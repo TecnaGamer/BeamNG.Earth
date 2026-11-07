@@ -14,26 +14,29 @@ EDGE_SLOPE_DEG = 30.0     # bounded 12 m extension at a confirmed cut's rounded 
 MIN_CORE_CELLS = 6
 CREST_SLOPE_DEG = 38.0
 SLOPE_BREAK_DEG = 12.0
-MIN_RISE_M = 8.0
-MIN_AVERAGE_DEG = 30.0  # includes the road's flat shoulder and rounded crest
+MIN_RISE_M = 4.0  # substantial roadside cutting, including lower highway banks
+MIN_AVERAGE_DEG = 30.0  # face profile, including its rounded crest
+BENCH_APPROACH_DEG = 15.0  # flat/gentle shoulder before the first rising face
 REACH_M = 64.0
 PROFILE_STEP_M = 4.0
 PROFILE_PROBE_M = 4.0
 FACING_COS = 0.75
-MIN_FACE_M2 = 384.0
-MIN_FOOTPRINT_M2 = 128.0
+MIN_FACE_M2 = 192.0
+MIN_FOOTPRINT_M2 = 96.0  # six nominal detector cells; length/core tests still apply
 MIN_LENGTH_M = 24.0
 SHOULDER_M = 3.0
 # The 10 m land-cover raster can place its road strip more than one pixel from
 # the vector centreline. Ignore road-strip buffer seeds; major rural highways
 # can also recover road-labelled faces when a natural crest confirms the cut.
-ROAD_LABEL_MARGIN_M = 16.0
+ROAD_LABEL_MARGIN_M = 24.0  # two 10 m pixels plus the detector cell at a misaligned crest
 # A major rural highway can pass near built-up land without its excavation being
 # a city elevation anomaly. Its independently confirmed cut still keeps a local
 # built-up guard; ordinary roads and natural cliffs retain the full city buffer.
 HIGHWAY_CITY_BUFFER_M = 16.0
 HIGHWAY_CLASSES = ('motorway', 'trunk', 'primary')
-RURAL_CLASSES = HIGHWAY_CLASSES + ('secondary', 'tertiary', 'unclassified', 'residential')
+# Rural access/frontage roads can have real excavated banks too. Their road
+# class must not force a profile to start at a more distant highway below it.
+RURAL_CLASSES = HIGHWAY_CLASSES + ('secondary', 'tertiary', 'unclassified', 'residential', 'service')
 PROFILE_DROP_M = 1.0  # do not look over a roof/back slope for a distant natural crest
 # Shorter profiles can finish an existing excavation, but cannot seed one.
 END_SLOPE_DEG = 20.0
@@ -243,8 +246,12 @@ def city_guard(classes, road_labels, highway_corridor, spacing):
     return city
 
 
-def sustained(evidence, extent, slope, dx, dy):
-    """Require substantial direct evidence before accepting or recovering a face."""
+def sustained(evidence, extent, slope, dx, dy, *, profiles=None):
+    """Require a steep core and a substantial, independently profiled bank.
+
+    Rounded parts may supply size only when their own road-to-crest profiles
+    passed. Unprofiled support cannot make a short isolated core qualify.
+    """
     import cliffrocks as cr
     result = np.zeros_like(evidence)
     for cy, cx in cr._components(extent):
@@ -252,9 +259,17 @@ def sustained(evidence, extent, slope, dx, dy):
         if not proof.any():
             continue
         area = dx*dy*np.sqrt(1+slope[cy, cx]**2).sum()
-        length = max(np.ptp(cx[proof])*dx+dx, np.ptp(cy[proof])*dy+dy)
+        # Measure along the face, not only the map axes. A diagonal 25 m
+        # cutting otherwise appears shorter than 20 m and loses its whole bank.
+        measured = proof if profiles is None else proof | profiles[cy, cx]
+        points = np.column_stack((cx[measured]*dx, cy[measured]*dy))
+        centered = points-points.mean(axis=0)
+        _, axes = np.linalg.eigh(centered.T @ centered)
+        direction = axes[:, -1]
+        along = np.ptp(points @ direction)+np.abs(direction) @ np.array((dx, dy))
+        length = max(np.ptp(points[:, 0])+dx, np.ptp(points[:, 1])+dy, along)
         core = proof & (slope[cy, cx] >= math.tan(math.radians(MIN_SLOPE_DEG)))
-        if (core.sum() >= MIN_CORE_CELLS and proof.sum()*dx*dy >= MIN_FOOTPRINT_M2
+        if (core.sum() >= MIN_CORE_CELLS and measured.sum()*dx*dy >= MIN_FOOTPRINT_M2
                 and area >= MIN_FACE_M2 and length >= MIN_LENGTH_M):
             result[cy, cx] = True
     return result
@@ -358,6 +373,9 @@ def select(h, classes, xs, ys, scale, centers, segments, blocked, road_labels, h
     # Upper lifts may be separated from the road by flat benches. Check that
     # whole approach, so a roof followed by a drop cannot borrow a hill's crest.
     approach_z = toe.copy()
+    face_toe, face_start = toe.copy(), np.zeros(len(yy))
+    on_bench = np.ones(len(yy), bool)
+    previous_run = np.zeros(len(yy))
     approach = np.ones(len(yy), bool)
     cover_samples = (natural | (classes == 50)).astype(float)
     for reach in np.arange(PROFILE_STEP_M, REACH_M+PROFILE_STEP_M, PROFILE_STEP_M):
@@ -366,6 +384,14 @@ def select(h, classes, xs, ys, scale, centers, segments, blocked, road_labels, h
         z = cr._height_at(h, px, py)
         approach &= np.isfinite(z) & (z >= approach_z-PROFILE_DROP_M)
         approach &= cr._height_at(cover_samples, px, py) >= .999
+        # A wide shoulder or drainage shelf is not part of the cut face's
+        # average slope. Trim only the initial gentle approach; never skip an
+        # intervening bench, a drop, or a roof on the way to a distant crest.
+        delta = run-previous_run
+        on_bench &= np.isfinite(z) & (np.abs(z-approach_z) <= delta*math.tan(math.radians(BENCH_APPROACH_DEG)))
+        face_toe = np.where(on_bench, z, face_toe)
+        face_start = np.where(on_bench, run, face_start)
+        previous_run = run
         approach_z = z
     previous_z = cr._height_at(h, xx+.5, yy+.5)
     uphill_path = approach.copy()
@@ -398,8 +424,8 @@ def select(h, classes, xs, ys, scale, centers, segments, blocked, road_labels, h
             end_cover = np.maximum(end_cover, np.where(same_crest, cr._height_at(natural_samples, ex, ey), 0))
         span = toe_distance+reach
         found = (strict_sample & (distance+reach <= REACH_M) & (facing >= FACING_COS) & bench
-                 & uphill_path & natural_crest & (np.hypot(sx, sy) <= crest_limit) & (z-toe >= MIN_RISE_M)
-                 & ((z-toe)/span >= math.tan(math.radians(MIN_AVERAGE_DEG))))
+                 & uphill_path & natural_crest & (np.hypot(sx, sy) <= crest_limit) & (z-face_toe >= MIN_RISE_M)
+                 & ((z-face_toe)/(span-face_start) >= math.tan(math.radians(MIN_AVERAGE_DEG))))
         crest_reach[found & ~confirmed] = reach
         confirmed |= found
         end_found = ((distance+reach <= REACH_M) & (facing >= FACING_COS) & bench
@@ -416,9 +442,13 @@ def select(h, classes, xs, ys, scale, centers, segments, blocked, road_labels, h
         highway_cells = (highway_corridor[:-1, :-1] & highway_corridor[1:, :-1]
                          & highway_corridor[:-1, 1:] & highway_corridor[1:, 1:])
         # Only sustained, directly confirmed steep faces can authorize a raster
-        # correction. Rounded support and flat benches cannot supply proof.
+        # correction. Rounded support and flat benches cannot supply steep-core proof.
         proof = evidence & highway_cells
-        recovered = sustained(proof, proof, slope, dx, dy)
+        # Tapered sections already have independent uphill/crest evidence.
+        # Include them when measuring the bank, before road-label city buffers
+        # can fragment the steep core. They cannot supply steep-core cells.
+        profiled_bank = continue_ends(proof, end_profiles & highway_cells, dx, dy)
+        recovered = sustained(proof, profiled_bank, slope, dx, dy, profiles=end_profiles)
         # Partial road labels and low terminal banks are only recoverable when
         # connected to a substantial, fully natural-crested highway cut.
         recovered = continue_ends(recovered, end_profiles & highway_cells, dx, dy)
@@ -443,7 +473,7 @@ def select(h, classes, xs, ys, scale, centers, segments, blocked, road_labels, h
     support[yy, xx] = (facing >= FACING_COS) & bench & (local_angle >= EDGE_SLOPE_DEG)
     support &= eligible
     extent = cr._extend_faces(evidence, support, dx, dy)
-    result = sustained(evidence, extent, slope, dx, dy)
+    result = sustained(evidence, extent, slope, dx, dy, profiles=end_profiles)
     result = continue_ends(result, end_profiles & eligible, dx, dy)
     land_domain = safe[:-1, :-1] & safe[1:, :-1] & safe[:-1, 1:] & safe[1:, 1:]
     return (result, land_domain) if with_domain else result

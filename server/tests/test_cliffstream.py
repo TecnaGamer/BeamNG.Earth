@@ -90,5 +90,18 @@ class CliffStreamTest(unittest.TestCase):
             parts = [v for k,v in data.items() if k.startswith('cliff') and k!='cliffDecals']
             self.assertGreater(len(parts),1)
             self.assertTrue(all(Path(tmp,Path(v['shape']).name).is_file() for v in parts))
+            self.assertTrue(all(len(v['bounds']) == 6 for v in parts))
             self.assertNotIn('cliffDecals',data)
             self.assertEqual(len(data['talus']['items']),1)
+
+    def test_strip_publishes_support_bounds(self):
+        import json
+        import cliffstrips
+        from types import SimpleNamespace
+        rock = surface(5)
+        positions = np.array([[-2., 1., 3.], [4., 5., 6.], [0., 3., 7.]])
+        rock.strips = [SimpleNamespace(positions=positions)]
+        with tempfile.TemporaryDirectory() as tmp, patch.object(cliffstrips, 'write'):
+            roads.write_tile(tmp, '/test', 1, 2, 3, [], cliff_mesh=rock)
+            data = json.loads(next(Path(tmp).glob('*.json')).read_text())
+            self.assertEqual(data['cliffStrip1']['bounds'], [-2., 1., 3., 4., 5., 7.])

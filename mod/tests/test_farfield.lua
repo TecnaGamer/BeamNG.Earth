@@ -885,4 +885,26 @@ do
   step(free, nil, 100)
 end
 
+-- Driving can deliver a split, merge and another split before the first import
+-- completes. Each swap must retain the tile generation that was sent for it.
+farfield.clear()
+farfield.setNearVisual('mesh')
+farfield.switchAnchor(90, false)
+local parentKey, childKey = '1_0_0', '0_0_0'
+farfield.onTile(tile(90,1,0,0))
+farfield.onSwap(swap(90,1,{parentKey}))
+step(free,nil,40)
+farfield.onTile(tile(90,0,0,0,{z=101}))
+farfield.onSwap(swap(90,2,{childKey},{parentKey}))
+farfield.onTile(tile(90,1,0,0,{z=102}))
+farfield.onSwap(swap(90,3,{parentKey},{childKey}))
+farfield.onTile(tile(90,0,0,0,{z=103}))
+farfield.onSwap(swap(90,4,{childKey},{parentKey}))
+farfield.onDone({anchorId=90})
+step(free,nil,180)
+T.check(visible(obj(childKey)) and obj(childKey).pos.z == 103,
+  'queued split/merge/split keeps the final terrain generation visible')
+T.check(farfield.stats().waitingGroups == 0 and farfield.stats().queued == 0,
+  'all terrain generations finish without missing-tile groups')
+
 T.done('test_farfield')

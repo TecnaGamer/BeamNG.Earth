@@ -312,8 +312,8 @@ class BoundedMeshTest(unittest.TestCase):
         self.assertEqual(cdae.encode(pos, tri, uvs=uv), cdae.encode(pos, tri, uvs=uv, split_meshes=True))
         with self.assertRaises(cdae.CdaeError):
             cdae.encode(pos, tri, split_meshes=True, collision_only=True)
-        with self.assertRaises(cdae.CdaeError):
-            cdae.encode(pos, tri, split_meshes=True, collisions=[(pos, tri, None)])
+        shape = cdae.decode(cdae.encode(pos, tri, split_meshes=True, collisions=[(pos, tri, None)]))
+        self.assertEqual([m["type"] for m in shape["meshes"]], [0, 4, 4, 0])
 
 
 class SplitLodTest(unittest.TestCase):
@@ -342,3 +342,37 @@ class SplitLodTest(unittest.TestCase):
         self.assertEqual(totals,[len(t),1])
         dets=[struct.unpack_from('<3i3fi',shape['details'][2],i*52) for i in range(2)]
         self.assertEqual([(d[2],d[3],d[6]) for d in dets],[(0,600.,len(t)),(1,2.,1)])
+
+
+class MixedCollisionLodTest(unittest.TestCase):
+    def test_split_lods_keep_render_bytes_and_collision_detail_separate(self):
+        from unittest.mock import patch
+        p, uv, t = dae.grid(8, 1.)
+        p, uv, t = np.asarray(p).reshape(-1,3), np.asarray(uv).reshape(-1,2), np.asarray(t).reshape(-1,3)
+        lod = dict(positions=p[:3], tris=[[0,1,2]], tri_materials=[1])
+        kw = dict(uvs=uv, material=['a','b','unused','collision'], tri_materials=np.zeros(len(t),int),
+                  split_meshes=True, lods=[(600,lod)])
+        with patch.object(cdae, 'RENDER_VERTEX_LIMIT', 16):
+            baseline = cdae.decode(cdae.encode(p,t,**kw))
+            blob = cdae.encode(p,t,collisions=[(p[:3],[[0,1,2]],[3])],**kw)
+        shape = cdae.decode(blob)
+        objects = np.frombuffer(shape['objects'][2],'<i4').reshape(-1,6)
+        nrender = len(baseline['meshes'])//2
+        self.assertGreater(nrender,1)
+        self.assertEqual(len(objects),nrender+1)
+        self.assertEqual(shape['smallestVisibleDL'],1)
+        for k,obj in enumerate(objects):
+            self.assertEqual(tuple(obj[1:3]),(3,k*3))
+            self.assertEqual(shape['names'][obj[0]],shape['header']['objectNames'][k])
+            if k<nrender:
+                self.assertEqual(shape['meshes'][k*3:k*3+2],baseline['meshes'][k*2:k*2+2])
+                self.assertEqual(shape['meshes'][k*3+2]['type'],4)
+            else:
+                self.assertEqual([m['type'] for m in shape['meshes'][k*3:]],[4,4,0])
+        self.assertEqual([m['name'] for m in shape['materials']],['a','b','collision'])
+        collision=cdae.mesh_arrays(shape['meshes'][-1])
+        self.assertEqual(int(collision['primitives'][0][2]) & cdae.PRIM_MATERIAL_MASK,2)
+        scaled=cdae.decode(cdae.scale_lod_thresholds(blob,.5))
+        self.assertEqual(scaled['meshes'],shape['meshes'])
+        details=[struct.unpack_from('<3i3fi',scaled['details'][2],i*52) for i in range(3)]
+        self.assertEqual([(d[2],d[3]) for d in details],[(0,1200.),(1,2.),(2,-1.)])

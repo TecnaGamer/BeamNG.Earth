@@ -1,6 +1,6 @@
 # Regional debug layers
 
-Open the map, choose **Layers > Debug layers > Regional placement**, then select
+Open the map, choose **Layers > Debug Overlays > Regional placement**, then select
 an overlay. These overlays inspect rules/data without generating world assets.
 
 | Layer | Meaning |
@@ -13,7 +13,7 @@ an overlay. These overlays inspect rules/data without generating world assets.
 
 The map requests data only while enabled, coalesces pans, refreshes every five
 seconds and paints a canvas. Sampled providers use a 40 x 24 grid compressed
-into runs. Generated coverage reads at most 96 loaded tiles / 16 MiB of manifests / 6,000 features;
+into continuous contours with shared grid edges removed and holes preserved. Generated coverage reads at most 96 loaded tiles / 16 MiB of manifests / 6,000 features;
 zoom in if limited. Older tiles without metadata are explicitly identified.
 Cliff debug metadata is computed from the existing coarse detector, never from
 the expensive refined render mesh. Disabled faces are labelled as disabled.
@@ -89,7 +89,7 @@ park boundaries. Preview points locate sectors, not guaranteed spawn positions.
 Existing slope, cover, road clearance and enabled-cliff settings still decide
 which faces generate. Both sides of the Rio Grande use the same appearance rule.
 
-To inspect them, open **Layers > Debug layers > Regional placement > Natural
+To inspect them, open **Layers > Debug Overlays > Regional placement > Natural
 cliff regions** on the map and pan to the preview coordinates. **Generated cliffs
 & road cuts** shows recorded coverage after near tiles have actually loaded.
 Changing this registry participates in the revisit cache's source fingerprint;
@@ -114,7 +114,7 @@ material IDs. Keep near/far/talus selection shared and update regression tests.
 
 Other regional features add a provider to `debuglayers.LAYERS` and `query` using
 their production selector. Responses contain `layers`, `legend` (id/label/color),
-`features` (type/ring in longitude-latitude, optional label) and `note`. The map
+`features` (type and ring or rings in longitude-latitude, optional label; outline only for explicit envelopes) and `note`. The map
 loads provider choices from the server, so subsequent providers need no duplicate
 UI catalogue. Validate bounds, enforce budgets, label approximate data, and use
 no network or generation side effects. New sampled providers should reuse the
@@ -130,7 +130,7 @@ a geological boundary or a claim that every dry area has volcanic rock. Existing
 slope, land-cover and user settings gate generation. Near and far faces and toe
 rubble share the production selector; road cuts keep their separate context.
 
-On the map choose **Layers > Debug layers > Regional placement > Natural cliff
+On the map choose **Layers > Debug Overlays > Regional placement > Natural cliff
 regions** and inspect Hoover Dam (36.02, -114.74). The arid coverage is a bounded
 sample of the climate raster; layered canyon envelopes are exact registry rings.
 Use **Generated cliffs & road cuts** to inspect recorded actual generation.
@@ -141,3 +141,56 @@ provider bounds/empty/error/disabled states and talus placement tests pass. Live
 Hoover Dam near/far materials load without missing textures, and the map displays
 the new legend and sampled overlay. Geological accuracy outside the tested area
 and full driving performance have not been established by these visual checks.
+
+
+## Seam-free coverage contours (2026-11-07)
+
+Sampled regions and recorded detector rectangles are merged by material before
+being sent to the map. Only their outer contours and holes remain; shared row
+and tile edges are not drawn. The canvas fills all rings of each material once
+with the even-odd rule, preserving gaps without darker overlaps. Explicit
+appearance envelopes alone have outlines. This does not smooth, expand or
+reclassify the production coverage, and does not load render meshes. The existing
+query, tile, file and detector-rectangle limits remain in effect.
+
+The menu section is **Debug Overlays**. Regional placement's legend shows its
+colour key and loading/error status without the long provider description. The
+provider response retains its coverage note for tools and diagnostics.
+
+Validated with 18 provider/contour tests, the JavaScript canvas checks and the live
+map. A uniform 40 x 24 sample becomes one four-corner contour instead of 24
+outlined rows. Random masks retain their exact cell membership; tests include
+holes, corner-only contacts, overlapping rectangles, material separation and the
+date line. A 6,000-rectangle local check took about 6 ms for solid coverage and
+51 ms for isolated patches; this is request-time server work, not game-frame work.
+
+
+### Confirmed road cuts
+
+The **Confirmed road cuts** overlay reads `debugCliffCuts` from already delivered
+road tiles. It records only the production road-cut detector, independently of
+natural cliffs that share the same arid material. Outlines merge detector cells;
+they are approximate coverage before toe fitting and pavement clipping. Older
+tiles without this field show missing coverage until regenerated. No map query
+starts terrain or mesh generation. Test near 35.98080, -114.70057 for diagonal
+road cuts; face length is measured along its principal direction as well as
+the map axes. Initial gentle shoulders are excluded from the face-slope average,
+while full approach, rise, crest, land-cover and clearance checks still apply.
+
+Rural service/frontage roads use the same cut-profile checks as other rural
+roads. At the Nevada example above, the upper service road must supply the
+left-hand bank profile instead of the highway farther below it. Urban service
+roads remain excluded. The Confirmed road cuts overlay records both sides.
+
+At 35.96077, -114.66431, lower sustained highway banks also qualify: the road-cut
+minimum is a 4 m rise, 192 square metres of face, and 96 square metres of
+profile-confirmed footprint. Six steep core cells and a 24 m bank span are still required,
+along with the profile, natural crest, city/land-cover and road clearance tests.
+These limits apply to road cuts, not natural-cliff selection.
+
+The same highway near 35.96077, -114.66431 also exercises partial road labels
+at a tapered bank. A 24 m road-label margin accounts for two coarse land-cover
+pixels and a detector cell. Independently validated terminal profiles may
+contribute the bank length and footprint; they cannot replace its six directly
+confirmed steep core cells. The map overlay records the resulting footprint
+from the production detector, with no extra generation work in map queries.

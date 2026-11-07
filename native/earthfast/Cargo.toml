@@ -10,6 +10,8 @@ name = "earthfast"
 crate-type = ["cdylib"]
 
 [dependencies]
+# Collision-only edge collapse; meshoptimizer MIT, Rust wrapper MIT / Apache-2.0.
+meshopt = "0.7"
 pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
 numpy = "0.25"
 # GPU compute (gpu.rs): the per-pixel image work moved off the CPU when a GPU is there (Vulkan / DX12 / Metal)

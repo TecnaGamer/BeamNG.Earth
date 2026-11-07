@@ -32,6 +32,7 @@ package.loaded['beamngEarth/windturbines'] = {
   onRows = function(key, rows) turbineRows[#turbineRows + 1] = { key, rows } end,
   dropKey = function(key) turbineDrops[#turbineDrops + 1] = key end,
 }
+require('beamngEarth/farfield').groundReady = function() return true end -- ground fixture for contact tests
 local roads = require('beamngEarth/roads')
 local update = roads.update
 roads.update = function(...)
@@ -679,4 +680,45 @@ do
   T.check(#statics() == 0, 'clear leaves no orphaned barrier')
   getPlayerVehicle = nil
 end
+-- Urgency follows actual cliff pieces; distant, disabled and stale contacts do
+-- not repeatedly promote the whole tile to a synchronous global rebuild.
+do
+  roads.clear()
+  local oldVehicle = getPlayerVehicle
+  local oldReload, oldGap, oldCheck = roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = 1e9, 1e9, 0
+  local pos, speed = vec3(128,128,0), 0
+  getPlayerVehicle = function() return {getPosition=function() return pos end,
+    getVelocity=function() return vec3(speed,0,0) end} end
+  files['/t/urgent_cliff.json'] = '{chunks={},cliff={shape="/t/urgent_cliff.cdae",pos={0,0,0},bounds={400,100,10000,420,140,10020}}}'
+  roads.onTile({anchorId=11,key='0_0',path='/t/urgent_cliff.json',n=0},11)
+  roads.update(gov,11)
+  local piece = statics()[1]
+  function piece:getWorldBox() return {minExtents=vec3(400,100,10000),maxExtents=vec3(420,140,10020)} end
+  T.check(piece.fields.collisionType=='Visible Mesh Final','distant contact stays enabled for the normal rebuild')
+  T.check(not roads.urgentColliders(),'nearby tile does not make a distant cliff piece urgent')
+  pos.x = 260
+  T.check(roads.urgentColliders(),'approaching within 150 m makes pending cliff contact urgent, regardless of height')
+  pos.x, speed = 128, 60
+  roads.update(gov,11)
+  T.check(roads.urgentColliders(),'fast travel retains six seconds of cliff collision lookahead')
+  piece:setField('collisionType',0,'None')
+  T.check(not roads.urgentColliders(),'deactivated pending cliff does not force a rebuild')
+  piece:setField('collisionType',0,'Visible Mesh Final')
+  piece:delete()
+  T.check(not roads.urgentColliders(),'deleted pending object cannot force a rebuild')
+  roads.onDrop({anchorId=11,key='0_0'})
+  roads.update(gov,11)
+  files['/t/urgent_legacy.json'] = '{chunks={},cliff={shape="/t/legacy.cdae",pos={0,0,0}}}'
+  roads.onTile({anchorId=11,key='0_0',path='/t/urgent_legacy.json',n=0},11)
+  roads.update(gov,11)
+  roads.update(gov,11)
+  T.check(roads.urgentColliders(),'legacy cliff without world bounds retains tile urgency')
+  roads.onDrop({anchorId=11,key='0_0'})
+  T.check(not roads.urgentColliders(),'dropped tile cannot leave stale urgent contacts')
+  roads.clear()
+  getPlayerVehicle = oldVehicle
+  roads.RELOAD_EVERY_S, roads.URGENT_GAP_S, roads.COLLIDE_CHECK_S = oldReload, oldGap, oldCheck
+end
+
 T.done('test_roads')

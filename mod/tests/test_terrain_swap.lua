@@ -23,6 +23,18 @@ FS.fileExists = function(_, p) return p ~= '/t/gone.ter' end
 T.check(terrain.swap('/t/gone.ter', 2, 512, 0, 0, 0) == false, 'a missing .ter: no swap')
 FS.fileExists = missing
 local mats = { { 'bngEarthGroundAsphalt', 'ASPHALT_OLD' }, { 'beamngEarthDirt', 'DIRT' } }
+T.check(tb.fields.castShadows == '1', 'visible terrain casts shadows by default')
+terrain.setShadowsEnabled(false)
+T.check(tb.fields.castShadows == '0', 'shadow setting applies immediately')
+local shadowApplies = calls.postApply_TerrainBlock
+terrain.setShadowsEnabled(false)
+T.check(calls.postApply_TerrainBlock == shadowApplies, 'unchanged shadow setting does not rebuild terrain')
+terrain.setRenderEnabled(false)
+terrain.setShadowsEnabled(true)
+T.check(tb.fields.castShadows == '0', 'physics-only terrain does not cast duplicate shadows')
+terrain.setRenderEnabled(true)
+T.check(tb.fields.castShadows == '1', 'returning to visible terrain restores the shadow preference')
+terrain.setShadowsEnabled(false)
 local applies = calls.postApply_TerrainBlock or 0
 local updates = calls.updateMaterial or 0
 local setField, prepared = tb.setField, false
@@ -40,6 +52,7 @@ T.check(calls.updateMaterial == updates, 'a successful .ter swap does not dirty 
 T.check(tb.fields.terrainFile == '/t/c.ter' and tb.applied == '/t/c.ter', 'the .ter set, then applied')
 T.check(tb.fields.maxHeight == '1024', 'maxHeight from the message')
 T.check(tb.pos.x == -384 and tb.pos.y == -512 and tb.pos.z == -128, 'block moved')
+T.check(tb.fields.castShadows == '0', 'terrain swap retains disabled shadow preference')
 T.check((calls.importMaps or 0) == imports and calls.postApply_TerrainBlock == applies + 1, 'one postApply, no importMaps')
 T.check(terrain.slots[1] == 'bngEarthGroundAsphalt' and terrain.slots[2] == 'beamngEarthDirt' and #terrain.slots == 2,
   'material slots = the .ter\'s materials')

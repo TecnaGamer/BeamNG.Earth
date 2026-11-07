@@ -336,6 +336,7 @@ class Mesh:
     lod_scale: float = 1.0  # projected piece radius / original tile radius
     terrain_blend: bool = False  # UV1 is the opaque terrain rim; PBR uses UV0
     strip_colors: np.ndarray | None = None  # Build-only rock tint before satellite rim blending
+    debug_cuts: list = field(default_factory=list)  # Confirmed road-cut detector runs
     debug_coverage: list = field(default_factory=list)  # Geographic detector runs, independent of render detail
 
 
@@ -844,6 +845,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     owned = ((center_points[...,0] >= box[0]) & (center_points[...,0] < box[2]) &
              (center_points[...,1] >= box[1]) & (center_points[...,1] < box[3]))
     debug_coverage = debuglayers.footprint_grid(keep & owned, detector_family, xs, ys)
+    debug_cuts = debuglayers.footprint_grid(cuts & owned, detector_family, xs, ys)
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
     natural_family = clifftypes.compact(cliffmaterial.natural_family(la, lo))
     coarse_canyon_grid = np.all(natural_family == cliffmaterial.CANYON) and not cuts.any()
@@ -925,6 +927,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
             import cliffdetail
             result = cliffdetail.refine_canyon(result, full_relief=True)
         result.debug_coverage = debug_coverage
+        result.debug_cuts = debug_cuts
         result.talus = rubble
         if decals:
             import cliffstrips
@@ -956,7 +959,7 @@ def tile_mesh(*args, **kwargs):
         return None
 
 
-def write(path, rock):
+def write(path, rock, collision=None):
     """Write the rock skin with vertex tint through the existing compiled-mesh path."""
     import cdae
     import clifflod
@@ -965,6 +968,8 @@ def write(path, rock):
     return cdae.write(path, rock.positions, rock.tris, uvs=rock.uvs,
                       material=list(materials) if rock.tri_materials is not None else MATERIAL,
                       tri_materials=rock.tri_materials, colors=rock.colors, normals=rock.normals, object_name="cliff",
+                      collisions=None if collision is None else [(collision["positions"], collision["tris"],
+                                                               collision["tri_materials"])],
                       split_meshes=True, lods=[(px*rock.lod_scale, mesh) for px, mesh in clifflod.levels(rock)
                             if px*rock.lod_scale > cdae.LOD_TOP_SIZE],
                       uvs2=rock.uvs2, tangent_uvs=rock.uvs if rock.terrain_blend else rock.uvs2)

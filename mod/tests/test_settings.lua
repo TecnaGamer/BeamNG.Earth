@@ -41,6 +41,16 @@ end
 T.check(same, 'no file: every value is its default (but the quality, picked from the hardware)')
 T.check(vals.quality == 'high', 'no file, no GPU info: the High preset (= the old defaults)')
 
+-- Terrain shadows persist and apply without changing the world's geometry.
+local terrain = require('beamngEarth/terrain')
+T.check(settings.get('terrainShadows') == true, 'terrain shadows default on')
+settings.set('terrainShadows', false)
+T.check(not terrain.isShadowsEnabled(), 'terrain shadows toggle applies immediately')
+settings.load()
+T.check(settings.get('terrainShadows') == false, 'terrain shadows off survives settings reload')
+settings.set('terrainShadows', true)
+T.check(terrain.isShadowsEnabled(), 'terrain shadows can be enabled again')
+
 -- the quality presets
 T.check(settings.detectQuality({ name = 'AMD Custom GPU 0932 (RADV VANGOGH)', memoryMB = 6144 }) == 'medium',
   'a Steam Deck gets Medium')
@@ -602,5 +612,21 @@ do
   T.check(roads.cliffsEnabled and trees.groupOff.cliff_rock and not roads.cliffStripsEnabled,'enabling faces leaves rubble and decals off')
   settings.set('cliffRocks',true); settings.set('cliffDecals',true)
 end
+for _, preset in ipairs(settings.PRESET_ORDER) do
+  settings.setQuality(preset)
+  local full = preset == 'high' or preset == 'ultra' or preset == 'extreme'
+  T.check(settings.get('terrainShadows') == full and terrain.isShadowsEnabled() == full,
+    preset .. ' applies terrain shadow quality')
+  T.check(settings.get('cliffFaces') == (preset ~= 'low')
+      and settings.get('cliffRocks') == full and settings.get('cliffDecals') == full,
+    preset .. ' applies cliff components')
+end
+settings.setQuality('high')
+settings.set('terrainShadows', false)
+T.check(settings.get('quality') == 'custom', 'changing shadows away from preset selects Custom')
+settings.setQuality('high')
+settings.set('cliffFaces', false)
+T.check(settings.get('quality') == 'custom', 'changing cliff faces away from preset selects Custom')
+settings.setQuality('high')
 files[settings.FILE] = nil
 T.done('test_settings')

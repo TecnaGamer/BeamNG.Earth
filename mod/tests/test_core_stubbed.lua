@@ -519,7 +519,7 @@ veh.vel = vec3(20, 0, 0)
 frames(2)
 local movesBefore, setOrig = calls.setClusterPosRelRot, calls.setOriginalTransform
 T.check(tb.renderEnabled == nil and (calls.setRenderEnabled or 0) == 0, 'terrain mode: the block is drawn, render flag never touched')
-T.check(tb.fields.castShadows == '0', 'the block casts no shadows (no shadow-map redraw at its moves)')
+T.check(tb.fields.castShadows == '1', 'visible terrain casts shadows by default')
 T.check(farfield.nearVisual() == 'terrain', 'terrain near visual')
 local roadsMod = require('beamngEarth/roads')
 local roadClears, realClear = 0, roadsMod.clear

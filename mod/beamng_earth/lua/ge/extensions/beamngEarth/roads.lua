@@ -25,6 +25,7 @@ local M = {}
 M.cliffsEnabled = true
 M.cliffStripsEnabled = true
 M.CLIFF_STRIP_PARTS_MAX = 24 -- server cliffstrips.PARTS_MAX; still 8k triangles per import
+M.CLIFF_GROUND_CHECKS_PER_FRAME = 8 -- bounded retries; leave the import budget for missing terrain
 M.CLIFF_PARTS_MAX = 64 -- server cliffrocks.STREAM_PARTS_MAX
 M.CLIFF_WHATS = { 'cliff' }
 for k = 2, M.CLIFF_PARTS_MAX do M.CLIFF_WHATS[#M.CLIFF_WHATS + 1] = 'cliff' .. k end
@@ -546,7 +547,8 @@ local function syncCliffCollision(key, t, id, what, gov, range)
   if active == wanted then return end
   if gov and not gov:try('cliffContact') then M.cliffContactsPending = true; return end
   local started = now()
-  o:setField('collisionType', 0, wanted and 'Visible Mesh Final' or 'None')
+  local collisionType = o:getField('bneCliffCollisionMesh', 0) == '1' and 'Collision Mesh' or 'Visible Mesh Final'
+  o:setField('collisionType', 0, wanted and collisionType or 'None')
   o:postApply()
   collisionDirty = true
   if wanted then noteCliffContact(key, t, id, what) end
@@ -597,6 +599,10 @@ end
 -- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only)
 local function createWalk(walk, collide)
   local o = createObject('TSStatic')
+  if walk.isCliff and walk.collisionMesh then
+    o:setField('bneCliffCollisionMesh', 0, '1')
+    if collide then collide = 'Collision Mesh' end
+  end
   o:setField('shapeName', 0, walk.shape)
   -- 'Visible Mesh Final' (the engine's own suggestion: 'Performance: Mesh is using visible collision ... switch the
   -- mesh to Visible Mesh Final'); the same collision (in-game rays, 2026-10-17)
@@ -853,7 +859,7 @@ function M.geoWalk(t, what)
   local pp = t.pls and t.pls[what]
   if not p or not pp then return nil end
   local x, y, z = pp.xf:apply(p.pos[1], p.pos[2], p.pos[3])
-  return { shape = partShape(t, what), pos = { x, y, z }, rot = pp.q }
+  return { shape = partShape(t, what), pos = { x, y, z }, rot = pp.q, collisionMesh = p.collisionMesh }
 end
 
 -- Server message `roads_tile` for a geotile key: its content (data: the JSON; frame, h, slots, exact).
@@ -904,7 +910,7 @@ function M.onGeoTile(msg, currentAnchor, a)
     if type(e) == 'table' and e.shape and type(e.pos) == 'table' then
       local sl = msgSlot(msg, what)
       t.parts[what] = { shape = sl and sl.path or e.shape, pos = e.pos, pivot = tonumber(e.pivot) or 0,
-        relief = tonumber(e.relief) or 0 }
+        relief = tonumber(e.relief) or 0, bounds = e.bounds, collisionMesh = e.collisionMesh == true }
       if sl then t.slots[what] = sl end
       if cols[what] then t.colliders[what] = cols[what] end
       pivots, np = pivots + (tonumber(e.pivot) or 0), np + 1
@@ -1919,6 +1925,7 @@ function M.update(gov, currentAnchor, player, view, a)
   end
   sinceUrgent = sinceUrgent + 1
   local cliffLoaded = false
+  local groundWaiting = {}
   while #walkQ > 0 do
     local index = forced or M.nextWalk(walkQ)
     local kind = (M.isCliff(walkQ[index].what) or M.isCliffStrip(walkQ[index].what)) and 'cliffMesh' or 'roadWalk'
@@ -1940,6 +1947,15 @@ function M.update(gov, currentAnchor, player, view, a)
     end
     local walk = q.walk
     if t and q.geo then walk = M.geoWalk(t, q.what) end      -- (a geotile's part: placed as the tile is now)
+    if t and walk and (M.isCliff(q.what) or M.isCliffStrip(q.what)) then
+      local bounds = M.cliffWalkBounds(t, q.what, walk)
+      -- Older packets have no bounds; retain their existing behaviour.
+      if bounds and not require('beamngEarth/farfield').groundReady(bounds) then
+        groundWaiting[#groundWaiting + 1] = q
+        t = nil
+        if #groundWaiting >= M.CLIFF_GROUND_CHECKS_PER_FRAME then break end
+      end
+    end
     if t and walk then
       walk.isCliff = M.isCliff(q.what)
       walk.isCliffStrip = M.isCliffStrip(q.what)
@@ -1982,6 +1998,7 @@ function M.update(gov, currentAnchor, player, view, a)
       if M.isCliff(q.what) or M.isCliffStrip(q.what) then cliffLoaded = true; break end
     end
   end
+  for _, q in ipairs(groundWaiting) do walkQ[#walkQ + 1] = q end
   cliffLastFrame = cliffLoaded
   step('walks')
   if not cliffLoaded then updateFar(gov) end -- far buildings: only with the near meshes all made (they share the budget)
@@ -2158,18 +2175,32 @@ function M.urgentWalk(q)
   return best
 end
 
--- Is a collider made since the last rebuild one the car reaches soon (its tile within URGENT_S of driving, 150 m at
--- least)? Then the rebuild runs now, not after RELOAD_EVERY_S.
+-- Newly enabled collision is urgent within six seconds of travel (150 m minimum).
+-- Cliff pieces already have exact world bounds: their parent tile can be much
+-- nearer, needlessly promoting distant rock to a global collision rebuild.
 function M.urgentColliders()
   if #newColliders == 0 then return false end
   local p = playerNow()
   if not p then return true end
-  local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
+  local reach = math.max(150, lastSpeed * M.URGENT_S)
   for _, c in ipairs(newColliders) do
-    local t = tiles[c[2].key]
-    if t and t.cx then
-      local dx, dy = t.cx - p.x, t.cy - p.y
-      if dx * dx + dy * dy <= reach * reach then return true end
+    local q = c[2]
+    local t = tiles[q.key]
+    local o = scenetree.findObjectById(c[1])
+    -- A pending record can outlive a replacement, deletion or range deactivation.
+    if t and t[q.what] == c[1] and (not q.tile or q.tile == t)
+        and o and o:getField('collisionType', 0) ~= 'None' then
+      local bounds = M.isCliff(q.what) and cliffObjectBounds(t, q.what, o)
+      if bounds then
+        local x = math.max(bounds[1], math.min(p.x, bounds[4]))
+        local y = math.max(bounds[2], math.min(p.y, bounds[5]))
+        if (x-p.x)^2 + (y-p.y)^2 <= reach*reach then return true end
+      elseif t.cx then
+        -- Bridges, tunnels and legacy shapes keep their conservative tile reach.
+        local dx, dy = t.cx-p.x, t.cy-p.y
+        local tileReach = reach + M.TILE_M*0.71
+        if dx*dx + dy*dy <= tileReach*tileReach then return true end
+      end
     end
   end
   return false

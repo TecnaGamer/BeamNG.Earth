@@ -125,8 +125,34 @@ class DebugLayersTest(unittest.TestCase):
             with patch.object(vegetation,"regional",return_value=np.full(960,vegetation.G_DESERT_ROCK)) as f:
                 result=dl.query(None,self.message(layer))
                 f.assert_called_once()
-                self.assertEqual(len(result["features"]),24)
+                self.assertEqual(len(result["features"]),1)
                 self.assertIn("not vegetation density",result["note"])
+
+    def test_confirmed_cuts_are_recorded_provenance_not_material_regions(self):
+        frame = geodesy.EnuFrame(35, -110)
+        with tempfile.TemporaryDirectory() as tmp:
+            conn = SimpleNamespace(active=1, cliff_faces=True,
+                roads=SimpleNamespace(sent={(0, 0)}, geo=False),
+                s=SimpleNamespace(out_dir=tmp, anchors={1:SimpleNamespace(frame=frame)}))
+            path = Path(tmp)/"roads_1_0_0.json"
+            msg = self.message("cliff_confirmed_cuts")
+            path.write_text(json.dumps({"debugCliffs":[[2,-110,35,-109.999,35.001]]}))
+            result = dl.query(conn, msg)
+            self.assertEqual(result["features"], [], 'arid natural rock is not proof of a road cut')
+            self.assertIn("predate", result["note"])
+            path.write_text(json.dumps({"debugCliffCuts":[[2,-110,35,-109.999,35.001]]}))
+            result = dl.query(conn, msg)
+            self.assertEqual([f["type"] for f in result["features"]], [2])
+            self.assertEqual({r["label"] for r in result["legend"]},
+                             {"Road cut: limestone", "Road cut: arid rock"})
+            self.assertIn("Approximate", result["note"])
+            conn.cliff_faces = False
+            self.assertEqual(dl.query(conn, msg)["features"], [])
+            conn.cliff_faces = True
+            path.write_text('{broken')
+            self.assertEqual(dl.query(conn, msg)["features"], [])
+            conn.roads.sent.clear()
+            self.assertIn("No recorded", dl.query(conn, msg)["note"])
 
     def test_loaded_footprints_empty_disabled_and_budgets(self):
         import roads
@@ -144,6 +170,12 @@ class DebugLayersTest(unittest.TestCase):
                 self.assertIn("Display limited",limited["note"])
             with patch.object(dl,"MAX_TILES",0):
                 self.assertIn("Display limited",dl.query(conn,self.message("cliff_generated"))["note"])
+            path.write_text(json.dumps({"debugCliffs":[[2,-110,35,-109.999,35.001],
+                [2,-110,35.001,-109.999,35.002]]}))
+            merged=dl.query(conn,self.message("cliff_generated"))["features"]
+            self.assertEqual(len(merged),1)
+            self.assertEqual(len(merged[0]["rings"]),1)
+            self.assertEqual(len(merged[0]["rings"][0]),4)
             conn.cliff_faces=False
             self.assertEqual(dl.query(conn,self.message("cliff_generated"))["features"],[])
             conn.cliff_faces=True

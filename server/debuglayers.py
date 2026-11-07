@@ -8,6 +8,7 @@ import math
 from pathlib import Path
 import numpy as np
 import clifftypes
+import debugcontours
 
 MAX_TILES = 96
 MAX_FEATURES = 6000
@@ -16,6 +17,7 @@ MAX_QUERY_BYTES = 16 * 1024 * 1024
 LAYERS = (
     {"id": "cliff_regions", "label": "Natural cliff regions"},
     {"id": "cliff_generated", "label": "Generated cliffs & road cuts"},
+    {"id": "cliff_confirmed_cuts", "label": "Confirmed road cuts"},
     {"id": "cliff_cuts", "label": "Road-cut material regions"},
     {"id": "building_styles", "label": "Building style regions"},
     {"id": "vegetation_trees", "label": "Regional tree variants"},
@@ -66,7 +68,7 @@ def _overlap(lat, lon, bounds, pad=0):
     lon = (lon-(w+e)/2+180)%360-180+(w+e)/2
     return s-pad <= lat <= n+pad and w-pad <= lon <= e+pad
 
-def _generated(conn, bounds):
+def _generated(conn, bounds, *, cuts_only=False):
     """Only tiles already delivered to this connection; no scan of the world/cache."""
     if not conn.cliff_faces:
         return [], "Cliff faces are disabled. Enable them in graphics settings to generate and display faces."
@@ -107,7 +109,7 @@ def _generated(conn, bounds):
         except (OSError, ValueError):
             missing += 1
             continue
-        debug = data.get("debugCliffs")
+        debug = data.get("debugCliffCuts" if cuts_only else "debugCliffs")
         if debug is None:
             missing += 1
             continue
@@ -119,13 +121,17 @@ def _generated(conn, bounds):
         if len(features) >= MAX_FEATURES:
             break
     note = "Detected near faces and confirmed road cuts in loaded tiles; approximate detector cells, not exact mesh edges."
+    if cuts_only:
+        note = "Confirmed road-cut detector footprints in loaded tiles, including profiled tapered banks and rural service-road cuts; slope, road-facing profile, crest, land cover and pavement clearance apply. Approximate cells, not exact mesh edges."
     if not features:
         note += " No recorded cliffs in this view; explore here with cliff faces enabled."
     if missing:
         note += " Some tiles predate debug metadata; regenerated tiles will appear."
     if byte_limited or len(candidates)>MAX_TILES or len(features)>=MAX_FEATURES:
         note += " Display limited; zoom in for more coverage."
-    return features,note
+    return debugcontours.features([
+        [f["type"], f["ring"][0][0], f["ring"][0][1], f["ring"][2][0], f["ring"][2][1]]
+        for f in features]),note
 
 def query(conn, msg):
     bounds = _box(msg)
@@ -134,13 +140,15 @@ def query(conn, msg):
     if layer == "cliff_regions":
         result.update(_sampled(layer,bounds))
         # Exact higher-priority canyon envelopes overlay the bounded climate preview.
-        result["features"] += [{"type":rule.family,"ring":ring,"label":name}
+        result["features"] += [{"type":rule.family,"ring":ring,"label":name,"outline":True}
             for rule in sorted(clifftypes.TYPES,key=lambda r:(r.priority,r.key)) if rule.context == "natural"
             for name,ring in rule.regions]
         result["legend"] = legend("natural")
         result["note"] = "Sampled arid climate rock; exact layered canyon envelopes take precedence. Appearance priors, not geology. Slope, land cover and settings still gate near and distant faces."
-    elif layer == "cliff_generated":
-        result["features"],result["note"] = _generated(conn,bounds)
+    elif layer in ("cliff_generated", "cliff_confirmed_cuts"):
+        result["features"],result["note"] = _generated(conn,bounds, cuts_only=layer == "cliff_confirmed_cuts")
+        if layer == "cliff_confirmed_cuts":
+            result["legend"] = legend("road_cut")
     elif layer in {"cliff_cuts", "building_styles", "vegetation_trees", "vegetation_shrubs", "vegetation_rocks"}:
         result.update(_sampled(layer,bounds))
     else:
@@ -189,13 +197,14 @@ def _sampled(layer, bounds):
         rows = [{"id":i,"label":name.replace("_"," ").title(),"color":PALETTE[i%len(PALETTE)]} for i,name in enumerate(veg.GROUPS)]
         note = "Production regional variant selector, using a fixed representative seed and " + {10:"deciduous tree on tree cover",20:"shrub on shrubland",60:"rock on bare ground"}[cover] + ". This is a rule preview, not vegetation density or exact spawn positions."
     present = set(values.tolist())
-    features = []
+    rectangles = []
     for j in range(24):
         start = 0
         for i in range(1,41):
             if i < 40 and values[j*40+i] == values[j*40+start]:
                 continue
-            features.append({"label":next(r["label"] for r in rows if r["id"] == int(values[j*40+start])),"type":int(values[j*40+start]),"ring":_ring(edges_y[j],edges_x[start],edges_y[j+1],edges_x[i])})
+            rectangles.append([int(values[j*40+start]), edges_x[start], edges_y[j], edges_x[i], edges_y[j+1]])
             start = i
-    return {"features":features,"legend":[r for r in rows if r["id"] in present],
+    return {"features":debugcontours.features(rectangles, {r["id"]:r["label"] for r in rows}),
+            "legend":[r for r in rows if r["id"] in present],
             "note":"Sampled regions; zoom in for boundary detail. " + note}

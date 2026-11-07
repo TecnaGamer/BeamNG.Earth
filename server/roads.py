@@ -9797,24 +9797,30 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     # Cached diagnostic footprints: no mesh reads or generation when the map opens.
     data["debugCliffs"] = [] if cliff_mesh is None else getattr(cliff_mesh, "debug_coverage", [])
+    data["debugCliffCuts"] = [] if cliff_mesh is None else getattr(cliff_mesh, "debug_cuts", [])
     if cliff_mesh is not None:      # fitted rock skin; client enables mesh collision near the vehicle
         import cliffrocks
+        import cliffcollision
         x0, y0, _, _ = tile_bbox(tx, ty)
         files = shape_files(aid, tx, ty)
         for k, part in enumerate(cliffrocks.stream_parts(cliff_mesh), 1):
             what = "cliff" if k == 1 else f"cliff{k}"
             shape = files[what]
-            cliffrocks.write(os.path.join(out_dir, shape), part)
+            collision = cliffcollision.build(part) if cliffcollision.ENABLED else None
+            cliffrocks.write(os.path.join(out_dir, shape), part, collision=collision)
             # Select physics per streamed piece before native shape registration.
             # The client transforms these local bounds with the geotile pivot.
             data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0],
                           "bounds": part.positions.min(axis=0).tolist() + part.positions.max(axis=0).tolist()}
+            if collision is not None:
+                data[what]["collisionMesh"] = True
         import cliffstrips
         for k, part in enumerate(cliff_mesh.strips, 1):
             what = f"cliffStrip{k}"
             shape = files[what]
             cliffstrips.write(os.path.join(out_dir, shape), part)
-            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0],
+                          "bounds": part.positions.min(axis=0).tolist() + part.positions.max(axis=0).tolist()}
         if cliff_mesh.talus:
             groups = sorted({r[0] for r in cliff_mesh.talus})
             data["talus"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in cliff_mesh.talus]}

@@ -38,6 +38,7 @@ getPlayerVehicle = function() return { getPosition = function() return vec3(car.
 
 local geodesy = require('beamngEarth/geodesy')
 local geotile = require('beamngEarth/geotile')
+require('beamngEarth/farfield').groundReady = function() return true end -- ground fixture for contact tests
 local roads = require('beamngEarth/roads')
 roads.setGeo(true)
 roads.setSession('s1')
@@ -287,5 +288,40 @@ roads.onTile({ anchorId = 1, key = key, n = 0, frame = { clat, clon }, h = 'empt
 local empty = called('windturbines', 'onRows')
 T.check(#empty[#empty][4] == 0, 'content with no turbine hands on an empty list')
 roads.reset()
+
+-- Protocol receipt must retain piece bounds until createWalk chooses collision.
+-- A distant piece can belong to a nearby geotile; activating the whole tile
+-- briefly creates physics that the next range pass immediately removes.
+do
+  roads.setGeo(true)
+  roads.setFoci({})
+  car.x, car.y = B:geodeticToWorld(clat, clon, 0)
+  local function importPiece(bounds, hash, proxy)
+    roads.onGeoTile({key=key, frame={clat,clon}, h=hash,
+      data={key=key, frame={clat,clon}, h=hash,
+        cliff={shape='/s/bounded_cliff.cdae',pos={0,0,0},bounds=bounds,collisionMesh=proxy}}},1,B)
+    local applies = S.calls.postApply_TSStatic or 0
+    roads.update(gov,1,car,nil,B)
+    T.check((S.calls.postApply_TSStatic or 0)==applies,'geotile selects contact before registration')
+    return objsWith('bounded_cliff')[1]
+  end
+  local distant=importPiece({4000,0,0,4020,20,100},'bounded')
+  T.check(distant and distant.fields.collisionType=='None','distant piece in nearby geotile imports without physics')
+  roads.clear()
+  local near=importPiece({0,0,0,20,20,100},'near')
+  T.check(near and near.fields.collisionType=='Visible Mesh Final','nearby bounded piece imports with physics')
+  roads.clear()
+  local legacy=importPiece(nil,'legacy')
+  T.check(legacy and legacy.fields.collisionType=='Visible Mesh Final','legacy payload retains conservative tile collision')
+  roads.clear()
+  local proxy=importPiece({0,0,0,20,20,100},'proxy',true)
+  T.check(proxy and proxy.fields.collisionType=='Collision Mesh','proxy capability survives receipt and initial import')
+  T.check(proxy.fields.bneCliffCollisionMesh=='1','proxy capability belongs to the loaded object')
+  roads.setCliffsEnabled(false)
+  T.check(proxy.fields.collisionType=='None','disabling cliffs disables proxy collision')
+  roads.setCliffsEnabled(true)
+  T.check(proxy.fields.collisionType=='Collision Mesh','reactivating cliffs restores their proxy collision')
+  roads.reset()
+end
 
 T.done('test_roadgeo')

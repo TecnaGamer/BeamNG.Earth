@@ -188,7 +188,11 @@ T.check(count() == 20, 'driving: its third shape the frame after that')
 tile('1_0', 4, 10)
 tile('1_1', 25, 10)
 trees.update(3, { x = 50, y = 50 }, nil, 4.0)
-T.check(count() == 40, 'shapes made before: not new, both in one frame (' .. count() .. ')')
+T.check(count() == 30, 'warm shapes also obey the driving model limit')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() > 30 and count() < 40, 'next warm model progresses on the following frame')
+trees.update(3, { x = 50, y = 50 }, nil, 4.0)
+T.check(count() == 40, 'all warm models finish without changing the item set')
 trees.clear()
 trees.reset()
 tile('0_0', 4, 10)
@@ -662,6 +666,39 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
     'golfflag: its model at 1:1')
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
+
+-- Warm, sparse models need a distinct-shape budget too: item counts alone allow
+-- dozens of expensive native model updates in one frame. Final placement is exact.
+do
+  trees.clear(); trees.reset()
+  local every, spare = trees.EVERY_N, trees.POOL_SPARE
+  trees.EVERY_N, trees.POOL_SPARE, trees.RECHECK_S = 3, 0, -1
+  local groups, rows = {}, {}
+  for i=1,3 do
+    local g='budget_model_'..i
+    groups[i]=g; trees.CATALOG[g]={{'/test/warm_model_'..i,1}}
+    rows[i]={i-1,10+i,10,5,0,1,1,0}
+  end
+  trees.onRows(90,'0_0',rows,groups,8)
+  for _=1,3 do trees.update(90,{x=10,y=10},nil,trees.LOADING_FRAME_MS) end
+  T.check(count()==3,'calm loading keeps its multi-model throughput')
+  local expected=placed()
+  trees.clear() -- everMade/types stay warm, so the new-shape gate cannot explain the limit
+  trees.onRows(90,'0_0',rows,groups,8)
+  for i=1,3 do
+    trees.update(90,{x=10,y=10},nil,4)
+    T.check(count()==i,'driving admits one warm model on each consecutive frame '..i)
+  end
+  T.check(placed()==expected,'model scheduling keeps identical objects, transforms and collision')
+  trees.onDrop({anchorId=90,key='0_0'})
+  for i=1,3 do
+    trees.update(90,{x=10,y=10},nil,4)
+    T.check(count()==3-i,'driving also limits model removals '..i)
+  end
+  for _,g in ipairs(groups) do trees.CATALOG[g]=nil end
+  trees.EVERY_N, trees.POOL_SPARE = every, spare
+  trees.clear();trees.reset()
 end
 
 T.done('test_trees')

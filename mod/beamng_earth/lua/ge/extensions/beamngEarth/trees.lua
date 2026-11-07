@@ -729,16 +729,21 @@ end
 -- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most while driving; any number while the
 -- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
 M.NEW_SHAPES_PER_FRAME = 1
-local touched, touchedItems, newShapes = {}, 0, 0
-local newShapeCap = math.huge
+-- Sparse tinted rubble defeats a population-only budget: 29 already-loaded models
+-- with 473 items caused a 139 ms native tick. Admit one model per driving frame;
+-- all items of that model still share the existing item/time budget.
+M.DRIVING_SHAPES_PER_FRAME = 1
+local touched, touchedItems, newShapes, touchedShapes = {}, 0, 0, 0
+local newShapeCap, shapeCap = math.huge, math.huge
 local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
   if touched[shape] then return true end
   local n = pop[shape] or 0
   local new = not everMade[shape]
   if next(touched) ~= nil and (touchedItems + n > M.SHAPE_ITEMS_PER_FRAME
-      or (new and newShapes >= newShapeCap)) then return false end
+      or touchedShapes >= shapeCap or (new and newShapes >= newShapeCap)) then return false end
   touched[shape], touchedItems = true, touchedItems + n
+  touchedShapes = touchedShapes + 1
   if new then everMade[shape], newShapes = true, newShapes + 1 end
   return true
 end
@@ -1062,7 +1067,7 @@ end
 
 -- Every frame: tiles of other anchors and dropped ones emptied, the others filled / thinned to their
 -- distance's rank, M.PER_FRAME items at most.
--- Tree work every EVERY_N-th frame, N times the items: a frame with any Forest change costs the engine's tick a few
+-- Calm tree work every EVERY_N-th frame, N times the items: a frame with any Forest change costs the engine's tick a few
 -- ms whatever the count (2026-10-15, 100 mph forest drive: tick 3.5 -> 1.65 ms a frame on average, 50 -> 54 fps)
 M.EVERY_N = 3
 local frameN = 0
@@ -1089,8 +1094,12 @@ function M.update(anchorId, player, view, frameMs)
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
+  local driving = frameMs ~= nil and frameMs < M.LOADING_FRAME_MS
+  -- Spread model updates over consecutive driving frames instead of accumulating
+  -- three frames of unrelated shapes. The overall item allowance stays the same.
+  local interval = driving and 1 or M.EVERY_N
   frameN = frameN + 1
-  if frameN % M.EVERY_N ~= 0 then return end
+  if frameN % interval ~= 0 then return end
   if not dirty and not ghostSince and #foci == 0 and lastPass and lastPass.anchor == anchorId and player
       and math.abs(player.x - lastPass.x) + math.abs(player.y - lastPass.y) < M.RECHECK_M
       and (view and lastPass.vx and math.abs(view.x - lastPass.vx) + math.abs(view.y - lastPass.vy) < M.RECHECK_M
@@ -1105,12 +1114,13 @@ function M.update(anchorId, player, view, frameMs)
   dirty = false                           -- (set again below by anything this pass leaves undone)
   lastPass = player and { anchor = anchorId, x = player.x, y = player.y, vx = view and view.x, vy = view and view.y,
     clock = stopwatch.new() } or nil
-  local budget = M.PER_FRAME * M.EVERY_N
+  local budget = M.PER_FRAME * interval
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
-  touched, touchedItems, newShapes = {}, 0, 0
-  newShapeCap = (frameMs ~= nil and frameMs < M.LOADING_FRAME_MS) and M.NEW_SHAPES_PER_FRAME or math.huge
+  touched, touchedItems, newShapes, touchedShapes = {}, 0, 0, 0
+  newShapeCap = driving and M.NEW_SHAPES_PER_FRAME or math.huge
+  shapeCap = driving and M.DRIVING_SHAPES_PER_FRAME or math.huge
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
   for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)

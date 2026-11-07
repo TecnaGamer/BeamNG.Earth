@@ -190,7 +190,7 @@
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
-          <div class="panel-sub">Debug layers</div>
+          <div class="panel-sub">Debug Overlays</div>
           <label class="layer-opt"><input type="checkbox" v-model="debugOn" /> Regional placement</label>
           <BngSelect v-if="debugOn" class="cache-select" :value="debugMode" :options="debugOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (debugMode = v)" />
@@ -214,7 +214,7 @@
       <div v-for="item in debugData?.legend || []" :key="item.id" class="cache-legend-row">
         <span class="cache-swatch" :style="{ background: item.color }"></span>{{ item.label }}
       </div>
-      <div class="debug-note">{{ debugMessage || debugData?.note }}</div>
+      <div v-if="debugMessage" class="debug-note">{{ debugMessage }}</div>
     </div>
 
     <!-- status: tiles unavailable / not connected -->
@@ -420,6 +420,7 @@ import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
+import { paintDebugFeatures } from "./debugoverlay.js"
 import layerData from "./maplayers.js"
 import { BngSelect } from "@/common/components/base"
 
@@ -1134,7 +1135,7 @@ function askDebug() {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiDebugMap and beamngEarth_settings.uiDebugMap(${luaStr(debugMode.value)},${south},${west},${north},${east}) or nil`, r => {
     if (seq !== debugSeq) return
     if (!r?.id) {
-      debugMessage.value = r?.error || "Connect to the companion server to view debug layers."
+      debugMessage.value = r?.error || "Connect to the companion server to view debug overlays."
       scheduleDebug(5000)
       return
     }
@@ -1162,28 +1163,10 @@ function drawDebug() {
   if (!ctx) return
   ctx.clearRect(0, 0, w.value, h.value)
   if (!debugOn.value || !debugData.value) return
-  const colors = new Map((debugData.value.legend || []).map(o => [o.id, o.color]))
-  const world = 256 * Math.pow(2, view.value.z)
-  for (const feature of debugData.value.features || []) {
-    const points = feature.ring.map(([lon, lat]) => screen(lat, lon))
-    if (!points.length) continue
-    // Unwrap around the first vertex, then draw adjacent world copies. A pan
-    // across the date line must not paint a polygon through the entire map.
-    for (const p of points) p.x += Math.round((points[0].x - p.x) / world) * world
-    for (const shift of [-world, 0, world]) {
-      if (Math.max(...points.map(p => p.x + shift)) < 0 || Math.min(...points.map(p => p.x + shift)) > w.value) continue
-      ctx.beginPath()
-      points.forEach((p, i) => i ? ctx.lineTo(p.x + shift, p.y) : ctx.moveTo(p.x + shift, p.y))
-      ctx.closePath()
-      ctx.fillStyle = colors.get(feature.type) || "#ffffff"
-      ctx.globalAlpha = debugMode.value === "cliff_generated" ? 0.68 : 0.28
-      ctx.fill()
-      if (feature.label) {
-        ctx.globalAlpha = 0.9; ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2; ctx.stroke()
-      }
-    }
-  }
-  ctx.globalAlpha = 1
+  paintDebugFeatures(ctx, debugData.value, {
+    screen, width: w.value, world: 256 * Math.pow(2, view.value.z),
+    alpha: debugMode.value === "cliff_generated" ? 0.68 : 0.28,
+  })
 }
 function queueDebugDraw() {
   if (debugFrame === null) debugFrame = requestAnimationFrame(drawDebug)

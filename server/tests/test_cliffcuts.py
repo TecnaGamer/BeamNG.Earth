@@ -31,6 +31,104 @@ class RoadCutTests(unittest.TestCase):
                            self.x, self.y, 1, self.centers, self.segs if segments is None else segments,
                            self.blocked, self.labels)
 
+    def test_sustained_length_follows_diagonal_face_on_rectangular_cells(self):
+        # At Nevada latitudes a nominal 4 m longitude cell is about 3.24 m.
+        # The same 26 m face must qualify regardless of compass direction.
+        dx, dy = 3.24, 4.
+        yy, xx = np.mgrid[-12:13, -12:13]
+        x, y = xx*dx, yy*dy
+        for angle in (0, 30, 45, 60, 90, 135):
+            a = np.radians(angle)
+            along = x*np.cos(a)+y*np.sin(a)
+            across = -x*np.sin(a)+y*np.cos(a)
+            face = (np.abs(along) < 13) & (np.abs(across) < 4.5)
+            result = cuts.sustained(face, face, np.full(face.shape, 2.), dx, dy)
+            self.assertTrue(result.any(), f"face at {angle} degrees")
+            short = (np.abs(along) < 7) & (np.abs(across) < 4.5)
+            self.assertFalse(cuts.sustained(short, short, np.full(face.shape, 4.), dx, dy).any(),
+                             'high face area cannot authorize a short isolated bank')
+
+    def test_wide_shoulder_does_not_dilute_a_steep_cut(self):
+        # A 12 m-high wall behind a 20 m drainage/shoulder shelf is still
+        # a cutting. Averaging the shelf into the face rejected it as gentle.
+        h = np.clip(self.xx-28, 0, 10)*1.3
+        keep = self.select(h=h)
+        self.assertTrue(keep.any())
+        self.assertFalse(keep[self.centers[..., 0] < 28].any(), 'flat shelf stays terrain')
+        self.assertFalse(self.select(h=np.minimum(h, 3.)).any(), 'short rise remains excluded')
+        dropped = h-np.where(self.xx >= 20, 8., 0.)
+        self.assertFalse(self.select(h=dropped).any(), 'cannot look across a drop to borrow a crest')
+
+    def test_rural_service_road_below_cut_is_used_instead_of_distant_highway(self):
+        # A rural frontage road sits 30 m above/beside the main carriageway.
+        # Its 13 m cutting must be profiled from that nearby road's bench.
+        service = SimpleNamespace(urban=False, cls='service', width=10.)
+        highway = SimpleNamespace(urban=False, cls='trunk', width=10.)
+        ground = [('main', highway, np.array([[0., -200, 0], [0, 200, 0]]), 0),
+                  ('upper', service, np.array([[30., -200, 10], [30, 200, 10]]), 0)]
+        h = np.clip(self.xx-10, 0, 16)*.4 + np.clip(self.xx-40, 0, 10)*1.3
+        vertices = np.c_[self.xx.ravel(), self.yy.ravel()]
+        blocked = self.blocked | (np.abs(self.centers[..., 0]-30) < 11)
+        def select(roads, heights=h, classes=self.classes):
+            return cuts.select_roads(heights, classes, self.x, self.y, 1, self.centers,
+                vertices, cuts.road_groups(roads, True), blocked)[0]
+        self.assertFalse(select(ground[:1]).any(), 'distant highway cannot confirm this upper face')
+        selected = select(ground)
+        self.assertTrue(selected.any(), 'rural frontage-road classification must not veto the cut')
+        self.assertFalse(selected[blocked].any(), 'both roads retain pavement clearance')
+        for heights in (np.zeros_like(h), -h, np.maximum(self.xx-40, 0)*1.3):
+            self.assertFalse(select(ground, heights).any(), 'flat land, fills and open hills stay excluded')
+        self.assertFalse(select(ground, classes=np.full(h.shape, 50)).any(), 'no built-up roof recovery')
+        service.urban = True
+        self.assertFalse(select(ground).any(), 'urban service roads remain excluded')
+
+    def test_lower_sustained_highway_cut_is_not_treated_as_a_small_bank(self):
+        # A six-metre cutting is visibly a roadside wall, despite not reaching
+        # the former eight-metre minimum. Keep the steep/long face requirements.
+        h = np.clip(self.xx-10, 0, 6)*1.
+        selected = self.select(h=h)
+        self.assertTrue(selected.any())
+        self.assertFalse(selected[self.blocked].any())
+        self.assertFalse(self.select(h=np.minimum(h, 3.)).any(), 'small verge stays terrain')
+        self.assertFalse(self.select(h=-h).any(), 'downhill embankment is not an excavation')
+        self.classes[np.abs(self.yy) > 8] = 40
+        self.assertFalse(self.select(h=h).any(), 'short isolated mound cannot qualify')
+
+    def test_profiled_taper_counts_as_bank_extent_but_cannot_supply_steep_core(self):
+        evidence = np.zeros((20, 20), bool)
+        evidence[8:11, 9:11] = True  # six steep cells, shorter than the whole bank
+        bank = evidence.copy()
+        bank[4:16, 9:11] = True
+        slope = np.full(bank.shape, np.tan(np.radians(25)))
+        slope[evidence] = np.tan(np.radians(50))
+        self.assertFalse(cuts.sustained(evidence, bank, slope, 3.24, 4.).any(),
+                         'ordinary unprofiled support cannot prove bank size')
+        accepted = cuts.sustained(evidence, bank, slope, 3.24, 4., profiles=bank)
+        np.testing.assert_array_equal(accepted, bank)
+        fewer = evidence.copy()
+        fewer[8, 9] = False
+        self.assertFalse(cuts.sustained(fewer, bank, slope, 3.24, 4., profiles=bank).any(),
+                         'tapers cannot replace the six-cell steep core')
+
+    def test_misaligned_road_label_does_not_cast_city_buffer_over_confirmed_cut(self):
+        # The coarse road raster runs 24 m past the carriageway edge, covering
+        # the crest of an otherwise natural bank at 35.96077, -114.66431.
+        self.h *= np.clip((24-np.abs(self.yy))/8, 0, 1)
+        self.classes[np.abs(self.xx) <= 28] = 50
+        spec = SimpleNamespace(urban=False, cls='trunk', width=10.)
+        ground = [('highway', spec, np.array([[0., -200, 0], [0, 200, 0]]), 0)]
+        vertices = np.c_[self.xx.ravel(), self.yy.ravel()]
+        selected, _ = cuts.select_roads(self.h, self.classes, self.x, self.y, 1,
+            self.centers, vertices, cuts.road_groups(ground, True), self.blocked)
+        face = ((self.centers[..., 0] >= 22) & (self.centers[..., 0] <= 26)
+                & (np.abs(self.centers[..., 1]) <= 14))
+        self.assertTrue(selected[face].all(), 'road raster must not erase the crest of the short bank')
+        self.assertFalse(selected[self.blocked].any())
+        self.classes[self.xx >= 32] = 50
+        selected, _ = cuts.select_roads(self.h, self.classes, self.x, self.y, 1,
+            self.centers, vertices, cuts.road_groups(ground, True), self.blocked)
+        self.assertFalse(selected.any(), 'a wholly built-up crest remains excluded')
+
     def test_road_cut_with_built_up_carriageway_is_detected(self):
         self.classes[self.labels] = 50
         keep = self.select()
@@ -134,7 +232,7 @@ class RoadCutTests(unittest.TestCase):
     def test_no_road_downhill_fill_low_bank_and_open_hill_fail(self):
         self.assertFalse(self.select(segments=roads._Segs({})).any())
         self.assertFalse(self.select(h=-self.h).any(), 'downhill fill is not an uphill cutting')
-        self.assertFalse(self.select(h=np.clip(self.xx-10, 0, 4)*1.5).any())
+        self.assertFalse(self.select(h=np.clip(self.xx-10, 0, 2)*1.5).any())
         self.assertFalse(self.select(h=np.maximum(self.xx-10, 0)*1.3).any(), 'no crest slope break')
         self.assertFalse(self.select(h=self.xx*1.3).any(), 'no road bench')
         self.assertFalse(self.select(h=np.maximum(self.xx-10, 0)*.6).any(), 'ordinary roadside slope')
