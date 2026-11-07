@@ -94,6 +94,8 @@ M.SCHEMA = {
   -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
   -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
+  -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
+  mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -142,7 +144,7 @@ M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', '
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
-  'placeNamesOnline', 'telemetry', 'creditsVisible', 'beammpOnLaunch',
+  'placeNamesOnline', 'telemetry', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
   'devMapKm' }
 
@@ -1067,6 +1069,11 @@ end
 
 -- The key binding (actions/beamngEarth.json; M and the pause menu Map via redirectBigMap): open the map, or close it back to driving.
 function M.toggleMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and (m3.isActive() or (not mapOpen and M.get and M.get('mapStyle') == '3d')) then
+    m3.toggle()
+    return
+  end
   if mapOpen then
     M.navigate('play')
     mapOpen = false
