@@ -553,15 +553,18 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
         log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
     de_nodes = False                # (Germany's mapped nodes: its junction signs on, the graph's window in Germany)
+    de_routes = ()                  # (and the cells' road_routes for the German junctions' ref ranks, as the tiles')
     if rules.get("de_junctions"):
         import designs
         de_nodes = designs.reads_here(True, frame, (x - w, y - w, x + w, y + w))
+        if de_nodes:
+            de_routes = _de_routes(_s.md, keys)
     nodes = secrossings.read(_s.md, frame, keys) if secrossings.wanted(rules.get("country"), de_nodes) else None
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
                               priority=None if nodes is None else nodes["priority"],
-                              de_on=bool(rules.get("de_junctions")))
+                              de_on=bool(rules.get("de_junctions")), de_routes=de_routes)
     graph["rules"] = rules
     path = navgraphmod.write(out_dir, vfs_dir, aid, serial, graph)
     return path, len(graph["nodes"]), len(graph["edges"])

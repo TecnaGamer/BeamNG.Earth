@@ -189,16 +189,48 @@ def mapped_arms(arms, rows, lines=None):
 
 
 def reads_here(de_on, frame, box):
-    """secrossings.wanted's de for a road tile or a road graph (Ruling R36): the German junction signs on (de_on: the
-    setting, enabled's) and the frame-local box (x0, y0, x1, y1) it decides touching Germany, one of its four corners
-    or its centre inside (a road tile's: tile_reach; a road graph's: its window). Then every German junction it decides
-    has both of the map's sources, Overture's stop / give-way points and crossings and the lane shards' sign nodes,
-    not only those of a tile whose centre is in Germany. Off, Germany's border data is not asked. (Not near(): its
-    bounds span half of Central Europe, a read for every tile there.)"""
-    if not de_on:
+    """secrossings.wanted's de for a road tile or a road graph: the German junction signs on (de_on: the
+    setting, enabled's) and the frame-local box (x0, y0, x1, y1) it decides touching Germany (a road tile's:
+    tile_reach; a road graph's: its window): one of its four corners or its centre inside, or a point of a GRID_M grid
+    over it (on countrybounds: Germany entering the box along an edge, a bulge or a river's bend, with no corner
+    and not the centre inside; GRID_M says what it can miss). Then every German junction it decides has both of the
+    map's sources, Overture's stop / give-way points and crossings and the lane shards' sign nodes, not only those of a
+    tile whose centre is in Germany. Off, or the box away from germany.BOX (near), the border data is not asked at
+    all; otherwise the corners and the centre are one lookup and the grid, where they are all outside, one more."""
+    if not de_on or not near(frame, box):
         return False
     x0, y0, x1, y1 = (float(v) for v in box[:4])
-    return bool(_de(frame, [(x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2)]).any())
+    if _de(frame, [(x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2)]).any():
+        return True
+    return _grid_in(frame, (x0, y0, x1, y1))
+
+
+GRID_M = 25.0       # m at most between reads_here's grid points, the box's edges among its rows and columns. Germany's
+                    # part of the box is found where it runs GRID_M or more along one of the box's edges (an edge's
+                    # points are no farther apart) or holds a disc of GRID_M * sqrt(2) = 35 m anywhere (a grid cell's
+                    # diagonal). Missed can be a sliver narrower than that inside the box, or a bend shorter than
+                    # GRID_M across an edge (the border data itself is ~10 m): what reads_here gates is left out
+                    # there. A road tile decides its signs by each junction's point (inside), whatever reads_here
+                    # says: it loses only the map's stop / give-way points and crossings there. A road graph gates its
+                    # whole German context on reads_here (navgraph.build): a German junction in a missed sliver gets
+                    # today's AI there while the tiles' props stand its German signs, the one decision no longer
+                    # shared. That needs a strip of Germany under ~35 m wide reaching 200 m or more into the box (the
+                    # window's margin round the junctions it decides), or such a piece inside it. Cost, measured on
+                    # the published border data where the grid runs (the corners and the centre all outside Germany,
+                    # the box meeting germany.BOX: Salzburg, Strasbourg): a road tile's tile_reach (336 m) 15 x 15
+                    # points, 0.4-0.6 ms; a road graph's window (navgraph.WINDOW_M + 200 m each way: 2600 m) 105 x
+                    # 105, 16-26 ms. Inside Germany a corner answers (0.03 ms); away from the box nothing is asked
+                    # (0.01 ms)
+
+
+def _grid_in(frame, box):
+    """Does a point of a GRID_M grid over the frame-local box (x0, y0, x1, y1), its edges and corners among them, lie in
+    Germany? One germany.de_at: one codes_at for the grid's points inside germany.BOX."""
+    x0, y0, x1, y1 = box
+    nx = max(2, int(np.ceil((x1 - x0) / GRID_M)) + 1)
+    ny = max(2, int(np.ceil((y1 - y0) / GRID_M)) + 1)
+    gx, gy = np.meshgrid(np.linspace(x0, x1, nx), np.linspace(y0, y1, ny))
+    return bool(_de(frame, np.column_stack([gx.ravel(), gy.ravel()])).any())
 
 
 def cache_parts(de_on, frame, box):

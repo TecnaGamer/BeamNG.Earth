@@ -87,11 +87,11 @@ class RoadsTileTest(unittest.TestCase):
 
 
 class GermanRoutesTest(unittest.TestCase):
-    """The cells' road_routes for the German junctions' ref ranks (blockworker._de_routes) reach roads.build_tile the
-    same in a road process and in the server's own thread (earthd.Server's in-process path: --road-processes 0,
-    --block-process off): behind the same gate (a tile near Germany: designs.near) and over the same cells (the tile's,
-    200 m round it with the regional pole kit on), so a pool tile is the in-process tile there too (a tertiary
-    Kreisstraße a stretch in both)."""
+    """The cells' road_routes for the German junctions' ref ranks (blockworker._de_routes) reach roads.build_tile and
+    navgraph.build the same in a road process and in the server's own thread (earthd.Server's in-process paths:
+    --road-processes 0, --block-process off): behind the same gate (a tile near Germany: designs.near; the graph's
+    window touching it: designs.reads_here) and over the same cells (the tile's, 200 m round it with the regional pole
+    kit on), so a pool tile is the in-process tile there too (a tertiary Kreisstraße a stretch in both)."""
     MUNICH, SALZBURG, BALTIMORE = (48.137, 11.575), (47.800, 13.045), (39.2834, -76.5934)
 
     def server(self, at, out, on, poles):
@@ -111,12 +111,17 @@ class GermanRoutesTest(unittest.TestCase):
         return ns
 
     def routes(self, kind, at, on=True, poles="off"):
-        """(the road process's de_routes, the server thread's) that roads.build_tile (kind "tile": tile (0, 0)) gets
-        for an anchor at at; _de_routes stands in as [its cells]."""
+        """(the road process's de_routes, the server thread's) that roads.build_tile (kind "tile": tile (0, 0)) or
+        navgraph.build ("graph": round (0, 0)) gets for an anchor at at; _de_routes stands in as [its cells]."""
         import earthd
+        import navgraph
         import secrossings
         from unittest import mock
         got = []
+
+        def record(*a, **k):
+            got.append(k.get("de_routes", ()))
+            return {"nodes": {}, "edges": []}
         blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
                                          airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
                                          bridges={}, anchor=lambda aid, lat, lon: (None, None))
@@ -130,6 +135,12 @@ class GermanRoutesTest(unittest.TestCase):
                     blockworker.roads_tile(1, at[0], at[1], 15, 0, 0, a, "/temp/x", False, 0.0, country="DE",
                                            mph=False, pole_profile=earthd.Server.pole_profile(ns), de_junctions=on)
                     earthd.Server.build_roads_tile(ns, 1, 0, 0)
+            else:
+                with mock.patch.object(navgraph, "build", record), mock.patch.object(navgraph, "write",
+                                                                                     lambda *p: "/temp/x/g.json"):
+                    blockworker.navgraph(1, at[0], at[1], 15, 0.0, 0.0, a, "/temp/x", 7, False, False,
+                                         {"country": "DE", "de_junctions": on})
+                    earthd.Server.build_navgraph(ns, 1, 0.0, 0.0, 7)
         self.assertEqual(len(got), 2, kind)
         return [list(g) for g in got]
 
@@ -142,6 +153,12 @@ class GermanRoutesTest(unittest.TestCase):
             self.assertEqual(bool(pool), near, (at, on, poles))
         wide = self.routes("tile", self.MUNICH, poles="europe")[0][0]
         self.assertGreater(len(wide), len(self.routes("tile", self.MUNICH)[0][0]), "the kit's 200 m: more cells")
+
+    def test_graph_routes_in_process_as_in_a_road_process(self):
+        for at, on, want in ((self.MUNICH, True, True), (self.MUNICH, False, False), (self.SALZBURG, True, False)):
+            pool, here = self.routes("graph", at, on)
+            self.assertEqual(here, pool, (at, on))
+            self.assertEqual(bool(pool), want, (at, on))
 
 
 class NavgraphTest(unittest.TestCase):
@@ -178,8 +195,8 @@ class NavgraphTest(unittest.TestCase):
 class GermanReadGateTest(unittest.TestCase):
     """The German read gates in a road process: Overture's nodes (secrossings.read) for a road tile or a
     road graph when the German junction signs are on and the box it decides touches Germany (the tile's own ± its
-    junctions' reach, roads.NEAR_M; the graph's window): one of its corners or its centre inside. Off: Germany's
-    border data untouched, no read; outside Germany: no read."""
+    junctions' reach, roads.NEAR_M; the graph's window): one of its corners or its centre inside (or a point of
+    designs.GRID_M's grid). Off: Germany's border data untouched, no read; outside Germany: no read."""
     MUNICH, SALZBURG = (48.137, 11.575), (47.800, 13.045)
 
     def reads(self, kind, at, on=True, west_of=None):
@@ -235,6 +252,26 @@ class GermanReadGateTest(unittest.TestCase):
         (roads.NEAR_M, 40 m): read; 60 m west, past the reach: not."""
         self.assertTrue(self.reads("tile", self.MUNICH, west_of=-20.0))
         self.assertFalse(self.reads("tile", self.MUNICH, west_of=-60.0))
+
+    def test_the_graph_gets_the_cells_routes_in_germany(self):
+        """The road graph's German context has the cells' road_routes (designs.context's ref ranks, as the road
+        tiles': blockworker._de_routes over its window's cells) where its window touches Germany; none off or
+        outside."""
+        import navgraph
+        from unittest import mock
+        layer = object()
+        for at, on, want in ((self.MUNICH, True, [layer]), (self.MUNICH, False, ()), (self.SALZBURG, True, ())):
+            got = {}
+            blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
+                                             airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
+                                             bridges={}, anchor=lambda aid, lat, lon: (None, None))
+            with mock.patch.object(blockworker, "_de_routes", lambda md, keys: [layer] if keys else []), \
+                    mock.patch.object(navgraph, "build", lambda *a, **k: got.update(k) or {"nodes": [], "edges": []}), \
+                    tempfile.TemporaryDirectory() as out:
+                blockworker.navgraph(1, at[0], at[1], 15, 0.0, 0.0, out, "/temp/x", 7, False, True,
+                                     {"country": "DE", "de_junctions": on})
+            self.assertEqual(list(got.get("de_routes", ())), list(want), (at, on))
+            self.assertIs(got["de_on"], on)
 
     def test_a_graph_window_across_the_border(self):
         """The graph's window is (0, 0) +- navgraph.WINDOW_M + 200 m: Germany 50 m inside its west edge: read; 50 m past

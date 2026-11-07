@@ -1814,6 +1814,8 @@ class Server:
         de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
         nodes = secrossings.read(self.mapdata, anchor.frame, keys) \
             if secrossings.wanted(self.country(anchor), de_nodes) else None
+        # (and the cells' road_routes for the German junctions' ref ranks, as blockworker.navgraph reads them)
+        de_routes = blockworker._de_routes(self.mapdata, keys) if de_nodes else ()
         tun = {}
         try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
             if not navgraphmod.AI_TUNNELS:
@@ -1831,7 +1833,7 @@ class Server:
                                   left_hand=self.left_hand(anchor), mph=self.mph(anchor),
                                   signals=furnituremod.signals_for(self.mapdata, anchor.frame, keys),
                                   country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
-                                  de_on=designsmod.enabled(self.dej_on))
+                                  de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
         graph["rules"] = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, float(cla), float(clo)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)

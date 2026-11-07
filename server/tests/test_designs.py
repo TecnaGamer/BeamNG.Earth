@@ -365,22 +365,91 @@ class MappedTest(unittest.TestCase):
                          {"two": 0, "out": 0, "in": 0})
 
     def test_reads_here_over_the_box(self):
-        """R36: the read gate's box touches Germany at a corner or its centre (a half-plane west of x = 0 here); off,
-        the border data untouched. tile_reach: a tile's own box + roads.NEAR_M (+ a geotile's skin margin)."""
+        """The read gate's box touches Germany at a corner (a half-plane west of x = 0 here) or its centre (a disc
+        round it, no corner inside), or a point of designs.GRID_M's grid over the box, its edges among them
+        (Germany entering it along an edge); off, the border data untouched. tile_reach: a tile's own box +
+        roads.NEAR_M (+ a geotile's skin margin)."""
         lon_cut = float(self.FRAME.enu_to_geodetic(np.array(0.0), np.array(0.0), 0.0)[1])
         west = lambda lon, lat: np.atleast_1d(np.asarray(lon, float) <= lon_cut)    # noqa: E731
         with mock.patch.object(germany, "contains", west):
             self.assertTrue(designs.reads_here(True, self.FRAME, (-10.0, 0.0, 300.0, 300.0)), "a corner")
             self.assertFalse(designs.reads_here(True, self.FRAME, (10.0, 0.0, 300.0, 300.0)))
-            self.assertTrue(designs.reads_here(True, self.FRAME, (-300.0, 0.0, 200.0, 300.0)), "the centre")
             self.assertTrue(designs.reads_here(True, self.FRAME, designs.tile_reach((30.0, 0.0, 286.0, 256.0))))
             self.assertFalse(designs.reads_here(True, self.FRAME, designs.tile_reach((50.0, 0.0, 306.0, 256.0))))
         self.assertEqual(designs.tile_reach((0.0, 0.0, 256.0, 256.0), 3.0), (-43.0, -43.0, 299.0, 299.0))
+        box = (-300.0, 0.0, 200.0, 300.0)            # (its centre (-50, 150))
+
+        def ll(x, y):
+            lat, lon, _ = self.FRAME.enu_to_geodetic(np.asarray(x, float), np.asarray(y, float), 0.0)
+            return np.asarray(lon, float), np.asarray(lat, float)
+
+        def disc(lon, lat):             # (Germany a disc of 20 m round the box's centre)
+            e, n, _ = self.FRAME.geodetic_to_enu(np.asarray(lat, float), np.asarray(lon, float), 0.0)
+            return np.atleast_1d(np.hypot(np.asarray(e) + 50.0, np.asarray(n) - 150.0) <= 20.0)
+        with mock.patch.object(germany, "contains", disc):
+            self.assertFalse(disc(*ll([-300.0, 200.0, -300.0, 200.0], [0.0, 0.0, 300.0, 300.0])).any(), "(no corner)")
+            self.assertTrue(designs.reads_here(True, self.FRAME, box), "the centre")
+
+        def polygon(*xy):
+            """Germany a polygon of frame points xy (germany.contains patched: points in lon / lat)."""
+            import polygon as polygonmod
+            ring = np.array(xy, float)
+
+            def contains(lon, lat):
+                e, n, _ = self.FRAME.geodetic_to_enu(np.asarray(lat, float), np.asarray(lon, float), 0.0)
+                return np.atleast_1d(np.asarray(polygonmod.contains_points(
+                    ring, np.column_stack([np.ravel(e), np.ravel(n)])), bool))
+            return contains
+        # Germany entering the box along its south edge (a bulge 40 m deep, between x -120 and -60, 27 m of the
+        # edge): no corner and not the centre inside, a point of the edge's row of the grid is
+        bulge = polygon((-120.0, -50.0), (-90.0, 40.0), (-60.0, -50.0))
+        past = polygon((-120.0, -50.0), (-90.0, -10.0), (-60.0, -50.0))     # (10 m short of it)
+        with mock.patch.object(germany, "contains", bulge):
+            self.assertFalse(designs._de(self.FRAME, [(-300.0, 0.0), (200.0, 0.0), (-300.0, 300.0), (200.0, 300.0),
+                                                      (-50.0, 150.0)]).any(), "(no corner, not the centre)")
+            self.assertTrue(designs.reads_here(True, self.FRAME, box), "a grid point in the bulge")
+        with mock.patch.object(germany, "contains", past):
+            self.assertFalse(designs.reads_here(True, self.FRAME, box))
+        # (designs.GRID_M's limit: a sliver inside the box narrower than the grid between its points is missed by
+        # design; a disc of GRID_M * sqrt(2) anywhere in it is not)
+        sliver = polygon((-112.0, 10.0), (-103.0, 10.0), (-103.0, 290.0), (-112.0, 290.0))      # (x -112 .. -103)
+        with mock.patch.object(germany, "contains", sliver):
+            self.assertFalse(designs.reads_here(True, self.FRAME, box), "missed by design: 9 m between grid columns")
+        rng = np.random.default_rng(7)
+        r = designs.GRID_M * np.sqrt(2.0) / 2 / np.cos(np.pi / 64) + 0.01     # (its 64-gon's inradius: half a diagonal)
+        for cx, cy in zip(rng.uniform(-300.0 + r, 200.0 - r, 40), rng.uniform(r, 300.0 - r, 40)):
+            ring = [(cx + r * np.cos(t), cy + r * np.sin(t)) for t in np.linspace(0.0, 2 * np.pi, 64)]
+            with mock.patch.object(germany, "contains", polygon(*ring)):
+                self.assertTrue(designs.reads_here(True, self.FRAME, box), (cx, cy))
 
         def untouched(*a, **k):
             raise AssertionError("Germany's border data asked with the setting off")
         with mock.patch.object(germany, "contains", untouched), mock.patch.object(countrybounds, "bundled", untouched):
             self.assertFalse(designs.reads_here(False, self.FRAME, (-300.0, -300.0, 300.0, 300.0)))
+
+    def test_reads_here_lookups(self):
+        """reads_here's lookups: the corners and the centre one germany.contains call, the grid (where they are all
+        outside) one more, and none for a box away from germany.BOX (near: Baltimore, the border data not asked)."""
+        calls = []
+        real = germany.contains
+
+        def counted(lon, lat):
+            calls.append(np.size(lon))
+            return real(lon, lat)
+        window = (-1300.0, -1300.0, 1300.0, 1300.0)         # (a road graph's: navgraph.WINDOW_M + 200 m)
+        with mock.patch.object(germany, "contains", counted):
+            self.assertTrue(designs.reads_here(True, self.FRAME, window))
+            self.assertEqual(calls, [5])
+            calls.clear()
+            salzburg = geodesy.EnuFrame(47.800, 13.045, 0.0)    # (Freilassing 5 km away: not in the window)
+            self.assertFalse(designs.reads_here(True, salzburg, window))
+            self.assertEqual(calls, [5, 105 * 105])
+            calls.clear()
+            self.assertFalse(designs.reads_here(True, salzburg, designs.tile_reach((0.0, 0.0, 256.0, 256.0))))
+            self.assertEqual(calls, [5, 15 * 15])
+        with mock.patch.object(germany, "contains", side_effect=AssertionError("asked")), \
+                mock.patch.object(countrybounds, "bundled", side_effect=AssertionError("asked")):
+            self.assertFalse(designs.reads_here(True, geodesy.EnuFrame(39.2834, -76.5934, 0.0), window))
 
     def test_near_is_the_box(self):
         """near(): the box against germany.BOX, no lookup (Salzburg and Strasbourg are near, Baltimore and Vienna
