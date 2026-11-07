@@ -381,6 +381,8 @@ EYE_LOD_MIN_M = 3000.0          # an eye above this: the far tiles' detail by th
 MAP_HIGH_EYE_M = 40000.0        # an eye above this (the 3D map): the finest global tiles are leaves (farfield.select_global)
 MAP_RAMP_START = 0.125           # the 3D map at a new anchor: K x this first (Conn.commit_anchor) ...
 MAP_RAMP_STEP = 2.0              # ... times this each time that far field is done, up to 1
+MAP_OUT_OF_VIEW_K = 3.0          # the 3D map: tiles off the screen chosen as if this many times as far (map_cone)
+MAP_ZOOM_RAMP_K = 8.0            # the 3D map's eye this many times lower than before: coarse first again (on_pose)
 MAP_FOCUS_MAX_M = 1200000.0      # a map_focus farther from the anchor than this is ignored (mod map3d REBASE_M)
 FAR_TRACE = os.environ.get("BNGE_FARTRACE") == "1"     # (tools: every far tile sent, logged)
 MAP_TEX_PX = 512                # the 3D map's far textures at least this (Server.tex_size) ...
@@ -6720,6 +6722,7 @@ class Connection:
             # the 3D map at a new place: coarse first, then finer in steps as each is done (Conn._stream), as map apps
             # load; the finest first left the screen empty for seconds round the first tiles (2026-11-07)
             self.lod_ramp = MAP_RAMP_START
+            self.zoom_ref = self.eye        # (the zoom rule's reference: this anchor's own ramp, not a second one)
         self.update_far()
 
     def _set_block(self, aid, cx, cy):
@@ -6958,6 +6961,16 @@ class Connection:
                 else:
                     cs = predict_chain(px, py, *self.vel, base.cx, base.cy, rule, PREFETCH_CHAIN, at)
                 self.predicted_chain = [self.s.layout.block_at(*c) for c in cs]
+        if (self.map_view or self.map_open) and self.eye:
+            # the 3D map zoomed far in (the user, 2026-11-07: "no matter where i am it should only take a couple seconds
+            # to see detailed terrain"): coarse first there too, as at a new anchor (commit_anchor), not the finest of
+            # ~360 tiles first and the screen filling in 15 s (Minneapolis, no origin move)
+            ref = getattr(self, "zoom_ref", None)
+            if ref is None or self.eye > ref:
+                self.zoom_ref = self.eye
+            elif self.eye < ref / MAP_ZOOM_RAMP_K and getattr(self, "lod_ramp", 1.0) >= 1.0:
+                self.lod_ramp, self.zoom_ref = MAP_RAMP_START, self.eye
+                log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
         self.update_far()
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
@@ -7509,7 +7522,8 @@ class Connection:
                                                   hold=set(self.node_changed), min_level=self.s.min_level,
                                                   radii=self.s.near_radii, layout=self.s.layout,
                                                   forced_level=self.s.forced_level, view=self.view(),
-                                                  anchor_nodes=not high, eye_h=eye_h, **extra)
+                                                  anchor_nodes=not high, eye_h=eye_h, cone=self.map_cone(aid=anchor.id),
+                                                  **extra)
         else:
             new, refined = farfield.select(*self.view_focus, self.forced(), self.refined, self.kfun(),
                                            self.s.hysteresis, radius, hold=set(self.node_changed),
@@ -7523,6 +7537,13 @@ class Connection:
         if self.desired:                # the first selection of an anchor is not a change
             for n in refined ^ self.refined:
                 self.node_changed[n] = now
+        if FAR_TRACE and time.monotonic() - getattr(self, "_sel_logged", 0.0) > 0.5:
+            self._sel_logged = time.monotonic()
+            lv = {}
+            for t in new.values():
+                lv[t.level] = lv.get(t.level, 0) + 1
+            log.info("fartrace select eye %.0f radius %.0f km focus %.0f,%.0f held %d levels %s", self.eye or -1,
+                     radius / 1000, *self.view_focus, len(self.node_changed), dict(sorted(lv.items())))
         self.refined = refined
         changed = new.keys() != self.desired.keys()
         self.desired = new
@@ -7531,6 +7552,15 @@ class Connection:
             self.dirty = True
             self.batch = [time.perf_counter(), 0, 0]
         self.wake.set()
+
+    def map_cone(self, aid):
+        """The 3D map's view cone for the selection (farfield.out_of_view: off-screen nodes MAP_OUT_OF_VIEW_K times as
+        far), or None (driving: every direction counts; no 3D camera yet)."""
+        if not (self.map_view or self.map_open) or not isinstance(self.cam, dict) or \
+                getattr(self, "cam_aid", None) != aid:
+            return None
+        c = farfield.view_cone(self.cam)
+        return list(c) + [MAP_OUT_OF_VIEW_K] if c is not None and len(c) == 8 else None
 
     def ck(self, key):
         """The server's key of far tile `key` under the active anchor (Server.far_ck: a global tile's names none)."""
@@ -7805,6 +7835,7 @@ class Connection:
                 # (only once a step is whole: stepping on a timer instead left the coarse tiles not built yet out of
                 # the next selection, holes in the view for 15 s, Bozeman 2026-11-07)
                 self.lod_ramp = min(1.0, self.lod_ramp * MAP_RAMP_STEP)     # (the next, finer step: commit_anchor)
+                self.zoom_ref = self.eye    # (each step: what is shown is this eye's; a zoom from here starts over)
                 log.info("anchor %d: 3D map detail step x%.2f after %.2f s", anchor.id, self.lod_ramp,
                          time.perf_counter() - self.batch[0])
                 self.update_far()
@@ -7815,6 +7846,8 @@ class Connection:
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
                 self.send({"type": "far_done", "anchorId": anchor.id, "count": n})
                 self.far_done_at = time.monotonic()
+                if self.map_view or self.map_open:
+                    self.zoom_ref = self.eye    # (all shown at this eye's detail: the zoom rule's reference)
                 # (full priority: the roads too, on_pose; a catch-up boost is ended by catch_up only: ended here, it
                 # stayed off for the rest of a 150 mph drive, its flag still on, 2026-11-02)
                 if not self.s.boost_full and not self.catchup:

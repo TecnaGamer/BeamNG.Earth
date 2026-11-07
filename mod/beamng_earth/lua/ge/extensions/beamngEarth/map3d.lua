@@ -627,9 +627,11 @@ end
 -- rendering without haveing to rebase". Kept past 1,000 km: the anchor's own tile grid lies on its tangent plane,
 -- stretched ~1 % there, 11 % at 3,000 km)
 M.REBASE_M = 1000000
-M.REBASE_EYE_SHARE = 0.25       -- high up only once the target is this share of the eye's height away (the whole earth
-                                -- in view; over the far side of the earth from the origin the sky and the tiles went
-                                -- wrong, the user 2026-11-07: the globe turned "under the horizon line")
+-- Never while the eye is over REBASE_MAX_EYE_M (the whole earth in view): turning the globe moved the origin every few
+-- thousand km, each a reload and the backdrop earth swapped (the user, 2026-11-07: "when im zoomed all the way out
+-- and im rotating the earth around, it will lag alot and the earth will pop out and in from its center"); the sky
+-- shader's camera on the planet (skypatch.py SKY) draws the far side right. Coming down, one move to the view.
+M.REBASE_MAX_EYE_M = 300000
 M.REBASE_EVERY_S = 3
 local lastRebase = -1e9
 
@@ -704,7 +706,7 @@ function M.onUpdate(dtReal)
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.returnToCar then core.returnToCar() end
   elseif not transitioning and g.target and clock - lastRebase > M.REBASE_EVERY_S and not M.flying()
-      and anchorDistance(g) > math.max(M.REBASE_M, M.REBASE_EYE_SHARE * g.dist * math.sin(g.pitch)) then
+      and g.dist * math.sin(g.pitch) < M.REBASE_MAX_EYE_M and anchorDistance(g) > M.REBASE_M then
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.rebaseTo and s.lat then
       local sLat, sLon = require('beamngEarth/geodesy').snapAnchor(s.lat, s.lon)
