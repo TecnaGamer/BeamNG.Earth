@@ -186,8 +186,30 @@ def params(sys_row):
     return [float(p[k]) for k in PARAM_KEYS]
 
 
+def pole_params(sys_row):
+    """The kernel's pole settings: per rule its group's place in the country's order (-1: alone), most signs on a pole, the
+    distance within which signs share one."""
+    roles, systems, by_id = tables()
+    order = list(sys_row["order"])
+    ranks = []
+    for rule in systems["rules"]:
+        group = by_id[rule][1]["group"]
+        ranks.append(float(order.index(group)) if group in order else -1.0)
+    return ranks + [float(sys_row.get("max_on_pole", 3)), float(systems["pole"]["join_m"])]
+
+
+def speed_signs(frame, box, context, left_hand, mph):
+    """(n, 4) x, y, travel x, travel y of the speed-limit signs in box and 10 m round it: the road signs keep off them."""
+    x0, y0, x1, y1 = box
+    try:
+        rows = speedsigns.place(frame, (x0 - 10.0, y0 - 10.0, x1 + 10.0, y1 + 10.0), context, left_hand, mph)
+    except Exception:       # (optional scenery: the road signs go on without it)
+        return np.zeros((0, 4))
+    return np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, 9)[:, :4])
+
+
 def place(md, frame, box, context, left_hand, mph, sys_row):
-    """(k, 9) of road_sign_place's rows in box (x0, y0, x1, y1)."""
+    """(k, 11) of road_sign_place's rows in box (x0, y0, x1, y1)."""
     fast.require(KERNEL, "road signs")
     x0, y0, x1, y1 = box
     m = speedsigns.MARGIN_M
@@ -203,7 +225,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
             rows.setdefault(fid, row)           # (a line is whole in every cell it crosses)
     got = arrays(with_flags(rows, living, left_hand), box)
     if got is None:
-        return np.zeros((0, 9))
+        return np.zeros((0, 11))
     pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got
     b_la, b_lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
     infra = [md.cell(k, layers=("infrastructure",), kind="prefetch").layers.get("infrastructure")
@@ -214,19 +236,28 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     return fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
-                                    params(sys_row))
+                                    params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row))
 
 
 def table(signs, z_ground, z_road, sys_row):
-    """road_sign_mesh's rows of road_sign_place's, heights given."""
+    """road_sign_mesh's rows of road_sign_place's, heights given: the signs of one pole stacked from the lowest up, the top one
+    first in slot order, `gap_m` between them."""
     roles, systems, by_id = tables()
     sizes = systems["sizes"]["default"]
-    out = np.zeros((len(signs), 10))
+    gap = float(systems["pole"]["gap_m"])
+    width = np.zeros(len(signs))
+    cells = []
     for k, row in enumerate(signs):
         cell, role = by_id[systems["rules"][int(row[4])]]
-        urban, size = row[8] != 0.0, int(row[5])
-        out[k] = (row[0], row[1], z_ground[k], z_road[k], row[2], row[3], cell, SHAPES[role["shape"]],
-                  sizes[role["shape"]][size], sys_row["mount"][0 if urban else 1])
+        cells.append((cell, role))
+        width[k] = sizes[role["shape"]][int(row[5])]
+    out = np.zeros((len(signs), 10))
+    for k, row in enumerate(signs):
+        below = [width[j] + gap for j in range(len(signs)) if signs[j, 9] == row[9] and signs[j, 10] > row[10]]
+        cell, role = cells[k]
+        urban = row[8] != 0.0
+        out[k] = (row[0], row[1], z_ground[k], z_road[k], row[2], row[3], cell, SHAPES[role["shape"]], width[k],
+                  sys_row["mount"][0 if urban else 1] + sum(below))
     return np.ascontiguousarray(out)
 
 

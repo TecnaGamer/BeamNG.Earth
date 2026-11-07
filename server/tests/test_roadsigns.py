@@ -102,6 +102,55 @@ class Rules(unittest.TestCase):
         self.assertEqual((flags, meta[2]), (0, 0.0))
 
 
+class Poles(unittest.TestCase):
+    def test_a_warning_stands_alone_in_germany_but_not_in_czechia(self):
+        rules = roadsigns.tables()[1]["rules"]
+        de, cz = roadsigns.pole_params(roadsigns.system("DE")), roadsigns.pole_params(roadsigns.system("CZ"))
+        self.assertEqual(len(de), 17)
+        self.assertEqual(de[rules.index("warn.curve_left")], -1.0)
+        self.assertGreaterEqual(cz[rules.index("warn.curve_left")], 0.0)
+        self.assertEqual(cz[rules.index("warn.curve_left")], 0.0, "czech warnings on top")
+        self.assertEqual(de[15:], [3.0, 12.0])
+
+    def test_the_country_order_ranks_the_groups_from_the_top(self):
+        rules = roadsigns.tables()[1]["rules"]
+        ua = roadsigns.pole_params(roadsigns.system("UA"))
+        self.assertLess(ua[rules.index("warn.curve_left")], ua[rules.index("mand.roundabout")])
+        self.assertLess(ua[rules.index("mand.roundabout")], ua[rules.index("reg.no_entry")])
+        self.assertLess(ua[rules.index("reg.no_entry")], ua[rules.index("info.oneway")])
+
+    def test_signs_on_a_pole_are_stacked_from_the_lowest_up(self):
+        sys_row = roadsigns.system("CZ")
+        rules = roadsigns.tables()[1]["rules"]
+        rule = lambda name: float(rules.index(name))        # noqa: E731
+        # [x, y, travel x, travel y, rule, size, road x, road y, urban, pole, slot]
+        signs = np.array([[0, 0, 1, 0, rule("warn.signals"), 1, 0, 0, 0, 0, 0],
+                          [0, 0, 1, 0, rule("info.crossing_right"), 1, 0, 0, 0, 0, 1],
+                          [50, 0, 1, 0, rule("reg.no_entry"), 1, 50, 0, 0, 1, 0]], float)
+        t = roadsigns.table(signs, np.zeros(3), np.zeros(3), sys_row)
+        sizes = roadsigns.tables()[1]["sizes"]["default"]
+        mount = sys_row["mount"][1]
+        self.assertAlmostEqual(t[1, 9], mount)
+        self.assertAlmostEqual(t[2, 9], mount)
+        self.assertAlmostEqual(t[0, 9], mount + sizes["square"][1] + 0.1)
+
+    def test_a_tile_of_roads_gives_signs_with_pole_and_slot(self):
+        import fast
+        if not hasattr(fast._ef, "road_sign_place"):
+            self.skipTest("kernel without road signs")
+        pts = np.array([[0.0, 0.0], [800.0, 0.0]])
+        meta = np.array([[4.0, 0.0, 4.0, 0.0, 0.0, 0.0]])
+        z2 = np.zeros((0, 2))
+        got = fast._ef.road_sign_place(pts, pts, np.array([0, 2], np.int64), meta, np.array([0.0, 1.0]), np.array([0, 1], np.int64),
+                                       np.array([0, 2], np.int64), z2, np.zeros(2, np.int64), np.array([[360.0, 0.5]]),
+                                       np.array([[500.0, 0.5]]), z2, z2, np.zeros(1, np.int64), [-1e4, -1e4, 1e4, 1e4], False,
+                                       [0.5, 1.2], 0.9, roadsigns.params({}), np.zeros((0, 4)),
+                                       roadsigns.pole_params(roadsigns.system("CZ")))
+        self.assertEqual(got.shape[1], 11)
+        on = {int(p) for p in got[:, 9]}
+        self.assertTrue(any(((got[:, 9] == p).sum() > 1) for p in on), got)
+
+
 class Crossings(unittest.TestCase):
     def tags(self, **kw):
         return json.dumps({"highway": "crossing", **kw})

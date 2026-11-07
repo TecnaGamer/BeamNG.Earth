@@ -19,6 +19,9 @@
 //!   m before it ends (traffic leaves onto a lesser road).
 //! - LIVING, LIVING_END: entering and leaving a living street from a road that is not one.
 //! - ONEWAY: at the start of a town one-way street where traffic can join and none comes along it as a one-way.
+//! Signs that would stand within `join` m of each other, facing the same way, share one pole (the country's `order` of groups
+//! from the top down, at most `max_on_pole`; a rule whose group is not in the order stands alone); signs near a speed-limit
+//! sign of speedsigns.rs (the caller's `avoid`) give way to it.
 //! A rule's signs are thinned per direction; signs stand beside the carriageway on the driving side, clear of every
 //! road's pavement, never on a bridge or in a tunnel.
 //!
@@ -58,6 +61,10 @@ pub const FLAG_LIVING: i64 = 2;
 /// double curve gap m, motorway end m, living street min m, min m before the hazard].
 pub const N_PARAMS: usize = 8;
 
+/// The pole settings (Input::pole): per rule its place in the country's order of groups from the top of a pole (a negative
+/// number: the rule stands alone), then the most signs on a pole and the distance within which signs share one.
+pub const N_POLE: usize = RULES + 2;
+
 const PRIMARY: i64 = 5;         // ranks (speedsigns.RANK)
 const TRUNK: i64 = 6;
 const TERTIARY: i64 = 3;
@@ -71,6 +78,7 @@ const ROUNDABOUT_IN_M: f64 = 8.0;        // the mandatory sign this far before t
 const MOTORWAY_IN_M: f64 = 20.0;
 const LIVING_IN_M: f64 = 6.0;
 const ONEWAY_IN_M: f64 = 8.0;
+const AVOID_M: f64 = 7.0;               // a spot this near a speed-limit sign facing the same way is dropped
 const PANEL_GAP_M: f64 = 5.0;            // no two signs facing the same way closer than this, whatever their rules
 
 const NO_ENTRY_IN_M: f64 = 6.0;         // m inside the road's end
@@ -184,6 +192,8 @@ pub struct Sign {
     pub size: usize,
     pub road: [f64; 2],
     pub urban: bool,
+    pub pole: usize,
+    pub slot: usize,        // 0: the top of its pole
 }
 
 pub struct Input<'a> {
@@ -199,6 +209,7 @@ pub struct Input<'a> {
     pub crossings: ArrayView2<'a, f64>,
     pub signals: ArrayView2<'a, f64>,
     pub open_ends: ArrayView2<'a, f64>,
+    pub avoid: ArrayView2<'a, f64>,         // (n, 4) x, y, travel x, travel y of the speed-limit signs round the box
     pub poly: ArrayView2<'a, f64>,
     pub poly_off: ArrayView1<'a, i64>,
     pub bx: [f64; 4],
@@ -206,6 +217,7 @@ pub struct Input<'a> {
     pub lateral: [f64; 2],      // m from the carriageway's edge to the sign's near edge: town, country
     pub widest: f64,            // m: the widest sign, for the clearance of a spot
     pub params: [f64; N_PARAMS],
+    pub pole: [f64; N_POLE],
 }
 
 fn no_entry(net: &Net, incoming: &HashMap<i64, Vec<usize>>, outgoing: &HashMap<i64, Vec<usize>>, out: &mut Vec<Cand>) {
@@ -500,6 +512,61 @@ fn one_ways(net: &Net, ends: &HashMap<i64, usize>, incoming: &HashMap<i64, Vec<u
     }
 }
 
+/// Signs sharing poles: the greedy groups of signs of the same size class facing the same way within `join` m of the first of
+/// them, at most `max` to a pole, ordered from the top by the rule's place in the country's order; each group moves to its first
+/// sign's spot. The rest keep PANEL_GAP_M from every pole and from each other. Poles are numbered in the order they are made.
+fn poles(signs: Vec<Sign>, pole: &[f64; N_POLE]) -> Vec<Sign> {
+    let (max, join) = (pole[RULES].max(1.0) as usize, pole[RULES + 1]);
+    let n = signs.len();
+    let rank = |i: usize| pole[signs[i].rule as usize];
+    let mut taken = vec![false; n];
+    let mut groups: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        if taken[i] || rank(i) < 0.0 { continue; }
+        let mut g = vec![i];
+        for j in i + 1..n {
+            if g.len() >= max { break; }
+            if taken[j] || rank(j) < 0.0 || signs[j].size != signs[i].size || dot(signs[j].dir, signs[i].dir) < 0.95 { continue; }
+            let (dx, dy) = (signs[j].xy[0] - signs[i].xy[0], signs[j].xy[1] - signs[i].xy[1]);
+            if dx * dx + dy * dy <= join * join { g.push(j); }
+        }
+        if g.len() > 1 {
+            for &m in &g { taken[m] = true; }
+            groups.push(g);
+        }
+    }
+    let mut out: Vec<Sign> = Vec::with_capacity(n);
+    for g in &groups {
+        let mut order = g.clone();
+        order.sort_by(|&x, &y| rank(x).partial_cmp(&rank(y)).unwrap().then(signs[x].rule.cmp(&signs[y].rule)));
+        let first = &signs[g[0]];
+        for (slot, &m) in order.iter().enumerate() {
+            let mut s = signs[m].clone();
+            s.xy = first.xy;
+            s.dir = first.dir;
+            s.road = first.road;
+            s.slot = slot;
+            out.push(s);
+        }
+        let base = out.len() - order.len();
+        for k in 0..order.len() { out[base + k].pole = base; }
+    }
+    let mut singles: Vec<Sign> = Vec::new();
+    for i in 0..n {
+        if taken[i] { continue; }
+        let s = &signs[i];
+        let near = |o: &Sign| dot(o.dir, s.dir) > SAME_WAY_COS && (o.xy[0] - s.xy[0]).powi(2) + (o.xy[1] - s.xy[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M;
+        if out.iter().any(near) || singles.iter().any(near) { continue; }
+        singles.push(s.clone());
+    }
+    for mut s in singles {
+        s.pole = out.len();
+        s.slot = 0;
+        out.push(s);
+    }
+    out
+}
+
 /// The signs of a box. Arrays as speed_sign_place's; see Input.
 pub fn plan(a: &Input) -> Vec<Sign> {
     let mut net = Net { pts: a.pts, ll: a.ll, roads: Vec::new(), edges: Vec::new() };
@@ -623,23 +690,23 @@ pub fn plan(a: &Input) -> Vec<Sign> {
             }
         }
         let Some((q, t, road_xy)) = found else { continue };
-        // (the margin's signs count too: a sign in the next tile keeps this one off its spot, the same in both)
-        if out.iter().any(|o| dot(o.dir, t) > SAME_WAY_COS
-                           && (o.xy[0] - q[0]).powi(2) + (o.xy[1] - q[1]).powi(2) < PANEL_GAP_M * PANEL_GAP_M) {
+        if (0..a.avoid.nrows()).any(|k| dot([a.avoid[[k, 2]], a.avoid[[k, 3]]], t) > SAME_WAY_COS
+                                    && (a.avoid[[k, 0]] - q[0]).powi(2) + (a.avoid[[k, 1]] - q[1]).powi(2) < AVOID_M * AVOID_M) {
             continue;
         }
         let size = if rd.urban { 0 } else if rd.rank >= PRIMARY { 2 } else { 1 };
-        out.push(Sign { xy: q, dir: t, rule: c.rule, size, road: road_xy, urban: rd.urban });
+        out.push(Sign { xy: q, dir: t, rule: c.rule, size, road: road_xy, urban: rd.urban, pole: 0, slot: 0 });
     }
-    out.retain(|o| o.xy[0] >= a.bx[0] && o.xy[0] < a.bx[2] && o.xy[1] >= a.bx[1] && o.xy[1] < a.bx[3]);
-    out
+    let out = poles(out, &a.pole);
+    out.into_iter().filter(|o| o.xy[0] >= a.bx[0] && o.xy[0] < a.bx[2] && o.xy[1] >= a.bx[1] && o.xy[1] < a.bx[3]).collect()
 }
 
 /// The road signs of a box (x0, y0, x1, y1). Roads, junctions and bridge / tunnel ranges as speed_sign_place's; crossings
 /// (c, 2) points on the roads' centre lines, signals the same for traffic signals; meta (r, 6) as speed_sign_place's with the flags
 /// (FLAG_RING, FLAG_LIVING) in column 5; params: see N_PARAMS; open_ends (o, 2) where a road goes on unpaved. lateral: m from the
 /// carriageway's edge to the sign's near edge [town, country]; widest: m, the widest sign's width.
-/// Returns (k, 9) [x, y, travel x, travel y, rule, size class, road x, road y, urban].
+/// avoid (n, 4): the speed-limit signs (x, y, travel x, travel y); pole: see N_POLE.
+/// Returns (k, 11) [x, y, travel x, travel y, rule, size class, road x, road y, urban, pole, slot].
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn road_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll: PyReadonlyArray2<'py, f64>,
@@ -649,17 +716,19 @@ pub fn road_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll
                             skip_off: PyReadonlyArray1<'py, i64>, crossings: PyReadonlyArray2<'py, f64>,
                             signals: PyReadonlyArray2<'py, f64>, open_ends: PyReadonlyArray2<'py, f64>,
                             poly: PyReadonlyArray2<'py, f64>, poly_off: PyReadonlyArray1<'py, i64>, bx: [f64; 4],
-                            left_hand: bool, lateral: [f64; 2], widest: f64, params: [f64; N_PARAMS])
-                            -> Bound<'py, PyArray2<f64>> {
+                            left_hand: bool, lateral: [f64; 2], widest: f64, params: [f64; N_PARAMS],
+                            avoid: PyReadonlyArray2<'py, f64>, pole: [f64; N_POLE]) -> Bound<'py, PyArray2<f64>> {
     let signs = plan(&Input { pts: pts.as_array(), ll: ll.as_array(), off: off.as_array(), meta: meta.as_array(),
                               con_at: con_at.as_array(), con_id: con_id.as_array(), con_off: con_off.as_array(),
                               skip: skip.as_array(), skip_off: skip_off.as_array(), crossings: crossings.as_array(),
                               signals: signals.as_array(), open_ends: open_ends.as_array(), poly: poly.as_array(),
-                              poly_off: poly_off.as_array(), bx, left_hand, lateral, widest, params });
+                              poly_off: poly_off.as_array(), bx, left_hand, lateral, widest, params,
+                              avoid: avoid.as_array(), pole });
     let n = signs.len();
     let rows: Vec<f64> = signs.iter().flat_map(|s| [s.xy[0], s.xy[1], s.dir[0], s.dir[1], s.rule as f64, s.size as f64,
-                                                    s.road[0], s.road[1], if s.urban { 1.0 } else { 0.0 }]).collect();
-    numpy::ndarray::Array2::from_shape_vec((n, 9), rows).unwrap().into_pyarray(py)
+                                                    s.road[0], s.road[1], if s.urban { 1.0 } else { 0.0 },
+                                                    s.pole as f64, s.slot as f64]).collect();
+    numpy::ndarray::Array2::from_shape_vec((n, 11), rows).unwrap().into_pyarray(py)
 }
 
 // ---- the mesh ----
@@ -818,16 +887,31 @@ mod tests {
         run_x(t, cross, none(), open, left)
     }
 
+    /// Poles as the Czech order has them: priority 1, warning 0 ... every rule given its group's place; none alone.
+    fn all_alone() -> [f64; N_POLE] {
+        let mut p = [-1.0; N_POLE];
+        p[RULES] = 3.0;
+        p[RULES + 1] = 12.0;
+        p
+    }
+
     fn run_x(t: &T, cross: Array2<f64>, signals: Array2<f64>, open: Array2<f64>, left: bool) -> Vec<Sign> {
+        run_p(t, cross, signals, open, none4(), all_alone(), left)
+    }
+
+    fn none4() -> Array2<f64> { Array2::zeros((0, 4)) }
+
+    fn run_p(t: &T, cross: Array2<f64>, signals: Array2<f64>, open: Array2<f64>, avoid: Array2<f64>, pole: [f64; N_POLE],
+             left: bool) -> Vec<Sign> {
         let skip = Array2::<f64>::zeros((0, 2));
         let skip_off = Array1::<i64>::zeros(t.off.len());
         let poly = Array2::<f64>::zeros((0, 2));
         let poly_off = arr1(&[0i64]);
         plan(&Input { pts: t.pts.view(), ll: t.pts.view(), off: t.off.view(), meta: t.meta.view(), con_at: t.con_at.view(),
                       con_id: t.con_id.view(), con_off: t.con_off.view(), skip: skip.view(), skip_off: skip_off.view(),
-                      crossings: cross.view(), signals: signals.view(), open_ends: open.view(), poly: poly.view(),
+                      crossings: cross.view(), signals: signals.view(), open_ends: open.view(), avoid: avoid.view(), poly: poly.view(),
                       poly_off: poly_off.view(), bx: [-1e4, -1e4, 1e4, 1e4], left_hand: left, lateral: [0.5, 1.2],
-                      widest: 0.75, params: PARAMS })
+                      widest: 0.75, params: PARAMS, pole: pole })
     }
 
     fn none() -> Array2<f64> { Array2::zeros((0, 2)) }
@@ -1073,6 +1157,77 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Czech-like pole settings: priority group 1, warning group 0 (top), the rest below; `alone` rules get -1.
+    fn grouped(max: f64, alone: &[u8]) -> [f64; N_POLE] {
+        let mut p = [2.0; N_POLE];
+        p[SIGNALS as usize] = 0.0;
+        p[CROSSING as usize] = 3.0;
+        p[NO_ENTRY as usize] = 1.0;
+        for &r in alone { p[r as usize] = -1.0; }
+        p[RULES] = max;
+        p[RULES + 1] = 12.0;
+        p
+    }
+
+    fn poles_of(s: &[Sign]) -> Vec<Vec<u8>> {
+        let mut by: std::collections::BTreeMap<usize, Vec<(usize, u8)>> = Default::default();
+        for x in s { by.entry(x.pole).or_default().push((x.slot, x.rule)); }
+        by.into_values().map(|mut v| { v.sort(); v.into_iter().map(|(_, r)| r).collect() }).collect()
+    }
+
+    fn road800() -> T { country(&[[0.0, 0.0], [800.0, 0.0]], 0.0, 4.0) }
+
+    #[test]
+    fn signs_close_together_share_a_pole_ordered_by_group() {
+        // signals warned of at 350 and a crossing at 360: one pole, the warning on top
+        let s = run_p(&road800(), arr2(&[[360.0, 0.5]]), arr2(&[[500.0, 0.5]]), none(), none4(), grouped(3.0, &[]), false);
+        let on: Vec<_> = poles_of(&s).into_iter().filter(|p| p.len() > 1).collect();
+        assert_eq!(on, vec![vec![SIGNALS, CROSSING]], "{s:?}");
+        let (a, b) = (s.iter().find(|x| x.rule == SIGNALS).unwrap(), s.iter().find(|x| x.rule == CROSSING).unwrap());
+        assert_eq!((a.xy, a.dir, a.pole), (b.xy, b.dir, b.pole), "one spot");
+        assert_eq!((a.slot, b.slot), (0, 1));
+    }
+
+    #[test]
+    fn a_rule_that_stands_alone_is_not_put_on_a_pole() {
+        let s = run_p(&road800(), arr2(&[[360.0, 0.5]]), arr2(&[[500.0, 0.5]]), none(), none4(), grouped(3.0, &[SIGNALS]), false);
+        assert!(poles_of(&s).iter().all(|p| p.len() == 1), "{s:?}");
+        // and the two keep apart
+        for (i, a) in s.iter().enumerate() {
+            for b in &s[i + 1..] {
+                if dot(a.dir, b.dir) > SAME_WAY_COS {
+                    assert!((a.xy[0] - b.xy[0]).powi(2) + (a.xy[1] - b.xy[1]).powi(2) >= PANEL_GAP_M * PANEL_GAP_M, "{s:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_pole_holds_no_more_than_the_limit() {
+        let marks = arr2(&[[352.0, 0.5], [358.0, 0.5], [364.0, 0.5]]);
+        let s = run_p(&road800(), marks, arr2(&[[500.0, 0.5]]), none(), none4(), grouped(2.0, &[]), false);
+        assert!(poles_of(&s).iter().all(|p| p.len() <= 2), "{s:?}");
+    }
+
+    #[test]
+    fn signs_facing_the_other_way_never_share_a_pole() {
+        let two_way = road800();
+        let s = run_p(&two_way, arr2(&[[360.0, 0.5]]), none(), none(), none4(), grouped(3.0, &[]), false);
+        assert_eq!(s.len(), 2, "{s:?}");
+        assert!(poles_of(&s).iter().all(|p| p.len() == 1));
+    }
+
+    #[test]
+    fn a_spot_by_a_speed_limit_sign_is_given_up() {
+        let at = arr2(&[[360.0, 0.5]]);
+        let free = run_p(&road800(), at.clone(), none(), none(), none4(), grouped(3.0, &[]), false);
+        let east = free.iter().find(|x| x.dir[0] > 0.0).unwrap();
+        let avoid = arr2(&[[east.xy[0] + 2.0, east.xy[1], 1.0, 0.0]]);
+        let s = run_p(&road800(), at, none(), none(), avoid, grouped(3.0, &[]), false);
+        assert!(s.iter().all(|x| x.dir[0] < 0.0), "the eastbound sign next to the speed sign is gone: {s:?}");
+        assert_eq!(s.len(), 1);
     }
 
     #[test]
