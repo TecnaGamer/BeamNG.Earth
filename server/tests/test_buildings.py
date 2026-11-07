@@ -1755,3 +1755,72 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual(got, {})       # (the parts are near the origin, the model at x 1000: none under it)
         got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 22)], b, [])
         self.assertEqual(got, {22: [(-80.0, 2.0, 1.0), (90.0, 2.0, 2.0)]})
+
+
+class RoadPassageTest(unittest.TestCase):
+    """A road mapped inside a building with no tunnel tag is a passage through it (Ülemiste keskus, Tallinn: the
+    service roads at the back of the mall run in under it, and the wall stood across them)."""
+
+    def setUp(self):
+        import geodesy
+        self.f = geodesy.EnuFrame(59.42, 24.79)
+        self.ground = lambda la, lo: np.zeros(np.shape(la))
+
+    def ll(self, x, y, w, d):
+        e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+        la, lo, _ = self.f.enu_to_geodetic(e, n, 0.0)
+        return np.stack([lo, la], 1)
+
+    def items(self, road, height=10.0, **kw):
+        b = Feats(["B"], [self.ll(20, 20, 100, 60)], **{"class": ["retail"], "height": [height]})
+        return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], self.ground, passage_xy=[np.asarray(road, float)], **kw)
+
+    @staticmethod
+    def covers(items, x, y, z):
+        """Is the point (x, y, z) inside one of the drawn pieces?"""
+        from polygon import Path
+        for s, _, _ in items:
+            lo = s.min_h or 0.0
+            if lo <= z <= lo + s.height and Path(s.ring).contains_points(np.array([[x, y]]))[0]:
+                return True
+        return False
+
+    def test_a_road_through_a_building_is_left_open_under_a_lintel(self):
+        items = self.items([[0.0, 50.0], [256.0, 50.0]])
+        self.assertTrue(self.covers(items, 40, 60, 2.0), "the building stands beside the way")
+        self.assertFalse(self.covers(items, 70, 50, 2.0), "nothing across the road")
+        self.assertFalse(self.covers(items, 70, 52.5, 3.0), "the way is as wide as ROAD_PASSAGE_W")
+        self.assertTrue(self.covers(items, 70, 50, 6.0), "the building goes on over it")
+        self.assertFalse(self.covers(items, 70, 50, 10.5), "to its own top")
+        area = sum(abs(bld._area2(s.ring)) / 2 for s, _, _ in items if not s.min_h)
+        lintel = sum(abs(bld._area2(s.ring)) / 2 for s, _, _ in items if s.min_h)
+        self.assertAlmostEqual(area + lintel, 6000.0, delta=10.0, msg="the footprint's own area, cut not lost")
+        self.assertAlmostEqual(lintel, 100.0 * bld.ROAD_PASSAGE_W, delta=20.0)
+
+    def test_a_low_building_is_open_all_through(self):
+        items = self.items([[0.0, 50.0], [256.0, 50.0]], height=bld.ROAD_PASSAGE_H + 0.5)
+        self.assertFalse(self.covers(items, 70, 50, 1.0))
+        self.assertFalse(self.covers(items, 70, 50, 4.0), "no room for a lintel over the clearance")
+        self.assertTrue(self.covers(items, 40, 60, 1.0))
+
+    def test_a_road_along_its_edge_cuts_nothing(self):
+        """Mapped lines are metres off the buildings' edges: a road just inside the outline is the outline's slop."""
+        self.assertEqual(len(self.items([[0.0, 21.0], [256.0, 21.0]])), 1)
+        self.assertEqual(len(self.items([[0.0, 50.0], [25.0, 50.0]])), 1, "a road 5 m into it: a driveway")
+
+    def test_a_winding_way_leaves_the_building_whole(self):
+        """The aisles of a lot wind about; a footprint they would cut to pieces is left as it is."""
+        road = [[30, 30], [60, 30], [60, 40], [90, 40], [90, 50], [60, 50], [60, 60], [100, 60]]
+        self.assertEqual(len(self.items(road)), 1)
+
+    def test_the_switch_gives_the_old_wall(self):
+        with unittest.mock.patch.object(bld, "ROAD_PASSAGE_ON", False):
+            self.assertEqual(len(self.items([[0.0, 50.0], [256.0, 50.0]])), 1)
+
+    def test_roads_of_the_passage_classes_only(self):
+        """A service road is looked for, not a car park's aisle (road_lines' classes, not the through classes)."""
+        from test_roads import FRAME, features
+        f = features([[(0, 128), (256, 128)]], ["service"])
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [], "a service road is not a through road")
+        self.assertEqual(len(bld.road_lines(FRAME, [f], 0.0, 0.0, classes=bld.ROAD_PASSAGE_CLASSES)), 1)
+        self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
