@@ -289,11 +289,17 @@ def context(frame, feats_list, routes_list=(), priority=None, signs=(), towns=No
 
 def in_town(arms, ctx=None):
     """The German signs' town test of a junction (the kernel's urban, and where junction_rows stands a 306 or a
-    307): every arm's road in town by the land cover (ctx.town: taken before roads.build_tile draws a short ring
-    approach, a divided primary built up on one side or a connector rural for its own reasons), its spec.urban where
-    the context has none."""
+    307): most of its street arms' roads in town by the land cover (ctx.town: taken before roads.build_tile draws a
+    short ring approach, a divided primary built up on one side or a connector rural for its own reasons), its
+    spec.urban where the context has none. Most, not every: a village's main road is mapped in segments from junction
+    to junction, and one with fields on one side (Barbing's Regensburger Straße past its sports ground: 38 % of it
+    built up) made both its junctions rural, their 306 after the junction as out of town, among side streets all in
+    town (the user's review, 2026-11-07). Arms that are no street (a driveway, a service road) do not vote; where every
+    arm is none, all of them do."""
     town = ctx.town if ctx is not None and ctx.town is not None else {}
-    return bool(all(town.get(a[0], a[1].urban) for a in arms))
+    got = [bool(town.get(a[0], a[1].urban)) for a in arms]
+    vote = [t for a, t in zip(arms, got) if CLS.get(_base(a[1].cls)) is not None] or got
+    return 2 * sum(vote) > len(vote)
 
 
 SPLIT_DOT = 0.5         # u·u over which two one-way carriageways leave a node together: within 60 deg of each other

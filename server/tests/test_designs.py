@@ -963,6 +963,23 @@ class JunctionRowsTest(Placed, unittest.TestCase):
         self.assertTrue(designs.in_town([a for a in furniture._arms(self.stretch_t()).values() if len(a) == 3][0]),
                         "no context: spec.urban")
 
+    def test_town_is_most_street_arms(self):
+        """A village's main road mapped in segments, one with fields on one side (Barbing's Regensburger Straße: rural
+        by its land cover, the side street and the other segment in town): the junction is in town, its 306 before
+        it; with two of three arms rural it is out of town. A driveway does not vote."""
+        rs = [self.road("e", "tertiary", "e"), self.road("w", "tertiary", "w"), self.road("s", "residential", "s")]
+        edge = self.ctx(town={"e": False, "w": True, "s": True})
+        self.assertEqual(self.placed(self.props(rs, edge)), [("de_z205", "s", "before"), ("de_z306", "e", "before"),
+                                                             ("de_z306", "w", "before")])
+        rural = self.ctx(town={"e": False, "w": True, "s": False})
+        self.assertEqual(self.placed(self.props(rs, rural)), [("de_z205", "s", "before"), ("de_z306", "e", "after"),
+                                                              ("de_z306", "w", "after")])
+        drive = [*rs, self.road("n", "service", "n", False)]
+        arms = next(a for a in furniture._arms(drive).values() if len(a) == 4)
+        self.assertTrue(designs.in_town(arms, self.ctx(town={"e": True, "w": True, "s": False, "n": False})),
+                        "two of three streets in town; the service road no vote")
+        self.assertFalse(designs.in_town(arms, self.ctx(town={"e": True, "w": False, "s": False, "n": True})))
+
     def test_probe_is_the_signs_own_height(self):
         seen = []
 

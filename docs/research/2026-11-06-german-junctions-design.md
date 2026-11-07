@@ -47,8 +47,11 @@ The sections below describe the code as built. Where it departs from the design 
   own carriageway (StVO § 18 Abs. 3) or ramps among themselves, a diverge, a carriageway split. None of them is a
   junction where anyone must be told to yield.
 - **A ramp's end gives way to the road it meets** (205), whatever its class: German Anschlussstellen are signed so.
-- **"In town" is the land cover's town of every arm**, not the road drawing's: the drawing makes some town roads
-  rural for its own reasons (a short roundabout approach, a road built up on one side).
+- **"In town" is the land cover's town of most of a junction's street arms**, not the road drawing's: the drawing
+  makes some town roads rural for its own reasons (a short roundabout approach, a road built up on one side). Most,
+  not every (the user's review, 2026-11-07): a village's main road is mapped in segments, and one with fields on one
+  side (Barbing's Regensburger Straße past its sports ground, 38 % built up) made both its junctions rural, their 306
+  after the junction among side streets all in town. Driveways and service roads do not vote.
 - **A mapped stop or give-way point belongs to one arm**, the nearest, not by its direction: Overture's points have
   none, and the shards' forward / backward run along the OSM way, which the arms do not carry.
 - **Every tertiary is a stretch, with a ref or without** (the user's review, 2026-11-07): as approved only a tertiary
@@ -339,9 +342,9 @@ Straßen des überörtlichen Verkehrs (Bundes-, Landes- und Kreisstraßen) noch 
 streets with nothing mapped stay right before left (step 3). The other unmapped arms coming in get **205**; an arm
 leaving (a one-way out) gets nothing. A 301 at a junction where no arm gives way is left out (zu Zeichen 301 Rn. 2:
 the other road must have a 205 or 206). In town a stretch's arm shows 306 where this gives 301 (zu Zeichen 301 Rn. 4:
-301 is not for main roads, "Dort ist das Zeichen 306 zu verwenden"), outside a 30 zone. "In town" is every arm's
-road in town by the land cover, before the road drawing's own overrides (a short roundabout approach, a road built
-up on one side).
+301 is not for main roads, "Dort ist das Zeichen 306 zu verwenden"), outside a 30 zone. "In town" is most of the
+junction's street arms' roads in town by the land cover, before the road drawing's own overrides (a short roundabout
+approach, a road built up on one side).
 
 **A Vorfahrtstraße is a property of a road, not of one junction** (VwV-StVO zu den Zeichen 306 und 307 Rn. 1: in
 town the Bundes-, Landes- and Kreisstraßen and the main roads get 306). A road is on a stretch when:
