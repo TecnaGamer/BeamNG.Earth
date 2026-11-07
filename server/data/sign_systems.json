@@ -1,0 +1,18 @@
+{
+  "_": "How the roles of sign_roles.json look and stand, by country (task 017). The numbers' sources and what is unverified: docs/research/2026-11-06-road-signs.md, section 3.4 (not read in a primary text: UA heights and lateral offsets, taken from the neighbours). lateral: m from the carriageway's edge to the sign [town, country]; mount: m from the road to the lower edge [town, country]; sizes: m wide by shape [town, country, major road]; order: the groups from the top of a pole down.",
+  "sizes": {
+    "default": {"circle": [0.6, 0.75, 0.9], "square": [0.6, 0.75, 0.9], "tri_up": [0.75, 0.9, 1.25], "tri_down": [0.75, 0.9, 1.25],
+                "octagon": [0.6, 0.75, 0.9], "diamond": [0.6, 0.75, 0.9]}
+  },
+  "countries": {
+    "UA": {"atlas": "vienna_w", "lateral": [0.5, 1.2], "mount": [2.0, 1.5], "gap_m": [25, 50], "max_on_pole": 3,
+           "order": ["priority", "warning", "mandatory", "prohibition", "information"]},
+    "CZ": {"atlas": "vienna_w", "lateral": [0.5, 1.2], "mount": [2.2, 1.5], "gap_m": [10, 20], "max_on_pole": 3,
+           "order": ["warning", "priority", "information", "prohibition", "mandatory"]},
+    "PL": {"atlas": "vienna_y", "lateral": [0.5, 1.0], "mount": [2.2, 2.0], "gap_m": [10, 20], "max_on_pole": 3,
+           "order": ["priority", "warning", "prohibition", "mandatory", "information"]},
+    "DE": {"atlas": "vienna_w", "lateral": [0.5, 1.5], "mount": [2.0, 2.0], "gap_m": [10, 20], "max_on_pole": 3,
+           "order": ["priority", "prohibition", "mandatory", "information"]}
+  },
+  "rules": ["reg.no_entry", "info.dead_end", "info.crossing_right"]
+}
