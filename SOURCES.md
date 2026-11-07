@@ -70,7 +70,7 @@ Connecticut (`cteco.uconn.edu`), Massachusetts (`tiles.arcgis.com`), Washington 
 Indiana (`di-ingov.img.arcgis.com`), Ohio (`maps.ohio.gov`), North Carolina (`services.nconemap.gov`),
 Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`), New York State
 (`orthos.its.ny.gov`), New Jersey (`maps.nj.gov`), Delaware (`imagery.firstmap.delaware.gov`), Vermont
-(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Spain
+(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Portugal (`cartografia.dgterritorio.gov.pt`), Spain
 (`tms-pnoa-ma.idee.es`), the Netherlands (`service.pdok.nl`), Luxembourg (`wmts1.geoportail.lu`), Austria
 (`maps.wien.gv.at`), South Tyrol (`geoservices.buergernetz.bz.it`), Italy (`wms.pcn.minambiente.it`), Poland
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders
