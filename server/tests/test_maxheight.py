@@ -22,5 +22,21 @@ class MaxheightTest(unittest.TestCase):
         self.assertAlmostEqual(roads._point_line_dist(np.array([13.0, 4.0]), ln), 5.0)
 
 
+class UnderDecksTest(unittest.TestCase):
+    def test_cap(self):
+        import numpy as np
+        import grading
+        deck = (np.array([[0.0, 0.0], [20.0, 0.0]]), np.array([10.0, 12.0]), 5.0)
+        e = np.array([10.0, 10.0, -1.0, 21.0, 10.0])
+        n = np.array([0.0, 4.0, 0.0, 0.0, 6.0])
+        z = np.array([15.0, 10.5, 15.0, 15.0, 15.0])
+        out = grading.under_decks(e, n, z, [deck], gap=0.1)
+        self.assertAlmostEqual(out[0], 10.9)    # under it: its road (11) minus the gap
+        self.assertAlmostEqual(out[1], 10.5)    # under it, already lower: kept
+        self.assertAlmostEqual(out[2], 15.0)    # past its ends: the road on the ground
+        self.assertAlmostEqual(out[3], 15.0)
+        self.assertAlmostEqual(out[4], 15.0)    # beside it
+
+
 if __name__ == "__main__":
     unittest.main()

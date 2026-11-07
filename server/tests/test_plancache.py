@@ -108,7 +108,7 @@ class PlanCacheTest(unittest.TestCase):
         c.release(KEY)
         t.join(5)
         self.assertEqual(got[0][1], False)
-        self.assertEqual(got[0][0], ([], [], [], []))
+        self.assertEqual(got[0][0], ([], [], [], [], []))      # (plans, keeps, covers, opens, decktops)
         self.assertEqual(other.stats["waited"], 1)
 
     def test_does_not_wait_behind_a_less_favoured_planner(self):

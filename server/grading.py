@@ -362,6 +362,18 @@ CW_JUNCTION_W = float(os.environ.get("BNE_CW_JUNCTION_W", "500"))   # weight hol
 CW_JUNCTION_NEAR_M = 3.0    # m from a street's end a ramp's sample is at that junction
 CW_PREF_W = float(os.environ.get("BNE_CW_PREF_W", "10.0"))   # weight pulling a carriageway to the full clearance (ground's 0.2; 10: the clearance before a dug street, the user 2026-11-07)
 CW_PEER_SHARE = os.environ.get("BNE_CW_PEER_SHARE", "on") != "off"   # a carriageway region solved once per process, mapped into each planner's frame
+# The ground under a freeway deck stays DECK_GROUND_GAP_M under the deck's road (Grader.apply, after grade_points): a
+# ground road's grading reaches past its end under the deck, and at the deck's height plus the road lift (or more) it
+# showed through the deck as a saw-tooth of 2 m terrain cells over Murray Street, and as patches of dirt where the twin
+# carriageways' and the ramps' ends lie beside each other's decks (the user's screenshots, 2026-11-07).
+DECK_GROUND_ON = os.environ.get("BNE_DECK_GROUND", "on") != "off"
+DECK_GROUND_GAP_M = 0.10
+DECK_GROUND_STEP_M = 4.0
+# ... and a freeway plan's end meets its deck's road exactly (_meet_decks)
+DECK_MEET_ON = os.environ.get("BNE_DECK_MEET", "on") != "off"
+DECK_MEET_M = 20.0          # m over which the end is eased onto the deck's height
+DECK_MEET_MESH_M = 0.01     # m the road mesh lies over a deck's top (roadmesh: the deck's asphalt 1 cm over its slab)
+DECK_MEET_MAX_M = 0.5       # m: a larger difference is not this deck's end (left as it is)     # m between a deck's profile points kept for it
 UNDER_WALLS_ON = os.environ.get("BNE_UNDER_WALLS", "on") != "off"   # abutment walls beside streets under a carriageway's deck (CW_ON)
 UNDER_WALL_MIN_M = 2.5      # m the deck's underside stands over the street at least for walls
 UNDER_WALL_MAX_SPAN_M = 45.0    # m: a longer main span is a viaduct on piers, no abutment walls under it
@@ -1662,6 +1674,7 @@ class _Planner:
         self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
+        self.decktops = {}      # cell key -> [(xy (k, 2), z (k,), half width)]: the decks the ground stays under
 
     # the store's settings (set on the anchors' Graders after they are made): shared: plancache.PlanCache (the cells'
     # plans shared with the server's other processes); wet(lat, lon) -> water depth (m): tunnels under water are left
@@ -1697,13 +1710,16 @@ class _Planner:
             if key not in src.cells:            # (its fetch failed: asked again later)
                 return []
             keeps, covers, opens = src.keeps.get(key, []), src.covers.get(key, []), src.opens.get(key, [])
+            tops = src.decktops.get(key, [])
         import geotiles
 
         def m(xy):
             return geotiles.world_xy_map(src.frame, self.frame, xy)
         got = ([(fid, mapped_plan(p, m)) for fid, p in plans], [(m(xy), hw) for xy, hw in keeps],
-               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens])
+               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens],
+               [(m(xy), z, hw) for xy, z, hw in tops])
         with self.lock:
+            self.decktops.setdefault(key, got[4])
             self.cells.setdefault(key, got[0])
             self.keeps.setdefault(key, got[1])
             self.covers.setdefault(key, got[2])
@@ -1746,8 +1762,10 @@ class _Planner:
         finally:
             if mine:
                 self.shared.release(key)
-        plans, keeps, covers, opens = got
+        plans, keeps, covers, opens = got[:4]
+        tops = got[4] if len(got) > 4 else []
         with self.lock:
+            self.decktops.setdefault(key, tops)
             self.cells.setdefault(key, plans)
             self.keeps.setdefault(key, keeps)
             self.covers.setdefault(key, covers)
@@ -1755,7 +1773,7 @@ class _Planner:
             return self.cells[key]
 
     def _make_cell(self, key):
-        """(plans, keeps, covers, opens) of cell key, or None when its roads could not be fetched."""
+        """(plans, keeps, covers, opens, decktops) of cell key, or None when its roads could not be fetched."""
         widths = getattr(self, "widths", None)
         if widths is not None and hasattr(widths, "prefetch"):
             # the cell's buildings (its roads' widths) fetched while its roads are: one after the other before
@@ -1872,6 +1890,11 @@ class _Planner:
                     junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+            if CW_ON and DECK_MEET_ON and plans:
+                try:
+                    self._meet_decks(plans, pspecs)
+                except Exception as e:      # as they were rather than no grading
+                    log.debug("grading: deck ends of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -1929,7 +1952,62 @@ class _Planner:
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
         else:
             covers, opens, keeps = [], [], []
-        return plans, keeps, covers, opens
+        return plans, keeps, covers, opens, self._deck_tops(key)
+
+    def _meet_decks(self, plans, specs):
+        """A freeway family plan's end leading onto its deck (Plan.abut) brought to the deck's road: the carriageway
+        profile there (the deck's own height, DECK_Z_HOOK) less ROAD_LIFT plus DECK_MEET_MESH_M, so the lifted physics
+        ground, and the road mesh on it, meet the deck's road mesh; eased in over DECK_MEET_M. The stages after the
+        profiles (the dips, the junctions) left it 0-5 cm over the deck, and the lift 4 cm more: a lip at every deck's
+        end (the user, 2026-11-07). In place."""
+        for (fid, p), sp in zip(plans, specs):
+            if p is None or sp is None or len(p.xy) < 2 or not (p.abut[0] or p.abut[1]):
+                continue
+            if _cw.family(str(getattr(sp, "cls", "")) + ("_link" if _is_link(sp) else "")) is None:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            z = np.array(p.z, np.float64, copy=True)
+            changed = False
+            for end, (i, d) in enumerate(((0, s), (len(xy) - 1, s[-1] - s))):
+                if not p.abut[end]:
+                    continue
+                got = self._cw_z_at(xy, xy[i:i + 1], str(fid).split(":")[0])
+                if got is None or not np.isfinite(np.ravel(got)[0]):
+                    continue
+                delta = float(np.ravel(got)[0]) - ROAD_LIFT + DECK_MEET_MESH_M - float(z[i])
+                if abs(delta) > DECK_MEET_MAX_M:
+                    continue        # (not its deck's profile there: as it is)
+                w = np.clip(1.0 - d / DECK_MEET_M, 0.0, 1.0)
+                z += delta * w * w * (3.0 - 2.0 * w)
+                changed = True
+            if changed:
+                p.z = z.astype(np.asarray(p.z).dtype)
+
+    def _deck_tops(self, key):
+        """[(xy (k, 2), z (k,), half width)] of cell key's freeway decks (CW_ON: their carriageway profile, the height
+        their deck is drawn at, DECK_Z_HOOK): the ground under them is kept DECK_GROUND_GAP_M under their road
+        (apply). [] with DECK_GROUND_ON or CW_ON off."""
+        if not (DECK_GROUND_ON and CW_ON):
+            return []
+        out = []
+        try:
+            c = self._cell_enu(key, ground=False)
+            nb = len(c["bridges"])
+            for line, cls, fid, half in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
+                                            c.get("bridge_ids", [None] * nb), c.get("bridge_half", [4.0] * nb)):
+                if cls is None or _cw.family(cls) is None or len(line) < 2:
+                    continue
+                xy, _s = resample(np.asarray(line, np.float64)[:, :2], DECK_GROUND_STEP_M)
+                z = self._cw_z_at(xy, xy, None if fid is None else str(fid))
+                if z is None:
+                    continue
+                z = np.asarray(z, np.float64)
+                if len(z) == len(xy) and np.isfinite(z).all():
+                    out.append((xy, z, float(half)))
+        except Exception as e:      # (the ground as graded rather than no plans)
+            log.debug("grading: deck tops of %s: %s: %s", key, type(e).__name__, e)
+        return out
 
     def _chain_cands(self, key, feats=None, specs=None):
         """The graded ground parts of cell key's roads, as the continuations at a node in it are looked for (every cell
@@ -4431,6 +4509,11 @@ class _Planner:
         e, n, _ = self.frame.geodetic_to_enu(lat.ravel(), lon.ravel(), 0.0)
         e, n = np.asarray(e), np.asarray(n)
         out = grade_points(e, n, base.ravel(), pack, lift)
+        if DECK_GROUND_ON:
+            with self.lock:
+                tops = [t for k in keys for t in self.decktops.get(k, ())]
+            if tops:
+                out = under_decks(e, n, out, tops)
         race = self._on_kept(e, n)
         if race is not None:                # (the terrain is a racetrack's surface: GitHub #143)
             out[race] = base.ravel()[race]
@@ -4708,6 +4791,39 @@ class Grader:
                     seen.add(k)
                     out.append((la, lo, spec))
         return out
+
+
+def under_decks(e, n, z, tops, gap=None):
+    """z (heights at points e, n (m,)) at most a deck's road height minus gap (DECK_GROUND_GAP_M) wherever a point lies
+    within a deck's half width of its line, between its ends: tops [(xy (k, 2), z (k,), half width)]. Pure."""
+    gap = DECK_GROUND_GAP_M if gap is None else gap
+    z = np.array(z, np.float64, copy=True)
+    for xy, zz, half in tops:
+        if len(xy) < 2:
+            continue
+        lo_, hi_ = xy.min(0) - half, xy.max(0) + half
+        cand = np.flatnonzero((e >= lo_[0]) & (e <= hi_[0]) & (n >= lo_[1]) & (n <= hi_[1]))
+        if not len(cand):
+            continue
+        q = np.stack([e[cand], n[cand]], axis=1)
+        a, b = xy[:-1], xy[1:]
+        ab = b - a
+        l2 = np.maximum((ab * ab).sum(1), 1e-12)
+        t_raw = (((q[:, None, :] - a[None]) * ab[None]).sum(2)) / l2[None]          # (m, s)
+        t = np.clip(t_raw, 0.0, 1.0)
+        d = np.hypot(*(a[None] + t[..., None] * ab[None] - q[:, None, :]).transpose(2, 0, 1))
+        # (not past the deck's own ends: beyond them the road on the ground goes on)
+        d[:, 0] = np.where(t_raw[:, 0] < 0.0, np.inf, d[:, 0])
+        d[:, -1] = np.where(t_raw[:, -1] > 1.0, np.inf, d[:, -1])
+        j = np.argmin(d, axis=1)
+        r = np.arange(len(cand))
+        inside = d[r, j] <= half
+        if not inside.any():
+            continue
+        top = zz[j] + (zz[j + 1] - zz[j]) * t[r, j] - gap
+        sel = cand[inside]
+        z[sel] = np.minimum(z[sel], top[inside])
+    return z
 
 
 def trim_plan(p, box):

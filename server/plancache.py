@@ -61,7 +61,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 12     # 12: dirt roads toned down (#783, #784); 11: pass roads with two lanes graded as mountain roads again (the Stelvio); 10: worn dirt roads (PR #677: damage, lean, 2 m vertices, 2.5 m smoothing of minor dirt); 9: roundabout rings level across (RING_LEVEL_ON); 8: PR #753 (a deck end's approaches rise with it, slip roads tied to their overpass road); 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
+PLANS_FORMAT = 13     # 13: the freeway decks the ground stays under (decktops, grading.under_decks); 12: dirt roads toned down (#783, #784); 11: pass roads with two lanes graded as mountain roads again (the Stelvio); 10: worn dirt roads (PR #677: damage, lean, 2 m vertices, 2.5 m smoothing of minor dirt); 9: roundabout rings level across (RING_LEVEL_ON); 8: PR #753 (a deck end's approaches rise with it, slip roads tied to their overpass road); 7: PR #471 and #686 lanes (wider / narrower roads graded); 6: the dip under a deck takes its ends on their embankments (#684's fill); 5: one half width a bridge (each was appended twice: under-deck ground and carriageways read the wrong bridge's); 4: junction pads, steep side-road ramps, rail bridges the DEM predates (PR #482/#671); 3:
                       # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
 
 
@@ -128,7 +128,7 @@ class PlanCache:
         return os.path.join(self.dir, f"{int(key[0])}_{int(key[1])}_{int(key[2])}.npz")
 
     def load(self, key):
-        """(plans, keeps, covers, opens) of cell key from the cache, or None."""
+        """(plans, keeps, covers, opens, decktops) of cell key from the cache, or None."""
         from grading import Plan, set_widen
         from roads import Spec
         try:
@@ -142,6 +142,8 @@ class PlanCache:
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
+                lists["t"] = _split(f, "t") if "t_n" in f.files else []
+                lists["tz"] = _split(f, "tz") if "tz_n" in f.files else []
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
                 lists["w"] = _split(f, "w") if "w_n" in f.files else []
         except (OSError, ValueError, KeyError, TypeError):
@@ -159,9 +161,10 @@ class PlanCache:
         covers = list(zip(lists["v"], meta["covers"]))
         opens = [(xy, Spec(**{**sp, "sides": tuple(sp["sides"]) if sp.get("sides") is not None else None}))
                  for xy, sp in zip(lists["o"], meta["opens"])]   # (JSON gave sides back as a list)
+        tops = list(zip(lists["t"], lists["tz"], meta.get("tops", [])))
         with self._lock:
             self.stats["read"] += 1
-        return plans, keeps, covers, opens
+        return plans, keeps, covers, opens, tops
 
     def _revisit_key(self, key):
         import revisit
@@ -224,7 +227,7 @@ class PlanCache:
             return None
         return io.BytesIO(got[0]["plans.npz"])
 
-    def store(self, key, plans, keeps, covers, opens, persist=False):
+    def store(self, key, plans, keeps, covers, opens, tops=(), persist=False):
         """Write cell key's plans for the run's other processes; persist: also into the revisit cache (complete plans:
         nothing they read failed or was missing, Grader._plan_cell)."""
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
@@ -233,6 +236,7 @@ class PlanCache:
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
+                "tops": [float(hw) for _xy, _z, hw in tops],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
                           for _xy, sp in opens]}
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
@@ -245,6 +249,8 @@ class PlanCache:
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])
+            _pack(arrays, "t", [np.asarray(xy, np.float64) for xy, _z, _hw in tops])
+            _pack(arrays, "tz", [np.asarray(z, np.float64) for _xy, z, _hw in tops])
             p = self._path(key)
             os.makedirs(self.dir, exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
