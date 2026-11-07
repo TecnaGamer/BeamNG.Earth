@@ -173,6 +173,7 @@ local cacheClears = 0         -- answers to a clear so far (the settings page wa
 
 local function resetState()
   loadprogress.reset()
+  M._baseLater = nil
   st = {
     inOurLevel = false,
     active = false,          -- world logic running (rebase, far field, sky, pose)
@@ -1027,12 +1028,40 @@ M.BASE_LATER_MS, M.BASE_NOW_MS = 35, 30         -- m/s (78 / 67 mph; the server 
 M._baseLater = nil
 function M.applyBaseLater()
   local bl, pl = M._baseLater, st.player
-  if not bl or not pl or (pl.speed or 0) > M.BASE_NOW_MS then return false end
-  M._baseLater = nil
+  if not bl or not pl then return false end
   local b = st.block
-  if bl.anchorId ~= st.anchorId or not b or b.cx ~= bl.cx or b.cy ~= bl.cy or not FS:fileExists(bl.base) then return false end
-  terrain.setBase(bl.base, bl.size)
-  st.baseRefreshes = (st.baseRefreshes or 0) + 1
+  if bl.anchorId ~= st.anchorId or not b or b.cx ~= bl.cx or b.cy ~= bl.cy or not FS:fileExists(bl.base) then
+    M._baseLater = nil
+    return false
+  end
+  return M.applyBlockUpdates()
+end
+
+-- A refresh and its later photo may arrive together. Receive their metadata at once, but change the engine only
+-- after terrain-follow/rebase has had first choice of the heavy slot. One swap can bind both; never rebuild all
+-- the materials separately in the same frame. The two quiet frames belong to these updates too (V1_2_DESIGN 5.4).
+function M.applyBlockUpdates()
+  local b, pl = st.block, st.player
+  if not b or not pl or st.placeFrames or st.rebasing or windowMinimized() or gov.blocked or gov:isHeavyFrame() then
+    return false
+  end
+  local dr, bl = st.deferredRefresh, M._baseLater
+  if dr and (dr.anchorId ~= st.anchorId or dr.cx ~= b.cx or dr.cy ~= b.cy or dr.size ~= terrain.SIZE) then
+    st.deferredRefresh, dr = nil, nil
+  end
+  if bl and (bl.anchorId ~= st.anchorId or bl.cx ~= b.cx or bl.cy ~= b.cy or not FS:fileExists(bl.base)) then
+    M._baseLater, bl = nil, nil
+  end
+  if not dr and (not bl or (bl.slow ~= false and (pl.speed or 0) > M.BASE_NOW_MS)) then return false end
+  if not gov:requestHeavy() then return false end
+  if dr then
+    st.deferredRefresh = nil
+    if bl then dr.base, dr.baseSize = bl.base, bl.size end
+    if commitTerrain(dr) and bl then M._baseLater = nil end
+  else
+    M._baseLater = nil
+    if terrain.setBase(bl.base, bl.size) then st.baseRefreshes = (st.baseRefreshes or 0) + 1 end
+  end
   return true
 end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
@@ -1074,6 +1103,7 @@ local function onMessage(msg)
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
+    st.deferredRefresh, st.refreshLater, M._baseLater = nil, nil, nil
     st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
@@ -1102,7 +1132,7 @@ local function onMessage(msg)
     end
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
-    st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
+    st.refreshLater, st.deferredRefresh, M._baseLater = nil, nil, nil -- a restarted server numbers anchors from 1
     roads.setSession(msg.sessionId)   -- the road / building tiles' pooled shape files belong to this server
     lastHello = {}           -- the server's version and options, for the reports' hardware.json
     for k, v in pairs(msg) do if k ~= 'attribution' and type(v) ~= 'table' then lastHello[k] = v end end
@@ -1285,7 +1315,9 @@ local function onMessage(msg)
     if msg.anchorId ~= st.anchorId then
       st.refreshLater = msg
     elseif st.block and msg.cx == st.block.cx and msg.cy == st.block.cy and msg.size == terrain.SIZE then
-      if windowMinimized() then st.deferredRefresh = msg else commitTerrain(msg) end
+      st.deferredRefresh = msg
+      -- This later terrain owns its base fields too; an older queued photo must not overwrite them.
+      M._baseLater = nil
     elseif p and p.ready and p.msg and msg.cx == p.cx and msg.cy == p.cy and msg.size == terrain.SIZE then
       p.msg = msg
     end
@@ -1337,13 +1369,8 @@ local function onMessage(msg)
         -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
         -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
         local pl = st.player
-        if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
-          M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
-        else
-          M._baseLater = nil
-          terrain.setBase(msg.base, tonumber(msg.baseSize))
-          st.baseRefreshes = (st.baseRefreshes or 0) + 1
-        end
+          M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base,
+            size = tonumber(msg.baseSize), slow = pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil }
       end
       if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
     end
@@ -1797,14 +1824,6 @@ local function updateWorld(dt)
     log('I', 'beamngEarth', minimized and 'window minimized: terrain moves wait' or 'window restored: terrain moves resume')
   end
   if minimized then return end
-  M.applyBaseLater()
-  local dr = st.deferredRefresh
-  if dr then
-    st.deferredRefresh = nil
-    if dr.anchorId == st.anchorId and st.block and dr.cx == st.block.cx and dr.cy == st.block.cy then
-      commitTerrain(dr)
-    end
-  end
   if mapOpen and action == 'prefetch' then action = nil end
   if (action == 'commit' or action == 'resync') and st.paused and not mapOpen then action = nil end -- vehicles move only with physics running
   if action == 'prefetch' then
@@ -2584,7 +2603,9 @@ local function onUpdate(dtReal, dtSim)
   local rl = st.refreshLater
   if rl and rl.anchorId == st.anchorId then     -- (its anchor committed: see 'terrain_refresh')
     st.refreshLater = nil
-    if st.block and rl.cx == st.block.cx and rl.cy == st.block.cy and rl.size == terrain.SIZE then commitTerrain(rl) end
+    if st.block and rl.cx == st.block.cx and rl.cy == st.block.cy and rl.size == terrain.SIZE then
+      st.deferredRefresh = rl
+    end
   end
   if st.recouple then                   -- a rebase's trailers hitched again over a few seconds (rebase.lua)
     local okR, plan = pcall(rebase.recoupleTick, st.recouple, st.clock)
@@ -2604,6 +2625,7 @@ local function onUpdate(dtReal, dtSim)
     end
     t = mark('player', t)
     updateWorld(dtReal)
+    M.applyBlockUpdates()
     t = mark('world', t)
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car

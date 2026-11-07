@@ -649,8 +649,10 @@ serverSend({ type = 'anchor_ready', requestId = rq.requestId, anchorId = 7, lat 
     zBase = 1120, maxHeight = 1024, q = 1 / 64 } })
 T.check(pumpUntil(function() return calls.importMaps >= imp512 + 1 end, 10), '512: the size-512 anchor terrain is accepted and imported')
 frames(2)
-T.check(calls.importMaps == imp512 + 2 and tb.lastImport.path == '/temp/beamngEarth/s5/hm_7g.png',
-  'the graded block that came first is swapped in once its anchor is committed')
+T.check(calls.importMaps == imp512 + 1, 'the graded refresh respects the quiet frames after the anchor commit')
+T.check(pumpUntil(function() return calls.importMaps == imp512 + 2 end, 90)
+  and tb.lastImport.path == '/temp/beamngEarth/s5/hm_7g.png',
+  'the graded block that came first is swapped in once its own heavy slot is available')
 T.check(last('commit_anchor').anchorId == 7, '512: resync committed')
 T.check(tb.pos.x == rq.cx - 512 and tb.pos.y == rq.cy - 512, '512: block position = (cx-512, cy-512)')
 T.check(tb.lastImport.maps[1].path:match('beamngEarth_layer_512%.png$') ~= nil, '512: the 512 layer map with the 512 heightmap')
@@ -904,7 +906,11 @@ do
   local setBase, n = terrain.setBase, 0
   terrain.setBase = function() n = n + 1; return true end
   local st = core._state()
-  local was = { st.anchorId, st.block, st.player }
+  local was = { st.anchorId, st.block, st.player, st.placeFrames, st.rebasing }
+  local gv = core._governor()
+  local request, isHeavy, blocked = gv.requestHeavy, gv.isHeavyFrame, gv.blocked
+  gv.requestHeavy, gv.isHeavyFrame, gv.blocked = function() return true end, function() return false end, false
+  st.placeFrames, st.rebasing = nil, nil
   st.anchorId, st.block = 7, { cx = 512, cy = -512 }
   core._baseLater = { anchorId = 7, cx = 512, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
   st.player = { speed = core.BASE_LATER_MS + 5 }
@@ -917,7 +923,8 @@ do
   T.check(core.applyBaseLater() == false and n == 1 and core._baseLater == nil,
     'base photo refresh: dropped when its block is no longer the one in use')
   terrain.setBase = setBase
-  st.anchorId, st.block, st.player = was[1], was[2], was[3]
+  gv.requestHeavy, gv.isHeavyFrame, gv.blocked = request, isHeavy, blocked
+  st.anchorId, st.block, st.player, st.placeFrames, st.rebasing = was[1], was[2], was[3], was[4], was[5]
 end
 -- fast pre-cache's pause (PR #773): only our own pause is let go, and the app going away ends it
 do
