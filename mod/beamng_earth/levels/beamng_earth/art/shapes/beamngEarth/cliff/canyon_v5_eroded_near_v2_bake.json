@@ -1,0 +1,18 @@
+{
+  "source_normal": "canyon_v5_faceted_near.normal.png",
+  "erosion_normal": "canyon_far_v8.normal.png",
+  "size": [
+    4096,
+    4096
+  ],
+  "erosion_slope_gain": 1.5,
+  "uv": 0,
+  "repeat_metres": [
+    91.44,
+    182.88
+  ],
+  "erosion_width_scale": 3.0,
+  "erosion_wrap_blend": 0.2,
+  "normal_orientation": "OpenGL +Y",
+  "method": "Periodic height-gradient addition; existing material normal strength and microdetail retained"
+}

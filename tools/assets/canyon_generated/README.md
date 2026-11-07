@@ -165,3 +165,24 @@ fine channels, tributaries, rock chips and fine source relief by 25%. Broad
 beds, channel shapes, UV scales and material normal strength remain unchanged.
 Runtime uses `canyon_far_v8_ready.normal.dds`, cooked and validated before
 binding; the authoring output is `canyon_far_v8.normal.png`.
+
+
+Near canyon erosion normal (2026-11-06)
+-------------------------------------
+`tools/bake_canyon_near_erosion.py` combines the approved
+`canyon_far_v8.normal.png` with `canyon_v5_faceted_near.normal.png` into a 4096-square
+normal. It adds surface gradients with periodic sampling, retains the separate
+3 m dirt-rocky detail normal, and uses the existing UV0 normal slot in both near
+canyon materials. No extra texture samples, mesh work, or distant-material changes.
+Erosion features are enlarged 3x horizontally to match the far cliff width
+multiplier. The inner 80% uses the exact enlarged sampling; a smooth closing
+crossfade makes the cropped pattern tile across UV0 without a hard seam. Only
+erosion is enlarged: diffuse-aligned joints and dirt-rocky microdetail retain
+their original scale. Existing color, roughness and AO are unchanged.
+
+After rebaking near PBR, run this tool again, cook its PNG through BeamNG, then
+run `tools/bake_canyon_near_erosion.py --publish <cooked DDS path>`. Publish verifies
+4096 x 4096 BC5_UNORM and the complete 13-level mip chain before binding
+`canyon_v5_eroded_near_v2_ready.normal.dds`. Ship the cooked DDS; never bind a fresh
+uncooked PNG in a running scene. Keep the faceted source normal for reproducible
+composition rather than feeding the previously combined result back into itself.
