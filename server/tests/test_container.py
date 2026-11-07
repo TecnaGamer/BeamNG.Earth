@@ -65,7 +65,8 @@ class EntrypointTest(unittest.TestCase):
     def test_a_bad_value_stops_the_start_before_anything_changes(self):
         shipped = self.main_lua.read_text()
         for name, value in (("BNGE_TIME", "29:59"), ("BNGE_TIME_SPEED", "fast"), ("BNGE_WEATHER", "hail"),
-                            ("BNGE_LISTED", "maybe"), ("BNGE_WEATHER", "rain'; os.exit() --")):
+                            ("BNGE_LISTED", "maybe"), ("BNGE_WEATHER", "rain'; os.exit() --"),
+                            ("BNGE_WEATHER", "rain\nx")):
             r = self.run_entry(**{name: value})
             self.assertEqual(r.returncode, 2, (name, value))
             self.assertIn(name, r.stderr)

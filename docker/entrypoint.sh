@@ -8,7 +8,8 @@ data=${BNGE_DATA:-/data}
 plugin=$root/Resources/Server/BeamNGEarth
 
 fail() { echo "bnge-entrypoint: $*" >&2; exit 2; }
-is() { printf '%s' "$2" | grep -Eqx "$1"; }
+is() { case $2 in *'
+'*) return 1;; esac; printf '%s' "$2" | grep -Eqx "$1"; }   # (grep -x matches line by line)
 
 # every value checked before anything changes: a bad one stops here, not with a broken main.lua or config
 time=${BNGE_TIME:-}; speed=${BNGE_TIME_SPEED:-}; weather=${BNGE_WEATHER:-}; listed=${BNGE_LISTED:-}
