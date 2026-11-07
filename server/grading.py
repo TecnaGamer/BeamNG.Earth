@@ -305,6 +305,11 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
+# A walkway bridge is not a road, so it never becomes a deck. The elevation still has it: a footbridge across a
+# motorway cut is a ridge of ground in the carriageway (a catwalk over I-87 at Lake George, GitHub #802). Its span
+# caps the road under it the same way a road deck does, and nothing else (no ramp, no abutment).
+WALK_SPAN_CLASSES = {"footway", "path", "pedestrian", "cycleway", "bridleway", "steps"}
+WALK_SPAN_HALF_M = 4.0      # m: the walkway, wide enough that the side read covers the ridge the elevation leaves
 UNDER_DECK_MAX_M = 30.0     # m along the road a deck covers at most either side of the crossing (an oblique one)
 UNDER_DECK_PAD_M = 3.0 * SIGMA_MAJOR_M + PROFILE_STEP + UNDER_DECK_SIDE_M + UNDER_DECK_MAX_M    # m round a cell: the
                             # farthest its plans' samples reach past its box (their extensions), and a deck's window
@@ -3297,11 +3302,21 @@ class _Planner:
     def _cell_enu_calc(self, k, ground):
         parts = {}
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+        span_ll = []
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
+            classes = f.attrs.get("class")
+            subtypes = f.attrs.get("subtype")
             for i in range(len(f)):
                 if bs[i] is None and rs[i] is None:
+                    cls = str(classes[i]) if classes is not None else ""
+                    sub = str(subtypes[i]) if subtypes is not None else "road"
+                    if sub == "road" and cls in WALK_SPAN_CLASSES:
+                        for ring in roadsmod.bridge_parts(f, i):
+                            ring = np.asarray(ring, np.float64)
+                            if len(ring) >= 2:
+                                span_ll.append(ring)
                     continue
                 fid = str(f.ids[i])
                 # (a bridge part's level: OSM's layer as Overture's level rules, 1 without one; stacked decks' order)
@@ -3364,9 +3379,18 @@ class _Planner:
             for ring, out_ in [(r, rail_xy) for r in rail] + [(r, rail_gxy) for r in rail_g]:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
+        span_xy = []
+        if span_ll:
+            alls = np.concatenate(span_ll)
+            se, sn, _ = self.frame.geodetic_to_enu(alls[:, 1], alls[:, 0], 0.0)
+            sxy = np.stack([np.asarray(se, np.float64), np.asarray(sn, np.float64)], axis=1)
+            k0 = 0
+            for ring in span_ll:
+                span_xy.append(sxy[k0:k0 + len(ring)])
+                k0 += len(ring)
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids,
-                "end_of": end_of,
+                "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
 
     def _decks_ll(self, lonlat):
@@ -3402,8 +3426,9 @@ class _Planner:
                 short = True
                 continue
             halves = c.get("bridge_half") or [0.0] * len(c["bridges"])
-            for line, half in list(zip(c["bridges"], halves)) + [(r, railwaysmod.DECK_HALF_M)
-                                                                    for r in c.get("rail_bridges", ())]:
+            for line, half in (list(zip(c["bridges"], halves))
+                               + [(r, railwaysmod.DECK_HALF_M) for r in c.get("rail_bridges", ())]
+                               + [(r, WALK_SPAN_HALF_M) for r in c.get("span_bridges", ())]):
                 if len(line) < 2 or half <= 0:
                     continue
                 k2 = (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), round(float(line[-1, 0]), 1), len(line))
