@@ -91,6 +91,9 @@ M.SCHEMA = {
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
+  -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
+  -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
+  telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -139,7 +142,7 @@ M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', '
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
-  'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
+  'placeNamesOnline', 'telemetry', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
   'devMapKm' }
 

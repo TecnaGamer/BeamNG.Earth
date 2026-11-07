@@ -90,6 +90,8 @@ def player_settings(user_dir):
         out["priority"] = "normal"
     if d.get("teleportPriority") is True:
         out["teleport_full"] = True
+    if d.get("telemetry") is False:                 # (the settings page's Anonymous usage statistics: telemetry.py)
+        out["telemetry"] = False
     env = os.environ.get("BNGE_TELEPORT_FULL")      # (tests: the setting either way for this run)
     if env in ("0", "1"):
         out["teleport_full"] = env == "1"

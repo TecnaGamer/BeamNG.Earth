@@ -7724,7 +7724,8 @@ async def main_async(args):
         server.telemetry = telemetry.Reporter(
             args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
             lambda: (bool(server.connections), getattr(server, "_share_hub", None) is not None),
-            proc_dir=os.environ.get("BNE_NETSTATS_PROC")).start()
+            proc_dir=os.environ.get("BNE_NETSTATS_PROC"),
+            allowed=lambda: cpupin.player_settings(args.user_dir).get("telemetry", True) is not False).start()
         log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
                  "BNE_TELEMETRY=off turns it off)")
     log.info("startup: opening the local connection")

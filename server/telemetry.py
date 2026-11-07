@@ -9,7 +9,8 @@ Every REPORT_S the server sends https://earth.tgforever.net/telemetry (the proje
      "sources": {host: {"req", "mb", "ok", "e4xx", "e404", "e429", "e5xx", "err", "retry"}}}   (since the last report)
 
 Nothing else: no place, no position, no IP kept (the collector derives the country from the address and drops it).
-Off with BNE_TELEMETRY=off (or earthd --telemetry off), and always in --offline mode. Failures are silent: a report that
+Off with the settings page's Anonymous usage statistics switch (read before every report), BNE_TELEMETRY=off (or
+earthd --telemetry off), and always in --offline mode. Failures are silent: a report that
 cannot be sent is dropped (its counts go into the next one).
 
 The per-host counts are every process's (netfetch.process_totals: the worker processes write theirs to
@@ -76,12 +77,14 @@ def os_name():
 class Reporter:
     """The report loop (a daemon thread). state() -> (game connected, in BeamMP)."""
 
-    def __init__(self, cache_dir, version, state, proc_dir=None, url=URL, send=None, clock=time.monotonic):
+    def __init__(self, cache_dir, version, state, proc_dir=None, url=URL, send=None, clock=time.monotonic,
+                 allowed=None):
         self.cache_dir, self.version, self.state = cache_dir, str(version or ""), state
         self.proc_dir = proc_dir
         self.url = url
         self.send = send or self._post
         self.clock = clock
+        self.allowed = allowed or (lambda: True)    # (the settings page's switch, read before every report)
         self.id = install_id(cache_dir)
         self.seen = {}              # pid -> {host: {counter: n}} last counted
         self.carry = {}             # host -> counts not yet delivered (a failed report)
@@ -154,6 +157,9 @@ class Reporter:
 
     def report(self):
         sources = self.deltas()
+        if not self.allowed():          # (turned off on the settings page: nothing sent, these counts dropped)
+            self.carry = {}
+            return
         body = self.body(sources)
         if self.send(body):
             self.carry = {}

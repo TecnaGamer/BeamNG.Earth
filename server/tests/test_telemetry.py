@@ -63,6 +63,33 @@ class ReporterTest(unittest.TestCase):
         self.assertEqual(self.sent[-1]["sources"]["c.example.org"]["req"], 3)    # only what changed
 
 
+class SwitchTest(unittest.TestCase):
+    def test_the_settings_page_switch_stops_reports_and_drops_their_counts(self):
+        with tempfile.TemporaryDirectory() as d:
+            sent, on = [], [False]
+            f = netfetch.Fetcher()
+            f._bump(f.host("d.example.org"), "requests", 5)
+            r = telemetry.Reporter(d, "1.9.0", lambda: (True, False), send=lambda b: (sent.append(b), True)[1],
+                                   allowed=lambda: on[0])
+            r.report()
+            self.assertEqual(sent, [])
+            on[0] = True
+            r.report()
+            self.assertNotIn("d.example.org", sent[-1]["sources"])      # (the counts made while off were dropped)
+
+    def test_player_settings_reads_the_switch(self):
+        import cpupin
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, cpupin.MOD_SETTINGS[0]))
+            path = os.path.join(d, cpupin.MOD_SETTINGS[0], cpupin.MOD_SETTINGS[1])
+            with open(path, "w") as fh:
+                json.dump({"telemetry": False}, fh)
+            self.assertIs(cpupin.player_settings(d).get("telemetry"), False)
+            with open(path, "w") as fh:
+                json.dump({"telemetry": True}, fh)
+            self.assertNotIn("telemetry", cpupin.player_settings(d))
+
+
 class OptOutTest(unittest.TestCase):
     def test_off_by_default_for_direct_runs_and_the_launcher_switch(self):
         import earthd

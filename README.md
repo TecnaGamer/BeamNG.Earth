@@ -437,8 +437,9 @@ The collector looks up your country from the connection's address and does not k
 The public numbers (players online, peaks, history, countries with at least 5 players) are at
 <https://earth.tgforever.net/players>.
 
-Turn reports off with the environment variable `BNE_TELEMETRY=off` (set it before starting BeamNG.Earth); they are
-never sent in offline mode (`--offline`).
+Turn reports off in the game: BeamNG.Earth's settings page, Interface, **Anonymous usage statistics** (from the next
+report on). Or set the environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in
+offline mode (`--offline`).
 
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
