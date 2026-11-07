@@ -40,7 +40,7 @@ table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom
 <body>
 <main>
 <h1>BeamNG.Earth players</h1>
-<p class="sub">Live counts from BeamNG.Earth apps that send anonymous usage reports.
+<p class="sub">Live counts from BeamNG.Earth apps that send anonymous usage reports. <a href="players/advanced" id="adv">Advanced statistics</a> ·
   <span class="live"><span class="dot off" id="dot"></span><span id="upd">connecting</span></span></p>
 <div class="tiles">
   <div class="tile"><div class="n" id="online">-</div><div class="l">online now</div></div>
@@ -191,6 +191,7 @@ apply.onclick = () => {
       custom.classList.add("show"); from.value = toLocalInput(f); to.value = toLocalInput(t); loadRange(); return; } }
   select(PRESETS[p.get("range")] ? p.get("range") : "24h");
 })();
+adv.href = base + "players/advanced";
 live(); setInterval(live, 10000);
 </script>
 </body>

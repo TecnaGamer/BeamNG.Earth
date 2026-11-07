@@ -313,6 +313,9 @@ fn main() {
     });
     let token = std::env::var("BNGE_TELEMETRY_TOKEN").ok().filter(|t| t.len() >= 16);
     let mut tel = telemetry::Telemetry::new(Some(tel_dir));
+    // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
+    // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
+    let mut advanced: Option<(Instant, String)> = None;
     loop {
         let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         tel.tick(Instant::now(), unix_now);
@@ -384,8 +387,17 @@ fn main() {
                     (None, _) => json(404, "{\"error\":\"not found\"}".into()),
                 }
             }
+            (Method::Get, "/stats/advanced") => {
+                if advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
+                    advanced = Some((now, tel.private(now, unix_now).to_string()));
+                }
+                json(200, advanced.as_ref().unwrap().1.clone())
+            }
             (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
-            (Method::Get, "/players/private") => html(include_str!("private.html")),
+            (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
+            (Method::Get, "/players/private") => Response::from_string("")
+                .with_status_code(301)
+                .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
             _ => json(404, "{\"error\":\"not found\"}".into()),
         };
         let _ = req.respond(resp);

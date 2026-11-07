@@ -8,9 +8,10 @@
 //!                   gives its country (Geo) and is then dropped: no address, name or position is kept.
 //! GET  /stats       public: players online now (an install heard from in ONLINE_TTL) and in game, the peaks, the
 //!                   last 48 h (5 min samples), daily peaks, countries with at least K_ANON players (the rest "other").
-//! GET  /stats/private  with "Authorization: Bearer <BNGE_TELEMETRY_TOKEN>" (404 without the variable): versions,
+//! GET  /stats/advanced  public since 2026-11-06 (the user: "i dont see much of an issue with the private page being
+//!                   public ... i think its fine to keep exact country counts"; main.rs caches it a minute): versions,
 //!                   systems, every country, BeamMP sessions, and per data source the requests, MB, errors and 429s per
-//!                   hour over the last 7 days and in the last 24 h.
+//!                   hour over the last 7 days and in the last 24 h. (/stats/private: the same with the token.)
 //!
 //! Kept in BNGE_TELEMETRY_DIR (default: next to the binary): samples.jsonl (5 min samples, SAMPLE_KEEP) and hours.jsonl
 //! (an hour's peaks and data-source sums, HOUR_KEEP), appended and compacted at start.
