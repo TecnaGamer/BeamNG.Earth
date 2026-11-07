@@ -415,6 +415,38 @@ class FailingMD:
         raise OSError("offline")
 
 
+class WalkwaySpanTest(unittest.TestCase):
+    """A bridge that is not a road (a footway, a path, a cycleway) is not a deck. The elevation still has its
+    span, a ridge across the road under it (GitHub #802). That span caps the road, and the walkway is not raised
+    into a carriageway."""
+
+    def cell(self, feats):
+        g = grading._Planner(FRAME, FakeMD(feats), lambda la, lo: np.zeros(np.shape(la)))
+        return g._cell_enu_calc(mapcells.cell_of(LAT, LON), ground=False)
+
+    def test_a_walkway_bridge_caps_the_road_and_is_not_a_deck(self):
+        bridged = features([[(0.0, -40.0), (0.0, 40.0)]], ["footway"], flags=[(0, "is_bridge")])
+        plain = features([[(10.0, -20.0), (10.0, 20.0)]], ["footway"])
+        road = features([[(-40.0, 0.0), (40.0, 0.0)]], ["motorway"], flags=[(0, "is_bridge")])
+        span = self.cell(bridged)
+        self.assertEqual(span["bridges"], [])
+        self.assertEqual(len(span["span_bridges"]), 1)
+        self.assertLess(float(span["span_bridges"][0][:, 1].min()), -20.0)
+        self.assertEqual(self.cell(plain)["span_bridges"], [])
+        deck = self.cell(road)
+        self.assertEqual(len(deck["bridges"]), 1)
+        self.assertEqual(deck["span_bridges"], [])
+
+    def test_the_road_under_a_walkway_does_not_climb_its_ridge(self):
+        s = np.arange(-60.0, 61.0, 2.0)
+        z = np.zeros(len(s))
+        z[(np.abs(s) < 10.0)] = 8.0
+        pts = np.stack([s, np.zeros(len(s))], axis=1)
+        span = (np.array([[0.0, -30.0], [0.0, 30.0]]), grading.WALK_SPAN_HALF_M)
+        self.assertLess(float(grading.deck_capped(pts, z, [span]).max()), 0.5)
+        self.assertGreater(float(grading.deck_capped(pts, z, []).max()), 7.0)
+
+
 class DirtTest(unittest.TestCase):
     """A dirt road is worn: potholes and patches on its profile (grading.dirt_bumps), a lean to one side
     (grading.dirt_bank). A built road gets neither, and a main dirt road much less than a country lane."""
