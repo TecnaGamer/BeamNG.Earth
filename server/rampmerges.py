@@ -310,6 +310,10 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
     rows = [r for r in rows if len(r[2]) >= 2]
     mains = [r for r in rows if r[1].kind == 'paved' and r[1].oneway and not r[1].link and not getattr(r[1], 'roundabout', False)
              and r[1].cls in ('motorway', 'trunk') and roadmarkings.for_road(r[1], lon=r[3]) is not None]
+    # each main's xy box grown by JOIN: an end outside it is farther than JOIN from that main (the same choices,
+    # without projecting every ramp end on every main: 6700 project() calls per 16 Midtown tiles)
+    main_boxes = np.array([[r[2][:, 0].min() - JOIN, r[2][:, 1].min() - JOIN, r[2][:, 0].max() + JOIN,
+                            r[2][:, 1].max() + JOIN] for r in mains]).reshape(-1, 4)
     out, extensions = [], []
     for fid, sp, source, lon in sorted(rows, key=lambda r: r[0]):
         if not sp.link or not sp.oneway or sp.kind != 'paved':
@@ -324,7 +328,10 @@ def plans(rows, terminals=None, geometry=None, pavement=None):
             direction = sample(away, min(12., length))[0, :2] - away[0, :2]
             direction /= max(np.linalg.norm(direction), 1e-9)
             choices = []
-            for row in mains:
+            ex, ey = float(away[0, 0]), float(away[0, 1])
+            near_mains = np.flatnonzero((main_boxes[:, 0] <= ex) & (ex <= main_boxes[:, 2]) &
+                                        (main_boxes[:, 1] <= ey) & (ey <= main_boxes[:, 3]))
+            for row in (mains[i] for i in near_mains):
                 p = row[2][::(-1 if (row[1].dir or 1) * (-1 if entry else 1) < 0 else 1)]
                 s, q, tangent, _, distance = project(p, away[:1])
                 if distance[0] > JOIN or abs(q[0, 2]-away[0, 2]) > HEIGHT or tangent[0] @ direction < .75:
@@ -582,41 +589,59 @@ def connections(rows):
     return out
 
 
+def _paint_lines(p):
+    """A layout's paint lines [(look, width, line)], tile independent: built once per layout (the layouts are cached
+    for the source neighbourhood, and every road tile under them asked for all of them again: ~0.4 s per 16 Phoenix
+    I-10 tiles in the separators' projections), with their xy bounding box."""
+    import roads
+    got = p.get('_paint')
+    if got is not None:
+        return got
+    profile = roadmarkings.profile(p['spec'].state)
+    kind = 'entrance' if p['entry'] else 'exit'
+    # Preserve the mainline's outside boundary colour through the taper.
+    # A right-side ramp's inner edge stays white until the pavements split;
+    # a left-side ramp's outside edge remains yellow throughout.
+    lines = [(dict(m=p['color'], p=2, tl=6.4, ramp_merge=kind), profile.solid, p['outer'])]
+    if profile.ramp:
+        length, gap, width = profile.ramp
+        look = dict(m='line_white', p=6, tl=length+gap, dash=(length, gap), ramp_merge=kind)
+        # A separator cannot fit at a zero-width tip: start where the paint
+        # clears the solid edge, rather than drawing white strokes on top of it.
+        clearance = (profile.solid + width)/2 + PAINT_CLEARANCE
+        def separator(line, internal=False):
+            def metric(points):
+                distance = project(p['outer'], points)[4] - clearance
+                if internal:
+                    distance = np.minimum(distance, project(p['guide'], points)[4] - width - PAINT_CLEARANCE)
+                return distance
+            for part in _outside(line, metric):
+                lines.append((dict(look, _source=part), width, part))
+        separator(p['guide'])
+        # A multi-lane ramp sheds its additional lanes in sequence as the available width narrows.
+        count = p['spec'].lanes or 1
+        for k in range(1, count):
+            offset = p['span'] - k * (p['spec'].width-2*roads.edge_inset(p['spec'])) / count
+            fraction = np.maximum(0., offset) / np.maximum(p['span'], 1e-9)
+            line = p['guide'] + (p['outer']-p['guide']) * fraction[:, None]
+            keep = np.flatnonzero(offset > .05)
+            if len(keep) >= 2:
+                line = line[keep[0]:]
+                separator(line, internal=True)
+    pts = np.vstack([np.asarray(line)[:, :2] for _, _, line in lines])
+    got = p['_paint'] = (lines, (float(pts[:, 0].min()), float(pts[:, 1].min()),
+                                 float(pts[:, 0].max()), float(pts[:, 1].max())))
+    return got
+
+
 def chunks(layouts, box, fixed=False):
     import roads
     out = []
+    x0, y0, x1, y1 = box
     for p in layouts:
-        profile = roadmarkings.profile(p['spec'].state)
-        kind = 'entrance' if p['entry'] else 'exit'
-        # Preserve the mainline's outside boundary colour through the taper.
-        # A right-side ramp's inner edge stays white until the pavements split;
-        # a left-side ramp's outside edge remains yellow throughout.
-        lines = [(dict(m=p['color'], p=2, tl=6.4, ramp_merge=kind), profile.solid, p['outer'])]
-        if profile.ramp:
-            length, gap, width = profile.ramp
-            look = dict(m='line_white', p=6, tl=length+gap, dash=(length, gap), ramp_merge=kind)
-            # A separator cannot fit at a zero-width tip: start where the paint
-            # clears the solid edge, rather than drawing white strokes on top of it.
-            clearance = (profile.solid + width)/2 + PAINT_CLEARANCE
-            def separator(line, internal=False):
-                def metric(points):
-                    distance = project(p['outer'], points)[4] - clearance
-                    if internal:
-                        distance = np.minimum(distance, project(p['guide'], points)[4] - width - PAINT_CLEARANCE)
-                    return distance
-                for part in _outside(line, metric):
-                    lines.append((dict(look, _source=part), width, part))
-            separator(p['guide'])
-            # A multi-lane ramp sheds its additional lanes in sequence as the available width narrows.
-            count = p['spec'].lanes or 1
-            for k in range(1, count):
-                offset = p['span'] - k * (p['spec'].width-2*roads.edge_inset(p['spec'])) / count
-                fraction = np.maximum(0., offset) / np.maximum(p['span'], 1e-9)
-                line = p['guide'] + (p['outer']-p['guide']) * fraction[:, None]
-                keep = np.flatnonzero(offset > .05)
-                if len(keep) >= 2:
-                    line = line[keep[0]:]
-                    separator(line, internal=True)
+        lines, (lx0, ly0, lx1, ly1) = _paint_lines(p)
+        if lx1 < x0 or lx0 > x1 or ly1 < y0 or ly0 > y1:
+            continue                # (no paint of this layout in the tile)
         for look, width, line in lines:
             for piece in roads.clip_polyline(line, *box):
                 for part in roads.split(piece):
