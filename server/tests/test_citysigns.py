@@ -88,6 +88,36 @@ class FilesTest(unittest.TestCase):
         self.assertEqual(len(citysigns.poles_near(self.d, 3, 0, 0)), 0)
 
 
+class GeoTest(unittest.TestCase):
+    """The game's road tiles are geotiles (rg_<key>.json, rows in the tile's own frame): their poles in the anchor's metres."""
+
+    def test_a_geotiles_poles_are_moved_into_the_anchors_frame(self):
+        import geodesy
+        import geotiles
+        anchor = geodesy.EnuFrame(49.23, 28.44)
+        gx, gy = geotiles.tile_of(49.2344, 28.4370)
+        la, lo = 49.2344, 28.4370
+        src = geodesy.EnuFrame(float(la), float(lo))
+        # a pole 10 m east, 20 m north of the geotile's frame origin: its place in the anchor's frame by the geodesy
+        d = tempfile.mkdtemp(prefix="citysigns_geo_")
+        self.addCleanup(shutil.rmtree, d, True)
+        data = {"frame": [float(la), float(lo)], "props": {"groups": ["pole", "bench"], "items": [[0, 10.0, 20.0, 5.0, 0, 1, 9, 0], [1, 11.0, 20.0, 5.0, 0, 1, 1, 0]]}}
+        with open(os.path.join(d, f"rg_{geotiles.key(gx, gy)}.json"), "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        e, n, _ = anchor.geodetic_to_enu(*src.enu_to_geodetic(10.0, 20.0, 5.0)[:2], 0.0)
+        box = (float(e) - 50.0, float(n) - 50.0, float(e) + 50.0, float(n) + 50.0)
+        p = citysigns.geo_poles_near(d, anchor, box)
+        self.assertEqual(len(p), 1, "the pole, not the bench")
+        self.assertAlmostEqual(float(p[0, 0]), float(e), delta=0.5)
+        self.assertAlmostEqual(float(p[0, 1]), float(n), delta=0.5)
+
+    def test_no_geotile_written_is_no_poles(self):
+        import geodesy
+        d = tempfile.mkdtemp(prefix="citysigns_geo_")
+        self.addCleanup(shutil.rmtree, d, True)
+        self.assertEqual(len(citysigns.geo_poles_near(d, geodesy.EnuFrame(49.23, 28.44), (0.0, 0.0, 256.0, 256.0))), 0)
+
+
 @unittest.skipUnless(HAVE, "earthfast with the town board mesh")
 class MeshTest(unittest.TestCase):
     @staticmethod

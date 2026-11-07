@@ -341,7 +341,12 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     z = np.asarray(frame.geodetic_to_enu(la, lo, hz)[2], np.float64).ravel()
     n = len(keep)
     import citysigns
-    poles = citysigns.poles_near(out_dir, aid, tx, ty) if aid is not None and any(is_town(k[0]) for k in keep) else None
+    poles = None
+    if any(is_town(k[0]) for k in keep):
+        parts = [citysigns.geo_poles_near(out_dir, frame, box)]
+        if aid is not None:
+            parts.append(citysigns.poles_near(out_dir, aid, tx, ty))
+        poles = citysigns._sorted([p for p in parts if len(p)])
     side = -1.0 if left_hand else 1.0
     for i, (b, mat, w, h) in enumerate(keep):
         x, y, zg, zr, mount, mode = b[0], b[1], z[i], z[n + i], st["placement"]["mount_m"], -1.0

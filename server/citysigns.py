@@ -54,17 +54,73 @@ def _poles_of(path):
 
 
 def poles_near(out_dir, aid, tx, ty):
-    """The mountable poles of road tile (tx, ty) and its neighbours that are written, (n, 3) sorted (x, y)."""
+    """The mountable poles of road tile (tx, ty) and its neighbours that are written, (n, 3) sorted (x, y). (The anchor
+    road tiles roads_<aid>_<tx>_<ty>.json: what the tests and tools/count_dirsigns.py build.)"""
     parts = []
     for dy in (-1, 0, 1):
         for dx in (-1, 0, 1):
             got = _poles_of(os.path.join(out_dir, f"roads_{aid}_{tx + dx}_{ty + dy}.json"))
             if got is not None and len(got):
                 parts.append(got)
+    return _sorted(parts)
+
+
+def _sorted(parts):
     if not parts:
         return np.zeros((0, 3))
     p = np.vstack(parts)
     return p[np.lexsort((p[:, 1], p[:, 0]))]
+
+
+def _geo_poles_of(path, frame):
+    """(n, 3) mountable poles of one road geotile JSON (rg_<key>.json; its rows are in its own frame, "frame" = [lat, lon])
+    in `frame`'s metres, or None (not written yet)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    key = (path, st.st_mtime_ns, st.st_size, frame.lat0, frame.lon0)
+    got = _CACHE.get(key)
+    if got is not None:
+        return got
+    try:
+        with open(path, encoding="utf-8") as f:
+            d = json.load(f)
+    except (OSError, ValueError):
+        return None
+    props = d.get("props") or {}
+    groups = props.get("groups") or []
+    ok = {i for i, g in enumerate(groups) if mountable(str(g))}
+    rows = [[r[1], r[2], r[3]] for r in props.get("items") or [] if int(r[0]) in ok]
+    out = np.zeros((0, 3))
+    if rows and d.get("frame"):
+        import geodesy
+        src = geodesy.EnuFrame(float(d["frame"][0]), float(d["frame"][1]))
+        a = np.asarray(rows, np.float64)
+        la, lo, h = src.enu_to_geodetic(a[:, 0], a[:, 1], a[:, 2])
+        x, y, z = frame.geodetic_to_enu(la, lo, h)
+        out = np.column_stack([x, y, z]).astype(np.float64)
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.clear()
+    _CACHE[key] = out
+    return out
+
+
+def geo_poles_near(out_dir, frame, box, margin=60.0):
+    """The mountable poles of the road geotiles round box (x0, y0, x1, y1 of `frame`, plus margin m), in frame metres,
+    sorted (x, y). The geotiles are the session's road tiles in the game (rg_g<z>_<x>_<y>.json beside the sign tiles)."""
+    import geotiles
+    x0, y0, x1, y1 = box
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0 - margin, x1 + margin]), np.array([y0 - margin, y1 + margin]), 0.0)
+    gx0, gy1 = geotiles.tile_of(float(np.min(la)), float(np.min(lo)))
+    gx1, gy0 = geotiles.tile_of(float(np.max(la)), float(np.max(lo)))
+    parts = []
+    for gx in range(min(gx0, gx1), max(gx0, gx1) + 1):
+        for gy in range(min(gy0, gy1), max(gy0, gy1) + 1):
+            got = _geo_poles_of(os.path.join(out_dir, f"rg_{geotiles.key(gx, gy)}.json"), frame)
+            if got is not None and len(got):
+                parts.append(got)
+    return _sorted(parts)
 
 
 def pick(poles, board, junction_xy, left_hand):

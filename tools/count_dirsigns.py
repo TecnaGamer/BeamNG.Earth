@@ -24,7 +24,7 @@ import revisit  # noqa: E402
 import roads  # noqa: E402
 
 args = [a for a in sys.argv[1:] if not a.startswith("--")]
-with_roads = "--roads" in sys.argv
+with_roads = "--roads" in sys.argv or "--modes" in sys.argv
 lat, lon = float(args[0]), float(args[1])
 rad = int(args[2]) if len(args) > 2 else 3
 name = args[3] if len(args) > 3 else f"{lat:.3f},{lon:.3f}"
@@ -39,6 +39,9 @@ def counted(*a):
     # (a board of a neighbouring tile's margin is counted by the tile that owns it: the kernel returns the box's own)
     total[0] += len(boards)
     total[1] += int((boards[:, 6] > 0.5).sum()) if len(boards) else 0
+    if "--where" in sys.argv:
+        for b in boards:
+            print(f"board junction lat {b[9]:.5f} lon {b[8]:.5f} {'town' if b[6] > 0.5 else 'road'}", file=sys.stderr)
     return boards, rows
 
 
@@ -54,10 +57,10 @@ def counted_mesh(signs, origin):
 
 
 fast._ef.dirsign_mesh = counted_mesh
-out = tempfile.mkdtemp(prefix="cntdir_")
+out = os.environ.get("BNE_COUNT_OUT") or tempfile.mkdtemp(prefix="cntdir_")     # (a game session folder: its road geotiles are the poles)
 frame = geodesy.EnuFrame(lat, lon)
 tiles = 0
-if with_roads:
+if "--roads" in sys.argv:
     for ty in range(-rad - 1, rad + 1):
         for tx in range(-rad - 1, rad + 1):
             try:
