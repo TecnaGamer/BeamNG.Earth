@@ -1,5 +1,5 @@
-"""The faces of Germany's junction signs (server/designs.py's GROUPS): bne_de_signs.png, Zeichen 205, 206, 301, 306,
-307 and the ten 1002 plates of designs.PLATES, one to a cell of 256 px, drawn from their construction; and of its zone
+"""The faces of Germany's junction signs (server/designs.py's GROUPS): bne_de_signs.png, Zeichen 205, 206, 215, 301,
+306, 307 and the ten 1002 plates of designs.PLATES, one to a cell of 256 px, drawn from their construction; and of its zone
 signs (server/speedsigns.py's de_zone_mesh): bne_de_zones.png, Zeichen 274.1 and 274.2 for the zones of
 designsigns.ZONE_KMH (zone_pictures below).
 
@@ -11,7 +11,7 @@ widths of the borders, the symbols and the lettering, is measured off the public
 Commons ("Zeichen 205 - Vorfahrt gewähren! StVO 1970.svg", "Zeichen 206 - Halt! Vorfahrt gewähren! StVO 2017.svg",
 "Zeichen 301 - Vorfahrt, StVO 1970.svg", "Zeichen 306 - Vorfahrtstraße, StVO 1970.svg", "Zeichen 307 - Ende der
 Vorfahrtstraße, StVO 1981.svg", "Zusatzzeichen 1002-10 - Verlauf der Vorfahrtsstraße an Kreuzungen (von unten nach
-links), StVO 1992.svg"; fetched 2026-11-06), in mm at Größe 2 below: their paths are in round millimetres, and
+links), StVO 1992.svg"; fetched 2026-11-06; "Zeichen 215 - Kreisverkehr, StVO 2000.svg", Andreas06, 2026-11-07), in mm at Größe 2 below: their paths are in round millimetres, and
 the VzKat's own pictures (vzkat.de, a private reproduction of the VzKat 04/2025) agree. Those are measurements, not
 the BASt's construction sheets.
 
@@ -39,7 +39,7 @@ OUT = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", 
 ZONES_OUT = os.path.join(os.path.dirname(OUT), "bne_de_zones.png")
 FONT = os.path.join(HERE, "fonts", "D-DIN-Bold.otf")
 CELL, ART, SS = 256, 244, 4     # px: a cell, a picture's longer side in it; drawn SS times over
-COLOURS = 48                    # the anti-aliased edges' too; the four below exactly (_quantise)
+COLOURS = 48                    # the anti-aliased edges' too; the five below exactly (_quantise)
 # the VzKat's own pictures' colours (BASt / BMDV, as vzkat.de shows them, 2026-11-06): the median of a flat patch of
 # each, edges avoided; Z 205, 206 and 301 give the same red, 205, 306 and the 1002 plates the same white
 # (RAL's paint swatches, ral-farben.de, are darker and greener: 3020 #AB1519, 1023 #E6BE05; a sign's face is
@@ -48,11 +48,13 @@ WHITE = (0xEF, 0xEF, 0xEF)      # the white field: 205.gif's middle, 306.gif's r
 RED = (0xDE, 0x00, 0x00)        # the red border: 205.gif's top band, 206.gif over the lettering, 301.gif's base
 YELLOW = (0xFF, 0xB5, 0x00)     # 306.gif's and 307.gif's yellow
 BLACK = (0x00, 0x00, 0x00)      # 301.gif's symbol, 1002-10.gif's road, 307.gif's bars
+BLUE = (0x00, 0x3A, 0xBD)       # 215.gif's blue (Teil 3; its white 205.gif's, its red absent; the rendering's #154889
+                                # is paint-like, as its 205's #c1121c against the VzKat's #DE0000)
 GREY = (0x7B, 0x7B, 0x7B)       # 274-2-50.gif's struck-through ring, digits and ZONE (274-1-50.gif: the red, white and
                                 # black above)
 
 # the cells (column, row) of the 1024 px sheet; p<k>: the 1002 plate of designs.PLATES[k]
-CELLS = {"z205": (0, 0), "z206": (1, 0), "z301": (2, 0), "z306": (3, 0), "z307": (0, 1)}
+CELLS = {"z205": (0, 0), "z206": (1, 0), "z301": (2, 0), "z306": (3, 0), "z307": (0, 1), "z215": (3, 3)}
 CELLS.update({f"p{k}": ((k + 5) % 4, (k + 5) // 4) for k in range(len(designs.PLATES))})
 # the VzKat's number of each plate (Teil 7 Zeichen 1002: "an Kreuzungen 10: von unten nach links, 11: von oben nach
 # links, 20: von unten nach rechts, 21: von oben nach rechts"; "an Einmündungen 12: von unten nach links, Einmündung von
@@ -75,6 +77,14 @@ STOP = (("S", -0.3418, -0.1899, -0.1616, 0.1616), ("T", -0.1730, -0.0210, -0.158
 # black line on its edge; 307's three black bars 35 mm wide, 50 mm apart, across to the black edge (552 mm long)
 DIA_RIM, DIA_EDGE, DIA_CORE, DIA_LINE = 0.014, 0.015, 0.160, 0.010
 BAR_W, BAR_STEP, BAR_HALF = 0.035, 0.050, 0.276
+# Z 215 at Größe 2 (600 across): a 14 mm white rim round the blue disc (286 mm its radius), three white arrows turning
+# anticlockwise, each the one below turned by 120 degrees (the rendering's three agree within a millimetre): its path
+# from its head's outer point, m from the middle, z up, ("L", point) or ("C", two control points and the end)
+DISC_215 = 0.286
+ARROW_215 = ((0.1435, -0.1255), ("L", (0.0459, -0.1007)), ("L", (0.0099, -0.1221)), ("L", (0.0799, -0.1414)),
+             ("C", (0.0106, -0.1838), (-0.0836, -0.1577), (-0.1243, -0.1053)), ("L", (-0.1517, -0.1280)),
+             ("C", (-0.0739, -0.2162), (0.0274, -0.2110), (0.0978, -0.1726)), ("L", (0.0801, -0.2435)),
+             ("L", (0.1179, -0.2218)))
 # the 1002 plate at Größe 2 (600 x 600): a 10 mm white rim, a 15 mm black frame; the roads from 225 mm off the middle,
 # the priority's 100 mm wide, bent on a 100 mm radius (its middle line), the others 50 mm wide from 75 mm off it
 PLATE_RIM, PLATE_FRAME = 0.010, 0.015
@@ -216,6 +226,35 @@ def diamond(name):
     return c.done()
 
 
+def _path(start, segs, steps=24):
+    """The points of a path of straight lines and cubic curves (ARROW_215's form)."""
+    pts = [start]
+    for seg in segs:
+        if seg[0] == "L":
+            pts.append(seg[1])
+            continue
+        (x0, z0), (x1, z1), (x2, z2), (x3, z3) = pts[-1], *seg[1:]
+        for j in range(1, steps + 1):
+            t = j / steps
+            a, b, c, d = (1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3
+            pts.append((a * x0 + b * x1 + c * x2 + d * x3, a * z0 + b * z1 + c * z2 + d * z3))
+    return pts
+
+
+def roundabout(name):
+    """Zeichen 215: the white rim, the blue disc and the three arrows (ARROW_215 turned by 0, 120 and 240 degrees)."""
+    c = Canvas(name)
+    r = designs.SIZE[name][1] / 2
+    c.disc(0.0, 0.0, r, WHITE)
+    c.disc(0.0, 0.0, DISC_215, BLUE)
+    arrow = _path(ARROW_215[0], ARROW_215[1:])
+    for k in range(3):
+        a = 2 * math.pi * k / 3
+        ca, sa = math.cos(a), math.sin(a)
+        c.poly([(x * ca - z * sa, x * sa + z * ca) for x, z in arrow], WHITE)
+    return c.done()
+
+
 def _arm(c, d, near, far, width):
     """A road on the plate: from near to far m off its middle towards d, width m wide."""
     (dx, dz), w = d, width / 2
@@ -253,7 +292,7 @@ def plate(k):
 def pictures():
     """{name: its cell's picture (256 px RGB)}."""
     out = {"z205": triangle("z205"), "z301": triangle("z301"), "z206": octagon("z206"), "z306": diamond("z306"),
-           "z307": diamond("z307")}
+           "z307": diamond("z307"), "z215": roundabout("z215")}
     out.update({f"p{k}": plate(k) for k in range(len(designs.PLATES))})
     return out
 
@@ -328,7 +367,7 @@ def zone_pictures():
     return {(s, v): zone(s, v) for s in (1, 2) for v in designsigns.ZONE_KMH}
 
 
-def _quantise(sheet, base=(WHITE, RED, YELLOW, BLACK)):
+def _quantise(sheet, base=(WHITE, RED, YELLOW, BLACK, BLUE)):
     """sheet in COLOURS colours, the ones of its signs (base) exactly: they seed the palette, median cut adds the
     anti-aliased edges' (a palette of its own would move each flat colour to its cluster's mean), and each px takes its
     nearest entry, the first of equals (Pillow's own mapping looks up a coarser cache: a flat white went to a

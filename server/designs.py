@@ -721,8 +721,9 @@ def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
       - before a roundabout's entry on a stretch, unless another stretch leaves the roundabout (not beside the entry:
         that is its divided road's other carriageway; not a link, which gives way at its end), where the stretch
         goes on past it (Rn. 7).
-    - A roundabout's entries (controls' G_YIELD, furniture.junction_controls' ring rule): a 205 without a plate at
-      today's give-way spot (spec B1; no Z 215). Signals (G_SIGNAL) are furniture's rows, with no 307 here."""
+    - A roundabout's entries (controls' G_YIELD, furniture.junction_controls' ring rule): Zeichen 205 over Zeichen 215
+      on one post, without a plate, at today's give-way spot (StVO § 8 Abs. 1a: the ring has the right of way where
+      215 stands under 205). Signals (G_SIGNAL) are furniture's rows, with no 307 here."""
     rows = []
 
     def put(arm, face, plate=-1, after=False, back=0.0):
@@ -755,7 +756,7 @@ def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
         for a, w, _ in ctl:
             if w != furniture.G_YIELD:
                 continue
-            put(a, "z205")
+            put(a, "z205_z215")
             if urban or not st[at[id(a)]]:
                 continue
             leave = [(x, y) for x, y in ring_arms if x[0] != a[0] and not _inbound(x)]

@@ -26,6 +26,8 @@ import roads  # noqa: E402
 import signroads  # noqa: E402
 import speedsigns  # noqa: E402
 
+RING = "de_z205_z215"   # a roundabout entry's assembly: Zeichen 205 over 215 (StVO § 8 Abs. 1a)
+
 
 def setUpModule():
     borderfixtures.require()        # (no border data: every German test would pass on today's output)
@@ -760,31 +762,32 @@ class JunctionRowsTest(Placed, unittest.TestCase):
     def test_307_before_a_roundabout_only_where_the_stretch_ends(self):
         box = (-150.0, -150.0, 150.0, 150.0)
         through = furniture.junction_props(self.ring("secondary"), box, de_on=True, de_ctx=self.ctx())
-        self.assertEqual(sorted(r[0] for r in through), ["de_z205"] * 2, "the stretch goes on past it (Rn. 7)")
+        self.assertEqual(sorted(r[0] for r in through), [RING] * 2, "the stretch goes on past it (Rn. 7)")
         ends = furniture.junction_props(self.ring("residential"), box, de_on=True, de_ctx=self.ctx())
-        self.assertEqual(sorted(r[0] for r in ends), ["de_z205", "de_z205", "de_z307"])
+        self.assertEqual(sorted(r[0] for r in ends), [RING, RING, "de_z307"])
         z307 = next(r for r in ends if r[0] == "de_z307")
-        z205 = next(r for r in ends if r[0] == "de_z205" and r[1] > 0)
+        z205 = next(r for r in ends if r[0] == RING and r[1] > 0)
         self.assertGreater(z307[1], z205[1] + 5.0, "on the east entry, before its 205")
         rs = self.ring("residential")
         town = self.ctx(town={fid: True for fid, *_ in rs})
         self.assertEqual(sorted(r[0] for r in furniture.junction_props(rs, box, de_on=True, de_ctx=town)),
-                         ["de_z205"] * 2, "in town none (Rn. 8): the land cover's town, not the ring's drawing")
-        for exit, want in (((("secondary", False)), ["de_z205"] * 2),
-                           (("trunk_link", False), ["de_z205", "de_z205", "de_z307"]),
-                           (("trunk", True), ["de_z205", "de_z205", "de_z307"]),
-                           (("primary_link", False), ["de_z205", "de_z205", "de_z307"])):
+                         [RING] * 2, "in town none (Rn. 8): the land cover's town, not the ring's drawing")
+        for exit, want in (((("secondary", False)), [RING] * 2),
+                           (("trunk_link", False), [RING, RING, "de_z307"]),
+                           (("trunk", True), [RING, RING, "de_z307"]),
+                           (("primary_link", False), [RING, RING, "de_z307"])):
             got = furniture.junction_props(self.ring("residential", exit=exit), box, de_on=True, de_ctx=self.ctx())
             self.assertEqual(sorted(r[0] for r in got), want, f"an exit {exit}: a ramp is no stretch going on")
 
-    def test_roundabout_entries_give_way_with_a_205(self):
-        """Spec B1: a roundabout's entries keep today's give-way spot, a 205 without a plate, sized by the entry's
-        limit; no US give-way sign inside Germany."""
+    def test_roundabout_entries_give_way_with_a_205_over_a_215(self):
+        """A roundabout's entries keep today's give-way spot: Zeichen 205 over Zeichen 215 on one post (StVO § 8 Abs.
+        1a: the ring has the right of way where 215 stands under 205; the user's review, 2026-11-07: a 205 alone was
+        no roundabout's sign), no plate, sized by the entry's limit; no US give-way sign inside Germany."""
         box = (-150.0, -150.0, 150.0, 150.0)
         today = furniture.junction_props(self.ring("secondary", kmh=120), box)
         got = furniture.junction_props(self.ring("secondary", kmh=120), box, de_on=True, de_ctx=self.ctx())
         self.assertEqual(sorted(r[0] for r in today), [furniture.G_YIELD] * 2)
-        self.assertEqual(sorted(r[0] for r in got), ["de_z205", "de_z205_g3"])
+        self.assertEqual(sorted(r[0] for r in got), [RING, RING + "_g3"])
         for r in got:
             self.assertEqual(r[6], designs.HEIGHTS[r[0]])
         for g, t in zip(sorted(got, key=lambda r: r[1]), sorted(today, key=lambda r: r[1])):

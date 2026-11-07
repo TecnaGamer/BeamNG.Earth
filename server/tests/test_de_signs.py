@@ -30,6 +30,7 @@ SHEET = os.path.join(SHAPES, "bne_de_signs.png")
 # Verkehrsweiß, 1023 Verkehrsgelb, 9017 Verkehrsschwarz
 SRGB_3020, SRGB_9016 = (0xDE, 0x00, 0x00), (0xEF, 0xEF, 0xEF)
 SRGB_1023, SRGB_9017 = (0xFF, 0xB5, 0x00), (0x00, 0x00, 0x00)
+SRGB_5017 = (0x00, 0x3A, 0xBD)      # Verkehrsblau: vzkat.de's 215 (Teil 3), its flat blue, 2026-11-07
 DELTA_E = 1.0       # CIE76: a flat area keeps its colour exactly (the palette is seeded with the four)
 
 
@@ -45,7 +46,8 @@ def lab(rgb):
     return 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz)
 
 
-RAL_3020, RAL_9016, RAL_1023, RAL_9017 = (lab(c) for c in (SRGB_3020, SRGB_9016, SRGB_1023, SRGB_9017))
+RAL_3020, RAL_9016, RAL_1023, RAL_9017, RAL_5017 = (lab(c) for c in (SRGB_3020, SRGB_9016, SRGB_1023, SRGB_9017,
+                                                                    SRGB_5017))
 
 
 def sheet():
@@ -75,11 +77,11 @@ def dae(group):
 
 
 class GroupsTest(unittest.TestCase):
-    def test_35_assemblies_in_three_sizes(self):
-        self.assertEqual(len(designs.ASSEMBLIES), 35)
-        self.assertEqual(len(designs.GROUPS), 105)
-        self.assertEqual(len(set(designs.GROUPS)), 105)
-        want = {"de_z205", "de_z206", "de_z301", "de_z306", "de_z307"} | {
+    def test_36_assemblies_in_three_sizes(self):
+        self.assertEqual(len(designs.ASSEMBLIES), 36)
+        self.assertEqual(len(designs.GROUPS), 108)
+        self.assertEqual(len(set(designs.GROUPS)), 108)
+        want = {"de_z205", "de_z206", "de_z301", "de_z306", "de_z307", "de_z205_z215"} | {
             f"de_{f}_p{k}" for f in ("z205", "z206", "z306") for k in range(len(designs.PLATES))}
         self.assertEqual(set(designs.ASSEMBLIES), want)
         self.assertEqual(set(designs.GROUPS), {a + s for a in want for s in ("_g1", "", "_g3")})
@@ -107,6 +109,25 @@ class GroupsTest(unittest.TestCase):
         self.assertGreater(designs.HEIGHTS["de_z205_p0"], designs.HEIGHTS["de_z205"] + 0.6)
         self.assertEqual(designs.PARTS["de_z306_p4_g3"], ("z306", 4, 2))
         self.assertEqual(designs.PARTS["de_z307"], ("z307", None, 1))
+        self.assertEqual(designs.PARTS["de_z205_z215_g1"], ("z205", "z215", 0))
+
+    def test_215_under_205(self):
+        """A roundabout's entry: Zeichen 215 (a 600 mm disc; 750 above 100 km/h: VwV-StVO zu den §§ 39 bis 43 Rn. 13
+        and 15, round signs over 20 km/h Größe 2) its lower edge 2 m up, the 205 GAP_M over it (StVO § 8 Abs. 1a:
+        "Zeichen 215 (Kreisverkehr) unter dem Zeichen 205")."""
+        self.assertEqual(designs.SIZE["z215"], (0.60, 0.60, 0.75))
+        for suffix, d215, d205 in (("_g1", 0.60, 0.63), ("", 0.60, 0.90), ("_g3", 0.75, 1.26)):
+            (p0, s0, m0, c0), (p1, s1, m1, c1) = designs.panels("de_z205_z215" + suffix)
+            self.assertEqual((p0, s0, m0, p1, s1, m1), ("z215", "z215", d215, "z205", "z205", d205), suffix)
+            self.assertAlmostEqual(c0, designs.LOW_M + d215 / 2, places=6)
+            self.assertAlmostEqual(c1 + designs.extent("z205", d205)[1], designs.LOW_M + d215 + designs.GAP_M,
+                                   places=6)
+        self.assertEqual(designs.WIDTHS["de_z205_z215"], designs.WIDTHS["de_z205"])
+        x0, z0, x1, z1 = designs.extent("z215", 0.6)
+        self.assertEqual((round(x0, 6), round(z0, 6), round(x1, 6), round(z1, 6)), (-0.3, -0.3, 0.3, 0.3))
+        edge = designs.edge("z215", 0.6)
+        self.assertEqual(len(edge), len(set(edge)), "a circle: no point twice")
+        self.assertTrue(all(abs(math.hypot(x, z) - 0.3) < 1e-9 for x, z in edge))
 
 
 class CatalogTest(unittest.TestCase):
@@ -154,7 +175,8 @@ class SheetTest(unittest.TestCase):
         checks = (("z205", 0.0, 0.0, RAL_9016), ("z205", 0.0, r_in - 0.05, RAL_3020),
                   ("z301", 0.0, -(r_in - 0.05), RAL_3020), ("z301", 0.2, -0.13, RAL_9016),
                   ("z206", 0.0, 0.30, RAL_3020), ("z306", 0.0, 0.0, RAL_1023), ("z306", 0.0, 0.30, RAL_9016),
-                  ("z307", 0.078, -0.078, RAL_1023))
+                  ("z307", 0.078, -0.078, RAL_1023), ("z215", 0.0, 0.0, RAL_5017), ("z215", 0.0, 0.293, RAL_9016),
+                  ("z215", 0.0, -0.19, RAL_9016), ("z215", 0.0, -0.25, RAL_5017))
         for name, x, z, ref in checks:
             got = lab(at(im, name, x, z))
             self.assertLess(math.dist(got, ref), DELTA_E, (name, x, z, got, ref))
@@ -165,7 +187,7 @@ class SheetTest(unittest.TestCase):
             self.assertLess(math.dist(got, ref), DELTA_E, (name, x, z, got, ref))
         used = {rgb for _, rgb in im.getcolors(4096)}
         self.assertLessEqual(len(used), build_de_signs.COLOURS)
-        self.assertLessEqual({SRGB_3020, SRGB_9016, SRGB_1023, SRGB_9017}, used, "RAL's four, exactly")
+        self.assertLessEqual({SRGB_3020, SRGB_9016, SRGB_1023, SRGB_9017, SRGB_5017}, used, "RAL's five, exactly")
 
     def test_plates_bold_pair_from_the_drivers_view(self):
         """designs.PLATES k: the other arms' slots and the priority pair's, D the approach at the bottom, L left, A
@@ -209,7 +231,7 @@ class CollisionTest(unittest.TestCase):
                 "len(designsigns.GROUPS))" % server)
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=server)
         self.assertEqual(out.returncode, 0, out.stderr)
-        self.assertEqual(out.stdout.split(), ["0", "105"])
+        self.assertEqual(out.stdout.split(), ["0", "108"])
 
 
 ZONE_SHEET = os.path.join(SHAPES, "bne_de_zones.png")
