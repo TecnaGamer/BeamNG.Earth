@@ -699,6 +699,24 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(kmh(roads.Spec(6.0, "paved", True, "residential", False)), 50.0)
         self.assertLess(kmh(roads.Spec(4.0, "paved", True, "service", False)), 25.0)
 
+    def test_german_zone_roads_drive_the_zones_limit(self):
+        """A road of a German zone without a mapped limit drives the zone's (its 274.1's) with the German junction
+        signs on; off, or with a mapped limit, as before."""
+        class F:
+            rules = {}
+            attrs = {"osm_zone_maxspeed": np.array(["DE:20", "DE:30", None, "DE:50"], object)}
+        res = roads.Spec(6.0, "paved", True, "residential", False)
+        kmh = lambda i, on: navgraph.road_mph(F, i, res, mph=False, country="DE", de_on=on) * 1.609344   # noqa: E731
+        self.assertAlmostEqual(kmh(0, True), 20.0)
+        self.assertAlmostEqual(kmh(1, True), 30.0)
+        self.assertAlmostEqual(kmh(0, False), 25.0 * 1.609344, msg="off: the class default")
+        self.assertAlmostEqual(kmh(2, True), 25.0 * 1.609344, msg="no zone")
+        self.assertAlmostEqual(kmh(3, True), 25.0 * 1.609344, msg="not a zone of the family")
+        class Mapped(F):
+            rules = {"max_speed_kmh": rules([(0, 10.0)], "float")}
+        self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, res, mph=False, de_on=True) * 1.609344, 10.0,
+                               msg="a mapped limit first")
+
     def test_driving_side_and_signals_by_country(self):
         self.assertEqual(navgraph.road_rules("US"), {"rightHandDrive": False, "turnOnRed": True, "redYellow": False,
                                                      "country": "US", "mph": True})

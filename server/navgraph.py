@@ -150,10 +150,11 @@ def _us_state(feats, i):
     return _us_place(feats, i)[0]
 
 
-def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
+def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
-    signs (speedsigns.py), so a sign shows what the traffic drives."""
+    signs (speedsigns.py), so a sign shows what the traffic drives. de_on (the German junction signs, the graph's):
+    a road of a German zone without a mapped limit (osm_zone_maxspeed) drives the zone's, as its 274.1 posts it."""
     if spec is None or spec.cls not in DRIVE:
         return None
     speed = feats.rules.get("max_speed_kmh")
@@ -163,6 +164,12 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if de_on:
+        zone = feats.attrs.get("osm_zone_maxspeed")
+        if zone is not None and isinstance(zone[i], str):
+            from designs import ZONES
+            if zone[i] in ZONES:
+                return int(zone[i][3:]) / 1.609344
     if country == "US" and spec.cls == "motorway" and not getattr(spec, "link", False):     # (not a ramp)
         state, city = _us_place(feats, i)
         if state in US_MOTORWAY_MPH:
@@ -488,7 +495,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         node_fid[nm] = fid
                         deck_centres[nm] = deck_xy[dk]
                         pending_by[nm] = (-w, fid)
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
+                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country,
+                                 de_on=de_on) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
                 if in_tunnel:
