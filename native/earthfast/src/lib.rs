@@ -5526,7 +5526,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(cropfield::crop_grid, m)?)?;
     m.add_function(wrap_pyfunction!(cropfield::crop_paint, m)?)?;
     m.add_function(wrap_pyfunction!(cropfield::crop_sample, m)?)?;
-    m.add("VERSION", 159)?;
+    m.add("VERSION", 161)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())
