@@ -4,7 +4,7 @@
 "classes": {"au_mvg:1": "rainforest", "au_mvg:2": "tall_forest", "au_mvg:3": "open_forest", "au_mvg:4": "low_forest", "au_mvg:5": "woodland", "au_mvg:6": "acacia_forest", "au_mvg:7": "she_oak_pine", "au_mvg:8": "she_oak_pine", "au_mvg:9": "paperbark", "au_mvg:10": "woodland_mixed", "au_mvg:11": "open_woodland", "au_mvg:12": "tropical_woodland", "au_mvg:13": "acacia_open", "au_mvg:14": "mallee", "au_mvg:15": "thicket", "au_mvg:16": "shrubland", "au_mvg:17": "shrubland", "au_mvg:18": "heath", "au_mvg:19": "tussock", "au_mvg:20": "hummock", "au_mvg:21": "wet_grass", "au_mvg:22": "saltbush", "au_mvg:23": "mangrove", "au_mvg:25": "cleared", "au_mvg:29": "woodland", "au_mvg:31": "open_woodland", "au_mvg:32": "mallee_open"},
 "north_lat": -30.0, "wet_north": [12, 1, 2, 3], "wet_south": [6, 7, 8, 9, 10],
 "palettes": {
-  "cleared": {"trees": [["eucalypt", 0.8], ["deciduous", 0.2]], "shrubs": [], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.2]},
+  "cleared": {"trees": [["eucalypt", 0.9], ["deciduous", 0.1]], "shrubs": [], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.2]},
   "acacia_forest": {"trees": [["mallee", 0.75], ["eucalypt", 0.25]], "shrubs": [["scrub", 0.5]], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.15]},
   "acacia_open": {"trees": [["mallee", 0.8], ["eucalypt", 0.2]], "shrubs": [["scrub", 0.5]], "ground": "dry_long", "density": 0.7, "scale": [0.75, 1.1]},
   "heath": {"trees": [["scrub", 1.0]], "shrubs": [["scrub", 0.8]], "ground": "dry_bush", "density": 1.0, "scale": [0.8, 1.1]},

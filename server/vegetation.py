@@ -38,7 +38,7 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 25          # (fork: 24: Australia's eucalypt / tropical / palm mix, australian_trees; 25: the NVIS palettes,
+VERSION = 26          # (fork: 26: palette crowns kept off roads (_crown_clear); 24: Australia's eucalypt / tropical / palm mix, australian_trees; 25: the NVIS palettes,
                       # apply_palette, and a palette / map edit rebuilds: Vegetation._stamp)
                       # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
@@ -274,6 +274,42 @@ def palette_items(it, cls):
     out = Items(it.lon, it.lat, (it.height * size).astype(np.float32), (it.radius * size).astype(np.float32), it.kind,
                 group, rank, it.yaw, it.scale)
     return out if (rank < 1.0).all() else out.take(rank < 1.0)
+
+
+# fork: a palette tree's crown (radius times CROWN_K, wider for the rainforest's spreading figs and the tropical trees) may
+# hang OVERHANG_M over a road's edge; a tree whose crown would reach further in is dropped (Kuranda's Kennedy Highway,
+# 2026-11-07: figs over both lanes). Only palette (Australian) trees: elsewhere nothing changes.
+OVERHANG_M = 1.0
+CROWN_K = {G_TROPICAL: 2.0, G_DRY_RAINFOREST: 2.0, G_MANGROVE: 1.5}
+CLEAR_MAX_M = 14.0
+
+
+def _crown_clear(it, road, mx, my, chm):
+    if not len(it.lat) or not road.any():
+        return it
+    pal = vegclass.palette_ids(it.lat, it.lon) > 0
+    if not pal.any():
+        return it
+    k = np.ones(len(it.lat), np.float32)
+    for g, f in CROWN_K.items():
+        k[it.group == g] = f
+    need = it.radius * k - OVERHANG_M                   # m from the road's edge the trunk must stand
+    chk = pal & (it.kind == KIND_TREE) & (need > 0)
+    if not chk.any():
+        return it
+    step = float(abs(chm.dx))
+    dist = np.full(road.shape, np.inf, np.float32)      # m to the nearest road pixel (square steps)
+    cur = road
+    dist[cur] = 0.0
+    for n in range(1, int(CLEAR_MAX_M / step) + 1):
+        cur = _dilate(cur, 1)
+        dist[cur & np.isinf(dist)] = n * step
+    x = np.radians(it.lon.astype(np.float64)) * 6378137.0
+    y = np.log(np.tan(np.pi / 4 + np.radians(it.lat.astype(np.float64)) / 2)) * 6378137.0
+    col = np.clip(np.round((x - mx[0]) / (mx[1] - mx[0])).astype(np.int64), 0, road.shape[1] - 1)
+    row = np.clip(np.round((y - my[0]) / (my[1] - my[0])).astype(np.int64), 0, road.shape[0] - 1)
+    drop = chk & (dist[row, col] < need)
+    return it.take(~drop) if drop.any() else it
 
 
 class Vegetation:
@@ -517,6 +553,7 @@ class Vegetation:
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
         tree = palette_items(tree, lcls)       # fork: the NVIS palette's trees, size and density
+        tree = _crown_clear(tree, curb, mx, my, chm)     # fork: palette crowns overhang a road by OVERHANG_M at most
         # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)

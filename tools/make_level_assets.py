@@ -181,7 +181,7 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
 for i, (name, gm, detail, dsize, macro, msize, strength) in enumerate((
         ("bngEarthGroundRedDirt", "DIRT_DUSTY", "sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 32, 0.35),
         ("bngEarthGroundCane", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2),
-        ("bngEarthGroundDryLong", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):     # (+ the palettes' long dry grass)
+        ("bngEarthGroundDryLong", "GRASS", "grass/t_dirt_dry_grass/t_dirt_dry_grass", 2, "grass/t_macro_dry_grass/t_macro_dry_grass", 32, 0.5))):     # (+ the palettes' long dry grass: the stock straw detail, strong enough to lift the photo's dark canopy shadow)
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}", detail, dsize, macro, msize, strength))
 
 pretty(os.path.join(T, "main.materials.json"), {

@@ -76,9 +76,9 @@ M.DEFS = {
   -- fork: long grass (server/surface.py DRY_LONG: the NVIS palettes' woodlands, forests and grasslands): the stock long dry grasses
   -- (West Coast USA's grass_dry_1 and weed1, the Johnson Valley dry grass texture) and Hirochi's long green grass, their shares
   -- trading off by the dry share at a constant total (`mix2`, M.longMix): brown most of the year, green in the palette's wet months
-  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_long', layer = 'bngEarthGroundDryLong', share = 0.14, mix2 = 'dry', typeScale = 1.3 },
-  { source = 'wcusa', src = 'weed1', name = 'weed1_long', layer = 'bngEarthGroundDryLong', share = 0.06, mix2 = 'dry', typeScale = 1.3 },
-  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_long', layer = 'bngEarthGroundDryLong', share = 0.2,
+  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_long', layer = 'bngEarthGroundDryLong', share = 0.27, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'wcusa', src = 'weed1', name = 'weed1_long', layer = 'bngEarthGroundDryLong', share = 0.11, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_long', layer = 'bngEarthGroundDryLong', share = 0.38,
     fields = LONG_NEAR, mix2 = 'green', typeScale = 1.3 },
 }
 M.PREFIX = 'bngEarthGC_'
