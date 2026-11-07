@@ -109,6 +109,11 @@ M.LOOKS = {
   bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
   bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+  -- fork: Australia (server/surface.py RED_DIRT, CANE; the same in tools/make_level_assets.py). The red / ochre soil: the stock
+  -- sand detail, stronger than the grey-brown dirt's, pulls the photo toward ochre. Sugarcane: the grass detail (the tall crop
+  -- is groundcover.lua's bngEarthGC_long_grass_distant_cane).
+  bngEarthGroundRedDirt = look('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.35),
+  bngEarthGroundCane = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
