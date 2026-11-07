@@ -204,6 +204,13 @@ M.SIGNAL_TYPE = 'lightsBasic'
 -- the switchable head (the stock boom, instanced_trafficlight material): one TSStatic per approach where the
 -- road tile's static boom stands (trees.lua's signal group is hidden while these exist)
 M.SIGNAL_SHAPE = '/art/shapes/objects/s_trafficlight_boom_sn.dae'
+-- fork: Australia's heads (server navgraph._signals appends the group as an approach's 12th item): the same shapes as
+-- trees.lua's au_signal / au_signal_mast, with the stock lens material (tools/build_au_traffic.py)
+M.SIGNAL_SHAPES = {
+  au_signal = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_sw.dae',
+  au_signal_mast = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_mast_sw.dae',
+}
+M.SIGNAL_GROUPS = { 'signal', 'au_signal', 'au_signal_mast' }      -- fork: the trees.lua groups the switchable heads stand in for
 local heads = {}        -- instance name -> {id, x, y}: the heads in the scene (kept across applies)
 local seenHeads = {}
 
@@ -228,7 +235,7 @@ local function makeHead(inst, a)
     local old = scenetree.findObjectById(h.id)
     if old then old:delete() end
   end
-  local o = inst:createSignalObject(M.SIGNAL_SHAPE, vec3(a[8], a[9], a[10]), quat(0, 0, 0, 1))
+  local o = inst:createSignalObject(M.SIGNAL_SHAPES[a[12] or ''] or M.SIGNAL_SHAPE, vec3(a[8], a[9], a[10]), quat(0, 0, 0, 1))   -- fork: a[12]
   if not o then return end
   local m = MatrixF(true)
   m:setFromEuler(vec3(0, 0, -math.rad(a[11] or 0)))     -- as trees.lua turns the static boom (negated: clockwise)
@@ -394,12 +401,12 @@ local function applySignals(nodes)
     local grid = {}
     for _, h in pairs(heads) do grid[math.floor(h.x / 4) .. ',' .. math.floor(h.y / 4)] = true end
     trees.suppress = function(g, x, y)
-      if g ~= 'signal' then return false end
+      if g ~= 'signal' and g ~= 'au_signal' and g ~= 'au_signal_mast' then return false end    -- (fork: Australia's)
       local cx, cy = math.floor(x / 4), math.floor(y / 4)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
-    trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
+    for _, g in ipairs(M.SIGNAL_GROUPS) do trees.refresh(g) end    -- (only the tiles with signal items: suppress hides nothing else)
   end)
   stats.signalsMs = (os.clock() - t1) * 1000
   if not okS then log('W', 'beamngEarth', 'navgraph: signals: ' .. tostring(err2)) end

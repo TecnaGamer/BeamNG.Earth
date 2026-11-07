@@ -32,6 +32,7 @@ Press **M** for the world map. Type `latitude, longitude` into its search box to
 | 8 | London (control) | `51.5007, -0.1246` | Should look exactly like upstream |
 | 9 | Any suburb street, e.g. #1, at street level | `-27.4990, 152.9750` | Front fences: grey/cream/charcoal Colorbond sheet (ribbed) or timber paling, 1.35 or 1.8 m, behind the footpath; a light-grey concrete channel strip along the kerb; timber poles with wires, a lamp arm every second pole |
 | 10 | Main road lines (primary/secondary) | `-27.4598, 153.0003` | Concrete poles with a cross-arm and the three wires on it, lamps on every pole |
+| 10b | A signalled junction in town (e.g. on Given Tce or Milton Rd), then a minor T-junction in a suburb | near #2 | Signals: grey galvanised pole on the left kerb, 3-aspect lantern in a black target board with a white border, a mast arm over wide approaches; the lenses change with the AI's phases. T-junction: red-bordered inverted-triangle GIVE WAY on a galvanised post on the left, never a US stop sign (stops only where OSM has them) |
 | 11 | Any suburban roundabout (drive #1's streets) | n/a | Centre island green mown grass with a few shrubs and a small tree, no bare earth |
 
 ## Console checks (`~` opens the console, Lua/GE)
@@ -40,7 +41,7 @@ Press **M** for the world map. Type `latitude, longitude` into its search box to
 - The log should not contain `no shapes for group eucalypt`.
 
 ## What's expected not to change yet
-Signs (still Vienna-style speed discs; no green direction boards), signals (US style),
+Signs (still Vienna-style speed discs; no green direction boards),
 gas station look, Queenslander houses on stumps. Those are Phase 2–3.
 
 ## Report back

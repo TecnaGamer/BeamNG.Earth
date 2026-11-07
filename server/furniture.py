@@ -219,6 +219,23 @@ MAJOR = {"primary", "secondary", "tertiary", "trunk"}
 MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
+# fork: Australia's junction props (tools/build_au_traffic.py): AS 1742.2's red Give Way (R1-2) on a galvanised post, and the
+# traffic signals AS 1742.14 / Queensland TMR: 3-aspect 300 mm lanterns with black target boards on a galvanised pole, on a
+# mast arm over a wide road. The controls stay G_SIGNAL / G_YIELD (au_group maps them at placement); heights are the
+# catalog's (trees.lua).
+G_SIGNAL_AU, G_SIGNAL_AU_MAST, G_GIVEWAY_AU = "au_signal", "au_signal_mast", "au_giveway"
+AU_PROP_H = {G_SIGNAL_AU: 4.0, G_SIGNAL_AU_MAST: 7.0, G_GIVEWAY_AU: 2.7}
+AU_MAST_WIDTH_M = 9.0       # m: an approach this wide (a carriageway of three lanes or more) gets a mast arm over it
+PROP_H = {G_SIGNAL: 9.4, **AU_PROP_H}      # the catalog's height of a junction prop, else 3.0 (signs)
+
+
+def au_group(what, spec):
+    """fork: the prop group (trees.lua) of control what (G_SIGNAL | G_STOP | G_YIELD) on an arm of spec in Australia: a
+    signal on a pole, or on a mast arm where the approach is wide (AU_MAST_WIDTH_M), and the red Give Way sign; the
+    stop sign stays the stock one (the same red octagon)."""
+    if what == G_SIGNAL:
+        return G_SIGNAL_AU_MAST if spec.width >= AU_MAST_WIDTH_M else G_SIGNAL_AU
+    return G_GIVEWAY_AU if what == G_YIELD else what
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
@@ -345,7 +362,8 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     arms lower than the road through and nothing between roads of a class, as trafikförordningen (1998:1276): the
     right-hand rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
     inte fungerar" (Transportstyrelsen's decision TSV 2011-1541, 2012-01-09); priority: the signs the map has
-    (secrossings.nodes), on top of those, as a stop sign is only ever the map's."""
+    (secrossings.nodes), on top of those, as a stop sign is only ever the map's. fork: Australia: the map's signs on any arm
+    and, in town and with none, Give Way where the other countries guess a stop sign (_guessed_stops)."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
     major = [a for a in arms if a[1].cls in MAJOR]
@@ -356,6 +374,14 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
+    if str(country or "").upper() == "AU":
+        # fork: Australia: the signs the map has (highway=give_way and stop, on any arm), and with none, in town, a Give Way
+        # where the code would guess a stop sign (AS 1742.2: an untagged minor T-junction there is Give Way or unsigned;
+        # a stop sign is only ever the map's)
+        mapped = [(a, w) for a in arms for w in (_mapped_priority(a, priority),) if w is not None and not _outbound(a)]
+        if mapped or not all(a[1].urban for a in arms):
+            return mapped
+        return [(a, G_YIELD) for a, _ in _guessed_stops(arms) if not _outbound(a)]
     if str(country or "").upper() == "SE":
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
@@ -367,6 +393,14 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
             if what is not None and not _outbound(a):
                 put.append((a, what))
         return put
+    return _guessed_stops(arms)
+
+
+def _guessed_stops(arms):
+    """[(arm, G_STOP)] of a junction's guessed stop signs (junction_controls): the minor arms meeting a major road, the
+    stem of a minor T, half the minor four-ways (hashed)."""
+    major = [a for a in arms if a[1].cls in MAJOR]
+    minor = [a for a in arms if a[1].cls in MINOR]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
@@ -414,7 +448,7 @@ def _off_carriageways(c, u, right, along, out, lines, group=G_SIGNAL, base_z=0.0
         for do in (0.0, 1.0, 2.0, 3.0):
             q = np.round(c + u * (along + da) + right * (out + do), 2)
             z = float(ground(q[0], q[1])) if ground is not None else float(base_z)
-            row = [group, q[0], q[1], round(z, 2), yaw, 1.0, 9.4 if group == G_SIGNAL else 3.0, 0.0]
+            row = [group, q[0], q[1], round(z, 2), yaw, 1.0, PROP_H.get(group, 3.0), 0.0]    # fork: PROP_H (was 9.4 | 3.0)
             if clearance.clear(row, SIGN_CLEAR_M):
                 return q
     return None
@@ -486,6 +520,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     Sweden: junction_controls' rules, and the give-way signs in the country too."""
     x0, y0, x1, y1 = box
     sweden = str(country or "").upper() == "SE"
+    au = str(country or "").upper() == "AU"        # fork: mapped give-way and stop signs anywhere; au_group props
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -499,19 +534,20 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     for k, arms in junctions.items():
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         here = _controlled_here(arms, signals)
-        if len(arms) < 3 or not (on_ring or here or sweden):
+        if len(arms) < 3 or not (on_ring or here or sweden or au):
             continue
         p = arms[0][3]
         if not (_owns(box, p[0], p[1])):
             continue
         put = junction_controls(arms, k, link_ok, ring, signals, country, priority)
-        if sweden and not here:
+        if (sweden or au) and not here:       # (fork: au)
             put = [p for p in put if p[1] != G_SIGNAL]      # (no signals guessed out here)
         if not put:
             continue
         wide = max(a[1].width for a in arms) / 2
         for (fid, spec, u, c, *_), what in put:
-            side, yaw = approach_pose(u, what, left_hand)
+            prop = au_group(what, spec) if au else what      # fork
+            side, yaw = approach_pose(u, prop, left_hand)
             # Relocation along a slope uses that spot's height, not the junction node's (PR #629)
             own_line = min(own_lines[fid], key=lambda pts: _seg_dist_min(c[:2], pts[:, :2]))
 
@@ -521,14 +557,14 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
                 at = _project(own_line, np.array([[x, y]]))
                 return float(_at(own_line, at)[0][0, 2]) + curb_h
             b1 = sweden and what == G_YIELD
-            group = G_B1 if b1 else what
+            group = G_B1 if b1 else prop
             q = signal_spot(c, u, side, wide, spec.width / 2, lines, group, float(c[2] + curb_h), support, clearance,
                             yaw)
             if q is None or not (x0 - 20 <= q[0] < x1 + 20 and y0 - 20 <= q[1] < y1 + 20):
                 continue
             rows.append([group, round(float(q[0]), 2), round(float(q[1]), 2),
                          round(support(q[0], q[1]), 2), yaw, 1.0,
-                         B1_TOP if b1 else 9.4 if what == G_SIGNAL else 3.0, 0.0])
+                         B1_TOP if b1 else PROP_H.get(group, 3.0), 0.0])
     return rows
 
 
@@ -625,6 +661,12 @@ COLLISION_BOXES = {
     G_SIGNAL: (9.4, ((-0.277, -0.327, -0.397, 0.263, 0.296, 9.365),)),
     G_STOP: (3.0, ((-0.460, -0.028, -0.987, 0.436, 0.029, 3.004),)),
     G_YIELD: (3.0, ((-0.356, -0.042, -0.075, 0.357, 0.032, 3.336),)),
+    # fork: Australia's (tools/build_au_traffic.py): the signal's pole and its lantern in front of it (target board 0.62 m
+    # wide, lens faces to y -0.31); the mast's pole and its pole lantern, its arm overhead (above 6.3 m: not a box here)
+    G_SIGNAL_AU: (4.0, ((-0.320, -0.430, -0.300, 0.320, 0.100, 3.950),)),
+    G_SIGNAL_AU_MAST: (7.0, ((-0.110, -0.110, -0.300, 0.110, 0.110, 7.000),
+                             (-0.320, -0.450, 2.400, 0.320, -0.100, 4.000))),
+    G_GIVEWAY_AU: (2.7, ((-0.400, -0.075, -0.300, 0.400, 0.030, 2.650),)),
     G_HYDRANT: (1.5, ((-0.327, -0.377, -0.145, 0.327, 0.377, 1.324),)),
     G_BENCH: (0.9, ((-1.000, -0.329, 0.000, 1.000, 0.205, 0.850),)),
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
@@ -1095,7 +1137,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
-    rows = [r for r in rows if r[0] in (G_POLE, G_POLE_CONC, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]    # fork
+    rows = [r for r in rows if r[0] in (G_POLE, G_POLE_CONC, G_SIGNAL, G_STOP, G_YIELD, G_SIGNAL_AU, G_SIGNAL_AU_MAST,
+                                        G_GIVEWAY_AU) or clearance.clear(r)]    # fork
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 

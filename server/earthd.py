@@ -1759,7 +1759,7 @@ class Server:
                                                   anchor.bridges.depth_of(fid)))
         except Exception as e:          # no decks: the graph follows the ground under bridges
             log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-        nodes = secrossings.read(self.mapdata, anchor.frame, keys) if str(self.country(anchor) or "").upper() == "SE" else None
+        nodes = secrossings.read(self.mapdata, anchor.frame, keys) if str(self.country(anchor) or "").upper() in ("SE", "AU") else None    # fork: AU
         tun = {}
         try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
             if not navgraphmod.AI_TUNNELS:
@@ -2223,8 +2223,8 @@ class Server:
         marks = []                  # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
         near_roads = []             # the ground carriageways near the tile (the median barriers': medians.tile_rows)
         nkeys = roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)
-        sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) if str(self.country(anchor) or "").upper() == "SE" \
-            else None
+        sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) \
+            if str(self.country(anchor) or "").upper() in ("SE", "AU") else None     # fork: AU
         clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)

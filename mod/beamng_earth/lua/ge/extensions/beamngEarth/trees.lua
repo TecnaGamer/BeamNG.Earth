@@ -305,6 +305,18 @@ end
 -- ... and the concrete pole of Australia's main roads' lines (server furniture.pole_group): 9.2 m, the cross-arm along x at
 -- the wires' height (furniture.WIRE_Z), like the stock pole it stands in for
 M.CATALOG.au_pole_conc = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc', 9.2 } }
+-- fork: Australia's red Give Way (AS 1742.2 R1-2) and traffic signals (server furniture.au_group, tools/build_au_traffic.py): the sign
+-- 2.7 m on its galvanised post; the pole signal (one lantern, 4.0 m) and the mast arm over a wide road (7.0 m, the arm reaching
+-- +X over the road). The static items' lenses are dark; navgraph.lua's switchable heads (SIGNAL_SHAPES) hide them where they stand.
+M.CATALOG.au_giveway = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_giveway', 2.7 } }
+M.CATALOG.au_signal = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal', 4.0 } }
+M.CATALOG.au_signal_mast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_signal_mast', 7.0 } }
+M.GROUP_MAX_M.au_giveway = 300
+M.GROUP_MAX_M.au_signal = 500
+M.GROUP_MAX_M.au_signal_mast = 500
+M.ONE_SPELLING.au_giveway = true
+M.ONE_SPELLING.au_signal = true
+M.ONE_SPELLING.au_signal_mast = true
 M.CATALOG.giveway_b1 = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_giveway_b1', 2.30 } }   -- (Sweden's yellow give-way)
 M.GROUP_MAX_M.giveway_b1 = 300
 -- Sweden's signs (server sesigns.py, tools/build_median_props.py's SE_SIGNS): their shapes, heights and how far out they show.
@@ -583,6 +595,7 @@ local function setup()
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_guideposts.materials.json')   -- fork
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_streetscape.materials.json')  -- fork: fences, pole
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_warnsigns.materials.json')   -- fork: warning signs
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_traffic.materials.json')     -- fork: Give Way, signals
   if FS and scenetree then      -- fork: the Mount Coot-tha eucalypts, where installed and their materials are registered
     local ok, shapes = pcall(M.eucalyptShapes, function(p) return FS:fileExists(p) end,
       function(n) return scenetree.findObject(n) ~= nil end)

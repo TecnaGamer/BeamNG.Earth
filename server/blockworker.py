@@ -550,7 +550,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     except Exception as e:          # no tunnels: their stretches stay the minimap's only
         log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
-    nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
+    nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() in ("SE", "AU") else None    # fork: AU (the map's give-way and stop signs)
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
@@ -833,7 +833,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
     near_cells = roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)
-    nodes = secrossings.read(_s.md, frame, near_cells) if str(country or "").upper() == "SE" else None
+    nodes = secrossings.read(_s.md, frame, near_cells) if str(country or "").upper() in ("SE", "AU") else None    # fork: AU
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
