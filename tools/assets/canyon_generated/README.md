@@ -124,3 +124,35 @@ lookup reads shipped material/albedo data, filtered to 64x64 in linear light.
 No image pixels, normal maps, geometry, or nearby cliff materials are changed.
 This softens broad color steps; it is not a pixel-perfect shader feather and
 normal/geometry boundaries can remain visible.
+
+
+### Distant erosion revision v7
+
+The runtime canyon normal is now `canyon_far_v7_ready.normal.dds`: a cooked
+1024-square BC5 normal with all 11 mip levels. `canyon_far_v7.normal.png` is
+its authoring output. The earlier v3 description above records the original
+profile. V7 keeps the same texture sample budget, UV scale and material strength.
+It adds warped channels with variable depth, interrupted tributaries and
+source-aligned rock chips. Rounded convex shoulders meet concave valleys with
+a softened floor (profile epsilon 0.16; v6 used 0.025 and was too sharp).
+Near normals, albedo, geometry and CPU displacement are unaffected.
+
+Run `tools/bake_canyon_material.py --far-only` to produce the PNG. Preload it
+in BeamNG with `ui_imgui.ImTextureHandler` and wait until the texture cooker
+has produced the complete DDS in the game's temp tree. Then run
+`tools/bake_canyon_material.py --publish-far <cooked DDS path>` to validate and
+package it and update both distant canyon material bindings. Deploy the DDS
+before the material JSON. Publishing a fresh PNG binding before cooking caused
+intermittent "no normal" textures during live iteration; shipping the completed
+DDS removes that import dependency.
+
+Far mesh charts now retain their projection across same-facing bends when the
+projection remains well-conditioned. This removes unnecessary chart switches
+without adding triangles or draw calls. Opposing folds, tile chart boundaries
+and cliff/terrain classification edges can still produce visible transitions.
+
+Verified through BeamNG MCP at the user's camera, including a tighter FOV,
+with the camera restored afterward. Screenshots are under
+`build/far-normal-study/` (`final-dds.png`, `final-close.png`,
+`current-check.png`). Automated checks cover continuous coarse-bend charts,
+normal length/mip detail and complete packaged BC5 mip payloads.

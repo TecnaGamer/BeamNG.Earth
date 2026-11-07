@@ -99,6 +99,26 @@ class FarCliffsTest(unittest.TestCase):
             q=built();q.positions[:,2]=1000+2*q.positions[:,slope_axis]
             self.assertTrue((fc.projection_axes(q.positions,q.tris,labels)[:-2]==expected).all())
 
+    def test_coarse_bend_keeps_one_chart_when_both_projections_are_valid(self):
+        b=built()
+        x,y=b.positions[:81,:2].T
+        b.positions[:81,2]=1000+2*y+np.where(x<=64,x,64+4*(x-64))
+        labels=np.r_[np.ones(len(b.tris)-2,np.int8),[-1,-1]]
+        t=b.tris[:-2]
+        normals=np.cross(b.positions[t[:,1]]-b.positions[t[:,0]],
+                         b.positions[t[:,2]]-b.positions[t[:,0]])
+        dominant=np.abs(normals[:,0])>=np.abs(normals[:,1])
+        self.assertEqual(len(np.unique(dominant)),2)
+        axes=fc.projection_axes(b.positions,b.tris,labels)
+        self.assertEqual(len(np.unique(axes[:-2])),1,
+            'a 37-degree terrain bend must not reset normal texture phase')
+        from unittest.mock import patch
+        with patch.object(fc,'classify',return_value=labels):
+            out=fc.geometry(b,self.frame,b.planar,b.detail_uvs,'terrain')
+        walls=np.unique(out['tris'][out['tri_materials']==2])
+        self.assertEqual(len(walls),81)
+        self.assertEqual(len(out['tris']),len(b.tris))
+
     def test_export_preserves_geometry_and_collision_exactly(self):
         b=built()
         rock=fc.geometry(b,self.frame,b.planar,b.detail_uvs,'terrain')
@@ -357,10 +377,28 @@ class FarCliffsTest(unittest.TestCase):
         np.testing.assert_allclose(fc.canyon_detail_gain(uv),fc.canyon_detail_gain(uv+[5,-8]),atol=1e-10)
         np.testing.assert_array_equal(rock['normals'][walls],b.normals[:1].repeat(len(walls),axis=0))
 
+    def test_canyon_runtime_normal_is_complete_cooked_bc5(self):
+        import json
+        import struct
+        root=Path(__file__).resolve().parents[2]/'mod/beamng_earth'
+        materials=root/'levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'
+        mats=json.loads(materials.read_text())
+        for name in ('bne_far_cliff_canyon_sat','bne_far_cliff_canyon_blend'):
+            path=mats[name]['Stages'][0]['normalMap']
+            self.assertTrue(path.endswith('.normal.dds'), 'ship the cooked normal, not an import-time PNG')
+            data=(root/path.lstrip('/')).read_bytes()
+            self.assertEqual(data[:4],b'DDS ')
+            self.assertEqual(data[84:88],b'DX10')
+            self.assertEqual(struct.unpack_from('<I',data,128)[0],83, 'BC5_UNORM')
+            self.assertEqual(struct.unpack_from('<II',data,12),(1024,1024))
+            self.assertEqual(struct.unpack_from('<I',data,28)[0],11)
+            expected_size=148+sum(max(1,(1024 >> level)//4)**2*16 for level in range(11))
+            self.assertEqual(len(data),expected_size,'all mip payloads must be present')
+
     def test_far_normal_is_unit_length_and_preserves_detail_in_mips(self):
         from PIL import Image
         root=Path(__file__).resolve().parents[2]
-        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v3.normal.png'
+        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v7.normal.png'
         with Image.open(path) as im:
             n=np.asarray(im,dtype=float)/127.5-1
             mip=np.asarray(im.resize((32,32),Image.Resampling.BOX),dtype=float)/127.5-1

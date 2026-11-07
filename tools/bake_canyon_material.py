@@ -2,7 +2,8 @@
 
 No model calls. Approximate height removes broad albedo variation so pale beds
 are not mistaken for metres of protruding stone. Resample albedo to the requested 4K runtime size (source is 1254 square, not
-native 4K). Preserve far/CPU relief; derive aligned near PBR from the final diffuse.
+native 4K). The full bake delegates near PBR to the reconstructed tile baker.
+Use --far-only then --publish-far for distant normal revisions without changing near assets.
 """
 import json
 import sys
@@ -29,7 +30,8 @@ ALBEDO_SIZE = 4096  # runtime size; generated source is 1254, not native 4K deta
 WIDTH_M = 91.44
 HEIGHT_M = 182.88
 RELIEF_M = .65
-FAR_NORMAL_NAME = 'canyon_far_v3.normal.png'
+FAR_NORMAL_NAME = 'canyon_far_v7.normal.png'
+FAR_COOKED_NORMAL_NAME = 'canyon_far_v7_ready.normal.dds'
 FAR_FINE_RELIEF_M = .65
 FAR_GROOVE_RMS_M = 1.12
 FAR_LEDGE_RMS_M = .64
@@ -60,7 +62,45 @@ def far_normal(height, lum):
     # Broad bed/joint structure from the authored source, not satellite shadows.
     beds = smooth_periodic(lum,16,16)-smooth_periodic(lum,96,96)
     beds *= FAR_LEDGE_RMS_M/max(beds.std(),1e-6)
-    relief = grooves+beds+FAR_FINE_RELIEF_M*smooth_periodic(height,2,2)
+    # Warp channel direction and depth at broad scales so erosion branches and
+    # varies across the face instead of forming uniformly parallel ribs.
+    weather = smooth_periodic(rng.standard_normal((h,w)),
+        3.0*w/WIDTH_M, 5.0*h/HEIGHT_M)
+    weather /= max(weather.std(), 1e-6)
+    warp = smooth_periodic(rng.standard_normal((h,w)),
+        3.0*w/WIDTH_M, 9.0*h/HEIGHT_M)
+    warp *= .65*w/WIDTH_M/max(warp.std(), 1e-6)
+    yy,xx = np.indices((h,w),dtype=np.float32)
+    grooves = cv2.remap(grooves.astype(np.float32), (xx+warp).astype(np.float32), yy,
+                        cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+    # A rounded absolute-value field has smooth convex shoulders and narrow
+    # concave V valleys. Slowly varying bias/depth breaks up parallel channels,
+    # unlike symmetric clipping which made the shoulders look flat/extruded.
+    channel = grooves/FAR_GROOVE_RMS_M + .25*np.tanh(weather)
+    grooves = np.sqrt(channel*channel + .16**2)*(.9+.18*np.tanh(weather))
+    grooves -= grooves.mean()
+    grooves *= FAR_GROOVE_RMS_M/max(grooves.std(), 1e-6)
+    small = smooth_periodic(rng.standard_normal((h,w)),
+        .45*w/WIDTH_M, 3.0*h/HEIGHT_M)
+    small /= max(small.std(), 1e-6)
+    broken = smooth_periodic(rng.standard_normal((h,w)),
+        1.5*w/WIDTH_M, 1.5*h/HEIGHT_M)
+    broken /= max(broken.std(), 1e-6)
+    # Interrupted sharp V cuts, at a smaller scale than the retained macro ribs.
+    cuts = -.24*np.maximum(0, .7-np.abs(small))*np.clip(.7+.3*broken, 0, 1)
+    tributaries = smooth_periodic(rng.standard_normal((h,w)),
+        .8*w/WIDTH_M, 5.5*h/HEIGHT_M)
+    tributaries /= max(tributaries.std(), 1e-6)
+    tributaries = cv2.remap(tributaries.astype(np.float32),
+        (xx+.6*warp).astype(np.float32), yy, cv2.INTER_LINEAR, borderMode=cv2.BORDER_WRAP)
+    cuts -= .38*np.maximum(0, .9-np.abs(tributaries+.3*weather))*np.clip(.6+.4*weather,0,1)
+    # Source-aligned chips: bilateral filtering retains stone/joint boundaries
+    # without turning every albedo grain into a high-amplitude bump.
+    chips = height-smooth_periodic(height, 12, 12)
+    chips = np.clip(chips/max(chips.std(),1e-6), -1.5, 1.5).astype(np.float32)
+    padded = np.pad(chips, 4, mode='wrap')
+    chips = cv2.bilateralFilter(padded, 9, .4, 2)[4:-4,4:-4]
+    relief = grooves+beds+cuts+.10*chips+FAR_FINE_RELIEF_M*smooth_periodic(height,2,2)
     dx = (np.roll(relief,-1,1)-np.roll(relief,1,1))*w/(2*WIDTH_M)
     dy = (np.roll(relief,-1,0)-np.roll(relief,1,0))*h/(2*HEIGHT_M)
     normal = np.stack((-dx,dy,np.ones_like(dx)),-1)
@@ -165,4 +205,44 @@ def bake():
     bake_tiled_near()
     print(f'Baked distant canyon from legacy source; near material uses reconstructed 4K patches.')
 
-if __name__=='__main__': bake()
+def bake_far_only():
+    """Rebuild distant normal relief without touching near PBR, colors or CPU height."""
+    rgb = np.asarray(Image.open(SOURCE).convert('RGB'), np.float32)/255
+    rgb = periodic(cv2.resize(rgb, (TEXTURE_SIZE, TEXTURE_SIZE), interpolation=cv2.INTER_AREA), 32)
+    lum = rgb @ np.array((.2126, .7152, .0722), np.float32)
+    height = periodic(np.clip(.5+(lum-cv2.GaussianBlur(lum,(0,0),10))*2,0,1),32)
+    normal = far_normal(height, lum)
+    Image.fromarray(np.uint8(np.rint((normal*.5+.5)*255))).save(OUT/FAR_NORMAL_NAME)
+    print('Baked', OUT/FAR_NORMAL_NAME)
+
+
+def publish_far_normal(cooked_path):
+    """Pin a fully imported BC5 DDS; never publish a not-yet-cooked PNG binding.
+
+    Preload the PNG with BeamNG's ImTextureHandler, wait for the cooked DDS,
+    then pass its real path here. This also makes releases independent of the
+    runtime texture importer. The generated PNG remains the editable source.
+    """
+    import struct
+    data = Path(cooked_path).read_bytes()
+    expected_size = 148 + sum(max(1,(TEXTURE_SIZE >> level)//4)**2*16 for level in range(11))
+    if (len(data) != expected_size or data[:4] != b'DDS ' or data[84:88] != b'DX10' or
+            struct.unpack_from('<I',data,128)[0] != 83 or
+            struct.unpack_from('<II',data,12) != (TEXTURE_SIZE,TEXTURE_SIZE) or
+            struct.unpack_from('<I',data,28)[0] != 11):
+        raise ValueError('Expected fully mipmapped 1024-square BC5_UNORM DDS')
+    (OUT/FAR_COOKED_NORMAL_NAME).write_bytes(data)
+    path = OUT.parent/'cliff.materials.json'
+    mats = json.loads(path.read_text())
+    for name in ('bne_far_cliff_canyon_sat', 'bne_far_cliff_canyon_blend'):
+        mats[name]['Stages'][0]['normalMap'] = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/'+FAR_COOKED_NORMAL_NAME
+    path.write_text(json.dumps(mats,indent=2)+'\n')
+
+
+if __name__=='__main__':
+    if '--publish-far' in sys.argv:
+        publish_far_normal(sys.argv[sys.argv.index('--publish-far')+1])
+    elif '--far-only' in sys.argv:
+        bake_far_only()
+    else:
+        bake()

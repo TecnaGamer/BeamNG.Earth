@@ -17,7 +17,7 @@ MIN_SLOPE_DEG = 48.0
 MIN_FACE_DROP_M = 8.0
 REFERENCE_GRID_M = 8.0  # scale the drop gate down on finer ground; do not open an L0 gap
 CHART_MIN_PROJECTION = 0.35  # at most ~3:1 horizontal compression within a wall chart
-CHART_SMOOTH_COS = math.cos(math.radians(25.0))
+CHART_SMOOTH_COS = 0.0  # same-facing coarse bends share a chart; projection conditioning still gates it
 MAX_GRID_SPACING_M = 128.0
 WORLD_M_PER_DEG = 111320.0
 EXPOSED_CLASSES = (20, 30, 60)  # shrub, grass, bare
@@ -85,7 +85,7 @@ def classify(built, frame, surface=None):
 def projection_axes(positions, tris, labels):
     """Keep a smooth connected wall on one chart, rather than switching at 45Â°.
 
-    Flood from the best-conditioned faces. Sharp folds, material changes and
+    Flood from the best-conditioned faces. Opposing folds, material changes and
     faces nearly parallel to the chosen projection stop a chart. Shared faces
     then retain identical UVs/tangents without adding geometry or shader layers.
     """
