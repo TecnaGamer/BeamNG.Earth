@@ -522,8 +522,8 @@ class HighSetTest(unittest.TestCase):       # fork
                 rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
                 hs = bld.highset(spec, 0.0, 2.0)
                 top = hs.floor + (bld.PORCH_DECK_M if porch else 0.0)
-                self.assertEqual(rows[0][0], "door")
-                self.assertAlmostEqual(rows[0][3], round(top, 2), msg="the door prop on the raised floor, not the ground")
+                self.assertFalse([r for r in rows if r[0] == "door"],
+                                 "no stock door prop (its own steps and rails) at a raised door: the leaf is in the mesh")
                 m = bld.Mesh()
                 bld._hs_stair(m, spec, hs, bld.drawn_ring(spec), bld._Looks(spec.seed))
                 P = m.arrays()[0]
@@ -536,6 +536,84 @@ class HighSetTest(unittest.TestCase):       # fork
                     plain = bld.Mesh()
                     bld._porch(plain, spec, hs.floor, bld._Looks(spec.seed))
                     self.assertGreater(pm.n, plain.n, "the verandah deck is not left in the air")
+
+    def test_stair_stays_in_the_yard_and_turns_along_the_wall_when_tight(self):     # fork
+        """A high floor over a falling street: the straight run would reach the road; it is kept within HS_STAIR_REACH_M of
+        the wall, turned to run along the front wall when it does not fit; a low floor keeps its straight stair."""
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            for porch in (False, True):
+                spec = self.house(kind, pred=lambda s: bool(s.porch) == porch)
+                gmin, gmax = self.slope(spec, 2.0)
+                hs = bld.highset(spec, gmin, gmax)
+                ring = bld.drawn_ring(spec)
+                a, d, L, out = bld._hs_edge(ring, spec.door[0])
+                m = bld.Mesh()
+                bld._hs_stair(m, spec, hs, ring, bld._Looks(spec.seed))
+                P = m.arrays()[0]
+                self.assertGreater(len(P), 40, "a stair is still drawn")
+                self.assertLessEqual(float(((P[:, :2] - a) @ out).max()), bld.HS_STAIR_REACH_M + 1e-6, "not into the street")
+                self.assertGreater(float(np.ptp((P[:, :2] - a) @ d)), 3.0, "turned: it runs along the front wall")
+                self.assertLess(float(P[:, 2].min()), 0.3, "down to the ground")
+        spec = self.house(bld.HS_TIMBER, pred=lambda s: bld._hs_floor(s, 0.0, 0.0) is not None and not s.porch)
+        gmin, gmax = self.slope(spec, 0.0)
+        hs = bld.highset(spec, gmin, gmax)
+        ring = bld.drawn_ring(spec)
+        a, d, L, out = bld._hs_edge(ring, spec.door[0])
+        m = bld.Mesh()
+        bld._hs_stair(m, spec, hs, ring, bld._Looks(spec.seed))
+        P = m.arrays()[0]
+        self.assertLess(float(np.ptp((P[:, :2] - a) @ d)), 1.7, "a short flight stays straight")
+        self.assertLessEqual(float(((P[:, :2] - a) @ out).max()), bld.HS_STAIR_REACH_M + 1e-6)
+
+    def test_raised_door_is_a_flat_leaf_and_there_is_no_stoop_prop(self):         # fork
+        for kind in (bld.HS_TIMBER, bld.HS_BRICK, bld.HS_RENDER):
+            spec = self.house(kind)
+            spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
+            rows = bld.doors([(spec, 0.0, 2.0)], [(np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)], 0.0, 0.0)
+            self.assertFalse([r for r in rows if r[0] == "door"])
+            self.assertIsNotNone(spec.door)
+            hs = bld.highset(spec, 0.0, 2.0)
+            ring = bld.drawn_ring(spec)
+            m = bld.Mesh()
+            bld._hs_door(m, spec, hs, ring, bld._Looks(spec.seed))
+            P = m.arrays()[0]
+            a, d, L, out = bld._hs_edge(ring, spec.door[0])
+            self.assertEqual(len(P), 4)
+            np.testing.assert_allclose((P[:, :2] - a) @ out, bld.WIN_OUT_M, atol=1e-9)      # flat on the wall
+            self.assertAlmostEqual(float(P[:, 2].min()), hs.floor + (bld.PORCH_DECK_M if spec.porch else 0.0), places=6)
+
+    def test_roller_door_is_flush_vertical_and_only_on_level_ground(self):        # fork
+        mi = bld.MATERIALS.index(bld.METALWALL)
+        seen = 0
+        for crossfall in (False, True):
+            for i in range(80):
+                spec = self.plan(i)
+                if not spec.hs or spec.hs[0] == bld.HS_TIMBER:
+                    continue
+                spec.gring = np.array([0.0, 2.0, 2.0, 0.0]) if crossfall else np.array([0.0, 0.0, 2.0, 2.0])
+                spec.door = None
+                hs = bld.highset(spec, 0.0, 2.0)
+                ring = bld.drawn_ring(spec)
+                m = bld.Mesh()
+                bld._hs_openings(m, spec, hs, ring, bld._Looks(spec.seed))
+                P, UV, T, M, C = m.arrays()
+                tris = T[M == mi]
+                if not len(tris):
+                    continue
+                seen += 1
+                q = P[np.unique(tris)]
+                self.assertEqual(len(q), 4)
+                xy = np.round(q[:, :2], 9)
+                self.assertEqual(len(np.unique(xy, axis=0)), 2, "top and bottom corners are above each other: vertical")
+                def line_dist(p, k):
+                    e, w = ring[(k + 1) % 4] - ring[k], p - ring[k]
+                    return abs(float(e[0] * w[1] - e[1] * w[0])) / float(np.linalg.norm(e))
+                dist = [line_dist(p, k) for p in xy for k in range(4)]
+                self.assertAlmostEqual(min(dist), bld.HS_GARAGE_OUT_M, places=6, msg="0.02 m proud of the wall plane")
+                lows = sorted(q[:, 2])[:2]
+                self.assertLessEqual(abs(lows[1] - lows[0]), bld.HS_GARAGE_LEVEL_M + 1e-9, "level ground along the door")
+                self.assertLessEqual(float(q[:, 2].max()), hs.floor - 0.2 + 1e-9)
+        self.assertGreater(seen, 10)
 
     def test_collision_and_boxes_follow_the_raised_floor(self):
         spec = self.house(bld.HS_TIMBER)
@@ -600,6 +678,180 @@ class HighSetTest(unittest.TestCase):       # fork
                     h.update(np.ascontiguousarray(bld.collision_mesh([(spec, 0.0, 2.0)])[0]).tobytes())
                     h.update(repr(bld.collider_boxes([(spec, 0.0, 2.0)], 0.0, 0.0)).encode())
         self.assertEqual(h.hexdigest(), "ea4fd10c2b12c2d30b91b234269ac21d59d2b02f76266fb5a5aeb02d8a50c21a")
+
+
+class QldDetailsTest(unittest.TestCase):        # fork
+    """Queensland houses' eaves, gutters, solar panels, whirlybirds, awnings, carports and water tanks."""
+    LAT, LON = -27.47, 153.02
+
+    def house(self, i, w=9.0, l=12.0, ang=0.0, at=(0.0, 0.0), rural=False):
+        ring = rect(0, 0, w, l) - (w / 2, l / 2)
+        c, s = math.cos(ang), math.sin(ang)
+        ring = ring @ np.array([[c, s], [-s, c]]) + at
+        return bld.plan(ring, {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON, rural=rural)
+
+    def houses(self, n=300, **kw):
+        return [h for h in (self.house(i, **kw) for i in range(n)) if h.qld]
+
+    @staticmethod
+    def diff(spec, **flags):
+        """(build with the flags on, without any extra, the vertex count between them)."""
+        q0 = spec.qld
+        base = dict(q0, solar=False, whirly=0, awn=False, carport=None, tank=False)
+        spec.qld = dict(base, **flags)
+        a = bld.build([(spec, 0.0, 0.0)])
+        spec.qld = base
+        b = bld.build([(spec, 0.0, 0.0)])
+        spec.qld = q0
+        return a, b
+
+    def test_only_detached_queensland_houses_with_pitched_roofs_have_details(self):
+        for lat, lon in ((39.29, -76.61), (-33.87, 151.21), (46.59, 7.91), (-9.44, 147.18), (-29.5, 153.9)):
+            for i in range(40):
+                s = bld.plan(rect(0, 0, 9, 12), {"class": "house", "seed_id": i}, lat=lat, lon=lon)
+                self.assertIsNone(s.qld)
+        hs = [self.house(i) for i in range(300)]
+        for h in hs:
+            self.assertEqual(h.qld is not None, h.roof != "flat" and h.floors <= 2)
+        self.assertIsNone(bld.plan(rect(0, 0, 8, 14), {"class": "barn"}, lat=self.LAT, lon=self.LON).qld)
+
+    def test_eaves_soffit_fascia_gutters_and_downpipes(self):
+        ri = {bld.MATERIALS.index(bld.ROOF_COLORBOND), bld.MATERIALS.index(bld.ROOF_QTILE)}
+        fi = bld.MATERIALS.index(bld.FACADE)
+        for h in self.houses(60):
+            self.assertTrue(0.45 <= h.qld["eave"] <= 0.6)
+            a, _ = self.diff(h)
+            q0, h.qld = h.qld, None
+            b = bld.build([(h, 0.0, 0.0)])          # (the same house with the stock eaves)
+            h.qld = q0
+            extra = len(a[0]) - len(b[0])
+            self.assertTrue(60 <= extra <= 150, extra)
+            P, T, M = a[0], a[2], a[3]
+            roof = P[T[np.isin(M, list(ri))].ravel()]
+            dims = sorted(float(x) for x in np.ptp(roof[:, :2], axis=0))
+            e = h.qld["eave"]
+            self.assertAlmostEqual(dims[0], 9 + 2 * e, places=5, msg="eaves across")
+            self.assertAlmostEqual(dims[1], 12 + 2 * (bld.QLD_RAKE_M if h.roof == "gabled" else e), places=5)
+            tri = P[T[M == fi]]
+            nz = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            nz = nz[:, 2] / np.maximum(np.linalg.norm(nz, axis=1), 1e-12)
+            self.assertTrue((nz < -0.99).any(), "a soffit under the eaves")
+            self.assertGreater(float(np.ptp(roof[:, 2])), 1.0, "a pitched roof")
+        # the overhang is on the tilted roof: the roof UVs run on (continuous) to its edge
+        h = self.houses(10)[0]
+        a, _ = self.diff(h)
+        self.assertTrue(np.isfinite(a[1]).all())
+
+    def test_solar_on_the_north_face_only(self):
+        hs = [self.house(i) for i in range(800)]
+        hs = [h for h in hs if h.qld]
+        share = sum(h.qld["solar"] for h in hs) / len(hs)
+        self.assertAlmostEqual(share, bld.QLD_SOLAR, delta=0.06)
+        got = want = 0
+        for k, h in enumerate(hs[:300]):
+            if not h.qld["solar"]:
+                continue
+            ang = (k * 0.7) % (2 * math.pi)
+            sp = h                                  # (the same house, turned)
+            rot = np.array([[math.cos(ang), math.sin(ang)], [-math.sin(ang), math.cos(ang)]])
+            sp.ring = (rect(0, 0, 9, 12) - (4.5, 6.0)) @ rot
+            sp.qld = dict(sp.qld, whirly=0, awn=False, carport=None, tank=False)
+            a, b = self.diff(sp, solar=True)
+            look = bld._Looks(sp.seed)["qsolar_cell"][1]
+            mask = (a[5][a[2][:, 0]] == np.array(look)).all(axis=1)
+            want += 1
+            if not mask.any():
+                continue
+            got += 1
+            tri = a[0][a[2][mask]]
+            nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            self.assertTrue((nrm[:, 1] > 0).all() and (nrm[:, 2] > 0).all(), "panels face north and up, never south")
+            n = mask.sum() // 2
+            self.assertTrue(bld.SOLAR_N[0] <= n <= bld.SOLAR_N[1], n)
+            self.assertLess(len(a[0]) - len(b[0]), 20 * 8 + 1)
+        self.assertGreater(got, 0.6 * want, "most rotations have a face towards the north")
+        # a ridge running north-south has no north face: no panels
+        h = next(h for h in self.houses(200) if h.roof == "gabled")
+        h.ring = rect(0, 0, 9, 12) - (4.5, 6.0)           # long axis along y (north-south): faces east and west
+        a, b = self.diff(h, solar=True)
+        self.assertEqual(len(a[0]), len(b[0]))
+
+    def test_whirlybird_and_awning_shares_and_sizes(self):
+        hs = self.houses(800)
+        w = [h.qld["whirly"] for h in hs]
+        self.assertAlmostEqual(sum(x > 0 for x in w) / len(w), bld.QLD_WHIRLY, delta=0.06)
+        self.assertAlmostEqual(sum(x == 2 for x in w) / sum(x > 0 for x in w), bld.QLD_WHIRLY2, delta=0.1)
+        old = [h for h in hs if h.qld["old"]]
+        self.assertAlmostEqual(sum(h.qld["awn"] for h in old) / len(old), bld.QLD_AWNING, delta=0.07)
+        self.assertFalse(any(h.qld["awn"] for h in hs if not h.qld["old"]), "none on rendered houses")
+        self.assertTrue(all((h.wall and h.wall.split("|")[0] == bld.SIDING) or h.band is bld.BAND_BRICK for h in old))
+        for h in [h for h in hs if h.qld["whirly"]][:30]:
+            a, b = self.diff(h, whirly=h.qld["whirly"])
+            n = (len(a[0]) - len(b[0])) / 40
+            self.assertTrue(n == int(n) and 1 <= n <= h.qld["whirly"], n)
+        seen = 0
+        for h in [h for h in hs if h.qld["awn"] and not h.porch][:30]:
+            h.door = (0, 4.5)
+            a, b = self.diff(h, awn=True)
+            n = (len(a[0]) - len(b[0])) / 10
+            self.assertTrue(n == int(n) and 0 <= n <= bld.AWN_MAX, n)
+            seen += n > 0
+        self.assertGreater(seen, 10)
+
+    def street(self, n, pitch, rural=False):
+        rows, items = [], []
+        for i in range(n):
+            h = bld.plan(rect(i * pitch, 0, 9, 12), {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON, rural=rural)
+            h.gring = np.zeros(4)
+            items.append((h, 0.0, 0.0))
+        road = (np.array([(-50.0, -15.0), (n * pitch + 50, -15.0)]), 4.0)
+        return items, bld.doors(items, [road], 0.0, 0.0)
+
+    def test_carports_only_with_room_and_never_overlap(self):
+        for pitch, expect in ((40.0, True), (11.5, False)):
+            items, _ = self.street(300 if expect else 150, pitch)
+            hs = [s for s, _, _ in items if s.qld and s.door]
+            cps = [s for s in hs if s.qld["carport"]]
+            if expect:
+                self.assertAlmostEqual(len(cps) / len(hs), bld.QLD_CARPORT, delta=0.07, msg="~30 % with room")
+            for s in cps:
+                cp = s.qld["carport"]
+                A, S, T = np.array(cp["p0"]), np.array(cp["s"]), np.array(cp["t"])
+                R = np.array([A, A + S * bld.CARPORT_W, A + S * bld.CARPORT_W + T * bld.CARPORT_L, A + T * bld.CARPORT_L])
+                if bld._area2(R) < 0:
+                    R = R[::-1]
+                for o, _, _ in items:
+                    if o is not s:
+                        self.assertFalse(bld._rect_hits(R, o.ring), "no overlap with another house")
+                a, b = self.diff(s, carport=cp)
+                self.assertTrue(40 <= len(a[0]) - len(b[0]) <= 64, len(a[0]) - len(b[0]))
+            if not expect:
+                self.assertLess(len(cps), 0.2 * len(hs) * 0.3 + 3, "a gap of 2.5 m: almost none")
+        # a carport leans on a wall at 2.4 m clear
+        s = cps[0] if cps else next(s for s, _, _ in self.street(300, 40.0)[0] if s.qld["carport"])
+        a, b = self.diff(s, carport=s.qld["carport"])
+        self.assertTrue(np.isfinite(a[0]).all())
+
+    def test_water_tanks_only_on_isolated_rural_houses(self):
+        rural, _ = self.street(200, 60.0, rural=True)
+        urban, _ = self.street(200, 60.0, rural=False)
+        tight, _ = self.street(100, 14.0, rural=True)
+        r = [s for s, _, _ in rural if s.qld and not s.qld["carport"]]
+        self.assertAlmostEqual(sum(s.qld["tank"] for s in r) / len(r), bld.QLD_TANK, delta=0.08)
+        self.assertFalse(any(s.qld["tank"] for s, _, _ in urban if s.qld), "suburban tiles: none")
+        self.assertFalse(any(s.qld["tank"] for s, _, _ in tight if s.qld), "neighbours within 25 m: none")
+        s = next(s for s in r if s.qld["tank"])
+        a, b = self.diff(s, tank=True)
+        self.assertTrue(30 <= len(a[0]) - len(b[0]) <= 60)
+
+    def test_vertex_budget_with_everything(self):
+        worst = 0
+        for h in self.houses(120):
+            h.door = (0, 4.5)
+            a, b = self.diff(h, solar=True, whirly=2, awn=True, tank=True)
+            worst = max(worst, len(a[0]) - len(b[0]))
+        self.assertLess(worst, 520)
+        self.assertLess(bld.MAX_MESH_VERTS, 65536)
 
 
 class PlanTest(unittest.TestCase):
