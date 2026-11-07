@@ -4,6 +4,7 @@ vertical."""
 import math
 import sys
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 import numpy as np
@@ -44,6 +45,35 @@ class SquaresTest(unittest.TestCase):
 
 
 class PlanTest(unittest.TestCase):
+    def test_small_low_town_inside_large_coastal_tile(self):
+        # Less than 1% of a 2 km square: the old 5% allowance submerged the whole street grid (#812).
+        f = geodesy.EnuFrame(1.637555, 7.420206)
+
+        def points(la, lo):
+            return f.geodetic_to_enu(la, lo, 0.0)[:2]
+
+        def sea(la, lo, size):
+            e, n = points(la, lo)
+            return (e > 320.0) | (n > 320.0)
+
+        def ground(la, lo, size):
+            e, n = points(la, lo)
+            town = (e > 60.) & (e < 180.) & (n > 60.) & (n < 180.)
+            return np.where(sea(la, lo, size), -6., np.where(town, -1.4, 3.))
+
+        with patch.object(seatiles, 'squares', return_value=[(0., 0., 2048.)]):
+            tiles = seatiles.plan(f, 0., 0., sea, ground_at=ground)
+        self.assertTrue(tiles)
+        self.assertLessEqual(len(tiles), seatiles.SEA_MAX_TILES)
+        self.assertFalse(any(abs(t.x - 120.) < t.size / 2 and abs(t.y - 120.) < t.size / 2 for t in tiles))
+        self.assertTrue(any(abs(t.x - 600.) < t.size / 2 and abs(t.y - 600.) < t.size / 2 for t in tiles))
+
+    def test_native_sample_shapes_checked(self):
+        import fast
+        with self.assertRaises(ValueError):
+            fast._ef.sea_tile_actions(np.zeros((1, 2)), np.zeros((1, 4), bool), np.zeros((2, 4)),
+                                     2048., 0., 0., (0., 2048., .3, 2., .05, 64., .0625))
+
     def test_sea_only_level_and_tilt(self):
         f = geodesy.EnuFrame(39.0, -76.4)
         east = lambda la, lo, s: np.asarray(lo) > -76.4 + 0.02     # noqa: E731  sea east of ~1.7 km
