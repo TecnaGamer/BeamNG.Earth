@@ -10,8 +10,7 @@ between two tracks: the line's outer side), off the roads; its cantilever (tools
 trees.lua's catmast) holds the contact wire 5.75 m over the rail head and the messenger wire above it, and the droppers
 hang between them. Every span is drawn by the tile that holds its mast.
 
-Opt-in: BNE_CATENARY=1 (railxing's BNE_RAIL_XING is the crossings'). Not done: portals over three tracks or more (the
-inner tracks of a yard stay bare), masts on bridges, other styles of mast (the shape is one)."""
+Opt-in: BNE_CATENARY=1 (railxing's BNE_RAIL_XING is the crossings'). Not done: masts on bridges."""
 import hashlib
 import math
 import os
@@ -44,7 +43,7 @@ MAST_Z_BAND = (-0.5, 0.2)       # the mast's base over the track's bed at most t
 MESSENGER_SAG_M = 1.3           # at mid-span
 DROPPER_EVERY_M = 10.0
 CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.007
-# the style of a country's masts (plan 015): "su" the concrete spun mast (ex-USSR, and where concrete is the usual: Poland,
+# the style of a country's masts: "su" the concrete spun mast (ex-USSR, and where concrete is the usual: Poland,
 # Czechia, Slovakia, Hungary, Romania, the Baltics), "eu" the steel H-beam mast (Germany and the rest: DB uses both,
 # Bane NOR steel; the others' norms were not found: a guess, agreed with the user 2026-11-05). STYLE_GROUPS: mast, post.
 SU_COUNTRIES = frozenset("AM AZ BY EE GE KG KZ LT LV MD RU TJ TM UA UZ PL CZ SK HU RO".split())
