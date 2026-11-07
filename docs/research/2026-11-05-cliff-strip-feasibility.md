@@ -396,7 +396,8 @@ translucentRecvShadows=true. Alpha testing remains enabled and castShadows stays
 false. BlendOp=None was tested and still took the opaque/depth-writing path.
 To keep sparse erosion rather than semitransparent surviving texels, alphaRef is
 255 and opacityFactor is 255/128. This preserves the prior cutoff (128/255),
-while surviving alpha is >=1 and saturates to an opaque hardware blend weight.
+while surviving alpha is >=1. The assumption that this saturates to an opaque
+hardware blend weight was incorrect on HDR targets; see the correction below.
 Distance visibility may still fade as before. No texture/geometry changes or
 additional draw calls; no engine shader or global shadow settings changed.
 Baker and packaged JSON both updated; installed material deployed and live-reloaded.
@@ -416,3 +417,41 @@ this is not an uncached-generation test or proof of equal GPU cost.
 Raw data: screen-space-shadow-frametimes.json. Validation: baker parses, all
 packaged texture references resolve, clip-boundary equivalence and fully opaque
 survivors checked numerically, git diff --check clean. Changes uncommitted.
+
+
+## Bounded strip coverage fixes red coloration (2026-11-06)
+
+The forward material's opacityFactor=255/128 allowed blend alpha above one.
+On the HDR target this extrapolated away from the terrain color, producing the
+reported blood-red, magenta and black patches. A live opacityFactor=1 isolation
+removed the artifact without changing the vertex tint or rock-color sampling.
+
+The final material keeps the shadow-free forward path, alpha testing and no
+translucent depth writes. opacityFactor is 1 and alphaRef is 224. The baked height
+and threshold masks use a power-compressed encoding:
+
+- Original normalized source height H = .51 + .49*h.
+- p = log(224/255) / log(.505).
+- Height coverage = H^p.
+- Threshold coverage D(t) = .5*(.505/(.505+.52*t))^p.
+- Engine alpha = height coverage * saturate(2*D(t)).
+
+The continuous cut contour remains H >= .505 + .52*t. RGBA8 quantization and
+filtering can slightly shift individual surviving texels. Surviving pixels blend
+approximately 88-100% rock, with at most approximately 12% receiver contribution;
+they never extrapolate color. Side/end erosion and rock tint remain intact.
+Higher-precision mask formats were tested but rejected by this engine; the final
+assets retain the existing RGBA8 format, dimensions and mip budget. Obsolete
+masks and temporary format probes were removed. No additional draw calls,
+geometry, runtime work or engine shader changes were introduced.
+
+Installed and live-reloaded the final material and masks. Compared the original
+view and a closer field of view: the red/black artifact is gone and the strips
+show muted rock-colored pebbles. Camera restored afterward. Captures:
+build/strip-color/before.png, after.png and after-close.png. Live material fields
+confirmed opacityFactor=1, alphaRef=224, translucentZWrite=0 and castShadows=0.
+
+Validation: all 17 test_cliffstrips tests pass. Regression checks read the shipped
+DDS masks and verify bounded alpha, sparse edge erosion, dense center coverage,
+HDR blend colors remaining between rock/receiver colors, and shadow-free material
+settings. This is visual/material validation, not a new frame-time benchmark.

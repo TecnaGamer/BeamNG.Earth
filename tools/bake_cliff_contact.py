@@ -10,6 +10,20 @@ from io import BytesIO
 from make_detail_texture import encode
 ROOT = Path(__file__).resolve().parents[1]
 
+# Compress the original height-test ratio into [0, 1]. Surviving texels retain
+# at least 88% rock colour without extrapolating away from the receiver colour
+# on HDR render targets (the old alpha > 1 caused red/black fringes).
+ALPHA_REF = 224
+EROSION_BASE = .505
+EROSION_RANGE = .52
+COVERAGE_POWER = np.log(ALPHA_REF/255)/np.log(EROSION_BASE)
+
+
+def coverage_maps(height, threshold):
+    """Preserve H >= .505 + .52*t, with a bounded forward blend weight."""
+    return height**COVERAGE_POWER, .5*(EROSION_BASE/(EROSION_BASE+EROSION_RANGE*threshold))**COVERAGE_POWER
+
+
 def main():
     game = Path(sys.argv[1])
     directory = ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'
@@ -32,10 +46,11 @@ def main():
     while min(levels[-1].shape) > 1:
         a = levels[-1]
         levels.append((a[::2, ::2]+a[1::2, ::2]+a[::2, 1::2]+a[1::2, 1::2])/4)
-    (target/'contact_height.data.dds').write_bytes(encode(levels))
+    height_levels = [coverage_maps(level, 0)[0] for level in levels]
+    (target/'contact_height_coverage.data.dds').write_bytes(encode(height_levels))
     t = np.linspace(0, 1, 1024)
-    lookup = (128/255)*.5/(.505+.52*t)
-    (target/'contact_threshold.data.dds').write_bytes(encode([np.tile(lookup, (8, 1))]))
+    lookup = coverage_maps(1., t)[1]
+    (target/'contact_threshold_coverage.data.dds').write_bytes(encode([np.tile(lookup, (8, 1))]))
     mean = np.where(rgb <= .04045, rgb/12.92, ((rgb+.055)/1.055)**2.4).mean(axis=(0,1))
     factor = 1.055*(1/mean)**(1/2.4)-.055
     root = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/'
@@ -44,19 +59,19 @@ def main():
         normalMap=root+'canyon_detail_dirt_rocky_v1.normal.dds', normalMapStrength=.65,
         roughnessMap=root+'canyon_detail_dirt_rocky_source_r.data.dds', roughnessFactor=1, metallicFactor=0,
         ambientOcclusionMap=root+'canyon_detail_dirt_rocky_source_ao.data.dds', ambientOcclusionFactor=.35,
-        opacityMap=root+'contact_height.data.dds', opacityFactor=255/128, opacityMapUseUV=0,
-        opacityDetailMap=root+'contact_threshold.data.dds', opacityDetailMapUseUV=1,
+        opacityMap=root+'contact_height_coverage.data.dds', opacityFactor=1, opacityMapUseUV=0,
+        opacityDetailMap=root+'contact_threshold_coverage.data.dds', opacityDetailMapUseUV=1,
         detailOpacityMapStrength=1, detailScale=[1,1])
     # Screen-space shadows ignore castShadows and trace opaque scene depth.
     # Use the forward pass without depth writes; BlendOp=None selects opaque again.
-    # Scaling opacity by 255/128 and clipping at 1 preserves the old 128/255
-    # cutoff. Surviving texels have alpha >= 1 (opaque blend weight), not a fade.
-    material = dict(name=name, mapTo=name, **{'class':'Material'}, version=1.5, alphaTest=True, alphaRef=255,
+    # The compressed masks preserve height clipping while keeping forward alpha
+    # within [0, 1]. Never use over-range opacity to make surviving texels opaque.
+    material = dict(name=name, mapTo=name, **{'class':'Material'}, version=1.5, alphaTest=True, alphaRef=ALPHA_REF,
                     translucent=True, translucentBlendOp='LerpAlpha', translucentZWrite=False,
                     translucentRecvShadows=True, doubleSided=True, castShadows=False, Stages=[stage,{},{},{}])
     (directory/'cliff_contact.materials.json').write_text(json.dumps({name:material}, indent=2)+'\n')
     (target/'contact_sources.json').write_text(json.dumps(dict(source=prefix+'_h.png',
-        sha256=hashlib.sha256(height).hexdigest(), encoding='H=.51+.49*h; D(t)=(128/255)*.5/(.505+.52*t)',
+        sha256=hashlib.sha256(height).hexdigest(), encoding='H=(.51+.49*h)^p; D(t)=.5*(.505/(.505+.52*t))^p; p=log(224/255)/log(.505)',
         notes='Linear coverage maps; source height is embedded in the generated DDS. Albedo and PBR reuse bundled rocky-dirt assets.'),indent=2)+'\n')
 
 if __name__ == '__main__':

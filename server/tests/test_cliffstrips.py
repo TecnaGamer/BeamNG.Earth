@@ -20,13 +20,39 @@ class ProjectedStrips(unittest.TestCase):
         np.testing.assert_allclose(t[:,[0,-1]],1)
         self.assertEqual(t[15,10],0)
         self.assertTrue(np.all(np.diff(t[:6,10])<=0))
-        # Actual 8-bit encoded shader values: all heights survive the center,
-        # and none survive the outer border (alpha reference is 128/255).
-        h=np.round((.51+.49*np.linspace(0,1,256))*255)/255
-        for edge,expected in ((0,True),(1,False)):
-            lookup=np.round(((128/255)*.5/(.505+.52*edge))*255)/255
-            keep=h*min(1,2*lookup)>=128/255
-            self.assertTrue(np.all(keep==expected))
+        # Verify the shipped masks, including DDS quantization and the engine's
+        # saturating detail operation, rather than duplicating the baker formula.
+        from PIL import Image
+        import json
+        art = Path(__file__).resolve().parents[2]/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth'
+        material = json.loads((art/'cliff_contact.materials.json').read_text())['bne_cliff_contact_strip']
+        stage = material['Stages'][0]
+        def mask(field):
+            with Image.open(art/'cliff'/Path(stage[field]).name) as image:
+                return np.asarray(image.convert('RGB'),float)[...,0]/255
+        h = mask('opacityMap')
+        lookup = mask('opacityDetailMap')[0]
+        cutoff = material['alphaRef']/255
+        for edge, expected in ((0,True),(-1,False)):
+            alpha = stage['opacityFactor']*h*np.clip(2*lookup[edge],0,1)
+            self.assertTrue(np.all((alpha >= cutoff) == expected))
+        # Filtered samples and all mip levels remain in the same [min,max] range.
+        # The previous >1 forward alpha extrapolated colours outside either
+        # surface's gamut, particularly over bright HDR terrain.
+        alpha = stage['opacityFactor']*h.max()*np.clip(2*lookup,0,1)
+        self.assertLessEqual(float(alpha.max()),1.)
+        self.assertGreaterEqual(cutoff,.85)
+        self.assertTrue(np.all(np.diff(lookup)<=0))
+        rock = np.array([.32,.24,.20])
+        terrain = np.array([1.2,1.4,1.1])
+        mixed = alpha[:,None]*rock + (1-alpha[:,None])*terrain
+        self.assertTrue(np.all(mixed >= np.minimum(rock,terrain)))
+        self.assertTrue(np.all(mixed <= np.maximum(rock,terrain)))
+        self.assertTrue(material['alphaTest'])
+        self.assertTrue(material['translucent'])
+        self.assertEqual(material['translucentBlendOp'],'LerpAlpha')
+        self.assertFalse(material['translucentZWrite'])
+        self.assertFalse(material['castShadows'])
 
     def test_frontmost_receiver_and_misses(self):
         projector=cs.Projector(np.concatenate((plane(),plane(2))),[0,0,1],[0,0,0])
