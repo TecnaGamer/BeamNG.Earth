@@ -75,7 +75,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Speed-limit signs everywhere, showing the limit the traffic drives (the mapped one, else the road class's default):
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
-  signs setting switches them too.
+  signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
+  no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
+  limit ends.
+- Town entry and exit signs (on by default; Settings > World > Town signs; from fuxau's contribution): each
+  country's own sign where a road enters a town's built-up land, the exit sign on its back. In Germany the yellow
+  Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
+  Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
+  OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads, with each way's road numbers (national
   and European), the places it leads to, and their distances; Ukraine, Czechia, Poland and Germany for now. Cities
@@ -462,6 +469,9 @@ The repository contains only code; all map data is downloaded at runtime and cac
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
   (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).
+- Town signs: towns and villages from Overture Maps (divisions), Germany's mapped town signs from OpenStreetMap
+  contributors (ODbL, rebuilt weekly), its Städte and Märkte from the Statistisches Bundesamt (Destatis,
+  Gemeindeverzeichnis); German lettering: D-DIN (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).
