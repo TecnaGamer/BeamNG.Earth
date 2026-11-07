@@ -669,6 +669,8 @@ class HighSetTest(unittest.TestCase):       # fork
                               {"class": "house", "facade_material": "wood"}):
                     spec = bld.plan(ring, attrs, lat=lat, lon=lon)
                     self.assertIsNone(spec.hs)
+                    if spec.au:     # fork: Australia's own fences (boundary fences behind the front wall) are tested in test_au_streetscape
+                        continue
                     spec.gring = np.array([0.0, 0.0, 2.0, 2.0])
                     rows = bld.doors([(spec, 0.0, 2.0)], [road], 0.0, 0.0)
                     h.update(repr(rows).encode())
@@ -677,7 +679,7 @@ class HighSetTest(unittest.TestCase):       # fork
                         h.update(np.ascontiguousarray(m[k]).tobytes())
                     h.update(np.ascontiguousarray(bld.collision_mesh([(spec, 0.0, 2.0)])[0]).tobytes())
                     h.update(repr(bld.collider_boxes([(spec, 0.0, 2.0)], 0.0, 0.0)).encode())
-        self.assertEqual(h.hexdigest(), "ea4fd10c2b12c2d30b91b234269ac21d59d2b02f76266fb5a5aeb02d8a50c21a")
+        self.assertEqual(h.hexdigest(), "b55ca4731cc8ff23db482a6d33873ef3154a386a4a72990d2e6bf3c2ec3ba752")
 
 
 class QldDetailsTest(unittest.TestCase):        # fork

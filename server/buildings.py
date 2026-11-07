@@ -3995,6 +3995,7 @@ def doors(items, lines, x0, y0, drives=None):
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
     off = np.array([x0, y0], np.float64)
     cents = None
+    au_cents = None         # fork: the footprints' centres, for Australia's side fences
     if any(sp.qld or sp.awn is not None for sp, _, _ in items):     # fork: Queensland's carports, tanks and awnings need the neighbours
         cents = np.array([r.mean(0) for _, r in others]).reshape(-1, 2) - off
         for sp, _, _ in items:
@@ -4091,7 +4092,16 @@ def doors(items, lines, x0, y0, drives=None):
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
                                "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
-        if spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
+        if spec.roof != "flat" and not narrow and getattr(spec, "au", None):
+            # fork: Australia: usually no front fence (or a low one); the tall Colorbond / paling fences stand on the side
+            # and rear boundaries, from the front building line back
+            if _hash01(spec.seed, "fence") < AU_FRONT_SHARE:
+                rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
+                                         drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
+            if au_cents is None:
+                au_cents = np.array([r.mean(0) for _, r in others]).reshape(-1, 2)
+            rows.extend(_au_side_fences(spec, ring, a, d, Le, out, gmin, others, au_cents, (A, B, SHALF)))
+        elif spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
         p = a + d * (Le * f) + out * DOOR_OUT_M
@@ -4196,8 +4206,8 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
         gaps.append(float((a + d * (Le * (0.82 if f <= 0.5 else 0.18)) - centre) @ dr))
     n = max(1, int(math.ceil((Le + 3.0) / FENCE_SEG_M)))
     group, height = G_FENCE, 1.3
-    if au:     # fork: Australia: a Colorbond or timber paling boundary fence, one kind and colour a house
-        group, height = au_fence(spec.seed)
+    if au:     # fork: Australia: a Colorbond or timber paling boundary fence, one kind and colour a house; a low one in front
+        group, height = au_fence(spec.seed)[0], AU_FRONT_H
     rows = []
     for k in range(n):
         sk = (k - (n - 1) / 2) * FENCE_SEG_M
@@ -4217,8 +4227,8 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
 
 
 # fork: Australia's boundary fences (tools/build_au_streetscape.py: 5.4 m models along x, FENCE_SEG_M like the stock one, 1.8 m
-# high): ~60 % Colorbond (flat-ribbed steel sheet) in the muted colours of the range, ~40 % timber paling (new pine or
-# weathered grey); one kind and colour per house (hashed on its seed), a quarter of them a lower 1.35 m fence (front fences
+# high): ~60 % Colorbond (flat-ribbed steel sheet) in the muted colours of the range, ~40 % timber paling (weathered grey-brown pine or
+# silver-grey: never orange); one kind and colour per house (hashed on its seed), a quarter of them a lower 1.35 m fence (front fences
 # are often lower than the 1.8 m of the boundaries)
 AU_FENCE_COLORBOND = (("au_fence_monument", 3), ("au_fence_woodland", 3), ("au_fence_surfmist", 3),
                       ("au_fence_basalt", 1), ("au_fence_shale", 1), ("au_fence_dune", 1))
@@ -4239,6 +4249,55 @@ def au_fence(seed):
             break
         u -= w
     return group, (AU_FENCE_LOW_H if _hash01(seed, "au fence low") < AU_FENCE_LOW_SHARE else AU_FENCE_H)
+
+
+AU_FRONT_SHARE = 0.12       # fork: houses with any fence along the front (a low one), of those that have the room
+AU_FRONT_H = 1.05           # fork: ... its height
+AU_SIDE_GAP_M = 1.5         # fork: the side boundary's distance from the house's walls (the lot's side setback, half of it)
+AU_REAR_M = 6.0             # fork: the back boundary's distance behind the house
+AU_SIDE_MAX_M = 24.0        # fork: no side fence runs further back than this from the front building line
+
+
+def _au_side_fences(spec, ring, a, d, Le, out, z, others, cents, roads):
+    """fork: prop rows of Australia's boundary fences behind the front building line (the wall from a along d, out its
+    outward normal): one along each side of the house's footprint, AU_SIDE_GAP_M from it, from the front wall back past the
+    house, and one across the back, AU_REAR_M behind it, of the house's own kind, colour and 1.8 m (a lower fence along
+    the front is _front_fence's). A piece that would stand in a building (or this house) or within FENCE_CLEAR_M of a road's
+    edge is left out. others: [(spec, ring)] and cents their centres, roads (starts, ends, half widths), as _front_fence."""
+    rel = ring - a
+    along, back = rel @ d, -(rel @ out)
+    s0, s1 = float(along.min()) - AU_SIDE_GAP_M, float(along.max()) + AU_SIDE_GAP_M
+    depth = min(float(back.max()) + AU_REAR_M, AU_SIDE_MAX_M)
+    if depth < 4.0 or s1 - s0 < 3.0:
+        return []
+    group = au_fence(spec.seed)[0]
+    back_dir = -out
+    lines = [(a + d * s0, back_dir, depth), (a + d * s1, back_dir, depth),         # (the two sides, from the front back)
+             (a + d * s0 + back_dir * depth, d, s1 - s0)]                           # (the rear)
+    rows = []
+    for k, (start, dr, length) in enumerate(lines):
+        n = max(1, int(round(length / FENCE_SEG_M)))
+        step = length / n
+        yaw = round(math.degrees(math.atan2(dr[1], dr[0])) % 360.0, 1)
+        nr = np.array([-dr[1], dr[0]])
+        for j in range(n):
+            p = start + dr * (step * (j + 0.5))
+            half_l = max(step, FENCE_SEG_M) / 2
+            R = np.array([p - dr * half_l - nr * 0.15, p + dr * half_l - nr * 0.15,
+                          p + dr * half_l + nr * 0.15, p - dr * half_l + nr * 0.15])
+            near = np.flatnonzero(np.hypot(*(cents - p).T) < 40.0)
+            if any(_rect_hits(R, others[i][1]) for i in near):
+                continue
+            if len(roads[0]):
+                ends = np.array([p - dr * half_l, p, p + dr * half_l])
+                fast.require(0, "points_near_segments")
+                if np.asarray(fast._ef.points_near_segments(ends, np.ascontiguousarray(roads[0], np.float64),
+                                                            np.ascontiguousarray(roads[1], np.float64),
+                                                            np.asarray(roads[2], np.float64) + FENCE_CLEAR_M)).any():
+                    continue
+            rows.append([group, round(float(p[0]), 2), round(float(p[1]), 2), round(float(z), 2), yaw, 1.0, AU_FENCE_H,
+                         round(_hash01(spec.seed, "au fr", k, j), 3)])
+    return rows
 
 
 def _suppress_under_models(items, radii, x0, y0):

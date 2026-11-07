@@ -52,6 +52,22 @@ class BendTest(unittest.TestCase):
         self.assertEqual(len(rows([("a", SPEC, straight(1500.0), 12.0)])), 0)
         self.assertEqual(len(rows([("a", SPEC, bend_road(400.0, 60.0), 12.0)])), 0, "400 m radius is not sharp")
 
+    def test_a_moderate_bend_is_signed_by_the_speed(self):
+        road = bend_road(300.0, 45.0)
+        self.assertGreater(len(rows([("a", SPEC, road, 12.0)])), 0, "300 m radius, 45 degrees at 100 km/h")
+        self.assertEqual(len(rows([("a", SPEC._replace(kmh=80.0), road, 12.0)])), 0, "(250 m at 80)")
+        self.assertGreater(len(rows([("a", SPEC._replace(kmh=80.0), bend_road(200.0, 45.0), 12.0)])), 0)
+        self.assertEqual(len(rows([("a", SPEC._replace(kmh=70.0), bend_road(200.0, 45.0), 12.0)])), 0, "(150 m / 30 degrees below 80)")
+        self.assertEqual(len(rows([("a", SPEC, bend_road(300.0, 12.0), 12.0)])), 0, "under 20 degrees is not a bend to slow for")
+        self.assertEqual(warnsigns.bend_limits(None), (400.0, 20.0))
+
+    def test_signs_follow_each_other_at_150_m(self):
+        xs = np.arange(0.0, 3000.0, 5.0)
+        wind = np.c_[xs, 120.0 * np.sin(xs / 150.0), np.zeros(len(xs))]
+        got = rows([("a", SPEC._replace(oneway=True, dir=1), wind, 12.0)])
+        self.assertGreater(len(got), 4)
+        self.assertTrue((np.diff(np.sort(got[:, 1])) >= warnsigns.MIN_GAP_M - 10.0).all())
+
     def test_a_kink_at_one_node_is_not_a_curve(self):
         xy = np.vstack([straight(600.0), [[600.0 + 20.0, 4.0, 0.0]], [[640.0 + k * 10.0, 4.0 + 2.0 * k, 0.0] for k in range(1, 4)],
                         [[660.0 + k * 10.0, 10.0 + k * 0.0, 0.0] for k in range(1, 40)]])
@@ -87,7 +103,8 @@ class BendTest(unittest.TestCase):
         b = rows([("a", SPEC._replace(kmh=70.0), bend_road(100.0, 70.0), 12.0)])
         xa = a[[n == "au_warn_curve_l" for n in names(a)], 1][0]
         xb = b[[n == "au_warn_curve_l" for n in names(b)], 1][0]
-        self.assertAlmostEqual(xb - xa, 50.0, delta=6.0)
+        # (the advance differs by 50 m; the 100 km/h road's bend also reads from a little earlier, the radius limit being 400 m)
+        self.assertAlmostEqual(xb - xa, 50.0, delta=12.0)
         self.assertEqual(warnsigns.advance_m(None), 150.0)
 
     def test_one_way_roads_only_their_own_way(self):
