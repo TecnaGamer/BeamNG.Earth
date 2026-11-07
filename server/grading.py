@@ -684,7 +684,7 @@ def _add_cuts(frame, plans, elev):
     if not jobs:
         return
     allp = np.concatenate([q for _, q, _ in jobs])
-    la, lo, _ = frame.enu_to_geodetic(allp[:, 0], allp[:, 1], 0.0)
+    la, lo = enu_to_ll_dense(frame, allp[:, 0], allp[:, 1])
     g = np.asarray(elev(np.asarray(la), np.asarray(lo)), f64)       # (as plan_roads' heights)
     k = 0
     for p, q, o in jobs:
@@ -711,6 +711,32 @@ def _add_cuts(frame, plans, elev):
                 cut[:, c] = np.minimum(cut[:, c], zmin + getattr(p, "max_wall", WALL_MAX_H_M))
             if np.isfinite(cut[:, 0]).any() or np.isfinite(cut[:, 3]).any():
                 p.cut = cut
+
+
+LL_GRID_M = 32.0       # m: enu_to_ll_dense's node spacing (the frame's conversion is smooth to < 0.1 mm over a cell)
+
+
+def enu_to_ll_dense(frame, x, y, step=LL_GRID_M):
+    """(lat, lon) of many points (x, y) in frame: the frame's exact conversion at the nodes of a step-m grid over
+    them, interpolated between the nodes (earthfast grid_bilinear2); a scattered few (more nodes than a quarter of
+    the points) converted one by one. _add_cuts' millions of probes: their conversion was most of its time."""
+    import fast
+    fast.require(158, "grid_bilinear2")
+    x = np.ascontiguousarray(x, np.float64)
+    y = np.ascontiguousarray(y, np.float64)
+    if len(x) == 0:
+        return np.zeros(0), np.zeros(0)
+    x0 = math.floor(float(x.min()) / step) * step
+    y0 = math.floor(float(y.min()) / step) * step
+    nx = int(math.ceil((float(x.max()) - x0) / step)) + 2
+    ny = int(math.ceil((float(y.max()) - y0) / step)) + 2
+    if nx * ny * 4 > len(x):
+        la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
+        return np.asarray(la, np.float64), np.asarray(lo, np.float64)
+    gx, gy = np.meshgrid(x0 + step * np.arange(nx), y0 + step * np.arange(ny))
+    gla, glo, _ = frame.enu_to_geodetic(gx.ravel(), gy.ravel(), 0.0)
+    return fast._ef.grid_bilinear2(np.asarray(gla, np.float64).reshape(ny, nx),
+                                   np.asarray(glo, np.float64).reshape(ny, nx), x0, y0, step, x, y)
 
 
 def _point_along(line, d):
