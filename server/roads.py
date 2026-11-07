@@ -5500,9 +5500,114 @@ def deck_split(depth):
     return slab, float(depth) - slab
 
 
-def deck_road_clear(depth=None):
-    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. Pure."""
-    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
+def deck_road_clear(depth=None, headroom=None):
+    """m a deck's road stands over a road under it: the headroom with its margin (headroom: Headroom.at's, default
+    MIN_BRIDGE_HEADROOM_M's) and the deck's depth. Pure."""
+    hr = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M if headroom is None else headroom
+    return hr + (DECK_FULL_DEPTH if depth is None else float(depth))
+
+
+# OpenStreetMap's maxheight on the road under a deck (Overture's height restriction, the cell's "maxheight_m" rule) is
+# the headroom that deck keeps instead of MIN_BRIDGE_HEADROOM_M: the signed limit, a little under the real clearance.
+# Untagged roads keep 6 m. (The user 2026-11-07: the Mitchell Freeway is signed 4.5 m under Hay Street and Murray Street
+# 4.5 m under the freeway; at 6 m Hay's deck humped 1.5 m higher than the real one.)
+# (with the interchange solver, BNE_INTERCHANGE=1, unless BNE_MAXHEIGHT says otherwise: opt-in like the rest of it)
+MAXHEIGHT_ON = os.environ.get("BNE_MAXHEIGHT", "on" if os.environ.get("BNE_INTERCHANGE", "0").lower() in (
+    "1", "on", "yes", "true") else "off").lower() in ("1", "on", "yes", "true")
+MAXHEIGHT_NEAR_M = 4.0      # m from a tagged stretch's line a crossing takes its limit (the road's own line: ~0)
+MAXHEIGHT_MIN_M = 2.0       # limits outside [MIN, MAX] are mapping errors (a car park's 2.1 m is real; 0.45 is not)
+MAXHEIGHT_MAX_M = 9.0
+
+
+def maxheight_lines(feats):
+    """[(lon/lat polyline (k, 2), maxheight m)]: the stretches of a cell's roads with a height limit, made once per
+    layer."""
+    got = feats.__dict__.get("_maxheight_lines")
+    if got is not None:
+        return got
+    out = []
+    t = feats.rules.get("maxheight_m") if MAXHEIGHT_ON else None
+    if t is not None and len(t):
+        for f, v, a, b in zip(t.feature, t.value, t.start, t.end):
+            v = float(v)
+            if not (MAXHEIGHT_MIN_M <= v <= MAXHEIGHT_MAX_M) or b - a <= 0:
+                continue
+            # (only where the road is on the ground: a limit mapped along a stretch that is itself a bridge is the
+            # headroom over it, not under it; the Mitchell Freeway's 4.9 m way runs on over Wellington Street, whose
+            # deck then cleared the street by 4.9 m, 2026-11-07)
+            for ga, gb in ground_ranges(level_ranges(feats, int(f))):
+                lo_, hi_ = max(float(a), ga), min(float(b), gb)
+                if hi_ - lo_ <= MIN_PART:
+                    continue
+                for part in feats.parts(int(f)):
+                    for ring in part:
+                        if len(ring) < 2:
+                            continue
+                        r = ring if (lo_, hi_) == (0.0, 1.0) else sub_polyline(ring, lo_, hi_)
+                        if len(r) >= 2:
+                            out.append((np.asarray(r, np.float64)[:, :2], v))
+    feats.__dict__["_maxheight_lines"] = out
+    return out
+
+
+class Headroom:
+    """The headroom (m, with BRIDGE_HEADROOM_MARGIN_M) a deck keeps over points in frame: the road there's maxheight,
+    else MIN_BRIDGE_HEADROOM_M. cell_fn(cell key) -> the cell's roads layer (or None). Thread-safe."""
+    DEFAULT = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M
+
+    def __init__(self, frame, cell_fn):
+        self.frame, self.cell_fn = frame, cell_fn
+        self.cells, self.lock = {}, threading.Lock()
+
+    def _cell(self, key):
+        k = str(key)
+        with self.lock:
+            got = self.cells.get(k)
+        if got is not None:
+            return got
+        lines, vals = [], []
+        try:
+            feats = self.cell_fn(key)
+        except Exception as ex:     # (no limits: the default headroom)
+            log.debug("headroom: cell %s: %s: %s", k, type(ex).__name__, ex)
+            feats = None
+        if feats is not None and len(feats):
+            for ring, v in maxheight_lines(feats):
+                e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                lines.append(np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], axis=1))
+                vals.append(v)
+        got = (lines, vals)
+        with self.lock:
+            if len(self.cells) > 256:
+                self.cells.clear()
+            self.cells[k] = got
+        return got
+
+    def at(self, pts):
+        """(n,) headroom m at points (n, 2): the lowest limit within MAXHEIGHT_NEAR_M, else DEFAULT."""
+        pts = np.asarray(pts, np.float64).reshape(-1, 2)
+        out = np.full(len(pts), self.DEFAULT)
+        if not MAXHEIGHT_ON or not len(pts):
+            return out
+        la, lo, _ = self.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+        la, lo = np.atleast_1d(la), np.atleast_1d(lo)
+        for k in range(len(pts)):
+            lines, vals = self._cell(mapcells.cell_of(float(la[k]), float(lo[k])))
+            best = None
+            for ln, v in zip(lines, vals):
+                if _point_line_dist(pts[k], ln) <= MAXHEIGHT_NEAR_M and (best is None or v < best):
+                    best = v
+            if best is not None:
+                out[k] = best + BRIDGE_HEADROOM_MARGIN_M
+        return out
+
+
+def _point_line_dist(p, line):
+    """m from point p (2,) to polyline line (k, 2). Pure."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    return float(np.min(np.hypot(*(a + t[:, None] * ab - p).T)))
 
 
 def geom_span(lines):
@@ -5936,8 +6041,13 @@ class BridgeProfiles:
         except Exception as ex:             # the share-of-span rule alone
             log.debug("nav clearance: %s: %s", type(ex).__name__, ex)
             nav = 0.0
-        required = [(c[0], c[1], z) for c, z in zip(cr, road_z)]
         depth = self._depth(lines) if bridge_profile_mode() == "curve" else None
+        # (each road under at its own headroom: OSM's maxheight where it has one, Headroom)
+        hrm = self.__dict__.setdefault("headroom", Headroom(self.frame, self.cell_fn))
+        hr = hrm.at(np.array([c[2] for c in cr], np.float64)) if cr else []
+        # (as the road's height lowered by the difference: a crossing with its own clearance is water's or a rail's to
+        # deck_profile, without a road's level corridor and at-grade junctions)
+        required = [(c[0], c[1], float(z) + float(h) - Headroom.DEFAULT) for c, z, h in zip(cr, road_z, hr)]
         dd = self.__dict__.setdefault("depth", {})
         for k in comp:
             dd[k] = DECK_FULL_DEPTH if depth is None else depth
@@ -7385,6 +7495,40 @@ def _under_decks(xy, z, decks):
 _DECK_PACK = [(None, None)]     # [(the decks list, its packed arrays)]: one tile's walls ask with the same list
 
 
+def _under_walls_on():
+    """grading's abutment walls under carriageway decks are on (BNE_INTERCHANGE and BNE_UNDER_WALLS)."""
+    import grading
+    return bool(grading.CW_ON and grading.UNDER_WALLS_ON)
+
+
+def _deck_underside(xy, decks):
+    """Per point of xy (k, 2): the underside (m) of the deck chunk over it (its road height there less its slab and
+    girders, ch["depth"] when given, else DECK_FULL_DEPTH), NaN where none is within its half width + 1 m. Pure."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    out = np.full(len(xy), np.nan)
+    for ch in decks or ():
+        n = np.asarray(ch.get("n", ()), np.float64)
+        if n.ndim != 2 or len(n) < 2:
+            continue
+        reach = float(ch.get("w") or 0.0) / 2 + 1.0
+        lo, hi = n[:, :2].min(0) - reach, n[:, :2].max(0) + reach
+        near = ((xy >= lo) & (xy <= hi)).all(1)
+        if not near.any():
+            continue
+        a, b = n[:-1, :2], n[1:, :2]
+        d = b - a
+        L2 = np.maximum((d * d).sum(1), 1e-12)
+        depth = float(ch.get("depth") or DECK_FULL_DEPTH)
+        for i in np.flatnonzero(near):
+            t = np.clip(((xy[i] - a) * d).sum(1) / L2, 0.0, 1.0)
+            dd = np.hypot(*(a + t[:, None] * d - xy[i]).T)
+            j = int(np.argmin(dd))
+            if dd[j] <= reach:
+                zz = float(n[j, 2] + (n[j + 1, 2] - n[j, 2]) * t[j]) - depth
+                out[i] = zz if not np.isfinite(out[i]) else min(out[i], zz)
+    return out
+
+
 def _deck_pack(decks):
     """(points (n, 3), starts (C + 1,), reach (C,)) of the deck chunks with 2 points or more, or None."""
     if not decks:
@@ -7805,7 +7949,15 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                     a_, b_ = w_["at"]
                     w_["base"] = w_["base"] + out_n[a_:b_] * hx[a_:b_, None]
             out.extend(par)
-        full = _wall_runs(gg - z) & ~_under_decks(xy + out_n * core, z, decks) & ~bends
+        ud = _under_decks(xy + out_n * core, z, decks)
+        under_z = None
+        if ud.any() and _under_walls_on():
+            # (an abutment wall beside a street under a carriageway's deck, grading._under_deck_walls: allowed there,
+            # its top at the deck's underside; elsewhere under a deck none, as before)
+            under_z = _deck_underside(xy + out_n * core, decks)
+            ok_u = ud & np.isfinite(under_z) & (under_z - z >= grading.UNDER_WALL_MIN_M - 0.5)
+            ud = ud & ~ok_u
+        full = _wall_runs(gg - z) & ~ud & ~bends
         # (no face standing on a carriageway: a hairpin's other leg, the same road, the Stelvio Pass 2026-10-21)
         full &= ~_on_carriageways(xy + out_n * face[:, None], others, 0.0)
         # (its ends lowered over WALL_TAPER_M toward the road, the whole wall's ends, not a tile edge's)
@@ -7838,11 +7990,17 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                 # walled in dry stone, tall cuts too, Mapillary 2026-10-21; the user chose stone walls for passes)
                 tall = CLIFF_WALLS_ON and float(np.max(top_g[sl] - z[sl])) > CLIFF_MIN_CUT_M
                 top = np.maximum(tp, z[sl] + WALL_TAPER_LOW_M)
+                if under_z is not None:         # (never through the deck over it)
+                    cap = under_z[sl]
+                    top = np.where(np.isfinite(cap), np.minimum(top, cap - DECK_CLEAR), top)
                 # (its top behind the coping rises to the graded ground at its back edge, never under the coping: the
                 # slope above goes on from the wall's top, held up by it; flat at the top's height, a band of grass
                 # standing out in front of the slope read as a thick freestanding wall, the user 2026-10-31)
                 back_top = top if ground_at is None else np.maximum(top, np.minimum(
                     ground_at(face[sl] + th, range(i, j + 1)), z[sl] + max_h + BACK_TOP_OVER_M))
+                if under_z is not None:
+                    back_top = np.where(np.isfinite(under_z[sl]), np.minimum(back_top, under_z[sl] - DECK_CLEAR),
+                                        back_top)
                 out.append({"base": base, "top": top, "back_top": back_top, "foot": z[sl] - WALL_FOOT_M,
                             "mountain": bool(mountain),
                             "toward": -out_n[sl], "thick": th, "concrete": concrete, "rock": rural and tall,

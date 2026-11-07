@@ -16,6 +16,17 @@ and overlapping-deck merging cannot remove an already feasible clearance floor.
 Existing approach grading uses the same derived deck clearance automatically.
 Explicit water/navigation requirements retain their own clearances.
 
+## Signed height limits (OpenStreetMap `maxheight`)
+
+Where the road under a deck carries a height limit (OpenStreetMap's `maxheight`, read from Overture's
+height restrictions into the roads layer's `maxheight_m` rule, roads layer 9), that limit replaces the 6 m
+as the headroom under the girders (still plus the 0.15 m tolerance). A signed limit is usually a little
+under the real clearance, so it errs low. Only the stretches where the tagged road is on the ground count:
+a limit mapped along a stretch that is itself a bridge describes what is over it. Limits outside 2-9 m are
+ignored as mapping errors. On with the interchange solver (`BNE_INTERCHANGE=1`); `BNE_MAXHEIGHT=on/off`
+overrides that. The rule is read into every roads cell regardless (it changes no heights by itself). (Perth: the Mitchell Freeway is
+signed 4.5 m and 4.9 m under Hay Street, Murray Street 4.5 m under the freeway.)
+
 ## Constraints and diagnostics
 
 Abutment heights, genuine at-grade ramp junctions and the existing maximum grade

@@ -330,7 +330,10 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
         ch.hi = None if c.get("hi") is None else np.asarray(c["hi"], np.float64)
         cs.append(ch)
     off = np.r_[0, np.cumsum([c.n for c in cs])].astype(int)
-    eqs = [(a, i, b, j, 0.0) for a, i, b, j, kind, v in couplings if kind == "eq"]
+    eqs = [(a, i, b, j, 0.0, MU) for a, i, b, j, kind, v in couplings if kind == "eq"]
+    # ("near": z_a[i] ~ z_b[j] with weight v, a soft pull the limits and bounds win over: a divided road's two
+    # carriageways side by side)
+    eqs += [(a, i, b, j, 0.0, float(v)) for a, i, b, j, kind, v in couplings if kind == "near" and float(v) > 0]
     ges = [(a, i, b, j, float(v)) for a, i, b, j, kind, v in couplings if kind == "ge"]
     active_ge = set()
     zs = None
@@ -344,12 +347,12 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
         refit = [c.dirty for c in cs]
         for c in cs:
             c.assemble()
-        cols = [(a, i, b, j, v) for a, i, b, j, v in eqs] + [ges[k] for k in sorted(active_ge)]
+        cols = list(eqs) + [ges[k] + (MU,) for k in sorted(active_ge)]
         # z = B^-1 r - B^-1 U (M^-1 + U' B^-1 U)^-1 U' B^-1 r, U's columns e_(a,i) - e_(b,j), M = MU I
         r = [c.b.copy() for c in cs]
-        for a, i, b, j, v in cols:
-            r[a][i] += MU * v
-            r[b][j] -= MU * v
+        for a, i, b, j, v, wt in cols:
+            r[a][i] += wt * v
+            r[b][j] -= wt * v
         # (a chain neither refactored nor coupled differently: its solve as last round)
         z0 = [z0[n] if z0 is not None and not refit[n] and np.array_equal(r[n], prev_r[n]) else cs[n].solve(r[n])
               for n in range(len(cs))]
@@ -359,7 +362,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
             # each chain's own columns only (a dense (n, k) block per chain was gigabytes at a large interchange):
             # its B^-1 U on them, kept while its factor and its columns stay
             touch = [[] for _ in cs]
-            for m, (a, i, b, j, v) in enumerate(cols):
+            for m, (a, i, b, j, v, _wt) in enumerate(cols):
                 touch[a].append((m, i, 1.0))
                 touch[b].append((m, j, -1.0))
             BUs = []
@@ -380,13 +383,13 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
             BU = BUs
             UtBU = np.zeros((k, k))
             Utz = np.zeros(k)
-            for m, (a, i, b, j, v) in enumerate(cols):
+            for m, (a, i, b, j, v, _wt) in enumerate(cols):
                 _s, ca, Ba = BU[a]
                 _s, cb, Bb = BU[b]
                 UtBU[m, ca] += Ba[i]
                 UtBU[m, cb] -= Bb[j]
                 Utz[m] = z0[a][i] - z0[b][j]
-            y = np.linalg.solve(np.eye(k) / MU + UtBU, Utz)
+            y = np.linalg.solve(np.diag([1.0 / c_[5] for c_ in cols]) + UtBU, Utz)
             zs = [z0[n] if BU[n] is None else z0[n] - BU[n][2] @ y[BU[n][1]] for n in range(len(cs))]
         else:
             zs = z0

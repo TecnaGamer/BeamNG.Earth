@@ -75,13 +75,30 @@ def plans_format():
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
 
 
+# BNE_* settings that change no plan (the caches' own, what is sent when): not part of a plan's signature
+NOT_PLAN_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
+                     "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_CW_DEBUG", "BNE_CW_DUMP")
+
+
+def switches_sig():
+    """"" with no build switch set (every default player shares plans as before), else "x" + a short hash of the
+    BNE_* switches: plans made with the interchange solver on (BNE_INTERCHANGE and the rest) were read back with it
+    off and the other way round, a place's roads as first built whatever the switches (2026-11-06)."""
+    import hashlib
+    items = sorted((k, v) for k, v in os.environ.items() if k.startswith("BNE_") and k not in NOT_PLAN_SWITCHES
+                   and not (k == "BNE_BRIDGE_PROFILE" and v.lower() == "curve"))   # (earthd sets its default always)
+    if not items:
+        return ""
+    return "x" + hashlib.sha1(repr(items).encode()).hexdigest()[:8]
+
+
 def for_grader(cache_dir, grader, widths, wet):
     """The PlanCache of a grading.Grader (any anchor's: the plans are its store's, in the planning regions' frames;
     settings that change plans in the signature), or None outside a server run. Complete plans are kept in the revisit
     cache too (persist): a place's next visit (a game started where it was left, or anchored anywhere near) reads them
     instead of planning again."""
     md = getattr(grader, "md", None)
-    signature = f"w{int(widths is not None)}s{int(wet is not None)}"
+    signature = f"w{int(widths is not None)}s{int(wet is not None)}" + switches_sig()
     bundle = os.environ.get("BNGE_WORLD_BUNDLE")
     if bundle:
         from worldbundle import PinnedPlanCache

@@ -59,6 +59,7 @@ whatever order tiles loaded, after any number of rebases, on any machine.
 | v1.8 Alive | Done: parked cars, AI traffic (setting, default off), signals, stop signs, street furniture, trees. |
 | v1.9 Cities & nature | Partly: buildings with collision, canopy trees, filled sparse areas. |
 | Quick wins | Done: saved places (map), launcher (Linux AppImage, Windows .exe), real weather, airports, data credits. |
+| Interchanges | In progress (opt-in `BNE_INTERCHANGE=1`): freeway carriageways solved together, headroom from OSM maxheight; notes, known issues and next steps in docs/INTERCHANGE_SOLVER.md. |
 | Robustness | Mostly done: lost server / offline handling, orphaned servers, level isolation (issue #1). |
 
 ## Next (in this order unless the user reorders)

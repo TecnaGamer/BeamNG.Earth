@@ -790,8 +790,17 @@ class Reader:
                 r."when"."using", r."when".recognized, r."when".vehicle, r."between" FROM
             (SELECT fi, unnest(access_restrictions) AS r, generate_subscripts(access_restrictions, 1) AS k FROM t)
             ORDER BY fi, k""").fetchall()
-        ow = []
+        ow, mh = [], []
         for fi, typ, heading, mode, during, using, recognized, vehicle, b in rows:
+            # a height limit: vehicles taller than it denied (OpenStreetMap's maxheight, the signed clearance under a
+            # bridge or through an underpass; the user 2026-11-07: the Mitchell Freeway under Hay Street, 4.5 m)
+            if keep[fi] and typ == "denied" and vehicle and not during:
+                for v in vehicle:
+                    if v.get("dimension") == "height" and v.get("comparison") in ("greater_than",
+                                                                                "greater_than_equal"):
+                        m = _length_m(v.get("value"), v.get("unit"))
+                        if m is not None:
+                            mh.append((int(fmap[fi]), m, b))
             if not keep[fi] or typ != "denied" or heading not in ("forward", "backward"):
                 continue
             if during or using or recognized or vehicle:
@@ -800,6 +809,7 @@ class Reader:
                 continue
             ow.append((int(fmap[fi]), 1.0 if heading == "backward" else -1.0, b))
         feats.rules["oneway"] = mg.rule_table(ow, "float")
+        feats.rules["maxheight_m"] = mg.rule_table(mh, "float")
         rows = con.execute("""SELECT fi, c.connector_id, c."at" FROM
             (SELECT fi, unnest(connectors) AS c, generate_subscripts(connectors, 1) AS k FROM t)
             ORDER BY fi, k""").fetchall()
@@ -820,6 +830,18 @@ class Reader:
                 multi += [(f, r, b) for r, b in ways]
         feats.attrs["src_record"] = mg.text_column(record)
         feats.rules["src_ways"] = mg.rule_table(multi, "text")
+
+
+_UNIT_M = {"m": 1.0, "cm": 0.01, "ft": 0.3048, "in": 0.0254, "yd": 0.9144, "km": 1000.0, "mi": 1609.344}
+
+
+def _length_m(value, unit):
+    """metres of a vehicle-dimension value in its Overture unit (None: no value, an unknown unit). Pure."""
+    try:
+        k = _UNIT_M.get((unit or "m").strip().lower())
+        return None if value is None or k is None else float(value) * k
+    except (TypeError, ValueError):
+        return None
 
 
 def _span(between):
@@ -857,6 +879,7 @@ def empty(layer):
         f.rules["max_speed_kmh"] = mg.rule_table([], "float")
         f.rules["connectors"] = mg.rule_table([], "text")
         f.rules["oneway"] = mg.rule_table([], "float")
+        f.rules["maxheight_m"] = mg.rule_table([], "float")
         f.rules["src_ways"] = mg.rule_table([], "text")
     return f
 
