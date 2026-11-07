@@ -411,7 +411,9 @@ local function applyHorizon()
     -- (a fixed view distance in the settings: theirs stays; the horizon's radius moving set it back before)
     local stg = rawget(_G, 'beamngEarth_settings')
     local fixed = stg and stg.get and stg.get('viewDistanceMode') == 'fixed'
-    local v = not fixed and horizon.visibleTarget(farRadius, st.visibleDistance or VISIBLE_DISTANCE, VISIBLE_DISTANCE)
+    -- (horizon.extraVisible: the 3D map's globe, the far side of the earth in view)
+    local v = not fixed and horizon.visibleTarget(farRadius, st.visibleDistance or VISIBLE_DISTANCE,
+                                                  math.max(VISIBLE_DISTANCE, horizon.extraVisible or 0))
     if v and horizon.setVisibleDistance(v) then st.visibleDistance = v end
   else
     horizon.restoreSky()
@@ -526,6 +528,7 @@ end
 local function commitTeleport(msg)
   local tr, err = anchorTerrain(msg)
   gov:heavyNow() -- the user asked for a jump: no waiting for a calm frame
+  if st.viewFrame then M._leaveViewFrame() end   -- (the 3D map's Drive here: the car is placed in the new frame)
   local sw = stopwatch.new()
   local ok
   if tr then ok, err = loadBlock(tr) end
@@ -583,10 +586,14 @@ local function finishRebase()
   gov:heavyNow() -- phase 2 must follow phase 1's vehicle move; its frame is a heavy slot anyway
   local sw = stopwatch.new()
   local msg, tr, xf = rb.msg, rb.terrain, rb.xf
+  local viewMove = rb.purpose == 'view' or rb.purpose == 'carback'
   st.recouple = rebase.recoupleStart(rb.couplings, st.clock)   -- (trailers hitched again: rebase.lua)
-  local ok, err = loadBlock(tr)
-  -- the world shifts under the grass: made fresh (with tools/gcpatch the engine would keep it)
-  groundcover.rebuild()
+  local ok, err = true, nil
+  if tr then
+    ok, err = loadBlock(tr)
+    -- the world shifts under the grass: made fresh (with tools/gcpatch the engine would keep it)
+    groundcover.rebuild()
+  end
   if not ok then log('E', 'beamngEarth', 'rebase terrain import failed: ' .. tostring(err)) end
   farfield.transform(xf, rb.newAnchor)   -- (the global far tiles placed exactly into the new anchor: farfield.lua)
   -- roads, buildings, street furniture and trees move with it and stay until the new anchor's tiles cover them
@@ -605,17 +612,22 @@ local function finishRebase()
   navgraph.transform(xf, msg.anchorId)    -- (the AI's road graph too: applied again at once, the AI planning afresh)
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
-  farfield.switchAnchor(msg.anchorId, true, { cx = tr.cx, cy = tr.cy }, st.sessionId, rb.newAnchor)
-  local cs = camshift.shift(xf, rb.playerOld[1], rb.playerOld[2], rb.playerOld[3])
+  farfield.switchAnchor(msg.anchorId, true, tr and { cx = tr.cx, cy = tr.cy } or false, st.sessionId, rb.newAnchor)
+  -- (the 3D map's own camera is placed by latitude / longitude: nothing of it to shift)
+  local cs = viewMove and { points = 0, triples = 0, viaDebug = true }
+    or camshift.shift(xf, rb.playerOld[1], rb.playerOld[2], rb.playerOld[3])
   be:reloadCollision()
   roads.collisionRebuilt()      -- (the moved colliders are solid: no second rebuild up to RELOAD_EVERY_S later)
+  if rb.purpose == 'view' then M._enterViewFrame(xf)
+  elseif rb.purpose == 'carback' then M._leaveViewFrame() end
 
   st.anchor, st.anchorId, st.anchorKey = rb.newAnchor, msg.anchorId, msg.anchorKey
   st.anchorSession, st.resync = st.sessionId, false
   mpanchor.announceOwn(st.anchor.lat, st.anchor.lon)
-  st.block, st.terrainPending, st.terrainErrorAt = { cx = tr.cx, cy = tr.cy }, nil, nil
+  st.block, st.terrainPending, st.terrainErrorAt = tr and { cx = tr.cx, cy = tr.cy } or nil, nil, nil
   edgeguard.newFrame(st.guard)
-  sendCommits(msg.anchorId, tr.cx, tr.cy)
+  if tr then sendCommits(msg.anchorId, tr.cx, tr.cy)
+  else net.send({ type = 'commit_anchor', anchorId = msg.anchorId }) end
   activateWorld()
   st.skyTimer, st.poseTimer = SKY_INTERVAL, POSE_INTERVAL
   st.lastRebaseMs, st.lastRebaseWait = rb.phase1Ms + sw(), rb.waited
@@ -623,6 +635,63 @@ local function finishRebase()
   setStatus(string.format('Anchor #%s at %.5f, %.5f (%s, %.0f ms, %.3f deg, phase 2 after %d frame(s), camera: %d points%s)%s',
     tostring(msg.anchorId), msg.lat, msg.lon, rb.purpose, st.lastRebaseMs, math.deg(xf:angle()), rb.waited,
     cs.points + cs.triples, cs.viaDebug and '' or ', no camData', ok and '' or ' TERRAIN FAILED'))
+end
+
+-- The 3D map's view frame (map3d.lua; the user, 2026-11-07: zooming into a spot far from the car "the screen stays
+-- black"): the world's origin moves to the view with no block there ('view'); the car, the other vehicles and the
+-- car's block keep their coordinates in the car's own frame (st.viewFrame.carLat / carLon) and are hidden meanwhile
+-- (they would stand near the view's origin); 'carback' goes back to that frame before the map closes.
+function M._setViewHidden(vf, hide)     -- (a field: core.lua is at Lua's 200 locals)
+  local t = scenetree.findObject('bngEarthTerrain')
+  if t and t.setHidden then pcall(function() t:setHidden(hide) end) end
+  if hide then
+    vf.vehicles = {}
+    for i = 0, be:getObjectCount() - 1 do
+      local o = be:getObject(i)
+      if o and o.setHidden and not o:isHidden() then
+        pcall(function() o:setHidden(true) end)
+        table.insert(vf.vehicles, o:getID())
+      end
+    end
+  else
+    for _, id in ipairs(vf.vehicles or {}) do
+      local o = scenetree.findObjectById(id)
+      if o and o.setHidden then pcall(function() o:setHidden(false) end) end
+    end
+    vf.vehicles = {}
+  end
+end
+
+function M._enterViewFrame(xf)
+  local vf = st.viewFrame
+  if not vf then
+    local veh = getPlayerVehicle(0)
+    local p = veh and veh:getPosition() or vec3(0, 0, 0)
+    vf = { carLat = st.anchor.lat, carLon = st.anchor.lon, block = st.block, carAt = { p.x, p.y, p.z } }
+    st.viewFrame = vf
+    M._setViewHidden(vf, true)
+    log('I', 'beamngEarth', string.format('view frame: the car kept in %.5f, %.5f (hidden)', vf.carLat, vf.carLon))
+  end
+  vf.carAt = { xf:apply(vf.carAt[1], vf.carAt[2], vf.carAt[3]) }
+end
+
+function M._leaveViewFrame()
+  local vf = st.viewFrame
+  if not vf then return end
+  st.viewFrame = nil
+  M._setViewHidden(vf, false)
+  log('I', 'beamngEarth', 'view frame left: back in the car\'s frame')
+end
+
+-- (map3d.lua) is the world in a view frame; ask to go back to the car's frame (true when asked or nothing to do)
+function M.inViewFrame() return st.viewFrame ~= nil end
+function M.returnToCar()
+  local vf = st.viewFrame
+  if not vf then return true end
+  if st.pending and st.pending.purpose == 'carback' then return true end
+  if st.pending or st.rebasing or not net.isConnected() then return false end
+  local b = vf.block or { cx = 0, cy = 0 }
+  return requestAnchor(vf.carLat, vf.carLon, 'carback', b.cx, b.cy)
 end
 
 -- Is the player's move visible to GE yet (veh:getPosition, the value the camera reads at
@@ -651,8 +720,12 @@ end
 -- in onUpdate. rebaseLag starts at 0 (same frame) and is measured on every rebase: onPreRender
 -- records after how many frames the move became visible, and the next rebase uses that.
 local function commitRebase(msg, purpose)
+  -- the 3D map's origin moves (map3d.lua): 'view' (the frame only, no block: the car and its block stay in their own
+  -- frame, hidden) and 'carback' (back to the car's own frame, its block with it); vehicles never move in either
+  local viewMove = purpose == 'view' or purpose == 'carback'
   local tr, err = anchorTerrain(msg)
-  if not tr then
+  if purpose == 'view' then tr, err = false, nil end
+  if tr == nil then
     setStatus('Rebase failed: ' .. tostring(err))
     st.retryAt = st.clock + rebase.RETRY_S
     return false
@@ -662,12 +735,16 @@ local function commitRebase(msg, purpose)
   local newAnchor = geodesy.newAnchor(msg.lat, msg.lon)
   -- (corrected at the player: the new world's place of the spot the car is on; geodesy worldTransformTo)
   local pp = st.player
+  if purpose == 'carback' and st.viewFrame then
+    local c = st.viewFrame.carAt         -- (exact at the car, where the world is going back to)
+    pp = { x = c[1], y = c[2], z = c[3] }
+  end
   local xf = pp and st.anchor:worldTransformTo(newAnchor, pp.x, pp.y, pp.z) or st.anchor:transformTo(newAnchor)
   -- nothing to move for an identity transform (resync); setClusterPosRelRot from the GE-side
   -- position would only pull the car back to where GE last saw it
   local moved, playerId = {}, nil
   local couplings = {}
-  if not isIdentity(xf) then
+  if not viewMove and not isIdentity(xf) then
     holdMotionBlur()
     couplings = rebase.couplings()      -- (re-hitched after phase 2: rebase.recoupleStart)
     moved, playerId = rebase.moveVehicles(xf, geodesy)
@@ -1128,6 +1205,8 @@ local function onMessage(msg)
     end
   elseif t == 'space_clouds' then        -- the clouds seen from space (spaceclouds.lua / server spaceclouds.py)
     pcall(require('beamngEarth/spaceclouds').onMessage, msg, st.anchorId)
+  elseif t == 'globe' then               -- the 3D map's whole earth (globe.lua / server globe.py)
+    pcall(require('beamngEarth/globe').onMessage, msg, st.anchorId)
   elseif t == 'anchor_progress' then
     local p = st.pending
     if p and msg.requestId == p.requestId and not p.ready then p.stage, p.progressAt = msg.stage, st.clock end
@@ -1135,7 +1214,8 @@ local function onMessage(msg)
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
     if p.importAt then return end       -- duplicate ready while retrying the same files
-    if p.purpose == 'rebase' or (p.purpose == 'resync' and st.anchor) then
+    if p.purpose == 'rebase' or (p.purpose == 'resync' and st.anchor)
+        or ((p.purpose == 'view' or p.purpose == 'carback') and st.anchor) then
       p.ready, p.msg = true, msg -- committed in updateWorld() (distance rule / when not paused)
       if p.purpose == 'rebase' and p.sentAt then st.anchorLatency = st.clock - p.sentAt end
     else
@@ -1279,9 +1359,9 @@ local function onMessage(msg)
     roads.onFarDrop(msg, 'B')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
-  elseif t == 'labels_result' then           -- the 3D map's place names (map3d.lua)
+  elseif t == 'map_labels_result' then       -- the 3D map's labels (map3d.lua; server maplabels.py)
     local m3 = rawget(_G, 'beamngEarth_map3d')
-    if m3 and m3.onLabels then m3.onLabels(msg) end
+    if m3 and m3.onMapLabels then m3.onMapLabels(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
@@ -1391,7 +1471,7 @@ local function cameraState()
   local m3 = rawget(_G, 'beamngEarth_map3d')
   if m3 and m3.isActive and m3.isActive() then
     local g = cam.getGlobalCameras and cam.getGlobalCameras()[m3.CAMERA]
-    if g and g.target then out.tx, out.ty = g.target.x, g.target.y end
+    if g and g.target then out.tx, out.ty, out.tz = g.target.x, g.target.y, g.target.z end
   end
   return out
 end
@@ -1424,6 +1504,16 @@ local function updatePlayer(dt)
     st.player = { x = c.x, y = c.y, z = c.z, vx = 0, vy = 0, vz = 0, lat = lat, lon = lon, dist = hypot(c.x, c.y),
       speed = 0, camera = true }
     st.slowFor = st.slowFor + dt
+    return
+  end
+  if st.viewFrame then
+    -- (a view frame: the car is in its own frame, hidden; the player is the 3D map's target on the ground)
+    local c = st.cam
+    if not c then return end
+    local x, y = c.tx or c.x, c.ty or c.y
+    local lat, lon = st.anchor:worldToGeodetic(x, y, 0)
+    st.player = { x = x, y = y, z = 0, vx = 0, vy = 0, vz = 0, lat = lat, lon = lon, dist = hypot(x, y), speed = 0,
+      camera = true }
     return
   end
   st.camAt = nil              -- (a car now: the player is the car)
@@ -1481,6 +1571,7 @@ local function endHold(h)
 end
 
 local function updateDropHold(dt)
+  if st.viewFrame then return end       -- (the 3D map's view frame: the car is not where the player is)
   local pl = st.player
   local veh = getPlayerVehicle(0)
   if not pl or not veh then return end
@@ -1571,7 +1662,7 @@ end
 -- the car's place for "Where you left off" (places.notePosition): force at level end and game close
 local function notePlayerPos(force)
   local pl = st.player
-  if pl and pl.lat and pl.lon and st.anchorId and not st.pending then
+  if pl and pl.lat and pl.lon and st.anchorId and not st.pending and not st.viewFrame then
     pcall(places.notePosition, pl.lat, pl.lon, st.clock, force)
   end
 end
@@ -1620,7 +1711,8 @@ local function updateWorld(dt)
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
     -- ids are another server's); sessions: every session folder in use
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
-      lat = pl.lat, lon = pl.lon, speed = pl.speed, follow = not st.followHeld,
+      lat = pl.lat, lon = pl.lon, speed = pl.speed, follow = not st.followHeld and not st.viewFrame,
+      view = st.viewFrame and true or nil,       -- (the 3D map's view frame: server Conn.map_view)
       held = (farfield.session() == st.sessionId) and farfield.heldAnchors() or {},
       sessions = roads.allHeldSessions(),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)
@@ -1637,6 +1729,14 @@ local function updateWorld(dt)
 
   -- origin rebase first: when it commits, the terrain-follow state belongs to the old frame
   local p = st.pending
+  if p and p.ready and (p.purpose == 'view' or p.purpose == 'carback') then
+    if gov:requestHeavy() then
+      st.pending = nil
+      commitAnchor(p.msg, p.purpose)
+    end
+    return
+  end
+  if st.viewFrame then return end       -- (the car's terrain-follow and rebases wait for its own frame: carback)
   local staleDist, edgeDist
   if p and p.ready and (p.purpose == 'rebase' or p.purpose == 'resync') then
     p.anchorObj = p.anchorObj or geodesy.newAnchor(p.msg.lat, p.msg.lon)
@@ -1649,9 +1749,15 @@ local function updateWorld(dt)
     edgeDist = math.min(nx - x0, x1 - nx, ny - y0, y1 - ny)
   end
   local action = rebase.decide(pl.dist, p, staleDist, st.clock, st.retryAt, edgeDist)
+  -- (the 3D map open, map3d.lua: the origin follows the view, not the car: no rebase to the car; and the map's own
+  -- rebases commit with the car paused and far from them (nothing has to drive meanwhile) - the car's rebase, and the
+  -- resync's "the car is off its prepared terrain" re-ask, undid the map's at once and the view a continent away stayed
+  -- under the old origin's curve, black, 2026-11-07)
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local mapOpen = m3 and m3.isActive and m3.isActive()
   if p and p.ready and p.purpose == 'resync' then
     -- the player may have driven off the terrain the server prepared meanwhile: ask again
-    if staleDist > rebase.STALE_DIST then
+    if staleDist > rebase.STALE_DIST and not mapOpen then
       action = nil
       -- at most one re-request per RETRY_S: if the server can't centre the block where we ask,
       -- re-asking every frame turns into a request storm
@@ -1677,7 +1783,8 @@ local function updateWorld(dt)
       commitTerrain(dr)
     end
   end
-  if (action == 'commit' or action == 'resync') and st.paused then action = nil end -- vehicles move only with physics running
+  if mapOpen and action == 'prefetch' then action = nil end
+  if (action == 'commit' or action == 'resync') and st.paused and not mapOpen then action = nil end -- vehicles move only with physics running
   if action == 'prefetch' then
     if net.isConnected() then
       local aLat, aLon, cx, cy = M._rebaseRequest(pl)
@@ -2373,6 +2480,8 @@ local function onUpdate(dtReal, dtSim)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
       ok, err = pcall(require('beamngEarth/spaceclouds').update, dtReal, st.anchor, st.anchorId, net.send)
       if not ok then log('E', 'beamngEarth', 'space clouds: ' .. tostring(err)) end
+      ok, err = pcall(require('beamngEarth/globe').update, dtReal, st.anchor, st.anchorId, net.send)
+      if not ok then log('E', 'beamngEarth', 'globe: ' .. tostring(err)) end
       ok, err = pcall(farcars.update, dtReal)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
       t = mark('farcars', t)
@@ -2523,6 +2632,7 @@ local function onClientEndMission()
   require('beamngEarth/enginepref').restore()
   pcall(terrainpatch.clear)
   pcall(require('beamngEarth/spaceclouds').clear)
+  pcall(require('beamngEarth/globe').clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
   pcall(mpsession.reset)
@@ -2650,7 +2760,7 @@ end
 -- beammp.lua). The same smooth two-phase change as a rebase (commitRebase), asked as a resync so it commits as soon as
 -- the server has it ready; the terrain centred where the player will be in the new frame. False if one is under way,
 -- the server is not connected or the anchor is already that one.
-function M.rebaseTo(lat, lon)
+function M.rebaseTo(lat, lon, purpose)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false, 'bad lat/lon' end
   if not st.anchor then return false, 'no anchor' end
@@ -2658,6 +2768,7 @@ function M.rebaseTo(lat, lon)
   if st.rebasing then return false, 'rebase under way' end
   if not net.isConnected() then return false, 'server not connected' end
   if math.abs(st.anchor.lat - lat) < 1e-9 and math.abs(st.anchor.lon - lon) < 1e-9 then return false, 'same anchor' end
+  if purpose == 'view' then return requestAnchor(lat, lon, 'view', 0, 0) end
   local pl = st.player
   local x, y, z = 0, 0, 0
   if pl then x, y, z = pl.x, pl.y, pl.z end

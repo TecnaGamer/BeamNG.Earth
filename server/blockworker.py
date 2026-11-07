@@ -735,6 +735,46 @@ class _Parts:
     the meshes and rows of everything else."""
 
 
+DEM_WARM_MARGIN_M = 250.0   # m round a road tile whose DEM tiles _dem_warm fetches ahead (its roads' overlap, props)
+DEM_WARM_MAX = 64           # DEM tiles at most (a coarse zoom's tile covers the box anyway)
+_dem_warm_ex = None
+
+
+def _dem_warm(frame, box, zoom):
+    """The DEM tiles of zoom under box (x0, y0, x1, y1 in frame, + DEM_WARM_MARGIN_M), fetched together in the
+    background (dem.Dem.tiles: the samples that come for them wait on the same downloads). A fresh tile's buildings
+    sampled their bases tile by tile, each a download in turn: 8.6 of a Bologna tile's 9.2 s of buildings, 2026-11-07."""
+    global _dem_warm_ex
+    import math
+    m = DEM_WARM_MARGIN_M
+    x0, y0, x1, y1 = box
+    try:
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m, x0 - m, x1 + m]),
+                                          np.array([y0 - m, y0 - m, y1 + m, y1 + m]), 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        if np.abs(la).max() > 84.0 or float(lo.max() - lo.min()) > 180.0:
+            return          # (the poles' DEM, the antimeridian: as before, on demand)
+        n = 2 ** int(zoom)
+
+        def col(x):
+            return int(math.floor((x / 360.0 + 0.5) * n))
+
+        def row(y):
+            return int(math.floor((0.5 - math.asinh(math.tan(math.radians(y))) / (2 * math.pi)) * n))
+        r0, r1 = max(0, row(float(la.max()))), min(n - 1, row(float(la.min())))
+        keys = [(int(zoom), c % n, r) for r in range(r0, r1 + 1) for c in range(col(float(lo.min())), col(float(lo.max())) + 1)]
+    except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
+        log.debug("dem warm: %s: %s", type(e).__name__, e)
+        return
+    fetch = getattr(getattr(_s, "dem", None), "tiles", None)     # (a test's stand-in DEM may have none)
+    if not keys or len(keys) > DEM_WARM_MAX or fetch is None:
+        return
+    if _dem_warm_ex is None:
+        from concurrent.futures import ThreadPoolExecutor
+        _dem_warm_ex = ThreadPoolExecutor(2, thread_name_prefix="dem-warm")
+    _dem_warm_ex.submit(fetch, keys)
+
+
 @profile_step('Road tile assembly')
 def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                 q, rkey, centre, skin_margin=0.0, walks_raw=None, cache_dir=None, out_dir=None, vfs_dir=None, pole_profile=None):
@@ -757,6 +797,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         _s.fra.prefetch(roadsmod.cells_of_tile(frame, tx, ty))
     if buildings:                                   # (the props' side sources, read while the tile is built)
         _s.md.side_prefetch(roadsmod.cells_of_tile(frame, tx, ty))
+    _dem_warm(frame, roadsmod.tile_bbox(tx, ty), zoom)     # (its ground too: the buildings' bases waited on it)
     mark("warm")
     cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
              for k in roadsmod.cells_of_tile(frame, tx, ty,
@@ -1912,6 +1953,30 @@ def _far_bridges(frame, gzoom, raw):
     return roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, setup), frame)
 
 
+FAR_CELLS_WAIT_S = 30.0     # s a far geotile waits for its cells' downloads before it is built anyway (_far_cells_ready)
+_far_cells_miss = {}        # (kind, key) -> monotonic of its first ask with cells missing
+
+
+def _far_cells_ready(tag, keys, layers):
+    """Are all far geotile tag's (cell, layer)s in the map data's cache? If not, their downloads start together (in the
+    map data's own threads, MapData.warm) and the tile is asked again later (None to the tracker): the one far
+    process goes on with tiles whose cells are here. A blocking download per tile there held every far building
+    behind the slowest cell of a first visit (2026-11-07). Past FAR_CELLS_WAIT_S it is built anyway (its cell()
+    calls fetch what is still missing, or fail as before)."""
+    need = [(k, layer) for k in keys for layer in layers if not _s.md.has(k, layer)]
+    if not need:
+        _far_cells_miss.pop(tag, None)
+        return True
+    first = _far_cells_miss.setdefault(tag, time.monotonic())
+    if time.monotonic() - first > FAR_CELLS_WAIT_S:
+        _far_cells_miss.pop(tag, None)
+        return True
+    if len(_far_cells_miss) > 4096:
+        _far_cells_miss.clear()
+    _s.md.warm(need, kind="demand")
+    return False
+
+
 def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     """Far geotile tile's content written to out_dir: (JSON data, {what: file name} of its shapes, count) or None
     when its cells are not at hand (asked again later)."""
@@ -1927,6 +1992,8 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     names = far_geo_names(kind, tile.key)
     shapes = {}
     if kind == "bldfar":
+        if not _far_cells_ready((kind, tile.key), *buildingsmod.far_needs(frame, tile, None)):
+            return None
         items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region)
         mesh = buildingsmod.build(items, lite=True)
         n = len(items)
@@ -1943,9 +2010,7 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
             lamps = []
     else:                               # brfar: the slabs in a piece per road geotile under it
         keys = roadsmod.cells_of_tile(frame, tile, None, margin=0.0)
-        if not all(_s.md.has(k, "roads") for k in keys):
-            for k in keys:
-                _s.md.prefetch(k, layers=("roads",))
+        if not _far_cells_ready((kind, tile.key), keys, ("roads",)):
             return None
         cells = [_s.md.cell(k, layers=("roads",), kind="background").layers.get("roads") for k in keys]
 
@@ -2262,6 +2327,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
                     bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
                     *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
     got = revisit.load(_s.cache_dir, "far", k)
+    quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:
         blobs, extra = got
         if mask and "mask.dds" in blobs:
@@ -2270,7 +2336,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
     f0 = revisit.faults()
     built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
-    if got is not None and revisit.ON and revisit.faults() == f0:
+    if got is not None and revisit.ON and revisit.faults() == f0 and not quick:
         try:
             blob, meta = _built_blob(built)
             blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
@@ -2296,7 +2362,11 @@ def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, ma
     px = tex["px"]
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
     try:
-        rgb, used = im.render(frame, *sq, px)
+        im.quick_all = bool(tex.get("quick"))
+        try:
+            rgb, used = im.render(frame, *sq, px)
+        finally:
+            im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     if built.grid is not None:          # (earthd.Server.rock_faces)

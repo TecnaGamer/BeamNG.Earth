@@ -22,6 +22,7 @@ flagged as bridge / tunnel or off ground level are left out), the navgraph.
 import json
 import logging
 import math
+import types
 import collections
 import hashlib
 import os
@@ -5383,13 +5384,8 @@ def view_key(conn, aid, x, y):
         d = tile_distance(k[0], k[1], x, y)
         if cone is None or d <= 0:
             return d
-        cx, cy, fx, fy, cosmax = cone
-        x0, y0, x1, y1 = tile_bbox(k[0], k[1])
-        dx, dy = (x0 + x1) / 2 - cx, (y0 + y1) / 2 - cy
-        r = math.hypot(dx, dy)
-        if r <= (x1 - x0) or (dx * fx + dy * fy) / r >= cosmax:
-            return d
-        return d * farfield.VIEW_PENALTY
+        # (the far field's own rule, in Rust: the flat cone, or the 3D map's 3D one)
+        return farfield.view_distances([types.SimpleNamespace(bbox=tile_bbox(k[0], k[1]))], cone, x, y)[0]
     return key
 
 

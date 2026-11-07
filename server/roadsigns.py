@@ -21,7 +21,7 @@ import roads
 import signroads
 import speedsigns
 
-KERNEL = 159                    # earthfast VERSION with road_sign_place / road_sign_mesh
+KERNEL = 162                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
