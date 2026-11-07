@@ -1373,8 +1373,17 @@ local function cameraState()
   local okF, fx, fy, fz = pcall(cam.getForwardXYZ)
   if not okF or type(fx) ~= 'number' then return nil end
   local okV, fov = pcall(cam.getFovDeg)
-  return { x = x, y = y, z = z, fx = fx, fy = fy, fz = fz, fovDeg = (okV and type(fov) == 'number') and fov or 60,
+  local out = { x = x, y = y, z = z, fx = fx, fy = fy, fz = fz, fovDeg = (okV and type(fov) == 'number') and fov or 60,
     h = screenHeight() }
+  -- the 3D map (map3d.lua): what the view is about is the orbit's target on the ground, up to kilometres ahead of the
+  -- camera; the server centres the far field and the tiles round it there (camera_away: tx / ty), the camera's own
+  -- position still decides what is near the eye
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then
+    local g = cam.getGlobalCameras and cam.getGlobalCameras()[m3.CAMERA]
+    if g and g.target then out.tx, out.ty = g.target.x, g.target.y end
+  end
+  return out
 end
 
 -- The camera's {x, y} when it is more than VIEW_AWAY_M from the car (a free camera, a far chase camera): what is drawn
@@ -1384,9 +1393,10 @@ M.VIEW_AWAY_M = 50
 function M.viewAway()
   local c, p = st.cam, st.player
   if not c or not p or not c.x or not p.x then return nil end
-  local dx, dy = c.x - p.x, c.y - p.y
+  local cx, cy = c.tx or c.x, c.ty or c.y       -- (the 3D map's target first)
+  local dx, dy = cx - p.x, cy - p.y
   if dx * dx + dy * dy <= M.VIEW_AWAY_M * M.VIEW_AWAY_M then return nil end
-  return { x = c.x, y = c.y }
+  return { x = cx, y = cy }
 end
 
 local function updatePlayer(dt)

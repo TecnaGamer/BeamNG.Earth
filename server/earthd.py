@@ -6676,6 +6676,8 @@ class Connection:
         if not isinstance(cam, dict):
             return None
         cx, cy = cam.get("x"), cam.get("y")
+        if cam.get("tx") is not None and cam.get("ty") is not None:
+            cx, cy = cam.get("tx"), cam.get("ty")       # (the 3D map's target on the ground: mod map3d.lua)
         if not all(isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in (cx, cy)):
             return None
         if math.hypot(cx - self.focus[0], cy - self.focus[1]) <= VIEW_AWAY_M:
