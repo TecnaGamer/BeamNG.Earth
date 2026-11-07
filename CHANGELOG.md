@@ -2,6 +2,12 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Fixed
+
+- **Bare earth under overpasses**: a road in a cutting under a bridge deck got no retaining walls there, the slopes beside it bare under the deck (Assaku, Tallinn); the walls now stand under the deck too, up to its underside, and none under a low one.
+
 ## 1.8.2 beta (2026-11-05)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
