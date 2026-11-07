@@ -40,7 +40,7 @@ import staging
 
 log = logging.getLogger("earthd.surface")
 
-VERSION = 2   # fork: 2 = Australian lawns (LAWN_SHARE_AU); (nothing keys on it yet: for whoever caches masks)
+VERSION = 3   # fork: 2 = Australian lawns (LAWN_SHARE_AU), 3 = red soils and sugarcane (RED_DIRT, CANE); (nothing keys on it yet: for whoever caches masks)
 # (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
 # default, and the one every block had before (an all-zero sample falls to the later layer on ties,
 # docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
@@ -62,9 +62,12 @@ MATERIALS = (
     ("bngEarthGroundGolfGreen", "GRASS"),
     ("bngEarthGroundGolfBunker", "SAND"),
     ("beamngEarthDirt", "DIRT"),
+    # fork: Australia (after the default dirt, so no existing mask changes its name; masks written only where a sample uses them)
+    ("bngEarthGroundRedDirt", "DIRT_DUSTY"),      # the red / ochre soil of the dry inland and the west (au_ground)
+    ("bngEarthGroundCane", "GRASS"),              # sugarcane: Queensland's coastal cropland (cane_belt; groundcover.lua)
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT = range(len(MATERIALS))
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT, RED_DIRT, CANE = range(len(MATERIALS))   # fork: + RED_DIRT, CANE
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -97,6 +100,68 @@ for _c, _m in CLASS_MATERIAL.items():
     _LUT[_c] = _m
 
 
+# fork: Australian soils and sugarcane. Both are pure functions of the world position (the Koppen class of the 0.1 degree grid,
+# a coastline polyline), so blocks agree along their shared samples, and both do nothing outside Australia.
+RED_KOPPEN = (4, 5, 6, 7)       # fork: BWh BWk BSh BSk: red soil
+RED_SAVANNA_LON = 144.5         # fork: Aw (3) is red west of this (the Gulf, Cape York, the Top End), brown on the Queensland coast
+# fork: Queensland's mainland coast (lat ascending, lon): Moreton Bay, Hervey Bay, Bundaberg, Gladstone, Yeppoon, Mackay, Bowen,
+# Townsville, Ingham, Cairns, Port Douglas
+CANE_COAST = ((-27.0, -25.3, -24.8, -23.85, -23.1, -21.1, -20.0, -19.25, -18.6, -16.9, -16.0),
+              (153.4, 152.9, 152.45, 151.3, 150.8, 149.2, 148.25, 146.8, 146.3, 145.8, 145.5))
+CANE_LAT = (-27.0, -16.0)
+CANE_COAST_KM = 60.0            # fork: cropland this near the coast is cane ...
+CANE_NORTH = (-21.0, 145.5)     # fork: ... and so is all of it north of this latitude and east of this longitude
+
+
+def cane_belt(lat, lon):
+    """fork: True where cropland is sugarcane country: Queensland's coastal belt (CANE_LAT; within CANE_COAST_KM of the coast, or
+    east of CANE_NORTH's longitude north of its latitude). Pure."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    inside = (lat >= CANE_LAT[0]) & (lat <= CANE_LAT[1]) & (lon <= 154.0)
+    coast = np.interp(lat, CANE_COAST[0], CANE_COAST[1])
+    km = (coast - lon) * 111.32 * np.cos(np.radians(lat))       # inland of the coast: > 0
+    near = (km <= CANE_COAST_KM) & (km >= -10.0)
+    north = (lat > CANE_NORTH[0]) & (lon > CANE_NORTH[1])
+    return inside & (near | north)
+
+
+def _may_be_cane(lat, lon):
+    """fork: whether a block (its sample positions) can reach the cane belt: a scalar test on its middle, with a margin."""
+    la, lo = float(np.mean(lat)), float(np.mean(lon))
+    return CANE_LAT[0] - 0.1 <= la <= CANE_LAT[1] + 0.1 and 140.0 <= lo <= 154.5
+
+
+def red_soil(lat, lon):
+    """fork: True where Australian bare ground is red or ochre: the arid classes and the savanna west of RED_SAVANNA_LON; the
+    coast and the south-east stay brown. Pure; False outside Australia."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    out = np.zeros(lat.shape, bool)
+    box = climate.in_australia(lat, lon)
+    if box.any():
+        k = climate.koppen_grid(lat[box], lon[box])
+        out[box] = np.isin(k, RED_KOPPEN) | ((k == 3) & (lon[box] < RED_SAVANNA_LON))
+    return out
+
+
+def au_ground(idx, lat, lon):
+    """fork: idx with Australia's bare ground (DIRT, and the bare land's and gravel roads' LOOSE) red or ochre (RED_DIRT) where
+    red_soil says, after the roads and lots are painted (unsealed roads and their verges are DIRT). A new array only where
+    something changed; outside Australia idx itself. Pure."""
+    if not climate.in_australia(float(np.mean(lat)), float(np.mean(lon))):
+        return idx
+    bare = (idx == DIRT) | (idx == LOOSE)
+    if not bare.any():
+        return idx
+    sel = bare & red_soil(lat, lon)
+    if not sel.any():
+        return idx
+    out = idx.copy()
+    out[sel] = np.uint8(RED_DIRT)
+    return out
+
+
 def dry_west(lat, lon):
     """The arid West (a coarse climate stand-in, vegetation.regional's): its towns have fewer lawns."""
     lat, lon = np.asarray(lat), np.asarray(lon)
@@ -124,6 +189,14 @@ def classify(classes, u, square, lat=None, lon=None):
     classes = np.asarray(classes, np.uint8)
     idx = _LUT[classes]
     if lat is not None and lon is not None:
+        # fork: sugarcane on WorldCover cropland in Queensland's coastal belt (only the cropland samples are tested)
+        crop = classes == 40
+        if crop.any() and _may_be_cane(lat, lon):
+            cane = np.zeros(idx.shape, bool)
+            cane[crop] = cane_belt(np.asarray(lat, np.float64)[crop], np.asarray(lon, np.float64)[crop])
+            if cane.any():
+                idx = idx.copy()
+                idx[cane] = np.uint8(CANE)
         # (KyzoFox 1.5.4: lawns() only at the built-up samples, the only ones it can change: on rural ground
         # that is almost none of a block)
         urban = classes == 50
@@ -941,13 +1014,21 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
     roads = _square_roads(frame, x0, y0, size, surface)
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
         feats = _square_lots(frame, x0, y0, size, surface)
-        rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
+        # fork: no dirt furrows over sugarcane (the belt's crop is green and tall: classify's CANE)
+        if not _cane_square(frame, x0, y0, size):
+            rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
         rgb = photo_golf(rgb, frame, x0, y0, size, feats)
         rgb = photo_lots(rgb, frame, x0, y0, size, feats)
         rgb = photo_pads(rgb, frame, x0, y0, size, _square_pads(frame, x0, y0, size, surface))     # (under the roads)
     if not roads:
         return rgb
     return photo_roads(rgb, frame, x0, y0, size, roads, surface.urban, widths, simple=simple)
+
+
+def _cane_square(frame, x0, y0, size):
+    """fork: whether the middle of [x0, x0 + size]² of frame lies in the sugarcane belt (cane_belt)."""
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0 + size / 2]), np.array([y0 + size / 2]), np.zeros(1))
+    return bool(_may_be_cane(la, lo) and cane_belt(la, lo).any())
 
 
 def unghost_square(rgb, frame, x0, y0, size, surface, widths=None):
@@ -1034,7 +1115,11 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 
 def paint_fields(idx, lat, lon, feats_list):
     """idx with farmland polygons drawn as dirt (the whole field: the furrows are only in the photo). Pure."""
-    return _paint(idx, lat, lon, feats_list, _farmland, DIRT)
+    out = _paint(idx, lat, lon, feats_list, _farmland, DIRT)
+    cane = idx == CANE            # fork: a field over sugarcane stays cane (WorldCover cropland in the belt, classify)
+    if out is not idx and cane.any():
+        out = np.where(cane, np.uint8(CANE), out)
+    return out
 
 
 def paint_lots(idx, lat, lon, feats_list):
@@ -1402,6 +1487,8 @@ def write_masks(idx, out_dir, stem):
     atomically. Returns the file names (in out_dir), in MATERIALS order."""
     names = mask_names(stem)
     for i, name in enumerate(names):
+        if i >= RED_DIRT and not (idx == i).any():
+            continue            # fork: Australia's materials only where a sample uses them (terrain_msg sends the .ter's own)
         path = os.path.join(out_dir, name)
         tmp = staging.tmp_for(path)
         Image.fromarray(np.where(idx == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)

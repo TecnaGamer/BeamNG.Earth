@@ -67,6 +67,12 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
     fields = LONG_NEAR },
+  -- fork: sugarcane (server/surface.py CANE: WorldCover cropland in Queensland's coastal belt): the stock long grass, dense, its
+  -- plants `typeScale` times as tall, over the whole layer (no short grass between: a cane field is a wall of leaf)
+  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_cane', layer = 'bngEarthGroundCane', share = 0.45,
+    fields = LONG_NEAR, typeScale = 2.4 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_cane', layer = 'bngEarthGroundCane', share = 0.1,
+    typeScale = 1.6 },
 }
 M.PREFIX = 'bngEarthGC_'
 
@@ -170,8 +176,8 @@ local function readDefs(source)
 end
 
 -- Pure: the setField calls (name, index, value) that recreate a stock definition on `layer`, its
--- element count scaled by `share`, its radii by `dist` (default 1).
-function M.fieldsFor(def, layer, share, dist)
+-- element count scaled by `share`, its radii by `dist` (default 1); fork: typeScale (default 1) multiplies each plant type's size.
+function M.fieldsFor(def, layer, share, dist, typeScale)
   local calls = {}
   dist = dist or 1
   for k, v in pairs(def) do
@@ -186,6 +192,7 @@ function M.fieldsFor(def, layer, share, dist)
       for k, v in pairs(t) do
         if v ~= nil and v ~= jsonNull then
           if k == 'layer' then v = (v ~= '' and layer or '') end
+          if typeScale and (k == 'sizeMin' or k == 'sizeMax') and tonumber(v) then v = tonumber(v) * typeScale end   -- fork
           calls[#calls + 1] = { k, i - 1, fieldValue(v) }
         end
       end
@@ -232,7 +239,7 @@ function M.ensure()
           local dist = M.distance
           local fg, fd = M.mixFactors(wantDry)      -- fork: the grass layer's green / dry mix
           local share = d.share * (d.mix == 'dry' and fd or d.mix == 'green' and fg or 1)
-          for _, c in ipairs(M.fieldsFor(def, d.layer, share * M.density * dist * dist, dist)) do
+          for _, c in ipairs(M.fieldsFor(def, d.layer, share * M.density * dist * dist, dist, d.typeScale)) do
             gc:setField(c[1], c[2], c[3])
           end
           for k, v in pairs(d.fields or {}) do

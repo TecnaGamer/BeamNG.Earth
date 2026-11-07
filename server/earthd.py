@@ -2983,6 +2983,7 @@ class Server:
             if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
                 idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
                                             self.surface.fuel_pads(keep["lat"], keep["lon"]))
+            idx = surfacemod.au_ground(idx, keep["lat"], keep["lon"])     # fork: red soil in dry Australia
             stages["roadPaint"] = time.perf_counter() - t1
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
@@ -5737,7 +5738,7 @@ class Connection:
                "q": info["q"]}
         if info.get("layers"):      # --surface on: one mask per material, MATERIALS order
             # only the .ter's own materials, in its order (surface.write_ter; all of them for an older block)
-            use = info.get("mats") or range(len(surfacemod.MATERIALS))
+            use = info.get("mats") or range(len(info["layers"]))     # fork: (MATERIALS grew; a block lists its own masks)
             out["layers"] = [f"{self.s.vfs_dir}/{info['layers'][i]}" for i in use]
             out["materials"] = [list(surfacemod.MATERIALS[i]) for i in use]
         if info.get("base"):        # detail mode: the base photo over the block's world size

@@ -27,7 +27,9 @@ class ClassifyTest(unittest.TestCase):
         self.assertEqual(idx.tolist(), [[sf.DIRT, sf.GRASS, sf.DUSTY, sf.GRASS], [sf.DIRT, sf.DIRT, sf.LOOSE, sf.SNOW],
                                         [sf.MUD, sf.MUD, sf.MUD, sf.GRASS]])
         self.assertEqual(sf.MATERIALS[sf.DIRT], ("beamngEarthDirt", "DIRT"))
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "the default material goes last (ties pick the later layer)")
+        # fork: the default dirt is the last of the stock materials; RED_DIRT and CANE follow it (appended: no stock mask changes its name)
+        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 3, "the default material goes last of the stock ones")
+        self.assertEqual((sf.RED_DIRT, sf.CANE), (len(sf.MATERIALS) - 2, len(sf.MATERIALS) - 1))
 
     def test_unknown_class_is_dirt(self):
         self.assertEqual(sf.classify(np.array([[7, 255]], np.uint8), np.zeros((1, 2)), 2.0).tolist(), [[sf.DIRT, sf.DIRT]])
@@ -799,6 +801,64 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[40, 40], expect))
         self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
+
+
+class AustraliaGroundTest(unittest.TestCase):
+    """fork: red soils and sugarcane (surface.red_soil, au_ground, cane_belt, classify)."""
+
+    def grid(self, lat, lon, n=4):
+        la = np.full((n, n), lat)
+        lo = np.full((n, n), lon)
+        return la, lo
+
+    def test_cane_belt(self):
+        for lat, lon in ((-21.14, 149.19), (-19.58, 147.40), (-17.0, 145.9), (-25.0, 152.3), (-27.0, 153.1)):
+            self.assertTrue(bool(sf.cane_belt(lat, lon)), (lat, lon))
+        for lat, lon in ((-33.9, 151.2), (-23.4, 144.0), (-27.8, 153.4), (-14.0, 143.5), (-24.9, 148.0)):
+            self.assertFalse(bool(sf.cane_belt(lat, lon)), (lat, lon))
+
+    def test_cropland_is_cane_in_the_belt_only(self):
+        classes = np.full((4, 4), 40, np.uint8)
+        u = np.zeros((4, 4))
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.CANE).all())
+        la, lo = self.grid(-33.9, 151.2)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
+        la, lo = self.grid(36.5, -118.3)
+        self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
+        # grass stays grass in the belt
+        la, lo = self.grid(-21.14, 149.19)
+        self.assertTrue((sf.classify(np.full((4, 4), 30, np.uint8), u, 2.0, la, lo) == sf.GRASS).all())
+
+    def test_red_soil_inland_not_on_the_coast(self):
+        idx = np.full((4, 4), sf.DIRT, np.uint8)
+        la, lo = self.grid(-23.7, 133.9)        # Alice Springs: arid
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+        la, lo = self.grid(-27.47, 153.03)      # Brisbane: Cfa
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(-20.7, 139.5)        # Mount Isa: dry
+        self.assertTrue((sf.au_ground(idx, la, lo) == sf.RED_DIRT).all())
+
+    def test_only_bare_ground_turns_red_and_nowhere_else(self):
+        la, lo = self.grid(-23.7, 133.9)
+        idx = np.array([[sf.GRASS, sf.ASPHALT, sf.DIRT, sf.LOOSE]] * 4, np.uint8)
+        out = sf.au_ground(idx, la, lo)
+        self.assertEqual(out[0].tolist(), [sf.GRASS, sf.ASPHALT, sf.RED_DIRT, sf.RED_DIRT])
+        la, lo = self.grid(36.5, -118.3)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+        la, lo = self.grid(51.5, -0.1)
+        self.assertIs(sf.au_ground(idx, la, lo), idx)
+
+    def test_masks_skip_unused_australian_materials(self):
+        idx = np.full((4, 4), sf.GRASS, np.uint8)
+        with tempfile.TemporaryDirectory() as d:
+            names = sf.write_masks(idx, d, "t")
+            self.assertEqual(len(names), len(sf.MATERIALS))
+            self.assertFalse(os.path.exists(os.path.join(d, names[sf.RED_DIRT])))
+            self.assertTrue(os.path.exists(os.path.join(d, names[sf.GRASS])))
+            idx[0, 0] = sf.CANE
+            sf.write_masks(idx, d, "t")
+            self.assertTrue(os.path.exists(os.path.join(d, names[sf.CANE])))
 
 
 if __name__ == "__main__":

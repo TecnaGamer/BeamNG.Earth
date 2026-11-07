@@ -176,6 +176,13 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
     mat["baseColorDetailStrength"] = [strength, far]
     SURFACES.update(made)
 
+# fork: Australia (server/surface.py RED_DIRT, CANE): the dry inland's red / ochre soil (the sand detail pulls the photo toward
+# ochre) and sugarcane (the grass detail; the tall crop itself is groundcover.lua's bngEarthGC_long_grass_distant_cane)
+for i, (name, gm, detail, dsize, macro, msize, strength) in enumerate((
+        ("bngEarthGroundRedDirt", "DIRT_DUSTY", "sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 32, 0.35),
+        ("bngEarthGroundCane", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
+    SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}", detail, dsize, macro, msize, strength))
+
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {
         "name": "beamngEarthDirt",

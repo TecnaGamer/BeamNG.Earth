@@ -1192,7 +1192,7 @@ class PaintRoadsTest(unittest.TestCase):
         out = sf.paint_roads(np.full(lat.shape, sf.GRASS, np.uint8), lat, lon, [f], 2.0)
         self.assertEqual(int(out[64, 10]), sf.COBBLE)
         self.assertEqual(sf.MATERIALS[sf.COBBLE][1], "COBBLESTONE")
-        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 1, "dirt still last")
+        self.assertEqual(sf.DIRT, len(sf.MATERIALS) - 3, "dirt still last of the stock materials")   # fork: RED_DIRT, CANE follow it
 
     def test_a_tunnels_open_section_painted(self):
         # a 'tunnel' in the map lying open (grading.Grader.open_tunnels): road, not grass (Central Park, 2026-10-17)
