@@ -579,8 +579,10 @@ class VegClassTest(unittest.TestCase):
         self.assertEqual(vegclass.at(*DAINTREE), "rainforest")
         self.assertEqual(vegclass.at(*ALICE), "shrubland")
         self.assertEqual(vegclass.at(*DANDENONG), "open_forest")
-        for place in (ROCKHAMPTON, MELBOURNE, TOKYO, (51.5, -0.12), (0.0, 0.0), (-23.5, 160.0)):
-            self.assertEqual(vegclass.at(*place), "", place)        # cleared land, the sea, other countries: none
+        self.assertEqual(vegclass.at(*ROCKHAMPTON), "cleared")     # fork: grazing land: scattered eucalypts, long dry grass
+        self.assertEqual(vegclass.at(*MELBOURNE), "cleared")
+        for place in (TOKYO, (51.5, -0.12), (0.0, 0.0), (-23.5, 160.0)):
+            self.assertEqual(vegclass.at(*place), "", place)        # the sea, other countries: none
         got = vegclass.at(np.array([MT_ARCHER[0], TOKYO[0], DAINTREE[0]]), np.array([MT_ARCHER[1], TOKYO[1], DAINTREE[1]]))
         self.assertEqual(list(got), ["woodland", "", "rainforest"])
         self.assertEqual(vegclass.at(np.zeros((2, 3)), np.zeros((2, 3))).shape, (2, 3))
@@ -596,9 +598,9 @@ class VegClassTest(unittest.TestCase):
                 self.assertIn(g, veg.GROUPS, name)
             self.assertIn(p["ground"], vegclass.GROUND)
             self.assertTrue(0.0 < p["density"] <= 1.0 and 0.0 < p["scale"][0] <= p["scale"][1], name)
-        for code in range(1, 33):       # every NVIS group but the cleared, water, bare, sea, unclassified and unknown ones has one
+        for code in range(1, 33):       # every NVIS group but water, bare, sea, unclassified and unknown has one (cleared: fork)
             self.assertEqual(f"au_mvg:{code}" in vegclass._load_palettes()[0]["classes"],
-                             code not in (24, 25, 26, 27, 28, 30), code)
+                             code not in (24, 26, 27, 28, 30), code)
 
     def test_finest_layer_wins(self):
         class Fake:
@@ -655,7 +657,7 @@ class PaletteTest(unittest.TestCase):
         self.assertEqual(self.share(out, veg.G_SCRUB) + self.share(out, veg.G_MALLEE), 1.0)
 
     def test_untouched(self):
-        for place in (ROCKHAMPTON, TOKYO, (47.6, -122.3), (-36.85, 174.76)):      # cleared land and other places
+        for place in (TOKYO, (47.6, -122.3), (-36.85, 174.76)):      # other countries
             for generic in (veg.G_DECIDUOUS, veg.G_CONIFER, veg.G_SHRUB, veg.G_ROCK, veg.G_PALM):
                 g, out = self.apply(generic, place)
                 self.assertEqual(out.tobytes(), g.tobytes(), (place, generic))

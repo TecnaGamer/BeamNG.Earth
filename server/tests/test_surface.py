@@ -826,9 +826,9 @@ class AustraliaGroundTest(unittest.TestCase):
         self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
         la, lo = self.grid(36.5, -118.3)
         self.assertTrue((sf.classify(classes, u, 2.0, la, lo) == sf.DIRT).all())
-        # grass stays grass in the belt
+        # grass in the belt is the cleared land's long dry grass (fork: veg_palettes "cleared")
         la, lo = self.grid(-21.14, 149.19)
-        self.assertTrue((sf.classify(np.full((4, 4), 30, np.uint8), u, 2.0, la, lo) == sf.GRASS).all())
+        self.assertTrue((sf.classify(np.full((4, 4), 30, np.uint8), u, 2.0, la, lo) == sf.DRY_LONG).all())
 
     def test_red_soil_inland_not_on_the_coast(self):
         idx = np.full((4, 4), sf.DIRT, np.uint8)
@@ -866,13 +866,13 @@ class AustraliaGroundTest(unittest.TestCase):
         tree = np.full((4, 4), 10, np.uint8)
         u = np.zeros((4, 4))
         cases = (((-23.31, 150.60), sf.DRY_LONG), ((-23.70, 133.88), sf.DUSTY),      # Mt Archer (woodland), Alice Springs
-                 ((-16.17, 145.40), sf.DIRT))                                       # the Daintree: rainforest
+                 ((-16.17, 145.40), sf.DIRT), ((-23.38, 150.51), sf.DRY_LONG))   # + Rockhampton (cleared: grazing land)                                       # the Daintree: rainforest
         for (lat, lon), want in cases:
             la, lo = self.grid(lat, lon)
             self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == want).all(), (lat, lon))
             built = sf.classify(np.full((4, 4), 50, np.uint8), u, 2.0, la, lo)
             self.assertFalse(np.isin(built, (sf.DRY_LONG, sf.DUSTY)).any(), "built-up land keeps its own")
-        for lat, lon in ((-23.38, 150.51), (36.5, -118.3), (51.5, -0.1)):        # Rockhampton (cleared), the US, England
+        for lat, lon in ((36.5, -118.3), (51.5, -0.1)):        # the US, England
             la, lo = self.grid(lat, lon)
             self.assertTrue((sf.classify(tree, u, 2.0, la, lo) == sf.GRASS).all(), (lat, lon))
         self.assertIn(sf.DRY_LONG, sf.VERGE_FROM)
