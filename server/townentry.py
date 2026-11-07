@@ -22,12 +22,12 @@ together, each kerb has the sign of the town its traffic enters, the other town'
 The state is a function of the point alone, never of the road segment or the tile, so every segment and every tile
 puts a road's signs at the same places (ROADMAP "deterministic generation"). Pure given its inputs.
 
-In the game (BNE_TOWNSIGNS=on, off by default): Towns.rows gives a road tile its signs (roads.build_tile's towns),
-each sign two Forest items of its commune's own faces (write_face: the name drawn on the sign, a textured quad,
-written once per session next to the tile): the entry face with the body every town sign shares (the mod's
-sign_town_body: two posts and the plate's back, tools/generate_town_signs.py) and the exit face at the same spot turned
-round, on the body's back. The tile names its faces ("townsigns": group -> shape, texture, material); the mod's
-townsigns.lua makes each face's Material and puts face and body at one spot (trees.lua).
+In the game (Settings > World > Town signs, on by default; BNE_TOWNSIGNS=on / off forces it): Towns.rows gives a road
+tile its signs (roads.build_tile's towns), each sign two Forest items of its commune's own faces (write_face: the name
+drawn on the sign, a textured quad, written once per session next to the tile): the entry face with the body every
+town sign shares (the mod's sign_town_body: two posts and the plate's back, tools/generate_town_signs.py) and the exit
+face at the same spot turned round, on the body's back. The tile names its faces ("townsigns": group -> shape,
+texture, material); the mod's townsigns.lua makes each face's Material and puts face and body at one spot (trees.lua).
 """
 import hashlib
 import logging
@@ -47,7 +47,20 @@ from overture import LATIN_COLS, REGIONAL_LANGS
 
 log = logging.getLogger("earthd.townsigns")
 
-ON = os.environ.get("BNE_TOWNSIGNS", "off") == "on"
+# BNE_TOWNSIGNS=on / off forces the town signs whatever the settings page's Town signs switch says (enabled)
+ENV = os.environ.get("BNE_TOWNSIGNS", "")
+
+
+def enabled(server_flag):
+    """Whether the town signs are built: BNE_TOWNSIGNS=on / off forces it, anything else follows server_flag (the
+    settings page's Town signs, earthd.Server.towns_on: on unless the player turns it off)."""
+    if ENV == "on":
+        return True
+    if ENV == "off":
+        return False
+    return bool(server_flag)
+
+
 # the countries whose rules are written here (ISO 3166 alpha-2): France (EB10 / EB20), Belgium (F1a / F3a, the user
 # 2026-10-29: "toute l'Europe", country by country, as the real signs are), Luxembourg (E,9a / E,9b), Germany
 # (Zeichen 310 / 311), Switzerland (4.27 - 4.30), Italy (figura II 273 / 274), Austria (Hinweiszeichen 17a / 17b), the
