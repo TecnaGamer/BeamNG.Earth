@@ -34,7 +34,8 @@ class ModelBridgeDetectionTest(unittest.TestCase):
         p = box(88, 60, 22)  # wide S-shaped footbridge's envelope fails any long/thin heuristic
         for info in ({"tags": {"bridge": "yes"}}, {"tags": {"bridge": "viaduct"}},
                      {"tags": {"man_made": "bridge"}}, {"tags": {"building": "bridge"}},
-                     {"categories": ["art", "bridge"]}):
+                     {"categories": ["art", "bridge"]}, {"categories": ["Bridge", "Foot Bridge"]},
+                     {"categories": " BRIDGE "}):
             with self.subTest(info=info):
                 self.assertTrue(buildings._is_bridge(p, info))
         self.assertFalse(buildings._is_bridge(p))
