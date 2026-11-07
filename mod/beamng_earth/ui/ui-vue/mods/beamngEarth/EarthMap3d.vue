@@ -2,6 +2,7 @@
   <!-- the 3D map screen (map3d.lua): transparent over the game; the mouse moves the orbit camera (the UI takes it from
        the camera, as the vanilla big map's screen), the controls as the 2D map's -->
   <div class="earth-map3d" tabindex="-1" ref="rootEl" @keydown.esc.stop="back"
+       @keydown="onKey($event, true)" @keyup="onKey($event, false)"
        @mousedown="onDown" @wheel.prevent="onWheel" @contextmenu.prevent>
     <div class="m3-top" @mousedown.stop>
       <div class="m3-place">
@@ -22,7 +23,7 @@
       <button class="map-btn" @click="zoom(-3)" title="Zoom in">+</button>
       <button class="map-btn" @click="zoom(3)" title="Zoom out">&minus;</button>
     </div>
-    <div class="m3-help" @mousedown.stop>Drag: move &middot; Right drag: turn and tilt &middot; Wheel: zoom &middot; WASD also moves</div>
+    <div class="m3-help" @mousedown.stop>Drag: move &middot; Right drag: turn and tilt &middot; Wheel: zoom &middot; WASD / arrows: move &middot; Q E: turn &middot; R F: tilt</div>
     <div class="m3-cross"></div>
   </div>
 </template>
@@ -86,6 +87,41 @@ function onWheel(e) {
   zoom(Math.sign(e.deltaY) * Math.min(3, Math.max(1, Math.abs(e.deltaY) / 100)))
 }
 
+// the keyboard (the game's camera keys are off while a menu screen is open): held keys move the view every frame
+const held = new Set()
+const KEYS = { w: "up", arrowup: "up", s: "down", arrowdown: "down", a: "left", arrowleft: "left", d: "right",
+  arrowright: "right", q: "turnL", e: "turnR", r: "tiltUp", f: "tiltDown", "+": "in", "=": "in", "-": "out",
+  pageup: "in", pagedown: "out" }
+let keyTimer = null
+function onKey(e, down) {
+  const k = KEYS[(e.key || "").toLowerCase()]
+  if (!k) return
+  e.preventDefault()
+  if (down) held.add(k)
+  else held.delete(k)
+  if (held.size && !keyTimer) keyTimer = setInterval(keyStep, 33)
+  if (!held.size && keyTimer) { clearInterval(keyTimer); keyTimer = null }
+}
+function keyStep() {
+  const px = 18, h = window.innerHeight
+  let dx = 0, dy = 0, ox = 0, oy = 0, z = 0
+  if (held.has("up")) dy += px
+  if (held.has("down")) dy -= px
+  if (held.has("left")) dx += px
+  if (held.has("right")) dx -= px
+  if (held.has("turnL")) ox -= 6
+  if (held.has("turnR")) ox += 6
+  if (held.has("tiltUp")) oy -= 6
+  if (held.has("tiltDown")) oy += 6
+  if (held.has("in")) z -= 0.4
+  if (held.has("out")) z += 0.4
+  let lua = ""
+  if (dx || dy) lua += `beamngEarth_map3d.drag(${dx}, ${dy}, 'pan', ${h}); `
+  if (ox || oy) lua += `beamngEarth_map3d.drag(${ox}, ${oy}, 'orbit', ${h}); `
+  if (z) lua += `beamngEarth_map3d.zoom(${z}); `
+  if (lua) engineLua(lua)
+}
+
 function zoom(n) { engineLua(`beamngEarth_map3d.zoom(${n})`) }
 function north() { engineLua("beamngEarth_map3d.setHeading(0)") }
 function back() { engineLua("beamngEarth_map3d.exit()") }
@@ -108,12 +144,16 @@ onMounted(() => {
 
 onUnmounted(() => {
   clearInterval(timer)
+  if (keyTimer) clearInterval(keyTimer)
   onUp()
 })
 </script>
 
 <style scoped>
-.earth-map3d { position: absolute; inset: 0; outline: none; user-select: none; cursor: grab; font-family: inherit; }
+/* (an almost invisible background: the game's UI layer hands the mouse to the game wherever the page is fully
+   transparent, so a transparent screen never saw a drag or the wheel; the user, 2026-11-07) */
+.earth-map3d { position: absolute; inset: 0; outline: none; user-select: none; cursor: grab; font-family: inherit;
+  background: rgba(0, 0, 0, 0.01); }
 .earth-map3d:active { cursor: grabbing; }
 .m3-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; align-items: flex-start; gap: 12px; }
 .m3-place { padding: 8px 14px; color: #fff; background: rgba(0, 0, 0, 0.6); border-radius: 6px; min-width: 260px; }
