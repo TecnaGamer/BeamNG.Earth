@@ -12,7 +12,8 @@
 local C = {}
 C.__index = C
 
-C.DIST_MIN, C.DIST_MAX = 15, 25000000          -- m (the whole earth in view: globe.lua past the far tiles)
+C.DIST_MIN, C.DIST_MAX = 15, 500000            -- m (the game's own world all the way: the sky's shell tops out at 600 km;
+                                               --  the globe stand-in past it is off, the user 2026-11-07: 'id prefer to keep using the actual game world')
 local PITCH_MIN, PITCH_MAX = math.rad(12), math.rad(89.5)
 local ZOOM_RATE = 2.2                          -- e-folds of distance per second at full zoom input
 local PAN_RATE = 0.9                           -- target speed in distances per second at full stick
@@ -22,12 +23,24 @@ local GROUND_MIN, GROUND_MAX = -500, 9000      -- m: a ground height outside thi
 
 local function clamp(x, a, b) return math.max(a, math.min(b, x)) end
 
+-- The tilt allowed at a distance (the user, 2026-11-07: from high up "tilt/turn goes weird": a low tilt from far out
+-- orbited the target from the side and swung the view off the earth): any tilt within TILT_FREE_M, straight down
+-- from TILT_TOP_M, smoothly (in log distance) between, as map apps do.
+C.TILT_FREE_M = 30000
+C.TILT_TOP_M = 3000000
+function C.pitchMin(dist)
+  local a, b = math.log(C.TILT_FREE_M), math.log(C.TILT_TOP_M)
+  local t = clamp((math.log(math.max(1, dist)) - a) / (b - a), 0, 1)
+  t = t * t * (3 - 2 * t)
+  return PITCH_MIN + (math.rad(88) - PITCH_MIN) * t
+end
+
 -- Far out (the whole earth): the game's sky draws every object black with the camera above its shell (600 km), so
 -- past MINI_ALT the real camera stays MINI_CAM_ALT up, on the line from the earth's centre to where the view really
 -- is, and globe.lua draws the server's small copy of the globe (C.miniScale of the earth, ~30 km across) in front of
 -- it, s x the real centre distance away: the same angle as the earth from the real place.
 -- self.mini = {s, O (the earth's centre), Om (the copy's centre)} then; nil otherwise.
-C.MINI_ALT = 450000
+C.MINI_ALT = math.huge          -- (off: globe.lua's stand-in; was 480 km)
 C.MINI_CAM_ALT = 300000
 C.R = 6371000
 C.miniScale = 30000 / 6368000      -- (globe.lua sets the server's own: globe.py's miniScale)
@@ -144,6 +157,9 @@ function C:update(data)
   local mx = MoveManager.right - MoveManager.left + MoveManager.absXAxis
   local my = MoveManager.forward - MoveManager.backward + MoveManager.absYAxis
   if mx ~= 0 or my ~= 0 then self:move(my * self.dist * PAN_RATE * dt, mx * self.dist * PAN_RATE * dt) end
+  -- (the tilt the distance allows: eased up to it, so zooming out raises the view smoothly)
+  local pmin = C.pitchMin(self.dist)
+  if self.pitch < pmin then self.pitch = self.pitch + (pmin - self.pitch) * math.min(1, dt * 6) end
   -- the target on the ground (eased: a roof or a bridge does not jolt the view)
   local g = self:groundHeight()
   if g then self.ground = self.ground + (g - self.ground) * math.min(1, dt * 4) end

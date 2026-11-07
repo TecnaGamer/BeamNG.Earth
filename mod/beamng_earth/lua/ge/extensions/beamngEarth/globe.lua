@@ -8,6 +8,10 @@
 
 local M = {}
 
+-- (off, the user 2026-11-07: 'i dont like how the far out view/mode looks. id prefer to keep using the actual game
+-- world'; kept for a later look)
+M.ENABLED = false
+
 M.SHOW_M = 250000           -- the camera's height above sea level
 M.HIDE_M = 200000
 M.NITS = 1500               -- the texture's brightness (emissive)
@@ -65,6 +69,25 @@ local function spawn(shape, name)
   return o
 end
 
+-- The sky's brightness faded out as the camera nears the copy's height (the user, 2026-11-07: "popping between
+-- modes": the sky went from blue to black at once): full below SKY_FADE_FROM_M, none at SKY_FADE_TO_M (the copy's).
+M.SKY_FADE_FROM_M = 330000
+M.SKY_FADE_TO_M = 480000
+local skyBright = nil       -- { id, value }: the sky's own brightness before the fade
+
+local function fadeSky(h)
+  local s = scenetree.findObject('sunsky')
+  if not s then return end
+  if not skyBright or skyBright.id ~= s:getID() then
+    skyBright = { id = s:getID(), value = tonumber(s:getField('skyBrightness', 0)) or 40 }
+  end
+  local t = 0
+  if h then t = math.max(0, math.min(1, (h - M.SKY_FADE_FROM_M) / (M.SKY_FADE_TO_M - M.SKY_FADE_FROM_M))) end
+  local want = skyBright.value * (1 - t)
+  local cur = tonumber(s:getField('skyBrightness', 0))
+  if not cur or math.abs(cur - want) > 0.05 then s:setField('skyBrightness', 0, tostring(want)) end
+end
+
 local function setSky(off)
   if skyOff == off then return end
   skyOff = off
@@ -90,6 +113,7 @@ function M.visibleFor(h)
 end
 
 function M.update(dt, anchor, anchorId, send)
+  if not M.ENABLED then return end
   clock = clock + dt
   timer = timer + dt
   if timer < M.CHECK_S then return end
@@ -123,6 +147,8 @@ function M.update(dt, anchor, anchorId, send)
     end
   end
   setSky(mini ~= nil)
+  fadeSky(active and h or nil)
+  horizon().atmoOverrideKm = (active and h and h > 60000) and horizon().ATMO_MAX_KM or nil
   local hz = horizon()
   local want = shown and M.visibleFor(h) or nil
   if want ~= hz.extraVisible then
@@ -158,6 +184,8 @@ end
 function M.clear()
   deleteGlobe()
   setSky(false)
+  fadeSky(nil)
+  horizon().atmoOverrideKm = nil
   horizon().extraVisible = nil
   pending, shown, timer = nil, false, 0
 end

@@ -604,6 +604,8 @@ end
 local cloudsHidden = false
 local function hideCloudsHigh(h)
   local want = M.cloudsHiddenAt(h, cloudsHidden)
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then want = true end      -- (no clouds over the 3D map, the user 2026-11-07)
   if want == cloudsHidden then return end
   local names = scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')
   for _, nm in ipairs(names or {}) do

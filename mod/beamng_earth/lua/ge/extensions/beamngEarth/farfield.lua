@@ -1089,7 +1089,7 @@ function M.anchorObj() return anchorObj end
 
 -- New committed anchor. keepOld=true (rebase): current tiles stay until the server removes them or
 -- the new far_done. keepOld=false (teleport): everything is hidden at once and deleted progressively.
--- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once.
+-- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once (false: none, nil: kept).
 -- newSession: the server session the new anchor belongs to (hello.sessionId; nil = unchanged). A
 -- resync with a restarted server keeps the old session's tiles like a rebase; its far_removes never
 -- come (the new server does not know them), so they go when covered (mesh) or at the new far_done.
@@ -1176,6 +1176,12 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   if blk then
     setBlock(blk.cx, blk.cy)
     for _, inst in pairs(old) do applyCover(inst, false) end
+  elseif blk == false then
+    -- (no block in the new frame: the 3D map's view-only origin, core commitRebase 'view'; the car's block stays in
+    -- its own frame, hidden: nothing is covered here)
+    block = nil
+    for _, inst in pairs(old) do applyCover(inst, false) end
+    for _, inst in pairs(live) do applyCover(inst, false) end
   end
 end
 

@@ -380,7 +380,7 @@ SSE_SPACING_CAP = 2.0
 
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
            radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None, region=None):
+           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0):
     """Desired tiles for a player at (px, py).
 
     region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
@@ -435,7 +435,8 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                 if d is None:
                     d = math.hypot(max(x0 - px, 0.0, px - x1), max(y0 - py, 0.0, py - y1))
                 lim = switch_distance(lvl, kfun, radii, min_level)
-                split = d < lim or (node in prev_refined and d < (1.0 + h) * lim)
+                d3 = math.hypot(d, eye_h)       # (eye_h: the camera's height over the ground; select_global)
+                split = d3 < lim or (node in prev_refined and d3 < (1.0 + h) * lim)
                 if not split and view is not None and d < view.reach * lim:
                     px_ = view.pixels(node, x0, y0, x1, y1)
                     if px_ is not None:
@@ -464,8 +465,26 @@ VIEW_MAX_DEG = 80.0
 ASPECT = 16 / 9
 
 
+VIEW_MARGIN_3D_DEG = 5.0
+
+
 def view_cone(cam):
-    """(x, y, unit forward fx, fy, cos of the cone's half angle) from a pose.cam dict, or None (no usable heading)."""
+    """(x, y, unit forward fx, fy, cos of the cone's half angle) from a pose.cam dict, or None (no usable heading).
+    The 3D map (cam.tx: its target on the ground) gets the 3D cone (x, y, z, fx, fy, fz, cos, ground z) round the
+    screen's diagonal: a tilted view's ground under the camera is off the screen (earthfast.view_distances)."""
+    if cam.get("tx") is not None:
+        try:
+            x, y, z = float(cam["x"]), float(cam["y"]), float(cam["z"])
+            fx, fy, fz = float(cam["fx"]), float(cam["fy"]), float(cam["fz"])
+            fov, gz = float(cam.get("fovDeg") or 60), float(cam.get("tz") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        n = math.sqrt(fx * fx + fy * fy + fz * fz)
+        if not (n > 0.5 and all(map(math.isfinite, (x, y, z, fx, fy, fz, fov, gz)))):
+            return None
+        tv = math.tan(math.radians(fov) / 2)
+        half = math.degrees(math.atan(math.hypot(tv, tv * ASPECT))) + VIEW_MARGIN_3D_DEG
+        return x, y, z, fx / n, fy / n, fz / n, math.cos(math.radians(min(half, 89.0))), gz
     try:
         x, y, fx, fy = float(cam["x"]), float(cam["y"]), float(cam["fx"]), float(cam["fy"])
         fov = float(cam.get("fovDeg") or 60)
@@ -490,7 +509,7 @@ def view_distances(tiles, cone, x, y):
         return [t.distance(x, y) for t in tiles]
     if not tiles:
         return []
-    fast.require(1, "view_distances")
+    fast.require(161 if len(cone) == 8 else 1, "view_distances")
     bb = np.array([t.bbox for t in tiles], np.float64)
     return fast._ef.view_distances(bb, float(x), float(y), list(cone) if cone else [], float(VIEW_PENALTY)).tolist()
 
@@ -589,7 +608,7 @@ GLOBAL_MIN_LEVEL = 3
 GLOBAL_MAX_LAT = 84.5          # deg: the selection's whole radius must stay within Web Mercator
 GLOBAL_MIN_AREA = 1e-3          # m^2: an overlap below this is a shared edge, not an overlap
 GLOBAL_OVERLAP_REL = 0.01      # ... and below this of the smaller footprint (the quads' straight edges off the curved parallels)
-GLOBAL_NEED = 109               # earthfast farglobal.rs
+GLOBAL_NEED = 160               # earthfast farglobal.rs (160: far_global_select eye_h)
 GLOBAL_GEO_VERSION = 1          # bump: every global tile's cached geometry / texture is built again
 GLOBAL_PROTO = 1                # hello.globalFar: the mod places global far tiles (farfield.lua GLOBAL_FAR)
 
@@ -737,7 +756,7 @@ class Region:
 
 def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
                   max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None, anchor_nodes=True):
+                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0):
     """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
     anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
     select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
@@ -758,7 +777,7 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
     t0 = time.perf_counter()
     tiles, grefined, regions = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz)
+        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h))
     out = {}
     for z, x, y, q, s in tiles:
         t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
@@ -779,7 +798,7 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
     if regions:
         aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
                             GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
-                            None, forced_level, view, region=Region(zf, regions))
+                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h)
         out.update(aout)
         refined |= aref
     global LAST_GLOBAL_SELECT

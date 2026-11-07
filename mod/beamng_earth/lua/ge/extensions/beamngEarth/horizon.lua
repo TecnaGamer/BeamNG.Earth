@@ -38,6 +38,7 @@ M.ATMO_LIFT_SHARE = 0.6
 M.ATMO_HEADROOM_KM = 100
 M.ATMO_STEP_KM = 100
 M.ATMO_MAX_KM = 600
+M.atmoOverrideKm = nil        -- (the 3D map high up: the shell at its top once, globe.lua, not in 100 km steps)
 
 -- Pure: the visibleDistance (m) to set for a far-field radius (m), given the current value and the
 -- minimum; nil to keep the current one (within the hysteresis, or no usable radius).
@@ -86,7 +87,7 @@ function M.applySky()
   if tonumber(s.atmoPlanetRadius) ~= M.PLANET_RADIUS_KM then s.atmoPlanetRadius = M.PLANET_RADIUS_KM end
   local cam = rawget(_G, 'core_camera')
   local p = cam and cam.getPosition and cam.getPosition()
-  local want = M.thicknessFor(p and p.z / 1000, saved.thickness or M.ATMO_THICK_KM)
+  local want = M.atmoOverrideKm or M.thicknessFor(p and p.z / 1000, saved.thickness or M.ATMO_THICK_KM)
   if tonumber(s.atmoThickness) ~= want then s.atmoThickness = want end
   return true
 end

@@ -105,14 +105,33 @@ function M.enter()
   play(markers, function()
     core_camera.setGlobalCameraByName(M.CAMERA, false, data)
     active = true
+    -- (the car paused while the map is open, as the vanilla big map: far from the origin its ground tilts against
+    -- the game's gravity, the map's rebases below)
+    pcall(simTimeAuthority.pushPauseRequest, 'beamngEarthMap3d')
     local stg = rawget(_G, 'beamngEarth_settings')
     if stg and stg.navigate then stg.navigate(M.ROUTE) end
     extensions.hook('onBeamngEarthMap3d', true)
   end)
 end
 
+local function unpause()
+  pcall(simTimeAuthority.popPauseRequest, 'beamngEarthMap3d')
+end
+
+-- The world back in the car's own frame before the map closes (the map moved the origin to the view: core 'view'
+-- frames, the car hidden in its own): 'exit' / '2d' once core says so (onUpdate)
+local returning = nil
+local function viewFramed()
+  local core = rawget(_G, 'beamngEarth_core')
+  return core and core.inViewFrame and core.inViewFrame() or false
+end
+
 function M.exit()
   if not active or transitioning then return end
+  if viewFramed() then
+    returning = 'exit'
+    return
+  end
   local veh, center, size = vehicleFrame()
   local g = core_camera.getGlobalCameras()[M.CAMERA]
   if not veh or not g then
@@ -141,6 +160,7 @@ function M.exit()
   play(markers, function()
     core_camera.setGlobalCameraByName(nil)
     if core_camera.startCameraTransition then pcall(core_camera.startCameraTransition, 0.6) end
+    unpause()
     extensions.hook('onBeamngEarthMap3d', false)
   end)
 end
@@ -164,7 +184,7 @@ function M.drag(dx, dy, mode, screenH)
   dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
   if mode == 'orbit' then
     g.heading = g.heading + dx * 0.006
-    g.pitch = math.max(math.rad(12), math.min(math.rad(89.5), g.pitch + dy * 0.004))
+    g.pitch = math.max(g.pitchMin and g.pitchMin(g.dist) or math.rad(12), math.min(math.rad(89.5), g.pitch + dy * 0.004))
     return
   end
   local mpp = 2 * g.dist * math.tan(math.rad(g.fov) / 2) / math.max(200, tonumber(screenH) or 1080)
@@ -193,6 +213,7 @@ function M.driveHere()
   if r and r.ok then
     active, transitioning = false, false
     core_camera.setGlobalCameraByName(nil)
+    unpause()
     if stg.navigate then stg.navigate('play') end
     extensions.hook('onBeamngEarthMap3d', false)
   end
@@ -201,8 +222,13 @@ end
 
 -- the 2D map instead (the screen's 2D button): straight back to the car's camera, then the flat map
 function M.to2d()
+  if active and viewFramed() then
+    returning = '2d'
+    return
+  end
   active, transitioning = false, false
   core_camera.setGlobalCameraByName(nil)
+  unpause()
   extensions.hook('onBeamngEarthMap3d', false)
   local stg = rawget(_G, 'beamngEarth_settings')
   if stg and stg.navigate then stg.navigate(stg.MAP_ROUTE) end
@@ -304,6 +330,15 @@ local function drawLabels(g)
   end
 end
 
+-- The world's origin follows the view (the user, 2026-11-07: zooming into a spot a continent away "the screen stays
+-- black": the ground there lay ~160 km under the origin's z = 0 on the earth's curve, and the game's sky took the
+-- camera for being underground): once the view's target is REBASE_M from the origin it moves there (core.rebaseTo
+-- 'view', on the teleport grid: the frame only, ~0.1 s; the car and its block stay in their own frame, hidden, and
+-- the world goes back there before the map closes: returning).
+M.REBASE_M = 100000
+M.REBASE_EVERY_S = 3
+local lastRebase = -1e9
+
 local clock = 0
 function M.onUpdate(dtReal)
   if not active then return end
@@ -311,13 +346,33 @@ function M.onUpdate(dtReal)
   local g = core_camera.getGlobalCameras()[M.CAMERA]
   if not g then return end
   local s = M.state()
+  if returning then
+    if not viewFramed() then
+      local r = returning
+      returning = nil
+      if r == '2d' then M.to2d() else M.exit() end
+      return
+    end
+    local core = rawget(_G, 'beamngEarth_core')
+    if core and core.returnToCar then core.returnToCar() end
+  elseif not transitioning and g.target and clock - lastRebase > M.REBASE_EVERY_S
+      and g.target.x * g.target.x + g.target.y * g.target.y > M.REBASE_M * M.REBASE_M then
+    local core = rawget(_G, 'beamngEarth_core')
+    if core and core.rebaseTo and s.lat then
+      local sLat, sLon = require('beamngEarth/geodesy').snapAnchor(s.lat, s.lon)
+      local ok = core.rebaseTo(sLat, sLon, 'view')
+      lastRebase = clock
+      if ok then log_('I', string.format('origin moved to the view: %.4f, %.4f', sLat, sLon)) end
+    end
+  end
   if s.lat then requestLabels(g, s, clock) end
   drawLabels(g)
 end
 
 -- a level change or a vehicle switch ends the mode at once (no path)
 function M.onClientEndMission()
-  active, transitioning = false, false
+  if active then unpause() end
+  active, transitioning, returning = false, false, nil
 end
 
 return M
