@@ -921,6 +921,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
+    guardrail_rows = guardrail_rows + _au_rail_rows(frame, near_roads, box, elev, country, guardrail_rows, deck_parts, tx, ty)
     guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
     guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
                                                  country, tx, ty, wide)
@@ -1587,6 +1588,18 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return medians.tile_rows(frame, near_roads, box, elev, left_hand, country, mapped, decks, custom)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _au_rail_rows(frame, near_roads, box, elev, country, mapped, decks, tx, ty):
+    """fork: Australia's roadside crash barriers' Forest rows of a road tile (aurails.tile_rows), [] if they fail (logged)."""
+    if str(country or "").upper() != "AU":
+        return []
+    import aurails
+    try:
+        return aurails.tile_rows(frame, near_roads, box, elev, country, mapped, decks)
+    except Exception as ex:
+        log.warning("au roadside barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 

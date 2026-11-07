@@ -62,6 +62,67 @@ class FenceTest(unittest.TestCase):
         near = buildings._front_fence(buildings.Spec(seed=("fence", 3), au=None), *args)
         self.assertAlmostEqual(far[0][2] - near[0][2], buildings.FENCE_BACK_AU_M - buildings.FENCE_BACK_M, 2)
 
+    def test_side_and_rear_fences_start_at_the_front_building_line(self):
+        """The user, in game: a lone paling panel in a front yard looked wrong; the tall fences are on the side and rear boundaries."""
+        ring = np.array([(-6.0, 22.0), (6.0, 22.0), (6.0, 31.0), (-6.0, 31.0)])
+        spec = buildings.Spec(seed=("fence", 3), au=True)
+        roads_ = (np.array([[-40.0, 0.0]]), np.array([[80.0, 0.0]]), np.array([3.5]))
+        args = (spec, ring, ring[0], np.array([1.0, 0.0]), 12.0, np.array([0.0, -1.0]), 10.0)
+        rows = buildings._au_side_fences(*args, [(spec, ring)], ring.mean(0)[None], roads_)
+        self.assertGreater(len(rows), 6)
+        self.assertEqual(len({r[0] for r in rows}), 1, "one kind and colour a house")
+        self.assertTrue(all(r[0].startswith("au_fence") and r[6] == buildings.AU_FENCE_H for r in rows))
+        self.assertTrue(all(r[2] >= 22.0 for r in rows), "none in the front yard")
+        sides = [r for r in rows if abs(abs(r[1]) - 6.0 - buildings.AU_SIDE_GAP_M) < 0.01]
+        self.assertGreaterEqual(len(sides), 4, "both sides")
+        self.assertTrue(any(abs(r[2] - (31.0 + buildings.AU_REAR_M)) < 0.01 for r in rows), "and the rear")
+        # a neighbour's house in the way takes that piece out
+        other = np.array([(7.0, 24.0), (19.0, 24.0), (19.0, 33.0), (7.0, 33.0)])
+        some = buildings._au_side_fences(*args, [(spec, ring), (spec, other)], np.array([ring.mean(0), other.mean(0)]), roads_)
+        self.assertLess(len(some), len(rows))
+        self.assertTrue(all(not (7.0 < r[1] < 19.0 and 24.0 < r[2] < 33.0) for r in some))
+
+    def test_a_house_in_australia_has_tall_fences_behind_its_front_wall_only(self):
+        road = [(np.array([(-80.0, -14.0), (80.0, -14.0)]), 4.0)]
+        tall = low = houses = 0
+        for lat, lon, au in ((-27.47, 153.03, True), (40.0, -75.0, False)):
+            for i in range(60):
+                ring = np.array([[0, 0], [10.0, 0], [10.0, 12.0], [0, 12.0]], float)
+                spec = buildings.plan(ring, {"class": "house", "seed_id": i}, lat=lat, lon=lon)
+                if spec.roof == "flat":
+                    continue
+                rows = buildings.doors([(spec, 0.0, 0.0)], road, 0.0, 0.0)
+                fences = [r for r in rows if str(r[0]).startswith("au_fence")]
+                if not au:
+                    self.assertFalse(fences)
+                    continue
+                houses += 1
+                self.assertTrue(all(r[2] >= -0.01 or r[6] == buildings.AU_FRONT_H for r in fences),
+                                "in front of the house: only the low fence")
+                tall += sum(r[6] == buildings.AU_FENCE_H for r in fences)
+                low += sum(r[6] == buildings.AU_FRONT_H for r in fences)
+        self.assertGreater(houses, 10)
+        self.assertGreater(tall, 3 * houses)
+        self.assertLess(low, tall)
+
+    def test_the_front_fence_is_low(self):
+        a = np.array([-6.0, 22.0])
+        args = (a, np.array([1.0, 0.0]), 12.0, 0.5, np.array([-40.0, 0.0]), np.array([80.0, 0.0]), 6400.0, 3.5, 10.0, False)
+        rows = buildings._front_fence(buildings.Spec(seed=("fence", 3), au=True), *args)
+        self.assertTrue(rows and all(r[6] == buildings.AU_FRONT_H for r in rows))
+
+    def test_the_paling_is_weathered_not_orange(self):
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "au_streetscape.materials.json")
+        with open(path, encoding="utf-8") as fh:
+            mats = json.load(fh)
+        for k, m in mats.items():
+            if "paling" in k and not k.endswith("_rail"):
+                r, g, b = m["Stages"][0]["baseColorFactor"][:3]
+                self.assertLess(r - b, 0.2, k)       # (the first tone, 0.78 / 0.60 / 0.40, read as orange)
+                self.assertLess(r, 0.6, k)
+
     def test_plan_marks_australian_footprints(self):
         ring = np.array([(0.0, 0.0), (12.0, 0.0), (12.0, 9.0), (0.0, 9.0)])
         for lat, lon, want in ((-27.47, 153.03, True), (40.0, -75.0, None), (51.5, -0.1, None), (-36.85, 174.76, None)):

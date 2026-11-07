@@ -11,7 +11,7 @@
 
 Fences (reference: fork/QLD_REFERENCE.md, Brisbane streets): a Colorbond fence is a flat-ribbed steel sheet 1.8 m high between
 steel posts, a capping along its top, in the range's muted colours (Monument, Woodland Grey, Surfmist, Basalt, Shale Grey,
-Dune); a timber paling fence is 1.8 m of upright boards (new treated pine, or weathered grey) on rails and posts. Each model is
+Dune); a timber paling fence is 1.8 m of upright boards (weathered grey-brown pine, or silver-grey) on rails and posts. Each model is
 a 5.4 m panel centred on its origin, z up from the ground (0.1 m sunk for a slope), the panel's thin side along y, ready for
 the stock fence's rows: group, x, y, z, yaw along the road, scale = height / 1.8.
 Pole: Z up from the ground, the cross-arm along x (across the road, the wires along y: furniture.WIRE_ARMS 0.8 m either side
@@ -44,7 +44,9 @@ COLORBOND = {
     "shale": ((0.73, 0.74, 0.71), "Shale Grey"),
     "dune": ((0.64, 0.62, 0.56), "Dune"),
 }
-PALING = {"pine": (0.78, 0.60, 0.40), "grey": (0.56, 0.52, 0.47)}      # new treated pine; weathered silver-grey
+# fork: both weathered (the first pine tone, 0.78 0.60 0.40, showed as bright orange in game under the texture and sRGB): a
+# grey-brown treated pine gone dull, and silver-grey
+PALING = {"pine": (0.42, 0.35, 0.28), "grey": (0.46, 0.44, 0.41)}
 COLOURS = {                       # plain materials: (base colour, metallic, roughness)
     "bne_au_conc": ((0.66, 0.66, 0.63), 0.0, 0.9),             # the poles' concrete
     "bne_au_steel": ((0.55, 0.57, 0.58), 0.7, 0.45),           # galvanised cross-arms

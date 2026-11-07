@@ -9,6 +9,10 @@ for Australia: a tile keeps the signs in its box, and each is worked out from th
 a sign for a bend only where one stands clear of every junction, never closer than MIN_GAP_M after the last on that road
 and way of travel, none inside the first / last WINDOW_M of a road (its bend unknown), none on motorways, urban streets,
 roads with footpaths or unsealed ones.
+
+fork (user, in-game testing in Queensland: the signs were far too rare): the radius and deflection a bend is signed at go
+by the road's speed (BEND_BY_KMH: under 400 m and 20 degrees at 100 km/h, 250 m at 80, 150 m / 30 degrees below), and the
+spacing is MIN_GAP_M 150 m. No advisory speed plate (it would need a model per speed).
 """
 import math
 
@@ -25,12 +29,17 @@ UNCLASSIFIED_KMH = 80.0
 OUT_M = 2.0                     # m outside the sealed edge (spec.width includes the sealed shoulders)
 STEP_M = 5.0                    # m: the road is read at this spacing
 WINDOW_M = 20.0                 # the bend is read over this much road either side of a station: R = WINDOW_M / turn
-SHARP_RADIUS_M = 150.0          # a bend tighter than this is worth a sign
+SHARP_RADIUS_M = 150.0          # a bend tighter than this is worth a sign (a road below 80 km/h)
 MIN_DEFLECTION_DEG = 30.0       # ... if it turns the road at least this much
+# fork: by the road's speed, a bend that needs a noticeably lower speed than the limit is worth a sign: (km/h at or over,
+# radius m under, deflection degrees at least). At 100 a radius under 400 m (advisory ~110 km/h at best) needs slowing
+# for; the deflection keeps a gentle or noisy line (a few degrees at a digitised node) from being one.
+BEND_BY_KMH = ((100.0, 400.0, 20.0), (80.0, 250.0, 20.0), (0.0, SHARP_RADIUS_M, MIN_DEFLECTION_DEG))
+DEFAULT_KMH = 100.0             # (a numbered rural road with no limit mapped)
 MIN_RUN_M = 25.0                # ... over at least this much road
 JOIN_M = 40.0                   # bends the same way this close are one
 TURN_DEG, TURN_RADIUS_M = 70.0, 90.0    # a square turn rather than a curve: this much deflection at a median radius under this
-MIN_GAP_M = 250.0               # m between signs of one road, one way of travel
+MIN_GAP_M = 150.0               # m between signs of one road, one way of travel (fork: was 250)
 JUNCTION_CLEAR_M = 8.0          # m a sign stands clear past a crossing road's edge
 RAIL_CLEAR_M = 3.0              # m from a mapped barrier
 HEIGHT_M = 2.56                 # the models' height (tools/build_au_warnsigns.py)
@@ -53,9 +62,16 @@ def advance_m(kmh):
     return next(m for k, m in ADVANCE_M if v >= k)
 
 
-def bends(xy):
+def bend_limits(kmh):
+    """fork: (radius m, deflection degrees) a bend of a road of this limit (None: DEFAULT_KMH) must be under / over."""
+    v = DEFAULT_KMH if kmh is None else float(kmh)
+    _, r, d = next(row for row in BEND_BY_KMH if v >= row[0])
+    return r, d
+
+
+def bends(xy, radius_m=SHARP_RADIUS_M, min_deflection=MIN_DEFLECTION_DEG):
     """[(start m, end m, +1 left / -1 right going along xy, deflection degrees, median radius m)] of xy (k, >=2)'s sharp
-    bends (see the module doc), and the polyline's length. Pure."""
+    bends (see the module doc: radius_m and min_deflection by bend_limits), and the polyline's length. Pure."""
     seg = np.hypot(*np.diff(xy, axis=0).T)
     xy = xy[np.r_[True, seg > 1e-6]]
     cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
@@ -72,7 +88,7 @@ def bends(xy):
     turn = np.arctan2(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0], (a * b).sum(1))      # + left, over WINDOW_M of road
     turn[(s < WINDOW_M) | (s > length - WINDOW_M)] = 0.0          # (the ends: straight, the bend there unknown)
     radius = WINDOW_M / np.maximum(np.abs(turn), 1e-9)
-    sharp = radius < SHARP_RADIUS_M
+    sharp = radius < radius_m
     sign = np.where(turn >= 0, 1, -1)
     out, i, n = [], 0, len(s)
     while i < n:
@@ -89,7 +105,7 @@ def bends(xy):
             k += 1
         run = slice(i, j + 1)
         deflection = float(np.degrees(np.sum(np.abs(turn[run]) * (sign[run] == way)) / WINDOW_M * STEP_M))
-        if s[j] - s[i] + STEP_M >= MIN_RUN_M and deflection >= MIN_DEFLECTION_DEG:
+        if s[j] - s[i] + STEP_M >= MIN_RUN_M and deflection >= min_deflection:
             out.append((float(s[i]), float(s[j]), int(way), deflection, float(np.median(radius[run][sharp[run]]))))
         i = j + 1
     return out, length
@@ -105,7 +121,7 @@ def _row(group, q, travel, z):
 
 def signs(spec, xy):
     """[(group, point (2,), unit travel direction (2,))] along road xy (k, >=2) for the way of travel the spec allows."""
-    found, length = bends(np.asarray(xy, np.float64)[:, :2])
+    found, length = bends(np.asarray(xy, np.float64)[:, :2], *bend_limits(spec.kmh))
     if not found:
         return []
     seg = np.hypot(*np.diff(xy[:, :2], axis=0).T)

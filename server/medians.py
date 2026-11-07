@@ -69,8 +69,12 @@ STYLES = {
     "it": ((5.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
            (12.0, RAILS, JERSEY, RAILS, RAILS, NONE)),
     "jp": ((8.0, STEEL, STEEL, STEEL, STEEL, NONE),),
-    "au": ((5.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
+    "nz": ((5.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
            (15.0, CABLE, JERSEY, CABLE, CABLE, NONE)),
+    # fork: Australia (user, in game on the M1 / A1: the medians are mostly missing): the wire rope runs on up to 20 m of
+    # grass median (the M1 and Bruce Hwy duplications are rope in 10-20 m medians); only a paved or narrow one is concrete
+    "au": ((5.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
+           (20.0, CABLE, JERSEY, CABLE, CABLE, NONE)),
     "default": ((4.0, JERSEY, JERSEY, JERSEY, JERSEY, JERSEY),
                 (12.0, STEEL, STEEL, STEEL, STEEL, NONE)),
 }
@@ -82,7 +86,8 @@ REGIONS = {c: r for r, cs in (
     ("es", "ES PT AD GI"),
     ("it", "IT SM VA MT GR CY"),
     ("jp", "JP"),
-    ("au", "AU NZ"),
+    ("au", "AU"),
+    ("nz", "NZ"),
 ) for c in cs.split()}
 
 
