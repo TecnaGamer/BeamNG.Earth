@@ -123,6 +123,12 @@ class Source:
     # Flown leaf-off (bare trees, dormant grass): render() gives its vegetation the summer reference's colour
     # (season.leaf_on) when the Imagery's leaf_on is set
     leaf_off: bool = False
+    # Tile packs (tilepack.py: the project's own tile host): one request is the (2^pack)^2 tiles of a zoom under one
+    # tile pack levels up, all written to disk; url takes {z}, {px}, {py} (the pack). 0: one tile a request.
+    pack: int = 0
+    # Never used for a view finer than this zoom (not enlarged: the next source's sharper tiles there), unlike
+    # max_zoom, which a finer view uses enlarged
+    max_view_zoom: int = 99
 
 
 SOURCES = {
@@ -166,7 +172,16 @@ SOURCES["md6in"] = Source(
 BASE_CHAIN = ("md6in", "naipusda", "naip", "usgs", "eox2023", "eox2016")     # the chain before the regional sources
 # Regional aerial imagery (imagery_regional.py: state and national orthophoto services, each within its box)
 import bcortho as bcorthomod  # noqa: E402
-import imagery_regional  # noqa: E402
+import imagery_regional
+import tilepack as tilepackmod  # noqa: E402
+# The project's own tile host (cdn.py: its switch puts this in the chain): Sentinel-2 photos of the whole land, ESA
+# WorldCover's 2021 Sentinel-2 RGBNIR composite (CC BY 4.0), tone-mapped Web-Mercator JPEG tiles to z12 in packs of 8 x 8
+# (tools/build_s2_packs.py); the far rings everywhere, ahead of USGS / EOX, whose sharper tiles keep the nearer zooms
+CDN_BASE = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").rstrip("/")
+SOURCES["bngs2"] = Source(
+    "bngs2", CDN_BASE + "/s2wc/v1/{z}/{px}/{py}.bngp", 12,
+    "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)",
+    pack=3, max_view_zoom=12)
 # A state's tile cache serves the far rings from this zoom on; coarser rings (texels of ~15 m and more, kilometres
 # away) take USGS / Sentinel-2 (the user, 2026-10-22: "the world gen is really slow": Columbus's far field waited
 # 4 minutes on Ohio's cache at its 6 requests/s, ~1,000 tiles for the 2-4 km tiles: z15 / z14).  z16: L2 and nearer.
@@ -588,6 +603,8 @@ class Imagery:
             return data
         if src.export:
             return self._download_export(src, z, x, y)
+        if src.pack:
+            return self._download_pack(src, z, x, y)
         url = src.url.format(z=z, x=x, y=y, ty=(1 << z) - 1 - y)     # {ty}: a TMS cache's flipped row
         if self.fetcher.miss_alive(miss, url):
             return None
@@ -621,6 +638,66 @@ class Imagery:
             self.disk.forget(miss)
         self._count(src.name + ":net")
         return data
+
+    def _download_pack(self, src, z, x, y):
+        """A pack source's tile: its pack (tilepack.py) fetched as one request and every tile in it written to disk (a
+        missing one as a 404 marker), one fetch per pack at a time; None if there is no tile there."""
+        (pz, px, py), _ = tilepackmod.pack_of(z, x, y, src.pack)
+        key = (src.name, pz, px, py, "pack")
+        with self._lock:
+            lock = self._export_locks.setdefault(key, threading.Lock())
+        with lock:
+            path, miss = self._paths(src, z, x, y)
+            data = self.disk.read(path)         # (another tile of the pack fetched it meanwhile)
+            if data is not None:
+                self._count(src.name + ":disk")
+                return data
+            url = src.url.format(z=pz, px=px, py=py)
+            if self.fetcher.miss_alive(miss, url):
+                return None
+            kind = getattr(self._local, "kind", "demand")
+            try:
+                r = self.fetcher.get(url, kind=kind)
+            except netfetch.NotFound:           # no pack there (open sea, outside it): every tile of it a miss
+                for i in range((1 << src.pack) ** 2):
+                    _, mm = self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))
+                    os.makedirs(os.path.dirname(mm), exist_ok=True)
+                    open(mm, "wb").close()
+                    self.disk.wrote(mm, 0)
+                self._count(src.name + ":404")
+                return None
+            except netfetch.FetchError as e:
+                deferred = kind not in ("demand", "urgent") and isinstance(e, _DEFERRED)
+                self._count(src.name + (":deferred" if deferred else ":skipped" if isinstance(e, netfetch.HostUnavailable)
+                                        else ":error"))
+                raise ImageryError(f"imagery fetch failed: {url}: {e}", deferred,
+                                   unavailable=isinstance(e, netfetch.HostUnavailable)) from None
+            try:
+                _, _, _, k, tiles = tilepackmod.parse(r.body)
+            except tilepackmod.PackError as e:
+                raise ImageryError(f"bad {src.name} pack {url}: {e}") from None
+            with self._lock:
+                self.fetch_ms.append(r.elapsed * 1000)
+                del self.fetch_ms[:-2000]
+            out = None
+            for i in range((1 << k) ** 2):
+                tz, tx, ty = tilepackmod.tile_at(pz, px, py, k, i)
+                tp, mm = self._paths(src, tz, tx, ty)
+                b = tiles.get(i)
+                os.makedirs(os.path.dirname(tp), exist_ok=True)
+                if b is None:
+                    open(mm, "wb").close()
+                    self.disk.wrote(mm, 0)
+                    continue
+                tmp = f"{tp}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as f:
+                    f.write(b)
+                staging.replace_cached(tmp, tp)
+                self.disk.wrote(tp, len(b))
+                if (tx, ty) == (x, y):
+                    out = b
+            self._count(src.name + ":net")
+            return out
 
     def _download_export(self, src, z, x, y):
         """An export source's tile: its parent (src.export levels up) fetched as one image and split into
@@ -749,6 +826,8 @@ class Imagery:
         source writes 4 ** export tiles (raw: _download_export). The caller fetches a source's tiles and stops at the
         first that had any."""
         for src in self.chain:
+            if zw > src.max_view_zoom:
+                continue
             z = min(zw, src.max_zoom)
             p = self.fetcher.policy(netfetch.host_of(src.url))
             if z < src.min_zoom:
@@ -954,6 +1033,8 @@ class Imagery:
             return
         zw = zoom_for(float(lat[1, 1]), t)
         for k, src in enumerate(self.chain):
+            if zw > src.max_view_zoom:
+                continue
             z = min(zw, src.max_zoom)
             if z < src.min_zoom or src.lazy:    # (a lazy source's tiles: only warm() fetches them)
                 continue
@@ -1139,7 +1220,10 @@ class Imagery:
                     bs, bw, bn, be = src.bounds     # the regional chain: their per-tile loop cost the far field)
                     if la < bs - pad or la > bn + pad or lo < bw - pad or lo > be + pad:
                         continue
-                z = min(zoom_for(float(la), texel_m), src.max_zoom)     # (each point's: a route spans latitudes)
+                zp = zoom_for(float(la), texel_m)
+                if zp > src.max_view_zoom:
+                    continue
+                z = min(zp, src.max_zoom)     # (each point's: a route spans latitudes)
                 if z < src.min_zoom:
                     continue
                 k = src.export
@@ -1585,6 +1669,8 @@ class Imagery:
         fast.require(108, "imagery tile_warp")
         for i, src in enumerate(self.chain):
             last = i == len(self.chain) - 1
+            if zw > src.max_view_zoom:
+                continue
             z = min(zw, src.max_zoom)
             if z < src.min_zoom or (skip_lazy and src.lazy):
                 continue
