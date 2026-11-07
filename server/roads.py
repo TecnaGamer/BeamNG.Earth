@@ -5517,6 +5517,7 @@ MAXHEIGHT_ON = os.environ.get("BNE_MAXHEIGHT", "on" if os.environ.get("BNE_INTER
 MAXHEIGHT_NEAR_M = 4.0      # m from a tagged stretch's line a crossing takes its limit (the road's own line: ~0)
 MAXHEIGHT_MIN_M = 2.0       # limits outside [MIN, MAX] are mapping errors (a car park's 2.1 m is real; 0.45 is not)
 MAXHEIGHT_MAX_M = 9.0
+MAXHEIGHT_EXTEND_M = float(os.environ.get("BNE_MAXHEIGHT_EXTEND", "30"))   # m a limit carries on along its road (one underpass)
 
 
 def maxheight_lines(feats):
@@ -5535,8 +5536,14 @@ def maxheight_lines(feats):
             # (only where the road is on the ground: a limit mapped along a stretch that is itself a bridge is the
             # headroom over it, not under it; the Mitchell Freeway's 4.9 m way runs on over Wellington Street, whose
             # deck then cleared the street by 4.9 m, 2026-11-07)
+            # (carried MAXHEIGHT_EXTEND_M on along the road either side: one limit is posted for an underpass, but mapped
+            # often on the way under one of its decks only; Murray Street's 4.5 m stops under the west carriageway of
+            # the Mitchell Freeway, the east one then needing 6 m and digging the street, 2026-11-07)
+            L = _feature_len_m(feats, int(f))
+            ext = MAXHEIGHT_EXTEND_M / L if L > 0 else 0.0
+            a2, b2 = max(0.0, float(a) - ext), min(1.0, float(b) + ext)
             for ga, gb in ground_ranges(level_ranges(feats, int(f))):
-                lo_, hi_ = max(float(a), ga), min(float(b), gb)
+                lo_, hi_ = max(a2, ga), min(b2, gb)
                 if hi_ - lo_ <= MIN_PART:
                     continue
                 for part in feats.parts(int(f)):
@@ -5548,6 +5555,17 @@ def maxheight_lines(feats):
                             out.append((np.asarray(r, np.float64)[:, :2], v))
     feats.__dict__["_maxheight_lines"] = out
     return out
+
+
+def _feature_len_m(feats, i):
+    """m along feature i's first ring (lon / lat, lon scaled by cos lat). Pure given feats."""
+    for part in feats.parts(i):
+        for ring in part:
+            r = np.asarray(ring, np.float64)
+            if len(r) >= 2:
+                c = math.cos(math.radians(float(np.mean(r[:, 1]))))
+                return float(np.hypot(np.diff(r[:, 0]) * c, np.diff(r[:, 1])).sum() * 111320.0)
+    return 0.0
 
 
 class Headroom:

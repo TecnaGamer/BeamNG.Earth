@@ -30,24 +30,32 @@ flow over and under the street bridges smooth at 80 km/h.
 
 ## Known issues (for the PR)
 
-1. **Ramp grades by speed.** On- and off-ramps use one grade limit along their length. They should allow more
-   grade change near the slow road they join and less as they leave the freeway (a design speed falling along
-   the ramp).
+1. **Ramp grades by speed.** A slip road now eases from its link limits (7 %, K 12) to a street's (10 %, K 5) over
+   the last `BNE_RAMP_EASE` (60 m) before the street it meets. Still to do: stricter limits (the freeway's) as it
+   leaves the freeway.
 2. **Headroom over railways.** Decks over tracks keep the road headroom; real ones are often higher (overhead
    wires), and railway generation itself lays the tracks higher than expected. Left as is for now.
-3. **Untagged streets keep 6 m.** Where `maxheight` is mapped on only part of a street (Murray Street under the
-   east carriageway), the untagged part needs 6 m and is dug up to ~0.6 m.
-4. Being worked on (Perth, in game 2026-11-07):
-   - a slight step where a freeway deck meets the terrain;
-   - George Street between Wellington and Murray rises slightly and falls back before the Murray intersection;
-   - George Street from Murray to Hay: a lump in the Murray intersection, a dip, then steep mounds up to a car
-     park entrance, lumpy after;
-   - Murray Street west of the freeway held flat for ~50 m, then rising sharply (the natural climb is gentler).
+3. **Partly mapped height limits.** A limit is carried 30 m on along its road either side (`BNE_MAXHEIGHT_EXTEND`)
+   to cover the whole underpass when it is mapped under one deck only; a street with no limit at all keeps 6 m.
+4. **Banked roads merging.** Where a slip road merges into a banked carriageway, each is banked on its own, and the
+   ground under the overlap follows one of them: the other's edge can be rough.
+
+Fixed after the in-game check of 2026-11-07 (offline, to be checked in game):
+- Slip roads on the ground had the freeway's limits (5 %, K 30): they were classed as "motorway", not links.
+- A slip road meeting a street at grade is held to the ground at the junction itself (`BNE_CW_JUNCTION_W` 500),
+  not to its smoothed ground: George Street was dug up to 3.4 m with mounds (max grade 49 % -> 18 %, no dig over
+  1 m), Murray Street west of the freeway held flat 50 m then climbing 21 % (now on its ground, max 8 %).
+- Junction pads (BNE_JUNCTION_PAD) skip a freeway's own merges and diverges: a flat pad there stood out of the
+  low side of the banked lanes as a disc of dirt.
+- The fill behind the walls under a freeway deck takes the lowest deck over it, from that deck's own profile, 0.3 m
+  under its underside: under the twin decks at Murray Street the higher one's fill stood through the lower deck in
+  2 m steps.
+- A street under a freeway deck is dug `BNE_CW_STREET_DIG` (0.2 m) at most before the deck rises (was 1.5 m).
 
 ## Roadmap
 
-1. Fix the anomalies above (item 4).
-2. Ramp grade limits by design speed along the ramp (known issue 1).
+1. Banked merges (known issue 4).
+2. Ramp limits leaving the freeway (known issue 1).
 3. **Interchange control points** (prototype outside the repo, `wip_tools/icp`): build the interchange as a
    frame of points from the OSM layer (crossings with their clearances, junctions shared, edges where it joins
    the network locked to the terrain), bound each point by the grade limits from the most to the least

@@ -345,7 +345,7 @@ def _cw_half(q):
     return float(q[6]) if len(q) > 6 else 5.0
 CW_MAX_DIG_M = 2.5      # m a carriageway is lowered at most under another road's deck (the deck is low for the rest)
 CW_DIP_UNDER = os.environ.get("BNE_CW_DIP_UNDER", "on") != "off"   # a carriageway under a later-built deck dips toward it
-CW_STREET_DIG_M = float(os.environ.get("BNE_CW_STREET_DIG", "1.5"))   # m a street under a carriageway deck dips before the deck rises (99: never rises, as before)
+CW_STREET_DIG_M = float(os.environ.get("BNE_CW_STREET_DIG", "0.2"))   # m a street under a carriageway deck dips before the deck rises (99: never rises, as before)
 CW_UNDER_PROFILE = os.environ.get("BNE_CW_UNDER_PROFILE", "on") != "off"   # a street deck clears a carriageway at its solved profile
 CW_NONFAM_TRUSTED = os.environ.get("BNE_CW_NONFAM_TRUSTED", "on") != "off"   # a street deck's ends over a carriageway at the street's own level
 CW_NONFAM_MIN_RISE = 0.5   # x its clearance: a street deck's ends this far over a carriageway already bound it (less: the deck rises)
@@ -354,12 +354,19 @@ CW_DIG_FLOOR = os.environ.get("BNE_CW_DIG_FLOOR", "off") == "on"   # a carriagew
 # depth; a carriageway aims this much over it where nothing pulls against it. The user 2026-11-07: "6m of real
 # headroom ... otherwise we use OSM data", replacing a 6 m road-over-road floor, 4-5 m under the girders)
 CLEAR_AIM_M = float(os.environ.get("BNE_CLEAR_AIM", "0.5"))
+CW_STREET_RISE_M = 2.0     # m a street's own ground at a crossing may stand over its level read past the deck
+RAMP_EASE_M = float(os.environ.get("BNE_RAMP_EASE", "60"))   # m from a street a slip road eases to a street's limits (0: off)
+RAMP_SLOW_GRADE = 0.10      # a slip road's steepest grade at the street it meets (a secondary road's)
+RAMP_SLOW_K = 5.0           # its K there (m per 1 % of grade change: ~40 km/h)
+CW_JUNCTION_W = float(os.environ.get("BNE_CW_JUNCTION_W", "500"))   # weight holding a ramp to the ground where it meets a street at grade (0: off)
+CW_JUNCTION_NEAR_M = 3.0    # m from a street's end a ramp's sample is at that junction
 CW_PREF_W = float(os.environ.get("BNE_CW_PREF_W", "10.0"))   # weight pulling a carriageway to the full clearance (ground's 0.2; 10: the clearance before a dug street, the user 2026-11-07)
 CW_PEER_SHARE = os.environ.get("BNE_CW_PEER_SHARE", "on") != "off"   # a carriageway region solved once per process, mapped into each planner's frame
 UNDER_WALLS_ON = os.environ.get("BNE_UNDER_WALLS", "on") != "off"   # abutment walls beside streets under a carriageway's deck (CW_ON)
 UNDER_WALL_MIN_M = 2.5      # m the deck's underside stands over the street at least for walls
 UNDER_WALL_MAX_SPAN_M = 45.0    # m: a longer main span is a viaduct on piers, no abutment walls under it
 UNDER_WALL_PAST_M = 1.0     # m past the deck's edge the walls run along the street
+UNDER_WALL_GAP_M = 0.3      # m the fill behind an under-deck wall stays under the deck's underside (the terrain's 2 m cells)
 UNDER_WALL_BACK_M = 6.0     # m behind the wall the ground is held at the underside
 CW_TWIN_W = float(os.environ.get("BNE_CW_TWIN_W", "0"))   # weight pulling a divided road's two carriageways to one height (ground 0.2; 0: off)
 CW_TWIN_HALF_M = 5.0   # m half width a carriageway needs to count (a ramp mapped as a motorway is narrower)
@@ -1449,6 +1456,12 @@ def junction_pads(plans, specs, nodes=None):
             b_n = 0.0 if p.bank is None else float(np.interp(arc, s, p.bank)) * sgn     # (toward the branch's left)
             info.append((j, arc, sgn, avail, np.array([px_, py_]), z_n, grade, pad_class_w(specs[j]), b_n))
         if len(info) < 2 or len({plans[i[0]].rid for i in info}) < 2:
+            continue
+        # (a freeway's merge or diverge, only its carriageways and slip roads: they are solved together, held equal at
+        # the node, each banked; a flat pad there stood out of the low side of the banked lanes as a disc of dirt,
+        # the Mitchell Freeway in Perth, 2026-11-07)
+        if CW_ON and all(_cw.family(str(getattr(specs[i[0]], "cls", "")) + ("_link" if _is_link(specs[i[0]]) else ""))
+                         is not None for i in info):
             continue
         if len(info) == 2 and float(info[0][4] @ info[1][4]) < -math.cos(math.radians(PAD_FACE_DEG[0])) * \
                 math.hypot(*info[0][4]) * math.hypot(*info[1][4]):
@@ -2541,8 +2554,9 @@ class _Planner:
                 if UNDER_SEA_ON and z >= floor:
                     target = max(target, floor)
                 if os.environ.get("BNE_CW_DEBUG"):
-                    log.debug("grading: CWDIP at %s: road %.1f trusted %.1f deck %.1f -> %.1f", np.round(pt), z, tl,
-                              deck, target)
+                    _la, _lo, _ = self.frame.enu_to_geodetic(np.array([pt[0]]), np.array([pt[1]]), 0.0)
+                    log.debug("grading: CWDIP at %.6f,%.6f: road %.1f trusted %.1f deck %.1f -> %.1f", float(_la[0]),
+                              float(_lo[0]), z, tl, deck, target)
                 if target < z - 0.1:
                     requirements.append((i, sc, z - target))
                     xs_floor.append((np.asarray(pt, f64), target, _road_fids(i, lines, [ground[g][3] for g in gids],
@@ -2713,7 +2727,12 @@ class _Planner:
         c = self._cell_enu(k)
         out, seen = [], set()
         nb = len(c["bridges"])
-        items = [(ln, False, cls, gid[0], 0.0, float(h)) for (ln, h, cls), gid in zip(c["ground"], c["ground_ids"])]
+        # (a slip road on the ground as a link, with a link's limits, as its decks are: as "motorway" it had the
+        # freeway's 5 % and K 30 and could not climb from under the Mitchell Freeway to George Street, which it
+        # dragged 1-3 m down, 2026-11-07)
+        glink = c.get("ground_link", [False] * len(c["ground"]))
+        items = [(ln, False, cls + "_link" if lk and cls and not str(cls).endswith("_link") else cls, gid[0], 0.0,
+                  float(h)) for (ln, h, cls), gid, lk in zip(c["ground"], c["ground_ids"], glink)]
         items += [(ln, True, cls, fid, float(lv), float(h))
                   for ln, cls, fid, lv, h in zip(c["bridges"], c.get("bridge_cls", [None] * nb),
                                                  c.get("bridge_ids", [None] * nb), c.get("bridge_levels", [1.0] * nb),
@@ -2841,8 +2860,11 @@ class _Planner:
                     continue            # (bounding boxes apart: most pairs, 5 s of a Perth pair of cells)
                 for c in roadsmod._crossings([b], [xy]):
                     q = np.asarray(c[2], f64)
-                    dz = self._cw_z_near(q)
-                    if dz is None:
+                    # (this deck's own profile: the nearest one within 3 m was at times the other carriageway's, up to
+                    # 2 m higher at Murray Street)
+                    got = self._cw_z_at(b, q[None])
+                    dz = float(np.ravel(got)[0]) if got is not None else self._cw_z_near(q)
+                    if dz is None or not np.isfinite(dz):
                         continue
                     under = dz - depth - ROAD_LIFT
                     # where along the street, and how far it runs under the deck (its width over the crossing angle)
@@ -2862,8 +2884,9 @@ class _Planner:
                         cut = np.full((len(xy) - 1, 6), np.nan) if p.cut is None else np.asarray(p.cut, f64).copy()
                     for col in (0, 3):
                         cut[on, col] = p.half
-                        cut[on, col + 1] = np.fmax(cut[on, col + 1], under) if np.isfinite(cut[on, col + 1]).any() \
-                            else under
+                        # (the lowest underside over it: where two carriageways' decks meet over the street, the
+                        # higher one's fill stood through the lower deck in 2 m steps, over Murray Street 2026-11-07)
+                        cut[on, col + 1] = np.fmin(cut[on, col + 1], under - UNDER_WALL_GAP_M)
                         cut[on, col + 2] = p.half + UNDER_WALL_BACK_M
             if cut is not None:
                 p.cut = cut
@@ -3056,6 +3079,34 @@ class _Planner:
         streets = [(np.asarray(line, f64)[:, :2], float(half)) for c in cs for line, half, gc in c["ground"]
                    if _cw.family(gc) is None and gc not in _xs.PATHS and gc not in UNGRADED and len(line) >= 2]
 
+        # (where a ramp meets a street at grade, its end or a node along it: held to the ground there, read over a few
+        # metres, not the chain's smoothed ground. Held only by its smoothed ends, a Mitchell Freeway slip road through
+        # George Street to Murray Street lay 2-3 m under both, and both streets were dragged down to it: George dug
+        # 3.4 m with mounds, Murray flat for 50 m then a 20 % climb, the user 2026-11-07)
+        if CW_JUNCTION_W > 0 and streets:
+            sends = np.array([e for st in streets for e in (st[0][0], st[0][-1])], f64)
+            for n, (xy, s_, pi, br, raw) in enumerate(samples):
+                d = np.hypot(xy[:, None, 0] - sends[None, :, 0], xy[:, None, 1] - sends[None, :, 1]).min(1)
+                at = np.flatnonzero((d <= CW_JUNCTION_NEAR_M) & ~br)
+                for j in at:
+                    # (the ground at the junction itself, the street's: read along the slip road it was its slope's
+                    # middle, 1 m under George Street)
+                    data[n]["t"][j] = float(raw[j])
+                    data[n]["w"][j] = max(float(data[n]["w"][j]), CW_JUNCTION_W)
+                # a slip road eases from its link's limits to a street's towards the street it meets (slowing for
+                # it), RAMP_EASE_M; a carriageway keeps its own (the user 2026-11-07: "more grade change allowed as
+                # they approach slower roads and less ... as they leave the high speed roads")
+                if os.environ.get("BNE_CW_DEBUG") and len(at):
+                    _la, _lo, _ = self.frame.enu_to_geodetic(xy[at[:1], 0], xy[at[:1], 1], 0.0)
+                    log.debug("grading: CWJN at %.6f,%.6f: classes %s, %d junctions", float(_la[0]), float(_lo[0]),
+                              sorted({str(p_[3]) for p_ in chains[n][0]}), len(at))
+                if len(at) and RAMP_EASE_M > 0 and any(str(p_[3]).endswith("_link") for p_ in chains[n][0]):
+                    ds = np.min(np.abs(s_[:, None] - s_[at][None, :]), axis=1)
+                    f = np.clip(1.0 - ds / RAMP_EASE_M, 0.0, 1.0)
+                    g0, k0 = float(data[n]["grade"]), float(data[n]["K"])
+                    data[n]["grade"] = g0 + f * max(RAMP_SLOW_GRADE - g0, 0.0)
+                    data[n]["K"] = k0 - f * max(k0 - RAMP_SLOW_K, 0.0)
+
         def nearest(n, part_i, q):
             xy, s, pi, br, raw = samples[n]
             cand = np.flatnonzero(pi == part_i)
@@ -3092,6 +3143,11 @@ class _Planner:
                         tl = _xs.trusted_under(q, _xs.dir_at(sl, q), 8.0, zat)
                         if tl is None:
                             continue
+                        # (a street climbing under the deck: its own ground at the crossing, when higher than the level
+                        # read past the deck, at most CW_STREET_RISE_M more (a DEM's embankment under a deck is not
+                        # the street's). From the low side alone, Murray Street, rising 1.4 m under the Mitchell
+                        # Freeway's two carriageways, was dug 0.7 m under the west one, 2026-11-07)
+                        tl = max(tl, min(zraw(q), tl + CW_STREET_RISE_M))
                         # (low ground: the deck clears the street at its own level, a dug road there is under the water
                         # table; elsewhere the street dips CW_STREET_DIG_M at most and the deck rises for the rest: with
                         # no bound the Mitchell Freeway stayed flat 2 m under its own ground and dug Murray and
@@ -3109,6 +3165,10 @@ class _Planner:
                         # (hard: the street's headroom over it dipped its share; aimed for: CLEAR_AIM_M more over it
                         # where it lies, which nothing else pulls against, the user 2026-11-06/07)
                         hc = clear - CW_HEADROOM_M + float(self._headroom_at(q)[0])
+                        if os.environ.get("BNE_CW_DEBUG"):
+                            _la, _lo, _ = self.frame.enu_to_geodetic(np.array([q[0]]), np.array([q[1]]), 0.0)
+                            log.debug("grading: CWST at %.6f,%.6f: street %.1f (raw %.1f) dig %.1f clear %.2f",
+                                      float(_la[0]), float(_lo[0]), tl, zraw(q), dig, hc)
                         data[n]["lo"][near_] = np.maximum(data[n]["lo"][near_], tl - dig + hc)
                         data[n]["t"][near_] = np.maximum(data[n]["t"][near_], tl + hc + CLEAR_AIM_M)
                         data[n]["w"][near_] = np.maximum(data[n]["w"][near_], CW_PREF_W)
@@ -3670,6 +3730,7 @@ class _Planner:
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
         bridges, ground_l, ends, end_of, bcls, ground_ids, bids, blevels, bhalf = [], [], [], [], [], [], [], [], []
+        ground_link = []
         items = sorted(parts.items())
         if items:               # (the frame's conversion once for every part: it is per call)
             allr = np.concatenate([ring for _k, (ring, _sp, _lv) in items])
@@ -3691,6 +3752,7 @@ class _Planner:
                 bcls.append(cls + "_link" if cls is not None and _is_link(sp) else cls)
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
+                ground_link.append(_is_link(sp))
                 ground_ids.append((fid, j, profile_sigma(sp), MEDIAN_M if sp.kind in roadsmod.BUILT else DIRT_MEDIAN_M))
         rail_xy, rail_gxy = [], []
         if rail or rail_g:
@@ -3702,7 +3764,7 @@ class _Planner:
                 out_.append(rxy[k0:k0 + len(ring)])
                 k0 += len(ring)
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
-                "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids,
+                "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "end_of": end_of,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
 

@@ -324,8 +324,12 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
         # (a little weight everywhere: a chain all on bridges or under them stays defined, near the ground's line)
         ch = _Chain(c["t"], np.maximum(np.asarray(c["w"], np.float64), W_MIN), float(c.get("lam", LAMBDA)), h)
         ch.length = float(c.get("length", LENGTH_BIAS))
-        ch.g = float(c["grade"]) * h
-        ch.c = h * h / (float(c["K"]) * 100.0)
+        # (grade and K per sample, or one each: a slip road eases to a street's limits towards its slow end)
+        n_ = len(c["t"])
+        gr = np.broadcast_to(np.asarray(c["grade"], np.float64), (n_,))
+        kk = np.broadcast_to(np.asarray(c["K"], np.float64), (n_,))
+        ch.g = np.maximum(gr[:-1], gr[1:]) * h if n_ >= 2 else np.zeros(0)
+        ch.c = h * h / (kk[1:-1] * 100.0) if n_ >= 3 else np.zeros(0)
         ch.lo = None if c.get("lo") is None else np.asarray(c["lo"], np.float64)
         ch.hi = None if c.get("hi") is None else np.asarray(c["hi"], np.float64)
         cs.append(ch)
@@ -419,13 +423,13 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None):
             d1 = np.diff(z)
             for k in np.flatnonzero(np.abs(d1) > c.g * 1.02 + 1e-3):
                 if k not in c.rows1:
-                    c.rows1[int(k)] = float(np.sign(d1[k]) * c.g)
+                    c.rows1[int(k)] = float(np.sign(d1[k]) * c.g[k])
                     changed = c.dirty = True
             if c.n >= 3:
                 d2 = z[:-2] - 2 * z[1:-1] + z[2:]
                 for k in np.flatnonzero(np.abs(d2) > c.c * 1.05 + 1e-4):
                     if k not in c.rows2:
-                        c.rows2[int(k)] = float(np.sign(d2[k]) * c.c)
+                        c.rows2[int(k)] = float(np.sign(d2[k]) * c.c[k])
                         changed = c.dirty = True
             if c.lo is not None:
                 for i in np.flatnonzero(z < c.lo - 0.02):
