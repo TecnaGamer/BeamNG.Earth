@@ -1,0 +1,296 @@
+{
+  "bne_au_cb_monument": {
+    "name": "bne_au_cb_monument",
+    "mapTo": "bne_au_cb_monument",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "306bf01b-5c75-51bc-baff-48ca36642a08",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.2,
+          0.2,
+          0.21,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_cb_woodland": {
+    "name": "bne_au_cb_woodland",
+    "mapTo": "bne_au_cb_woodland",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b25e37ef-47e9-585d-ba1e-40d7d7e91213",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.3,
+          0.31,
+          0.28,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_cb_surfmist": {
+    "name": "bne_au_cb_surfmist",
+    "mapTo": "bne_au_cb_surfmist",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a7833b32-bf00-5324-837c-0deba6c3b4ed",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.89,
+          0.88,
+          0.83,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_cb_basalt": {
+    "name": "bne_au_cb_basalt",
+    "mapTo": "bne_au_cb_basalt",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5ad4722b-38ae-5935-95a7-07ee91a069d9",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.43,
+          0.43,
+          0.44,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_cb_shale": {
+    "name": "bne_au_cb_shale",
+    "mapTo": "bne_au_cb_shale",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0a2155cf-8cce-536e-b5c5-c14c4a19f31b",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.73,
+          0.74,
+          0.71,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_cb_dune": {
+    "name": "bne_au_cb_dune",
+    "mapTo": "bne_au_cb_dune",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f483af65-3b4f-50a8-907b-9f2e265f99dd",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_colorbond.png",
+        "baseColorFactor": [
+          0.64,
+          0.62,
+          0.56,
+          1.0
+        ],
+        "metallicFactor": 0.35,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_pal_pine": {
+    "name": "bne_au_pal_pine",
+    "mapTo": "bne_au_pal_pine",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3186af6a-0239-5c09-ad3b-03bfe7d92cb5",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_paling.png",
+        "baseColorFactor": [
+          0.78,
+          0.6,
+          0.4,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_pal_pine_rail": {
+    "name": "bne_au_pal_pine_rail",
+    "mapTo": "bne_au_pal_pine_rail",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "60066c41-778e-5a13-975f-d356e022da42",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6240000000000001,
+          0.48,
+          0.32000000000000006,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_pal_grey": {
+    "name": "bne_au_pal_grey",
+    "mapTo": "bne_au_pal_grey",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "149b68a6-9b9b-56c1-9686-b1436d62ad82",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_paling.png",
+        "baseColorFactor": [
+          0.56,
+          0.52,
+          0.47,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_pal_grey_rail": {
+    "name": "bne_au_pal_grey_rail",
+    "mapTo": "bne_au_pal_grey_rail",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "17033aaf-7b5a-543d-a784-a8873f624e5d",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.44800000000000006,
+          0.41600000000000004,
+          0.376,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_conc": {
+    "name": "bne_au_conc",
+    "mapTo": "bne_au_conc",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a8a935e0-8bda-5249-8cd2-584f997e7747",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.66,
+          0.66,
+          0.63,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_steel": {
+    "name": "bne_au_steel",
+    "mapTo": "bne_au_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "102c7ad6-c285-5a00-a33a-28a6b351306e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.55,
+          0.57,
+          0.58,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_insulator": {
+    "name": "bne_au_insulator",
+    "mapTo": "bne_au_insulator",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f935c40c-9eba-5c8e-b48a-ad80f90af9ba",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.72,
+          0.74,
+          0.76,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

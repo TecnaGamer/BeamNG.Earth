@@ -40,7 +40,8 @@ import staging
 
 log = logging.getLogger("earthd.surface")
 
-VERSION = 2   # fork: 2 = Australian lawns (LAWN_SHARE_AU); (nothing keys on it yet: for whoever caches masks)
+VERSION = 3   # fork: 3 = Australian roundabout islands filled with mown grass (ISLAND_GRASS_AU); 2 = Australian lawns
+              # (LAWN_SHARE_AU); (nothing keys on it yet: for whoever caches masks)
 # (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
 # default, and the one every block had before (an all-zero sample falls to the later layer on ties,
 # docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
@@ -604,6 +605,7 @@ def photo_ghosts(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=Non
 # Roundabout island fill (Chavagnes-en-Paillers 2026-10-28): the photo often still shows the old through-road
 # across the grass and as a dark E–W band on the approaches; carriageway paint leaves gaps so the scar stays visible.
 ISLAND_GRASS = (76, 98, 58)     # muted grass when the photo's own greens are too few to sample
+ISLAND_GRASS_AU = (98, 120, 64)  # fork: mown couch / kikuyu, the colour of Australia's roundabout lawns (2g - r - b = 78)
 # Outset past the ring centreline so the fill covers the whole roundabout footprint (island + carriageways); paint_lines
 # then redraws the asphalt on top and only the island centre stays grass.
 ISLAND_OUTSET_M = 8.0
@@ -716,11 +718,19 @@ def _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn=None, wi
     return out
 
 
-def _fill_island_photos(rgb, polys):
-    """rgb with each roundabout footprint filled: median of its greener photo pixels, else ISLAND_GRASS. Covers the
-    old through-road scar; carriageways paint over the ring afterwards."""
+def _fill_island_photos(rgb, polys, au=False):
+    """rgb with each roundabout footprint filled: median of its greener photo pixels, else ISLAND_GRASS (fork: au: always
+    ISLAND_GRASS_AU, mown green: Queensland's dry, brown or bare island photos made a bare island, photo_lawns turning
+    its lawn to dirt). Covers the old through-road scar; carriageways paint over the ring afterwards."""
     if not polys:
         return rgb
+    if au:
+        out = rgb.copy()
+        im = Image.fromarray(out)
+        draw = ImageDraw.Draw(im)
+        for poly in polys:
+            draw.polygon(poly, fill=ISLAND_GRASS_AU)
+        return np.asarray(im)
     out = rgb.copy()
     im = Image.fromarray(out)
     draw = ImageDraw.Draw(im)
@@ -755,7 +765,8 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
         # the rounded corners of curbless junctions (roadcorners.py) in the asphalt's colour, under the roads
         rgb = photo_corners(rgb, frame, x0, y0, size, corner_pads(frame, x0, y0, size, feats_list, urban_fn, widths))
         filled = _fill_island_photos(np.ascontiguousarray(rgb, np.uint8),
-                                     _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths))
+                                     _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths),
+                                     au=bool(climate.in_australia(frame.lat0, frame.lon0)))      # fork
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         return filled

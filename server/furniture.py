@@ -29,7 +29,15 @@ LAMP_SPACING_NA = {"trunk": (70.0, True), "primary": (70.0, True), "secondary": 
 # Washington DC 60-150 ft (DDOT), Columbus' post tops 150-170 ft, Chicago's davits opposite or staggered
 LAMP_SPACING_NA_DENSE = dict(LAMP_SPACING_NA, residential=(46.0, False), unclassified=(50.0, False),
                              living_street=(40.0, False))
-LAMP_REGIONS = {"US": "na", "CA": "na"}
+LAMP_REGIONS = {"US": "na", "CA": "na", "AU": "au"}      # fork: AU
+# fork: Australia (LAMP_REGIONS "au"; Energex / Brisbane City Council practice, AS/NZS 1158): arterials lit both sides
+# (staggered, ~35-40 m between lamps), collectors one side 45-50 m, local streets 60 m on the street's utility poles (every
+# other pole, pole_lamp) or on posts where the lines are underground; the shapes stay the stock cobra-head arm and post.
+LAMP_SPACING_AU = {"trunk": (70.0, True), "primary": (70.0, True), "secondary": (45.0, False), "tertiary": (50.0, False),
+                   "residential": (60.0, False), "unclassified": (70.0, False), "living_street": (50.0, False)}
+# ... and the concrete / steel poles (AU_POLE_CONC, a mod shape: tools/build_au_streetscape.py) of the main roads' lines, where
+# the suburbs' are timber (the stock pole)
+AU_CONC_POLE_CLASSES = {"trunk", "primary", "secondary"}
 # US states' own practice (the state DOTs' lighting policies and their largest cities' design manuals, researched
 # 2026-10-27: .claude/work/street_lighting_research.md):
 # - the Mountain West and Oklahoma light single-family local streets at their intersections, mid-block only past
@@ -70,6 +78,8 @@ def _na(region):
 
 def lamp_spacing(region, dense=False):
     """The class -> (spacing, both) table of a lamp region (dense: a city's core)."""
+    if region == "au":      # fork
+        return LAMP_SPACING_AU
     if region == "na:sparse":
         return LAMP_SPACING_NA_SPARSE_DENSE if dense else LAMP_SPACING_NA_SPARSE
     if _na(region):
@@ -88,6 +98,13 @@ POLE_OFF_M = 2.4            # m beyond the carriageway's edge
 END_CLEAR_M = 4.0           # m kept clear of a run's ends (corners, crosswalk ramps)
 CLEAR_OTHER_M = 1.5         # m kept off another road's carriageway
 G_LAMP, G_POLE = "streetlight", "pole"
+G_POLE_CONC = "au_pole_conc"        # fork: a concrete pole (Australia's main roads); the stock timber pole elsewhere
+
+
+def pole_group(region, cls):
+    """fork: the group of a utility pole along a road of class cls: Australia's main roads' concrete pole, else the stock
+    pole (G_POLE)."""
+    return G_POLE_CONC if region == "au" and cls in AU_CONC_POLE_CLASSES else G_POLE
 
 
 def _h01(*vals):
@@ -538,7 +555,9 @@ G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA
 # underground share of each country's low-voltage km. Countries not listed: mostly overhead (the US, Canada, Japan,
 # Australia, most of the world). Old figures: the shares have only grown since.
 BURIED_LV = {"NL": 1.0, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30, "FR": 0.27,
-             "PT": 0.19, "AT": 0.15, "ES": 0.14}
+             "PT": 0.19, "AT": 0.15, "ES": 0.14,
+             "AU": 0.25}    # fork: an estimate: Australia's older suburbs are overhead on timber poles, its newer estates
+                            # underground (Energex and Ergon report roughly a quarter to a third of their LV network)
 
 
 def buried_share(country):
@@ -562,6 +581,8 @@ POLE_LAMP_EVERY = {"trunk", "primary", "secondary"}
 
 def pole_lamp(cls, k, region):
     """Does the k-th utility pole along a road of class cls carry a lamp? (the sparse states: every third)"""
+    if region == "au":      # fork: Australia: a lamp on every second pole of the local streets (60-80 m), every one on main roads
+        return cls in POLE_LAMP_EVERY or k % 2 == 0
     if cls in POLE_LAMP_EVERY or not _na(region):
         return True
     return k % (3 if region == "na:sparse" else 2) == 0
@@ -597,6 +618,9 @@ COLLISION_BOXES = {
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
     G_POLE: (9.2, ((-0.260, -0.300, -1.000, 0.260, 0.300, 7.772),
                    (-0.900, -0.348, 7.772, 0.901, 0.300, 8.000))),
+    # fork: the concrete pole's own (tools/build_au_streetscape.py: a 0.17 m shaft tapering to 0.095 m, a 1.9 m cross-arm at 7.7 m)
+    G_POLE_CONC: (9.2, ((-0.200, -0.200, -0.300, 0.200, 0.200, 7.600),
+                        (-0.950, -0.200, 7.600, 0.950, 0.200, 9.200))),
     G_POLELAMP: (1.1, ((-2.891, -0.110, -0.365, 0.039, 0.110, 0.699),)),
     G_SIGNAL: (9.4, ((-0.277, -0.327, -0.397, 0.263, 0.296, 9.365),)),
     G_STOP: (3.0, ((-0.460, -0.028, -0.987, 0.436, 0.029, 3.004),)),
@@ -957,8 +981,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     yaw = _yaw(out[0], out[1])
-                    pole = [G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                            round(yaw, 1), 1.0, 9.2, 0.0]
+                    pole = [pole_group(region, spec.cls), round(float(q[0]), 2), round(float(q[1]), 2),
+                            round(float(p[2]), 2), round(yaw, 1), 1.0, 9.2, 0.0]    # (fork: pole_group)
                     if not clearance.clear(pole):
                         if wires is not None and len(run_poles) > 1:
                             wires.extend(_own_spans(run_poles, box))
@@ -1055,8 +1079,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 continue
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
-            pole = [G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                    round(yaw, 1), 1.0, 9.2, 0.0]
+            pole = [pole_group(region, spec.cls), round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                    round(yaw, 1), 1.0, 9.2, 0.0]       # (fork: pole_group)
             if not clearance.clear(pole):
                 if len(run) > 1 and wires is not None:
                     wires.extend(_own_spans(run, box))
@@ -1071,7 +1095,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
-    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]
+    rows = [r for r in rows if r[0] in (G_POLE, G_POLE_CONC, G_SIGNAL, G_STOP, G_YIELD) or clearance.clear(r)]    # fork
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 
 
