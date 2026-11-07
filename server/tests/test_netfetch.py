@@ -979,6 +979,31 @@ class OfflineTest(unittest.TestCase):
         s.tile_pool.shutdown(wait=True)
         s.hm_pool.shutdown(wait=True)
 
+    def test_retry_degraded_recovers_tiles_when_hosts_healthy(self):
+        f, clock, sleep, tr = fetcher()
+        s = self.server(f)
+        c = self.connection(s)
+        s.connections.add(c)
+        a = s.new_anchor(test_server.LAT, test_server.LON)
+        s.anchors[a.id] = a
+        ck = (a.id, ff.Tile(3, 0, 0).key)
+        s.degraded.add(ck)
+        s.tiles[ck] = earthd.TileInfo((0, 0, 0), 0, None, 0, None, 100, 0.1, None, None, 0, 0)
+        c.shown[ck] = (0, 0, 256, 256)
+        f.host(EOX).breaker.trip(60.0)
+        s.retry_degraded()
+        self.assertIn(ck, s.degraded)
+        self.assertIn(ck, s.tiles)
+        clock.advance(61.0)
+        tr.script[EOX] = [(200, {}, b"ok", 0)]
+        f.get(url(EOX))
+        s.retry_degraded()
+        self.assertNotIn(ck, s.degraded)
+        self.assertNotIn(ck, s.tiles)
+        self.assertNotIn(ck, c.shown)
+        s.tile_pool.shutdown(wait=True)
+        s.hm_pool.shutdown(wait=True)
+
     def test_expired_marker_counts_while_the_host_is_down(self):
         f, clock, sleep, tr = fetcher()
         with tempfile.TemporaryDirectory() as d:
