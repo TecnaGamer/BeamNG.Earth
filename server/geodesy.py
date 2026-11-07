@@ -42,6 +42,48 @@ def ecef_to_geodetic(x, y, z):
     return _rust3("enu_to_geodetic", x, y, z, _ZERO, _EYE)
 
 
+def segment_lengths(lonlat):
+    """WGS84 geodesic metres between consecutive lon/lat vertices (Vincenty).
+
+    Use ellipsoidal distances to locate source lane sections along merged roads. Vectorized over
+    the source edges; near-antipodal edges (not normal road geometry) fall back
+    to the mean-sphere distance if the inverse iteration cannot converge.
+    """
+    ll = np.radians(np.asarray(lonlat, np.float64)[:, :2])
+    if len(ll) < 2:
+        return np.empty(0, np.float64)
+    u = np.arctan((1. - F) * np.tan(ll[:, 1]))
+    su, cu = np.sin(u), np.cos(u)
+    s1, s2, c1, c2 = su[:-1], su[1:], cu[:-1], cu[1:]
+    longitude = (np.diff(ll[:, 0]) + np.pi) % (2 * np.pi) - np.pi
+    lam = longitude.copy()
+    for _ in range(200):
+        sl, cl = np.sin(lam), np.cos(lam)
+        ss = np.hypot(c2 * sl, c1 * s2 - s1 * c2 * cl)
+        cs = s1 * s2 + c1 * c2 * cl
+        sigma = np.arctan2(ss, cs)
+        sa = np.divide(c1 * c2 * sl, ss, out=np.zeros_like(ss), where=ss > 1e-15)
+        ca2 = np.maximum(0., 1. - sa * sa)
+        mid = cs - np.divide(2 * s1 * s2, ca2, out=np.zeros_like(ss), where=ca2 > 1e-15)
+        mid = np.where(ca2 > 1e-15, mid, 0.)
+        c = F / 16. * ca2 * (4. + F * (4. - 3. * ca2))
+        updated = longitude + (1. - c) * F * sa * (sigma + c * ss * (mid + c * cs * (-1. + 2 * mid * mid)))
+        converged = np.abs(updated - lam) <= 1e-12
+        if converged.all():
+            break
+        lam = updated
+    u2 = ca2 * (A * A - B * B) / (B * B)
+    aa = 1. + u2 / 16384. * (4096. + u2 * (-768. + u2 * (320. - 175. * u2)))
+    bb = u2 / 1024. * (256. + u2 * (-128. + u2 * (74. - 47. * u2)))
+    ds = bb * ss * (mid + bb / 4. * (cs * (-1. + 2 * mid * mid)
+                    - bb / 6. * mid * (-3. + 4 * ss * ss) * (-3. + 4 * mid * mid)))
+    out = B * aa * (sigma - ds)
+    if not converged.all():
+        h = np.sin(np.diff(ll[:, 1]) / 2.)**2 + np.cos(ll[:-1, 1]) * np.cos(ll[1:, 1]) * np.sin(longitude / 2.)**2
+        out[~converged] = (2 * 6371008.8 * np.arcsin(np.sqrt(np.clip(h, 0., 1.))))[~converged]
+    return out
+
+
 class EnuFrame:
     """Local East-North-Up frame tangent to the ellipsoid at (lat0, lon0, h0)."""
 

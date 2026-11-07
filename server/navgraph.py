@@ -311,6 +311,12 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             full.append(order[-1])
             xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
             names = [marks[v] for v in full]
+            import lanesections
+            section_width = None
+            if lanesections.profile(feats, i):
+                la, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
+                section_width = roads.taper_widths(spec.width, roads.road_tapers(
+                    feats, urban_fn, widths, left_hand)[i], lon, la)
             # this road's edge attributes
             mid = 0.5
             driv = DRIVE[spec.cls][0]
@@ -374,6 +380,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
+                if section_width is not None:
+                    half += float(max(section_width[j], section_width[j + 1]) - spec.width) / 2.
                 if in_tunnel:
                     # (the AI keeps TUNNEL_AI_WALL_M off the tube's walls, roadmesh.tunnel's road + shoulders: with the
                     # road's half width it ran 5.3 m off its line at 56 mph into the Fort Pitt Tunnel's portal frame)

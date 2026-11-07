@@ -189,6 +189,55 @@ class HighwayLanesTest(unittest.TestCase):
             self.assertEqual(roads.road_specs(f)[0].lanes, 2, mode)
             self.assertEqual(f.attrs["lane_source"][0], "", mode)
 
+    def test_merged_highway_recovers_agreeing_current_way_fragments(self):
+        for reverse in (False, True):
+            f = highway([[(0, 0), (240, 0)]], direction=-1 if reverse else 1)
+            if reverse:
+                f.lonlat[:] = f.lonlat[::-1]
+            coords = {wid: highway([[(a, 0), (b, 0)]]).lonlat
+                      for wid, a, b in ((98, 0, 83), (99, 83, 155), (100, 155, 240))}
+            tags = {wid: {"lanes": 3, "lane_hw": "motorway", "osm_oneway": "yes"} for wid in coords}
+            tags[1] = {}             # the old source way still exists, without a count
+            osmtags.join(f, tags, lambda need: coords)
+            sp = roads.road_specs(f)[0]
+            self.assertEqual(sp.lanes, 3)
+            self.assertEqual(f.attrs["lane_source"][0], "osm-chain")
+            self.assertEqual(roads.lane_layout(sp)[1], 3)
+
+    def test_source_way_outside_the_touching_cell_still_supplies_mainline_count(self):
+        import mapdata
+        f = highway([[(0, 0), (240, 0)]])
+        ll = f.lonlat
+        bounds = (ll[0, 0], ll[0, 1] - .001, (ll[0, 0] + ll[-1, 0]) / 2, ll[0, 1] + .001)
+        md = mapdata.MapData.__new__(mapdata.MapData)
+        md.osmtags = mock.Mock()
+        md.osmtags.cell.return_value = ({1: {"lanes": 3}}, [])
+        md.osmtags.highway_geometry.return_value = {}
+        md._osm_roads(f, mock.Mock(bounds=lambda: bounds), ({}, []), "demand")
+        queried = md.osmtags.cell.call_args.args[0]
+        self.assertGreaterEqual(queried[2], ll[-1, 0])
+        self.assertEqual(roads.road_specs(f)[0].lanes, 3)
+        self.assertEqual(f.attrs["lane_source"][0], "osm-way")
+
+    def test_chain_evidence_rejects_gaps_conflicts_ramps_and_opposite_flow(self):
+        for mode in ("gap", "conflict", "ramp", "opposing", "ambiguous"):
+            f = highway([[(0, 0), (240, 0)]])
+            tags = {98: {"lanes": 3, "lane_hw": "motorway", "osm_oneway": "yes",
+                         "_coords": highway([[(0, 0), (120, 0)]]).lonlat},
+                    99: {"lanes": 3, "lane_hw": "motorway", "osm_oneway": "yes",
+                         "_coords": highway([[(140 if mode == 'gap' else 120, 0), (240, 0)]]).lonlat}}
+            if mode == "conflict":
+                tags[99]["lanes"] = 2
+            elif mode == "ramp":
+                tags[99]["lane_hw"] = "motorway_link"
+            elif mode == "opposing":
+                tags[99]["osm_oneway"] = "-1"
+            elif mode == "ambiguous":
+                tags[100] = dict(tags[99], lanes=2)
+            osmtags.join(f, tags)
+            self.assertEqual(f.attrs["lane_source"][0], "", mode)
+            self.assertEqual(roads.road_specs(f)[0].lanes, 2, mode)
+
     def test_enrichment_refresh_discards_ground_and_structure_specs(self):
         f = chain()
         self.assertEqual(roads.road_specs(f)[0].lanes, 3)

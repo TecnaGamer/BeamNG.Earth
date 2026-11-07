@@ -228,21 +228,33 @@ def gores(roads_):
         for end in (0, -1):
             e = p[end]
             hit = None
+            sample, _station = _resample(p if end == 0 else p[::-1], 1.0)
+            look = sample[min(30, len(sample) - 1)]
             for mf, ms, mp in majors:
                 if mf == fid:
                     continue
                 _, d = _nearest(mp, e)
-                if d < 1.5 and (hit is None or d < hit[2]):
-                    hit = (ms, mp, d)
+                # A placement-aware slip lane starts outside the reference
+                # line. Choose the through continuation, not a section ending
+                # at the fork or the opposite carriageway across the median.
+                dz = abs(float(mp[np.argmin(np.linalg.norm(mp[:, :2] - e[:2], axis=1)), 2] - e[2]))
+                score = d + _nearest(mp, look)[1]
+                if d <= ms.width / 2 + 1.5 and dz < 2. and (hit is None or score < hit[2]):
+                    hit = (ms, mp, score)
             if hit is None:
                 continue
             ms, mp, _ = hit
+            import roads
+            # Gores meet the painted driving edges; shoulders remain outside
+            # the channelizing lines and must not swallow the painted wedge.
+            mw = roads.lane_layout(ms)[0]
+            rw = roads.lane_layout(sp)[0]
             q, s = _resample(p if end == 0 else p[::-1], 1.0)
             q = q[s <= GORE_REACH_M]
             gaps, sides = [], []
             for x in q:
                 m, d = _nearest(mp, x)
-                gaps.append(d - ms.width / 2 - sp.width / 2)
+                gaps.append(d - mw / 2 - rw / 2)
                 sides.append((x[:2] - m) / max(d, 1e-9))
             gaps = np.asarray(gaps)
             inside = np.flatnonzero((gaps >= GORE_MIN_M) & (gaps <= GORE_MAX_M))
@@ -252,19 +264,20 @@ def gores(roads_):
             k1 = k0
             while k1 + 1 < len(q) and GORE_MIN_M <= gaps[k1 + 1] <= GORE_MAX_M:
                 k1 += 1
-            eL = np.array([np.r_[q[k][:2] - sides[k] * sp.width / 2, q[k][2]] for k in range(k0, k1 + 1)])
+            eL = np.array([np.r_[q[k][:2] - sides[k] * rw / 2, q[k][2]] for k in range(k0, k1 + 1)])
             out.append(("channel", GORE_CHANNEL_W, eL))
             # the wedge itself, paved (surface.photo_roads / paint_roads): its middle line and half width per point
-            mids = np.array([np.r_[q[k][:2] - sides[k] * (sp.width / 2 + gaps[k] / 2), q[k][2]]
+            mids = np.array([np.r_[q[k][:2] - sides[k] * (rw / 2 + gaps[k] / 2), q[k][2]]
                              for k in range(max(k0 - 3, 0), k1 + 1)])
             out.append(("fill", np.array([gaps[k] / 2 + 0.5 for k in range(max(k0 - 3, 0), k1 + 1)]), mids))
             # chevrons (MUTCD 3B.25): a V across the wedge, its point toward the traffic coming at it: at an exit
             # (the ramp starts at the shared end) toward that end, at an entrance away from it
-            up = -1.0 if end == 0 else 1.0
+            exit_ = (end == 0) == (getattr(sp, "dir", 0) >= 0)
+            up = -1.0 if exit_ else 1.0
             for k in range(k0, k1 + 1, int(GORE_STEP_M)):
-                a = np.r_[q[k][:2] - sides[k] * sp.width / 2, q[k][2]]
+                a = np.r_[q[k][:2] - sides[k] * rw / 2, q[k][2]]
                 m, _ = _nearest(mp, q[k])
-                b = np.r_[m + sides[k] * ms.width / 2, q[k][2]]
+                b = np.r_[m + sides[k] * mw / 2, q[k][2]]
                 kk = min(k + 1, len(q) - 1)
                 t = q[kk][:2] - q[max(kk - 1, 0)][:2]
                 t = t / max(float(np.hypot(*t)), 1e-9)
