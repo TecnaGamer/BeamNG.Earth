@@ -880,12 +880,10 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
             # Limit the artificial damage alone, not the real climb. Integrating clipped TOTAL height differences
             # then smoothing the lost height back over 40 m made local pits into long hills/dips. Two local sweeps
             # bound neighbouring damage values without accumulating an offset down the road. Keep the ends pinned.
-            damage[0] = 0.0
-            for i in range(1, len(damage)):
-                damage[i] = min(max(damage[i], damage[i - 1] - cap), damage[i - 1] + cap)
-            damage[-1] = 0.0
-            for i in range(len(damage) - 2, -1, -1):
-                damage[i] = min(max(damage[i], damage[i + 1] - cap), damage[i + 1] + cap)
+            # (native: dirtsteps.rs, the same two sweeps; Python loops per sample before)
+            import fast
+            fast.require(157, "dirt_step_clamp")
+            damage = np.asarray(fast._ef.dirt_step_clamp(np.ascontiguousarray(damage, np.float64), float(cap)))
         zs = zs + damage
     # thin to VERTEX_STEP (the profile stays smooth between: linear in the grading pass); a minor dirt road keeps
     # every sample, or its potholes would be smoothed away by the linear stretches between the vertices
