@@ -2,6 +2,14 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### Fixed
+- **Guard rails ending short of a bridge**: a guard rail mapped along a bridge's approach that stops a few metres before
+  the deck (the real one meets the bridge's parapet) is now run on to the bridge rail's line, so there is no gap and no
+  end cap between the approach rail and the bridge's own rail (the overpass at Jüri, Estonia: 8.7 m and 7.7 m gaps,
+  the rail ends 2 m outside the bridge's line).
+
 ## 1.8.2 beta (2026-11-05)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help

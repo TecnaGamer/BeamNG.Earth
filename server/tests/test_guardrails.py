@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import unittest
+import unittest.mock
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -304,6 +305,34 @@ class GuardrailForestTest(unittest.TestCase):
         built = [r for r in rows if r[1] < 100.0 and r[2] > 0]
         self.assertAlmostEqual(max(r[1] for r in built) + guardrails.MODULE_LENGTH_M / 2, 100.0, delta=0.6)
         self.assertLess(first[1] - 1.5 - 100.0, 1.5)
+
+    def test_an_approach_rail_that_stops_short_of_the_deck_is_run_on_to_the_bridge_rail(self):
+        """OSM's approach rails end a few metres before the bridge (Jüri's overpass: 7 m of nothing, and the end 2 m
+        outside the bridge rail's line). The rail runs on to the deck's end; BNE_RAIL_GAP=off leaves the gap."""
+        decks, parapets = self.deck_fixture()
+        line = guardrails.BRIDGE_EDGE_OFFSET_M + 4.0
+        mapped = [[106.0, 7.0], [160.0, 9.0]]           # (starts 6 m past the deck's end, 2.8 m off the rail's line)
+
+        def approach(rows):
+            return sorted((r for r in rows if r[1] > 100.0 and r[2] > 0), key=lambda r: r[1])
+
+        rows = self.rows_for(mapped, 14.0, decks, parapets, bridge_rails=True)
+        got = approach(rows)
+        self.assertTrue(got)
+        self.assertLess(got[0][1] - 100.0, guardrails.MODULE_LENGTH_M)      # the first module begins at the deck's end
+        self.assertAlmostEqual(got[0][2], line, delta=0.3)                  # on the bridge rail's line there
+        self.assertNotIn(1, [r[0] for r in got])                            # no cap where it joins the bridge's rail
+        for a, b in zip(got, got[1:]):                                      # a continuous chain, no gap on the way
+            self.assertLess(b[1] - a[1], guardrails.MODULE_STEP_M + 0.6)
+        with unittest.mock.patch.object(guardrails, "GAP_CLOSE_ON", False):
+            off = approach(self.rows_for(mapped, 14.0, decks, parapets, bridge_rails=True))
+        self.assertGreater(off[0][1] - 100.0, 5.0)                          # as before: it starts where it was mapped
+        self.assertIn(1, [r[0] for r in off])
+        # Not run on: ends far short of the deck, or standing well away from its rail
+        for far in ([[120.0, 6.0], [160.0, 7.0]], [[106.0, 11.0], [160.0, 12.0]]):
+            with self.subTest(mapped=far):
+                got = approach(self.rows_for(far, 14.0, decks, parapets, bridge_rails=True))
+                self.assertGreater(got[0][1] - 100.0, guardrails.GAP_CLOSE_M - 3.0 if far[0][0] > 110 else 5.0)
 
     def test_approach_rail_on_a_fill_stands_at_the_road_level_not_on_the_slope(self):
         deck = {"n": [[0.0, 0.0, 20.0], [100.0, 0.0, 26.0]], "w": 8.0}
