@@ -147,6 +147,22 @@ class FarGenerationTest(unittest.TestCase):
         import farfield
         self.tile=farfield.Tile(1,0,0)
 
+    def test_fine_terrain_uses_cliff_fallback_and_honors_off(self):
+        import farfield
+        self.anchor.zooms[-1]=15
+        for level in (-1,0,1):
+            for enabled in (False,True):
+                with self.subTest(level=level,enabled=enabled):
+                    self.conn.distant_cliff_faces=enabled
+                    tile=farfield.Tile(level,0,0)
+                    with patch.object(self.s,'anchor_q',return_value=None), \
+                         patch.object(self.s,'grader_for',return_value=None), \
+                         patch.object(farfield,'build_tile',return_value=built()), \
+                         patch('farcliffs.geometry',return_value=None) as kernel:
+                        info=self.s.make_tile(self.anchor,tile)
+                    self.assertEqual(kernel.call_count,int(enabled))
+                    self.assertEqual(info.cliff_faces,enabled,'fine tiles must also be eligible for off-to-on upgrades')
+
     def test_off_skips_cliff_kernel_and_on_rebuilds_cached_photo_safely(self):
         import farfield
         import matslots

@@ -2,7 +2,7 @@
 
 No extra geometry, colliders, downloads, or live native shape changes. Keep the
 terrain's exact positions/triangles and skirts; split vertices only at material
-and dominant-plane UV boundaries. Its existing LOD/streaming controls the cost.
+and coherent wall-chart boundaries. Its existing LOD/streaming controls the cost.
 """
 import math
 import logging
@@ -15,9 +15,14 @@ import clifftypes
 
 MIN_SLOPE_DEG = 48.0
 MIN_FACE_DROP_M = 8.0
+REFERENCE_GRID_M = 8.0  # scale the drop gate down on finer ground; do not open an L0 gap
+CHART_MIN_PROJECTION = 0.35  # at most ~3:1 horizontal compression within a wall chart
+CHART_SMOOTH_COS = math.cos(math.radians(25.0))
 MAX_GRID_SPACING_M = 128.0
 WORLD_M_PER_DEG = 111320.0
-EXPOSED_CLASSES = (20, 30, 60)  # shrub, grass, bare; never forest/crops/cities/water
+EXPOSED_CLASSES = (20, 30, 60)  # shrub, grass, bare
+FOREST_CLASS = 10
+FOREST_WALL_MIN_SLOPE_DEG = 75.0  # overhead canopy can classify a sheer rim wall as forest
 MATERIALS = ('bne_far_cliff_strata_blend', 'bne_far_cliff_canyon_blend')
 PHOTO_BLUR_M = 48.0  # low-frequency colour, not trees/roads stretched down the face
 PHOTO_BLEND = 1.0  # macro albedo comes from the same terrain photo, without a fixed rose cast
@@ -40,7 +45,8 @@ def classify(built, frame, surface=None):
 
     Known exposed land qualifies globally. Missing land cover qualifies only in
     the explicit dry plateau appearance region, so distant canyon coverage does
-    not depend on near-road land-cover prefetch. Known exclusions still win.
+    not depend on near-road land-cover prefetch. Sheer forest-labelled rim walls
+    qualify too; ordinary forest slopes and other known exclusions still win.
     """
     p, t = built.positions, built.tris
     labels = np.full(len(t), -1, np.int8)
@@ -51,7 +57,12 @@ def classify(built, frame, surface=None):
     # A vertical skirt has zero XY area. Never texture the hidden stitching faces.
     z = normal[:,2]
     steep = (z > 1e-5) & (np.hypot(normal[:,0],normal[:,1]) > z*math.tan(math.radians(MIN_SLOPE_DEG)))
-    steep &= np.ptp(vertices[:,:,2],axis=1) >= MIN_FACE_DROP_M
+    # A fixed eight-metre drop rejects the same wall as soon as LOD refines
+    # it into small triangles. Use each face's footprint, including adaptive
+    # triangles, while retaining the coarse-tile rejection of minor relief.
+    span = np.max(np.linalg.norm(vertices[:,:,:2]-np.roll(vertices[:,:,:2],1,axis=1),axis=2),axis=1)
+    minimum_drop = MIN_FACE_DROP_M*np.minimum(1.0,span/(REFERENCE_GRID_M*math.sqrt(2)))
+    steep &= np.ptp(vertices[:,:,2],axis=1) >= minimum_drop
     index = np.flatnonzero(steep)
     if not len(index):
         return labels
@@ -60,8 +71,65 @@ def classify(built, frame, surface=None):
     classes = np.zeros(len(index),np.uint8)
     if surface is not None:
         classes,_ = surface.classes(lat,lon,fetch=False)  # cached only; never fetches/waits
-    labels[index] = clifftypes.far_families(lat, lon, classes, EXPOSED_CLASSES)
+    # WorldCover observes the canopy from above: trees on a rim can label the
+    # nearly vertical wall below as forest. Keep ordinary forest slopes excluded,
+    # but allow its existing terrain faces to carry the lightweight rock surface.
+    # This never permits crops, buildings, snow, water or wetlands.
+    families = clifftypes.far_families(lat, lon, classes, (*EXPOSED_CLASSES, FOREST_CLASS))
+    forest_wall = np.hypot(normal[index,0],normal[index,1]) >= z[index]*math.tan(math.radians(FOREST_WALL_MIN_SLOPE_DEG))
+    families[(classes == FOREST_CLASS) & ~forest_wall] = -1
+    labels[index] = families
     return labels
+
+
+def projection_axes(positions, tris, labels):
+    """Keep a smooth connected wall on one chart, rather than switching at 45Â°.
+
+    Flood from the best-conditioned faces. Sharp folds, material changes and
+    faces nearly parallel to the chosen projection stop a chart. Shared faces
+    then retain identical UVs/tangents without adding geometry or shader layers.
+    """
+    cross = np.cross(positions[tris[:,1]]-positions[tris[:,0]],
+                     positions[tris[:,2]]-positions[tris[:,0]])
+    horizontal = cross[:,:2]
+    length = np.linalg.norm(horizontal,axis=1)
+    direction = horizontal/np.maximum(length[:,None],1e-12)
+    dominant = np.abs(direction[:,0]) >= np.abs(direction[:,1])
+    active = np.flatnonzero(labels >= 0)
+    if not len(active):
+        return dominant
+    # Three directed slots per face, paired by the undirected vertex edge.
+    edges = np.sort(
+        np.stack((tris[active],np.roll(tris[active],-1,axis=1)),axis=2).reshape(-1,2),axis=1)
+    order = np.lexsort((edges[:,1],edges[:,0]))
+    paired = np.flatnonzero(np.all(edges[order[1:]] == edges[order[:-1]],axis=1))
+    a,b = order[paired],order[paired+1]
+    fa,fb = active[a//3],active[b//3]
+    smooth = (labels[fa] == labels[fb]) & (np.einsum('ij,ij->i',direction[fa],direction[fb]) >= CHART_SMOOTH_COS)
+    neighbours = np.full((len(tris),3),-1,np.int32)
+    a,b,fa,fb = a[smooth],b[smooth],fa[smooth],fb[smooth]
+    neighbours[fa,a%3] = fb
+    neighbours[fb,b%3] = fa
+    assigned = labels < 0
+    # Stable sorting makes equal-condition faces deterministic.
+    confidence = np.abs(np.abs(direction[active,0])-np.abs(direction[active,1]))
+    for seed in active[np.argsort(-confidence,kind='stable')]:
+        if assigned[seed]:
+            continue
+        axis = dominant[seed]
+        component = 0 if axis else 1
+        sign = 1 if direction[seed,component] >= 0 else -1
+        assigned[seed] = True
+        stack = [seed]
+        while stack:
+            face = stack.pop()
+            dominant[face] = axis
+            for other in neighbours[face]:
+                if other < 0 or assigned[other] or sign*direction[other,component] < CHART_MIN_PROJECTION:
+                    continue
+                assigned[other] = True
+                stack.append(other)
+    return dominant
 
 
 def terrain_colors(texture, uv, size, *, blur_m=PHOTO_BLUR_M):
@@ -156,8 +224,7 @@ def geometry(built, frame, terrain_uv, terrain_uv2, terrain_material, surface=No
     lat,lon,elev = frame.enu_to_geodetic(*world.T)
     # Shared with near cliffs: metres in the geographic chart, true elevation.
     x,y = lon*WORLD_M_PER_DEG,lat*WORLD_M_PER_DEG
-    normals = np.cross(p[t[:,1]]-p[t[:,0]],p[t[:,2]]-p[t[:,0]])
-    use_y = np.abs(normals[:,0]) >= np.abs(normals[:,1])
+    use_y = projection_axes(p,t,labels)
     groups = [(0,labels < 0,None)]
     for family in (0,1):
         for axis in (False,True):

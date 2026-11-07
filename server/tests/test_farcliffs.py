@@ -52,6 +52,53 @@ class FarCliffsTest(unittest.TestCase):
         b.size=2048
         self.assertTrue((fc.classify(b,self.frame)==-1).all(),'coarsest horizon stays photo terrain')
 
+    def test_sheer_forest_rim_wall_has_fallback_without_opening_other_exclusions(self):
+        for frame,family in ((self.frame,1),(geodesy.EnuFrame(31.8,-106.5),0)):
+            for slope_deg,expected in ((70,-1),(80,family),(85,family)):
+                b=built(slope=np.tan(np.deg2rad(slope_deg)))
+                labels=fc.classify(b,frame,Cover(10))
+                self.assertTrue((labels[:-2]==expected).all())
+                self.assertTrue((labels[-2:]==-1).all())
+                for excluded in (40,50,70,80,90):
+                    self.assertTrue((fc.classify(b,frame,Cover(excluded))==-1).all())
+
+    def test_fine_faces_do_not_lose_coverage_when_lod_refines(self):
+        # The same inclined surface, with smaller triangles, must still qualify.
+        for spacing in (0.5,1,2,4,8,16):
+            b=built(slope=1.5)
+            factor=spacing/16
+            b.positions[:,:2]*=factor
+            b.positions[:,2]=1000+(b.positions[:,2]-1000)*factor
+            b.size*=factor
+            for frame,cover,family in ((self.frame,None,1),(geodesy.EnuFrame(31.8,-106.5),Cover(60),0)):
+                with self.subTest(spacing=spacing,family=family):
+                    labels=fc.classify(b,frame,cover)
+                    self.assertTrue((labels[:-2]==family).all())
+                    self.assertTrue((labels[-2:]==-1).all())
+
+    def test_smooth_diagonal_wall_has_shared_normal_uvs_across_triangles(self):
+        b=built()
+        x,y=b.positions[:81,:2].T
+        b.positions[:81,2]=1000+2*(x+y)+8*np.sin(x/32)*np.sin(y/32)
+        t=b.tris[:-2]
+        cross=np.cross(b.positions[t[:,1]]-b.positions[t[:,0]],b.positions[t[:,2]]-b.positions[t[:,0]])
+        old_axes=np.abs(cross[:,0]) >= np.abs(cross[:,1])
+        self.assertEqual(len(np.unique(old_axes)),2,'fixture crosses the old 45-degree projection switch')
+        labels=np.r_[np.ones(len(t),np.int8),[-1,-1]]
+        axes=fc.projection_axes(b.positions,b.tris,labels)
+        self.assertEqual(len(np.unique(axes[:-2])),1,'one continuous wall must have one chart')
+        from unittest.mock import patch
+        with patch.object(fc,'classify',return_value=labels):
+            out=fc.geometry(b,self.frame,b.planar,b.detail_uvs,'terrain')
+        ids=np.unique(out['tris'][out['tri_materials']==2])
+        self.assertEqual(len(ids),81,'no duplicated wall vertices at triangle chart boundaries')
+        self.assertEqual(len(out['tris']),len(b.tris))
+        self.assertTrue(np.isfinite(out['uvs2']).all())
+        # A perpendicular wall still chooses its well-conditioned projection.
+        for slope_axis,expected in ((0,True),(1,False)):
+            q=built();q.positions[:,2]=1000+2*q.positions[:,slope_axis]
+            self.assertTrue((fc.projection_axes(q.positions,q.tris,labels)[:-2]==expected).all())
+
     def test_export_preserves_geometry_and_collision_exactly(self):
         b=built()
         rock=fc.geometry(b,self.frame,b.planar,b.detail_uvs,'terrain')

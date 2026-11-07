@@ -4081,7 +4081,7 @@ class Server:
         t2 = time.perf_counter()
         size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
                                     textured=material is not None, tex_px=self.tex_size(lvl),
-                                    cliff_frame=self.tile_where(anchor, tile)[0] if lvl > 0 and distant_cliffs else None,
+                                    cliff_frame=self.tile_where(anchor, tile)[0] if distant_cliffs else None,
                                     cliff_surface=self.surface,
                                     cliff_texture=os.path.join(self.out_dir, texture) if material else None,
                                     plain_path=os.path.splitext(path)[0] + "_plain.cdae")
@@ -4097,7 +4097,7 @@ class Server:
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources)
         info.tile = tile
-        info.cliff_faces = distant_cliffs or lvl <= 0
+        info.cliff_faces = distant_cliffs
         if cliff_upgrade:
             info.source = info.shape = source
         if is_global:
