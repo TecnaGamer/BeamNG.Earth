@@ -744,11 +744,91 @@ class GermanTownTest(unittest.TestCase):
         self.assertFalse(ts.kreisfreie("Börde", boerde))
 
     def test_the_small_line(self):
+        """An Ortsteil's Ortstafel: its Gemeinde with "Stadt", "Markt" or "Gemeinde" before it, and the Kreis under
+        that (VwV-StVO zu den Zeichen 310 und 311 Rn. 6; the user, 2026-11-07: Sarching's says "Gemeinde Barbing" and
+        "Landkreis Regensburg"); the Gemeinde's own village the Kreis only (Rn. 4), a kreisfreie Stadt none."""
         de = ts.Commune("Rüdesheim am Rhein", [], [], None, "x", "", "DE", county="Rheingau-Taunus-Kreis")
-        self.assertEqual(ts.village_sub("Assmannshausen", de, "Rüdesheim am Rhein"), "Rüdesheim am Rhein")
+        self.assertEqual(ts.village_sub("Assmannshausen", de, "Rüdesheim am Rhein"),
+                         "Stadt Rüdesheim am Rhein\nRheingau-Taunus-Kreis")
         self.assertEqual(ts.village_sub("Rüdesheim am Rhein", de, "Rüdesheim am Rhein"), "Rheingau-Taunus-Kreis")
         self.assertEqual(ts.village_sub("Grünau", de._replace(county="Zwickau"), ""), "Landkreis Zwickau")
         self.assertEqual(ts.village_sub("Ulm", de._replace(county="Ulm"), ""), "", "a kreisfreie Stadt: no Kreis")
+        lkr = de._replace(name="Barbing", county="Landkreis Regensburg")
+        self.assertEqual(ts.village_sub("Sarching", lkr, "Barbing"), "Gemeinde Barbing\nLandkreis Regensburg")
+        self.assertEqual(ts.village_sub("Sulzbach", lkr, "Donaustauf"), "Markt Donaustauf\nLandkreis Regensburg")
+        self.assertEqual(ts.village_sub("Mühlried", de._replace(county="Neuburg-Schrobenhausen"), "Schrobenhausen"),
+                         "Stadt Schrobenhausen\nLandkreis Neuburg-Schrobenhausen")
+        # (a Markt whose name has the word already: Markt Indersdorf's Ortsteile say "Markt Indersdorf")
+        self.assertEqual(ts.village_sub("Glonn", de._replace(county="Landkreis Dachau"), "Markt Indersdorf"),
+                         "Markt Indersdorf\nLandkreis Dachau")
+
+    def test_zeichen_310_face(self):
+        """Zeichen 310 in DIN lettering (D-DIN, the Condensed for a long name, as DIN 1451's Engschrift): the name,
+        then each of the small line's two lines (an Ortsteil's Gemeinde and its Kreis) as its own block of ink; a name
+        of German letters drawn as the font has them (ß kept), a Sorbian one with its accents drawn on its letters."""
+        self.assertEqual(ts._din(80).getname()[0], "D-DIN")
+        self.assertEqual(ts._din(80, narrow=True).getname()[0], "D-DIN Condensed")
+        self.assertEqual(ts.de_letters("Großmehring"), ("Großmehring", {}))
+        self.assertEqual(ts.de_letters("Köfering"), ("Köfering", {}))
+        letters, marks = ts.de_letters("Chóśebuz")
+        self.assertEqual(letters, "Chosebuz")
+        self.assertTrue(marks)
+        img = ts.face_image("Sarching", ts.G_ENTRY, country="DE", sub="Gemeinde Barbing\nLandkreis Regensburg")
+        self.assertEqual(img.size, (round(ts.plate_w("DE") * ts.FACE_PX_PER_M), round(ts.PLATE_H * ts.FACE_PX_PER_M)))
+        a = np.asarray(img)
+        w = a.shape[1]
+        ink = (a[:, round(0.06 * w):-round(0.06 * w)].sum(axis=2) < 100).any(axis=1)
+        ink[:round(0.06 * a.shape[0])] = ink[-round(0.06 * a.shape[0]):] = False     # (the border)
+        runs = int(np.sum(ink[1:] & ~ink[:-1]))
+        self.assertEqual(runs, 3, "the name and the two small lines")
+        long = ts.face_image("Pfaffenhofen an der Ilm", ts.G_ENTRY, country="DE", sub="Landkreis Pfaffenhofen an der Ilm")
+        self.assertEqual(long.size, img.size)
+
+    def test_stadt_or_markt(self):
+        """de_kind: Destatis' Städte and Märkte (data/de_gemeinden.json.gz) matched to Overture's names: its
+        abbreviations (a.d., i., St.) and suffixes left out, the Kreis with or without the word, a name's first word
+        when it alone is unique in its Kreis (Rohr i.NB, Rohr in Niederbayern); everything else a Gemeinde."""
+        self.assertEqual(ts.de_kind("Neutraubling", "Landkreis Regensburg"), "Stadt")
+        self.assertEqual(ts.de_kind("Barbing", "Landkreis Regensburg"), "Gemeinde")
+        self.assertEqual(ts.de_kind("Donaustauf", "Regensburg"), "Markt")
+        self.assertEqual(ts.de_kind("Pfaffenhofen an der Ilm", "Landkreis Pfaffenhofen an der Ilm"), "Stadt")
+        self.assertEqual(ts.de_kind("Neustadt an der Donau", "Landkreis Kelheim"), "Stadt")
+        self.assertEqual(ts.de_kind("Rohr in Niederbayern", "Landkreis Kelheim"), "Markt")
+        self.assertEqual(ts.de_kind("Pfaffenhofen", "Landkreis Heilbronn"), "Gemeinde")
+        self.assertEqual(ts.de_kind("Neustadt", "Landkreis Nirgendwo"), "Gemeinde", "no such Kreis: a Gemeinde")
+
+    def test_a_citys_stadtteil(self):
+        """A kreisfreie Stadt's Stadtteil: the city's name, "Stadtteil Harting" under it (Rn. 6's first form, the
+        name OSM's Ortstafel there has: "Regensburg (Stadtteil Harting)"); a Gemeinde's village its own name with the
+        Gemeinde and the Kreis under it."""
+        class Points:
+            def __init__(self, rows):          # (id, name, localities, lon, lat)
+                self.rows = rows
+                self.ids = np.array([r[0] for r in rows])
+                self.attrs = {"country": np.array(["DE"] * len(rows)), "name": np.array([r[1] for r in rows]),
+                              "localities": np.array([r[2] for r in rows])}
+
+            def __len__(self):
+                return len(self.rows)
+
+            def parts(self, i):
+                return [[np.array([[self.rows[i][3], self.rows[i][4]]])]]
+        xy = [[np.array([(0, 0), (2000, 0), (2000, 1000), (0, 1000)], np.float64)]]
+        ll = [[r / M for r in rings] for rings in xy]
+        xy2 = [[r + (3000.0, 0.0) for r in rings] for rings in xy]
+        ll2 = [[r / M for r in rings] for rings in xy2]
+        city = ts.Commune("Regensburg", xy, ll, None, "c-1", "", "DE", county="Regensburg")
+        barbing = ts.Commune("Barbing", xy2, ll2, None, "c-2", "", "DE", county="Landkreis Regensburg")
+        r = "region:r=Bayern|"
+        pts = Points([("p-1", "Regensburg", r + "county:k=Regensburg|locality:c-1=Regensburg", 500 / M, 500 / M),
+                      ("p-2", "Harting", r + "county:k=Regensburg|locality:h=Harting", 1500 / M, 500 / M),
+                      ("p-3", "Barbing", r + "county:l=Landkreis Regensburg|locality:c-2=Barbing", 3500 / M, 500 / M),
+                      ("p-4", "Sarching", r + "county:l=Landkreis Regensburg|locality:c-2=Barbing|locality:s=Sarching",
+                       4500 / M, 500 / M)])
+        v = ts.split_villages([city, barbing], lambda c: [pts])
+        self.assertEqual(sorted((c.name, c.sub) for c in v),
+                         [("Barbing", "Landkreis Regensburg"), ("Regensburg", ""),
+                          ("Regensburg", "Stadtteil Harting"), ("Sarching", "Gemeinde Barbing\nLandkreis Regensburg")])
 
     def test_austria(self):
         """Austria's Statutarstädte are its counties named without Bezirk; an Ortstafel's small line is the Gemeinde

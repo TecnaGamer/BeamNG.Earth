@@ -29,7 +29,10 @@ town sign shares (the mod's sign_town_body: two posts and the plate's back, tool
 face at the same spot turned round, on the body's back. The tile names its faces ("townsigns": group -> shape,
 texture, material); the mod's townsigns.lua makes each face's Material and puts face and body at one spot (trees.lua).
 """
+import functools
+import gzip
 import hashlib
+import json
 import logging
 import math
 import os
@@ -785,7 +788,10 @@ def split_villages(communes, points_of):
             sub = village_sub(name, c, gname)
             if gname.startswith("="):       # a city's Stadtteil: the city's name, the Stadtteil's under it
                 gname = gname[1:]
-                name, sub, local = gname, (name if name != gname else village_sub(gname, c)), own.get(gname, "")
+                part = name != gname
+                name, sub, local = gname, (name if part else village_sub(gname, c)), own.get(gname, "")
+                if part and c.country == "DE" and gname not in CITY_STATES:
+                    sub = "Stadtteil " + sub        # (VwV-StVO zu den Zeichen 310 und 311 Rn. 6: "Stadtteil Pasing")
             if c.country == "DE":
                 # (Lusatia's names are both already, "Cottbus - Chóśebuz": the German on the first line, the Sorbian
                 # on the second, as its Ortstafeln; the small line the German only)
@@ -928,12 +934,80 @@ def village_sub(name, commune, town=""):
         return commune.sub
     if commune.country != "DE":
         return ""
-    if town and name != town:
-        return town
     county = commune.county.split(" - ")[0]
-    if not county or county == name.split(" - ")[0]:
-        return ""
-    return county if re.search(r"kreis|Region|Stadtverband", county, re.IGNORECASE) else "Landkreis " + county
+    kreis = ("" if not county or county == name.split(" - ")[0] else
+             county if re.search(r"kreis|Region|Stadtverband", county, re.IGNORECASE) else "Landkreis " + county)
+    if town.startswith("="):            # (a city's Stadtteil: split_villages writes its small line)
+        return kreis
+    if town and name != town:
+        # an Ortsteil: its Gemeinde, "Stadt", "Markt" or "Gemeinde" before it, and the Kreis under that (VwV-StVO zu
+        # den Zeichen 310 und 311 Rn. 6; the user, 2026-11-07: Sarching's sign, "Gemeinde Barbing" and "Landkreis
+        # Regensburg"); a name with the word already as it is (Markt Indersdorf)
+        g = town.split(" - ")[0]
+        if not re.match(r"(Stadt|Markt|Gemeinde) ", g):
+            g = de_kind(g, county) + " " + g
+        return g + ("\n" + kreis if kreis else "")
+    return kreis
+
+
+# Germany's Städte and Märkte (tools/build_de_gemeinden.py, from Destatis' municipality directory GV100AD): an
+# Ortsteil's small line names its Gemeinde as "Stadt Schrobenhausen", "Markt Donaustauf", any other "Gemeinde Barbing"
+DE_GEMEINDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "de_gemeinden.json.gz")
+# the words a German place's key leaves out (de_key): the little words between a name's parts and Destatis' shortened
+# ones ("Pfaffenhofen a.d.Ilm" is Overture's "Pfaffenhofen an der Ilm", "Weil a.Rhein" "Weil am Rhein")
+DE_KEY_SKIP = {"an", "am", "der", "den", "dem", "die", "des", "im", "in", "bei", "ob", "unter", "vor", "auf", "und",
+               "zu", "a", "d", "i", "b", "o", "u", "v", "z"}
+DE_KREIS_WORDS = {"landkreis", "kreis", "stadtkreis", "regionalverband"}     # (de_kreis_key: Kreis or not)
+
+
+def de_key(name):
+    """A German Gemeinde's name as a key both Destatis' and Overture's spelling of it give: its first name only (the
+    Sorbian after " / " or " - ", Destatis' suffix after ", ": "Neutraubling, St"), lower case, its words without
+    DE_KEY_SKIP, "St." as "Sankt" (St. Englmar, Sankt Englmar)."""
+    words = re.findall(r"[^\W\d_]+", re.split(r", | / | - ", name)[0].lower())
+    return " ".join("sankt" if w == "st" else w for w in words if w not in DE_KEY_SKIP)
+
+
+def de_kreis_key(name):
+    """de_key of a Kreis without the word Kreis or Landkreis (Overture's "Landkreis Regensburg", Destatis'
+    "Regensburg"; a kreisfreie Stadt and the Landkreis of its name one key: their Gemeinden's names differ)."""
+    return " ".join(w for w in de_key(name).split() if w not in DE_KREIS_WORDS)
+
+
+@functools.lru_cache(maxsize=1)
+def _de_gemeinden():
+    """{de_kreis_key: {de_key: "Stadt" | "Markt"}} of DE_GEMEINDEN ({} without it: every Gemeinde a "Gemeinde")."""
+    try:
+        with gzip.open(DE_GEMEINDEN, "rt", encoding="utf-8") as fh:
+            rows = json.load(fh).get("rows", ())
+    except (OSError, ValueError) as e:
+        log.warning("town signs: %s: %s", DE_GEMEINDEN, e)
+        return {}
+    out = {}
+    for kreis, name, kind in rows:
+        out.setdefault(de_kreis_key(kreis), {})[de_key(name)] = "Stadt" if kind == "S" else "Markt"
+    return out
+
+
+def _shortened(short, full):
+    """Is the key short Destatis' shortening of the key full: the same first word, then only abbreviations (3 letters
+    at most) whose letters come in order in full's other words ("rohr nb", "rohr niederbayern")?"""
+    s, f = short.split(), full.split()
+    if len(s) < 2 or len(f) < 2 or s[0] != f[0] or any(len(w) > 3 for w in s[1:]):
+        return False
+    rest = iter("".join(f[1:]))
+    return all(ch in rest for ch in "".join(s[1:]))
+
+
+def de_kind(town, county):
+    """ "Stadt", "Markt" or "Gemeinde": what the German Gemeinde town (Overture's name) of the county (Overture's,
+    with or without Landkreis) is, by Destatis (_de_gemeinden; a name it shortens: _shortened)."""
+    by = _de_gemeinden().get(de_kreis_key(county or ""), {})
+    k = de_key(town)
+    got = by.get(k)
+    if got is None:
+        got = next((v for kk, v in sorted(by.items()) if _shortened(kk, k)), None)
+    return got or "Gemeinde"
 
 
 # The next place on an exit sign (Luxembourg's E,9b names it above the struck-through name, with an arrow): the
@@ -1788,8 +1862,34 @@ DE_BAND = ((18.71, 548.94), (772.30, 303.07), (884.19, 303.07), (882.68, 342.85)
            (18.71, 567.20))
 
 
+# Germany's lettering: DIN 1451 (VzKat; Mittelschrift, Engschrift where a name is long) as D-DIN and D-DIN Condensed
+# (Datto, SIL OFL 1.1: open DIN-like faces, not DIN 1451's own drawings), the server's own files
+DE_FONTS = tuple(os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "fonts", f)
+                 for f in ("D-DIN.ttf", "D-DINCondensed.ttf"))
+# the text D-DIN has every letter of (Latin-1: German's ä ö ü ß, French' and Danish' accents): drawn as the font draws
+# it; any other (Sorbian's ś, č, ł) its letters with their accents drawn on them (mark_text)
+DIN_TEXT = re.compile(r"^[\x20-\x7e\xa0-\xff]*$")
+
+
+@functools.lru_cache(maxsize=64)
+def _din(size, narrow=False):
+    """D-DIN (narrow: D-DIN Condensed) at size px; Pillow's own typeface (_font) without the file."""
+    from PIL import ImageFont
+    try:
+        return ImageFont.truetype(DE_FONTS[1 if narrow else 0], size)
+    except OSError:
+        return _font(size)
+
+
+def de_letters(text):
+    """(letters, marks) of a German sign's text: the text as it is where D-DIN has its letters (DIN_TEXT: Großmehring
+    keeps its ß), else mark_text's."""
+    return (text, {}) if DIN_TEXT.match(text) else mark_text(text)
+
+
 def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
-    """Germany's Zeichen 310 (G_ENTRY) / 311 (G_EXIT), above."""
+    """Germany's Zeichen 310 (G_ENTRY) / 311 (G_EXIT), above, in DIN lettering (_din); sub's lines (an Ortsteil's
+    Gemeinde, then its Kreis: village_sub) each a small line under the name."""
     from PIL import Image, ImageDraw
     w, h = round(plate_w("DE") * FACE_PX_PER_M), round(PLATE_H * FACE_PX_PER_M)
     sx, sy = w / 900.0, h / 600.0
@@ -1801,10 +1901,15 @@ def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
     pad_x, pad_y = 45 * sx, 40 * sy
 
     def fit(text, size, room_w):
-        """(font, its size, box) of text at size or smaller, as wide as room_w at most."""
-        letters, marks = mark_text(text)
+        """(font, its size, box) of text at size in D-DIN, else D-DIN Condensed at size or smaller, as wide as room_w
+        at most."""
+        letters, marks = de_letters(text)
+        f = _din(size)
+        bx = _marks_box(d, letters, marks, f, size)
+        if bx[2] - bx[0] <= room_w:
+            return f, size, bx, letters, marks
         while True:
-            f = _font(size)
+            f = _din(size, narrow=True)
             bx = _marks_box(d, letters, marks, f, size)
             if bx[2] - bx[0] <= room_w or size <= 8:
                 return f, size, bx, letters, marks
@@ -1833,12 +1938,15 @@ def _face_de(name, group, local="", nxt="", km=0, sub="", **_):
         item = fit(name, round(150 * sy), room)
         put(item, w / 2, 450 * sy - (item[2][3] - item[2][1]) / 2)
         return img
-    lines = [fit(name, round((150 if not (local or sub) else 135) * sy), room)]
+    subs = [t for t in sub.split("\n") if t] if sub else []
+    lines = [fit(name, round((150 if not (local or subs) else 135 if len(subs) < 2 else 120) * sy), room)]
+    gaps = [0.0]
     if local:
         lines.append(fit(local, round(105 * sy), room))
-    if sub:
-        lines.append(fit(sub, round(62 * sy), room))
-    gaps = [0.0] + [45 * sy] * (len(lines) - 1)
+        gaps.append(45 * sy)
+    for k, t in enumerate(subs):
+        lines.append(fit(t, round(62 * sy), room))
+        gaps.append((45 if k == 0 else 18) * sy)     # (the Kreis close under the Gemeinde)
     total = sum(it[2][3] - it[2][1] for it in lines) + sum(gaps)
     y = (h - total) / 2
     for it, gap in zip(lines, gaps):
