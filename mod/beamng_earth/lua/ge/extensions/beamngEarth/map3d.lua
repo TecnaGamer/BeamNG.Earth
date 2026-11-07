@@ -258,76 +258,157 @@ function M.uiState()
   return s
 end
 
--- ---- place names over the 3D view (the user: "Add overlays to the terrain to show street names and some of our other
--- overlays from the 2d map"): the towns round the view's target from the server (labels: placenames.labels, the largest
--- first), asked again when the view moved a third of its distance or zoomed by half; drawn each frame as text at the
--- ground, each kind of place only within its reach (a city from far away, a hamlet only close by), the nearest
--- LABELS_DRAWN at most.
-M.LABEL_REACH = {megacity = 900000, city = 250000, town = 45000, village = 14000, hamlet = 5000}
-M.LABEL_REACH_DEFAULT = 2500           -- a city's district (no class)
-M.LABELS_DRAWN = 90
-local labels = {list = {}, anchor = nil, reqId = 0, last = nil}
+-- ---- labels over the 3D view, as map apps draw them (the user, 2026-11-07: "handle labels similar how modern map apps
+-- like Apple Maps dose it. As you zoom in more and more info appears and try to make it as clean as this"). The
+-- server sends every label round the view with the web-map zoom it starts and stops at and a rank (map_labels:
+-- maplabels.py: Natural Earth far out, Overture's towns, the streets' names and places close in); here they are
+-- placed in the world (the anchor's frame: the earth's curve in it) and handed to the map screen (EarthMap3d.vue)
+-- with the camera every frame. The screen projects them, shows those its zoom allows, the most important first,
+-- none overlapping, fading in and out.
+M.SCREEN_H = 1080                       -- the UI's height in px (the screen says: setScreen)
+local labels = {rows = {}, reqId = 0, last = nil, anchor = nil, version = 0, sent = -1, heights = 0}
 
-function M.onLabels(msg)
-  if not msg or msg.id ~= labels.reqId or type(msg.places) ~= 'table' then return end
-  labels.list = {}
-  for _, p in ipairs(msg.places) do
-    if type(p) == 'table' and p[1] and p[2] and p[3] then
-      labels.list[#labels.list + 1] = {name = tostring(p[1]), lat = p[2], lon = p[3], cls = p[4] or '', pop = p[5] or 0}
-    end
-  end
-  labels.anchor = nil                  -- (placed in the current anchor's frame at the next draw)
+function M.setScreen(h)
+  h = tonumber(h)
+  if h and h > 100 then M.SCREEN_H = h end
+end
+
+-- Pure: the web-map zoom of a view eye metres above the ground at lat with a vertical field of view fovDeg on a
+-- screen screenH px tall (256 px tiles: zoom z shows 156543 cos(lat) / 2^z metres per px)
+function M.zoomFor(eye, lat, fovDeg, screenH)
+  local mpp = 2 * math.max(1, eye) * math.tan(math.rad(fovDeg or 55) / 2) / math.max(100, screenH or 1080)
+  local z = math.log(156543.03 * math.max(0.05, math.cos(math.rad(lat or 0))) / mpp) / math.log(2)
+  return math.max(0, math.min(21, z))
+end
+
+-- Pure: how far from the target the view's ground reaches (m): to its top edge when that meets the ground, else
+-- to the horizon
+function M.viewRadius(eye, pitch, fovDeg)
+  local horizon = math.sqrt(2 * 6371000 * math.max(1, eye) + eye * eye)
+  local top = pitch - math.rad(fovDeg or 55) * 0.5 * 1.15
+  local r = top > 0.02 and math.min(horizon, eye / math.tan(top)) or horizon
+  return math.max(1500, math.min(4000000, r * 1.25 + eye))
+end
+
+-- (against a 1000 px view, the size the web maps' zooms are tuned for: a 4K screen at its own height showed a
+-- state's area at zoom 8.7, past Natural Earth's state names, 2026-11-07)
+M.ZOOM_REF_PX = 1000
+local function viewZoom(g, s)
+  local eye = g.dist * math.sin(g.pitch)
+  return M.zoomFor(eye, s.lat, g.fov or 55, M.ZOOM_REF_PX), eye
 end
 
 local function requestLabels(g, s, now)
-  local radius = math.max(8000, math.min(150000, g.dist * 3))
+  local zoom, eye = viewZoom(g, s)
+  local radius = M.viewRadius(eye, g.pitch, g.fov)
   local L = labels.last
-  if L and now - L.t < 1.0 then return end
-  if L and math.abs(math.log(radius / L.r)) < 0.5 then
+  if L and now - L.t < 0.5 then return end
+  if L and math.abs(zoom - L.z) < 0.5 then
     local dx = (s.lat - L.lat) * 111320
     local dy = (s.lon - L.lon) * 111320 * math.cos(math.rad(s.lat))
-    if dx * dx + dy * dy < (radius / 3) ^ 2 then return end
+    if dx * dx + dy * dy < (L.r / 4) ^ 2 then return end
   end
   labels.reqId = labels.reqId + 1
-  labels.last = {t = now, lat = s.lat, lon = s.lon, r = radius}
-  require('beamngEarth/net').send({ type = 'labels', id = labels.reqId, lat = s.lat, lon = s.lon, radius = radius })
+  labels.last = {t = now, lat = s.lat, lon = s.lon, r = radius, z = zoom}
+  require('beamngEarth/net').send({ type = 'map_labels', id = labels.reqId, lat = s.lat, lon = s.lon, zoom = zoom,
+    radius = radius })
 end
 
-local white, back = nil, nil
-local function drawLabels(g)
-  if g.mini then return end              -- (the whole earth: the globe's copy, no town that far out)
-  local core = rawget(_G, 'beamngEarth_core')
-  local a = core and core._state and core._state().anchor
-  if not a or not debugDrawer then return end
-  if labels.anchor ~= a then           -- (a rebase or new results: positions in this anchor's frame, heights again)
-    for _, p in ipairs(labels.list) do
-      p.x, p.y = a:geodeticToEnu(p.lat, p.lon, 0)
-      p.z = nil
+-- the server's map_labels_result: rows [kind, text, lat, lon, min zoom, max zoom, rank, extra, bearing]
+function M.onMapLabels(msg)
+  if not msg or msg.id ~= labels.reqId or type(msg.rows) ~= 'table' then return end
+  local rows = {}
+  for i, r in ipairs(msg.rows) do
+    if type(r) == 'table' and r[2] and tonumber(r[3]) and tonumber(r[4]) then
+      rows[#rows + 1] = {id = tostring(r[1]) .. '|' .. tostring(r[2]) .. '|' .. string.format('%.4f,%.4f', r[3], r[4]),
+        k = tostring(r[1]), t = tostring(r[2]), lat = tonumber(r[3]), lon = tonumber(r[4]), mz = tonumber(r[5]) or 0,
+        xz = tonumber(r[6]) or 99, r = tonumber(r[7]) or 50, e = r[8] ~= nil and tostring(r[8]) or '',
+        b = tonumber(r[9])}
     end
-    labels.anchor = a
   end
-  white = white or ColorF(1, 1, 1, 1)
-  back = back or ColorI(0, 0, 0, 150)
-  local cam = core_camera.getPosition()
-  local drawn = 0
-  for _, p in ipairs(labels.list) do
-    if drawn >= M.LABELS_DRAWN then break end
-    if p.x then
-      local dx, dy = p.x - cam.x, p.y - cam.y
-      local dz = (p.z or (cam.z - g.dist * math.sin(g.pitch))) - cam.z     -- (the camera's height counts: from orbit
-      local reach = M.LABEL_REACH[p.cls] or M.LABEL_REACH_DEFAULT          --  none, 2026-11-07)
-      if dx * dx + dy * dy + dz * dz < reach * reach then
-        if not p.z then
-          local z = be:getSurfaceHeightBelow(vec3(p.x, p.y, cam.z + 20000))
-          if z and z > -1e8 then p.z = z end
-        end
-        if p.z then
-          debugDrawer:drawTextAdvanced(vec3(p.x, p.y, p.z + 30), p.name, white, true, false, back)
-          drawn = drawn + 1
-        end
+  labels.rows, labels.anchor = rows, nil
+  labels.version = labels.version + 1
+end
+
+-- the rows' places in the anchor's world: x, y, z (the ground, read from the drawn world close in; sea level far
+-- out) and a street's direction along its road
+local NEAR_KINDS = {street = true, poi = true, district = true, town = true}
+local function placeLabels(a)
+  if labels.anchor ~= a then
+    for _, p in ipairs(labels.rows) do
+      p.x, p.y, p.z = a:geodeticToEnu(p.lat, p.lon, 0)
+      p.ground = not NEAR_KINDS[p.k]      -- (far kinds stay at sea level)
+      if p.b then
+        local br = math.rad(p.b)
+        local x2, y2, z2 = a:geodeticToEnu(p.lat + math.cos(br) * 30 / 111320,
+          p.lon + math.sin(br) * 30 / (111320 * math.max(0.05, math.cos(math.rad(p.lat)))), 0)
+        p.dx, p.dy, p.dz = x2 - p.x, y2 - p.y, z2 - p.z
       end
     end
+    labels.anchor = a
+    labels.version = labels.version + 1
   end
+  -- the ground under the near ones, a few each frame (the drawn far tiles and blocks)
+  local n = 0
+  for _, p in ipairs(labels.rows) do
+    if not p.ground and be then
+      local z = be:getSurfaceHeightBelow(vec3(p.x, p.y, p.z + 9000))
+      if z and z == z and z > p.z - 600 and z < p.z + 9000 then p.z = z + 2 end
+      p.ground = true
+      n = n + 1
+      if n >= 60 then break end
+    end
+  end
+  if n > 0 then labels.version = labels.version + 1 end
+end
+
+local function hook(name, data)
+  if guihooks and guihooks.trigger then guihooks.trigger(name, data) end
+end
+
+local function sendLabels()
+  if labels.sent == labels.version then return end
+  labels.sent = labels.version
+  local items = {}
+  for i, p in ipairs(labels.rows) do
+    if p.x then
+      items[i] = {id = p.id, k = p.k, t = p.t, x = p.x, y = p.y, z = p.z, mz = p.mz, xz = p.xz, r = p.r, e = p.e,
+        dx = p.dx, dy = p.dy, dz = p.dz}
+    end
+  end
+  hook('BngEarthMap3dLabels', {v = labels.version, items = items})
+end
+
+-- (the screen just opened: everything again)
+function M.resendLabels() labels.sent = -2 end
+
+-- every frame while the map is open: the camera, for the screen's projection (and the earth's centre: labels past
+-- the horizon hidden)
+local function sendView(g, s)
+  local p = core_camera.getPosition()
+  local q = core_camera.getQuat()
+  if not p or not q then return end
+  local f, u, r = q * vec3(0, 1, 0), q * vec3(0, 0, 1), q * vec3(1, 0, 0)
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  local ox, oy, oz = 0, 0, -6371000
+  if a and a.ecefToEnu then ox, oy, oz = a:ecefToEnu(0, 0, 0) end
+  local zoom = viewZoom(g, s)
+  hook('BngEarthMap3dView', {px = p.x, py = p.y, pz = p.z, fx = f.x, fy = f.y, fz = f.z, ux = u.x, uy = u.y, uz = u.z,
+    rx = r.x, ry = r.y, rz = r.z, fov = core_camera.getFovDeg(), zoom = zoom, ox = ox, oy = oy, oz = oz})
+end
+
+function M.onPreRender()
+  if not active then return end
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  local s = g and M.state()
+  if not g or not s or not s.lat then return end
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if not a then return end
+  placeLabels(a)
+  sendLabels()
+  sendView(g, s)
 end
 
 -- The world's origin follows the view (the user, 2026-11-07: zooming into a spot a continent away "the screen stays
@@ -340,8 +421,38 @@ M.REBASE_EVERY_S = 3
 local lastRebase = -1e9
 
 local clock = 0
+-- No sun shadows from high up (the user, 2026-11-07: "this shadow map box that follows underneath the camera when
+-- zoomed out in map view": the shadow map covers a box round the camera, its edge a dark line across the land from
+-- miles up): off above SHADOW_EYE_M while the map is open, the sky's own setting back otherwise.
+M.SHADOW_EYE_M = 1600
+local shadowSaved = nil         -- the sky's castShadows while the map holds it off
+local function holdShadows(off)
+  local sky = scenetree.findObject('sunsky')
+  if not sky then shadowSaved = nil return end
+  if off and shadowSaved == nil then
+    shadowSaved = sky:getField('castShadows', 0)
+    sky:setField('castShadows', 0, '0')
+    if sky.postApply then sky:postApply() end
+  elseif not off and shadowSaved ~= nil then
+    sky:setField('castShadows', 0, shadowSaved ~= '' and shadowSaved or '1')
+    if sky.postApply then sky:postApply() end
+    shadowSaved = nil
+  end
+end
+
 function M.onUpdate(dtReal)
-  if not active then return end
+  if not active then
+    holdShadows(false)
+    if labels.sent ~= -1 then       -- (the map closed: the screen's labels go)
+      labels.sent = -1
+      hook('BngEarthMap3dLabels', {v = -1, items = {}})
+    end
+    return
+  end
+  do
+    local gc = core_camera.getGlobalCameras()[M.CAMERA]
+    if gc then holdShadows(gc.dist * math.sin(gc.pitch) > M.SHADOW_EYE_M) end
+  end
   clock = clock + (dtReal or 0)
   local g = core_camera.getGlobalCameras()[M.CAMERA]
   if not g then return end
@@ -366,7 +477,6 @@ function M.onUpdate(dtReal)
     end
   end
   if s.lat then requestLabels(g, s, clock) end
-  drawLabels(g)
 end
 
 -- a level change or a vehicle switch ends the mode at once (no path)

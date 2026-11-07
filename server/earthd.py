@@ -102,6 +102,7 @@ import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import placenames as placenamesmod  # noqa: E402
+import maplabels as maplabelsmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
@@ -5275,40 +5276,74 @@ class Connection:
                 log.debug("where: place: %s: %s", type(e).__name__, e)
         self.send(out)
 
-    async def labels(self, msg):
-        """The 3D map's place names {"id", "lat", "lon", "radius"} -> labels_result {"id", "places": [[name, lat, lon,
-        class, population], ...]} (placenames.labels: the largest first). The cells on disk answer at once; when some
-        are missing they are fetched as background jobs (never ahead of the world's own downloads) and a second
-        labels_result follows, unless a newer request came meanwhile."""
+    def _map_label_rows(self, lat, lon, zoom, radius, fetch):
+        """maplabels' rows for the view (worker thread): (rows, complete). Without fetch only the cells on disk;
+        complete is False when some were missing (fetch=True then asks for them as background jobs)."""
+        rows = maplabelsmod.world_labels(lat, lon, zoom, radius)
+        complete = True
+        if zoom >= 7.5:
+            towns = self.s.place_names().labels(lat, lon, min(radius, placenamesmod.LABELS_RADIUS_MAX_M),
+                                                fetch=fetch)
+            rows += maplabelsmod.town_labels(towns, rows)
+        md = self.s.mapdata
+        for layer, z0, r in (("hoods", maplabelsmod.HOOD_MIN_Z, maplabelsmod.HOOD_RADIUS_M),
+                             ("roads", maplabelsmod.STREET_MIN_Z, maplabelsmod.STREET_RADIUS_M),
+                             ("places", maplabelsmod.POI_MIN_Z, maplabelsmod.POI_RADIUS_M)):
+            if md is None or zoom < z0:
+                continue
+            cells = []
+            for k in maplabelsmod.near_cells(lat, lon, min(r, radius)):
+                if md.has(k, layer) or fetch:
+                    try:
+                        cells.append(md.cell(k, layers=(layer,), kind="background").layers.get(layer))
+                    except mapdatamod.DEFERRED:
+                        complete = False
+                else:
+                    complete = False
+            r = min(r, radius)
+            rows += (maplabelsmod.street_labels(cells, lat, lon, zoom, r) if layer == "roads"
+                     else maplabelsmod.hood_labels(cells, lat, lon, r) if layer == "hoods"
+                     else maplabelsmod.poi_labels(cells, lat, lon, r))
+        return rows, complete
+
+    async def map_labels(self, msg):
+        """The 3D map's labels {"id", "lat", "lon", "zoom", "radius"} -> map_labels_result {"id", "rows": [[kind, text,
+        lat, lon, min zoom, max zoom, rank, extra, bearing], ...]} (maplabels.py). The cells on disk answer at once;
+        when some are missing they are fetched as background jobs and a second answer follows, unless a newer request
+        came meanwhile."""
         try:
-            lat, lon, radius = float(msg["lat"]), float(msg["lon"]), float(msg.get("radius") or 20000.0)
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+            zoom, radius = float(msg.get("zoom") or 10.0), float(msg.get("radius") or 20000.0)
         except (KeyError, TypeError, ValueError):
             return
-        self._labels_seq = seq = getattr(self, "_labels_seq", 0) + 1
+        if not (math.isfinite(lat) and math.isfinite(lon) and math.isfinite(zoom) and math.isfinite(radius)):
+            return
+        self._map_labels_seq = seq = getattr(self, "_map_labels_seq", 0) + 1
         loop = asyncio.get_running_loop()
-        pn = self.s.place_names()
         try:
-            got = await loop.run_in_executor(self.s.place_pool, pn.labels, lat, lon, radius)
-        except Exception as e:          # a damaged cell file: none this time
-            log.debug("labels: %s: %s", type(e).__name__, e)
-            got = []
-        self.send({"type": "labels_result", "id": msg.get("id"), "places": [list(r) for r in got]})
+            rows, complete = await loop.run_in_executor(self.s.place_pool, self._map_label_rows, lat, lon, zoom,
+                                                        radius, False)
+        except Exception as e:
+            log.info("map labels: %s: %s", type(e).__name__, e)
+            return
+        self.send({"type": "map_labels_result", "id": msg.get("id"), "rows": rows})
         for _ in range(WHERE_PLACE_TRIES):
-            if getattr(self, "_labels_seq", 0) != seq:
+            if complete or getattr(self, "_map_labels_seq", 0) != seq:
                 return
             try:
-                full = await loop.run_in_executor(self.s.place_pool, functools.partial(
-                    pn.labels, lat, lon, radius, fetch=True))
-            except mapdatamod.DEFERRED as e:
-                log.debug("labels: deferred: %s: %s", type(e).__name__, e)
+                rows, complete = await loop.run_in_executor(self.s.place_pool, self._map_label_rows, lat, lon, zoom,
+                                                            radius, True)
+            except mapdatamod.DEFERRED:
                 await asyncio.sleep(WHERE_PLACE_RETRY_S)
                 continue
             except Exception as e:
-                (log.debug if isinstance(e, netfetch.FetchError) else log.info)("labels: %s: %s", type(e).__name__, e)
+                (log.debug if isinstance(e, netfetch.FetchError) else log.info)("map labels: %s: %s",
+                                                                                  type(e).__name__, e)
                 return
-            if len(full) != len(got) and getattr(self, "_labels_seq", 0) == seq:
-                self.send({"type": "labels_result", "id": msg.get("id"), "places": [list(r) for r in full]})
-            return
+            if getattr(self, "_map_labels_seq", 0) == seq:
+                self.send({"type": "map_labels_result", "id": msg.get("id"), "rows": rows})
+            if not complete:
+                await asyncio.sleep(WHERE_PLACE_RETRY_S)
 
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
@@ -5837,8 +5872,8 @@ class Connection:
             self.spawn(self.route(msg))
         elif kind == "where":                   # the status bar's street, town and country (geocode.py)
             self.spawn(self.where(msg))
-        elif kind == "labels":                  # the 3D map's place names (map3d.lua; placenames.labels)
-            self.spawn(self.labels(msg))
+        elif kind == "map_labels":              # the 3D map's labels, every kind by zoom (maplabels.py)
+            self.spawn(self.map_labels(msg))
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)

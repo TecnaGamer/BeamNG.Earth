@@ -617,6 +617,19 @@ local function hideCloudsHigh(h)
 end
 M._cloudsHidden = function() return cloudsHidden end -- tests
 
+-- No rain or snow over the 3D map either (its streaks fell across the whole view from miles up, 2026-11-07)
+local rainHidden = false
+local function hideRainInMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local want = (m3 and m3.isActive and m3.isActive()) and true or false
+  if want == rainHidden then return end
+  for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('Precipitation')) or {}) do
+    local o = scenetree.findObject(nm)
+    if o and o.setHidden then o:setHidden(want) end
+  end
+  rainHidden = want
+end
+
 local function apply(e)
   local c = S.cur
   setIf(e.getCloudCover, e.setCloudCover, c.coverage, 0.005)
@@ -632,6 +645,7 @@ local function apply(e)
   setIf(e.getWindSpeed, e.setWindSpeed, c.cloudWindSpeed, 0.005)
   local camH = cameraOverGround()
   hideCloudsHigh(camH)
+  hideRainInMap()
   if S.groundZ then
     local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight) * M.fogAltitudeShare(camH)
     local have = e.getFogDensity and tonumber((e.getFogDensity()))

@@ -270,6 +270,12 @@ LAYERS = {
                             text=("subtype", "name") + tuple(f"name_{k}" for k in REGIONAL_LANGS) + LATIN_COLS
                                  + ("country", "src_dataset", "src_record", "localities"),
                             where="subtype = 'locality'"),
+    # the 3D map's district names, as map apps write them close in ("FELLS POINT", "CANTON"; maplabels.hood_labels):
+    # the neighbourhoods' and macrohoods' points
+    "hoods": dict(theme="divisions", type="division", clip=False,
+                  cols=f"subtype, class, {_NAME}, country, {_SRC}",
+                  text=("subtype", "class", "name", "country", "src_dataset", "src_record"),
+                  where="subtype IN ('neighborhood', 'macrohood')"),
 }
 SIMPLIFY_DEG = 0.002            # degrees (~200 m): a `simplify` layer's tolerance
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)

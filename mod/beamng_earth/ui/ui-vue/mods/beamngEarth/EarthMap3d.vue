@@ -4,6 +4,8 @@
   <div class="earth-map3d" tabindex="-1" ref="rootEl" @keydown.esc.stop="back"
        @keydown="onKey($event, true)" @keyup="onKey($event, false)"
        @mousedown="onDown" @wheel.prevent="onWheel" @contextmenu.prevent>
+    <!-- the labels (map3dLabels.js: projected each frame from map3d.lua's camera, no overlaps, fading) -->
+    <div class="m3-labels" ref="labelsEl"></div>
     <div class="m3-top" @mousedown.stop>
       <div class="m3-place">
         <div class="m3-name">{{ place || "—" }}</div>
@@ -30,8 +32,16 @@
 
 <script setup>
 import { ref, computed, onMounted, onUnmounted, nextTick } from "vue"
+import { useEvents } from "@/services/events"
+import { LabelLayer } from "./map3dLabels.js"
 
 const rootEl = ref(null)
+const labelsEl = ref(null)
+let layer = null
+const events = useEvents()
+events.on("BngEarthMap3dLabels", d => { if (layer) layer.setLabels(d) })
+events.on("BngEarthMap3dView", v => { if (layer) layer.setView(v) })
+function onResize() { engineLua(`beamngEarth_map3d.setScreen(${window.innerHeight})`) }
 const st = ref({})
 const place = ref("")
 const busy = ref(false)
@@ -137,12 +147,20 @@ function driveHere() {
 }
 
 onMounted(() => {
+  layer = new LabelLayer(labelsEl.value)
+  onResize()
+  window.addEventListener("resize", onResize)
+  // (the labels the map has already: sent again for this screen)
+  engineLua("beamngEarth_map3d and beamngEarth_map3d.resendLabels and beamngEarth_map3d.resendLabels()")
   poll()
   timer = setInterval(poll, 250)
   nextTick(() => rootEl.value && rootEl.value.focus())
 })
 
 onUnmounted(() => {
+  window.removeEventListener("resize", onResize)
+  if (layer) layer.destroy()
+  layer = null
   clearInterval(timer)
   if (keyTimer) clearInterval(keyTimer)
   onUp()
@@ -155,6 +173,24 @@ onUnmounted(() => {
 .earth-map3d { position: absolute; inset: 0; outline: none; user-select: none; cursor: grab; font-family: inherit;
   background: rgba(0, 0, 0, 0.01); }
 .earth-map3d:active { cursor: grabbing; }
+/* the labels: white with a soft dark halo, as map apps write on the photo; no boxes */
+.m3-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.m3-labels :deep(.lb) { position: absolute; left: 0; top: 0; white-space: nowrap; color: #fff; opacity: 0;
+  display: flex; align-items: center; gap: 4px; transition: opacity 0.3s ease; will-change: transform, opacity;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.95), 0 0 5px rgba(0, 0, 0, 0.55), 0 1px 2px rgba(0, 0, 0, 0.8); }
+.m3-labels :deep(.lb-country) { color: #fff; }
+.m3-labels :deep(.lb-continent) { color: #fff; }
+.m3-labels :deep(.lb-state) { color: rgba(255, 255, 255, 0.85); }
+.m3-labels :deep(.lb-water) { color: #a8dcf5; text-shadow: 0 0 3px rgba(0, 30, 60, 0.9), 0 1px 2px rgba(0, 0, 0, 0.6); }
+.m3-labels :deep(.lb-land) { color: #efe3cf; }
+.m3-labels :deep(.lb-district) { color: rgba(255, 255, 255, 0.92); }
+.m3-labels :deep(.lb-street) { color: #fff; }
+.m3-labels :deep(.lb-dot) { width: 6px; height: 6px; border-radius: 50%; background: #fff; border: 1.5px solid #333;
+  box-shadow: 0 0 2px rgba(0, 0, 0, 0.8); flex: none; }
+.m3-labels :deep(.lb-big .lb-dot) { width: 8px; height: 8px; }
+.m3-labels :deep(.lb-icon) { width: 17px; height: 17px; border-radius: 50%; display: flex; align-items: center;
+  justify-content: center; flex: none; box-shadow: 0 0 0 1.5px rgba(255, 255, 255, 0.9), 0 1px 3px rgba(0, 0, 0, 0.6); }
+.m3-labels :deep(.lb-icon svg) { width: 11px; height: 11px; fill: #fff; }
 .m3-top { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; align-items: flex-start; gap: 12px; }
 .m3-place { padding: 8px 14px; color: #fff; background: rgba(0, 0, 0, 0.6); border-radius: 6px; min-width: 260px; }
 .m3-name { font-size: 18px; font-weight: 600; }

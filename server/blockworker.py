@@ -766,12 +766,13 @@ def _dem_warm(frame, box, zoom):
     except Exception as e:      # (never in the tile's way: its samples fetch what they need as before)
         log.debug("dem warm: %s: %s", type(e).__name__, e)
         return
-    if not keys or len(keys) > DEM_WARM_MAX or _s.dem is None:
+    fetch = getattr(getattr(_s, "dem", None), "tiles", None)     # (a test's stand-in DEM may have none)
+    if not keys or len(keys) > DEM_WARM_MAX or fetch is None:
         return
     if _dem_warm_ex is None:
         from concurrent.futures import ThreadPoolExecutor
         _dem_warm_ex = ThreadPoolExecutor(2, thread_name_prefix="dem-warm")
-    _dem_warm_ex.submit(_s.dem.tiles, keys)
+    _dem_warm_ex.submit(fetch, keys)
 
 
 @profile_step('Road tile assembly')
