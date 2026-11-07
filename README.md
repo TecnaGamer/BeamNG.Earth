@@ -23,7 +23,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Europe, the US and more; in Canada the distant terrain lined up with NRCan's HRDEM lidar ground),
   Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
 - Aerial and satellite imagery on the ground: open state and national orthophotos (Maryland's 15 cm photos,
-  a dozen more US states, NAIP across the US, Switzerland, France, Spain, the Netherlands, Germany's states,
+  a dozen more US states, NAIP across the US, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states,
   Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 cloudless everywhere else; shadows and
   colour seams taken out of the photos, the season's colours graded in, cliffs drawn as rock.
 - A real view distance out to the horizon, with the Earth's curvature.
@@ -444,7 +444,7 @@ offline mode (`--offline`).
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
-  states, Switzerland, France, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
+  states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
   Canada, and more), USDA NAIP and USGS The National Map (public domain) in the US, and Sentinel-2
   cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
   data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
