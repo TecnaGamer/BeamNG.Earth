@@ -32,7 +32,7 @@ import staging
 log = logging.getLogger("earthd.dirsigns")
 
 ON = os.environ.get("BNE_DIRSIGNS", "off") == "on"
-KERNEL = 160                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
+KERNEL = 163                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
 PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
