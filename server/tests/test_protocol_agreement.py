@@ -127,6 +127,7 @@ MOD_TO_SERVER = {
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
              "view": F(bool, OPT),          # true: the 3D map's view frame (earthd Conn.map_view)
+             "map": F(bool, OPT),           # true: the 3D map open (earthd Conn.map_open)
              # previous anchors whose tile objects the mod still has (an empty Lua table may encode as {})
              "held": F((list, dict), OPT),
              # the session folders in use, as in hello: an earlier run's one no longer named is released
@@ -185,6 +186,8 @@ MOD_TO_SERVER = {
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     # the 3D map's labels by zoom (map3d.lua; maplabels.py)
     "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
+    # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
+    "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
     "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # BeamMP shared world generation v2 (mpsession.lua <-> mpshare.py): our share code asked once a session, the

@@ -596,6 +596,7 @@ local function finishRebase()
   end
   if not ok then log('E', 'beamngEarth', 'rebase terrain import failed: ' .. tostring(err)) end
   farfield.transform(xf, rb.newAnchor)   -- (the global far tiles placed exactly into the new anchor: farfield.lua)
+  pcall(require('beamngEarth/globe').transform, xf, msg.anchorId)
   -- roads, buildings, street furniture and trees move with it and stay until the new anchor's tiles cover them
   roads.transform(xf, geodesy)
   trees.transform(xf, geodesy, rb.newAnchor)    -- (geotiles: placed into the new anchor, nothing sent again)
@@ -1707,6 +1708,7 @@ local function updateWorld(dt)
     net.send({ type = 'pose', anchorId = st.anchorId, x = pl.x, y = pl.y, z = pl.z, vx = pl.vx, vy = pl.vy,
       lat = pl.lat, lon = pl.lon, speed = pl.speed, follow = not st.followHeld and not st.viewFrame,
       view = st.viewFrame and true or nil,       -- (the 3D map's view frame: server Conn.map_view)
+      map = (rawget(_G, 'beamngEarth_map3d') and beamngEarth_map3d.isActive()) and true or nil,   -- (Conn.map_open)
       held = (farfield.session() == st.sessionId) and farfield.heldAnchors() or {},
       sessions = roads.allHeldSessions(),
       slotsGone = slotsGoneNow(), -- pooled shape slots let go (server/matslots.py)

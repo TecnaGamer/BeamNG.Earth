@@ -406,6 +406,18 @@ def as_tile(rgb):
     return Tile(rgb, is_uniform(rgb))
 
 
+QUICK_OVERZOOM = 4          # levels up a quick render looks for the same source's tile on disk (Imagery._quick_ancestor)
+
+
+def _overzoom(a, key, d):
+    """Tile key's part of its d-levels-up ancestor tile a, enlarged to a whole tile (bilinear)."""
+    _, _, x, y = key
+    n = TILE >> d
+    ox, oy = (x & ((1 << d) - 1)) * n, (y & ((1 << d) - 1)) * n
+    part = np.ascontiguousarray(a.rgb[oy:oy + n, ox:ox + n])
+    return Tile(np.asarray(Image.fromarray(part).resize((TILE, TILE), Image.BILINEAR)), a.uniform)
+
+
 # The finished pyramid (geotiles phase 3a, .claude/work/geotiles_plan.md): every source tile once de-shadowed,
 # colour-matched and tone-mapped (Imagery.finished), kept on disk under <cache>/imagery/fin<FIN_VERSION>-<settings>/
 # <source>/z/x/y.bnf, so a far tile's texture or a block's photo for any anchor is a warp of these (earthfast.tile_warp)
@@ -876,7 +888,7 @@ class Imagery:
         last = self.chain[-1] if self.chain else None
         probes = {k: self._probe_key(k) for k in keys}
         known = self.tiles({p for p in probes.values() if p is not None}, kind) if any(probes.values()) else {}
-        out, futs = {}, {}
+        out, futs, over = {}, {}, {}
         with self._lock:
             for k in keys:
                 if probes[k] is not None and not self._covered(known[probes[k]]):
@@ -887,18 +899,48 @@ class Imagery:
                 elif not in_bounds(*k):
                     out[k] = None                   # outside the source's area
                 elif (k[0].lazy or (quick and k[0] is not last)) and not self._on_disk(k):
-                    out[k] = None                   # not fetched (warm() does, ahead): the next source now
+                    anc = self._quick_ancestor(k) if quick and not k[0].lazy else None
+                    if anc is not None:
+                        over[k] = anc
+                        if anc[0] not in self._lru:
+                            futs.setdefault(anc[0], self._future(anc[0], kind))
+                    else:
+                        out[k] = None               # not fetched (warm() does, ahead): the next source now
                 else:
                     futs[k] = self._future(k, kind)
         err = None
+        got = {}
         for k, fut in futs.items():
             try:
-                out[k] = self._result(k, fut, kind)
+                got[k] = self._result(k, fut, kind)
             except ImageryError as e:
                 err = e
         if err is not None:
             raise err
+        for k in keys:
+            if k in got:
+                out[k] = got[k]
+        for k, (pk, d) in over.items():
+            with self._lock:
+                a = got[pk] if pk in got else self._lru.get(pk)
+            out[k] = None if a is None else _overzoom(a, k, d)
         return out
+
+    def _quick_ancestor(self, key):
+        """(ancestor key, levels up) of a tile not on disk whose ancestor is (in memory or on disk), for the 3D map's
+        quick render: the same photo enlarged, not the chain's last source (2026-11-07, the user: "a tile will switch
+        between a lower and higher res image several times before settling": the satellite stand-in between two
+        aerial photos), or None. Under the lock."""
+        src, z, x, y = key
+        for d in range(1, QUICK_OVERZOOM + 1):
+            if z - d < max(0, src.min_zoom):
+                break
+            pk = (src, z - d, x >> d, y >> d)
+            if pk in self._lru:
+                return (pk, d) if self._lru[pk] is not None and not self._lru[pk].uniform else None
+            if self._on_disk(pk):
+                return pk, d
+        return None
 
     def _needed(self, frame, x0, y0, size, px):
         """The source tiles render(frame, x0, y0, size, px) may need, source by source in chain order: (k, src,
@@ -999,6 +1041,15 @@ class Imagery:
     def img_status(self, token):
         """None while a fetch_later batch downloads, True once done (a texture rendered without it can be better)."""
         return self._later.get(token[1]) if len(token) == 2 else True
+
+    def done_token(self):
+        """A pending token that is ready at once ((IMG_PENDING, batch id), img_status True): a texture rendered raw
+        (the 3D map's quick render in a far-tile process) re-rendered finished as soon as it is shown (far_retex)."""
+        with self._lock:
+            self._later_seq += 1
+            bid = self._later_seq
+            self._later[bid] = True
+        return (IMG_PENDING, bid)
 
     def fetch_later(self, frame, x0, y0, size, px):
         """The tiles a quick render of render(frame, x0, y0, size, px) leaves out (the sources before the chain's

@@ -15,6 +15,7 @@ M.ENABLED = true
 
 M.SHOW_M = 250000           -- the camera's height above sea level
 M.HIDE_M = 200000
+M.LOW_TOO = true          -- shown under SHOW_M too while the map is open
 M.NITS = 1500               -- the texture's brightness (emissive)
 M.CHECK_S = 0.25
 M.RETRY_S = 30
@@ -22,7 +23,7 @@ M.R = 6371000
 
 local globe = nil           -- { obj, mini, anchorId, material }: the globe and its small copy (far out)
 local pending = nil         -- { at, anchorId }
-local shown, skyOff = false, false
+local shown, skyOff, high = false, false, false
 local timer, clock = 0, 0
 
 local function horizon() return require('beamngEarth/horizon') end
@@ -127,7 +128,11 @@ function M.update(dt, anchor, anchorId, send)
     local _, _, hh = anchor:enuToGeodetic(p.x, p.y, p.z)
     h = hh
   end
-  shown = active and M.shownAt(h, shown) or false
+  high = active and M.shownAt(h, high) or false
+  -- (low down too while the map is open: the earth's photo under a place whose tiles have not come yet, not the
+  -- empty sky; the far tiles cover it, 3 km over it, where they are. 2026-11-07: a flight to a fresh city landed on
+  -- blue for 5-10 s)
+  shown = active and (high or (M.LOW_TOO and h ~= nil)) or false
   -- far out the camera mode hands over a copy's place (earthGlobe C.MINI_*): the copy shown, the globe hidden
   local g = active and core_camera.getGlobalCameras()[m3.CAMERA] or nil
   local mini = shown and g and g.mini or nil
@@ -157,7 +162,7 @@ function M.update(dt, anchor, anchorId, send)
     horizon().atmoOverrideKm = (active and h and h > 60000) and horizon().ATMO_MAX_KM or nil
   end
   local hz = horizon()
-  local want = shown and M.visibleFor(h) or nil
+  local want = high and M.visibleFor(h) or nil
   if want ~= hz.extraVisible then
     hz.extraVisible = want
     if want then hz.setVisibleDistance(math.max(want, (scenetree.theLevelInfo and scenetree.theLevelInfo.visibleDistance) or 0)) end
@@ -188,13 +193,29 @@ function M.onMessage(msg, anchorId)
   log('I', 'beamngEarth', 'globe: anchor ' .. tostring(msg.anchorId))
 end
 
+-- Origin rebase (core, beside farfield.transform): the sphere moved into the new frame (T_new = R*T_old + t) and kept
+-- for the new anchor, so it never goes while a flight's new place loads (the user, 2026-11-07: "the earth rendering
+-- can't keep up": hidden at the flight's start until the new anchor's sphere came back).
+function M.transform(xf, newAnchorId)
+  if not globe or not xf then return end
+  local geodesy = require('beamngEarth/geodesy')
+  local p = globe.pos or {0, 0, 0}
+  local q = globe.rot or {0, 0, 0, 1}
+  local x, y, z = xf:apply(p[1], p[2], p[3])
+  local bx, by, bz, bw = xf:beamngQuat()
+  local qx, qy, qz, qw = geodesy.quatMul(q[1], q[2], q[3], q[4], bx, by, bz, bw)
+  globe.pos, globe.rot = {x, y, z}, {qx, qy, qz, qw}
+  pcall(function() globe.obj:setPosRot(x, y, z, qx, qy, qz, qw) end)
+  globe.anchorId = newAnchorId
+end
+
 function M.clear()
   deleteGlobe()
   setSky(false)
   fadeSky(nil)
   horizon().atmoOverrideKm = nil
   horizon().extraVisible = nil
-  pending, shown, timer = nil, false, 0
+  pending, shown, timer, high = nil, false, 0, false
 end
 
 M._state = function() return { globe = globe, pending = pending, shown = shown, skyOff = skyOff } end -- tests

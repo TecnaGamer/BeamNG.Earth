@@ -167,7 +167,7 @@ function routeHere() {
     msg.value = r && r.ok === false ? "No route: the GPS could not plan one" : ""
   })
 }
-function clearRoute() { engineLua("beamngEarth_settings and beamngEarth_settings.uiMapGps(nil) or nil") }
+function clearRoute() { engineLua("if beamngEarth_settings and beamngEarth_settings.uiMapGps then beamngEarth_settings.uiMapGps(nil) end") }
 
 function onResize() { engineLua(`beamngEarth_map3d.setScreen(${window.innerHeight})`) }
 const st = ref({})
@@ -280,7 +280,7 @@ onMounted(() => {
   onResize()
   window.addEventListener("resize", onResize)
   // (the labels the map has already: sent again for this screen)
-  engineLua("beamngEarth_map3d and beamngEarth_map3d.resendLabels and beamngEarth_map3d.resendLabels()")
+  engineLua("if beamngEarth_map3d and beamngEarth_map3d.resendLabels then beamngEarth_map3d.resendLabels() end")
   poll()
   timer = setInterval(poll, 250)
   nextTick(() => rootEl.value && rootEl.value.focus())

@@ -450,7 +450,7 @@ end
 -- ---- flying to a place (the user, 2026-11-07: "if you serch for a place dont just teliport the camera but smoothly
 -- zoom it from 1 place to another"): out and over and down, as map apps: along the great circle, the distance rising
 -- with how far the trip is and coming down at the end (log scale), eased.
-M.FLY_MIN_S, M.FLY_MAX_S = 1.6, 5.0
+M.FLY_MIN_S, M.FLY_MAX_S = 1.2, 6.5
 local fly = nil
 
 local function unitOf(lat, lon)
@@ -458,23 +458,56 @@ local function unitOf(lat, lon)
   return vec3(math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la))
 end
 
--- Pure: the camera's (lat, lon, dist) s of the way (0..1, eased already) along a flight f. The height changes late
--- when coming down and early when going up (the first try came down at once and crossed the ocean low, 2026-11-07):
--- t is the flight's own time (0..1) for that.
-function M.flyAt(f, s, t)
-  t = t or s
+-- Pure: the flight's path (van Wijk and Nuij, "Smooth and efficient zooming and panning", 2003, the curve map apps
+-- and d3.interpolateZoom fly): the view's width w (the camera distance) and its ground travel u chosen so the picture
+-- moves at one steady speed on screen, out as far as the trip needs and back down. The first version (2026-11-07)
+-- moved along the ground on one curve and the height on another; the user: "the camera animation going from 1 place
+-- to another needs some work". Sets f.S (the path's length, for the duration) and f.u1 (m along the great circle).
+M.FLY_RHO = 1.42
+function M.flyPath(f)
   local a, b = unitOf(f.lat0, f.lon0), unitOf(f.lat1, f.lon1)
-  local om = math.acos(math.max(-1, math.min(1, a:dot(b))))
+  f.om = math.acos(math.max(-1, math.min(1, a:dot(b))))
+  local rho = M.FLY_RHO
+  local r2, u1, w0, w1 = rho * rho, f.om * 6371000, f.d0, f.d1
+  f.u1 = u1
+  if u1 < 1 then
+    f.S = math.abs(math.log(w1 / w0)) / rho
+    return f
+  end
+  local b0 = (w1 * w1 - w0 * w0 + r2 * r2 * u1 * u1) / (2 * w0 * r2 * u1)
+  local b1 = (w1 * w1 - w0 * w0 - r2 * r2 * u1 * u1) / (2 * w1 * r2 * u1)
+  f.r0 = math.log(math.sqrt(b0 * b0 + 1) - b0)
+  f.S = (math.log(math.sqrt(b1 * b1 + 1) - b1) - f.r0) / rho
+  return f
+end
+
+local function cosh(x) return (math.exp(x) + math.exp(-x)) / 2 end
+local function sinh(x) return (math.exp(x) - math.exp(-x)) / 2 end
+local function tanh(x) local e = math.exp(2 * x) return (e - 1) / (e + 1) end
+
+-- Pure: the camera's (lat, lon, dist) s of the way (0..1, eased already) along a flight f (flyPath set).
+function M.flyAt(f, s)
+  if not f.S then M.flyPath(f) end
+  local rho, sig = M.FLY_RHO, s * f.S
+  local frac, w
+  if f.u1 < 1 then
+    frac = s
+    w = f.d0 * math.exp((f.d1 >= f.d0 and 1 or -1) * rho * sig)
+  else
+    local c0 = cosh(f.r0)
+    local u = f.d0 / (rho * rho) * (c0 * tanh(rho * sig + f.r0) - sinh(f.r0))
+    frac = math.max(0, math.min(1, u / f.u1))
+    w = f.d0 * c0 / cosh(rho * sig + f.r0)
+  end
+  if s >= 1 then frac, w = 1, f.d1 end
+  local a, b, om = unitOf(f.lat0, f.lon0), unitOf(f.lat1, f.lon1), f.om
   local p
   if om < 1e-6 then p = a else
-    p = a * (math.sin((1 - s) * om) / math.sin(om)) + b * (math.sin(s * om) / math.sin(om))
+    p = a * (math.sin((1 - frac) * om) / math.sin(om)) + b * (math.sin(frac * om) / math.sin(om))
   end
   local lat = math.deg(math.asin(math.max(-1, math.min(1, p.z / p:length()))))
   local lon = math.deg(math.atan2(p.y, p.x))
-  local l0, l1 = math.log(f.d0), math.log(f.d1)
-  local bump = math.max(0, math.log(f.peak) - math.max(l0, l1))
-  local h = (l1 < l0) and t ^ 2.5 or (1 - (1 - t) ^ 2.5)
-  return lat, lon, math.exp(l0 + (l1 - l0) * h + bump * 4 * s * (1 - s))
+  return lat, lon, math.max(15, math.min(20000000, w))
 end
 
 -- fly the view to (lat, lon), ending dist m from it (default: the current distance, at most 4 km)
@@ -485,10 +518,42 @@ function M.flyTo(lat, lon, dist)
   local d1 = tonumber(dist) or math.min(g.dist, 4000)
   local a, b = unitOf(g.lat, g.lon), unitOf(lat, lon)
   local km = math.acos(math.max(-1, math.min(1, a:dot(b)))) * 6371
-  local peak = math.min(8000000, math.max(g.dist, d1, km * 1000 * 0.9))
-  fly = {lat0 = g.lat, lon0 = g.lon, d0 = math.max(15, g.dist), lat1 = lat, lon1 = lon, d1 = d1, peak = peak, t = 0,
-    dur = math.max(M.FLY_MIN_S, math.min(M.FLY_MAX_S, 1.2 + 0.9 * math.log10(1 + km)))}
+  fly = M.flyPath({lat0 = g.lat, lon0 = g.lon, d0 = math.max(15, g.dist), lat1 = lat, lon1 = lon, d1 = d1, t = 0,
+    pitch0 = g.pitch})
+  -- (the duration from the path's length: ~1.5 s across a town, ~3.5 s to the next city, ~6 s round the earth)
+  fly.dur = math.max(M.FLY_MIN_S, math.min(M.FLY_MAX_S, 0.6 + 0.45 * fly.S))
+  -- the destination loads while the camera flies (the user, 2026-11-07: "big leaps in world gen speed"): the origin
+  -- there at once, then the server told where the view will end (flyHint, map_focus)
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if core and core.rebaseTo and a then
+    local p1, p2 = math.rad(a.lat), math.rad(lat)
+    local h = math.sin((p2 - p1) / 2) ^ 2 + math.cos(p1) * math.cos(p2) * math.sin(math.rad(lon - a.lon) / 2) ^ 2
+    if 2 * 6371000 * math.asin(math.min(1, math.sqrt(h))) > M.REBASE_M then
+      local sLat, sLon = require('beamngEarth/geodesy').snapAnchor(lat, lon)
+      pcall(core.rebaseTo, sLat, sLon, 'view')
+    end
+  end
   return true
+end
+
+-- while flying: the server builds round where the view will end, at the detail it will have there (map_focus, for
+-- the flight's anchor: sent again after the origin moved)
+local function flyHint()
+  if not fly then return end
+  local core = rawget(_G, 'beamngEarth_core')
+  local st = core and core._state and core._state()
+  if not st or not st.anchor or fly.hintFor == st.anchorId then return end
+  -- (not to the old origin while the rebase to the destination is on its way: Tucson 2026-11-07, the first 7 s of
+  -- every far worker went to the destination's tiles in the frame of a place 2,000 miles away, thrown away after)
+  local a = st.anchor
+  local p1, p2 = math.rad(a.lat), math.rad(fly.lat1)
+  local hv = math.sin((p2 - p1) / 2) ^ 2 + math.cos(p1) * math.cos(p2) * math.sin(math.rad(fly.lon1 - a.lon) / 2) ^ 2
+  if 2 * 6371000 * math.asin(math.min(1, math.sqrt(hv))) > M.REBASE_M then return end
+  fly.hintFor = st.anchorId
+  local x, y = st.anchor:geodeticToEnu(fly.lat1, fly.lon1, 0)
+  require('beamngEarth/net').send({type = 'map_focus', anchorId = st.anchorId, x = x, y = y,
+    eye = fly.d1 * math.sin(math.rad(50)), seconds = fly.dur * (1 - math.min(1, fly.t)) + 2})
 end
 
 function M.cancelFly() fly = nil end
@@ -496,10 +561,16 @@ function M.flying() return fly ~= nil end
 
 local function flyStep(g, dt)
   if not fly then return end
+  flyHint()
   fly.t = fly.t + dt / fly.dur
   local t = math.min(1, fly.t)
   local s = t * t * (3 - 2 * t)
-  g.lat, g.lon, g.dist = M.flyAt(fly, s, t)
+  g.lat, g.lon, g.dist = M.flyAt(fly, s)
+  -- the tilt as it was when the flight began, back at the end (the camera's own rule looks straight down high up:
+  -- earthGlobe.pitchMin, which left a flight's end looking down)
+  if fly.pitch0 and g.pitchMin then
+    g.pitch = math.max(fly.pitch0, g.pitchMin(g.dist))
+  end
   if t >= 1 then fly = nil end
 end
 

@@ -2208,6 +2208,37 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
 WORKER_IMAGERY_TILES = 96      # decoded imagery tiles a far-tile worker keeps (imagery.MEM_TILES: 512, the server's)
 
 
+def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
+    """far_global_geometry and its texture here (the 3D map's quick render of a global far tile: the Mercator square's
+    photo from the imagery tiles on disk, raw, rock faces drawn), written to tex["path"]: (Built, (texture bytes,
+    sources used)), or (Built, None) when a photo tile it needs is not on disk. In the server's own interpreter these
+    waited 26 s each at a fresh city, one at a time (2026-11-07)."""
+    import geotiles
+    import imagery as imagerymod
+    import rockface as rockfacemod
+    built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    im = _imagery(tex)
+    px = tex["px"]
+    try:
+        im.quick_all = bool(tex.get("quick"))
+        try:
+            rgb, used = im.render_merc(z, x, y, px)
+        finally:
+            im.quick_all = False
+    except imagerymod.ImageryError:
+        return built, None
+    if built.grid is not None:          # (earthd.Server.rock_faces, its tile_where for a global tile)
+        try:
+            g = np.asarray(built.grid)
+            s = built.size
+            rgb = rockfacemod.rock(rgb, geotiles.frame(x, y, z), *imagerymod.gutter_square(-s / 2, -s / 2, s, px), g,
+                                   -s / 2, -s / 2, s / (g.shape[1] - 1))
+        except Exception as e:
+            log.debug("rock faces of global %s: %s", (z, x, y), e)
+    n = imagerymod.write_dds(tex["path"], rgb)
+    return built, (n, used)
+
+
 def _imagery(tex):
     """This process's imagery.Imagery for the server's chain settings (tex: chain, tone, leaf_on, season_mode): the
     imagery tiles on disk alone (strict: a missing tile fails the render), or, for a compute-sharing helper
