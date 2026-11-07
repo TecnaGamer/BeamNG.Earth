@@ -34,13 +34,23 @@ Each PR goes on its own branch, cut from a fresh `upstream/main`. Re-apply the c
 - Check that the non-AU digests are unchanged.
 - Normalise line endings to match upstream; some fork merges changed CRLF to LF and back.
 
-## 3. Rust
-- Upstream keeps heavy geometry kernels in `native/earthfast` and ships a prebuilt `.pyd`. We kept everything in Python on purpose, because a local MSVC build changes the float digests.
-- Good candidates to move to Rust once upstream agrees:
-  - the brick UV re-mapping (`_qld_brick_scale`, which rewrites UVs the kernel already made; better done in the kernel's bay logic);
-  - the curve-sign curvature scan;
-  - the point-in-polygon state lookup, if it shows up in profiles.
-- Let upstream CI build the `.pyd`. Never commit a locally built one.
+## 3. Rust: upstream policy (.claude/agent-rules.md, the maintainer, 2026-10-21)
+- New server logic goes in Rust (`native/earthfast`). Python is only thin glue: argument marshalling and calls.
+- Touching a Python algorithm means porting it, with no Python twin left behind (`fast.require()`, no fallback).
+- The mod stays Lua.
+- PRs target `dev`, not `main`.
+- The fork wrote everything in Python, to iterate fast without rebuilding the native module. **Every PR therefore needs a port before submission.** Sort the fork code three ways:
+  - **Data and tables** (markings styles, tints, shares, dirsigns_styles.json, places and destination shards, the state polygons, region packs): stays data, with no port needed.
+  - **Algorithms** (high-set house geometry, eaves, carports, awnings, brick UVs, fence and verge placement, curve detection, barrier rules, no-stopping lines, destination matching, the point-in-polygon lookup, soil and cane classification): port to Rust, keeping the Python tests as behaviour tests.
+  - **Lua** (groundcover, trees catalog, signals, terrain looks): stays Lua.
+  - Generated assets (.dae, materials) stay as they are, along with their `tools/` builders. Check whether upstream wants the builders in Python or Rust; tools may be exempt.
+- **Build:** a local MSVC build gives float digests that differ from upstream's committed `.pyd`. Before porting, rebuild the native module on a clean `upstream/dev` and re-record the goldens locally, so only our own diffs show. Or ask the maintainer how they record digests (CI or their machine).
+- **Workflow per PR:**
+  1. Branch from `upstream/dev`.
+  2. Port the module to Rust.
+  3. Test that the AU behaviour matches the fork version bit for bit.
+  4. Check the non-AU digests are unchanged.
+  5. Open the PR to `dev` with in-game screenshots (the maintainer insists on checking real-place imagery).
 
 ## 4. Making it worldwide: "region packs" (plan item 3.7)
 The fork shows what a region needs. Today it is hard-coded per country in each module, as `if region == "AU"` branches. The generic version:
