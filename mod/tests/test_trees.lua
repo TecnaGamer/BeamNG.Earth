@@ -512,6 +512,13 @@ do -- fork: Australia's fences (server buildings.au_fence, tools/build_au_street
   T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_pole_conc' and math.abs(sc - 1) < 1e-9,
     'au_pole_conc: its model at 1:1')
 end
+do -- fork: Australia's Give Way and signals (server furniture.au_group, tools/build_au_traffic.py): their models at 1:1
+  for g, h in pairs({ au_giveway = 2.7, au_signal = 4.0, au_signal_mast = 7.0 }) do
+    local shape, sc = trees.pick(g, h, 0.3)
+    T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g and math.abs(sc - 1) < 1e-9, g .. ': its model at 1:1')
+    T.check(trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0 and trees.ONE_SPELLING[g], g .. ': a draw distance, one spelling')
+  end
+end
 do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
   local props = {
     { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },

@@ -538,6 +538,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     approach its stop point on the kerb-side half of the lane (where the AI's closest-edge search finds that
     approach), the travel direction, the phase (0 / 1, by the approach's axis) and the head's prop transform."""
     import furniture
+    au = str(country or "").upper() == "AU"      # fork
     out = []
     # furniture's arm tuples (fid, spec, u, point, at its start, length): the same decision as the road tiles' props
     farms = {name: [(x[0], x[1], x[2], x[3], x[4] == 0, x[5] if len(x) > 5 else math.inf) for x in a]
@@ -578,11 +579,14 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
                 return float(np.asarray(ground(x, y)).reshape(-1)[0]) + 0.15 if ground is not None else jz + 0.15
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
-            side, yaw = furniture.approach_pose(u, what, left_hand)
+            prop = furniture.au_group(what, spec) if au else what      # fork: Australia's pole / mast head
+            side, yaw = furniture.approach_pose(u, prop, left_hand)
             pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines,
-                                       group=what, base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
+                                       group=prop, base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
+            if au and what == furniture.G_SIGNAL:
+                head.append(prop)       # fork: the head's own shape (navgraph.lua SIGNAL_SHAPES); absent: the stock boom
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
                         round(float(inc[0]), 4), round(float(inc[1]), 4), phase] + head)
         if app:
