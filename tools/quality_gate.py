@@ -21,6 +21,7 @@ MODULES = (
     "test_revisit", "test_plancache", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
+    "test_power_clearance", "test_powerlines",
     "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package", "test_carriageway_solver",
 )
