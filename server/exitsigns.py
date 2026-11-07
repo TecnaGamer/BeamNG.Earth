@@ -372,7 +372,10 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
     posts = np.array([centre + right * width * off for off in offsets])
     bases = np.array([_ground_z(frame, elev, p) for p in posts])
     z = _ground_z(frame, elev, centre)
-    bottom = max(float(bases.max()) + 2.4, float(road_point[2]) + 2.2)
+    # Sign-road outlines carry a placeholder z=0, not the graded road height.
+    # Sample the road too: the anchor plane can be far above low terrain.
+    road_z = _ground_z(frame, elev, road_point)
+    bottom = max(float(bases.max()) + 2.4, road_z + 2.2)
     label = obj['exit']['label']
     return dict(id=obj['id'], kind=kind, label=label, style=sign_style(label), state=state,
                 centre=[float(centre[0]), float(centre[1]), z], travel=travel.tolist(), side=side,
