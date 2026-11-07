@@ -150,6 +150,23 @@ JUNCTION_END_M = 10.0       # m: a same-class road ending this close to the othe
 JUNCTION_TAPER_M = 40.0     # m along the side road the height change is eased in over (half the road when shorter)
 JUNCTION_MAX_M = 6.0        # m: a bigger difference is left as it was (bad data; Perm, GitHub #414: 4-5 m steps where a
                             # 30 m DEM smeared an embankment into the junctions)
+# The grade guard (grade_guard; docs/new/003_grade-guard): the last pass over a cell's plans. Per class: the steepest
+# grade a road of it may have unless the ground itself is steeper there (GUARD_GRADE, over the ground's own + 2 %), and
+# the window rule (GUARD_WINDOW: the points WIN_N m before and after standing within WIN_H of each other, the point
+# between may not stand more than WIN_H outside them). The ceilings stand over the norms (ДБН В.2.3-4: 3-6 % on a
+# motorway, up to 8 % in a town) because the old roads are steeper than the new ones.
+GUARD_ON = os.environ.get("BNE_GRADE_GUARD", "off") == "on"     # off by default: it changes every road (play.env.d)
+GUARD_GRADE = {"motorway": 0.06, "trunk": 0.06, "primary": 0.09, "secondary": 0.09, "tertiary": 0.12,
+               "unclassified": 0.12, "residential": 0.12, "living_street": 0.18, "service": 0.18}
+GUARD_GRADE_OTHER = 0.30    # tracks, paths, anything else
+GUARD_LINK_BONUS = 0.02     # a slip road may be this much steeper than its class
+GUARD_MOUNTAIN_BONUS = 0.04  # a pass road
+GUARD_WINDOW = {"motorway": (50.0, 0.5), "trunk": (50.0, 0.5), "primary": (40.0, 0.75), "secondary": (40.0, 0.75),
+                "tertiary": (25.0, 1.0), "unclassified": (25.0, 1.0), "residential": (25.0, 1.0),
+                "living_street": (15.0, 1.5), "service": (15.0, 1.5)}
+GUARD_WINDOW_OTHER = (10.0, 2.0)
+GUARD_REACH_M = 3.0         # m past a road's edge an end still joins it (as JUNCTION_REACH_M)
+GUARD_DESIGNED_M = 0.3      # m from the natural height from which a point counts as a solved shape (a fill, a dip)
 JUNCTION_HOLD_PAD_M = 2.0   # m beyond the joined road's carriageway a side road keeps its height (_hold_junction_corridors)
 JUNCTION_HOLD_GRADE = 0.12  # ... and goes back to its own profile at most this steep
 # A road's change at a junction eased back to its own profile no longer than it must be (junction_pads): the cosine adds
@@ -1557,6 +1574,48 @@ def junction_pads(plans, specs, nodes=None):
     return nodes
 
 
+def guard_limits(spec, plan):
+    """(grade ceiling, window m, window height m) of a road: its class's, a slip road's and a pass road's more."""
+    cls = spec.cls or ""
+    base = cls.removesuffix("_link")
+    g = GUARD_GRADE.get(base, GUARD_GRADE_OTHER)
+    if cls != base:
+        g += GUARD_LINK_BONUS
+    if plan.steep:
+        g += GUARD_MOUNTAIN_BONUS
+    n, h = GUARD_WINDOW.get(base, GUARD_WINDOW_OTHER)
+    return g, n, h
+
+
+def grade_guard(plans, specs, bases, skip=()):
+    """The cell's finished plans (every pass done) put under the grade ceilings and the window rule, as one graph (see
+    GUARD_*): changed in place. bases: each plan's natural profile (the heights before the passes), skip: indices of plans
+    left as they are (tunnels). Returns the kernel's stats (changed points, largest change, edges over the ceiling before
+    / the worst excess, after / the worst excess, the worst point's index) or None. In Rust (earthfast.grade_guard)."""
+    if not plans:
+        return None
+    import fast
+    fast.require(165, "the grade guard")
+    n = [len(p.xy) for p in plans]
+    off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
+    xy = np.ascontiguousarray(np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans]).reshape(-1, 2))
+    z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, np.float64) for p in plans]))
+    base = np.ascontiguousarray(np.concatenate([np.asarray(b, np.float64) for b in bases]))
+    lim = np.array([guard_limits(sp, p) for sp, p in zip(specs, plans)], np.float64).reshape(-1, 3)
+    gmax = np.ascontiguousarray(lim[:, 0])
+    for k in skip:
+        gmax[k] = 0.0
+    rank = np.array([road_rank(sp) for sp in specs], np.int64)
+    half = np.array([p.road_half for p in plans], np.float64)
+    abut = np.array([[bool(p.abut[0]), bool(p.abut[1])] for p in plans], np.uint8).reshape(-1, 2)
+    out, stats, changed = fast._ef.grade_guard(xy, z, base, off, gmax, np.ascontiguousarray(lim[:, 1]),
+                                               np.ascontiguousarray(lim[:, 2]), rank, half, abut, GUARD_REACH_M,
+                                               GUARD_DESIGNED_M, JUNCTION_MAX_M)
+    for j in np.flatnonzero(changed):
+        plans[j].z = out[off[j]:off[j + 1]].copy()
+    return stats
+
+
 LEG_RID_SHIFT = 44           # PlanPack: a pass road's leg (between hairpins) as rid + leg << this (rids < 2^41; earthfast's
                              # LEG_ROAD_MASK alike)
 HAIRPIN_FOLD_RATIO = 0.5      # hairpin_cores: a point of the road's own line this much nearer than along it is another leg
@@ -1832,6 +1891,7 @@ class _Planner:
                     pspecs.append(part[1])
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
+            bases = [np.array(p.z, np.float64) for _f, p in plans] if GUARD_ON else None
             if NEIGHBOUR_ON and plans and self._coarse(key):
                 try:
                     r = 2.0 * NEIGHBOUR_TREND_SIGMA_M
@@ -1876,6 +1936,15 @@ class _Planner:
                     junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+            if GUARD_ON and plans:
+                try:            # the finished plans under the grade ceilings and the window rule (grade_guard)
+                    st = grade_guard([p for _f, p in plans], pspecs, bases,
+                                     [i for i, (f, _p) in enumerate(plans) if TUNNEL_TAG in f])
+                    if st is not None and st[4] > 0:
+                        log.info("grading: grade guard %s: %d edges still over their ceiling, worst %.1f m", key,
+                                 int(st[4]), float(st[5]))
+                except Exception as e:      # the plans as the passes left them rather than no grading
+                    log.debug("grading: grade guard of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
