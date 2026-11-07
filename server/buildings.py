@@ -517,9 +517,8 @@ def region_style(lat, lon):
         return STYLES["mediterranean"]
     if 20.0 <= lat <= 46.0 and 100.0 <= lon <= 146.0:           # China, Korea, Japan, Taiwan
         return STYLES["east_asia"]
-    # fork: Queensland (and the NSW Northern Rivers to 29.2 S); not Papua New Guinea's Milne Bay (north of 12 S, east of
-    # 144 E)
-    if -29.2 <= lat <= -10.0 and 137.9 <= lon <= 153.7 and not (lat > -12.0 and lon > 144.0):
+    # fork: Queensland (climate.au_state: the state's outline, so neither the NSW Northern Rivers nor Papua New Guinea)
+    if climate.au_state(lat, lon) == "QLD":
         return STYLES["queensland"]
     if -50.0 <= lat <= -10.0 and 110.0 <= lon <= 180.0:         # Australia, New Zealand
         return STYLES["oceania"]
