@@ -178,13 +178,14 @@ fn edge_mean(q: &[[f64; 2]; 4]) -> f64 {
 /// Returns (tiles [(z, x, y, quad (8), real edge m)], refined [(z, x, y)], regions [(x, y, quad (8))]: the refined
 /// tiles of zoom zf, which the anchor's own nodes fill).
 #[pyfunction]
-#[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None))]
+#[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None, eye_h=0.0))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f64, disc: bool, zf: u32,
                               max_level: i32, k: Vec<f64>, rmin: f64, h: f64, prev: Vec<(u32, i64, i64)>,
                               hold: Vec<(u32, i64, i64)>, forced: Vec<(f64, f64, f64, f64)>,
                               horizon: Option<(f64, f64, f64, PyReadonlyArray2<'py, f64>, f64, f64,
-                                               Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>)
+                                               Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>,
+                              eye_h: f64)
                          -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>)> {
     let hz = horizon.map(|(reach, min_d, r, base, half, cell, merc)| {
         let a = base.as_array();
@@ -227,8 +228,12 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
         } else if hold.contains(&node) {
             prev.contains(&node)
         } else {
+            // (eye_h: the camera's height over the ground; the split goes by the 3D distance, so straight under a
+            // camera far up the tiles are as coarse as its height asks: the user, 2026-11-07, "its building a bunch of
+            // little tiles directly under the camera even tho im extreamly high up")
+            let d3 = (d * d + eye_h * eye_h).sqrt();
             let lim = (k[lvl.min(k.len() - 1)] * size).max(rmin);
-            d < lim || (prev.contains(&node) && d < (1.0 + h) * lim)
+            d3 < lim || (prev.contains(&node) && d3 < (1.0 + h) * lim)
         };
         if split {
             refined.push(node);

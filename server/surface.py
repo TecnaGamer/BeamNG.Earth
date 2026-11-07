@@ -1378,7 +1378,7 @@ def crop_grid_for(frame, e_min, n_min, e_max, n_max, sampler):
     groups = sampler(np.asarray(la).reshape(rows, cols), np.asarray(lo).reshape(rows, cols))
     if groups is None or not groups.any():
         return None
-    fast.require(161, "crop_grid / crop_sample")
+    fast.require(164, "crop_grid / crop_sample")
     filt, ang, ph, sure = fast._ef.crop_grid(np.ascontiguousarray(groups, np.uint8), CROP_CELL_M, e0, n0)
     if not filt.any():
         return None
