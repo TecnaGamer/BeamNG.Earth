@@ -15,6 +15,8 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import fast
+
 TILE_MIN = 2048.0           # the sea's tiles: 6 inches off the curve at the corners of the smallest
 PLAN_SQUARE = 512.0         # the server plans again when the player enters another square of this size
 TILE_MAX = 8192.0
@@ -22,8 +24,9 @@ SPLIT_K = 0.75              # a square closer to the player than SPLIT_K * its s
 RADIUS_M = 8192.0           # tiles within this of the player; beyond, the far tiles' photo
 SAMPLES = 64                # sea_at is asked on a SAMPLES x SAMPLES grid per tile (32-128 m apart)
 # Land below the sea (the Netherlands' polders, GitHub #8 / #53: a quarter of the country lies under sea level, and a
-# tile's WaterBlock floods all of its square): a tile more than SEA_FLOOD_SHARE of which is land more than SEA_FLOOD_M
-# under the sea is split, on down to SEA_TILE_FLOOR, where it is kept only when it is mostly sea
+# tile's WaterBlock floods all of its square): near tiles containing any sampled land more than SEA_FLOOD_M
+# under the sea are split, on down to SEA_TILE_FLOOR, where they are kept only when mostly sea. A tile-wide 5% allowance
+# hid Santo António's low streets in a 2 km tile (#812). The distant DEM-band tiles retain that allowance.
 SEA_FLOOD_M = 0.3
 SEA_FLOOD_FAR_M = 2.0           # ... for the tiles placed by the DEM band (> POLY_TILE_MAX, far): the polders are 2-6 m
                                 # under the sea, a coarse DEM's marshes and shores a metre (Manhattan's 28 tiles: 62)
@@ -31,7 +34,7 @@ POLY_TILE_MAX = 2048.0          # (seacarve.POLY_TILE_MAX)
 SEA_TILE_FLOOR = 64.0
 SEA_FLOOR_K = 0.0625            # ... farther away, down to this share of the distance (a 16 km straight shore split to
                                 # 128 m all along was 146 tiles; the far shore's strip of sea goes without)
-SEA_FLOOD_SHARE = 0.05
+SEA_FLOOD_SHARE = 0.05          # distant DEM-band tiles only (> POLY_TILE_MAX)
 SEA_SPLIT_SAMPLES = (16, 64)    # samples per edge of a tile checked for low land: size / 32, within these
 SEA_MAX_TILES = 200             # nearest first
 SEA_E = 0.0                     # m: the sea surface (seacarve.SEA_E)
@@ -132,17 +135,17 @@ def plan(frame, x, y, sea_at, radius=None, ground_at=None):
             lat, lon = _grid(frame, corners, s, n)
             wet = np.asarray(sea_at(lat, lon, s), bool).reshape(len(corners), -1)
             g = np.asarray(ground_at(lat, lon, s), np.float64).reshape(len(corners), -1)
-            low = ~wet & (g < SEA_E - (SEA_FLOOD_M if s <= POLY_TILE_MAX else SEA_FLOOD_FAR_M))   # land under the sea
-            for (x0, y0), w, lo in zip(corners, wet, low):
-                # (a share, not any: the DEM's water under the piers the map has as land, Manhattan's waterfront,
-                # split every tile on to 200)
-                if lo.mean() <= SEA_FLOOD_SHARE:
+            fast.require(159, "coastal water tile decisions")
+            actions = fast._ef.sea_tile_actions(np.ascontiguousarray(corners, np.float64),
+                                               np.ascontiguousarray(wet), np.ascontiguousarray(g), s, x, y,
+                                               (SEA_E, POLY_TILE_MAX, SEA_FLOOD_M, SEA_FLOOD_FAR_M,
+                                                SEA_FLOOD_SHARE, SEA_TILE_FLOOR, SEA_FLOOR_K))
+            for (x0, y0), action in zip(corners, actions):
+                if action == 1:
                     keep.append((x0, y0, s))
-                elif s / 2 >= max(SEA_TILE_FLOOR, SEA_FLOOR_K * _dist(x, y, x0, y0, s)):
+                elif action == 2:
                     h = s / 2
                     todo += [(x0 + a * h, y0 + b * h, h) for a in (0, 1) for b in (0, 1)]
-                elif w.mean() >= 0.5:
-                    keep.append((x0, y0, s))
     keep.sort(key=lambda t: _dist(x, y, t[0], t[1], t[2]))
     out = []
     for x0, y0, s in keep[:SEA_MAX_TILES]:
