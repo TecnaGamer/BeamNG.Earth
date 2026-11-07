@@ -5556,7 +5556,9 @@ class Connection:
             return
         kind = msg["type"]
         if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
-            raise ValueError("hello must complete before world requests")
+            # (a client that skipped hello: a fresh lease, not resumable, and the request goes on as before PR #817;
+            # the mod always says hello first on its connection, so its reconnect still resumes before any request)
+            self.s.attach_stream(self, {})
         if kind == "traffic_visuals":
             self.traffic_on = self.traffic_visuals and msg.get("enabled") is True
             if self.traffic_on and msg.get("reset") is True:

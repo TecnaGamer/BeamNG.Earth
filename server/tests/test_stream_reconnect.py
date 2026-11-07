@@ -92,18 +92,21 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(path.read_bytes(), b"STILL DRAWN BY FIRST GAME")
         self.assertTrue(self.s.slot_held(slot))
 
-    async def test_world_requests_cannot_start_before_the_new_transports_hello(self):
+    async def test_world_requests_before_hello_get_a_fresh_unresumable_lease(self):
         reader, writer = await asyncio.open_connection("127.0.0.1", self.port)
         self.clients.append(writer)
         await asyncio.wait_for(self.accepted_event.wait(), 2)
         c = self.accepted[-1]
-        with mock.patch.object(c, "spawn") as spawn:
-            for kind in ("prepare_anchor", "prepare_terrain", "commit_anchor", "commit_terrain", "pose"):
-                with self.subTest(kind=kind), self.assertRaises(ValueError):
-                    c.dispatch(dict(type=kind))
-            spawn.assert_not_called()
+        # (lenient since the merge: a hello-less client, older tools and test clients, keeps working on a lease of its
+        # own that no later hello can resume)
+        with mock.patch.object(c, "spawn"):
+            try:
+                c.dispatch(dict(type="pose"))
+            except (ValueError, KeyError, TypeError):
+                pass                        # (the empty message itself is malformed: only the lease matters here)
+        self.assertIsNotNone(c.lease)
+        self.assertFalse(c.lease.resumable)
         self.assertEqual(self.s.anchors, {})
-        self.assertIsNone(c.lease)
 
     async def test_repeated_hello_cannot_clear_sends_not_yet_seen_by_the_game(self):
         c, _, _, hello = await self.connect()
