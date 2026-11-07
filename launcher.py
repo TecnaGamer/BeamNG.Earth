@@ -28,6 +28,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
 import argparse
 import multiprocessing
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1390,7 +1391,7 @@ def hand_over():
         return False
     if not new:
         return False
-    env = {k: v for k, v in os.environ.items() if k not in ("APPDIR", "APPIMAGE", "ARGV0", "OWD")}
+    env = clean_env()                   # (the new copy without this one's AppImage variables and library path)
     print(f"Starting the updated BeamNG.Earth: {os.path.basename(new)}", flush=True)
     try:
         proc = subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
@@ -1458,12 +1459,21 @@ def update_popup(text, run=None, which=None, windows=None):
         if not which(cmd[0]):
             continue
         try:
-            code = run(cmd, timeout=600).returncode
+            # (clean_env: under the AppImage's own library path kdialog could not load its Qt libraries and exited 1,
+            # read as "No": the update was never offered on KDE desktops, 2026-11-07)
+            r = run(cmd, timeout=600, env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         except (OSError, subprocess.SubprocessError):
             continue
-        if code in (0, 1):
-            return code == 0
+        err = r.stderr.decode("utf-8", "replace") if isinstance(r.stderr, bytes) else str(r.stderr or "")
+        if POPUP_BROKEN.search(err):
+            continue                    # (the tool did not start: not an answer)
+        if r.returncode in (0, 1):
+            return r.returncode == 0
     return None
+
+
+# a pop-up tool that failed to load (the dynamic loader's own messages), not the player's "No"
+POPUP_BROKEN = re.compile(r"error while loading shared libraries|symbol lookup error|version `[^']*' not found")
 
 
 def update_at_start(args, ask=input, popup=update_popup, packaged=None, check=None, download=None, start=None):

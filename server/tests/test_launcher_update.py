@@ -180,10 +180,30 @@ class GameStillRunning(unittest.TestCase):
 
 class Popup(unittest.TestCase):
     def test_linux_zenity_yes_no_and_none_installed(self):
-        run = lambda code: (lambda cmd, timeout: mock.Mock(returncode=code))
+        run = lambda code, err=b"": (lambda cmd, timeout, **kw: mock.Mock(returncode=code, stderr=err))
         self.assertTrue(launcher.update_popup("t", run=run(0), which=lambda n: n == "zenity", windows=False))
         self.assertFalse(launcher.update_popup("t", run=run(1), which=lambda n: n == "kdialog", windows=False))
         self.assertIsNone(launcher.update_popup("t", run=run(0), which=lambda n: None, windows=False))
+
+    def test_a_tool_that_cannot_load_is_not_a_no(self):
+        """kdialog under the AppImage's library path: "version `CXXABI_1.3.15' not found", exit 1 (2026-11-07)."""
+        err = b"kdialog: /tmp/.mount_x/libstdc++.so.6: version `CXXABI_1.3.15' not found (required by kdialog)"
+        self.assertIsNone(launcher.update_popup("t", run=run_err(1, err), which=lambda n: n == "kdialog", windows=False))
+        seen = []
+
+        def run(cmd, timeout, **kw):
+            seen.append(kw.get("env"))
+            return mock.Mock(returncode=0, stderr=b"")
+        with mock.patch.object(launcher, "FROZEN", True), \
+                mock.patch.dict(os.environ, {"LD_LIBRARY_PATH": "/tmp/.mount_x/_internal", "APPIMAGE": "/a.AppImage"}):
+            os.environ.pop("LD_LIBRARY_PATH_ORIG", None)
+            self.assertTrue(launcher.update_popup("t", run=run, which=lambda n: n == "zenity", windows=False))
+        self.assertNotIn("LD_LIBRARY_PATH", seen[0])     # the tool runs with the system's libraries
+        self.assertNotIn("APPIMAGE", seen[0])
+
+
+def run_err(code, err):
+    return lambda cmd, timeout, **kw: mock.Mock(returncode=code, stderr=err)
 
 
 if __name__ == "__main__":
