@@ -5211,6 +5211,23 @@ class Connection:
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
+    async def debug_map(self, msg):
+        """Bounded, read-only placement overlays; never starts world generation."""
+        import debuglayers
+        out = {"type": "debug_map_result", "id": msg.get("id")}
+        try:
+            if getattr(self, "_debug_map_busy", False):
+                out["error"] = "Debug layer busy; retrying"
+            else:
+                self._debug_map_busy = True
+                try:
+                    out.update(await asyncio.get_running_loop().run_in_executor(None, debuglayers.query, self, msg))
+                finally:
+                    self._debug_map_busy = False
+        except (ValueError, OSError) as e:
+            out["error"] = str(e)[:200]
+        self.send(out)
+
     async def cache_map(self, msg):
         """The map's cache view {"id", "z", "x0", "y0", "x1", "y1", "mode"?} -> cache_map_result {"id", "z", "x0",
         "y0", "w", "h", "cells" (base64, a level per cell), "gen", "ready", "error"?} (covermap.CoverMap.query)."""
@@ -5637,6 +5654,8 @@ class Connection:
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
             self.spawn(self.geocode(msg))
+        elif kind == "debug_map":
+            self.spawn(self.debug_map(msg))
         elif kind == "cache_map":               # the map's cache view: what is cached where (covermap.py)
             self.spawn(self.cache_map(msg))
         elif kind == "area_plan":               # the map's picked area: the estimate for its confirm box (areas.py)

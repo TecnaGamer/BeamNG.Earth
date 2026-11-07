@@ -1232,6 +1232,8 @@ local function onMessage(msg)
     if type(msg.result) == 'table' and msg.result.id then M._areaResults = { [msg.result.id] = msg.result } end
   elseif t == 'area_plan_result' then
     if msg.id then M._areaPlans = { [msg.id] = msg } end
+  elseif t == 'debug_map_result' then
+    if msg.id then M._debugMapResults = { [msg.id] = msg } end
   elseif t == 'cache_map_result' then
     -- the map's cache view: a grid of levels for the asked box (EarthMap.vue polls takeCacheMap)
     if msg.id then M._cacheMapResults = { [msg.id] = msg } end
@@ -2779,6 +2781,20 @@ function M.takeGeocode(id)
   local r = geocodeResults[id]
   geocodeResults[id] = nil
   return r
+end
+
+-- Regional placement debug requests share the existing companion connection.
+function M.requestDebugMap(id, layer, s, w, n, e)
+  if not net.isConnected() then return false end
+  M._debugMapResults = {}
+  net.send({ type = 'debug_map', id = id, layer = layer, s = s, w = w, n = n, e = e })
+  return true
+end
+function M.takeDebugMap(id)
+  local results = M._debugMapResults or {}
+  local result = results[id]
+  results[id] = nil
+  return result
 end
 
 -- The world map's cache view (server covermap.py): what is cached in the zoom-z tiles x0..x1, y0..y1 (mode: summary,

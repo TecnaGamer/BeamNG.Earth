@@ -9795,6 +9795,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
         roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    # Cached diagnostic footprints: no mesh reads or generation when the map opens.
+    data["debugCliffs"] = [] if cliff_mesh is None else getattr(cliff_mesh, "debug_coverage", [])
     if cliff_mesh is not None:      # fitted rock skin; client enables mesh collision near the vehicle
         import cliffrocks
         x0, y0, _, _ = tile_bbox(tx, ty)

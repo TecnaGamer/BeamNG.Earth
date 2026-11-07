@@ -877,6 +877,21 @@ function M.uiGeocodeResult(id)
   return core and core.takeGeocode and core.takeGeocode(tonumber(id)) or nil
 end
 
+-- Regional placement overlays: read-only geographic providers, requested only by the debug map UI.
+function M.uiDebugMap(layer, s, w, n, e)
+  local core = ext('beamngEarth_core')
+  if not core or not core.requestDebugMap then return { error = 'BeamNG.Earth is not loaded' } end
+  M._debugMapId = (M._debugMapId or 0) + 1
+  if not core.requestDebugMap(M._debugMapId, tostring(layer), tonumber(s), tonumber(w), tonumber(n), tonumber(e)) then
+    return { error = 'Companion server not connected' }
+  end
+  return { id = M._debugMapId }
+end
+function M.uiDebugMapResult(id)
+  local core = ext('beamngEarth_core')
+  return core and core.takeDebugMap and core.takeDebugMap(tonumber(id)) or nil
+end
+
 -- The map's cache view (server covermap.py): ask (z, x0, y0, x1, y1, mode -> { id } or { error }) and poll (id -> nil
 -- while waiting, else { z, x0, y0, w, h, cells (base64 levels), gen, ready, error }).
 local cacheMapId = 0

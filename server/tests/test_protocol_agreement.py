@@ -163,6 +163,7 @@ MOD_TO_SERVER = {
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     # the map's cache view (covermap.py; additive): the zoom-z tiles x0..x1, y0..y1; mode summary / elevation /
     # imagery / mapdata (world: not asked by the map yet)
+    "debug_map": {"id": F(int), "layer": F(str), "s": F(NUM), "w": F(NUM), "n": F(NUM), "e": F(NUM)},
     "cache_map": {"id": F(int), "z": F(int), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM),
                   "mode": F(str, OPT)},
     # saved areas (areas.py; additive): a picked box's estimate, a new area, pause / resume / delete one; a saved
@@ -203,6 +204,7 @@ SERVER_TO_MOD = {
     "geocode_result": {"id": F(int), "results": F(list), "error": F(str, OPT), "text": F(str, OPT)},   # geocode.py
     # covermap.py: w x h levels (base64, north row first) for the asked box, clipped to the world; gen changes with
     # the index; ready: false while the index is being built
+    "debug_map_result": {"id": F(int), "layers": F(list, OPT), "legend": F(list, OPT), "features": F(list, OPT), "note": F(str, OPT), "error": F(str, OPT)},
     "cache_map_result": {"id": F(int), "z": F(int), "x0": F(int), "y0": F(int), "w": F(int), "h": F(int),
                          "cells": F(str), "gen": F(int), "ready": F(bool, OPT), "error": F(str, OPT)},
     # areas.py: a picked box's estimate (sizes in bytes, the time in s, days of the hosts' daily limits)
@@ -385,7 +387,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
                        "geocode_result", "route_result",             # only when the map / GPS asks
-                       "cache_map_result",                           # only when the map's cache view asks
+                       "debug_map_result", "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
                        "route_download",                             # only when the GPS plans a route (routeahead.py)
                        "terrain_ready_set",                          # only to a fast player's mod that says readySet

@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 import numpy as np
 import cliffmaterial as cm
+import clifftypes
 
 MIN_SLOPE_DEG = 48.0
 MIN_FACE_DROP_M = 8.0
@@ -56,12 +57,10 @@ def classify(built, frame, surface=None):
         return labels
     centers = vertices[index].mean(axis=1)+np.asarray(built.pos)
     lat,lon,_ = frame.enu_to_geodetic(*centers.T)
-    canyon = cm.canyon_region(lat,lon)
     classes = np.zeros(len(index),np.uint8)
     if surface is not None:
         classes,_ = surface.classes(lat,lon,fetch=False)  # cached only; never fetches/waits
-    allowed = np.isin(classes,EXPOSED_CLASSES) | ((classes == 0) & canyon)
-    labels[index[allowed]] = canyon[allowed].astype(np.int8)
+    labels[index] = clifftypes.far_families(lat, lon, classes, EXPOSED_CLASSES)
     return labels
 
 

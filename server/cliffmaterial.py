@@ -3,6 +3,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
+import clifftypes
+from clifftypes import NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON, PLATEAU_RING
 
 WIDTH_M = 91.44
 HEIGHT_M = 91.44
@@ -39,7 +41,6 @@ CANYON_MEDIAN_SRGB = np.array((136, 105, 95), float)/255
 CANYON_COLOR_FACTOR = np.array((.84, .90, .93))
 FAR_STRATA_MEDIAN_SRGB = np.array((155, 152, 147), float)/255
 FAR_STRATA_COLOR_FACTOR = np.array((1.3, 1.4, 1.5))
-NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON = range(4)
 MATERIALS = ('bne_cliff_strata', ROAD_CUT_MATERIAL, ARID_CUT_MATERIAL, 'bne_cliff_canyon_sat')
 
 
@@ -49,7 +50,7 @@ def cut_family(biomes):
     Biome 1 comes from the bundled Koppen B climates, not coordinates. This is
     an environmental appearance prior, not a claim of mapped local lithology.
     """
-    return np.where(np.asarray(biomes) == 1, ARID_CUT, LIMESTONE_CUT)
+    return clifftypes.select(0, 0, context="road_cut", biomes=biomes)
 
 
 @lru_cache(maxsize=4)
@@ -90,26 +91,13 @@ def geometry_sample(u, v, *, family=NATURAL):
     return beds + CANYON_SCAN_RELIEF_WEIGHT*scan
 
 
-# Broad appearance region for the Colorado Plateau: Grand Canyon, Zion and
-# Canyonlands. Deliberately not a lithology map; excludes El Paso and Austin.
-# Selection is shared by near skins and far terrain, independent of the anchor.
-PLATEAU_RING = ((-114.2,35.3),(-112.4,34.3),(-109.1,34.3),(-107.5,36.0),
-                (-108.3,39.7),(-111.8,40.2),(-113.7,38.1))
-
-
 def canyon_region(lat, lon):
-    lat, lon = np.broadcast_arrays(np.asarray(lat, float), np.asarray(lon, float))
-    inside = np.zeros(lat.shape, bool)
-    for (x0,y0),(x1,y1) in zip(PLATEAU_RING, PLATEAU_RING[1:]+PLATEAU_RING[:1]):
-        if y0 == y1:
-            continue
-        crosses = ((y0 > lat) != (y1 > lat)) & (lon < (x1-x0)*(lat-y0)/(y1-y0)+x0)
-        inside ^= crosses
-    return inside
+    """Compatibility wrapper: the winning natural appearance is canyon."""
+    return natural_family(lat, lon) == CANYON
 
 
 def natural_family(lat, lon):
-    return np.where(canyon_region(lat, lon), CANYON, NATURAL)
+    return clifftypes.select(lat, lon)
 
 
 def height_span(family):

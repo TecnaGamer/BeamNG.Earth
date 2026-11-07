@@ -12,6 +12,7 @@ import heapq
 import math
 
 import numpy as np
+import clifftypes
 import cliffmaterial
 
 log = logging.getLogger("earthd.cliffrocks")
@@ -317,6 +318,7 @@ class Mesh:
     lod_scale: float = 1.0  # projected piece radius / original tile radius
     terrain_blend: bool = False  # UV1 is the opaque terrain rim; PBR uses UV0
     strip_colors: np.ndarray | None = None  # Build-only rock tint before satellite rim blending
+    debug_coverage: list = field(default_factory=list)  # Geographic detector runs, independent of render detail
 
 
 def _surface_fade(h, touches, dx, dy):
@@ -368,6 +370,21 @@ def _cut_chart(h, envelope, cuts, dx, dy):
 
 def displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale=1.0, cuts=None, natural_family=cliffmaterial.NATURAL):
     """Shared terrain-following skin, including the actual faded/sunken rim."""
+    if np.ndim(natural_family):
+        # Only tiles crossing appearance boundaries take this path. Blend shared
+        # vertices, but retain exact per-cell material ownership below.
+        sums = None
+        total = np.zeros(np.shape(heights), float)
+        for family in np.unique(natural_family):
+            weight = np.zeros(np.shape(heights), float)
+            cells = np.asarray(natural_family) == family
+            for oy, ox in ((0,0),(0,1),(1,0),(1,1)):
+                weight[oy:oy+cells.shape[0], ox:ox+cells.shape[1]] += cells
+            part = displaced_surface(heights, keep, xs, ys, biomes, horizontal_scale, cuts, int(family))
+            weighted = [a * (weight[...,None] if a.ndim == 3 else weight) for a in part]
+            sums = weighted if sums is None else [a+b for a,b in zip(sums, weighted)]
+            total += weight
+        return tuple(a / (total[...,None] if a.ndim == 3 else total) for a in sums)
     h = np.asarray(heights, float)
     touches = np.zeros(h.shape, np.uint8)
     for dy, dx in ((0, 0), (0, 1), (1, 0), (1, 1)):
@@ -515,7 +532,8 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     out_p, out_t, out_uv, out_c, out_n, out_uv2 = [], [], [], [], [], []
     out_mat = []; out_strip_c = []
     cut_cells = np.zeros(len(j), bool) if cuts is None else cuts[j, i]
-    families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]), natural_family)
+    families = np.where(cut_cells, cliffmaterial.cut_family(biomes[j, i]),
+                        np.asarray(natural_family)[j,i] if np.ndim(natural_family) else natural_family)
     count = 0
     for family, use_y in ((f, a) for f in range(len(cliffmaterial.MATERIALS)) for a in (False, True)):
         cut_material = family in (cliffmaterial.LIMESTONE_CUT, cliffmaterial.ARID_CUT)
@@ -797,9 +815,15 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
         if rocks:
             result.talus = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at)
         return result
+    import debuglayers
+    detector_family = np.where(cuts, cliffmaterial.cut_family(b),
+                               cliffmaterial.natural_family(cy/WORLD_M_PER_DEG, (cx/WORLD_M_PER_DEG+180)%360-180))
+    owned = ((center_points[...,0] >= box[0]) & (center_points[...,0] < box[2]) &
+             (center_points[...,1] >= box[1]) & (center_points[...,1] < box[3]))
+    debug_coverage = debuglayers.footprint_grid(keep & owned, detector_family, xs, ys)
     shore = (classes[:-1, :-1] == 80) | (classes[:-1, 1:] == 80) | (classes[1:, :-1] == 80) | (classes[1:, 1:] == 80)
-    natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
-    coarse_canyon_grid = natural_family == cliffmaterial.CANYON and not cuts.any()
+    natural_family = clifftypes.compact(cliffmaterial.natural_family(la, lo))
+    coarse_canyon_grid = np.all(natural_family == cliffmaterial.CANYON) and not cuts.any()
     subdivisions = CANYON_RENDER_SUBDIVISIONS if coarse_canyon_grid else RENDER_SUBDIVISIONS
     xs, ys, h, keep, b, colors = _refine(xs, ys, keep, b, world_box, elev, color_at, shore, scale, subdivisions)
     # Transfer provenance with the same coarse-cell ownership as _refine.
@@ -848,7 +872,9 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     # Keep missing elevations invalid through toe fitting, then prevent them
     # from poisoning finite-difference normals of neighbouring valid cells.
     h = np.nan_to_num(h, nan=0, posinf=0, neginf=0)
-    natural_family = int(cliffmaterial.natural_family(float(la.mean()), float(lo.mean())))
+    fy, fx = np.meshgrid((ys[:-1]+ys[1:])/2, (xs[:-1]+xs[1:])/2, indexing="ij")
+    natural_family = clifftypes.compact(cliffmaterial.natural_family(
+        fy/WORLD_M_PER_DEG, (fx/WORLD_M_PER_DEG+180)%360-180))
     surface_data = displaced_surface(h, keep, xs, ys, b, scale, fine_cuts, natural_family)
     rubble = []
     if rocks:
@@ -872,9 +898,10 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
                            (la*WORLD_M_PER_DEG-ys[0])/(ys[1]-ys[0]))
             return frame.geodetic_to_enu(la, lo, z)[2]
         result.lod_ground = lod_ground
-        if natural_family == cliffmaterial.CANYON:
+        if np.any(natural_family == cliffmaterial.CANYON):
             import cliffdetail
             result = cliffdetail.refine_canyon(result, full_relief=True)
+        result.debug_coverage = debug_coverage
         result.talus = rubble
         if decals:
             import cliffstrips
