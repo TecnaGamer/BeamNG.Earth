@@ -73,6 +73,26 @@ def _hsv(rgb):
     return h, s, mx
 
 
+class GrassMonthsTest(unittest.TestCase):
+    """fork: the grass is brown most of the year and green in its palette's wet months."""
+
+    def test_tropics_wet_summer_south_wet_winter(self):
+        north = season.grass_dry_months(-23.31, 150.60)           # Mt Archer, Rockhampton: woodland, December to March
+        self.assertEqual(len(north), 12)
+        self.assertTrue(all(0.0 <= v <= 1.0 for v in north))
+        self.assertEqual(north[0], season.GRASS_DRY_SHARES[1], "January: green")
+        self.assertEqual(north[6], season.GRASS_DRY_SHARES[0], "July: brown")
+        self.assertTrue(north[3] > north[0] and north[10] > north[0], "April and November: changing")
+        self.assertGreater(sum(north) / 12, 0.5, "dry most of the year")
+        south = season.grass_dry_months(-37.85, 145.35)           # the Dandenongs: green June to October
+        self.assertEqual(south[7], season.GRASS_DRY_SHARES[1], "August: green")
+        self.assertEqual(south[0], season.GRASS_DRY_SHARES[0], "January: brown")
+
+    def test_no_palette_no_months(self):
+        for lat, lon in ((35.68, 139.69), (-23.38, 150.51), (51.5, -0.12)):      # Tokyo, Rockhampton's cleared city, London
+            self.assertIsNone(season.grass_dry_months(lat, lon))
+
+
 class ColourTest(unittest.TestCase):
     def test_leaf_on_greens_vegetation_only(self):
         rgb = np.zeros((64, 64, 3), np.uint8)

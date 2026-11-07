@@ -30,7 +30,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, scrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -50,7 +50,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { shrub = true, desert_shrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { shrub = true, desert_shrub = true, scrub = true, door = true, lamplens = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -141,10 +141,42 @@ M.CATALOG = {
     { WCA .. 'trees/trees_oak/oak_a', 9.6 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
   },
-  -- fork: Australia's trees (server vegetation.py G_EUCALYPT): West Coast USA's two eucalypts, the heights of oak_west's
+  -- fork: Australia's trees (server vegetation.py G_EUCALYPT): West Coast USA's eucalypts, the first two the heights of oak_west's
   -- entries above; M.eucalyptShapes swaps in the Mount Coot-tha pack (below) where it is installed and its materials load
+  -- (eucalyptus_group, a clump of trunks: its height is an estimate, not yet measured)
   eucalypt = {
     { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 }, { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 },
+    { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 24.0 },
+  },
+  -- fork: the NVIS palettes' groups (server vegetation.py G_DRY_RAINFOREST .. G_MANGROVE, data/veg_palettes.json), vanilla
+  -- shapes (fork/reference/vanilla_veg/inventory.csv). Heights are ESTIMATES by name and file size (the game files were not at
+  -- hand to measure; trees.pick scales an item to its height, so a wrong one only shifts the scale): to be measured in-game.
+  -- Dry rainforest and vine thicket: Jungle Rock Island's second tropical tree, its fillers and bushes, Italy's dense oaks
+  dry_rainforest = {
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 }, { IT .. 'trees/trees_italy/holm_oak_bush_huge', 4.5 },
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 6.5 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_medium', 13.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_02', 14.0 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_03', 15.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_large', 17.0 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler_04', 18.0 }, { JRI .. 'trees/trees_tropical_2/tro_tree_2_tall', 22.0 },
+  },
+  -- mallee, acacia and brigalow, she-oaks: Italy's scraggly trees and cork oaks
+  mallee = {
+    { IT .. 'trees/trees_italy/scraggly_bush', 2.5 }, { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 },
+    { IT .. 'trees/trees_italy/scraggly_tree_filler_1', 6.0 }, { IT .. 'trees/trees_italy/scraggly_2', 8.0 },
+    { IT .. 'trees/trees_italy/scraggly', 9.5 }, { IT .. 'trees/trees_italy/cork_oak_medium', 10.0 },
+  },
+  -- shrublands and heath: West Coast USA's shrubs
+  scrub = {
+    { WCA .. 'trees/trees_shrub/shrub_c', 0.6 }, { WCA .. 'trees/trees_shrub/shrub_e', 0.8 },
+    { WCA .. 'trees/trees_shrub/shrub_g', 0.9 }, { WCA .. 'trees/trees_shrub/shrub_f', 1.0 },
+    { WCA .. 'trees/trees_shrub/shrub_d', 1.1 }, { WCA .. 'trees/trees_shrub/shrub_b', 1.2 },
+    { WCA .. 'trees/trees_shrub/shrub_a', 1.4 }, { IT .. 'trees/trees_italy/holm_oak_bush', 2.5 },
+    { IT .. 'trees/trees_italy/cork_oak_bush_large', 3.3 },
+  },
+  -- mangroves: the dense low tropical bushes
+  mangrove = {
+    { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
+    { JRI .. 'trees/trees_tropical_2/tro_tree_2_bush_huge', 6.5 },
   },
   palm = {
     { JRI .. 'trees/trees_palm/palm_small', 8.9 }, { JRI .. 'trees/trees_palm/palm_short', 9.1 },
@@ -377,7 +409,7 @@ vienna.install(M)
 local MATERIALS = {
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
   ECA .. 'trees/ECA_coast_bush', ECA .. 'trees/common', ECA .. 'trees', ECA .. 'rocks',
-  WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm',
+  WCA .. 'trees/trees_conifer', WCA .. 'trees/trees_oak', WCA .. 'trees/trees_eucalyptus', WCA .. 'trees/trees_palm', WCA .. 'trees/trees_shrub',
   WCA .. 'trees', UT .. 'trees/Juniper', UT .. 'trees', UT .. 'groundcover', UT .. 'rocks', JV .. 'groundcover',
   JV .. 'rocks', JV .. 'trees/deserttrees', JV .. 'trees', JRI .. 'trees/trees_palm', JRI .. 'trees/trees_tropical_1',
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',

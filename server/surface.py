@@ -30,6 +30,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 import climate      # fork: Australian lawns (dry_australia)
+import vegclass     # fork: the palettes' ground cover (au_cover)
 import fast
 import mapgeom
 import heightmap
@@ -40,8 +41,9 @@ import staging
 
 log = logging.getLogger("earthd.surface")
 
-VERSION = 5   # fork: 2 = Australian lawns (LAWN_SHARE_AU), 3 = red soils and sugarcane (RED_DIRT, CANE),
-              # 4 = + Australian roundabout islands mown grass (ISLAND_GRASS_AU); 5 = Australia is the state outlines (climate.au_state); (nothing keys on it yet)
+VERSION = 6   # fork: 2 = Australian lawns (LAWN_SHARE_AU), 3 = red soils and sugarcane (RED_DIRT, CANE),
+              # 4 = + Australian roundabout islands mown grass (ISLAND_GRASS_AU); 5 = Australia is the state outlines (climate.au_state);
+              # 6 = the vegetation palettes' ground (au_cover, DRY_LONG); (nothing keys on it yet)
 # (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
 # default, and the one every block had before (an all-zero sample falls to the later layer on ties,
 # docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
@@ -66,9 +68,10 @@ MATERIALS = (
     # fork: Australia (after the default dirt, so no existing mask changes its name; masks written only where a sample uses them)
     ("bngEarthGroundRedDirt", "DIRT_DUSTY"),      # the red / ochre soil of the dry inland and the west (au_ground)
     ("bngEarthGroundCane", "GRASS"),              # sugarcane: Queensland's coastal cropland (cane_belt; groundcover.lua)
+    ("bngEarthGroundDryLong", "GRASS"),           # long dry grass, green in the wet season: the woodlands' and grasslands' ground (au_cover)
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT, RED_DIRT, CANE = range(len(MATERIALS))   # fork: + RED_DIRT, CANE
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT, RED_DIRT, CANE, DRY_LONG = range(len(MATERIALS))   # fork: + RED_DIRT, CANE, DRY_LONG
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -163,6 +166,29 @@ def au_ground(idx, lat, lon):
     return out
 
 
+COVER_CLASSES = (10, 20, 30, 100)       # fork: WorldCover tree, shrub, grass, moss: the land au_cover regrounds
+GROUND_LAYER = np.array([255, DRY_LONG, DUSTY, 255, DIRT], np.uint8)    # fork: by vegclass.GROUND (255: as it is)
+
+
+def au_cover(idx, classes, lat, lon):
+    """fork: idx with the ground of vegetated land (COVER_CLASSES) set by its vegetation palette (vegclass.py: NVIS in
+    Australia): long dry grass (DRY_LONG), the shrubland's dusty ground (DUSTY: its shrubs and sparse grass), or none
+    under rainforest and mangroves (DIRT, red where au_ground says); "green" and every point without a palette stay
+    as they are. A new array only where something changed. Pure."""
+    sel = np.isin(classes, COVER_CLASSES)
+    if not sel.any():
+        return idx
+    new = GROUND_LAYER[vegclass.ground_codes(np.asarray(lat, np.float64)[sel], np.asarray(lon, np.float64)[sel])]
+    hit = new != 255
+    if not hit.any():
+        return idx
+    out = idx.copy()
+    sub = out[sel]
+    sub[hit] = new[hit]
+    out[sel] = sub
+    return out
+
+
 def dry_west(lat, lon):
     """The arid West (a coarse climate stand-in, vegetation.regional's): its towns have fewer lawns."""
     lat, lon = np.asarray(lat), np.asarray(lon)
@@ -206,6 +232,7 @@ def classify(classes, u, square, lat=None, lon=None):
             sub = idx[urban]
             sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
             idx[urban] = sub
+        idx = au_cover(idx, classes, lat, lon)      # fork: the vegetation palettes' ground cover
     u = np.asarray(u, np.float64)
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
@@ -1104,7 +1131,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.5
-VERGE_FROM = (GRASS, LAWN, DUSTY)
+VERGE_FROM = (GRASS, LAWN, DUSTY, DRY_LONG)     # (fork: + DRY_LONG)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot

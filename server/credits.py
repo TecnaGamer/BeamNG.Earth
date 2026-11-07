@@ -108,13 +108,16 @@ FEATURES = {
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    "veg:nvis": "NVIS Version 7.0, (c) Commonwealth of Australia (DCCEEW), CC BY 4.0, resampled",     # fork: vegclass.py
 }
 SHORT.update(FEATURES)
+SHORT["veg:nvis"] = "NVIS 7.0 (DCCEEW, CC BY 4.0)"        # fork: (the overlay trims; the wording of record is full_label)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
-          ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
+          ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate"),
+          ("veg", "Vegetation", "Far vegetation")]     # fork: veg
 # Display order of the ids (unknown ones follow, by name)
 ORDER = ([f"img:{n}" for n in IMAGERY] + [f"dem:{n}" for n in ELEVATION] + list(FEATURES) + [WEATHER_ID])
 
@@ -248,6 +251,12 @@ def feature_ids(conn):
         ids.add("grav:egm2008")
     if veg_on:                      # (the trees' tiles carry the forest ambience's set: climate.koppen_at)
         ids.add("climate:beck-kg")
+        try:                        # fork: Australia's vegetation palettes (vegclass: NVIS) once the trees are shown there
+            import climate
+            if climate.in_australia(lat, lon):
+                ids.add("veg:nvis")
+        except Exception:
+            pass
     return ids
 
 

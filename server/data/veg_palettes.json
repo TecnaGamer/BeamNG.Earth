@@ -1,0 +1,30 @@
+{
+"v": 1,
+"_about": "fork: vegclass.py reads this. classes: layer:code -> palette (a class not listed, e.g. cleared land, keeps the stock behaviour). palettes: trees / shrubs [[vegetation group, share], ...] (trees sum to 1 and replace every tree group; shrubs may sum to less: the rest keep theirs), ground (vegclass.GROUND), density (at most 1: thins by rank), scale (height multiplier range), wet (months the grass is green; default wet_north / wet_south either side of north_lat). The NVIS 7.0 group numbers are tools/build_au_vegetation.py's LEGEND.",
+"classes": {"au_mvg:1": "rainforest", "au_mvg:2": "tall_forest", "au_mvg:3": "open_forest", "au_mvg:4": "low_forest", "au_mvg:5": "woodland", "au_mvg:6": "acacia_forest", "au_mvg:7": "she_oak_pine", "au_mvg:8": "she_oak_pine", "au_mvg:9": "paperbark", "au_mvg:10": "woodland_mixed", "au_mvg:11": "open_woodland", "au_mvg:12": "tropical_woodland", "au_mvg:13": "acacia_open", "au_mvg:14": "mallee", "au_mvg:15": "thicket", "au_mvg:16": "shrubland", "au_mvg:17": "shrubland", "au_mvg:18": "heath", "au_mvg:19": "tussock", "au_mvg:20": "hummock", "au_mvg:21": "wet_grass", "au_mvg:22": "saltbush", "au_mvg:23": "mangrove", "au_mvg:29": "woodland", "au_mvg:31": "open_woodland", "au_mvg:32": "mallee_open"},
+"north_lat": -30.0, "wet_north": [12, 1, 2, 3], "wet_south": [6, 7, 8, 9, 10],
+"palettes": {
+  "acacia_forest": {"trees": [["mallee", 0.75], ["eucalypt", 0.25]], "shrubs": [["scrub", 0.5]], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.15]},
+  "acacia_open": {"trees": [["mallee", 0.8], ["eucalypt", 0.2]], "shrubs": [["scrub", 0.5]], "ground": "dry_long", "density": 0.7, "scale": [0.75, 1.1]},
+  "heath": {"trees": [["scrub", 1.0]], "shrubs": [["scrub", 0.8]], "ground": "dry_bush", "density": 1.0, "scale": [0.8, 1.1]},
+  "hummock": {"trees": [["mallee", 0.5], ["eucalypt", 0.5]], "shrubs": [], "ground": "dry_bush", "density": 0.5, "scale": [0.8, 1.2]},
+  "low_forest": {"trees": [["eucalypt", 1.0]], "shrubs": [["scrub", 0.5]], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.1]},
+  "mallee": {"trees": [["mallee", 0.85], ["eucalypt", 0.15]], "shrubs": [["scrub", 0.6]], "ground": "dry_bush", "density": 0.9, "scale": [0.9, 1.3]},
+  "mallee_open": {"trees": [["mallee", 0.9], ["eucalypt", 0.1]], "shrubs": [["scrub", 0.5]], "ground": "dry_bush", "density": 0.6, "scale": [0.9, 1.3]},
+  "mangrove": {"trees": [["mangrove", 1.0]], "shrubs": [["mangrove", 0.9]], "ground": "none", "density": 1.0, "scale": [0.6, 0.95]},
+  "open_forest": {"trees": [["eucalypt", 0.93], ["dry_rainforest", 0.07]], "shrubs": [["scrub", 0.3]], "ground": "dry_long", "density": 1.0, "scale": [0.95, 1.2]},
+  "open_woodland": {"trees": [["eucalypt", 0.95], ["mallee", 0.05]], "shrubs": [["scrub", 0.2]], "ground": "dry_long", "density": 0.8, "scale": [0.7, 1.25]},
+  "paperbark": {"trees": [["eucalypt", 1.0]], "shrubs": [["scrub", 0.15]], "ground": "green", "density": 1.0, "scale": [0.7, 1.0], "wet": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+  "rainforest": {"trees": [["dry_rainforest", 0.55], ["tropical", 0.45]], "shrubs": [["scrub", 0.3]], "ground": "none", "density": 1.0, "scale": [0.9, 1.15]},
+  "saltbush": {"trees": [["scrub", 0.5], ["mallee", 0.5]], "shrubs": [], "ground": "dry_bush", "density": 0.5, "scale": [0.8, 1.2]},
+  "she_oak_pine": {"trees": [["mallee", 0.55], ["eucalypt", 0.45]], "shrubs": [["scrub", 0.4]], "ground": "dry_long", "density": 1.0, "scale": [0.85, 1.15]},
+  "shrubland": {"trees": [["scrub", 0.7], ["mallee", 0.3]], "shrubs": [["scrub", 0.5]], "ground": "dry_bush", "density": 0.8, "scale": [0.8, 1.2]},
+  "tall_forest": {"trees": [["eucalypt", 0.82], ["dry_rainforest", 0.18]], "shrubs": [["dry_rainforest", 0.4]], "ground": "green", "density": 1.0, "scale": [1.05, 1.3], "wet": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+  "thicket": {"trees": [["dry_rainforest", 0.6], ["mallee", 0.4]], "shrubs": [["scrub", 0.4]], "ground": "none", "density": 1.0, "scale": [0.85, 1.15]},
+  "tropical_woodland": {"trees": [["eucalypt", 1.0]], "shrubs": [["scrub", 0.1]], "ground": "dry_long", "density": 0.8, "scale": [0.8, 1.3]},
+  "tussock": {"trees": [["eucalypt", 0.75], ["mallee", 0.25]], "shrubs": [["scrub", 0.15]], "ground": "dry_long", "density": 0.45, "scale": [0.8, 1.2]},
+  "wet_grass": {"trees": [["eucalypt", 0.7], ["mallee", 0.3]], "shrubs": [["scrub", 0.2]], "ground": "green", "density": 0.5, "scale": [0.8, 1.2], "wet": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]},
+  "woodland": {"trees": [["eucalypt", 1.0]], "shrubs": [["scrub", 0.2]], "ground": "dry_long", "density": 1.0, "scale": [0.75, 1.25]},
+  "woodland_mixed": {"trees": [["eucalypt", 0.6], ["mallee", 0.4]], "shrubs": [["scrub", 0.3]], "ground": "dry_long", "density": 1.0, "scale": [0.8, 1.2]}
+}
+}

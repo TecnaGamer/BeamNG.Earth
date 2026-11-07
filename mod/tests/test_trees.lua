@@ -670,11 +670,12 @@ end
 
 do -- fork: the "eucalypt" group (server vegetation.G_EUCALYPT): West Coast USA's eucalypts, or the optional Mount Coot-tha pack
   local euc = trees.CATALOG.eucalypt
-  T.check(euc and #euc == 2 and euc[1][1]:find('trees_eucalyptus/eucalyptus_double', 1, true)
-    and euc[2][1]:find('trees_eucalyptus/eucalyptus_tall', 1, true), 'eucalypt: the stock eucalyptus pair')
+  T.check(euc and #euc == 3 and euc[1][1]:find('trees_eucalyptus/eucalyptus_double', 1, true)
+    and euc[2][1]:find('trees_eucalyptus/eucalyptus_tall', 1, true)
+    and euc[3][1]:find('trees_eucalyptus/eucalyptus_group', 1, true), 'eucalypt: the stock eucalyptus pair and the clump')
   local oak = trees.CATALOG.oak_west
   T.check(euc[1][2] == oak[5][2] and euc[2][2] == oak[6][2], 'eucalypt: the same measured heights as oak_west\'s eucalypts')
-  local shape, sc = trees.pick('eucalypt', 22.5, 0.3)
+  local shape, sc = trees.pick('eucalypt', 22.5, 0.0)     -- (rank 0: the first of the two near it, the clump is the other)
   T.check(shape:find('eucalyptus_tall', 1, true) and math.abs(sc - 1) < 1e-9, 'eucalypt: a 22.5 m tree is the tall one at 1:1')
   T.check(trees.GROUP_MAX_M.eucalypt == nil and not trees.isBarrier('eucalypt'), 'eucalypt: a tree, not a barrier')
   -- the stock West Coast eucalyptus materials are preloaded
@@ -706,6 +707,24 @@ do -- fork: the "eucalypt" group (server vegetation.G_EUCALYPT): West Coast USA'
   -- in this stubbed game (every file exists, no such materials registered) the stock pair stays
   trees.update(31, { x = 0, y = 0 })
   T.check(trees.CATALOG.eucalypt == trees.STOCK_EUCALYPT, 'setup: no Mount Coot-tha materials: stock shapes')
+end
+
+do -- fork: the NVIS palettes' groups (server vegetation.GROUPS 12 .. 15), vanilla shapes, every entry usable by pick
+  local source = assert(io.open(dir .. '/../beamng_earth/lua/ge/extensions/beamngEarth/trees.lua')):read('*a')
+  for _, g in ipairs({ 'dry_rainforest', 'mallee', 'scrub', 'mangrove' }) do
+    local list = trees.CATALOG[g]
+    T.check(list and #list >= 3, g .. ': several shapes')
+    local ordered = true
+    for i, v in ipairs(list or {}) do
+      if type(v[1]) ~= 'string' or not v[1]:find('^/levels/') or v[2] <= 0 or (i > 1 and v[2] < list[i - 1][2]) then ordered = false end
+    end
+    T.check(ordered, g .. ': level shapes by height')
+    local shape, sc = trees.pick(g, 6.0, 0.4)
+    T.check(type(shape) == 'string' and sc >= 0.3 and sc <= 2.5, g .. ': pick gives a shape and a scale')
+    T.check(not trees.isBarrier(g), g .. ': not a barrier')
+  end
+  T.check(trees.NO_COLLIDE.scrub and trees.GROUP_MAX_M.scrub == 250 and trees.NO_COLLIDE.mallee == nil, 'scrub: a bush (no collision, near only)')
+  T.check(source:find("WCA .. 'trees/trees_shrub'", 1, true), 'scrub: its stock materials folder is preloaded')
 end
 
 T.done('test_trees')

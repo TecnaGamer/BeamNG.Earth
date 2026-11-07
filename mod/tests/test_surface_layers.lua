@@ -196,6 +196,16 @@ do
   T.check(gc.dryShare(14, -27.47, 153.03, 244) > gc.dryShare(14, -27.47, 153.03, 350), 'Sep drier than mid Dec')
   T.check(near(gc.dryShare(8, -31.95, 115.86, 213), 0.5) and near(gc.dryShare(8, -31.95, 115.86, 30), 0.5),
     'Perth Csa: no seasonal swing (dry in summer already)')
+  -- fork: the vegetation palette's month by month dry shares (anchor_ready.grassDry, server season.grass_dry_months): wet December to March
+  local months = { 0.12, 0.12, 0.302, 0.667, 0.85, 0.85, 0.85, 0.85, 0.85, 0.85, 0.667, 0.302 }
+  T.check(near(gc.dryShare(6, -23.3, 150.6, 196, months), 0.85), 'palette months: mid July dry (the climate class no longer matters)')
+  T.check(near(gc.dryShare(14, -23.3, 150.6, 15, months), 0.15), 'palette months: mid January green')
+  T.check(near(gc.dryShare(nil, -23.3, 150.6, nil, months), 0.6), 'palette months, no season: their mean')
+  T.check(near(gc.dryShare(14, -27.47, 153.03, 213, { 1 }), 0.6), 'a malformed list is ignored')
+  local lg, ld = gc.longMix(0.5)
+  local lg9, ld9 = gc.longMix(0.9)
+  T.check(near(lg, 1) and near(ld, 1) and near(lg9 + ld9, 2) and lg9 < 0.3 and ld9 > 1.7, 'the long grass layer trades at a constant total')
+  T.check(near(select(2, gc.longMix(nil)), 2 * gc.AU_DRY), 'no dry share: the Australian default')
   -- constant element total: green down by what dry goes up
   local fg, fd = gc.mixFactors(0.6)
   local g, d = 0, 0
@@ -241,6 +251,15 @@ do
   gc.rebuild()
   local total1 = elements('small_grass_close') + elements('long_grass_distant') + elements('grass_dry_1')
   T.check(math.abs(total1 - total0) <= 3, 'Brisbane: the same element total (' .. total0 .. ' / ' .. total1 .. ')')
+  -- fork: the DRY_LONG layer's definitions keep their own total whatever the dry share, and are on their own layer
+  local function longTotal() return elements('grass_dry_1_long') + elements('weed1_long') + elements('long_grass_distant_long') end
+  local long1 = longTotal()
+  gc.setClimate(14, -23.3, 150.6, { 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12, 0.12 })
+  gc.rebuild()
+  T.check(near(gc.status().dryShare, 0.1) and math.abs(longTotal() - long1) <= 3, 'wet months: the long grass total as before')
+  T.check(elements('long_grass_distant_long') > 3 * elements('grass_dry_1_long'), 'wet months: mostly green long grass')
+  gc.setClimate(14, -27.47, 153.03)
+  gc.rebuild()
   -- the lawn and the shrub definitions are not mixed
   T.check(elements('small_grass_close_lawn') == 10000 and elements('shrubs_near') == 15000, 'lawn and scrub shares untouched')
   -- seasonal: only with hello.season auto, remade when the date moves the share a step

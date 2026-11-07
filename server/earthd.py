@@ -5852,6 +5852,12 @@ class Connection:
             ready["koppen"] = int(climatemod.koppen_at(lat, lon))   # for the mod's grass mix (groundcover.setClimate)
         except Exception as e:          # (the mod behaves as before without it)
             log.debug("anchor %d: no climate class: %s: %s", anchor.id, type(e).__name__, e)
+        try:                            # fork (protocol addition, optional): the grass's dry share by month where a vegetation
+            months = seasonmod.grass_dry_months(lat, lon)       # palette covers the anchor (groundcover.setClimate)
+            if months:
+                ready["grassDry"] = months
+        except Exception as e:
+            log.debug("anchor %d: no grass months: %s: %s", anchor.id, type(e).__name__, e)
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")
         if provisional:
