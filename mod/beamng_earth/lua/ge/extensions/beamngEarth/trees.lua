@@ -283,6 +283,17 @@ M.CATALOG.au_guidepost_red = { { '/levels/beamng_earth/art/shapes/beamngEarth/bn
 M.CATALOG.au_guidepost_white = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_guidepost_white', 1.05 } }
 M.GROUP_MAX_M.au_guidepost_red = 800
 M.GROUP_MAX_M.au_guidepost_white = 800
+-- fork: Australia's yellow diamond curve / turn warning signs (server warnsigns.py, tools/build_au_warnsigns.py): 2.56 m, the face
+-- to local -Y (the traffic it warns) on a post behind it, like Sweden's signs; few, so one spelling each and seen from 400 m
+local AU_WARN = '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_warn_'
+M.CATALOG.au_warn_curve_l = { { AU_WARN .. 'curve_l', 2.56 } }
+M.CATALOG.au_warn_curve_r = { { AU_WARN .. 'curve_r', 2.56 } }
+M.CATALOG.au_warn_turn_l = { { AU_WARN .. 'turn_l', 2.56 } }
+M.CATALOG.au_warn_turn_r = { { AU_WARN .. 'turn_r', 2.56 } }
+for _, g in ipairs({ 'au_warn_curve_l', 'au_warn_curve_r', 'au_warn_turn_l', 'au_warn_turn_r' }) do
+  M.GROUP_MAX_M[g] = 400
+  M.ONE_SPELLING[g] = true
+end
 -- fork: Australia's boundary fences (server buildings.au_fence, tools/build_au_streetscape.py): Colorbond sheet in six colours and
 -- timber paling in two, 5.4 m along x like the stock yard fence, 1.8 m high (a row's height scales it)
 for _, g in ipairs({ 'au_fence_monument', 'au_fence_woodland', 'au_fence_surfmist', 'au_fence_basalt', 'au_fence_shale',
@@ -342,6 +353,11 @@ M.GROUP_MAX_M.golfflag = 400
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
     or g:sub(1, 3) == 'se_' or g:sub(1, 12) == 'au_guidepost')      -- (a sign thinned away is a rule gone, not a tree fewer)
+end
+-- fork: ... and Australia's warning signs are never thinned either
+local isBarrierStock = M.isBarrier
+function M.isBarrier(g)
+  return isBarrierStock(g) or (g ~= nil and g:sub(1, 8) == 'au_warn_')
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -566,6 +582,7 @@ local function setup()
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/golf_flag.materials.json')
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_guideposts.materials.json')   -- fork
   pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_streetscape.materials.json')  -- fork: fences, pole
+  pcall(loadJsonMaterialsFile, '/levels/beamng_earth/art/shapes/beamngEarth/au_warnsigns.materials.json')   -- fork: warning signs
   if FS and scenetree then      -- fork: the Mount Coot-tha eucalypts, where installed and their materials are registered
     local ok, shapes = pcall(M.eucalyptShapes, function(p) return FS:fileExists(p) end,
       function(n) return scenetree.findObject(n) ~= nil end)
