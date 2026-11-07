@@ -203,7 +203,7 @@ def wire_mesh(lines, origin):
 
 
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}
-MINOR = {"residential", "unclassified", "living_street"}
+MINOR = {"residential", "unclassified", "living_street", "service"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
@@ -238,6 +238,45 @@ def _outbound(a):
     if len(a) < 5 or not a[1].oneway or not getattr(a[1], "dir", 0):
         return False
     return (a[1].dir > 0) == bool(a[4])
+
+
+# OSM hierarchy for unsignalised right-of-way. Links and ramps rank below the
+# road they join so an on-ramp does not inherit its mainline's priority.
+PRIORITY_RANK = {"motorway": 10, "trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6,
+                 "unclassified": 5, "residential": 4, "living_street": 3, "service": 2, "unknown": 1}
+PRIORITY_LINK_PENALTY = 2
+PRIORITY_DRIVABILITY_BY_RANK = {0: 0.38, 1: 0.39, 2: 0.40, 3: 0.50, 4: 0.79,
+                                5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98, 10: 0.99}
+
+
+def priority_rank(spec):
+    rank = PRIORITY_RANK.get(str(getattr(spec, "cls", "unknown")), 1)
+    if getattr(spec, "link", False):
+        rank -= PRIORITY_LINK_PENALTY
+    return max(0, rank)
+
+
+def priority_drivability(spec):
+    return PRIORITY_DRIVABILITY_BY_RANK[min(10, max(0, priority_rank(spec)))]
+
+
+def priority_incoming_arms(arms, ring=None):
+    ring_ids = ring or set()
+    return [a for a in arms if a[0] not in ring_ids and not _outbound(a)]
+
+
+def priority_stop_arms(arms, ring=None):
+    if ring and sum(1 for a in arms if a[0] in ring) >= 2:
+        return []
+    if len(arms) < 3:
+        return []
+    incoming = priority_incoming_arms(arms, ring)
+    if len(incoming) < 2:
+        return []
+    best = max(priority_rank(a[1]) for a in incoming)
+    if best <= 0:
+        return []
+    return [a for a in incoming if priority_rank(a[1]) < best]
 
 
 SIGNAL_NEAR_M = 25.0        # m past the junction's widest arm a mapped traffic signal may stand (OSM maps them at the
@@ -335,9 +374,12 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     (secrossings.nodes), on top of those, as a stop sign is only ever the map's."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
-    major = [a for a in arms if a[1].cls in MAJOR]
-    minor = [a for a in arms if a[1].cls in MINOR]
-    if _is_signalled(arms, signals):
+    major = [a for a in arms if a[1].cls in MAJOR and not _outbound(a)]
+    minor = [a for a in arms if a[1].cls in MINOR and not _outbound(a)]
+    priority_stops = priority_stop_arms(arms, ring)
+    mapped_signal = signals is not None and _is_signalled(arms, signals)
+    guessed_signal = signals is None and _guess_signalled(arms)
+    if mapped_signal or (guessed_signal and not priority_stops):
         # one head per way in: none on a one-way arm leaving it, none on a short link to the next signalled
         # junction (a divided road crossing a street is two junctions 20 m apart: the user's report 2026-10-14,
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
@@ -354,13 +396,16 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
             if what is not None and not _outbound(a):
                 put.append((a, what))
         return put
+    if priority_stops:
+        return [(a, G_STOP) for a in priority_stops]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
         # the stem: the arm least in line with another
         def straightest(a):
             return max(-float(a[2] @ b[2]) for b in arms if b is not a)
-        return [(min(arms, key=straightest), G_STOP)] if all(a[1].cls in MINOR for a in arms) else []
+        stem = min(arms, key=straightest)
+        return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and not _outbound(stem) else []
     # the all-way coin flip: keyed on the roads that meet there (their map ids, sorted: the arms' order differs between
     # the road tiles and the road graph), the same from both and from every anchor (an 8 m cell of the junction in
     # the anchor's frame flipped junctions at a rebase: geotiles, 2026-10-29)
@@ -487,7 +532,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     for k, arms in junctions.items():
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         here = _controlled_here(arms, signals)
-        if len(arms) < 3 or not (on_ring or here or sweden):
+        if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
             continue
         p = arms[0][3]
         if not (_owns(box, p[0], p[1])):
