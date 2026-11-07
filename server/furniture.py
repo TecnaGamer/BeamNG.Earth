@@ -634,6 +634,7 @@ BENCH_YAW = 90.0            # the bench model's front is its local +y (the yaw p
 # the complete collider is covered while their legal high arms can overhang a carriageway.
 # STOP/give-way/polelamp have no Colmesh: use all transformed visual bounds (matching the native ObjectBox).
 COLLISION_BOXES = {
+    "busshelter": (2.90, ((-0.74, -1.45, -0.20, 0.74, 1.44, 2.70),)),
     G_LAMP: (9.0, ((-0.203, -0.200, -0.420, 0.144, 0.201, 7.124),
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
     G_POLE: (9.2, ((-0.260, -0.300, -1.000, 0.260, 0.300, 7.772),

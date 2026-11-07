@@ -999,7 +999,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import shelters
         try:
-            props.extend(shelters.rows(frame, infra_fn, box, elev, near_roads))
+            props.extend(shelters.rows(frame, infra_fn, box, elev, near_roads,
+                                      clearance=clearance[0] if clearance else None))
         except Exception as ex:
             log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import industry
