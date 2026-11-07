@@ -11,7 +11,7 @@ import geodesy
 
 
 class TalusTest(unittest.TestCase):
-    def fixture(self, box=(0,0,160,160), classes=None, blocked=None, keep=None):
+    def fixture(self, box=(0,0,160,160), classes=None, blocked=None, keep=None, **kwargs):
         x = np.arange(41)*4.
         if keep is None:
             keep = np.zeros((40,40),bool)
@@ -20,7 +20,7 @@ class TalusTest(unittest.TestCase):
         if blocked is None: blocked = np.zeros((40,40),bool)
         def elev(lat,lon): return 20+np.clip(np.asarray(lon)*cr.WORLD_M_PER_DEG-80,0,20)*3
         return talus.rows(geodesy.EnuFrame(0,0),box,x,x,keep,classes,blocked,
-                          np.zeros((40,40),int),elev)
+                          np.zeros((40,40),int),elev, **kwargs)
 
     def test_density_favors_stable_ground_below_cliff(self):
         p = talus.probability(np.array((0,25,28,35,44,78,85)),0)
@@ -90,6 +90,35 @@ class TalusTest(unittest.TestCase):
         freeze = lambda rows: {tuple(r) for r in rows}
         self.assertFalse(freeze(left)&freeze(right))
         self.assertEqual(freeze(whole),freeze(left)|freeze(right))
+
+    def test_full_footprint_clears_bends_and_endpoints(self):
+        import roads
+        corridor = roads._Segs({'bend': (np.array([[0.,0.],[20.,0.],[20.,20.]]), 3.)})
+        points = np.array([[10,6,0],[10,9,0],[24,15,0],[24,24,0],[30,30,0]],float)
+        # Centres are all off-road, but wide clusters overlap its sides/end cap.
+        np.testing.assert_array_equal(talus.road_clear(points,np.full(5,2.),corridor),
+                                      [False,True,False,False,True])
+        self.assertTrue(talus.road_clear(points[2:3],np.array([.2]),corridor)[0])
+
+    def test_road_check_uses_final_seated_position(self):
+        import roads
+        corridor = roads._Segs({'road': (np.array([[100.,-100.],[100.,300.]]), 3.)})
+        self.assertEqual(self.fixture(),self.fixture(road_segments=corridor))
+        def shifted(e,n,z):
+            return np.column_stack((np.full_like(e,100.),n,z))
+        self.assertGreater(len(self.fixture(skin_at=shifted)),20)
+        self.assertEqual(self.fixture(skin_at=shifted,road_segments=corridor),[])
+
+    def test_elevated_access_roads_excluded_but_not_tunnels(self):
+        import surface
+        from test_roads import FRAME, features
+        feats = features([[(0,0),(200,0)]],['unclassified'],widths=[(0,8)],
+                         flags=[(0,'is_bridge',.25,.5),(0,'is_tunnel',.65,.85)])
+        ground = surface._roads_list_enu(FRAME,[feats],None,None)
+        corridor = talus.road_exclusion(FRAME,[feats],None,None,ground)
+        points = np.array([[20,0,0],[75,0,0],[150,0,0],[75,20,0]],float)
+        np.testing.assert_array_equal(talus.road_clear(points,np.ones(4),corridor),
+                                      [False,False,True,True])
 
     def test_city_road_and_water_exclusions_survive_rubble_growth(self):
         self.assertEqual(self.fixture(blocked=np.ones((40,40),bool)),[])

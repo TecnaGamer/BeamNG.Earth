@@ -13,6 +13,55 @@ SPACING_M = 2.0
 MAX_DENSITY = .65
 MAX_TILT_DEG = 28.0
 TINT_STEP = 16.0
+# Conservative pivot-centred sphere per metre of requested instance height.
+# Bounds measured in BeamNG for all six clifftalus.lua models: the widest is
+# collection_02 (~2.20). This also encloses tilted clusters and off-centre pivots.
+ROAD_RADIUS_PER_HEIGHT = 2.25
+ROAD_SHOULDER_M = .5
+ROAD_RADIUS_BIN_M = .5
+
+
+def road_exclusion(frame, road_cells, urban, widths, ground_roads):
+    """Road corridors for rubble, including elevated surface roads.
+
+    The cliff detector deliberately uses ground roads only. Rubble must also
+    avoid bridge/deck approaches (Hoover Dam Access Road is partly elevated).
+    Conservatively exclude their XY corridor; tunnels remain available above.
+    This uses already-fetched cells and adds no elevation or network queries.
+    """
+    import mapgeom
+    import roads
+    segments = {str(k): (pts[:, :2], spec.width/2)
+                for k, (_, spec, pts, _) in enumerate(ground_roads)}
+    for feats in road_cells:
+        if feats is None or not len(feats):
+            continue
+        specs = roads.road_specs(feats, urban, widths)
+        for i, spec in enumerate(specs):
+            if spec is None:
+                continue
+            for ring in roads.bridge_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                if len(e) >= 2:
+                    segments[str(len(segments))] = (np.column_stack((e, n)), spec.width/2)
+    return roads._Segs(segments)
+
+
+def road_clear(positions, heights, road_segments):
+    """Check final seated footprints, batching native segment tests by size.
+
+    Rounded-up radius bins bound the number of native calls and avoid a Python
+    rock-by-road loop. The half-metre shoulder also covers output quantization.
+    """
+    clear = np.ones(len(positions), bool)
+    if road_segments is None or not len(road_segments.h):
+        return clear
+    radius = np.asarray(heights)*ROAD_RADIUS_PER_HEIGHT + ROAD_SHOULDER_M
+    bins = np.ceil(radius/ROAD_RADIUS_BIN_M).astype(int)
+    for size in np.unique(bins):
+        k = np.flatnonzero(bins == size)
+        clear[k] = ~road_segments.near(positions[k, :2], size*ROAD_RADIUS_BIN_M)
+    return clear
 
 
 def probability(slope, distance):
@@ -119,7 +168,7 @@ def surface_sampler(xs, ys, heights, surface):
     return sample
 
 
-def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None, skin_at=None):
+def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None, skin_at=None, road_segments=None):
     """17-field Forest rows with a tilted orthonormal basis and regional tint.
 
     The same geographic lattice owns every candidate across tile boundaries.
@@ -202,8 +251,9 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
     else:
         positions = np.column_stack(frame.geodetic_to_enu(la[k],lo[k],z[k]))
     positions -= normal*(height*.12)[:,None]
+    clear = road_clear(positions, np.round(height, 3), road_segments)
     out = []
-    for at in range(len(k)):
+    for at in np.flatnonzero(clear):
         group = 'talus_' + ''.join(f'{v:02x}' for v in tint[at])
         basis = np.concatenate((tangent[at],bitangent[at],up[at]))
         out.append([group,*np.round(positions[at],3).tolist(),round(float(np.degrees(yaw[at])),2),

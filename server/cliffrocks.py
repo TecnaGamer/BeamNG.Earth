@@ -807,13 +807,15 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
         rubble_color_at = color_at
     import clifftalus
     coarse = (xs, ys, keep, classes, blocked, b)
+    rubble_roads = (clifftalus.road_exclusion(frame, road_cells, surface.urban, widths, road_list)
+                    if rocks else None)
     if not faces:
         # Only detection is shared with props. No render-grid resampling, relief,
         # PBR/tint work, contour meshing, canyon refinement or LODs without faces.
         result = Mesh(np.empty((0, 3)), np.empty((0, 3), np.int32),
                       np.empty((0, 2)), np.empty((0, 4)))
         if rocks:
-            result.talus = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at)
+            result.talus = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, road_segments=rubble_roads)
         return result
     import debuglayers
     detector_family = np.where(cuts, cliffmaterial.cut_family(b),
@@ -879,7 +881,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     rubble = []
     if rocks:
         skin_at = clifftalus.surface_sampler(xs, ys, h, surface_data[0])
-        rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at)
+        rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at, road_segments=rubble_roads)
 
     def project(p):
         return np.column_stack(frame.geodetic_to_enu(p[:, 1]/WORLD_M_PER_DEG,

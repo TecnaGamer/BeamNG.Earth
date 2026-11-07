@@ -82,6 +82,7 @@ class NearGenerationTest(unittest.TestCase):
                 self.assertIsNotNone(result)
                 fail.assert_not_called()
                 self.assertEqual(rubble.call_count,int(rocks))
+                self.assertIsInstance(rubble.call_args.kwargs["road_segments"],roads._Segs)
                 self.assertEqual(patches.call_count,0)
                 with patch('cliffrocks.write',fail):
                     with tempfile.TemporaryDirectory() as tmp:
@@ -101,7 +102,7 @@ class NearGenerationTest(unittest.TestCase):
         def elev(lat,lon):
             return 100+(np.asarray(lon)-7)*111320*np.cos(np.radians(46))*2
         fail=Mock(side_effect=AssertionError('disabled prop generation'))
-        with patch('clifftalus.rows',fail), patch('cliffstrips.tile_parts',fail):
+        with patch('clifftalus.rows',fail), patch('clifftalus.road_exclusion',fail), patch('cliffstrips.tile_parts',fail):
             result=cliffrocks.build(frame,(0,0,80,80),elev,Surface(),features=(True,False,False))
         self.assertIsNotNone(result)
         self.assertGreater(len(result.tris),0)
