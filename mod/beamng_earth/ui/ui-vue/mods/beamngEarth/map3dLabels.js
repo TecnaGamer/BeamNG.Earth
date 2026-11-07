@@ -20,6 +20,12 @@ const RESERVED = [             // the screen's own controls (px from the edges):
   { bottom: 0, height: 44, left: 0, right: 0 },
 ]
 
+// The screen draws a frame or two after the game (the UI is its own process, composited later): the labels trailed
+// the ground while the view moved (the user, 2026-11-07: "the lables seems to have a delay as i move the camera
+// around"). The camera is carried on by its own motion over the last two frames, LEAD_MS ahead.
+const LEAD_MS = 40
+const MAX_EXTRAP = 2.5         // at most this many frame steps ahead (a stop: no overshoot past it)
+
 const POI_COLOURS = { food: "#ff9f43", shop: "#f5c518", lodging: "#b48cff", culture: "#ff7eb6", park: "#4cd97b",
   education: "#d9a066", health: "#ff6b6b", transit: "#4aa8ff", fuel: "#7fb3ff" }
 // (white glyphs on the coloured disc, 12 x 12 viewBox)
@@ -114,8 +120,29 @@ export class LabelLayer {
   }
 
   setView(v) {
+    const t = performance.now()
+    if (this.view) this.prev = { v: this.view, t: this.viewT }
     this.view = v
+    this.viewT = t
     if (!this.raf) this.raf = requestAnimationFrame(() => { this.raf = 0; this.frame() })
+  }
+
+  // the camera now + LEAD_MS, from its motion between the last two messages
+  predicted() {
+    const v = this.view, p = this.prev
+    if (!p) return v
+    const step = this.viewT - p.t
+    if (!(step > 2 && step < 120)) return v
+    const k = Math.min(MAX_EXTRAP, (performance.now() - this.viewT + LEAD_MS) / step)
+    const out = Object.assign({}, v)
+    for (const f of ["px", "py", "pz", "fx", "fy", "fz", "ux", "uy", "uz", "rx", "ry", "rz", "zoom"]) {
+      out[f] = v[f] + (v[f] - p.v[f]) * k
+    }
+    for (const b of [["fx", "fy", "fz"], ["ux", "uy", "uz"], ["rx", "ry", "rz"]]) {
+      const n = Math.hypot(out[b[0]], out[b[1]], out[b[2]]) || 1
+      for (const f of b) out[f] /= n
+    }
+    return out
   }
 
   makeEl(s, st, text) {
@@ -142,8 +169,8 @@ export class LabelLayer {
   }
 
   frame() {
-    const v = this.view
-    if (!v) return
+    if (!this.view) return
+    const v = this.predicted()
     const W = this.el.clientWidth || window.innerWidth, H = this.el.clientHeight || window.innerHeight
     const F = (H / 2) / Math.tan((v.fov || 55) * Math.PI / 360)
     const zoom = v.zoom

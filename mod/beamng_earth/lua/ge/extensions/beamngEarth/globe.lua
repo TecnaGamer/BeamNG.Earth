@@ -8,9 +8,10 @@
 
 local M = {}
 
--- (off, the user 2026-11-07: 'i dont like how the far out view/mode looks. id prefer to keep using the actual game
--- world'; kept for a later look)
-M.ENABLED = false
+-- (on again, 2026-11-07, as the backdrop only: the real camera and the real far tiles all the way up (the sky shader
+-- patched), the sphere 3 km under sea level showing where the tiles do not reach and past Web Mercator's poles; the
+-- small copy in front of a capped camera, which the user did not like, stays off: earthGlobe MINI_ALT)
+M.ENABLED = true
 
 M.SHOW_M = 250000           -- the camera's height above sea level
 M.HIDE_M = 200000
@@ -147,8 +148,14 @@ function M.update(dt, anchor, anchorId, send)
     end
   end
   setSky(mini ~= nil)
-  fadeSky(active and h or nil)
-  horizon().atmoOverrideKm = (active and h and h > 60000) and horizon().ATMO_MAX_KM or nil
+  -- (the sky shader patched: its own atmosphere from space, the limb and black space past it; else the old shell)
+  if horizon().skyPatched then
+    fadeSky(nil)
+    horizon().atmoOverrideKm = nil
+  else
+    fadeSky(active and h or nil)
+    horizon().atmoOverrideKm = (active and h and h > 60000) and horizon().ATMO_MAX_KM or nil
+  end
   local hz = horizon()
   local want = shown and M.visibleFor(h) or nil
   if want ~= hz.extraVisible then

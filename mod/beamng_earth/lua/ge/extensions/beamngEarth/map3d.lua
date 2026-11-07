@@ -417,6 +417,7 @@ end
 -- 'view', on the teleport grid: the frame only, ~0.1 s; the car and its block stay in their own frame, hidden, and
 -- the world goes back there before the map closes: returning).
 M.REBASE_M = 100000
+M.REBASE_EYE_MAX_M = 1500000    -- (higher up the whole earth is in view: the origin stays, no far field rebuilt)
 M.REBASE_EVERY_S = 3
 local lastRebase = -1e9
 
@@ -443,6 +444,7 @@ end
 function M.onUpdate(dtReal)
   if not active then
     holdShadows(false)
+    pcall(function() require('beamngEarth/farfield').setPreview(false) end)
     if labels.sent ~= -1 then       -- (the map closed: the screen's labels go)
       labels.sent = -1
       hook('BngEarthMap3dLabels', {v = -1, items = {}})
@@ -451,7 +453,12 @@ function M.onUpdate(dtReal)
   end
   do
     local gc = core_camera.getGlobalCameras()[M.CAMERA]
-    if gc then holdShadows(gc.dist * math.sin(gc.pitch) > M.SHADOW_EYE_M) end
+    if gc then
+      local eye = gc.dist * math.sin(gc.pitch)
+      holdShadows(eye > M.SHADOW_EYE_M)
+      -- (each new far tile shown as it loads, not when its whole swap group has: farfield.setPreview)
+      pcall(function() require('beamngEarth/farfield').setPreview(true, eye) end)
+    end
   end
   clock = clock + (dtReal or 0)
   local g = core_camera.getGlobalCameras()[M.CAMERA]
@@ -467,6 +474,7 @@ function M.onUpdate(dtReal)
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.returnToCar then core.returnToCar() end
   elseif not transitioning and g.target and clock - lastRebase > M.REBASE_EVERY_S
+      and g.dist * math.sin(g.pitch) < M.REBASE_EYE_MAX_M
       and g.target.x * g.target.x + g.target.y * g.target.y > M.REBASE_M * M.REBASE_M then
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.rebaseTo and s.lat then

@@ -2327,6 +2327,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
                     bool(tex.get("online")), _s.widths is not None, _s.surface is not None,
                     *((tuple(sorted(tex["fin"].items())),) if tex.get("fin") else ()))
     got = revisit.load(_s.cache_dir, "far", k)
+    quick = bool(tex.get("quick"))      # (the 3D map's quick render: never kept, its sharper one comes later)
     if got is not None:
         blobs, extra = got
         if mask and "mask.dds" in blobs:
@@ -2335,7 +2336,7 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
         return _built_from(blobs["built.npz"], extra), (int(extra["tex_bytes"]), extra["used"])
     f0 = revisit.faults()
     built, got = _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
-    if got is not None and revisit.ON and revisit.faults() == f0:
+    if got is not None and revisit.ON and revisit.faults() == f0 and not quick:
         try:
             blob, meta = _built_blob(built)
             blobs = {"built.npz": blob, "tex.dds": revisit.Side(tex["path"])}     # (linked in, not copied)
@@ -2361,7 +2362,11 @@ def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, ma
     px = tex["px"]
     sq = imagerymod.gutter_square(x0, y0, tile.size, px)
     try:
-        rgb, used = im.render(frame, *sq, px)
+        im.quick_all = bool(tex.get("quick"))
+        try:
+            rgb, used = im.render(frame, *sq, px)
+        finally:
+            im.quick_all = False
     except imagerymod.ImageryError:
         return built, None
     if built.grid is not None:          # (earthd.Server.rock_faces)

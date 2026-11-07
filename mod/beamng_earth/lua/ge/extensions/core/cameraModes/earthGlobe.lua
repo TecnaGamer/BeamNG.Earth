@@ -12,8 +12,9 @@
 local C = {}
 C.__index = C
 
-C.DIST_MIN, C.DIST_MAX = 15, 500000            -- m (the game's own world all the way: the sky's shell tops out at 600 km;
-                                               --  the globe stand-in past it is off, the user 2026-11-07: 'id prefer to keep using the actual game world')
+-- (the whole earth, as map apps: the user, 2026-11-07, "so i can zoom out as far as the apple map screenshots": the
+-- real camera all the way up, the game's sky shader patched for a camera above the air, launcher skypatch.py)
+C.DIST_MIN, C.DIST_MAX = 15, 20000000
 local PITCH_MIN, PITCH_MAX = math.rad(12), math.rad(89.5)
 local ZOOM_RATE = 2.2                          -- e-folds of distance per second at full zoom input
 local PAN_RATE = 0.9                           -- target speed in distances per second at full stick
@@ -111,9 +112,14 @@ function C:pose()
   local p, up, n, e = self:localFrame()
   if not p then return nil end
   self.target = p
-  local cp = math.cos(self.pitch)
-  local dir = (e * (math.sin(self.heading) * cp) + n * (math.cos(self.heading) * cp)) - up * math.sin(self.pitch)
-  return p - dir * self.dist, quatFromDir(dir, up), up
+  local cp, sp = math.cos(self.pitch), math.sin(self.pitch)
+  local fwd = e * math.sin(self.heading) + n * math.cos(self.heading)
+  local dir = fwd * cp - up * sp
+  -- (the screen's up: the ground's up tilted towards the heading. With the ground's up itself the reference was all
+  -- but parallel to a look nearly straight down, and from high up the view turned upside down: south at the top,
+  -- 2026-11-07)
+  local camUp = up * cp + fwd * sp
+  return p - dir * self.dist, quatFromDir(dir, camUp), up
 end
 
 -- move the target over the ground: forward (along the heading) and right, in metres

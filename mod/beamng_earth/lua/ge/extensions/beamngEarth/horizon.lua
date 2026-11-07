@@ -62,10 +62,18 @@ end
 
 local saved = nil -- { id, radius, thickness }: the sky object and its atmoPlanetRadius / atmoThickness before applySky
 
+-- The game's sky shader patched (the launcher's skypatch.py writes it, and this flag, into the installed mod): the
+-- haze from above the atmosphere is right, so the shell stays as it is at any height (the 3D map from orbit)
+M.skyPatched = (function()
+  local ok, flag = pcall(require, 'beamngEarth/skypatch_flag')
+  return ok and flag == true
+end)()
+
 -- Pure: the atmosphere's thickness (km) for a camera camKm km above sea level, the level's base (ATMO_*).
 function M.thicknessFor(camKm, base)
   base = tonumber(base) or M.ATMO_THICK_KM
   camKm = tonumber(camKm)
+  if M.skyPatched then return base end
   if not camKm or camKm <= M.ATMO_LIFT_SHARE * base then return base end
   local want = math.ceil((camKm + M.ATMO_HEADROOM_KM) / M.ATMO_STEP_KM) * M.ATMO_STEP_KM
   return math.max(base, math.min(M.ATMO_MAX_KM, want))
