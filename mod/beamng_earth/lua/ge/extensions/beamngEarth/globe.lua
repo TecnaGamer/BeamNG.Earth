@@ -137,7 +137,7 @@ function M.update(dt, anchor, anchorId, send)
   local g = active and core_camera.getGlobalCameras()[m3.CAMERA] or nil
   local mini = shown and g and g.mini or nil
   if globe then
-    local hide = not shown or globe.anchorId ~= anchorId or mini ~= nil
+    local hide = not shown or (globe.anchorId ~= anchorId and globe.followed ~= anchorId) or mini ~= nil
     if globe.hidden ~= hide then
       globe.obj:setHidden(hide)
       globe.hidden = hide
@@ -206,7 +206,10 @@ function M.transform(xf, newAnchorId)
   local qx, qy, qz, qw = geodesy.quatMul(q[1], q[2], q[3], q[4], bx, by, bz, bw)
   globe.pos, globe.rot = {x, y, z}, {qx, qy, qz, qw}
   pcall(function() globe.obj:setPosRot(x, y, z, qx, qy, qz, qw) end)
-  globe.anchorId = newAnchorId
+  -- shown for the new anchor meanwhile, its own (exact) sphere asked for at once: moved again and again it drifted
+  -- off the tiles (the user, 2026-11-07: "the backddrop earth got offset")
+  globe.followed = newAnchorId
+  pending = nil
 end
 
 function M.clear()

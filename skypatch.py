@@ -80,6 +80,50 @@ def _flag(mod_dir, on):
         pass
 
 
+# The sky's own colour (skyLutSkyP.hlsl) took the camera as max(camPos.z, 50 m) straight over the origin: far from
+# the origin on our curved world (the 3D map without moving the origin, the user 2026-11-07: "see if we can fix the
+# grey rendering without haveing to rebase") the camera is km under z = 0, so the sky was drawn for 50 m over the
+# origin, tilted against the ground and grey. Its place on the planet instead (the camera volume and the sky-view LUT
+# already use the whole camera position), at least 50 m over the ground sphere: eyePosWorld (the same shader's fog
+# uses it), camPos.xy did not move the horizon (seen in game 2026-11-07, 380 km from the origin).
+SKY = "shaders/common/sky/skyLutSkyP.hlsl"
+SKY_OLD = "const float3 worldPos = float3(0, 0, max(camPos.z, 50) * 1e-3) + float3(0, 0, Atmosphere.BottomRadius);"
+SKY_NEW = ("float3 worldPos = eyePosWorld * 1e-3 + float3(0, 0, Atmosphere.BottomRadius); // " + MARK + ": the camera's own "
+           "place on the planet\n    worldPos *= max(length(worldPos), Atmosphere.BottomRadius + 0.05) / "
+           "max(length(worldPos), 1e-6);")
+
+
+def _sky_file(game_dir, backup_dir, on):
+    """skyLutSkyP.hlsl's camera line patched (on) or back: 'done', 'skipped' (not the code we know) or 'failed'."""
+    path = os.path.join(game_dir, *SKY.split("/")) if game_dir else None
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            text = fh.read()
+    except (OSError, TypeError, UnicodeDecodeError):
+        return "skipped"
+    if on:
+        if SKY_NEW in text:
+            return "done"
+        if text.count(SKY_OLD) != 1:
+            return "skipped"
+        try:
+            os.makedirs(backup_dir, exist_ok=True)
+            digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
+            with open(os.path.join(backup_dir, f"skyLutSkyP.{digest}.hlsl"), "w", encoding="utf-8", newline="") as fh:
+                fh.write(text)
+            _write(path, text.replace(SKY_OLD, SKY_NEW))
+        except OSError:
+            return "failed"
+        return "patched"
+    if SKY_NEW not in text:
+        return "done"
+    try:
+        _write(path, text.replace(SKY_NEW, SKY_OLD))
+    except OSError:
+        return "failed"
+    return "patched"
+
+
 CACHE_FILES = ("temp/shaders/shaders.vk.db", "temp/shaders/pipelinecache.vk.db")
 
 
@@ -119,6 +163,10 @@ def apply(game_dir, mod_dir, backup_dir, user_dir=None):
     if unpatched(text) is not None:
         if _mark_main(game_dir, True) == "failed":
             return "failed"
+        if _sky_file(game_dir, backup_dir, True) == "patched":
+            refresh_cache(user_dir)
+            _flag(mod_dir, True)
+            return "patched"
         _flag(mod_dir, True)
         return "current"
     new = patched(text)
@@ -137,6 +185,7 @@ def apply(game_dir, mod_dir, backup_dir, user_dir=None):
         return "failed"
     if _mark_main(game_dir, True) == "failed":
         return "failed"
+    _sky_file(game_dir, backup_dir, True)
     refresh_cache(user_dir)
     _flag(mod_dir, True)
     return "patched"
@@ -163,14 +212,19 @@ def restore(game_dir, mod_dir=None, user_dir=None):
     patched) or 'failed'."""
     if mod_dir:
         _flag(mod_dir, False)
+    sky = "done"
     if game_dir:
         _mark_main(game_dir, False)
+        sky = _sky_file(game_dir, None, False)
     src = os.path.join(game_dir, *SHADER.split("/")) if game_dir else None
     try:
         with open(src, encoding="utf-8", newline="") as fh:
             text = fh.read()
         old = unpatched(text)
         if old is None:
+            if sky == "patched":
+                refresh_cache(user_dir)
+                return "restored"
             return "original"
         _write(src, old)
     except (OSError, TypeError, UnicodeDecodeError):

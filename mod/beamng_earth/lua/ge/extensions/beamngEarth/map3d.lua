@@ -622,7 +622,11 @@ end
 -- camera for being underground): once the view's target is REBASE_M from the origin it moves there (core.rebaseTo
 -- 'view', on the teleport grid: the frame only, ~0.1 s; the car and its block stay in their own frame, hidden, and
 -- the world goes back there before the map closes: returning).
-M.REBASE_M = 100000
+-- (100 km at first; with the sky shader's camera on the planet (skypatch.py SKY) the view far from the origin renders
+-- right, and every move reloaded the view: the user, 2026-11-07: "getting alot of issues as we rebase ... fix the grey
+-- rendering without haveing to rebase". Kept past 1,000 km: the anchor's own tile grid lies on its tangent plane,
+-- stretched ~1 % there, 11 % at 3,000 km)
+M.REBASE_M = 1000000
 M.REBASE_EYE_SHARE = 0.25       -- high up only once the target is this share of the eye's height away (the whole earth
                                 -- in view; over the far side of the earth from the origin the sky and the tiles went
                                 -- wrong, the user 2026-11-07: the globe turned "under the horizon line")

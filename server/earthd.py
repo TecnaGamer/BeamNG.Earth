@@ -381,7 +381,7 @@ EYE_LOD_MIN_M = 3000.0          # an eye above this: the far tiles' detail by th
 MAP_HIGH_EYE_M = 40000.0        # an eye above this (the 3D map): the finest global tiles are leaves (farfield.select_global)
 MAP_RAMP_START = 0.125           # the 3D map at a new anchor: K x this first (Conn.commit_anchor) ...
 MAP_RAMP_STEP = 2.0              # ... times this each time that far field is done, up to 1
-MAP_FOCUS_MAX_M = 150000.0       # a map_focus farther from the anchor than this is ignored (mod map3d REBASE_M)
+MAP_FOCUS_MAX_M = 1200000.0      # a map_focus farther from the anchor than this is ignored (mod map3d REBASE_M)
 FAR_TRACE = os.environ.get("BNGE_FARTRACE") == "1"     # (tools: every far tile sent, logged)
 MAP_TEX_PX = 512                # the 3D map's far textures at least this (Server.tex_size) ...
 MAP_TEX_MAX_LEVEL = 2           # ... up to this level (coarser ones: 4x the photo tiles each, and EOX answered 403 to
@@ -7800,9 +7800,10 @@ class Connection:
             if anchor is not None:
                 self.emit_groups()
                 self.flush_old()
-            if (not self.inflight and self.dirty and anchor is not None
-                    and len(self.groups) == len(self._blocked())
-                    and getattr(self, "lod_ramp", 1.0) < 1.0 and (self.map_view or self.map_open)):
+            if (anchor is not None and getattr(self, "lod_ramp", 1.0) < 1.0 and (self.map_view or self.map_open)
+                    and not self.inflight and self.dirty and len(self.groups) == len(self._blocked())):
+                # (only once a step is whole: stepping on a timer instead left the coarse tiles not built yet out of
+                # the next selection, holes in the view for 15 s, Bozeman 2026-11-07)
                 self.lod_ramp = min(1.0, self.lod_ramp * MAP_RAMP_STEP)     # (the next, finer step: commit_anchor)
                 log.info("anchor %d: 3D map detail step x%.2f after %.2f s", anchor.id, self.lod_ramp,
                          time.perf_counter() - self.batch[0])
