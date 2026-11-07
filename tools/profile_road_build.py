@@ -10,6 +10,8 @@ build is recorded and returns nonzero, never counted as a successful fast build.
 import argparse
 import cProfile
 import hashlib
+import importlib.machinery
+import importlib.util
 import json
 import logging
 import math
@@ -70,17 +72,32 @@ def main(argv=None):
     if not (source / 'server/blockworker.py').is_file():
         ap.error('--source-root must contain server/blockworker.py')
     native_dir = args.native_dir.resolve() if args.native_dir else source / 'server'
-    sys.path[:0] = [str(native_dir), str(source / 'server')]
+    sys.path.insert(0, str(source / 'server'))
+    # Select only the extension: putting native_dir on sys.path can accidentally load
+    # another checkout's Python modules when the caller supplies its server directory.
+    native_file = next((native_dir / ('earthfast' + suffix) for suffix in importlib.machinery.EXTENSION_SUFFIXES
+                        if (native_dir / ('earthfast' + suffix)).is_file()), None)
+    if native_file is None:
+        ap.error('no earthfast extension in the selected native directory; build it first')
+    loaded = sys.modules.get('earthfast')
+    if loaded is not None and Path(loaded.__file__).resolve() != native_file.resolve():
+        ap.error('a different earthfast extension is already loaded; use a fresh process')
+    if loaded is None:
+        spec = importlib.util.spec_from_file_location('earthfast', native_file)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        sys.modules['earthfast'] = module
     os.chdir(source)
     # Force a measured build rather than silently timing an old tile; use --revisit to measure restoration.
     os.environ['BNE_REVISIT'] = 'on' if args.revisit else 'off'
     os.environ['BNGE_GPU'] = '0'
-    report_path.parent.mkdir(parents=True, exist_ok=True)
     initial_cache_empty = not cache.exists() or not any(cache.iterdir())
+    report_path.parent.mkdir(parents=True, exist_ok=True)
     cache.mkdir(parents=True, exist_ok=True)
     import blockworker
     import dem
     import fast
+    fast.require(fast.MIN_VERSION, 'road-geotile profiling')
     import geotiles
     import numpy as np
     import revisit
