@@ -201,12 +201,8 @@ EDGE_DECAL_GAP_M = 1.5          # ... none where another carriageway's edge is t
 MEASURE_SKIP = {"service"}      # classes not measured between buildings (lots, alleys: far walls)
 MEASURE_MAX = 3.0               # a measured carriageway at most this times the class default
 SIDEWALK_CLASSES = {"residential", "tertiary", "secondary", "primary", "unclassified", "living_street"}
-# Paint on the busway carriageways already in the roads (osmtags.busway_features: class busway, 7 m, paved).
-# Edge lines in every country (paints_edge_line). A centre line only when two-way (extras skips a one-way).
-# Dashes between lanes only from a mapped count (lane_layout: the 7 m default is one lane). A painted bus lane
-# on an ordinary road is bus:lanes / psv:lanes (markings.lane_plan), not this class. The 7 m stays a width rule,
-# so rural edge strips are not added to the asphalt. In this set the AI uses the painted driving width
-# (navgraph.driving_width).
+# busway (osmtags.busway_features): edge lines in every country (paints_edge_line), a centre line only when
+# two-way, dashes only from a mapped count (lane_layout). A painted bus lane on a normal road is markings.lane_plan.
 CENTRE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "busway"}
 EDGE_LINE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway", "busway"}
 LANE_CLASSES = {"primary", "secondary", "tertiary", "trunk", "motorway", "busway"}

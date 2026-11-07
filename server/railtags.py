@@ -241,8 +241,7 @@ class RailTags(Shards):
 
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
-# lane-by-lane data (markings.py). bus:lanes:forward / :backward and psv:lanes are the painted bus lane on an
-# ordinary road (markings.lane_plan). join copies a key only when the shard already has it.
+# lane-by-lane data (markings.py). bus:lanes:forward, bus:lanes:backward and psv:lanes join only if the shard has them.
 LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
                 "change:lanes:forward", "change:lanes:backward", "placement", "placement:forward", "placement:backward",
                 "lanes:forward", "lanes:backward", "lanes:both_ways", "overtaking", "overtaking:forward",
