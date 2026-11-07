@@ -25,6 +25,11 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}     # (a newer push to dev replaces the build under way)
 
+
+# (the tests start servers through the launcher: never usage reports from CI, telemetry.py)
+env:
+  BNE_TELEMETRY: "off"
+
 jobs:
   quality:
     uses: ./.github/workflows/quality.yml

@@ -240,7 +240,10 @@ def run_server(argv):
 
 
 def telemetry_on():
-    """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off."""
+    """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off; never under CI or a test
+    run (the first night's 'players' were mostly the release workflow's Windows test servers: each a new install)."""
+    if os.environ.get("CI") or "unittest" in sys.modules:
+        return False
     return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 
 

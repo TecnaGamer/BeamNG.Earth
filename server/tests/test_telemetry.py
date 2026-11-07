@@ -97,15 +97,18 @@ class OptOutTest(unittest.TestCase):
             else None
         sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
         import launcher
-        old = os.environ.get("BNE_TELEMETRY")
-        try:
+        from unittest import mock
+        # (a test process never reports: the first night's 'players' were the CI's test servers)
+        self.assertFalse(launcher.telemetry_on())
+        with mock.patch.dict(os.environ, {"CI": "true"}):
+            self.assertFalse(launcher.telemetry_on())
+        # the switch itself, as a player's launcher (no unittest, no CI) sees it
+        modules = {k: v for k, v in sys.modules.items() if k != "unittest"}
+        env = {k: v for k, v in os.environ.items() if k not in ("CI", "BNE_TELEMETRY")}
+        with mock.patch.dict(sys.modules, modules, clear=True), mock.patch.dict(os.environ, env, clear=True):
+            self.assertTrue(launcher.telemetry_on())
             os.environ["BNE_TELEMETRY"] = "off"
             self.assertFalse(launcher.telemetry_on())
-            os.environ.pop("BNE_TELEMETRY")
-            self.assertTrue(launcher.telemetry_on())
-        finally:
-            if old is not None:
-                os.environ["BNE_TELEMETRY"] = old
 
 
 if __name__ == "__main__":

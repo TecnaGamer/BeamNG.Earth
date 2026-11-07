@@ -7490,7 +7490,8 @@ async def main_async(args):
         atexit.register(netstatemod.close)
     # (telemetry: every process's per-host download counts, summed by telemetry.Reporter; set before the workers start
     # so they inherit it)
-    telemetry_on = args.telemetry == "on" and not args.offline
+    telemetry_on = args.telemetry == "on" and not args.offline and not os.environ.get("CI") \
+        and os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
     if telemetry_on:
         proc_dir = os.path.join(args.cache_dir, "netstats", "proc")
         os.environ["BNE_NETSTATS_PROC"] = proc_dir

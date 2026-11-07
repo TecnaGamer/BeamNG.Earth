@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+
+# (the tests start servers through the launcher: never usage reports from CI, telemetry.py)
+env:
+  BNE_TELEMETRY: "off"
+
 jobs:
   regression:
     strategy:

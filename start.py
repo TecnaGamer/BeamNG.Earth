@@ -89,7 +89,8 @@ def main():
     extra = args.extra[1:] if args.extra[:1] == ["--"] else args.extra
     cmd += extra
     # anonymous usage reports (server/telemetry.py), as the app's launcher: BNE_TELEMETRY=off turns them off
-    telemetry = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
+    telemetry = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no") \
+        and not os.environ.get("CI")        # (never the CI's or a test's servers: they are not players)
     if telemetry and has_flag(help_text, "--telemetry") and "--offline" not in extra and "--telemetry" not in extra:
         cmd += ["--telemetry", "on"]
 
