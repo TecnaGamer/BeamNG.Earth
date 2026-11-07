@@ -26,7 +26,8 @@ from PIL import Image, ImageDraw, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(HERE, "..", "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes", "beamngEarth")
 TEX_DIR = "/levels/beamng_earth/art/shapes/beamngEarth"
-FONTS = ["/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+FONTS = [os.path.join(HERE, "fonts", "DejaVuSans-Bold.ttf"),
+         "/usr/share/fonts/TTF/DejaVuSans-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
          "/usr/share/fonts/liberation/LiberationSans-Bold.ttf", "C:/Windows/Fonts/arialbd.ttf"]
 
 # the materials: (base colour, metallic, roughness, emissive)
@@ -104,6 +105,10 @@ class Mesh:
         m.p = [np.array([-q[0], q[1], q[2]]) for q in self.p]
         m.n = [np.array([-q[0], q[1], q[2]]) for q in self.n]
         m.uv = list(self.uv)
+        # Reflect the mechanism, but keep the lettering readable from the front.
+        for i in {i for tri in self.tri.get("bne_rr_crossbuck", ()) for i in tri}:
+            u, v = m.uv[i]
+            m.uv[i] = (1.0 - u, v)
         m.tri = {k: [(a, c, b) for a, b, c in v] for k, v in self.tri.items()}
         return m
 
@@ -264,7 +269,9 @@ def textures():
         f = _font(150)
         l, t, r, b = d.textbbox((0, 0), word, font=f)
         d.text(((W - (r - l)) / 2 - l, y0 + (H // 2 - (b - t)) / 2 - t), word, font=f, fill=(15, 15, 15))
-    us.transpose(Image.FLIP_TOP_BOTTOM).save(os.path.join(OUT, "bne_rr_crossbuck.png"))
+    # The Collada importer already converts V to 1-V; a flipped bitmap turns
+    # the lettering upside down on the boards.
+    us.save(os.path.join(OUT, "bne_rr_crossbuck.png"))
     eu = Image.new("RGB", (W, H), (236, 236, 232))
     d = ImageDraw.Draw(eu)
     for k in range(2):                       # white with a red border (the Vienna Convention's A,28a)
