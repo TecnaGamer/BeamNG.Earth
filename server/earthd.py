@@ -5286,6 +5286,41 @@ class Connection:
                 log.debug("where: place: %s: %s", type(e).__name__, e)
         self.send(out)
 
+    async def labels(self, msg):
+        """The 3D map's place names {"id", "lat", "lon", "radius"} -> labels_result {"id", "places": [[name, lat, lon,
+        class, population], ...]} (placenames.labels: the largest first). The cells on disk answer at once; when some
+        are missing they are fetched as background jobs (never ahead of the world's own downloads) and a second
+        labels_result follows, unless a newer request came meanwhile."""
+        try:
+            lat, lon, radius = float(msg["lat"]), float(msg["lon"]), float(msg.get("radius") or 20000.0)
+        except (KeyError, TypeError, ValueError):
+            return
+        self._labels_seq = seq = getattr(self, "_labels_seq", 0) + 1
+        loop = asyncio.get_running_loop()
+        pn = self.s.place_names()
+        try:
+            got = await loop.run_in_executor(self.s.place_pool, pn.labels, lat, lon, radius)
+        except Exception as e:          # a damaged cell file: none this time
+            log.debug("labels: %s: %s", type(e).__name__, e)
+            got = []
+        self.send({"type": "labels_result", "id": msg.get("id"), "places": [list(r) for r in got]})
+        for _ in range(WHERE_PLACE_TRIES):
+            if getattr(self, "_labels_seq", 0) != seq:
+                return
+            try:
+                full = await loop.run_in_executor(self.s.place_pool, functools.partial(
+                    pn.labels, lat, lon, radius, fetch=True))
+            except mapdatamod.DEFERRED as e:
+                log.debug("labels: deferred: %s: %s", type(e).__name__, e)
+                await asyncio.sleep(WHERE_PLACE_RETRY_S)
+                continue
+            except Exception as e:
+                (log.debug if isinstance(e, netfetch.FetchError) else log.info)("labels: %s: %s", type(e).__name__, e)
+                return
+            if len(full) != len(got) and getattr(self, "_labels_seq", 0) == seq:
+                self.send({"type": "labels_result", "id": msg.get("id"), "places": [list(r) for r in full]})
+            return
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -5813,6 +5848,8 @@ class Connection:
             self.spawn(self.route(msg))
         elif kind == "where":                   # the status bar's street, town and country (geocode.py)
             self.spawn(self.where(msg))
+        elif kind == "labels":                  # the 3D map's place names (map3d.lua; placenames.labels)
+            self.spawn(self.labels(msg))
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
             self.spawn(self.random_place(msg))
         elif kind == "place_previews":          # the level select's place pictures (placepreview.py)
