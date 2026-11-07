@@ -28,7 +28,8 @@
 --     for temporal smoothers/springs, `.st` for exponential ones) that is one, is mapped. Offsets,
 --     rotations, directions and velocities are small vectors near the origin; the rebase only
 --     happens >= 2 km from it, so "within RADIUS of the player" separates them reliably.
---     The free camera's position is always mapped, wherever it is.
+--     The free camera's position is always mapped, wherever it is. The 3D map's orbit target
+--     (earthGlobe.target) the same: it is the ground being looked at, often kilometres from the car.
 --  2. the per-context frame data in core/cameraUpdate.lua (camData.pos/prevPos/vehPos/prevVehPos,
 --     finalCameraData.pos, lastValidData.pos) is mapped too, so objectTeleported() sees continuous
 --     motion and camData.vel stays valid (no one-frame dynamic-FOV dip, no pitch-smoothing reset).
@@ -158,6 +159,12 @@ local function walkGlobal(job, cams)
   if type(cams) ~= 'table' then return end
   local free = cams.free
   if type(free) == 'table' and isVec(free.pos) then mapVec(job, free.pos, true) end
+  -- before the walk: a far target would be marked seen and left in the old frame
+  local globe = cams.earthGlobe
+  if type(globe) == 'table' and isVec(globe.target) then
+    mapVec(job, globe.target, true)
+    globe.groundSmooth = nil          -- (that z was the old frame's ground; the next pose takes the new one)
+  end
   for _, cam in pairs(cams) do
     if type(cam) == 'table' then walk(job, cam, 1) end
   end

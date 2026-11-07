@@ -4,7 +4,7 @@
 -- clockwise). Inputs (the free camera's own): mouse / right stick rotate (yaw: heading, pitch: tilt), WASD / left stick
 -- move the target over the ground (faster the higher the camera), zoom in / out and up / down change the distance
 -- exponentially, so the wheel feels the same at street level and from orbit. beamngEarth/map3d.lua enters and leaves
--- it (the fly-up / fly-down paths) and owns the target's rebase when it travels far from the car.
+-- it (the fly-up / fly-down paths). A rebase carries the target with the world (camshift.lua), including far from the car.
 
 local C = {}
 C.__index = C
