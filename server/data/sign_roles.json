@@ -2,7 +2,7 @@
   "_": "What a road sign means, whatever it looks like (task 017). The index of a role in `roles` is its atlas cell, in every system: tools/build_sign_atlas.py draws them, native roadsigns.rs cuts `shape` out of the cell.",
   "cell_px": 256,
   "cols": 8,
-  "rows": 8,
+  "rows": 16,
   "systems": {"vienna_w": "white", "vienna_y": "yellow"},
   "roles": [
     {"id": "prio.main_road", "group": "priority", "shape": "diamond"},
@@ -68,6 +68,10 @@
     {"id": "info.bus_stop", "group": "information", "shape": "square"},
     {"id": "info.crossing_right", "group": "information", "shape": "square"},
     {"id": "info.crossing_left", "group": "information", "shape": "square"},
-    {"id": "info.bus_lane", "group": "information", "shape": "square"}
+    {"id": "info.bus_lane", "group": "information", "shape": "square"},
+    {"id": "warn.chevron_right", "group": "board", "shape": "rect"},
+    {"id": "warn.chevron_left", "group": "board", "shape": "rect"},
+    {"id": "info.bus_stop_cz", "group": "local", "shape": "circle"},
+    {"id": "info.bus_stop_de", "group": "local", "shape": "circle"}
   ]
 }

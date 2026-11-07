@@ -16,7 +16,7 @@ import math
 import os
 import sys
 
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ROLES = os.path.join(ROOT, "server", "data", "sign_roles.json")
@@ -115,6 +115,26 @@ class Pen:
         base = (b[0] - ux * hl, b[1] - uy * hl)
         self.line(pts[:-1] + [base], w, col, round_ends=False)
         self.poly([b, (base[0] - uy * hw, base[1] + ux * hw), (base[0] + uy * hw, base[1] - ux * hw)], col)
+
+    def text(self, c, h, txt, col, width=None):
+        """txt centred at c, h cell units high (capitals), squeezed to `width` cell units when given."""
+        size = max(int(h * self.px / 2.0 / 0.72), 8)
+        font = None
+        for name in ("arialbd.ttf", "DejaVuSans-Bold.ttf", "Arial Bold.ttf"):
+            try:
+                font = ImageFont.truetype(name, size)
+                break
+            except OSError:
+                continue
+        font = font or ImageFont.load_default()
+        l, t, r, b = self.d.textbbox((0, 0), txt, font=font)
+        w, hh = r - l, b - t
+        layer = Image.new("L", (w + 4, hh + 4), 0)
+        ImageDraw.Draw(layer).text((2 - l, 2 - t), txt, font=font, fill=255)
+        if width:
+            layer = layer.resize((max(int(width * self.px / 2.0), 1), layer.size[1]), Image.LANCZOS)
+        x, y = self.xy(c)
+        self.img.paste(Image.new("RGB", layer.size, col), (int(x - layer.size[0] / 2), int(y - layer.size[1] / 2)), layer)
 
     def done(self, px):
         return self.img.resize((px, px), Image.LANCZOS)
@@ -257,6 +277,28 @@ def white_panel(pen):
     pen.poly(rounded(square(), 0.10), BLACK)
     pen.poly(rounded(inset(square(), 0.955), 0.08), WHITE)
     pen.inner = WHITE
+
+
+def clip_rect(pts, x0, x1, y0, y1):
+    """A polygon clipped to the rectangle (Sutherland-Hodgman)."""
+    def cut(poly, inside, cross):
+        out = []
+        for a, b in zip(poly, poly[1:] + poly[:1]):
+            if inside(a):
+                out.append(a)
+                if not inside(b):
+                    out.append(cross(a, b))
+            elif inside(b):
+                out.append(cross(a, b))
+        return out
+    at_x = lambda x: (lambda a, b: (x, a[1] + (b[1] - a[1]) * (x - a[0]) / (b[0] - a[0])))       # noqa: E731
+    at_y = lambda y: (lambda a, b: (a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]), y))       # noqa: E731
+    for inside, cross in ((lambda q: q[0] >= x0, at_x(x0)), (lambda q: q[0] <= x1, at_x(x1)),
+                          (lambda q: q[1] >= y0, at_y(y0)), (lambda q: q[1] <= y1, at_y(y1))):
+        pts = cut(pts, inside, cross)
+        if not pts:
+            return []
+    return pts
 
 
 # ---- the roles ----
@@ -634,6 +676,52 @@ def i_pedzone(p):
     walker(p, BLACK, lambda q: (-q[0] * 0.50 + 0.30, q[1] * 0.50 - 0.14))
 
 
+def chevron(side):
+    """A chevron board (a bend's direction board): a wide board of red and white diagonal stripes with a black arrow on a white
+    plate, twice as wide as high; it fills the middle band of its cell (outline 6)."""
+    def go(pen, _f):
+        x0, x1, y0, y1 = -0.97, 0.97, -0.48, 0.48
+        pen.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], WHITE)
+        step = 0.36
+        k = x0 - 1.0
+        while k < x1 + 1.0:        # stripes leaning 45 degrees, half of every step red
+            band = [(k, y0 - 0.1), (k + step / 2, y0 - 0.1), (k + step / 2 + (y1 - y0 + 0.2), y1 + 0.1), (k + (y1 - y0 + 0.2), y1 + 0.1)]
+            got = clip_rect(band, x0, x1, y0, y1)
+            if got:
+                pen.poly(got, RED)
+            k += step
+        pen.poly(rounded([(0.66, 0.34), (-0.66, 0.34), (-0.66, -0.34), (0.66, -0.34)], 0.12), WHITE)
+        pen.arrow([(-0.46 * side, 0.0), (0.46 * side, 0.0)], 0.15, BLACK, 2.4)
+    return go
+
+
+def bus_cz(pen, _f):
+    """The Czech stop sign: a white disc with blue caps, a bus and ZASTÁVKA in the white band."""
+    pen.disc((0, 0), 0.99, WHITE)
+    pen.disc((0, 0), 0.93, BLUE)
+    ys = [0.5 - k * 0.05 for k in range(21)]
+    pen.poly([(-math.sqrt(0.93 ** 2 - y * y), y) for y in ys] + [(math.sqrt(0.93 ** 2 - y * y), y) for y in reversed(ys)], WHITE)
+    pen.poly([(-0.55, -0.02), (-0.55, 0.40), (-0.50, 0.46), (0.50, 0.46), (0.55, 0.40), (0.55, -0.02)], BLACK)
+    for i in range(5):
+        x = -0.46 + i * 0.185
+        pen.poly([(x, 0.10), (x + 0.15, 0.10), (x + 0.15, 0.34), (x, 0.34)], WHITE)
+    pen.disc((-0.34, -0.04), 0.085, BLACK)
+    pen.disc((0.34, -0.04), 0.085, BLACK)
+    pen.text((0, -0.30), 0.24, "ZASTÁVKA", BLACK, width=1.55)
+    pen.inner = WHITE
+
+
+def bus_de(pen, _f):
+    """The German stop sign (Zeichen 224): a yellow disc in a green ring with a green H."""
+    pen.disc((0, 0), 0.99, WHITE)
+    pen.disc((0, 0), 0.95, GREEN)
+    pen.disc((0, 0), 0.82, YELLOW)
+    pen.line([(-0.30, -0.50), (-0.30, 0.50)], 0.24, GREEN, False)
+    pen.line([(0.30, -0.50), (0.30, 0.50)], 0.24, GREEN, False)
+    pen.line([(-0.30, 0.0), (0.30, 0.0)], 0.22, GREEN, False)
+    pen.inner = YELLOW
+
+
 def i_bus_lane(p):
     i_bus(p)
     p.poly([(-.84, -.72), (.84, -.72), (.84, -.60), (-.84, -.60)], WHITE)
@@ -664,6 +752,8 @@ DRAW = {
     "info.living_street_end": panel(i_living(True)), "info.pedestrian_zone": panel(i_pedzone), "info.tunnel": i_tunnel,
     "info.parking": blue(i_park), "info.bus_stop": blue(i_bus), "info.crossing_right": i_crossing(False),
     "info.crossing_left": i_crossing(True), "info.bus_lane": blue(i_bus_lane),
+    "warn.chevron_right": chevron(1), "warn.chevron_left": chevron(-1), "info.bus_stop_cz": bus_cz,
+    "info.bus_stop_de": bus_de,
 }
 
 

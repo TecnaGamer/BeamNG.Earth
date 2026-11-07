@@ -54,18 +54,21 @@ class Tables(unittest.TestCase):
 class Rules(unittest.TestCase):
     def test_the_rule_numbers_are_the_kernels(self):
         _, systems, by_id = roadsigns.tables()
-        self.assertEqual(len(systems["rules"]), 15)
-        self.assertEqual(len(set(systems["rules"])), 15)
+        self.assertEqual(len(systems["rules"]), 27)
+        self.assertEqual(len(set(systems["rules"])), 27)
         names = ["reg.no_entry", "info.dead_end", "info.crossing_right", "warn.curve_right", "warn.curve_left",
                  "warn.double_right", "warn.double_left", "warn.roundabout", "mand.roundabout", "warn.signals",
-                 "info.motorway", "info.motorway_end", "info.living_street", "info.living_street_end", "info.oneway"]
+                 "info.motorway", "info.motorway_end", "info.living_street", "info.living_street_end", "info.oneway",
+                 "warn.narrow_both", "warn.chevron_right", "warn.chevron_left", "warn.side_right", "warn.side_left",
+                 "prio.give_way", "prio.stop", "info.tunnel", "info.pedestrian_zone", "mand.bicycle", "info.bus_stop",
+                 "info.parking"]
         self.assertEqual(systems["rules"], names)
 
     def test_every_threshold_is_given_and_a_country_may_override(self):
         _, systems, _ = roadsigns.tables()
         self.assertEqual(set(systems["params"]), set(roadsigns.PARAM_KEYS))
         base = roadsigns.params({})
-        self.assertEqual(len(base), 8)
+        self.assertEqual(len(base), 11)
         over = roadsigns.params({"params": {"warn_m": 200}})
         self.assertEqual(over[0], 200.0)
         self.assertEqual(over[1:], base[1:])
@@ -110,11 +113,11 @@ class Poles(unittest.TestCase):
     def test_a_warning_stands_alone_in_germany_but_not_in_czechia(self):
         rules = roadsigns.tables()[1]["rules"]
         de, cz = roadsigns.pole_params(roadsigns.system("DE")), roadsigns.pole_params(roadsigns.system("CZ"))
-        self.assertEqual(len(de), 17)
+        self.assertEqual(len(de), len(roadsigns.tables()[1]["rules"]) + 2)
         self.assertEqual(de[rules.index("warn.curve_left")], -1.0)
         self.assertGreaterEqual(cz[rules.index("warn.curve_left")], 0.0)
         self.assertEqual(cz[rules.index("warn.curve_left")], 0.0, "czech warnings on top")
-        self.assertEqual(de[15:], [3.0, 12.0])
+        self.assertEqual(de[len(rules):], [3.0, 12.0])
 
     def test_the_country_order_ranks_the_groups_from_the_top(self):
         rules = roadsigns.tables()[1]["rules"]
@@ -149,10 +152,53 @@ class Poles(unittest.TestCase):
                                        np.array([0, 2], np.int64), z2, np.zeros(2, np.int64), np.array([[360.0, 0.5]]),
                                        np.array([[500.0, 0.5]]), z2, z2, np.zeros(1, np.int64), [-1e4, -1e4, 1e4, 1e4], False,
                                        [0.5, 1.2], 0.9, roadsigns.params({}), np.zeros((0, 4)),
-                                       roadsigns.pole_params(roadsigns.system("CZ")))
+                                       roadsigns.pole_params(roadsigns.system("CZ")), np.zeros((0, 5)))
         self.assertEqual(got.shape[1], 11)
         on = {int(p) for p in got[:, 9]}
         self.assertTrue(any(((got[:, 9] == p).sum() > 1) for p in on), got)
+
+
+class Interest(unittest.TestCase):
+    def test_give_way_and_stop_take_the_way_the_map_states(self):
+        tags = lambda **kw: json.dumps(kw)         # noqa: E731
+        self.assertEqual(roadsigns.poi_of("give_way", tags(highway="give_way", direction="forward")), (roadsigns.POI_GIVE_WAY, 1.0))
+        self.assertEqual(roadsigns.poi_of("stop", tags(highway="stop", direction="backward")), (roadsigns.POI_STOP, -1.0))
+        self.assertEqual(roadsigns.poi_of("stop", tags(highway="stop")), (roadsigns.POI_STOP, 0.0))
+        self.assertIsNone(roadsigns.poi_of("bench", tags(amenity="bench")))
+        self.assertEqual(roadsigns.poi_of("give_way", None), (roadsigns.POI_GIVE_WAY, 0.0))
+
+    def test_a_bus_stop_is_a_highway_bus_stop_and_a_car_park_is_not_private(self):
+        tags = lambda **kw: json.dumps(kw)         # noqa: E731
+        self.assertEqual(roadsigns.poi_of("bus_stop", tags(highway="bus_stop"))[0], roadsigns.POI_BUS_STOP)
+        self.assertIsNone(roadsigns.poi_of("bus_stop", tags(public_transport="platform")), "a platform alone is not a stop sign")
+        self.assertEqual(roadsigns.poi_of("parking_entrance", tags(amenity="parking_entrance"))[0], roadsigns.POI_PARKING)
+        self.assertIsNone(roadsigns.poi_of("parking_entrance", tags(amenity="parking_entrance", access="private")))
+        self.assertIsNone(roadsigns.poi_of("bus_stop", "not json"))
+
+    def test_a_country_may_have_its_own_sign_for_a_role(self):
+        rules = roadsigns.tables()[1]["rules"]
+        bus = rules.index("info.bus_stop")
+        roles, _, by_id = roadsigns.tables()
+        self.assertEqual(roadsigns.system("CZ")["roles"]["info.bus_stop"], "info.bus_stop_cz")
+        self.assertIn("info.bus_stop_cz", by_id)
+        row = np.array([[0.0, 0.0, 0.0, 1.0, bus, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+        cz = roadsigns.table(row, np.zeros(1), np.zeros(1), roadsigns.system("CZ"))
+        ua = roadsigns.table(row, np.zeros(1), np.zeros(1), roadsigns.system("UA"))
+        self.assertEqual(int(cz[0, 6]), by_id["info.bus_stop_cz"][0])
+        self.assertEqual(int(ua[0, 6]), by_id["info.bus_stop"][0])
+        local = roadsigns.pole_params(roadsigns.system("CZ"))
+        self.assertEqual(local[bus], -1.0, "a local sign stands alone on its pole")
+
+    def test_a_chevron_board_is_wide_and_stands_alone(self):
+        rules = roadsigns.tables()[1]["rules"]
+        _, _, by_id = roadsigns.tables()
+        self.assertEqual(by_id["warn.chevron_right"][1]["shape"], "rect")
+        for cc in ("UA", "CZ", "PL", "DE"):
+            self.assertEqual(roadsigns.pole_params(roadsigns.system(cc))[rules.index("warn.chevron_left")], -1.0, cc)
+        row = np.array([[0.0, 0.0, 0.0, 1.0, rules.index("warn.chevron_left"), 1.0, 0.0, 0.0, 0.0, 0.0, 0.0]])
+        t = roadsigns.table(row, np.zeros(1), np.zeros(1), roadsigns.system("CZ"))
+        self.assertEqual(int(t[0, 7]), roadsigns.SHAPES["rect"])
+        self.assertEqual(t[0, 8], roadsigns.tables()[1]["sizes"]["default"]["rect"][1])
 
 
 class Crossings(unittest.TestCase):

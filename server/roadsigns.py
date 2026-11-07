@@ -21,14 +21,20 @@ import roads
 import signroads
 import speedsigns
 
-KERNEL = 153                    # earthfast VERSION with road_sign_place / road_sign_mesh
+KERNEL = 159                    # earthfast VERSION with road_sign_place / road_sign_mesh
 ON = os.environ.get("BNE_ROADSIGNS", "off") == "on"
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5}
+SHAPES = {"circle": 0, "tri_up": 1, "tri_down": 2, "diamond": 3, "octagon": 4, "square": 5, "rect": 6}
 METAL = "bne_exit_metal"
-FLAG_RING, FLAG_LIVING = 1, 2     # roadsigns.rs
+FLAG_RING, FLAG_LIVING, FLAG_FOOT, FLAG_CYCLE = 1, 2, 4, 8     # roadsigns.rs
+POI_GIVE_WAY, POI_STOP, POI_BUS_STOP, POI_PARKING, POI_TUNNEL = 0, 1, 2, 3, 4
+POI_CLASSES = {"give_way": POI_GIVE_WAY, "stop": POI_STOP, "bus_stop": POI_BUS_STOP, "parking_entrance": POI_PARKING}
+PATH_CLASSES = {"pedestrian": FLAG_FOOT, "cycleway": FLAG_CYCLE}     # roads cars do not drive, kept for the signs that enter them
+PRIVATE = {"private", "no", "customers", "permit", "delivery"}        # a car park with such access gets no sign
+TUNNEL_MIN_M = 80.0            # a shorter tunnel is not signed
+PATH_HALF_M = 1.5
 PARAM_KEYS = ("warn_m", "curve_turn_deg", "curve_window_m", "curve_min_rank", "double_gap_m", "motorway_end_m",
-              "living_min_m", "min_before_m")
+              "living_min_m", "min_before_m", "chevron_turn_deg", "chevron_window_m", "narrow_ratio")
 _lock = threading.Lock()
 OPEN_CLASSES = {"track", "unknown"}     # a road ending on one of these goes on
 CROSSING_KINDS = {"zebra", "marked", "uncontrolled"}
@@ -97,6 +103,105 @@ def crossings(frame, cells):
 def signals(frame, cells):
     """(n, 2) of the traffic signals of infrastructure cells, in frame, each once."""
     return points(frame, cells, {"traffic_signals": lambda _tags: True})
+
+
+def _tags(text):
+    try:
+        t = json.loads(text)
+    except (TypeError, ValueError):
+        return {}
+    return t if isinstance(t, dict) else {}
+
+
+def poi_of(cls, tags):
+    """(kind, a) of an infrastructure point of class cls with these tags, or None: a give way / stop node with the way it states
+    (a: +1 along the road's geometry, -1 against, 0 not stated), a bus stop (highway=bus_stop), a car park entrance that is not
+    private."""
+    kind = POI_CLASSES.get(cls)
+    if kind is None:
+        return None
+    t = _tags(tags)
+    if kind in (POI_GIVE_WAY, POI_STOP):
+        return kind, {"forward": 1.0, "backward": -1.0}.get(str(t.get("direction", "")).lower(), 0.0)
+    if kind == POI_BUS_STOP:
+        return (kind, 0.0) if t.get("highway") == "bus_stop" or t.get("amenity") == "bus_stop" else None
+    return (kind, 0.0) if str(t.get("access", "")).lower() not in PRIVATE else None
+
+
+def pois(frame, cells):
+    """(n, 5) x, y, kind, a, 0 of the points of interest of infrastructure cells (poi_of), in frame, each once."""
+    rows = []
+    for feats in cells:
+        if feats is None or not len(feats):
+            continue
+        cls, tags, own = feats.attrs["class"], feats.attrs["tags"], feats.own
+        for i in np.flatnonzero((feats.kind == mapgeom.POINT) & np.isin(cls, sorted(POI_CLASSES)) & own):
+            got = poi_of(str(cls[i]), str(tags[i]))
+            if got:
+                ll = np.asarray(feats.parts(int(i))[0][0], np.float64)[0, :2]
+                rows.append((ll[0], ll[1], got[0], got[1]))
+    if not rows:
+        return np.zeros((0, 5))
+    a = np.array(rows, np.float64)
+    e, n, _ = frame.geodetic_to_enu(a[:, 1], a[:, 0], 0.0)
+    return np.ascontiguousarray(np.column_stack([e, n, a[:, 2], a[:, 3], np.zeros(len(a))]), np.float64)
+
+
+def tunnel_portals(feats, own):
+    """(n, 5) x, y, POI_TUNNEL, travel x, travel y (into the tunnel) of the portals of the tunnels of a cell's road rows `own`
+    ({fid: speed row}), the tunnels of TUNNEL_MIN_M and more."""
+    ids, out = None, []
+    for fid, row in own.items():
+        if not row[5] or row[5] == [(0.0, 1.0)]:
+            continue
+        pts = row[1]
+        s = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))])
+        if s[-1] < TUNNEL_MIN_M:
+            continue
+        if ids is None:
+            ids = {str(x): i for i, x in enumerate(feats.ids)}
+        i = ids.get(fid)
+        if i is None:
+            continue
+        at = lambda m, c: float(np.interp(min(max(m, 0.0), s[-1]), s, pts[:, c]))     # noqa: E731
+        for a, b, kind in roads.level_ranges(feats, i):
+            if kind != "tunnel" or (b - a) * s[-1] < TUNNEL_MIN_M:
+                continue
+            for f, sgn in ((a, 1.0), (b, -1.0)):
+                m = f * s[-1]
+                tx, ty = at(m + 3.0, 0) - at(m - 3.0, 0), at(m + 3.0, 1) - at(m - 3.0, 1)
+                l = float(np.hypot(tx, ty))
+                if l > 1e-6:
+                    out.append((at(m, 0), at(m, 1), POI_TUNNEL, sgn * tx / l, sgn * ty / l))
+    return np.array(out, np.float64).reshape(-1, 5)
+
+
+def path_rows(feats, frame):
+    """{fid: (speed row, meta, flags)} of the pedestrian zones and cycle paths of a cell: roads cars do not drive, so not in the
+    sign network, but they join it, and the sign for entering one stands on the road that leads to it. Kept on the cell."""
+    key = (frame.lat0, frame.lon0)
+    with _lock:
+        memo = feats.__dict__.setdefault('_rsign_paths', {})
+        got = memo.get(key)
+    if got is None:
+        got = {}
+        cls = feats.attrs.get("class")
+        con = feats.rules.get("connectors")
+        if cls is not None:
+            for i in np.flatnonzero(np.isin(cls, sorted(PATH_CLASSES))):
+                parts = feats.parts(int(i))
+                if not parts or not len(parts[0]) or len(parts[0][0]) < 2:
+                    continue
+                line = np.asarray(parts[0][0], np.float64)[:, :2]
+                e, n, _ = frame.geodetic_to_enu(line[:, 1], line[:, 0], 0.0)
+                cons = [(float(con.start[r]), str(con.value[r])) for r in con.rows(int(i))] if con is not None else []
+                row = (line, np.ascontiguousarray(np.column_stack([e, n]), np.float64), (PATH_HALF_M, 0.0, 0.0, 0.0, 0.0), cons, [], [])
+                got[str(feats.ids[i])] = (row, list(row[2]), PATH_CLASSES[str(cls[i])])
+        with _lock:
+            if len(memo) >= speedsigns.CELL_FRAMES:
+                memo.pop(next(iter(memo)))
+            memo[key] = got
+    return got
 
 
 def open_ends(frame, cells):
@@ -210,7 +315,7 @@ def pole_params(sys_row):
     order = list(sys_row["order"])
     ranks = []
     for rule in systems["rules"]:
-        group = by_id[rule][1]["group"]
+        group = by_id[sys_row.get("roles", {}).get(rule, rule)][1]["group"]
         ranks.append(float(order.index(group)) if group in order else -1.0)
     return ranks + [float(sys_row.get("max_on_pole", 3)), float(systems["pole"]["join_m"])]
 
@@ -231,7 +336,7 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     x0, y0, x1, y1 = box
     m = speedsigns.MARGIN_M
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
-    rows, cells, living, ring = {}, [], set(), {}
+    rows, cells, living, ring, paths, portals = {}, [], set(), {}, {}, []
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
         feats = context.cell(key)
         if feats is None or not len(feats):
@@ -242,7 +347,9 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
         for fid, row in own.items():
             rows.setdefault(fid, row)           # (a line is whole in every cell it crosses)
         ring.update(cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, own))
-    got = arrays(with_flags(rows, living, ring), box)
+        paths.update(path_rows(feats, frame))
+        portals.append(tunnel_portals(feats, own))
+    got = arrays(with_flags(rows, living, ring) + [v for k, v in paths.items() if k not in rows], box)
     if got is None:
         return np.zeros((0, 11))
     pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got
@@ -252,10 +359,12 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
     sizes = tables()[1]["sizes"]["default"]
+    poi = np.vstack([pois(frame, infra)] + portals)
     return fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
-                                    params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row))
+                                    params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row),
+                                    np.ascontiguousarray(poi, np.float64))
 
 
 def table(signs, z_ground, z_road, sys_row):
@@ -267,7 +376,8 @@ def table(signs, z_ground, z_road, sys_row):
     width = np.zeros(len(signs))
     cells = []
     for k, row in enumerate(signs):
-        cell, role = by_id[systems["rules"][int(row[4])]]
+        rule = systems["rules"][int(row[4])]
+        cell, role = by_id[sys_row.get("roles", {}).get(rule, rule)]
         cells.append((cell, role))
         width[k] = sizes[role["shape"]][int(row[5])]
     out = np.zeros((len(signs), 10))

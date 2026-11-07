@@ -51,15 +51,40 @@ pub const MOTORWAY_END: u8 = 11;
 pub const LIVING: u8 = 12;
 pub const LIVING_END: u8 = 13;
 pub const ONEWAY: u8 = 14;
-pub const RULES: usize = 15;
+pub const NARROW: u8 = 15;
+pub const CHEVRON_RIGHT: u8 = 16;
+pub const CHEVRON_LEFT: u8 = 17;
+pub const SIDE_RIGHT: u8 = 18;
+pub const SIDE_LEFT: u8 = 19;
+pub const GIVE_WAY: u8 = 20;
+pub const STOP: u8 = 21;
+pub const TUNNEL: u8 = 22;
+pub const PED_ZONE: u8 = 23;
+pub const BICYCLE: u8 = 24;
+pub const BUS_STOP: u8 = 25;
+pub const PARKING: u8 = 26;
+pub const RULES: usize = 27;
+
+/// The kinds of Input::pois (x, y, kind, a, b): give way and stop nodes (a: +1 along the way's geometry, -1 against, 0 not
+/// stated), bus stops, car park entrances, tunnel portals (a, b: the travel into the tunnel).
+pub const POI_GIVE_WAY: i64 = 0;
+pub const POI_STOP: i64 = 1;
+pub const POI_BUS_STOP: i64 = 2;
+pub const POI_PARKING: i64 = 3;
+pub const POI_TUNNEL: i64 = 4;
+
+mod more;
 
 /// What the caller says about a road beside its rank (meta column 5).
 pub const FLAG_RING: i64 = 1;
 pub const FLAG_LIVING: i64 = 2;
+pub const FLAG_FOOT: i64 = 4;       // a pedestrian zone
+pub const FLAG_CYCLE: i64 = 8;      // a cycle path
 
 /// The thresholds (Input::params, sign_systems.json "params"): [warn m, curve turn deg, curve window m, curve min rank,
-/// double curve gap m, motorway end m, living street min m, min m before the hazard].
-pub const N_PARAMS: usize = 8;
+/// double curve gap m, motorway end m, living street min m, min m before the hazard, chevron turn deg, chevron window m,
+/// narrowing: the narrower road's share of the wider one's half width at most].
+pub const N_PARAMS: usize = 11;
 
 /// The pole settings (Input::pole): per rule its place in the country's order of groups from the top of a pole (a negative
 /// number: the rule stands alone), then the most signs on a pole and the distance within which signs share one.
@@ -93,7 +118,8 @@ const STRAIGHT_COS: f64 = 0.7;
 const SPLIT_COS: f64 = -0.85;           // a one-way leaving nearly opposite to the one arriving: a divided road's split
 const TANGENT_M: f64 = 10.0;
 const SAME_WAY_COS: f64 = 0.7;
-const GAPS_M: [f64; RULES] = [15.0, 30.0, 12.0, 150.0, 150.0, 150.0, 150.0, 100.0, 20.0, 150.0, 200.0, 200.0, 25.0, 25.0, 60.0];        // the same rule, the same way, within this: one sign
+const GAPS_M: [f64; RULES] = [15.0, 30.0, 12.0, 150.0, 150.0, 150.0, 150.0, 100.0, 20.0, 150.0, 200.0, 200.0, 25.0, 25.0, 60.0,
+                                   150.0, 8.0, 8.0, 100.0, 100.0, 10.0, 10.0, 100.0, 30.0, 30.0, 25.0, 40.0];        // the same rule, the same way, within this: one sign
 const ALONG_STEPS_M: [f64; 5] = [0.0, 2.0, 4.0, 6.0, 8.0];  // a blocked spot: tried farther along
 const OUT_STEP_M: f64 = 0.5;
 const OUT_MAX_M: f64 = 2.0;
@@ -110,6 +136,8 @@ struct Road {
     link: bool,
     ring: bool,
     living: bool,
+    foot: bool,
+    cycle: bool,
 }
 
 struct Edge {
@@ -180,6 +208,7 @@ struct Cand {
     key: u64,
     xy: [f64; 2],
     dir: [f64; 2],
+    side: Option<f64>,      // None: the kerb side; Some(1.0) the right of the travel, Some(-1.0) the left
 }
 
 /// One sign: its spot, the direction of the traffic it faces, its rule, size class (0 town, 1 country, 2 major road),
@@ -209,6 +238,7 @@ pub struct Input<'a> {
     pub crossings: ArrayView2<'a, f64>,
     pub signals: ArrayView2<'a, f64>,
     pub open_ends: ArrayView2<'a, f64>,
+    pub pois: ArrayView2<'a, f64>,          // (n, 5) x, y, kind (POI_*), a, b
     pub avoid: ArrayView2<'a, f64>,         // (n, 4) x, y, travel x, travel y of the speed-limit signs round the box
     pub poly: ArrayView2<'a, f64>,
     pub poly_off: ArrayView1<'a, i64>,
@@ -328,7 +358,7 @@ fn cand(net: &Net, rule: u8, road: usize, s: f64, fwd: bool, back: bool) -> Cand
         ^ (rule as u64) ^ ((fwd as u64) << 8);
     let total = net.roads[road].s[net.roads[road].b - net.roads[road].a - 1];
     let dir = net.chord(road, (s - 3.0).max(0.0), (s + 3.0).min(total), fwd);
-    Cand { rule, road, s, fwd, back, key, xy, dir }
+    Cand { rule, road, s, fwd, back, key, xy, dir, side: None }
 }
 
 /// The arc length on edge e's road at u m from the edge's start in its direction of travel.
@@ -581,7 +611,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
         let flags = if a.meta.ncols() > 5 { a.meta[[r, 5]] as i64 } else { 0 };
         let road = Road { a: p, b: q, s, hw: a.meta[[r, 0]], dir: a.meta[[r, 1]] as i64, rank: a.meta[[r, 2]] as i64,
                           urban: a.meta[[r, 3]] != 0.0, link: a.meta[[r, 4]] != 0.0, ring: flags & FLAG_RING != 0,
-                          living: flags & FLAG_LIVING != 0 };
+                          living: flags & FLAG_LIVING != 0, foot: flags & FLAG_FOOT != 0, cycle: flags & FLAG_CYCLE != 0 };
         let total = if q >= p + 2 { road.s[q - p - 1] } else { 0.0 };
         net.roads.push(road);
         if total < 1.0 { continue; }
@@ -625,6 +655,7 @@ pub fn plan(a: &Input) -> Vec<Sign> {
     motorways(&net, &ends, &incoming, &outgoing, &a.params, &mut cands);
     living_streets(&net, &incoming, &outgoing, &a.params, &mut cands);
     one_ways(&net, &ends, &incoming, &mut cands);
+    more::all(&net, &ends, &incoming, &outgoing, a, &mut cands);
     cands.sort_by(|x, y| (x.rule, x.key).cmp(&(y.rule, y.key)));
 
     // one a place, per rule and direction, in a fixed order
@@ -678,7 +709,8 @@ pub fn plan(a: &Input) -> Vec<Sign> {
             if s <= 0.0 || s >= total { break; }
             let (road_xy, _) = net.at(c.road, s);
             let t = net.chord(c.road, (s - 3.0).max(0.0), (s + 3.0).min(total), c.fwd);
-            let right = [t[1] * side, -t[0] * side];
+            let sd = c.side.unwrap_or(side);
+            let right = [t[1] * sd, -t[0] * sd];
             let mut extra = 0.0;
             while extra <= OUT_MAX_M + 1e-9 {
                 let q = [road_xy[0] + right[0] * (base + extra), road_xy[1] + right[1] * (base + extra)];
@@ -703,9 +735,9 @@ pub fn plan(a: &Input) -> Vec<Sign> {
 
 /// The road signs of a box (x0, y0, x1, y1). Roads, junctions and bridge / tunnel ranges as speed_sign_place's; crossings
 /// (c, 2) points on the roads' centre lines, signals the same for traffic signals; meta (r, 6) as speed_sign_place's with the flags
-/// (FLAG_RING, FLAG_LIVING) in column 5; params: see N_PARAMS; open_ends (o, 2) where a road goes on unpaved. lateral: m from the
+/// (FLAG_RING, FLAG_LIVING, FLAG_FOOT, FLAG_CYCLE) in column 5; params: see N_PARAMS; open_ends (o, 2) where a road goes on unpaved. lateral: m from the
 /// carriageway's edge to the sign's near edge [town, country]; widest: m, the widest sign's width.
-/// avoid (n, 4): the speed-limit signs (x, y, travel x, travel y); pole: see N_POLE.
+/// avoid (n, 4): the speed-limit signs (x, y, travel x, travel y); pole: see N_POLE; pois (n, 5): see POI_GIVE_WAY.
 /// Returns (k, 11) [x, y, travel x, travel y, rule, size class, road x, road y, urban, pole, slot].
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
@@ -717,11 +749,12 @@ pub fn road_sign_place<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, ll
                             signals: PyReadonlyArray2<'py, f64>, open_ends: PyReadonlyArray2<'py, f64>,
                             poly: PyReadonlyArray2<'py, f64>, poly_off: PyReadonlyArray1<'py, i64>, bx: [f64; 4],
                             left_hand: bool, lateral: [f64; 2], widest: f64, params: [f64; N_PARAMS],
-                            avoid: PyReadonlyArray2<'py, f64>, pole: [f64; N_POLE]) -> Bound<'py, PyArray2<f64>> {
+                            avoid: PyReadonlyArray2<'py, f64>, pole: [f64; N_POLE], pois: PyReadonlyArray2<'py, f64>)
+                            -> Bound<'py, PyArray2<f64>> {
     let signs = plan(&Input { pts: pts.as_array(), ll: ll.as_array(), off: off.as_array(), meta: meta.as_array(),
                               con_at: con_at.as_array(), con_id: con_id.as_array(), con_off: con_off.as_array(),
                               skip: skip.as_array(), skip_off: skip_off.as_array(), crossings: crossings.as_array(),
-                              signals: signals.as_array(), open_ends: open_ends.as_array(), poly: poly.as_array(),
+                              signals: signals.as_array(), open_ends: open_ends.as_array(), pois: pois.as_array(), poly: poly.as_array(),
                               poly_off: poly_off.as_array(), bx, left_hand, lateral, widest, params,
                               avoid: avoid.as_array(), pole });
     let n = signs.len();
@@ -780,6 +813,7 @@ pub fn outline(shape: i64) -> Vec<[f64; 2]> {
             vec![[t, 0.98], [-t, 0.98], [-0.98, t], [-0.98, -t], [-t, -0.98], [t, -0.98], [0.98, -t], [0.98, t]]
         }
         5 => round_poly(&[[0.97, 0.97], [-0.97, 0.97], [-0.97, -0.97], [0.97, -0.97]], 0.10),
+        6 => round_poly(&[[0.97, 0.48], [-0.97, 0.48], [-0.97, -0.48], [0.97, -0.48]], 0.06),     // a board twice as wide as high
         _ => (0..32).map(|k| {
             let a = k as f64 * std::f64::consts::TAU / 32.0;
             [0.99 * a.cos(), 0.99 * a.sin()]
@@ -809,9 +843,11 @@ pub fn road_sign_mesh<'py>(py: Python<'py>, signs: PyReadonlyArray2<'py, f64>, c
         m.face = [-tx / tl, -ty / tl];
         m.right = [ty / tl, -tx / tl];
         let bottom = (zr + mount).max(zg + 1.2) - zg;
-        let (half, zc) = (w / 2.0, bottom + w / 2.0);
-        m.pole(-0.05, 0.03, -0.3, zc + 0.3 * half, M_METAL);
         let out = shapes.entry(shape).or_insert_with(|| outline(shape));
+        let half = w / 2.0;
+        let high = out.iter().fold(0.0f64, |a, q| a.max(q[1].abs()));     // (a wide board is lower than it is wide)
+        let zc = bottom + high * half;
+        m.pole(-0.05, 0.03, -0.3, zc + 0.3 * half * high, M_METAL);
         let (cu, cv) = ((cell % cols) as f64, (cell / cols) as f64);
         let n = out.len();
         let i = m.p.len() as i64;
@@ -881,7 +917,7 @@ mod tests {
             con_id: Array1::from(id), con_off: Array1::from(co) }
     }
 
-    const PARAMS: [f64; N_PARAMS] = [150.0, 55.0, 60.0, 3.0, 100.0, 150.0, 40.0, 50.0];
+    const PARAMS: [f64; N_PARAMS] = [150.0, 55.0, 60.0, 3.0, 100.0, 150.0, 40.0, 50.0, 70.0, 40.0, 0.8];
 
     fn run(t: &T, cross: Array2<f64>, open: Array2<f64>, left: bool) -> Vec<Sign> {
         run_x(t, cross, none(), open, left)
@@ -903,13 +939,24 @@ mod tests {
 
     fn run_p(t: &T, cross: Array2<f64>, signals: Array2<f64>, open: Array2<f64>, avoid: Array2<f64>, pole: [f64; N_POLE],
              left: bool) -> Vec<Sign> {
+        run_q(t, cross, signals, open, avoid, pole, Array2::zeros((0, 5)), left)
+    }
+
+    /// The road signs of the roads and the points of interest (x, y, kind, a, b) alone.
+    fn with_pois(t: &T, pois: Array2<f64>, left: bool) -> Vec<Sign> {
+        run_q(t, none(), none(), none(), none4(), all_alone(), pois, left)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_q(t: &T, cross: Array2<f64>, signals: Array2<f64>, open: Array2<f64>, avoid: Array2<f64>, pole: [f64; N_POLE],
+             pois: Array2<f64>, left: bool) -> Vec<Sign> {
         let skip = Array2::<f64>::zeros((0, 2));
         let skip_off = Array1::<i64>::zeros(t.off.len());
         let poly = Array2::<f64>::zeros((0, 2));
         let poly_off = arr1(&[0i64]);
         plan(&Input { pts: t.pts.view(), ll: t.pts.view(), off: t.off.view(), meta: t.meta.view(), con_at: t.con_at.view(),
                       con_id: t.con_id.view(), con_off: t.con_off.view(), skip: skip.view(), skip_off: skip_off.view(),
-                      crossings: cross.view(), signals: signals.view(), open_ends: open.view(), avoid: avoid.view(), poly: poly.view(),
+                      crossings: cross.view(), signals: signals.view(), open_ends: open.view(), pois: pois.view(), avoid: avoid.view(), poly: poly.view(),
                       poly_off: poly_off.view(), bx: [-1e4, -1e4, 1e4, 1e4], left_hand: left, lateral: [0.5, 1.2],
                       widest: 0.75, params: PARAMS, pole: pole })
     }
@@ -1231,8 +1278,122 @@ mod tests {
     }
 
     #[test]
+    fn a_tight_bend_gets_three_chevrons_on_its_outside_pointing_the_way_it_turns() {
+        // east, a left arc of radius 25 m (90 degrees, centre (-25, 25)), north
+        let mut line: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        line.extend(arc(-25.0, 25.0, 25.0, -90.0, 0.0));
+        line.push([0.0, 300.0]);
+        let s = run(&country(&line, 0.0, 4.0), none(), none(), false);
+        let (l, r) = (of(&s, CHEVRON_LEFT), of(&s, CHEVRON_RIGHT));
+        assert_eq!((l.len(), r.len()), (3, 3), "{s:?}");
+        for c in l.iter().chain(r.iter()) {
+            let d = ((c.xy[0] + 25.0).powi(2) + (c.xy[1] - 25.0).powi(2)).sqrt();
+            assert!(d > 25.0 + 4.0, "on the outside of the bend: {c:?} is {d} m from its centre");
+        }
+    }
+
+    #[test]
+    fn a_bend_a_curve_sign_is_enough_for_has_no_chevrons() {
+        let mut line: Vec<[f64; 2]> = vec![[-300.0, 0.0]];
+        line.extend(arc(-50.0, 50.0, 50.0, -90.0, 0.0));
+        line.push([0.0, 300.0]);
+        let s = run(&country(&line, 0.0, 4.0), none(), none(), false);
+        assert!(of(&s, CHEVRON_LEFT).is_empty() && of(&s, CHEVRON_RIGHT).is_empty(), "{s:?}");
+    }
+
+    fn t_main(urban: f64, side_rank: f64) -> T {
+        // an east-west main road (rank 4) through (0, 0) and a road joining it from the north
+        roads_x(&[(&[[-1000.0, 0.0], [0.0, 0.0]], 0.0, 4.0, [1, 2], urban, 0, 0.0), (&[[0.0, 0.0], [1000.0, 0.0]], 0.0, 4.0, [2, 3], urban, 0, 0.0),
+                  (&[[0.0, 100.0], [0.0, 0.0]], 0.0, side_rank, [4, 2], urban, 0, 0.0)])
+    }
+
+    #[test]
+    fn a_side_road_is_warned_of_on_the_main_road_on_the_side_it_joins_from() {
+        let s = run(&t_main(0.0, 2.0), none(), none(), false);
+        let (l, r) = (of(&s, SIDE_LEFT), of(&s, SIDE_RIGHT));
+        assert_eq!((l.len(), r.len()), (1, 1), "{s:?}");
+        assert!(l[0].dir[0] > 0.99 && l[0].xy[0] < -100.0, "going east it joins from the left: {:?}", l[0]);
+        assert!(r[0].dir[0] < -0.99 && r[0].xy[0] > 100.0, "going west from the right: {:?}", r[0]);
+        let town = run(&t_main(1.0, 2.0), none(), none(), false);
+        assert!(town.iter().all(|x| x.rule != SIDE_LEFT && x.rule != SIDE_RIGHT), "in town: none");
+        let main = run(&t_main(0.0, 4.0), none(), none(), false);
+        assert!(main.iter().all(|x| x.rule != SIDE_LEFT && x.rule != SIDE_RIGHT), "a road as big as the main road: none");
+    }
+
+    #[test]
+    fn give_way_and_stop_stand_where_the_map_has_them_facing_the_way_it_states() {
+        let t = road800();
+        let s = with_pois(&t, arr2(&[[300.0, 0.0, 0.0, 1.0, 0.0], [500.0, 0.0, 1.0, -1.0, 0.0]]), false);
+        let (g, p) = (of(&s, GIVE_WAY), of(&s, STOP));
+        assert_eq!((g.len(), p.len()), (1, 1), "{s:?}");
+        assert!(g[0].dir[0] > 0.99 && (g[0].xy[0] - 298.5).abs() < 6.0, "{:?}", g[0]);
+        assert!(p[0].dir[0] < -0.99, "{:?}", p[0]);
+        assert!(with_pois(&t, arr2(&[[300.0, 0.0, 0.0, 0.0, 0.0]]), false).is_empty(), "no stated way on a two-way road: none");
+    }
+
+    #[test]
+    fn a_node_at_a_junction_belongs_to_the_minor_road() {
+        // the node lies at the crossing of a main road and a rank 1 street: the sign goes to the street
+        let t = roads_x(&[(&[[-500.0, 0.0], [500.0, 0.0]], 0.0, 4.0, [1, 2], 0.0, 0, 0.0), (&[[0.0, 200.0], [0.0, 0.0]], 1.0, 1.0, [3, 4], 0.0, 0, 0.0)]);
+        let s = with_pois(&t, arr2(&[[0.0, 1.0, 0.0, 0.0, 0.0]]), false);
+        let g = of(&s, GIVE_WAY);
+        assert_eq!(g.len(), 1, "{s:?}");
+        assert!(g[0].dir[1] < -0.99, "facing the traffic coming south along the street: {:?}", g[0]);
+    }
+
+    #[test]
+    fn a_narrowing_road_is_warned_of_before_it() {
+        let mut t = roads_x(&[(&[[-1000.0, 0.0], [0.0, 0.0]], 0.0, 3.0, [1, 2], 0.0, 0, 0.0), (&[[0.0, 0.0], [1000.0, 0.0]], 0.0, 3.0, [2, 3], 0.0, 0, 0.0)]);
+        t.meta[[1, 0]] = 2.5;
+        let s = run(&t, none(), none(), false);
+        let n = of(&s, NARROW);
+        assert_eq!(n.len(), 1, "only the way it narrows: {s:?}");
+        assert!(n[0].dir[0] > 0.99 && n[0].xy[0] < -100.0, "{:?}", n[0]);
+        t.meta[[1, 0]] = 3.8;
+        assert!(of(&run(&t, none(), none(), false), NARROW).is_empty(), "a hair narrower is the same road");
+    }
+
+    #[test]
+    fn a_tunnel_is_signed_before_its_portal() {
+        let t = road800();
+        let s = with_pois(&t, arr2(&[[500.0, 0.0, 4.0, 1.0, 0.0], [700.0, 0.0, 4.0, -1.0, 0.0]]), false);
+        let u = of(&s, TUNNEL);
+        assert_eq!(u.len(), 2, "{s:?}");
+        assert!(u.iter().any(|x| x.dir[0] > 0.99 && x.xy[0] < 495.0) && u.iter().any(|x| x.dir[0] < -0.99 && x.xy[0] > 705.0), "{u:?}");
+    }
+
+    #[test]
+    fn a_bus_stop_is_signed_for_the_traffic_on_its_side() {
+        let t = road800();
+        let at = arr2(&[[300.0, -6.0, 2.0, 0.0, 0.0]]);
+        let s = of(&with_pois(&t, at.clone(), false), BUS_STOP).iter().map(|x| x.dir[0]).collect::<Vec<_>>();
+        assert_eq!(s.len(), 1);
+        assert!(s[0] > 0.99, "south of the road: the traffic going east (right-hand): {s:?}");
+        let l = of(&with_pois(&t, at, true), BUS_STOP).iter().map(|x| x.dir[0]).collect::<Vec<_>>();
+        assert!(l.len() == 1 && l[0] < -0.99, "left-hand traffic: the other way: {l:?}");
+        assert!(with_pois(&t, arr2(&[[300.0, -60.0, 2.0, 0.0, 0.0]]), false).is_empty(), "a stop far from every road: none");
+    }
+
+    #[test]
+    fn pedestrian_zones_and_cycle_paths_are_signed_where_traffic_enters_them() {
+        // an ordinary road, then a pedestrian zone straight on; a cycle path leaving to the side
+        let t = roads_x(&[(&[[-300.0, 0.0], [0.0, 0.0]], 0.0, 3.0, [1, 2], 0.0, 0, 0.0),
+                          (&[[0.0, 0.0], [200.0, 0.0]], 0.0, 0.0, [2, 3], 0.0, FLAG_FOOT, 0.0)]);
+        let s = run(&t, none(), none(), false);
+        let p = of(&s, PED_ZONE);
+        assert_eq!(p.len(), 1, "{s:?}");
+        assert!(p[0].dir[0] > 0.99 && p[0].xy[0] > 0.0, "{:?}", p[0]);
+        let straight = roads_x(&[(&[[-300.0, 0.0], [0.0, 0.0]], 0.0, 3.0, [1, 2], 0.0, 0, 0.0),
+                                 (&[[0.0, 0.0], [200.0, 0.0]], 0.0, 0.0, [2, 3], 0.0, FLAG_CYCLE, 0.0)]);
+        assert_eq!(of(&run(&straight, none(), none(), false), BICYCLE).len(), 1);
+        let side = roads_x(&[(&[[-300.0, 0.0], [0.0, 0.0]], 0.0, 3.0, [1, 2], 0.0, 0, 0.0),
+                             (&[[0.0, 0.0], [0.0, 200.0]], 0.0, 0.0, [2, 3], 0.0, FLAG_CYCLE, 0.0)]);
+        assert!(of(&run(&side, none(), none(), false), BICYCLE).is_empty(), "a path branching off is not announced");
+    }
+
+    #[test]
     fn outlines_are_counter_clockwise_and_in_the_cell() {
-        for shape in 0..6 {
+        for shape in 0..7 {
             let o = outline(shape);
             let area: f64 = (0..o.len()).map(|i| {
                 let (a, b) = (o[i], o[(i + 1) % o.len()]);
