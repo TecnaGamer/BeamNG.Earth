@@ -55,7 +55,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes, dirs_faces=None):
 
 
 def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, widths=None,
-               left_hand=False, mph=True, country=None, dirs=False):
+               left_hand=False, mph=True, country=None, dirs=False, dej=False):
     source = getattr(md, 'highway_signs', None)
     if source is None:
         return None
@@ -74,7 +74,7 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
             if len(ring) >= 2:
                 pts = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
-    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
+    speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us), dej)
     dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir)         if dirs else (None, {})
     import euguardrails
     french = False
@@ -96,11 +96,11 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
 _warned = -float('inf')
 
 
-def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face):
+def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=False):
     """speedsigns.build_tile, or None: optional scenery never stops the other signs."""
     global _warned
     try:
-        return speedsigns.build_tile(frame, tx, ty, elev, context, decks, left_hand, mph, face)
+        return speedsigns.build_tile(frame, tx, ty, elev, context, decks, left_hand, mph, face, de_on=de_on)
     except Exception as error:
         now = time.monotonic()
         if now - _warned >= 60.:

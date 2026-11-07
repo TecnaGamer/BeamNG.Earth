@@ -45,6 +45,61 @@ class PaintTest(unittest.TestCase):
             self.assertEqual(secrossings.paint(tags), secrossings.M15, tags)
 
 
+class WantedTest(unittest.TestCase):
+    """Who reads the map's crossing, stop and give-way nodes: Sweden always, Germany with its junction signs on (de: the
+    setting and the tile's or the graph's centre inside Germany)."""
+    def test_sweden(self):
+        self.assertTrue(secrossings.wanted("SE"))
+        self.assertTrue(secrossings.wanted("se", de=False))
+
+    def test_germany_with_its_signs_on(self):
+        self.assertTrue(secrossings.wanted("DE", de=True))
+        self.assertFalse(secrossings.wanted("DE"))
+        self.assertFalse(secrossings.wanted("DE", de=False))
+
+    def test_elsewhere(self):
+        self.assertFalse(secrossings.wanted("FR"))
+        self.assertFalse(secrossings.wanted(None))
+        self.assertFalse(secrossings.wanted(""))
+
+
+class GermanCrossingTest(unittest.TestCase):
+    """Germany's crossings by their own tags: Z 293 (a Fußgängerüberweg) only where the map has a marked crossing
+    without signals, nothing on a bare highway=crossing, a refuge island, an unmarked one or one at signals (VwV-StVO zu
+    § 26 Rn. 5)."""
+    def test_marked_is_z293(self):
+        for tags in ({"crossing": "zebra"}, {"crossing_ref": "zebra"}, {"crossing:markings": "zebra"},
+                     {"crossing:markings": "yes"}, {"crossing": "marked"}, {"crossing": "uncontrolled"},
+                     {"crossing": "island", "crossing:markings": "zebra"}, {"crossing:markings": "zebra:double"},
+                     {"crossing": "uncontrolled", "crossing_ref": "zebra", "crossing:markings": "zebra"}):
+            self.assertEqual(secrossings.de_paint(tags), secrossings.M15, tags)
+
+    def test_unmarked_or_signalled_is_nothing(self):
+        for tags in ({}, {"highway": "crossing"}, {"crossing": "island"}, {"crossing": "unmarked"},
+                     {"crossing": "traffic_signals"}, {"crossing": "traffic_signals", "crossing:markings": "zebra"},
+                     {"crossing": "traffic_signals", "crossing_ref": "zebra"}, {"crossing": "informal"},
+                     {"crossing": "no"}, {"crossing": "uncontrolled", "crossing:markings": "no"},
+                     {"crossing": "marked", "crossing:signals": "yes"}, {"crossing:markings": "dots"},
+                     {"crossing:markings": "surface"}, {"crossing:markings": "lines"}):
+            self.assertEqual(secrossings.de_paint(tags), 0, tags)
+
+    def test_nodes_carry_germanys_codes(self):
+        """nodes' de_crossings: every crossing (its kerbs are lowered, painted or not), Z 293 where de_paint says and no
+        signal is mapped within SIGNALS_NEAR_M; Sweden's crossings as they were."""
+        got = secrossings.nodes(Frame(), [Infra([
+            ("crossing", (1.0, 2.0), {}),
+            ("crossing", (3.0, 4.0), {"crossing": "zebra"}),
+            ("crossing", (5.0, 6.0), {"crossing": "island"}),
+            ("crossing", (7.0, 8.0), {"crossing": "traffic_signals"}),
+            ("crossing", (20.0, 20.0), {"crossing:markings": "zebra"}),
+            ("traffic_signals", (20.0, 21.0), {})])])
+        self.assertEqual(got["de_crossings"], [(10.0, 20.0, 0), (30.0, 40.0, secrossings.M15), (50.0, 60.0, 0),
+                                               (70.0, 80.0, 0), (200.0, 200.0, 0)])
+        self.assertEqual(got["crossings"], [(10.0, 20.0, secrossings.M15), (30.0, 40.0, secrossings.M15),
+                                            (50.0, 60.0, secrossings.M15), (70.0, 80.0, secrossings.M15),
+                                            (200.0, 200.0, secrossings.M15)])
+
+
 class Infra:
     """An infrastructure Features of points."""
     def __init__(self, rows):

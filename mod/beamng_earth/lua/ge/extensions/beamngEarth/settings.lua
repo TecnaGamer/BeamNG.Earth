@@ -96,6 +96,9 @@ M.SCHEMA = {
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
+  -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
+  -- accordingly (server designs.py; the message german_junctions)
+  germanJunctionSigns = { kind = 'bool', default = true, label = 'German junction signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -141,7 +144,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'germanJunctionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -489,6 +492,10 @@ M.APPLY = {
   directionSigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setDirectionSigns then core.setDirectionSigns(v) end
+  end,
+  germanJunctionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setGermanJunctionSigns then core.setGermanJunctionSigns(v) end
   end,
   roads = function(v)
     local core = ext('beamngEarth_core')

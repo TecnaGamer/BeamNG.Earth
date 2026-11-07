@@ -167,6 +167,64 @@ class GiveWayLineTest(unittest.TestCase):
         self.assertEqual(markings.give_way_lines([(fid, spec, np.array([[0.0, 0.0, 0.0], [0.0, 6.0, 0.0]]), wide)], [])[0], [])
 
 
+class WaitLineTest(unittest.TestCase):
+    """Germany's Wartelinie Z 341 where a 205 stands (VwV-StVO zu Zeichen 341 Rn. 1): a Breitstrich 0.50 m wide of
+    0.50 m dashes 0.25 m apart (RMS 4.7.2), at the spot stop_lines stands a line."""
+
+    def arm(self, width=8.0, oneway=False, wide=5.0, length=60.0):
+        spec = roads.Spec(width, "paved", True, "residential", oneway)
+        return ("a", spec, np.array([[0.0, 0.0, 3.0], [0.0, length, 3.0]]), wide)    # the road runs north from it
+
+    def test_dashes_across_the_half_coming_in(self):
+        dashes, cuts = markings.wait_lines([self.arm()], [])
+        self.assertEqual(len(dashes), 5, "3.5 m of lane (0.2 m off the middle, 0.3 m off the edge): five dashes")
+        for q in dashes:
+            self.assertEqual(q.shape, (4, 3))
+            self.assertAlmostEqual(np.ptp(q[:, 0]), 0.50, 6, msg="dashes 0.50 m long, across the lane")
+            self.assertAlmostEqual(np.ptp(q[:, 1]), 0.50, 6, msg="a Breitstrich 0.50 m wide")
+            self.assertTrue((q[:, 2] == 3.0).all())
+        pts = np.concatenate(dashes)
+        self.assertTrue((pts[:, 0] < 0).all(), "traffic heading south keeps to the west half")
+        self.assertAlmostEqual(pts[:, 0].max(), -0.2, 6)
+        self.assertAlmostEqual(pts[:, 0].min(), -3.7, 6)
+        mids = sorted(float(q[:, 0].mean()) for q in dashes)
+        self.assertTrue(np.allclose(np.diff(mids), 0.75), "0.25 m gaps")
+        self.assertAlmostEqual(float(pts[:, 1].mean()), 6.0, 6, msg="1 m from the crossing road's edge (stop_lines')")
+        self.assertEqual(list(cuts), ["a"])
+        self.assertAlmostEqual(cuts["a"][0][2], 6.0, msg="the road's lines end at it")
+
+    def test_whole_dashes_centred(self):
+        dashes, _ = markings.wait_lines([self.arm(width=9.0)], [])
+        pts = np.concatenate(dashes)
+        self.assertEqual(len(dashes), 5, "4.0 m: five dashes (3.5 m), 0.25 m to spare each side")
+        self.assertAlmostEqual(pts[:, 0].max(), -0.45, 6)
+        self.assertAlmostEqual(pts[:, 0].min(), -3.95, 6)
+        self.assertEqual(len(markings.wait_lines([self.arm(oneway=True)], [])[0]), 10, "a one-way: its whole width")
+
+    def test_left_hand_mirror(self):
+        right = np.concatenate(markings.wait_lines([self.arm()], [])[0])
+        left = np.concatenate(markings.wait_lines([self.arm()], [], True)[0])
+        self.assertTrue((left[:, 0] > 0).all(), "traffic heading south keeps to the east half")
+        np.testing.assert_allclose(sorted(left[:, 0]), sorted(-right[:, 0]))
+
+    def test_past_a_crossing(self):
+        cw = {"a": np.array([-4.0, 9.0, 3.0]), "b": np.array([4.0, 9.0, 3.0]), "w": 3.0}
+        dashes, cuts = markings.wait_lines([self.arm()], [cw])
+        self.assertAlmostEqual(float(np.concatenate(dashes)[:, 1].mean()), 11.5, 6, msg="1 m past it (no car between)")
+        self.assertAlmostEqual(cuts["a"][0][2], 11.5)
+
+    def test_a_stub_gets_none(self):
+        self.assertEqual(markings.wait_lines([self.arm(length=7.0)], []), ([], {}))
+
+
+class StopLineWidthTest(unittest.TestCase):
+    def test_germany_passes_its_haltlinie(self):
+        spec = roads.Spec(8.0, "paved", True, "residential", False)
+        arm = ("a", spec, np.array([[0.0, 0.0, 0.0], [0.0, 60.0, 0.0]]), 5.0, "stop")
+        self.assertEqual(markings.stop_lines([arm], [])[0][0]["w"], markings.M13_W, "Sweden's M13 as it was")
+        self.assertEqual(markings.stop_lines([arm], [], w=markings.Z294_W)[0][0]["w"], 0.50, "Z 294 (RMS 4.6)")
+
+
 class M20Test(unittest.TestCase):
     def test_arrow_ends_at_its_tip_and_points_right_of_the_lane(self):
         polys = markings.m20((10.0, 20.0), (0.0, 1.0))       # heading north

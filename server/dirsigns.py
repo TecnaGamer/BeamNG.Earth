@@ -142,14 +142,15 @@ def km_text(metres, factor, rounding):
 
 
 def _arrays(rows, box, margin, table, routes_of):
-    """dirsign_place's road arrays of the speed-signs' rows ({fid: (line, pts, meta, cons, limits, skips)}) near box."""
+    """dirsign_place's road arrays of the speed-signs' rows ({fid: (line, pts, meta, cons, limits, skips, zone)}:
+    speedsigns._cell_rows'; their zone column unread) near box."""
     x0, y0, x1, y1 = box
     ll, xy, off, meta = [], [], [0], []
     con_at, con_id, con_off = [], [], [0]
     rt_id, rt_from, rt_to, rt_off = [], [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for fid, (line, pts, m, cons, _limits, skips) in sorted(rows.items()):
+    for fid, (line, pts, m, cons, _limits, skips, *_) in sorted(rows.items()):
         if (pts[:, 0].max() < x0 - margin or pts[:, 0].min() > x1 + margin or
                 pts[:, 1].max() < y0 - margin or pts[:, 1].min() > y1 + margin):
             continue
