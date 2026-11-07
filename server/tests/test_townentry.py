@@ -912,6 +912,23 @@ class MappedTest(unittest.TestCase):
         self.assertEqual(sorted((r[8], round(r[1])) for r in got if r[0] == ts.G_ENTRY),
                          [("Aholfing", -120), ("Barbing", -120)])
 
+    def test_where_two_towns_meet_one_mapped(self):
+        """Two towns grown together (one estimated change from Aholfing to Barbing, a sign of each back to back) and
+        a mapped sign of Aholfing only: Aholfing's stands where it is mapped, Barbing's estimated one stays."""
+        towns = [commune("Aholfing", -2000, -1500, 0, 1500, lambda x, y: np.asarray(x) <= 0.0)._replace(country="DE"),
+                 commune("Barbing", 0, -1500, 2000, 1500, east_of(0.0))._replace(country="DE")]
+        est = signs([road("r", x0=-900.0)], towns)
+        at = sorted((r[8], round(r[1])) for r in est if r[0] == ts.G_ENTRY)
+        self.assertEqual([n for n, _ in at], ["Aholfing", "Barbing"])
+        self.assertEqual(at[0][1], at[1][1], "one change: back to back")
+        got = signs([road("r", x0=-900.0)], towns, mapped=[(-60.0, 0.0, "Aholfing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in got if r[0] == ts.G_ENTRY),
+                         [("Aholfing", -60), ("Barbing", at[1][1])])
+        # (a one-way road eastbound: Aholfing's estimated sign was its exit on the far kerb, the mapped one replaces it)
+        one = signs([road("r", x0=-900.0, oneway=True, d=1)], towns, mapped=[(-60.0, 0.0, "Aholfing")])
+        self.assertEqual(sorted((r[8], round(r[1])) for r in one if r[0] == ts.G_ENTRY),
+                         [("Aholfing", -60), ("Barbing", at[1][1])])
+
     def test_a_mapped_sign_without_a_name(self):
         """No name (or one no commune has): the town on one side of it, its way in toward that side."""
         got = signs([road("r")], self.TOWN, mapped=[(140.0, 0.0, "")])

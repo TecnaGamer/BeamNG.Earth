@@ -1481,9 +1481,9 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
     either side of it when it has no name (state, MAPPED_PROBE_M along the
     line), a village the places do not have when its name means no commune (_unlisted); its way in toward the side its
     town is on, else toward its town's point (an unlisted village's: the middle of its mapped signs, MAPPED_VILLAGE_M,
-    for one alone its built-up side, _built_side). An estimated change of one of
-    those towns within MAPPED_REACH_M of a mapped sign is left out; a town's mapped signs on one line MAPPED_DEDUPE_M
-    apart are one."""
+    for one alone its built-up side, _built_side). An estimated change's side of one of
+    those towns within MAPPED_REACH_M of a mapped sign is left out (-1; where two towns meet, the other's stays; the
+    change goes when neither side is left); a town's mapped signs on one line MAPPED_DEDUPE_M apart are one."""
     import fast
     fast.require(MAPPED_KERNEL, "the mapped town signs")
     mlines = lines if mlines is None else mlines
@@ -1546,16 +1546,22 @@ def mapped_signs(lines, changes, communes, frame, mapped, urban=None, mlines=Non
     sign_towns = np.array([key.setdefault(c.name, len(key)) for _, _, c, _ in signs], np.int64)
     at = np.array([furniture._at(mlines[li][1], np.array([s]))[0][0, :2] for li, s, _, _ in signs], np.float64)
     sign_rows = np.c_[at, [[li, s] for li, s, _, _ in signs]].astype(np.float64)
+    # each change twice, a row per side ([a, -1], [-1, b]): a mapped sign of one town replaces that town's side only,
+    # the other town's sign at a boundary where the two meet stays (Codex on PR #892)
     if changes:
-        cat = np.array([furniture._at(lines[li][1], np.array([s]))[0][0, :2] for li, s, _, _ in changes], np.float64)
-        ctowns = np.array([[key.get(communes[a].name, -1) if a >= 0 else -1,
-                            key.get(communes[b].name, -1) if b >= 0 else -1] for _, _, a, b in changes], np.int64)
+        cat = np.repeat(np.array([furniture._at(lines[li][1], np.array([s]))[0][0, :2] for li, s, _, _ in changes],
+                                 np.float64), 2, axis=0)
+        ctowns = np.array([row for _, _, a, b in changes
+                           for row in ([key.get(communes[a].name, -1) if a >= 0 else -1, -1],
+                                       [-1, key.get(communes[b].name, -1) if b >= 0 else -1])], np.int64)
     else:
         cat, ctowns = np.zeros((0, 2)), np.zeros((0, 2), np.int64)
     keep_c, keep_s = fast._ef.town_sign_select(np.ascontiguousarray(cat), np.ascontiguousarray(ctowns),
                                                np.ascontiguousarray(sign_rows), sign_towns, MAPPED_REACH_M,
                                                MAPPED_DEDUPE_M)
-    return ([ch for ch, k in zip(changes, keep_c.tolist()) if k],
+    keep_c = keep_c.reshape(-1, 2).tolist()
+    kept = [(li, s, a if ka else -1, b if kb else -1) for (li, s, a, b), (ka, kb) in zip(changes, keep_c)]
+    return ([ch for ch in kept if ch[2] >= 0 or ch[3] >= 0],
             [sg for sg, k in zip(signs, keep_s.tolist()) if k])
 
 
