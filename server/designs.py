@@ -215,10 +215,11 @@ GRID_M = 25.0       # m at most between reads_here's grid points, the box's edge
                     # whole German context on reads_here (navgraph.build): a German junction in a missed sliver gets
                     # today's AI there while the tiles' props stand its German signs, the one decision no longer
                     # shared. That needs a strip of Germany under ~35 m wide reaching 200 m or more into the box (the
-                    # window's margin round the junctions it decides), or such a piece inside it. Cost, measured on
-                    # the published border data where the grid runs (the corners and the centre all outside Germany,
-                    # the box meeting germany.BOX: Salzburg, Strasbourg): a road tile's tile_reach (336 m) 15 x 15
-                    # points, 0.4-0.6 ms; a road graph's window (navgraph.WINDOW_M + 200 m each way: 2600 m) 105 x
+                    # window's margin round the junctions it decides), or such a piece inside it. A speed sign tile
+                    # loses its zone signs there. Cost, measured on the published border data where the grid runs
+                    # (the corners and the centre all outside Germany, the box meeting germany.BOX: Salzburg,
+                    # Strasbourg): a road tile's tile_reach (336 m) 15 x 15 points, 0.4-0.6 ms; a speed sign tile's box
+                    # (456 m) 0.6-1.0 ms; a road graph's window (navgraph.WINDOW_M + 200 m each way: 2600 m) 105 x
                     # 105, 16-26 ms. Inside Germany a corner answers (0.03 ms); away from the box nothing is asked
                     # (0.01 ms)
 

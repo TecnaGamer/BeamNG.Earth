@@ -13,6 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import borderfixtures  # noqa: E402
 import countrybounds  # noqa: E402
 import designs  # noqa: E402
+import designsigns  # noqa: E402
+import dezones  # noqa: E402
 import earthd  # noqa: E402
 import fast  # noqa: E402
 import furniture  # noqa: E402
@@ -21,6 +23,8 @@ import germany  # noqa: E402
 import mapgeom  # noqa: E402
 import numpy as np  # noqa: E402
 import roads  # noqa: E402
+import signroads  # noqa: E402
+import speedsigns  # noqa: E402
 
 
 def setUpModule():
@@ -1527,3 +1531,413 @@ class MarkingsTest(unittest.TestCase):
         nowhere = lambda lon, lat: np.zeros(np.size(lon), bool)     # noqa: E731
         with mock.patch.object(germany, "contains", nowhere):
             self.assertEqual(self.build(feats, country="FR")[0], self.build(feats, False, country="FR")[0])
+
+
+def _rules(entries, dtype):
+    col = lambda k, t: np.array([e[k] for e in entries], t)    # noqa: E731
+    return mapgeom.RuleTable(col(0, np.int32), col(1, dtype), col(2, np.float32), col(3, np.float32))
+
+
+def _zone_feats(frame, lines):
+    """A roads layer of lines [(id, class, [(x, y) m ...], osm_zone_maxspeed or None, Overture's max_speed_kmh (or
+    [(km/h, from, to)] fractions) or None, oneway 0 / 1 along / -1 against its geometry)], every end and every vertex
+    two lines share a connector."""
+    seen = {}
+    for _, _, pts, *_ in lines:
+        for p in pts:
+            seen[(round(p[0], 1), round(p[1], 1))] = seen.get((round(p[0], 1), round(p[1], 1)), 0) + 1
+    coords, cons, kmh, ow = [], [], [], []
+    for i, (fid, cls, pts, zone, v, one) in enumerate(lines):
+        pts = np.asarray(pts, float)
+        lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        coords += list(zip(np.asarray(lon), np.asarray(lat)))
+        s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(pts, axis=0).T))]
+        for k, p in enumerate(pts):
+            key = (round(p[0], 1), round(p[1], 1))
+            if k in (0, len(pts) - 1) or seen[key] > 1:
+                cons.append((i, f"{key[0]},{key[1]}", s[k] / s[-1], s[k] / s[-1]))
+        for value, a, b in (v if isinstance(v, list) else [(v, 0.0, 1.0)] if v else []):
+            kmh.append((i, float(value), a, b))
+        if one:
+            ow.append((i, float(one), 0.0, 1.0))
+    n = len(lines)
+    rules = {"connectors": _rules(cons, "<U32")}
+    if kmh:
+        rules["max_speed_kmh"] = _rules(kmh, np.float32)
+    if ow:
+        rules["oneway"] = _rules(ow, np.float32)
+    return mapgeom.Features(layer="roads", ids=np.array([ln[0] for ln in lines]),
+                            kind=np.full(n, mapgeom.LINE, np.uint8), part_off=np.arange(n + 1, dtype=np.int64),
+                            ring_off=np.arange(n + 1, dtype=np.int64),
+                            coord_off=np.r_[0, np.cumsum([len(ln[2]) for ln in lines])].astype(np.int64),
+                            lonlat=np.array(coords, np.float64),
+                            attrs={"class": np.array([ln[1] for ln in lines]), "subtype": np.array(["road"] * n),
+                                   "osm_zone_maxspeed": np.array([ln[3] for ln in lines], object)},
+                            rules=rules)
+
+
+ZC = (100.0, 100.0)                 # the zone edge of the fixtures below
+
+
+def _two_arm(zone_kmh=30, road_kmh=50):
+    """A 50 road (tertiary, from the west) going on as a zone street (DE:30, to the east) at ZC."""
+    return [("w", "tertiary", [(0.0, 100.0), ZC], None, road_kmh, 0),
+            ("e", "residential", [ZC, (220.0, 100.0)], "DE:30", zone_kmh, 0)]
+
+
+def _crossroads(zone_kmh=30, road_kmh=50):
+    """_two_arm with a 50 road across at ZC: the kernel's 274s there stand 30 m past it (JUNCTION_IN_URBAN_M)."""
+    return _two_arm(zone_kmh, road_kmh) + [("n", "tertiary", [ZC, (100.0, 220.0)], None, road_kmh, 0),
+                                           ("s", "tertiary", [(100.0, 0.0), ZC], None, road_kmh, 0)]
+
+
+# today's 274s of the fixtures (speedsigns.build_tile's table for speed_sign_mesh: x, y, travel x, travel y, value,
+# size class; recorded 2026-11-07 at ade45e9e, flat ground)
+TODAY_274 = {"two-arm": [(95.0, 106.35, -1.0, 0.0, 50.0, 0.0), (105.0, 93.9, 1.0, 0.0, 30.0, 0.0)],
+             "crossroads": [(70.0, 106.35, -1.0, 0.0, 50.0, 0.0), (130.0, 93.9, 1.0, 0.0, 30.0, 0.0)]}
+
+
+class ZoneSignsTest(unittest.TestCase):
+    """Zeichen 274.1 / 274.2 where a mapped zone begins and ends (dezones.py, the sign tiles, de_on, in Germany), in
+    place of the round 274 there (spec B2: never a 274 and a 274.1 at one boundary)."""
+    FRAME = JunctionGlueTest.FRAME
+    BOX = roads.tile_bbox(0, 0)
+
+    def context(self, lines, frame=None):
+        feats = _zone_feats(frame or self.FRAME, lines)
+        return signroads.Context(lambda key: feats, _everywhere)
+
+    def zones(self, lines):
+        return dezones.zones(self.FRAME, self.BOX, self.context(lines), False, False)
+
+    def placed(self, lines):
+        """[(sign 1 / 2, zone km/h, size, its road point (x, y), its traffic's travel (x, y))] sorted, each standing on
+        its traffic's right (Germany), beside its road's pavement."""
+        z = self.zones(lines)
+        out = []
+        for x, y, tx, ty, kind, kmh, size, rx, ry in z.signs:
+            right = np.array([ty, -tx])
+            off = np.array([x - rx, y - ry])
+            self.assertGreater(float(off @ right), 2.5, "on the driver's right, beside the road")
+            self.assertAlmostEqual(float(off @ np.array([tx, ty])), 0.0, places=6, msg="abreast of its road point")
+            out.append((int(kind), int(kmh), int(size), (round(float(rx), 2), round(float(ry), 2)),
+                        (round(float(tx), 3), round(float(ty), 3))))
+        return sorted(out)
+
+    def table(self, lines, de_on, frame=None):
+        """build_tile's 274s (the table it hands speed_sign_mesh, as TODAY_274) and its mesh."""
+        with mock.patch.object(fast._ef, "speed_sign_mesh", wraps=fast._ef.speed_sign_mesh) as spy:
+            mesh = speedsigns.build_tile(frame or self.FRAME, 0, 0, _flat0, self.context(lines, frame), (), False,
+                                         False, speedsigns.STYLE_VIENNA, de_on=de_on)
+        rows = [tuple(round(float(v), 2) for v in r[[0, 1, 4, 5, 6, 7]]) for r in spy.call_args[0][0]] \
+            if spy.called else []
+        return sorted(rows), mesh
+
+    def test_zone_entry_and_exit(self):
+        """A 50 road meeting a zone road: one 274.1 facing in, one 274.2 facing out, and the boundary's 274s gone (on
+        the zone road, and on the road it goes on as, also where the kernel stands its 274 30 m past a junction in
+        town). At a 2-arm connector: the 274.1 5 m inside, the 274.2 5 m outside."""
+        self.assertEqual(self.placed(_two_arm()), [(1, 30, 1, (105.0, 100.0), (1.0, 0.0)),
+                                                   (2, 30, 1, (95.0, 100.0), (-1.0, 0.0))])
+        for name, lines in (("two-arm", _two_arm()), ("crossroads", _crossroads())):
+            today = speedsigns.place(self.FRAME, self.BOX, self.context(lines), False, False)
+            near = [r for r in today if np.hypot(r[6] - ZC[0], r[7] - ZC[1]) <= 30.0 + 1e-6]
+            self.assertEqual(len(near), 2, f"{name}: today's 274s at the edge (the test's premise)")
+            z = dezones.zones(self.FRAME, self.BOX, self.context(lines), False, False)
+            self.assertEqual(dezones.outside_zones(self.FRAME, today, z).tolist(), [False] * len(today), name)
+            got, mesh = self.table(lines, True)
+            self.assertEqual(got, [], f"{name}: no 274 left")
+            self.assertEqual(mesh[3], dezones.MATERIALS_ZONE)
+            kinds = sorted(int(k) for k in z.signs[:, 4])
+            self.assertEqual(kinds, [1, 2], name)
+
+    def test_zone_without_maxspeed(self):
+        """The zone road has no Overture max_speed_kmh (the AI's class default, 40, is posted): the
+        274.1 / 274.2 still stand, their digits the zone's (DE:30), and no stray 274 beside them."""
+        for name, lines in (("two-arm", _two_arm(None, None)), ("crossroads", _crossroads(None, None))):
+            today = speedsigns.place(self.FRAME, self.BOX, self.context(lines), False, False)
+            self.assertIn(40.0, today[:, 4].tolist(), "(the class default posted on the zone road)")
+            z = dezones.zones(self.FRAME, self.BOX, self.context(lines), False, False)
+            self.assertEqual(sorted((int(k), int(v)) for k, v in z.signs[:, 4:6]), [(1, 30), (2, 30)], name)
+            got, _ = self.table(lines, True)
+            self.assertEqual(got, [], name)
+
+    def test_memo_sees_later_lanes(self):
+        """The cell's rows are made again when the lane shards join it later (mapdata._lanes: _lanes_built): its zones
+        come with them."""
+        feats = _zone_feats(self.FRAME, _two_arm())
+        feats.attrs.pop("osm_zone_maxspeed")
+        first = speedsigns._cell_rows(feats, self.FRAME, _everywhere, None, False, False)
+        self.assertEqual(first["e"][6][0], 0)
+        self.assertIs(speedsigns._cell_rows(feats, self.FRAME, _everywhere, None, False, False), first, "(kept)")
+        feats.attrs["osm_zone_maxspeed"] = np.array([None, "DE:30"], object)
+        feats.__dict__["_lanes_built"] = "2026-11-07"
+        later = speedsigns._cell_rows(feats, self.FRAME, _everywhere, None, False, False)
+        self.assertEqual(later["e"][6][0], 30)
+        self.assertEqual(later["w"][6][0], 0)
+
+    def test_off_is_todays(self):
+        """de_on False, or outside Germany: today's 274s (recorded), and the zone code never runs."""
+        baltimore = geodesy.EnuFrame(39.2834, -76.5934, 0.0)
+        for name, lines in (("two-arm", _two_arm()), ("crossroads", _crossroads())):
+            with mock.patch.object(dezones, "zones", side_effect=AssertionError("zones")):
+                off, off_mesh = self.table(lines, False)
+                self.assertEqual(off, TODAY_274[name], name)
+                self.assertEqual(off_mesh[3], speedsigns.MATERIALS)
+                away, away_mesh = self.table(lines, True, baltimore)
+                self.assertEqual(away, TODAY_274[name], name)
+                self.assertEqual(len(away_mesh[1]), len(off_mesh[1]))
+
+    def test_zone_street_mouth(self):
+        """A zone street T-ing onto a 50 road (one zone arm): both signs on the zone street, 5 m in from the
+        through road's edge, each facing its own traffic on its right."""
+        lines = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 50, 0),
+                 ("z", "residential", [ZC, (100.0, 10.0)], "DE:30", 30, 0)]
+        d = 5.0 + 11.1 / 2                  # (the tertiary's half width: 11.1 m in town)
+        self.assertEqual(self.placed(lines), [(1, 30, 1, (100.0, round(100.0 - d, 2)), (0.0, -1.0)),
+                                              (2, 30, 1, (100.0, round(100.0 - d, 2)), (0.0, 1.0))])
+
+    def test_lone_street_into_a_zone(self):
+        """A street outside the zone meeting a zone street that goes on (one arm outside): both signs on that
+        street, 5 m out from the zone street's edge."""
+        lines = [("z", "residential", [(10.0, 100.0), ZC, (190.0, 100.0)], "DE:30", 30, 0),
+                 ("n", "residential", [ZC, (100.0, 10.0)], None, 50, 0)]
+        d = 5.0 + 10.6 / 2                  # (the zone street's half width)
+        self.assertEqual(self.placed(lines), [(1, 30, 1, (100.0, round(100.0 - d, 2)), (0.0, 1.0)),
+                                              (2, 30, 1, (100.0, round(100.0 - d, 2)), (0.0, -1.0))])
+
+    def test_zone_street_across_a_road(self):
+        """A zone street crossing a 50 road (two arms either side): a pair on each zone arm."""
+        lines = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 50, 0),
+                 ("zn", "residential", [ZC, (100.0, 190.0)], "DE:30", 30, 0),
+                 ("zs", "residential", [(100.0, 10.0), ZC], "DE:30", 30, 0)]
+        lo, hi = round(100.0 - (5.0 + 11.1 / 2), 2), round(100.0 + (5.0 + 11.1 / 2), 2)
+        self.assertEqual(self.placed(lines), [(1, 30, 1, (100.0, lo), (0.0, -1.0)),
+                                              (1, 30, 1, (100.0, hi), (0.0, 1.0)),
+                                              (2, 30, 1, (100.0, lo), (0.0, 1.0)),
+                                              (2, 30, 1, (100.0, hi), (0.0, -1.0))])
+
+    def test_one_way_zone_street(self):
+        """A zone street one way into the zone has only its 274.1; one way out of it, only its 274.2."""
+        for one, want in ((1, [1]), (-1, [2])):
+            lines = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 50, 0),
+                     ("z", "residential", [ZC, (100.0, 10.0)], "DE:30", 30, one)]
+            self.assertEqual([p[0] for p in self.placed(lines)], want, one)
+
+    def test_zone_meets_zone(self):
+        """A 30 zone going on as a 20 zone: each zone's 274.1 facing the traffic coming in, no 274.2 (the zone driven
+        into has its own sign, as VwV zu den Zeichen 274.1 und 274.2 Rn. 3 has it for the areas it names); each sized
+        by the zone its traffic comes from."""
+        lines = [("a", "residential", [(0.0, 100.0), ZC], "DE:30", None, 0),
+                 ("b", "residential", [ZC, (220.0, 100.0)], "DE:20", None, 0)]
+        self.assertEqual(self.placed(lines), [(1, 20, 1, (105.0, 100.0), (1.0, 0.0)),
+                                              (1, 30, 0, (95.0, 100.0), (-1.0, 0.0))])
+
+    def test_zone_sizes(self):
+        """VwV-StVO zu den §§ 39 bis 43 Rn. 17a (the size of the round 274 on it), Rn. 15's round signs (up to
+        20 km/h Größe 1, to 80 Größe 2, above Größe 3) by the limit where the sign stands for the traffic it faces,
+        Rn. 13's square (420 / 600 / 840 mm)."""
+        self.assertEqual(designsigns.ZONE_SIZE, (0.42, 0.60, 0.84))
+        self.assertEqual([designsigns.zone_size(v) for v in (None, 0, 10, 20, 21, 50, 80, 81, 100)],
+                         [1, 1, 0, 0, 1, 1, 1, 2, 2])
+        fast_road = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 100, 0),
+                     ("z", "residential", [ZC, (100.0, 10.0)], "DE:20", 20, 0)]
+        self.assertEqual([p[:3] for p in self.placed(fast_road)], [(1, 20, 2), (2, 20, 0)])
+
+    def test_zone_mesh(self):
+        """de_zone_mesh: the face towards the driver, the sheet the right way round, its lower edge 2.00 m over the road
+        (VwV-StVO zu den §§ 39 bis 43 Rn. 42), the square's side by its size, on bne_de_zones.png's cell of its sign."""
+        for kind, kmh, size in ((1, 30, 1), (2, 20, 0), (1, 10, 2)):
+            table = np.array([[0.0, 0.0, 10.0, 10.5, 0.0, 1.0, kind, kmh, size]])      # driving north
+            p, t, uv, mats, mi = dezones.de_zone_mesh(table, (0.0, 0.0, 0.0))
+            self.assertEqual(mats, dezones.MATERIALS_ZONE)
+            face = t[mi == 0]
+            a, b, c = p[face[:, 0]], p[face[:, 1]], p[face[:, 2]]
+            self.assertTrue((np.cross(b - a, c - a)[:, 1] < 0).all(), "the face towards the driver")
+            used = np.unique(face)
+            for axis, along in ((0, 0), (2, 1)):                                    # east is the driver's right
+                self.assertGreater(np.corrcoef(p[used, axis], uv[used, along])[0, 1], 0.999)
+            self.assertAlmostEqual(p[used, 2].min(), 10.5 + 2.0, places=6)
+            self.assertAlmostEqual(np.ptp(p[used, 0]), designsigns.ZONE_SIZE[size], places=6)
+            x0, y0, x1, y1 = designsigns.zone_cell(kind, kmh)
+            self.assertTrue(((uv[used, 0] > x0) & (uv[used, 0] < x1) & (uv[used, 1] > y0) & (uv[used, 1] < y1)).all())
+            self.assertLess(p[:, 2].min(), 10.0, "on a post into the ground")
+            self.assertIn(1, set(mi.tolist()))
+
+    def test_one_mesh_with_the_274s(self):
+        """build_tile: the 274s away from the zone and the zone's signs in one mesh, bne_de_zones after the 274s'
+        materials and the posts on their metal; the boundary's 274s gone, the far road's kept."""
+        far = [("p", "tertiary", [(0.0, 200.0), (150.0, 200.0)], None, 50, 0),
+               ("q", "tertiary", [(150.0, 200.0), (256.0, 200.0)], None, 70, 0)]
+        _, mesh = self.table(_crossroads() + far, True)
+        p, t, uv, mats, mi = mesh
+        self.assertEqual(mats, speedsigns.MATERIALS + ["bne_de_zones"])
+        zone = np.unique(t[mi == len(speedsigns.MATERIALS)])
+        self.assertTrue(len(zone))
+        self.assertLess(np.hypot(p[zone, 0] - ZC[0], p[zone, 1] - ZC[1]).max(), 30.0, "(the zone's signs)")
+        self.assertLess(mi.max(), len(mats))
+        near = np.hypot(p[:, 0] - ZC[0], p[:, 1] - ZC[1]) < 30.0                     # (the zone's signs' vertices)
+        self.assertEqual({mats[k] for k in mi[near[t].all(1)]}, {"bne_de_zones", "bne_exit_metal"},
+                         "faces, backs, posts")
+        red = np.unique(t[mi == speedsigns.MATERIALS.index("bne_guide_red")])
+        self.assertTrue(len(red), "(the 274s at the far road's change)")
+        self.assertGreater(np.hypot(p[red, 0] - ZC[0], p[red, 1] - ZC[1]).min(), 30.0)
+
+    def test_no_274_inside_a_zone(self):
+        """A 274 the kernel stands on a zone road far from its edges (Overture's limit changing inside the zone) goes
+        too: the zone's own signs say its limit."""
+        lines = [("w", "tertiary", [(0.0, 100.0), ZC], None, 50, 0),
+                 ("e", "residential", [ZC, (250.0, 100.0)], "DE:30", [(30.0, 0.0, 0.5), (50.0, 0.5, 1.0)], 0)]
+        today = speedsigns.place(self.FRAME, self.BOX, self.context(lines), False, False)
+        far = [r for r in today if np.hypot(r[6] - ZC[0], r[7] - ZC[1]) > 50.0]
+        self.assertTrue(far, "(the kernel's 274 at the change, 75 m in)")
+        got, _ = self.table(lines, True)
+        self.assertEqual(got, [])
+
+    def test_no_edge_at_a_service_road(self):
+        """A service road (a driveway, a car park's way) off a zone street is no edge: no sign at it."""
+        lines = [("z", "residential", [(10.0, 100.0), ZC, (190.0, 100.0)], "DE:30", 30, 0),
+                 ("d", "service", [ZC, (100.0, 40.0)], None, None, 0)]
+        self.assertEqual(self.placed(lines), [])
+
+    def test_zone_signs_clear_of_pavements(self):
+        """A sign whose spot is on a road's pavement (here a short street beside the zone street's mouth) moves on, as
+        the kernel moves its 274s, never onto it."""
+        lines = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 50, 0),
+                 ("z", "residential", [ZC, (100.0, 10.0)], "DE:30", 30, 0),
+                 ("p", "tertiary", [(90.0, 85.0), (90.0, 95.0)], None, 50, 0)]
+        got = [p for p in self.placed(lines) if p[0] == 1]
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0][3][1], 100.0 - (5.0 + 11.1 / 2) - 5.0, places=2, msg="5 m on: clear of it")
+
+    def test_direction_signs_read_the_rows(self):
+        """dirsigns reads the speed signs' cell rows too (dirsigns._arrays over speedsigns._cell_rows): their zone
+        column changes none of its arrays, in Germany or anywhere else (Baltimore)."""
+        import dirsigns
+        for frame in (self.FRAME, geodesy.EnuFrame(39.2834, -76.5934, 0.0)):
+            feats = _zone_feats(frame, _crossroads())
+            rows = speedsigns._cell_rows(feats, frame, _everywhere, None, False, False)
+            got = dirsigns._arrays(rows, self.BOX, 900.0, dirsigns.RouteTable(), {})
+            want = dirsigns._arrays({k: v[:6] for k, v in rows.items()}, self.BOX, 900.0, dirsigns.RouteTable(), {})
+            self.assertIsNotNone(got)
+            self.assertEqual(len(got), len(want))
+            for a, b in zip(got, want):
+                np.testing.assert_array_equal(a, b)
+
+    def test_main_road_274s_at_a_zone_mouth_stay(self):
+        """A 50 / 70 change on the through road at a zone street's mouth keeps both its 274s (for its own traffic,
+        which never was in the zone); the zone's pair stands on the zone street."""
+        lines = [("w", "tertiary", [(0.0, 100.0), ZC], None, 50, 0),
+                 ("e", "tertiary", [ZC, (220.0, 100.0)], None, 70, 0),
+                 ("z", "residential", [ZC, (100.0, 10.0)], "DE:30", 30, 0)]
+        today, _ = self.table(lines, False)
+        self.assertEqual([r[4] for r in today], [50.0, 70.0], "(the kernel's two 274s, 30 m past the junction)")
+        self.assertEqual(self.table(lines, True)[0], today)
+        self.assertEqual(sorted(p[0] for p in self.placed(lines)), [1, 2])
+
+    def test_a_moved_274_on_the_continuation_goes(self):
+        """The boundary's own 274 on the road a zone street goes on as, moved 15 m on by the kernel (its spot 30 m
+        past the junction on another road's pavement: ALONG_STEPS_M), 45 m out: it goes too."""
+        lines = _crossroads() + [("p", "residential", [(60.0, 108.0), (80.0, 108.0)], None, 50, 0)]
+        today, _ = self.table(lines, False)
+        west = [r for r in today if r[2] < -0.9]
+        self.assertEqual([(r[0], r[4]) for r in west], [(55.0, 50.0)], "(the 50 for traffic out of the zone, 45 m out)")
+        self.assertEqual([r for r in self.table(lines, True)[0] if r[2] < -0.9], [])
+
+    def test_a_change_farther_on_stays(self):
+        """On the road a zone street goes on as, a 274 of a change farther along it (here 70 from 40 m out) is
+        another boundary's: it stays; the edge's own (its 50) goes."""
+        lines = [("w", "tertiary", [(0.0, 100.0), ZC], None, [(70.0, 0.0, 0.6), (50.0, 0.6, 1.0)], 0),
+                 ("e", "residential", [ZC, (220.0, 100.0)], "DE:30", 30, 0)]
+        today, _ = self.table(lines, False)
+        west = sorted((r[0], r[4]) for r in today if r[2] < -0.9)
+        self.assertEqual(west, [(55.0, 70.0), (95.0, 50.0)], "(the change 40 m out, and the edge's own 50)")
+        self.assertEqual(sorted((r[0], r[4]) for r in self.table(lines, True)[0] if r[2] < -0.9), [(55.0, 70.0)])
+
+    def test_a_bent_2_arm_edge(self):
+        """At a 2-arm connector the outer arm's 274 is the boundary's at any angle (the kernel's straight on with
+        two arms): a zone street bending north off a 50 road keeps none at the bend."""
+        lines = [("w", "tertiary", [(0.0, 100.0), ZC], None, 50, 0),
+                 ("n", "residential", [ZC, (100.0, 220.0)], "DE:30", 30, 0)]
+        today, _ = self.table(lines, False)
+        self.assertEqual(sorted(r[4] for r in today), [30.0, 50.0], "(the kernel's two, 5 m past the bend)")
+        self.assertEqual(self.table(lines, True)[0], [])
+
+    def test_a_274_toward_the_edge_stays(self):
+        """On the road out of the zone, a 274 facing the traffic driving towards the edge (here the 70 -> 50 change
+        where it begins, 55 m out) is not the zone's: it stays; the 50 for the traffic leaving the zone goes."""
+        lines = [("v", "tertiary", [(0.0, 100.0), (40.0, 100.0)], None, 70, 0),
+                 ("w", "tertiary", [(40.0, 100.0), ZC], None, 50, 0),
+                 ("e", "residential", [ZC, (220.0, 100.0)], "DE:30", 30, 0)]
+        today, _ = self.table(lines, False)
+        east = [(r[0], r[4]) for r in today if r[2] > 0.9 and r[0] < ZC[0]]
+        self.assertEqual(east, [(45.0, 50.0)], "(the 50 into the road out of the zone, 55 m from the edge)")
+        got = self.table(lines, True)[0]
+        self.assertIn((45.0, 50.0), [(r[0], r[4]) for r in got if r[2] > 0.9])
+        self.assertFalse([r for r in got if r[2] < -0.9 and r[0] > 40.0], "(the edge's own 50 westbound: gone)")
+
+    def test_no_clear_straight_on(self):
+        """Where no arm coming in is clearly the straight on one (the kernel's STRAIGHT_MARGIN: a zone street and a
+        secondary both about 15 degrees off), the kernel's 274 on the road out (its turn-in sign) is not the zone's."""
+        def arm(deg, length=120.0):
+            return (ZC[0] + length * np.cos(np.radians(deg)), ZC[1] + length * np.sin(np.radians(deg)))
+        lines = [("w", "tertiary", [(0.0, 100.0), ZC], None, 50, 0),
+                 ("z", "residential", [ZC, arm(14.0)], "DE:30", 30, 0),
+                 ("s", "secondary", [ZC, arm(-16.0)], None, 50, 0)]
+        today, _ = self.table(lines, False)
+        west = [(r[0], r[4]) for r in today if r[2] < -0.9]
+        self.assertEqual(west, [(70.0, 50.0)], "(the kernel's turn-in 274 30 m out on the tertiary)")
+        self.assertIn((70.0, 50.0), [(r[0], r[4]) for r in self.table(lines, True)[0] if r[2] < -0.9])
+
+    def test_a_lone_street_s_274_goes(self):
+        """At a lone street into a zone street that goes on (the pair stands on that street), the lone
+        street's 274 is the boundary's: here the kernel's turn-in 50 (a tertiary off a secondary zone street), 30 m in,
+        which stood 19 m past the 274.2 facing the same traffic."""
+        lines = [("z", "secondary", [(10.0, 100.0), ZC, (190.0, 100.0)], "DE:30", 30, 0),
+                 ("n", "tertiary", [ZC, (100.0, 10.0)], None, 50, 0)]
+        today, _ = self.table(lines, False)
+        self.assertEqual([(r[0], r[1], r[4]) for r in today if r[3] < -0.9], [(93.65, 70.0, 50.0)], "(the turn-in 50)")
+        got = self.table(lines, True)[0]
+        self.assertFalse([r for r in got if r[3] < -0.9], "(gone)")
+        two = [p for p in self.placed(lines) if p[0] == 2]
+        self.assertEqual([(p[3], p[4]) for p in two], [((100.0, round(100.0 - (5.0 + 12.1 / 2), 2)), (0.0, -1.0))],
+                         "(its 274.2 on the street, 5 m out from the secondary's 12.1 m)")
+
+    def test_zone_edges_only_in_germany(self):
+        """An edge outside Germany (germany.contains) has no signs and clears no 274 (the country exactly DE)."""
+        nowhere = lambda lon, lat: np.zeros(np.size(lon), bool)     # noqa: E731
+        lines = _crossroads()
+        today = speedsigns.place(self.FRAME, self.BOX, self.context(lines), False, False)
+        with mock.patch.object(germany, "contains", nowhere):
+            z = dezones.zones(self.FRAME, self.BOX, self.context(lines), False, False)
+            self.assertEqual((len(z.signs), len(z.edges)), (0, 0))
+            self.assertTrue(dezones.outside_zones(self.FRAME, today, z).all(), "(its zone roads' 274s kept too)")
+
+    def test_zone_signs_in_their_tile(self):
+        """A sign stands in one tile only, the one its spot is in (as the kernel's 274s), whichever tile its edge is
+        in: two tiles split at the edge share its four signs out."""
+        lines = [("m", "tertiary", [(10.0, 100.0), ZC, (190.0, 100.0)], None, 50, 0),
+                 ("zn", "residential", [ZC, (100.0, 190.0)], "DE:30", 30, 0),
+                 ("zs", "residential", [(100.0, 10.0), ZC], "DE:30", 30, 0)]
+        ctx = self.context(lines)
+        whole = dezones.zones(self.FRAME, self.BOX, ctx, False, False).signs
+        west, east = (0.0, 0.0, ZC[0], 256.0), (ZC[0], 0.0, 256.0, 256.0)
+        parts = [dezones.zones(self.FRAME, b, ctx, False, False).signs for b in (west, east)]
+        self.assertEqual((len(whole), len(parts[0]), len(parts[1])), (4, 2, 2))
+        self.assertTrue((parts[0][:, 0] < ZC[0]).all() and (parts[1][:, 0] >= ZC[0]).all())
+        self.assertEqual(sorted(map(tuple, np.round(np.vstack(parts), 6))), sorted(map(tuple, np.round(whole, 6))))
+
+    def test_zone_materials_are_in_the_mod(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadside", "exit.materials.json")
+        import json
+        with open(path, encoding="utf-8") as f:
+            mats = json.load(f)
+        self.assertLessEqual(set(dezones.MATERIALS_ZONE), set(mats))
+        sheet = mats["bne_de_zones"]["Stages"][0]["baseColorMap"]
+        self.assertTrue(sheet.endswith("/bne_de_zones.png"))
+        self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), "..", os.path.basename(sheet))))
+
+
+def _flat0(la, lo):
+    return np.zeros(np.shape(la))

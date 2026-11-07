@@ -3,7 +3,7 @@ collision boxes) both import, data and pure geometry only, so neither waits on t
 (tools/build_median_props.py's DE_SIGNS: bne_<group>.dae), its faces on bne_de_signs.png (tools/build_de_signs.py),
 its height in trees.lua's DE_SIGNS (HEIGHTS: rows carry it, so the mesh is drawn at scale 1, its plate and lower edge
 as built). A group is a face alone or over its 1002 plate (_p<k>, k an index into PLATES), in one of three sizes
-(SIZES: a suffix, Größe 1, 2 and 3)."""
+(SIZES: a suffix, Größe 1, 2 and 3). And its zone signs (ZONE_*: the sign tiles' dezones.de_zone_mesh, no group)."""
 import math
 
 # the kernel's 1002 pictures in its order (native dejunction.rs PATTERNS): the other arms' slots, then the priority
@@ -114,3 +114,46 @@ def size_suffix(kmh):
     if not kmh or kmh != kmh:
         return ""
     return "_g1" if kmh < 50 else "_g3" if kmh > 100 else ""
+
+
+# Germany's zone signs, Zeichen 274.1 (a zone begins) and 274.2 (it ends): dezones.de_zone_mesh draws them in the
+# sign tiles (render-only, as the round 274 there), on tools/build_de_signs.py's second sheet bne_de_zones.png
+# (material bne_de_zones), one cell a face: row 0 the 274.1s, row 1 the 274.2s, a column a zone's limit (ZONE_KMH:
+# osm_zone_maxspeed DE:30 / DE:20 / DE:10). The face is a square (the VzKat's pictures, Teil 3 Zeichen 274.1 and 274.2;
+# its edge the 1002 plate's: SHAPES["plate"], a 40 mm corner at 600), its side by size (ZONE_SIZE, zone_size).
+# (StVO § 45 Abs. 1c: Tempo 30-Zonen; Abs. 1d: "Zonen-Geschwindigkeitsbeschränkungen von weniger als 30 km/h" in
+# verkehrsberuhigten Geschäftsbereichen, the VzKat's 274.1-20; for 10 the VzKat has no picture, "kein amtliches
+# Verkehrszeichen": tools/build_de_signs.py draws it as the 20's with a 10)
+ZONE_KMH = (30, 20, 10)
+ZONE_SIZE = (0.42, 0.60, 0.84)  # m: VwV-StVO zu den §§ 39 bis 43 Rn. 13's square at Größe 1 / 2 / 3
+ZONE_SHEET = (1024, 512)        # px (w, h): 4 x 2 cells
+ZONE_CELL, ZONE_ART = 256, 244  # px: a cell, a face's side in it (Größe 2, as the junction signs' sheet)
+
+
+def zone_size(kmh):
+    """The index into ZONE_SIZE of a zone sign where the limit in force for the traffic it faces is kmh (km/h): VwV-StVO
+    zu den §§ 39 bis 43 Rn. 17a ("Die Größe von Zonenzeichen ... sollte sich nach dem darauf enthaltenen Hauptzeichen
+    richten": the round 274), so Rn. 15's round signs (0 to 20 km/h Größe 1, more than 20 to 80 Größe 2, more than 80
+    Größe 3). No limit known (None, 0): Größe 2."""
+    if not kmh or kmh != kmh:
+        return 1
+    return 0 if kmh <= 20 else 1 if kmh <= 80 else 2
+
+
+def zone_pixel(sign, kmh, x, z):
+    """The px (from bne_de_zones.png's top left) of (x, z) m round the middle of the face of Zeichen 274.<sign> (1 or
+    2) for a zone of kmh, at Größe 2 (600 mm; other sizes scale: x and z times 0.6 / their side)."""
+    k = ZONE_ART / ZONE_SIZE[1]
+    return (ZONE_CELL * (ZONE_KMH.index(int(kmh)) + 0.5) + x * k, ZONE_CELL * (int(sign) - 0.5) - z * k)
+
+
+def zone_uv(sign, kmh, x, z):
+    px, py = zone_pixel(sign, kmh, x, z)
+    return px / ZONE_SHEET[0], 1.0 - py / ZONE_SHEET[1]
+
+
+def zone_cell(sign, kmh):
+    """(u0, v0, u1, v1) of the cell of a face on bne_de_zones.png."""
+    c, r = ZONE_KMH.index(int(kmh)), int(sign) - 1
+    w, h = ZONE_SHEET
+    return c * ZONE_CELL / w, 1.0 - (r + 1) * ZONE_CELL / h, (c + 1) * ZONE_CELL / w, 1.0 - r * ZONE_CELL / h

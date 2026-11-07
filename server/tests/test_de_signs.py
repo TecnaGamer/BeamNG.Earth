@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(HERE, ".."))
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 
 import designs  # noqa: E402
+import designsigns  # noqa: E402
 import furniture  # noqa: E402
 import build_de_signs  # noqa: E402
 
@@ -209,6 +210,145 @@ class CollisionTest(unittest.TestCase):
         out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=server)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertEqual(out.stdout.split(), ["0", "105"])
+
+
+ZONE_SHEET = os.path.join(SHAPES, "bne_de_zones.png")
+SRGB_GREY = (0x7B, 0x7B, 0x7B)      # 274.2's struck-through ring, digits and ZONE (vzkat.de 274-2-50.gif, flat patches)
+
+
+def zone_at(im, kind, kmh, x, z):
+    """The zone sheet's colour at (x, z) m of the face of Zeichen 274.<kind> for kmh (Größe 2, designsigns.zone_uv)."""
+    u, v = designsigns.zone_uv(kind, kmh, x, z)
+    w, h = im.size
+    return im.getpixel((int(u * w), int((1 - v) * h)))
+
+
+def sheet_cases():
+    """[(the committed sheet, its seeded colours, spots(im) -> [(rgb, want)])]: the junction signs', then the
+    zones'."""
+    r_in = 0.9 / (2 * 3 ** 0.5)
+    ring = build_de_signs.ZONE_RING[0]
+    return [(SHEET, (SRGB_9016, SRGB_3020, SRGB_1023, SRGB_9017),
+             lambda im: [(at(im, "z205", 0.0, 0.0), SRGB_9016), (at(im, "z205", 0.0, r_in - 0.05), SRGB_3020),
+                         (at(im, "z306", 0.0, 0.0), SRGB_1023), (at(im, "z307", 0.0, 0.0), SRGB_9017)]),
+            (ZONE_SHEET, (SRGB_9016, SRGB_3020, SRGB_9017, SRGB_GREY),
+             lambda im: [(zone_at(im, 1, 30, 0.0, -0.148), SRGB_9016), (zone_at(im, 1, 30, 0.165, ring), SRGB_3020),
+                         (zone_at(im, 1, 30, 0.2825, 0.0), SRGB_9017), (zone_at(im, 2, 30, -0.165, ring), SRGB_GREY)])]
+
+
+def build_sheets(tmp, tag=""):
+    """(the junction signs' sheet, the zone sheet) as the tool makes them now, in tmp."""
+    import contextlib
+    import io
+    a, b = os.path.join(tmp, f"de{tag}.png"), os.path.join(tmp, f"zones{tag}.png")
+    with contextlib.redirect_stdout(io.StringIO()):
+        build_de_signs.main(a, b)
+    return a, b
+
+
+class ZoneSheetTest(unittest.TestCase):
+    """bne_de_zones.png (tools/build_de_signs.py's second sheet): Zeichen 274.1 and 274.2 for the zones of
+    designsigns.ZONE_KMH, as the VzKat's pictures (Teil 3, 274-1-50.gif and 274-2-50.gif) show them."""
+
+    def at(self, im, kind, kmh, x, z):
+        return zone_at(im, kind, kmh, x, z)
+
+    def test_zone_faces(self):
+        im = Image.open(ZONE_SHEET).convert("RGB")
+        self.assertEqual(im.size, designsigns.ZONE_SHEET)
+        ring = build_de_signs.ZONE_RING[0]
+        for kmh in designsigns.ZONE_KMH:
+            for x, z, want in ((0.165, ring, SRGB_3020), (0.0, ring + 0.12, SRGB_9016), (0.0, -0.148, SRGB_9016),
+                               (0.2825, 0.0, SRGB_9017), (0.0935, -0.205, SRGB_9017)):
+                self.assertEqual(self.at(im, 1, kmh, x, z), want, (274.1, kmh, x, z))
+            for x, z, want in ((-0.165, ring, SRGB_GREY), (0.2825, 0.0, SRGB_9017), (0.0, 0.0, SRGB_9017),
+                               (-0.2, -0.05, SRGB_9016)):
+                self.assertEqual(self.at(im, 2, kmh, x, z), want, (274.2, kmh, x, z))
+            (_, x0, x1), z1 = build_de_signs.digit_boxes(kmh)[-1], build_de_signs.DIGIT_Z[1]
+            self.assertLess(lum(self.at(im, 1, kmh, (x0 + x1) / 2, z1 - 0.012)), 60, (kmh, "a black digit: its top"))
+            self.assertGreater(lum(self.at(im, 1, kmh, (x0 + x1) / 2, ring)), 200, (kmh, "the 0's white middle"))
+            h = 2 ** -0.5                   # (half a pitch across the bars, 0.2 m down along them: the panel's white)
+            self.assertGreater(lum(self.at(im, 2, kmh, (0.01055 - 0.2) * h, (-0.01055 - 0.2) * h)), 200,
+                               (kmh, "white between the bars"))
+            self.assertLess(lum(self.at(im, 2, kmh, (0.0211 - 0.2) * h, (-0.0211 - 0.2) * h)), 60, (kmh, "a bar"))
+        used = {rgb for _, rgb in im.getcolors(4096)}
+        self.assertLessEqual(len(used), build_de_signs.COLOURS)
+        self.assertLessEqual({SRGB_3020, SRGB_9016, SRGB_9017, SRGB_GREY}, used, "the VzKat's four, exactly")
+        cells = set()
+        for kind in (1, 2):
+            for kmh in designsigns.ZONE_KMH:
+                u0, v0, u1, v1 = designsigns.zone_cell(kind, kmh)
+                w, h = im.size
+                cells.add(im.crop((round(u0 * w), round((1 - v1) * h), round(u1 * w), round((1 - v0) * h))).tobytes())
+        self.assertEqual(len(cells), 6, "six faces")
+
+    def test_the_tool_makes_the_sheets(self):
+        """The committed sheets are the tool's output (decoded, not byte for byte, since FreeType's
+        anti-aliasing and zlib differ between Pillow builds): a fresh build has their size and mode, the seeded VzKat
+        colours exactly in its palette and at their spots, and differs from them by edges at most; two builds here are
+        byte for byte the same (the tool is deterministic)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            made = [build_sheets(tmp, n) for n in "ab"]
+            for k, (kept, base, spots) in enumerate(sheet_cases()):
+                with open(made[0][k], "rb") as f, open(made[1][k], "rb") as g:
+                    self.assertEqual(f.read(), g.read(), "a rebuild is byte for byte the same")
+                self.assertEqual(sheet_differences(made[0][k], kept, base, spots), [], kept)
+
+    def test_the_comparison_sees_a_wrong_sheet(self):
+        """sheet_differences flags a sheet one glyph off on one face (the 30's 3 drawn as an 8 on both zone faces;
+        STOP's O as a Q on the junction sheet's 206), a seeded colour moved, and a block of pixels painted over."""
+        import tempfile
+        from unittest import mock
+        (de_kept, de_base, de_spots), (z_kept, z_base, z_spots) = sheet_cases()
+        with tempfile.TemporaryDirectory() as tmp:
+            eight = {**build_de_signs.DIGITS, 30: (("8",) + build_de_signs.DIGITS[30][0][1:],
+                                                     build_de_signs.DIGITS[30][1])}
+            with mock.patch.object(build_de_signs, "DIGITS", eight):
+                _, z = build_sheets(tmp, "8")
+            self.assertTrue(sheet_differences(z, z_kept, z_base, z_spots), "a 3 drawn as an 8")
+            q = tuple(("Q",) + box[1:] if box[0] == "O" else box for box in build_de_signs.STOP)
+            with mock.patch.object(build_de_signs, "STOP", q):
+                de, _ = build_sheets(tmp, "q")
+            self.assertTrue(sheet_differences(de, de_kept, de_base, de_spots), "STOP's O as a Q")
+            im = Image.open(ZONE_SHEET)
+            pal = im.getpalette()
+            k = [tuple(pal[i:i + 3]) for i in range(0, len(pal), 3)].index(SRGB_GREY)
+            pal[3 * k:3 * k + 3] = [0x80, 0x80, 0x80]
+            moved = os.path.join(tmp, "moved.png")
+            im.putpalette(pal)
+            im.save(moved)
+            self.assertTrue(sheet_differences(moved, z_kept, z_base, z_spots), "a seeded colour moved")
+            im = Image.open(ZONE_SHEET).convert("RGB")
+            im.paste((0, 0, 0), (0, 0, 64, 64))
+            painted = os.path.join(tmp, "painted.png")
+            im.quantize(48).save(painted)
+            self.assertTrue(sheet_differences(painted, z_kept, z_base, z_spots), "a block painted over")
+
+
+def sheet_differences(made, kept, base, spots):
+    """[what differs] between the sheet made and the one kept: size, mode, base colours not exactly in the palette or
+    not at their spots (spots(im) -> [(rgb, want)]), more than FreeType's anti-aliasing elsewhere, in any 256 px cell
+    (one face: a mean difference over 1 of 255 a channel, or over 0.25 % of its pixels, 164, 64 or more off; a wrong
+    glyph on one face is some 500 to 900 of them)."""
+    a, b = Image.open(made), Image.open(kept)
+    out = []
+    if (a.size, a.mode) != (b.size, b.mode):
+        return [f"size / mode {a.size} {a.mode} != {b.size} {b.mode}"]
+    pal = a.getpalette() or []
+    colours = {tuple(pal[i:i + 3]) for i in range(0, len(pal), 3)}
+    out += [f"{c} not in the palette" for c in base if c not in colours]
+    rgb_a, rgb_b = a.convert("RGB"), b.convert("RGB")
+    out += [f"{got} at a spot of {want}" for got, want in spots(rgb_a) if got != want]
+    d = np.abs(np.asarray(rgb_a, np.int64) - np.asarray(rgb_b, np.int64))
+    cell = build_de_signs.CELL
+    for y in range(0, d.shape[0], cell):
+        for x in range(0, d.shape[1], cell):
+            c = d[y:y + cell, x:x + cell]
+            off = int((c.max(axis=2) >= 64).sum())
+            if c.mean() > 1.0 or off > 0.0025 * c.shape[0] * c.shape[1]:
+                out.append(f"the cell at ({x}, {y}): mean {c.mean():.3f}, {off} px 64 or more off")
+    return out
 
 
 if __name__ == "__main__":

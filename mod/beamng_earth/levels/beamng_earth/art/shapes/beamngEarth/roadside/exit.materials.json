@@ -328,5 +328,22 @@
       {}
     ],
     "castShadows": false
+  },
+  "bne_de_zones": {
+    "name": "bne_de_zones",
+    "mapTo": "bne_de_zones",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_zones.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
   }
 }
