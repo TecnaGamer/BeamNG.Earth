@@ -96,6 +96,8 @@ M.SCHEMA = {
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
+  -- ordinary road signs (server roadsigns.py, needs BNE_ROADSIGNS=on on the server)
+  roadSigns = { kind = 'bool', default = true, label = 'Road signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -141,7 +143,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -489,6 +491,10 @@ M.APPLY = {
   directionSigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setDirectionSigns then core.setDirectionSigns(v) end
+  end,
+  roadSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setRoadSigns then core.setRoadSigns(v) end
   end,
   roads = function(v)
     local core = ext('beamngEarth_core')

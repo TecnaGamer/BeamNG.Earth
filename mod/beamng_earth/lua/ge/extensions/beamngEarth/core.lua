@@ -1039,6 +1039,12 @@ local function onMessage(msg)
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
       net.send({ type = 'direction_signs', on = M.directionSigns })
     end
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadSigns')
+      if v ~= nil then M.roadSigns = v == true end
+      net.send({ type = 'road_signs', on = M.roadSigns ~= false })
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -3026,6 +3032,14 @@ function M.setDirectionSigns(on)
   if M.directionSigns == on then return end
   M.directionSigns = on
   net.send({ type = 'direction_signs', on = on })
+end
+
+-- The road signs on / off (settings roadSigns): the server builds the sign tiles again with or without them.
+function M.setRoadSigns(on)
+  on = on == true
+  if M.roadSigns == on then return end
+  M.roadSigns = on
+  net.send({ type = 'road_signs', on = on })
 end
 
 M.onUpdate = onUpdate

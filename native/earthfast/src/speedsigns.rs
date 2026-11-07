@@ -88,7 +88,7 @@ fn mount(style: i64, urban: bool, freeway: bool) -> f64 {
     if urban || freeway { if style == 0 { 2.13 } else { 2.0 } } else { 1.52 }
 }
 
-fn splitmix(mut z: u64) -> u64 {
+pub(crate) fn splitmix(mut z: u64) -> u64 {
     z = z.wrapping_add(0x9E3779B97F4A7C15);
     z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
     z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
@@ -215,7 +215,7 @@ fn straight(cands: &[(usize, f64)], arms: usize) -> Option<usize> {
 fn dot(a: [f64; 2], b: [f64; 2]) -> f64 { a[0] * b[0] + a[1] * b[1] }
 
 /// Whether a disc (c, r) is clear of every polygon (outside it and r from its edges).
-fn clear(c: [f64; 2], r: f64, poly: &numpy::ndarray::ArrayView2<f64>, off: &numpy::ndarray::ArrayView1<i64>,
+pub(crate) fn clear(c: [f64; 2], r: f64, poly: &numpy::ndarray::ArrayView2<f64>, off: &numpy::ndarray::ArrayView1<i64>,
          boxes: &[[f64; 4]]) -> bool {
     for (q, bx) in boxes.iter().enumerate() {
         if c[0] + r < bx[0] || c[0] - r > bx[2] || c[1] + r < bx[1] || c[1] - r > bx[3] { continue; }
@@ -581,7 +581,7 @@ pub(crate) struct Mesh {
 }
 
 impl Mesh {
-    fn world(&self, q: [f64; 3]) -> [f64; 3] {
+    pub(crate) fn world(&self, q: [f64; 3]) -> [f64; 3] {
         [self.centre[0] + q[0] * self.face[0] + q[1] * self.right[0],
          self.centre[1] + q[0] * self.face[1] + q[1] * self.right[1],
          self.centre[2] + q[2]]
@@ -623,7 +623,7 @@ impl Mesh {
     }
 
     /// A round pole (octagonal) of radius r at depth x0 from z0 to z1.
-    fn pole(&mut self, x0: f64, r: f64, z0: f64, z1: f64, m: i64) {
+    pub(crate) fn pole(&mut self, x0: f64, r: f64, z0: f64, z1: f64, m: i64) {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for k in 0..8 {
             let (a, b) = (k as f64 * std::f64::consts::TAU / 8.0, (k + 1) as f64 * std::f64::consts::TAU / 8.0);
