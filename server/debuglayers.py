@@ -130,7 +130,7 @@ def query(conn, msg):
         result["features"] = [{"type":rule.family,"ring":ring,"label":name}
             for rule in sorted(clifftypes.TYPES,key=lambda r:(r.priority,r.key)) if rule.context == "natural"
             for name,ring in rule.regions]
-        result["note"] = "Shaded: layered canyon regions. Elsewhere: default rock. Appearance priors, not geology; slope, land cover and settings still gate near and distant faces."
+        result["note"] = "Shaded: arid layered-cliff regions using the shared canyon texture and local imagery tint. Elsewhere: default rock. Appearance priors, not geology; slope, land cover and settings still gate near and distant faces."
     elif layer == "cliff_generated":
         result["features"],result["note"] = _generated(conn,bounds)
     elif layer in {"cliff_cuts", "building_styles", "vegetation_trees", "vegetation_shrubs", "vegetation_rocks"}:

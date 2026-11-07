@@ -21,6 +21,38 @@ class CliffTypesTest(unittest.TestCase):
         for lat,lon in ((31.88,-106.49),(30.3,-97.8),(35.78,-106.27),(-22.4,118.3),(51.0,-115.0)):
             self.assertEqual(int(ct.select(lat,lon)),ct.NATURAL,(lat,lon))
 
+    def test_added_arid_regions_share_near_far_and_road_cut_rules(self):
+        # Documented cliff sectors and nearby places intentionally outside them.
+        points = ((29.18,-103.63), (29.22,-102.89), (-24.66,115.17),
+                  (-24.25,131.58), (-29.79,-67.99), (24.945,45.994))
+        outside = ((29.27,-103.30), (29.18,-103.05), (-24.85,115.17),
+                   (-25.34,131.04), (-30.10,-67.90), (24.71,46.67))
+        lat,lon=np.array(points+outside).T
+        expected=np.array([ct.CANYON]*len(points)+[ct.NATURAL]*len(outside))
+        np.testing.assert_array_equal(ct.select(lat,lon),expected)
+        np.testing.assert_array_equal(ct.far_families(lat,lon,60,(20,30,60)),
+                                      np.where(expected==ct.CANYON,1,0))
+        # Regional appearance must not turn forests into cliffs or override cuts.
+        np.testing.assert_array_equal(ct.far_families(lat,lon,10,(20,30,60)),-1)
+        np.testing.assert_array_equal(ct.select(lat,lon,context="road_cut",biomes=1),ct.ARID_CUT)
+        np.testing.assert_array_equal(ct.select(lat,lon,context="road_cut",biomes=0),ct.LIMESTONE_CUT)
+
+    def test_added_region_boundaries_and_debug_rings(self):
+        features={f["label"]:f for f in dl.query(None,dict(
+            layer="cliff_regions",s=-90,w=-180,n=90,e=180))["features"]}
+        for name,ring in ct.REGIONS[4:]:
+            self.assertEqual(features[name]["ring"],ring)
+            self.assertEqual(features[name]["type"],ct.CANYON)
+            # Cross an actual polygon edge rather than just its bounding box.
+            a,b=np.array(ring[:2]);middle=(a+b)/2
+            normal=np.array([-(b-a)[1],(b-a)[0]])
+            normal=normal/np.linalg.norm(normal)*1e-5
+            probes=np.array([middle+normal,middle-normal])
+            near=ct.select(probes[:,1],probes[:,0])
+            self.assertEqual(set(near),{ct.CANYON,ct.NATURAL},name)
+            np.testing.assert_array_equal(ct.far_families(
+                probes[:,1],probes[:,0],60,(20,30,60)),np.where(near==ct.CANYON,1,0))
+
     def test_explicit_priority_overrides_order_and_fallback(self):
         rules = (ct.TYPES[1],ct.TYPES[0])
         self.assertEqual(int(ct.select(36,-112,rules=rules)),ct.CANYON)

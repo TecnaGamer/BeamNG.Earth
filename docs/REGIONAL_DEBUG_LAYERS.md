@@ -44,12 +44,65 @@ Added conservative appearance envelopes:
   describes sedimentary Tumblagooda Sandstone and successive sand layers.
   https://www.wa.gov.au/organisation/department-of-mines-petroleum-and-exploration/geological-survey-of-western-australia/trace-fossils-of-the-tumblagooda-sandstone
 
+### Additional arid cliff sectors (November 2026)
+
+All six additions reuse the existing **Layered canyon** family, its PBR maps,
+local satellite colour matching, and the shared near/far/talus selector. No
+regional texture variants or new runtime data downloads are introduced.
+
+| Debug region | Why the shared material is a useful approximation | Preview latitude, longitude |
+| --- | --- | --- |
+| Santa Elena Canyon | Desert limestone canyon; limited to the river-cut escarpment, excluding the volcanic Chisos Mountains. | 29.18, -103.63 |
+| Boquillas Canyon | Stacked Del Carmen limestone, Sue Peaks shale slope and Santa Elena limestone; a separate Rio Grande corridor. | 29.22, -102.89 |
+| Kennedy Range southern escarpment | Desert sandstone/shale strata forming cliffs and gorges. Starts with the southern Temple Gorge sector rather than the whole range. | -24.66, 115.17 |
+| Watarrka - Kings Canyon | Two sandstone formations separated by mudstone, exposed in desert canyon walls. Restricted to the western George Gill Range near Kings Canyon. | -24.25, 131.58 |
+| Talampaya canyon sector | Arid sedimentary basin with red sandstone walls. Restricted to the principal canyon sector, not the whole Talampaya/Ischigualasto World Heritage property. | -29.79, -67.99 |
+| Tuwaiq - Edge of the World | Desert sedimentary limestone escarpment. Covers the central Edge of the World sector, not the entire 800 km range. Local imagery tint is especially important for its pale rock. | 24.945, 45.994 |
+
+Primary sources supporting these appearance choices:
+
+- **Big Bend:** [NPS geology overview](https://www.nps.gov/bibe/learn/nature/rocks.htm)
+  distinguishes limestone canyons from the park's volcanic rocks;
+  [USGS Boquillas Canyon](https://www.usgs.gov/media/images/a-photo-boquillas-canyon)
+  identifies the stacked cliff/slope formations.
+- **Kennedy Range:** [WA Parks visitor guide](https://exploreparks.dbca.wa.gov.au/sites/default/files/2021-10/kennedy-range-national-park-mundatharrda-visitor-guide.pdf)
+  describes the desert climate, sandstone/shale layers and southern/eastern cliffs.
+- **Watarrka:** [NT Parks geology sheet](https://nt.gov.au/_media/docs/parks/find-a-park-to-visit/central-australia-region/watarrka-geology.pdf)
+  describes the Mereenie/Carmichael sandstone and intervening mudstone;
+  [Australian heritage listing](https://www.dcceew.gov.au/parks-heritage/heritage/places/national/watarrka-national-park)
+  documents the arid setting. The texture is an approximation of the exposed
+  beds, not a reproduction of the park's cross-bedded domes.
+- **Talampaya:** [UNESCO property description](https://whc.unesco.org/en/list/966)
+  describes the desert sedimentary basin;
+  [Argentina National Parks](https://www.argentina.gob.ar/parquesnacionales/centro/parque-nacional-talampaya/ficha-del-area-protegida)
+  documents the desert canyon and red walls.
+- **Tuwaiq:** [Saudipedia escarpment description](https://saudipedia.com/en/tuwaiq-mountain)
+  documents its Jurassic limestone and western cliff face;
+  [USGS geology of the Arabian Peninsula](https://pubs.usgs.gov/pp/0560d/report.pdf)
+  describes the sedimentary succession;
+  [Edge of the World](https://saudipedia.com/en/edge-of-the-world)
+  locates this desert cliff sector west of Riyadh.
+
+The polygon vertices are hand-authored appearance envelopes, inferred from these
+landmarks and their surroundings; they are not digitized geological contacts or
+park boundaries. Preview points locate sectors, not guaranteed spawn positions.
+Existing slope, cover, road clearance and enabled-cliff settings still decide
+which faces generate. Both sides of the Rio Grande use the same appearance rule.
+
+To inspect them, open **Layers > Debug layers > Regional placement > Natural
+cliff regions** on the map and pan to the preview coordinates. **Generated cliffs
+& road cuts** shows recorded coverage after near tiles have actually loaded.
+Changing this registry participates in the revisit cache's source fingerprint;
+restart the companion server to load the new rules and invalidate old results.
+
 These are deliberately approximate visual envelopes inferred from documented
 exposures, not authoritative geologic boundaries. Do not assign this texture to
 all canyons or all arid places. Volcanic Bandelier tuff and Karijini banded iron
-formation need different material families. Massive/cross-bedded sandstone and
-tilted formations within the broad Plateau remain candidates for future,
-higher-priority variants. No new texture is claimed to reproduce every formation.
+formation are excluded from this expansion. Wadi Rum's massive domes and the
+soft clay/gypsum badlands of Bardenas Reales were also deferred: aridity alone
+is insufficient. Similar bedded sandstone and limestone can share this material
+without requiring a texture for every locality. The shared texture is a visual
+approximation and does not reproduce every formation.
 
 ## Extending the system
 
