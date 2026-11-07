@@ -12,7 +12,7 @@
 local C = {}
 C.__index = C
 
-C.DIST_MIN, C.DIST_MAX = 15, 600000            -- m
+C.DIST_MIN, C.DIST_MAX = 15, 25000000          -- m (the whole earth in view: globe.lua past the far tiles)
 local PITCH_MIN, PITCH_MAX = math.rad(12), math.rad(89.5)
 local ZOOM_RATE = 2.2                          -- e-folds of distance per second at full zoom input
 local PAN_RATE = 0.9                           -- target speed in distances per second at full stick
@@ -21,6 +21,24 @@ local M_PER_DEG = 111320
 local GROUND_MIN, GROUND_MAX = -500, 9000      -- m: a ground height outside this is a bad hit (2026-11-07: 4e17 m)
 
 local function clamp(x, a, b) return math.max(a, math.min(b, x)) end
+
+-- Far out (the whole earth): the game's sky draws every object black with the camera above its shell (600 km), so
+-- past MINI_ALT the real camera stays MINI_CAM_ALT up, on the line from the earth's centre to where the view really
+-- is, and globe.lua draws the server's small copy of the globe (C.miniScale of the earth, ~30 km across) in front of
+-- it, s x the real centre distance away: the same angle as the earth from the real place.
+-- self.mini = {s, O (the earth's centre), Om (the copy's centre)} then; nil otherwise.
+C.MINI_ALT = 450000
+C.MINI_CAM_ALT = 300000
+C.R = 6371000
+C.miniScale = 30000 / 6368000      -- (globe.lua sets the server's own: globe.py's miniScale)
+
+local function earthCentre()
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if not a or not a.ecefToEnu then return nil end
+  local x, y, z = a:ecefToEnu(0, 0, 0)
+  return vec3(x, y, z)
+end
 
 -- the frame: (lat, lon, h) -> world vec3, from the active anchor; nil without one (a test sets C.frame)
 local function defaultFrame()
@@ -131,6 +149,23 @@ function C:update(data)
   if g then self.ground = self.ground + (g - self.ground) * math.min(1, dt * 4) end
   local pos, rot, up = self:pose()
   if not pos then return false end
+  -- far out: the real camera stays inside the sky's shell, the globe's copy in front of it (C.MINI_*)
+  self.mini = nil
+  local O = self.earthCentre and self.earthCentre() or earthCentre()
+  if O then
+    local vo = pos - O
+    local dc = vo:length()
+    if dc - C.R > C.MINI_ALT then
+      local cam = O + vo * ((C.R + C.MINI_CAM_ALT) / dc)
+      local s = C.miniScale
+      self.mini = { s = s, O = O, Om = cam - vo * s }
+      data.res.pos:set(cam)
+      data.res.rot:set(rot)
+      data.res.fov = self.fov
+      data.res.nearClip = clamp(s * (dc - C.R) * 0.05, 0.05, 200)
+      return true
+    end
+  end
   -- never under the ground near the target (a low view over a hill)
   if self.dist < 20000 and be then
     local gz = be:getSurfaceHeightBelow(vec3(pos.x, pos.y, pos.z + 10000))

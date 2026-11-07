@@ -5788,6 +5788,8 @@ class Connection:
         elif kind == "open_page":               # the update notice's button: the releases page (updates.open_page)
             if not updatesmod.open_page(msg.get("url")):
                 log.info("open_page: refused %r", msg.get("url"))
+        elif kind == "globe_req":               # the 3D map's whole-earth globe for an anchor (globe.py)
+            self.spawn(self.globe(msg))
         elif kind == "space_clouds_req":        # the camera above the clouds: today's clouds round it (spaceclouds.py)
             self.spawn(self.space_clouds(msg))
         elif kind == "terrain_patch":           # ground under another vehicle's collision island (terrainpatch.lua)
@@ -5881,6 +5883,23 @@ class Connection:
         """K(L) of this connection's far field: the server's times the mod's terrain detail (lodScale)."""
         k, s = self.s.kfun, self.lod_scale
         return k if s == 1.0 else (lambda lvl: k(lvl) * s)
+
+    async def globe(self, msg):
+        """The mod's globe.lua (the 3D map far out): the whole earth as one sphere in anchorId's frame, its world texture
+        made once and cached (globe.py); answered with its files, or nothing (no world texture could be had)."""
+        aid = msg.get("anchorId")
+        if aid not in self.s.anchors:
+            return
+        import globe as globemod
+        frame = self.s.anchors[aid].frame
+        try:
+            res = await asyncio.get_running_loop().run_in_executor(
+                None, globemod.build, self.s.out_dir, self.s.vfs_dir, frame, aid, self.s.cache_dir, self.s.net)
+        except Exception as e:
+            log.warning("globe: %s: %s", type(e).__name__, e)
+            return
+        if res is not None:
+            self.send(dict(res, type="globe", anchorId=aid))
 
     async def space_clouds(self, msg):
         """The mod's spaceclouds.lua: the cloud shell round the point under a camera far above the clouds (lat, lon,

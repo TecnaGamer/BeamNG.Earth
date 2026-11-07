@@ -411,7 +411,9 @@ local function applyHorizon()
     -- (a fixed view distance in the settings: theirs stays; the horizon's radius moving set it back before)
     local stg = rawget(_G, 'beamngEarth_settings')
     local fixed = stg and stg.get and stg.get('viewDistanceMode') == 'fixed'
-    local v = not fixed and horizon.visibleTarget(farRadius, st.visibleDistance or VISIBLE_DISTANCE, VISIBLE_DISTANCE)
+    -- (horizon.extraVisible: the 3D map's globe, the far side of the earth in view)
+    local v = not fixed and horizon.visibleTarget(farRadius, st.visibleDistance or VISIBLE_DISTANCE,
+                                                  math.max(VISIBLE_DISTANCE, horizon.extraVisible or 0))
     if v and horizon.setVisibleDistance(v) then st.visibleDistance = v end
   else
     horizon.restoreSky()
@@ -1122,6 +1124,8 @@ local function onMessage(msg)
     end
   elseif t == 'space_clouds' then        -- the clouds seen from space (spaceclouds.lua / server spaceclouds.py)
     pcall(require('beamngEarth/spaceclouds').onMessage, msg, st.anchorId)
+  elseif t == 'globe' then               -- the 3D map's whole earth (globe.lua / server globe.py)
+    pcall(require('beamngEarth/globe').onMessage, msg, st.anchorId)
   elseif t == 'anchor_progress' then
     local p = st.pending
     if p and msg.requestId == p.requestId and not p.ready then p.stage, p.progressAt = msg.stage, st.clock end
@@ -2367,6 +2371,8 @@ local function onUpdate(dtReal, dtSim)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'terrain patches: ' .. tostring(err)) end
       ok, err = pcall(require('beamngEarth/spaceclouds').update, dtReal, st.anchor, st.anchorId, net.send)
       if not ok then log('E', 'beamngEarth', 'space clouds: ' .. tostring(err)) end
+      ok, err = pcall(require('beamngEarth/globe').update, dtReal, st.anchor, st.anchorId, net.send)
+      if not ok then log('E', 'beamngEarth', 'globe: ' .. tostring(err)) end
       ok, err = pcall(farcars.update, dtReal)
       if not ok then fociBroken = true; log('E', 'beamngEarth', 'far cars: ' .. tostring(err)) end
       t = mark('farcars', t)
@@ -2517,6 +2523,7 @@ local function onClientEndMission()
   require('beamngEarth/enginepref').restore()
   pcall(terrainpatch.clear)
   pcall(require('beamngEarth/spaceclouds').clear)
+  pcall(require('beamngEarth/globe').clear)
   pcall(gasstations.reset)
   pcall(farcars.reset)
   pcall(mpsession.reset)

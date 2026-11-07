@@ -269,6 +269,7 @@ end
 
 local white, back = nil, nil
 local function drawLabels(g)
+  if g.mini then return end              -- (the whole earth: the globe's copy, no town that far out)
   local core = rawget(_G, 'beamngEarth_core')
   local a = core and core._state and core._state().anchor
   if not a or not debugDrawer then return end
@@ -287,8 +288,9 @@ local function drawLabels(g)
     if drawn >= M.LABELS_DRAWN then break end
     if p.x then
       local dx, dy = p.x - cam.x, p.y - cam.y
-      local reach = M.LABEL_REACH[p.cls] or M.LABEL_REACH_DEFAULT
-      if dx * dx + dy * dy < reach * reach then
+      local dz = (p.z or (cam.z - g.dist * math.sin(g.pitch))) - cam.z     -- (the camera's height counts: from orbit
+      local reach = M.LABEL_REACH[p.cls] or M.LABEL_REACH_DEFAULT          --  none, 2026-11-07)
+      if dx * dx + dy * dy + dz * dz < reach * reach then
         if not p.z then
           local z = be:getSurfaceHeightBelow(vec3(p.x, p.y, cam.z + 20000))
           if z and z > -1e8 then p.z = z end
