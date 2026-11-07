@@ -178,7 +178,7 @@ class JunctionGlueTest(unittest.TestCase):
         self.assertEqual(ctx.mapped.shape, (0, 3))
         none = designs.context(self.FRAME, [feats])         # no routes layer: class alone
         self.assertEqual(none.info["a"][0], 0)
-        self.assertFalse(none.stretch["a"])
+        self.assertTrue(none.stretch["a"], "a tertiary is a stretch without its ref too")
 
     def test_numpy_wrappers(self):
         u8, i8 = np.uint8, np.int8
@@ -592,8 +592,8 @@ class JunctionRowsTest(Placed, unittest.TestCase):
                 self.assertEqual(got, TODAY[name], name)
 
     def test_rural_301_at_the_junction(self):
-        rs = [self.road("e", "tertiary", "e", False), self.road("w", "tertiary", "w", False),
-              self.road("s", "unclassified", "s", False)]
+        rs = [self.road("e", "unclassified", "e", False), self.road("w", "unclassified", "w", False),
+              self.road("s", "residential", "s", False)]
         self.assertEqual(self.placed(self.props(rs)), [("de_z205", "s", "before"), ("de_z301", "e", "before"),
                                                        ("de_z301", "w", "before")],
                          "301 immediately before the junction out of town too (zu Zeichen 301 Rn. 1)")
@@ -642,9 +642,9 @@ class JunctionRowsTest(Placed, unittest.TestCase):
                                              ("de_z306_g3", "e", "after")], "after it: the road it stands on")
 
     def end(self, urban, **town):
-        """A stretch ending (W secondary, E a tertiary without a ref, S residential: the kernel ranks it, W-E 301)."""
+        """A stretch ending (W secondary, E unclassified, S residential: the kernel ranks it, W-E 301)."""
         return [self.road("w", "secondary", "w", urban if "w" not in town else town["w"]),
-                self.road("e", "tertiary", "e", urban), self.road("s", "residential", "s", urban)]
+                self.road("e", "unclassified", "e", urban), self.road("s", "residential", "s", urban)]
 
     def test_307_out_of_town_only(self):
         """Out of town the 307 before the stretch's end, on a post of its own, with W's 301 (Rn. 8), and the 306 after
@@ -848,13 +848,13 @@ class JunctionRowsTest(Placed, unittest.TestCase):
                              (cls, flag))
 
     def test_an_on_ramp_never_takes_the_priority(self):
-        """A link leaving the node (an on-ramp's start) ranks below the road too: a tertiary whose continuation
-        bends away while the ramp leaves straight on keeps its own two arms the priority pair, nobody yields, so no
-        301 (zu Zeichen 301 Rn. 2) and no 205 on the road's own continuation."""
+        """A link leaving the node (an on-ramp's start) ranks below the road too: an unclassified road whose
+        continuation bends away while the ramp leaves straight on keeps its own two arms the priority pair, nobody
+        yields, so no 301 (zu Zeichen 301 Rn. 2) and no 205 on the road's own continuation."""
         for link in (("motorway", True), ("trunk_link", False)):
             for bend in (15, 25, 40):
                 fid, sp, pts, lon = self.road("ramp", link[0], "e", False, oneway=1)
-                rs = [self.road("w", "tertiary", "w", False), self.road("e", "tertiary", unit(bend), False),
+                rs = [self.road("w", "unclassified", "w", False), self.road("e", "unclassified", unit(bend), False),
                       (fid, sp._replace(link=link[1]), pts, lon)]
                 self.assertEqual(self.props(rs, signals=self.NO_SIGNALS), [], (link, bend))
 
@@ -906,7 +906,7 @@ class JunctionRowsTest(Placed, unittest.TestCase):
     def test_no_301_without_a_road_that_yields(self):
         """VwV-StVO zu Zeichen 301 Rn. 2: a 301 needs a 205 or 206 on the other road; the kernel's 301 pair with the
         third arm a one-way leaving it has none, so no 301."""
-        rs = [self.road("e", "tertiary", "e", False), self.road("w", "tertiary", "w", False),
+        rs = [self.road("e", "unclassified", "e", False), self.road("w", "unclassified", "w", False),
               self.road("s", "residential", "s", False, oneway=1)]
         self.assertEqual(self.props(rs), [])
 
@@ -1017,17 +1017,20 @@ class BuildTileTest(Placed, unittest.TestCase):
                                               walks=[], props=[], de_on=True), roads.build_tile(
                 frame, 0, 0, [self.tee(frame)], lambda la, lo: np.zeros(np.shape(la)), walks=[], props=[]))
 
-    def test_a_kreisstrasse_is_a_stretch(self):
-        """The cells' road_routes give the tertiary through the T its ref (K 12, a district code M 12): a stretch
-        (306), where without them the class alone ranks it (301)."""
+    def test_a_tertiary_is_a_stretch(self):
+        """A tertiary through the T is a stretch (306) with its ref (K 12, a district code M 12, from the cells'
+        road_routes) and without one (a town's main road: Barbing's Regensburger Straße, 301 at four junctions in a row
+        before, the user 2026-11-07); an unclassified road is none, the class alone ranks it (301)."""
         frame = JunctionGlueTest.FRAME
         tee = self.tee(frame, "tertiary")
-        self.assertEqual(sorted(r[0] for r in self.build(frame, True, tee)), ["de_z205", "de_z301", "de_z301"])
+        self.assertEqual(sorted(r[0] for r in self.build(frame, True, tee)), ["de_z205", "de_z306", "de_z306"])
         for ref in ("K 12", "M 12"):
             routes = _features("road_routes", ["w", "e"], routes_txt=[f"regional|{ref}|0|1"] * 2,
                                **{"class": ["tertiary", "tertiary"]})
             self.assertEqual(sorted(r[0] for r in self.build(frame, True, tee, routes=[routes])),
                              ["de_z205", "de_z306", "de_z306"], ref)
+        self.assertEqual(sorted(r[0] for r in self.build(frame, True, self.tee(frame, "unclassified"))),
+                         ["de_z205", "de_z301", "de_z301"])
 
     def test_town_before_the_drawing(self):
         """An arm build_tile draws rural for a drawing reason (here a mapped roundabout's way, roads._rings) still

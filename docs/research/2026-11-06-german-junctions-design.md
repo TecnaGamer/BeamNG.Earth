@@ -51,6 +51,11 @@ The sections below describe the code as built. Where it departs from the design 
   rural for its own reasons (a short roundabout approach, a road built up on one side).
 - **A mapped stop or give-way point belongs to one arm**, the nearest, not by its direction: Overture's points have
   none, and the shards' forward / backward run along the OSM way, which the arms do not carry.
+- **Every tertiary is a stretch, with a ref or without** (the user's review, 2026-11-07): as approved only a tertiary
+  with a ref was, so Barbing's Regensburger Straße (tertiary, 50 km/h, no ref) got 301 at four junctions in a row,
+  where zu Zeichen 301 Rn. 4 wants 306 on a town's main roads. Out of town a tertiary without a ref (a
+  Gemeindeverbindungsstraße) now gets 306 after its junctions and 307 where it ends; 301 stays for unclassified roads
+  and for pairs a mapped sign leaves.
 - **A stretch is each road's own property** (class, ref, `priority_road`), read at each junction, with no pass across
   tiles; mapped 307 nodes are not read (`priority_road=end` is).
 - **In town a stretch's arm shows 306 where the derivation gives 301** (zu Zeichen 301 Rn. 4: not on main roads,
@@ -341,8 +346,9 @@ up on one side).
 **A Vorfahrtstraße is a property of a road, not of one junction** (VwV-StVO zu den Zeichen 306 und 307 Rn. 1: in
 town the Bundes-, Landes- and Kreisstraßen and the main roads get 306). A road is on a stretch when:
 - it is mapped `priority_road=designated` or `yes_unposted` (a way's `traffic_sign=DE:306` reads as designated);
-- else, unless it is mapped `priority_road=end`: it is of class trunk / primary / secondary, or a tertiary with a ref
-  (Bundes-, Staats- and Kreisstraßen, as ranked above).
+- else, unless it is mapped `priority_road=end`: it is of class trunk / primary / secondary / tertiary, a tertiary
+  with a ref or without (a Kreisstraße, or a town's main road or Gemeindeverbindungsstraße that OpenStreetMap ranks
+  with them). The ref ranks two stretches against each other (above), not whether a road is one.
 
 Each road tile reads the flag of every road (`de_stretch`) and uses it at each junction; there is no pass across
 tiles. A stretch so ends, for the signs, where its road drops to a class that is none, at a roundabout or a

@@ -16,8 +16,8 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 159 # the newest kernel signature the server calls (earthd checks it at start; 159: dejunction.rs, the
-                  # German junction kernel)
+MIN_VERSION = 160 # the newest kernel signature the server calls (earthd checks it at start; 159: dejunction.rs, the
+                  # German junction kernel; 160: its stretch takes every tertiary)
 
 
 class NativeMissing(RuntimeError):

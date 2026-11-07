@@ -23,9 +23,10 @@
 //!   alle Straßen des überörtlichen Verkehrs (Bundes-, Landes- und Kreisstraßen) und weitere für den innerörtlichen
 //!   Verkehr wesentliche Hauptverkehrsstraßen grundsätzlich unter Verwendung des Zeichens 306"), not 301 (zu Zeichen
 //!   301 Rn. 4: "für Ortsdurchfahrten und Hauptverkehrsstraßen nicht anzuordnen"). So a stretch (de_stretch, in and
-//!   out of town alike) is a mapped priority_road=designated or yes_unposted, else trunk / primary / secondary, and
-//!   tertiary with a ref (Bundes-, Staats- / Landes- and Kreisstraßen), unless the map says priority_road=end; 301 is
-//!   for a priority found by rank alone.
+//!   out of town alike) is a mapped priority_road=designated or yes_unposted, else trunk / primary / secondary /
+//!   tertiary, a tertiary with a ref or without (a Kreisstraße, or a town's main road or a Gemeindeverbindungsstraße
+//!   that OpenStreetMap ranks with them: 301 at each junction of Barbing's Regensburger Straße, four in a row, was the
+//!   user's report, 2026-11-07), unless the map says priority_road=end; 301 is for a priority found by rank alone.
 //! - The 1002 plate ("Verlauf der Vorfahrtstraße") exists only with a Vorfahrtstraße: under its 306 (StVO Anlage 3
 //!   lfd. Nr. 2.1: "Das Zusatzzeichen zum Zeichen 306 zeigt den Verlauf der Vorfahrtstraße an") and under the 205 /
 //!   206 of that junction (Anlage 2 zu Nr. 2 und 3: "...zusammen mit den Zeichen 205 oder 206 den Verlauf der
@@ -97,7 +98,6 @@ pub const RING: u8 = 8;         // ... a roundabout's ring
 const RESIDENTIAL: u8 = 1;      // the class codes (living_street 0)
 const UNCLASSIFIED: u8 = 2;
 const TERTIARY: u8 = 3;
-const SECONDARY: u8 = 4;
 const TRUNK: u8 = 6;
 const DESIGNATED: u8 = 1;       // the priority_road codes
 const END: u8 = 2;
@@ -117,11 +117,12 @@ pub const PATTERNS: [(u8, u8); 10] = [
 ];
 
 /// Is a road a Vorfahrtstraße stretch: mapped as one (priority_road designated / yes_unposted), or, unless mapped as
-/// its end, trunk / primary / secondary, or a tertiary with a ref (VwV-StVO zu den Zeichen 306 und 307 Rn. 1: the
-/// Bundes-, Landes- and Kreisstraßen and the main roads). Motorways have no junctions at grade.
-pub fn stretch(cls: u8, ref_rank: u8, prio: u8) -> bool {
-    prio == DESIGNATED || prio == YES_UNPOSTED
-        || (prio != END && ((SECONDARY..=TRUNK).contains(&cls) || (cls == TERTIARY && ref_rank >= 1)))
+/// its end, trunk / primary / secondary / tertiary (VwV-StVO zu den Zeichen 306 und 307 Rn. 1: the Bundes-, Landes-
+/// and Kreisstraßen and the main roads; a tertiary without a ref is a town's main road or a Gemeindeverbindungsstraße,
+/// and in town 301 is "für Ortsdurchfahrten und Hauptverkehrsstraßen nicht anzuordnen", zu Zeichen 301 Rn. 4). The ref
+/// rank still ranks two stretches (junction). Motorways have no junctions at grade.
+pub fn stretch(cls: u8, _ref_rank: u8, prio: u8) -> bool {
+    prio == DESIGNATED || prio == YES_UNPOSTED || (prio != END && (TERTIARY..=TRUNK).contains(&cls))
 }
 
 fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
@@ -341,7 +342,8 @@ mod tests {
     #[test]
     fn stretch_rules() {
         assert!(stretch(SEC, 3, 0));            // a B road, secondary
-        assert!(!stretch(TER, 0, 0));           // a tertiary without a ref
+        assert!(stretch(TER, 0, 0));            // a tertiary without a ref (a town's main road: Barbing's
+                                                // Regensburger Straße)
         assert!(stretch(TER, 1, 0));            // a tertiary Kreisstraße
         assert!(stretch(RES, 0, 1));            // priority_road=designated
         assert!(stretch(RES, 0, 3));            // priority_road=yes_unposted
@@ -620,8 +622,8 @@ mod tests {
 
     #[test]
     fn stretch_end_falls_to_rank() {
-        // the secondary W (a stretch) goes on as the tertiary E without a ref: no stretch pair, the rank decides
-        let t = [with(arm(W, SEC), STRETCH), arm(E, TER), arm(S, RES)];
+        // the secondary W (a stretch) goes on as the unclassified E: no stretch pair, the rank decides
+        let t = [with(arm(W, SEC), STRETCH), arm(E, UNC), arm(S, RES)];
         assert_eq!(run(&t, true), (vec![Z301, Z301, Z205], vec![-1, -1, -1]));
     }
 
