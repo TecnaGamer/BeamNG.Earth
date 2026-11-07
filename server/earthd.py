@@ -379,6 +379,10 @@ WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_wa
 WORLD_WARM_CONC = 2
 EYE_LOD_MIN_M = 3000.0          # an eye above this: the far tiles' detail by the 3D distance (eye_clearance)
 MAP_HIGH_EYE_M = 40000.0        # an eye above this (the 3D map): the finest global tiles are leaves (farfield.select_global)
+MAP_TEX_PX = 512                # the 3D map's far textures at least this (Server.tex_size) ...
+MAP_TEX_MAX_LEVEL = 2           # ... up to this level (coarser ones: 4x the photo tiles each, and EOX answered 403 to
+                                # ~135 requests/s with every level at 512 px and no cap, 2026-11-07)
+MAP_LOD_SCALE = 1.25            # ... and their detail reaching this much farther (Connection.kfun)
 MAP_DETAIL_EYE_M = 3000.0       # the 3D map's view frame: roads, trees, buildings round its target only below this eye
 VIEW_ANCHOR_Q = 1 / 32          # the 3D map's view-only anchors' height quantum (m): no survey, no block driven on
 ROAD_TILE_TIMEOUT_S = float(os.environ.get("BNGE_ROAD_TILE_TIMEOUT", "") or 300.0)
@@ -3848,10 +3852,16 @@ class Server:
 
     def tex_size(self, level):
         """Texture edge of a level (the layout's per-level table: with 32 cells the two finest
-        levels of the mode get tex_near, the others tex_far; horizon mode: farfield.HORIZON_TEX from L8)."""
+        levels of the mode get tex_near, the others tex_far; horizon mode: farfield.HORIZON_TEX from L8). With the 3D
+        map open, at least MAP_TEX_PX (the user, 2026-11-07: "i want the ground to look high res at every zoom level":
+        256 px tiles were 4-8 m texels under ~2.4 m screen pixels from 3 mi up)."""
         if self.horizon and level in farfield.HORIZON_TEX:
-            return farfield.HORIZON_TEX[level]
-        return self.layout.tex_size(level)
+            px = farfield.HORIZON_TEX[level]
+        else:
+            px = self.layout.tex_size(level)
+        if level <= MAP_TEX_MAX_LEVEL and any(getattr(c, "map_view", False) for c in self.connections):
+            px = max(px, MAP_TEX_PX)
+        return px
 
     @property
     def max_level(self):
@@ -6011,8 +6021,9 @@ class Connection:
             self.update_far()
 
     def kfun(self):
-        """K(L) of this connection's far field: the server's times the mod's terrain detail (lodScale)."""
-        k, s = self.s.kfun, self.lod_scale
+        """K(L) of this connection's far field: the server's times the mod's terrain detail (lodScale), times
+        MAP_LOD_SCALE with the 3D map's view frame (finer tiles farther out: high res at every zoom)."""
+        k, s = self.s.kfun, self.lod_scale * (MAP_LOD_SCALE if self.map_view else 1.0)
         return k if s == 1.0 else (lambda lvl: k(lvl) * s)
 
     async def globe(self, msg):

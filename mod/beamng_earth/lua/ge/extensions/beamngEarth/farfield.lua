@@ -697,6 +697,22 @@ local function previewGroup(g)
   end
 end
 
+-- (and the loaded tiles no group names yet: the server announces a group once all its tiles are sent, and over
+-- Manhattan ~420 loaded tiles waited for theirs, the view's ground missing under its buildings, 2026-11-07)
+local function previewPending()
+  local lift = max(M.PREVIEW_LIFT_MIN_M, min(200, preview.eye * M.PREVIEW_LIFT_EYE_SHARE * 0.5))
+  for _, a in pairs(pending) do
+    if a.loaded and not a.failed and not a.preview and not a.prefetch and visibleCover(coverOf(a)) then
+      local o = getObj(a)
+      if o then
+        writePos(o, a, lift)
+        setHidden(o, false)
+        a.off, a.hidden, a.preview = lift, false, true
+      end
+    end
+  end
+end
+
 local function groupReady(g)
   for _, key in ipairs(g.add) do
     local a = pending[key]
@@ -1380,6 +1396,7 @@ function M.update(gov, dt, cam, player)
     end
   end
   local stop = false
+  if preview.on then previewPending() end
   for _, g in ipairs(groups) do
     if g.state == 'wait' and preview.on then previewGroup(g) end
     if g.state == 'wait' then

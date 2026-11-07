@@ -18,6 +18,45 @@
       </div>
     </div>
     <div class="m3-msg" v-if="msg" @mousedown.stop>{{ msg }}</div>
+    <!-- the 2D map's tools here too (the user, 2026-11-07: "bring more elements from the 2d map. saved places, search,
+         gps"): search (a smooth flight there), places, a GPS route to the view -->
+    <div class="m3-tools" @mousedown.stop @wheel.stop>
+      <div class="m3-search">
+        <input v-model="query" class="m3-input" placeholder="Search places and addresses" maxlength="120"
+               @focus="typing(true)" @blur="typing(false)" @keydown.stop="onSearchKey" />
+        <button class="map-btn" :class="{ active: panel === 'places' }" @click="togglePlaces" title="Saved and recent places">&#9733;</button>
+      </div>
+      <div class="m3-list" v-if="results.length || searching || searchMsg">
+        <div v-if="searching" class="m3-note">Searching&hellip;</div>
+        <div v-else-if="searchMsg && !results.length" class="m3-note">{{ searchMsg }}</div>
+        <div v-for="(r, i) in results" :key="'r' + i" class="m3-item" @click="goResult(r)">
+          <div class="m3-item-name">{{ r.name }}</div>
+          <div class="m3-item-sub">{{ r.detail || fmt(r.lat, r.lon) }}</div>
+        </div>
+      </div>
+      <div class="m3-list" v-else-if="panel === 'places'">
+        <div class="m3-row">
+          <input v-model="saveName" class="m3-input small" placeholder="Name for this view" maxlength="60"
+                 @focus="typing(true)" @blur="typing(false)" @keydown.stop @keydown.enter="saveView" />
+          <button class="map-btn" @click="saveView">Save</button>
+        </div>
+        <div v-if="placesMsg" class="m3-note">{{ placesMsg }}</div>
+        <div v-for="p in savedPlaces" :key="'p' + p.id" class="m3-item" @click="goPlace(p)">
+          <div class="m3-item-name">&#9733; {{ p.name }}</div>
+          <div class="m3-item-sub">{{ p.text || fmt(p.lat, p.lon) }}</div>
+        </div>
+        <div v-if="recentPlaces.length" class="m3-head">Recent</div>
+        <div v-for="(p, i) in recentPlaces" :key="'c' + i" class="m3-item" @click="goPlace(p)">
+          <div class="m3-item-name">{{ p.name || p.text }}</div>
+          <div class="m3-item-sub">{{ p.name ? p.text : "" }}</div>
+        </div>
+      </div>
+      <div class="m3-gps">
+        <button class="map-btn" @click="routeHere" title="Plan a GPS route from the car to the middle of the view">Route here</button>
+        <button class="map-btn" v-if="st.gps" @click="clearRoute" title="Stop the GPS route">Clear route</button>
+        <span v-if="st.gps && st.gps.text" class="m3-gps-text">{{ st.gps.text }}</span>
+      </div>
+    </div>
     <div class="m3-compass" @mousedown.stop @click="north" title="Face north">
       <div class="m3-needle" :style="{ transform: `rotate(${-headingDeg}deg)` }">N</div>
     </div>
@@ -31,7 +70,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onUnmounted, nextTick } from "vue"
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { LabelLayer } from "./map3dLabels.js"
 
@@ -41,6 +80,95 @@ let layer = null
 const events = useEvents()
 events.on("BngEarthMap3dLabels", d => { if (layer) layer.setLabels(d) })
 events.on("BngEarthMap3dView", v => { if (layer) layer.setView(v) })
+// ---- search, places, GPS (the 2D map's settings.lua calls)
+const query = ref("")
+const results = ref([])
+const searching = ref(false)
+const searchMsg = ref("")
+const panel = ref("")
+const saveName = ref("")
+const placesMsg = ref("")
+const savedPlaces = ref([])
+const recentPlaces = ref([])
+let searchSeq = 0
+let searchTimer = null
+const toArray = v => (Array.isArray(v) ? v : v && typeof v === "object" ? Object.values(v) : [])
+const luaStr = t => JSON.stringify(String(t == null ? "" : t))
+const num = v => (Number.isFinite(Number(v)) ? String(Number(v)) : "nil")
+function fmt(lat, lon) {
+  if (lat == null || lon == null) return ""
+  return `${Math.abs(lat).toFixed(4)}° ${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(4)}° ${lon >= 0 ? "E" : "W"}`
+}
+function typing(on) { engineLua(`if setCEFTyping then setCEFTyping(${on ? "true" : "false"}) end`) }
+function flyTo(lat, lon) {
+  if (lat == null || lon == null) return
+  engineLua(`beamngEarth_map3d.flyTo(${num(lat)}, ${num(lon)})`)
+}
+function runSearch(full) {
+  const text = query.value.trim()
+  const seq = ++searchSeq
+  searchMsg.value = ""
+  const m = text.match(/^\s*(-?\d+(?:\.\d+)?)\s*[, ]\s*(-?\d+(?:\.\d+)?)\s*$/)
+  if (m) { results.value = [{ name: text, lat: Number(m[1]), lon: Number(m[2]) }]; searching.value = false; return }
+  if (text.length < 3) { results.value = []; searching.value = false; return }
+  searching.value = true
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}, ${full ? "true" : "false"}) or nil`, r => {
+    if (seq !== searchSeq) return
+    if (!r || r.error || !r.id) { searching.value = false; searchMsg.value = (r && r.error) || ""; return }
+    let tries = 0
+    const poll = () => {
+      if (seq !== searchSeq) return
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocodeResult(${r.id}) or nil`, res => {
+        if (seq !== searchSeq) return
+        if (!res) { if (++tries < 60) setTimeout(poll, 150); else { searching.value = false; searchMsg.value = "No answer from the address search" }; return }
+        searching.value = false
+        results.value = toArray(res.results)
+        if (!results.value.length) searchMsg.value = res.error ? "Address search unavailable" : full ? "Nothing found" : "Press Enter to search streets and addresses too"
+      })
+    }
+    setTimeout(poll, 150)
+  })
+}
+watch(query, () => { clearTimeout(searchTimer); searchTimer = setTimeout(() => runSearch(false), 300) })
+function onSearchKey(e) {
+  if (e.key === "Enter") { if (results.value.length) goResult(results.value[0]); else runSearch(true) }
+  else if (e.key === "Escape") { query.value = ""; results.value = []; e.target.blur() }
+}
+function goResult(r) { flyTo(Number(r.lat), Number(r.lon)); results.value = []; query.value = "" }
+function loadPlaces(res) {
+  if (!res) return
+  savedPlaces.value = toArray(res.places)
+  recentPlaces.value = toArray(res.recent).slice(0, 8)
+  if (res.ok === false && res.error) placesMsg.value = res.error
+}
+function togglePlaces() {
+  panel.value = panel.value === "places" ? "" : "places"
+  if (panel.value === "places") {
+    placesMsg.value = ""
+    engineLua("beamngEarth_settings and beamngEarth_settings.uiPlaces and beamngEarth_settings.uiPlaces() or nil", loadPlaces)
+  }
+}
+function goPlace(p) {
+  let lat = p.lat, lon = p.lon
+  if (lat == null && p.text) { const m = String(p.text).match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/); if (m) { lat = Number(m[1]); lon = Number(m[2]) } }
+  flyTo(lat, lon)
+}
+function saveView() {
+  if (st.value.lat == null) return
+  const name = saveName.value.trim() || (place.value || "").split(",")[0] || "Saved view"
+  const text = `${st.value.lat.toFixed(6)}, ${st.value.lon.toFixed(6)}`
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiPlaceAdd and beamngEarth_settings.uiPlaceAdd(${luaStr(name)}, ${luaStr(text)}) or nil`, res => {
+    loadPlaces(res)
+    if (res && res.ok !== false) { placesMsg.value = `Saved "${name}"`; saveName.value = "" }
+  })
+}
+function routeHere() {
+  engineLua(`beamngEarth_map3d.gpsHere(${luaStr((place.value || "").split(",")[0])})`, r => {
+    msg.value = r && r.ok === false ? "No route: the GPS could not plan one" : ""
+  })
+}
+function clearRoute() { engineLua("beamngEarth_settings and beamngEarth_settings.uiMapGps(nil) or nil") }
+
 function onResize() { engineLua(`beamngEarth_map3d.setScreen(${window.innerHeight})`) }
 const st = ref({})
 const place = ref("")
@@ -104,6 +232,7 @@ const KEYS = { w: "up", arrowup: "up", s: "down", arrowdown: "down", a: "left", 
   pageup: "in", pagedown: "out" }
 let keyTimer = null
 function onKey(e, down) {
+  if (e.target && (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA")) return
   const k = KEYS[(e.key || "").toLowerCase()]
   if (!k) return
   e.preventDefault()
@@ -203,6 +332,21 @@ onUnmounted(() => {
 .m3-zoom { position: absolute; right: 24px; bottom: 190px; display: flex; flex-direction: column; gap: 6px; }
 .m3-help { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); padding: 4px 12px; font-size: 13px; color: #fff;
   background: rgba(0, 0, 0, 0.5); border-radius: 4px; }
+.m3-tools { position: absolute; top: 86px; left: 12px; width: 340px; display: flex; flex-direction: column; gap: 6px; }
+.m3-search, .m3-row { display: flex; gap: 6px; }
+.m3-input { flex: 1; padding: 7px 10px; font-size: 14px; color: #fff; background: rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 4px; outline: none; }
+.m3-input:focus { border-color: #e0761c; }
+.m3-list { max-height: 50vh; overflow-y: auto; background: rgba(0, 0, 0, 0.72); border-radius: 6px; padding: 4px; }
+.m3-item { padding: 6px 8px; border-radius: 4px; cursor: pointer; color: #fff; }
+.m3-item:hover { background: rgba(255, 255, 255, 0.12); }
+.m3-item-name { font-size: 14px; font-weight: 600; }
+.m3-item-sub { font-size: 12px; opacity: 0.7; }
+.m3-note, .m3-head { padding: 6px 8px; font-size: 12px; color: rgba(255, 255, 255, 0.75); }
+.m3-head { text-transform: uppercase; letter-spacing: 0.1em; }
+.m3-gps { display: flex; gap: 6px; align-items: center; }
+.m3-gps-text { font-size: 12px; color: #fff; background: rgba(0, 0, 0, 0.6); padding: 4px 8px; border-radius: 4px; }
+.map-btn.active { background: #e0761c; border-color: #e0761c; }
 .m3-cross { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px; pointer-events: none;
   border: 2px solid rgba(255, 255, 255, 0.85); border-radius: 50%; box-shadow: 0 0 3px rgba(0, 0, 0, 0.8); }
 .map-btn {

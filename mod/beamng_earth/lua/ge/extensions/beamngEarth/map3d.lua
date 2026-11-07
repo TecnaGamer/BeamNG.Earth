@@ -181,6 +181,7 @@ end
 function M.drag(dx, dy, mode, screenH)
   local g = globe()
   if not g then return end
+  if M.cancelFly then M.cancelFly() end     -- (the player's hand: a flight in progress stops)
   dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
   if mode == 'orbit' then
     g.heading = g.heading + dx * 0.006
@@ -193,6 +194,7 @@ end
 
 -- the wheel: notches (positive: out), each ~15 % of the distance
 function M.zoom(notches)
+  if M.cancelFly then M.cancelFly() end
   local g = globe()
   if not g then return end
   g.dist = math.max(g.DIST_MIN or 15, math.min(g.DIST_MAX or 600000, g.dist * math.exp((tonumber(notches) or 0) * 0.15)))
@@ -255,6 +257,15 @@ function M.uiState()
     end
     s.place = table.concat(parts, ', ')
   end
+  -- the GPS route's state for the screen's buttons (gps.lua)
+  local okG, g = pcall(function() return require('beamngEarth/gps').status() end)
+  if okG and g then
+    local txt = g.planning and 'Planning the route...' or g.routeError and ('No route: ' .. tostring(g.routeError)) or nil
+    if not txt and g.remaining then
+      txt = string.format('%s%.1f mi to go', g.name and g.name ~= '' and (g.name .. ': ') or '', g.remaining / 1609.344)
+    end
+    s.gps = {text = txt or (g.name ~= '' and g.name) or 'Route set'}
+  end
   return s
 end
 
@@ -266,6 +277,7 @@ end
 -- with the camera every frame. The screen projects them, shows those its zoom allows, the most important first,
 -- none overlapping, fading in and out.
 M.SCREEN_H = 1080                       -- the UI's height in px (the screen says: setScreen)
+M.LABELS_IMGUI = true                   -- labels drawn by the game (maplabels3d.lua), not the screen (map3dLabels.js)
 local labels = {rows = {}, reqId = 0, last = nil, anchor = nil, version = 0, sent = -1, heights = 0}
 
 function M.setScreen(h)
@@ -407,8 +419,131 @@ function M.onPreRender()
   local a = core and core._state and core._state().anchor
   if not a then return end
   placeLabels(a)
+  if M.LABELS_IMGUI then
+    -- (drawn from the camera's own update, drawLabels; the screen's labels off)
+    if labels.sent ~= -3 then labels.sent = -3; hook('BngEarthMap3dLabels', {v = -3, items = {}}) end
+    return
+  end
   sendLabels()
   sendView(g, s)
+end
+
+-- earthGlobe's update, right after it set this frame's pose: the labels drawn with it (maplabels3d.lua)
+function M.drawLabels(pos, rot, fov)
+  if not active or not M.LABELS_IMGUI then return end
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  local s = g and M.state()
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if not g or not s or not s.lat or not a then return end
+  local ox, oy, oz = 0, 0, -6371000
+  if a.ecefToEnu then ox, oy, oz = a:ecefToEnu(0, 0, 0) end
+  local t = os.clock()
+  local dt = labels.drawAt and math.min(0.1, t - labels.drawAt) or 0.016
+  labels.drawAt = t
+  local q = quat(rot)
+  local ok, err = pcall(require('beamngEarth/maplabels3d').draw, {p = vec3(pos), f = q * vec3(0, 1, 0),
+    u = q * vec3(0, 0, 1), r = q * vec3(1, 0, 0), fov = fov, zoom = viewZoom(g, s), O = vec3(ox, oy, oz)}, labels.rows, dt)
+  if not ok and not labels.drawErr then labels.drawErr = true; log_('E', 'labels: ' .. tostring(err)) end
+end
+
+-- ---- flying to a place (the user, 2026-11-07: "if you serch for a place dont just teliport the camera but smoothly
+-- zoom it from 1 place to another"): out and over and down, as map apps: along the great circle, the distance rising
+-- with how far the trip is and coming down at the end (log scale), eased.
+M.FLY_MIN_S, M.FLY_MAX_S = 1.6, 5.0
+local fly = nil
+
+local function unitOf(lat, lon)
+  local la, lo = math.rad(lat), math.rad(lon)
+  return vec3(math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la))
+end
+
+-- Pure: the camera's (lat, lon, dist) s of the way (0..1, eased already) along a flight f. The height changes late
+-- when coming down and early when going up (the first try came down at once and crossed the ocean low, 2026-11-07):
+-- t is the flight's own time (0..1) for that.
+function M.flyAt(f, s, t)
+  t = t or s
+  local a, b = unitOf(f.lat0, f.lon0), unitOf(f.lat1, f.lon1)
+  local om = math.acos(math.max(-1, math.min(1, a:dot(b))))
+  local p
+  if om < 1e-6 then p = a else
+    p = a * (math.sin((1 - s) * om) / math.sin(om)) + b * (math.sin(s * om) / math.sin(om))
+  end
+  local lat = math.deg(math.asin(math.max(-1, math.min(1, p.z / p:length()))))
+  local lon = math.deg(math.atan2(p.y, p.x))
+  local l0, l1 = math.log(f.d0), math.log(f.d1)
+  local bump = math.max(0, math.log(f.peak) - math.max(l0, l1))
+  local h = (l1 < l0) and t ^ 2.5 or (1 - (1 - t) ^ 2.5)
+  return lat, lon, math.exp(l0 + (l1 - l0) * h + bump * 4 * s * (1 - s))
+end
+
+-- fly the view to (lat, lon), ending dist m from it (default: the current distance, at most 4 km)
+function M.flyTo(lat, lon, dist)
+  lat, lon = tonumber(lat), tonumber(lon)
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  if not active or not g or not lat or not lon then return false end
+  local d1 = tonumber(dist) or math.min(g.dist, 4000)
+  local a, b = unitOf(g.lat, g.lon), unitOf(lat, lon)
+  local km = math.acos(math.max(-1, math.min(1, a:dot(b)))) * 6371
+  local peak = math.min(8000000, math.max(g.dist, d1, km * 1000 * 0.9))
+  fly = {lat0 = g.lat, lon0 = g.lon, d0 = math.max(15, g.dist), lat1 = lat, lon1 = lon, d1 = d1, peak = peak, t = 0,
+    dur = math.max(M.FLY_MIN_S, math.min(M.FLY_MAX_S, 1.2 + 0.9 * math.log10(1 + km)))}
+  return true
+end
+
+function M.cancelFly() fly = nil end
+function M.flying() return fly ~= nil end
+
+local function flyStep(g, dt)
+  if not fly then return end
+  fly.t = fly.t + dt / fly.dur
+  local t = math.min(1, fly.t)
+  local s = t * t * (3 - 2 * t)
+  g.lat, g.lon, g.dist = M.flyAt(fly, s, t)
+  if t >= 1 then fly = nil end
+end
+
+-- ---- the GPS route on the 3D map (the 2D map's line, drawn in the world: settings.uiGpsRoute)
+local route = {version = nil, pts = nil, world = nil, anchor = nil, check = 0}
+local routeColor = nil
+local function drawRoute(a, dt)
+  route.check = route.check - dt
+  if route.check <= 0 then
+    route.check = 1
+    local stg = rawget(_G, 'beamngEarth_settings')
+    local r = stg and stg.uiGpsRoute and stg.uiGpsRoute() or nil
+    if not r or not r.points then route.version, route.pts, route.world = nil, nil, nil
+    elseif r.version ~= route.version then
+      route.version, route.pts, route.world = r.version, r.points, nil
+    end
+  end
+  if not route.pts then return end
+  if route.world == nil or route.anchor ~= a then
+    route.world, route.anchor = {}, a
+    for _, p in ipairs(route.pts) do
+      local la, lo = tonumber(p[1] or p['1']), tonumber(p[2] or p['2'])
+      if la and lo then
+        local x, y, z = a:geodeticToEnu(la, lo, 0)
+        local gz = be and be:getSurfaceHeightBelow(vec3(x, y, z + 9000))
+        if gz and gz == gz and gz > z - 600 and gz < z + 9000 then z = gz end
+        route.world[#route.world + 1] = vec3(x, y, z + 3)
+      end
+    end
+  end
+  routeColor = routeColor or ColorF(0.16, 0.55, 1, 0.95)
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  local w = math.max(3, math.min(40, (g and g.dist or 1000) * 0.0015))      -- (px-ish: wider from higher up)
+  for i = 2, #route.world do
+    debugDrawer:drawLineInstance(route.world[i - 1], route.world[i], w, routeColor)
+  end
+end
+
+-- the screen's GPS buttons: a route to the view's target / none
+function M.gpsHere(name)
+  local s = M.state()
+  local stg = rawget(_G, 'beamngEarth_settings')
+  if not s.lat or not stg or not stg.uiMapGps then return {ok = false} end
+  return stg.uiMapGps(s.lat, s.lon, name or '')
 end
 
 -- The world's origin follows the view (the user, 2026-11-07: zooming into a spot a continent away "the screen stays
@@ -417,9 +552,23 @@ end
 -- 'view', on the teleport grid: the frame only, ~0.1 s; the car and its block stay in their own frame, hidden, and
 -- the world goes back there before the map closes: returning).
 M.REBASE_M = 100000
-M.REBASE_EYE_MAX_M = 1500000    -- (higher up the whole earth is in view: the origin stays, no far field rebuilt)
+M.REBASE_EYE_SHARE = 0.25       -- high up only once the target is this share of the eye's height away (the whole earth
+                                -- in view; over the far side of the earth from the origin the sky and the tiles went
+                                -- wrong, the user 2026-11-07: the globe turned "under the horizon line")
 M.REBASE_EVERY_S = 3
 local lastRebase = -1e9
+
+-- the view's target's great-circle distance from the world's origin (m): its x / y on the origin's plane shrink again
+-- past a quarter of the earth (the far side's point lies under the origin)
+local function anchorDistance(g)
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if not a or not g.lat then return 0 end
+  local p1, p2 = math.rad(a.lat), math.rad(g.lat)
+  local dl = math.rad(g.lon - a.lon)
+  local h = math.sin((p2 - p1) / 2) ^ 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ^ 2
+  return 2 * 6371000 * math.asin(math.min(1, math.sqrt(h)))
+end
 
 local clock = 0
 -- No sun shadows from high up (the user, 2026-11-07: "this shadow map box that follows underneath the camera when
@@ -464,6 +613,12 @@ function M.onUpdate(dtReal)
   local g = core_camera.getGlobalCameras()[M.CAMERA]
   if not g then return end
   local s = M.state()
+  flyStep(g, dtReal or 0.016)
+  do
+    local core = rawget(_G, 'beamngEarth_core')
+    local a = core and core._state and core._state().anchor
+    if a then pcall(drawRoute, a, dtReal or 0.016) end
+  end
   if returning then
     if not viewFramed() then
       local r = returning
@@ -473,9 +628,8 @@ function M.onUpdate(dtReal)
     end
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.returnToCar then core.returnToCar() end
-  elseif not transitioning and g.target and clock - lastRebase > M.REBASE_EVERY_S
-      and g.dist * math.sin(g.pitch) < M.REBASE_EYE_MAX_M
-      and g.target.x * g.target.x + g.target.y * g.target.y > M.REBASE_M * M.REBASE_M then
+  elseif not transitioning and g.target and clock - lastRebase > M.REBASE_EVERY_S and not M.flying()
+      and anchorDistance(g) > math.max(M.REBASE_M, M.REBASE_EYE_SHARE * g.dist * math.sin(g.pitch)) then
     local core = rawget(_G, 'beamngEarth_core')
     if core and core.rebaseTo and s.lat then
       local sLat, sLon = require('beamngEarth/geodesy').snapAnchor(s.lat, s.lon)

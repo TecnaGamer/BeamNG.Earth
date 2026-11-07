@@ -197,6 +197,10 @@ function C:update(data)
   data.res.rot:set(rot)
   data.res.fov = self.fov
   data.res.nearClip = clamp(self.dist * 0.002, 0.1, 2000)
+  -- the map's labels with this very pose, the one this frame renders with (map3d.drawLabels: from the extensions'
+  -- onPreRender they could come before this update, a frame behind the ground)
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.drawLabels then pcall(m3.drawLabels, pos, rot, self.fov) end
   return true
 end
 
