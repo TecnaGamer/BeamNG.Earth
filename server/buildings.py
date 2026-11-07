@@ -2962,6 +2962,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         if pr_ is not None:
                             ship_parts.append((pr_, p[1]))
                     bparts = None
+            outline_h = None
+            if bparts and all(p[1] is None for p in bparts):
+                # parts without heights (a dome's, a tower's) on a building whose height is theirs, the levels its
+                # body's: the parts up to the height, the outline at its levels (the Maryland State House, 54 m to the
+                # lantern over 3 storeys, came out a 54 m block, 2026-11-07)
+                bh, nf = at.get("height"), at.get("num_floors")
+                if bh is not None and np.isfinite(bh) and nf is not None and np.isfinite(nf) and nf >= 1 \
+                        and (nf + 1) * FLOOR_M < bh \
+                        and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN:
+                    bparts = [(p[0], (float(bh), 0.0)) + tuple(p[2:]) for p in bparts]
+                    outline_h = float(nf) * FLOOR_M
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -3002,6 +3013,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
                     continue
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
+                if outline_h is not None:
+                    at = dict(at, height=outline_h, roof_height=None)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
                 continue
