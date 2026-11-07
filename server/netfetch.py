@@ -208,6 +208,10 @@ POLICIES = {
        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com",
                  "dataforgood-fb-data.s3.amazonaws.com",
                  "copernicus-dem-30m.s3.amazonaws.com")},      # the polar caps' DEM (polardem.py)
+    # EU crop map (cropmap.py): range reads of two big GeoTIFFs on the JRC open-data server, kept on disk; optional
+    "jeodpp.jrc.ec.europa.eu": HostPolicy(rate=5.0, burst=10.0, max_conc=2, daily_budget=3000, allow_prefetch=True,
+                                          offline_ok=True, miss_ttl=None, binary=True, timeout=40.0, max_attempts=2,
+                                          base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
     # British Columbia's lidar DEMs (lidarbc.py): range reads of the Province's open bucket; optional
     "nrs.objectstore.gov.bc.ca": HostPolicy(rate=20.0, burst=40.0, max_conc=6, daily_budget=None, allow_prefetch=True,
                                             offline_ok=True, miss_ttl=None, binary=True, timeout=30.0, optional=True),
@@ -328,6 +332,7 @@ ROLES = {
     "esa-worldcover.s3.eu-central-1.amazonaws.com":
         "land cover (ground materials, rocks, town streets); places not visited before get a plain ground meanwhile",
     "dataforgood-fb-data.s3.amazonaws.com": "the trees; places not visited before have none meanwhile",
+    "jeodpp.jrc.ec.europa.eu": "which crop grows in each field (Europe); fields look plain meanwhile",
     "gis.ngdc.noaa.gov": "sea depths; new coasts get a plain sloping sea floor meanwhile",
     "davidmegginson.github.io": "the airport list; the copy on disk is used meanwhile",
     "data.openstreetmap.us": "road details from OpenStreetMap (lanes, widths, sidewalks); estimated meanwhile",

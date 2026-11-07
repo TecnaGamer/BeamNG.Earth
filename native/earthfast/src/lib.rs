@@ -5,6 +5,7 @@ mod s3url;
 mod countrymap;
 mod carriageway_solver;
 mod carriageways;
+mod cropfield;
 mod spaceclouds;
 mod cdaez;
 mod clearance;
@@ -5522,7 +5523,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<clearance::DeckLevels>()?;
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
-    m.add("VERSION", 158)?;
+    m.add_function(wrap_pyfunction!(cropfield::crop_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(cropfield::crop_paint, m)?)?;
+    m.add_function(wrap_pyfunction!(cropfield::crop_sample, m)?)?;
+    m.add("VERSION", 161)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())

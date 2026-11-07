@@ -978,6 +978,58 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
 - A second TerrainBlock (even 5 km away with disableCollision) drops the player's vehicle through the
   ground at once (in-game, twice): never create one while a vehicle is in the world.
 
+## Crop fields (`server/cropmap.py`, `native/earthfast/src/cropfield.rs`, `groundcover.lua`; opt-in `BNE_CROPS=1`, 2026-11-05)
+- What a field grows comes from the JRC's EU crop map (EUCROPMAP 2022, 10 m, CC BY 4.0): two tiled LZW BigTIFFs in
+  EPSG:3035 (EU27, 6.8 GB; Ukraine, 1.0 GB) read by byte range (`rangeread.RemoteFile` + `cog.Cog`, 512-px windows, ~1 s
+  cold for a 5 km window, then from disk). The photo alone cannot tell the crops apart (Hradec: wheat, maize, beet and
+  soya all ~(70, 72, 45), class spread larger than the gap between classes), the map can. Elsewhere nothing changes.
+- `cropmap.fold` folds the 19 JRC codes into visual groups (cereal, maize, sunflower, rape, root, fodder, rice, bare,
+  pulse). `cropfield.crop_grid` cleans a 10 m group grid (3 x 3 majority, patches under 6 cells dropped), gives each
+  field its row axis (long axis of its patch) and a phase hashed from where it is; the grid's cells sit on a lattice of
+  the frame, so the photo, the ground layers and neighbouring blocks read the same points.
+- Photo (`surface.photo_crops`, `cropfield.crop_paint`, run in `paint_square` instead of `photo_fields` where the map has
+  a field): the photo's colours are kept; rows (maize, sunflower, roots), tramlines (cereal, rape), ploughed furrows
+  (bare, or little green over ~16 m) and a grain of world-anchored noise are multiplied in. Greenness decides plants
+  against furrows. Pattern periods fade out when a texel is coarser than a third of them. ~70 ms for a 2048² photo.
+- Ground layers (`surface.paint_crops`): grass / dusty / loose / lawn / dirt samples inside a field become one of four
+  crop layers (`bngEarthCropCereal | Maize | Sunflower | Broad | Root`), by the same lookup (`crop_sample`), so a plant
+  stands where the photo draws its crop. Where the map names the crop for sure (the cell keeps its class with 6 of its
+  3 x 3 neighbours agreeing: `cropfield.rs` `SURE_MIN`, `crop_grid`'s fourth array, `paint_crops(unsure=)`, kept in the
+  block's info as `cropUnsure`) the plants stand whatever the photo says, since the photo is one snapshot of another
+  season (a maize field of Vinnytsia reads grey-brown). Only where the map is unsure `photo_lawns` turns a crop layer
+  back into dirt where the photo is not green or ripe straw (`BNE_CROP_GREEN`, 0.075), and where the photo plainly shows
+  bare soil (ploughed land, stubble) below `BNE_CROP_BARE` (off until calibrated). A crop layer a block does not use
+  is neither written nor listed in its .ter.
+- Plants (`groundcover.ensureCrops`): one GroundCover with one type per atlas cell, each bound to its crop layer, made
+  when a block lists a crop layer; the atlas (`tools/make_crop_atlas.py`, procedural) is 2048² in `art/beamngEarth/crops/`.
+- Kernel VERSION 159. Not done: field edges (headlands), a shell for maize / sunflower taller than the grass distance,
+  crop types outside the EU and Ukraine (USDA CDL, WorldCover maize), a plant stage by date.
+
+## Grass underlay (`surface.py`, `terrain.lua`, `tools/make_grass_ai_assets.py`; 2026-11-05)
+- Grass objects (GroundCover) reach only 20-45 m; beyond them a grass sample is the aerial photo plus the terrain material's
+  detail / macro maps (the stock grass maps barely showed: pale CUZK hillsides read as sand). The grass layers now carry our
+  own maps (ChatGPT pictures, `tools/make_grass_ai_assets.py`, `art/beamngEarth/grass/ground/`): detail = dense blades seen
+  from above (`close`, `close_dry`; 2 m, fade out 50-90 m), macro = a meadow of the tone (8 m, in from 35-75 m), same file
+  naming and colour handling as the crop canopies (plain .png, luminance mean 0.5, part of the chroma kept).
+- Which tone a grass sample takes is PR #658's choice (`grass.py`, `grass_layers.py`: the photo's colour over 12 m, with
+  a halo, gives dry / light / lush weights; a deterministic hash of the world position picks one; the late photo
+  rewrites the .ter under a fresh name and the mod re-reads it, `grassRefresh`). Its layers are ours to look at:
+  `bngEarthGroundGrass` (lush) keeps `close` + `lush`, `GrassLight` (light green) takes `close_dry` + `dry` (green with
+  gold), `GrassDry` takes `close_dry` + `hay` (burnt-out straw); the shrub palettes keep the dusty look. `Pasture` (mown
+  stripes) is a layer of its own, from the crop map, outside the palettes. The .ter lists only the layers a block uses.
+  (Before #658 was taken in, a tone of our own was picked by `photo_lawns` from excess green over 8 m, with Dry and
+  Hay listed beside every grass sample, +2 materials a block; that is gone.)
+- Every detail / macro map of the terrain material set must be 1024 x 1024 (`TerrainCellMaterial ... dont have required
+  size`): 256 px roughness / AO maps made the engine drop the materials (flat grey ground, 2026-11-05).
+- Colour: the maps keep little of the pictures' colour (macro chroma 0.3, level 0.36-0.40 so they darken; the close
+  detail 0.6 / 0.5) and get a blue lift (the greens have almost no blue: lime). Stronger colour read as neon salad green
+  and sun-struck far slopes (the user, 2026-11-05).
+- `Pasture` comes from the crop map: EUCROPMAP code 500 (grass) on land the land cover calls bare / dusty / cropland
+  (`CropMap.sample(grass=True)`, `Surface.grass_fields`, `surface.paint_grass_fields` inside `paint_crops`), not the
+  Rust field filter (it counts ten groups). The land cover's own grass stays grass.
+- `groundcover.lua` DEFS: #658's families per palette layer, short stock grass on Pasture and on the crop layers near the car.
+- Not done: the tunnel soil material (`bne_tunnel_soil`) still uses the stock grass map; no per-tone grass objects of our own.
+
 ## Roads (`server/roads.py`, `roads.lua`; `earthd --roads on`, 2026-10-11)
 - Tiles: 256 m squares of the anchor's ENU frame. The connection's `roads.Tracker` keeps the tiles
   within 640 m of the player sent and drops those beyond 960 m. A worker builds each tile from the

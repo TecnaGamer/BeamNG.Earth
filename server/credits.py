@@ -103,7 +103,7 @@ FEATURES = {
     "map:Overture": "Overture Maps", "map:OpenStreetMap": "OpenStreetMap", "map:Microsoft ML Buildings": "Microsoft",
     "map:TomTom": "TomTom", "map:Esri Community Maps": "Esri", "map:Google Open Buildings": "Google",
     "map:USGS Lidar": "USGS Lidar", "map:doi:10.5281/zenodo.8174931": "Shi et al. (East Asia buildings)",
-    "land:esa-worldcover": "ESA WorldCover", "canopy:meta-wri-chm": "Meta & WRI",
+    "land:esa-worldcover": "ESA WorldCover", "crops:eucropmap": "EU crop map (JRC)", "canopy:meta-wri-chm": "Meta & WRI",
     "canopy:lidarbc-chm": "LidarBC (OGL-BC)",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
@@ -217,6 +217,14 @@ def feature_ids(conn):
                 elif pid == "lidarbc-chm":
                     ids.add("canopy:lidarbc-chm")
                     ids.add("canopy:meta-wri-chm")
+    try:                            # (BNE_CROPS: the crop types of the fields come from the JRC's EU crop map)
+        import cropmap
+        import surface as surfacemod
+        if surfacemod.CROPS_ON and getattr(s, "surface", None) is not None and cropmap.covers(
+                np.array([lat]), np.array([lon])):
+            ids.add("crops:eucropmap")
+    except Exception:
+        pass
     sea = getattr(conn, "sea_sent", None)
     if sea and sea[0] == conn.active and sea[1] and sea[1][0]:
         ids.add("sea:noaa")

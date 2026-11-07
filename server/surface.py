@@ -27,7 +27,7 @@ import time
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFilter
 
 import fast
 import mapgeom
@@ -60,10 +60,26 @@ MATERIALS = (
     ("bngEarthGroundGolfFairway", "GRASS"),
     ("bngEarthGroundGolfGreen", "GRASS"),
     ("bngEarthGroundGolfBunker", "SAND"),
-    ("beamngEarthDirt", "DIRT"),
+    # Vegetation palettes retain the base surface's physics. The photo's colour picks one of them for a grass or shrub
+    # sample (grass_layers.apply): each selects its own GroundCover family (groundcover.lua) and, for grass, its own
+    # detail / macro textures (docs/new/013_grass-underlay; ChatGPT pictures, tools/make_grass_ai_assets.py)
+    ("bngEarthGroundGrassDry", "GRASS"),          # golden / tan dry grass (pale straw underlay)
+    ("bngEarthGroundGrassLight", "GRASS"),        # light green, transitional (green mixed with gold underlay)
+    ("bngEarthGroundDustyLight", "DIRT_DUSTY"),
+    ("bngEarthGroundDustyLush", "DIRT_DUSTY"),
+    ("bngEarthGroundPasture", "GRASS"),           # a mapped grass field (EUCROPMAP grassland): mown stripes
+    # crop fields (cropfield.rs, docs/new/008_crop-fields; only where BNE_CROPS is on and the crop map covers): each a
+    # dirt ground model, a layer of its own so groundcover.lua can plant that crop on it and nothing else
+    ("bngEarthCropCereal", "DIRT"),         # wheat, barley, rye, oats ... (and fodder, rice)
+    ("bngEarthCropMaize", "DIRT"),
+    ("bngEarthCropSunflower", "DIRT"),
+    ("bngEarthCropBroad", "DIRT"),          # rape
+    ("bngEarthCropRoot", "DIRT"),           # sugar beet and other roots, soya, pulses
+    ("beamngEarthDirt", "DIRT"),            # the default goes last (a tie between masks picks the later layer)
 )
-ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT = range(len(MATERIALS))
+(ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER,
+ GRASS_DRY, GRASS_LIGHT, DUSTY_LIGHT, DUSTY_LUSH, PASTURE,
+ CROP_CEREAL, CROP_MAIZE, CROP_SUNFLOWER, CROP_BROAD, CROP_ROOT, DIRT) = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -905,7 +921,11 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False):
     roads = _square_roads(frame, x0, y0, size, surface)
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
         feats = _square_lots(frame, x0, y0, size, surface)
-        rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
+        drawn = False
+        if CROPS_ON:
+            rgb, drawn = photo_crops(rgb, frame, x0, y0, size, surface, roads, getattr(surface, "urban", None), widths)
+        if not drawn:
+            rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
         rgb = photo_golf(rgb, frame, x0, y0, size, feats)
         rgb = photo_lots(rgb, frame, x0, y0, size, feats)
         rgb = photo_pads(rgb, frame, x0, y0, size, _square_pads(frame, x0, y0, size, surface))     # (under the roads)
@@ -976,7 +996,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.5
-VERGE_FROM = (GRASS, LAWN, DUSTY)
+VERGE_FROM = (GRASS, LAWN, DUSTY, PASTURE)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1298,6 +1318,164 @@ def _farmland(feats):
     return None if cls is None else np.isin(np.asarray(cls).astype(str), list(FARM_CLASSES))
 
 
+# Crop fields from the EU crop map (cropmap.py; docs/new/008_crop-fields). Off unless BNE_CROPS=1: it draws every
+# field of a covered place in the ground photo (rows, tramlines, furrows by crop and greenness: cropfield.rs) instead
+# of photo_fields' stripes. Places the crop map does not cover keep the stripes.
+CROPS_ON = os.environ.get("BNE_CROPS", "0") == "1"
+CROP_CELL_M = 10.0              # the crop map's pixel
+CROP_MARGIN_M = 150.0           # the group grid reaches this far past the photo, so a field cut by the edge keeps its axis
+
+
+def photo_crops(rgb, frame, x0, y0, size, surface, roads=None, urban_fn=None, widths=None):
+    """(rgb with the crop map's fields drawn in, True), or (rgb, False) when the crop map has no field in the square
+    (not covered, not reachable now, or no arable land). Pure: rgb is not changed."""
+    sampler = getattr(surface, "crop_groups", None)
+    if sampler is None or rgb is None or size <= 0:
+        return rgb, False
+    h, w = rgb.shape[:2]
+    if h == 0 or w == 0:
+        return rgb, False
+    got = crop_grid_for(frame, x0, y0, x0 + size, y0 + size, sampler)
+    if got is None:
+        return rgb, False
+    (filt, ang, ph, _), geo = got
+    e0, n0 = geo[3], geo[4]
+    dirt = _dirt_road_mask(frame, x0, y0, size, h, w, roads or [], urban_fn, widths)
+    dirt = np.zeros((0, 0), np.uint8) if dirt is None else np.ascontiguousarray(dirt, np.uint8)
+    out = np.ascontiguousarray(rgb, np.uint8).copy()
+    fast._ef.crop_paint(out, filt, ang, ph, [x0, y0 + size, size / float(w), e0, n0, CROP_CELL_M], dirt)
+    return out, True
+
+
+# crop group (cropmap.GROUP_NAMES order) -> ground layer; the layer replaces only these (a road, rock, water, snow stay)
+CROP_LAYERS = (CROP_CEREAL, CROP_MAIZE, CROP_SUNFLOWER, CROP_BROAD, CROP_ROOT)
+# A crop layer's plants stand on the crop the map names, in its season (the photo is one snapshot, taken before the crop
+# came up or after the harvest: a maize field of Vinnytsia read grey-brown). The photo's excess green
+# (2g - r - b) / (r + g + b) overrules the map only in two cases (the user, 2026-11-07):
+#  - a map cell it is not sure of (cropfield.rs SURE_MIN: a ragged edge, a noisy area; paint_crops `unsure`): the plants
+#    stand where the photo is at least CROP_GREEN green (BNE_CROP_GREEN; -1 keeps them everywhere);
+#  - a photo that clearly shows bare soil (ploughed land, stubble: ČÚZK's photos), below CROP_BARE (BNE_CROP_BARE; -1 off).
+CROP_GREEN = float(os.environ.get("BNE_CROP_GREEN", "0.075"))
+CROP_BARE = float(os.environ.get("BNE_CROP_BARE", "-1"))
+CROP_LAYER = {1: CROP_CEREAL, 2: CROP_MAIZE, 3: CROP_SUNFLOWER, 4: CROP_BROAD, 5: CROP_ROOT, 6: CROP_CEREAL,
+              7: CROP_CEREAL, 8: DIRT, 9: CROP_ROOT}
+CROP_REPLACES = (GRASS, DUSTY, LOOSE, LAWN, DIRT)
+
+
+def crop_grid_for(frame, e_min, n_min, e_max, n_max, sampler):
+    """((cleaned group grid, row angles, phases, sure flags), its geo [x0, ytop, px_m, ge0, gn0, cell_m]) over the frame
+    rectangle plus the margin, or None when the crop map has no field in it."""
+    # the grid's cells sit on a fixed lattice of the frame (multiples of CROP_CELL_M), so every window that reads the
+    # same ground samples the same points: the photo and the ground layers agree, and so do neighbouring blocks
+    e0 = math.floor((e_min - CROP_MARGIN_M) / CROP_CELL_M) * CROP_CELL_M
+    n0 = math.ceil((n_max + CROP_MARGIN_M) / CROP_CELL_M) * CROP_CELL_M
+    cols = int(math.ceil((e_max + CROP_MARGIN_M - e0) / CROP_CELL_M))
+    rows = int(math.ceil((n0 - (n_min - CROP_MARGIN_M)) / CROP_CELL_M))
+    ee = e0 + (np.arange(cols) + 0.5) * CROP_CELL_M
+    nn = n0 - (np.arange(rows) + 0.5) * CROP_CELL_M
+    E, N = np.meshgrid(ee, nn)
+    la, lo, _ = frame.enu_to_geodetic(E.ravel(), N.ravel(), np.zeros(E.size))
+    groups = sampler(np.asarray(la).reshape(rows, cols), np.asarray(lo).reshape(rows, cols))
+    if groups is None or not groups.any():
+        return None
+    fast.require(161, "crop_grid / crop_sample")
+    filt, ang, ph, sure = fast._ef.crop_grid(np.ascontiguousarray(groups, np.uint8), CROP_CELL_M, e0, n0)
+    if not filt.any():
+        return None
+    return (filt, ang, ph, sure), [e_min, n_max, 0.0, e0, n0, CROP_CELL_M]
+
+
+def paint_crops(idx, frame, lat, lon, surface, unsure=None):
+    """idx (material per ground sample) with the crop map's fields as their crop layers (CROP_LAYER), replacing only
+    grass, dusty, loose, lawn and dirt ground. The same lookup as the photo's rows (cropfield.rs), so the plants a layer
+    carries stand where the photo draws that crop. Pure (idx is not changed); idx itself where there is nothing to paint.
+    unsure: a list; when given, the packed mask (pack_unsure) of the samples painted from a cell the map is not sure of
+    (cropfield.rs SURE_MIN) is appended to it, for photo_lawns."""
+    sampler = getattr(surface, "crop_groups", None)
+    if sampler is None:
+        return idx
+    e, n, _ = frame.geodetic_to_enu(np.asarray(lat).ravel(), np.asarray(lon).ravel(), np.zeros(np.asarray(lat).size))
+    e, n = np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64)
+    got = crop_grid_for(frame, float(e.min()), float(n.min()), float(e.max()), float(n.max()), sampler)
+    out = idx
+    if got is not None:
+        (filt, _, _, sure), geo = got
+        g, sure_at = fast._ef.crop_sample(filt, sure, e, n, geo)
+        g, sure_at = g.reshape(np.asarray(idx).shape), sure_at.reshape(np.asarray(idx).shape)
+        lut = np.zeros(16, np.uint8)
+        for k, v in CROP_LAYER.items():
+            lut[k] = v
+        layer = lut[g]
+        ok = (g > 0) & np.isin(idx, CROP_REPLACES)
+        if ok.any():
+            out = idx.copy()
+            out[ok] = layer[ok]
+            if unsure is not None and (ok & (sure_at == 0)).any():
+                unsure.append(pack_unsure(ok & (sure_at == 0)))
+    return paint_grass_fields(out, lat, lon, surface)
+
+
+def pack_unsure(mask):
+    """A bool grid as (shape, bits): a block's mask of unsure crop samples travels with its info (33 KB, not 260)."""
+    mask = np.asarray(mask, bool)
+    return mask.shape, np.packbits(mask.ravel())
+
+
+def unpack_unsure(packed):
+    """pack_unsure's bool grid, or None for None."""
+    if packed is None:
+        return None
+    shape, bits = packed
+    return np.unpackbits(bits, count=int(shape[0]) * int(shape[1])).astype(bool).reshape(shape)
+
+
+PASTURE_FROM = (DIRT, DUSTY, LOOSE)      # farmland the land cover calls bare / dusty: a mapped grass field there is pasture
+
+
+def paint_grass_fields(idx, lat, lon, surface):
+    """idx with the crop map's grass fields (EUCROPMAP "grassland" on land the land cover has as cropland or bare: a meadow
+    that is mown or grazed, not a wild one) as PASTURE, the grass layer with mown stripes (its tone follows the photo,
+    photo_lawns). Roads, rock, water, snow and the land cover's own grass stay as they are. Pure; idx itself where
+    there is nothing to paint."""
+    sampler = getattr(surface, "grass_fields", None)
+    if sampler is None:
+        return idx
+    mask = np.asarray(sampler(lat, lon), bool).reshape(np.asarray(idx).shape)
+    ok = mask & np.isin(idx, PASTURE_FROM)
+    if not ok.any():
+        return idx
+    out = idx.copy()
+    out[ok] = PASTURE
+    return out
+
+
+CROP_ROAD_MARGIN_M = float(os.environ.get("BNE_CROP_ROAD_MARGIN", "3.0"))   # m: no crop layer this close to a road's paint
+
+
+def crop_road_margin(idx, with_crops, pre_crops, margin_m=None):
+    """idx (after the roads were painted over with_crops, the layer map paint_crops made out of pre_crops) with the crop layers
+    taken away again within margin_m of the painted roads: the ground there is what it was before the crops (grass, dirt),
+    so the verge has no crop soil and no crop plants (the user, 2026-11-05); bare dirt there turns grass (the stock grass grows on it).
+    Pure; idx itself where nothing changes."""
+    margin = CROP_ROAD_MARGIN_M if margin_m is None else margin_m
+    if pre_crops is None or with_crops is None or margin <= 0:
+        return idx
+    roads = np.asarray(idx) != np.asarray(with_crops)          # the samples the roads painted
+    crop = np.isin(idx, CROP_LAYERS)
+    if not roads.any() or not crop.any():
+        return idx
+    r = int(math.ceil(margin / heightmap.SQUARE))
+    near = np.asarray(Image.fromarray(roads.astype(np.uint8) * 255, "L").filter(ImageFilter.MaxFilter(2 * r + 1))) > 0
+    back = near & crop
+    if not back.any():
+        return idx
+    out = np.array(idx, copy=True)
+    pre = np.asarray(pre_crops)
+    # what the ground was before the crops, but bare dirt (cropland is dirt) becomes grass: a weedy verge with the stock grass
+    out[back] = np.where(pre[back] == DIRT, GRASS, pre[back])
+    return out
+
+
 def lots_mask(frame, x0, y0, size, px, feats_list):
     """The parking lots' coverage (px x px uint8, 255 inside) of a tile photo's square, or None."""
     return pads_mask(frame, x0, y0, size, px, lot_pads(feats_list))
@@ -1365,7 +1543,12 @@ def write_masks(idx, out_dir, stem):
     """One 0/255 greyscale PNG per material (rows as the heightmap's: row 0 = north), written
     atomically. Returns the file names (in out_dir), in MATERIALS order."""
     names = mask_names(stem)
+    listed = {i: True for i in used_materials(idx)}
     for i, name in enumerate(names):
+        if i in CROP_LAYERS and not (idx == i).any():
+            continue            # (a layer no sample uses is not listed in the .ter either: used_materials)
+        if i == PASTURE and not listed.get(i, False):
+            continue
         path = os.path.join(out_dir, name)
         tmp = staging.tmp_for(path)
         Image.fromarray(np.where(idx == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
@@ -1376,15 +1559,18 @@ def write_masks(idx, out_dir, stem):
 SNOW_BRIGHT = 165           # mean of r, g, b of the ground photo (0-255) from which a snow candidate stays snow, ...
 SNOW_GREY = 40              # ... with at most this spread between its channels (white, not pale scree)
 LAWN_GREEN = 10             # 2g - r - b of the ground photo above which a lawn candidate stays a lawn
+PALETTE_LAYERS = (GRASS_DRY, GRASS_LIGHT, DUSTY_LIGHT, DUSTY_LUSH)    # grass_layers.apply picks them by the photo
 
 
-def photo_lawns(out_dir, ter_name, mask_names_, rgb):
+def photo_lawns(out_dir, ter_name, mask_names_, rgb, unsure=None):
     """Detail mode: the block's LAWN samples where the ground photo (rgb (px, px, 3), row 0 = north, the
     block's footprint) is not green turn DIRT (paved yards, lots and driveways: the grass layer's blades
     over a pale photo looked like snow, Lancaster 2026-10-14). Patches the .ter's layer map and the two
     masks in place, atomically. Returns the number of samples changed. Likewise SNOW (WorldCover "snow and ice")
     where the photo is not snow-white turns LOOSE scree (the Stelvio Pass's summit in late summer: the snow layer's
-    white blur where the orthophoto has grey-brown gravel, the user's reports #40 / #44, 2026-10-17)."""
+    white blur where the orthophoto has grey-brown gravel, the user's reports #40 / #44, 2026-10-17). A crop layer turns
+    DIRT where the photo does not carry it (CROP_GREEN, CROP_BARE); unsure: paint_crops' packed mask of samples its map
+    cell is not sure of."""
     path = os.path.join(out_dir, ter_name)
     with open(path, "rb") as f:
         data = bytearray(f.read())
@@ -1407,7 +1593,8 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
     lay = to_glob[lay]
     lawn = lay == LAWN
     snow = lay == SNOW
-    if not lawn.any() and not snow.any():
+    crop = np.isin(lay, CROP_LAYERS)
+    if not lawn.any() and not snow.any() and not crop.any():
         return 0
     px = rgb.shape[0]
     rows = np.clip(((n - 1 - np.arange(n)) + 0.5) * px / n, 0, px - 1).astype(np.int64)
@@ -1416,7 +1603,13 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
     exg = 2 * c[:, :, 1] - c[:, :, 0] - c[:, :, 2]
     green = exg > LAWN_GREEN
     white = (c.mean(2) >= SNOW_BRIGHT) & (c.max(2) - c.min(2) <= SNOW_GREY)
-    bare = lawn & ~green
+    # a crop layer's plants stand where the map names the crop for sure, unless the photo is plainly bare soil; where the
+    # map is unsure they stand only on green or ripe straw (CROP_*): elsewhere the layer is plain dirt and nothing grows
+    exg_n = exg / np.maximum(c.sum(2), 1)
+    guess = unpack_unsure(unsure)
+    guess = np.zeros_like(crop) if guess is None or guess.shape != crop.shape else guess
+    fallow = crop & np.where(guess, exg_n < CROP_GREEN, exg_n < CROP_BARE)
+    bare = (lawn & ~green) | fallow
     scree = snow & ~white
     if to_local[DIRT] == heightmap.TER_HOLE:
         bare[:] = False
@@ -1434,7 +1627,9 @@ def photo_lawns(out_dir, ter_name, mask_names_, rgb):
         f.write(data)
     staging.replace(tmp, path)
     north = lay[::-1]
-    for i in (LAWN, DIRT, SNOW, LOOSE):
+    for i in (GRASS, LAWN, DIRT, SNOW, LOOSE, PASTURE, *CROP_LAYERS):
+        if i in (GRASS, PASTURE) and to_local[i] == heightmap.TER_HOLE:
+            continue            # (a layer the .ter does not list has no mask file either)
         p = os.path.join(out_dir, mask_names_[i])
         tmp = staging.tmp_for(p)
         Image.fromarray(np.where(north == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)
@@ -1449,7 +1644,7 @@ def used_materials(idx):
     55-80 ms, three 80-180, all ten 250-560 ms in RenderShadows, whether a sample uses them or not)."""
     u = set(np.unique(np.asarray(idx, np.uint8)).tolist())
     u.discard(heightmap.TER_HOLE)
-    if LAWN in u:
+    if LAWN in u or u & set(CROP_LAYERS):
         u.add(DIRT)
     if SNOW in u:
         u.add(LOOSE)
@@ -1487,6 +1682,23 @@ class Surface:
 
     def close(self):
         self.pool.shutdown(wait=False)
+
+    def _crop_map(self):
+        if getattr(self, "_crops", None) is None:
+            import cropmap
+            with self._lock:
+                if getattr(self, "_crops", None) is None:
+                    self._crops = cropmap.CropMap(self.md.raw_dir, self.md.fetcher)
+        return self._crops
+
+    def crop_groups(self, lat, lon):
+        """The crop map's visual group (cropmap.GROUPS) at each point, uint8, 0 = none; None where it has no coverage
+        or the source is not reachable (the photo is then painted without it)."""
+        return self._crop_map().sample(lat, lon, "demand")
+
+    def grass_fields(self, lat, lon):
+        """Where the crop map says grassland (a bool array like lat; False where it has no coverage or is not reachable)."""
+        return self._crop_map().sample(lat, lon, "demand", grass=True) > 0
 
     def _cached(self, key):
         """The cell's land-cover Raster from the cache, None if absent (a fetch is queued) or no

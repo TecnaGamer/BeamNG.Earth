@@ -381,7 +381,7 @@ local function loadBlock(tr)
   if warn then warnOnce('height', 'terrain height scale: ' .. warn) end
   local layers = (type(tr.layers) == 'table' and type(tr.materials) == 'table')
     and { masks = tr.layers, materials = tr.materials } or nil -- server --surface on (surface.py)
-  if layers then groundcover.ensure() end
+  if layers then groundcover.ensure(); groundcover.ensureCrops(layers.materials) end
   -- detail mode: the block's aerial photo as its base colour (server write_base); else the level's
   -- (false: detail mode without a photo -> the level's flat base; nil: other modes, untouched)
   local base = nil
@@ -764,6 +764,9 @@ local function commitTerrain(msg)
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
   st.followCount = st.followCount + 1
+  -- The optional engine patch retains grass cells across terrain swaps. A new
+  -- environmental palette must invalidate those cells once, at this origin.
+  if msg.grassRefresh then groundcover.rebuild() end
   log('I', 'beamngEarth', string.format('terrain block now at (%d, %d), %.1f ms', msg.cx, msg.cy, st.lastFollowMs))
   return true
 end
@@ -936,7 +939,7 @@ function M.applyBaseLater()
   M._baseLater = nil
   local b = st.block
   if bl.anchorId ~= st.anchorId or not b or b.cx ~= bl.cx or b.cy ~= bl.cy or not FS:fileExists(bl.base) then return false end
-  terrain.setBase(bl.base, bl.size)
+  if bl.surface then commitTerrain(bl.surface) else terrain.setBase(bl.base, bl.size) end
   st.baseRefreshes = (st.baseRefreshes or 0) + 1
   return true
 end
@@ -1225,22 +1228,35 @@ local function onMessage(msg)
     -- in use takes it now, a ready one not committed yet takes it at its commit
     if nearVisual == 'detail' and msg.anchorId == st.anchorId and type(msg.base) == 'string' then
       local b, tp = st.block, st.terrainPending
+      local surface = type(msg.terrain) == 'table' and msg.terrain or nil
+      if surface and (surface.cx ~= msg.cx or surface.cy ~= msg.cy or surface.size ~= terrain.SIZE) then surface = nil end
+      if surface then surface.anchorId = msg.anchorId end
       if b and b.cx == msg.cx and b.cy == msg.cy and FS:fileExists(msg.base) then
         -- (a new base photo rebuilds every terrain material the next frame, as a block swap does: 55-140 ms, on
         -- Windows twice that. At speed the next block replaces this one in seconds, so the refresh waits until the
         -- car slows: M.applyBaseLater)
         -- (only a photo replacing another: a block taken without one (the level's flat brown base, its photo not
         -- ready at speed) takes its first at once; deferred, the ground stayed brown until the car slowed down)
+        -- The late photo can also select new GroundCover layers (`surface`): their compact .ter material table is
+        -- re-read together with the photo, before the grass is regenerated.
         local pl = st.player
         if pl and (pl.speed or 0) > M.BASE_LATER_MS and terrain.base() ~= nil then
-          M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize) }
+          M._baseLater = { anchorId = msg.anchorId, cx = msg.cx, cy = msg.cy, base = msg.base, size = tonumber(msg.baseSize),
+            surface = surface }
         else
           M._baseLater = nil
-          terrain.setBase(msg.base, tonumber(msg.baseSize))
+          if surface then
+            if windowMinimized() then st.deferredRefresh = surface else commitTerrain(surface) end
+          else
+            terrain.setBase(msg.base, tonumber(msg.baseSize))
+          end
           st.baseRefreshes = (st.baseRefreshes or 0) + 1
         end
       end
-      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then tp.msg.base = msg.base end
+      if tp and tp.msg and tp.msg.cx == msg.cx and tp.msg.cy == msg.cy then
+        if surface then for k, v in pairs(surface) do tp.msg[k] = v end end
+        tp.msg.base = msg.base
+      end
     end
   elseif t == 'ground_ahead' then
     -- the highest ground near the player's path (server groundahead.py): the altitude rule (follow.lua)

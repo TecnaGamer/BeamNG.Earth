@@ -67,11 +67,17 @@ local TEX_FIELDS = { 'aoBaseTex', 'aoBaseTexSize', 'aoDetailStrength', 'aoDetail
 -- size. Repeats in metres divide the 128 m block step (2 / 4 m detail, 32 / 64 m macro), or the pattern
 -- jumps under the car at every terrain move (the in-game finding noted in tools/make_level_assets.py).
 local T = '/assets/materials/terrain/'
-local function look(detail, dsize, macro, msize, strength)
+local function look(detail, dsize, macro, msize, strength, own)
   local l = { detailDistances = '0 0 50 80', macroDistances = '0 0 150 1500' }
-  for _, k in ipairs({ { 'baseColor', '_b' }, { 'normal', '_nm' }, { 'roughness', '_r' }, { 'ao', '_ao' } }) do
-    l[k[1] .. 'DetailTex'] = T .. detail .. k[2] .. '.png'
-    l[k[1] .. 'MacroTex'] = T .. macro .. k[2] .. '.png'
+  local crop = detail:sub(1, 1) == '/'      -- a crop's own canopy (art/beamngEarth/crops/ground): other file names, reaches far
+  if crop then      -- soil near (detail, gone by 40-70 m, where the plants end), canopy far (macro, in from 35-75 m)
+    l.detailDistances, l.macroDistances = '0 0 40 70', '35 75 600 2000'
+    if own and own.detailDistances then l.detailDistances = own.detailDistances end
+  end
+  for _, k in ipairs({ { 'baseColor', '_b', '_b' }, { 'normal', '_nm', '_nm.normal' }, { 'roughness', '_r', '_r.data' },
+                       { 'ao', '_ao', '_ao.data' } }) do
+    l[k[1] .. 'DetailTex'] = crop and (detail .. k[3] .. '.png') or (T .. detail .. k[2] .. '.png')
+    l[k[1] .. 'MacroTex'] = (macro:sub(1, 1) == '/') and (macro .. k[3] .. '.png') or (T .. macro .. k[2] .. '.png')
   end
   -- flat height textures: height-blended layer borders swirled across whole blocks between the land-cover
   -- classes (in-game 2026-10-12), so the borders follow the server's masks; never '' (an empty slot makes
@@ -85,8 +91,15 @@ local function look(detail, dsize, macro, msize, strength)
   l.baseColorDetailStrength = (strength or 0.25) .. ' 0.08'
   l.normalDetailStrength, l.roughnessDetailStrength, l.aoDetailStrength = '1 0.3', '1 0.4', '0.8 0.2'
   l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
+  if crop then      -- the soil takes over near, the canopy (strength = the 5th argument) far
+    l.baseColorDetailStrength = '0.7 0.08'
+    l.baseColorMacroStrength, l.normalMacroStrength = (strength or 0.8) .. ' ' .. (strength or 0.8), '0.8 0.5'
+    if own and own.detailStrength then l.baseColorDetailStrength = own.detailStrength end
+  end
   return l
 end
+local GRASS_DIR = '/art/beamngEarth/grass/ground/'
+local GRASS_OWN = { detailDistances = '0 0 50 90', detailStrength = '0.7 0.08' }   -- (the grass objects reach 20-45 m)
 local function golfLook(detail, dsize, macro, msize, near, far)
   local l = look(detail, dsize, macro, msize, near)
   l.baseColorDetailStrength = near .. ' ' .. far
@@ -94,7 +107,9 @@ local function golfLook(detail, dsize, macro, msize, near, far)
 end
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
-  bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
+  -- grass (docs/new/013_grass-underlay): the dense grass seen from above near (detail), a meadow of the photo's tone far (macro)
+  bngEarthGroundGrass = look(GRASS_DIR .. 'close', 2, GRASS_DIR .. 'lush', 8, 0.5, GRASS_OWN),
+  bngEarthGroundPasture = look(GRASS_DIR .. 'close', 2, GRASS_DIR .. 'pasture', 8, 0.45, GRASS_OWN),
   bngEarthGroundDusty = look('soil/dirt_loose_dusty/t_dirt_loose_dusty', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundLoose = look('soil/t_gravel/t_gravel', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
@@ -109,7 +124,20 @@ M.LOOKS = {
   bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
   bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
+  -- crop fields (server/surface.py CROP_*): the dirt look, a layer each for the plants groundcover.lua puts on them
+  bngEarthCropCereal = look('/art/beamngEarth/crops/ground/soil_straw', 2, '/art/beamngEarth/crops/ground/cereal', 8, 0.62),
+  bngEarthCropMaize = look('/art/beamngEarth/crops/ground/soil_dark', 2, '/art/beamngEarth/crops/ground/maize', 8, 0.62),
+  bngEarthCropSunflower = look('/art/beamngEarth/crops/ground/soil_dark', 2, '/art/beamngEarth/crops/ground/sunflower', 8, 0.62),
+  bngEarthCropBroad = look('/art/beamngEarth/crops/ground/soil_dark', 2, '/art/beamngEarth/crops/ground/rape', 8, 0.62),
+  bngEarthCropRoot = look('/art/beamngEarth/crops/ground/soil_dark', 2, '/art/beamngEarth/crops/ground/root', 8, 0.62),
 }
+-- Environment changes the GroundCover family and, with it, the ground texture look: lush grass is the base
+-- layer, light and dry take the sun-dried tone pictures (docs/new/013_grass-underlay), the shrub palettes keep
+-- the dusty look. All fields stay filled for the additional layers (empty texture slots are expensive).
+M.LOOKS.bngEarthGroundGrassLight = look(GRASS_DIR .. 'close_dry', 2, GRASS_DIR .. 'dry', 8, 0.6, GRASS_OWN)
+M.LOOKS.bngEarthGroundGrassDry = look(GRASS_DIR .. 'close_dry', 2, GRASS_DIR .. 'hay', 8, 0.6, GRASS_OWN)
+M.LOOKS.bngEarthGroundDustyLight = M.LOOKS.bngEarthGroundDusty
+M.LOOKS.bngEarthGroundDustyLush = M.LOOKS.bngEarthGroundDusty
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
 
 M.square = lattice.SQUARE   -- the block's square size (m per sample), from the last load

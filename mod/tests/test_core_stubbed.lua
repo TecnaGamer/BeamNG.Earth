@@ -252,6 +252,33 @@ T.check(tb.lastImport.sq == 2.0 and tb.lastImport.maxH == 3500, 'importMaps squa
 T.check(pumpUntil(function() return calls.safeTeleport == 2 end, 10), 'teleport placement')
 T.near(veh.pos.z, 1181, 1e-9, 'placed at groundZ + 1')
 
+do -- late imagery updates the active block's environmental masks and compact material table together
+  local random = math.random
+  math.random = function(a, b) return b or a end -- keep the existing session's packet-fragment sequence
+  core.setNearVisual('detail')
+  local tr = terrainMsg(0, 0, '/temp/beamngEarth/s1/hm_1_0_0.png', 1100)
+  tr.ter, tr.base = '/temp/beamngEarth/s1/hm_1_0_0_environment.ter', '/temp/beamngEarth/s1/base_environment.dds'
+  tr.layers = { '/temp/beamngEarth/s1/grass_dry.png', '/temp/beamngEarth/s1/dirt.png' }
+  tr.materials = { { 'bngEarthGroundGrassDry', 'GRASS' }, { 'beamngEarthDirt', 'DIRT' } }
+  tr.grassRefresh = true
+  local cover, n, rebuilt = require('beamngEarth/groundcover'), 0, 0
+  local after = cover.afterBlockChange
+  local rebuild = cover.rebuild
+  cover.afterBlockChange = function() n = n + 1; return after() end
+  cover.rebuild = function() rebuilt = rebuilt + 1; return true end
+  serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = tr.base, terrain = tr })
+  frames(5)
+  local ter = require('beamngEarth/terrain')
+  T.check(tb.fields.terrainFile == tr.ter and ter.base() == tr.base, 'late active photo applies the matching compact terrain and photo')
+  T.check(ter.slots[1] == 'bngEarthGroundGrassDry' and n == 1, 'late active photo selects dry grass and rebuilds cover once')
+  T.check(core._state().baseRefreshes == 1, 'late active environmental refresh counted')
+  T.check(rebuilt == 1, 'palette refresh invalidates cells retained by the optional engine patch')
+  cover.afterBlockChange = after
+  cover.rebuild = rebuild
+  core.setNearVisual('terrain')
+  math.random = random
+end
+
 -- far tiles: loaded hidden within the governor budget, shown by their swap group
 local farKeys = {}
 for i = 1, 5 do
@@ -302,6 +329,27 @@ serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx 
   heightmap = '/temp/beamngEarth/s1/hm_1_256_0.png', size = 1024, squareSize = SQ, zBase = 1110, maxHeight = 1024, q = 1 / 64 })
 frames(40)
 T.check(calls.importMaps == imports, 'ready but below 450 m: no commit yet')
+do -- a ready block that is not committed yet keeps the new .ter, masks, materials and base metadata
+  local random = math.random
+  math.random = function(a, b) return b or a end
+  core.setNearVisual('detail')
+  local tr = terrainMsg(256, 0, '/temp/beamngEarth/s1/hm_1_256_0.png', 1110)
+  tr.ter, tr.base, tr.baseSize = '/temp/beamngEarth/s1/hm_1_256_0_environment.ter', '/temp/beamngEarth/s1/base_pending.dds', 2048
+  tr.layers = { '/temp/beamngEarth/s1/pending_grass_light.png', '/temp/beamngEarth/s1/pending_dirt.png' }
+  tr.materials = { { 'bngEarthGroundGrassLight', 'GRASS' }, { 'beamngEarthDirt', 'DIRT' } }
+  serverSend({ type = 'block_base', anchorId = 1, cx = 256, cy = 0, base = tr.base, baseSize = 2048, terrain = tr })
+  frames(5)
+  local pending = core._state().terrainPending.msg
+  T.check(pending.ter == tr.ter and pending.base == tr.base and pending.baseSize == 2048, 'late pending photo carries its new compact terrain and photo size')
+  T.check(pending.layers == tr.layers and pending.materials == tr.materials, 'late pending photo keeps matching masks and material table')
+  T.check(calls.importMaps == imports and tb.fields.terrainFile ~= tr.ter, 'late pending update waits for the normal terrain-follow commit')
+  -- Continue the existing terrain-follow import checks with the original ready response.
+  serverSend({ type = 'terrain_ready', requestId = pt.requestId, anchorId = 1, cx = 256, cy = 0,
+    heightmap = '/temp/beamngEarth/s1/hm_1_256_0.png', size = 1024, squareSize = SQ, zBase = 1110, maxHeight = 1024, q = 1 / 64 })
+  frames(5)
+  core.setNearVisual('terrain')
+  math.random = random
+end
 local farBefore = {}
 for _, o in ipairs(S.liveOf('TSStatic')) do farBefore[o.id] = o:getPosition() end
 veh.pos = vec3(451, 0, 1200)

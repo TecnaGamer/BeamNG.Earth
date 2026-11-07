@@ -6,6 +6,7 @@ import os
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 from PIL import Image
@@ -53,6 +54,51 @@ class ClassifyTest(unittest.TestCase):
         grass = np.full((2, 2), 30, np.uint8)
         self.assertTrue((sf.classify(grass, np.zeros((2, 2)), 2.0, np.full((2, 2), 39.3), np.full((2, 2), -76.6)) == sf.GRASS).all())
 
+    def crop_block(self, d, n, unsure, bare=None):
+        """A maize block over a photo that is ploughed brown in the south, ripe straw and green in the north; its layers
+        after photo_lawns (south first), and the changed count."""
+        idx = np.full((n, n), sf.CROP_MAIZE, np.uint8)
+        rgb = np.zeros((64, 64, 3), np.uint8)
+        rgb[:] = (112, 86, 60)                      # ploughed brown ...
+        rgb[:21] = (150, 130, 70)                   # ... a band of ripe straw ...
+        rgb[21:32] = (60, 100, 45)                  # ... and green; the south (rows 32+) stays brown
+        _, used = sf.write_ter(d, "b.ter", np.zeros((n, n), np.uint16), idx)
+        self.assertIn(sf.DIRT, used, "the fallow ground needs its layer in the .ter")
+        names = sf.write_masks(idx[::-1], d, "b")
+        mask = sf.pack_unsure(np.full((n, n), unsure, bool))
+        with mock.patch.object(sf, "CROP_BARE", -1.0 if bare is None else bare):
+            changed = sf.photo_lawns(d, "b.ter", names, rgb, mask)
+        with open(os.path.join(d, "b.ter"), "rb") as f:
+            lay = _glob(np.frombuffer(f.read()[5 + 2 * n * n:5 + 3 * n * n], np.uint8).reshape(n, n), used)
+        return lay[1:-1, 1:-1], names, changed       # (the edge ring is holes; row 0 = south)
+
+    def test_an_unsure_crop_keeps_its_plants_only_on_green_or_straw_photos(self):
+        import tempfile
+        n = 16
+        with tempfile.TemporaryDirectory() as d:
+            inner, names, changed = self.crop_block(d, n, True)
+            self.assertTrue((inner[: n // 2 - 1] == sf.DIRT).all(), "south half: brown, fallow")
+            self.assertTrue((inner[n // 2:] == sf.CROP_MAIZE).all(), "north half: straw and green keep the crop")
+            self.assertGreater(changed, 0)
+            crop_mask = np.array(Image.open(os.path.join(d, names[sf.CROP_MAIZE])))
+            dirt_mask = np.array(Image.open(os.path.join(d, names[sf.DIRT])))
+            self.assertTrue(((crop_mask > 0) ^ (dirt_mask > 0))[1:-1, 1:-1].all(), "the masks agree with the .ter")
+
+    def test_a_sure_crop_keeps_its_plants_whatever_the_photo_unless_it_is_plain_soil(self):
+        import tempfile
+        n = 16
+        with tempfile.TemporaryDirectory() as d:
+            inner, _, changed = self.crop_block(d, n, False)
+            self.assertTrue((inner == sf.CROP_MAIZE).all(), "the map names the crop: brown photo or not")
+            self.assertEqual(changed, 0)
+        with tempfile.TemporaryDirectory() as d:
+            inner, _, _ = self.crop_block(d, n, False, bare=0.03)      # ploughed brown reads excess green 0.0
+            self.assertTrue((inner[: n // 2 - 1] == sf.DIRT).all(), "south half: plainly bare soil")
+            self.assertTrue((inner[n // 2:] == sf.CROP_MAIZE).all())
+
+    def test_the_default_crop_gate_leaves_a_map_named_crop_on_a_grey_brown_photo(self):
+        self.assertLess(sf.CROP_BARE, 0.0, "off until a photo's bare soil is told from a dull one (docs/new/008)")
+
     def test_photo_lawns_only_where_the_photo_is_green(self):
         import tempfile
         n = 16
@@ -95,7 +141,8 @@ class CompactTerTest(unittest.TestCase):
         idx[:4] = sf.LAWN
         with tempfile.TemporaryDirectory() as d:
             _, used = sf.write_ter(d, "b.ter", np.zeros((n, n), np.uint16), idx)
-            self.assertEqual(used, [sf.ASPHALT, sf.GRASS, sf.LAWN, sf.DIRT])      # (a lawn may turn dirt)
+            # (a lawn may turn dirt by its photo; a grass sample's palette, grass_layers.apply, lists its own later)
+            self.assertEqual(used, [sf.ASPHALT, sf.GRASS, sf.LAWN, sf.DIRT])
             with open(os.path.join(d, "b.ter"), "rb") as f:
                 raw = f.read()
             off = 5 + 3 * n * n
