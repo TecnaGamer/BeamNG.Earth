@@ -334,7 +334,6 @@ CW_MIN_SIN = 0.3        # two carriageways crossing at a flatter angle are not a
 CW_STACK_SIN = 0.03      # decks at different levels crossing more steeply than this (2 degrees) are separated
 CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is held along at most
 CW_OVERLAP_STEP_M = 12.0  # m between the points two overlapping decks' clearance is held at
-CW_PIN_W = 1e5          # weight holding a chain's end to the kept (lower-level) chain it branches from
 
 
 def _cw_level(q):
@@ -2799,8 +2798,10 @@ class _Planner:
             if chains:
                 prof = self._cw_cluster_solve(chains)
         except Exception as e:      # the rules as before rather than no grading
-            log.debug("grading: carriageways of %s: %s: %s", hk, type(e).__name__, e)
-            prof = {}
+            import revisit
+            revisit.fault()         # incomplete profiles must not become a persistent plan/region
+            log.warning("grading: carriageways of %s: %s: %s", hk, type(e).__name__, e)
+            return {"parts": parts, "prof": {}, "failed": True}
         return {"parts": parts, "prof": prof}
 
     def _cw_cluster_solve(self, chains):
@@ -3040,9 +3041,13 @@ class _Planner:
                 if a_ in loc and b_ in loc:
                     cp.append((loc[a_], i_, loc[b_], j_, kind, v))
                 elif a_ in loc and zs[b_] is not None:
-                    d_[loc[a_]]["t"][i_], d_[loc[a_]]["w"][i_] = zs[b_][j_], CW_PIN_W
+                    d = d_[loc[a_]]
+                    d["lo"][i_] = max(d["lo"][i_], zs[b_][j_])
+                    d["hi"][i_] = min(d["hi"][i_], zs[b_][j_])
                 elif b_ in loc and zs[a_] is not None:
-                    d_[loc[b_]]["t"][j_], d_[loc[b_]]["w"][j_] = zs[a_][i_], CW_PIN_W
+                    d = d_[loc[b_]]
+                    d["lo"][j_] = max(d["lo"][j_], zs[a_][i_])
+                    d["hi"][j_] = min(d["hi"][j_], zs[a_][i_])
 
             def bound(lst, cp_):
                 for nu, ju, nl, jl, clear in lst:
@@ -3054,14 +3059,21 @@ class _Planner:
                         d_[loc[nl]]["hi"][jl] = min(d_[loc[nl]]["hi"][jl], zs[nu][ju] - clear)
             bound(seps, cp)
             mine = [t_ for t_ in ties if t_[0] in loc]
+            def solve_stage():
+                info = {}
+                profiles = _cw.solve(d_, cp, deadline=deadline, diagnostics=info)
+                if not info["converged"]:
+                    raise RuntimeError(f"carriageway level {L}: {info['status']} (feasible={info['feasible']})")
+                return profiles
+
             if mine:
-                pre = _cw.solve(d_, cp, deadline=deadline)
+                pre = solve_stage()
                 tie_seps = []
                 for na, ia, nb, ib, q, sin, ua in mine:
                     a_up = pre[loc[na]][nearest(na, ia, q)] >= pre[loc[nb]][nearest(nb, ib, q)]
                     tie_seps += self._cw_overlap(chains, samples, nearest, (na, ia, nb, ib, q, sin, ua), a_up)
                 bound(tie_seps, cp)
-            got = _cw.solve(d_, cp, deadline=deadline)
+            got = solve_stage()
             for n in idx:
                 zs[n] = got[loc[n]]
         couplings = couplings + [(nu, ju, nl, jl, "ge", c_) for nu, ju, nl, jl, c_ in seps]
@@ -3124,6 +3136,10 @@ class _Planner:
             reg = self._cw_region(mapcells.cell_of(float(la[0]), float(lo[0])))
         except Exception as e:      # (the rules as before)
             log.debug("grading: carriageway at %s: %s: %s", np.round(mid, 1), type(e).__name__, e)
+            return None
+        if reg.get("failed"):
+            import revisit
+            revisit.fault()         # also on later reads of the session's memoized failed region
             return None
         best = None
         for q in reg["parts"]:

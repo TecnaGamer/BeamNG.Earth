@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded foundation regression gate. Uses synthetic data, not a gameplay benchmark.
 
-Run after installing server/requirements.txt and lupa and building tools/build_native.py.
+Run after installing server/requirements.txt, lupa and scipy and building tools/build_native.py.
 The existing full server suite remains available through tools/run_tests.py.
 """
 import argparse
@@ -22,7 +22,7 @@ MODULES = (
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets",
     "test_worldbundle", "test_world_cache", "test_peerwork",
-    "test_host_package",
+    "test_host_package", "test_carriageway_solver",
 )
 
 
@@ -42,6 +42,7 @@ def main():
     import fsspec
     import lupa.luajit21
     import lupa.lua53
+    import scipy.optimize       # test-only independent reference for the native carriageway QP
     fast.require(fast.MIN_VERSION, "quality gate")
     print(f"Python {sys.version.split()[0]}, earthfast {fast._ef.VERSION}, "
           f"DuckDB {duckdb.__version__}, fsspec {fsspec.__version__}", flush=True)

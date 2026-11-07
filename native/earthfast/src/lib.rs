@@ -3,6 +3,8 @@
 mod devraster;
 mod s3url;
 mod countrymap;
+mod carriageway_solver;
+mod carriageways;
 mod spaceclouds;
 mod cdaez;
 mod clearance;
@@ -5516,7 +5518,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 155)?;
+    m.add("VERSION", 156)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
+    m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())
 }
