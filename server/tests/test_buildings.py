@@ -2373,3 +2373,71 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual(got, {})       # (the parts are near the origin, the model at x 1000: none under it)
         got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 22)], b, [])
         self.assertEqual(got, {22: [(-80.0, 2.0, 1.0), (90.0, 2.0, 2.0)]})
+
+
+class QldStoreysBrickAwningTest(unittest.TestCase):        # fork
+    """Queensland: single-storey houses by default, one brick scale on every face, footpath awnings kept off the road."""
+    LAT, LON = -23.129, 150.749         # Yeppoon
+
+    def plan(self, ring, attrs, i):
+        return bld.plan(ring, dict(attrs, seed_id=i), lat=self.LAT, lon=self.LON)
+
+    def test_untagged_houses_are_mostly_single_storey_tagged_ones_are_left(self):
+        specs = [self.plan(rect(0, 0, 10, 13), {"class": "house"}, i) for i in range(600)]
+        self.assertAlmostEqual(sum(s.floors == 1 for s in specs) / len(specs), bld.QLD_ONE_STOREY, delta=0.06)
+        for s in (self.plan(rect(0, 0, 10, 13), {"class": "house", "num_floors": 2}, i) for i in range(40)):
+            self.assertEqual(s.floors, 2)
+        apart = [self.plan(rect(0, 0, 30, 40), {"class": "apartments"}, i).floors for i in range(60)]
+        self.assertGreaterEqual(min(apart), 3)
+        self.assertEqual(self.plan(rect(0, 0, 10, 13), {"class": "house"}, 5).floors,
+                         self.plan(rect(0, 0, 10, 13), {"class": "house"}, 5).floors)      # (stable)
+        other = bld.plan(rect(0, 0, 10, 13), {"class": "house", "seed_id": 1}, lat=40.0, lon=-75.0)
+        self.assertIsNone(other.awn)
+
+    def test_brick_walls_share_one_scale(self):
+        for i in range(200):
+            spec = self.plan(rect(0, 0, 6.0, 8.6), {"class": "house"}, i)
+            if spec.band is bld.BAND_BRICK and spec.facade.startswith("bne_bld_fac_qbrick"):
+                break
+        else:
+            self.fail("no face-brick house")
+        spec.door = None
+        P, UV, T, M, mats, _C = bld.build([(spec, 0.0, 0.0)])
+        fac = mats.index(bld.FACADE)
+        seen = set()
+        for k in range(0, len(T) - 1, 2):
+            i = int(T[k][0])
+            if M[k] != fac or tuple(T[k]) != (i, i + 1, i + 2) or tuple(T[k + 1]) != (i, i + 2, i + 3):
+                continue                            # (not a quad of the facade sheet)
+            a, b, c = P[i], P[i + 1], P[i + 2]
+            if a[2] != b[2] or c[2] - b[2] < 2.0:
+                continue
+            length = math.hypot(*(b[:2] - a[:2]))
+            if length < 0.5:
+                continue
+            seen.add(round(float(length), 1))
+            per_m = (UV[i + 1][0] - UV[i][0]) / length
+            self.assertAlmostEqual(per_m * bld.TILE_PX_M, 1.0, delta=0.14, msg=f"wall {length:.1f} m")
+        self.assertGreaterEqual(len(seen), 2)       # (a 6.0 and an 8.6 m face: round(l / 2.4) bays gave 1.25x and 0.9x)
+
+    def shop(self, gap, i):
+        spec = self.plan(rect(0, 0, 12, 10), {"class": "retail"}, i)
+        road = (np.array([(-50.0, -4.0 - gap), (50.0, -4.0 - gap)]), 4.0, "tertiary", True)      # carriageway edge at y = -gap
+        spec.gring = np.array([0.0, 0.0, 0.0, 0.0])
+        bld.doors([(spec, 0.0, 0.0)], [road], 0.0, 0.0)
+        return spec
+
+    def test_shop_awnings_stay_off_the_carriageway(self):
+        for gap, depth in ((4.5, bld.QLD_AWN_MAX_D), (2.3, bld.QLD_AWN_MIN_D)):
+            shops = [self.shop(gap, i) for i in range(30)]
+            got = [s for s in shops if s.awn]
+            self.assertTrue(got, gap)
+            self.assertAlmostEqual(len(got) / 30, bld.QLD_AWN_SHARE, delta=0.2)
+            for s in got:
+                self.assertEqual(s.awn["D"], depth)
+                self.assertGreaterEqual(s.awn["L"], bld.QLD_AWN_MIN_L)
+                m = bld.build([(s, 0.0, 0.0)])
+                self.assertGreaterEqual(float(m[0][:, 1].min()), -(gap - bld.QLD_AWN_KERB_M) - 1e-6)    # (nothing past the clear edge)
+                self.assertLess(float(m[0][:, 1].min()), -0.5)                                             # (and it does reach out)
+        self.assertFalse(any(self.shop(2.0, i).awn for i in range(30)))     # a footpath under 2.1 m: no awning
+        self.assertFalse(any(self.shop(1.0, i).awn for i in range(30)))

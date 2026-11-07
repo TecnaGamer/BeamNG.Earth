@@ -407,7 +407,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable", "hs", "qld")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "gable", "hs", "qld", "awn")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -683,6 +683,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         elif west_town and not industrial and cls != "apartments":
             # Bishop's and Moab's photos (2026-10-14): one-storey shops with false fronts, ranch houses
             nf = 1 if seed < WEST_TOWN_ONE_STOREY else 2
+        elif style.name == "queensland" and cls != "apartments" and (
+                cls in HOUSE_CLASSES or (area < 260 and not shop and not industrial)):
+            # fork: a Queensland suburb's untagged detached houses are mostly single-storey low-set (Yeppoon, Rockhampton,
+            # Brisbane's outer suburbs): QLD_ONE_STOREY of them one storey (hashed on the footprint's own seed), the rest two;
+            # a high-set house is one raised storey (Spec.hs, below), never counted as a second one
+            nf = 1 if _hash01(seed, "qstoreys") < QLD_ONE_STOREY else 2
         elif cls in HOUSE_CLASSES or (area < 220 and not shop):
             nf = 1 if seed < 0.3 else 2
         elif industrial:
@@ -953,7 +959,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     return Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500, porch=porch, cls=cls,
-                deck=garage and roof == "flat", pitch=style.pitch, gable=gable, hs=hs, qld=qld)
+                deck=garage and roof == "flat", pitch=style.pitch, gable=gable, hs=hs, qld=qld,
+                # fork: a Queensland building that may stand on a main street: doors() decides its footpath awning (Spec.awn)
+                awn={} if style.name == "queensland" and qld is None and roof == "flat" and not (
+                    shed or barn or church or garage or industrial or terminal or plain) else None)
 
 
 class Mesh:
@@ -1058,12 +1067,79 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
+    if mid and band is BAND_BRICK and not spec.wall and not spec.plain and spec.facade.startswith("bne_bld_fac_qbrick"):
+        _qld_brick_scale(spec, ring, P, UV, mid)        # fork: one brick scale on every face
     if mid:
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
+
+
+# fork: a face-brick wall of the window sheet (BAND_BRICK, Queensland's qbrick facades) is laid by the Rust kernel a whole number of
+# bays (TILE_PX_M / bays per sheet, 2.4 m) along each wall, so a wall's bricks are stretched to its own length / round(length / 2.4):
+# a 3.5 m face took one 3.5 m bay and a 3.7 m face two 1.85 m ones (up to 2x, 1.5x between neighbours: a two-storey block on Anzac
+# Parade, Yeppoon). _qld_brick_scale() gives every such wall the sheet's own scale (one repeat per TILE_PX_M, the same on every face
+# and storey; up to QLD_BRICK_SCALE_MAX off it only where no window of the sheet's pattern would otherwise be cut by a corner) and
+# places the pattern so its windows keep QLD_BRICK_MARGIN_M of brick to the corners. The plain-brick strips (a plinth, the door's) and
+# the walls the kernel splits round a flat-roofed house's door keep the kernel's UVs.
+QLD_BRICK_MARGIN_M = 0.4        # m of brick at least between a window's edge and a corner
+QLD_BRICK_WIN_M = 1.2           # m: a window of the sheet's bay (its 2.4 m)
+QLD_BRICK_SCALES = (1.0, 0.96, 1.04, 0.92, 1.08, 0.88, 1.12)    # wall metres per sheet metre tried, in order of preference
+
+
+def _qld_brick_fit(L, bay):
+    """(scale, o) for a wall of length L m: the sheet is laid at `scale` wall metres per sheet metre with a window's middle o m
+    along the wall (the next ones every bay * scale): the first scale (QLD_BRICK_SCALES) at which no window is cut by a
+    corner or stands closer than QLD_BRICK_MARGIN_M to one, the pattern placed as evenly as it can be."""
+    best = None
+    for sc in QLD_BRICK_SCALES:
+        step, hw = bay * sc, QLD_BRICK_WIN_M * sc / 2
+        o = np.arange(0.0, step, 0.05)
+        x = o[:, None] + step * np.arange(-1, int(L // step) + 3)[None, :]           # the window middles, one row per offset
+        gone = (x + hw <= 0.0) | (x - hw >= L)                                      # wholly off the wall
+        cut = ((x + hw > 0.0) & (x - hw < QLD_BRICK_MARGIN_M)) | ((x + hw > L - QLD_BRICK_MARGIN_M) & (x - hw < L))
+        bad = (cut & ~gone).sum(1) + 0.5 * ((~gone).sum(1) == 0) * (L >= 2.2)       # (a wall of 2.2 m and more has a window)
+        inside = ~gone
+        first = np.where(inside, x - hw, np.inf).min(1)
+        last = np.where(inside, L - (x + hw), np.inf).min(1)
+        lop = np.where(np.isfinite(first), np.abs(first - last), 0.0)                # how lopsided its margins are
+        k = int(np.lexsort((lop, bad))[0])
+        if best is None or bad[k] < best[0]:
+            best = (float(bad[k]), sc, float(o[k]))
+        if bad[k] == 0:
+            break
+    return best[1], best[2]
+
+
+def _qld_brick_scale(spec, ring, P, UV, mid):
+    """Rewrite the u of the window sheet's wall quads in place (P, UV: the kernel's flat lists, 12 and 8 numbers per quad)."""
+    bay = TILE_PX_M / spec.band[1]
+    pts = np.asarray(ring, np.float64)[:, :2]
+    E = np.roll(pts, -1, 0) - pts
+    EL = np.hypot(E[:, 0], E[:, 1])
+    skip = spec.door[0] if spec.door and spec.roof == "flat" else -1       # (the kernel's door strip splits that wall)
+    fits = {}
+    for q, k in enumerate(mid):
+        if k != 0 or UV[8 * q + 2] - UV[8 * q] < 0.1:   # (not the facade sheet's; a plain strip is 0.06 wide, a sliver wall less)
+            continue
+        x, y, x1, y1 = P[12 * q], P[12 * q + 1], P[12 * q + 3], P[12 * q + 4]
+        off = 0.0
+        for px, py in ((x, y), (x1, y1)):           # the wall both ends of the quad lie on (a corner is on two)
+            w = pts + E * np.clip(((px - pts[:, 0]) * E[:, 0] + (py - pts[:, 1]) * E[:, 1]) / np.maximum(EL * EL, 1e-12), 0.0, 1.0)[:, None]
+            off = off + np.hypot(w[:, 0] - px, w[:, 1] - py)
+        i = int(np.argmin(off))
+        if i == skip or EL[i] < 0.05:
+            continue
+        L = float(EL[i])
+        if i not in fits:
+            fits[i] = _qld_brick_fit(L, bay)
+        sc, o = fits[i]
+        a = float((x - pts[i, 0]) * E[i, 0] + (y - pts[i, 1]) * E[i, 1]) / L            # along the wall: the quad's start, its end
+        b = float((x1 - pts[i, 0]) * E[i, 0] + (y1 - pts[i, 1]) * E[i, 1]) / L
+        ua, ub = (a - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1], (b - o) / (TILE_PX_M * sc) + 0.5 / spec.band[1]
+        UV[8 * q], UV[8 * q + 2], UV[8 * q + 4], UV[8 * q + 6] = ua, ub, ub, ua
 
 
 def _cornice(m, spec, ring, z_eave, mat_idx):
@@ -1662,6 +1738,7 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
 QLD_EAVE_M = (0.45, 0.15)       # the eaves' overhang: 0.45 m + up to 0.15 (hashed)
 QLD_RAKE_M = 0.3                # a gable end's overhang
 QLD_SOLAR, QLD_WHIRLY, QLD_WHIRLY2 = 0.35, 0.40, 0.40   # shares: solar; whirlybirds; a second whirlybird among those
+QLD_ONE_STOREY = 0.80           # untagged detached houses that are single-storey (the rest two storeys)
 QLD_CARPORT, QLD_AWNING, QLD_TANK = 0.30, 0.30, 0.70    # carports (of houses with room); awnings (of older houses); tanks (rural)
 QLD_RURAL_COVER = 0.04          # a tile whose footprints cover less than this share is rural (tile_buildings -> plan)
 QLD_ISOLATED_M = 25.0           # ... and a rural house this far from any other building in the tile has a tank
@@ -1675,6 +1752,15 @@ WHIRLY_R, WHIRLY_H, WHIRLY_SIDES = 0.15, 0.35, 8
 CARPORT_W, CARPORT_L, CARPORT_H, CARPORT_FALL, CARPORT_SIDE_M = 3.0, 6.0, 2.4, 0.2, 1.0
 AWN_OUT, AWN_DROP, AWN_Z, AWN_MAX = 0.5, 0.3, 2.65, 4       # projection, fall, the hood's top over the floor, most per house
 TANK_D, TANK_H, TANK_SIDES = (2.5, 3.5), 2.0, 12
+# fork: footpath awnings (shop verandahs, Spec.awn, set by doors(), drawn by _qld_verandah): a Colorbond skillion over the footpath of a
+# Queensland shop on a street (country main streets), falling away from the shop to its outer edge QLD_AWN_CLEAR over the ground, as
+# deep as the footpath is (at most QLD_AWN_MAX_D, none under QLD_AWN_MIN_D) and never over the carriageway: its outer edge stays
+# QLD_AWN_KERB_M clear of every road's edge (the roads' half widths doors() has) and its rectangle clear of every other building
+QLD_AWN_SHARE = 0.85            # of the shops that have the room
+QLD_AWN_CLEAR, QLD_AWN_MAX_D, QLD_AWN_MIN_D, QLD_AWN_KERB_M = 3.0, 3.0, 1.5, 0.6     # m
+QLD_AWN_MIN_L, QLD_AWN_STREET_M = 3.0, 6.0      # m: the shortest awning; the farthest a frontage may stand from the carriageway's edge
+QLD_AWN_FALL, QLD_AWN_POST_M, QLD_AWN_POST_SHARE = 0.10, 3.6, 0.70      # fall per m of depth; post spacing; of awnings deep enough: on posts
+QLD_AWN_COLOURS = (0, 1, 2, 3, 7)       # Colorbond: Monument, Surfmist, Shale Grey, Woodland Grey, Classic Cream (QLD_METAL's indices)
 _TRIM_K = 0.841 / 0.93          # the Colorbond tints are target / the sheet's mean 0.841; the facade sheet's plain texel is ~0.93
 for _k, _c in enumerate(QLD_METAL):
     LOOKS[f"qtrim|{_k}"] = (FACADE, tuple(min(1.0, v * _TRIM_K) for v in _c))      # fascia, gutters, pipes in a roof colour
@@ -1977,6 +2063,44 @@ def _qld_carport(m, spec, rl, z_eave, gnd, mat_idx):
             w = np.array([-nrm[1], nrm[0]])
             q0, q1 = p + nrm * 0.05 - w * 0.05, p + nrm * 0.05 + w * 0.05
             _oquad(m, [p3(q0, z0), p3(q1, z0), p3(q1, zh), p3(q0, zh)], np.array([*nrm, 0.0]), _FLAT_UV, post)
+
+
+def _qld_verandah(m, spec, gmin, gmax, z_eave, mat_idx):  # fork:
+    """A shop's footpath awning (spec.awn, from doors()): a Colorbond skillion on the street wall, its outer edge QLD_AWN_CLEAR over
+    the footpath's ground and QLD_AWN_FALL per m lower than the wall's end, a deep fascia on that edge, on slim posts a little in
+    from it (or cantilevered). Not above the shop's own top: a low shop's awning stands lower (at least 2.6 m clear) or none."""
+    v = spec.awn
+    s, t, A, L, depth = np.array(v["s"]), np.array(v["t"]), np.array(v["p0"]), v["L"], v["D"]
+    gnd = _qld_ground(spec, gmin, gmax, None)
+    B, C, E = A + s * L, A + s * L + t * depth, A + t * depth
+    gz = max(gnd(p[0], p[1]) for p in (A, B, C, E))
+    fall = QLD_AWN_FALL * depth
+    zo = gz + QLD_AWN_CLEAR
+    if zo + fall + 0.1 > z_eave - 0.15:
+        zo = z_eave - 0.25 - fall - 0.1
+        if zo - gz < 2.6:
+            return
+    zw = zo + fall
+    mat = mat_idx[f"{ROOF_COLORBOND}|q{QLD_AWN_COLOURS[int(_hash01(spec.seed, 'qawnc2') * len(QLD_AWN_COLOURS))]}"]
+    ru, rv = ROOF_UV_M_OF[ROOF_COLORBOND]
+    sl = math.hypot(depth, fall)
+
+    def p3(p, z):
+        return (float(p[0]), float(p[1]), float(z))
+    uv = ((0.0, 0.0), (L / ru, 0.0), (L / ru, sl / rv), (0.0, sl / rv))
+    _oquad(m, [p3(A, zw + 0.1), p3(B, zw + 0.1), p3(C, zo + 0.1), p3(E, zo + 0.1)], np.array([0.0, 0.0, 1.0]), uv, mat)
+    _oquad(m, [p3(A, zw), p3(B, zw), p3(C, zo), p3(E, zo)], np.array([0.0, 0.0, -1.0]), uv, mat)
+    fv = ((0.0, 0.0), (L / ru, 0.0), (L / ru, 0.32 / rv), (0.0, 0.32 / rv))
+    _oquad(m, [p3(E, zo - 0.12), p3(C, zo - 0.12), p3(C, zo + 0.2), p3(E, zo + 0.2)], np.array([*t, 0.0]), fv, mat)
+    ev = ((0.0, 0.0), (depth / ru, 0.0), (depth / ru, 0.1 / rv), (0.0, 0.1 / rv))
+    for P0, P1, sg in ((A, E, -1.0), (B, C, 1.0)):          # the two ends of the slab
+        _oquad(m, [p3(P0, zw), p3(P1, zo), p3(P1, zo + 0.1), p3(P0, zw + 0.1)], np.array([*(s * sg), 0.0]), ev, mat)
+    if v["posts"]:
+        post = mat_idx["bne_bld_fac_white"]
+        n = max(2, math.ceil((L - 0.4) / QLD_AWN_POST_M) + 1)
+        for k in range(n):
+            p = A + s * (0.2 + (L - 0.4) * k / (n - 1)) + t * (depth - 0.2)
+            _prism(m, p, s, 0.04, 0.04, gnd(p[0], p[1]) - 0.1, zo, post)
 
 
 def _qld_tank(m, spec, rl, gnd, mat_idx):
@@ -2412,6 +2536,8 @@ def build(specs_and_ground, lite=False):
         _roof(m, spec, ring, z_eave, mat_idx)
         if spec.qld and spec.roof != "flat" and not lite:       # fork: Queensland house details
             _qld_extras(m, spec, ring, z_eave, gmin, gmax, hs, mat_idx)
+        if spec.awn and not lite:                               # fork: a Queensland shop's footpath awning
+            _qld_verandah(m, spec, gmin, gmax, z_eave, mat_idx)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite:
@@ -3788,6 +3914,55 @@ def _qld_carport_site(spec, a, d, Le, out, f, edge, off, others, cents, segs):
     return {"p0": corner + s_dir * 0.05, "s": s_dir, "t": t_dir, "wall": {0: -1, 2: 1}.get(j, 0)}
 
 
+def _qld_awning_site(spec, a, d, Le, out, off, others, cents, segs, kseg, minor):  # fork:
+    """The footpath awning of a Queensland shop (spec.awn: QLD_AWN_SHARE of those with room) or None: the longest stretch of its
+    street wall (a, d, Le, out: the wall in the anchor frame) over which a QLD_AWN_MAX_D (down to QLD_AWN_MIN_D) deep awning keeps
+    its outer edge QLD_AWN_KERB_M clear of every road's carriageway, at least QLD_AWN_MIN_L long and clear of the other buildings.
+    The wall's nearest road (segment kseg) must be a street (not a back lane) with the wall within QLD_AWN_STREET_M of its edge."""
+    if spec.awn is None or spec.floors > 3 or spec.cls == "civic" or minor or _hash01(spec.seed, "qverandah") >= QLD_AWN_SHARE:
+        return None
+    A, D, L2, SH = segs
+    mid = a + d * (Le / 2)
+    t = float(np.clip(((mid - A[kseg]) * D[kseg]).sum() / L2[kseg], 0, 1))
+    if float(np.hypot(*(A[kseg] + t * D[kseg] - mid))) - SH[kseg] > QLD_AWN_STREET_M:
+        return None
+    ss = np.arange(0.3, Le - 0.3 + 1e-9, 0.5)
+    if len(ss) < 2:
+        return None
+    for depth in (QLD_AWN_MAX_D, 2.5, 2.0, QLD_AWN_MIN_D):
+        # the outer edge and the points between it and the wall, against every road's edge: the room each has
+        pts = np.concatenate([a + d * ss[:, None] + out * (depth * f) for f in (1.0, 0.5)])
+        T = np.clip(((pts[:, None, :] - A[None]) * D[None]).sum(2) / L2[None], 0, 1)
+        Q = A[None] + T[..., None] * D[None]
+        room = (np.hypot(*(Q - pts[:, None, :]).transpose(2, 0, 1)) - SH[None]).min(1)
+        ok = (room >= QLD_AWN_KERB_M).reshape(2, -1).all(0)
+        best, i = None, 0
+        while i < len(ss):                          # the longest run of room
+            if not ok[i]:
+                i += 1
+                continue
+            j = i
+            while j + 1 < len(ss) and ok[j + 1]:
+                j += 1
+            if best is None or ss[j] - ss[i] > best[1] - best[0]:
+                best = (ss[i], ss[j])
+            i = j + 1
+        if best is None or best[1] - best[0] < QLD_AWN_MIN_L:
+            continue
+        s0, s1 = float(best[0]), float(best[1])
+        p0 = a + d * s0
+        R = np.array([p0, p0 + d * (s1 - s0), p0 + d * (s1 - s0) + out * depth, p0 + out * depth])
+        R = R if _area2(R) > 0 else R[::-1]
+        for k in np.flatnonzero(np.hypot(*(cents - (mid - off)).T) < 40.0 + Le):
+            if others[k][0] is not spec and _rect_hits(R - off, others[k][1] - off):
+                break
+        else:
+            return {"p0": (float(p0[0] - off[0]), float(p0[1] - off[1])), "s": (float(d[0]), float(d[1])),
+                    "t": (float(out[0]), float(out[1])), "L": s1 - s0, "D": depth,
+                    "posts": depth >= 2.0 and _hash01(spec.seed, "qawnpost") < QLD_AWN_POST_SHARE}
+    return None
+
+
 def doors(items, lines, x0, y0, drives=None):
     """Prop rows (trees.lua rows, group "door") of a front door per house: on the wall whose middle is
     nearest a road and faces it, a row house's to one side, others' in the middle. lines: [(centreline
@@ -3817,11 +3992,13 @@ def doors(items, lines, x0, y0, drives=None):
     others = [(spec, spec.ring + np.array([x0, y0])) for spec, _, _ in items if (spec.min_h or 0.0) <= 0.5]
     off = np.array([x0, y0], np.float64)
     cents = None
-    if any(sp.qld for sp, _, _ in items):       # fork: Queensland's carports and tanks need the neighbours
+    if any(sp.qld or sp.awn is not None for sp, _, _ in items):     # fork: Queensland's carports, tanks and awnings need the neighbours
         cents = np.array([r.mean(0) for _, r in others]).reshape(-1, 2) - off
         for sp, _, _ in items:
             if sp.qld:
                 sp.qld["carport"], sp.qld["tank"] = None, False
+            if sp.awn is not None:
+                sp.awn.clear()
     for spec, gmin, gmax in items:
         no_door = False
         if spec.plain or spec.floors >= 7 or spec.band in (BAND_OFFICE, BAND_OFFICE2) or spec.wall:
@@ -3874,6 +4051,9 @@ def doors(items, lines, x0, y0, drives=None):
         if spec.shop:
             if storefront and not spec.wall:
                 spec.sign = edge                # the sign band over the street wall's shopfront
+            if spec.awn is not None and storefront and not spec.wall:       # fork: a Queensland shop's footpath awning
+                spec.awn.update(_qld_awning_site(spec, a, d, Le, out, off, others, cents, (A, D, L2, SHALF), kseg,
+                                                 bool(SMINOR[kseg])) or {})
             continue
         if no_door:
             continue
@@ -3882,6 +4062,9 @@ def doors(items, lines, x0, y0, drives=None):
             spec.shop = True                    # a main street's ground floor: a shopfront, no house door
             if not spec.plain:
                 spec.sign = edge
+            if spec.awn is not None and not spec.plain:                     # fork: ... under a Queensland footpath awning
+                spec.awn.update(_qld_awning_site(spec, a, d, Le, out, off, others, cents, (A, D, L2, SHALF), kseg,
+                                                 bool(SMINOR[kseg])) or {})
             continue
         narrow = Le < 9.0
         f = (0.22 if _hash01(spec.seed, "door") < 0.5 else 0.78) if narrow else 0.5
