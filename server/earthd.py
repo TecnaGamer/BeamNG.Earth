@@ -5859,10 +5859,11 @@ class Connection:
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
         elif kind == "german_junctions":        # the settings page's switch: the road and sign tiles again, with or without
-            if self.s.set_dej(msg.get("on")):
+            if self.s.set_dej(msg.get("on")):   # (and the AI's graph: its stops, give-ways and zone speeds)
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+                self.nav.refresh()
         elif kind == "gas_stations":            # the settings page's switch: the road tiles again, with or without
             if self.s.set_gas_stations(msg.get("on")):
                 self.roads.close()

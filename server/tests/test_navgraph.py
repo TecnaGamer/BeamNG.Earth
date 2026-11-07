@@ -717,6 +717,47 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, res, mph=False, de_on=True) * 1.609344, 10.0,
                                msg="a mapped limit first")
 
+    def test_refresh_drops_a_build_of_the_old_setting(self):
+        """Tracker.refresh (the German junction signs switched): the next pose builds again where the player stands,
+        and a build running at the switch lands unsent."""
+        import asyncio
+        import threading
+        sent, builds = [], []
+        conn = mock.Mock(send=sent.append)
+        gate = threading.Event()
+
+        def build(aid, x, y, serial):
+            builds.append(serial)
+            return f"g{serial}", 1, 1
+
+        def slow(aid, x, y, serial):
+            gate.wait(5)
+            return build(aid, x, y, serial)
+
+        async def run():
+            loop = asyncio.get_running_loop()
+            t = navgraph.Tracker()
+            t.on_pose(conn, 1, 0.0, 0.0, loop, build)
+            await asyncio.sleep(0.05)
+            self.assertEqual([m["serial"] for m in sent], [1])
+            t.on_pose(conn, 1, 0.0, 0.0, loop, build)
+            self.assertEqual(builds, [1], "not moved: no build")
+            t.refresh()
+            t.on_pose(conn, 1, 0.0, 0.0, loop, build)
+            await asyncio.sleep(0.05)
+            self.assertEqual([m["serial"] for m in sent], [1, 2], "built again in place")
+            t.on_pose(conn, 1, 9999.0, 0.0, loop, slow)     # (moved away: a build, still running at the switch)
+            await asyncio.sleep(0.02)
+            t.refresh()
+            gate.set()
+            await asyncio.sleep(0.05)
+            self.assertEqual([m["serial"] for m in sent], [1, 2], "the old setting's build is not sent")
+            t.on_pose(conn, 1, 9999.0, 0.0, loop, build)
+            await asyncio.sleep(0.05)
+            self.assertEqual([m["serial"] for m in sent], [1, 2, 4])
+            t.close()
+        asyncio.run(run())
+
     def test_driving_side_and_signals_by_country(self):
         self.assertEqual(navgraph.road_rules("US"), {"rightHandDrive": False, "turnOnRed": True, "redYellow": False,
                                                      "country": "US", "mph": True})

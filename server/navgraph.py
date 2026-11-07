@@ -949,11 +949,18 @@ class Tracker:
         self.centre = None
         self.building = False
         self.serial = 0
+        self.stale = 0          # builds up to this serial are of an old setting (refresh): not sent, not kept
         self.pool = None        # one thread of its own (vegetation.Tracker: not behind other trackers' builds)
 
     def close(self):
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
+
+    def refresh(self):
+        """A setting the graph reads changed (the German junction signs): built again at the next pose, wherever the
+        player is; a build already running lands unsent."""
+        self.centre = None
+        self.stale = self.serial
 
     def on_pose(self, conn, aid, x, y, loop, build):
         """build(aid, x, y, serial) runs in a worker and returns (vfs path, nodes, edges) or None."""
@@ -980,6 +987,9 @@ class Tracker:
             logging.getLogger("earthd.navgraph").debug("navgraph %s: %s: %s", centre, type(e).__name__, e)
             return
         if res is None:
+            return
+        if serial <= self.stale:    # (the old setting's: the next pose builds again)
+            self.aid = aid
             return
         self.aid, self.centre = aid, centre
         path, n, m = res
