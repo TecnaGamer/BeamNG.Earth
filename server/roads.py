@@ -445,7 +445,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 4      # 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 10     # 10: per-source highway lane sections and full-feature lane evidence; 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1791,11 +1791,12 @@ def edge_margin(spec):
 
 
 def motorway_shoulder(spec):
-    """A rural motorway carriageway's shoulder: SHOULDER_M (SHOULDER_WIDE_M on a wide one), or beside a ramp's mapped
-    number of LINK_LANE_M lanes what they leave (GitHub #107: a 6 m ramp's edge lines stood 1.6 m apart, inside the
-    motorway's 2.2 m shoulders; PR #471: a ramp's own lane count)."""
+    """Fit shoulders in the pavement left over after the driving lanes."""
     cap = SHOULDER_WIDE_M if (spec.lanes or 0) >= SHOULDER_WIDE_LANES else SHOULDER_M     # (its carriageway's)
-    drive = (spec.lanes or 1) * LINK_LANE_M if spec.link else LINK_LANE_M
+    # A mapped motorway can be only as wide as its travel lanes. Reserving
+    # the default shoulders on that pavement squeezed three lanes into 5 m.
+    drive = ((spec.lanes or 1) * LINK_LANE_M if spec.link or spec.lanes is None
+             else spec.lanes * LANE_W["motorway"])
     return float(np.clip((spec.width - drive) / 2, EDGE_LINE["inset"], cap))
 
 
@@ -2090,7 +2091,30 @@ def _tapers(feats, specs, decks=False):
         got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
     for i, t in got.items():
         out[i] = tuple(t)
-    return out
+    return _section_tapers(feats, specs, bridge, out)
+
+
+def _section_tapers(feats, specs, bridge, out):
+    """One-sided auxiliary-lane tapers replace symmetric joint widening."""
+    import lanesections
+    joints = set()
+    manual = {}
+    for i in range(len(feats)):
+        prof = lanesections.profile(feats, i)
+        sp = specs[i] or bridge[i]
+        if not prof or not prof["extra"] or sp is None:
+            continue
+        rows = []
+        for end, span in enumerate(prof["reach"]):
+            if span > 0:
+                lo, la = prof["line"][0 if end == 0 else -1]
+                joints.add((round(lo, 6), round(la, 6)))
+                rows.append((lo, la, sp.width - prof["extra"] * (1. - prof["ends"][end]), span))
+        manual[i] = tuple(rows)
+    if not manual:
+        return out
+    return [manual.get(i, tuple(r for r in rows if (round(r[0], 6), round(r[1], 6)) not in joints))
+            for i, rows in enumerate(out)]
 
 
 def joint_desc(copies, fn):
@@ -2393,6 +2417,10 @@ def lane_shifts(feats, urban_fn=None, widths=None, left_hand=False):
                 got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
             for i, t in got.items():
                 out[i] = tuple(t)
+    import lanesections
+    for i in range(n):
+        if lanesections.profile(feats, i):
+            out[i] = ()                     # placement already belongs to the physical centreline
     memo[k] = out
     return out
 
@@ -4737,7 +4765,53 @@ def way_lines(ex, feats, i, spec, pts, lon, left_hand, country, ws=None, shift=N
     return out
 
 
-def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shift=None):
+def _lane_runs(line, room):
+    """The parts of a separator inside the growing carriageway, with dash phase."""
+    if np.all(room >= -1e-6):
+        return [(line, 0.)]
+    keep = room >= 0.
+    if not keep.any():
+        return []
+    distances = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line[:, :2], axis=0), axis=1))]
+    edges = np.flatnonzero(np.diff(np.r_[False, keep, False]))
+    runs = []
+    for a, b in zip(edges[::2], edges[1::2]):
+        piece, before = line[a:b], distances[a]
+        if a:
+            t = -room[a - 1] / (room[a] - room[a - 1])
+            piece = np.vstack([line[a - 1] + t * (line[a] - line[a - 1]), piece])
+            before = distances[a - 1] + t * (distances[a] - distances[a - 1])
+        if b < len(line):
+            t = -room[b - 1] / (room[b] - room[b - 1])
+            piece = np.vstack([piece, line[b - 1] + t * (line[b] - line[b - 1])])
+        if len(piece) >= 2:
+            runs.append((piece, before))
+    return runs
+
+
+def section_lines(ex, feats, i, spec, pts, frame, lon, left_hand, country, ws):
+    """Keep through-lane spacing while the outside auxiliary lane opens/closes.
+
+    Edge lines and pavement already follow the physical centre/width profile.
+    Lane separators follow the full-width lane grid, including at a taper's tip.
+    """
+    import lanesections
+    prof = lanesections.profile(feats, i)
+    if not prof or not prof["extra"]:
+        return ex
+    la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
+    # The physical line is centred on the current width. The full lane grid's
+    # centre remains on its mapped placement: never shrink all four lanes.
+    g = lanesections.growth(prof, lo, la)
+    centre = offset_polyline(pts, prof["shift"] * (1. - g))
+    lines = extras(spec, centre, lon, left_hand, country, lane_tags(feats, i) or {"lanes": spec.lanes},
+                   phase=lanesections.phase(feats, i),
+                   lane_growth=(np.sign(prof["shift"]), prof["turning"], prof["extra"] * (1. - g)))
+    return [e for e in ex if e[0].get("kind") != "lane"] + [
+        e for e in lines if e[0].get("kind") == "lane"]
+
+
+def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shift=None, phase=0., lane_growth=None):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame (a whole ground part: its broken lines' dashes start their cycle at
     its start, so they meet across tiles); lon: its longitude; country: ISO code (markings.style: the country's line
@@ -4781,7 +4855,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     sweden = st is markings.STYLES["SE"]
     barrier = sweden and kind == "paved" and _motesfri_section(spec, osm)   # (a 2+1 road's: motesfri.py)
 
-    def mark(kind_, mat, width, along, pattern=None, side=None):
+    def mark(kind_, mat, width, along, pattern=None, side=None, dash_phase=phase):
         """A solid line, or a broken one's dashes (pattern: dash, gap); kind_: "centre", "lane" or "edge"; side: an edge
         line's (+1 left / -1 right of the geometry: build_tile cuts it at a rounded corner, roadcorners.tile)."""
         if pattern is None:
@@ -4790,7 +4864,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 look["side"] = side
             out.append((look, width, along))
             return
-        for piece in markings.dashes(along, pattern):
+        for piece in markings.dashes(along, pattern, phase=dash_phase):
             look = {"m": mat, "tl": max(1.0, pattern[0]), "p": CENTRE["p"], "kind": kind_, "dash": True}
             if side is not None:
                 look["side"] = side
@@ -4821,7 +4895,17 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 for sd in (1, -1):
                     mark("centre", st.centre, markings.BARRIER_LINE_W, at(off + sd * markings.BARRIER_LINE_M))
             elif role == "lane":
-                mark("lane", "line_white", lw_, at(off), None if how else pat)
+                along = at(off)
+                if lane_growth is None:
+                    mark("lane", "line_white", lw_, along, None if how else pat)
+                    continue
+                side, turning, missing = lane_growth
+                from_edge = drive / 2 - side * off
+                auxiliary = from_edge <= turning * drive / lanes + 1e-5
+                pattern = None if how else ((min(3., pat[0]), min(3., pat[1])) if auxiliary else pat)
+                for piece, before in _lane_runs(along, from_edge - missing):
+                    mark("lane", "line_white", lw_ * (2 if auxiliary else 1), piece, pattern,
+                         dash_phase=phase + before)
             elif role == "twltl":           # solid on the through side, broken on the turn lane's (MUTCD 3B.05)
                 mark("centre", st.centre, lw_, at(off + how * d))
                 mark("centre", st.centre, lw_, at(off - how * d), cpat)
@@ -7970,12 +8054,22 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
 
 
 def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=None, shift_of=None, width_of=None,
-                   context_of=None, context_m=None):
+                   context_of=None, context_m=None, left_hand=False, country=None):
     """The chunks of the bridges crossing the tile box `exact` (deck surfaces flagged "deck", their
     centre / edge lines; every bridge chunk "fixed": its z is the deck's, not the ground's). Deck
     heights: from `bridges` (BridgeProfiles: whole chains, shared by every tile), else from the
     chains found among the given cells (deck_heights; tests). context_m: surrounding decks to retain (default
     DECK_CONTEXT_M); furniture needs enough context to decide the next support of an owned wire span."""
+    def marks_of(fid, spec, pts, lon, ws):
+        got = copies_of(cells).get(fid)
+        if not got and fid in bseen:
+            got = [bseen[fid][:2]]
+        import lanesections
+        tags = lane_tags(*got[0]) if got else None
+        ex = extras(spec, pts, lon, left_hand, country, tags, ws,
+                    phase=lanesections.phase(*got[0]) if got else 0.)
+        return section_lines(ex, *got[0], spec, pts, frame, lon, left_hand, country, ws) if got else ex
+
     if bridges is not None:
         margin = DECK_CONTEXT_M if context_m is None else float(context_m)
         near = (exact[0] - margin, exact[1] - margin, exact[2] + margin, exact[3] + margin)
@@ -8016,7 +8110,7 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
                    if np.isfinite(z).all()]
         dd = getattr(bridges, "depth_of", None)
         return _deck_chunks(got, exact, bridges._ground, {d[0]: dd(d[0]) for d in got} if dd else None, walks,
-                            shift_of, width_of, context_m)
+                            shift_of, width_of, context_m, marks_of=marks_of)
     if not bseen:
         return []
     parts = []                                  # (fid, spec, xy (k, 2), lon)
@@ -8051,7 +8145,8 @@ def _bridge_chunks(frame, bseen, elev, exact, bridges=None, cells=None, walks=No
             import grading
             z = np.maximum(_smooth_pinned(z, DECK_STEP, grading.SIGMA_M), g)
         decks.append((fid, spec, np.c_[xy, z], lon))
-    return _deck_chunks(decks, exact, ground, walks=walks, shift_of=shift_of, width_of=width_of, context_m=context_m)
+    return _deck_chunks(decks, exact, ground, walks=walks, shift_of=shift_of, width_of=width_of,
+                        context_m=context_m, marks_of=marks_of)
 
 
 DECK_CONTEXT_M = 24.0   # m around a tile its bridges' decks are passed as context (roadmesh.deck: whether an edge has
@@ -8438,7 +8533,8 @@ def deck_walks(feats, i, ground_specs, left_hand=False):
     return None
 
 
-def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None):
+def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of=None, width_of=None, context_m=None,
+                 marks_of=None):
     """Deck + line chunks of bridge parts [(fid, spec, pts (k, 3), lon)] clipped to the box `exact`, and their decks
     within context_m (default DECK_CONTEXT_M) as "ctx" chunks (not drawn: build_tile's caller hands them to roadmesh.deck).
     ground_fn(xy) -> heights: a part's ends on the ground are its abutments (each deck chunk's "abut" points: the
@@ -8526,7 +8622,9 @@ def _deck_chunks(decks, exact, ground_fn=None, depths=None, walks=None, shift_of
         pts = shifted[i]
         dw, dc = _deck_frame(spec, walks.get(fid))
         lines = [({**_deck_look(spec), "deck": True}, dw, offset_polyline(pts, dc) if dc else pts)]
-        for look, w, line in extras(spec, pts, lon, ws=width_of(fid, pts) if width_of else None):
+        ws = width_of(fid, pts) if width_of else None
+        ex = marks_of(fid, spec, pts, lon, ws) if marks_of else extras(spec, pts, lon, ws=ws)
+        for look, w, line in ex:
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
                 lines.append((look, w, line))
         if walks.get(fid):                      # its sidewalks, flush on the deck beside the carriageway
@@ -8673,6 +8771,50 @@ def _off_line(q, pts):
     a, d = pts[:-1, :2], np.diff(pts[:, :2], axis=0)
     t = np.clip(((q - a) * d).sum(1) / np.maximum((d * d).sum(1), 1e-9), 0.0, 1.0)
     return float(np.hypot(*(a + d * t[:, None] - q).T).min())
+
+
+def section_continuations(rows, seen):
+    """Through pairs at mapped nodes whose physical centres differ by placement.
+
+    Coordinate coincidence is insufficient at an auxiliary lane: its centre is
+    half a lane outside the through-road reference, while the inner lane grid
+    remains continuous. Use shared endpoint connectors and compatible tangents.
+    """
+    import lanesections
+    at_node = {}
+    for fid, sp, pts, _lon in rows:
+        if fid not in seen or len(pts) < 2:
+            continue
+        f, i = seen[fid][:2]
+        table = f.rules.get("connectors")
+        if table is None:
+            continue
+        section = lanesections.profile(f, i) is not None
+        for r in table.rows(i):
+            u = float(table.start[r])
+            if u > 1e-6 and u < 1 - 1e-6:
+                continue
+            k, nb = (0, 1) if u <= 1e-6 else (-1, -2)
+            d = pts[nb, :2] - pts[k, :2]
+            d /= max(float(np.linalg.norm(d)), 1e-9)
+            at_node.setdefault(str(table.value[r]), []).append((fid, sp, pts[k, :2], d, section))
+    pairs, stems, ends = set(), set(), {}
+    for node, arms in at_node.items():
+        through = set()
+        for a, sa, pa, ua, ca in arms:
+            if not sa.oneway or sa.link:
+                continue
+            for b, sb, pb, ub, cb in arms:
+                if (a == b or not sb.oneway or sb.link or sa.cls != sb.cls or not (ca or cb)
+                        or float(ua @ ub) > -math.cos(math.radians(GOING_ON_DEG))
+                        or np.linalg.norm(pa - pb) > abs(sa.width - sb.width) / 2 + .8):
+                    continue
+                pairs.add((a, b))
+                through.update((a, b))
+        for a in through:
+            ends.setdefault(a, set()).add(node)
+            stems.update((a, b) for b, *_ in arms if b not in through)
+    return pairs, stems, {a for a, nodes in ends.items() if len(nodes) >= 2}
 
 
 LINE_RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, "unclassified": 2, "residential": 2}
@@ -8872,7 +9014,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 deck_width_fn(frame, source_cells))
 
     for ch in _bridge_chunks(frame, bseen, elev, (x0, y0, x1, y1), bridges, cells, deck_walk, deck_shift, deck_width,
-                             bridge_context, context_m=context_m if traffic_context else None):
+                             bridge_context, context_m=context_m if traffic_context else None,
+                             left_hand=left_hand, country=country):
         if ch.get("deck"):
             decks_near.append(ch)
             traffic_decks.append(_deck_clearance(ch))
@@ -9034,6 +9177,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     chunks.extend(corner_chunks)
     going_on = _going_on(roads)
     straight, stems, whole = line_through(roads)
+    sec_straight, sec_stems, sec_whole = section_continuations(roads, seen)
+    straight |= sec_straight
+    stems |= sec_stems
+    whole |= sec_whole
+    going_on |= sec_straight
     traffic_lines = []
     for fid, spec, pts, lon in roads:
         ws = None                               # (tapered where it meets a road of another width: road_tapers)
@@ -9050,14 +9198,19 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if ls:
                 sla, slo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 sh = shift_at(ls, slo, sla)
-        ex = extras(spec, pts, lon, left_hand, country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws, sh) \
+        import lanesections
+        phase = lanesections.phase(*seen[fid][:2]) if fid in seen else 0.
+        ex = extras(spec, pts, lon, left_hand, country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws, sh,
+                    phase=phase) \
             if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
         if not ex:
             continue
-        if fid in seen and str(country or "").upper() == "SE":
-            ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
+        if fid in seen:
+            ex = section_lines(ex, *seen[fid][:2], spec, pts, frame, lon, left_hand, country, ws)
+            if str(country or "").upper() == "SE":
+                ex = way_lines(ex, *seen[fid][:2], spec, pts, lon, left_hand, country, ws, sh)
         blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads if f2 != fid]
         edge_blockers = [(p2[:, :2], s2.width / 2 + CUT_MARGIN) for f2, s2, p2, _ in roads
                          if f2 != fid and (fid, f2) not in straight] + zebras

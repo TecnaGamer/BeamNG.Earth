@@ -56,7 +56,8 @@ def is_link(feats, i):
 def invalidate(feats):
     """Enrichment can arrive after specs were requested; discard derived facts."""
     for key in ("_road_specs", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
-                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_overrides"):
+                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_overrides",
+                "_lane_flow", "_lane_flow_rows", "_lane_flow_home", "_lane_shifts", "_lane_section_joints"):
         feats.__dict__.pop(key, None)
 
 
@@ -70,22 +71,75 @@ def _project(line, points):
     return dist[np.arange(len(points)), k], delta[k] / length[k, None]
 
 
+def _chain_count(line, candidates, cls, link, direction):
+    """Lane evidence along an entire merged segment, including current OSM way splits.
+
+    Every four metres must have nearby, aligned evidence of the same count. A
+    ramp, the opposite carriageway, a gap, or a disputed count cannot fill it.
+    """
+    arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line, axis=0), axis=1))]
+    s = np.linspace(0., arc[-1], max(9, int(np.ceil(arc[-1] / 4.)) + 1))
+    points = np.column_stack([np.interp(s, arc, line[:, d]) for d in (0, 1)])
+    _, tangent = _project(line, points)
+    evidence = []
+    for wid, lanes, other_cls, other_link, od, p, lo, hi in candidates:
+        if other_cls != cls or other_link != link or bool(od) != bool(direction):
+            continue
+        use = np.flatnonzero(np.all((points >= lo) & (points <= hi), axis=1))
+        if not len(use):
+            continue
+        dist, heading = _project(p, points[use])
+        alignment = (tangent[use] * heading).sum(1)
+        alignment = alignment * direction * od if direction else np.abs(alignment)
+        dist = np.where((alignment >= .9) & (dist <= 6.), dist, np.inf)
+        row = np.full(len(points), np.inf)
+        row[use] = dist
+        evidence.append((wid, lanes, row))
+    if not evidence:
+        return None
+    distances = np.array([r[2] for r in evidence])
+    best = distances.argmin(0)
+    nearest = distances[best, np.arange(len(points))]
+    if not np.isfinite(nearest).all() or nearest.mean() > 3.:
+        return None
+    counts = np.array([r[1] for r in evidence])
+    agreed = counts[best[0]]
+    if np.any(counts[best] != agreed):
+        return None
+    if np.any((counts[:, None] != agreed) & (distances < nearest + 1.)):
+        return None
+    used = np.unique(best)
+    if len(used) < 2:
+        return None                   # the existing whole-way matcher handles this
+    return int(evidence[best[len(best) // 2]][0]), int(agreed)
+
+
+def missing_boxes(feats, tags, ids):
+    """Full bounds of highway features without source-way lane evidence.
+
+    A feature touching a data cell can extend well beyond that cell. Its source
+    way (or replacement fragments) may only intersect the other end.
+    """
+    classes = feats.attrs.get("class", [""] * len(feats))
+    out = []
+    for i in range(len(feats)):
+        if classes[i] in HIGHWAYS and count(tags.get(ids[i], {}).get("lanes")) is None:
+            parts = feats.parts(i)
+            if len(parts) == 1 and len(parts[0]) == 1 and len(parts[0][0]) >= 2:
+                ll = np.asarray(parts[0][0], np.float64)
+                out.append((float(ll[:, 0].min()), float(ll[:, 1].min()), float(ll[:, 0].max()),
+                            float(ll[:, 1].max())))
+    return out
+
+
 def join(feats, tags, ids, geometry=None):
     """Keep highway evidence separate from osmtags' legacy named-street fallback. geometry() -> {way id: (k, 2)
     lon/lat} of the tagged highways (osmtags.OsmTags.highway_geometry), asked only when a motorway / trunk's own way
-    id is not among the tags (replaced since the Overture release): its count from a way along the same line.
+    id has no lane count: its count from current ways along the same line.
     geometry(need): need, the lon/lat boxes (lon0, lat0, lon1, lat1) of those highways."""
     n = len(feats)
     if geometry is not None:
-        classes_ = feats.attrs.get("class", [""] * n)
-        need = []           # (lon0, lat0, lon1, lat1) of each highway whose own way is not among the tags
-        for i in range(n):
-            if classes_[i] in HIGHWAYS and ids[i] not in tags:
-                parts = feats.parts(i)
-                if len(parts) == 1 and len(parts[0]) == 1 and len(parts[0][0]) >= 2:
-                    ll = np.asarray(parts[0][0], np.float64)
-                    need.append((float(ll[:, 0].min()), float(ll[:, 1].min()), float(ll[:, 0].max()),
-                                 float(ll[:, 1].max())))
+        need = missing_boxes(feats, tags, ids)
         if need:
             try:
                 for wid, p in (geometry(need) or {}).items():
@@ -148,6 +202,11 @@ def join(feats, tags, ids, geometry=None):
         if matches and not any(m[2] != matches[0][2] and m[0] < matches[0][0] + 1. for m in matches[1:]):
             _, matched[i], counts[i] = matches[0]
             sources[i] = "osm-geometry"
+        elif not matches:
+            chain = _chain_count(line, candidates, classes[i], is_link(feats, i), direction)
+            if chain is not None:
+                matched[i], counts[i] = chain
+                sources[i] = "osm-chain"
     feats.attrs["lane_count"] = counts
     feats.attrs["lane_source"] = np.array(sources, dtype="<U16")
     feats.attrs["lane_osm_way"] = matched

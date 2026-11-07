@@ -104,7 +104,8 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-LAYER_VERSIONS = {"roads": 8}
+# roads 10: lane evidence over the full merged feature, including current OSM fragments across cell edges
+LAYER_VERSIONS = {"roads": 10}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -439,8 +440,7 @@ class MapData:
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
             feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result(),
-                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
+                feats = self._osm_roads(feats, key, osm.result(), kind)
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -468,6 +468,35 @@ class MapData:
             if getattr(self, "_osm_ex", None) is None:
                 self._osm_ex = ThreadPoolExecutor(OSM_THREADS, thread_name_prefix="osmtags")
             return self._osm_ex
+
+    def _osm_roads(self, feats, key, got, kind):
+        """Read lane evidence over a merged highway's full length, across cell edges.
+
+        The A8's source way was outside the cell that contained its other end;
+        missing tags then let ramp flow reduce the three-lane mainline to one.
+        """
+        import osmtags
+        import roadlanes
+        tags, raceways = got
+        bounds = key.bounds()
+        osm = getattr(self, "osmtags", None)
+        if osm is not None and len(feats):
+            ids = [osmtags.way_id(str(v)) for v in feats.attrs.get("src_record", [""] * len(feats))]
+            need = roadlanes.missing_boxes(feats, tags, ids)
+            if need:
+                boxes = np.asarray([bounds] + need)
+                full = (float(boxes[:, 0].min()), float(boxes[:, 1].min()),
+                        float(boxes[:, 2].max()), float(boxes[:, 3].max()))
+                if full != bounds:
+                    try:
+                        more, _ = osm.cell(full, kind)
+                        tags = dict(tags)
+                        tags.update(more)
+                        bounds = full
+                    except Exception as e:
+                        log.debug("mapdata: full highway lane tags: %s", e)
+        return self._osm(feats, (tags, raceways),
+                         (lambda need: osm.highway_geometry(bounds, kind, need)) if osm is not None else None)
 
     def _osm_cell(self, key, kind):
         """(tags, raceways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
@@ -723,6 +752,30 @@ class MapData:
                     f = f.localize(frame)
                 self._rails(key, layer, f)
                 self._lanes(key, layer, f)
+                if layer == "roads":
+                    import lanesections
+                    import railtags
+                    source = f
+                    context = {}
+                    def lane_context(lat, lon):
+                        owner = mapcells.cell_of(lat, lon)
+                        if owner == key:
+                            return source
+                        if owner not in context:
+                            # Raw arrays, not cell(): avoid a decoded-cell cycle
+                            # when two workers resolve opposite ends of one link.
+                            try:
+                                ar, _hit = self.layer_arrays(owner, layer, kind)
+                                other = mapgeom.Features.from_arrays(layer, ar, "")
+                                self._lanes(owner, layer, other)
+                                context[owner] = other
+                            except Exception as e:
+                                import revisit
+                                revisit.fault()
+                                log.debug("lane mouth context %s: %s", owner, e)
+                                context[owner] = None
+                        return context[owner]
+                    f = lanesections.split(f, frame, lane_context if railtags.LANE_PARTS in f.attrs else None)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                 if layer == "roads":

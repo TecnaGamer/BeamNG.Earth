@@ -180,8 +180,8 @@ class OsmTags:
         touches bounds: PR #471's match for a highway whose Overture way id OSM no longer has (roadlanes.join). Asked
         only then (roadlanes.join's geometry callback): the geometry column of their row groups was ~33 MB more of a
         cold downtown Los Angeles visit (4 road tiles, 2026-11-04) when every cell read it. need: [(lon0, lat0, lon1,
-        lat1)] of the highways to match: only the ways whose bbox (GEOMETRY_MARGIN_M round it) holds one of them
-        (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read."""
+        lat1)] of the highways to match: only ways whose bbox (GEOMETRY_MARGIN_M round it) intersects one of them
+        are read. A merged Overture segment can span several current OSM ways."""
         lon0, lat0, lon1, lat1 = bounds
         etag, remote = self.version(kind)
         rd = self._reader
@@ -210,7 +210,7 @@ class OsmTags:
                         x0, y0, x1, y1 = (r[3 + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
                         dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
                         dy = GEOMETRY_MARGIN_M / 110574.0
-                        if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
+                        if not any(x0 - dx <= a1 and x1 + dx >= a0 and y0 - dy <= b1 and y1 + dy >= b0
                                    for a0, b0, a1, b1 in need):
                             continue
                     lane_rows.append(r[2])
