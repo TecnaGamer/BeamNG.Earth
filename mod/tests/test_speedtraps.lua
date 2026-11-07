@@ -22,7 +22,7 @@ end
 local row = { '172', 0, 0, 100, 0, 5, 130, 0, -8, 101.22 }
 local function drive(x, y, z, vx, id)
   speedtraps.update({ vehicleId = id or 1, x = x, y = y or 0, z = z or 101,
-    vx = vx, vy = 0, vz = 0, speed = math.abs(vx) }, .10, .10)
+    vx = vx, vy = 0, vz = 0, speed = math.abs(vx) }, .08, .08)
 end
 speedtraps.onRows('g:tile', { row })
 drive(-2, nil, nil, 140 / 3.6)
@@ -34,6 +34,8 @@ for _, o in pairs(S.objects) do if o.class == 'SpotLight' then light = o end end
 T.check(light and light.fields.isEnabled == 'true', 'a real SpotLight flash is enabled')
 drive(6, nil, nil, 140 / 3.6)
 drive(10, nil, nil, 140 / 3.6)
+T.check(light.fields.isEnabled == 'true', 'the pulse is still active at 160 ms')
+drive(14, nil, nil, 140 / 3.6)
 T.check(light.fields.isEnabled == 'false' and #notices == 1, 'flash expires and the pass is not counted twice')
 
 for _, p in ipairs({ { 0, 101, -40 }, { 7, 101, 40 }, { 0, 110, 40 }, { 0, 101, 36 } }) do

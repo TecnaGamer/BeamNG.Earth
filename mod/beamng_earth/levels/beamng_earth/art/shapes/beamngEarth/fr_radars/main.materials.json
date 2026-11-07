@@ -101,7 +101,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3a.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3a_512.color.png",
         "roughnessFactor": 0.7
       }
     ],
@@ -114,7 +114,7 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3b.color.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars/sr3b_512.color.png",
         "roughnessFactor": 0.7
       }
     ],

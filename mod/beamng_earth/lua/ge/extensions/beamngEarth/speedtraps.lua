@@ -4,7 +4,7 @@ local M = {}
 local tiles = {}
 local previous, lightId, lightKey
 local flashLeft = 0
-local FLASH_S = 0.13
+local FLASH_S = 0.20
 
 -- Fixed-camera technical margin (Arrêté du 4 juin 2009, article 6).
 -- Compare in hundredths of km/h so 137 measured at a 130 limit gives 130.15.
@@ -79,7 +79,7 @@ local function flash(key, gate)
     light:setField('range', 0, '30')
     light:setField('innerAngle', 0, '65')
     light:setField('outerAngle', 0, '125')
-    light:setField('brightness', 0, '16')
+    light:setField('brightness', 0, '48')
     light:setField('color', 0, '1 0.97 0.91 1')
     light:setField('castShadows', 0, 'false')
     light:setField('isEnabled', 0, 'false')
@@ -88,7 +88,8 @@ local function flash(key, gate)
     lightId = light:getID()
   end
   local x, y, z = gate.lightX, gate.lightY, gate.lightZ
-  local dir = vec3(gate.x - x - gate.dx * 3, gate.y - y - gate.dy * 3, gate.z + 0.7 - z)
+  -- Throw the pulse across the lane and into the road ahead of the driver.
+  local dir = vec3(gate.x - x + gate.dx * 6, gate.y - y + gate.dy * 6, gate.z + 0.7 - z)
   local q = quatFromDir(dir, vec3(0, 0, 1))
   light:setPosRot(x, y, z, q.x, q.y, q.z, q.w)
   light:setField('isEnabled', 0, 'true')

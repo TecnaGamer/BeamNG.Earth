@@ -17,6 +17,8 @@ VFS = "/levels/beamng_earth/art/shapes/beamngEarth/fr_radars"
 OUT = ROOT / "mod/beamng_earth" / VFS.lstrip("/")
 CATALOG = ROOT / "mod/beamng_earth/lua/ge/extensions/beamngEarth/frRadarAssets.lua"
 PREFIX = "bne_fr_radar_"
+SIGN_FACE_SIZE = (512, 512)
+TEXTURE_FILES = {"sr3a": "sr3a_512.color.png", "sr3b": "sr3b_512.color.png", "stripe": "stripe.color.png"}
 
 
 def box(mesh, name, x, y, z, dx, dy, dz):
@@ -100,8 +102,8 @@ def materials():
     stages = {name: {"baseColorFactor": [*colour, 1.], "roughnessFactor": .24 if name == "glass" else .64,
                      "metallicFactor": .40 if name in {"zinc", "silver"} else 0.}
               for name, colour in palette.items()}
-    for name in ("sr3a", "sr3b", "stripe"):
-        stages[name] = {"baseColorMap": f"{VFS}/{name}.color.png", "roughnessFactor": .7}
+    for name, filename in TEXTURE_FILES.items():
+        stages[name] = {"baseColorMap": f"{VFS}/{filename}", "roughnessFactor": .7}
     result = {}
     for key, stage in stages.items():
         name = PREFIX + key
@@ -115,12 +117,15 @@ def build(a=None, b=None):
     for name, source in (("sr3a", a), ("sr3b", b)):
         if source:
             with Image.open(source) as im:
-                im.convert("RGB").save(OUT / f"{name}.color.png", optimize=True)
+                # BeamNG's Texture Cooker requires power-of-two dimensions.
+                # The full-face UVs restore the portrait proportions on the sign.
+                face_texture = im.convert("RGB").resize(SIGN_FACE_SIZE, Image.Resampling.LANCZOS)
+                face_texture.save(OUT / TEXTURE_FILES[name], optimize=True)
     stripe = Image.new("RGB", (64, 64), (42, 42, 35))
     draw = ImageDraw.Draw(stripe)
     for x in range(-64, 64, 16):
         draw.polygon(((x, 0), (x + 8, 0), (x + 72, 64), (x + 64, 64)), fill=(244, 190, 37))
-    stripe.save(OUT / "stripe.color.png", optimize=True)
+    stripe.save(OUT / TEXTURE_FILES["stripe"], optimize=True)
     (OUT / "main.materials.json").write_text(json.dumps(materials(), indent=2) + "\n", encoding="utf-8")
     assets = []
     for kind, (group, height, lens) in HARDWARE.items():
