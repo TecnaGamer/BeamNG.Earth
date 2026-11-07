@@ -3362,7 +3362,7 @@ def _section_mat_tex(sec_res, factors, has_alphas, alpha_cutoffs, double_sideds=
 def _model_mesh(c, cache_dir):
     """road_tile_items' custom entry c's mesh as it is baked: (pos, uvs, tris, nrm, textures, tri_materials), a local
     model off disk (threedmr.load_local_model), a 3dmr.eu one fetched and decoded (threedmr.gltf_mesh), turned by
-    its forced (threedmr.position_override) or OSM (threedmr.osm_yaw) yaw when c has a "latlon"."""
+    its forced (threedmr.position_override) or, for non-bridges, OSM (threedmr.osm_yaw) yaw when c has a "latlon"."""
     import logging
     import threedmr
 
@@ -3382,6 +3382,10 @@ def _model_mesh(c, cache_dir):
         if override is not None and override[2] is not None:
             yaw = override[2]
             log.info("3dmr model %s: yaw %.1f° (forced by override)", cid, yaw)
+        elif _is_bridge(pos, _bridge_info(c, cache_dir)):
+            # A building footprint is not a bridge alignment. Keep the author's geographic orientation;
+            # known per-model corrections above still take precedence.
+            yaw = 0.0
         else:
             yaw = threedmr.osm_yaw(latlon[0], latlon[1], cid, lower, cache_dir)
             if yaw:
@@ -3391,11 +3395,40 @@ def _model_mesh(c, cache_dir):
     return pos, uvs, tris, nrm, textures, tri_materials
 
 
-def _is_bridge(pos):
-    """A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M)."""
-    dx = float(pos[:, 0].max() - pos[:, 0].min()) if len(pos) else 0.0
-    dy = float(pos[:, 1].max() - pos[:, 1].min()) if len(pos) else 0.0
-    return (dx > BRIDGE_ASPECT * dy or dy > BRIDGE_ASPECT * dx) and max(dx, dy) > BRIDGE_MIN_SPAN_M
+def _bridge_info(c, cache_dir):
+    """Optional metadata already cached by model_position; never fetch just to classify a mesh."""
+    import threedmr
+
+    return c["local"] if "local" in c else threedmr.model_info(c["id"], cache_dir, cached_only=True)
+
+
+def _is_bridge(pos, info=None):
+    """Explicit 3DMR bridge metadata, else a rotation-invariant long-deck heuristic.
+
+    A short/curved bridge need not have a long, narrow bbox. Untagged legacy uploads keep the span/aspect
+    thresholds, measured along their principal horizontal axes rather than compass axes. Unique points
+    keep duplicate material seams and double-sided faces from weighting the axis estimate.
+    """
+    info = info or {}
+    tags = info.get("tags") or {}
+    tags = tags if isinstance(tags, dict) else {}
+    bridge = str(tags.get("bridge", "")).lower()
+    if bridge in ("no", "false", "0"):
+        return False
+    if (bridge and bridge not in ("none", "null")) or tags.get("man_made") == "bridge" or tags.get("building") == "bridge":
+        return True
+    categories = info.get("categories") or []
+    if any(str(category).strip().casefold() == "bridge"
+           for category in (categories if isinstance(categories, list) else [categories])):
+        return True
+    xy = np.unique(np.asarray(pos, np.float64).reshape(-1, 3)[:, :2], axis=0)
+    if len(xy) < 3 or not np.isfinite(xy).all():
+        return False
+    xy -= xy.mean(axis=0)
+    _values, axes = np.linalg.eigh(xy.T @ xy)
+    spans = np.ptp(xy @ axes, axis=0)
+    width, length = sorted(spans)
+    return bool(length > BRIDGE_MIN_SPAN_M and length > BRIDGE_ASPECT * width)
 
 
 def _centred(pos):
@@ -3421,8 +3454,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     be had here (a user's report at Baghdad's Al-Shaheed Monument, model 24: two procedural "sector"
     stubs of its domes' lower tiers stayed and poked through the real mesh once it loaded).
 
-    A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M - told apart
-    from a monument's or a building's) carries the road itself (FV=24, a user's report: no stub under it, driven on, no
+    A model identified by bridge metadata or a long deck along its principal axes (_is_bridge) carries
+    the road itself (FV=24, a user's report: no stub under it, driven on, no
     friction): its deck's top is traced (threedmr.bridge_deck_surface), the model leaned so that deck meets the
     road network where the mapped bridge leaves it (road_ends: blockworker's bridge_road_ends; else the ground at
     the deck's own ends - threedmr.bridge_tilt), drawn without collision ("col": False - its two-sided lattice
@@ -3430,7 +3463,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     "_deck" entry at the same pos); the procedural bridge under it is left out of every tile it reaches
     (bridge_footprints, bridge_stub_*). A slab that fails to write leaves the model its own collision (and the
     tile incomplete: revisit.fault). Before that: if custom's entry carries
-    a "latlon" (road_tile_items' - the model's own mapped position), the mesh is rotated about its vertical
+    a "latlon" (road_tile_items' - the model's own mapped position), a non-bridge mesh is rotated about its vertical
     axis to match its OSM footprint's edges (threedmr.osm_yaw/rotate_xz) - not every 3dmr.eu upload follows
     the orientation guide (a user's report: the Eiffel Tower, id 4, stood ~45 degrees off though its
     position was right), so this runs before write_model's own centering (rotating a mesh that is not yet
@@ -3475,7 +3508,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             if max(dx, dy) > MODEL_MAX_M:
                 log.warning("3dmr model %s: %.0f x %.0f m, wider than %.0f m: not placed", cid, dx, dy, MODEL_MAX_M)
                 continue
-            is_bridge = _is_bridge(pos) and "local" not in c
+            is_bridge = _is_bridge(pos, _bridge_info(c, cache_dir)) and "local" not in c
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
             )
@@ -3773,7 +3806,7 @@ def bridge_footprints(frame, tx, ty, cache_dir):
 
             def mesh(_c=c):
                 pos, _uvs, tris, _nrm, _tex, _tm = _model_mesh(_c, cache_dir)
-                return _centred(pos), tris, _is_bridge(pos)
+                return _centred(pos), tris, _is_bridge(pos, _bridge_info(_c, cache_dir))
 
             fp = threedmr.bridge_footprint(mid, cache_dir, mesh)
         except threedmr.UnsupportedModelError:

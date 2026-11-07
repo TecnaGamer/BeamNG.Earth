@@ -1941,8 +1941,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_27(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 27)
+    def test_version_is_28(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 28)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -2185,6 +2185,20 @@ class BridgeDeckTest(unittest.TestCase):
         Z = self.surf["z"]
         self.assertLess(np.nanmax(Z), 16.0, "the dragon's back is no floor")
         self.assertGreater(np.nanmin(Z), 4.5, "nor the slab's lower skin or a plinth")
+
+    def test_pier_caps_below_deck_do_not_truncate_collision(self):
+        # Caps have enough headroom below the road to be mistaken for the first open floor. Their wider
+        # footprints dominate a few columns, as on the Narrows and Elizabeth Quay bridge models.
+        P, T = self.P.tolist(), self.T.tolist()
+        for x in (-50, 0, 50):
+            n = len(P)
+            P.extend([[x - 3, -14, 0], [x + 3, -14, 0], [x + 3, 14, 0], [x - 3, 14, 0]])
+            T.extend([[n, n + 1, n + 2], [n, n + 2, n + 3]])
+        surface = threedmr.bridge_deck_surface(np.array(P), np.array(T))
+        rows = np.flatnonzero(np.isfinite(surface["z"]).any(1))
+        self.assertGreaterEqual((rows[-1] - rows[0]) * surface["du"], 198)
+        i = int(round((0 - surface["u0"]) / surface["du"]))
+        self.assertGreater(np.nanmedian(surface["z"][i]), 14)
 
     def test_ends_where_the_level_steps(self):
         Z = self.surf["z"]

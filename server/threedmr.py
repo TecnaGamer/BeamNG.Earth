@@ -56,7 +56,7 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 27  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 28  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
 # deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
 # and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
@@ -302,11 +302,19 @@ def region_ids(lat, lon, cache_dir, iface=None, timeout=30.0):
     return ids
 
 
-def model_info(model_id, cache_dir, iface=None, timeout=30.0):
+def model_info(model_id, cache_dir, iface=None, timeout=30.0, *, cached_only=False):
     """The https://3dmr.eu/api/info/<id> record of a model ({"id", "lat", "lon", "title", "tags", ...}),
-    cached per id under <cache_dir>/threedmr_cache/info_<id>.json."""
+    cached per id under <cache_dir>/threedmr_cache/info_<id>.json. cached_only returns {} on a cache miss:
+    optional classification must not add a network dependency after discovery has resolved the position."""
     cache = os.path.join(cache_dir, "threedmr_cache")
     path = os.path.join(cache, f"info_{model_id}.json")
+    if cached_only:
+        try:
+            with open(path) as f:
+                info = json.load(f)
+            return info if isinstance(info, dict) else {}
+        except (OSError, ValueError):
+            return {}
     url = INFO_URL.format(id=model_id)
     return _cached_json(path, url, iface, timeout, f"info {model_id}")
 
@@ -1293,7 +1301,9 @@ def bridge_deck_surface(positions, tris):
         for allz, upz in col:
             if upz is None:
                 continue
-            for z in upz:
+            # Start at the exposed top. A pier cap/underside more than HEADROOM below the deck is also
+            # "open" by that test; choosing it first makes the median jump down and ends the trace at piers.
+            for z in reversed(upz):
                 above = allz[allz > z + 0.05]
                 if not len(above) or above[0] > z + BRIDGE_HEADROOM_M:
                     open_.append(z)

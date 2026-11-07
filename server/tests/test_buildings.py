@@ -1683,7 +1683,7 @@ class ModelBridgeTest(unittest.TestCase):
         return (P, np.zeros((len(P), 2)), np.array(T, np.int64), None, [(None, None, None, False, None)],
                 np.zeros(len(T), np.int64))
 
-    def _bake(self, **patches):
+    def _bake(self, mesh=None, info=None, **patches):
         custom = [{"id": 22, "xy": (10.0, 10.0)}]
         ground = lambda la, lo: np.zeros(np.shape(la))
         res = {"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22", "has_alpha": False,
@@ -1692,7 +1692,8 @@ class ModelBridgeTest(unittest.TestCase):
             out = os.path.join(d, "s1")
             os.makedirs(out)
             with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
-                 mock.patch("threedmr.gltf_mesh", return_value=self._slab()), \
+                 mock.patch("threedmr.gltf_mesh", return_value=mesh if mesh is not None else self._slab()), \
+                 mock.patch("threedmr.model_info", return_value=info or {}), \
                  mock.patch("threedmr.write_model", return_value=res) as write_model, \
                  mock.patch("threedmr.update_materials", return_value=None), \
                  mock.patch("revisit.fault") as fault:
@@ -1702,6 +1703,20 @@ class ModelBridgeTest(unittest.TestCase):
                         road_ends={22: [(-80.0, 10.0, 1.0), (100.0, 10.0, 2.0)]})
                 files = sorted(os.listdir(out))
         return entries, write_model, fault, files
+
+    def test_diagonal_bridge_gets_deck_collision_and_road_end_placement(self):
+        mesh = list(self._slab())
+        mesh[0] = threedmr.rotate_xz(mesh[0], 45.0)
+        entries, writer, fault, _files = self._bake(mesh=mesh)
+        self.assertEqual([e.get("col", True) for e in entries], [False, True])
+        self.assertIsNotNone(writer.call_args.kwargs["tilt"])
+        fault.assert_not_called()
+
+    def test_tagged_short_bridge_gets_its_own_deck(self):
+        entries, writer, fault, _files = self._bake(mesh=self._slab(60, 10), info={"tags": {"bridge": "yes"}})
+        self.assertEqual([e.get("col", True) for e in entries], [False, True])
+        self.assertIsNotNone(writer.call_args.kwargs["tilt"])
+        fault.assert_not_called()
 
     def test_bridge_drawn_without_collision_beside_its_deck_slab(self):
         entries, write_model, fault, files = self._bake()
