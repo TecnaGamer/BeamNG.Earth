@@ -215,3 +215,41 @@ jobs:
           { echo; echo "---"; echo; python3 tools/release_notes.py --launch-only "$v"; } >> notes.md
           gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip --target "$GITHUB_SHA" --title "BeamNG.Earth $v" \
             --notes-file notes.md --generate-notes $pre
+
+  # the BeamMP server as a container image (docker/Dockerfile: the Linux host bundle), ghcr.io/<owner>/beamng.earth-server:
+  # a release tagged with its version and latest (next: a preview); a development build as dev only (the releases keep 3
+  # of those, the registry would keep every one)
+  container:
+    needs: [check, release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Development build's version
+        if: needs.check.outputs.dev == 'true'
+        run: printf '%s\n' "${{ needs.check.outputs.version }}" > VERSION
+      - id: tags
+        run: |
+          image="ghcr.io/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/beamng.earth-server"
+          v=${{ needs.check.outputs.version }}
+          if [ "${{ needs.check.outputs.dev }}" = "true" ]; then tags="$image:dev"
+          else
+            case "$v" in *preview*|*alpha*|*rc*) moving=next;; *) moving=latest;; esac
+            tags="$image:$v,$image:$moving"
+          fi
+          echo "tags=$tags" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          build-args: VERSION=${{ needs.check.outputs.version }}
+          tags: ${{ steps.tags.outputs.tags }}
+          push: true

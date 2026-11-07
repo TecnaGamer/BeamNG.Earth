@@ -1,0 +1,20 @@
+# A BeamNG.Earth BeamMP server (beammp/README.md, "Docker"): put your AuthKey in .env next to this file
+# (BEAMMP_AUTH_KEY=...), set the version's tag below (the same as your players' app) and: docker compose up -d
+services:
+  beamng-earth:
+    image: ghcr.io/tecnagamer/beamng.earth-server:1.8.2-beta
+    restart: unless-stopped
+    ports:
+      - "30814:30814/tcp"
+      - "30814:30814/udp"
+    volumes:
+      - beamng-earth:/data
+    environment:
+      BEAMMP_AUTH_KEY: ${BEAMMP_AUTH_KEY:?put your key from https://keymaster.beammp.com in .env}
+      BEAMMP_NAME: "My BeamNG.Earth server"
+      BEAMMP_PRIVATE: "false"
+      BNGE_TIME: real
+      BNGE_WEATHER: real
+
+volumes:
+  beamng-earth:

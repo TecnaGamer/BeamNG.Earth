@@ -403,6 +403,9 @@ little CPU. From the source, `python3 tools/package.py --beammp` builds the same
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
 checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
+[beammp/README.md](beammp/README.md#docker)).
 
 **Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
 the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
