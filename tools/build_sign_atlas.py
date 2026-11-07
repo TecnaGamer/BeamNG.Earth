@@ -677,21 +677,16 @@ def i_pedzone(p):
 
 
 def chevron(side):
-    """A chevron board (a bend's direction board): a wide board of red and white diagonal stripes with a black arrow on a white
-    plate, twice as wide as high; it fills the middle band of its cell (outline 6)."""
+    """A bend's direction board (Ukraine's 1.4.1, the Czech and Polish long boards alike): a long red board with a thin white
+    rim and five white chevrons pointing the way the road turns, four times as wide as high; it fills the middle band of its
+    cell (outline 6)."""
     def go(pen, _f):
-        x0, x1, y0, y1 = -0.97, 0.97, -0.48, 0.48
-        pen.poly([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], WHITE)
-        step = 0.36
-        k = x0 - 1.0
-        while k < x1 + 1.0:        # stripes leaning 45 degrees, half of every step red
-            band = [(k, y0 - 0.1), (k + step / 2, y0 - 0.1), (k + step / 2 + (y1 - y0 + 0.2), y1 + 0.1), (k + (y1 - y0 + 0.2), y1 + 0.1)]
-            got = clip_rect(band, x0, x1, y0, y1)
-            if got:
-                pen.poly(got, RED)
-            k += step
-        pen.poly(rounded([(0.66, 0.34), (-0.66, 0.34), (-0.66, -0.34), (0.66, -0.34)], 0.12), WHITE)
-        pen.arrow([(-0.46 * side, 0.0), (0.46 * side, 0.0)], 0.15, BLACK, 2.4)
+        x0, x1, y0, y1 = -0.97, 0.97, -0.25, 0.25
+        pen.poly(rounded([(x1, y1), (x0, y1), (x0, y0), (x1, y0)], 0.04), WHITE)
+        pen.poly(rounded([(x1 - 0.025, y1 - 0.05), (x0 + 0.025, y1 - 0.05), (x0 + 0.025, y0 + 0.05), (x1 - 0.025, y0 + 0.05)], 0.03), RED)
+        for k in range(5):
+            cx = (k - 2) * 0.36 * side
+            pen.line([(cx - 0.09 * side, 0.15), (cx + 0.09 * side, 0.0), (cx - 0.09 * side, -0.15)], 0.085, WHITE, False)
     return go
 
 
