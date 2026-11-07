@@ -737,7 +737,7 @@ class Region:
 
 def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
                   max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None):
+                  horizon=None, forced_level=0, view=None, anchor_nodes=True):
     """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
     anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
     select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
@@ -765,6 +765,17 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         out[t.key] = t
     refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
     t1 = time.perf_counter()
+    if regions and not anchor_nodes:
+        # (a camera high above the ground, the 3D map: the finest global tiles are leaves, no anchor nodes in them;
+        # those nodes, a few metres to a km, are below a pixel from there, and their Python selection took 0.25-0.37 s
+        # of the event loop at each camera move, 2026-11-07)
+        for x, y, q in regions:
+            q = tuple(float(v) for v in q)
+            e = [math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1]) for k in range(4)]
+            t = GTile(int(zf), int(x), int(y), GLOBAL_MIN_LEVEL, q, float(sum(e) / 4))
+            out[t.key] = t
+            refined.discard(("m", int(zf), int(x), int(y)))
+        regions = []
     if regions:
         aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
                             GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,

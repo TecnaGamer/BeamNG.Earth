@@ -32,16 +32,29 @@ local function vehicleFrame()
 end
 
 -- the orbit's first pose: over the car, looking the way the camera looked
+local function anchor()
+  local core = rawget(_G, 'beamngEarth_core')
+  return core and core._state and core._state().anchor or nil
+end
+
 local function startOrbit(center)
   local fwd = core_camera.getQuat() * vec3(0, 1, 0)
   local heading = math.atan2(fwd.x, fwd.y)
-  local g = rawget(_G, 'core_camera') and core_camera.getGlobalCameras and core_camera.getGlobalCameras()[M.CAMERA]
-  local data = {target = vec3(center), dist = M.START_DIST, heading = heading, pitch = M.START_PITCH, fov = 55}
+  local a = anchor()
+  local lat, lon, h = 0, 0, 0
+  if a then
+    if a.worldToGeodetic then lat, lon, h = a:worldToGeodetic(center.x, center.y, center.z)
+    else lat, lon, h = a:enuToGeodetic(center.x, center.y, center.z) end
+  end
+  local data = {lat = lat, lon = lon, ground = h or 0, dist = M.START_DIST, heading = heading, pitch = M.START_PITCH,
+                fov = 55}
+  local g = core_camera.getGlobalCameras and core_camera.getGlobalCameras()[M.CAMERA]
   local pos, rot
   if g then
     g:setCustomData(data)
     pos, rot = g:pose()
-  else
+  end
+  if not pos then
     local cp = math.cos(data.pitch)
     local dir = vec3(math.sin(heading) * cp, math.cos(heading) * cp, -math.sin(data.pitch))
     pos, rot = center - dir * data.dist, quatFromDir(dir, vec3(0, 0, 1))
@@ -155,16 +168,14 @@ function M.drag(dx, dy, mode, screenH)
     return
   end
   local mpp = 2 * g.dist * math.tan(math.rad(g.fov) / 2) / math.max(200, tonumber(screenH) or 1080)
-  local f = vec3(math.sin(g.heading), math.cos(g.heading), 0)
-  local r = vec3(f.y, -f.x, 0)
-  g.target = g.target + (r * (-dx) + f * (dy / math.max(0.2, math.sin(g.pitch)))) * mpp
+  g:move(dy / math.max(0.2, math.sin(g.pitch)) * mpp, -dx * mpp)
 end
 
 -- the wheel: notches (positive: out), each ~15 % of the distance
 function M.zoom(notches)
   local g = globe()
   if not g then return end
-  g.dist = math.max(15, math.min(600000, g.dist * math.exp((tonumber(notches) or 0) * 0.15)))
+  g.dist = math.max(g.DIST_MIN or 15, math.min(g.DIST_MAX or 600000, g.dist * math.exp((tonumber(notches) or 0) * 0.15)))
 end
 
 function M.setHeading(h)
@@ -202,13 +213,7 @@ function M.state()
   if not active then return {active = false} end
   local g = core_camera.getGlobalCameras()[M.CAMERA]
   if not g then return {active = false} end
-  local out = {active = true, dist = g.dist, heading = g.heading, pitch = g.pitch}
-  local core = rawget(_G, 'beamngEarth_core')
-  local a = core and core._state and core._state().anchor
-  if a and a.enuToGeodetic then
-    out.lat, out.lon = a:enuToGeodetic(g.target.x, g.target.y, 0)
-  end
-  return out
+  return {active = true, dist = g.dist, heading = g.heading, pitch = g.pitch, lat = g.lat, lon = g.lon}
 end
 
 -- the 3D map screen's poll (EarthMap3d.vue): state() and the place under the view (the status bar asks the server
