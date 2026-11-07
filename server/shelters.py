@@ -29,6 +29,9 @@ NEAR_ROAD_M = 30.0          # a stop farther from every carriageway is not turne
 CURB_PAD_M = 1.2            # m past the carriageway edge: the signed face, when the point is in the road. 0.6 left the
                             # roof over the edge line and the posts on the paved shoulder (Suchy Dul, 2026-11-05)
 LONG_HALF = 1.45            # the shape's half length along the curb (local y)
+POST_PAD_M = 0.5            # m every post keeps off any carriageway's edge, and not only the road the shelter faces: a
+                            # post stood on the asphalt behind the kerb, at a junction by a car park (Suchy Dul, 2026-11-07)
+CLEAR_PASSES = 4            # a shelter pushed off one road may reach another: a few passes, then it stays
 POLY_MAX = 80.0             # m²: a bus stop drawn as a polygon is still one shelter
 NO_SHELTER = {"no", "none"}
 TRANSIT_SHELTER = {"public_transport", "public_transit", "bus_stop", "bus", "bus_shelter", "transit"}
@@ -122,8 +125,9 @@ def _spot(feats, frame, i):
 
 
 def _closest(roads, x, y):
-    """(closest x, y, tangent x, y, half width) of the nearest carriageway within NEAR_ROAD_M, or None.
-    roads: build_tile's (fid, spec, centreline (k, 3), lon)."""
+    """(closest x, y, tangent x, y, half width) of the carriageway whose edge is nearest, within NEAR_ROAD_M, or None.
+    roads: build_tile's (fid, spec, centreline (k, 3), lon). By the edge, not the centre line: beside a wide road and a
+    lane, the wide road is the one the kerb is on."""
     best = None
     px, py = float(x), float(y)
     for item in roads or ():
@@ -137,16 +141,54 @@ def _closest(roads, x, y):
         t = np.clip(((px - a[:, 0]) * ab[:, 0] + (py - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
         cx = a[:, 0] + t * ab[:, 0]
         cy = a[:, 1] + t * ab[:, 1]
-        d2 = (cx - px) ** 2 + (cy - py) ** 2
-        k = int(np.argmin(d2))
-        if best is None or d2[k] < best[0]:
+        d = np.hypot(cx - px, cy - py)
+        k = int(np.argmin(d))
+        edge = float(d[k]) - half
+        if best is None or edge < best[0]:
             span = math.hypot(float(ab[k, 0]), float(ab[k, 1]))
             if span < 1e-6:
                 continue
-            best = (float(d2[k]), float(cx[k]), float(cy[k]), float(ab[k, 0]) / span, float(ab[k, 1]) / span, half)
-    if best is None or best[0] > NEAR_ROAD_M ** 2:
+            best = (edge, float(cx[k]), float(cy[k]), float(ab[k, 0]) / span, float(ab[k, 1]) / span, half)
+    if best is None or best[0] > NEAR_ROAD_M:
         return None
     return best[1:]
+
+
+def _posts(ox, oy, yaw):
+    """The (4, 2) corners of a shelter's footprint: its posts."""
+    rad = math.radians(yaw)
+    ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
+    return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
+                     for sx in (-STREET_X, STREET_X) for sy in (-LONG_HALF, LONG_HALF)], np.float64)
+
+
+def _clear_of_roads(ox, oy, yaw, roads):
+    """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of."""
+    for _ in range(CLEAR_PASSES):
+        worst = None
+        for item in roads or ():
+            spec, pts = item[1], np.asarray(item[2], np.float64)
+            if len(pts) < 2:
+                continue
+            half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
+            a, b = pts[:-1, :2], pts[1:, :2]
+            ab = b - a
+            ab2 = np.maximum((ab * ab).sum(1), 1e-9)
+            for p in _posts(ox, oy, yaw):
+                t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
+                foot = a + t[:, None] * ab
+                d = np.hypot(*(p - foot).T)
+                k = int(np.argmin(d))
+                short = half + POST_PAD_M - float(d[k])
+                if short > 1e-3 and (worst is None or short > worst[0]):
+                    # (off the road's own centre line: the shelter's centre says which side it is on)
+                    n = np.array([ox, oy]) - foot[k]
+                    worst = (short, n / max(float(np.hypot(*n)), 1e-6))
+        if worst is None:
+            break
+        ox += float(worst[1][0]) * worst[0]
+        oy += float(worst[1][1]) * worst[0]
+    return ox, oy
 
 
 def _place(fid, x, y, roads):
@@ -226,6 +268,7 @@ def rows(frame, infra_fn, box, elev, roads=()):
                 continue
             seen.add(fid)
             ox, oy, yaw = _place(fid, spot[0], spot[1], roads)
+            ox, oy = _clear_of_roads(ox, oy, yaw, roads)
             pending.append((ox, oy, yaw))
     if not pending:
         return []

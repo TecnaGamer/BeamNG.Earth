@@ -69,6 +69,16 @@ class PlaceTest(unittest.TestCase):
         self.assertEqual(len(got), 1)
         self.assertGreaterEqual(got[0][2] - shelters.STREET_X, 4.0 + shelters.CURB_PAD_M - 0.02)
 
+    def test_no_post_stands_on_a_road_beside_the_one_it_faces(self):
+        # an 8 m road along x and a 6 m lane across it at x = 52: every post clear of both
+        lane = ("lane", type("S", (), {"width": 6.0})(), np.array([[52.0, -50.0, 0.0], [52.0, 50.0, 0.0]]), None)
+        roads = list(self.road()) + [lane]
+        got = self.rows(self.stop([[50.0, 8.0]]), roads)
+        self.assertEqual(len(got), 1)
+        posts = shelters._posts(got[0][1], got[0][2], got[0][4])
+        self.assertTrue((np.abs(posts[:, 1]) >= 4.0 + shelters.POST_PAD_M - 0.02).all(), posts)
+        self.assertTrue((np.abs(posts[:, 0] - 52.0) >= 3.0 + shelters.POST_PAD_M - 0.02).all(), posts)
+
     def test_the_base_sits_on_the_lowest_ground_under_the_posts(self):
         # a bank rising away from the road (y): the posts uphill are in the ground, the downhill ones touch it
         def elev(la, lo):
