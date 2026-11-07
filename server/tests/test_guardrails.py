@@ -200,12 +200,12 @@ class GuardrailForestTest(unittest.TestCase):
     BOX = (0.0, -20.0, 200.0, 20.0)
 
     def rows_for(self, xy, ground, decks, parapets=(), tags=None, bridge_rails=False,
-                 supported_decks_out=None):
+                 supported_decks_out=None, roads=()):
         f = self.features("guard_rail", tags=tags, xy=xy)
         return guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
                                       lambda lat, lon: np.full(np.shape(lat), float(ground), np.float64),
                                       decks=decks, parapets=parapets, bridge_rails=bridge_rails,
-                                      supported_decks_out=supported_decks_out)
+                                      supported_decks_out=supported_decks_out, roads=roads)
 
     def test_mapped_rails_on_the_deck_edge_are_dropped(self):
         decks, parapets = self.deck_fixture()
@@ -234,10 +234,23 @@ class GuardrailForestTest(unittest.TestCase):
         decks, parapets = self.deck_fixture()
         # This lower road crosses the bridge at right angles. A point-only deck lookup used
         # to mistake the module at the crossing for a centre rail on the bridge.
+        under = [self.road([[50.0, -40.0], [50.0, 40.0]], width=8.0)]
+        rows = self.rows_for([[50.0, -15.0], [50.0, 15.0]], 12.0, decks, parapets, roads=under)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertAlmostEqual(row[3], 12.0, delta=0.05)
+            self.assertAlmostEqual(row[1], 50.0, delta=0.2)
+
+    def test_a_fender_across_the_deck_leaves_the_lane(self):
+        """A rail that cuts across a deck and follows no carriageway leaves the lanes.
+        The parts outside the deck stay, at ground height. A rail that follows a road under the deck does not."""
+        decks, parapets = self.deck_fixture()
         rows = self.rows_for([[50.0, -15.0], [50.0, 15.0]], 12.0, decks, parapets)
         self.assertTrue(rows)
         for row in rows:
             self.assertAlmostEqual(row[3], 12.0, delta=0.05)
+            self.assertGreater(abs(row[2]), 4.0)
+        self.assertTrue(any(abs(row[2]) > 8.0 for row in rows))
 
     def test_explicit_bridge_median_between_two_decks_stays_at_deck_height(self):
         decks = [{"n": [[0.0, -6.0, 20.0], [100.0, -6.0, 20.0]], "w": 8.0},
@@ -443,6 +456,59 @@ class GuardrailForestTest(unittest.TestCase):
         self.assertTrue(at_end, "(the rail past the road's sides)")
         self.assertEqual([r for r in at_end if abs(r[2]) < 6.0 + guardrails.MODULE_LENGTH_M / 2], [],
                          "none across the road's end")
+
+    def _on_road(self, cls, xy, roads_near):
+        f = self.features(cls, xy=xy)
+        return guardrails.forest_rows(self.frame, lambda _k: f, self.BOX,
+                                      lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64),
+                                      roads=roads_near)
+
+    def test_a_side_rail_inside_the_lane_is_pushed_to_the_edge(self):
+        """GitHub #680: a rail mapped along the road, but inside the generated width, stands in the lane.
+        It is shifted out to the carriageway edge. A centre barrier and a rail already beside the road stay."""
+        road = [self.road([[0.0, 0.0], [100.0, 0.0]], width=12.0)]
+        edge = 6.0 + guardrails.RAIL_CLEAR_M
+        for cls in ("guard_rail", "jersey_barrier"):
+            with self.subTest(cls=cls):
+                inside = self._on_road(cls, [[10.0, 3.0], [90.0, 3.0]], road)
+                self.assertTrue(inside)
+                for row in inside:
+                    self.assertAlmostEqual(row[2], edge, delta=0.05)
+                centre = self._on_road(cls, [[10.0, 0.4], [90.0, 0.4]], road)
+                self.assertTrue(centre)
+                for row in centre:
+                    self.assertAlmostEqual(row[2], 0.4, delta=0.05)
+                beside = self._on_road(cls, [[10.0, 8.0], [90.0, 8.0]], road)
+                self.assertTrue(beside)
+                for row in beside:
+                    self.assertAlmostEqual(row[2], 8.0, delta=0.05)
+
+    def test_a_skewed_lower_road_rail_stays_on_the_ground(self):
+        """A lower road 23° off a deck still clears the deck's parallel test (Drie Merenweg under the
+        Zuidtangent). The rail follows the lower road, so it stays at ground height on that road's edge
+        instead of pitching up into the lane above."""
+        direction = np.array([np.cos(np.deg2rad(23.0)), np.sin(np.deg2rad(23.0))])
+        left = np.array([-direction[1], direction[0]])
+
+        def at(t, offset):
+            return np.array([50.0, 0.0]) + t * direction + offset * left
+
+        decks, parapets = self.deck_fixture()
+        f = self.features("guard_rail", xy=[at(-30.0, 3.0), at(30.0, 3.0)])
+        rows = guardrails.forest_rows(
+            self.frame, lambda _k: f, self.BOX,
+            lambda lat, lon: np.full(np.shape(lat), 12.0, np.float64),
+            decks=decks, parapets=parapets,
+            roads=[self.road([at(-60.0, 0.0), at(60.0, 0.0)], width=12.0)])
+        self.assertTrue(rows)
+        edge = 6.0 + guardrails.RAIL_CLEAR_M
+        origin = at(-60.0, 0.0)
+        for row in rows:
+            self.assertAlmostEqual(row[3], 12.0, delta=0.1)
+            self.assertAlmostEqual(row[10], 0.0, delta=0.05)
+            v = np.array([row[1], row[2]]) - origin
+            lat = float(v[0] * direction[1] - v[1] * direction[0])
+            self.assertAlmostEqual(abs(lat), edge, delta=0.15)
 
 
 class BridgeRailTest(unittest.TestCase):
