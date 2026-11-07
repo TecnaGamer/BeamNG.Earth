@@ -26,8 +26,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 pub const ONLINE_TTL: Duration = Duration::from_secs(11 * 60); // two reports and a minute
 const MIN_GAP: Duration = Duration::from_secs(60); // reports from one install closer than this are refused
 const SAMPLE_S: u64 = 300;
-const SAMPLE_KEEP: u64 = 30 * 86400;
-const HOUR_KEEP: u64 = 400 * 86400;
+const SAMPLE_KEEP: u64 = 90 * 86400; // 5 min samples
+const MINUTE_KEEP: u64 = 7 * 86400; // 1 min samples (the last hours' graphs)
+const HOUR_KEEP: u64 = 20 * 365 * 86400; // the hours' player peaks: kept (the graphs over years)
+const SOURCE_KEEP: u64 = 400 * 86400; // ... their data-source sums this long
+const MAX_POINTS: u64 = 1000; // a range's points at most (buckets of the finest series that covers it)
+const MAX_SPAN: u64 = 20 * 366 * 86400;
 const MAX_INSTALLS: usize = 200_000;
 const MAX_IDS_PER_IP: usize = 32; // distinct installs one address may report for in an hour
 const MAX_SOURCES: usize = 64;
@@ -103,7 +107,9 @@ struct Install {
 pub struct Telemetry {
     installs: HashMap<String, Install>,
     per_ip: HashMap<IpAddr, (Instant, Vec<String>)>,
-    samples: VecDeque<(u64, u32, u32)>, // (unix s, online, in game)
+    samples: VecDeque<(u64, u32, u32)>, // (unix s, online, in game), every SAMPLE_S
+    minutes: VecDeque<(u64, u32, u32)>, // ... every minute
+    last_minute: u64,
     hours: BTreeMap<u64, Hour>,
     dir: Option<PathBuf>,
     last_sample: u64,
@@ -125,7 +131,8 @@ fn host_ok(h: &str) -> bool {
 impl Telemetry {
     pub fn new(dir: Option<PathBuf>) -> Telemetry {
         let mut t = Telemetry { installs: HashMap::new(), per_ip: HashMap::new(), samples: VecDeque::new(),
-                                hours: BTreeMap::new(), dir, last_sample: 0, written: HashSet::new() };
+                                hours: BTreeMap::new(), dir, last_sample: 0, written: HashSet::new(),
+                                minutes: VecDeque::new(), last_minute: 0 };
         t.load();
         t
     }
@@ -142,10 +149,22 @@ impl Telemetry {
                 }
             }
         }
+        if let Ok(text) = fs::read_to_string(dir.join("minutes.jsonl")) {
+            for line in text.lines() {
+                if let Ok((t, o, p)) = serde_json::from_str::<(u64, u32, u32)>(line) {
+                    if now.saturating_sub(t) <= MINUTE_KEEP {
+                        self.minutes.push_back((t, o, p));
+                    }
+                }
+            }
+        }
         if let Ok(text) = fs::read_to_string(dir.join("hours.jsonl")) {
             for line in text.lines() {
-                if let Ok(h) = serde_json::from_str::<Hour>(line) {
+                if let Ok(mut h) = serde_json::from_str::<Hour>(line) {
                     if now.saturating_sub(h.h * 3600) <= HOUR_KEEP {
+                        if now.saturating_sub(h.h * 3600) > SOURCE_KEEP {
+                            h.sources.clear(); // (the peaks stay, the data-source sums go)
+                        }
                         self.written.insert(h.h);
                         self.hours.insert(h.h, h);
                     }
@@ -156,6 +175,8 @@ impl Telemetry {
         let _ = fs::create_dir_all(&dir);
         let s: String = self.samples.iter().map(|x| serde_json::to_string(x).unwrap() + "\n").collect();
         let _ = fs::write(dir.join("samples.jsonl"), s);
+        let m: String = self.minutes.iter().map(|x| serde_json::to_string(x).unwrap() + "\n").collect();
+        let _ = fs::write(dir.join("minutes.jsonl"), m);
         let h: String = self.hours.values().map(|x| serde_json::to_string(x).unwrap() + "\n").collect();
         let _ = fs::write(dir.join("hours.jsonl"), h);
     }
@@ -231,6 +252,16 @@ impl Telemetry {
     pub fn tick(&mut self, now: Instant, unix_now: u64) {
         self.installs.retain(|_, i| now.duration_since(i.seen) < Duration::from_secs(86400));
         self.per_ip.retain(|_, s| now.duration_since(s.0) < Duration::from_secs(3600));
+        let minute = unix_now / 60 * 60;
+        if minute > self.last_minute {
+            self.last_minute = minute;
+            let (o, p) = self.online(now);
+            self.minutes.push_back((minute, o, p));
+            self.append("minutes.jsonl", serde_json::to_string(&(minute, o, p)).unwrap());
+            while self.minutes.front().is_some_and(|s| unix_now.saturating_sub(s.0) > MINUTE_KEEP) {
+                self.minutes.pop_front();
+            }
+        }
         let slot = unix_now / SAMPLE_S * SAMPLE_S;
         if slot > self.last_sample {
             self.last_sample = slot;
@@ -257,6 +288,10 @@ impl Telemetry {
         }
         let cut = unix_now.saturating_sub(HOUR_KEEP) / 3600;
         self.hours.retain(|h, _| *h >= cut);
+        let src_cut = unix_now.saturating_sub(SOURCE_KEEP) / 3600;
+        for (_, h) in self.hours.range_mut(..src_cut) {
+            h.sources.clear();
+        }
         self.written.retain(|h| *h >= cut);
     }
 
@@ -303,6 +338,61 @@ impl Telemetry {
         serde_json::json!({"online": o, "playing": p, "peak24h": peak24, "peakAll": peak_all, "peakAllAt": peak_at,
                            "history": hist, "daily": daily, "countries": countries, "sampleSeconds": SAMPLE_S,
                            "onlineMeans": "a BeamNG.Earth app running now; playing: with the game connected"})
+    }
+
+    /// The live numbers (the page asks every few seconds): online, in game, the peaks, the public countries.
+    pub fn now(&self, now: Instant, unix_now: u64) -> serde_json::Value {
+        let p = self.public(now, unix_now);
+        serde_json::json!({"t": unix_now, "online": p["online"], "playing": p["playing"], "peak24h": p["peak24h"],
+                           "peakAll": p["peakAll"], "peakAllAt": p["peakAllAt"], "countries": p["countries"]})
+    }
+
+    /// Players over [from, to] (unix s): the finest series whose retention reaches `from` (1 min, 5 min, hourly
+    /// peaks), in buckets of whole steps so at most MAX_POINTS come back, each bucket's highest online and in-game
+    /// counts. The current moment's count closes a range that reaches now.
+    pub fn range(&self, now: Instant, unix_now: u64, from: u64, to: u64) -> Result<serde_json::Value, (u16, &'static str)> {
+        let to = to.min(unix_now);
+        if from >= to || to - from < 60 || to - from > MAX_SPAN {
+            return Err((400, "bad range"));
+        }
+        let span = to - from;
+        let age = unix_now.saturating_sub(from);
+        let (base, series): (u64, Vec<(u64, u32, u32)>) = if age <= MINUTE_KEEP && span / 60 <= 20 * MAX_POINTS {
+            (60, self.minutes.iter().filter(|s| s.0 >= from && s.0 <= to).copied().collect())
+        } else if age <= SAMPLE_KEEP && span / SAMPLE_S <= 20 * MAX_POINTS {
+            (SAMPLE_S, self.samples.iter().filter(|s| s.0 >= from && s.0 <= to).copied().collect())
+        } else {
+            (3600, self.hours.range(from / 3600..=to / 3600).map(|(h, x)| (h * 3600, x.online, x.playing)).collect())
+        };
+        let mut step = base;
+        while span / step > MAX_POINTS {
+            step = match step {
+                60 => 300,
+                300 => 900,
+                900 => 3600,
+                3600 => 3 * 3600,
+                10800 => 6 * 3600,
+                21600 => 86400,
+                86400 => 7 * 86400,
+                s => s * 2,
+            };
+        }
+        let mut buckets: BTreeMap<u64, (u32, u32)> = BTreeMap::new();
+        for (t, o, p) in series {
+            let b = buckets.entry(t / step * step).or_default();
+            b.0 = b.0.max(o);
+            b.1 = b.1.max(p);
+        }
+        if to + 90 >= unix_now {
+            let (o, p) = self.online(now);
+            let b = buckets.entry(unix_now / step * step).or_default();
+            b.0 = b.0.max(o);
+            b.1 = b.1.max(p);
+        }
+        let points: Vec<(u64, u32, u32)> = buckets.into_iter().map(|(t, (o, p))| (t, o, p)).collect();
+        let first = self.hours.keys().next().map(|h| h * 3600).into_iter()
+            .chain(self.samples.front().map(|s| s.0)).chain(self.minutes.front().map(|s| s.0)).min();
+        Ok(serde_json::json!({"from": from, "to": to, "step": step, "points": points, "dataSince": first}))
     }
 
     pub fn private(&self, now: Instant, unix_now: u64) -> serde_json::Value {
@@ -371,6 +461,29 @@ mod tests {
         // gone after the online window
         let later = now + ONLINE_TTL + Duration::from_secs(1);
         assert_eq!(t.online(later), (0, 0));
+    }
+
+    #[test]
+    fn ranges_pick_a_resolution_and_stay_bounded() {
+        let mut t = Telemetry::new(None);
+        let now = Instant::now();
+        let u0 = 1_800_000_000 - 1_800_000_000 % 86400;
+        let ip: IpAddr = "192.0.2.1".parse().unwrap();
+        t.report(ip, "US".into(), rep(&format!("{:032x}", 3), true, 1), now, u0).unwrap();
+        for k in 0..(3 * 86400 / 60) {
+            t.tick(now, u0 + k * 60);           // three days of minutes
+        }
+        let u = u0 + 3 * 86400;
+        let hour = t.range(now, u, u - 3600, u).unwrap();
+        assert_eq!(hour["step"], 60);
+        assert!(hour["points"].as_array().unwrap().len() >= 59);
+        let three = t.range(now, u, u - 3 * 86400, u).unwrap();
+        assert!(three["points"].as_array().unwrap().len() as u64 <= MAX_POINTS + 1);
+        assert!(three["step"].as_u64().unwrap() >= 300);
+        let decade = t.range(now, u, u - 10 * 365 * 86400, u).unwrap();
+        assert!(decade["step"].as_u64().unwrap() >= 86400);
+        assert!(decade["points"].as_array().unwrap().len() as u64 <= MAX_POINTS + 1);
+        assert_eq!(t.range(now, u, u, u - 10).unwrap_err().0, 400);
     }
 
     #[test]

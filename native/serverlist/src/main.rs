@@ -362,6 +362,20 @@ fn main() {
                 }
             }
             (Method::Get, "/stats") => json(200, tel.public(now, unix_now).to_string()),
+            (Method::Get, "/stats/now") => json(200, tel.now(now, unix_now).to_string()),
+            (Method::Get, "/stats/range") => {
+                // ?from=<unix s>&to=<unix s> (to defaults to now)
+                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+                let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+                    .and_then(|v| v.parse::<u64>().ok());
+                match arg("from") {
+                    Some(from) => match tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
+                        Ok(v) => json(200, v.to_string()),
+                        Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                    },
+                    None => json(400, "{\"error\":\"from\"}".into()),
+                }
+            }
             (Method::Get, "/stats/private") => {
                 let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
                 match (&token, auth) {
