@@ -1273,6 +1273,9 @@ local function onMessage(msg)
     roads.onFarDrop(msg, 'B')
   elseif t == 'where_result' then
     statusbar.onResult(msg)
+  elseif t == 'labels_result' then           -- the 3D map's place names (map3d.lua)
+    local m3 = rawget(_G, 'beamngEarth_map3d')
+    if m3 and m3.onLabels then m3.onLabels(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then

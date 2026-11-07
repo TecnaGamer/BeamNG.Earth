@@ -182,6 +182,7 @@ MOD_TO_SERVER = {
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
               "download": F(str, OPT)},  # the "Download along route" setting: off / ahead / route (route_download)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
+    "labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "radius": F(NUM)},   # the 3D map's place names (map3d.lua)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # BeamMP shared world generation v2 (mpsession.lua <-> mpshare.py): our share code asked once a session, the
     # plugin's messages and groups passed through untouched
@@ -232,6 +233,7 @@ SERVER_TO_MOD = {
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
+    "labels_result": {"id": F(int), "places": F(list)},     # the 3D map's place names: [[name, lat, lon, class, pop]]
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
@@ -388,6 +390,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "where_result",                               # the status bar: asked by the mod while driving
+                       "labels_result",                              # the 3D map's place names: asked in map mode
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
@@ -462,7 +465,7 @@ def mod_sends():
     mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
     (core hands them net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua"), r"net(?:'\))?\.send\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua"), r"net(?:'\))?\.send\(\{"),
                            (("terrainpatch.lua", "spaceclouds.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")

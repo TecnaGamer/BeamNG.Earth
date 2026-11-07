@@ -227,6 +227,87 @@ function M.uiState()
   return s
 end
 
+-- ---- place names over the 3D view (the user: "Add overlays to the terrain to show street names and some of our other
+-- overlays from the 2d map"): the towns round the view's target from the server (labels: placenames.labels, the largest
+-- first), asked again when the view moved a third of its distance or zoomed by half; drawn each frame as text at the
+-- ground, each kind of place only within its reach (a city from far away, a hamlet only close by), the nearest
+-- LABELS_DRAWN at most.
+M.LABEL_REACH = {megacity = 900000, city = 250000, town = 45000, village = 14000, hamlet = 5000}
+M.LABEL_REACH_DEFAULT = 2500           -- a city's district (no class)
+M.LABELS_DRAWN = 90
+local labels = {list = {}, anchor = nil, reqId = 0, last = nil}
+
+function M.onLabels(msg)
+  if not msg or msg.id ~= labels.reqId or type(msg.places) ~= 'table' then return end
+  labels.list = {}
+  for _, p in ipairs(msg.places) do
+    if type(p) == 'table' and p[1] and p[2] and p[3] then
+      labels.list[#labels.list + 1] = {name = tostring(p[1]), lat = p[2], lon = p[3], cls = p[4] or '', pop = p[5] or 0}
+    end
+  end
+  labels.anchor = nil                  -- (placed in the current anchor's frame at the next draw)
+end
+
+local function requestLabels(g, s, now)
+  local radius = math.max(8000, math.min(150000, g.dist * 3))
+  local L = labels.last
+  if L and now - L.t < 1.0 then return end
+  if L and math.abs(math.log(radius / L.r)) < 0.5 then
+    local dx = (s.lat - L.lat) * 111320
+    local dy = (s.lon - L.lon) * 111320 * math.cos(math.rad(s.lat))
+    if dx * dx + dy * dy < (radius / 3) ^ 2 then return end
+  end
+  labels.reqId = labels.reqId + 1
+  labels.last = {t = now, lat = s.lat, lon = s.lon, r = radius}
+  require('beamngEarth/net').send({ type = 'labels', id = labels.reqId, lat = s.lat, lon = s.lon, radius = radius })
+end
+
+local white, back = nil, nil
+local function drawLabels(g)
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  if not a or not debugDrawer then return end
+  if labels.anchor ~= a then           -- (a rebase or new results: positions in this anchor's frame, heights again)
+    for _, p in ipairs(labels.list) do
+      p.x, p.y = a:geodeticToEnu(p.lat, p.lon, 0)
+      p.z = nil
+    end
+    labels.anchor = a
+  end
+  white = white or ColorF(1, 1, 1, 1)
+  back = back or ColorI(0, 0, 0, 150)
+  local cam = core_camera.getPosition()
+  local drawn = 0
+  for _, p in ipairs(labels.list) do
+    if drawn >= M.LABELS_DRAWN then break end
+    if p.x then
+      local dx, dy = p.x - cam.x, p.y - cam.y
+      local reach = M.LABEL_REACH[p.cls] or M.LABEL_REACH_DEFAULT
+      if dx * dx + dy * dy < reach * reach then
+        if not p.z then
+          local z = be:getSurfaceHeightBelow(vec3(p.x, p.y, cam.z + 20000))
+          if z and z > -1e8 then p.z = z end
+        end
+        if p.z then
+          debugDrawer:drawTextAdvanced(vec3(p.x, p.y, p.z + 30), p.name, white, true, false, back)
+          drawn = drawn + 1
+        end
+      end
+    end
+  end
+end
+
+local clock = 0
+function M.onUpdate(dtReal)
+  if not active then return end
+  clock = clock + (dtReal or 0)
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  if not g then return end
+  local s = M.state()
+  if s.lat then requestLabels(g, s, clock) end
+  drawLabels(g)
+end
+
 -- a level change or a vehicle switch ends the mode at once (no path)
 function M.onClientEndMission()
   active, transitioning = false, false
