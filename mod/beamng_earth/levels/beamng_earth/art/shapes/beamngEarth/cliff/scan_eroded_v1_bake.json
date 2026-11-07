@@ -1,0 +1,16 @@
+{
+  "source_normal": "scan_v2_flat.normal.png",
+  "erosion_normal": "canyon_far_v8.normal.png",
+  "size": [
+    8192,
+    8192
+  ],
+  "erosion_repeat_metres": [
+    274.32,
+    182.88
+  ],
+  "erosion_slope_gain": 0.45,
+  "wrap_blend": 0.2,
+  "normal_orientation": "OpenGL +Y",
+  "method": "Periodic surface-gradient addition"
+}

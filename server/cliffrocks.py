@@ -270,14 +270,17 @@ def biome_at(koppen, classes):
     return b
 
 
-def rock_colors(biomes, rgb=None):
-    """Linear albedo multiplier from local exposed ground; biome fallback if absent.
+def rock_colors(biomes, rgb=None, family=cliffmaterial.NATURAL):
+    """Encoded PBR vertex tint from local exposed ground; biome fallback if absent.
 
     Do not multiply by the photograph's baked-in shadows. Bound its luminance,
     retain mineral chromaticity, and leave the scan's internal variation intact.
     An all-zero sample means no usable cached imagery (not a black rock).
     """
-    base = PALETTES[np.asarray(biomes)] / ALBEDO_HEADROOM
+    import cliffcolors as cc
+    import clifftransition
+    mineral = PALETTES[np.asarray(biomes)].copy()
+    base = mineral / ALBEDO_HEADROOM
     if rgb is not None:
         rgb = np.asarray(rgb, float)
         if rgb.shape != base.shape or not np.isfinite(rgb).all():
@@ -289,16 +292,31 @@ def rock_colors(biomes, rgb=None):
         # restrained chroma and broad luminance prior decouple photo exposure
         # from albedo; geographic variation is still supplied by the imagery.
         stone = rgb.copy()
-        stone[..., 1] = np.minimum(stone[..., 1], .6*stone[..., 0]+.4*stone[..., 2])
+        # Sandy/yellow minerals legitimately have more green than the average
+        # of red and blue. The old channel clamp made that evidence magenta.
+        # Reject vegetation above; preserve the accepted mineral hue here.
         luminance = stone @ np.array((.2126, .7152, .0722))
         stone = .7*stone + .3*luminance[..., None]
         target_light = 180 + .25*(np.clip(luminance, 130, 210)-180)
         stone *= (target_light/np.maximum(luminance, 1))[..., None]
+        mineral = np.where(valid[..., None], stone, mineral)
         def linear(a):
             return np.where(a <= .04045, a/12.92, ((a+.055)/1.055)**2.4)
         gain = linear(np.clip(stone/255, 0, 1))/linear(SCAN_MEDIAN_SRGB)/ALBEDO_HEADROOM
         base = np.where(valid[..., None], np.clip(gain, .12, 1)*255, base)
-    return np.clip(base, 0, 255).astype(np.uint8)
+    # Preserve the established exposure, but calibrate hue against the actual
+    # diffuse + material factor. A shared scan-relative gain was too pink on
+    # the arid cut and exaggerated channel differences when the shader decoded
+    # that gain as sRGB. Encode the corrected linear multiplier exactly once.
+    reference = np.asarray(clifftransition.MEANS)[np.asarray(family)]
+    weights = np.array((.2126, .7152, .0722))
+    rendered = cc.linear(np.clip(base/255, 0, 1))*reference
+    target = cc.linear(np.clip(mineral/255, 0, 1))
+    target *= ((rendered @ weights)/np.maximum(target @ weights, 1e-8))[..., None]
+    corrected = cc.srgb(np.clip(target/reference, 0, 1))*255
+    calibrated = ((np.asarray(family) == cliffmaterial.NATURAL)
+                  | (np.asarray(family) == cliffmaterial.ARID_CUT))
+    return np.rint(np.clip(np.where(calibrated[..., None], corrected, base), 0, 255)).astype(np.uint8)
 
 
 @dataclass
@@ -514,8 +532,7 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
     normals /= np.linalg.norm(normals, axis=-1, keepdims=True)
     normals, terrain_normals = clifftransition.normals(normals, h, rim_weights, dx*horizontal_scale, dy)
     vertex_rgb = None if rgb is None else np.pad(rgb, ((0, 1), (0, 1), (0, 0)), mode='edge')
-    colors = rock_colors(vb, vertex_rgb)
-    colors = np.concatenate((colors, np.full((*h.shape, 1), 255, np.uint8)), axis=-1)
+    family_colors = {}
     p = surface.reshape(-1, 3)
     if project is not None:
         p = project(p)
@@ -554,7 +571,11 @@ def mesh(heights, keep, xs, ys, biomes, box, origin, rgb=None,
             import cliffcolors
             chart_colors = cliffcolors.canyon_tint(vb, vertex_rgb)
         else:
-            chart_colors = colors
+            if family not in family_colors:
+                colors = rock_colors(vb, vertex_rgb, family)
+                family_colors[family] = np.concatenate(
+                    (colors, np.full((*h.shape, 1), 255, np.uint8)), axis=-1)
+            chart_colors = family_colors[family]
         # Contact attributes must be evaluated at full terrain weight. Interpolating
         # a partially faded endpoint leaves a bright lip and reintroduces relief.
         strip_source_colors = chart_colors.reshape(-1, 4)

@@ -88,7 +88,7 @@ def mineral_tints(biomes, rgb=None, family=0):
     import cliffcolors as cc
     import cliffmaterial as cm
     means = _cliff_means()
-    tint = cr.rock_colors(biomes, rgb)[..., :3]
+    tint = cr.rock_colors(biomes, rgb, family)[..., :3]
     canyon = np.asarray(family) == cm.CANYON
     if np.any(canyon):
         tint = np.where(canyon[..., None], cc.canyon_tint(biomes, rgb)[..., :3], tint)

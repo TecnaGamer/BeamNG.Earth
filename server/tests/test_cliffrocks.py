@@ -827,6 +827,27 @@ class CliffRocksTest(unittest.TestCase):
         self.assertLess(abs(int(tint[1, 0])-int(tint[1, 2])), 30)
         np.testing.assert_array_equal(cr.rock_colors(biomes, np.zeros((2,3))), cr.rock_colors(biomes))
 
+    def test_mineral_hue_matches_both_default_and_arid_materials(self):
+        import cliffcolors as cc
+        import clifftransition
+        # Test the rendered material product, not vertex channels: the two
+        # source textures need different tints to produce the same mineral hue.
+        rgb = np.array([[185., 185., 150.], [215.5, 187.1, 165.3], [180., 180., 180.]])
+        lum = rgb @ np.array((.2126, .7152, .0722))
+        stone = .7*rgb + .3*lum[:, None]
+        target_light = 180 + .25*(np.clip(lum, 130, 210)-180)
+        stone *= (target_light/lum)[:, None]
+        target = cc.linear(stone/255)
+        for family in (cr.cliffmaterial.NATURAL, cr.cliffmaterial.ARID_CUT):
+            tint = cr.rock_colors(np.ones(3, int), rgb, family)
+            rendered = cc.linear(tint/255)*clifftransition.MEANS[family]
+            np.testing.assert_allclose(rendered/rendered[:, 1:2],
+                                       target/target[:, 1:2], atol=.02)
+            old_gain = cc.linear(stone/255)/cc.linear(cr.SCAN_MEDIAN_SRGB)/cr.ALBEDO_HEADROOM
+            previous = cc.linear(np.clip(old_gain, .12, 1))*clifftransition.MEANS[family]
+            np.testing.assert_allclose(rendered @ np.array((.2126, .7152, .0722)),
+                                       previous @ np.array((.2126, .7152, .0722)), atol=.003)
+
     def test_cached_colour_field_is_shared_between_tiles_and_ignores_water(self):
         import cliffcolors
         def photo(cache, lat, lon):

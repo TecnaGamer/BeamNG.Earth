@@ -76,8 +76,8 @@ class TalusTest(unittest.TestCase):
         means = np.asarray(json.loads(Path(cr.__file__).with_name('cliff_transition_means.json').read_text()))
         rgb = np.array([[90,140,80],[110,75,110],[180,170,150],[200,165,115],[0,0,0]])
         biome = np.zeros(5,int)
-        for family in (cm.NATURAL,cm.CANYON):
-            tint = (cc.canyon_tint(biome,rgb) if family==cm.CANYON else cr.rock_colors(biome,rgb))[:,:3]
+        for family in (cm.NATURAL,cm.ARID_CUT,cm.CANYON):
+            tint = (cc.canyon_tint(biome,rgb) if family==cm.CANYON else cr.rock_colors(biome,rgb,family))[:,:3]
             expected = cc.srgb(cc.linear(tint/255)*means[family])*255
             actual = talus.mineral_tints(biome,rgb,family)
             np.testing.assert_allclose(actual,expected,atol=talus.TINT_STEP/2)
