@@ -2282,7 +2282,9 @@ class Server:
             # (on the graded ground, as blockworker.roads_tile)
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
-                                                 cache_dir=os.path.dirname(self.out_dir))
+                                                 cache_dir=os.path.dirname(self.out_dir),
+                                                 deck_fn=lambda cs, bb: blockworker._tile_decks(anchor.bridges, cs, tx,
+                                                                                                ty, box=bb))
             _bridge_fps = buildingsmod.bridge_footprints(anchor.frame, tx, ty, os.path.dirname(self.out_dir))
             if anchor.bridges is not None and any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
                 try:

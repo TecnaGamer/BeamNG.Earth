@@ -803,7 +803,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
-                                                      skip=skip, cache_dir=cache_dir)
+                                                      skip=skip, cache_dir=cache_dir,
+                                                      deck_fn=lambda cs, bb: _tile_decks(bridges, cs, tx, ty, box=bb))
         _bridge_fps = buildingsmod.bridge_footprints(frame, tx, ty, cache_dir)
         if any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
             try:            # (the tile that bakes the model: where the mapped bridge meets the roads)
@@ -1727,13 +1728,14 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
         return mesh
 
 
-def _tile_decks(bridges, cells, tx, ty):
+def _tile_decks(bridges, cells, tx, ty, box=None):
     """[(xy (k, 2), z (k,), width m)] of the bridge decks over road tile (tx, ty) (the buildings they run through get a
-    way, the ones standing on them their floor on the deck: buildings.road_tile_items), [] without bridge profiles."""
+    way, the ones standing on them their floor on the deck: buildings.road_tile_items), [] without bridge profiles.
+    box: (x0, y0, x1, y1) to look in instead of the tile's (its deck_fn: round a long footprint of the tile's)."""
     if bridges is None:
         return []
     import roads as roadsmod
-    x0, y0, x1, y1 = roadsmod.tile_bbox(tx, ty)
+    x0, y0, x1, y1 = box if box is not None else roadsmod.tile_bbox(tx, ty)
     try:
         return [(np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64), float(spec.width))
                 for _, spec, xy, z, _ in bridges.parts(cells, (x0 - 20, y0 - 20, x1 + 20, y1 + 20))]
@@ -1802,7 +1804,8 @@ def far_buildings_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, lamp_regio
     return _revisit_tile("bldfar", k, aid, tx, ty, out_dir, vfs_dir, f"bldfar_{aid}_{tx}_{ty}.json",
                          lambda: buildingsmod.far_tile(frame, tx, ty, _s.md,
                                                        lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                                       out_dir, vfs_dir, aid, lamp_region),
+                                                       out_dir, vfs_dir, aid, lamp_region,
+                                                       deck_fn=_far_decks(frame, zoom)),
                          lambda res: {"n": int(res[1])},
                          lambda path, extra: (path, int(extra.get("n", 0))),
                          _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty), md=_md_versions()))
@@ -1912,6 +1915,21 @@ def _far_bridges(frame, gzoom, raw):
     return roadsmod.ChainView(_chain_store(f"far_bridges_{gzoom}", roadsmod.BridgeProfiles, raw, setup), frame)
 
 
+def _far_decks(frame, gzoom):
+    """buildings.far_items' deck_fn: the decks [(xy (k, 2), z (k,), width m)] in frame near a box, from the far
+    bridges' profiles (_far_bridges: the raw ground of DEM zoom gzoom, as the far slabs')."""
+    def decks(cells, box):
+        def raw(la, lo):
+            return ground(None, la, lo, _s.dem.sample(la, lo, gzoom))
+        try:
+            return [(np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64), float(spec.width))
+                    for _, spec, xy, z, _ in _far_bridges(frame, gzoom, raw).parts(cells, box)]
+        except Exception as e:      # no ways cut rather than no buildings
+            log.debug("far decks: %s: %s", type(e).__name__, e)
+            return []
+    return decks
+
+
 def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     """Far geotile tile's content written to out_dir: (JSON data, {what: file name} of its shapes, count) or None
     when its cells are not at hand (asked again later)."""
@@ -1927,7 +1945,8 @@ def _far_geo_build(kind, tile, gzoom, out_dir, vfs_dir, lamp_region):
     names = far_geo_names(kind, tile.key)
     shapes = {}
     if kind == "bldfar":
-        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region)
+        items, lamps, _box = buildingsmod.far_items(frame, tile, None, _s.md, raw, lamp_region,
+                                                     deck_fn=_far_decks(frame, gzoom))
         mesh = buildingsmod.build(items, lite=True)
         n = len(items)
     elif kind == "bldsky":
