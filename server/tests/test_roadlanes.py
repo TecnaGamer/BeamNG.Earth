@@ -38,6 +38,26 @@ def chain(counts=(3, None, 3), reverse=False):
 
 
 class HighwayLanesTest(unittest.TestCase):
+    def test_narrow_motorway_pavement_reserves_width_for_travel_lanes_first(self):
+        pts = np.array([[0., 0., 0.], [100., 0., 0.]])
+        for kind, make in ((None, roads.road_specs), ("is_bridge", roads.bridge_specs),
+                           ("is_tunnel", roads.tunnel_specs)):
+            for width, expected in ((10.9, 10.3), (13.8, 10.8), (16.8, 10.8)):
+                with self.subTest(kind=kind, width=width):
+                    f = highway(direction=-1, flags=[(0, kind)] if kind else [])
+                    osmtags.join(f, {1: {"lanes": 3, "width": width}})
+                    sp = make(f)[0]
+                    self.assertAlmostEqual(sp.width, width)
+                    drive, lanes = roads.lane_layout(sp)
+                    self.assertEqual(lanes, 3)
+                    self.assertAlmostEqual(drive, expected)
+                    self.assertAlmostEqual(navgraph.driving_width(sp), expected)
+                    paint = roads.extras(sp, pts, 0., country="DE")
+                    offsets = sorted({round(float(p[0, 1]), 6) for look, _, p in paint
+                                      if look.get("kind") in ("edge", "lane")})
+                    self.assertEqual(len(offsets), 4)
+                    np.testing.assert_allclose(np.diff(offsets), expected / 3, atol=1e-6)
+
     def test_unmapped_width_guess_does_not_add_an_unpainted_lane(self):
         f = features([[(0, 0), (100, 0)]], ["primary"], widths=[(0, 12.0)])
         sp = roads.road_specs(f)[0]

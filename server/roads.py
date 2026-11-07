@@ -1791,11 +1791,12 @@ def edge_margin(spec):
 
 
 def motorway_shoulder(spec):
-    """A rural motorway carriageway's shoulder: SHOULDER_M (SHOULDER_WIDE_M on a wide one), or beside a ramp's mapped
-    number of LINK_LANE_M lanes what they leave (GitHub #107: a 6 m ramp's edge lines stood 1.6 m apart, inside the
-    motorway's 2.2 m shoulders; PR #471: a ramp's own lane count)."""
+    """Fit shoulders in the pavement left over after the driving lanes."""
     cap = SHOULDER_WIDE_M if (spec.lanes or 0) >= SHOULDER_WIDE_LANES else SHOULDER_M     # (its carriageway's)
-    drive = (spec.lanes or 1) * LINK_LANE_M if spec.link else LINK_LANE_M
+    # A mapped motorway can be only as wide as its travel lanes. Reserving
+    # the default shoulders on that pavement squeezed three lanes into 5 m.
+    drive = ((spec.lanes or 1) * LINK_LANE_M if spec.link or spec.lanes is None
+             else spec.lanes * LANE_W["motorway"])
     return float(np.clip((spec.width - drive) / 2, EDGE_LINE["inset"], cap))
 
 
