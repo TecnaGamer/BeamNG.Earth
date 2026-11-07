@@ -68,6 +68,41 @@ class ReconnectTest(unittest.IsolatedAsyncioTestCase):
         await writer.wait_closed()
         await asyncio.wait_for(conn.finished.wait(), 2)
 
+    async def test_negotiated_dispatch_window_over_real_loopback(self):
+        conn, reader, writer, hello = await self.connect(dispatchWindow=8)
+        self.assertEqual(hello["dispatchWindow"], 8)
+        flow = conn.stream_dispatch
+        for k in range(100):
+            self.assertTrue(conn.send(dict(type="roads_drop", anchorId=1, key=str(k))))
+        conn.send(dict(type="status", text="critical barrier"))
+        total = flow.next_seq - 1
+        seen, keys = 0, []
+        while seen < total:
+            batch = min(8, total - seen)
+            for _ in range(batch):
+                while True:
+                    m = await asyncio.wait_for(protocol.read_message(reader), 2)
+                    if "streamSeq" in m:
+                        break
+                seen += 1
+                self.assertEqual(m["streamSeq"], seen)
+                if m["type"] == "roads_drop":
+                    keys.append(m["key"])
+            self.assertLessEqual(flow.inflight, 8)
+            if seen == 8:
+                # No dispatch credit has been returned: the urgent barrier must already be on the wire.
+                m = await asyncio.wait_for(protocol.read_message(reader), 2)
+                self.assertEqual(m, dict(type="status", text="critical barrier"))
+                self.assertGreater(flow.queued_messages, 0)
+            writer.write(protocol.encode(dict(type="stream_ack", seq=seen)))
+            await writer.drain()
+        self.assertEqual(keys, [str(k) for k in range(100)])
+
+    async def test_legacy_hello_does_not_enable_dispatch_credits(self):
+        conn, _, _, hello = await self.connect()
+        self.assertNotIn("dispatchWindow", hello)
+        self.assertIsNone(conn.stream_dispatch)
+
     def shape(self, conn, name, content):
         source = Path(self.s.out_dir, name)
         temporary = source.with_suffix(".next")

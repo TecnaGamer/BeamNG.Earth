@@ -104,6 +104,13 @@ not release game-owned slots, anchors or adopted session folders. See
 [streaming reliability](../docs/STREAMING_RELIABILITY.md) for the wire contract,
 queue limits, legacy behavior and offline validation limits.
 
+`hello.dispatchWindow` optionally negotiates ordinary-metadata credits (8..64; the mod asks for 32).
+The server echoes it and adds increasing `streamSeq` integers to ordinary messages. After dispatching
+their Lua handlers, the mod sends `stream_ack {seq}` cumulatively on that transport. Critical ground,
+anchor and urgent UI answers bypass this window. This does not acknowledge imports or file ownership;
+the lease and tile acknowledgements above remain necessary. Without negotiation the legacy behavior
+remains. See [exploration frame pacing](../docs/EXPLORATION_PERFORMANCE.md).
+
 Subsea tunnels require `hello.waterguard = 1` from the mod when server water is enabled. The server echoes the
 negotiated version, or requests a mod update and starts no world jobs until a compatible hello arrives. Without
 water, older clients remain supported. Tunnel road JSON may contain `waterguard` records with stable IDs,
@@ -156,6 +163,7 @@ for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the 
 | `{"type":"commit_anchor","anchorId":A}` | Switches the far field to A and commits A's first terrain (from `anchor_ready`). Tiles of the previous anchor that were sent but never swapped in are forgotten: the mod drops them. |
 | `{"type":"prepare_terrain","requestId":N,"anchorId":A,"cx":m,"cy":m}` | `cx`,`cy` multiples of 256 (`--block 512`: 128; other values are snapped). For the active anchor this block becomes the **pending** block: in terrain mode the far field is refined to L0 over it at once and its 64 L0 tiles are built first (mesh mode: no tile depends on a block). |
 | `{"type":"commit_terrain","anchorId":A,"cx":m,"cy":m}` | The committed block. **No far-tile key changes**; in terrain mode only the forced-L0 area moves, in mesh mode nothing at all changes. For a newer known anchor it implies `commit_anchor`. |
+| `{"type":"stream_ack","seq":N}` | Optional dispatch credit: every sequenced metadata message through N was handled on this connection. Does not release pooled files or acknowledge imported tiles. |
 | `{"type":"gas_stations","on":b}` | The settings page's "Gas stations" switch (additive; sent after every `hello` and on change): off, the server lays out no stations, paints no forecourts and names no shapes, and sends the road tiles again (canopies back as buildings); on, the same with them. Never on without `--gas-stations on`. |
 | `{"type":"graphics","lodScale":x,"treeScale":x,"buildingScale":x,"photoPx":n,"viewM":m}` | The settings page's graphics (additive; sent after every `hello` and when one changes; every field optional, scales clamped to 0.5-3, `Connection.set_graphics`): `lodScale` times the layout's K (the far field's terrain detail: each level splits that much farther out; the near radii and the exact level under the block are unchanged), selected again at once; `treeScale` times the tree tiles' reach (`vegetation.SEND_M`, drop 256 m beyond); `buildingScale` times the far buildings', skyline's and far bridges' reach; `photoPx` the drawn block's photo size (1024 / 2048 / 4096, `earthd.BASE_SIZES`: the next photos at that size, every layer's AO map the one of that size, built blocks' photos again); `viewM` the fixed view distance (m, at least 10 km; 0 = the real horizon): the far field's radius at most. |
 | `{"type":"cache","capGb":n,"clear":true}` | The download cache (`server/cache.py`; additive like `weather`): both fields optional. `capGb` = the settings page's size cap in GB (0 = unlimited; sent after every `hello` and on change), `clear: true` = "Clear cache" (everything but the files this server session used and the gravity model, on an executor), neither = fresh usage numbers (the page asks every 10 s while it is open). Always answered with a `cache`; ignored by a `Server()` without a `Cache`. |

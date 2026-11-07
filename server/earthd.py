@@ -81,6 +81,7 @@ from runtimeprofiler import ThreadPoolExecutor  # noqa: E402
 from dataclasses import dataclass, field, replace  # noqa: E402
 
 import numpy as np  # noqa: E402
+import fast  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
@@ -5235,6 +5236,7 @@ class Connection:
         self.tasks = set()
         self.lease = None
         self.closing = False
+        self.stream_dispatch = None     # optional native metadata window, negotiated by hello.dispatchWindow
         self.active = None              # committed anchor id
         self.block = None               # farfield.Block of the committed terrain
         self.pending_block = None       # the last prepare_terrain of the active anchor
@@ -5986,15 +5988,35 @@ class Connection:
     def send(self, msg):
         lease = getattr(self, "lease", None)
         if not getattr(self, "closing", False) and (lease is None or lease.connection is self) and not self.writer.is_closing():
-            data = protocol.encode(msg)
-            transport = getattr(self.writer, "transport", None)
-            pending = transport.get_write_buffer_size() if transport is not None else 0
-            if pending + len(data) > SEND_BUFFER_MAX:
-                self.abort_stream("outgoing buffer limit exceeded")
-                return False
-            self.writer.write(data)
-            return True
+            flow = getattr(self, "stream_dispatch", None)
+            if flow is not None and fast._ef.stream_controlled(msg["type"]):
+                seq = flow.next_seq
+                data = protocol.encode(dict(msg, streamSeq=seq))
+                transport = getattr(self.writer, "transport", None)
+                pending = transport.get_write_buffer_size() if transport is not None else 0
+                if pending + flow.queued_bytes + len(data) > SEND_BUFFER_MAX:
+                    self.abort_stream("outgoing dispatch buffer limit exceeded")
+                    return False
+                try:
+                    frames = flow.enqueue(seq, data)
+                except ValueError as e:
+                    self.abort_stream(str(e))
+                    return False
+                return all(self._write_frame(frame) for frame in frames)
+            return self._write_frame(protocol.encode(msg))
         return False
+
+    def _write_frame(self, data):
+        lease = getattr(self, "lease", None)
+        if getattr(self, "closing", False) or (lease is not None and lease.connection is not self) or self.writer.is_closing():
+            return False
+        transport = getattr(self.writer, "transport", None)
+        pending = transport.get_write_buffer_size() if transport is not None else 0
+        if pending + len(data) > SEND_BUFFER_MAX:
+            self.abort_stream("outgoing buffer limit exceeded")
+            return False
+        self.writer.write(data)
+        return True
 
     def abort_stream(self, reason):
         """Close this transport, preserving ownership until the game's next complete snapshot."""
@@ -6254,6 +6276,10 @@ class Connection:
                 self.distant_traffic_far.sent.clear()
         elif kind == "hello":
             lease_id = self.s.attach_stream(self, msg)
+            window = msg.get("dispatchWindow")
+            if getattr(self, "stream_dispatch", None) is None and type(window) is int and 8 <= window <= 64:
+                fast.require(169, "stream dispatch credits")
+                self.stream_dispatch = fast._ef.StreamDispatch(window, SEND_BUFFER_MAX, 4096)
             self.s.check_user_dir(self, msg.get("userPath"))
             lay = self.s.layout
             fmt = msg.get("format", lay.format)
@@ -6270,6 +6296,8 @@ class Connection:
                  "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
                  "nearVisual": self.s.near_visual, "attribution": self.s.attribution()}
+            if getattr(self, "stream_dispatch", None) is not None:
+                m["dispatchWindow"] = self.stream_dispatch.capacity
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()
@@ -6403,6 +6431,13 @@ class Connection:
             self.commit_terrain(msg)
         elif kind == "pose":
             self.on_pose(msg)
+        elif kind == "stream_ack":
+            flow = getattr(self, "stream_dispatch", None)
+            seq = msg.get("seq")
+            if flow is not None and type(seq) is int and seq >= 0:
+                for data in flow.acknowledge(seq):
+                    if not self._write_frame(data):
+                        break
         elif kind == "map_tiles":               # the in-game map's tiles, as files (the UI cannot fetch http)
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)

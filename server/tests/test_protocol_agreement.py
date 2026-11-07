@@ -92,7 +92,7 @@ MOD_TO_SERVER = {
     # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
     "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "release": F(str, OPT),
               "sessions": F((list, dict), OPT),
-              "waterguard": F(int, OPT),  # required for world generation when the server enables water
+              "waterguard": F(int, OPT), "dispatchWindow": F(int, OPT),
               # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
               "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
               "streamLease": F(int, OPT), "leaseId": F(str, OPT), "leaseSession": F(str, OPT),
@@ -122,6 +122,7 @@ MOD_TO_SERVER = {
                        # 2026-10-25: 'teleport' (a declared teleport: provisional first block, boost) or 'rebase'
                        "purpose": F(str, OPT)},
     "commit_anchor": {"anchorId": F(int)},
+    "stream_ack": {"seq": F(int)},
     "prepare_terrain": {"requestId": F(int), "anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "commit_terrain": {"anchorId": F(int), "cx": F(NUM), "cy": F(NUM)},
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
@@ -271,7 +272,7 @@ SERVER_TO_MOD = {
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
-    "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+    "hello": {"dispatchWindow": F(int, OPT), "runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
               "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "farFormat": F(str), "material": F(str),
@@ -412,6 +413,10 @@ SERVER_TO_MOD = {
               "managed": F(bool), "clearedBytes": F(int, OPT),
               "pinnedBytes": F(int, OPT)},     # the saved areas' files (areas.py; kept by a clear)
 }
+# Optional transport metadata; urgent answers never get a sequence (test_stream_dispatch asserts the bypass).
+for _spec in SERVER_TO_MOD.values():
+    _spec["streamSeq"] = F(int, OPT)
+
 WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "fromDeg", "gustMs"},
                   "aloft": {"ms", "fromDeg"}}
 # message types the plain session cannot produce (each has its own session test below)

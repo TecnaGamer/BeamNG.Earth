@@ -1015,11 +1015,13 @@ end
 
 -- (onUpdate: the server's messages a frame, up to a budget; on M: core.lua is at Lua's 200-locals limit)
 M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 24, drainDiv = 16,
+  window = 32, dispatch = false, ack = 0, sentAck = 0,
   -- handled at once, ahead of the queue: the terrain's and the UI's answers (a player on dev.151, 2026-11-03: holds for
   -- terrain grew over a session, even at 19 mph, a block's terrain_ready waiting behind hundreds of tile messages)
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
   -- taken at once brought the road / green / road ground flicker back, the same player)
-  urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
+  urgent = { anchor_ready = true, anchor_error = true, anchor_progress = true,
+    terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
     block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
@@ -1067,6 +1069,21 @@ end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
 function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 
+function M._dispatchHandled(msg)
+  local nq = M._netq
+  -- Credit only the current transport. This also runs in the main menu: the connection outlives the level.
+  if nq.dispatch and net.isCurrent(msg) and type(msg.streamSeq) == 'number' and msg.streamSeq > nq.ack
+      and msg.streamSeq < 9007199254740992 and msg.streamSeq == math.floor(msg.streamSeq) then
+    nq.ack = msg.streamSeq
+  end
+end
+function M._flushDispatchAck()
+  local nq = M._netq
+  if nq.dispatch and nq.ack > nq.sentAck then
+    if net.send({ type = 'stream_ack', seq = nq.ack }) then nq.sentAck = nq.ack end
+  end
+end
+
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
@@ -1099,7 +1116,8 @@ local function onMessage(msg)
       trafficVisuals = M._trafficvisuals.PROTO,
       -- (the game's own user folder: the server checks it writes its files there, GitHub #770)
       userPath = (FS and FS.getUserPath) and FS:getUserPath() or nil,
-      readySet = 1 })      -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
+      readySet = 1,        -- (it takes a built block near its target: follow.preferReady, 'terrain_ready_set')
+      dispatchWindow = M._netq.window })  -- bounded ordinary metadata until its Lua handlers acknowledge it
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
@@ -1120,6 +1138,8 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    M._netq.dispatch = tonumber(msg.dispatchWindow) == M._netq.window
+    M._netq.ack, M._netq.sentAck = 0, 0
     if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
       net.serverHello(msg.sessionId, msg.leaseId, msg)
     else
@@ -2452,10 +2472,19 @@ local function onUpdate(dtReal, dtSim)
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
     -- server is). The user, 2026-10-20: the mod should be effectively off when not playing the BeamNG.Earth map.
-    for _, msg in ipairs(net.update(dtReal)) do
+    -- Finish the existing FIFO too: bypassing it here could acknowledge later sequences before the messages
+    -- deferred by the last playing frame, or process a reconnect's hello before the old transport's tail.
+    local nq = M._netq
+    for _, msg in ipairs(net.update(dtReal)) do nq.q[#nq.q + 1] = msg end
+    while nq.head <= #nq.q do
+      local msg = nq.q[nq.head]
+      nq.head = nq.head + 1
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+      M._dispatchHandled(msg)
     end
+    nq.q, nq.head = {}, 1
+    M._flushDispatchAck()
     return
   end
   require('beamngEarth/profiler').update(frameMs0, marks, st.inOurLevel, net.isConnected(), net.send)
@@ -2536,6 +2565,7 @@ local function onUpdate(dtReal, dtSim)
   -- 2026-11-03. The rest waits for the next frames. Each type's cost is kept (M.netCosts).
   do
     local nq = M._netq
+    local n0 = hitchClock()
     local function handle(msg)
       local m0, kb0 = hitchClock(), collectgarbage('count')
       local ok, err = pcall(onMessage, msg)
@@ -2549,6 +2579,9 @@ local function onUpdate(dtReal, dtSim)
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
+      -- Dispatch credits are separate from import/file ownership acks. Old queued transports must never free a
+      -- newer transport's credits; net.lua keeps the receive generation without adding it to the wire message.
+      M._dispatchHandled(msg)
     end
     M._alloc.roll(st.clock)
     M._alloc.frame()
@@ -2563,11 +2596,12 @@ local function onUpdate(dtReal, dtSim)
     end
     local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
     local waiting = #nq.q - nq.head + 1
-    local budget = loadingNow and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
-    -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
-    local minN, done = math.ceil(waiting / nq.drainDiv), 0
-    local n0 = hitchClock()
+    -- New servers pace ordinary metadata by this client's credits: no fraction-of-backlog override, even when
+    -- the backlog is large. Older servers retain their legacy drain rule (they cannot pause their sender yet).
+    local budget = loadingNow and math.huge or ((not nq.dispatch and waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local minN, done = nq.dispatch and 0 or math.ceil(waiting / nq.drainDiv), 0
     while nq.head <= #nq.q do
+      if done >= minN and hitchClock() - n0 >= budget then break end
       local msg = nq.q[nq.head]
       nq.head = nq.head + 1       -- (the slot kept: holes would make #nq.q, where the next ones go, unreliable)
       handle(msg)
@@ -2581,6 +2615,8 @@ local function onUpdate(dtReal, dtSim)
       for k = nq.head, #nq.q do rest[#rest + 1] = nq.q[k] end
       nq.q, nq.head = rest, 1
     end
+    M._flushDispatchAck()
+    gov:noteFrame(hitchClock() - n0)  -- decoding/dispatch counts before any streaming, parking or navgraph work
   end
   t = mark('net', t)
   if not scenetree.MissionGroup then return end -- no level loaded
