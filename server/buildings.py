@@ -3418,7 +3418,8 @@ def _is_bridge(pos, info=None):
     if (bridge and bridge not in ("none", "null")) or tags.get("man_made") == "bridge" or tags.get("building") == "bridge":
         return True
     categories = info.get("categories") or []
-    if "bridge" in (categories if isinstance(categories, list) else [categories]):
+    if any(str(category).strip().casefold() == "bridge"
+           for category in (categories if isinstance(categories, list) else [categories])):
         return True
     xy = np.unique(np.asarray(pos, np.float64).reshape(-1, 3)[:, :2], axis=0)
     if len(xy) < 3 or not np.isfinite(xy).all():
