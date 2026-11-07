@@ -271,7 +271,9 @@ class LaneTags(Shards):
 
     def join(self, feats, key):
         """Add OSM's lane tags (attrs lane_attr(k) for k in LANE_COLUMNS, None where absent) to cell key's road
-        segments, in place, joined by way id. Nothing when the shard cannot be had."""
+        segments, in place, joined by way id, and keep the shard's German sign nodes in the cell for sign_nodes(feats)
+        (tools/build_lane_tags.py: the Ortstafeln). Nothing when the shard cannot be had; a shard without "nodes" (an
+        older build) none."""
         sub = feats.attrs.get("subtype")
         if sub is None or not len(feats):
             return
@@ -301,8 +303,22 @@ class LaneTags(Shards):
                 if rows:
                     parts[i] = [(a, b, way_id(r), dict(ways.get(way_id(r)) or {})) for r, a, b in rows]
         feats.attrs[LANE_PARTS] = parts
+        # (the shard's German sign nodes in the cell: [(lon, lat, tags)], as RailTags' _rail_nodes; none without a
+        # cell to bound them)
+        nodes, found = sh.get("nodes") or (), []
+        if nodes and key is not None:
+            lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+            pad = 0.002
+            found = [(lo, la, t) for _id, lo, la, t in nodes
+                     if lon0 - pad <= lo <= lon1 + pad and lat0 - pad <= la <= lat1 + pad]
+        feats.__dict__["_sign_nodes"] = found
         import roadlanes
         roadlanes.invalidate(feats)
+
+
+def sign_nodes(feats):
+    """The German sign nodes LaneTags.join found in feats' cell: [(lon, lat, tags)], [] when none."""
+    return feats.__dict__.get("_sign_nodes", [])
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"

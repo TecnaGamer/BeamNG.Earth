@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""build_de_gemeinden.py GV100AD.txt [OUT]: Germany's Gemeinden that are a Stadt or a Markt, from the Federal
+"""build_de_gemeinden.py GV100AD.txt [OUT]: Germany's Gemeinden and which are a Stadt or a Markt, from the Federal
 Statistical Office's municipality directory (Destatis, Gemeindeverzeichnis GV100AD, the quarterly "Gebietsstand"
 text file: https://www.destatis.de/DE/Themen/Laender-Regionen/Regionales/Gemeindeverzeichnis/_inhalt.html), for the
 small line of an Ortsteil's Ortstafel (server/townentry.py de_kind: "Stadt Schrobenhausen", "Markt Donaustauf",
-"Gemeinde Barbing"; VwV-StVO zu den Zeichen 310 und 311 Rn. 6).
+"Gemeinde Barbing"; VwV-StVO zu den Zeichen 310 und 311 Rn. 6) and which of a village's localities is its Gemeinde
+(de_town: Overture names a Verwaltungsgemeinschaft as its seat, "Schrobenhausen" over Gachenbach).
 
     python3 tools/build_de_gemeinden.py GV100AD_30092026.txt server/data/de_gemeinden.json.gz
 
 The file's records (Datensatzbeschreibung GV100AD, fixed columns, UTF-8 since the Sorbian names): Satzart 40, a
 Kreis (its key in columns 11-15, its name 23-72); Satzart 60, a Gemeinde (its Kreis' key 11-15, its name 23-72 with
-Destatis' suffix after ", ": "Neutraubling, St", "Bad Abbach, M"; Textkennzeichen 123-124: 60 Markt, 63 Stadt, 67
-Große Kreisstadt, the rest no title). Written: {"source", "stand", "rows": [[Kreis, Gemeinde, "S" | "M"]]}, the
-Städte and Märkte only (every other Gemeinde is a "Gemeinde"), sorted; the kreisfreie Städte (61, 62) left out:
-their parts' signs say "Stadtteil" under the city's name. Data: (c) Statistisches Bundesamt (Destatis), reproduction
-and distribution with the source given permitted (the file's own notice).
+Destatis' suffix after ", ": "Neutraubling, St", "Bad Abbach, M"; Textkennzeichen 123-124: 60 Markt, 61 / 62 a
+kreisfreie Stadt, 63 Stadt, 67 Große Kreisstadt, 64 any other Gemeinde, 65 / 66 no Gemeinde: an unincorporated
+area). Written: {"source", "stand", "rows": [[Kreis, Gemeinde, "S" | "M" | "G"]]}, sorted. Data: (c) Statistisches
+Bundesamt (Destatis), reproduction and distribution with the source given permitted (the file's own notice).
 """
 import argparse
 import gzip
@@ -21,7 +21,7 @@ import json
 import os
 import sys
 
-KINDS = {"60": "M", "63": "S", "67": "S"}
+KINDS = {"60": "M", "61": "S", "62": "S", "63": "S", "67": "S", "64": "G"}
 
 
 def rows_of(lines):
@@ -57,7 +57,7 @@ def main():
     with gzip.open(a.out + ".part", "wt", encoding="utf-8", compresslevel=9) as fh:
         json.dump(doc, fh, ensure_ascii=False, separators=(",", ":"))
     os.replace(a.out + ".part", a.out)
-    print(f"{len(rows):,} Städte and Märkte (Gebietsstand {stand}) -> {a.out}, {os.path.getsize(a.out):,} B")
+    print(f"{len(rows):,} Gemeinden (Gebietsstand {stand}) -> {a.out}, {os.path.getsize(a.out):,} B")
 
 
 if __name__ == "__main__":

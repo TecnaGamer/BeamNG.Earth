@@ -141,6 +141,54 @@ class LaneTagsTest(unittest.TestCase):
         self.assertIsNone(got[2][3], "a way without lane tags, not its neighbour's")
         self.assertEqual(roads.lane_tag_parts(f, 1), [(0.0, 1.0, "33", None)], "one way: the whole segment")
 
+class SignNodesTest(unittest.TestCase):
+    """The lane shards' German sign nodes (tools/build_lane_tags.py: the Ortstafeln) kept per cell by LaneTags.join
+    for railtags.sign_nodes; the shard builder's records of them."""
+
+    def joined(self, shard):
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["tertiary"], subtypes=["road"])
+        f.attrs["src_record"] = np.array(["w21@1"])
+        lo, la = f.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        fetch = _Fetcher({"lanes/manifest.json": json.dumps({"built": "2026-11-07T03:00:00Z"}).encode(),
+                          f"lanes/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard(key)).encode())})
+        with tempfile.TemporaryDirectory() as d:
+            railtags.LaneTags(d, fetch).join(f, key)
+        return f
+
+    def test_sign_nodes_in_the_cell_only(self):
+        def shard(key):
+            lon0, lat0, lon1, lat1 = key.bounds()
+            mid = ((lon0 + lon1) / 2, (lat0 + lat1) / 2)
+            return {"ways": {}, "nodes": [[1, mid[0], mid[1], {"traffic_sign": "city_limit", "name": "Sarching"}],
+                                          [2, lon1 + 0.05, lat1, {"traffic_sign": "city_limit", "name": "Far"}]]}
+        got = railtags.sign_nodes(self.joined(shard))
+        self.assertEqual([t["name"] for _lo, _la, t in got], ["Sarching"])
+
+    def test_old_shard_without_nodes(self):
+        self.assertEqual(railtags.sign_nodes(self.joined(lambda key: {"ways": {}})), [])
+
+    def test_the_builders_records(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+            __file__)))), "tools"))
+        try:
+            import build_lane_tags as b
+        except ImportError as e:            # (pyosmium: the data repo's Action has it)
+            self.skipTest(f"build_lane_tags: {e}")
+        self.assertEqual(b.sign_records({"traffic_sign": "city_limit", "name": "Sarching"}),
+                         [{"traffic_sign": "city_limit", "name": "Sarching"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:310,DE:311", "direction": "forward", "name": "A / B"}),
+                         [{"traffic_sign": "DE:310,DE:311", "name": "A / B", "direction": "forward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "310"}), [{"traffic_sign": "DE:310"}])
+        self.assertEqual(b.sign_records({"traffic_sign:backward": "city_limit"}),
+                         [{"traffic_sign": "city_limit", "direction": "backward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:274[50]"}), [], "not a town sign")
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:3100"}), [], "not 310")
+        self.assertTrue(b.in_box(12.2, 49.0))
+        self.assertFalse(b.in_box(2.35, 48.85), "Paris: outside Germany's box")
+
+
 class WaysTest(unittest.TestCase):
     """A shard's ways kept compact (railtags.Ways): the same lookups as the dict, the distinct tag sets once."""
 
