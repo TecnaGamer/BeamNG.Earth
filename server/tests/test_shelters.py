@@ -20,9 +20,10 @@ class KindTest(unittest.TestCase):
         return type("F", (), {"attrs": attrs})()
 
     def test_bus_stops_and_transit_shelters(self):
-        self.assertTrue(shelters.is_shelter(self.features("bus_stop"), 0))
+        self.assertFalse(shelters.is_shelter(self.features("bus_stop"), 0))
         self.assertTrue(shelters.is_shelter(self.features("bus_stop", {"shelter": "yes"}), 0))
-        self.assertTrue(shelters.is_shelter(self.features("amenity", {"highway": "bus_stop"}), 0))
+        self.assertFalse(shelters.is_shelter(self.features("amenity", {"highway": "bus_stop"}), 0))
+        self.assertTrue(shelters.is_shelter(self.features("amenity", {"highway": "bus_stop", "shelter": "yes"}), 0))
         self.assertTrue(shelters.is_shelter(
             self.features("amenity", {"amenity": "shelter", "shelter_type": "public_transport"}), 0))
         self.assertFalse(shelters.is_shelter(self.features("bus_stop", {"shelter": "no"}), 0))
@@ -43,7 +44,7 @@ class PlaceTest(unittest.TestCase):
             part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
             coord_off=np.array([0, 1], np.int64), lonlat=np.column_stack((lon, lat)),
             attrs={"subtype": np.array(["transit"]), "class": np.array([cls]),
-                   "tags": np.array([json.dumps(tags or {})])})
+                   "tags": np.array([json.dumps({"shelter": "yes"} if tags is None else tags)])})
 
     def road(self, width=8.0):
         spec = type("S", (), {"width": width})()
@@ -77,6 +78,36 @@ class PlaceTest(unittest.TestCase):
 
     def test_a_stop_tagged_without_a_shelter_is_left_out(self):
         self.assertEqual(self.rows(self.stop([[50.0, 8.0]], tags={"shelter": "no"}), self.road()), [])
+
+    def test_a_plain_bus_stop_has_no_physical_shelter(self):
+        self.assertEqual(self.rows(self.stop([[50.0, 8.0]], tags={}), self.road()), [])
+
+    def test_the_whole_shelter_keeps_clear_of_a_second_parallel_road(self):
+        roads = self.road()
+        spec = type("S", (), {"width": 2.0})()
+        roads.append(("parallel", spec, np.array([[0., 7., 5.], [100., 7., 5.]]), 0.))
+        self.assertEqual(self.rows(self.stop([[50.0, 1.0]]), roads), [])
+
+    def test_the_end_of_a_shelter_cannot_enter_a_crossing_road(self):
+        roads = self.road()
+        spec = type("S", (), {"width": 1.0})()
+        roads.append(("crossing", spec, np.array([[51.4, 0., 5.], [51.4, 20., 5.]]), 0.))
+        self.assertEqual(self.rows(self.stop([[50.0, 1.0]]), roads), [])
+
+    def test_a_nearby_road_that_clears_the_whole_shelter_is_kept(self):
+        roads = self.road()
+        spec = type("S", (), {"width": 1.0})()
+        roads.append(("crossing", spec, np.array([[53., 0., 5.], [53., 20., 5.]]), 0.))
+        self.assertEqual(len(self.rows(self.stop([[50.0, 1.0]]), roads)), 1)
+
+    def test_a_road_high_over_the_shelter_does_not_remove_it(self):
+        import furniture
+        clearance = furniture.RoadClearance(
+            [(4., np.array([[0., 0., 5.], [100., 0., 5.]]))],
+            [(np.array([[50., 0., 20.], [50., 20., 20.]]), 1., 2.)])
+        got = shelters.rows(self.frame, lambda _: self.stop([[50., 1.]]), (0., 0., 100., 100.),
+                            lambda la, lo: np.full(np.shape(la), 5.), self.road(), clearance=clearance)
+        self.assertEqual(len(got), 1)
 
     def test_a_stop_with_no_road_still_stands(self):
         got = self.rows(self.stop([[40.0, 40.0]]))
