@@ -968,7 +968,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         _radii = []
         if _custom and out_dir and vfs_dir:
             _entries, _radii, _boxes = buildingsmod.custom_models(frame, _custom, elev, out_dir, vfs_dir,
-                                                                  road_ends=_bridge_ends)
+                                                                  road_ends=_bridge_ends, items=items,
+                                                                  origin=(x0, y0))
         bld, _entries = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None, items, custom=_custom,
                                                out_dir=out_dir, vfs_dir=vfs_dir, entries=_entries, radii=_radii)
         mark("bld")

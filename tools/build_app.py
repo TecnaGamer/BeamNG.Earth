@@ -176,7 +176,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)
            "--add-data", f"{os.path.join(server, 'data')}{SEP}data",
            "--add-data", f"{os.path.join(server, 'mile_markers_us.json')}{SEP}.",
-           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}."]
+           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}.",
+           # threedmr.position_fix's offline table (probe/position_audit.json's own OSM-measured corrections)
+           "--add-data", f"{os.path.join(server, 'threedmr_position_fixes.json')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork
