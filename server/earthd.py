@@ -373,6 +373,7 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
+SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 ROAD_TILE_TIMEOUT_S = float(os.environ.get("BNGE_ROAD_TILE_TIMEOUT", "") or 300.0)
 WORKERS = 3                     # far-tile workers (--workers)
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
@@ -7082,6 +7083,7 @@ class Connection:
         if self.view_cap is not None:       # (a fixed view distance: nothing past it is drawn; a disc, as the horizon)
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
         anchor = self.s.anchors[self.active]
+        t_sel = time.perf_counter()
         if self.global_on(anchor, radius):
             # far levels from 3 up as global tiles (geotiles phase 3b): the same for every anchor, kept at a rebase
             new, refined = farfield.select_global(anchor.frame, *self.view_focus, anchor.zf, self.forced(),
@@ -7094,6 +7096,11 @@ class Connection:
                                            self.s.hysteresis, radius, hold=set(self.node_changed),
                                            min_level=self.s.min_level, radii=self.s.near_radii, layout=self.s.layout,
                                            forced_level=self.s.forced_level, view=self.view(), **extra)
+        t_sel = time.perf_counter() - t_sel
+        if t_sel > SLOW_SELECT_S:
+            log.warning("far selection took %.2f s (radius %.0f km, eye %.0f m, %d tiles, %d refined nodes; global "
+                        "part, anchor part s, regions, global tiles: %s)", t_sel, radius / 1000, self.eye or 0.0,
+                        len(new), len(refined), farfield.LAST_GLOBAL_SELECT)
         if self.desired:                # the first selection of an anchor is not a change
             for n in refined ^ self.refined:
                 self.node_changed[n] = now
