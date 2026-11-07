@@ -121,3 +121,23 @@ no network or generation side effects. New sampled providers should reuse the
 shared run compression and fixed grid budget.
 
 Agent communication and validation requirements are in the root `AGENTS.md`.
+
+## Non-layered arid fractured rock (2026-11-07)
+
+**Arid fractured rock** uses the local Köppen dry classes (4-7) as an appearance
+prior, below **Layered canyon** in priority and above **Default rock**. It is not
+a geological boundary or a claim that every dry area has volcanic rock. Existing
+slope, land-cover and user settings gate generation. Near and far faces and toe
+rubble share the production selector; road cuts keep their separate context.
+
+On the map choose **Layers > Debug layers > Regional placement > Natural cliff
+regions** and inspect Hoover Dam (36.02, -114.74). The arid coverage is a bounded
+sample of the climate raster; layered canyon envelopes are exact registry rings.
+Use **Generated cliffs & road cuts** to inspect recorded actual generation.
+The server supplies the legend and coverage; no independent UI region rules exist.
+
+Validation: selector/precedence, climate vector sampling, far classification,
+provider bounds/empty/error/disabled states and talus placement tests pass. Live
+Hoover Dam near/far materials load without missing textures, and the map displays
+the new legend and sampled overlay. Geological accuracy outside the tested area
+and full driving performance have not been established by these visual checks.

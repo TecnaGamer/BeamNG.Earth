@@ -24,7 +24,13 @@ def bake():
     for name in NAMES:
         mat=copy.deepcopy(mats[name]);stage=mat['Stages'][0]
         with Image.open(ART/'cliff'/Path(stage['baseColorMap']).name) as im:
-            mean=linear(np.asarray(im.convert('RGB'),float)/255).mean(axis=(0,1))
+            # Bound peak memory even for the existing 8K source material.
+            rgb=im.convert('RGB')
+            total=np.zeros(3,np.float64)
+            for y in range(0,rgb.height,128):
+                stripe=np.asarray(rgb.crop((0,y,rgb.width,min(y+128,rgb.height))),np.float32)/255
+                total+=linear(stripe).sum(axis=(0,1),dtype=np.float64)
+            mean=total/(rgb.width*rgb.height)
         means.append((mean*linear(np.array(stage['baseColorFactor'][:3]))).tolist())
         mat['name']=mat['mapTo']=name+'_terrain'
         stage['normalMapUseUV']=0

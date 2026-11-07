@@ -36,4 +36,13 @@ T.check(#catalog==6 and copies==12,'three clusters and three Utah boulders share
 T.check(notifications==12,'resource cache notified before initial material load')
 T.check(talus.catalog(group)==catalog and copies==12 and loads==1,'cached assets are not copied per instance')
 T.check(files[talus.STOCK..talus.SHAPES[1][1]..'.dae']==text,'installed game mesh never overwritten')
+local large = 'talus_large_c0a080'
+T.check(talus.isGroup(large),'large outcrop group accepted')
+local big = talus.catalog(large)
+T.check(#big==2,'large population uses only two tall Utah boulders')
+T.check(copies==12,'large rocks reuse private texture copies')
+T.check(talus.materials(large)['bne_'..large..'_utah'] ~= nil,'large outcrop receives calibrated Utah tint')
+local outcrop = talus.materials(large)['bne_'..large..'_utah'].Stages[1]
+T.check(outcrop.baseColorMap:find('arid_fractured_v1_base',1,true) ~= nil,'arid outcrops reuse cliff albedo instead of red Utah patches')
+T.check(outcrop.normalMap:find('utah_normal',1,true) ~= nil,'outcrops retain mesh-authored normal map')
 T.done('clifftalus')

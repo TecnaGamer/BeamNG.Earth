@@ -34,7 +34,7 @@ class FarCliffsTest(unittest.TestCase):
 
     def test_region_is_shared_and_does_not_recolor_existing_sites(self):
         np.testing.assert_array_equal(cm.natural_family([36.1,37.2,38.5,31.8,30.3,48],
-            [-112.1,-113,-109.7,-106.5,-97.8,8]),[cm.CANYON]*3+[cm.NATURAL]*3)
+            [-112.1,-113,-109.7,-106.5,-97.8,8]),[cm.CANYON]*3+[cm.ARID_CUT,cm.NATURAL,cm.NATURAL])
 
     def test_coverage_and_exclusions(self):
         b=built()
@@ -53,7 +53,7 @@ class FarCliffsTest(unittest.TestCase):
         self.assertTrue((fc.classify(b,self.frame)==-1).all(),'coarsest horizon stays photo terrain')
 
     def test_sheer_forest_rim_wall_has_fallback_without_opening_other_exclusions(self):
-        for frame,family in ((self.frame,1),(geodesy.EnuFrame(31.8,-106.5),0)):
+        for frame,family in ((self.frame,1),(geodesy.EnuFrame(31.8,-106.5),2)):
             for slope_deg,expected in ((70,-1),(80,family),(85,family)):
                 b=built(slope=np.tan(np.deg2rad(slope_deg)))
                 labels=fc.classify(b,frame,Cover(10))
@@ -70,7 +70,7 @@ class FarCliffsTest(unittest.TestCase):
             b.positions[:,:2]*=factor
             b.positions[:,2]=1000+(b.positions[:,2]-1000)*factor
             b.size*=factor
-            for frame,cover,family in ((self.frame,None,1),(geodesy.EnuFrame(31.8,-106.5),Cover(60),0)):
+            for frame,cover,family in ((self.frame,None,1),(geodesy.EnuFrame(31.8,-106.5),Cover(60),2)):
                 with self.subTest(spacing=spacing,family=family):
                     labels=fc.classify(b,frame,cover)
                     self.assertTrue((labels[:-2]==family).all())

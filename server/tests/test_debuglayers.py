@@ -19,7 +19,7 @@ class CliffTypesTest(unittest.TestCase):
         for lat,lon in ((36.06,-112.14),(38.3,-109.9),(34.95,-101.65),(34.45,-101.1),(-27.72,114.44)):
             self.assertEqual(int(ct.select(lat,lon)),ct.CANYON,(lat,lon))
         for lat,lon in ((31.88,-106.49),(30.3,-97.8),(35.78,-106.27),(-22.4,118.3),(51.0,-115.0)):
-            self.assertEqual(int(ct.select(lat,lon)),ct.NATURAL,(lat,lon))
+            self.assertEqual(int(ct.select(lat,lon,biomes=0)),ct.NATURAL,(lat,lon))
 
     def test_added_arid_regions_share_near_far_and_road_cut_rules(self):
         # Documented cliff sectors and nearby places intentionally outside them.
@@ -28,10 +28,10 @@ class CliffTypesTest(unittest.TestCase):
         outside = ((29.27,-103.30), (29.18,-103.05), (-24.85,115.17),
                    (-25.34,131.04), (-30.10,-67.90), (24.71,46.67))
         lat,lon=np.array(points+outside).T
-        expected=np.array([ct.CANYON]*len(points)+[ct.NATURAL]*len(outside))
+        expected=np.array([ct.CANYON]*len(points)+[ct.ARID_CUT]*len(outside))
         np.testing.assert_array_equal(ct.select(lat,lon),expected)
         np.testing.assert_array_equal(ct.far_families(lat,lon,60,(20,30,60)),
-                                      np.where(expected==ct.CANYON,1,0))
+                                      np.where(expected==ct.CANYON,1,2))
         # Regional appearance must not turn forests into cliffs or override cuts.
         np.testing.assert_array_equal(ct.far_families(lat,lon,10,(20,30,60)),-1)
         np.testing.assert_array_equal(ct.select(lat,lon,context="road_cut",biomes=1),ct.ARID_CUT)
@@ -49,9 +49,23 @@ class CliffTypesTest(unittest.TestCase):
             normal=normal/np.linalg.norm(normal)*1e-5
             probes=np.array([middle+normal,middle-normal])
             near=ct.select(probes[:,1],probes[:,0])
-            self.assertEqual(set(near),{ct.CANYON,ct.NATURAL},name)
+            self.assertEqual(set(near),{ct.CANYON,ct.ARID_CUT},name)
             np.testing.assert_array_equal(ct.far_families(
-                probes[:,1],probes[:,0],60,(20,30,60)),np.where(near==ct.CANYON,1,0))
+                probes[:,1],probes[:,0],60,(20,30,60)),np.where(near==ct.CANYON,1,2))
+
+    def test_arid_climate_and_canyon_precedence(self):
+        lat=np.array([36.016,31.88,36.06,30.3,48.0]);lon=np.array([-114.739,-106.49,-112.14,-97.8,8.0])
+        np.testing.assert_array_equal(ct.select(lat,lon),[2,2,3,0,0])
+        np.testing.assert_array_equal(ct.far_families(lat,lon,60,(20,30,60)),[2,2,1,0,0])
+        self.assertEqual(int(ct.select(36.016,-114.739,context="road_cut")),2)
+        self.assertEqual(int(ct.select(36.06,-112.14,biomes=1)),3)
+
+    def test_vector_climate_matches_scalar_at_coasts_and_dateline(self):
+        import climate
+        lat=np.array([36.016,0,51,90,-90,0,0]);lon=np.array([-114.739,0,-115,180,-180,179.95,-179.95])
+        np.testing.assert_array_equal(climate.koppen_many(lat,lon),[climate.koppen_at(a,b) for a,b in zip(lat,lon)])
+        self.assertEqual(int(climate.koppen_many(float('nan'),0)),0)
+        self.assertEqual(climate.koppen_many(lat[:,None],lon).shape,(7,7))
 
     def test_explicit_priority_overrides_order_and_fallback(self):
         rules = (ct.TYPES[1],ct.TYPES[0])
@@ -62,9 +76,9 @@ class CliffTypesTest(unittest.TestCase):
 
     def test_array_boundary_agrees_with_far_and_compact(self):
         lat=np.array([36,36,34.95]);lon=np.array([-112,-115,-101.65])
-        np.testing.assert_array_equal(ct.select(lat,lon),[3,0,3])
-        np.testing.assert_array_equal(ct.far_families(lat,lon,[60,60,60],(20,30,60)),[1,0,1])
-        np.testing.assert_array_equal(ct.far_families(lat,lon,[10,0,0],(20,30,60)),[-1,-1,1])
+        np.testing.assert_array_equal(ct.select(lat,lon),[3,2,3])
+        np.testing.assert_array_equal(ct.far_families(lat,lon,[60,60,60],(20,30,60)),[1,2,1])
+        np.testing.assert_array_equal(ct.far_families(lat,lon,[10,0,0],(20,30,60)),[-1,2,1])
         self.assertEqual(ct.compact([3,3]),3)
         self.assertIsInstance(ct.compact([0,3]),np.ndarray)
 
@@ -89,7 +103,8 @@ class DebugLayersTest(unittest.TestCase):
 
     def test_region_provider_needs_no_server_or_downloads(self):
         result=dl.query(None,self.message())
-        self.assertEqual(len(result["features"]),len(ct.REGIONS))
+        self.assertGreaterEqual(len(result["features"]),len(ct.REGIONS))
+        self.assertLessEqual(len(result["features"]),960+len(ct.REGIONS))
         self.assertIn("not geology",result["note"])
         json.dumps(result,allow_nan=False)
 

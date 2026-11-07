@@ -36,3 +36,25 @@ def koppen_at(lat, lon):
     win = g[max(j - NEAR_PX, 0):j + NEAR_PX + 1, np.arange(i - NEAR_PX, i + NEAR_PX + 1) % g.shape[1]]
     vals = win[win > 0]
     return int(np.bincount(vals).argmax()) if vals.size else 0
+
+
+def koppen_many(lat, lon):
+    """Vectorized local climate lookup; resolve each coastal fallback cell once."""
+    lat,lon = np.broadcast_arrays(np.asarray(lat,float),np.asarray(lon,float))
+    finite = np.isfinite(lat) & np.isfinite(lon)
+    g = _load()
+    j = np.clip(((90-np.where(finite,lat,0))/RES).astype(int),0,g.shape[0]-1)
+    i = (((np.where(finite,lon,0)+180)%360)/RES).astype(int)%g.shape[1]
+    result = np.where(finite,g[j,i],0).astype(np.uint8)
+    fallback = finite & (result == 0)
+    if np.any(fallback):
+        keys,inverse = np.unique(j[fallback]*g.shape[1]+i[fallback],return_inverse=True)
+        values = []
+        for key in keys:
+            row,col = divmod(int(key),g.shape[1])
+            win = g[max(row-NEAR_PX,0):row+NEAR_PX+1,
+                    np.arange(col-NEAR_PX,col+NEAR_PX+1)%g.shape[1]]
+            vals = win[win>0]
+            values.append(int(np.bincount(vals).argmax()) if vals.size else 0)
+        result[fallback] = np.asarray(values,np.uint8)[inverse]
+    return result

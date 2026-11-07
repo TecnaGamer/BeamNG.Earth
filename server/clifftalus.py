@@ -168,6 +168,29 @@ def surface_sampler(xs, ys, heights, surface):
     return sample
 
 
+# At most one larger outcrop per 24 m geographic cell, on half the cells.
+LARGE_CELL_STEPS = 12
+LARGE_TOE_REACH_M = 6.0
+LARGE_MAX_SLOPE_DEG = 30.0
+
+
+def large_outcrops(gi, gj, families, distance, slope):
+    """Sparse arid-only replacements; canyon precedence and base-only placement."""
+    import cliffmaterial as cm
+    from vegetation import _hash01
+    ci,cj = gi//LARGE_CELL_STEPS,gj//LARGE_CELL_STEPS
+    eligible = ((families==cm.ARID_CUT)&(distance<=LARGE_TOE_REACH_M)&
+                (slope<=LARGE_MAX_SLOPE_DEG)&(_hash01(ci,cj,41)<.5))
+    out = np.zeros(len(gi),bool)
+    k = np.flatnonzero(eligible)
+    if len(k):
+        order = np.lexsort((_hash01(gi[k],gj[k],42),cj[k],ci[k]))
+        k = k[order]
+        first = np.r_[True,(np.diff(ci[k])!=0)|(np.diff(cj[k])!=0)]
+        out[k[first]] = True
+    return out
+
+
 def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None, skin_at=None, road_segments=None):
     """17-field Forest rows with a tilted orthonormal basis and regional tint.
 
@@ -220,7 +243,7 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
     footprint &= z <= base_z+.5
     # Low-frequency deterministic clusters break up an evenly peppered apron.
     cluster = .45+.55*_hash01(gi//4,gj//4,39)
-    selected = owned & footprint & np.isfinite(z+steep) & (_hash01(gi,gj,33) < probability(slope,distance)*cluster)
+    selected = footprint & np.isfinite(z+steep) & (_hash01(gi,gj,33) < probability(slope,distance)*cluster)
     k = np.flatnonzero(selected)
     if not len(k): return []
     source_j,source_i = base[k,4:].astype(int).T
@@ -228,8 +251,13 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
     source_lo = ((xs[source_i]+xs[source_i+1])*.5/cr.WORLD_M_PER_DEG+180)%360-180
     rgb = None if color_at is None else color_at(source_la,source_lo)
     import cliffmaterial as cm
-    tint = mineral_tints(biomes[source_j,source_i],rgb,cm.natural_family(source_la,source_lo))
+    families = cm.natural_family(source_la,source_lo)
+    tint = mineral_tints(biomes[source_j,source_i],rgb,families)
     height = (.65+1.2*_hash01(gi[k],gj[k],34))*(1-.45*distance[k]/REACH_M)
+    # Replace a few existing toe stones with jagged Utah outcrops, not an extra
+    # population. Choose before tile ownership so neighbouring tiles agree.
+    large = large_outcrops(gi[k],gj[k],families,distance[k],slope[k])
+    height = np.where(large,4+4*_hash01(gi[k],gj[k],43),height)
     yaw = _hash01(gi[k],gj[k],35)*2*np.pi
     rank = _hash01(gi[k],gj[k],36)
     # Stones rest at a shallower attitude than the face, with random heading.
@@ -251,10 +279,10 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
     else:
         positions = np.column_stack(frame.geodetic_to_enu(la[k],lo[k],z[k]))
     positions -= normal*(height*.12)[:,None]
-    clear = road_clear(positions, np.round(height, 3), road_segments)
+    clear = owned[k] & road_clear(positions, np.round(height, 3), road_segments)
     out = []
     for at in np.flatnonzero(clear):
-        group = 'talus_' + ''.join(f'{v:02x}' for v in tint[at])
+        group = ('talus_large_' if large[at] else 'talus_') + ''.join(f'{v:02x}' for v in tint[at])
         basis = np.concatenate((tangent[at],bitangent[at],up[at]))
         out.append([group,*np.round(positions[at],3).tolist(),round(float(np.degrees(yaw[at])),2),
                     1.0,round(float(height[at]),3),round(float(rank[at]),5),*np.round(basis,6).tolist()])

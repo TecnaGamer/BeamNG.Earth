@@ -1,0 +1,172 @@
+{
+  "method": "Overlapping built-in imagegen detail reconstruction",
+  "guide": "tools/assets/arid_generated/v1/guide.png",
+  "size": 4096,
+  "grid": 4,
+  "core": 1024,
+  "halo": 64,
+  "patches": [
+    {
+      "row": 0,
+      "column": 0,
+      "file": "patch-0-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-bdb9e7a7-b118-4875-84dc-4d496b4c3a25.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 1,
+      "file": "patch-0-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-469471d2-376f-4e58-9ba8-f1ce4e368962.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 2,
+      "file": "patch-0-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-91bc29e2-e8b3-416f-b5a9-ccd52be51752.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 0,
+      "column": 3,
+      "file": "patch-0-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-bbaa1e55-cfd3-4ec8-9ee3-59c16fd0a65d.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 0,
+      "file": "patch-1-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-0c1025cd-374b-4ada-8cf7-7c0677cdf997.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 1,
+      "file": "patch-1-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-e3d70ed1-6613-46d4-b4df-0058c1bfaacc.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 2,
+      "file": "patch-1-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-6731a71a-0cfd-48ac-a12c-c1f4c9cde2c2.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 1,
+      "column": 3,
+      "file": "patch-1-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-9221f9a8-4e64-416c-9baa-a5a4c0a70b95.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 0,
+      "file": "patch-2-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-303fce70-7306-49eb-b4c3-894537d5d028.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 1,
+      "file": "patch-2-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-5d0c1804-7aa7-4e5f-bf9a-359d1dceaec9.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 2,
+      "file": "patch-2-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-1ab415f3-3997-4265-b57c-ccb74f6c0a37.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 2,
+      "column": 3,
+      "file": "patch-2-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-23fe88d5-3b0a-4c30-9a9f-4c0930b793d0.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 0,
+      "file": "patch-3-0.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-69af5d3e-7f75-4e0f-8eda-980ff0c898a5.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 1,
+      "file": "patch-3-1.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-5eefcf3a-fbe2-4586-8c04-7d4c6b9f488d.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 2,
+      "file": "patch-3-2.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-c55d8a9c-6015-461f-a36e-8ee4dd316219.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    },
+    {
+      "row": 3,
+      "column": 3,
+      "file": "patch-3-3.png",
+      "original_path": "C:\\Users\\Austin\\.codex\\generated_images\\01a199ef-769f-79f0-96c0-e85bb62399b8\\exec-a8ec29d4-9f93-4dad-a55c-e2790140e275.png",
+      "native_size": [
+        1254,
+        1254
+      ]
+    }
+  ],
+  "prompt": "Generate a seamless square 4096 x 4096 photorealistic PBR BASE COLOR texture for a video game cliff, covering a very broad 100 metre by 100 metre expanse (several hundred feet) of massive arid desert volcanic bedrock inspired by the fractured tan rock at Hoover Dam, Nevada. Orthographic straight-on rock surface entirely filling the square, zoomed far enough out to include many large irregular interlocking angular slabs and smaller broken rocks. No sedimentary horizontal bands, no canyon layers. Multi-scale intersecting oblique and vertical joints, broad uneven solid rock panels, sharp chipped ledges, granular weathering, subtle dusty mineral mottling and thin darker fissures. Irregular block sizes and nonuniform joint directions; realistic complex geology, not a repeating brick pattern or uniform pebble field. Sandy grey-tan, muted warm buff and restrained brown with occasional cooler mineral faces; avoid saturated pink, red, orange. Flat soft neutral diffuse illumination, no directional highlights, no cast shadows, no ambient dark vignette. Detailed but moderate contrast, dark cracks retain visible detail. NO sky, plants, people, roads, buildings, wires, text, logos, borders or objects. Edge-to-edge tileable rock albedo only. Maximal resolved fine natural detail and requested 4096 square resolution.",
+  "patch_prompt": "Reconstruct this exact rock texture crop at maximum square resolution, at least 1254x1254. Preserve the large slab shapes, crack positions, framing and muted sandy grey-brown palette exactly. Add genuinely resolved fine chips, mineral grains, small secondary fractures and weathering inside these existing shapes, rather than enlarging blurry pixels. It depicts roughly 25 metres of dry massive unlayered fractured bedrock. PBR albedo under flat neutral diffuse light, no directional or cast shadows, no black crevices, no bright highlights. Do not introduce sedimentary layers, repetitive pebbles, sky, vegetation, objects, text or borders. Edge-to-edge material crop. Preserve structure at all four edges for later overlapping assembly."
+}

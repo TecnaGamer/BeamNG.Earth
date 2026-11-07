@@ -51,6 +51,12 @@ trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
 local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
 
 -- the variant: a height inside its range, scaled to it
+trees.CATALOG.talus_large_c0a080 = {{'/temp/beamngEarth/shapes/cliff_talus_v2/large_utah',1.698}}
+local _, largeScale = trees.pick('talus_large_c0a080',8,0)
+T.check(math.abs(largeScale*1.698-8)<.001,'large Utah outcrop retains server height')
+trees.CATALOG.talus_c0a080 = {{'/temp/beamngEarth/shapes/cliff_talus_v2/small_utah',1.698}}
+local _, smallScale = trees.pick('talus_c0a080',8,0)
+T.check(smallScale==2,'ordinary rubble retains existing scale cap')
 local shape, sc = trees.pick('conifer', 20.0, 0.3)
 T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m conifer: a large fir near its size')
 shape, sc = trees.pick('rock', 0.6, 0.1)

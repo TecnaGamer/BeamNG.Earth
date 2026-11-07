@@ -1,0 +1,112 @@
+{
+  "method": "Overlapping built-in imagegen detail reconstruction",
+  "size": [
+    4096,
+    4096
+  ],
+  "native_patch_sizes": [
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ],
+    [
+      1254,
+      1254
+    ]
+  ],
+  "patch_output_size": 1152,
+  "patch_core_size": 1024,
+  "overlap_pixels": 128,
+  "palette_sigma_pixels": 24.0,
+  "periodic_apron_pixels": 8,
+  "source_hashes": {
+    "patch-0-0.png": "a60b0039cc5fcc0d3d7839f064fab9c80f1c72a1676d25b4b5df5bdfc89422d6",
+    "patch-0-1.png": "3b6093ac9f2caa7cbc17b86440da0c68acb81bffcb812022dc18c09bd850a7cf",
+    "patch-0-2.png": "9ce4c6be30a9c1174f21d352646e723dfec8550fad7834e29622edb42aaac4c9",
+    "patch-0-3.png": "d4d7a6a1ef2df508fc987376ce2d9f62766709a4eba3ea6a0f71b6648ff4f1ce",
+    "patch-1-0.png": "7b42d923153982612e5d893b2fa74d3b64808ddbd7accc25cef541222e476946",
+    "patch-1-1.png": "69d90ee4d5715f850762a4b20544839017450f5d34bed9db72c1f6a9ddadc8d2",
+    "patch-1-2.png": "4b50693ca7b01dba0837478a11c18e31ba45779ca4c003517e6f14d2bbb2b79a",
+    "patch-1-3.png": "ecc12bdb9dc5c25550a9701d42e6f1f68b3f1ffd5b2c2e70955fa0322e32ad34",
+    "patch-2-0.png": "6657fd94ee32b7716814e0f986966a24f1d036ed8d9109fed9898483dc611830",
+    "patch-2-1.png": "0872298ae311e22139250ebc816e34b1e984cea2161184a0f7422c5d793d3d65",
+    "patch-2-2.png": "915b813af2d05b51d8460429836a70cbc9a49389ad088cfe080deadbf8886416",
+    "patch-2-3.png": "33bdaeb9152d96158088d7cd052ed8287c0b76196e593ace6b5e8caaa991f601",
+    "patch-3-0.png": "ecbd7be32312c0d727eb5084d9d3c61d100bd10c2b6c55cc6f01c2fd0a5cdf37",
+    "patch-3-1.png": "fe86dd1c27f4474341bac6306ad382a91e394cc714cd87d5cbaadde1d59b9a26",
+    "patch-3-2.png": "d7a65fa7b1ee071fa364efde9a0f38a24462aa23d212e9b4f18e02b69f3ad31e",
+    "patch-3-3.png": "e15333b010abd77500d2682f2903b1c7c82de9b40dbd82291eccb5b3b4097050"
+  },
+  "albedo_sha256": "201f1dd5b0d72a2b645e2fc71bf58be74671f902b16531d8f40ba5ac5e590173",
+  "provenance": "4K detail reconstructed from 16 independent generated patches; not a single native-4K generation or a whole-image upscale.",
+  "pbr": "Full-resolution albedo-derived approximate normal, roughness and cavity AO; not measured material channels.",
+  "guide_linear_mean": [
+    0.345565352916673,
+    0.25799224153515005,
+    0.19134216211914082
+  ],
+  "output_linear_mean": [
+    0.3455671500529603,
+    0.2579936664508756,
+    0.1913434016900136
+  ],
+  "guide_fine_rms": 0.008317411877214909,
+  "assembled_fine_rms": 0.029162276536226273,
+  "opposing_edge_max_byte_difference": 0
+}

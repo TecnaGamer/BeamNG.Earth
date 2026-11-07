@@ -81,28 +81,38 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_base.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_roughness.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_base.color.png",
         "baseColorFactor": [
-          1.4,
-          1.45,
-          1.55,
+          1,
+          1,
+          1,
           1
         ],
         "metallicFactor": 0,
+        "roughnessFactor": 1,
         "vertColor": true,
-        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_ao.data.png",
-        "roughnessFactor": 1.0,
         "useAnisotropic": true,
+        "normalMapStrength": 0.32,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_ready.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_roughness.data.png",
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
-        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_restored_micro_v1.normal.png",
-        "detailNormalMapStrength": 0.3,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_ao.data.png",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.data.png",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
+        "detailNormalMapStrength": 0.22,
         "detailScale": [
-          76.2,
-          76.2
-        ]
+          30.48,
+          30.48
+        ],
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_ao.data.png",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_roughness.data.png",
+        "detailRoughnessMapStrength": 0.35
       },
       {},
       {},
@@ -512,29 +522,38 @@
     "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_base.color.png",
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1.normal.png",
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_roughness.data.png",
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_base.color.png",
         "baseColorFactor": [
-          1.4,
-          1.45,
-          1.55,
+          1,
+          1,
+          1,
           1
         ],
         "metallicFactor": 0,
+        "roughnessFactor": 1,
         "vertColor": true,
-        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_arid_v1_ao.data.png",
-        "roughnessFactor": 1.0,
         "useAnisotropic": true,
+        "normalMapStrength": 0.32,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_ready.normal.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_roughness.data.png",
         "roughnessMapUseUV": 0,
-        "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
-        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/cut_restored_micro_v1.normal.png",
-        "detailNormalMapStrength": 0.3,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_v1_ao.data.png",
+        "ambientOcclusionMapUseUV": 0,
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.data.png",
+        "detailMapUseUV": 0,
+        "detailBaseColorMapStrength": 0.18,
+        "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
+        "detailNormalMapStrength": 0.22,
         "detailScale": [
-          76.2,
-          76.2
+          30.48,
+          30.48
         ],
-        "normalMapUseUV": 0
+        "normalDetailMapUseUV": 0,
+        "ambientOcclusionDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_ao.data.png",
+        "detailAoMapStrength": 0.22,
+        "roughnessDetailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_roughness.data.png",
+        "detailRoughnessMapStrength": 0.35
       },
       {
         "baseColorFactor": [
@@ -617,5 +636,44 @@
     "groundType": "ROCK",
     "translucent": false,
     "activeLayers": 2
+  },
+  "bne_far_cliff_arid_blend": {
+    "name": "bne_far_cliff_arid_blend",
+    "mapTo": "bne_far_cliff_arid_blend",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          2.0176708786838,
+          2.15338866265566,
+          2.2810844836358792,
+          1
+        ],
+        "detailMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_far_v1_base.color.png",
+        "detailMapUseUV": 0,
+        "detailScale": [
+          1,
+          1
+        ],
+        "detailBaseColorMapStrength": 0.65,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_far_v1_ready.normal.dds",
+        "normalMapUseUV": 1,
+        "roughnessFactor": 1,
+        "metallicFactor": 0,
+        "vertColor": true,
+        "useAnisotropic": true,
+        "normalMapStrength": 0.7,
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_far_v1_roughness.data.png",
+        "roughnessMapUseUV": 0,
+        "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/arid_fractured_far_v1_ao.data.png",
+        "ambientOcclusionMapUseUV": 0
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "ROCK",
+    "translucent": false
   }
 }

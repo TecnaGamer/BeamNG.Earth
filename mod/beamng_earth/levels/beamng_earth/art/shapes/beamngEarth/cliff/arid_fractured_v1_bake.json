@@ -1,0 +1,28 @@
+{
+  "size": [
+    4096,
+    4096
+  ],
+  "repeat_metres": [
+    91.44,
+    91.44
+  ],
+  "method": "Canyon median/bilateral face filtering and diffuse-aligned approximate relief, cavity AO and roughness",
+  "near_normal_strength": 0.32,
+  "far_normal_strength": 0.7,
+  "far_relief_weights": [
+    0.65,
+    0.22
+  ],
+  "normal_orientation": "OpenGL +Y",
+  "detail_repeat_metres": 3,
+  "limitation": "Inferred from diffuse texture, not measured physical channels.",
+  "near_roughness_range": [
+    0.8156790733337402,
+    0.9800000190734863
+  ],
+  "near_ao_range": [
+    0.7599999904632568,
+    1.0
+  ]
+}

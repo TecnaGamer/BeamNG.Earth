@@ -22,6 +22,32 @@ class TalusTest(unittest.TestCase):
         return talus.rows(geodesy.EnuFrame(0,0),box,x,x,keep,classes,blocked,
                           np.zeros((40,40),int),elev, **kwargs)
 
+    def test_large_arid_outcrops_are_sparse_and_reject_canyon_crest_and_steep_ground(self):
+        gi,gj=np.meshgrid(np.arange(120),np.arange(60));gi,gj=gi.ravel(),gj.ravel()
+        family=np.full(len(gi),2);distance=np.full(len(gi),3.);slope=np.zeros(len(gi))
+        chosen=talus.large_outcrops(gi,gj,family,distance,slope)
+        self.assertGreater(chosen.sum(),0)
+        cells=np.column_stack((gi[chosen]//talus.LARGE_CELL_STEPS,gj[chosen]//talus.LARGE_CELL_STEPS))
+        self.assertEqual(len(cells),len(np.unique(cells,axis=0)))
+        for f,d,s in ((3,3,0),(0,3,0),(2,7,0),(2,3,40)):
+            self.assertFalse(talus.large_outcrops(gi,gj,np.full(len(gi),f),np.full(len(gi),d),np.full(len(gi),s)).any())
+        reverse=talus.large_outcrops(gi[::-1],gj[::-1],family[::-1],distance[::-1],slope[::-1])
+        np.testing.assert_array_equal(chosen,reverse[::-1])
+
+    def test_large_arid_rows_keep_ownership_and_road_clearance(self):
+        from unittest.mock import patch
+        import cliffmaterial as cm
+        import roads
+        with patch.object(cm,'natural_family',return_value=cm.ARID_CUT):
+            whole=self.fixture();left=self.fixture((0,0,70,160));right=self.fixture((70,0,160,160))
+            self.assertEqual({tuple(r) for r in whole},{tuple(r) for r in left+right})
+            large=[r for r in whole if r[0].startswith('talus_large_')]
+            self.assertGreater(len(large),0)
+            self.assertTrue(all(4<=r[6]<=8 for r in large))
+            corridor=roads._Segs({'road':(np.array([[65.,-100.],[65.,300.]]),3.)})
+            rows=self.fixture(road_segments=corridor)
+            self.assertTrue(all(talus.road_clear(np.array([r[1:4]]),np.array([r[6]]),corridor)[0] for r in rows))
+
     def test_density_favors_stable_ground_below_cliff(self):
         p = talus.probability(np.array((0,25,28,35,44,78,85)),0)
         np.testing.assert_allclose(p[:3],talus.MAX_DENSITY)

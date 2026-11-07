@@ -23,7 +23,7 @@ WORLD_M_PER_DEG = 111320.0
 EXPOSED_CLASSES = (20, 30, 60)  # shrub, grass, bare
 FOREST_CLASS = 10
 FOREST_WALL_MIN_SLOPE_DEG = 75.0  # overhead canopy can classify a sheer rim wall as forest
-MATERIALS = ('bne_far_cliff_strata_blend', 'bne_far_cliff_canyon_blend')
+MATERIALS = ('bne_far_cliff_strata_blend', 'bne_far_cliff_canyon_blend', 'bne_far_cliff_arid_blend')
 PHOTO_BLUR_M = 48.0  # low-frequency colour, not trees/roads stretched down the face
 PHOTO_BLEND = 1.0  # macro albedo comes from the same terrain photo, without a fixed rose cast
 NORMAL_SCALE_TIERS = ((3072.0, 2.0), (6144.0, 4.0))  # physical tile width -> scale; allow for Mercator tiles smaller than nominal L4/L5
@@ -41,10 +41,10 @@ def normal_scale(tile_size):
 
 
 def classify(built, frame, surface=None):
-    """Per-triangle family (-1 terrain, 0 natural, 1 canyon), no network waits.
+    """Per-triangle family (-1 terrain, 0 default, 1 canyon, 2 arid), no network waits.
 
     Known exposed land qualifies globally. Missing land cover qualifies only in
-    the explicit dry plateau appearance region, so distant canyon coverage does
+    explicit canyon regions or the arid climate rule, so dry cliff coverage does
     not depend on near-road land-cover prefetch. Sheer forest-labelled rim walls
     qualify too; ordinary forest slopes and other known exclusions still win.
     """
@@ -159,8 +159,8 @@ def terrain_colors(texture, uv, size, *, blur_m=PHOTO_BLUR_M):
     return (1-fy)*((1-fx)*rgb[iy,ix]+fx*rgb[iy,jx])+fy*((1-fx)*rgb[jy,ix]+fx*rgb[jy,jx])
 
 
-@lru_cache(maxsize=1)
-def _canyon_detail_field():
+@lru_cache(maxsize=2)
+def _canyon_detail_field(family=1):
     """Low-frequency shader modulation, used only to match boundary colors.
 
     Read the shipped material rather than maintaining another artistic palette.
@@ -172,7 +172,7 @@ def _canyon_detail_field():
     import cliffcolors
     root=Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parents[1]))/'mod/beamng_earth'
     material=root/'levels/beamng_earth/art/shapes/beamngEarth/cliff.materials.json'
-    stage=json.loads(material.read_text())['bne_far_cliff_canyon_blend']['Stages'][0]
+    stage=json.loads(material.read_text())[MATERIALS[family]]['Stages'][0]
     # Reduce one output row at a time: a 4K asset must not create several
     # full-resolution float images in every terrain worker. Assets are POT.
     factor=cliffcolors.linear(stage['baseColorFactor'][:3])/cm.SATELLITE_HEADROOM
@@ -187,9 +187,9 @@ def _canyon_detail_field():
     return np.flipud(filtered).copy()
 
 
-def canyon_detail_gain(uv):
+def canyon_detail_gain(uv, family=1):
     """Periodic bilinear macro albedo multiplier in the existing wall chart."""
-    grid=_canyon_detail_field()
+    grid=_canyon_detail_field(family)
     h,w=grid.shape[:2]
     xy=np.mod(uv,1)*np.array([w,h])-.5
     ij=np.floor(xy).astype(int);f=xy-ij
@@ -219,14 +219,15 @@ def geometry(built, frame, terrain_uv, terrain_uv2, terrain_material, surface=No
             if exact is not None:
                 photo[boundary] = exact
     references = (cliffcolors.linear(cm.FAR_STRATA_MEDIAN_SRGB)*cm.FAR_STRATA_COLOR_FACTOR,
-                  cliffcolors.linear(cm.CANYON_MEDIAN_SRGB)*cm.CANYON_COLOR_FACTOR)
+                  cliffcolors.linear(cm.CANYON_MEDIAN_SRGB)*cm.CANYON_COLOR_FACTOR,
+                  cliffcolors.linear(np.array([.63,.57,.48])))
     world = p+np.asarray(built.pos)
     lat,lon,elev = frame.enu_to_geodetic(*world.T)
     # Shared with near cliffs: metres in the geographic chart, true elevation.
     x,y = lon*WORLD_M_PER_DEG,lat*WORLD_M_PER_DEG
     use_y = projection_axes(p,t,labels)
     groups = [(0,labels < 0,None)]
-    for family in (0,1):
+    for family in range(len(MATERIALS)):
         for axis in (False,True):
             groups.append((family+1,(labels == family)&(use_y == axis),axis))
     arrays = {k:[] for k in ('positions','tris','normals','uvs','uvs2','tangent_uvs','colors','tri_materials')}
@@ -246,7 +247,7 @@ def geometry(built, frame, terrain_uv, terrain_uv2, terrain_material, surface=No
             # Derive UV1 from the absolute chart BEFORE reducing UV0's origin.
             # Dividing a tile-local UV would reset phase and expose tile seams.
             normal_width = (EXTREME_NORMAL_WIDTH_SCALE if built.size >= NORMAL_SCALE_TIERS[-1][0] else cm.FAR_CANYON_NORMAL_WIDTH_SCALE) if material == 2 else 1.0
-            uv2=uv/(normal_repeat*np.array((normal_width,1.0)))
+            uv2=uv/((1.0 if material == 3 else normal_repeat)*np.array((normal_width,1.0)))
             uv2-=np.floor(uv2[0])
             uv-=np.floor(uv[0])  # colour beds keep their existing physical scale
             tangent=uv2  # positive axis scales preserve the wall tangent frame
@@ -258,13 +259,13 @@ def geometry(built, frame, terrain_uv, terrain_uv2, terrain_material, surface=No
         else:
             target=(np.broadcast_to(references[material-1],(len(used),3)).copy()
                     if photo is None else photo[used].copy())
-            if material == 2 and len(boundary):
+            if material in (2,3) and len(boundary):
                 edge=np.isin(used,boundary)
                 # Cancel the broad authored bed's gain at the shared vertices.
                 # Raster interpolation tapers that correction across boundary
                 # triangles; interior vertices keep the full stronger layering.
                 # Normals, photo shadows and all geometry remain unchanged.
-                target[edge]/=np.maximum(canyon_detail_gain(uv[edge]),.1)
+                target[edge]/=np.maximum((canyon_detail_gain(uv[edge]) if material == 2 else canyon_detail_gain(uv[edge],2)),.1)
             colors=cliffcolors.material_tint(target,np.ones(3),PHOTO_BLEND)
         arrays['colors'].append(colors)
         arrays['tri_materials'].append(np.full(len(selected),material,np.int32))

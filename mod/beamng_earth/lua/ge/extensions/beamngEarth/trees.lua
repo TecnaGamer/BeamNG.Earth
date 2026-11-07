@@ -562,7 +562,9 @@ function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   if clifftalus.isGroup(group) then
     local v = list[math.floor(rank * 7919) % #list + 1]
-    return v[1], math.max(0.10, math.min(2.0, h / v[2]))
+    -- Large toe outcrops are authored as 4-8 m placements; retain that size.
+    local maxScale = group:match('^talus_large_') and 5.0 or 2.0
+    return v[1], math.max(0.10, math.min(maxScale, h / v[2]))
   end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider

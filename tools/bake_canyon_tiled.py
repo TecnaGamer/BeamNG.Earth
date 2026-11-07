@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = ROOT/'tools/assets/canyon_generated/tiled-v5'
 ALBEDO = 'canyon_v5_base.color.png'
 PBR_PREFIX = 'canyon_v5_faceted_near'
+PREVIEW = ROOT/'build/canyon-tiled-v5'
 # Keep large beds and the previously approved terrain palette; add resolved
 # detail at shorter wavelengths. This corrects generator exposure/palette drift.
 PALETTE_SIGMA_PX = 24.0
@@ -95,7 +96,7 @@ def assemble():
         np.abs(encoded[0].astype(int)-encoded[-1]).max(),
         np.abs(encoded[:,0].astype(int)-encoded[:,-1]).max()))
     (SOURCES/'assembly.json').write_text(json.dumps(audit,indent=2)+'\n')
-    preview = ROOT/'build/canyon-tiled-v5'
+    preview = PREVIEW
     preview.mkdir(parents=True,exist_ok=True)
     Image.fromarray(encoded).resize((1024,1024),Image.Resampling.LANCZOS).save(preview/'assembled.png')
     repeat = np.tile(np.asarray(Image.fromarray(encoded).resize((512,512))),(2,2,1))

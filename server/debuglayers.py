@@ -23,8 +23,14 @@ LAYERS = (
     {"id": "vegetation_rocks", "label": "Regional scatter-rock variants"},
 )
 
-def legend():
-    return [{"id": r.family, "label": r.label, "color": r.color} for r in clifftypes.TYPES]
+def legend(context=None):
+    # One renderer is reused for arid natural faces and road cuts. Context-specific
+    # legends retain provenance; recorded family-only footprints use a shared label.
+    rows = {}
+    for r in clifftypes.TYPES:
+        if context is None or r.context == context:
+            rows[r.family] = {"id":r.family,"label":r.label,"color":r.color}
+    return list(rows.values())
 
 def footprint_grid(keep, families, xs, ys):
     """Compact rows from the existing coarse detector, not the refined render mesh.
@@ -126,11 +132,13 @@ def query(conn, msg):
     layer = msg.get("layer")
     result = {"layers":list(LAYERS), "legend":legend(), "features":[], "note":""}
     if layer == "cliff_regions":
-        result["legend"] = [x for x in legend() if x["id"] in (clifftypes.NATURAL, clifftypes.CANYON)]
-        result["features"] = [{"type":rule.family,"ring":ring,"label":name}
+        result.update(_sampled(layer,bounds))
+        # Exact higher-priority canyon envelopes overlay the bounded climate preview.
+        result["features"] += [{"type":rule.family,"ring":ring,"label":name}
             for rule in sorted(clifftypes.TYPES,key=lambda r:(r.priority,r.key)) if rule.context == "natural"
             for name,ring in rule.regions]
-        result["note"] = "Shaded: arid layered-cliff regions using the shared canyon texture and local imagery tint. Elsewhere: default rock. Appearance priors, not geology; slope, land cover and settings still gate near and distant faces."
+        result["legend"] = legend("natural")
+        result["note"] = "Sampled arid climate rock; exact layered canyon envelopes take precedence. Appearance priors, not geology. Slope, land cover and settings still gate near and distant faces."
     elif layer == "cliff_generated":
         result["features"],result["note"] = _generated(conn,bounds)
     elif layer in {"cliff_cuts", "building_styles", "vegetation_trees", "vegetation_shrubs", "vegetation_rocks"}:
@@ -157,11 +165,15 @@ def _sampled(layer, bounds):
     lon,lat = np.meshgrid((edges_x[:-1]+edges_x[1:])/2,(edges_y[:-1]+edges_y[1:])/2)
     lo = (lon.ravel()+180)%360-180
     la = lat.ravel()
-    if layer == "cliff_cuts":
+    if layer == "cliff_regions":
+        values = clifftypes.select(la,lo)
+        rows = legend("natural")
+        note = "Natural cliff appearance from local climate and higher-priority canyon regions."
+    elif layer == "cliff_cuts":
         import climate
         climates = np.array([climate.koppen_at(a,b) for a,b in zip(la,lo)])
         values = clifftypes.select(la,lo,context="road_cut",biomes=((climates>=4)&(climates<=7)).astype(int))
-        rows = [x for x in legend() if x["id"] in (clifftypes.LIMESTONE_CUT,clifftypes.ARID_CUT)]
+        rows = legend("road_cut")
         note = "Material choice for confirmed man-made cuts: arid climate vs limestone fallback. This does not predict where roads cut terrain."
     elif layer == "building_styles":
         import buildings
@@ -183,7 +195,7 @@ def _sampled(layer, bounds):
         for i in range(1,41):
             if i < 40 and values[j*40+i] == values[j*40+start]:
                 continue
-            features.append({"type":int(values[j*40+start]),"ring":_ring(edges_y[j],edges_x[start],edges_y[j+1],edges_x[i])})
+            features.append({"label":next(r["label"] for r in rows if r["id"] == int(values[j*40+start])),"type":int(values[j*40+start]),"ring":_ring(edges_y[j],edges_x[start],edges_y[j+1],edges_x[i])})
             start = i
     return {"features":features,"legend":[r for r in rows if r["id"] in present],
             "note":"Sampled regions; zoom in for boundary detail. " + note}

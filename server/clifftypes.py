@@ -55,6 +55,8 @@ TYPES = (
     CliffType("limestone_cut", LIMESTONE_CUT, "Road cut: limestone", "#e7da8a", context="road_cut"),
     CliffType("arid_cut", ARID_CUT, "Road cut: arid rock", "#cf8ddd", context="road_cut",
               priority=100, biomes=(1,)),
+    CliffType("arid", ARID_CUT, "Arid fractured rock", "#c9ad86", priority=50,
+              biomes=(1,), far_slot=2, unknown_cover=True),
 )
 
 def contains(lat, lon, ring):
@@ -66,15 +68,22 @@ def contains(lat, lon, ring):
             inside ^= ((y0 > lat) != (y1 > lat)) & (lon < (x1-x0)*(lat-y0)/(y1-y0)+x0)
     return inside
 
-def select(lat, lon, *, context="natural", biomes=0, rules=None):
+def select(lat, lon, *, context="natural", biomes=None, rules=None):
     """Select one material family per point; -1 when a context has no matching rule.
 
     Explicit rules argument supports tests and future registries without global
     mutation. Ascending key breaks equal-priority ties deterministically.
     """
+    rules = TYPES if rules is None else rules
+    if biomes is None:
+        biomes = 0
+        if any(r.context == context and r.biomes for r in rules):
+            import climate
+            climates = climate.koppen_many(lat, lon)
+            biomes = ((climates >= 4) & (climates <= 7)).astype(np.uint8)
     lat, lon, biomes = np.broadcast_arrays(np.asarray(lat,float), np.asarray(lon,float), np.asarray(biomes))
     result = np.full(lat.shape, -1, np.int16)
-    for rule in sorted(TYPES if rules is None else rules, key=lambda r: (r.priority, r.key)):
+    for rule in sorted(rules, key=lambda r: (r.priority, r.key)):
         if rule.context != context:
             continue
         match = np.isfinite(lat) & np.isfinite(lon)
