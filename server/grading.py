@@ -1649,6 +1649,8 @@ class _Planner:
         return property(get, put)
     shared = _store_attr("shared")
     wet = _store_attr("wet")
+    water = _store_attr("water")
+    tunnel_raw = _store_attr("tunnel_raw")
     dem = _store_attr("dem")
     del _store_attr
 
@@ -1894,10 +1896,11 @@ class _Planner:
                     kept.extend((fid, q) for q in pieces)
                     tplans.extend((fid, q) for q in (pieces if cl else [p]))
                 plans = kept
-            secs = self._tunnel_sections(feats, key, [p for _f, p in tplans])
+            portals = {}
+            secs = self._tunnel_sections(feats, key, [p for _f, p in tplans], portals)
             plans.extend((fid + TUNNEL_TAG, Plan(xy, z, spec.width / 2 + shoulder(spec)))
                          for fid, spec, xy, z, k in secs if k == 0)
-            plans.extend(self._mouth_plans(secs))
+            plans.extend(self._mouth_plans(secs, portals))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
         else:
@@ -3795,7 +3798,51 @@ class _Planner:
                 log.debug("grading: the chain store's drowned: %s: %s", type(e).__name__, e)
         return self._chains_for().drowned(key, ring)
 
-    def _tunnel_sections(self, feats, key=None, road_plans=()):
+    def _subsea_part(self, feats, i, j, ring, portals):
+        """The canonical region's solved wet profile, including its dry approaches. None: ordinary tunnel rules.
+
+        The grading reader uses the same raw source, region frame and native solve as the mesh reader. It never
+        calls a grader from a profile endpoint: planning the tunnel must not recursively plan itself.
+        """
+        import geotiles
+        holder = self.store if self.store is not None else self
+        with holder.lock:
+            cs = getattr(holder, "_subsea_chains", None)
+            if cs is None:
+                raw = self.tunnel_raw or self.elev
+                md, wet, water = self.md, self.wet, self.water
+                def setup(t):
+                    t.wet, t.water, t.raw = wet, water, raw
+                cs = holder._subsea_chains = roadsmod.ChainStore(roadsmod.TunnelProfiles,
+                    lambda k: md.cell(k, layers=("roads",), kind="demand").layers.get("roads"), raw, setup)
+        st = cs.store_at(float(ring[0][1]), float(ring[0][0]))
+        k = (str(feats.ids[i]), j)
+        if not st.drowned(k, ring):
+            return None
+        whole = roadsmod.BridgeProfiles.parts_todo(st, [(k, feats, i)])
+        pid = st._part_id(k)
+        with st.lock:
+            supported = pid in st._subsea
+            secs = list(st.sections.get(pid, ()))
+        if not supported:
+            return []
+        out = []
+        for _pid, spec, xy, z, _lon in whole:
+            la, lo, h = geotiles.world_to_geodetic(st.frame, np.c_[xy, z])
+            e, n, _ = self.frame.geodetic_to_enu(la, lo, 0.)
+            xy = np.c_[e, n]
+            for index, (a, b, kind) in enumerate(secs):
+                if b <= a: continue
+                fid = f"{pid}#{index}"
+                # Plans are the terrain datum: apply(..., ROAD_LIFT) supplies the physical road surface.
+                # The native tunnel profile already IS that surface, so do not add the lift a second time.
+                out.append((fid, spec, xy[a:b + 1], np.asarray(h)[a:b + 1] - ROAD_LIFT, kind))
+                if kind and portals is not None:
+                    for at, is_mouth in zip((a, b), st.mouth(fid)):
+                        portals[(fid, tuple(np.round(xy[at], 3)))] = is_mouth
+        return out
+
+    def _tunnel_sections(self, feats, key=None, road_plans=(), portals=None):
         """[(fid, spec, xy, z, kind)] of the tunnels' sections (roads.tunnel_sections on the ungraded ground, its
         ends graded by road_plans: the cell's road Plans, as roads.TunnelProfiles.ends grades them with the roads'
         plans alone): kind 0 an open road at z, 1 a low arch, 2 a full tunnel."""
@@ -3811,6 +3858,11 @@ class _Planner:
                 ll = np.asarray(ring, np.float64)
                 if len(ll) < 2:
                     continue
+                if self.water is not None:
+                    solved = self._subsea_part(feats, i, j, ring, portals)
+                    if solved is not None:
+                        out.extend(solved)
+                        continue
                 E, N, _ = self.frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
                 xy, s = resample(np.stack([np.asarray(E), np.asarray(N)], axis=1), VERTEX_STEP)
                 if len(xy) < 2 or s[-1] <= 0:
@@ -3869,7 +3921,7 @@ class _Planner:
         return lines, halves
 
     @staticmethod
-    def _mouth_plans(secs):
+    def _mouth_plans(secs, portals=None):
         """(fid, Plan) of the covered sections' mouths: the floor MOUTH_PLAN_M into the tube from a portal (where an
         open section or nothing comes before / after it): the ground at the portal graded to the road on both sides
         of it (the grading faded from the road's plan into the ungraded hill there, and the road tile and the
@@ -3883,6 +3935,9 @@ class _Planner:
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             hw = spec.width / 2 + shoulder(spec)
             for at_start in (True, False):
+                endpoint = xy[0 if at_start else -1]
+                if portals is not None and portals.get((fid, tuple(np.round(endpoint, 3)))) is False:
+                    continue
                 nb = n - 1 if at_start else n + 1
                 if same(nb) and secs[nb][4] != 0:
                     continue                    # inside the hill: a full tunnel goes on
@@ -4114,6 +4169,8 @@ class PlanStore:
         global _ACTIVE_STORE
         _ACTIVE_STORE = self
         self.wet = None
+        self.water = None
+        self.tunnel_raw = None
         self.dem = None
         self.shared = None
         self.lock = threading.Lock()
@@ -4209,6 +4266,8 @@ class Grader:
     def _set(name):
         return property(lambda self: getattr(self.store, name), lambda self, v: setattr(self.store, name, v))
     wet = _set("wet")
+    water = _set("water")
+    tunnel_raw = _set("tunnel_raw")
     dem = _set("dem")
     shared = _set("shared")
     del _set

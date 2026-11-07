@@ -20,6 +20,7 @@
 -- Console: beamngEarth_roads.status(), .setEnabled(bool)
 
 local stopwatch = require('beamngEarth/stopwatch')
+local sea = require('beamngEarth/sea')
 
 local M = {}
 
@@ -204,6 +205,11 @@ local function tileKey(aid, k) return tostring(aid) .. ':' .. tostring(k) end
 -- its last object is deleted (a collider deleted and made again while the tile lives keeps it).
 local session = nil        -- the server session the slots belong to (setSession)
 local objSlot = {}         -- object id -> slot number of the pooled file it loaded
+local waterSerial, objectWater, waterReleases, waterReloads = 0, {}, {}, 0
+local function protectWater(t, data, anchor)
+  waterSerial = waterSerial + 1
+  t.waterguard = sea.protect(waterSerial, data.waterguard, anchor)
+end
 local slotLive = {}        -- slot number -> objects alive with it
 local slotDropped = {}     -- slot number -> { serial, session } of a dropped tile's slot, reported at its last delete
 local slotsGone = {}       -- { n, serial, session } to report
@@ -212,13 +218,19 @@ local function slotOf(path) return tonumber(type(path) == 'string' and path:matc
 function M.setSession(s) session = s end
 
 -- An object with a pooled shape was made / is deleted.
-local function slotMade(id, path)
+local function slotMade(id, path, water)
+  if water then objectWater[id] = water; sea.retain(water) end
   local n = slotOf(path)
   if not n then return end
   objSlot[id] = n
   slotLive[n] = (slotLive[n] or 0) + 1
 end
 local function slotObjGone(id)
+  local water = objectWater[id]
+  if water then
+    objectWater[id] = nil
+    waterReleases[#waterReleases + 1] = { water, reloads + 1 }
+  end
   local n = objSlot[id]
   if not n then return end
   objSlot[id] = nil
@@ -348,6 +360,7 @@ local function dropTile(key)
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
+  sea.release(t.waterguard)
   tiles[key] = nil
 end
 
@@ -811,6 +824,7 @@ function M.onGeoTile(msg, currentAnchor, a)
   end
   t.rowPivot = np > 0 and pivots / np or 0
   t.data = data
+  protectWater(t, data, a)
   M.placeGeoTile(t, a)
   tiles[key] = t
   sinceChange = stopwatch.new()
@@ -1101,6 +1115,7 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  protectWater(tiles[key], data, a)
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
@@ -1753,6 +1768,13 @@ local function step(name)
   stepT0 = t
 end
 function M.update(gov, currentAnchor, player, view, a)
+  -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
+  -- that asynchronous rebuild before restoring deep water over its old bore.
+  local keepWater = {}
+  for _, r in ipairs(waterReleases) do
+    if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+  end
+  waterReleases, waterReloads = keepWater, reloads
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
@@ -1829,7 +1851,7 @@ function M.update(gov, currentAnchor, player, view, a)
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
         (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
-      if ok then slotMade(id, walk.shape) end
+      if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
         M.dropOldSkin(t, q.what)
@@ -2163,11 +2185,15 @@ function M.clear()
   end
   deleteQ = {}
   walkQ, parked = {}, {}
-  if collisionDirty then be:reloadCollision(); collisionDirty = false end
+  if collisionDirty then be:reloadCollision(); M.collisionRebuilt() end
 end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  for _, t in pairs(tiles) do sea.release(t.waterguard) end
+  for _, token in pairs(objectWater) do sea.release(token) end
+  for _, r in ipairs(waterReleases) do sea.release(r[1]) end
+  objectWater, waterReleases, waterReloads = {}, {}, reloads
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
   for _, f in pairs(far) do

@@ -120,6 +120,9 @@ class _State:
                                            store=self.plan_store) if self.grading else None)
                 if grader is not None:
                     grader.wet = self.sea.depth if getattr(self, "sea", None) is not None else None
+                    grader.water = self.sea.water if getattr(self, "sea", None) is not None else None
+                    grader.tunnel_raw = lambda la, lo: ground(None, la, lo,
+                        self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                     grader.dem = self.dem          # (its urgent lane: _plan_missing)
                     grader.shared = plancache.for_grader(self.cache_dir, grader, self.widths, grader.wet)
                 self.graders[aid] = grader
@@ -1079,6 +1082,8 @@ def _frame_grader(frame):
             _s.plan_store.tunnel_store = lambda: _s.__dict__.get("chain_stores", {}).get("tunnels")
     gr = gradingmod.Grader(frame, _s.md, _s.plan_store.elev, _s.widths, store=_s.plan_store)
     gr.wet = _s.sea.depth if getattr(_s, "sea", None) is not None else None
+    gr.water = _s.sea.water if getattr(_s, "sea", None) is not None else None
+    gr.tunnel_raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
     gr.dem = _s.dem
     if getattr(_s.plan_store, "shared", None) is None:
         gr.shared = plancache.for_grader(_s.cache_dir, gr, _s.widths, gr.wet)
@@ -1779,6 +1784,7 @@ def tunnel_profiles(aid, frame, elev, g=None):
     def setup(t):
         sea = getattr(_s, "sea", None)
         t.wet = sea.depth if sea is not None else None
+        t.water = sea.water if sea is not None else None
         t.raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
         if g is not None:
             t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731

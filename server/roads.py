@@ -6445,9 +6445,10 @@ class TunnelProfiles(BridgeProfiles):
     def _structure(self, chain):                # (no truss over a tunnel)
         return [], []
 
-    wet = None      # wet(lat, lon) -> water depth (m): tunnels under water are left out (the sea's WaterBlocks reach
-                    # 100 m down: a car in the tube would float; earthd / blockworker set the sea's depth)
+    wet = None      # wet(lat, lon) -> water depth (m): identify chains needing a constrained wet profile and finite
+                    # client water columns. Unsupported wet chains stay excluded; earthd/blockworker set the sources.
     open = None
+    water = None    # water(lat, lon) -> (depth, surface level): required for supported underwater profiles
     raw = None      # raw(lat, lon) -> the ground without the roads' grading (the cover over a tunnel is read on it)
     ends = None     # ends(lat, lon) -> the graded ground (its portals' floor), else the profiles' elev. Both at one DEM
                     # zoom (grading.PROFILE_ZOOM) in every process: the terrain blocks and the road tiles are built in
@@ -6467,6 +6468,7 @@ class TunnelProfiles(BridgeProfiles):
                                     # meets a full tunnel inside the hill (no hole, no portal face there)
         self._tls = threading.local()   # a thread's solved sections, kept with its parts (_commit) or dropped
         self._drowned = {}          # part id (fid.j) -> its chain has a part under water (drowned)
+        self._subsea = set()        # part ids whose underwater profile was solved successfully
 
     def _raw_ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
@@ -6483,7 +6485,9 @@ class TunnelProfiles(BridgeProfiles):
         if staged is None:
             return
         pid = self._part_id(k)
-        secs, subs = staged
+        secs, subs, underwater = staged
+        if underwater:
+            self._subsea.add(pid)
         self.sections[pid] = secs
         for n, (kind, th, ups, mouths, caps) in subs.items():
             sub = f"{pid}#{n}"
@@ -6499,7 +6503,7 @@ class TunnelProfiles(BridgeProfiles):
 
     def _mark_drowned(self, comp, pool):
         """Mark every part of the chain comp drowned when one of its parts is under water for more than
-        TUNNEL_WET_SHARE of its points: an underwater tunnel is left out whole. Overture splits one into pieces (the
+        TUNNEL_WET_SHARE of its points: unsupported underwater tunnels must be left out whole. Overture splits one into pieces (the
         Burnley Tunnel, Melbourne: the piece under the Yarra was left out, the dry piece from Batman Avenue to the
         bank was built, an open trench across the avenue with its mouth at the river; GitHub #128)."""
         if self.wet is None:
@@ -6568,8 +6572,21 @@ class TunnelProfiles(BridgeProfiles):
         gfn = self._raw_ground if self.raw is not None else self._ground
         out = []
         self._tls.staged = {}           # (committed by parts() right after, the rest dropped with the next solve)
+        underwater_floors = {}
+        if any(self._drowned.get(self._part_id(k)) for k in comp):
+            import subsea
+            answer = subsea.profiles(self, comp, pool)
+            if answer is not None:
+                underwater_floors, membership = answer
+                with self.lock:
+                    for k, wet in membership.items():
+                        self._drowned[self._part_id(k)] = wet
+            elif self.water is not None:
+                import revisit
+                revisit.fault()     # incomplete/unsolved wet geometry must not enter persistent road/plan caches
         nk = _EndJoin()                 # (the parts' ends another part of the chain goes on from: no portal there)
-        jends = {k: (nk(np.asarray(pool[k][1])[0]), nk(np.asarray(pool[k][1])[-1])) for k in comp
+        join = lambda k, p: subsea.node(p) if k in underwater_floors else nk(p)
+        jends = {k: (join(k, np.asarray(pool[k][1])[0]), join(k, np.asarray(pool[k][1])[-1])) for k in comp
                  if len(pool[k][1]) >= 2}
         jdeg = {}
         for a, b in jends.values():
@@ -6582,12 +6599,22 @@ class TunnelProfiles(BridgeProfiles):
                 continue
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             g = np.asarray(gfn(xy), np.float64)
-            ge = np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
+            underwater = k in underwater_floors
+            ge = g[[0, -1]] if underwater else np.asarray(self._ends_ground(xy[[0, -1]]), np.float64)
             g = g.copy()
             g[0], g[-1] = ge[0], ge[-1]
-            floor, kinds = tunnel_sections(s, g)
-            kinds = portal_cover(kinds, g - floor, pool[k][0])
-            kinds = self._cover_roads(xy, s, kinds, ground)
+            if underwater:
+                floor = underwater_floors[k]
+                la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.)
+                d, level = self.water(la, lo)[:2]
+                level = np.asarray(level, np.float64)
+                lz = self.frame.geodetic_to_enu(la, lo, np.where(np.isfinite(level), level, 0.))[2]
+                cover_ground = np.where(np.asarray(d) > .5, np.maximum(g, lz), g)
+                kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
+            else:
+                floor, kinds = tunnel_sections(s, g)
+                kinds = portal_cover(kinds, g - floor, pool[k][0])
+                kinds = self._cover_roads(xy, s, kinds, ground)
             secs, i = [], 0
             while i < len(kinds):
                 j = i
@@ -6597,8 +6624,9 @@ class TunnelProfiles(BridgeProfiles):
                 i = j + 1
             # neighbouring sections share their end sample (no gap between a portal and the open road)
             secs = [(a if n == 0 else a - 1, b, kd) for n, (a, b, kd) in enumerate(secs)]
-            floor = self._observed_floor(k, pool, xy, s, floor, secs,
-                                         tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
+            if not underwater:
+                floor = self._observed_floor(k, pool, xy, s, floor, secs,
+                                             tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None))))
             cover = g - floor
             log.debug("tunnel %s: sections %s over %.0f m", k, secs, s[-1])
             subs = {}
@@ -6626,11 +6654,15 @@ class TunnelProfiles(BridgeProfiles):
                     cv = float(np.max(cover[a:b + 1][near])) if near.any() else th
                     ups.append(float(np.clip(cv + PORTAL_GROUND_M - th, PORTAL_UP_MIN, roadmesh.PORTAL_FRAME)))
                 mouths = (n == 0 or secs[n - 1][2] == 0, n == len(secs) - 1 or secs[n + 1][2] == 0)
+                if underwater:
+                    joined = tuple(jdeg.get(e, 0) > 1 for e in jends.get(k, (None, None)))
+                    mouths = (mouths[0] and not (a == 0 and joined[0]),
+                              mouths[1] and not (b == len(xy) - 1 and joined[1]))
                 caps = None
                 if kd == 1:
                     caps, ups = self._road_caps(xy[a:b + 1], floor[a:b + 1], th, ups, mouths, pool[k][0].width, ground)
                 subs[n] = (kd, th, ups, mouths, caps)
-            self._tls.staged[k] = (secs, subs)
+            self._tls.staged[k] = (secs, subs, underwater)
             out.append(floor)
         return out
 
@@ -6829,7 +6861,8 @@ class TunnelProfiles(BridgeProfiles):
         return {"sections": mine(self.sections), "heights": mine(self.heights), "ups": mine(self.ups),
                 "caps": mine(self.caps), "mouths": mine(self.mouths), "open": {o for o in self.open
                                                                                if o.split("#")[0] in pids},
-                "drowned": {k: v for k, v in self._drowned.items() if k in pids}}
+                "drowned": {k: v for k, v in self._drowned.items() if k in pids},
+                "subsea": self._subsea & pids}
 
     def _adopt_take(self, extra):
         if not extra:
@@ -6838,16 +6871,20 @@ class TunnelProfiles(BridgeProfiles):
             for k, v in extra[name].items():
                 getattr(self, name).setdefault(k, v)
         self.open.update(extra["open"])
+        self._subsea.update(extra.get("subsea", ()))
         for k, v in extra["drowned"].items():
             self._drowned.setdefault(k, v)
 
     def _dry(self, out):
-        """The parts not under water for more than TUNNEL_WET_SHARE of their points, nor in a chain with one."""
+        """Dry parts and successfully solved wet profiles; incomplete/unsupported wet chains remain excluded."""
         if self.wet is None or not out:
             return out
         keep = []
         for p in out:
             with self.lock:
+                if str(p[0]).split("#")[0] in self._subsea:
+                    keep.append(p)
+                    continue
                 if self._drowned.get(str(p[0]).split("#")[0]):      # (its chain is under water: _mark_drowned)
                     continue
             xy = np.asarray(p[2], np.float64)
@@ -7990,9 +8027,9 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
                          parts[i][1]))
     for n, (fid, spec, xy, z, lon) in enumerate(parts):
         pts = np.c_[xy, z]
-        look = _deck_look(spec) if not terrain_surface(spec) else None
-        if terrain_paint and terrain_surface(spec):
-            look = None                     # painted in the ground layer, as any other ground part
+        # A covered road needs its own colliding floor even when its mapped surface normally belongs to the
+        # terrain paint (rock/grass). That paint lies on the hill/seabed above the bore, never inside it.
+        look = _deck_look(spec)
         lines = [] if look is None else [({**look, "deck": True, "tunnel": True, "no_tube": n in twinned}, spec.width, pts)]
         for look, w, line in extras(spec, pts, lon):
             if look["m"] not in (SIDEWALK["m"], GUTTER["m"], EDGE_DECAL["m"]):     # (no ground beside a deck)
@@ -8002,12 +8039,26 @@ def _tunnel_chunks(tunnels, cells, exact, terrain_paint=True):
         length = max((float(np.hypot(*np.diff(np.asarray(ln)[:, :2], axis=0).T).sum()) for _, _, ln in lines
                       if len(ln) >= 2), default=0.0)
         for look, w, line in lines:
+            guard = None
+            if look.get("tunnel") and getattr(tunnels, "frame", None) is not None:
+                # Whole sections, in a global datum: neighbouring tiles deduplicate them; anchor rebases and
+                # geotile pivots cannot put the water exclusion at a different height from its mesh.
+                q = simplify(np.asarray(line, np.float64), ztol=.1)
+                import geotiles
+                la, lo, h = geotiles.world_to_geodetic(tunnels.frame, q)
+                nodes = np.c_[np.round(la, 8), np.round(lo, 8), np.round(h, 3)].tolist()
+                height = tunnels.height(fid) + .2     # enclose both polylines' simplification/rounding and end overlap
+                identity = hashlib.sha1(json.dumps([nodes, w, height], separators=(",", ":")).encode()).hexdigest()[:16]
+                guard = {"id": f"{fid}:{identity}", "r": w / 2 + roadmesh.TUNNEL_SHOULDER + 1.,
+                         "h": height, "nodes": nodes}
             for piece in clip_polyline(line, *exact):
                 for c in split(densify(simplify(piece, ztol=SIMPLIFY_Z_M))):
                     if len(c) >= 2:
                         ch = _chunk(look, w, c)
                         ch["fixed"] = True
                         if look.get("tunnel"):
+                            if guard is not None:
+                                ch["waterguard"] = guard
                             ch["tunnel"] = True
                             ch["deck"] = not look.get("tube_only")      # (a twin's tube: no floor, no road surface)
                             ch["tunnel_len"] = round(length, 1)             # (the whole sub-part's: sound_boxes)
@@ -9984,7 +10035,10 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     # (from PR #41, Madderose) with a road mesh the mod makes no DecalRoads: their chunks were ~36 % of the file it
     # parses on its main thread
     data = {"v": VERSION, "chunks": [] if road_mesh is not None or not decals else
-            [c for c in chunks if not c.get("tube_only")]}
+            [{k: v for k, v in c.items() if k != "waterguard"} for c in chunks if not c.get("tube_only")]}
+    guards = {c["waterguard"]["id"]: c["waterguard"] for c in chunks if c.get("waterguard")}
+    if guards:
+        data["waterguard"] = [guards[k] for k in sorted(guards)]
     sound = sound_boxes(chunks) + list(garage_sound)      # (garage_sound: buildings.garage_sound_boxes)
     if sound:
         data["sound"] = sound

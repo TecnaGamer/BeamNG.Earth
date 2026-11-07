@@ -103,7 +103,7 @@ def sample(parts, chain, step=STEP_M):
     return xy, s, pi, br, from_end
 
 
-def chains(parts):
+def chains(parts, tol=TOUCH_M):
     """parts: [(key, line (k, 2), ...)] (the family's parts in a region, each once). Returns the chains: [[(part index,
     reversed)]], each a maximal run joined end to end through points where exactly two parts meet, ordered and
     oriented canonically (from the end of its lowest-keyed end part). Pure."""
@@ -117,9 +117,9 @@ def chains(parts):
     xs = ends[order_e, 0]
     for a_i, e in enumerate(order_e):
         b_i = a_i + 1
-        while b_i < len(order_e) and xs[b_i] - xs[a_i] <= TOUCH_M:
+        while b_i < len(order_e) and xs[b_i] - xs[a_i] <= tol:
             f = order_e[b_i]
-            if np.hypot(*(ends[e] - ends[f])) <= TOUCH_M and e // 2 != f // 2:
+            if np.hypot(*(ends[e] - ends[f])) <= tol and e // 2 != f // 2:
                 nb[e].append(int(f))
                 nb[f].append(int(e))
             b_i += 1

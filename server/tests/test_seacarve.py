@@ -152,12 +152,12 @@ class SeaCarveTest(unittest.TestCase):
                 j, i = rng.integers(0, n, 3000), rng.integers(0, n, 3000)
                 np.testing.assert_array_equal(a[j, i], b[j, i])
             self.assertEqual(float(got[1][1025, 1025]), 0.0)
-            del got
+            del got, a             # the loop variable also owns a mapped view; Windows cannot truncate it alive
             gc.collect()
             with open(p, "r+b") as fh:          # damaged: not read (the npz serves, and the copy is written again)
                 fh.seek(-10, 2)
                 fh.truncate()
-            with self.assertRaises(ValueError):
+            with self.assertRaises((ValueError, OSError)):   # Windows mmap rejects a truncated mapping with OSError
                 seacarve._open_raw(p)
 
     def test_raw_copy_and_older_cells(self):

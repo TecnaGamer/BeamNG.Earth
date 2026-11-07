@@ -155,6 +155,7 @@ import weather as weathermod  # noqa: E402
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
+WATERGUARD_VERSION = 1
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -2735,6 +2736,9 @@ class Server:
                 grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
                                           store=self.plan_store)
                 grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
+                grader.water = self.sea.water if self.sea is not None else None
+                grader.tunnel_raw = lambda la, lo: self.ground(None, la, lo,
+                    self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                 grader.dem = self.dem                # (its urgent lane: _plan_missing)
                 grader.shared = plancachemod.for_grader(self.cache_dir, grader, self.road_widths, grader.wet)
                 anchor.grader = grader       # publish only after a pinned bundle passed compatibility checks
@@ -3148,6 +3152,7 @@ class Server:
             else:
                 def setup(t):
                     t.wet = self.sea.depth if self.sea is not None else None
+                    t.water = self.sea.water if self.sea is not None else None
                     t.raw = lambda la, lo: self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                     if g is not None:
                         t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
@@ -4787,6 +4792,7 @@ class Connection:
 
     def __init__(self, server, reader, writer):
         self.s = server
+        self.waterguard_ok = getattr(server, "sea", None) is None
         self.reader, self.writer = reader, writer
         self.loop = asyncio.get_running_loop()
         self.peer = writer.get_extra_info("peername")
@@ -5555,6 +5561,14 @@ class Connection:
         if getattr(self, "closing", False):
             return
         kind = msg["type"]
+        if kind == "hello":
+            self.waterguard_ok = self.s.sea is None or msg.get("waterguard") == WATERGUARD_VERSION
+            if not self.waterguard_ok:
+                self.status("Mod update required: update BeamNG.Earth to use this server's underwater tunnels.")
+                return
+        elif not getattr(self, "waterguard_ok", True) and kind in {
+                "prepare_anchor", "prepare_terrain", "commit_anchor", "commit_terrain", "pose", "terrain_patch"}:
+            return  # no world jobs before a compatible hello; an older client would flood the generated bores
         if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
             # (a client that skipped hello: a fresh lease, not resumable, and the request goes on as before PR #817;
             # the mod always says hello first on its connection, so its reconnect still resumes before any request)
@@ -5583,6 +5597,8 @@ class Connection:
             if self.s.imagery is not None:      # the world map credits the sources its view shows
                 m["imageryCredits"] = self.s.imagery.credits_by_area()
                 m["otherCredits"] = self.s.attribution_rest()
+            if msg.get("waterguard") == WATERGUARD_VERSION:
+                m["waterguard"] = WATERGUARD_VERSION
             if lay.format >= 4:         # M1: the tiles' cell count (crossover.defaultErr, the exact level)
                 m["cells"] = lay.cells
             # the terrain block: samples per edge and their spacing (the mod's lattice / follow table, by its width in
