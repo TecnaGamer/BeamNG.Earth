@@ -182,6 +182,49 @@ T.check(#statics() == 1 and statics()[1].fields.collisionType == 'Visible Mesh F
 roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 
+-- railway collision off (settings railCollision, GitHub #821): the track only renders, the lean collider is not made;
+-- switching it back on or off acts on the tiles already here
+local function railKinds()
+  local k = {}
+  for _, o in ipairs(statics()) do k[o.fields.shapeName] = o.fields.collisionType end
+  return k
+end
+roads.onTile({ anchorId = 2, key = '6_6', path = '/t/rc.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(roads.railCollision == true and railKinds()['/t/railcol_2_6_6.cdae'] == 'Collision Mesh', 'railCollision starts on')
+T.check(roads.setRailCollision(false) == true and roads.setRailCollision(false) == false, 'off changes once')
+roads.update(gov, 2)
+kinds = railKinds()
+T.check(kinds['/t/railcol_2_6_6.cdae'] == nil and kinds['/t/rail_2_6_6.cdae'] == 'None' and #statics() == 1,
+  'off: the lean collider is gone, the track only renders')
+roads.onDrop({ anchorId = 2, key = '6_6' })
+roads.update(gov, 2)
+roads.onTile({ anchorId = 2, key = '6_6', path = '/t/rc.json', n = 0 }, 2)
+roads.update(gov, 2)
+kinds = railKinds()
+T.check(kinds['/t/railcol_2_6_6.cdae'] == nil and kinds['/t/rail_2_6_6.cdae'] == 'None', 'off: a tile arriving later has no rail collider')
+roads.onDrop({ anchorId = 2, key = '6_6' })
+roads.update(gov, 2)
+roads.onTile({ anchorId = 2, key = '6_6', path = '/t/r.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'None', 'off, no railcol: the drawn track does not collide')
+T.check(roads.setRailCollision(true) == true, 'on changes')
+roads.update(gov, 2)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'Visible Mesh Final', 'on again: the drawn track collides')
+roads.onDrop({ anchorId = 2, key = '6_6' })
+roads.update(gov, 2)
+roads.onTile({ anchorId = 2, key = '6_6', path = '/t/rc.json', n = 0 }, 2)
+roads.update(gov, 2)
+roads.setRailCollision(false)
+roads.update(gov, 2)
+roads.setRailCollision(true)
+roads.update(gov, 2)
+kinds = railKinds()
+T.check(kinds['/t/railcol_2_6_6.cdae'] == 'Collision Mesh' and kinds['/t/rail_2_6_6.cdae'] == 'None' and #statics() == 2,
+  'off then on: the lean collider is made again')
+roads.onDrop({ anchorId = 2, key = '6_6' })
+roads.update(gov, 2)
+
 -- pooled shape files (server/matslots.py): the slot paths replace the tile's own files; a slot is reported gone once
 -- its tile is dropped and its object deleted (one the tile cannot use: at once)
 gov.allow, gov.tries = nil, 0

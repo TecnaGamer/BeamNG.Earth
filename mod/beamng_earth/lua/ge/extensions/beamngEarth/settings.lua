@@ -91,6 +91,8 @@ M.SCHEMA = {
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
+  -- railway tracks collide with vehicles (roads.lua rail / railcol; GitHub #821); off: the track only renders. Needs Roads
+  railCollision = { kind = 'bool', default = true, label = 'Railway collision' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -136,7 +138,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'railCollision', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'creditsVisible', 'beammpOnLaunch',
@@ -481,6 +483,7 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setHighwaySigns then core.setHighwaySigns(v) else require('beamngEarth/roads').setSignsEnabled(v) end
   end,
+  railCollision = function(v) require('beamngEarth/roads').setRailCollision(v) end,
   directionSigns = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setDirectionSigns then core.setDirectionSigns(v) end
