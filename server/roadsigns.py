@@ -132,11 +132,28 @@ def living_ids(feats, frame, urban, widths, left_hand):
     return got
 
 
-def with_flags(rows, living, left_hand):
-    """[(row, flags)] of {fid: speedsigns row}: the roundabout rings (islands.ring_directions: the same loops the road tiles
-    and the graph see, with the ring's way round) and the living streets, a living street ranked as a street."""
-    roads_list = [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()]
-    ring = islands.ring_directions(roads_list, left_hand) if roads_list else {}
+def cell_rings(feats, frame, urban, widths, left_hand, mph, rows):
+    """{fid: way round} of the roundabout rings made of the roads of one map cell (islands.ring_directions: the same loops the
+    road tiles and the graph see), kept on the cell. A ring whose roads are in two cells is not seen: every road is whole in
+    each cell it crosses, so it is lost only when no cell holds all of it. (Asked per tile for the roads round it, it was 60 %
+    of a tile's time, 2026-11-07.)"""
+    key = (frame.lat0, frame.lon0, urban, widths, bool(left_hand), bool(mph))
+    with _lock:
+        memo = feats.__dict__.setdefault('_rsign_rings', {})
+        got = memo.get(key)
+    if got is None:
+        roads_list = [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()]
+        got = dict(islands.ring_directions(roads_list, left_hand)) if roads_list else {}
+        with _lock:
+            if len(memo) >= speedsigns.CELL_FRAMES:
+                memo.pop(next(iter(memo)))
+            memo[key] = got
+    return got
+
+
+def with_flags(rows, living, ring):
+    """[(row, meta, flags)] of {fid: speedsigns row}: the roundabout rings (ring: {fid: way round}) and the living streets, a
+    living street ranked as a street."""
     out = []
     for fid, row in rows.items():
         meta = list(row[2])
@@ -214,16 +231,18 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     x0, y0, x1, y1 = box
     m = speedsigns.MARGIN_M
     la, lo, _ = frame.enu_to_geodetic(np.array([x0 - m, x1 + m]), np.array([y0 - m, y1 + m]), 0.0)
-    rows, cells, living = {}, [], set()
+    rows, cells, living, ring = {}, [], set(), {}
     for key in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max())):
         feats = context.cell(key)
         if feats is None or not len(feats):
             continue
         cells.append(feats)
         living |= living_ids(feats, frame, context.urban, context.widths, left_hand)
-        for fid, row in speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph).items():
+        own = speedsigns._cell_rows(feats, frame, context.urban, context.widths, left_hand, mph)
+        for fid, row in own.items():
             rows.setdefault(fid, row)           # (a line is whole in every cell it crosses)
-    got = arrays(with_flags(rows, living, left_hand), box)
+        ring.update(cell_rings(feats, frame, context.urban, context.widths, left_hand, mph, own))
+    got = arrays(with_flags(rows, living, ring), box)
     if got is None:
         return np.zeros((0, 11))
     pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off = got

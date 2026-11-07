@@ -2,6 +2,7 @@
 import json
 import os
 import sys
+import types
 import unittest
 
 import numpy as np
@@ -88,17 +89,20 @@ class Rules(unittest.TestCase):
         rows = {"a": self.row(quarter(0, 90), 1.0), "b": self.row(quarter(90, 180), 1.0),
                 "c": self.row(quarter(180, 270), 1.0), "d": self.row(quarter(270, 360), 1.0),
                 "in": self.row([[-330.0, 0.0], [-30.0, 0.0]])}
-        got = {id(r[0]): (m, f) for r, m, f in roadsigns.with_flags(rows, set(), False)}
+        import islands
+        ring = islands.ring_directions(
+            [(fid, types.SimpleNamespace(oneway=bool(r[2][1]), dir=int(r[2][1])), r[1], 0.0) for fid, r in rows.items()], False)
+        got = {id(r[0]): (m, f) for r, m, f in roadsigns.with_flags(rows, set(), ring)}
         flags = {fid: got[id(rows[fid][0])][1] for fid in rows}
         self.assertEqual({k for k, v in flags.items() if v & roadsigns.FLAG_RING}, {"a", "b", "c", "d"})
         self.assertEqual(flags["in"], 0)
 
     def test_a_living_street_ranks_as_a_street(self):
         rows = {"x": (np.zeros((2, 2)), np.array([[0.0, 0.0], [50.0, 0.0]]), (3.0, 0.0, 0.0, 1.0, 0.0), [], [], [])}
-        (row, meta, flags), = roadsigns.with_flags(rows, {"x"}, False)
+        (row, meta, flags), = roadsigns.with_flags(rows, {"x"}, {})
         self.assertEqual(flags, roadsigns.FLAG_LIVING)
         self.assertGreaterEqual(meta[2], 1.0)
-        (row, meta, flags), = roadsigns.with_flags(rows, set(), False)
+        (row, meta, flags), = roadsigns.with_flags(rows, set(), {})
         self.assertEqual((flags, meta[2]), (0, 0.0))
 
 
