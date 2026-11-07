@@ -145,7 +145,9 @@ POLICIES = {
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
-    "basemap.nationalmap.gov": HostPolicy(rate=50.0, burst=150.0, max_conc=24, daily_budget=150000,
+    # (2026-11-07, the user: "i think its safe to increase USGS": 100/s, 32 at once; behind CloudFront, telemetry over
+    # ~500 players showed no 429 and 0.1 % errors at 50/s, and the 3D map's fresh views waited on ~1,350 deferred)
+    "basemap.nationalmap.gov": HostPolicy(rate=100.0, burst=300.0, max_conc=32, daily_budget=150000,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):

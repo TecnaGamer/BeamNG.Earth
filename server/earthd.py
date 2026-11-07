@@ -388,8 +388,18 @@ FAR_TRACE = os.environ.get("BNGE_FARTRACE") == "1"     # (tools: every far tile 
 MAP_TEX_PX = 512                # the 3D map's far textures at least this (Server.tex_size) ...
 MAP_TEX_MAX_LEVEL = 2           # ... up to this level (coarser ones: 4x the photo tiles each, and EOX answered 403 to
                                 # ~135 requests/s with every level at 512 px and no cap, 2026-11-07)
+MAP_TEX_OFF_PX = 128            # the 3D map: a far tile's texture off the screen (Server.tile_tex_px) ...
+MAP_TEX_MIN_PX = 128            # ... never under this on it ...
+MAP_TEX_OVERSAMPLE = 1.5        # ... and at most this many texels per screen pixel of its edge
+MAP_SCREEN_H = 1440.0           # ... for a screen this many pixels high
+MAP_TEX_UPGRADE_S = 1.0         # shown tiles checked this often for a larger texture as the camera turns
 MAP_LOD_SCALE = 1.25            # ... and their detail reaching this much farther (Connection.kfun)
-MAP_DETAIL_EYE_M = 3000.0       # the 3D map's view frame: roads, trees, buildings round its target only below this eye
+MAP_DETAIL_EYE_M = 3000.0       # the 3D map's view frame: roads, trees round its target only below this eye ...
+MAP_BUILDINGS_EYE_M = 10000.0   # ... the buildings below this one (the user, 2026-11-07: "make buildings start rendering
+MAP_BLD_FAR_EYE = 1.0           # further out"), the far ones to this many times the eye's height ...
+MAP_BLD_FAR_MAX_M = 6000.0      # ... at most this far,
+MAP_BLD_SKY_EYE = 3.0           # the skyline to this many times it ...
+MAP_BLD_SKY_MAX_M = 20000.0     # ... at most this far (Connection.building_reach)
 VIEW_ANCHOR_Q = 1 / 32          # the 3D map's view-only anchors' height quantum (m): no survey, no block driven on
 ROAD_TILE_TIMEOUT_S = float(os.environ.get("BNGE_ROAD_TILE_TIMEOUT", "") or 300.0)
 WORKERS = 3                     # far-tile workers (--workers): while driving (FAR_DRIVE)
@@ -629,6 +639,7 @@ class TileInfo:
     # whose status is ready: the loop guard, RETEX_REPEAT)
     retex_repeat: int = 0
     credits: frozenset = frozenset()    # data-credit source ids (credits.tile_sources; --credits on only)
+    tex_px: int = 0                     # its texture's size (Server.tile_tex_px; 0: tex_size of its level)
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
@@ -3900,6 +3911,43 @@ class Server:
             px = max(px, MAP_TEX_PX)
         return px
 
+    def tile_tex_px(self, anchor, tile):
+        """A far tile's texture size: tex_size(level), but with the 3D map open as fine as the tile is on screen (the
+        user, 2026-11-07, "photo detail matched to the screen": the photo zoom goes by it, each halving 4x fewer photo
+        tiles): one off the screen (behind the camera, outside its view cone) MAP_TEX_OFF_PX, else at most
+        MAP_TEX_OVERSAMPLE x its edge in screen pixels (at MAP_SCREEN_H px for the field of view), never under
+        MAP_TEX_MIN_PX. Retextured as the camera turns (a texture's size may change, its UVs go by its own)."""
+        if isinstance(tile, farfield.Piece):
+            tile = tile.base                # (a piece takes its node's texture: the same size)
+        px = self.tex_size(tile.level)
+        cam = next((c.cam for c in self.connections if (getattr(c, "map_view", False) or getattr(c, "map_open", False))
+                    and c.active == anchor.id and isinstance(getattr(c, "cam", None), dict)
+                    and c.cam.get("tx") is not None), None)
+        if cam is None:
+            return px
+        try:
+            x, y, z = float(cam["x"]), float(cam["y"]), float(cam["z"])
+            fx, fy, fz = float(cam["fx"]), float(cam["fy"]), float(cam["fz"])
+            gz, fov = float(cam.get("tz") or 0.0), float(cam.get("fovDeg") or 60.0)
+        except (KeyError, TypeError, ValueError):
+            return px
+        x0, y0, x1, y1 = tile.bbox
+        s = max(x1 - x0, y1 - y0)
+        dx, dy, dz = (x0 + x1) / 2 - x, (y0 + y1) / 2 - y, gz - z
+        d = math.sqrt(dx * dx + dy * dy + dz * dz)
+        if d < s:
+            return px                       # (under the camera)
+        n = math.sqrt(fx * fx + fy * fy + fz * fz) or 1.0
+        tv = math.tan(math.radians(fov) / 2)
+        half = math.atan(math.hypot(tv, tv * farfield.ASPECT))
+        slack = math.asin(min(1.0, s * 0.7071 / d))
+        ang = math.acos(max(-1.0, min(1.0, (dx * fx + dy * fy + dz * fz) / (d * n))))
+        if ang - slack > half:
+            return min(px, MAP_TEX_OFF_PX)
+        on_screen = s * (MAP_SCREEN_H / (2 * tv)) / d
+        want = 2 ** math.ceil(math.log2(max(1.0, on_screen * MAP_TEX_OVERSAMPLE)))
+        return int(max(MAP_TEX_MIN_PX, min(px, want)))
+
     @property
     def max_level(self):
         """The quadtree's root level: L9 (v1.3.1), L10 in horizon mode."""
@@ -3958,7 +4006,7 @@ class Server:
         wait on the network. Only the first source of the chain; errors surface at build time."""
         if self.imagery is not None:
             frame, x0, y0, size = self.tile_where(anchor, tile)
-            px = self.tex_size(tile.level)
+            px = self.tile_tex_px(anchor, tile)
             self.imagery.prefetch(frame, *imagerymod.gutter_square(x0, y0, size, px), px, soon=True)
 
     # --- BeamMP shared world generation v2 (mpshare.py, .claude/work/mp_share_v2.md) --------------------------------
@@ -4086,6 +4134,7 @@ class Server:
             return self.retexture(anchor, tile, prev)
         t0 = time.perf_counter()
         lvl = tile.level
+        px_t = self.tile_tex_px(anchor, tile)       # (the 3D map: as fine as it is on screen)
         is_global = isinstance(tile, farfield.GTile)
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
@@ -4100,7 +4149,7 @@ class Server:
                 # meanwhile and re-renders it): the global tiles are most of a map view (2026-11-07, Spokane: 26 s each
                 # here, waiting on their photos one interpreter at a time)
                 im = self.imagery
-                px = self.tex_size(lvl)
+                px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                 frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
                 later = im.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px)
@@ -4145,7 +4194,7 @@ class Server:
                 # token re-renders it finished here once the photos are in (far_retex)
                 x0q, y0q, _, _ = tile.bbox
                 later = self.imagery.fetch_later(anchor.frame, *imagerymod.gutter_square(
-                    x0q, y0q, tile.size, self.tex_size(lvl)), self.tex_size(lvl))
+                    x0q, y0q, tile.size, px_t), px_t)
             use_fin = analyses and self.far_pool is not None and node is tile and self.fin_worker_worth()
             if quick and analyses and not later and not use_fin and self.far_pool is not None and node is tile:
                 # (every photo on disk but no finished tiles: a first visit; raw now, finished re-rendered right after)
@@ -4162,7 +4211,7 @@ class Server:
                 # 81 s of one interpreter's time in a 10 min first visit beside the event loop (2026-11-04)
                 texture = self.texture_name(anchor.id, tile.key, self.tex_rev.get(ck, 0))
                 im = self.imagery
-                tex = {"path": os.path.join(self.out_dir, texture), "px": self.tex_size(lvl),
+                tex = {"path": os.path.join(self.out_dir, texture), "px": px_t,
                        "mask": (os.path.join(self.out_dir, surfacemod.road_mask_name(texture)),
                                 self.road_mask_px(lvl)) if self.road_masks else None,
                        "chain": [s.name for s in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
@@ -4237,7 +4286,7 @@ class Server:
             self.degraded.discard(ck)
         elif self.imagery is not None:
             try:
-                px = self.tex_size(lvl)
+                px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                 tk = self.tex_key(anchor, tile, px)
                 hit = revisitmod.load(self.cache_dir, "fartex", tk)
@@ -4294,7 +4343,7 @@ class Server:
             built = farfield.clip_built(built, tile.quad)
         t2 = time.perf_counter()
         size = farfield.write_built(path, built, self.far_format, material or farfield.MATERIAL,
-                                    textured=material is not None, tex_px=self.tex_size(lvl))
+                                    textured=material is not None, tex_px=px_t)
         dt = time.perf_counter() - t0
         self.build_stats.append(dt)
         tex_s = t2 - t1 - geo_wait
@@ -4307,6 +4356,7 @@ class Server:
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
                         material, texture, tex_bytes, tex_s, credits=sources)
         info.tile = tile
+        info.tex_px = px_t
         if is_global:
             info.frame = farfield.global_frame_ll(tile.z, tile.x, tile.y)
         if material is not None and self.far_format == "cdae":    # the pooled shape path (matslots.py)
@@ -4411,7 +4461,7 @@ class Server:
         under the next revision's file name; the shape and its material name stay. Network trouble:
         the previous TileInfo, still stale."""
         t0 = time.perf_counter()
-        px = self.tex_size(tile.level)
+        px = self.tile_tex_px(anchor, tile)
         pending = set()
         if self.map_on() and self.far_pool is not None and self.imagery is not None and \
                 isinstance(tile, farfield.GTile):
@@ -4427,7 +4477,7 @@ class Server:
                                        tex).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
-                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1)
+                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px)
         if self.map_on() and self.far_pool is not None and self.imagery is not None and \
                 type(tile) is farfield.Tile and tile.level > 0:
             # the 3D map: the sharper texture (its photos in now) from the raw photos in a far-tile process, many at
@@ -4447,7 +4497,7 @@ class Server:
                                        self.layout, tex).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
-                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1)
+                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px)
         try:
             rgb, used = self.render_tile(anchor, tile, px, pending)
         except imagerymod.ImageryError as e:
@@ -4470,7 +4520,7 @@ class Server:
                     else anchor.zooms[max(tile.level, 0)])
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
         return replace(prev, texture=texture, tex_bytes=tex_bytes, tex_seconds=time.perf_counter() - t0,
-                       cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources)
+                       cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px)
 
     def start_world_warm(self, anchor):
         """The rough earth (the user, 2026-11-07: "keep a very rough version of earth that we can easaly load at all times
@@ -7025,7 +7075,9 @@ class Connection:
                              self.build_veg_geo if self.veg.geo else self.build_veg_tile,
                              view=self.view_at, foci=[f for f in self.foci if f[3]],
                              frame=anchor.frame if anchor is not None else None)
-        if self.s.buildings and aid == self.active and detail:
+        bld_on = not (self.map_view and self.eye_clearance() > MAP_BUILDINGS_EYE_M)
+        if self.s.buildings and aid == self.active and bld_on:
+            self.building_reach()
             geo = self.far_geo
             anchor = self.s.anchors.get(aid)
             frame = anchor.frame if anchor is not None else None
@@ -7553,6 +7605,25 @@ class Connection:
             self.batch = [time.perf_counter(), 0, 0]
         self.wake.set()
 
+    def building_reach(self):
+        """The far buildings' and the skyline's send distances: the graphics setting's, farther with the 3D map open as
+        the eye rises (the user, 2026-11-07: "make buildings start rendering further out"), at most MAP_BLD_*_MAX_M."""
+        bld = getattr(self, "building_scale", None) or 1.0
+        far = buildingsmod.FAR_SEND_M * bld
+        sky = buildingsmod.SKY_SEND_M * bld
+        if self.map_view or self.map_open:
+            e = self.eye_clearance()
+            far = max(far, min(e * MAP_BLD_FAR_EYE, MAP_BLD_FAR_MAX_M))
+            sky = max(sky, min(e * MAP_BLD_SKY_EYE, MAP_BLD_SKY_MAX_M))
+        if abs(self.bldfar.send_m - far) > 50.0:
+            self.bldfar.send_m = far
+            self.bldfar.drop_m = far + (buildingsmod.FAR_DROP_M - buildingsmod.FAR_SEND_M)
+        if self.bldsky is not None and abs(self.bldsky.send_m - sky) > 50.0:
+            self.bldsky.send_m = sky
+            self.bldsky.drop_m = sky + (buildingsmod.SKY_DROP_M - buildingsmod.SKY_SEND_M)
+        if self.bldsky is not None:
+            self.bldsky.inner = (self.bldfar.send_m, buildingsmod.SKY_UNIT)
+
     def map_cone(self, aid):
         """The 3D map's view cone for the selection (farfield.out_of_view: off-screen nodes MAP_OUT_OF_VIEW_K times as
         far), or None (driving: every direction counts; no 3D camera yet)."""
@@ -7879,6 +7950,17 @@ class Connection:
             done, _ = await asyncio.wait(futs + [self._stream_waker], return_when=asyncio.FIRST_COMPLETED)
             if self._stream_waker in done:
                 self._stream_waker = None
+            if (self.map_view or self.map_open) and anchor is not None and \
+                    time.monotonic() - getattr(self, "_texup_at", 0.0) > MAP_TEX_UPGRADE_S:
+                # (the camera turned: tiles shown with a smaller texture than they now need on screen, sharper)
+                self._texup_at = time.monotonic()
+                for ck in [ck for ck in self.shown if ck[0] == anchor.id or ck[0] == GLOBAL_AID]:
+                    info = self.s.tiles.get(ck)
+                    if info is None or info.material is None or not info.tex_px or info.tile is None:
+                        continue
+                    if self.s.tile_tex_px(anchor, info.tile) > info.tex_px and not info.stale:
+                        info.stale = True
+                        self.s.retex_request(ck, pump=False)
             if self.s.retex_todo and (self.map_view or self.map_open):
                 self.s._retex_pump()        # (re-renders into the far slots builds left free)
             for ck in [ck for ck, (f, _) in self.inflight.items() if f.done()]:
@@ -7928,7 +8010,7 @@ class Connection:
                     m["texture"] = f"{self.s.vfs_dir}/{info.texture}"
                     m["detail"] = True          # the shape has UV1 (world-locked detail map)
                     if self.s.layout.format >= 4:   # M1: texture px, the mod's governor unit kind
-                        m["tex"] = self.s.tex_size(t.level)
+                        m["tex"] = info.tex_px or self.s.tex_size(t.level)
                 self.send(m)
                 if FAR_TRACE:
                     log.info("fartrace %.2f s L%d %s build %.0f ms tex %.0f ms quick %s", time.perf_counter() -
