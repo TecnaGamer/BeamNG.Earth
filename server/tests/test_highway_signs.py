@@ -126,6 +126,29 @@ class PipelineTest(unittest.TestCase):
                 self.assertIn('mileposts', data)
                 self.assertIn('/temp/revisited/', data['exits']['shape'])
 
+    def test_the_town_signs_speed_rule_only_with_the_buildings(self):
+        """The sign tiles leave Germany's general limits out (towns_on) only where the town signs stand: their road
+        tiles' props, which come with the buildings; with --buildings off no Ortstafel stands, so the 50 does (Codex on
+        PR #892)."""
+        import concurrent.futures
+        import townentry
+        got = []
+
+        class Pool:
+            def submit(self, fn, *args):
+                got.append(args[-1])
+                fut = concurrent.futures.Future()
+                fut.set_result(None)
+                return fut
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(townentry, 'ENV', ''):
+            md = fixture(root)
+            for buildings in (False, True):
+                srv = server(md, root)
+                srv.sign_pool, srv.towns_on, srv.buildings = Pool(), True, buildings
+                earthd.Server.build_signs_tile(srv, 1, 0, 0)
+            md.highway_signs.close()
+        self.assertEqual(got, [False, True])
+
     def test_sign_worker_and_fallback_match_without_touching_road_outputs(self):
         with tempfile.TemporaryDirectory() as root:
             md = fixture(root)

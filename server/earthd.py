@@ -1970,7 +1970,7 @@ class Server:
             return poolsmod.result_running(self.sign_pool.submit(
                 blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
                 self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor), dirsignsmod.enabled(self),
-                townentrymod.enabled(self.towns_on)), ROAD_TILE_TIMEOUT_S)
+                Server.towns_enabled(self)), ROAD_TILE_TIMEOUT_S)
         g = self.grader_for(anchor)
         zoom = anchor.zooms[0]
 
@@ -1979,7 +1979,7 @@ class Server:
             return g.apply(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
         urban = self.surface.urban if self.surface is not None and hasattr(self.surface, "urban") else None
         towns = None
-        if townentrymod.enabled(self.towns_on) and self.mapdata is not None and self.surface is not None:
+        if Server.towns_enabled(self) and self.mapdata is not None and self.surface is not None:
             if getattr(self, "towns", None) is None:
                 self.towns = townentrymod.Towns(self.mapdata, self.surface)
             towns = self.towns.town_state(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
@@ -2149,7 +2149,7 @@ class Server:
             blockworker.roads_geo, aid, anchor.lat, anchor.lon, anchor.zooms[0], gx, gy, gzoom, self.out_dir,
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
-            country, content, skin, exact, Server.pole_profile(self), townentrymod.enabled(self.towns_on))
+            country, content, skin, exact, Server.pole_profile(self), Server.towns_enabled(self))
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
@@ -2187,7 +2187,7 @@ class Server:
         return blockworker._geo_content_key(geotiles.geobox(gx, gy).key, gzoom, self.buildings, lh, mph,
                                             self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
-                                            towns_on=townentrymod.enabled(self.towns_on))
+                                            towns_on=Server.towns_enabled(self))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
@@ -2232,7 +2232,7 @@ class Server:
         return poolsmod.result_running(submit(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
-            towns_on=townentrymod.enabled(self.towns_on)), ROAD_TILE_TIMEOUT_S)
+            towns_on=Server.towns_enabled(self)), ROAD_TILE_TIMEOUT_S)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -2248,7 +2248,7 @@ class Server:
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
                 self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor), Server.pole_profile(self, anchor),
-                townentrymod.enabled(self.towns_on))
+                Server.towns_enabled(self))
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -2341,7 +2341,7 @@ class Server:
             sign_obstacles=signplacement.for_tile(anchor.frame,tx,ty,self.mapdata,items,skip)
         town_faces = {}                 # the town signs' faces the tile's props use (townentry.enabled)
         towns = None
-        if (props is not None and townentrymod.enabled(self.towns_on) and self.mapdata is not None
+        if (props is not None and Server.towns_enabled(self) and self.mapdata is not None
                 and self.surface is not None):
             if getattr(self, "towns", None) is None:
                 self.towns = townentrymod.Towns(self.mapdata, self.surface)
@@ -2519,6 +2519,13 @@ class Server:
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
                                    turbines=turbine_rows, towns=town_faces)
 
+    def towns_enabled(self):
+        """Whether the town signs are built (townentry.enabled: the settings page's Town signs, BNE_TOWNSIGNS), and
+        with them the speed-limit signs without Germany's general limits: only with the buildings, the road tiles'
+        props that carry the signs (Codex on PR #892: with --buildings off neither the Ortstafel nor the 50 stood).
+        Called as Server.towns_enabled(self), as pole_profile (the tests' servers are namespaces)."""
+        return townentrymod.enabled(self.towns_on) and bool(self.buildings)
+
     def set_towns(self, on):
         """The settings page's Town signs switch (message town_signs): True when it changed (the road tiles and the
         sign tiles are then sent again, as the gas stations' and the direction signs' are)."""
@@ -2594,7 +2601,7 @@ class Server:
             "buildings": bool(self.buildings),
             "gas_stations": bool(self.gas_stations),
             "pole_profile": Server.pole_profile(self),
-            "towns_on": townentrymod.enabled(self.towns_on),
+            "towns_on": Server.towns_enabled(self),
             # every kind: the map data's versions (Overture release, layer versions, the weekly rail / lane builds)
             "md": md,
             # far tiles' geometry and texture (blockworker._far_key, far_tile): the layout (quality: cells, texture px)
