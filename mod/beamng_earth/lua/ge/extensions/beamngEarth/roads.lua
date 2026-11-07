@@ -462,6 +462,64 @@ function M.collideNear(t, extra)
   return #foci > 0 and collisionfoci.near(foci, t.cx, t.cy, (extra or 0) + M.TILE_M * 0.71) or false
 end
 
+-- Bounds are local to the shape pivot. Map all eight corners when a geotile
+-- rotates; a translated min/max pair is not a valid box after rebasing.
+function M.cliffWalkBounds(t, what, walk)
+  local part = t.geo and t.parts and t.parts[what] or walk
+  local b = part and part.bounds
+  if not b or #b ~= 6 then return nil end
+  local pp = t.geo and t.pls and t.pls[what]
+  if t.geo and not pp then return nil end
+  local out = { math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge }
+  for i = 1, 4, 3 do for j = 2, 5, 3 do for k = 3, 6, 3 do
+    local x, y, z = b[i]+part.pos[1], b[j]+part.pos[2], b[k]+part.pos[3]
+    if pp then x, y, z = pp.xf:apply(x, y, z) end
+    out[1],out[2],out[3] = math.min(out[1],x),math.min(out[2],y),math.min(out[3],z)
+    out[4],out[5],out[6] = math.max(out[4],x),math.max(out[5],y),math.max(out[6],z)
+  end end end
+  return out
+end
+
+local function cliffObjectBounds(t, what, o)
+  t.cliffBoxes = t.cliffBoxes or {}
+  local cached = t.cliffBoxes[what]
+  if cached and cached.id == o:getID() then return cached.box end
+  local wb = o.getWorldBox and o:getWorldBox()
+  if not wb or not wb.minExtents then return nil end -- legacy/test objects: conservative tile fallback
+  local lo, hi = wb.minExtents, wb.maxExtents
+  local b = {lo.x,lo.y,lo.z,hi.x,hi.y,hi.z}
+  t.cliffBoxes[what] = {id=o:getID(),box=b}
+  return b
+end
+
+-- Physics range uses the nearest point of each piece, not its whole parent tile.
+-- Keep XY distance, speed lookahead and traffic/player islands identical to the
+-- old collision policy. Height differences cannot accidentally remove contact.
+function M.cliffCollideNear(t, b, extra, range)
+  extra = extra or 0
+  if not b then
+    if not range then return M.collideNear(t, extra) end
+    if range[extra] == nil then range[extra] = M.collideNear(t, extra) end
+    return range[extra]
+  end
+  -- One player lookup per range pass, shared by all pieces and tiles.
+  local p = range and range.player
+  if p == nil then
+    local veh = getPlayerVehicle and getPlayerVehicle(0)
+    p = veh and veh:getPosition() or false
+    if range then range.player = p end
+  end
+  if not p then return true end
+  local x, y = math.max(b[1],math.min(p.x,b[4])), math.max(b[2],math.min(p.y,b[5]))
+  local r = M.radiusToward(p,x,y,lastRadius,lastDir) + extra
+  if (x-p.x)^2+(y-p.y)^2 <= r*r then return true end
+  for _, f in ipairs(foci) do
+    x,y = math.max(b[1],math.min(f.x,b[4])), math.max(b[2],math.min(f.y,b[5]))
+    if (x-f.x)^2+(y-f.y)^2 <= (f.r+extra)^2 then return true end
+  end
+  return false
+end
+
 -- Other vehicles' collision foci (collisionfoci.lua, through core.lua): their tiles' colliders are made too.
 function M.setFoci(f) foci = f or {} end
 
@@ -480,12 +538,8 @@ local function syncCliffCollision(key, t, id, what, gov, range)
   local active = o:getField('collisionType', 0) ~= 'None'
   local wanted = false
   if M.cliffsEnabled then
-    -- Every piece of a tile has the same range. Query the player/foci once for
-    -- each hysteresis state instead of allocating vectors for every piece.
-    if range then
-      if range[active] == nil then range[active] = M.collideNear(t, active and M.UNCOLLIDE_M or 0) end
-      wanted = range[active]
-    else wanted = M.collideNear(t, active and M.UNCOLLIDE_M or 0) end
+    wanted = M.cliffCollideNear(t, cliffObjectBounds(t, what or 'cliff', o),
+      active and M.UNCOLLIDE_M or 0, range)
   end
   what = what or 'cliff'
   if id == t[what] then t.colWant[what] = wanted or nil end
@@ -520,8 +574,9 @@ local function updateCollideRange(gov)
     end
     parked = keep
   end
+  local player = veh and veh:getPosition() or false
   for key, t in pairs(tiles) do
-    local range = {}
+    local range = {player=player}
     for _, what in ipairs(M.CLIFF_WHATS) do syncCliffCollision(key, t, t[what], what, gov, range) end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
@@ -1019,6 +1074,7 @@ function M.replace(a, aid)
     if t.geo then
       t.anchor = aid
       M.placeGeoTile(t, a)
+      t.cliffBoxes = nil -- native world boxes changed with the anchor
       for what, pp in pairs(t.pls) do
         local p = t.parts[what]
         local x, y, z = pp.xf:apply(p.pos[1], p.pos[2], p.pos[3])
@@ -1892,7 +1948,8 @@ function M.update(gov, currentAnchor, player, view, a)
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- Choose contact before registration. Switching it immediately afterwards
       -- calls postApply and repeats native shape setup on the same frame.
-      local cliffContact = M.isCliff(q.what) and M.cliffsEnabled and M.collideNear(t)
+      local cliffContact = M.isCliff(q.what) and M.cliffsEnabled
+        and M.cliffCollideNear(t, M.cliffWalkBounds(t, q.what, walk))
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
         (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or (cliffContact or not isRoad))

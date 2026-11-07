@@ -46,7 +46,7 @@ def _prepare(rock):
                 normal=np.cross(p[t[:, 1]]-p[t[:, 0]], p[t[:, 2]]-p[t[:, 0]]))
 
 
-def simplify(rock, cell_m, prepared=None):
+def simplify(rock, cell_m, prepared=None, fallback=None):
     """Return one coarser mesh; all attributes follow the same vertex mapping."""
     p, t = np.asarray(rock.positions), np.asarray(rock.tris)
     n = len(p)
@@ -54,13 +54,17 @@ def simplify(rock, cell_m, prepared=None):
     e, locked, material = (prepared[k] for k in ('edges', 'locked', 'material'))
     cells = np.floor((p-p.min(axis=0))/cell_m).astype(np.int64)
     join = e[np.all(cells[e[:, 0]] == cells[e[:, 1]], axis=1) & ~locked[e].any(axis=1)]
-    labels = np.arange(n)
+    baseline = np.arange(n) if fallback is None else fallback
+    labels = baseline.copy()
     # Connected components inside each cell, never position-only welding.
     while len(join):
         old = labels.copy()
         low = np.minimum(labels[join[:, 0]], labels[join[:, 1]])
-        np.minimum.at(labels, join[:, 0], low)
-        np.minimum.at(labels, join[:, 1], low)
+        # Union roots so an accepted earlier cluster remains indivisible even
+        # when its original vertices straddle the next spatial grid.
+        roots = labels[join]
+        np.minimum.at(labels, roots[:, 0], low)
+        np.minimum.at(labels, roots[:, 1], low)
         labels = labels[labels]
         if np.array_equal(old, labels):
             break
@@ -77,13 +81,16 @@ def simplify(rock, cell_m, prepared=None):
         keep = (tri[:, 0] != tri[:, 1]) & (tri[:, 1] != tri[:, 2]) & (tri[:, 0] != tri[:, 2])
         nn = np.cross(pos[tri[:, 1]]-pos[tri[:, 0]], pos[tri[:, 2]]-pos[tri[:, 0]])
         lengths = np.linalg.norm(nn, axis=1)*np.linalg.norm(original_normal, axis=1)
+        # Only collapses can introduce a new defect. The clipped source can
+        # contain tiny sliver faces; rejecting an unchanged one would exhaust
+        # every retry and throw away the entire (otherwise valid) LOD.
+        changed = keep & np.any(weights[tri] > 1, axis=1)
         ground = getattr(rock, 'lod_ground', None)
         bad = np.zeros(len(t), bool)
         if ground is not None:
             # Check faces, not just vertices: a chord between clear endpoints
             # can cross a terrain ridge. Compare the same source locations at
             # sunken edges so simplification cannot widen their existing blend.
-            changed = keep & np.any(weights[tri] > 1, axis=1)
             ids = np.flatnonzero(changed)
             new = pos[tri[ids]]
             for bary in ((1,0,0),(0,1,0),(0,0,1),(.5,.5,0),
@@ -113,18 +120,21 @@ def simplify(rock, cell_m, prepared=None):
         bad_vertices = np.unique(ue[ec > 2])
         if len(bad_vertices):
             bad |= keep & np.isin(tri, bad_vertices).any(axis=1)
+        bad &= changed
         if not bad.any():
             used, remap = np.unique(tri[keep], return_inverse=True)
             normal = None if rock.normals is None else average(rock.normals)[used]
             if normal is not None:
                 normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
+            if fallback is not None:
+                prepared['accepted_labels'] = labels.copy()
             return dict(positions=pos[used], tris=remap.reshape(-1, 3),
                         uvs=average(rock.uvs)[used], colors=np.rint(average(rock.colors)[used]).astype(np.uint8),
                         normals=normal, tri_materials=material[keep],
                         uvs2=None if getattr(rock,'uvs2',None) is None else average(rock.uvs2)[used],
                         tangent_uvs=average(rock.uvs if rock.terrain_blend else rock.uvs2)[used] if rock.uvs2 is not None else None)
         restore = np.isin(mapping, np.unique(tri[bad]))
-        labels[restore] = np.arange(n)[restore]
+        labels[restore] = baseline[restore]
     # Pathological input remains intact rather than producing an unsafe coarse mesh.
     return dict(positions=p, tris=t, uvs=rock.uvs, colors=rock.colors,
                 normals=rock.normals, tri_materials=material,
@@ -137,8 +147,13 @@ def levels(rock):
     if previous < MIN_TRIANGLES:
         return result
     prepared = _prepare(rock)
+    fallback = np.arange(len(rock.positions))
     for pixels, cell in LEVELS:
-        coarse = simplify(rock, cell, prepared)
+        coarse = simplify(rock, cell, prepared, fallback)
+        # Rejected large clusters fall back to this already validated mapping.
+        # Always validate against the ORIGINAL surface, not a previously reduced
+        # mesh, so repeated levels cannot accumulate terrain penetration/error.
+        fallback = prepared.get('accepted_labels', fallback)
         count = len(coarse['tris'])
         if count < previous * (1-MIN_REDUCTION) and count:
             result.append((pixels, coarse))

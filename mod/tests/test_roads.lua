@@ -244,6 +244,39 @@ roads.onDrop({ anchorId = 2, key = '6_6' })
 roads.update(gov, 2)
 T.check(#statics() == 0, 'cliff drops with its tile')
 
+-- Per-piece physics bounds preserve lookahead and hysteresis, without waking
+-- every cliff in a tile. Old payloads conservatively use the tile range.
+do
+  local oldVehicle = getPlayerVehicle
+  local car = vec3(0,0,0)
+  getPlayerVehicle = function() return {getPosition=function() return car end} end
+  local t = {cx=0,cy=0}
+  local near = {310,-10,0,330,10,50}
+  local far = {600,-10,0,620,10,50}
+  T.check(roads.cliffCollideNear(t,near), 'nearest bound keeps a cliff touching the physics radius solid')
+  T.check(not roads.cliffCollideNear(t,far), 'distant piece in a nearby tile has no physics')
+  T.check(roads.cliffCollideNear(t,far,roads.UNCOLLIDE_M), 'piece collision retains hysteresis')
+  roads.setFoci({{x=610,y=0,r=80}})
+  T.check(roads.cliffCollideNear(t,far), 'traffic enables only its nearby cliff pieces')
+  roads.setFoci({})
+  local w = {pos={100,200,10},bounds={0,0,0,20,30,40}}
+  local b = roads.cliffWalkBounds(t,'cliff',w)
+  T.check(b[1]==100 and b[5]==230 and b[6]==50, 'legacy local bounds include their pivot')
+  local gt={geo=true,parts={cliff=w},pls={cliff={xf={apply=function(_,x,y,z) return -y,x,z end}}}}
+  b = roads.cliffWalkBounds(gt,'cliff',{})
+  T.check(b[1]==-230 and b[4]==-200 and b[2]==100 and b[5]==120,
+    'rotated geotile bounds use all corners')
+  T.check(roads.cliffWalkBounds(t,'cliff',{})==nil, 'old payload without bounds uses conservative fallback')
+  files['/t/bounded.json']='{chunks={},cliff={shape="/t/bounded.cdae",pos={0,0,0},bounds={600,-10,0,620,10,50}}}'
+  local applies=S.calls.postApply_TSStatic
+  roads.onTile({anchorId=2,key='0_0',path='/t/bounded.json',n=0},2)
+  roads.update(gov,2)
+  T.check(#statics()==1 and statics()[1].fields.collisionType=='None', 'new distant piece imports without collision')
+  T.check(S.calls.postApply_TSStatic==applies, 'piece range is chosen before registration')
+  roads.onDrop({anchorId=2,key='0_0'}); roads.update(gov,2)
+  getPlayerVehicle=oldVehicle
+end
+
 -- Cliff pieces use a separate budget and only one shape load per frame, even at startup.
 do
   files['/t/pieces.json'] = '{chunks={},cliff={shape="/t/a.cdae",pos={0,0,0}},' ..

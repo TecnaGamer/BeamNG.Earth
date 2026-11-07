@@ -103,6 +103,48 @@ class CliffLodTest(unittest.TestCase):
         for old, new in zip(expected, actual):
             np.testing.assert_array_equal(old, new)
 
+    def test_unchanged_sliver_does_not_discard_valid_lods(self):
+        rock = surface()
+        # A disconnected clipped sliver has locked vertices and cannot change.
+        # It must survive, without vetoing reductions elsewhere in the shape.
+        sliver = np.array([[40., 0., 0.], [40.000001, 0., 0.], [40., .000001, 0.]])
+        rock.tris = np.vstack((rock.tris, np.arange(3)+len(rock.positions)))
+        rock.positions = np.vstack((rock.positions, sliver))
+        rock.uvs = np.vstack((rock.uvs, sliver[:, :2]/91.44))
+        rock.colors = np.vstack((rock.colors, np.full((3, 4), 255, np.uint8)))
+        rock.normals = cdae.face_normal_sum(rock.positions, rock.tris)
+        rock.tri_materials = np.append(rock.tri_materials, 0)
+        for terrain in (False, True):
+            rock.lod_ground = (lambda p: p[:, 1]*2-.5) if terrain else None
+            levels = clifflod.levels(rock)
+            self.assertGreaterEqual(len(levels), 2)
+            for _, coarse in levels:
+                self.assertLess(len(coarse['tris']), len(rock.tris)*.75)
+                self.assertEqual(boundary(coarse['positions'], coarse['tris'])[0],
+                                 boundary(rock.positions, rock.tris)[0])
+                for v in sliver:
+                    self.assertTrue(np.any(np.all(coarse['positions'] == v, axis=1)))
+
+    def test_rejected_coarse_clusters_retain_valid_finer_reduction(self):
+        rock = surface()
+        rock.positions[:, 2] += np.cos(.6*rock.positions[:, 0])
+        rock.normals = cdae.face_normal_sum(rock.positions, rock.tris)
+        independent = clifflod.simplify(rock, 6)
+        prepared = clifflod._prepare(rock)
+        fallback = np.arange(len(rock.positions))
+        previous = len(rock.tris)
+        for _, cell in clifflod.LEVELS:
+            coarse = clifflod.simplify(rock, cell, prepared, fallback)
+            fallback = prepared['accepted_labels']
+            # Rejection cannot expand an already valid previous cluster.
+            self.assertLessEqual(len(coarse['tris']), previous)
+            previous = len(coarse['tris'])
+            self.assertEqual(boundary(coarse['positions'], coarse['tris'])[0],
+                             boundary(rock.positions, rock.tris)[0])
+            self.assertLessEqual(boundary(coarse['positions'], coarse['tris'])[1], 2)
+            np.testing.assert_array_equal(fallback[fallback], fallback)
+        self.assertLess(previous, len(independent['tris'])*.5)
+
     def test_tiny_mesh_stays_single_detail(self):
         self.assertEqual(clifflod.levels(surface(3)),[])
 

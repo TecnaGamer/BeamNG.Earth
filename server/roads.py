@@ -9805,7 +9805,10 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             what = "cliff" if k == 1 else f"cliff{k}"
             shape = files[what]
             cliffrocks.write(os.path.join(out_dir, shape), part)
-            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+            # Select physics per streamed piece before native shape registration.
+            # The client transforms these local bounds with the geotile pivot.
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0],
+                          "bounds": part.positions.min(axis=0).tolist() + part.positions.max(axis=0).tolist()}
         import cliffstrips
         for k, part in enumerate(cliff_mesh.strips, 1):
             what = f"cliffStrip{k}"
