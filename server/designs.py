@@ -1,8 +1,9 @@
 """The German junction signs: the switch (the settings page's "German junction signs", the mod's german_junctions
 message, Server.dej_on, or BNE_DEJUNCTIONS=on / off to force it whatever the page says) and the glue to the Rust
 kernel (native/earthfast dejunction.rs: de_stretch, de_junction): context() reads a tile's roads once (route ref
-ranks, mapped priority roads and 30 zones, the Vorfahrtstraße stretches), controls() gives each arm of one junction
-its sign (a code of the kernel, EXIT, or a furniture group for roundabouts and signals) and the 1002 plate,
+ranks, mapped priority roads and 30 zones, the Vorfahrtstraße stretches, the map's stop and give-way signs:
+mapped_rows), controls() gives each arm of one junction its sign (a code of the kernel, EXIT, or a furniture group for
+roundabouts and signals) and the 1002 plate (the map's signs each on one arm: mapped_arms),
 junction_rows() stands them where VwV-StVO says (furniture.junction_props' rows), decide() makes that decision once
 per junction of a road tile for its signs and its paint, junction_paint() paints the junctions as their signs say
 (roads.build_tile: the Wartelinie, the Haltlinie, the map's zebras); and the signs' catalogue, designsigns.py's
@@ -101,14 +102,133 @@ def _base(cls):
     return c[:-5] if c.endswith("_link") else c
 
 
+_YIELDS = re.compile(r"^DE:(205|206)(?=$|[\[\-:])")    # a 205 / 206 code of the lane shards' sign nodes (with "DE:"
+                                                        # always: tools/build_lane_tags.sign_code), a variant kept
+
+
+def mapped_rows(frame, priority, sign_nodes):
+    """(n, 3) x, y, 1 stop / 0 give-way of the map's own signs, in frame: Overture's stop and give-way points (priority:
+    secrossings.nodes' rows, frame xy already; None: none read) and the lane shards' sign nodes (sign_nodes:
+    railtags.sign_nodes' [(lon, lat, tags)]) with a 206 (1) or else a 205 (0) among their traffic_sign codes, matched by
+    number (DE:205,1002-12: the plate after it). A 301, 306 or 307 shows the road with the right of way, not the one
+    that yields: no row. Their direction keys are not used (they say forward / backward along the OSM way, which
+    the arms do not carry). A node in two cells, or with the same sign both ways (two records), is one row."""
+    out = [np.asarray(priority, np.float64).reshape(-1, 3)] if priority is not None else []
+    found = []
+    for lon, lat, tags in sign_nodes or ():
+        codes = {m.group(1) for m in (_YIELDS.match(c.strip()) for c in str(tags.get("traffic_sign", "")).split(","))
+                 if m}
+        if codes:
+            found.append((float(lon), float(lat), 1.0 if "206" in codes else 0.0))
+    if found:
+        ll = np.array(sorted(set(found)), np.float64)
+        e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+        out.append(np.column_stack([np.asarray(e, np.float64).ravel(), np.asarray(n, np.float64).ravel(), ll[:, 2]]))
+    return np.vstack(out) if out else np.zeros((0, 3))
+
+
+MAPPED_SIDE_M = 5.0     # m beside an arm's carriageway (past its half width) a mapped sign is still that arm's: a post
+                        # at the kerb, or a node set beside the way (Sweden's furniture._mapped_priority: 1.0)
+MAPPED_TIE_M = 1.0      # m within which two arms are as near a mapped sign (a node's own placing is no closer): the
+                        # drivers' side decides
+
+
+def _on_line(line, p):
+    """(arc length from line[0] of each point's nearest point on the polyline line (k, 2), its distance from it, signed
+    + toward the right of a driver coming in along the line toward line[0]) of points p (n, 2)."""
+    d = np.diff(line, axis=0)
+    keep = np.hypot(d[:, 0], d[:, 1]) > 1e-9                # (a repeated vertex is no segment)
+    a, d = line[:-1][keep], d[keep]
+    seg = np.hypot(d[:, 0], d[:, 1])
+    t = np.clip(((p[:, None, :] - a[None]) * d[None]).sum(-1) / (seg * seg)[None], 0.0, 1.0)
+    gap = np.hypot(*(a[None] + t[..., None] * d[None] - p[:, None, :]).transpose(2, 0, 1))
+    k = np.argmin(gap, axis=1)
+    i = np.arange(len(p))
+    v = p - a[k]
+    side = v[:, 1] * d[k, 0] - v[:, 0] * d[k, 1]           # (as the straight arm's: (-u.y, u.x))
+    return np.concatenate([[0.0], np.cumsum(seg)])[k] + t[i, k] * seg[k], np.where(side < 0.0, -1.0, 1.0) * gap[i, k]
+
+
+def mapped_arms(arms, rows, lines=None):
+    """The arm (an index into arms) each of the map's rows (n, 3: mapped_rows') belongs to at this junction, -1 for
+    none: the arm whose centreline the row is nearest, 0 < along it <= furniture.MAPPED_ARM_M and no farther than half
+    the arm's road (furniture._mapped_priority's reach: a row on a road between two junctions is the nearer end's),
+    within spec.width / 2 + MAPPED_SIDE_M beside it; of the arms within MAPPED_TIE_M as near, the one on whose drivers'
+    side it stands (the right: Germany drives on the right). One arm per row, never every arm: OpenStreetMap's stop and
+    give-way nodes stand on the way coming in (on its centreline) with no direction the arms could use. Every arm
+    counts, a driveway's or a one-way's leaving too: a row nearest one of those is no other arm's. lines: each arm's
+    road (its piece's centreline from the junction out, _arm_line's) or None: along it, exactly (the two ends of a
+    bowed road between two junctions are never both within half of it); None, or an arm's None: the straight line
+    from the junction along the arm's direction."""
+    rows = np.asarray(rows, np.float64).reshape(-1, 3)
+    out = np.full(len(rows), -1, np.int64)
+    if not len(rows) or not arms:
+        return out
+    off = np.full((len(rows), len(arms)), np.inf)
+    right = np.zeros((len(rows), len(arms)), bool)
+    for j, a in enumerate(arms):
+        line = None if lines is None or lines[j] is None else np.asarray(lines[j], np.float64)[:, :2]
+        length = float(np.hypot(*np.diff(line, axis=0).T).sum()) if line is not None and len(line) >= 2 else 0.0
+        if length > 1e-9:
+            along, side = _on_line(line, rows[:, :2])
+        else:
+            u = np.asarray(a[2], np.float64)[:2]
+            v = rows[:, :2] - np.asarray(a[3][:2], np.float64)
+            along = v @ u
+            side = v[:, 1] * u[0] - v[:, 0] * u[1]      # (toward the drivers' right coming in along -u: (-u.y, u.x))
+            length = a[5] if len(a) > 5 else np.inf
+        reach = min(furniture.MAPPED_ARM_M, length / 2)
+        hit = (along > 0.0) & (along <= reach) & (np.abs(side) <= a[1].width / 2 + MAPPED_SIDE_M)
+        off[hit, j] = np.abs(side[hit])
+        right[:, j] = side > 0.0
+    for i in np.flatnonzero(np.isfinite(off).any(axis=1)):
+        tied = np.flatnonzero(off[i] <= off[i].min() + MAPPED_TIE_M)
+        mine = tied[right[i, tied]]
+        out[i] = min(mine if len(mine) else tied, key=lambda j: (off[i, j], j))
+    return out
+
+
+def reads_here(de_on, frame, box):
+    """secrossings.wanted's de for a road tile or a road graph (Ruling R36): the German junction signs on (de_on: the
+    setting, enabled's) and the frame-local box (x0, y0, x1, y1) it decides touching Germany, one of its four corners
+    or its centre inside (a road tile's: tile_reach; a road graph's: its window). Then every German junction it decides
+    has both of the map's sources, Overture's stop / give-way points and crossings and the lane shards' sign nodes,
+    not only those of a tile whose centre is in Germany. Off, Germany's border data is not asked. (Not near(): its
+    bounds span half of Central Europe, a read for every tile there.)"""
+    if not de_on:
+        return False
+    x0, y0, x1, y1 = (float(v) for v in box[:4])
+    return bool(_de(frame, [(x0, y0), (x1, y0), (x0, y1), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2)]).any())
+
+
+def cache_parts(de_on, frame, box):
+    """What a cache key of output the German junction signs change adds for them over the frame-local box (x0, y0, x1,
+    y1) of what it decides (a road tile's tile_reach), after the setting's own bool(de_on): () off or with the box away
+    from germany.BOX (near: the key exactly as before, the border data not asked), else (germany.signature(),): a tile
+    built without the border data (offline before its first download, the German behaviour off there) has another key
+    than one built with it, and is built again once they are there."""
+    if not de_on or not near(frame, box):
+        return ()
+    return (germany.signature(),)
+
+
+def tile_reach(box, skin_margin=0.0):
+    """The box (x0, y0, x1, y1) a road tile decides its German junctions in (roads.build_tile's reach before its clamp
+    to the roads near): its own box (roads.tile_bbox) + roads.NEAR_M, + a geotile's skin_margin."""
+    import roads
+    m = roads.NEAR_M + float(skin_margin)
+    return box[0] - m, box[1] - m, box[2] + m, box[3] + m
+
+
 def context(frame, feats_list, routes_list=(), priority=None, signs=(), towns=None):
     """The tile's roads read once, as a DeContext: frame; info {fid: (ref rank, priority_road code, in a 30 zone)}
     of every road segment of feats_list (roads layers, joined with the lane shards: osm_priority_road,
     osm_zone_maxspeed); stretch {fid: on a Vorfahrtstraße stretch} from the kernel's de_stretch, one call over all;
-    mapped (n, 3) x, y, 1 stop / 0 give-way of the map's own signs (empty: priority and signs are for Task 7).
-    routes_list: the road_routes layers of the cells (dirsigns' routes), joined by id for the ref ranks; missing ones
-    leave rank 0 and the class decides. towns: {fid: in town by the land cover} (roads.road_towns), the town test's
-    (in_town); None: every road's spec.urban."""
+    mapped (n, 3) x, y, 1 stop / 0 give-way of the map's own signs (mapped_rows of priority, Overture's points:
+    secrossings.nodes' rows, and signs, the lane shards' sign nodes: railtags.sign_nodes'), each one arm's at a junction
+    (controls, mapped_arms). routes_list: the road_routes layers of the cells (dirsigns' routes), joined by id for the
+    ref ranks; missing ones leave rank 0 and the class decides. towns: {fid: in town by the land cover}
+    (roads.road_towns), the town test's (in_town); None: every road's spec.urban."""
     fast.require(KERNEL, "the German junction signs (de_stretch)")
     rank = _routes_of(routes_list)
     ids, cls, rr, pr, info = [], [], [], [], {}
@@ -130,7 +250,7 @@ def context(frame, feats_list, routes_list=(), priority=None, signs=(), towns=No
             pr.append(p)
             info[fid] = (r, p, z)
     st = fast._ef.de_stretch(np.array(cls, np.uint8), np.array(rr, np.uint8), np.array(pr, np.uint8)) if ids else []
-    return DeContext(frame, info, {fid: bool(v) for fid, v in zip(ids, st)}, np.zeros((0, 3)),
+    return DeContext(frame, info, {fid: bool(v) for fid, v in zip(ids, st)}, mapped_rows(frame, priority, signs),
                      None if towns is None else dict(towns))
 
 
@@ -191,7 +311,7 @@ def inside(ctx, x, y):
     return bool(np.asarray(germany.de_at(ctx.frame, x, y)).ravel()[0])
 
 
-def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, priority=None, ctx=None):
+def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, priority=None, ctx=None, lines=None):
     """[(arm, what, plate)] of a junction's arms (furniture's (fid, spec, unit vector away, point, at start, length)):
     - a roundabout's entries and signalled junctions: furniture.junction_controls' answer, what its group string
       (G_YIELD, G_SIGNAL), plate -1;
@@ -200,10 +320,15 @@ def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, prior
       base class), and a living_street at a junction where another arm is none. With fewer than three street arms
       left the junction is no junction (a road split at a connector, a driveway on a road): what 0; so is a node of
       the Autobahn, a diverge and a carriageway split (_no_junction). A link that meets a road that is none gives way
-      there (_yielding_links: the kernel's mapped give-way, no stretch). The kernel's urban is in_town's. A 301 where
-      no arm gives way is none (VwV-StVO zu Zeichen 301 Rn. 2: the other road must have a 205 or 206).
-    ctx: context()'s DeContext (the ref ranks, priorities, zones, stretches, towns); without it every road is plain by
-    class and its spec.urban."""
+      there (_yielding_links: the kernel's mapped give-way, no stretch). The map's own stop and give-way signs
+      (ctx.mapped, each on one arm: mapped_arms) are the kernel's mapped 206 / 205, over a link's give-way; at a
+      node not decided they place nothing. The kernel's urban is in_town's. A 301 where no arm gives way is none
+      (VwV-StVO zu Zeichen 301 Rn. 2: the other road must have a 205 or 206).
+    ctx: context()'s DeContext (the ref ranks, priorities, zones, stretches, towns, the map's signs); without it every
+    road is plain by class and its spec.urban, and the map's signs are priority's (secrossings.nodes' rows). lines:
+    each arm's road from the junction out (_arm_line's; decide passes them), for mapped_arms; without them a row is
+    measured along the arm's first direction, which on a bowed road between two junctions can put it on both (a caller
+    with the arms' roads, the road graph's too, navgraph._de_decide, passes them so its answer is decide's)."""
     if (ring and sum(1 for a in arms if a[0] in ring) >= 2) or furniture._is_signalled(arms, signals):
         return [(a, what, -1) for a, what in furniture.junction_controls(
             arms, k, link_ok, ring, signals, country, priority)]
@@ -234,6 +359,13 @@ def controls(arms, k, link_ok=None, ring=None, signals=None, country=None, prior
             c8[j] = r8[j] = 0
     u = np.array([np.asarray(arms[i][2], np.float64)[:2] for i in idx], np.float64).reshape(-1, 2)
     mapped = np.array([0 if y else -1 for y in yl], np.int8)
+    rows = ctx.mapped if ctx is not None else priority
+    if rows is not None and len(rows):
+        rows = np.asarray(rows, np.float64).reshape(-1, 3)
+        own = mapped_arms(arms, rows, lines)            # (over every arm: a driveway's row is no street's)
+        for j, i in enumerate(idx):
+            if (own == i).any():
+                mapped[j] = 1 if rows[own == i, 2].any() else 0     # (the map's over a link's give-way)
     what, plate = fast._ef.de_junction(u, c8, r8, flags, mapped, in_town(arms, ctx))
     yields = any(int(w) in (Z205, Z206) for w in what)
     for j, i in enumerate(idx):
@@ -261,8 +393,28 @@ def decide(roads, ctx, box, signals=None, country=None, priority=None):
         return {k: (junctions[k], None) for k in keys}
     import islands
     link_ok, ring = furniture._link_check(junctions, signals), islands.ring_fids(roads)
-    return {k: (junctions[k], controls(junctions[k], k, link_ok, ring, signals, country, priority, ctx) if d else None)
+    pieces = _pieces(roads) if ctx.mapped is not None and len(ctx.mapped) else None
+
+    def lines(arms):
+        return [_arm_line(a, pieces) for a in arms] if pieces is not None else None
+    return {k: (junctions[k], controls(junctions[k], k, link_ok, ring, signals, country, priority, ctx,
+                                       lines(junctions[k])) if d else None)
             for k, d in zip(keys, de)}
+
+
+def _pieces(roads):
+    """{fid: [centreline (k, 3)]} of roads (build_tile's: a road once per ground part)."""
+    out = {}
+    for fid, _, pts, _ in roads:
+        out.setdefault(fid, []).append(np.asarray(pts, np.float64))
+    return out
+
+
+def _arm_line(a, pieces):
+    """The centreline (k, 3) of arm a's road from its junction out: the piece of its road (pieces: _pieces') that ends
+    at the junction."""
+    pts = min(pieces[a[0]], key=lambda q: float(np.hypot(*(q[0 if a[4] else -1, :2] - a[3][:2]))))
+    return pts if a[4] else pts[::-1]
 
 
 def line_arms(decided, roads):
@@ -271,9 +423,7 @@ def line_arms(decided, roads):
     a roundabout's entries (controls' G_YIELD), and those of the paved 206 arms with furniture.G_STOP fifth
     (markings.wait_lines, markings.stop_lines). None on right before left, an EXIT arm or a junction not decided. The
     centreline: the piece of its road that ends at the junction (build_tile has a road once per ground part)."""
-    pieces = {}
-    for fid, _, pts, _ in roads:
-        pieces.setdefault(fid, []).append(np.asarray(pts, np.float64))
+    pieces = _pieces(roads)
     wait, stop = [], []
     for arms, ctl in decided.values():
         if ctl is None:
@@ -282,8 +432,7 @@ def line_arms(decided, roads):
         for a, what, _ in ctl:
             if a[1].kind != "paved" or what not in (Z205, Z206, furniture.G_YIELD):
                 continue
-            pts = min(pieces[a[0]], key=lambda q: float(np.hypot(*(q[0 if a[4] else -1, :2] - a[3][:2]))))
-            arm = (a[0], a[1], pts if a[4] else pts[::-1], wide)
+            arm = (a[0], a[1], _arm_line(a, pieces), wide)
             if what == Z206:
                 stop.append(arm + (furniture.G_STOP,))
             else:
@@ -305,6 +454,17 @@ def _within(points, anchors, reach):
     return (np.hypot(p[:, None, 0] - q[None, :, 0], p[:, None, 1] - q[None, :, 1]) <= reach).any(axis=1)
 
 
+ZEBRA_KMH = 50.0        # km/h a road may have at most for a Fußgängerüberweg (VwV-StVO zu § 26 Rn. 1)
+
+
+def _zebra_road(road, ctx):
+    """May road (fid, spec) have a Fußgängerüberweg (Z 293): in town (in_town's, the signs' town test) and its limit
+    (spec.kmh: the map's max_speed_kmh, as the speed signs read it) at most ZEBRA_KMH, or unknown (in town: 50)? Out of
+    town never (VwV-StVO zu § 26 Rn. 1)."""
+    kmh = getattr(road[1], "kmh", None)
+    return in_town([road], ctx) and (kmh is None or float(kmh) <= ZEBRA_KMH)
+
+
 def junction_paint(decided, roads, ctx, crosswalks, cuts, ramps, nodes=None, signals=None, left_hand=False):
     """Germany's paint at its junctions (roads.build_tile, de_on), in place of junctions.find's US crosswalks and stop
     lines: (crosswalks and stop lines [{"a", "b", "w"[, "stop"][, "look"]}], line cuts {fid: [(point, u, t)]}, kerb
@@ -317,11 +477,16 @@ def junction_paint(decided, roads, ctx, crosswalks, cuts, ramps, nodes=None, sig
       is outside Germany or signalised (controls' G_SIGNAL: a mapped signal within SIGNAL_NEAR_M of its widest arm's
       edge, furniture._is_signalled, as its signal heads: today's paint there), else it goes, and its line cut with it.
       The kerb ramps all stay: German streets have lowered kerbs at junctions with or without paint.
-    - The map's crossings inside Germany (secrossings.place): a zebra (Fußgängerüberweg, Z 293: bars 0.50 m wide,
-      0.50 m apart, RMS 4.9: secrossings.M15_LOOK's) where it is painted and no signal (a mapped one, or a signalised
-      junction's point) is within SIGNAL_NEAR_M (VwV-StVO zu § 26 Rn. 5: none near traffic lights; today's paint stands
-      there), and every one's kerb ramps added to the junctions'. Sweden's M16 squares are no German marking: none.
-    - The Wartelinie (Z 341) on the 205 arms and a roundabout's entries (R26), the Haltlinie (Z 294) on the 206 arms,
+    - The map's crossings inside Germany (secrossings.place of nodes' de_crossings: Germany's reading of their tags,
+      secrossings.de_paint): a zebra (Fußgängerüberweg, Z 293: bars 0.50 m wide, 0.50 m apart, RMS 4.9:
+      secrossings.M15_LOOK's) where the map has a marked crossing without signals, on a road in town (in_town's, as
+      the signs') whose limit is at most ZEBRA_KMH or unknown (VwV-StVO zu § 26 Rn. 1: "Fußgängerüberwege dürfen nur
+      innerhalb geschlossener Ortschaften und nicht auf Straßen angelegt werden, auf denen schneller als 50 km/h
+      gefahren werden darf"; unknown: the town's 50), and no signal (a mapped one, or a signalised junction's point) is
+      within SIGNAL_NEAR_M (VwV-StVO zu § 26 Rn. 5: none near traffic lights; today's paint stands there), and every
+      one's kerb ramps added to the junctions' (out of town or on a faster road too: the kerb is lowered there all the
+      same). Sweden's M16 squares are no German marking: none.
+    - The Wartelinie (Z 341) on the 205 arms and a roundabout's entries, the Haltlinie (Z 294) on the 206 arms,
       at the map's stop line where it has one (line_arms; markings.wait_lines, markings.stop_lines): the road's lines
       end at them. Nothing on right before left, an EXIT arm or a junction not decided."""
     import junctions
@@ -356,8 +521,9 @@ def junction_paint(decided, roads, ctx, crosswalks, cuts, ramps, nodes=None, sig
     out_ramps = {key: list(r) for key, r in ramps.items()}
     zebras = []
     if nodes is not None:
-        found, _, mapped_ramps = secrossings.place(roads, nodes)
-        painted = [cw for cw in found if cw.get("paint", True)]
+        on = []                 # (each crosswalk's road)
+        found, _, mapped_ramps = secrossings.place(roads, {"crossings": nodes["de_crossings"]}, on)  # (Germany's codes)
+        painted = [cw for cw, r in zip(found, on) if cw.get("paint", True) and _zebra_road(r, ctx)]
         if painted:
             pm = np.array([0.5 * (cw["a"][:2] + cw["b"][:2]) for cw in painted])
             near = _within(pm, np.vstack([mapped, at[lit]]), furniture.SIGNAL_NEAR_M)
@@ -413,8 +579,8 @@ def junction_stretch(arms, ctx=None):
 
 def near(frame, box):
     """Whether the frame-local box (x0, y0, x1, y1) meets germany.BOX (its corners' lon / lat bounds; no lookup of the
-    border data): a road tile far from Germany builds no context and asks no junction where it is (the setting is on by
-    default, the world over)."""
+    border data): a road tile far from Germany builds no context, asks no junction where it is and keys its cache as
+    before (the setting is on by default, the world over)."""
     x0, y0, x1, y1 = box[:4]
     lat, lon, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1], np.float64), np.array([y0, y0, y1, y1], np.float64),
                                         0.0)
@@ -478,6 +644,16 @@ APART_307_M, STEP_307_M, RETRY_307 = 1.0, 2.0, 3   # a 307 spot within APART_307
                                                     # out, at most RETRY_307 times
 BESIDE_DOT = 0.7        # u·u over which another arm leaving a roundabout runs out beside an entry: its divided road's
                         # other carriageway, the same road, not where it goes on
+
+
+def _zone_junction(arms, ctl, ctx, out):
+    """Is every street arm coming in (controls' answer ctl: no EXIT; out: furniture._outbound's) in a 30 zone, as the
+    kernel's zone junction: its pair 301, never 306 (StVO § 45 Abs. 1c Satz 2: the zone extends over no
+    Vorfahrtstraße), so no 306, 307 or stretch of the class there either?"""
+    info = ctx.info if ctx is not None else {}
+    what = {id(a): w for a, w, _ in ctl}
+    coming = [a for a, o in zip(arms, out) if not o and what.get(id(a)) != EXIT]
+    return bool(coming) and all(info.get(a[0], (0, 0, False))[2] for a in coming)
 
 
 def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
@@ -549,6 +725,8 @@ def junction_rows(arms, ctl, ctx, urban, left_hand, spot, ring_arms=()):
                 put(a, "z307", back=BACK_307_M)
         return rows
     got = {id(a): (int(w), int(p)) for a, w, p in ctl}
+    if _zone_junction(arms, ctl, ctx, out):
+        st = [False] * n        # (a 30 zone's junction: no Vorfahrtstraße there, its pair the kernel's 301)
     what = [got.get(id(a), (0, -1))[0] for a in arms]
     plate = [got.get(id(a), (0, -1))[1] for a in arms]
     leaves = [not _inbound(a) for a in arms]

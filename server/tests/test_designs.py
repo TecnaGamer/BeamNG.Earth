@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import borderfixtures  # noqa: E402
+import countrybounds  # noqa: E402
 import designs  # noqa: E402
 import earthd  # noqa: E402
 import fast  # noqa: E402
@@ -187,6 +188,231 @@ class JunctionGlueTest(unittest.TestCase):
             fast._ef.de_stretch(np.zeros(3, u8), np.zeros(2, u8), np.zeros(3, u8))
         with self.assertRaises(ValueError):
             fast._ef.de_junction(u, np.zeros(2, u8), np.zeros(3, u8), np.zeros(3, u8), np.full(3, -1, i8), True)
+
+
+class MappedTest(unittest.TestCase):
+    """The map's own stop and give-way signs at a German junction: designs.mapped_rows (Overture's stop / give-way
+    points and the lane shards' 205 / 206 sign nodes) and controls' assignment of each to one arm, the one whose
+    centreline it is nearest within furniture.MAPPED_ARM_M along it (and half its road) and its half width +
+    MAPPED_SIDE_M beside it, the drivers' side breaking a tie: the kernel's mapped 205 / 206 there."""
+    FRAME = JunctionGlueTest.FRAME
+    DIRS = JunctionGlueTest.DIRS
+    NO_SIGNALS = np.zeros((0, 2))
+    arm = JunctionGlueTest.arm      # (fid, Spec 10 m wide, u, the junction (100, 100), at its start, 80 m)
+
+    def four(self, cls="residential"):
+        return [self.arm(f, cls, f) for f in "enws"]
+
+    def sign(self, x, y, code, **more):
+        """A lane shard sign node (railtags.sign_nodes') at frame (x, y)."""
+        lat, lon, _ = self.FRAME.enu_to_geodetic(np.array(float(x)), np.array(float(y)), 0.0)
+        return float(lon), float(lat), dict({"traffic_sign": code}, **more)
+
+    def what(self, arms, signs=(), priority=None):
+        ctx = designs.DeContext(self.FRAME, {}, {}, designs.mapped_rows(self.FRAME, priority, signs))
+        return {a[0]: w for a, w, _ in designs.controls(arms, 0, signals=self.NO_SIGNALS, ctx=ctx)}
+
+    def owner(self, arms, signs=(), priority=None):
+        """[the fid of the arm each of the map's rows is given to (None: no arm's)]."""
+        got = designs.mapped_arms(arms, designs.mapped_rows(self.FRAME, priority, signs))
+        return [arms[i][0] if i >= 0 else None for i in got]
+
+    RVL4 = {"e": designs.RVL, "n": designs.RVL, "w": designs.RVL, "s": designs.RVL}
+
+    @staticmethod
+    def signed(fid, what):
+        """The crossroads' answer with the map's sign what on arm fid alone: no right before left among the other three
+        either (VwV-StVO zu den Zeichen 205 und 206 Rn. 6: signed on both roads), the two across it the pair (301), the
+        one opposite 205."""
+        across = "ew" if fid in "ns" else "ns"
+        return {f: what if f == fid else designs.Z301 if f in across else designs.Z205 for f in "enws"}
+
+    def test_sign_node_without_direction_goes_to_one_arm(self):
+        """A 205 node 4 m to the right of arm S, 12 m from the junction: S's alone, S gives way (a row on every arm
+        would make all four 205). So does one set where its post stands, 3 m past S's kerb (its half width 5 m +
+        MAPPED_SIDE_M)."""
+        for p in ((104.0, 88.0), (108.0, 85.0)):
+            self.assertEqual(self.owner(self.four(), [self.sign(*p, "DE:205")]), ["s"], p)
+            self.assertEqual(self.what(self.four(), [self.sign(*p, "DE:205")]), self.signed("s", designs.Z205), p)
+
+    def test_far_node_ignored(self):
+        """45 m from the junction along S, or 11 m beside it (its half width 5 m + 5 m): no arm's."""
+        self.assertEqual(self.what(self.four(), [self.sign(104.0, 55.0, "DE:205")]), self.RVL4)
+        self.assertEqual(self.what(self.four(), priority=np.array([[100.0, 55.0, 1.0]])), self.RVL4)
+        self.assertEqual(self.what(self.four(), [self.sign(111.0, 88.0, "DE:206")]), self.RVL4)
+
+    def test_stop_node_makes_206(self):
+        """Overture's highway=stop on arm S (on its way, 10 m out): S = Z206."""
+        for value, want in ((1.0, designs.Z206), (0.0, designs.Z205)):
+            self.assertEqual(self.what(self.four(), priority=np.array([[100.0, 90.0, value]])), self.signed("s", want))
+        both = np.array([[100.0, 90.0, 0.0], [100.0, 85.0, 1.0]])         # (a give-way and a stop on one arm: a stop)
+        self.assertEqual(self.owner(self.four(), priority=both), ["s", "s"])
+        self.assertEqual(self.what(self.four(), priority=both), self.signed("s", designs.Z206))
+
+    def test_306_node_adds_no_yield(self):
+        """301 / 306 / 307 mark the road with the right of way, not the one that yields: no row."""
+        for code in ("DE:306", "DE:301", "DE:307", "DE:306,1002-12", "DE:1002-12", "DE:2050"):
+            self.assertEqual(designs.mapped_rows(self.FRAME, None, [self.sign(100.0, 90.0, code)]).shape, (0, 3), code)
+        self.assertEqual(self.what(self.four(), [self.sign(100.0, 90.0, "DE:306")]), self.RVL4)
+
+    def test_codes_by_number(self):
+        """A 206 is a stop (1), a 205 a give-way (0), with their variants and the 1002 plates after them; a node with
+        both is a stop; the positions in the frame."""
+        for code, want in (("DE:205", 0.0), ("DE:206", 1.0), ("DE:205,1002-12", 0.0), ("DE:206,1002-21", 1.0),
+                           ("DE:205[1]", 0.0), ("DE:306,DE:205", 0.0), ("DE:205,DE:206", 1.0)):
+            got = designs.mapped_rows(self.FRAME, None, [self.sign(110.0, 90.0, code)])
+            self.assertEqual(got.shape, (1, 3), code)
+            np.testing.assert_allclose(got[0], [110.0, 90.0, want], atol=1e-6, err_msg=code)
+
+    def test_one_row_per_sign(self):
+        """A node in two cells (the join's pad) and the same sign both ways (two records) are one row; Overture's points
+        come first-class beside them."""
+        s = self.sign(110.0, 90.0, "DE:205")
+        both = [s, s, self.sign(110.0, 90.0, "DE:205", direction="forward"),
+                self.sign(110.0, 90.0, "DE:205", direction="backward")]
+        self.assertEqual(designs.mapped_rows(self.FRAME, None, both).shape, (1, 3))
+        got = designs.mapped_rows(self.FRAME, np.array([[1.0, 2.0, 1.0]]), both)
+        self.assertEqual(sorted(map(tuple, np.round(got, 6))), [(1.0, 2.0, 1.0), (110.0, 90.0, 0.0)])
+        self.assertEqual(designs.mapped_rows(self.FRAME, None, ()).shape, (0, 3))
+
+    def test_tie_goes_to_the_drivers_side(self):
+        """A sign at the corner between S and E, as near to both: it stands on the right of the drivers coming in on S
+        (heading north), on the left of those on E (heading west): S's. The same between W and N: N's. Half a metre
+        nearer E's line is still a tie (MAPPED_TIE_M)."""
+        for p, fid in (((103.0, 97.0), "s"), ((97.0, 103.0), "n"), ((103.5, 97.0), "s")):
+            self.assertEqual(self.owner(self.four(), [self.sign(*p, "DE:205")]), [fid], p)
+            self.assertEqual(self.what(self.four(), [self.sign(*p, "DE:205")]), self.signed(fid, designs.Z205), p)
+
+    def test_nearest_centreline_wins(self):
+        """A node 1 m left of S's centreline, 6 m out (on W's drivers' side, 6 m off W's): S's, the nearer."""
+        self.assertEqual(self.owner(self.four(), [self.sign(99.0, 94.0, "DE:205")]), ["s"])
+        self.assertEqual(self.what(self.four(), [self.sign(99.0, 94.0, "DE:205")]), self.signed("s", designs.Z205))
+
+    def test_between_two_junctions(self):
+        """Two 4-ways 40 m apart on one road: a stop 25 m from the first, 15 m from the second, is the second's only
+        (half the road between them each: furniture._mapped_priority's reach)."""
+        def four_at(c, short):
+            return [(f, sp, u, np.array([c[0], c[1], 0.0]), st, 40.0 if f == short else ln)
+                    for f, sp, u, _, st, ln in self.four()]
+        rows = designs.mapped_rows(self.FRAME, np.array([[100.0, 75.0, 1.0]]), ())
+        ctx = designs.DeContext(self.FRAME, {}, {}, rows)
+        j1 = designs.controls(four_at((100.0, 100.0), "s"), 0, signals=self.NO_SIGNALS, ctx=ctx)
+        j2 = designs.controls(four_at((100.0, 60.0), "n"), 1, signals=self.NO_SIGNALS, ctx=ctx)
+        self.assertEqual({a[0]: w for a, w, _ in j1}, self.RVL4)
+        self.assertEqual({a[0]: w for a, w, _ in j2}, self.signed("n", designs.Z206))
+
+    def test_a_bowed_road_between_two_junctions(self):
+        """Two junctions 30 m apart joined by a road that bows out 12 m (42.8 m long): a give-way 20.4 m along it from A
+        (22.4 m from B) is A's only, measured along the road itself (lines: decide's); along each end's first direction
+        both would be within half the road (18.2 and 19.3 m of 21.4)."""
+        bow = np.array([(0.0, 0.0, 0.0), (8.0, 12.0, 0.0), (22.0, 12.0, 0.0), (30.0, 0.0, 0.0)])
+        length = float(np.hypot(*np.diff(bow[:, :2], axis=0).T).sum())
+        sp = roads.Spec(10.0, "paved", True, "residential", False)
+
+        def junction(p, u, line):
+            p = np.array([p[0], p[1], 0.0])
+            side = [(f, sp, np.array(d, float), p, True, 80.0) for f, d in (("w" + str(p[0]), (-1.0, 0.0)),
+                                                                             ("s" + str(p[0]), (0.0, -1.0)))]
+            bowed = ("bow", sp, np.array(u) / np.hypot(*u), p, bool(p[0] == 0.0), length)
+            return [bowed] + side, [line, None, None]
+        rows = designs.mapped_rows(self.FRAME, np.array([[14.0, 12.5, 0.0]]), ())
+        ctx = designs.DeContext(self.FRAME, {}, {}, rows)
+        got = {}
+        for name, (arms, lines) in (("a", junction((0.0, 0.0), (8.0, 12.0), bow)),
+                                    ("b", junction((30.0, 0.0), (-8.0, 12.0), bow[::-1]))):
+            self.assertEqual(list(designs.mapped_arms(arms, rows)), [0], "(the straight line: both ends)")
+            got[name] = designs.controls(arms, 0, signals=self.NO_SIGNALS, ctx=ctx, lines=lines)[0][1]
+        self.assertEqual(got, {"a": designs.Z205, "b": designs.RVL})
+        rs = [("bow", sp, bow, 0.0)] + [(f, sp, np.array([p, q], float), 0.0) for f, p, q in (
+            ("wa", (0, 0, 0), (-80, 0, 0)), ("sa", (0, 0, 0), (0, -80, 0)), ("eb", (30, 0, 0), (110, 0, 0)),
+            ("sb", (30, 0, 0), (30, -80, 0)))]
+        decided = designs.decide(rs, ctx, (-100.0, -100.0, 200.0, 200.0), self.NO_SIGNALS)
+        self.assertEqual(sorted((round(float(arms[0][3][0])), w) for arms, ctl in decided.values()
+                                for a, w, _ in ctl if a[0] == "bow"), [(0, designs.Z205), (30, designs.RVL)])
+
+    def test_a_node_on_a_driveway_is_the_driveways(self):
+        """A give-way 10 m up a driveway leaving 60 deg off E, 8.7 m beside E's centreline: nearest the driveway's (no
+        street's: it gives way by StVO § 10 anyway), so E keeps right before left."""
+        u = np.array(unit(-60.0))
+        drive = ("d", roads.Spec(4.0, "paved", True, "service", False), u, np.array([100.0, 100.0, 0.0]), True, 80.0)
+        arms = [self.arm(f, "residential", f) for f in "enw"] + [drive]
+        p = np.array([100.0, 100.0]) + 10.0 * u
+        self.assertEqual(self.what(arms, [self.sign(p[0], p[1], "DE:205")]),
+                         {"e": designs.RVL, "n": designs.RVL, "w": designs.RVL, "d": designs.EXIT})
+
+    def test_rows_merge_over_the_links(self):
+        """A link meeting a road that is none gives way there (the kernel's mapped give-way); the map's rows merge
+        over it: a mapped stop on the link is 206, a mapped give-way elsewhere still counts."""
+        arms = [self.arm("e", "secondary_link", "e"), self.arm("w", "secondary", "w"),
+                self.arm("s", "residential", "s")]
+        self.assertEqual(self.what(arms), {"e": designs.Z205, "w": designs.Z301, "s": designs.Z301})
+        self.assertEqual(self.what(arms, priority=np.array([[110.0, 100.0, 1.0]]))["e"], designs.Z206)
+        got = self.what(arms, [self.sign(100.0, 90.0, "DE:205")])
+        self.assertEqual((got["e"], got["s"]), (designs.Z205, designs.Z205))
+
+    def test_not_decided_places_nothing(self):
+        """A mapped stop where no junction is decided: a driveway on a street, two ways meeting, a
+        carriageway split: nothing there."""
+        drive = [self.arm("e", "residential", "e"), self.arm("w", "residential", "w"), self.arm("s", "service", "s")]
+        self.assertEqual(self.what(drive, priority=np.array([[110.0, 100.0, 1.0]])),
+                         {"e": 0, "w": 0, "s": designs.EXIT})
+        two = [self.arm("e", "secondary", "e"), self.arm("w", "residential", "w")]
+        self.assertEqual(self.what(two, priority=np.array([[90.0, 100.0, 1.0]])), {"e": 0, "w": 0})
+        split = [(f, roads.Spec(10.0, "paved", True, "secondary", bool(d), 2.5, d), np.array(u), np.array(
+            [100.0, 100.0, 0.0]), True, 80.0) for f, u, d in (("two", (-1.0, 0.0), 0), ("out", unit(-10), 1),
+                                                                ("in", unit(5), -1))]
+        self.assertEqual(self.what(split, priority=np.array([[110.0, 101.0, 1.0], [90.0, 100.0, 1.0]])),
+                         {"two": 0, "out": 0, "in": 0})
+
+    def test_reads_here_over_the_box(self):
+        """R36: the read gate's box touches Germany at a corner or its centre (a half-plane west of x = 0 here); off,
+        the border data untouched. tile_reach: a tile's own box + roads.NEAR_M (+ a geotile's skin margin)."""
+        lon_cut = float(self.FRAME.enu_to_geodetic(np.array(0.0), np.array(0.0), 0.0)[1])
+        west = lambda lon, lat: np.atleast_1d(np.asarray(lon, float) <= lon_cut)    # noqa: E731
+        with mock.patch.object(germany, "contains", west):
+            self.assertTrue(designs.reads_here(True, self.FRAME, (-10.0, 0.0, 300.0, 300.0)), "a corner")
+            self.assertFalse(designs.reads_here(True, self.FRAME, (10.0, 0.0, 300.0, 300.0)))
+            self.assertTrue(designs.reads_here(True, self.FRAME, (-300.0, 0.0, 200.0, 300.0)), "the centre")
+            self.assertTrue(designs.reads_here(True, self.FRAME, designs.tile_reach((30.0, 0.0, 286.0, 256.0))))
+            self.assertFalse(designs.reads_here(True, self.FRAME, designs.tile_reach((50.0, 0.0, 306.0, 256.0))))
+        self.assertEqual(designs.tile_reach((0.0, 0.0, 256.0, 256.0), 3.0), (-43.0, -43.0, 299.0, 299.0))
+
+        def untouched(*a, **k):
+            raise AssertionError("Germany's border data asked with the setting off")
+        with mock.patch.object(germany, "contains", untouched), mock.patch.object(countrybounds, "bundled", untouched):
+            self.assertFalse(designs.reads_here(False, self.FRAME, (-300.0, -300.0, 300.0, 300.0)))
+
+    def test_near_is_the_box(self):
+        """near(): the box against germany.BOX, no lookup (Salzburg and Strasbourg are near, Baltimore and Vienna
+        not)."""
+        tile = (0.0, 0.0, 256.0, 256.0)
+        with mock.patch.object(germany, "contains", side_effect=AssertionError("asked")), \
+                mock.patch.object(countrybounds, "bundled", side_effect=AssertionError("asked")):
+            for (lat, lon), want in (((47.800, 13.045), True), ((48.583, 7.746), True), ((48.561, 11.262), True),
+                                     ((39.2834, -76.5934), False), ((48.21, 16.37), False)):
+                self.assertIs(designs.near(geodesy.EnuFrame(lat, lon, 0.0), tile), want, (lat, lon))
+
+    def test_cache_parts(self):
+        """The German part of a road tile's cache key: () off or away from germany.BOX (the key as before, the border
+        data not asked), the border data's signature on near Germany: another for no border data (Absent)."""
+        reach = designs.tile_reach((0.0, 0.0, 256.0, 256.0))
+        munich, baltimore = geodesy.EnuFrame(48.137, 11.575, 0.0), geodesy.EnuFrame(39.2834, -76.5934, 0.0)
+        with mock.patch.object(germany, "signature", side_effect=AssertionError("asked")), \
+                mock.patch.object(countrybounds, "bundled", side_effect=AssertionError("asked")):
+            self.assertEqual(designs.cache_parts(False, munich, reach), ())
+            self.assertEqual(designs.cache_parts(True, baltimore, reach), ())
+        here = designs.cache_parts(True, munich, reach)
+        self.assertEqual(here, (countrybounds.signature(),))
+        with mock.patch.object(countrybounds, "bundled", return_value=countrybounds.Absent()):
+            self.assertEqual(designs.cache_parts(True, munich, reach), (countrybounds.signature() + germany.ABSENT,))
+        salzburg = geodesy.EnuFrame(47.800, 13.045, 0.0)        # (in the box, not in Germany: keyed by the data too)
+        self.assertEqual(designs.cache_parts(True, salzburg, reach), here)
+
+    def test_context_fills_mapped(self):
+        feats = _features("roads", ["a"], subtype=["road"], **{"class": ["residential"]})
+        ctx = designs.context(self.FRAME, [feats], priority=np.array([[1.0, 2.0, 1.0]]),
+                              signs=[self.sign(110.0, 90.0, "DE:205"), self.sign(120.0, 90.0, "DE:306")])
+        self.assertEqual(sorted(map(tuple, np.round(ctx.mapped, 6))), [(1.0, 2.0, 1.0), (110.0, 90.0, 0.0)])
 
 
 # test_furniture-style recorded rows: junction_props without the German signs on JunctionRowsTest.fixtures() (captured
@@ -610,6 +836,23 @@ class JunctionRowsTest(Placed, unittest.TestCase):
         rs = [self.road("e", "tertiary", "e", False), self.road("w", "tertiary", "w", False),
               self.road("s", "residential", "s", False, oneway=1)]
         self.assertEqual(self.props(rs), [])
+
+    def test_a_zone_junction_has_no_306(self):
+        """A 30 zone's crossroads (every arm in it), W - E secondaries (stretches by their class), a mapped stop on S:
+        the pair W - E 301, never 306 (StVO § 45 Abs. 1c Satz 2: the zone extends over no Vorfahrtstraße; VwV-StVO zu
+        § 45 Abs. 1 bis 1e Rn. 41: 301 is the zone's means), N 205; in town no 306 for the stretch's arms, out of town
+        no 306 after the junction and no 307. Outside a zone the same roads are a Vorfahrtstraße."""
+        stop = np.array([[100.0, 88.0, 1.0]])
+        for urban in (True, False):
+            rs = [self.road(f, c, f, urban) for f, c in (("w", "secondary"), ("e", "secondary"), ("n", "residential"),
+                                                          ("s", "residential"))]
+            zone = designs.DeContext(self.FRAME, dict.fromkeys("wens", (0, 0, True)),
+                                     {"w": True, "e": True, "n": False, "s": False}, stop)
+            self.assertEqual(self.placed(self.props(rs, zone, signals=self.NO_SIGNALS)),
+                             [("de_z205", "n", "before"), ("de_z206", "s", "before"), ("de_z301", "e", "before"),
+                              ("de_z301", "w", "before")], urban)
+            plain = designs.DeContext(self.FRAME, {}, zone.stretch, stop)
+            self.assertIn("de_z306", {r[0] for r in self.props(rs, plain, signals=self.NO_SIGNALS)}, urban)
 
     def split(self, cls, urban, side_cls=None):
         """A carriageway split: a two-way road from the west, and two one-way carriageways east of the node, the one
@@ -1067,13 +1310,16 @@ class MarkingsTest(unittest.TestCase):
         self.assertEqual(sorted(got), ["east", "west"], "a Wartelinie on each entry")
 
     def test_mapped_zebras_only(self):
-        """nodes (secrossings.nodes): a mapped zebra on the stem is painted Z 293 (bars 0.50 m, 0.50 m apart: Sweden's
-        M15_LOOK) and its kerb ramps added to the junction's; one near signals is not (VwV-StVO zu § 26 Rn. 5), nor an
-        unmarked one (its ramps are), nor Sweden's M16 squares; outside Germany none."""
+        """nodes (secrossings.nodes; Germany reads its de_crossings, Sweden's codes are not its): a mapped zebra on the
+        stem is painted Z 293 (bars 0.50 m, 0.50 m apart: Sweden's M15_LOOK) and its kerb ramps added to the junction's;
+        one near signals is not (VwV-StVO zu § 26 Rn. 5), nor an unmarked one (its ramps are), nor Sweden's M16
+        squares; outside Germany none."""
         import secrossings
         feats = self.layer(self.STRETCH)
         nodes = {"crossings": [(120.0, 80.0, secrossings.M15), (120.0, 190.0, secrossings.M15),
                                (40.0, 120.0, 0), (200.0, 120.0, secrossings.M16)],
+                 "de_crossings": [(120.0, 80.0, secrossings.M15), (120.0, 190.0, secrossings.M15),
+                                  (40.0, 120.0, 0), (200.0, 120.0, 0)],
                  "stop_lines": np.zeros((0, 2)), "priority": np.zeros((0, 3))}
         signals = np.array([(120.0, 200.0)])
         ch, walks = self.build(feats, signals=signals, nodes=nodes)
@@ -1089,6 +1335,96 @@ class MarkingsTest(unittest.TestCase):
         with mock.patch.object(germany, "contains", nowhere):
             out, _ = self.build(feats, signals=signals, nodes=nodes)
         self.assertEqual(out, self.build(feats, False, signals=signals, nodes=nodes)[0], "outside Germany: as today")
+
+    def test_zebras_only_in_town_at_50(self):
+        """VwV-StVO zu § 26 Rn. 1: a Fußgängerüberweg only in town and on a road of at most 50 km/h: the stem's mapped
+        zebra is painted in town with no limit mapped (the town's 50) or with 50, not at 70 nor out of town (in town its
+        kerb ramps all the same)."""
+        import secrossings
+        from test_roads import rules
+        nodes = {"crossings": [(120.0, 80.0, secrossings.M15)], "de_crossings": [(120.0, 80.0, secrossings.M15)],
+                 "stop_lines": np.zeros((0, 2)), "priority": np.zeros((0, 3))}
+        nowhere = lambda la, lo: np.zeros(np.shape(la), bool)      # noqa: E731
+        for town, kmh, want in ((_everywhere, None, 1), (_everywhere, 50.0, 1), (_everywhere, 70.0, 0),
+                                (nowhere, None, 0), (nowhere, 50.0, 0)):
+            feats = self.layer(self.STRETCH)
+            if kmh is not None:
+                feats.rules["max_speed_kmh"] = rules([(list(feats.ids).index("s"), kmh)], "float")
+            got = {}
+            for name, n in (("with", nodes), ("without", None)):
+                walks = []
+                ch = roads.build_tile(self.FRAME, 0, 0, [feats], _flat, town, walks=walks, signals=self.NO_SIGNALS,
+                                      country="DE", nodes=n, de_on=True)
+                got[name] = (len([c for c in ch if c["m"] == "crossing_white"]), self.ramps(walks))
+            case = (town is _everywhere, kmh)
+            self.assertEqual(got["with"][0], want, case)
+            if town is _everywhere:     # (out of town no sidewalks, so no kerb ramps at all)
+                self.assertEqual(got["with"][1], got["without"][1] + 2, ("its kerb ramps",) + case)
+
+    def infra(self, rows):
+        """An infrastructure layer (Overture's) of points rows [(class, frame (x, y), OSM tags)]."""
+        import json
+        n = len(rows)
+        xy = np.array([r[1] for r in rows], np.float64)
+        lat, lon, _ = self.FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        return mapgeom.Features(layer="infrastructure", ids=np.array([f"n{i}" for i in range(n)]),
+                                kind=np.full(n, mapgeom.POINT, np.uint8), part_off=np.arange(n + 1, dtype=np.int64),
+                                ring_off=np.arange(n + 1, dtype=np.int64), coord_off=np.arange(n + 1, dtype=np.int64),
+                                lonlat=np.column_stack([np.asarray(lon), np.asarray(lat)]),
+                                attrs={"class": np.array([r[0] for r in rows], object),
+                                       "subtype": np.array(["transportation"] * n, object),
+                                       "tags": np.array([json.dumps(r[2]) for r in rows], object)}, rules={})
+
+    def test_germanys_crossings_by_their_tags(self):
+        """From the map's tags through secrossings.nodes to junction_paint: a crossing on the stem 40 m out is
+        Z 293 only where it is a marked one without signals (crossing=zebra, crossing_ref=zebra, crossing:markings=zebra
+        or yes, crossing=marked or uncontrolled); a bare highway=crossing, a refuge island, an unmarked one or one at
+        signals (its own tag, or a signal mapped 10 m off) gets none, its kerb ramps all the same."""
+        import secrossings
+        feats = self.layer(self.STRETCH)
+        base = self.ramps(self.build(feats)[1])
+        for tags, near, want in (({"crossing": "zebra"}, False, 1), ({"crossing_ref": "zebra"}, False, 1),
+                                 ({"crossing:markings": "zebra"}, False, 1), ({"crossing:markings": "yes"}, False, 1),
+                                 ({"crossing": "marked"}, False, 1), ({"crossing": "uncontrolled"}, False, 1),
+                                 ({}, False, 0), ({"crossing": "island"}, False, 0),
+                                 ({"crossing": "unmarked"}, False, 0), ({"crossing": "traffic_signals"}, False, 0),
+                                 ({"crossing": "zebra"}, True, 0)):
+            rows = [("crossing", (120.0, 80.0), tags)] + ([("traffic_signals", (120.0, 70.0), {})] if near else [])
+            nodes = secrossings.nodes(self.FRAME, [self.infra(rows)])
+            ch, walks = self.build(feats, nodes=nodes)
+            zebra = [c for c in ch if c["m"] == "crossing_white"]
+            self.assertEqual(len(zebra), want, (tags, near))
+            self.assertEqual(self.ramps(walks), base + 2, (tags, near))
+            if want:
+                self.assertEqual(zebra[0]["tl"], secrossings.M15_LOOK["tl"])
+
+    def test_mapped_stop_and_give_way_in_the_road_tile(self):
+        """The map's rows reach the tile's one decision (designs.context's mapped): Overture's stop 12 m out on S makes
+        S a 206 with its Haltlinie (and the others no right before left: W - E 301, N 205 with its Wartelinie), the
+        lane shards' 205 node 12 m out on E a 205 with its Wartelinie (W and N, the two left, 301); with the setting
+        off, the same nodes change nothing."""
+        import railtags
+        import secrossings
+        feats = self.layer(self.RES)
+        nodes = secrossings.nodes(self.FRAME, [self.infra([("stop", (120.0, 108.0), {})])])
+        props = []
+        ch, _ = self.build(feats, props=props, nodes=nodes)
+        self.assertEqual({self.arm(r[1:3])[0]: r[0] for r in props if r[0].startswith("de_z")},
+                         {"s": "de_z206", "n": "de_z205", "e": "de_z301", "w": "de_z301"})
+        halt = self.z294(ch)
+        self.assertEqual([self.arm(h.mean(0))[0] for h in halt], ["s"])
+        self.assertEqual(set(self.sets(self.z341(ch))), {"n"})
+        lat, lon, _ = self.FRAME.enu_to_geodetic(np.array(132.0), np.array(120.0), 0.0)
+        feats.__dict__["_sign_nodes"] = [(float(lon), float(lat), {"traffic_sign": "DE:205,1002-12"})]
+        self.assertEqual(len(railtags.sign_nodes(feats)), 1)
+        props = []
+        ch, _ = self.build(feats, props=props, nodes=nodes)
+        self.assertEqual({self.arm(r[1:3])[0]: r[0] for r in props if r[0].startswith("de_z")},
+                         {"s": "de_z206", "e": "de_z205", "n": "de_z301", "w": "de_z301"})
+        self.assertEqual(set(self.sets(self.z341(ch))), {"e"})
+        self.assertEqual([self.arm(h.mean(0))[0] for h in self.z294(ch)], ["s"])
+        off = self.build(feats, False, nodes=nodes)[0]
+        self.assertEqual(off, self.build(self.layer(self.RES), False)[0], "off: as today")
 
     def test_a_junction_at_a_tile_edge(self):
         """The junction 2 m west of the tiles' seam: its stem's Wartelinie straddles it; each dash is drawn by one tile

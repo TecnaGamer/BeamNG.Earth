@@ -552,7 +552,11 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     except Exception as e:          # no tunnels: their stretches stay the minimap's only
         log.debug("navgraph tunnels: %s: %s", type(e).__name__, e)
     urban = _s.surface.urban if _s.surface is not None else None
-    nodes = secrossings.read(_s.md, frame, keys) if str(rules.get("country") or "").upper() == "SE" else None
+    de_nodes = False                # (Germany's mapped nodes: its junction signs on, the graph's window in Germany)
+    if rules.get("de_junctions"):
+        import designs
+        de_nodes = designs.reads_here(True, frame, (x - w, y - w, x + w, y + w))
+    nodes = secrossings.read(_s.md, frame, keys) if secrossings.wanted(rules.get("country"), de_nodes) else None
     graph = navgraphmod.build(frame, feats, elev, (x, y), urban, decks=decks, tunnels=tun, widths=_s.widths,
                               left_hand=left_hand,
                               mph=mph, signals=furniture.signals_for(_s.md, frame, keys), country=rules.get("country"),
@@ -624,11 +628,15 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False):
     import revisit
     import threedmr
+    de = ()                         # (the German junction signs on near Germany: the border data in use too)
+    if de_junctions:
+        import designs
+        de = designs.cache_parts(True, geodesy.EnuFrame(lat, lon), designs.tile_reach(roadsmod_tile_bbox(tx, ty)))
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    bool(de_junctions))
+                    bool(de_junctions), *de)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), md=_md_versions(),
@@ -854,7 +862,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     marks = []                          # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
     near_roads = []                     # the ground carriageways near the tile (the median barriers': medians.tile_rows)
     near_cells = roadsmod.cells_of_tile(frame, tx, ty, SIGNALS_MARGIN_M)
-    nodes = secrossings.read(_s.md, frame, near_cells) if str(country or "").upper() == "SE" else None
+    de_nodes = False                # (Germany's mapped nodes: its junction signs on, the junctions it decides reach
+    if de_junctions:                # into Germany)
+        import designs
+        de_nodes = designs.reads_here(True, frame, designs.tile_reach(box, skin_margin))
+    nodes = secrossings.read(_s.md, frame, near_cells) if secrossings.wanted(country, de_nodes) else None
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
@@ -1235,12 +1247,21 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
                      models_dir=None, de_junctions=False):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
     check, earthd.Server.geo_prebuilt; models_dir: the folder of the 3dmr.eu models' cache, whose local models are
-    built in: threedmr.local_signature)."""
+    built in: threedmr.local_signature; de_junctions: the German junction signs, near Germany with the border data
+    in use, designs.cache_parts over the content's reach in its own frame)."""
     import revisit
     import threedmr
+    de = ()
+    if de_junctions:
+        import designs
+        import geotiles
+        z, gx, gy = geotiles.parse(key)
+        tile = geotiles.geobox(gx, gy, z)
+        de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
-                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), bool(de_junctions))
+                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), bool(de_junctions),
+                       *de)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,

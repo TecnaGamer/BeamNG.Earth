@@ -1,6 +1,8 @@
 """blockworker.roads_tile: a road tile built in a road process is the tile the server's own thread
 builds (roads.build_tile + roadmesh + write_tile with the same inputs), files byte for byte."""
 import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures",
+                                                       "regional"))     # (PR #505's data: the tests' slice)
 import sys
 import tempfile
 import threading
@@ -13,9 +15,14 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blockworker  # noqa: E402
+import borderfixtures  # noqa: E402
 import roadmesh  # noqa: E402
 import roads  # noqa: E402
 from test_roads import FRAME, LAT, LON, features  # noqa: E402
+
+
+def setUpModule():
+    borderfixtures.require()        # (no border data: the German read gates' tests would pass on today's reads)
 
 
 class FakeMapData:
@@ -166,6 +173,136 @@ class NavgraphTest(unittest.TestCase):
         self.assertEqual(got, json.loads(json.dumps(want, separators=(",", ":"))))
         self.assertGreater(n_nodes, 2)
         self.assertEqual((n_nodes, n_edges), (len(want["nodes"]), len(want["edges"])))
+
+
+class GermanReadGateTest(unittest.TestCase):
+    """The German read gates in a road process: Overture's nodes (secrossings.read) for a road tile or a
+    road graph when the German junction signs are on and the box it decides touches Germany (the tile's own ± its
+    junctions' reach, roads.NEAR_M; the graph's window): one of its corners or its centre inside. Off: Germany's
+    border data untouched, no read; outside Germany: no read."""
+    MUNICH, SALZBURG = (48.137, 11.575), (47.800, 13.045)
+
+    def reads(self, kind, at, on=True, west_of=None):
+        """Whether the road tile (0, 0) or the road graph round (0, 0) of an anchor at (lat, lon) at reads the nodes;
+        west_of: Germany patched to the half-plane west of this frame-local x (m)."""
+        import contextlib
+        import navgraph
+        import secrossings
+        import germany
+        from unittest import mock
+        calls = []
+        blockworker._s = SimpleNamespace(md=FakeMapData(None, None), dem=FakeDem(), widths=None, surface=None,
+                                         airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
+                                         bridges={}, anchor=lambda aid, lat, lon: (None, None))
+        with contextlib.ExitStack() as st:
+            st.enter_context(mock.patch.object(secrossings, "read", lambda md, frame, keys: calls.append(keys)))
+            if west_of is not None:
+                frame = blockworker.geodesy.EnuFrame(at[0], at[1])
+                cut = float(frame.enu_to_geodetic(np.array(float(west_of)), np.array(0.0), 0.0)[1])
+                st.enter_context(mock.patch.object(germany, "contains",
+                                                   lambda lon, lat: np.atleast_1d(np.asarray(lon, float) <= cut)))
+            elif not on:            # (off: the border data is not to be asked at all)
+                import countrybounds
+
+                def untouched(*a, **k):
+                    raise AssertionError("Germany's border data asked with the setting off")
+                st.enter_context(mock.patch.object(germany, "contains", untouched))
+                st.enter_context(mock.patch.object(countrybounds, "bundled", untouched))
+            out = st.enter_context(tempfile.TemporaryDirectory())
+            if kind == "tile":
+                blockworker.roads_tile(1, at[0], at[1], 15, 0, 0, out, "/temp/x", True, 0.05, country="DE",
+                                       de_junctions=on)
+            else:
+                st.enter_context(mock.patch.object(navgraph, "build", lambda *a, **k: {"nodes": [], "edges": []}))
+                blockworker.navgraph(1, at[0], at[1], 15, 0.0, 0.0, out, "/temp/x", 7, False, True,
+                                     {"country": "DE", "de_junctions": on})
+        return bool(calls)
+
+    def test_off_reads_nothing(self):
+        for kind in ("tile", "graph"):
+            self.assertFalse(self.reads(kind, self.MUNICH, on=False), kind)
+
+    def test_in_germany(self):
+        for kind in ("tile", "graph"):
+            self.assertTrue(self.reads(kind, self.MUNICH), kind)
+
+    def test_outside_germany(self):
+        for kind in ("tile", "graph"):
+            self.assertFalse(self.reads(kind, self.SALZBURG), kind)
+
+    def test_a_tile_across_the_border(self):
+        """Tile (0, 0) is x 0 .. 256: its centre outside, Germany 20 m west of it, within its junctions' reach
+        (roads.NEAR_M, 40 m): read; 60 m west, past the reach: not."""
+        self.assertTrue(self.reads("tile", self.MUNICH, west_of=-20.0))
+        self.assertFalse(self.reads("tile", self.MUNICH, west_of=-60.0))
+
+    def test_a_graph_window_across_the_border(self):
+        """The graph's window is (0, 0) +- navgraph.WINDOW_M + 200 m: Germany 50 m inside its west edge: read; 50 m past
+        it: not."""
+        import navgraph
+        w = navgraph.WINDOW_M + 200.0
+        self.assertTrue(self.reads("graph", self.MUNICH, west_of=-(w - 50.0)))
+        self.assertFalse(self.reads("graph", self.MUNICH, west_of=-(w + 50.0)))
+
+
+class GermanCacheKeyTest(unittest.TestCase):
+    """The revisit keys of a road tile and of a geotile's content with the German junction signs: off, or on away
+    from germany.BOX, the key's parts exactly as before (the setting's bool last; the border data not asked);
+    on near Germany, also germany.signature(), so a tile built without the border data is built again with it."""
+    MUNICH, BALTIMORE = (48.137, 11.575), (39.2834, -76.5934)
+
+    def setUp(self):
+        blockworker._s = SimpleNamespace(md=None, cache_dir=tmp_cache(self))
+
+    def parts(self, kind, at, on):
+        """The parts revisit.key is given for the road tile (0, 0) of an anchor at at, or the geotile under at."""
+        import revisit
+        from unittest import mock
+        got = []
+        with mock.patch.object(revisit, "key", lambda *p: got.append(p) or "k"), \
+                mock.patch.object(blockworker, "_revisit_tile", lambda *a, **k: None), \
+                tempfile.TemporaryDirectory() as out:
+            if kind == "tile":
+                blockworker._roads_tile_cached(1, at[0], at[1], 15, 0, 0, out, "/temp/x", True, 0.05, False, False,
+                                               True, None, False, 0.0, None, "DE", None, de_junctions=on)
+            else:
+                import geotiles
+                blockworker._geo_content_key(geotiles.key(*geotiles.tile_of(*at)), 15, True, False, True, False, 0.0,
+                                             None, "DE", models_dir=out, de_junctions=on)
+        self.assertEqual(len(got), 1)
+        return got[0]
+
+    def test_off_and_away_as_before(self):
+        import countrybounds
+        import regionaldata
+        from unittest import mock
+
+        def refused(*a, **k):
+            raise AssertionError("the border data asked")
+        for kind in ("tile", "geo"):
+            with mock.patch.object(countrybounds, "bundled", refused), \
+                    mock.patch.object(countrybounds, "signature", refused), \
+                    mock.patch.object(regionaldata, "manifest", refused):
+                off = self.parts(kind, self.MUNICH, False)
+                away = self.parts(kind, self.BALTIMORE, True)
+                away_off = self.parts(kind, self.BALTIMORE, False)
+            self.assertIs(off[-1], False, kind)
+            self.assertIs(away[-1], True, kind)
+            self.assertEqual(away[:-1], away_off[:-1], kind)
+            self.assertEqual(len(away), len(off), kind)
+
+    def test_near_germany_names_the_border_data(self):
+        import countrybounds
+        import germany
+        from unittest import mock
+        for kind in ("tile", "geo"):
+            off, on = self.parts(kind, self.MUNICH, False), self.parts(kind, self.MUNICH, True)
+            self.assertEqual(on[:-2], off[:-1], kind)
+            self.assertEqual(on[-2:], (True, germany.signature()), kind)
+            self.assertFalse(on[-1].endswith(germany.ABSENT), kind)
+            with mock.patch.object(countrybounds, "bundled", return_value=countrybounds.Absent()):
+                absent = self.parts(kind, self.MUNICH, True)
+            self.assertEqual(absent[-1], on[-1] + germany.ABSENT, kind)
 
 
 class NoiseFetcher:

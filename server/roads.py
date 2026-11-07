@@ -8969,9 +8969,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     furniture.place for the street trees, hydrants, benches and bins on these sidewalks. towns(roads, box,
     left_hand, rings) -> prop rows: the town entry and exit signs among props (townentry.Towns.maker; BNE_TOWNSIGNS;
     rings: the roundabout rings' ids, which have none). de_on: Germany's junction signs (designs.context of these
-    cells, de_routes their road_routes layers for the ref ranks, road_towns' town) and their paint
-    (designs.junction_paint in place of the US crosswalks and stop lines, one designs.decide per junction for both),
-    and the line style by Germany's border (markings.style of germany.effective_country at the tile's middle).
+    cells, de_routes their road_routes layers for the ref ranks, road_towns' town, the map's stop and give-way signs:
+    nodes' priority and the cells' lane shard sign nodes, railtags.sign_nodes) and their paint (designs.junction_paint
+    in place of the US crosswalks and stop lines, one designs.decide per junction for both), and the line style by
+    Germany's border (markings.style of germany.effective_country at the tile's middle).
     Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
@@ -9142,6 +9143,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
     de_ctx = de_ctl = None                      # Germany's junctions (de_on): the tile's roads read once
     line_country = country                      # (designs.context), the line style by its border (markings.style)
+    priority = None if nodes is None else nodes["priority"]     # (the map's stop and give-way points)
     if de_on:
         import designs
         if designs.near(frame, own_box):
@@ -9155,14 +9157,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                         by_cell[id(f)] = road_towns(f, urban_fn, left_hand)
                     if by_cell[id(f)] is not None:
                         de_towns[fid] = by_cell[id(f)][i]
-                de_ctx = designs.context(frame, cells, de_routes, towns=de_towns)
+                import railtags                 # (the map's own 205 / 206: the lane shards' sign nodes, the cells';
+                                                # de_signs: build_tile's signs are PR #505's sign meshes)
+                de_signs = [s for f in cells if f is not None for s in railtags.sign_nodes(f)]
+                de_ctx = designs.context(frame, cells, de_routes, priority, de_signs, towns=de_towns)
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
     teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares;
                                                 # Germany's Wartelinie (markings.wait_lines)
     zebras = []                                 # ... and its crossings, which a road's lines stop at (secrossings.place)
     crosswalk_look = junctions.CROSSWALK
-    priority = None if nodes is None else nodes["priority"]
     trams = []                                  # ... and what no raised sidewalk or median runs over (rails.tram_lines)
     if str(country or "").upper() == "SE":
         import furniture

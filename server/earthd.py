@@ -1810,7 +1810,10 @@ class Server:
                                                   anchor.bridges.depth_of(fid)))
         except Exception as e:          # no decks: the graph follows the ground under bridges
             log.debug("navgraph decks: %s: %s", type(e).__name__, e)
-        nodes = secrossings.read(self.mapdata, anchor.frame, keys) if str(self.country(anchor) or "").upper() == "SE" else None
+        # (Germany's mapped nodes too: its junction signs on, the graph's window in Germany)
+        de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, (x - w, y - w, x + w, y + w))
+        nodes = secrossings.read(self.mapdata, anchor.frame, keys) \
+            if secrossings.wanted(self.country(anchor), de_nodes) else None
         tun = {}
         try:            # (the tunnels the road tiles build: the AI drives through them; off: navgraph.AI_TUNNELS)
             if not navgraphmod.AI_TUNNELS:
@@ -2166,7 +2169,8 @@ class Server:
 
     def geo_content_key(self, gx, gy):
         """The revisit key geotile (gx, gy)'s road content has with this server's settings (blockworker._geo_content_key,
-        its own place's rules), or None (no map data)."""
+        its own place's rules), or None (no map data). Near Germany with its junction signs on the key names the border
+        data in use (designs.cache_parts): the first such key fetches it here once (regionaldata, then on disk)."""
         if self.mapdata is None:
             return None
         import geotiles
@@ -2177,7 +2181,8 @@ class Server:
                                             de_junctions=designsmod.enabled(self.dej_on))
 
     def geo_prebuilt(self, gx, gy):
-        """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
+        """Is geotile (gx, gy)'s road content in the revisit cache (no worker; no network but Germany's border data
+        once, geo_content_key)? -> its key or None."""
         k = self.geo_content_key(gx, gy)
         return k if k is not None and os.path.exists(revisitmod._path(self.cache_dir, "roadsg", k)) else None
 
@@ -2320,8 +2325,10 @@ class Server:
         marks = []                  # stall lines along parking aisles (parking.finish_markings adds the lot polygons')
         near_roads = []             # the ground carriageways near the tile (the median barriers': medians.tile_rows)
         nkeys = roadsmod.cells_of_tile(anchor.frame, tx, ty, blockworker.SIGNALS_MARGIN_M)
-        sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) if str(self.country(anchor) or "").upper() == "SE" \
-            else None
+        # (Germany's mapped nodes too: its junction signs on, the junctions it decides reach into Germany)
+        de_nodes = designsmod.reads_here(designsmod.enabled(self.dej_on), anchor.frame, designsmod.tile_reach(box))
+        sign_nodes = secrossings.read(self.mapdata, anchor.frame, nkeys) \
+            if secrossings.wanted(self.country(anchor), de_nodes) else None
         clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
         roadside_jobs = []
         drives = []
@@ -5347,7 +5354,8 @@ class Connection:
     async def area_plan(self, msg):
         """{"id", "s", "w", "n", "e"} or {"id", "route": "current", "half"} -> area_plan_result {"id", "ok", km2, items,
         missing, downloadBytes, diskBytes, seconds, days, hosts, excluded, km? (a route's length), "error"?}
-        (areas.Areas.plan / plan_route: no network)."""
+        (areas.Areas.plan / plan_route, in an executor thread: no network, but a box near Germany fetches Germany's
+        border data once, geo_content_key)."""
         out = {"type": "area_plan_result", "id": msg.get("id"), "ok": False}
         if self.s.areas is None:
             out["error"] = "saved areas need the download cache"
