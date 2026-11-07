@@ -7,6 +7,69 @@
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+/// Preserve the local level along an already classified bridge. Merged Overture features can carry
+/// several levels: promoting the whole feature to their maximum loses deck-over-deck ordering (#866).
+#[pyfunction]
+pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, f64>, ends: PyReadonlyArray1<'py, f64>, values: Vec<String>, min_part: f64)
+    -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let ranges = ranges.as_array();
+    let starts = starts.as_array();
+    let ends = ends.as_array();
+    if ranges.ncols() != 2 || starts.len() != ends.len() || starts.len() != values.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("bridge level rule shapes differ"));
+    }
+    let rules: Vec<(f64, f64, f64)> = values.iter().enumerate().filter_map(|(i, v)| {
+        let level = v.parse::<f64>().ok()?;
+        let (a, b) = (starts[i], ends[i]);
+        (a.is_finite() && b.is_finite() && b > a && level.is_finite())
+            .then_some((a, b, level.max(1.0)))
+    }).collect();
+    let mut result = Vec::new();
+    for range in ranges.rows() {
+        let (a, b) = (range[0], range[1]);
+        if !a.is_finite() || !b.is_finite() || b - a <= min_part { continue; }
+        let mut cuts = vec![a, b];
+        for &(s, e, _) in &rules {
+            if s > a && s < b { cuts.push(s); }
+            if e > a && e < b { cuts.push(e); }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-9);
+        let mut spans: Vec<(f64, f64, f64)> = Vec::new();
+        for pair in cuts.windows(2) {
+            let mid = (pair[0] + pair[1]) / 2.0;
+            let level = rules.iter().filter(|&&(s, e, _)| s <= mid && e >= mid)
+                .map(|r| r.2).fold(1.0, f64::max);
+            if let Some(last) = spans.last_mut() {
+                if last.2 == level { last.1 = pair[1]; continue; }
+            }
+            spans.push((pair[0], pair[1], level));
+        }
+        // Do not create tiny bridge parts (nor holes): absorb them into the adjacent retained span.
+        let mut i = 0;
+        while spans.len() > 1 && i < spans.len() {
+            if spans[i].1 - spans[i].0 <= min_part {
+                if i == 0 { spans[1].0 = spans[0].0; } else { spans[i - 1].1 = spans[i].1; }
+                spans.remove(i);
+            } else { i += 1; }
+        }
+        for span in spans {
+            if let Some(last) = result.last_mut() {
+                let last: &mut (f64, f64, f64) = last;
+                if (last.1 - span.0).abs() <= 1e-9 && last.2 == span.2 {
+                    last.1 = span.1; continue;
+                }
+            }
+            result.push(span);
+        }
+    }
+    let xy: Vec<f64> = result.iter().flat_map(|r| [r.0, r.1]).collect();
+    let levels: Vec<f64> = result.iter().map(|r| r.2).collect();
+    Ok((numpy::ndarray::Array2::from_shape_vec((result.len(), 2), xy).unwrap().into_pyarray(py),
+        levels.into_pyarray(py)))
+}
+
 const BRIDGE: i8 = 1;
 const TUNNEL: i8 = 2;
 
