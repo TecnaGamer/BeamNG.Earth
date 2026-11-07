@@ -336,6 +336,9 @@ Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
 `cd mod/tests && for f in test_*.lua; do luajit $f; done` (no luajit: `pip install lupa`, then
 `python3 tools/run_lua_tests.py`).
 
+For native thread-crash diagnostics without starting the game, see
+[the isolated stress runner](docs/NATIVE_CRASH_REPRODUCTION.md).
+
 ## Multiplayer (BeamMP)
 
 BeamNG.Earth runs on [BeamMP](https://beammp.com/) servers (in testing): drive the real world together.
