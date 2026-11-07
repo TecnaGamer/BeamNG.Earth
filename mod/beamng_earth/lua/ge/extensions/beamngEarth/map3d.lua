@@ -92,6 +92,8 @@ function M.enter()
   play(markers, function()
     core_camera.setGlobalCameraByName(M.CAMERA, false, data)
     active = true
+    local stg = rawget(_G, 'beamngEarth_settings')
+    if stg and stg.navigate then stg.navigate(M.ROUTE) end
     extensions.hook('onBeamngEarthMap3d', true)
   end)
 end
@@ -120,6 +122,8 @@ function M.exit()
   markers[3].movingEnd = false
   active = false
   log_('I', 'leaving the 3D map')
+  local stg = rawget(_G, 'beamngEarth_settings')
+  if stg and stg.navigate then stg.navigate('play') end
   core_camera.setGlobalCameraByName(nil)
   play(markers, function()
     core_camera.setGlobalCameraByName(nil)
@@ -130,6 +134,67 @@ end
 
 function M.toggle()
   if active then M.exit() else M.enter() end
+end
+
+-- ---- the 3D map screen's mouse (ui EarthMap3d.vue: the UI takes the mouse from the camera, as the vanilla big map's)
+M.ROUTE = 'beamngEarthMap3d'          -- index.js registers it
+
+local function globe()
+  return active and core_camera.getGlobalCameras()[M.CAMERA] or nil
+end
+
+-- grab and drag: the ground under the cursor follows it (metres per pixel at the target, the tilt stretching the
+-- vertical); mode 'orbit' turns (dx) and tilts (dy) instead
+function M.drag(dx, dy, mode, screenH)
+  local g = globe()
+  if not g then return end
+  dx, dy = tonumber(dx) or 0, tonumber(dy) or 0
+  if mode == 'orbit' then
+    g.heading = g.heading + dx * 0.006
+    g.pitch = math.max(math.rad(12), math.min(math.rad(89.5), g.pitch + dy * 0.004))
+    return
+  end
+  local mpp = 2 * g.dist * math.tan(math.rad(g.fov) / 2) / math.max(200, tonumber(screenH) or 1080)
+  local f = vec3(math.sin(g.heading), math.cos(g.heading), 0)
+  local r = vec3(f.y, -f.x, 0)
+  g.target = g.target + (r * (-dx) + f * (dy / math.max(0.2, math.sin(g.pitch)))) * mpp
+end
+
+-- the wheel: notches (positive: out), each ~15 % of the distance
+function M.zoom(notches)
+  local g = globe()
+  if not g then return end
+  g.dist = math.max(15, math.min(600000, g.dist * math.exp((tonumber(notches) or 0) * 0.15)))
+end
+
+function M.setHeading(h)
+  local g = globe()
+  if g then g.heading = tonumber(h) or 0 end
+end
+
+-- teleport the car to the place in the middle of the view, then fly down to it
+function M.driveHere()
+  local s = M.state()
+  if not s.active or not s.lat then return {ok = false, error = 'no place in view'} end
+  local stg = rawget(_G, 'beamngEarth_settings')
+  if not stg or not stg.uiMapTeleport then return {ok = false, error = 'BeamNG.Earth not loaded'} end
+  local r = stg.uiMapTeleport(s.lat, s.lon, '')
+  if r and r.ok then
+    active, transitioning = false, false
+    core_camera.setGlobalCameraByName(nil)
+    if stg.navigate then stg.navigate('play') end
+    extensions.hook('onBeamngEarthMap3d', false)
+  end
+  return r
+end
+
+-- the 2D map instead (the screen's 2D button): straight back to the car's camera, then the flat map
+function M.to2d()
+  active, transitioning = false, false
+  core_camera.setGlobalCameraByName(nil)
+  extensions.hook('onBeamngEarthMap3d', false)
+  local stg = rawget(_G, 'beamngEarth_settings')
+  if stg and stg.navigate then stg.navigate(stg.MAP_ROUTE) end
 end
 
 -- the orbit's state for the UI / server (target lat / lon, distance, heading)
@@ -144,6 +209,22 @@ function M.state()
     out.lat, out.lon = a:enuToGeodetic(g.target.x, g.target.y, 0)
   end
   return out
+end
+
+-- the 3D map screen's poll (EarthMap3d.vue): state() and the place under the view (the status bar asks the server
+-- about the view's target while the map is open: core.lua)
+function M.uiState()
+  local s = M.state()
+  local core = rawget(_G, 'beamngEarth_core')
+  local loc = core and core.statusbar and core.statusbar.location() or nil
+  if loc then
+    local parts = {}
+    for _, k in ipairs({'street', 'place', 'region', 'country'}) do
+      if loc[k] and loc[k] ~= '' then parts[#parts + 1] = loc[k] end
+    end
+    s.place = table.concat(parts, ', ')
+  end
+  return s
 end
 
 -- a level change or a vehicle switch ends the mode at once (no path)

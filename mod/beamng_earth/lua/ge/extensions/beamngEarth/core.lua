@@ -64,6 +64,7 @@ local ui = require('beamngEarth/ui')
 local settings = require('beamngEarth/settings') -- the pause-menu page's values (docs/DEVTOOLS.md)
 local credits = require('beamngEarth/credits') -- the on-screen data credits (docs/DEVTOOLS.md)
 local statusbar = require('beamngEarth/statusbar') -- the slim bar at the top: street, place, loading, fps
+M.statusbar = statusbar   -- (map3d.lua's screen reads statusbar.location())
 local loadprogress = require('beamngEarth/loadprogress') -- the bar's loading line after a teleport
 local places = require('beamngEarth/places') -- saved and recent places (the settings page)
 local levelinfo = require('beamngEarth/levelinfo') -- the level select's spawn points: the places, Random
@@ -2204,7 +2205,14 @@ local function onUpdate(dtReal, dtSim)
   statusbar.frame(frameMs0)
   if st.inOurLevel and net.isConnected() then
     local stg2 = rawget(_G, 'beamngEarth_settings')
-    local q = statusbar.request(st.clock, st.player, not stg2 or not stg2.get or stg2.get('placeNamesOnline') ~= false)
+    -- (the 3D map: where the view is, not the car: map3d.lua's target; its screen shows statusbar.location())
+    local who = st.player
+    local m3 = rawget(_G, 'beamngEarth_map3d')
+    if m3 and m3.isActive and m3.isActive() then
+      local ms = m3.state()
+      if ms.lat then who = { lat = ms.lat, lon = ms.lon } end
+    end
+    local q = statusbar.request(st.clock, who, not stg2 or not stg2.get or stg2.get('placeNamesOnline') ~= false)
     if q then net.send({ type = 'where', id = q.id, lat = q.lat, lon = q.lon, online = q.online }) end
   end
   local cf = st.commitFrames
