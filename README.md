@@ -68,6 +68,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   rougher forest tracks, smoother main gravel roads (from RiDexSS's contribution).
 - Street trees, fire hydrants, benches and bins along sidewalks where the street is really built up (its buildings,
   shops and land use; from wyo-backroads' contribution).
+- Bus shelters require positive map evidence of a shelter and keep their complete bodies clear of road lanes.
 - Highway signs on US freeways (from cody196's contribution): green exit signs at 1 mile, 1/2 mile and 1/4 mile and
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in

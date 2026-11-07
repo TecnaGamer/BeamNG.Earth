@@ -1,7 +1,8 @@
 """Bus shelters at mapped bus stops (Overture infrastructure class bus_stop).
 
-A stop is a point (highway=bus_stop). It gets East Coast's glass shelter unless the tags say
-shelter=no. The shelter's long side runs along the nearest road. The stock shape's signed side
+A stop is a point (highway=bus_stop). Only a positive shelter tag gives it the
+East Coast glass shelter; a plain stop is not evidence of a physical shelter. Its long side
+runs along the nearest road. The stock shape's signed side
 reads as the forest mesh's opposite of local +x, so the row yaw points local +x away from the
 carriageway and that signed side at the street, with the body on the sidewalk. A public-transport
 shelter that is not a bus stop (amenity=shelter, shelter_type=public_transport) is included. A
@@ -10,10 +11,10 @@ stop with no road nearby still stands, turned by its id.
 import hashlib
 import json
 import logging
-import math
 
 import numpy as np
 
+import fast
 import mapcells
 import mapgeom
 
@@ -28,8 +29,6 @@ SHELTER_H = 2.90
 NEAR_ROAD_M = 30.0          # a stop farther from every carriageway is not turned toward one
 CURB_PAD_M = 0.6            # m past the carriageway edge: the signed face, when the point is in the road
 POLY_MAX = 80.0             # m²: a bus stop drawn as a polygon is still one shelter
-NO_SHELTER = {"no", "none"}
-TRANSIT_SHELTER = {"public_transport", "public_transit", "bus_stop", "bus", "bus_shelter", "transit"}
 
 
 def _tags(feats, i):
@@ -57,21 +56,11 @@ def _cls(feats, i):
 
 
 def is_shelter(feats, i):
-    """A bus stop, or a shelter tagged for public transport. shelter=no is a pole only."""
+    """Require positive shelter evidence, including explicit transit-shelter features."""
     tags = _tags(feats, i)
-    if tags.get("shelter", "") in NO_SHELTER:
-        return False
-    amenity = tags.get("amenity", "")
-    highway = tags.get("highway", "")
-    stype = tags.get("shelter_type") or tags.get("shelter:type") or ""
-    bus_stop = _cls(feats, i) == "bus_stop" or highway == "bus_stop" or amenity == "bus_stop"
-    transit = amenity == "shelter" and stype in TRANSIT_SHELTER
-    return bus_stop or transit
-
-
-def _yaw(dx, dy):
-    """Degrees that turn a Forest item's local +x toward (dx, dy)."""
-    return math.degrees(math.atan2(dy, dx)) % 360.0
+    fast.require(160, "mapped transit shelters")
+    return fast._ef.shelter_is_shelter(_cls(feats, i), tags.get("shelter", ""), tags.get("amenity", ""),
+                                     tags.get("highway", ""), tags.get("shelter_type") or tags.get("shelter:type", ""))
 
 
 def _side(fid):
@@ -119,59 +108,24 @@ def _spot(feats, frame, i):
     return float(c[0]), float(c[1])
 
 
-def _closest(roads, x, y):
-    """(closest x, y, tangent x, y, half width) of the nearest carriageway within NEAR_ROAD_M, or None.
-    roads: build_tile's (fid, spec, centreline (k, 3), lon)."""
-    best = None
-    px, py = float(x), float(y)
-    for item in roads or ():
-        spec, pts = item[1], np.asarray(item[2], np.float64)
-        if len(pts) < 2:
-            continue
-        half = float(getattr(spec, "width", 0.0) or 0.0) * 0.5
-        a, b = pts[:-1, :2], pts[1:, :2]
-        ab = b - a
-        ab2 = np.maximum(ab[:, 0] ** 2 + ab[:, 1] ** 2, 1e-9)
-        t = np.clip(((px - a[:, 0]) * ab[:, 0] + (py - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
-        cx = a[:, 0] + t * ab[:, 0]
-        cy = a[:, 1] + t * ab[:, 1]
-        d2 = (cx - px) ** 2 + (cy - py) ** 2
-        k = int(np.argmin(d2))
-        if best is None or d2[k] < best[0]:
-            span = math.hypot(float(ab[k, 0]), float(ab[k, 1]))
-            if span < 1e-6:
-                continue
-            best = (float(d2[k]), float(cx[k]), float(cy[k]), float(ab[k, 0]) / span, float(ab[k, 1]) / span, half)
-    if best is None or best[0] > NEAR_ROAD_M ** 2:
-        return None
-    return best[1:]
+def _road_arrays(roads):
+    """Pack road segments once; nearest-road selection and placement run in Rust."""
+    segments, widths = [], []
+    for _fid, spec, points, _lon in roads or ():
+        points = np.asarray(points, np.float64)
+        if len(points) >= 2:
+            segments.extend(np.column_stack((points[:-1, :2], points[1:, :2])))
+            widths.extend([max(0.0, float(spec.width)) * 0.5] * (len(points) - 1))
+    return np.asarray(segments, np.float64).reshape(-1, 4), np.asarray(widths, np.float64)
 
 
-def _place(fid, x, y, roads):
-    """(origin x, y, yaw) with the signed face toward the road and the shelter on the sidewalk.
-    Local +x points away from the carriageway: the stock shape's signed side is that axis reversed."""
-    hit = _closest(roads, x, y)
-    if hit is None:
-        return x, y, _yaw_of(fid)
-    cx, cy, tx, ty, half = hit
-    left = (-ty, tx)
-    side = (x - cx) * left[0] + (y - cy) * left[1]
-    if abs(side) < 1.0:
-        side = _side(fid)
-    else:
-        side = 1.0 if side > 0.0 else -1.0
-    away = (side * left[0], side * left[1])
-    toward = (-away[0], -away[1])
-    dist = (x - cx) * away[0] + (y - cy) * away[1]
-    curb = half + CURB_PAD_M
-    if dist < curb:
-        fx, fy = cx + away[0] * curb, cy + away[1] * curb
-    else:
-        fx, fy = x, y
-    return fx - STREET_X * toward[0], fy - STREET_X * toward[1], (_yaw(toward[0], toward[1]) + 180.0) % 360.0
+def _place(fid, x, y, segments, widths):
+    fast.require(160, "mapped transit shelters")
+    return fast._ef.shelter_pose(x, y, segments, widths, _side(fid), _yaw_of(fid),
+                                NEAR_ROAD_M, CURB_PAD_M, STREET_X)
 
 
-def rows(frame, infra_fn, box, elev, roads=()):
+def rows(frame, infra_fn, box, elev, roads=(), clearance=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the bus shelters whose stop is inside box."""
     if infra_fn is None:
         return []
@@ -181,6 +135,7 @@ def rows(frame, infra_fn, box, elev, roads=()):
         keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
     except (ValueError, OverflowError):
         return []
+    segments = widths = None
     pending = []
     seen = set()
     for key in keys:
@@ -203,15 +158,22 @@ def rows(frame, infra_fn, box, elev, roads=()):
             if spot is None or not (x0 <= spot[0] < x1 and y0 <= spot[1] < y1):
                 continue
             seen.add(fid)
-            ox, oy, yaw = _place(fid, spot[0], spot[1], roads)
+            if segments is None:
+                segments, widths = _road_arrays(roads)
+            ox, oy, yaw = _place(fid, spot[0], spot[1], segments, widths)
             pending.append((ox, oy, yaw))
     if not pending:
         return []
     xy = np.array([[p[0], p[1]] for p in pending], np.float64)
     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    if clearance is None:
+        import furniture
+        clearance = furniture.RoadClearance([(spec.width / 2, pts) for _fid, spec, pts, _lon in roads])
     out = []
     for (ox, oy, yaw), zz in zip(pending, np.asarray(z, np.float64)):
-        out.append([G_SHELTER, round(ox, 2), round(oy, 2), round(float(zz) + LIFT, 2), round(yaw, 1) % 360.0,
-                    1.0, SHELTER_H, 0.0])
+        row = [G_SHELTER, round(ox, 2), round(oy, 2), round(float(zz) + LIFT, 2), round(yaw, 1) % 360.0,
+               1.0, SHELTER_H, 0.0]
+        if clearance.clear(row):
+            out.append(row)
     return out
