@@ -30,11 +30,12 @@ ALBEDO_SIZE = 4096  # runtime size; generated source is 1254, not native 4K deta
 WIDTH_M = 91.44
 HEIGHT_M = 182.88
 RELIEF_M = .65
-FAR_NORMAL_NAME = 'canyon_far_v7.normal.png'
-FAR_COOKED_NORMAL_NAME = 'canyon_far_v7_ready.normal.dds'
-FAR_FINE_RELIEF_M = .65
-FAR_GROOVE_RMS_M = 1.12
+FAR_NORMAL_NAME = 'canyon_far_v8.normal.png'
+FAR_COOKED_NORMAL_NAME = 'canyon_far_v8_ready.normal.dds'
+FAR_FINE_RELIEF_M = .8125
+FAR_GROOVE_RMS_M = .784
 FAR_LEDGE_RMS_M = .64
+FAR_SMALL_DETAIL_GAIN = 1.25  # finer channels and stone chips, independently of broad ribs
 FAR_GROOVE_WIDTH_M = 2.0  # Gaussian sigma: visible ribs span roughly 5-15 m
 FAR_GROOVE_HEIGHT_M = 14.0  # coherent vertical erosion, roughly 30 m long
 
@@ -100,7 +101,7 @@ def far_normal(height, lum):
     chips = np.clip(chips/max(chips.std(),1e-6), -1.5, 1.5).astype(np.float32)
     padded = np.pad(chips, 4, mode='wrap')
     chips = cv2.bilateralFilter(padded, 9, .4, 2)[4:-4,4:-4]
-    relief = grooves+beds+cuts+.10*chips+FAR_FINE_RELIEF_M*smooth_periodic(height,2,2)
+    relief = grooves+beds+FAR_SMALL_DETAIL_GAIN*(cuts+.10*chips)+FAR_FINE_RELIEF_M*smooth_periodic(height,2,2)
     dx = (np.roll(relief,-1,1)-np.roll(relief,1,1))*w/(2*WIDTH_M)
     dy = (np.roll(relief,-1,0)-np.roll(relief,1,0))*h/(2*HEIGHT_M)
     normal = np.stack((-dx,dy,np.ones_like(dx)),-1)

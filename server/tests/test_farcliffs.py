@@ -398,7 +398,7 @@ class FarCliffsTest(unittest.TestCase):
     def test_far_normal_is_unit_length_and_preserves_detail_in_mips(self):
         from PIL import Image
         root=Path(__file__).resolve().parents[2]
-        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v7.normal.png'
+        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v8.normal.png'
         with Image.open(path) as im:
             n=np.asarray(im,dtype=float)/127.5-1
             mip=np.asarray(im.resize((32,32),Image.Resampling.BOX),dtype=float)/127.5-1

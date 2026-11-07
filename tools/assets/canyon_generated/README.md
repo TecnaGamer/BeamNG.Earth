@@ -156,3 +156,12 @@ with the camera restored afterward. Screenshots are under
 `build/far-normal-study/` (`final-dds.png`, `final-close.png`,
 `current-check.png`). Automated checks cover continuous coarse-bend charts,
 normal length/mip detail and complete packaged BC5 mip payloads.
+
+
+### Distant erosion balance v8
+
+V8 reduces broad groove relief by 30% (1.12 m to 0.784 m RMS) and increases
+fine channels, tributaries, rock chips and fine source relief by 25%. Broad
+beds, channel shapes, UV scales and material normal strength remain unchanged.
+Runtime uses `canyon_far_v8_ready.normal.dds`, cooked and validated before
+binding; the authoring output is `canyon_far_v8.normal.png`.

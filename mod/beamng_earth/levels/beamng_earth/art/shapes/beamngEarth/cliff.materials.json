@@ -256,7 +256,7 @@
         "roughnessFactor": 0.94,
         "vertColor": true,
         "useAnisotropic": true,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v7_ready.normal.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v8_ready.normal.dds",
         "normalMapUseUV": 1,
         "normalMapStrength": 0.7
       },
@@ -315,7 +315,7 @@
           1
         ],
         "detailBaseColorMapStrength": 0.84,
-        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v7_ready.normal.dds",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v8_ready.normal.dds",
         "normalMapUseUV": 1,
         "roughnessFactor": 0.94,
         "metallicFactor": 0,
