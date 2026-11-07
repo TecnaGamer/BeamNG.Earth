@@ -171,7 +171,9 @@ POLICIES = {
                                     breaker_threshold=6, breaker_window=120.0),
     # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
     # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
-    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
+    # (40/s, 24 at once, 80,000 a day: the user, 2026-11-07, "i think we could increase our own limit if needed": the 3D
+    # map's first views waited on 4,648 deferred EOX requests and used 23,258 of the 30,000 by mid-morning)
+    "tiles.maps.eox.at": HostPolicy(rate=40.0, burst=160.0, max_conc=24, daily_budget=80000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -303,6 +305,11 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
+# rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
+# tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                    daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case

@@ -45,6 +45,7 @@ mod fartex;
 mod farglobal;
 mod dirtsteps;
 mod gridinterp;
+mod streetlabels;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -3701,6 +3702,9 @@ fn seam_pass<'py>(py: Python<'py>, arrs: PyReadonlyArray3<'py, f32>, half: i64, 
 /// farfield.view_distance for many tiles: bboxes (n, 4) [x0, y0, x1, y1]; the horizontal distance from (px, py) to
 /// each footprint, times `penalty` when the tile's centre is outside the view cone (cone = [cx, cy, fx, fy, cosmax]
 /// with a unit forward; empty: no cone) and farther from the camera than its own width. The build queue's order.
+/// A 3D cone (the 3D map, 2026-11-07: a tilted view built the ground under the camera, off the screen, before the
+/// far half of the screen): cone = [cx, cy, cz, fx, fy, fz, cosmax, gz], the tile's centre at height gz; a tile
+/// holding (px, py) (the view's target) always counts as in view.
 #[pyfunction]
 fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: f64, py_: f64, cone: Vec<f64>,
                        penalty: f64) -> Bound<'py, PyArray1<f64>> {
@@ -3712,6 +3716,17 @@ fn view_distances<'py>(py: Python<'py>, bboxes: PyReadonlyArray2<'py, f64>, px: 
             let dx = (x0 - px).max(0.0).max(px - x1);
             let dy = (y0 - py_).max(0.0).max(py_ - y1);
             let d = dx.hypot(dy);
+            if cone.len() == 8 {
+                if d <= 0.0 {
+                    return d;
+                }
+                let (cx, cy, cz) = ((x0 + x1) / 2.0 - cone[0], (y0 + y1) / 2.0 - cone[1], cone[7] - cone[2]);
+                let r = (cx * cx + cy * cy + cz * cz).sqrt();
+                // (the tile's corner nearest the cone's axis counts too: half its diagonal as an angle at r)
+                let slack = ((x1 - x0) * std::f64::consts::FRAC_1_SQRT_2 / r.max(1.0)).min(1.0).asin();
+                let c = ((cx * cone[3] + cy * cone[4] + cz * cone[5]) / r.max(1e-9)).clamp(-1.0, 1.0);
+                return if c.acos() - slack <= cone[6].clamp(-1.0, 1.0).acos() { d } else { d * penalty };
+            }
             if cone.len() != 5 || d <= 0.0 {
                 return d;
             }
@@ -5522,7 +5537,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<clearance::DeckLevels>()?;
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
-    m.add("VERSION", 158)?;
+    m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
+    m.add("VERSION", 161)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())

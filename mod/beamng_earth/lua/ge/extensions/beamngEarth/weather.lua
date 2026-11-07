@@ -596,6 +596,15 @@ M._restoreSun = function() restoreSun() end -- tests
 -- The camera's height over the ground under the player (nil without one): what the fog and clouds go by.
 local function cameraOverGround()
   local cam = rawget(_G, 'core_camera')
+  -- (the 3D map: its camera's height over its target, not the world z: over the far side of the earth from the
+  -- origin the camera lies thousands of km under z = 0, the fog took it for deep underground and the screen went grey,
+  -- the user 2026-11-07: "If i rotate the globe under the horizon line while zoomed all the way out the screen turns
+  -- gray")
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() and cam and cam.getGlobalCameras then
+    local g = cam.getGlobalCameras()[m3.CAMERA]
+    if g and g.dist and g.pitch then return g.dist * math.sin(g.pitch) end
+  end
   local p = cam and cam.getPosition and cam.getPosition()
   if not p or not S.groundZ then return nil end
   return p.z - S.groundZ
@@ -604,7 +613,16 @@ end
 local cloudsHidden = false
 local function hideCloudsHigh(h)
   local want = M.cloudsHiddenAt(h, cloudsHidden)
-  if want == cloudsHidden then return end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then want = true end      -- (no clouds over the 3D map, the user 2026-11-07)
+  if want == cloudsHidden and not want then return end
+  if want == cloudsHidden then        -- (hidden: any cloud layer made since, an origin move's weather, hidden too)
+    for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')) or {}) do
+      local o = scenetree.findObject(nm)
+      if o and o.setHidden and not o:isHidden() then o:setHidden(true) end
+    end
+    return
+  end
   local names = scenetree.findClassObjects and scenetree.findClassObjects('CloudLayer')
   for _, nm in ipairs(names or {}) do
     local o = scenetree.findObject(nm)
@@ -614,6 +632,19 @@ local function hideCloudsHigh(h)
   log('I', 'beamngEarth', want and 'clouds hidden: the camera far above them' or 'clouds shown again')
 end
 M._cloudsHidden = function() return cloudsHidden end -- tests
+
+-- No rain or snow over the 3D map either (its streaks fell across the whole view from miles up, 2026-11-07)
+local rainHidden = false
+local function hideRainInMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local want = (m3 and m3.isActive and m3.isActive()) and true or false
+  if want == rainHidden then return end
+  for _, nm in ipairs((scenetree.findClassObjects and scenetree.findClassObjects('Precipitation')) or {}) do
+    local o = scenetree.findObject(nm)
+    if o and o.setHidden then o:setHidden(want) end
+  end
+  rainHidden = want
+end
 
 local function apply(e)
   local c = S.cur
@@ -630,7 +661,15 @@ local function apply(e)
   setIf(e.getWindSpeed, e.setWindSpeed, c.cloudWindSpeed, 0.005)
   local camH = cameraOverGround()
   hideCloudsHigh(camH)
-  if S.groundZ then
+  hideRainInMap()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  local mapHigh = m3 and m3.isActive and m3.isActive() and camH and camH >= M.FOG_FADE_TO_M
+  if mapHigh then
+    -- (the 3D map high up: no fog at all, whatever the ground's height is known: the engine fogs by distance, and the
+    -- level's own 4e-5 over thousands of km turned the whole screen grey after a view's origin move, 2026-11-07)
+    local have = e.getFogDensity and tonumber((e.getFogDensity()))
+    if not have or have ~= 0 then envCall(e.setFogDensity, 0) end
+  elseif S.groundZ then
     local want = M.fogDensityFor(c.fogSigma, S.groundZ, c.fogHeight) * M.fogAltitudeShare(camH)
     local have = e.getFogDensity and tonumber((e.getFogDensity()))
     if not have or math.abs(have - want) > 0.02 * want then envCall(e.setFogDensity, want) end
@@ -749,6 +788,21 @@ local function update(dt)
     S.groundTimer = 0
     local p = playerPos()
     if p then S.groundZ = groundUnder(p) or S.groundZ end
+  end
+  -- the 3D map high up: no fog, no clouds, whatever the weather mode or the map's own pause (apply below may not run:
+  -- the fog stayed at the level's 4e-5 and the screen went grey from orbit, 2026-11-07)
+  S.mapTimer = (S.mapTimer or 0) + dt
+  if S.mapTimer >= 0.25 then
+    S.mapTimer = 0
+    local m3 = rawget(_G, 'beamngEarth_map3d')
+    if m3 and m3.isActive and m3.isActive() then
+      local camH = cameraOverGround()
+      hideCloudsHigh(camH)
+      if camH and camH >= M.FOG_FADE_TO_M then
+        local have = e.getFogDensity and tonumber((e.getFogDensity()))
+        if not have or have ~= 0 then envCall(e.setFogDensity, 0) end
+      end
+    end
   end
   if S.clock < S.graceUntil or S.mission then return end
   S.gravTimer = S.gravTimer + dt

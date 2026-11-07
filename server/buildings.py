@@ -3969,6 +3969,14 @@ def measured_roofs(md, frame, x0, y0, x1, y1):
     return src.tile(frame, x0, y0, x1, y1) if src is not None else None
 
 
+def far_needs(frame, tile, ty):
+    """The map cells and layers far_items reads for road tile (tile, ty) (blockworker: fetched together first)."""
+    import roads
+    box = roads.tile_bbox(tile, ty)
+    house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
+    return list(roads.cells_of_tile(frame, tile, ty, margin=0.0)), FAR_LAYERS + house_layers
+
+
 def far_items(frame, tile, ty, md, ground, lamp_region=None):
     """The far (lite) buildings of road tile (tile, ty) (an anchor tile, or a geotile: tile a geotiles.GeoBox, ty None:
     its own buildings, those the road geotile of the same key holds) in frame: (items, lamps [[x, y, z], ...] of its
@@ -3977,8 +3985,8 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     box = roads.tile_bbox(tile, ty)
     x0, y0, x1, y1 = box
     own = box if hasattr(box, "owns") else None
-    house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
-    cds = [md.cell(k, layers=FAR_LAYERS + house_layers, kind="demand") for k in roads.cells_of_tile(frame, tile, ty, margin=0.0)]
+    keys, layers = far_needs(frame, tile, ty)
+    cds = [md.cell(k, layers=layers, kind="demand") for k in keys]
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
                            house_land_layers=[c.layers.get("land_use") for c in cds],
@@ -4222,8 +4230,9 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     x0, y0, x1, y1 = box
     # (and the roads: their street lamps, far_lamps)
     if not all(md.has(k, "buildings") and md.has(k, "roads") for k in keys):
-        for k in keys:                      # (the background lane: never before what the player is near)
-            md.prefetch(k, layers=("buildings", "roads"))
+        # (the background lane: never before what the player is near; in the map data's own threads, all at once: one
+        # after another in the one far process they held the far buildings back, 2026-11-07)
+        md.warm([(k, layer) for k in keys for layer in ("buildings", "roads")], kind="prefetch")
         return None
     cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
