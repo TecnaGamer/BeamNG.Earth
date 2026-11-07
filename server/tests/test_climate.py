@@ -33,6 +33,14 @@ class ClimateTest(unittest.TestCase):
         self.assertEqual(climate.koppen_grid(np.array([30.0]), np.array([-40.0])).tolist(), [0])   # the sea
         self.assertTrue(bool(climate.dry_australia(-27.47, 153.03)))                                # scalars too
 
+    def test_au_state(self):        # fork: the state outlines, a coast's nearest state, nothing past 5 km
+        for (lat, lon), state in {(-27.47, 153.03): "QLD", (-28.18, 153.54): "NSW", (-28.168, 153.536): "QLD",
+                                  (-9.44, 147.18): None, (-42.88, 147.33): "TAS", (-33.87, 151.21): "NSW",
+                                  (-27.47, 153.5): "QLD", (-27.47, 156.5): None}.items():
+            self.assertEqual(climate.au_state(lat, lon), state, (lat, lon))
+        got = climate.in_australia(np.array([-27.47, -9.44]), np.array([153.03, 147.18]))
+        self.assertEqual(got.tolist(), [True, False])               # arrays too
+
 
 if __name__ == "__main__":
     unittest.main()

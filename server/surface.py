@@ -40,8 +40,8 @@ import staging
 
 log = logging.getLogger("earthd.surface")
 
-VERSION = 4   # fork: 2 = Australian lawns (LAWN_SHARE_AU), 3 = red soils and sugarcane (RED_DIRT, CANE),
-              # 4 = + Australian roundabout islands mown grass (ISLAND_GRASS_AU); (nothing keys on it yet)
+VERSION = 5   # fork: 2 = Australian lawns (LAWN_SHARE_AU), 3 = red soils and sugarcane (RED_DIRT, CANE),
+              # 4 = + Australian roundabout islands mown grass (ISLAND_GRASS_AU); 5 = Australia is the state outlines (climate.au_state); (nothing keys on it yet)
 # (TerrainMaterial name, BeamNG ground model). The last one is the level's own dirt material: the
 # default, and the one every block had before (an all-zero sample falls to the later layer on ties,
 # docs/research/2026-10-10-world-data-sources.md §4.4, so DIRT goes last).
