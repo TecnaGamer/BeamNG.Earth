@@ -259,6 +259,27 @@ class FarCliffsTest(unittest.TestCase):
         np.testing.assert_array_equal(cliffcolors.canyon_tint(biome,np.zeros((2,3))),
                                       cliffcolors.canyon_tint(biome))
 
+    def test_canyon_near_matches_sandy_hue_without_losing_red_regions_or_exposure(self):
+        import cliffcolors as cc
+        weights=np.array((.2126,.7152,.0722))
+        photo=np.array([[160,150,125],[160,155,150],[170,120,105]],float)
+        reference=cc.linear(cm.CANYON_MEDIAN_SRGB)*cm.CANYON_COLOR_FACTOR
+        colors=cc.canyon_tint(np.ones(3),photo)
+        rendered=reference*cc.linear(colors[:,:3]/255)*cm.SATELLITE_HEADROOM
+        lum=photo@weights
+        stone=(.7*photo+.3*lum[:,None])*(155/lum)[:,None]
+        desired=cc.linear(stone/255)
+        old=reference*cc.linear(cc.material_tint(desired,reference,.45,hue_amount=.30)[:,:3]/255)*cm.SATELLITE_HEADROOM
+        chroma=lambda rgb: rgb/(rgb@weights)[:,None]
+        error=np.linalg.norm(chroma(rendered)-chroma(desired),axis=1)
+        old_error=np.linalg.norm(chroma(old)-chroma(desired),axis=1)
+        self.assertTrue(np.all(error<old_error*.4),'sand must lose the fixed red cast')
+        np.testing.assert_allclose(rendered@weights,old@weights,atol=.003)
+        self.assertGreater(rendered[2,0]/rendered[2,1],1.5,'red imagery should retain warm rock')
+        # Missing/vegetated/cool imagery must retain the neutral fallback tint.
+        invalid=np.array([[0,0,0],[70,140,65],[70,80,130]])
+        np.testing.assert_array_equal(cc.canyon_tint(np.ones(3),invalid),cc.canyon_tint(np.ones(3)))
+
     def test_near_mesh_actually_uses_canyon_color_field(self):
         x=np.arange(17)*4.
         h=np.broadcast_to(2*x,(17,17)).copy()

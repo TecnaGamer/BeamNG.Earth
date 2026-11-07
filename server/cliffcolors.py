@@ -14,6 +14,8 @@ from PIL import Image
 GRID_M = 64.0
 RADIUS_M = 64.0
 METRES_PER_DEGREE = 111320.0
+CANYON_LIGHT_BLEND = .45
+CANYON_HUE_BLEND = .85
 
 
 @lru_cache(maxsize=96)
@@ -154,7 +156,7 @@ def material_tint(rgb_linear, reference, amount, count=None, *, hue_amount=None,
 
 
 def canyon_tint(biomes, rgb=None):
-    """A restrained regional hue blend for near canyon rock, without photo shade."""
+    """Match regional mineral hue while retaining layer contrast and near exposure."""
     import cliffmaterial as cm
     reference = linear(cm.CANYON_MEDIAN_SRGB)*cm.CANYON_COLOR_FACTOR
     shape = np.shape(biomes)
@@ -171,4 +173,13 @@ def canyon_tint(biomes, rgb=None):
         stone = .7*rgb + .3*lum[...,None]
         stone *= (155/np.maximum(lum,1))[...,None]
         target = np.where(valid[...,None], linear(np.clip(stone/255,0,1)), target)
-    return material_tint(target, reference, .45, hue_amount=.30)
+    # Blend exposure independently of hue. Blending RGB toward the red authored
+    # palette first, then attenuating its hue again, made even sandy imagery pink.
+    # Keep the established luminance so stronger hue matching cannot brighten
+    # the cliffs or reintroduce photo shadows. A per-vertex multiplier preserves
+    # the texture's internal light/dark layers and small-scale mineral variation.
+    weights = np.array((.2126, .7152, .0722))
+    target_light = np.maximum(target @ weights, 1e-8)
+    light = (1-CANYON_LIGHT_BLEND)*(reference @ weights)+CANYON_LIGHT_BLEND*target_light
+    target *= (light/target_light)[...,None]
+    return material_tint(target, reference, 1.0, hue_amount=CANYON_HUE_BLEND)
