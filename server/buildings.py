@@ -2578,7 +2578,8 @@ def _outline_under_parts(at, bparts):
 @profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=()):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
+                   roofs=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2591,7 +2592,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
     canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites). min_size (min height m, min
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
-    any other work on a building."""
+    any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
@@ -2637,6 +2638,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    "facade_material", "facade_color", "roof_material", "roof_color")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
+            if roofs is not None:
+                roofs.fill(at, e, n)
             lm = landmarks.of(a["src_record"][i]) if a.get("src_record") is not None else None
             if lm is not None:          # a landmark (landmarks.py): its own model on its footprint, its parts left out
                 ring = clean_ring(np.stack([e - x0, n - y0], 1))
@@ -3654,6 +3657,7 @@ def road_tile_items(
         ground,
         own=box if hasattr(box, "owns") else None,
         part_layers=[c.layers.get("building_parts") for c in cds],
+        roofs=measured_roofs(md, frame, x0, y0, x1, y1),
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
@@ -3959,6 +3963,12 @@ BRIDGE_MIN_SPAN_M = 100.0  # ... and only once it also reaches this far (a narro
 FAR_LAYERS = ("buildings", "building_parts", "infrastructure", "roads", "water")
 
 
+def measured_roofs(md, frame, x0, y0, x1, y1):
+    """The measured roofs (lod2roofs.Records) of a tile, or None: none there, or a map without them."""
+    src = getattr(md, "lod2_roofs", None)
+    return src.tile(frame, x0, y0, x1, y1) if src is not None else None
+
+
 def far_items(frame, tile, ty, md, ground, lamp_region=None):
     """The far (lite) buildings of road tile (tile, ty) (an anchor tile, or a geotile: tile a geotiles.GeoBox, ty None:
     its own buildings, those the road geotile of the same key holds) in frame: (items, lamps [[x, y, z], ...] of its
@@ -3972,6 +3982,7 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
                            house_land_layers=[c.layers.get("land_use") for c in cds],
+                           roofs=measured_roofs(md, frame, x0, y0, x1, y1),
                            west_town=district_town(frame, tile, ty, md),
                            garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
