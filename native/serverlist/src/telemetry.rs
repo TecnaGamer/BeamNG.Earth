@@ -95,8 +95,20 @@ pub struct Hour {
     pub sources: BTreeMap<String, Source>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct Saved {
+    id: String,
+    at: u64, // unix s it was last heard from
+    v: String,
+    os: String,
+    cc: String,
+    game: bool,
+    mp: bool,
+}
+
 struct Install {
     seen: Instant,
+    seen_unix: u64,
     v: String,
     os: String,
     cc: String,
@@ -149,6 +161,21 @@ impl Telemetry {
                 }
             }
         }
+        // the installs heard from lately (a restart kept counting them: online did not drop to 0 until their next report)
+        if let Ok(text) = fs::read_to_string(dir.join("installs.json")) {
+            if let Ok(list) = serde_json::from_str::<Vec<Saved>>(&text) {
+                let inst_now = Instant::now();
+                for x in list {
+                    let ago = Duration::from_secs(now.saturating_sub(x.at));
+                    if ago < ONLINE_TTL {
+                        if let Some(seen) = inst_now.checked_sub(ago) {
+                            self.installs.insert(x.id, Install { seen, seen_unix: x.at, v: x.v, os: x.os, cc: x.cc,
+                                                                 game: x.game, mp: x.mp });
+                        }
+                    }
+                }
+            }
+        }
         if let Ok(text) = fs::read_to_string(dir.join("minutes.jsonl")) {
             for line in text.lines() {
                 if let Ok((t, o, p)) = serde_json::from_str::<(u64, u32, u32)>(line) {
@@ -185,6 +212,17 @@ impl Telemetry {
         let Some(dir) = &self.dir else { return };
         if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dir.join(file)) {
             let _ = f.write_all((line + "\n").as_bytes());
+        }
+    }
+
+    fn save_installs(&self, now: Instant) {
+        let Some(dir) = &self.dir else { return };
+        let list: Vec<Saved> = self.installs.iter().filter(|(_, i)| now.duration_since(i.seen) < ONLINE_TTL)
+            .map(|(id, i)| Saved { id: id.clone(), at: i.seen_unix, v: i.v.clone(), os: i.os.clone(), cc: i.cc.clone(),
+                                   game: i.game, mp: i.mp }).collect();
+        let tmp = dir.join("installs.json.tmp");
+        if fs::write(&tmp, serde_json::to_string(&list).unwrap()).is_ok() {
+            let _ = fs::rename(&tmp, dir.join("installs.json"));
         }
     }
 
@@ -239,7 +277,7 @@ impl Telemetry {
                 entry.sources.entry(host.to_ascii_lowercase()).or_default().add(&add);
             }
         }
-        self.installs.insert(id, Install { seen: now, v: clean(r.v, 24), os: clean(r.os, 12), cc,
+        self.installs.insert(id, Install { seen: now, seen_unix: unix_now, v: clean(r.v, 24), os: clean(r.os, 12), cc,
                                            game: r.game.unwrap_or(false), mp: r.mp.unwrap_or(false) });
         let (o, p) = self.online(now);
         let e = self.hours.get_mut(&hour).unwrap();
@@ -255,6 +293,7 @@ impl Telemetry {
         let minute = unix_now / 60 * 60;
         if minute > self.last_minute {
             self.last_minute = minute;
+            self.save_installs(now);
             let (o, p) = self.online(now);
             self.minutes.push_back((minute, o, p));
             self.append("minutes.jsonl", serde_json::to_string(&(minute, o, p)).unwrap());
@@ -301,10 +340,12 @@ impl Telemetry {
         let day_ago = unix_now.saturating_sub(86400);
         let peak24 = self.samples.iter().filter(|s| s.0 >= day_ago).map(|s| s.1).max().unwrap_or(0).max(o);
         let (mut peak_all, mut peak_at) = (o, unix_now);
-        for h in self.hours.values() {
-            if h.online > peak_all {
-                peak_all = h.online;
-                peak_at = h.h * 3600;
+        let all = self.hours.values().map(|h| (h.h * 3600, h.online))
+            .chain(self.samples.iter().map(|s| (s.0, s.1))).chain(self.minutes.iter().map(|s| (s.0, s.1)));
+        for (t, n) in all {
+            if n > peak_all {
+                peak_all = n;
+                peak_at = t;
             }
         }
         let hist: Vec<(u64, u32, u32)> =
@@ -356,15 +397,15 @@ impl Telemetry {
             return Err((400, "bad range"));
         }
         let span = to - from;
-        let age = unix_now.saturating_sub(from);
-        let (base, series): (u64, Vec<(u64, u32, u32)>) = if age <= MINUTE_KEEP && span / 60 <= 20 * MAX_POINTS {
-            (60, self.minutes.iter().filter(|s| s.0 >= from && s.0 <= to).copied().collect())
-        } else if age <= SAMPLE_KEEP && span / SAMPLE_S <= 20 * MAX_POINTS {
-            (SAMPLE_S, self.samples.iter().filter(|s| s.0 >= from && s.0 <= to).copied().collect())
-        } else {
-            (3600, self.hours.range(from / 3600..=to / 3600).map(|(h, x)| (h * 3600, x.online, x.playing)).collect())
-        };
-        let mut step = base;
+        // every series over the range, each where no finer one has data (a series starts later than the coarser ones:
+        // the minutes at the collector's update, the 5 min samples at its start): bucket maxima mix them correctly
+        let fine = self.minutes.front().map(|m| m.0).unwrap_or(u64::MAX);
+        let mid = self.samples.front().map(|m| m.0).unwrap_or(u64::MAX).min(fine);
+        let mut series: Vec<(u64, u32, u32)> = self.hours.range(from / 3600..=to / 3600)
+            .filter(|(h, _)| (**h + 1) * 3600 <= mid).map(|(h, x)| (h * 3600, x.online, x.playing)).collect();
+        series.extend(self.samples.iter().filter(|s| s.0 >= from && s.0 <= to && s.0 < fine));
+        series.extend(self.minutes.iter().filter(|s| s.0 >= from && s.0 <= to));
+        let mut step = 60;
         while span / step > MAX_POINTS {
             step = match step {
                 60 => 300,
@@ -484,6 +525,34 @@ mod tests {
         assert!(decade["step"].as_u64().unwrap() >= 86400);
         assert!(decade["points"].as_array().unwrap().len() as u64 <= MAX_POINTS + 1);
         assert_eq!(t.range(now, u, u, u - 10).unwrap_err().0, 400);
+    }
+
+    #[test]
+    fn a_restart_keeps_who_is_online_and_ranges_fall_back_to_older_series() {
+        let dir = std::env::temp_dir().join(format!("bnge_tel_r_{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::create_dir_all(&dir);
+        let u = unix();
+        let ip: IpAddr = "192.0.2.9".parse().unwrap();
+        {
+            let mut t = Telemetry::new(Some(dir.clone()));
+            let now = Instant::now();
+            // 5 min samples over the last 6 hours (as written before an update), no minutes
+            for k in 0..72u64 {
+                let x = (u - 6 * 3600 + k * 300, 4u32, 2u32);
+                t.samples.push_back(x);
+                t.append("samples.jsonl", serde_json::to_string(&x).unwrap());
+            }
+            t.report(ip, "US".into(), rep(&format!("{:032x}", 11), true, 1), now, u).unwrap();
+            t.tick(now, u);             // (writes installs.json)
+        }
+        let t = Telemetry::new(Some(dir.clone()));
+        let now = Instant::now();
+        assert_eq!(t.online(now), (1, 1));                       // still online after the restart
+        let r = t.range(now, u, u - 6 * 3600, u).unwrap();
+        assert!(r["points"].as_array().unwrap().len() > 50);    // the samples, not just the new minutes
+        assert_eq!(t.public(now, u)["peakAll"], 4);              // the peak from the samples
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
