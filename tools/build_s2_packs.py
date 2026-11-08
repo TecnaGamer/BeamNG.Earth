@@ -22,6 +22,8 @@ import struct
 import sys
 import threading
 import urllib.error
+import http.client
+import time
 import urllib.request
 import zlib
 from collections import OrderedDict
@@ -56,9 +58,11 @@ def _get(url, start=None, end=None):
                 return None
             if attempt == 3:
                 raise
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
+        except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException, OSError):
+            # (a cut-off body too: IncompleteRead failed a whole region's job, 2026-11-08)
             if attempt == 3:
                 raise
+        time.sleep(1.5 * 2 ** attempt)
 
 
 class Cog:
