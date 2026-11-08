@@ -2078,7 +2078,11 @@ class _Planner:
                     rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                               for k in railways.cells_near(self.frame, own)]
                     for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
-                        p = Plan(xy, z, railways.GRADE_HALF_M)
+                        # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
+                        # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
+                        # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
+                        p = Plan(xy, z, railways.GRADE_HALF_M,
+                                 road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
                         p.rid = road_id(RAIL_TAG + fid)
                         plans.append((RAIL_TAG + fid, p))
                         pclip.append(True)
