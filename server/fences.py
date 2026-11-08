@@ -96,7 +96,7 @@ def _place(group, centre, tangent):
             _yaw(ty, -tx))
 
 
-def rows(frame, infra_fn, box, elev):
+def rows(frame, infra_fn, box, elev, exclude_ids=(),exclude_geometry=()):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the chain-link fences and noise walls whose
     centre is inside box (x0, y0, x1, y1)."""
     if infra_fn is None:
@@ -108,6 +108,12 @@ def rows(frame, infra_fn, box, elev):
     except (ValueError, OverflowError):
         return []
     pending = []
+    exclusive=None
+    if exclude_geometry:
+        import shapely
+        def local(coords):
+            e,n=mapgeom.enu_xy(None,frame,coords);return np.c_[e,n]
+        exclusive=shapely.union_all([shapely.transform(g,local) for g in exclude_geometry]).buffer(.005,cap_style=2)
     seen = set()
     for key in keys:
         try:
@@ -120,6 +126,9 @@ def rows(frame, infra_fn, box, elev):
         boxes = feats.boxes(frame)
         for i in range(len(feats)):
             fid = str(feats.ids[i])
+            import perimeters
+            if fid in exclude_ids or perimeters.osm_id(feats,i) in exclude_ids:
+                continue
             if fid in seen or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
                 continue
             group = kind_of(feats, i)
@@ -134,9 +143,15 @@ def rows(frame, infra_fn, box, elev):
                 if not part or len(part[0]) < 2:
                     continue
                 e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
+                if group==G_CHAIN and exclusive is not None:
+                    from shapely.geometry import LineString
+                    if LineString(np.c_[e,n]).difference(exclusive).length<.005:continue
                 for centre, tangent in _centres(np.column_stack((e, n)), length):
                     if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1):
                         continue
+                    if group==G_CHAIN and exclusive is not None:
+                        panel=LineString([centre-length/2*tangent,centre+length/2*tangent])
+                        if panel.intersection(exclusive).length>.95*length:continue
                     px, py, yaw = _place(group, centre, tangent)
                     pending.append((group, px, py, yaw))
     if not pending:

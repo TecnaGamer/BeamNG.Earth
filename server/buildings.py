@@ -330,7 +330,7 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "source_meta")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1234,7 +1234,7 @@ def _concat(meshes):
 
 
 @profile_step('Building mesh assembly')
-def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False):
+def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod=False, fence_geometry=None, origin=(0.,0.), fence_geometry_deferred=False):
     """build() split into meshes of at most max_verts vertices each (whole buildings per mesh): a list, [] if empty.
     Each building is built once (build draws them one by one) and the meshes joined. with_lod: each mesh carries the
     lite mesh of its buildings as a 7th element (write: the shape's coarse detail)."""
@@ -1252,6 +1252,12 @@ def build_parts(specs_and_ground, lite=False, max_verts=MAX_MESH_VERTS, with_lod
         if cur and n + len(one[0]) > max_verts:
             flush()
             cur, cur_lite, n = [], [], 0
+        if fence_geometry is not None:
+            import fencebuildings,roads
+            if len(parts)<roads.BLD_PARTS_MAX:
+                args=(one[0],one[2],origin,getattr(item[0],'source_meta',None),item[0].ring)
+                record = dict(deferred_mesh=args) if fence_geometry_deferred else fencebuildings.from_mesh(*args)
+                if record is not None: fence_geometry.append(record)
         cur.append(one)
         n += len(one[0])
         if with_lod and not lite:
@@ -2444,6 +2450,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color")}
+            at['fence_source'] = dict(id=str(key), dataset=str(a['src_dataset'][i]) if a.get('src_dataset') is not None else 'unknown',
+                record=str(a['src_record'][i]) if a.get('src_record') is not None else '', original_lonlat=outer.tolist())
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
             lm = landmarks.of(a["src_record"][i]) if a.get("src_record") is not None else None
@@ -2616,6 +2624,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         if mh > 0.5 and at.get("height") is not None and np.isfinite(at["height"]) and look is None:
             at = dict(at, height=max(2.5, float(at["height"]) - mh))     # a building's own height range
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
+        spec.source_meta = at.get('fence_source')
         spec.min_h = mh
         spec.portal = bool(at.get("portal"))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
@@ -3694,6 +3703,8 @@ def road_tile(
     vfs_dir=None,
     entries=None,
     radii=None,
+    fence_geometry=None,
+    fence_geometry_deferred=False,
 ):
     """The buildings of road tile (tx, ty) (roads.TILE squares of the anchor frame): ((mesh, collider boxes,
     collision mesh), [b3dmr entries]). The first element is None without any procedural buildings. md:
@@ -3722,7 +3733,15 @@ def road_tile(
         items = _suppress_under_models(items, radii, x0, y0)
     if props is not None and lines:
         props.extend(doors(items, lines, x0, y0))
-    meshes = build_parts(items, with_lod=True)
+    meshes = build_parts(items, with_lod=True, fence_geometry=fence_geometry, origin=(x0,y0),
+                        fence_geometry_deferred=fence_geometry_deferred)
+    if fence_geometry is not None and entries and out_dir:
+        import fencebuildings
+        if fence_geometry_deferred: fence_geometry.append(dict(deferred_custom=(entries,out_dir)))
+        else: fence_geometry.extend(fencebuildings.custom_entries(entries, out_dir))
+    if fence_geometry is not None:
+        import fencebuildings
+        fencebuildings.publish_bounds(md,frame,tx,ty,fence_geometry,out_dir)
     bld = (
         (meshes, collider_boxes(items, x0, y0), collision_mesh(items))
         if meshes

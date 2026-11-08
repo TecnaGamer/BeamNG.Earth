@@ -108,7 +108,7 @@ def source_closure(here):
 def source_id(here):
     """The fingerprint of source_closure's files and the native module (a packaged app's REVISIT_ID, tools/build_app.py)."""
     h = hashlib.sha1()
-    names = source_closure(here) + sorted(n for n in os.listdir(here) if n.startswith("earthfast"))
+    names = source_closure(here) + sorted(n for n in os.listdir(here) if n.startswith("earthfast") or n=='perimeter_evidence.geojson')
     for name in names:
         try:
             with open(os.path.join(here, name), "rb") as f:
@@ -143,6 +143,8 @@ def code_key():
             if got is None or any(n.endswith(".py") for n in os.listdir(here)):
                 got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
             h.update(got)
+            import facilityperimeters
+            h.update(facilityperimeters.evidence_signature().encode())
             for k in sorted(os.environ):                # (the build switches: BNE_*)
                 if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())

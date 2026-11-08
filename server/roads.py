@@ -5314,7 +5314,8 @@ def tile_needs(frame, tx, ty, buildings=True, widths=True, water_ring=0):
     own = set(keys)
     # land use with every tile: parks, yards and billboards (worldprops), and industry._named_plants. Asked for
     # alone after the rest it was ~5 s of a first visit's Manhattan road tile, 2026-11-02.
-    tile = ("roads", "infrastructure", "land_use") + (TILE_BUILDING_LAYERS if buildings else ())
+    perimeter_layers = ("perimeter_areas", "perimeter_infrastructure") if os.environ.get("BNE_PERIMETERS", "1") != "0" else ()
+    tile = ("roads", "infrastructure", "land_use") + perimeter_layers + (TILE_BUILDING_LAYERS if buildings else ())
     needs = [(k, ly) for k in sorted(keys) for ly in tile]
     needs += [(k, "roads") for k in ring(1) if k not in own]
     # (and the ring past that: gradesep reads the neighbours of every cell whose level ranges are asked, the ring's too)
@@ -9749,7 +9750,7 @@ def sound_boxes(chunks):
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
-               bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=()):
+               bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(),perimeter_status=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -9861,6 +9862,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
             cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material="bne_wire", object_name="wires")
             data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+    if perimeter_status is not None:
+        data['perimeter_status']=perimeter_status
+        data['perimeters']=[]
+    if props:
+        data["perimeters"] = [r[1:] for r in props if r[0] == "perimeter"]
+        props = [r for r in props if r[0] != "perimeter"]
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})
         data["props"] = {"groups": groups, "items": [[groups.index(r[0])] + r[1:] for r in props]}
@@ -9875,6 +9882,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     with open(tmp, "w") as f:
         f.write(json.dumps(data, separators=(",", ":")))    # json.dump to a file streams through the pure-Python encoder
     staging.replace(tmp, path)
+    if os.environ.get("BNE_PERIMETER_DIAGNOSTICS") == "1" and data.get("perimeters"):
+        counts = {}
+        for row in data["perimeters"]:
+            counts[row[7]] = counts.get(row[7], 0) + 1
+        for source, count in sorted(counts.items()):
+            log.info("perimeter %s serialized=%d tile=%s client_received=unknown rendering=UNVERIFIED", source, count, name)
     return f"{vfs_dir}/{name}", len(chunks)
 
 

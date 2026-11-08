@@ -1,0 +1,1365 @@
+{
+  "terrain": "synthetic 10m; captured provider context; not in-game verification",
+  "cases": [
+    {
+      "photo": 1,
+      "location": [
+        41.13223,
+        -104.85832
+      ],
+      "panels": 51,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 51,
+        "generated_sections": 51,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 2,
+      "location": [
+        41.13364,
+        -104.85491
+      ],
+      "panels": 106,
+      "sources": [
+        "physical:way/468200977"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 106,
+        "generated_sections": 106,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 3,
+      "location": [
+        41.16833,
+        -104.88051
+      ],
+      "panels": 90,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 90,
+        "generated_sections": 90,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 4,
+      "location": [
+        41.17039,
+        -104.88052
+      ],
+      "panels": 90,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 90,
+        "generated_sections": 90,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 5,
+      "location": [
+        41.17607,
+        -104.88373
+      ],
+      "panels": 119,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 119,
+        "generated_sections": 119,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 6,
+      "location": [
+        41.18283,
+        -104.88588
+      ],
+      "panels": 90,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 90,
+        "generated_sections": 90,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 7,
+      "location": [
+        41.18485,
+        -104.88585
+      ],
+      "panels": 90,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 90,
+        "generated_sections": 90,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 8,
+      "location": [
+        41.18695,
+        -104.88585
+      ],
+      "panels": 90,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 90,
+        "generated_sections": 90,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 9,
+      "location": [
+        41.18897,
+        -104.88582
+      ],
+      "panels": 111,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 111,
+        "generated_sections": 111,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    },
+    {
+      "photo": 10,
+      "location": [
+        41.1766,
+        -104.88433
+      ],
+      "panels": 124,
+      "sources": [
+        "physical:authoritative:warren/68bd493c5a06eeda"
+      ],
+      "placement_report": {
+        "network_digest": "8e11ed5bcea6a63b2b99dbd940d3f40e300f9d26b7afeb7bd8c8759621de948c",
+        "geographic_paths": 62,
+        "geographic_status": "validated_partial",
+        "placement_status": "complete",
+        "authoritative_sources": [
+          {
+            "label": "Boundary Francis E. Warren Air Force Base (border_zone)",
+            "source_id": "relation/252043",
+            "policy": "exclusive_relation_outer_ways",
+            "fallback": false,
+            "source_status": "available",
+            "roots": [
+              {
+                "id": "relation/252043",
+                "tags": {
+                  "boundary": "border_zone",
+                  "gnis:feature_id": "2409532",
+                  "heritage": "2",
+                  "heritage:operator": "nrhp",
+                  "landuse": "military",
+                  "military": "airfield",
+                  "name": "Francis E. Warren Air Force Base",
+                  "nrhp:criteria": "A",
+                  "nrhp:inscription_date": "May 15, 1975",
+                  "nrhp:nhl": "yes",
+                  "place": "locality",
+                  "protection_title": "protected_site",
+                  "ref:nrhp": "69000191",
+                  "short_name": "Warren AFB",
+                  "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+                  "type": "boundary",
+                  "wikidata": "Q1956149",
+                  "wikipedia": "en:Francis E. Warren Air Force Base"
+                },
+                "matches": [
+                  [
+                    "type",
+                    "boundary"
+                  ],
+                  [
+                    "boundary",
+                    "border_zone"
+                  ],
+                  [
+                    "name",
+                    "Francis E. Warren Air Force Base"
+                  ]
+                ],
+                "version": "17",
+                "timestamp": "2026-11-08T03:07:25Z",
+                "changeset": "191629546"
+              }
+            ],
+            "features": [
+              {
+                "id": "way/462694600",
+                "version": "4",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/462694597",
+                "version": "4",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/462694592",
+                "version": "4",
+                "timestamp": "2020-08-28T04:35:50Z"
+              },
+              {
+                "id": "way/40856809",
+                "version": "11",
+                "timestamp": "2025-07-29T18:05:49Z"
+              },
+              {
+                "id": "way/40856783",
+                "version": "11",
+                "timestamp": "2026-04-08T19:27:34Z"
+              },
+              {
+                "id": "way/40856781",
+                "version": "9",
+                "timestamp": "2020-10-12T16:46:18Z"
+              },
+              {
+                "id": "way/462694617",
+                "version": "3",
+                "timestamp": "2020-05-14T22:13:58Z"
+              },
+              {
+                "id": "way/468200954",
+                "version": "2",
+                "timestamp": "2021-02-26T20:49:28Z"
+              },
+              {
+                "id": "way/468200956",
+                "version": "1",
+                "timestamp": "2017-01-24T03:50:29Z"
+              },
+              {
+                "id": "way/1576457908",
+                "version": "1",
+                "timestamp": "2026-11-08T03:07:25Z"
+              },
+              {
+                "id": "way/468200979",
+                "version": "2",
+                "timestamp": "2026-11-08T03:07:25Z"
+              }
+            ],
+            "issues": [],
+            "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+            "checked_at": "2026-11-08T03:33:31.567222+00:00",
+            "osm_timestamp": "2026-11-08T03:07:25Z",
+            "source_signature": "a140d351a2e47792522024bd9f7b6bef81bcea6a556ed02f7d78e1f4633df991",
+            "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+          }
+        ],
+        "planned_sections": 124,
+        "generated_sections": 124,
+        "terrain_failures": {},
+        "pass_number": 2,
+        "engine_instantiation": "unverified"
+      }
+    }
+  ]
+}

@@ -87,6 +87,16 @@ nightlights.providers.gas = function() return gasstations.lightPoints() end
 -- changed nothing, 2026-10-27)
 nightlights.providers.tunnel = function() return ambience.tunnelLights() end
 gasstations.onCollide = roads.markCollisionDirty
+do
+  local perimeterCollisions = require('beamngEarth/perimeters')
+  perimeterCollisions.onCollide = roads.markCollisionDirty
+  perimeterCollisions.clearForCollision = function(r)
+    if not getPlayerVehicle or not getPlayerVehicle(0) then return true end
+    local dx,dy=r[4]-r[1],r[5]-r[2]
+    return not roads.nearPlayer(vec3((r[1]+r[4])/2,(r[2]+r[5])/2,(r[3]+r[6])/2),
+      2 + math.sqrt(dx*dx+dy*dy)/2)
+  end
+end
 local navgraph = require('beamngEarth/navgraph')
 local postfx = require('beamngEarth/postfx')       -- no far depth-of-field blur in our level
 local gps = require('beamngEarth/gps')               -- the game's GPS route to a place picked on the world map
@@ -591,6 +601,7 @@ local function finishRebase()
   trees.transform(xf, geodesy, rb.newAnchor)    -- (geotiles: placed into the new anchor, nothing sent again)
   ambience.transform(xf)
   pumpjacks.transform(xf)
+  require('beamngEarth/perimeters').transform(xf)
   require('beamngEarth/windturbines').transform(xf)
   require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
@@ -2254,6 +2265,14 @@ local function onUpdate(dtReal, dtSim)
       or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
+    do
+      local perimeter = require('beamngEarth/perimeters')
+      local okPerimeter, errPerimeter = pcall(perimeter.update,not (gov.blocked or gov:isHeavyFrame()))
+      if not okPerimeter and perimeter.lastError ~= tostring(errPerimeter) then
+        perimeter.lastError = tostring(errPerimeter)
+        log('E','beamngEarth.perimeters','update failed: ' .. perimeter.lastError)
+      end
+    end
     pcall(nightlights.update)
     t = mark('sea+trees', t)
     local pb = nil
@@ -2434,6 +2453,7 @@ local function onClientEndMission()
   trees.reset()
   ambience.reset()
   pumpjacks.reset()
+  require('beamngEarth/perimeters').reset()
   require('beamngEarth/windturbines').reset()
   require('beamngEarth/turbinestream').reset()
   nightlights.reset()

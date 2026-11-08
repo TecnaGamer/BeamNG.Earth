@@ -343,6 +343,7 @@ local function dropTile(key)
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
+  if t.perimeters then require('beamngEarth/perimeters').dropKey(key) end
   tiles[key] = nil
 end
 
@@ -665,6 +666,10 @@ end
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
+  if type(data.perimeters) == 'table' then
+    require('beamngEarth/perimeters').onRows(key, M.mapRows(pl, M.mapRows(pl,data.perimeters,1),4), data.perimeter_status)
+    t.perimeters = true
+  end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
@@ -768,6 +773,11 @@ function M.onGeoTile(msg, currentAnchor, a)
         and not T.hasGeo('g' .. old.gkey) then
       T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
         old.rowPivot or 0, old.anchorObj)
+    end
+    if type(data.perimeters) == 'table' then
+      local pl = old.rowPl.pl
+      require('beamngEarth/perimeters').onRows(key, M.mapRows(pl, M.mapRows(pl,data.perimeters,1),4), data.perimeter_status)
+      old.perimeters = true
     end
     M.geoStats.kept = M.geoStats.kept + 1
     return true
@@ -1108,6 +1118,10 @@ function M.onTile(msg, currentAnchor, a)
       data.guardrails.items, data.guardrails.groups, 17)
     tiles[key].guardrails = true
     tiles[key].guardrailRows = #data.guardrails.items
+  end
+  if type(data.perimeters) == 'table' then
+    require('beamngEarth/perimeters').onRows(key,data.perimeters,data.perimeter_status)
+    tiles[key].perimeters = true
   end
   if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)

@@ -632,10 +632,12 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                        gas_stations, buried, lamp_region, country=None):
     import revisit
     import threedmr
+    import authoritativeperimeters
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
-                    threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)))
+                    threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
+                    authoritativeperimeters.frame_token(geodesy.EnuFrame(lat,lon),roadsmod_tile_bbox(tx,ty)))
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), md=_md_versions())
@@ -950,6 +952,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                      ("raw",) + tuple(rkey)))
     mark("railways")
     bld = None
+    fence_geometry = []
     garage_sound = ()
     oil_wells = []
     if buildings:
@@ -960,7 +963,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             _entries, _radii, _boxes = buildingsmod.custom_models(frame, _custom, elev, out_dir, vfs_dir,
                                                                   road_ends=_bridge_ends)
         bld, _entries = buildingsmod.road_tile(frame, tx, ty, _s.md, elev, None, None, items, custom=_custom,
-                                               out_dir=out_dir, vfs_dir=vfs_dir, entries=_entries, radii=_radii)
+                                               out_dir=out_dir, vfs_dir=vfs_dir, entries=_entries, radii=_radii,
+                                               fence_geometry=fence_geometry,fence_geometry_deferred=True)
         mark("bld")
         garage_sound = buildingsmod.garage_sound_boxes(items, *box[:2], roadsmod.SOUND_GARAGE)
         oil_wells = oilwells.tile_wells(frame, tx, ty, elev)     # (the mod's pump jacks)
@@ -970,11 +974,6 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                               props, wires, clearance=clearance[0] if clearance else None)
-        import fences
-        try:
-            props.extend(fences.rows(frame, infra_fn, box, elev))
-        except Exception as ex:
-            log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
         land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
         bld_fn = lambda key: _s.md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
@@ -993,6 +992,22 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
+    import perimeters
+    import fencebuildings
+    perimeter_mapped=set()
+    perimeter_exclusive=[]
+    P.perimeter_report={}
+    props=props or []
+    props.extend(perimeters.tile_rows(frame, _s.md, infra_fn, box, elev, near_roads,
+                 lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q),
+                 (lambda: fencebuildings.nearby(frame,tx,ty,_s.md,elev,fence_geometry,out_dir,vfs_dir)) if buildings else None,
+                 selected_mapped=perimeter_mapped,transport_geometry=chunks+list(ctx),
+                 transport_meshes=[(P.rmesh,(box[0],box[1],0.),'generated-railway'),
+                                   (P.dmesh,(box[0],box[1],0.),'generated-bridge','bridge')],strict=True,status_out=P.perimeter_report,exclusive_geometry_out=perimeter_exclusive))
+    if buildings:
+        import fences
+        try:props.extend(fences.rows(frame,infra_fn,box,elev,exclude_ids=perimeter_mapped,exclude_geometry=perimeter_exclusive))
+        except Exception as ex:log.warning('mapped fences: tile %s_%s: %s',tx,ty,ex)
     import windturbines
     turbine_rows = windturbines.tile_turbines(frame, tx, ty, elev)
     if getattr(_s, "md", None) is not None:
@@ -1033,7 +1048,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
-                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines) + (P.fuel_pads,)
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines,
+                              perimeter_status=getattr(P,'perimeter_report',None)) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1135,7 +1151,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
-                                   turbines=getattr(P, "turbines", ()))
+                                   turbines=getattr(P, "turbines", ()),perimeter_status=getattr(P,'perimeter_report',None))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1193,9 +1209,13 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     built in: threedmr.local_signature)."""
     import revisit
     import threedmr
+    import authoritativeperimeters,geotiles
+    parsed=geotiles.parse(str(key));token=None
+    if parsed:
+        z,x,y=parsed;s,w,n,e=geotiles.info(x,y,z)[2:];token=authoritativeperimeters.cache_token((w,s,e,n))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
-                       threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir))
+                       threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir),token)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,

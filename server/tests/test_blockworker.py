@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import blockworker  # noqa: E402
 import roadmesh  # noqa: E402
 import roads  # noqa: E402
+import mapgeom
 from test_roads import FRAME, LAT, LON, features  # noqa: E402
 
 
@@ -25,7 +26,11 @@ class FakeMapData:
         self.feats, self.first = feats, first
 
     def cell(self, key, layers=(), kind="demand"):
-        return SimpleNamespace(layers={"roads": self.feats if key == self.first else None})
+        # Explicit empty optional source layers are complete data. A missing
+        # perimeter layer now correctly defers the production tile for retry.
+        result={layer:mapgeom.empty(layer) for layer in layers if layer!='roads'}
+        result['roads']=self.feats if key==self.first else (mapgeom.empty('roads') if 'roads' in layers else None)
+        return SimpleNamespace(layers=result)
 
     def warm(self, needs, kind="demand"):
         return 0
@@ -72,7 +77,15 @@ class RoadsTileTest(unittest.TestCase):
             self.assertGreater(got[1], 0)
             self.assertEqual(sorted(os.listdir(a)), sorted(os.listdir(b)))
             for name in os.listdir(a):
-                self.assertEqual(Path(a, name).read_bytes(), Path(b, name).read_bytes(), name)
+                if name.endswith('.json'):
+                    import json
+                    actual=json.loads(Path(a,name).read_text());expected=json.loads(Path(b,name).read_text())
+                    status=actual.pop('perimeter_status')
+                    self.assertEqual(status['placement_status'],'no_sections_in_tile')
+                    self.assertEqual(status['geographic_paths'],0)
+                    self.assertEqual(actual.pop('perimeters'),[])
+                    self.assertEqual(actual,expected,name)
+                else:self.assertEqual(Path(a, name).read_bytes(), Path(b, name).read_bytes(), name)
 
 
 

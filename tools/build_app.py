@@ -161,6 +161,9 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
            "--add-data", f"{os.path.join(server, 'wind_turbine_phase1.json')}{SEP}.",  # (windturbines.DATA_PATH)
+           "--add-data", f"{os.path.join(server, 'perimeter_evidence.geojson')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'perimeter_constraints.geojson')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'warren_outer_boundary.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'wind_turbines.npz')}{SEP}.",  # (windturbines.INDEX_PATH)
            "--add-data", f"{os.path.join(server, 'wind_turbines.provenance.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'refineries.npz')}{SEP}.",  # (industry.PATH)

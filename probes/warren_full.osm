@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<osm version="0.6" generator="openstreetmap-cgimap 2.1.1 (1680749 spike-08.openstreetmap.org)" copyright="OpenStreetMap and contributors" attribution="http://www.openstreetmap.org/copyright" license="http://opendatacommons.org/licenses/odbl/1-0/">
+ <node id="157422392" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T14:36:50Z" user="dysteleologist" uid="17427" lat="41.1561203" lon="-104.8797455"/>
+ <node id="157422431" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T14:36:51Z" user="dysteleologist" uid="17427" lat="41.1539211" lon="-104.8765082"/>
+ <node id="157422439" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T14:36:51Z" user="dysteleologist" uid="17427" lat="41.1529140" lon="-104.8752891"/>
+ <node id="157422448" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T14:36:52Z" user="dysteleologist" uid="17427" lat="41.1521612" lon="-104.8734797"/>
+ <node id="157422459" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T14:36:51Z" user="dysteleologist" uid="17427" lat="41.1494119" lon="-104.8688883"/>
+ <node id="157422463" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T13:57:12Z" user="dysteleologist" uid="17427" lat="41.1478932" lon="-104.8677945"/>
+ <node id="157422468" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T13:57:12Z" user="dysteleologist" uid="17427" lat="41.1470157" lon="-104.8663408"/>
+ <node id="157422477" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T13:57:12Z" user="dysteleologist" uid="17427" lat="41.1457750" lon="-104.8621926"/>
+ <node id="157422508" visible="true" version="4" changeset="174007280" timestamp="2025-10-31T07:40:15Z" user="Sgtgary" uid="20775510" lat="41.1442539" lon="-104.8571057"/>
+ <node id="157422532" visible="true" version="3" changeset="10584375" timestamp="2012-02-04T13:57:13Z" user="dysteleologist" uid="17427" lat="41.1420580" lon="-104.8516357"/>
+ <node id="477370490" visible="true" version="3" changeset="141005953" timestamp="2023-09-08T23:45:58Z" user="25or6to4" uid="37392" lat="41.1319871" lon="-104.8581022"/>
+ <node id="497125241" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:21Z" user="Jonah Adkins" uid="1820939" lat="41.1318749" lon="-104.8596768"/>
+ <node id="497125242" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:21Z" user="Jonah Adkins" uid="1820939" lat="41.1317637" lon="-104.8608112"/>
+ <node id="497125306" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:22Z" user="Jonah Adkins" uid="1820939" lat="41.1318828" lon="-104.8690952"/>
+ <node id="497125307" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:22Z" user="Jonah Adkins" uid="1820939" lat="41.1321637" lon="-104.8703730"/>
+ <node id="497125310" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:21Z" user="Jonah Adkins" uid="1820939" lat="41.1317782" lon="-104.8682444"/>
+ <node id="497125311" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:21Z" user="Jonah Adkins" uid="1820939" lat="41.1317819" lon="-104.8686146"/>
+ <node id="497125321" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:22Z" user="Jonah Adkins" uid="1820939" lat="41.1365260" lon="-104.8845739"/>
+ <node id="497125322" visible="true" version="2" changeset="44774783" timestamp="2016-12-30T04:17:22Z" user="Jonah Adkins" uid="1820939" lat="41.1352828" lon="-104.8846062"/>
+ <node id="497125326" visible="true" version="3" changeset="44774783" timestamp="2016-12-30T04:17:22Z" user="Jonah Adkins" uid="1820939" lat="41.1368552" lon="-104.8859466"/>
+ <node id="1617761329" visible="true" version="1" changeset="10584375" timestamp="2012-02-04T14:36:45Z" user="dysteleologist" uid="17427" lat="41.1516212" lon="-104.8717917"/>
+ <node id="4117047522" visible="true" version="1" changeset="38504547" timestamp="2016-04-12T16:31:20Z" user="RichRico" uid="2219338" lat="41.1561653" lon="-104.8786856"/>
+ <node id="4580604638" visible="true" version="1" changeset="44774783" timestamp="2016-12-30T04:17:18Z" user="Jonah Adkins" uid="1820939" lat="41.1318124" lon="-104.8601922"/>
+ <node id="4580604640" visible="true" version="1" changeset="44774783" timestamp="2016-12-30T04:17:18Z" user="Jonah Adkins" uid="1820939" lat="41.1317665" lon="-104.8663289"/>
+ <node id="4627633820" visible="true" version="2" changeset="150867880" timestamp="2024-05-04T08:31:04Z" user="Sgtgary" uid="20775510" lat="41.1347003" lon="-104.8517360"/>
+ <node id="7851934373" visible="true" version="1" changeset="90055044" timestamp="2020-08-28T04:35:50Z" user="GreenRunner0" uid="11632109" lat="41.1412903" lon="-104.8855426"/>
+ <node id="13034349879" visible="true" version="1" changeset="169683341" timestamp="2025-07-29T16:48:36Z" user="kechan" uid="16547554" lat="41.1507731" lon="-104.8818244"/>
+ <node id="13271767985" visible="true" version="1" changeset="174007280" timestamp="2025-10-31T07:40:15Z" user="Sgtgary" uid="20775510" lat="41.1438468" lon="-104.8558839"/>
+ <way id="841575049" visible="true" version="4" changeset="174007280" timestamp="2025-10-31T07:40:15Z" user="Sgtgary" uid="20775510">
+  <nd ref="497125306"/>
+  <nd ref="497125307"/>
+  <nd ref="497125322"/>
+  <nd ref="497125321"/>
+  <nd ref="497125326"/>
+  <nd ref="7851934373"/>
+  <nd ref="13034349879"/>
+  <nd ref="157422392"/>
+  <nd ref="4117047522"/>
+  <nd ref="157422431"/>
+  <nd ref="157422439"/>
+  <nd ref="157422448"/>
+  <nd ref="1617761329"/>
+  <nd ref="157422459"/>
+  <nd ref="157422463"/>
+  <nd ref="157422468"/>
+  <nd ref="157422477"/>
+  <nd ref="157422508"/>
+  <nd ref="13271767985"/>
+  <nd ref="157422532"/>
+  <nd ref="4627633820"/>
+  <nd ref="477370490"/>
+  <nd ref="497125241"/>
+  <nd ref="4580604638"/>
+  <nd ref="497125242"/>
+  <nd ref="4580604640"/>
+  <nd ref="497125310"/>
+  <nd ref="497125311"/>
+  <nd ref="497125306"/>
+  <tag k="landuse" v="military"/>
+  <tag k="name" v="Francis E. Warren Air Force Base"/>
+  <tag k="wikidata" v="Q1956149"/>
+  <tag k="wikipedia" v="en:Francis E. Warren Air Force Base"/>
+ </way>
+</osm>

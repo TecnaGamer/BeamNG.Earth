@@ -1,0 +1,62 @@
+{
+  "modules": [
+    "test_authoritative_perimeters",
+    "test_fence_overhaul",
+    "test_blockworker",
+    "test_package_stamps",
+    "test_vegetation",
+    "test_furniture",
+    "test_furniture_clearance",
+    "test_i80_banking",
+    "test_rural_lighting",
+    "test_bridgeprofile",
+    "test_bridge_clearance",
+    "test_bridge_junction_surface",
+    "test_bridge_scenarios",
+    "test_terrainpatch",
+    "test_facility_perimeters",
+    "test_fences",
+    "test_fence_buildings",
+    "test_fence_regression",
+    "test_fence_routing",
+    "test_perimeters",
+    "test_perimeters_client",
+    "test_perimeter_continuity",
+    "test_geodesy",
+    "test_mapgeom",
+    "test_revisit",
+    "test_revisit_side",
+    "test_buildings",
+    "test_roadcorners",
+    "test_roadgeo",
+    "test_roadlanes",
+    "test_roadmesh",
+    "test_roads",
+    "test_roads_refresh",
+    "test_roadwidth",
+    "test_roadz",
+    "test_roadz_inputs",
+    "test_road_classification",
+    "test_road_seams",
+    "test_smooth_road_collision",
+    "test_sweden_roads"
+  ],
+  "tests": 748,
+  "failures": 0,
+  "errors": 0,
+  "skipped": 2,
+  "seconds": 90.6897508000111,
+  "success": true,
+  "failure_ids": [],
+  "error_ids": [],
+  "skip_reasons": [
+    {
+      "test": "test_roadgeo.RealDataTest.test_content_identical_from_two_anchors",
+      "reason": "excluded from isolated suite: requires mutable external map cache and network"
+    },
+    {
+      "test": "test_roadgeo.RealDataTest.test_skin_on_the_drawn_ground_and_seams",
+      "reason": "excluded from isolated suite: requires mutable external map cache and network"
+    }
+  ]
+}

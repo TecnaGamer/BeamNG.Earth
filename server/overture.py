@@ -204,6 +204,17 @@ LAYERS = {
                         where="subtype = 'road' AND class IN ('motorway', 'trunk', 'primary', 'secondary', 'tertiary') "
                               "AND routes_txt <> ''"),
 }
+# Complete OSM-sourced facility polygons; the ordinary land_use layer is clipped.
+_PERIMETER_WHERE = (
+    "json_extract_string(tags, '$.landuse') IN ('industrial','military','quarry') OR "
+    "json_extract_string(tags, '$.military') = 'base' OR "
+    "json_extract_string(tags, '$.aeroway') = 'aerodrome' OR "
+    "json_extract_string(tags, '$.industrial') = 'mine' OR "
+    "class IN ('industrial','military','quarry','mine','airport','aerodrome')")
+for _layer, _type in (("perimeter_areas", "land_use"), ("perimeter_infrastructure", "infrastructure")):
+    LAYERS[_layer] = dict(theme="base", type=_type, clip=False,
+        cols=f"subtype, class, {_NAME}, {_SRC_OWN}, {_TAGS}",
+        text=("subtype", "class", "name", "src_dataset", "src_record", "tags"), where=_PERIMETER_WHERE)
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344

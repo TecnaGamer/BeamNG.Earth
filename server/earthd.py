@@ -2330,6 +2330,7 @@ class Server:
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)))
         bld = None
+        fence_geometry = []
         garage_sound = ()
         oil_wells = []
         custom_entries = []             # the tile's baked 3dmr.eu / local models (roads.write_tile's "b3dmr")
@@ -2341,18 +2342,14 @@ class Server:
                     anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends)
                 custom_entries = _baked_entries
             bld, _ = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None,
-                                            items, entries=_baked_entries, radii=_baked_radii)
+                                            items, entries=_baked_entries, radii=_baked_radii,fence_geometry=fence_geometry,
+                                            fence_geometry_deferred=True)
             garage_sound = buildingsmod.garage_sound_boxes(items, *roadsmod.tile_bbox(tx, ty)[:2],
                                                            roadsmod.SOUND_GARAGE)
             oil_wells = oilwells.tile_wells(anchor.frame, tx, ty, elev)     # (the mod's pump jacks)
             import powerlines
             powerlines.tile_lines(anchor.frame, tx, ty, self.mapdata, elev, props, wires,
                                   clearance=clearance[0] if clearance else None)    # high-voltage lines
-            import fences
-            try:
-                props.extend(fences.rows(anchor.frame, infra_fn, box, elev))
-            except Exception as ex:
-                log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import picnic
             land_fn = lambda key: self.mapdata.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
             bld_fn = lambda key: self.mapdata.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
@@ -2371,6 +2368,21 @@ class Server:
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
+        import perimeters
+        import fencebuildings
+        if self.mapdata is not None:
+            perimeter_mapped=set()
+            props = (props or []) + perimeters.tile_rows(anchor.frame, self.mapdata, infra_fn, box, elev, near_roads,
+                lambda xy: roadmeshmod.drawn_ground(anchor.frame, drawn, xy, self.anchor_q(anchor)),
+                (lambda: fencebuildings.nearby(anchor.frame,tx,ty,self.mapdata,elev,fence_geometry,
+                                                           self.out_dir,self.vfs_dir)) if self.buildings else None,
+                selected_mapped=perimeter_mapped,transport_geometry=chunks+list(ctx),
+                transport_meshes=[(rmesh,(box[0],box[1],0.),'generated-railway'),
+                                  (dmesh,(box[0],box[1],0.),'generated-bridge','bridge')])
+            if self.buildings:
+                import fences
+                try:props.extend(fences.rows(anchor.frame,infra_fn,box,elev,exclude_ids=perimeter_mapped))
+                except Exception as ex:log.warning('mapped fences: tile %s_%s: %s',tx,ty,ex)
         import windturbines
         turbine_rows = windturbines.tile_turbines(anchor.frame, tx, ty, elev)
         if self.mapdata is not None:

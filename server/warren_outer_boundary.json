@@ -1,0 +1,3226 @@
+{
+  "elements": [
+    {
+      "type": "node",
+      "id": 157419851,
+      "tags": {},
+      "version": "3",
+      "changeset": "54818874",
+      "timestamp": "2017-12-21T16:18:05Z",
+      "visible": "true",
+      "lon": -104.8475646,
+      "lat": 41.196501
+    },
+    {
+      "type": "node",
+      "id": 157429895,
+      "tags": {},
+      "version": "6",
+      "changeset": "98472660",
+      "timestamp": "2021-02-01T01:51:13Z",
+      "visible": "true",
+      "lon": -104.8476708,
+      "lat": 41.1789219
+    },
+    {
+      "type": "node",
+      "id": 497125119,
+      "tags": {},
+      "version": "3",
+      "changeset": "188056327",
+      "timestamp": "2026-08-26T17:14:21Z",
+      "visible": "true",
+      "lon": -104.839414,
+      "lat": 41.1592453
+    },
+    {
+      "type": "node",
+      "id": 497125220,
+      "tags": {},
+      "version": "3",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:14Z",
+      "visible": "true",
+      "lon": -104.842978,
+      "lat": 41.1681456
+    },
+    {
+      "type": "node",
+      "id": 497125230,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8585868,
+      "lat": 41.132123
+    },
+    {
+      "type": "node",
+      "id": 497125231,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8589155,
+      "lat": 41.1320347
+    },
+    {
+      "type": "node",
+      "id": 497125234,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8583124,
+      "lat": 41.1322089
+    },
+    {
+      "type": "node",
+      "id": 497125241,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8596768,
+      "lat": 41.1318749
+    },
+    {
+      "type": "node",
+      "id": 497125242,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8608112,
+      "lat": 41.1317637
+    },
+    {
+      "type": "node",
+      "id": 497125278,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8398224,
+      "lat": 41.1435595
+    },
+    {
+      "type": "node",
+      "id": 497125284,
+      "tags": {},
+      "version": "2",
+      "changeset": "40328575",
+      "timestamp": "2016-06-27T19:15:54Z",
+      "visible": "true",
+      "lon": -104.8403956,
+      "lat": 41.1464328
+    },
+    {
+      "type": "node",
+      "id": 497125288,
+      "tags": {},
+      "version": "2",
+      "changeset": "40328575",
+      "timestamp": "2016-06-27T19:15:54Z",
+      "visible": "true",
+      "lon": -104.8397468,
+      "lat": 41.1439778
+    },
+    {
+      "type": "node",
+      "id": 497125306,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8690952,
+      "lat": 41.1318828
+    },
+    {
+      "type": "node",
+      "id": 497125307,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.870373,
+      "lat": 41.1321637
+    },
+    {
+      "type": "node",
+      "id": 497125308,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8768253,
+      "lat": 41.1335755
+    },
+    {
+      "type": "node",
+      "id": 497125309,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8776809,
+      "lat": 41.1337638
+    },
+    {
+      "type": "node",
+      "id": 497125310,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8682444,
+      "lat": 41.1317782
+    },
+    {
+      "type": "node",
+      "id": 497125311,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8686146,
+      "lat": 41.1317819
+    },
+    {
+      "type": "node",
+      "id": 497125313,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.868778,
+      "lat": 41.132053
+    },
+    {
+      "type": "node",
+      "id": 497125314,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.869057,
+      "lat": 41.1319936
+    },
+    {
+      "type": "node",
+      "id": 497125315,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8794198,
+      "lat": 41.1341395
+    },
+    {
+      "type": "node",
+      "id": 497125316,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8815113,
+      "lat": 41.1345966
+    },
+    {
+      "type": "node",
+      "id": 497125321,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8845739,
+      "lat": 41.136526
+    },
+    {
+      "type": "node",
+      "id": 497125322,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8846062,
+      "lat": 41.1352828
+    },
+    {
+      "type": "node",
+      "id": 497125326,
+      "tags": {},
+      "version": "3",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:22Z",
+      "visible": "true",
+      "lon": -104.8859466,
+      "lat": 41.1368552
+    },
+    {
+      "type": "node",
+      "id": 497125331,
+      "tags": {},
+      "version": "2",
+      "changeset": "40328575",
+      "timestamp": "2016-06-27T19:15:54Z",
+      "visible": "true",
+      "lon": -104.839403,
+      "lat": 41.1491156
+    },
+    {
+      "type": "node",
+      "id": 497125348,
+      "tags": {},
+      "version": "3",
+      "changeset": "151039810",
+      "timestamp": "2024-05-08T07:02:08Z",
+      "visible": "true",
+      "lon": -104.8399311,
+      "lat": 41.1470809
+    },
+    {
+      "type": "node",
+      "id": 497125362,
+      "tags": {},
+      "version": "3",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "lon": -104.8447711,
+      "lat": 41.1376931
+    },
+    {
+      "type": "node",
+      "id": 497125392,
+      "tags": {},
+      "version": "3",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8406141,
+      "lat": 41.1396455
+    },
+    {
+      "type": "node",
+      "id": 497125394,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8436335,
+      "lat": 41.1405039
+    },
+    {
+      "type": "node",
+      "id": 497125395,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8416461,
+      "lat": 41.1399321
+    },
+    {
+      "type": "node",
+      "id": 497125396,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8440319,
+      "lat": 41.1400305
+    },
+    {
+      "type": "node",
+      "id": 497125398,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8447622,
+      "lat": 41.1392753
+    },
+    {
+      "type": "node",
+      "id": 497125399,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8446841,
+      "lat": 41.1392618
+    },
+    {
+      "type": "node",
+      "id": 497125400,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8448269,
+      "lat": 41.1379019
+    },
+    {
+      "type": "node",
+      "id": 497125401,
+      "tags": {},
+      "version": "2",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:21Z",
+      "visible": "true",
+      "lon": -104.8451514,
+      "lat": 41.1388354
+    },
+    {
+      "type": "node",
+      "id": 497126193,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8460443,
+      "lat": 41.1640824
+    },
+    {
+      "type": "node",
+      "id": 497126195,
+      "tags": {},
+      "version": "2",
+      "changeset": "40328575",
+      "timestamp": "2016-06-27T19:15:54Z",
+      "visible": "true",
+      "lon": -104.8526985,
+      "lat": 41.1592705
+    },
+    {
+      "type": "node",
+      "id": 497126202,
+      "tags": {},
+      "version": "3",
+      "changeset": "188056327",
+      "timestamp": "2026-08-26T17:14:21Z",
+      "visible": "true",
+      "lon": -104.8527032,
+      "lat": 41.1641075
+    },
+    {
+      "type": "node",
+      "id": 497126204,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:14Z",
+      "visible": "true",
+      "lon": -104.847546,
+      "lat": 41.164081
+    },
+    {
+      "type": "node",
+      "id": 497126224,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:15Z",
+      "visible": "true",
+      "lon": -104.847665,
+      "lat": 41.17679
+    },
+    {
+      "type": "node",
+      "id": 497126225,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:15Z",
+      "visible": "true",
+      "lon": -104.847671,
+      "lat": 41.176169
+    },
+    {
+      "type": "node",
+      "id": 497126227,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:15Z",
+      "visible": "true",
+      "lon": -104.847663,
+      "lat": 41.1772
+    },
+    {
+      "type": "node",
+      "id": 497126228,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:15Z",
+      "visible": "true",
+      "lon": -104.847664,
+      "lat": 41.176998
+    },
+    {
+      "type": "node",
+      "id": 497126230,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:15Z",
+      "visible": "true",
+      "lon": -104.847659,
+      "lat": 41.178012
+    },
+    {
+      "type": "node",
+      "id": 497126232,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847659,
+      "lat": 41.177809
+    },
+    {
+      "type": "node",
+      "id": 497126233,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847668,
+      "lat": 41.17875
+    },
+    {
+      "type": "node",
+      "id": 497126234,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847661,
+      "lat": 41.178196
+    },
+    {
+      "type": "node",
+      "id": 497126236,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847669,
+      "lat": 41.179118
+    },
+    {
+      "type": "node",
+      "id": 497126237,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847671,
+      "lat": 41.178935
+    },
+    {
+      "type": "node",
+      "id": 497126239,
+      "tags": {},
+      "version": "3",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:14Z",
+      "visible": "true",
+      "lon": -104.8434202,
+      "lat": 41.1680623
+    },
+    {
+      "type": "node",
+      "id": 497126240,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8460473,
+      "lat": 41.1671873
+    },
+    {
+      "type": "node",
+      "id": 497126247,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8429609,
+      "lat": 41.1690805
+    },
+    {
+      "type": "node",
+      "id": 497126248,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847675,
+      "lat": 41.175758
+    },
+    {
+      "type": "node",
+      "id": 497126249,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847674,
+      "lat": 41.175962
+    },
+    {
+      "type": "node",
+      "id": 497126253,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8429242,
+      "lat": 41.1728533
+    },
+    {
+      "type": "node",
+      "id": 497126256,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847566,
+      "lat": 41.192454
+    },
+    {
+      "type": "node",
+      "id": 497126257,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847647,
+      "lat": 41.191152
+    },
+    {
+      "type": "node",
+      "id": 497126259,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847674,
+      "lat": 41.190718
+    },
+    {
+      "type": "node",
+      "id": 497126261,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847675,
+      "lat": 41.190649
+    },
+    {
+      "type": "node",
+      "id": 497126262,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.84754,
+      "lat": 41.192889
+    },
+    {
+      "type": "node",
+      "id": 497126264,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:16Z",
+      "visible": "true",
+      "lon": -104.847551,
+      "lat": 41.181376
+    },
+    {
+      "type": "node",
+      "id": 497126265,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847558,
+      "lat": 41.181651
+    },
+    {
+      "type": "node",
+      "id": 497126267,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847524,
+      "lat": 41.18028
+    },
+    {
+      "type": "node",
+      "id": 497126268,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.84753,
+      "lat": 41.180554
+    },
+    {
+      "type": "node",
+      "id": 497126270,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847633,
+      "lat": 41.179939
+    },
+    {
+      "type": "node",
+      "id": 497126271,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847551,
+      "lat": 41.180194
+    },
+    {
+      "type": "node",
+      "id": 497126273,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847662,
+      "lat": 41.17967
+    },
+    {
+      "type": "node",
+      "id": 497126274,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847661,
+      "lat": 41.179854
+    },
+    {
+      "type": "node",
+      "id": 497126276,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.846784,
+      "lat": 41.174815
+    },
+    {
+      "type": "node",
+      "id": 497126278,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.84768,
+      "lat": 41.174831
+    },
+    {
+      "type": "node",
+      "id": 497126279,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847683,
+      "lat": 41.174944
+    },
+    {
+      "type": "node",
+      "id": 497126281,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847681,
+      "lat": 41.175147
+    },
+    {
+      "type": "node",
+      "id": 497126285,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847569,
+      "lat": 41.18211
+    },
+    {
+      "type": "node",
+      "id": 497126286,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847603,
+      "lat": 41.183489
+    },
+    {
+      "type": "node",
+      "id": 497126288,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8437902,
+      "lat": 41.1747943
+    },
+    {
+      "type": "node",
+      "id": 497126289,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:17Z",
+      "visible": "true",
+      "lon": -104.847615,
+      "lat": 41.183949
+    },
+    {
+      "type": "node",
+      "id": 497126305,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847632,
+      "lat": 41.184648
+    },
+    {
+      "type": "node",
+      "id": 497126307,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847683,
+      "lat": 41.186745
+    },
+    {
+      "type": "node",
+      "id": 497126308,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847701,
+      "lat": 41.187445
+    },
+    {
+      "type": "node",
+      "id": 497126310,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847715,
+      "lat": 41.188031
+    },
+    {
+      "type": "node",
+      "id": 497126312,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847724,
+      "lat": 41.18838
+    },
+    {
+      "type": "node",
+      "id": 497126313,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847701,
+      "lat": 41.189397
+    },
+    {
+      "type": "node",
+      "id": 497126315,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847693,
+      "lat": 41.18979
+    },
+    {
+      "type": "node",
+      "id": 497126316,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847681,
+      "lat": 41.190377
+    },
+    {
+      "type": "node",
+      "id": 497126318,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:19Z",
+      "visible": "true",
+      "lon": -104.847679,
+      "lat": 41.190445
+    },
+    {
+      "type": "node",
+      "id": 497126390,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8763562,
+      "lat": 41.2011634
+    },
+    {
+      "type": "node",
+      "id": 497126391,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8643393,
+      "lat": 41.2011035
+    },
+    {
+      "type": "node",
+      "id": 497126395,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.8556272,
+      "lat": 41.2010971
+    },
+    {
+      "type": "node",
+      "id": 497126577,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:55:29Z",
+      "visible": "true",
+      "lon": -104.847594,
+      "lat": 41.197459
+    },
+    {
+      "type": "node",
+      "id": 497126767,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:37Z",
+      "visible": "true",
+      "lon": -104.84767,
+      "lat": 41.199888
+    },
+    {
+      "type": "node",
+      "id": 497126769,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:37Z",
+      "visible": "true",
+      "lon": -104.847562,
+      "lat": 41.196418
+    },
+    {
+      "type": "node",
+      "id": 497126772,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:38Z",
+      "visible": "true",
+      "lon": -104.847692,
+      "lat": 41.200584
+    },
+    {
+      "type": "node",
+      "id": 497126773,
+      "tags": {},
+      "version": "2",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:13Z",
+      "visible": "true",
+      "lon": -104.847707,
+      "lat": 41.2010083
+    },
+    {
+      "type": "node",
+      "id": 497126958,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:46Z",
+      "visible": "true",
+      "lon": -104.847565,
+      "lat": 41.195153
+    },
+    {
+      "type": "node",
+      "id": 497126964,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:46Z",
+      "visible": "true",
+      "lon": -104.847544,
+      "lat": 41.192961
+    },
+    {
+      "type": "node",
+      "id": 497126967,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:46Z",
+      "visible": "true",
+      "lon": -104.847561,
+      "lat": 41.193253
+    },
+    {
+      "type": "node",
+      "id": 497126968,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:47Z",
+      "visible": "true",
+      "lon": -104.847556,
+      "lat": 41.19318
+    },
+    {
+      "type": "node",
+      "id": 497126970,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:47Z",
+      "visible": "true",
+      "lon": -104.847565,
+      "lat": 41.194521
+    },
+    {
+      "type": "node",
+      "id": 497126971,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:47Z",
+      "visible": "true",
+      "lon": -104.847562,
+      "lat": 41.19357
+    },
+    {
+      "type": "node",
+      "id": 497127061,
+      "tags": {},
+      "version": "1",
+      "changeset": "2493316",
+      "timestamp": "2009-09-15T15:56:51Z",
+      "visible": "true",
+      "lon": -104.847562,
+      "lat": 41.196101
+    },
+    {
+      "type": "node",
+      "id": 4550019945,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8429272,
+      "lat": 41.1747967
+    },
+    {
+      "type": "node",
+      "id": 4550019946,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8429455,
+      "lat": 41.1716795
+    },
+    {
+      "type": "node",
+      "id": 4550019947,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8432619,
+      "lat": 41.1671891
+    },
+    {
+      "type": "node",
+      "id": 4550019948,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.885875,
+      "lat": 41.177871
+    },
+    {
+      "type": "node",
+      "id": 4550019949,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8858428,
+      "lat": 41.1896154
+    },
+    {
+      "type": "node",
+      "id": 4550019950,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8848826,
+      "lat": 41.1896073
+    },
+    {
+      "type": "node",
+      "id": 4550019952,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8764229,
+      "lat": 41.189569
+    },
+    {
+      "type": "node",
+      "id": 4550019953,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8764445,
+      "lat": 41.2011633
+    },
+    {
+      "type": "node",
+      "id": 4550019954,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8851508,
+      "lat": 41.1772714
+    },
+    {
+      "type": "node",
+      "id": 4550019955,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8826188,
+      "lat": 41.1751516
+    },
+    {
+      "type": "node",
+      "id": 4550019956,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8808003,
+      "lat": 41.1751516
+    },
+    {
+      "type": "node",
+      "id": 4550019957,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8808057,
+      "lat": 41.1738796
+    },
+    {
+      "type": "node",
+      "id": 4550019958,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:11Z",
+      "visible": "true",
+      "lon": -104.8805428,
+      "lat": 41.173702
+    },
+    {
+      "type": "node",
+      "id": 4550019965,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8805321,
+      "lat": 41.1684404
+    },
+    {
+      "type": "node",
+      "id": 4550019966,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8805053,
+      "lat": 41.1645555
+    },
+    {
+      "type": "node",
+      "id": 4550019967,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8800922,
+      "lat": 41.163976
+    },
+    {
+      "type": "node",
+      "id": 4550019968,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.879883,
+      "lat": 41.1639639
+    },
+    {
+      "type": "node",
+      "id": 4550019969,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8790569,
+      "lat": 41.1634671
+    },
+    {
+      "type": "node",
+      "id": 4550019970,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8796362,
+      "lat": 41.1629825
+    },
+    {
+      "type": "node",
+      "id": 4550019971,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8796309,
+      "lat": 41.1594204
+    },
+    {
+      "type": "node",
+      "id": 4550019972,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8796416,
+      "lat": 41.1573121
+    },
+    {
+      "type": "node",
+      "id": 4550019973,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8796845,
+      "lat": 41.1568921
+    },
+    {
+      "type": "node",
+      "id": 4550019974,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8798401,
+      "lat": 41.1561651
+    },
+    {
+      "type": "node",
+      "id": 4550019975,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8800117,
+      "lat": 41.1556925
+    },
+    {
+      "type": "node",
+      "id": 4550019976,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8821092,
+      "lat": 41.150277
+    },
+    {
+      "type": "node",
+      "id": 4550019977,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8854459,
+      "lat": 41.1416696
+    },
+    {
+      "type": "node",
+      "id": 4550019978,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8856551,
+      "lat": 41.1408536
+    },
+    {
+      "type": "node",
+      "id": 4550019979,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8858107,
+      "lat": 41.1400012
+    },
+    {
+      "type": "node",
+      "id": 4550019980,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.885918,
+      "lat": 41.1388013
+    },
+    {
+      "type": "node",
+      "id": 4550019981,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334732",
+      "timestamp": "2016-12-12T00:01:12Z",
+      "visible": "true",
+      "lon": -104.8859287,
+      "lat": 41.1386094
+    },
+    {
+      "type": "node",
+      "id": 4550022600,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:13Z",
+      "visible": "true",
+      "lon": -104.843277,
+      "lat": 41.1676852
+    },
+    {
+      "type": "node",
+      "id": 4550022601,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:13Z",
+      "visible": "true",
+      "lon": -104.8434981,
+      "lat": 41.1677572
+    },
+    {
+      "type": "node",
+      "id": 4550022602,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:13Z",
+      "visible": "true",
+      "lon": -104.8431361,
+      "lat": 41.168054
+    },
+    {
+      "type": "node",
+      "id": 4550022603,
+      "tags": {},
+      "version": "1",
+      "changeset": "44334789",
+      "timestamp": "2016-12-12T00:07:13Z",
+      "visible": "true",
+      "lon": -104.8430275,
+      "lat": 41.1680912
+    },
+    {
+      "type": "node",
+      "id": 4550022604,
+      "tags": {
+        "barrier": "gate",
+        "locked": "no"
+      },
+      "version": "3",
+      "changeset": "181066507",
+      "timestamp": "2026-04-08T19:27:34Z",
+      "visible": "true",
+      "lon": -104.843466,
+      "lat": 41.167882
+    },
+    {
+      "type": "node",
+      "id": 4580604633,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8441825,
+      "lat": 41.1379975
+    },
+    {
+      "type": "node",
+      "id": 4580604634,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8446688,
+      "lat": 41.1385852
+    },
+    {
+      "type": "node",
+      "id": 4580604635,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8442785,
+      "lat": 41.138197
+    },
+    {
+      "type": "node",
+      "id": 4580604636,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8442173,
+      "lat": 41.1380956
+    },
+    {
+      "type": "node",
+      "id": 4580604637,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8400552,
+      "lat": 41.1423794
+    },
+    {
+      "type": "node",
+      "id": 4580604638,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8601922,
+      "lat": 41.1318124
+    },
+    {
+      "type": "node",
+      "id": 4580604639,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8630441,
+      "lat": 41.1317676
+    },
+    {
+      "type": "node",
+      "id": 4580604640,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8663289,
+      "lat": 41.1317665
+    },
+    {
+      "type": "node",
+      "id": 4580604641,
+      "tags": {},
+      "version": "1",
+      "changeset": "44774783",
+      "timestamp": "2016-12-30T04:17:18Z",
+      "visible": "true",
+      "lon": -104.8741948,
+      "lat": 41.1329922
+    },
+    {
+      "type": "node",
+      "id": 4627633705,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.844814,
+      "lat": 41.1392913
+    },
+    {
+      "type": "node",
+      "id": 4627633706,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8450261,
+      "lat": 41.1393994
+    },
+    {
+      "type": "node",
+      "id": 4627633707,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8446545,
+      "lat": 41.1398979
+    },
+    {
+      "type": "node",
+      "id": 4627633708,
+      "tags": {},
+      "version": "2",
+      "changeset": "100074272",
+      "timestamp": "2021-02-26T20:49:28Z",
+      "visible": "true",
+      "lon": -104.8452369,
+      "lat": 41.1401896
+    },
+    {
+      "type": "node",
+      "id": 4627633709,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8456369,
+      "lat": 41.1397297
+    },
+    {
+      "type": "node",
+      "id": 4627633710,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8463897,
+      "lat": 41.1401273
+    },
+    {
+      "type": "node",
+      "id": 4627633711,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8469861,
+      "lat": 41.140448
+    },
+    {
+      "type": "node",
+      "id": 4627633712,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8476815,
+      "lat": 41.1408107
+    },
+    {
+      "type": "node",
+      "id": 4627633713,
+      "tags": {},
+      "version": "2",
+      "changeset": "100074272",
+      "timestamp": "2021-02-26T20:49:28Z",
+      "visible": "true",
+      "lon": -104.848163,
+      "lat": 41.1410774
+    },
+    {
+      "type": "node",
+      "id": 4627633716,
+      "tags": {},
+      "version": "2",
+      "changeset": "100074272",
+      "timestamp": "2021-02-26T20:49:28Z",
+      "visible": "true",
+      "lon": -104.8482574,
+      "lat": 41.1411083
+    },
+    {
+      "type": "node",
+      "id": 4627633717,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8485981,
+      "lat": 41.1405361
+    },
+    {
+      "type": "node",
+      "id": 4627633718,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8485362,
+      "lat": 41.1406089
+    },
+    {
+      "type": "node",
+      "id": 4627633719,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8478114,
+      "lat": 41.1402554
+    },
+    {
+      "type": "node",
+      "id": 4627633720,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8466822,
+      "lat": 41.1397071
+    },
+    {
+      "type": "node",
+      "id": 4627633721,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8459669,
+      "lat": 41.1393631
+    },
+    {
+      "type": "node",
+      "id": 4627633722,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8460478,
+      "lat": 41.13927
+    },
+    {
+      "type": "node",
+      "id": 4627633723,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8454657,
+      "lat": 41.1389905
+    },
+    {
+      "type": "node",
+      "id": 4627633724,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8453277,
+      "lat": 41.139006
+    },
+    {
+      "type": "node",
+      "id": 4627633725,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:22Z",
+      "visible": "true",
+      "lon": -104.8451945,
+      "lat": 41.1389343
+    },
+    {
+      "type": "node",
+      "id": 4627633820,
+      "tags": {},
+      "version": "3",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "lon": -104.8518046,
+      "lat": 41.134975
+    },
+    {
+      "type": "node",
+      "id": 4627633893,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8487741,
+      "lat": 41.136279
+    },
+    {
+      "type": "node",
+      "id": 4627633894,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8472877,
+      "lat": 41.1369056
+    },
+    {
+      "type": "node",
+      "id": 4627633895,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8458876,
+      "lat": 41.1375031
+    },
+    {
+      "type": "node",
+      "id": 4627633896,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8455998,
+      "lat": 41.1376144
+    },
+    {
+      "type": "node",
+      "id": 4627633897,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8455104,
+      "lat": 41.137632
+    },
+    {
+      "type": "node",
+      "id": 4627633898,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8453898,
+      "lat": 41.137629
+    },
+    {
+      "type": "node",
+      "id": 4627633899,
+      "tags": {},
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:25Z",
+      "visible": "true",
+      "lon": -104.8452809,
+      "lat": 41.1375909
+    },
+    {
+      "type": "node",
+      "id": 4627633962,
+      "tags": {
+        "barrier": "gate"
+      },
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:26Z",
+      "visible": "true",
+      "lon": -104.8688976,
+      "lat": 41.1320275
+    },
+    {
+      "type": "node",
+      "id": 7314238358,
+      "tags": {},
+      "version": "2",
+      "changeset": "88775260",
+      "timestamp": "2020-07-31T10:01:57Z",
+      "visible": "true",
+      "lon": -104.8476887,
+      "lat": 41.1774994
+    },
+    {
+      "type": "node",
+      "id": 7314238361,
+      "tags": {},
+      "version": "2",
+      "changeset": "88775260",
+      "timestamp": "2020-07-31T10:01:57Z",
+      "visible": "true",
+      "lon": -104.8476837,
+      "lat": 41.1754386
+    },
+    {
+      "type": "node",
+      "id": 7314238362,
+      "tags": {},
+      "version": "2",
+      "changeset": "88775260",
+      "timestamp": "2020-07-31T10:01:57Z",
+      "visible": "true",
+      "lon": -104.8476873,
+      "lat": 41.1764721
+    },
+    {
+      "type": "node",
+      "id": 7851934373,
+      "tags": {},
+      "version": "1",
+      "changeset": "90055044",
+      "timestamp": "2020-08-28T04:35:50Z",
+      "visible": "true",
+      "lon": -104.8855426,
+      "lat": 41.1412903
+    },
+    {
+      "type": "node",
+      "id": 8000735815,
+      "tags": {},
+      "version": "1",
+      "changeset": "92366800",
+      "timestamp": "2020-10-12T16:46:18Z",
+      "visible": "true",
+      "lon": -104.839402,
+      "lat": 41.1579581
+    },
+    {
+      "type": "node",
+      "id": 8462226897,
+      "tags": {},
+      "version": "1",
+      "changeset": "100074272",
+      "timestamp": "2021-02-26T20:49:28Z",
+      "visible": "true",
+      "lon": -104.8482758,
+      "lat": 41.1411153
+    },
+    {
+      "type": "node",
+      "id": 11746808692,
+      "tags": {
+        "name": "Warren Air Force Base",
+        "place": "village",
+        "population": "2863",
+        "population:date": "2020",
+        "source:population": "US Census",
+        "wikidata": "Q1956149",
+        "wikipedia": "en:Francis E. Warren Air Force Base"
+      },
+      "version": "1",
+      "changeset": "148884272",
+      "timestamp": "2024-03-19T22:17:31Z",
+      "visible": "true",
+      "lon": -104.8608095,
+      "lat": 41.1535573
+    },
+    {
+      "type": "node",
+      "id": 14357646147,
+      "tags": {},
+      "version": "1",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "lon": -104.8589424,
+      "lat": 41.1320291
+    },
+    {
+      "type": "relation",
+      "id": 252043,
+      "tags": {
+        "boundary": "border_zone",
+        "gnis:feature_id": "2409532",
+        "heritage": "2",
+        "heritage:operator": "nrhp",
+        "landuse": "military",
+        "military": "airfield",
+        "name": "Francis E. Warren Air Force Base",
+        "nrhp:criteria": "A",
+        "nrhp:inscription_date": "May 15, 1975",
+        "nrhp:nhl": "yes",
+        "place": "locality",
+        "protection_title": "protected_site",
+        "ref:nrhp": "69000191",
+        "short_name": "Warren AFB",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)",
+        "type": "boundary",
+        "wikidata": "Q1956149",
+        "wikipedia": "en:Francis E. Warren Air Force Base"
+      },
+      "version": "17",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "members": [
+        {
+          "type": "node",
+          "ref": 11746808692,
+          "role": "label"
+        },
+        {
+          "type": "way",
+          "ref": 462694600,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 462694597,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 462694592,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 40856809,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 40856783,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 40856781,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 462694617,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 468200954,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 468200956,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 1576457908,
+          "role": "outer"
+        },
+        {
+          "type": "way",
+          "ref": 468200979,
+          "role": "outer"
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 40856781,
+      "tags": {
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "9",
+      "changeset": "92366800",
+      "timestamp": "2020-10-12T16:46:18Z",
+      "visible": "true",
+      "nodes": [
+        497125119,
+        8000735815,
+        497125331,
+        497125348,
+        497125284
+      ],
+      "geometry": [
+        {
+          "lon": -104.839414,
+          "lat": 41.1592453
+        },
+        {
+          "lon": -104.839402,
+          "lat": 41.1579581
+        },
+        {
+          "lon": -104.839403,
+          "lat": 41.1491156
+        },
+        {
+          "lon": -104.8399311,
+          "lat": 41.1470809
+        },
+        {
+          "lon": -104.8403956,
+          "lat": 41.1464328
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 40856783,
+      "tags": {},
+      "version": "11",
+      "changeset": "181066507",
+      "timestamp": "2026-04-08T19:27:34Z",
+      "visible": "true",
+      "nodes": [
+        497126262,
+        497126256,
+        497126257,
+        497126259,
+        497126261,
+        497126318,
+        497126316,
+        497126315,
+        497126313,
+        497126312,
+        497126310,
+        497126308,
+        497126307,
+        497126305,
+        497126289,
+        497126286,
+        497126285,
+        497126265,
+        497126264,
+        497126268,
+        497126267,
+        497126271,
+        497126270,
+        497126274,
+        497126273,
+        497126236,
+        497126237,
+        157429895,
+        497126233,
+        497126234,
+        497126230,
+        497126232,
+        7314238358,
+        497126227,
+        497126228,
+        497126224,
+        7314238362,
+        497126225,
+        497126249,
+        497126248,
+        7314238361,
+        497126281,
+        497126279,
+        497126278,
+        497126276,
+        497126288,
+        4550019945,
+        497126253,
+        4550019946,
+        497126247,
+        497125220,
+        4550022603,
+        4550022602,
+        497126239,
+        4550022604,
+        4550022601,
+        4550022600,
+        4550019947,
+        497126240,
+        497126193,
+        497126204,
+        497126202,
+        497126195,
+        497125119
+      ],
+      "geometry": [
+        {
+          "lon": -104.84754,
+          "lat": 41.192889
+        },
+        {
+          "lon": -104.847566,
+          "lat": 41.192454
+        },
+        {
+          "lon": -104.847647,
+          "lat": 41.191152
+        },
+        {
+          "lon": -104.847674,
+          "lat": 41.190718
+        },
+        {
+          "lon": -104.847675,
+          "lat": 41.190649
+        },
+        {
+          "lon": -104.847679,
+          "lat": 41.190445
+        },
+        {
+          "lon": -104.847681,
+          "lat": 41.190377
+        },
+        {
+          "lon": -104.847693,
+          "lat": 41.18979
+        },
+        {
+          "lon": -104.847701,
+          "lat": 41.189397
+        },
+        {
+          "lon": -104.847724,
+          "lat": 41.18838
+        },
+        {
+          "lon": -104.847715,
+          "lat": 41.188031
+        },
+        {
+          "lon": -104.847701,
+          "lat": 41.187445
+        },
+        {
+          "lon": -104.847683,
+          "lat": 41.186745
+        },
+        {
+          "lon": -104.847632,
+          "lat": 41.184648
+        },
+        {
+          "lon": -104.847615,
+          "lat": 41.183949
+        },
+        {
+          "lon": -104.847603,
+          "lat": 41.183489
+        },
+        {
+          "lon": -104.847569,
+          "lat": 41.18211
+        },
+        {
+          "lon": -104.847558,
+          "lat": 41.181651
+        },
+        {
+          "lon": -104.847551,
+          "lat": 41.181376
+        },
+        {
+          "lon": -104.84753,
+          "lat": 41.180554
+        },
+        {
+          "lon": -104.847524,
+          "lat": 41.18028
+        },
+        {
+          "lon": -104.847551,
+          "lat": 41.180194
+        },
+        {
+          "lon": -104.847633,
+          "lat": 41.179939
+        },
+        {
+          "lon": -104.847661,
+          "lat": 41.179854
+        },
+        {
+          "lon": -104.847662,
+          "lat": 41.17967
+        },
+        {
+          "lon": -104.847669,
+          "lat": 41.179118
+        },
+        {
+          "lon": -104.847671,
+          "lat": 41.178935
+        },
+        {
+          "lon": -104.8476708,
+          "lat": 41.1789219
+        },
+        {
+          "lon": -104.847668,
+          "lat": 41.17875
+        },
+        {
+          "lon": -104.847661,
+          "lat": 41.178196
+        },
+        {
+          "lon": -104.847659,
+          "lat": 41.178012
+        },
+        {
+          "lon": -104.847659,
+          "lat": 41.177809
+        },
+        {
+          "lon": -104.8476887,
+          "lat": 41.1774994
+        },
+        {
+          "lon": -104.847663,
+          "lat": 41.1772
+        },
+        {
+          "lon": -104.847664,
+          "lat": 41.176998
+        },
+        {
+          "lon": -104.847665,
+          "lat": 41.17679
+        },
+        {
+          "lon": -104.8476873,
+          "lat": 41.1764721
+        },
+        {
+          "lon": -104.847671,
+          "lat": 41.176169
+        },
+        {
+          "lon": -104.847674,
+          "lat": 41.175962
+        },
+        {
+          "lon": -104.847675,
+          "lat": 41.175758
+        },
+        {
+          "lon": -104.8476837,
+          "lat": 41.1754386
+        },
+        {
+          "lon": -104.847681,
+          "lat": 41.175147
+        },
+        {
+          "lon": -104.847683,
+          "lat": 41.174944
+        },
+        {
+          "lon": -104.84768,
+          "lat": 41.174831
+        },
+        {
+          "lon": -104.846784,
+          "lat": 41.174815
+        },
+        {
+          "lon": -104.8437902,
+          "lat": 41.1747943
+        },
+        {
+          "lon": -104.8429272,
+          "lat": 41.1747967
+        },
+        {
+          "lon": -104.8429242,
+          "lat": 41.1728533
+        },
+        {
+          "lon": -104.8429455,
+          "lat": 41.1716795
+        },
+        {
+          "lon": -104.8429609,
+          "lat": 41.1690805
+        },
+        {
+          "lon": -104.842978,
+          "lat": 41.1681456
+        },
+        {
+          "lon": -104.8430275,
+          "lat": 41.1680912
+        },
+        {
+          "lon": -104.8431361,
+          "lat": 41.168054
+        },
+        {
+          "lon": -104.8434202,
+          "lat": 41.1680623
+        },
+        {
+          "lon": -104.843466,
+          "lat": 41.167882
+        },
+        {
+          "lon": -104.8434981,
+          "lat": 41.1677572
+        },
+        {
+          "lon": -104.843277,
+          "lat": 41.1676852
+        },
+        {
+          "lon": -104.8432619,
+          "lat": 41.1671891
+        },
+        {
+          "lon": -104.8460473,
+          "lat": 41.1671873
+        },
+        {
+          "lon": -104.8460443,
+          "lat": 41.1640824
+        },
+        {
+          "lon": -104.847546,
+          "lat": 41.164081
+        },
+        {
+          "lon": -104.8527032,
+          "lat": 41.1641075
+        },
+        {
+          "lon": -104.8526985,
+          "lat": 41.1592705
+        },
+        {
+          "lon": -104.839414,
+          "lat": 41.1592453
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 40856809,
+      "tags": {
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "11",
+      "changeset": "169686603",
+      "timestamp": "2025-07-29T18:05:49Z",
+      "visible": "true",
+      "nodes": [
+        497126262,
+        497126964,
+        497126968,
+        497126967,
+        497126971,
+        497126970,
+        497126958,
+        497127061,
+        497126769,
+        157419851,
+        497126577,
+        497126767,
+        497126772,
+        497126773,
+        497126395,
+        497126391,
+        497126390,
+        4550019953
+      ],
+      "geometry": [
+        {
+          "lon": -104.84754,
+          "lat": 41.192889
+        },
+        {
+          "lon": -104.847544,
+          "lat": 41.192961
+        },
+        {
+          "lon": -104.847556,
+          "lat": 41.19318
+        },
+        {
+          "lon": -104.847561,
+          "lat": 41.193253
+        },
+        {
+          "lon": -104.847562,
+          "lat": 41.19357
+        },
+        {
+          "lon": -104.847565,
+          "lat": 41.194521
+        },
+        {
+          "lon": -104.847565,
+          "lat": 41.195153
+        },
+        {
+          "lon": -104.847562,
+          "lat": 41.196101
+        },
+        {
+          "lon": -104.847562,
+          "lat": 41.196418
+        },
+        {
+          "lon": -104.8475646,
+          "lat": 41.196501
+        },
+        {
+          "lon": -104.847594,
+          "lat": 41.197459
+        },
+        {
+          "lon": -104.84767,
+          "lat": 41.199888
+        },
+        {
+          "lon": -104.847692,
+          "lat": 41.200584
+        },
+        {
+          "lon": -104.847707,
+          "lat": 41.2010083
+        },
+        {
+          "lon": -104.8556272,
+          "lat": 41.2010971
+        },
+        {
+          "lon": -104.8643393,
+          "lat": 41.2011035
+        },
+        {
+          "lon": -104.8763562,
+          "lat": 41.2011634
+        },
+        {
+          "lon": -104.8764445,
+          "lat": 41.2011633
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 462694592,
+      "tags": {
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "4",
+      "changeset": "90055044",
+      "timestamp": "2020-08-28T04:35:50Z",
+      "visible": "true",
+      "nodes": [
+        497125326,
+        4550019981,
+        4550019980,
+        4550019979,
+        4550019978,
+        7851934373,
+        4550019977,
+        4550019976,
+        4550019975,
+        4550019974,
+        4550019973,
+        4550019972,
+        4550019971,
+        4550019970,
+        4550019969,
+        4550019968,
+        4550019967,
+        4550019966,
+        4550019965,
+        4550019958,
+        4550019957,
+        4550019956,
+        4550019955,
+        4550019954,
+        4550019948,
+        4550019949,
+        4550019950,
+        4550019952,
+        4550019953
+      ],
+      "geometry": [
+        {
+          "lon": -104.8859466,
+          "lat": 41.1368552
+        },
+        {
+          "lon": -104.8859287,
+          "lat": 41.1386094
+        },
+        {
+          "lon": -104.885918,
+          "lat": 41.1388013
+        },
+        {
+          "lon": -104.8858107,
+          "lat": 41.1400012
+        },
+        {
+          "lon": -104.8856551,
+          "lat": 41.1408536
+        },
+        {
+          "lon": -104.8855426,
+          "lat": 41.1412903
+        },
+        {
+          "lon": -104.8854459,
+          "lat": 41.1416696
+        },
+        {
+          "lon": -104.8821092,
+          "lat": 41.150277
+        },
+        {
+          "lon": -104.8800117,
+          "lat": 41.1556925
+        },
+        {
+          "lon": -104.8798401,
+          "lat": 41.1561651
+        },
+        {
+          "lon": -104.8796845,
+          "lat": 41.1568921
+        },
+        {
+          "lon": -104.8796416,
+          "lat": 41.1573121
+        },
+        {
+          "lon": -104.8796309,
+          "lat": 41.1594204
+        },
+        {
+          "lon": -104.8796362,
+          "lat": 41.1629825
+        },
+        {
+          "lon": -104.8790569,
+          "lat": 41.1634671
+        },
+        {
+          "lon": -104.879883,
+          "lat": 41.1639639
+        },
+        {
+          "lon": -104.8800922,
+          "lat": 41.163976
+        },
+        {
+          "lon": -104.8805053,
+          "lat": 41.1645555
+        },
+        {
+          "lon": -104.8805321,
+          "lat": 41.1684404
+        },
+        {
+          "lon": -104.8805428,
+          "lat": 41.173702
+        },
+        {
+          "lon": -104.8808057,
+          "lat": 41.1738796
+        },
+        {
+          "lon": -104.8808003,
+          "lat": 41.1751516
+        },
+        {
+          "lon": -104.8826188,
+          "lat": 41.1751516
+        },
+        {
+          "lon": -104.8851508,
+          "lat": 41.1772714
+        },
+        {
+          "lon": -104.885875,
+          "lat": 41.177871
+        },
+        {
+          "lon": -104.8858428,
+          "lat": 41.1896154
+        },
+        {
+          "lon": -104.8848826,
+          "lat": 41.1896073
+        },
+        {
+          "lon": -104.8764229,
+          "lat": 41.189569
+        },
+        {
+          "lon": -104.8764445,
+          "lat": 41.2011633
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 462694597,
+      "tags": {
+        "barrier": "fence",
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "4",
+      "changeset": "85225385",
+      "timestamp": "2020-05-14T22:13:58Z",
+      "visible": "true",
+      "nodes": [
+        497125311,
+        497125313,
+        4627633962,
+        497125314,
+        497125306,
+        497125307,
+        4580604641,
+        497125308,
+        497125309,
+        497125315,
+        497125316,
+        497125322,
+        497125321,
+        497125326
+      ],
+      "geometry": [
+        {
+          "lon": -104.8686146,
+          "lat": 41.1317819
+        },
+        {
+          "lon": -104.868778,
+          "lat": 41.132053
+        },
+        {
+          "lon": -104.8688976,
+          "lat": 41.1320275
+        },
+        {
+          "lon": -104.869057,
+          "lat": 41.1319936
+        },
+        {
+          "lon": -104.8690952,
+          "lat": 41.1318828
+        },
+        {
+          "lon": -104.870373,
+          "lat": 41.1321637
+        },
+        {
+          "lon": -104.8741948,
+          "lat": 41.1329922
+        },
+        {
+          "lon": -104.8768253,
+          "lat": 41.1335755
+        },
+        {
+          "lon": -104.8776809,
+          "lat": 41.1337638
+        },
+        {
+          "lon": -104.8794198,
+          "lat": 41.1341395
+        },
+        {
+          "lon": -104.8815113,
+          "lat": 41.1345966
+        },
+        {
+          "lon": -104.8846062,
+          "lat": 41.1352828
+        },
+        {
+          "lon": -104.8845739,
+          "lat": 41.136526
+        },
+        {
+          "lon": -104.8859466,
+          "lat": 41.1368552
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 462694600,
+      "tags": {
+        "barrier": "fence",
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "4",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "nodes": [
+        497125234,
+        497125230,
+        497125231,
+        14357646147,
+        497125241,
+        4580604638,
+        497125242,
+        4580604639,
+        4580604640,
+        497125310,
+        497125311
+      ],
+      "geometry": [
+        {
+          "lon": -104.8583124,
+          "lat": 41.1322089
+        },
+        {
+          "lon": -104.8585868,
+          "lat": 41.132123
+        },
+        {
+          "lon": -104.8589155,
+          "lat": 41.1320347
+        },
+        {
+          "lon": -104.8589424,
+          "lat": 41.1320291
+        },
+        {
+          "lon": -104.8596768,
+          "lat": 41.1318749
+        },
+        {
+          "lon": -104.8601922,
+          "lat": 41.1318124
+        },
+        {
+          "lon": -104.8608112,
+          "lat": 41.1317637
+        },
+        {
+          "lon": -104.8630441,
+          "lat": 41.1317676
+        },
+        {
+          "lon": -104.8663289,
+          "lat": 41.1317665
+        },
+        {
+          "lon": -104.8682444,
+          "lat": 41.1317782
+        },
+        {
+          "lon": -104.8686146,
+          "lat": 41.1317819
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 462694617,
+      "tags": {
+        "barrier": "fence",
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "3",
+      "changeset": "85225385",
+      "timestamp": "2020-05-14T22:13:58Z",
+      "visible": "true",
+      "nodes": [
+        497125284,
+        497125288,
+        497125278,
+        4580604637,
+        497125392,
+        497125395,
+        497125394,
+        497125396,
+        497125399,
+        497125398
+      ],
+      "geometry": [
+        {
+          "lon": -104.8403956,
+          "lat": 41.1464328
+        },
+        {
+          "lon": -104.8397468,
+          "lat": 41.1439778
+        },
+        {
+          "lon": -104.8398224,
+          "lat": 41.1435595
+        },
+        {
+          "lon": -104.8400552,
+          "lat": 41.1423794
+        },
+        {
+          "lon": -104.8406141,
+          "lat": 41.1396455
+        },
+        {
+          "lon": -104.8416461,
+          "lat": 41.1399321
+        },
+        {
+          "lon": -104.8436335,
+          "lat": 41.1405039
+        },
+        {
+          "lon": -104.8440319,
+          "lat": 41.1400305
+        },
+        {
+          "lon": -104.8446841,
+          "lat": 41.1392618
+        },
+        {
+          "lon": -104.8447622,
+          "lat": 41.1392753
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 468200954,
+      "tags": {
+        "barrier": "fence"
+      },
+      "version": "2",
+      "changeset": "100074272",
+      "timestamp": "2021-02-26T20:49:28Z",
+      "visible": "true",
+      "nodes": [
+        497125398,
+        4627633705,
+        4627633706,
+        4627633707,
+        4627633708,
+        4627633709,
+        4627633710,
+        4627633711,
+        4627633712,
+        4627633713,
+        4627633716,
+        8462226897
+      ],
+      "geometry": [
+        {
+          "lon": -104.8447622,
+          "lat": 41.1392753
+        },
+        {
+          "lon": -104.844814,
+          "lat": 41.1392913
+        },
+        {
+          "lon": -104.8450261,
+          "lat": 41.1393994
+        },
+        {
+          "lon": -104.8446545,
+          "lat": 41.1398979
+        },
+        {
+          "lon": -104.8452369,
+          "lat": 41.1401896
+        },
+        {
+          "lon": -104.8456369,
+          "lat": 41.1397297
+        },
+        {
+          "lon": -104.8463897,
+          "lat": 41.1401273
+        },
+        {
+          "lon": -104.8469861,
+          "lat": 41.140448
+        },
+        {
+          "lon": -104.8476815,
+          "lat": 41.1408107
+        },
+        {
+          "lon": -104.848163,
+          "lat": 41.1410774
+        },
+        {
+          "lon": -104.8482574,
+          "lat": 41.1411083
+        },
+        {
+          "lon": -104.8482758,
+          "lat": 41.1411153
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 468200956,
+      "tags": {
+        "barrier": "fence"
+      },
+      "version": "1",
+      "changeset": "45419752",
+      "timestamp": "2017-01-24T03:50:29Z",
+      "visible": "true",
+      "nodes": [
+        4627633717,
+        4627633718,
+        4627633719,
+        4627633720,
+        4627633721,
+        4627633722,
+        4627633723,
+        4627633724,
+        4627633725,
+        497125401
+      ],
+      "geometry": [
+        {
+          "lon": -104.8485981,
+          "lat": 41.1405361
+        },
+        {
+          "lon": -104.8485362,
+          "lat": 41.1406089
+        },
+        {
+          "lon": -104.8478114,
+          "lat": 41.1402554
+        },
+        {
+          "lon": -104.8466822,
+          "lat": 41.1397071
+        },
+        {
+          "lon": -104.8459669,
+          "lat": 41.1393631
+        },
+        {
+          "lon": -104.8460478,
+          "lat": 41.13927
+        },
+        {
+          "lon": -104.8454657,
+          "lat": 41.1389905
+        },
+        {
+          "lon": -104.8453277,
+          "lat": 41.139006
+        },
+        {
+          "lon": -104.8451945,
+          "lat": 41.1389343
+        },
+        {
+          "lon": -104.8451514,
+          "lat": 41.1388354
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 468200979,
+      "tags": {
+        "barrier": "fence"
+      },
+      "version": "2",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "nodes": [
+        4627633820,
+        4627633893,
+        4627633894,
+        4627633895,
+        4627633896,
+        4627633897,
+        4627633898,
+        4627633899
+      ],
+      "geometry": [
+        {
+          "lon": -104.8518046,
+          "lat": 41.134975
+        },
+        {
+          "lon": -104.8487741,
+          "lat": 41.136279
+        },
+        {
+          "lon": -104.8472877,
+          "lat": 41.1369056
+        },
+        {
+          "lon": -104.8458876,
+          "lat": 41.1375031
+        },
+        {
+          "lon": -104.8455998,
+          "lat": 41.1376144
+        },
+        {
+          "lon": -104.8455104,
+          "lat": 41.137632
+        },
+        {
+          "lon": -104.8453898,
+          "lat": 41.137629
+        },
+        {
+          "lon": -104.8452809,
+          "lat": 41.1375909
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 1576457908,
+      "tags": {
+        "barrier": "fence",
+        "boundary": "census",
+        "source": "TIGER/Line\u00ae 2008 Place Shapefiles (http://www.census.gov/geo/www/tiger/)"
+      },
+      "version": "1",
+      "changeset": "191629546",
+      "timestamp": "2026-11-08T03:07:25Z",
+      "visible": "true",
+      "nodes": [
+        497125401,
+        4580604634,
+        4580604635,
+        4580604636,
+        4580604633,
+        497125400,
+        497125362,
+        4627633899
+      ],
+      "geometry": [
+        {
+          "lon": -104.8451514,
+          "lat": 41.1388354
+        },
+        {
+          "lon": -104.8446688,
+          "lat": 41.1385852
+        },
+        {
+          "lon": -104.8442785,
+          "lat": 41.138197
+        },
+        {
+          "lon": -104.8442173,
+          "lat": 41.1380956
+        },
+        {
+          "lon": -104.8441825,
+          "lat": 41.1379975
+        },
+        {
+          "lon": -104.8448269,
+          "lat": 41.1379019
+        },
+        {
+          "lon": -104.8447711,
+          "lat": 41.1376931
+        },
+        {
+          "lon": -104.8452809,
+          "lat": 41.1375909
+        }
+      ]
+    }
+  ],
+  "provider": "https://api.openstreetmap.org/api/0.6/relation/252043/full",
+  "checked_at": "2026-11-08T03:33:31.567222+00:00",
+  "scope_bounds": [
+    -104.8859466,
+    41.1317637,
+    -104.839402,
+    41.2011634
+  ],
+  "diagnostic": "User-confirmed relation 252043: type=boundary, boundary=border_zone, name=Francis E. Warren Air Force Base. Direct current OSM API; no Overture fallback."
+}

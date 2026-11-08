@@ -104,15 +104,16 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-LAYER_VERSIONS = {"roads": 8}
+LAYER_VERSIONS = {"roads": 8, "perimeter_areas": 1, "perimeter_infrastructure": 1}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
-                 "road_routes")
+                 "road_routes", "perimeter_areas", "perimeter_infrastructure")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places", "road_routes")   # built only when asked for by name (buildings.py,
+OPTIONAL_LAYERS = ("building_parts", "places", "road_routes", "perimeter_areas", "perimeter_infrastructure")
+                                                                   # built only when asked for by name (buildings.py,
                                                                     # gasstations.py, dirsigns.py)
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
