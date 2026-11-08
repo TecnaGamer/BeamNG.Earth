@@ -9156,6 +9156,13 @@ def main():
                          "never what this session used within the hour, the gravity model or netstats/")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
+    try:
+        bad = _app_modules()[0].drive_relative_problem(args.cache_dir)
+    except Exception:
+        bad = None
+    if bad:                     # (GitHub #895: c:\games\x with its backslashes dropped went to the current folder;
+        ap.error(f"--cache-dir: {bad}")     # checked before anything writes there: cdn.chain's cdn.json)
+    args.cache_dir = os.path.abspath(os.path.expanduser(args.cache_dir))
     os.environ["BNE_BRIDGE_PROFILE"] = args.bridge_profile     # read by roads.py here and in the block workers
     args.cells = resolve_cells(args.cells, args.near_visual)
     args.block = resolve_block(args.block, args.near_visual)
@@ -9175,6 +9182,7 @@ def main():
         ap.error("--horizon needs --near-visual mesh (terrain mode is frozen at the v1.3.1 layout)")
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    log.info("download cache: %s", args.cache_dir)
     raise_open_files()
     import fast
     try:
