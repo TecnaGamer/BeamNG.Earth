@@ -4990,18 +4990,29 @@ class Server:
         retry = False
         # (the session folders listed once: a glob per anchor and file kind, ~10 each, scanned folders of thousands of
         # files on the event loop, 2 s stalls when the 3D map's view moved the origin often, 2026-11-07)
+        # (and indexed once by "<kind>_<anchor id>_": a scan of every name for each anchor and kind was ~10 x anchors x
+        # thousands of names, still 2-3 s on the loop after many origin moves, 2026-11-07; every kind is one word)
         listing = {}
 
         def names(d):
             if d not in listing:
                 try:
-                    listing[d] = os.listdir(d)
+                    found = os.listdir(d)
                 except OSError:
-                    listing[d] = []
+                    found = []
+                idx = {}
+                for n in found:
+                    parts = n.split("_", 2)
+                    if len(parts) == 3:
+                        idx.setdefault((parts[0], parts[1]), []).append(n)
+                listing[d] = (set(found), idx)
             return listing[d]
 
-        def starting(d, prefix):
-            return [os.path.join(d, n) for n in names(d) if n.startswith(prefix)]
+        def starting(d, kind, aid):
+            return [os.path.join(d, n) for n in names(d)[1].get((kind, str(aid)), ())]
+
+        def listed(p):
+            return os.path.basename(p) in names(os.path.dirname(p))[0]
         for aid in [a for a in self.anchors if a < keep_from]:
             if aid in busy:
                 # A running worker still owns its files and pooled shape slot.
@@ -5029,18 +5040,18 @@ class Server:
                     del self.hm[key]
             keep = {self.hm_name(k) for k in self.hm} | {i["ter"] for i in self.hm.values() if i.get("ter")}
             doomed = []
-            for p in starting(self.out_dir, f"far_{aid}_"):
+            for p in starting(self.out_dir, "far", aid):
                 name = os.path.basename(p)
                 doomed.append(p)
                 if name.endswith(".dae"):
                     doomed.append(os.path.join(self.cdae_dir, os.path.splitext(name)[0].lower() + ".cdae"))
-            doomed += starting(self.cdae_dir, f"far_{aid}_")  # caches whose source went earlier
-            doomed += [p for p in starting(self.out_dir, f"hm_{aid}_") if os.path.basename(p) not in keep]
+            doomed += starting(self.cdae_dir, "far", aid)  # caches whose source went earlier
+            doomed += [p for p in starting(self.out_dir, "hm", aid) if os.path.basename(p) not in keep]
             # the road / building / tree tiles too (2026-10-14: a night of teleports left 13k files in the
             # session folder, and the game's file watchers cost 4.5 ms a frame)
             for stem in ANCHOR_TILE_FILES:
-                doomed += starting(self.out_dir, f"{stem}_{aid}_")
-            self.queue_delete(p for p in dict.fromkeys(doomed) if os.path.exists(p))
+                doomed += starting(self.out_dir, stem, aid)
+            self.queue_delete(p for p in dict.fromkeys(doomed) if listed(p))     # (there when listed: no stat each)
         if retry:
             self.schedule_prune(keep_from)
 
