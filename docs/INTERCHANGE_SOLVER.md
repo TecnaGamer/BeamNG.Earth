@@ -46,7 +46,7 @@ Settings worth knowing, all optional:
 > Prompt in the folder with the download and run `set BNE_INTERCHANGE=1` and then `BeamNG.Earth-<version>.exe`
 > (Linux: `BNE_INTERCHANGE=1 ./BeamNG.Earth-<version>-x86_64.AppImage`). Around big interchanges the ground under
 > the car takes about 35 % longer to load with it on (Perth CBD: 30 s to 41 s). Found something off? Comment on the
-> pull request, #PR, with the place (coordinates) and a screenshot.
+> pull request, [#922](https://github.com/TecnaGamer/BeamNG.Earth/pull/922), with the place (coordinates) and a screenshot.
 
 ## What it does now
 
