@@ -2329,15 +2329,20 @@ class Server:
         (blockworker.prebuild_geo), the game sent nothing. -> its revisit key, or None (not complete: tried later)."""
         if self.mapdata is None or self.road_pool is None or not revisitmod.ON:
             return None
+        import roadz
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         # (beside the session folders, as a session's: a 3dmr.eu model baked there finds the models' cache, its textures'
         # game path and the mod's materials file where the game's own tiles do: buildings._custom_tile_entries, PR #626)
         scratch = os.path.join(self.root, "areas_scratch")
         fast = self.fast_pool           # (fast mode: its own processes, the game paused: no need to stand back)
         submit = fast.submit if fast is not None else getattr(self.road_pool, "submit_low", self.road_pool.submit)
+        # (the fast mode's own processes may wait for a cell's lidar; the live pool keeps its short wait)
+        timeout = (max(ROAD_TILE_TIMEOUT_S, roadz.PRECACHE_LIDAR_WAIT_S + 120.0) if fast is not None
+                   else ROAD_TILE_TIMEOUT_S)
         return poolsmod.result_running(submit(
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
-            lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self)), ROAD_TILE_TIMEOUT_S)
+            lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
+            wait_gaps=fast is not None), timeout)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,

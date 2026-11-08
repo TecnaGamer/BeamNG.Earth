@@ -350,6 +350,43 @@ class AreasTest(unittest.TestCase):
         self.assertTrue(b.command(aid, "delete"))
         self.assertEqual(areas.pinned_world(self.tmp.name), set(), "deleted: unpinned")
 
+    def test_world_mode_fetches_the_gas_stations_cells_first(self):
+        # a geotile's gas stations read OpenStreetMap's fuel cells from the cache only and fault the build while one
+        # is missing (gasstations.tile_sites): the world phase fetches them before its geotiles
+        class FuelMapData(StubMapData):
+            def __init__(self):
+                super().__init__()
+                self.fuel = set()
+
+            def osm_fuel_cached(self, key):
+                return [] if tuple(key) in self.fuel else None
+
+            def osm_fuel_fetch(self, key, kind="prefetch"):
+                self.fuel.add(tuple(key))
+                return []
+
+        s = StubServer()
+        s.mapdata = FuelMapData()
+        s.gas_stations = True
+        a, _ = self.make(server=s, start=True)
+        steps = a.phase_steps("world", BOX)
+        fuel = [st for st in steps if st[0] == "fuel"]
+        self.assertTrue(fuel)
+        kinds = [st[0] for st in steps if st[0] in ("lidar", "fuel", "geo")]
+        self.assertEqual(kinds, sorted(kinds, key=["lidar", "fuel", "geo"].index), "fuel before the geotiles")
+        ok, aid = a.add(*BOX, mode="world")
+        self.assertTrue(ok, aid)
+        self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        self.assertEqual({tuple(st[1:]) for st in fuel}, s.mapdata.fuel)
+
+    def test_precache_gaps_wait_restores_the_live_values(self):
+        # a world build may wait for its lidar; live play's short wait must be back after it
+        import roadz
+        old = roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S
+        with roadz.precache_gaps_wait(7.0):
+            self.assertEqual((roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S), (7.0, 7.0))
+        self.assertEqual((roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S), old)
+
     def test_fast_mode(self):
         # Tann2019 2026-11-05: "instead of an hour for the route i want it to be done in minutes, use all my cores,
         # pause the game physics": the gates go (the game is paused), a phase's steps run at once, the world's

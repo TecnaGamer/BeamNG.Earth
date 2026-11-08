@@ -1296,7 +1296,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
-                 country=None, scratch_vfs="/x", pole_profile=None):
+                 country=None, scratch_vfs="/x", pole_profile=None, wait_gaps=False):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
     road content (_geo_content: roads, sidewalks, bridges, buildings, street furniture) built into the revisit cache
     ahead of play; nothing for the game (its files written to scratch, then removed). The revisit key when the content
@@ -1310,8 +1310,14 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     if not os.path.exists(path):
         os.makedirs(scratch, exist_ok=True)
         try:
-            _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
-                         lamp_region, country, pole_profile=pole_profile)
+            if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)
+                import roadz
+                with roadz.precache_gaps_wait():
+                    _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
+                                 lamp_region, country, pole_profile=pole_profile)
+            else:               # (the live road pool: keep its short lidar wait, live play shares these processes)
+                _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
+                             lamp_region, country, pole_profile=pole_profile)
         finally:
             for name in geo_names(tile_key).values():
                 try:
