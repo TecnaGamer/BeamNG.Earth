@@ -10,6 +10,8 @@ maps beside the building materials (mod/.../art/shapes/beamngEarth/):
                           of the three, so a lit window column is not lit all the way up)
   bne_office_night_e.png  the metal sheet (offices' curtain walls and shopfronts, bne_bld_office / bne_bld_shop): the
                           stock map (every window lit) with some bays dimmed, a few dark
+  bne_office_night_e_b.png, _c.png  the same, each band's bay factors turned by one and two (bne_bld_office_b / _c:
+                          a curtain wall's windows each one of the three, buildings.py OFFICE_VARIANTS)
 
 The windows are picked per sheet cell (buildings.py's bands and bays: a wall's bays take their cells in turn or hashed),
 so a cell lit is lit wherever it is used. Deterministic. Needs the game's trim textures (the game folder's
@@ -54,6 +56,7 @@ COOL = (0.78, 0.86, 1.0)       # cool white, ~5000 K
 # (fewer and dimmer than the stock map's every bay: every floor of a curtain wall takes the same band, so a lit bay is lit
 # from street to roof, and Manhattan's towers glowed white all over, TGForever Discord 2026-10-28)
 OFFICE_BAYS = [(5, (0.55, 0.0, 0.8, 0.0, 0.3)), (4, (0.0, 0.7, 0.25, 0.0)), (2, (1.0, 1.0)), (1, (0.6,))]
+OFFICE_MAPS = (("bne_office_night_e.png", 0), ("bne_office_night_e_b.png", 1), ("bne_office_night_e_c.png", 2))
 
 
 def _read(zf, name):
@@ -86,15 +89,16 @@ def facade(base, turn=0):
     return Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
 
-def office(stock_e):
-    """The metal sheet's night map: the stock one, some bays dimmed."""
+def office(stock_e, turn=0):
+    """The metal sheet's night map: the stock one, some bays dimmed, each band's factors turned by turn bays
+    (OFFICE_MAPS)."""
     e = np.asarray(stock_e.convert("RGB"), np.float32)
     H, W = e.shape[:2]
     bh = H // len(OFFICE_BAYS)
     for i, (n, f) in enumerate(OFFICE_BAYS):
         for j in range(n):
             x0, x1 = j * W // n, (j + 1) * W // n
-            e[i * bh:(i + 1) * bh, x0:x1] *= f[j]
+            e[i * bh:(i + 1) * bh, x0:x1] *= f[(j - turn) % n]
     return Image.fromarray(np.clip(e + 0.5, 0, 255).astype(np.uint8))
 
 
@@ -105,7 +109,8 @@ def main():
     with zipfile.ZipFile(os.path.join(a.game, "content", "assets", "materials", "trim.zip")) as zf:
         base = _read(zf, PLASTER)
         out = [(facade(base, turn), name) for name, turn in FACADE_MAPS]
-        out.append((office(_read(zf, METAL_E)), "bne_office_night_e.png"))
+        stock = _read(zf, METAL_E)
+        out += [(office(stock, turn), name) for name, turn in OFFICE_MAPS]
     for img, name in out:
         p = os.path.join(OUT, name)
         img.save(p, optimize=True)

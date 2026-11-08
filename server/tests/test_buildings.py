@@ -476,23 +476,33 @@ class NightWindowsTest(unittest.TestCase):
         for f in bld.FACADE_VARIANTS[1:]:
             self.assertIn(f, bld.MATERIALS)
 
+    def test_towers_take_the_office_variants(self):
+        m = self._wall(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20, shop=True)
+        names = {bld.MATERIALS[i] for i in m.M}
+        self.assertTrue(set(bld.OFFICE_VARIANTS) <= names, names)
+        self.assertIn(bld.SHOP, names)                      # (the shopfront floor as it was)
+        self.assertFalse(names & set(bld.FACADE_VARIANTS))
+
     def test_split_keeps_the_wall(self):
-        """The bays cut from a floor cover it exactly, at the sheet's scale (u per metre of the floor's quad)."""
+        """The bays cut from a floor (same-variant neighbours as one quad) cover it exactly, at the sheet's scale."""
         band = bld.BAND_BRICK
         ring = rect(0, 0, 30, 14)
         P, UV, mid = bld.fast._ef.building_walls(ring, 0.0, 18.0, False, False, band[0], band[1], [], 6, 3.0, False,
                                                  0, 10.0, True, 0.37, False, 0, False, bld._WALL_CONSTS)
-        P2, UV2, mid2 = bld._split_bays(P, UV, mid, band[0], band[1])
+        P2, UV2, mid2 = bld._vary_bays(P, UV, mid, band[0], band[1])
         self.assertGreater(len(mid2), len(mid))
+        self.assertEqual(len(bld._vary_bays(P, UV, mid, band[0], band[1], split=False)[2]), len(mid))
 
         def area(pl):
             q = np.array(pl).reshape(-1, 4, 3)
             return float(np.linalg.norm(np.cross(q[:, 1] - q[:, 0], q[:, 3] - q[:, 0]), axis=1).sum())
         self.assertAlmostEqual(area(P), area(P2), 6)
         q, uv = np.array(P2).reshape(-1, 4, 3), np.array(UV2).reshape(-1, 8)
-        cut = np.isclose(uv[:, 2] - uv[:, 0], 1.0 / band[1])
-        width = np.linalg.norm(q[cut, 1, :2] - q[cut, 0, :2], axis=1)
-        self.assertTrue(np.all(np.abs(width * band[1] / bld.TILE_PX_M - 1.0) < 0.15), width)
+        sel = np.isclose(uv[:, 5], 1.0 - band[0] / bld.BANDS - 1.5 / 1024) & (uv[:, 2] - uv[:, 0] > 1e-6)
+        m_per_u = np.linalg.norm(q[sel, 1, :2] - q[sel, 0, :2], axis=1) / (uv[sel, 2] - uv[sel, 0])
+        self.assertTrue(np.all(np.abs(m_per_u / bld.TILE_PX_M - 1.0) < 0.15), m_per_u)
+        bays = np.round((uv[sel, 2] - uv[sel, 0]) * band[1]).astype(int)
+        self.assertTrue((bays == 1).any() and (bays > 1).any(), "bays one a quad, or none kept together")
 
     def test_laid_over_windows_take_the_sash_cells(self):
         m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))
