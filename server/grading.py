@@ -458,6 +458,14 @@ ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
 ABUT_MIN_M = 0.3            # m: a smaller fill at the end is left out
 ABUT_MAX_M = 8.0            # m filled at most
+SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
+SEAM_MIN_M = 0.05           # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
+SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
+SEAM_RUN_MIN_M = 24.0       # ... over at least this ...
+SEAM_RUN_MAX_M = 80.0       # ... and at most this
+SEAM_SIDE_M = 3.0           # m: a road's end this close to a pinned end meets the same abutment: it goes down from it
+SEAM_SIDE_GRADE = 0.10      # ... at this grade (a street off a freeway's bridge end), over SEAM_SIDE_RUN_M at least ...
+SEAM_SIDE_RUN_M = (12.0, 40.0)
 
 
 def median_profile(z, step, width):
@@ -2035,6 +2043,12 @@ class _Planner:
                     junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+            if SEAMS_ON and CW_ON and plans:
+                try:            # the deck's height at each carriageway road's abutment end, whatever the passes did to it
+                    if self._pin_cw_ends(plans, pspecs) and JUNCTION_SNAP_ON:
+                        snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
+                except Exception as e:      # the plans as the passes left them rather than no grading
+                    log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -3385,6 +3399,82 @@ class _Planner:
             np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
             np_.steep = getattr(p, "steep", False)
             plans[n] = (fid, np_)
+
+    def _pin_cw_ends(self, plans, specs):
+        """SEAMS_ON: each motorway- or trunk-family plan's end that is a bridge abutment (Plan.abut) back to the height
+        of its carriageway's profile there, which is the height the deck was drawn at (roads.DECK_Z_HOOK). The passes
+        after _apply_carriageways (the grade guard, the junction snaps) fit a plan's end to the roads and the ground
+        beside it, so the road came up to its deck's end 1.4-1.7 m under it: a step into the bridge (the M-21 over a
+        street in Nemiia, 48.4656 N 27.7711 E, 2026-11-08). The profile is taken back where the plan has it within
+        3 m, the plan's own offset there where not; either eased out over SEAM_GRADE (SEAM_RUN_MIN_M .. MAX_M) so no
+        new step lies further on. Plans changed in place; whether any was."""
+        done = False
+        pins = []                           # (x, y, z) of the ends pulled back to their decks
+        for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+            if sp is None or _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is None:
+                continue
+            ab = getattr(p, "abut", None)
+            if ab is None or not (ab[0] or ab[1]):
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            base = str(fid).split(":")[0]
+            z = np.array(p.z, np.float64)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            prof = self._cw_z_at(xy, xy, base)      # (None where a vertex is off the profile: ends read one by one)
+            out = z.copy()
+            for end, flag in ((0, ab[0]), (-1, ab[1])):
+                if not flag:
+                    continue
+                at = self._cw_z_at(xy, xy[end:end + 1] if end == 0 else xy[end:], base)
+                if at is None:
+                    continue
+                d = float(np.asarray(at)[0]) - float(z[end])
+                if abs(d) < SEAM_MIN_M:
+                    continue
+                run = float(np.clip(abs(d) / SEAM_GRADE, SEAM_RUN_MIN_M, SEAM_RUN_MAX_M))
+                a = s if end == 0 else s[-1] - s
+                t = np.clip(1.0 - a / run, 0.0, 1.0)
+                w = t * t * (3.0 - 2.0 * t)
+                out = out + ((prof - z) if prof is not None else d) * w
+                pins.append((float(xy[end][0]), float(xy[end][1]), float(z[end]) + d))
+            if np.abs(out - z).max() > 1e-6:
+                np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
+                plans[n] = (fid, np_)
+                done = True
+        # the roads that end at the same abutment (a street off the bridge's end): down from the deck's height
+        for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+            if not pins or sp is None or _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is not None:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            z = np.array(p.z, np.float64)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            out = z.copy()
+            for end in (0, -1):
+                near = [q for q in pins if math.hypot(q[0] - xy[end][0], q[1] - xy[end][1]) <= SEAM_SIDE_M]
+                if not near:
+                    continue
+                d = float(np.mean([q[2] for q in near])) - float(z[end])
+                if abs(d) < SEAM_MIN_M:
+                    continue
+                run = float(np.clip(abs(d) / SEAM_SIDE_GRADE, *SEAM_SIDE_RUN_M))
+                a = s if end == 0 else s[-1] - s
+                t = np.clip(1.0 - a / run, 0.0, 1.0)
+                out = out + d * t * t * (3.0 - 2.0 * t)
+            if np.abs(out - z).max() > 1e-6:
+                np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
+                plans[n] = (fid, np_)
+                done = True
+        return done
 
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M
