@@ -202,5 +202,22 @@
     "translucentZWrite": false,
     "castShadows": false,
     "doubleSided": true
+  },
+  "bne_au_amen_icons": {
+    "name": "bne_au_amen_icons",
+    "mapTo": "bne_au_amen_icons",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "73647bd3-e006-5c6e-9750-554bdb80b661",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_amen_icons.png",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

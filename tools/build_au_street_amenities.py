@@ -28,6 +28,37 @@ COLOURS = {      # (base colour, metallic, roughness)
     "bne_au_amen_dark": ((0.05, 0.05, 0.06), 0.0, 0.6),
 }
 GLASS = "bne_au_amen_glass"
+ICONS = "bne_au_amen_icons"     # icons.png: an envelope (white on the box's red) and a handset (white on the band's blue)
+
+
+def icons_png(path):
+    """The two unbranded pictograms side by side, 128 px each: u 0-0.5 the envelope, 0.5-1 the handset."""
+    from PIL import Image, ImageDraw
+    ss = 4
+    S = 128 * ss
+    im = Image.new("RGB", (2 * S, S))
+    d = ImageDraw.Draw(im)
+    red = tuple(round(c * 255) for c in COLOURS["bne_au_amen_red"][0])
+    blue = tuple(round(c * 255) for c in COLOURS["bne_au_amen_blue"][0])
+    d.rectangle((0, 0, S, S), fill=red)
+    d.rectangle((S, 0, 2 * S, S), fill=blue)
+    w, lw = (255, 255, 255), round(0.06 * S)
+    x0, y0, x1, y1 = 0.12 * S, 0.24 * S, 0.88 * S, 0.76 * S          # the envelope: its outline and flap
+    d.rectangle((x0, y0, x1, y1), outline=w, width=lw)
+    d.line([(x0 + lw, y0 + lw), (S / 2, 0.54 * S), (x1 - lw, y0 + lw)], fill=w, width=lw, joint="curve")
+    c = S + S / 2                                                     # the handset: an arc with an ear and a mouth piece
+    d.arc((c - 0.36 * S, 0.10 * S, c + 0.36 * S, 0.82 * S), 200, 340, fill=w, width=round(0.11 * S))
+    for sx in (-1, 1):
+        d.rounded_rectangle((c + sx * 0.33 * S - 0.12 * S, 0.30 * S, c + sx * 0.33 * S + 0.12 * S, 0.46 * S),
+                            radius=round(0.05 * S), fill=w)
+    im.resize((2 * 128, 128), Image.LANCZOS).save(path, optimize=True)
+
+
+def icon(m, half_u, x, y, z, w, h):
+    """An icon quad facing -Y at (x, y, z) (its middle), w x h m: half_u 0 the envelope, 1 the handset."""
+    u0 = 0.5 * half_u
+    m.face(ICONS, [(x - w / 2, y, z - h / 2), (x + w / 2, y, z - h / 2), (x + w / 2, y, z + h / 2), (x - w / 2, y, z + h / 2)],
+           [(u0, 0.0), (u0 + 0.5, 0.0), (u0 + 0.5, 1.0), (u0, 1.0)])
 GLASS_RGBA = (0.45, 0.52, 0.55, 0.22)       # clear, faintly grey
 
 
@@ -55,6 +86,7 @@ def payphone():
     m.face(GLASS, [(-0.40, 0.375, 0.50), (0.40, 0.375, 0.50), (0.40, 0.375, 1.80), (-0.40, 0.375, 1.80)])
     m.box("bne_au_amen_kick", (0.0, 0.375, 0.27), (0.40, 0.008, 0.23))
     m.box(B, (0.0, 0.0, 1.86), (0.46, 0.41, 0.06))                  # the band under the hood
+    icon(m, 1, 0.0, -0.4115, 1.86, 0.11, 0.11)                      # a handset on its front
     prism(m, O, [(-0.48, 1.92), (0.48, 1.92), (0.48, 2.05), (0.43, 2.14), (0.30, 2.19), (0.0, 2.20),
                  (-0.30, 2.19), (-0.43, 2.14), (-0.48, 2.05)], -0.43, 0.43)
     m.box(P, (0.0, 0.30, 1.30), (0.17, 0.06, 0.32))                 # the phone unit on the back wall
@@ -69,6 +101,7 @@ def postbox():
     m.box("bne_au_amen_dark", (0.0, 0.0, 0.0), (0.28, 0.25, 0.10))  # the plinth
     prism(m, "bne_au_amen_red", [(-0.25, 0.1), (0.25, 0.1), (0.25, 1.0), (0.2378, 1.0695), (0.2023, 1.1323), (0.1469, 1.182), (0.0773, 1.214), (0.0, 1.225), (-0.0773, 1.214), (-0.1469, 1.182), (-0.2023, 1.1323), (-0.2378, 1.0695), (-0.25, 1.0)], -0.225, 0.225)     # a round top
     m.box("bne_au_amen_white", (0.0, 0.0, 0.70), (0.256, 0.231, 0.06))      # the band
+    icon(m, 0, 0.0, -0.2265, 0.48, 0.26, 0.26)                                # an envelope on the front
     m.box("bne_au_amen_dark", (0.0, -0.2265, 0.92), (0.19, 0.003, 0.05))    # the slot's plate
     m.box("bne_au_amen_dark", (0.0, -0.229, 0.92), (0.15, 0.003, 0.0175))   # the slot
     return m
@@ -94,6 +127,10 @@ def materials():
                               "metallicFactor": 0.0, "roughnessFactor": 0.1}, {}, {}, {}],
                   "translucent": True, "translucentBlendOp": "LerpAlpha", "translucentZWrite": False,
                   "castShadows": False, "doubleSided": True}
+    out[ICONS] = {"name": ICONS, "mapTo": ICONS, "class": "Material", "version": 1.5, "persistentId": pid(ICONS),
+                  "Stages": [{"baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_amen_icons.png",
+                              "metallicFactor": 0.0, "roughnessFactor": 0.4}, {}, {}, {}]}
+    icons_png(os.path.join(OUT, "bne_au_amen_icons.png"))
     with open(os.path.join(OUT, "au_street_amenities.materials.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
 
