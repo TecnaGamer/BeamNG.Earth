@@ -226,6 +226,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
   textures) when it can, so the server needs less of your CPU; without a usable one the CPU does it as before.
 - Offline play from the download cache (with a size cap and "clear cache").
+- Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
+  data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core

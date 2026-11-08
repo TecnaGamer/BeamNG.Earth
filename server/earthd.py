@@ -3212,7 +3212,8 @@ class Server:
             # ground models per 2 m sample from the cached land cover and the slope (surface.py);
             # rows flipped as the heightmap's (row 0 = north)
             t1 = time.perf_counter()
-            classes, complete = self.surface.classes(keep["lat"], keep["lon"])
+            classes, complete = self.surface.block_classes(anchor.frame, cx, cy, keep["lat"], keep["lon"])
+            stages["classes"] = time.perf_counter() - t1
             idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
             if self.sea is not None and not provisional:    # under water: the bed (no grass through the surface)
                 idx[self.sea.depth(keep["lat"], keep["lon"]) > blockworker.WATER_BED_M] = surfacemod.MUD
