@@ -174,6 +174,13 @@ class Shards:
         d = os.path.join(self.dir, re.sub(r"[^0-9A-Za-z]+", "_", built)) if self.dir else None
         path = os.path.join(d, f"{x}_{y}.json.gz") if d else None
         got = None
+        side = path[:-len(".json.gz")] + IDX_SUFFIX if path else None
+        if side and os.path.exists(side):
+            got = _load_idx(side)
+            if got is not None:
+                with self.lock:
+                    self.shards[(x, y)] = got
+                return got
         if path and os.path.exists(path):
             try:
                 with gzip.open(path, "rt", encoding="utf-8") as fh:
@@ -196,6 +203,8 @@ class Shards:
                 os.replace(path + ".part", path)
         if isinstance(got, dict) and isinstance(got.get("ways"), dict):
             got["ways"] = Ways.of(got["ways"])
+            if side and isinstance(got["ways"], Ways):
+                _save_idx(side, got)
         with self.lock:
             self.shards[(x, y)] = got
         return got
@@ -250,6 +259,42 @@ LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backwar
 
 
 LANE_PARTS = "osm_lane_parts"   # per road feature of several ways: [(start, end, way id, its tags)], else None
+
+
+# A shard's decoded form beside it (<x>_<y>.idx.npz): the Ways' arrays, its distinct tag sets and the rest of the shard
+# as compact JSON. Every server process read the big shards again (gzip, JSON, the way index: ~0.5 s each, rail and
+# lanes 1-2 s per process and place, 2026-11-07); this ~0.05 s. Same build folder, so as fresh as the shard.
+IDX_SUFFIX = ".idx.npz"
+
+
+def _save_idx(path, shard):
+    w = shard["ways"]
+    rest = {k: v for k, v in shard.items() if k != "ways"}
+    try:
+        with open(path + ".part", "wb") as fh:
+            np.savez(fh, ids=w.ids, idx=w.idx,
+                     tags=np.frombuffer(json.dumps(w.tags, separators=(",", ":")).encode("utf-8"), np.uint8),
+                     rest=np.frombuffer(json.dumps(rest, separators=(",", ":")).encode("utf-8"), np.uint8))
+        os.replace(path + ".part", path)
+    except OSError as e:
+        log.debug("%s: %s", path, e)
+
+
+def _load_idx(path):
+    """The shard of a _save_idx file, or None (unreadable: the shard itself is read)."""
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            w = Ways.__new__(Ways)
+            w.ids, w.idx = z["ids"].astype(np.int64, copy=False), z["idx"].astype(np.int32, copy=False)
+            w.tags = json.loads(z["tags"].tobytes().decode("utf-8"))
+            got = json.loads(z["rest"].tobytes().decode("utf-8"))
+    except (OSError, ValueError, KeyError) as e:
+        log.debug("%s: %s", path, e)
+        return None
+    if not isinstance(got, dict) or not isinstance(w.tags, list) or len(w.ids) != len(w.idx):
+        return None
+    got["ways"] = w
+    return got
 
 
 def _tags_of(ways, keys):

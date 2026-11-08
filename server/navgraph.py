@@ -747,13 +747,28 @@ def road_rules(country):
             "country": c, "mph": c in MPH_COUNTRIES}
 
 
+_NEAREST = {}       # (id(db), lat, lon) -> (db, runway index): geo_rules asks country_near then region_near there
+
+
+def _nearest_runway(db, lat, lon):
+    """The index of the runway nearest (lat, lon) in db (airports._hav's first minimum), the last few remembered."""
+    k = (id(db), float(lat), float(lon))
+    hit = _NEAREST.get(k)
+    if hit is not None and hit[0] is db:
+        return hit[1]
+    import airports
+    i = int(np.argmin(airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])))
+    if len(_NEAREST) > 64:
+        _NEAREST.clear()
+    _NEAREST[k] = (db, i)
+    return i
+
+
 def country_near(db, lat, lon):
     """The country of the airport nearest (lat, lon) in airports.AirportDB db, or None."""
     if db is None or not getattr(db, "runways", None):
         return None
-    import airports
-    d = airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])
-    rw = db.runways[int(np.argmin(d))]
+    rw = db.runways[_nearest_runway(db, lat, lon)]
     ap = db.airports.get(rw.airport_ident)
     return getattr(ap, "country", None) or getattr(rw, "country", None) or None
 
@@ -762,9 +777,7 @@ def region_near(db, lat, lon):
     """The ISO 3166-2 region (e.g. "US-CA") of the airport nearest (lat, lon) in airports.AirportDB db, or None."""
     if db is None or not getattr(db, "runways", None):
         return None
-    import airports
-    d = airports._hav(lat, lon, db._mid[:, 0], db._mid[:, 1])
-    ap = db.airports.get(db.runways[int(np.argmin(d))].airport_ident)
+    ap = db.airports.get(db.runways[_nearest_runway(db, lat, lon)].airport_ident)
     return getattr(ap, "region", None) or None
 
 

@@ -145,7 +145,9 @@ POLICIES = {
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
-    "basemap.nationalmap.gov": HostPolicy(rate=50.0, burst=150.0, max_conc=24, daily_budget=150000,
+    # (2026-11-07, the user: "i think its safe to increase USGS": 100/s, 32 at once; behind CloudFront, telemetry over
+    # ~500 players showed no 429 and 0.1 % errors at 50/s, and the 3D map's fresh views waited on ~1,350 deferred)
+    "basemap.nationalmap.gov": HostPolicy(rate=100.0, burst=300.0, max_conc=32, daily_budget=150000,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):
@@ -171,7 +173,9 @@ POLICIES = {
                                     breaker_threshold=6, breaker_window=120.0),
     # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
     # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
-    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
+    # (40/s, 24 at once, 80,000 a day: the user, 2026-11-07, "i think we could increase our own limit if needed": the 3D
+    # map's first views waited on 4,648 deferred EOX requests and used 23,258 of the 30,000 by mid-morning)
+    "tiles.maps.eox.at": HostPolicy(rate=40.0, burst=160.0, max_conc=24, daily_budget=80000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -303,6 +307,15 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
+_CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
+POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
+                                 offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
+# IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
+# rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
+# tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                    daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case
@@ -310,6 +323,7 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
+    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",

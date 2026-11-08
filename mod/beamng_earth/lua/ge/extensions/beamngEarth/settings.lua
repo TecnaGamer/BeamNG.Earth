@@ -631,6 +631,7 @@ end
 
 function M.uiSet(key, v) return M.set(key, v) end
 
+
 function M.uiReset()
   values = defaults()
   M.resolveAuto()                               -- (quality 'auto': the hardware's preset again)
@@ -1080,6 +1081,18 @@ function M.toggleMap()
   else
     M.navigate(M.MAP_ROUTE)
   end
+end
+
+-- The 2D map's "3D map" button: the 3D map instead, remembered as the map key's style from now on (the user,
+-- 2026-11-07: "have the game remember which map mode the player last switched to")
+function M.uiOpen3d()
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if not m3 or not m3.enter then return { ok = false, error = 'the 3D map is not loaded' } end
+  pcall(M.set, 'mapStyle', '3d')
+  M.navigate('play')
+  mapOpen = false
+  m3.enter()
+  return { ok = true }
 end
 
 ------------------------------------------------------------------------------------------

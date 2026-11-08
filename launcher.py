@@ -255,6 +255,8 @@ def start_server(user_dir, extra, log_path, game_running=None):
         cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if sys.platform.startswith("linux"):    # (gamescope's WSI layer aborted the server's GPU kernels: earthd.main)
+        env.setdefault("DISABLE_GAMESCOPE_WSI", "1")
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
@@ -436,6 +438,25 @@ def stop_server(proc):
 
 
 # --- the game -------------------------------------------------------------------------------------
+
+def game_install_dir():
+    """The game's install folder (its shaders/, BinLinux/ ...), or None: the chosen one, Windows' registry / Steam
+    libraries, else the Steam libraries' BeamNG.drive (the Linux build or the Windows one under Proton)."""
+    import install
+    own = apppaths.saved_game_dir()
+    if own:
+        return own
+    if os.name == "nt":
+        try:
+            return windows_game_dir()
+        except Exception:
+            return None
+    for lib in install._steam_roots():
+        d = os.path.join(lib, "steamapps", "common", "BeamNG.drive")
+        if os.path.isdir(os.path.join(d, "shaders")):
+            return d
+    return None
+
 
 def linux_game_exe():
     import install
@@ -1808,6 +1829,16 @@ def run(args):
         reload_game = running and status in ("updated", "installed", "enabled")
         row("Mod", {"current": "up to date", "enabled": "turned back on", "updated": "updated",
                     "installed": "installed", "kept": "kept the installed copy"}.get(status, status or ""))
+        # the sky's haze from above the atmosphere (the 3D map from orbit; skypatch.py): from the game's own shader
+        try:
+            import skypatch
+            sky = skypatch.apply(game_install_dir(), os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME),
+                                 os.path.join(apppaths.data_dir(), "skypatch"), user_dir)
+            if sky == "patched":
+                row("Sky", "the view from orbit fixed (two lines of the game's sky shader; original kept; the game "
+                           "builds its shaders again once)")
+        except Exception as e:      # (never in the way of a start)
+            row("Sky", f"not patched ({type(e).__name__}: {e})")
     if getattr(args, "game_dir", None):
         if args.game_dir.strip().strip('"').lower() == "default":
             apppaths.set_game_dir("default")
