@@ -275,7 +275,8 @@ impl Agg {
     }
 }
 
-/// The 1 % low as fps: the frame-time bin the slowest 1 % reach, its upper edge (the slowest bin: under 4 fps).
+/// The 1 % low as fps: the frame time the slowest 1 % of frames reach, placed linearly inside its bin (the first
+/// night's reports, read as the bin's upper edge, could only say 4, 10, 20 or 29 fps); the slowest bin: under 4 fps.
 pub fn low1(fh: &[u64]) -> serde_json::Value {
     let n: u64 = fh.iter().sum();
     if n == 0 {
@@ -284,10 +285,16 @@ pub fn low1(fh: &[u64]) -> serde_json::Value {
     let want = (n as f64 * 0.01).ceil() as u64;
     let mut acc = 0;
     for i in (0..fh.len()).rev() {
-        acc += fh[i];
-        if acc >= want {
-            return if i >= EDGES_MS.len() { serde_json::json!(4) } else { serde_json::json!((1000.0 / EDGES_MS[i]).round() as u64) };
+        if acc + fh[i] >= want {
+            if i >= EDGES_MS.len() {
+                return serde_json::json!(4);
+            }
+            let (hi, lo) = (EDGES_MS[i], if i > 0 { EDGES_MS[i - 1] } else { 1000.0 / 240.0 });
+            let f = (want - acc) as f64 / fh[i] as f64;          // (from the bin's slow end)
+            let ms = hi - f * (hi - lo);
+            return serde_json::json!((1000.0 / ms).round() as u64);
         }
+        acc += fh[i];
     }
     serde_json::Value::Null
 }
@@ -553,6 +560,25 @@ impl Perf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn low1_inside_its_bin() {
+        // 1000 frames: 990 at 60 fps (bin 3, 14-17 ms), 10 in the 50-100 ms bin: the 1 % point is that bin's fast end
+        let mut fh = [0u64; BINS];
+        fh[3] = 990;
+        fh[7] = 10;
+        assert_eq!(low1(&fh), serde_json::json!(20));
+        // 5 slow (50-100 ms) and 10 at 17-22 ms: the 1 % point halfway into that bin, 19.5 ms: 51 fps, not its edge's 45
+        fh[7] = 5;
+        fh[4] = 10;
+        fh[3] = 985;
+        assert_eq!(low1(&fh), serde_json::json!(51));
+        // the slowest bin: under 4 fps
+        let mut slow = [0u64; BINS];
+        slow[BINS - 1] = 3;
+        slow[0] = 97;
+        assert_eq!(low1(&slow), serde_json::json!(4));
+    }
 
     fn report(gpu: &str, fps60: u64, with_setup: bool) -> PerfIn {
         let w: WindowIn = serde_json::from_value(serde_json::json!({
