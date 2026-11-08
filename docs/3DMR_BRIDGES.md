@@ -20,13 +20,33 @@ Recognised bridges retain the upload's geographic orientation instead of alignin
 to a nearby building's OSM footprint. Explicit per-model yaw corrections still
 take precedence. Ordinary buildings retain footprint alignment.
 
-The existing bridge pipeline traces the exposed deck, aligns its ends with mapped
-road ends (or terrain at the deck ends), and draws the visual model beside a
-separate invisible collision slab. It suppresses procedural bridge parts within
-the traced footprint. Deck tracing starts with each sample's highest open floor,
-so low pier caps do not interrupt the road surface above them. Visual triangles,
-texture resolution and material assignment are unchanged. Feature version 28
-invalidates previous baked models and cached bridge footprints.
+The bridge pipeline traces the exposed deck and aligns it with mapped motor-road
+ends. When no motor-road profile exists, it retains the authored deck clearance
+above the model's lowest support datum, using the highest terrain sample at the
+centre and deck ends. Fitting a footbridge walkway directly to river-edge terrain
+had submerged Elizabeth Quay Bridge. This fallback is not a surveyed vertical datum.
+
+The visual model is drawn beside an invisible collision slab. If mapped road ends
+extend beyond the model, collision retains the full
+authored span instead of cutting off the opposite end. The existing sinking aprons
+remain at the slab ends.
+
+Only covered sections of procedural road bridges and their markings/barriers are
+removed; uncovered approach sections remain. Node heights and widths interpolate
+together at these cuts. Elevated generated railway segments are also suppressed
+inside model bridge footprints. Ground tracks below overpasses remain intact.
+This assumes the imported bridge already supplies any elevated railway it covers.
+
+Deck tracing starts with each sample's highest open floor, so low pier caps do not
+interrupt the road surface above them. After road-height alignment, vertices at
+the model's lowest footing tier extend down to 0.5 m below local terrain, by at most
+50 m. This retains triangle counts, textures and UVs, but stretches those faces;
+models with multiple foundation tiers may still need authored foundation edits.
+Feature version 29 invalidates previous baked models and cached bridge footprints.
+
+These changes do not alter terrain heights, terrain noise or road grading. Removing
+a whole procedural approach could expose the existing rough terrain beneath it;
+retaining the uncovered approach addresses that gap rather than flattening riverbanks.
 
 This does not add full glTF PBR support, Draco decoding, multi-level or arbitrary
 looping-deck tracing, or a new vertical datum/anchor convention. The existing
@@ -37,7 +57,7 @@ synthetic mesh tests do not establish correct real-world road heights.
 Regression checks:
 
 ```
-python tools/run_tests.py test_model_bridge_detection test_threedmr test_buildings
+python tools/run_tests.py test_model_bridge_detection test_threedmr test_buildings test_railways
 ```
 
 These modules also run in the foundation quality gate. Fixtures are generated in
