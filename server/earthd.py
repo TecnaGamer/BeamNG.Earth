@@ -8642,7 +8642,10 @@ async def main_async(args):
     import atexit
     atexit.register(lambda: getattr(server, "_addons", None) is not None and server._addons.runner.stop_all())
     try:
-        await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
+        # (only a server the launcher started: a test's or a tool's own server never starts the player's add-ons; the
+        # 2026-11-08 drive test started the real Live GPS add-on from the player's folder)
+        if os.environ.get("BNGEARTH_PARENT"):
+            await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
     except Exception as e:      # (an add-on that does not start never stops the server)
         log.warning("add-ons: autostart: %s: %s", type(e).__name__, e)
     log.info("startup: opening the local connection")
