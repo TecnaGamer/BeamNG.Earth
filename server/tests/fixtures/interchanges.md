@@ -1,6 +1,6 @@
 # Interchange replay inputs
 
-Six places reported as badly built bridges or interchanges, captured on 2026-11-08 with
+Places reported as badly built bridges or interchanges, captured on 2026-11-08 and 2026-11-09 with
 `tools/capture_interchange_fixture.py` into a cache of their own (nothing from a player's cache):
 
 | file | issue | point (lat, lon) |
@@ -11,6 +11,8 @@ Six places reported as badly built bridges or interchanges, captured on 2026-11-
 | `interchange_a20_921.npz` | GitHub #921 | 54.037418, 12.606645 |
 | `interchange_castlegar_939.npz` | GitHub #939 | 49.29611, -117.65008 |
 | `interchange_silistra_936.npz` | GitHub #936 | 44.097069, 27.139581 |
+| `interchange_italy_967.npz` | GitHub #967 | 42.570363, 12.615334 |
+| `interchange_m1_ireland_960.npz` | GitHub #960 | 54.036322, -6.385183 |
 
 Each holds the `roads` layer (mapgeom.Features arrays, prefix `cell<i>.`) of every z14 cell within
 1200 m of the point, Overture release 2026-10-21.0, and the raw elevation `dem.Dem.sample` gives at

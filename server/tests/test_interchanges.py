@@ -52,5 +52,16 @@ class SilistraTest(unittest.TestCase):
         self.assertLess(r["max_grade_jump"], 0.05)
 
 
+
+class OverpassHeadroomTest(unittest.TestCase):
+    """GitHub #960: the M1's overpass near Dundalk ends on the carriageways' 3 m fork stubs; the motorway under it now
+    dips as under a single span (grading.UNDER_STUB_M): 3.3 m of road over road before, over 6 m now."""
+
+    def test_the_m1_clears_its_overpass(self):
+        r = replay("m1_ireland_960", interchange=False)
+        self.assertGreater(r["min_gap"], 6.0)
+        self.assertEqual(r["low"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -36,10 +36,13 @@ SITES = {       # name: (GitHub issue, what was reported)
     "a20_921": (921, "A20 near Rostock: a motorway bridge far too steep for its length"),
     "castlegar_939": (939, "Castlegar BC, after the Kinnaird bridge: an underpass too low for a car"),
     "silistra_936": (936, "Aydemir, Silistra: a weird impassable bridge"),
+    "italy_967": (967, "Italian freeway near Orte: an overpass at the same level as the road under it"),
+    "m1_ireland_960": (960, "M1 Newry to Dublin: bridges too low, clipping into the road below"),
 }
 RADIUS_M = 400.0
 STEP_M = 4.0
 MAJOR = {"motorway", "trunk"}
+END_M = 2.0             # m: a road met this near a deck's end is the junction it starts from
 LOW_GAP_M = 4.5         # m of road surface over the road under it: less leaves no headroom under any real deck
 
 
@@ -156,6 +159,8 @@ def measure(name):
                 if gid == fid:
                     continue
                 for t, p in _crossings(xy, gxy):
+                    if min(t, s[-1] - t) < END_M:       # the deck's end on a road: a junction, not a crossing over it
+                        continue
                     zd = float(np.interp(t, s, z))
                     la, lo, _ = site.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
                     zg = float(elev(la, lo)[0])
@@ -189,7 +194,9 @@ def measure(name):
             "decks": decks,
             "max_grade": round(max(grades), 4) if grades else None,
             "max_grade_jump": round(max(jumps), 4) if jumps else None,
-            "min_gap": round(min(gaps), 2) if gaps else None, "low": low}
+            "min_gap": round(min(gaps), 2) if gaps else None,
+            "low": [dict(t) for t in dict.fromkeys(tuple((k, tuple(v) if isinstance(v, list) else v)
+                                                         for k, v in x.items()) for x in low)]}
 
 
 def _cell_near(k, site, m):

@@ -356,6 +356,59 @@ CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is 
 CW_OVERLAP_STEP_M = 12.0  # m between the points two overlapping decks' clearance is held at
 
 
+def _merge_span_chains(parts):
+    """parts [(line (k, 2+), fixed, rail)] with every simple chain of them joined into one line: parts of the same
+    (fixed, rail) whose ends meet within UNDER_CHAIN_JOIN_M at a node no other part's end reaches. Pure."""
+    f64 = np.float64
+    n = len(parts)
+    if n < 2:
+        return list(parts)
+    ends = np.array([[np.asarray(b, f64)[0, :2], np.asarray(b, f64)[-1, :2]] for b, _f, _r in parts]).reshape(-1, 2)
+    d = np.hypot(ends[:, None, 0] - ends[None, :, 0], ends[:, None, 1] - ends[None, :, 1])
+    near = d < UNDER_CHAIN_JOIN_M
+    np.fill_diagonal(near, False)
+    link = {}                               # end index (2 * part + 0 / 1) -> the other part's end joined there
+    for e in range(2 * n):
+        others = np.flatnonzero(near[e])
+        if len(others) == 1 and others[0] // 2 != e // 2:
+            o = int(others[0])
+            if parts[e // 2][1:] == parts[o // 2][1:] and np.flatnonzero(near[o]).tolist() == [e]:
+                link[e] = o
+    out, used = [], set()
+    for start in range(n):
+        if start in used:
+            continue
+        # walk back to the chain's first part (or round a ring once)
+        p, e_in = start, 0
+        seen = {start}
+        while 2 * p + e_in in link:
+            o = link[2 * p + e_in]
+            q = o // 2
+            if q in seen:
+                break
+            seen.add(q)
+            p, e_in = q, 1 - (o % 2)
+        # and forward from it, joining
+        line = np.asarray(parts[p][0], f64)
+        if e_in == 1:
+            line = line[::-1]
+        used.add(p)
+        e_out = 2 * p + (1 - e_in)
+        while e_out in link:
+            o = link[e_out]
+            q = o // 2
+            if q in used:
+                break
+            nxt = np.asarray(parts[q][0], f64)
+            nxt = nxt if o % 2 == 0 else nxt[::-1]
+            w = min(line.shape[1], nxt.shape[1])
+            line = np.concatenate([line[:, :w], nxt[1:, :w]])
+            used.add(q)
+            e_out = 2 * q + (1 - o % 2)
+        out.append((line, parts[p][1], parts[p][2]))
+    return out
+
+
 def _cw_level(q):
     """A carriageway part's level (its OSM layer; 1 for a bridge without one, 0 on the ground)."""
     return float(q[5]) if len(q) > 5 else (1.0 if q[2] else 0.0)
@@ -383,6 +436,16 @@ XS_FLOOR_M = 150.0      # m round a solved crossing no road is dug under its tar
 # junctions at grade: APPROACH_SKIP) spreads as before, and so does one whose street has room for less than
 # UNDER_RUN_MIN_M (a junction right by the bridge is part of the underpass) or is a ring.
 UNDER_RUN_ON = os.environ.get("BNE_UNDERPASS_RUN", "on") != "off"
+# A short overpass mapped as several parts end to end (a 3 m stub split off at its end, two ways meeting mid-span) is one
+# span for the underpass: each part had another joined to it, so none was a single span and the road under kept its
+# ground: the M1's bridges near Dundalk 3.3-4 m over the motorway (GitHub #960), an overpass at the trunk's height by
+# Orte (#967). Parts joined at a node where only they meet (no branch), the same road or rail kind, are one line here.
+UNDER_CHAIN_ON = os.environ.get("BNE_UNDERPASS_CHAIN", "on") != "off"
+UNDER_CHAIN_JOIN_M = 0.75
+UNDER_CHAIN_MAX_M = UNDER_MAX_BRIDGE_M   # m: such a chain spans this at most (Orte's two parts, 194 m: their dip, 8 m
+                            # deep, ran into the trunk's next structure as a 3 m step in 12 m; left as it was)
+UNDER_STUB_M = 2 * APPROACH_MIN_CROSS_M     # m: a part this short (the carriageways' fork a deck ends on, 3 m stubs on the
+                                            # M1's) joined to a span leaves it a single span
 UNDER_RUN_MIN_M = 2.0
 ABUT_UNDER_GRADE = 0.08     # past a road's abutment end, over the deck, its ground falls at this grade (grade_points)
 ABUT_NEAR_M = 14.0          # m from the bridge end the road is checked ...
@@ -2543,8 +2606,14 @@ class _Planner:
             if k2 not in seen:
                 seen.add(k2)
                 uniq.append((b, fixed, rail))
+        chained = set()
+        if UNDER_CHAIN_ON:
+            n0 = [len(b) for b, _f, _r in uniq]
+            uniq = _merge_span_chains(uniq)
+            chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
         spans, rail_span = [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
+        stub = np.array([float(np.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
         for n, (b, fixed, rail) in enumerate(uniq):
             if rail and coarse:
@@ -2553,10 +2622,13 @@ class _Planner:
             # (a carriageway's deck, any length, joined or not: its height is its profile's, the roads under it dip
             # to clear it)
             cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
-            if L < 2 * APPROACH_MIN_CROSS_M or (L > UNDER_MAX_BRIDGE_M and not rail and not cw_deck):
+            max_l = UNDER_CHAIN_MAX_M if n in chained else UNDER_MAX_BRIDGE_M
+            if L < 2 * APPROACH_MIN_CROSS_M or (L > max_l and not rail and not cw_deck):
                 continue
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
+            if UNDER_CHAIN_ON and L >= UNDER_STUB_M:
+                d[stub] = np.inf                # (a stub at its end, too short to span a road: no inner end)
             if rail or cw_deck or not (d < 0.75).any():
                 spans.append((b, L, fixed, rail))
                 rail_span.append(rail)
