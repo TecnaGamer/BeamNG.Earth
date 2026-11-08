@@ -124,15 +124,17 @@ function M.update(dt, anchor, anchorId, send)
   local active = m3 and m3.isActive and m3.isActive()
   local p = core_camera and core_camera.getPosition and core_camera.getPosition()
   local h = nil
-  if active and p and anchor then
+  if p and anchor then
     local _, _, hh = anchor:enuToGeodetic(p.x, p.y, p.z)
     h = hh
   end
-  high = active and M.shownAt(h, high) or false
+  -- (any camera that high, not only the 3D map's: a car flown 20,000 km up saw only the sky's blue shell, no earth;
+  -- the user, 2026-11-08: "the earth just looks like a blue ball this high up")
+  high = M.shownAt(h, high)
   -- (low down too while the map is open: the earth's photo under a place whose tiles have not come yet, not the
   -- empty sky; the far tiles cover it, 3 km over it, where they are. 2026-11-07: a flight to a fresh city landed on
   -- blue for 5-10 s)
-  shown = active and (high or (M.LOW_TOO and h ~= nil)) or false
+  shown = high or (active and M.LOW_TOO and h ~= nil) or false
   -- far out the camera mode hands over a copy's place (earthGlobe C.MINI_*): the copy shown, the globe hidden
   local g = active and core_camera.getGlobalCameras()[m3.CAMERA] or nil
   local mini = shown and g and g.mini or nil
