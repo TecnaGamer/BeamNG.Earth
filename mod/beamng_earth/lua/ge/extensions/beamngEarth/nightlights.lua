@@ -28,6 +28,13 @@ M.MATERIALS = {
   bne_lm_floodlit = { '1 0.86 0.66', 25 },
   bne_lm_dial = { '1 0.97 0.88', 160 },
 }
+-- the street lamps' far glow balls (tools/build_lamp_glow.py, nearest first: bne_lamp_glow0 ..): each carries the
+-- lens's light over its disc, so a far lamp dims with its distance squared, down to the lit windows' 200 nits (all at
+-- the lens's 4000 nits, the far balls bloomed into blobs; the user, 2026-11-07: "look blown out from afar")
+M.GLOW_NITS = { 20400, 7970, 3020, 1160, 454, 200, 200, 200 }
+for k, nits in ipairs(M.GLOW_NITS) do
+  M.MATERIALS['bne_lamp_glow' .. (k - 1)] = { M.MATERIALS.bne_lamp_lens[1], nits }
+end
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest
 -- the camera (their lenses: the road tiles' lamplens rows, furniture.py), pointing down: within AROUND_M all round, and
