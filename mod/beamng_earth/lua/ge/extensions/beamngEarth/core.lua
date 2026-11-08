@@ -2252,12 +2252,14 @@ function M._alloc.text()
   return string.format(', GE Lua garbage %.0f MB/min (ours: decode %.0f%s%s)', a.total / 1024, a.decode / 1024,
     top and string.format(', msg %s %.0f', top, topKb / 1024) or '', #ps > 0 and ('; parts ' .. table.concat(ps, ', ')) or '')
 end
+M._perfOut = {}        -- (perfEngine's answer, refilled: perflog only sums it into its window; not a table a call)
 local function perfEngine()
   local dbg = Engine and Engine.Debug
   if not (dbg and dbg.getLastPerformanceMetrics) then return nil end
   for k in pairs(perfMetrics) do perfMetrics[k] = nil end
   if not pcall(dbg.getLastPerformanceMetrics, perfMetrics) then return nil end
-  local out = {}
+  local out = M._perfOut
+  for k in pairs(out) do out[k] = nil end
   for k, v in pairs(perfMetrics) do
     if type(v) == 'number' and not k:find('^phys') and not k:find('^virt') then out[k] = v end
   end
