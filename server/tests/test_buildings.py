@@ -487,18 +487,18 @@ class NightWindowsTest(unittest.TestCase):
         m = self._wall(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True)
         self.assertTrue(set(bld.SHOP_VARIANTS) <= {bld.MATERIALS[i] for i in m.M})
 
-    def test_far_floors_shifted_not_cut(self):
-        """Far tiles: no more quads than the kernel's, each floor its own variant and its bays shifted."""
-        band = bld.BAND_OFFICE
-        ring = rect(0, 0, 40, 30)
-        P, UV, mid = bld.fast._ef.building_walls(ring, 0.0, 70.0, False, False, band[0], band[1], [], 20, 3.5, False,
-                                                 -1, 0.0, True, 0.61, False, 0, True, bld._WALL_CONSTS)
-        P2, UV2, mid2 = bld._vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4), False)
-        self.assertEqual(len(mid2), len(mid))
-        self.assertEqual(P2, list(P))
-        u0 = np.array(UV2).reshape(-1, 8)[:, 0] * band[1]
-        self.assertGreater(len(set(np.round(u0, 6) % band[1])), 2)
-        self.assertGreater(len(set(mid2)), 1)
+    def test_far_tiles_vary_each_window(self):
+        """Far tiles (lite) too: a floor's bays each their own variant (a variant a floor, its bays shifted, drew
+        zigzags)."""
+        m = self._wall(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20, shop=False)
+        lite = bld.Mesh()
+        ring = rect(0, 0, 30, 14)
+        args = dict(ring=ring, floors=20, floor_h=3.0, roof="flat", facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE,
+                    shop=False, plain=False, wall=None, door=(0, 10.0), windows=None, front=0, seed=0.37)
+        bld._walls(lite, bld.Spec(**args), ring, 0.0, 60.0, self._Mats(), lite=True)
+        self.assertGreater(lite.n, 4 * 4 * 20)              # more than a quad a floor of each wall
+        self.assertTrue(set(bld.OFFICE_VARIANTS) <= {bld.MATERIALS[i] for i in lite.M})
+        self.assertTrue(m.n)
 
     def test_skyline_buildings_start_apart(self):
         ring = rect(0, 0, 40, 30)
@@ -519,7 +519,6 @@ class NightWindowsTest(unittest.TestCase):
                                                  0, 10.0, True, 0.37, False, 0, False, bld._WALL_CONSTS)
         P2, UV2, mid2 = bld._vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4))
         self.assertGreater(len(mid2), len(mid))
-        self.assertEqual(len(bld._vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4), False)[2]), len(mid))
 
         def area(pl):
             q = np.array(pl).reshape(-1, 4, 3)

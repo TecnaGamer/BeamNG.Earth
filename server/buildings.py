@@ -982,10 +982,10 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         if spec.wall:
             UV = _vary_windows(P, UV, mid)
         elif mats[0][0] in _VARIANT_MI:
-            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4), not lite)
+            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4))
             mats[3:5] = [(i, mats[0][1]) for i in _VARIANT_MI[mats[0][0]][1:]]
         if mats[1] is not None and mats[1][0] in _VARIANT_MI:
-            P, UV, mid = _vary_bays(P, UV, mid, BAND_SHOP[0], BAND_SHOP[1], 1, (1, 5, 6), not lite)
+            P, UV, mid = _vary_bays(P, UV, mid, BAND_SHOP[0], BAND_SHOP[1], 1, (1, 5, 6))
             mats[5:7] = [(i, mats[1][1]) for i in _VARIANT_MI[mats[1][0]][1:]]
         m.quads(P, UV, mid, mats)
 
@@ -1012,31 +1012,29 @@ def _vary_windows(P, UV, mid):
     return uv.ravel().tolist()
 
 
-def _vary_bays(P, UV, mid, band_k, bpt, slot, to, split=True):
+def _vary_bays(P, UV, mid, band_k, bpt, slot, to):
     """The kernel's quads with each bay of a window sheet (material slot slot) one of its sheet's three night variants
-    (FACADE_VARIANTS, OFFICE_VARIANTS, SHOP_VARIANTS: the slots to), hashed from its first corner. With split, a quad of
-    band band_k spanning several whole bays (a floor of a wall, or a floor's piece beside its door: the kernel draws it
-    as one quad over its bays) is cut at its bays, neighbours of the same variant kept as one quad: the same wall at the
-    same scale. Else (far tiles: no more quads) each such quad one variant, its bays shifted along the band by a
-    whole number of bays (hashed too): a floor's pattern another than the next one's."""
+    (FACADE_VARIANTS, OFFICE_VARIANTS, SHOP_VARIANTS: the slots to), hashed from its first corner. A quad of band band_k
+    spanning several whole bays (a floor of a wall, or a floor's piece beside its door: the kernel draws it as one quad
+    over its bays) is cut at its bays, neighbours of the same variant kept as one quad: the same wall at the same scale.
+    (Far tiles too: a variant a floor with its bays shifted drew a tower's alternating lit and dark bays as zigzags,
+    2026-11-08.)"""
     pq = np.array(P, np.float64).reshape(-1, 12)
     uv = np.array(UV, np.float64).reshape(-1, 8)
     mi = np.frombuffer(mid, np.uint8)
     eps = 1.5 / 1024
     u0, u1 = uv[:, 0] * bpt, uv[:, 2] * bpt
     nb = np.round(u1 - u0).astype(np.int64)
-    whole = ((mi == slot) & np.isclose(uv[:, 1], 1.0 - (band_k + 1) / BANDS + eps)
-             & np.isclose(uv[:, 5], 1.0 - band_k / BANDS - eps) & np.isclose(u0, np.round(u0))
-             & np.isclose(u1 - u0, nb) & (nb >= 1))
-    cut = whole & (nb >= 2) & split
+    cut = ((mi == slot) & np.isclose(uv[:, 1], 1.0 - (band_k + 1) / BANDS + eps)
+           & np.isclose(uv[:, 5], 1.0 - band_k / BANDS - eps) & np.isclose(u0, np.round(u0))
+           & np.isclose(u1 - u0, nb) & (nb >= 2))
     n = np.where(cut, nb, 1)
     rep = np.repeat(np.arange(len(n)), n)                   # each bay's quad
     j = np.arange(len(rep)) - np.repeat(np.cumsum(n) - n, n)
     a, b = pq[rep, 0:3], pq[rep, 3:6]
-    pick = np.zeros(len(rep), np.intp)
+    var = np.zeros(len(rep), np.intp)
     sheet = mi[rep] == slot
-    pick[sheet] = _pick((a + (b - a) * (j / n[rep])[:, None])[sheet], 3 * bpt)
-    var = pick % 3
+    var[sheet] = _pick((a + (b - a) * (j / n[rep])[:, None])[sheet], 3)
     run = np.ones(len(rep), bool)
     run[1:] = (rep[1:] != rep[:-1]) | (var[1:] != var[:-1])
     s0 = np.flatnonzero(run)
@@ -1053,10 +1051,6 @@ def _vary_bays(P, UV, mid, band_k, bpt, slot, to, split=True):
         ua = np.round(u0[r][c])
         UV2[c, 0] = UV2[c, 6] = (ua + ja) / bpt
         UV2[c, 2] = UV2[c, 4] = (ua + jb) / bpt
-    if not split:
-        sh = whole[r]
-        if sh.any():
-            UV2[np.ix_(sh, [0, 2, 4, 6])] += (pick[s0][sh] // 3 / bpt)[:, None]
     out = mi[r].copy()
     on = out == slot
     out[on] = np.array(to, np.uint8)[var[s0][on]]
