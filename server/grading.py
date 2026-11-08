@@ -1905,9 +1905,7 @@ class _Planner:
                     rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                               for k in railways.cells_near(self.frame, own)]
                     for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
-                        p = Plan(xy, z, railways.GRADE_HALF_M)
-                        p.rid = road_id(RAIL_TAG + fid)
-                        plans.append((RAIL_TAG + fid, p))
+                        plans.append((RAIL_TAG + fid, rail_plan(fid, xy, z)))
                         pclip.append(True)
                 except Exception as e:      # no rail grading rather than no grading
                     log.debug("grading: railways of %s: %s: %s", key, type(e).__name__, e)
@@ -4471,6 +4469,18 @@ def road_id(fid):
     return zlib.crc32(str(fid).encode()) & 0x7FFFFFFF
 
 
+def rail_plan(fid, xy, z):
+    """The Plan of a railway's bed line (railways.grade_plans' fid, xy (k, 2), z (k,)): the ground flat to the bed
+    GRADE_HALF_M either side of the track, its carriageway (grade_points' rh: what never gives way) the ballast's top.
+    Past the ballast the band gives way to another road's carriageway at another level, as a road's verge does: the
+    whole band its own, it blended into the approach of a short bridge over it whose abutment stood inside the band, and
+    the deck end, which takes that ground, sat 2.5-3.4 m under the road going on from it (GitHub #909, the A11 over the
+    Gramzower Museumsbahn)."""
+    p = Plan(xy, z, railwaysmod.GRADE_HALF_M, road_half=railwaysmod.BALLAST_TOP_M)
+    p.rid = road_id(RAIL_TAG + fid)
+    return p
+
+
 class PlanPack:
     """Plans (a list, in grade_points' order) as grade_points takes them: every segment's arrays concatenated once, with
     each plan's box; a call keeps the segments of the plans whose boxes meet its points', in the same order (built per
@@ -4607,9 +4617,9 @@ def grade_points(px, py, base, plans, lift=0.0):
         return out
     A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK, ABD = got
     import fast
-    fast.require(152, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(169, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
-                                             # given way to whole: 134)
+                                             # given way to whole: 134, no carriageway past an abutment end: 169)
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,

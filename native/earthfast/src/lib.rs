@@ -1556,22 +1556,25 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
                         target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
                     }
-                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
-                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
-                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
-                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
-                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
+                    // m past a bridge abutment's end (abut_d: how far along the road it lies from this segment): over
+                    // the deck
+                    let mut past = 0.0f64;
+                    if abut[s] != 0 && l2 > 1e-12 {
                         let len = l2.sqrt();
                         let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
                         let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
-                        let mut beyond = 0.0f64;
                         if da.is_finite() {
-                            beyond = beyond.max(-along - da);
+                            past = past.max(-along - da);
                         }
                         if db.is_finite() {
-                            beyond = beyond.max(along - len - db);
+                            past = past.max(along - len - db);
                         }
-                        target -= beyond * abut_under;
+                    }
+                    // there falling away at abut_under, not held at the end's height (the core's round end reached
+                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
+                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
+                    if abut_under > 0.0 {
+                        target -= past * abut_under;
                     }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
@@ -1587,7 +1590,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
                         // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
                         let cr = if steep[s] != 0 { h[s] } else { rh[s] };
-                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                        // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an
+                        // approach's carriageway reached over the railway under a short bridge, and the track's bed
+                        // gave way to it there; GitHub #909)
+                        let car = past <= yield_ramp.max(1e-6);
+                        if car && (d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan())) {
                             cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
@@ -5555,6 +5562,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
     // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
     m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
-    m.add("VERSION", 168)?;
+    m.add("VERSION", 169)?;
     Ok(())
 }

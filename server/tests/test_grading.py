@@ -292,6 +292,43 @@ class AbutmentEndTest(unittest.TestCase):
         self.assertLessEqual(out[1], 50.0 - 5.0 * grading.ABUT_UNDER_GRADE + 0.05)
 
 
+class RailUnderAbutmentTest(unittest.TestCase):
+    """GitHub #909 (the A11 over the Gramzower Museumsbahn by Neu-Kleinow): a short bridge over a railway in a cutting,
+    crossing it at 45 deg off-centre, its abutment 2.7 m from the track's centreline, inside the rail bed's flat band
+    (railways.GRADE_HALF_M). The bed (6 m down) blended into the abutment, the deck end took that ground (2.5-3.4 m
+    under the road going on from it). The band past the ballast gives way to the approach's carriageway there."""
+
+    def setUp(self):
+        xs = np.arange(-80.0, 0.1, 4.0)          # the approach, its end (0, 0) the abutment
+        self.approach = grading.Plan(np.stack([xs, np.zeros(len(xs))], axis=1), np.full(len(xs), 75.4), 8.0,
+                                     abut=(False, True), road_half=7.0)
+        u, n = np.array([1.0, 1.0]) / math.sqrt(2.0), np.array([1.0, -1.0]) / math.sqrt(2.0)
+        t = np.arange(-100.0, 100.1, 2.0)
+        self.c0 = 2.7 * n                         # the track's nearest point to the abutment (under the deck)
+        self.rail_xy = self.c0[None] + t[:, None] * u[None]
+        self.rail_z = np.full(len(t), 69.3)
+
+    def test_the_abutment_keeps_its_road(self):
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        out = grading.grade_points(np.array([0.0]), np.array([0.0]), np.array([69.4]), [self.approach, rail])
+        self.assertAlmostEqual(out[0], 75.4, delta=0.25, msg="the abutment at its approach's height")
+
+    def test_the_track_bed_is_no_higher(self):
+        # (under the deck, past the abutment end, the approach has no carriageway: the band does not give way there,
+        # so the track and the ground beside it stand no higher than with the whole band the rail's carriageway)
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        old = grading.Plan(self.rail_xy, self.rail_z, rail.half)
+        old.rid = rail.rid
+        n = np.array([1.0, -1.0]) / math.sqrt(2.0)
+        pts = np.array([self.c0 + k * n for k in (-1.5, -0.75, 0.0, 0.75, 1.5)] +
+                       [self.c0 + 40.0 * np.array([1.0, 1.0]) / math.sqrt(2.0)])
+        base = np.full(len(pts), 69.4)
+        got = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, rail])
+        was = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, old])
+        self.assertTrue((got <= was + 1e-9).all(), f"{got} over {was}")
+        self.assertAlmostEqual(got[-1], 69.3, delta=0.05, msg="the cutting away from the bridge")
+
+
 class SeparationTest(unittest.TestCase):
     """GitHub #92: a street in a cutting, a service road on the bank 7.5 m above it beside its core."""
 
