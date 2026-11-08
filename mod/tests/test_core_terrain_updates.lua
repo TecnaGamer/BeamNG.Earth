@@ -8,6 +8,7 @@ package.loaded['beamngEarth/net'] = setmetatable({
   update = function() local q = inbox; inbox = {}; return q end,
   isConnected = function() return false end,
   isReady = function() return false end,
+  isCurrent = function() return true end,
   lease = function() return nil end,
 }, { __index = function() return function() end end })
 function getPlayerVehicle() return nil end
@@ -79,6 +80,9 @@ st.placeFrames = nil
 st.rebasing = {}
 T.check(not core.applyBlockUpdates(), 'a two-phase rebase cannot be interrupted by a photo update')
 st.rebasing = nil
+st.viewFrame = {}
+T.check(not core.applyBlockUpdates(), 'the 3D map view frame cannot apply a car-frame terrain/photo update')
+st.viewFrame = nil
 T.check(core.applyBlockUpdates() and terrain.base() == '/minimized.jpg', 'restored window applies its photo later')
 
 deliver(photo('/earlier.jpg'), refresh('/newer.ter'))

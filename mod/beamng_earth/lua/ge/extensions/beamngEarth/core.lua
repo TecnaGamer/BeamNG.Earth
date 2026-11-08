@@ -1044,7 +1044,7 @@ end
 -- the materials separately in the same frame. The two quiet frames belong to these updates too (V1_2_DESIGN 5.4).
 function M.applyBlockUpdates()
   local b, pl = st.block, st.player
-  if not b or not pl or st.placeFrames or st.rebasing or windowMinimized() or gov.blocked or gov:isHeavyFrame() then
+  if not b or not pl or st.placeFrames or st.rebasing or st.viewFrame or windowMinimized() or gov.blocked or gov:isHeavyFrame() then
     return false
   end
   local dr, bl = st.deferredRefresh, M._baseLater
@@ -1085,6 +1085,9 @@ function M._flushDispatchAck()
 end
 
 local function onMessage(msg)
+  -- A reconnect's ownership snapshot does not include metadata still waiting in this FIFO. Its old transport's
+  -- files may be released after that snapshot; never apply those stale messages to the replacement session.
+  if not net.isCurrent(msg) then return end
   local t = msg.type
   if t == '_connected' then
     if not net.isCurrent(msg) then return end -- a queued event of an already-replaced transport cannot start a snapshot

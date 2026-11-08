@@ -61,7 +61,8 @@ messages. No surface, geometry, render-distance or graphics setting changes.
 
 Compatibility is negotiated: old mods receive the original unsequenced stream; with an old server, the new mod
 keeps the legacy drain rule because that sender cannot honor credits. No protocol/geometry format bump is
-needed. Native API 159 is required for the new server logic. No outside PR code was adopted: #71's older FIFO
+needed. The initial implementation used native API 159; upstream integration uses API 169 (170 includes the
+class cache too). No outside PR code was adopted: #71's older FIFO
 work overlaps the general subject; this fixes the newer backlog-fraction rule and supplies sender credits.
 
 Windows validation: the Release MSVC native module built; three Rust window tests passed; seven Python
@@ -82,7 +83,7 @@ inputs. An isolated profile of 1,048,576 points with already decoded WorldCover 
 raw `Surface.classes` at 172 ms median: warp 107 ms and raster sampling 33 ms in the instrumented pass. This
 does not attribute the entire observed 835 ms landcover stage to this sampler.
 
-`ClassGridCache` (native API 160) retains only raw classes in 64 x 64 sample chunks of the exact physics
+`ClassGridCache` (initial native API 160, now 170 after upstream integration) retains only raw classes in 64 x 64 sample chunks of the exact physics
 lattice, up to 8 MiB of class samples plus small identity/entry metadata. It recomputes missing points with
 the existing sampler. Frame, lattice spacing and warp changes invalidate the namespace. Immutable decoded
 rasters contribute weak identity tokens: replacement/reload invalidates entries without pinning raster data
@@ -132,3 +133,27 @@ agreement check was skipped. The general server module exceeded the initial 300 
 it then passed alone with a 900 s limit (447 s). The class-grid module has 11 tests, including seeded lattice
 moves, byte-identical material/terrain output, invalidation, incomplete data and weak-source lifetime checks.
 These results predate integration onto later upstream changes; in-game validation was not yet performed.
+
+## November 8 integration
+
+Rebased onto `ac3e0901`, preserving the intervening upstream texture-size check, vegetation batching,
+separate water-plan lane, map-frame handling and allocation/performance instrumentation. Native APIs were
+advanced to 169/170 to retain all upstream exports through 168. The old measurement record remains labeled
+with its actual base and binary; it is not a measurement of the newer combined project.
+
+A replaced transport's queued metadata is now discarded before its world handler, not only excluded from
+dispatch credit. The ownership snapshot cannot retain files referenced solely by unhandled metadata. The
+regression verifies that old metadata reaches neither the world handler nor the new transport's credit counter.
+The car-frame late-update queue also waits while the 3D map owns a different view frame.
+
+All 102 offline Lua modules passed after this integration. The Release MSVC native builds completed for
+both the upstream API 168 and combined API 170. Sixteen focused Python modules passed on the integrated
+base: protocol agreement, class-grid/stream dispatch, reconnect/cleanup, surface/heightmap/blockworker,
+vegetation batching/ground-ahead lane, MapData/revisit/chunk-cache, initial loading, pools and CLI defaults.
+The protocol module skipped one optional installed-game check; the pool module skipped one optional check.
+The 53-test general server run above was on the earlier base and was not repeated after integration.
+
+A preliminary upstream-only in-game smoke loaded the Earth level, physical terrain, imagery, vegetation and
+roads on BeamNG.drive 0.40.5 / DirectX 12, using an isolated user folder and a physical cache copy. An engine
+screenshot was inspected. This was not a controlled drive or an optimized-build acceptance test. No gameplay
+performance gain has been established; manual exploration and matched before/after validation remain pending.

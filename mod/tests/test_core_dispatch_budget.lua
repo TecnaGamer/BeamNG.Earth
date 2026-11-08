@@ -16,7 +16,7 @@ package.loaded['beamngEarth/net'] = setmetatable({
   isConnected = function() return false end,
   state = function() return 'disconnected' end,
   isReady = function() return false end,
-  isCurrent = function(msg) return current[msg] end,
+  isCurrent = function(msg) return current[msg] ~= false end,
   lease = function() return nil end,
   send = function(msg)
     if msg.type == 'stream_ack' and rejectAck then return false end
@@ -69,10 +69,11 @@ current[stale] = false
 inbox = { { type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 's2', dispatchWindow = 32 }, stale,
   { type = 'roads_tile', key = 'new', streamSeq = 1 } }
 current[inbox[3]] = true
+local prior = #handled
 frame()
-T.check(core._netq.ack == 0 and core.netBacklog() == 1, 'stale transport metadata consumes no current credit')
-frame()
-T.check(core._netq.sentAck == 1 and sent[#sent].seq == 1, 'the new transport starts its own cumulative ack')
+T.check(#handled == prior + 1 and handled[#handled] == 'new' and core.netBacklog() == 0,
+  'stale transport metadata cannot reach a world handler after the ownership snapshot')
+T.check(core._netq.sentAck == 1 and sent[#sent].seq == 1, 'only the new transport consumes/returns current credit')
 
 inbox = { { type = 'roads_tile', key = 'before2', streamSeq = 2 },
   { type = 'roads_tile', key = 'before3', streamSeq = 3 }, { type = 'roads_tile', key = 'before4', streamSeq = 4 } }

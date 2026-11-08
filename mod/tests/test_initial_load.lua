@@ -13,6 +13,7 @@ ui_imgui = setmetatable({ Begin = function() return true end,
 local incoming, sent = {}, {}
 local net = { PORT = 47613, attempts = function() return 1 end, everConnected = function() return true end }
 net.isConnected = function() return true end
+net.isCurrent = function() return true end
 net.state = function() return 'connected' end
 net.send = function(msg) sent[#sent + 1] = msg; return true end
 net.update = function() local batch = incoming; incoming = {}; return batch end
