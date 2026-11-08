@@ -72,7 +72,10 @@ DEFER_WAIT_S = 3.0          # a refused request (no spare tokens) is tried again
 DEFER_TRIES = 20            # ... this often, then skipped
 BUDGET_RETRY_S = 900.0      # a host's daily share used up: looked at again after this
 OFFLINE_RETRY_S = 300.0
-PASS_RETRY_S = 1800.0       # a pass with failed items: another pass after this
+PASS_RETRY_S = 1800.0       # a pass with failed items: another pass after this ...
+# ... at most this many passes in a row: then the items still failing count as unavailable and the area is done
+# (GitHub #917: a tile no host has failed every pass, so the area stood at 99 % all night, retried every half hour)
+MAX_FAILED_PASSES = 3
 STATUS_S = 2.0              # the 'areas' message at most this often while one runs
 PIN_EVERY_S = 600.0         # the pinned bytes counted again after this (and after an area is added or removed)
 # the estimate's rough numbers
@@ -94,6 +97,11 @@ WORLD_TILE_S = 2.0          # ... and its build in a road process (rough)
 MAX_WORLD_KM2 = 400.0       # (155 square miles, ~4,300 road geotiles, ~3.4 GB) a "world" area at most
 SIZES = {"dem": 110e3, "img": 25e3, "cell": 120e3}      # bytes on disk (a cell: one layer's file) when the cache
                                                         # knows no better
+
+
+def unavailable_msg(n):
+    """The done area's note when n of its items could not be downloaded (MAX_FAILED_PASSES)."""
+    return f"{n} items unavailable (no server had them in {MAX_FAILED_PASSES} tries): Resume tries again"
 
 
 def area_layers():
@@ -287,7 +295,9 @@ class Areas:
                                    "created": float(a.get("created", 0)), "paused": bool(a.get("paused")),
                                    "complete": bool(a.get("complete")), "total": int(a.get("total", 0)),
                                    "diskBytes": int(a.get("diskBytes", 0)), "done": 0, "state": "queued", "msg": "",
-                                   "retry_at": 0.0, "mode": a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE})
+                                   "retry_at": 0.0, "mode": a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE,
+                                   "failedPasses": int(a.get("failedPasses", 0)),
+                                   "unavailable": int(a.get("unavailable", 0))})
             except (KeyError, TypeError, ValueError):
                 continue
         self.next_id = max([int(doc.get("next", 1))] + [int(a["id"][1:]) + 1 for a in self.areas
@@ -295,11 +305,14 @@ class Areas:
         for a in self.areas:
             a["state"] = "paused" if a["paused"] else "done" if a["complete"] else "queued"
             a["done"] = a["total"] if a["complete"] else 0
+            if a["complete"] and a["unavailable"]:
+                a["msg"] = unavailable_msg(a["unavailable"])
 
     def _save(self):
         doc = {"v": STORE_VERSION, "next": self.next_id,
                "areas": [{k: a[k] for k in ("id", "name", "s", "w", "n", "e", "created", "paused", "complete", "total",
-                                            "diskBytes", "mode", "route") if k != "route" or a[k] is not None}
+                                            "diskBytes", "mode", "route", "failedPasses", "unavailable")
+                          if k in a and (k != "route" or a[k] is not None)}
                          for a in self.areas]}
         try:
             os.makedirs(self.dir, exist_ok=True)
@@ -580,6 +593,7 @@ class Areas:
                 a["paused"], a["state"], a["msg"] = True, "paused", ""
             elif op == "resume":
                 a["paused"], a["complete"], a["retry_at"], a["state"], a["msg"] = False, False, 0.0, "queued", ""
+                a["failedPasses"], a["unavailable"] = 0, 0      # (asked again: the unavailable items get new tries)
             else:
                 self.areas.remove(a)
                 for p in (self._done_path(aid), self._world_path(aid)):
@@ -811,11 +825,17 @@ class Areas:
                  failed, " fast" if fast else "")
         self._fast_end(a, "done" if not failed else f"{failed} failed")
         with self.lock:
-            if failed:
+            a["failedPasses"] = a.get("failedPasses", 0) + 1 if failed else 0
+            if failed and a["failedPasses"] < MAX_FAILED_PASSES:
                 a["state"], a["msg"] = "queued", f"{failed} items failed: tried again later"
                 a["retry_at"] = time.monotonic() + PASS_RETRY_S
             else:
-                a["complete"], a["state"], a["msg"], a["done"] = True, "done", "", a["total"]
+                a["unavailable"] = failed
+                a["complete"], a["state"], a["done"] = True, "done", a["total"]
+                a["msg"] = unavailable_msg(failed) if failed else ""
+                if failed:
+                    log.info("areas: %s done with %d items unavailable after %d passes", a["id"], failed,
+                             a["failedPasses"])
             self._save()
         self.pin_at = -1e18
         self._changed(force=True)
