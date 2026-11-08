@@ -93,6 +93,28 @@ class StreamDispatchTest(unittest.TestCase):
         c.dispatch(dict(type="stream_ack", seq=1))
         self.assertEqual([m["key"] for m in self.messages()], ["first"])
 
+    def test_far_stream_waits_for_credits_and_an_ack_wakes_it(self):
+        """The producer, not only the socket, is paced: past DISPATCH_HIGH_WATER queued messages the far stream starts
+        no tile (it was the hard limit's disconnect), and the ack that brings the queue under it wakes the loop."""
+        import asyncio
+        c = self.connection(2)
+        c.wake = asyncio.Event()
+        with mock.patch.object(earthd, "DISPATCH_HIGH_WATER", 4):
+            for k in range(5):
+                c.send(dict(type="roads_tile", key=k))
+            self.assertEqual(c.stream_dispatch.queued_messages, 3)
+            self.assertFalse(c.dispatch_behind())
+            c.send(dict(type="roads_tile", key=5))
+            self.assertTrue(c.dispatch_behind())
+            c._dispatch_paused = True
+            c.dispatch(dict(type="stream_ack", seq=1))      # one more sent: 3 queued, under the mark
+            self.assertFalse(c.dispatch_behind())
+            self.assertTrue(c.wake.is_set() and not c._dispatch_paused)
+            c.wake.clear()
+            c.dispatch(dict(type="stream_ack", seq=2))      # not paused: no wake for every ack
+            self.assertFalse(c.wake.is_set())
+        self.assertFalse(self.connection().dispatch_behind(), "a legacy client is never held back")
+
     def test_urgent_messages_still_share_the_total_byte_bound(self):
         c = self.connection(1)
         for k in range(3):

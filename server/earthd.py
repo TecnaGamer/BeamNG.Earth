@@ -160,6 +160,10 @@ import weather as weathermod  # noqa: E402
 PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
+# Ordinary metadata waiting server-side for the game's dispatch credits (hello.dispatchWindow) above which the far
+# stream starts no new tile: the credits only pace the socket, and without this the producer ran on while the queue grew
+# to its hard limit (4,096 messages / SEND_BUFFER_MAX) and the transport was closed. A stream_ack below it wakes it again.
+DISPATCH_HIGH_WATER = 512
 WATERGUARD_VERSION = 1
 TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
 _NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
@@ -6007,6 +6011,11 @@ class Connection:
             return self._write_frame(protocol.encode(msg))
         return False
 
+    def dispatch_behind(self):
+        """Is the game DISPATCH_HIGH_WATER ordinary messages or more behind (negotiated credits only)?"""
+        flow = getattr(self, "stream_dispatch", None)
+        return flow is not None and flow.queued_messages >= DISPATCH_HIGH_WATER
+
     def _write_frame(self, data):
         lease = getattr(self, "lease", None)
         if getattr(self, "closing", False) or (lease is not None and lease.connection is not self) or self.writer.is_closing():
@@ -6441,6 +6450,9 @@ class Connection:
                 for data in flow.acknowledge(seq):
                     if not self._write_frame(data):
                         break
+                if getattr(self, "_dispatch_paused", False) and not self.dispatch_behind():
+                    self._dispatch_paused = False
+                    self.wake.set()
         elif kind == "map_tiles":               # the in-game map's tiles, as files (the UI cannot fetch http)
             self.spawn(self.map_tiles(msg))
         elif kind == "geocode":                 # the map's search box: addresses and places (geocode.py)
@@ -8254,6 +8266,9 @@ class Connection:
             # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
             workers += self.s.remote_slots()
             while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
+                if self.dispatch_behind():
+                    self._dispatch_paused = True    # (stream_ack wakes the loop once the game has caught up)
+                    break
                 t = self._next_tile()
                 if t is None:
                     break

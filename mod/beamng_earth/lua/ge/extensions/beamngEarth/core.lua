@@ -2602,7 +2602,9 @@ local function onUpdate(dtReal, dtSim)
     -- New servers pace ordinary metadata by this client's credits: no fraction-of-backlog override, even when
     -- the backlog is large. Older servers retain their legacy drain rule (they cannot pause their sender yet).
     local budget = loadingNow and math.huge or ((not nq.dispatch and waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
-    local minN, done = nq.dispatch and 0 or math.ceil(waiting / nq.drainDiv), 0
+    -- (at least one with credits too: the budget's clock starts before the decode and the urgent answers, and a frame
+    -- whose urgent work alone took the budget handled no ordinary message, acknowledged nothing and so stalled the sender)
+    local minN, done = nq.dispatch and math.min(1, waiting) or math.ceil(waiting / nq.drainDiv), 0
     while nq.head <= #nq.q do
       if done >= minN and hitchClock() - n0 >= budget then break end
       local msg = nq.q[nq.head]

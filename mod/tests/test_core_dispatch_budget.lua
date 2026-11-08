@@ -97,4 +97,21 @@ local before = #handled
 for k = 1, 80 do inbox[#inbox + 1] = { type = 'roads_tile', key = k } end
 frame()
 T.check(#handled - before == 5, 'older server retains its existing catch-up rule')
+-- With credits, a frame whose decode (or urgent answers) alone used the whole budget still handles one ordinary
+-- message and acknowledges it: handling none acknowledged nothing, and the sender's window never reopened.
+while core.netBacklog() > 0 do frame() end
+inbox = { { type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 's3', dispatchWindow = 32 } }
+frame()
+local slowDecode = package.loaded['beamngEarth/net'].update
+package.loaded['beamngEarth/net'].update = function() now = now + 6; return slowDecode() end
+before = #handled
+for k = 1, 3 do
+  local msg = { type = 'roads_tile', key = 'slow' .. k, streamSeq = k }
+  current[msg] = true
+  inbox[#inbox + 1] = msg
+end
+frame()
+T.check(#handled - before == 1 and sent[#sent].type == 'stream_ack' and sent[#sent].seq == 1,
+  'a frame whose decode exceeded the budget still makes progress and returns a credit')
+package.loaded['beamngEarth/net'].update = slowDecode
 T.done('test_core_dispatch_budget')
