@@ -249,6 +249,7 @@ SERVER_TO_MOD = {
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
     "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+              "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
               "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4

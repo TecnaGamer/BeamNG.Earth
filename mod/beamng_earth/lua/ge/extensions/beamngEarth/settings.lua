@@ -94,6 +94,11 @@ M.SCHEMA = {
   -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
   -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
+  -- ... its parts (TELEMETRY.md): performance, system and error data; the per-map-service request counts. Nothing at all
+  -- is sent before the welcome page's choice (telemetryChoice: the consent version the player answered)
+  telemetryPerf = { kind = 'bool', default = true, label = 'Performance data' },
+  telemetryNet = { kind = 'bool', default = true, label = 'Network load' },
+  telemetryChoice = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Telemetry choice made (version)' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
@@ -144,12 +149,12 @@ M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', '
   'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
-  'placeNamesOnline', 'telemetry', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
+  'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
   'creditsCorner', 'creditsSize', 'cacheCapGb', 'routeDownload', 'serverCores', 'serverPriority', 'teleportPriority', 'devOutlineKm',
   'devMapKm' }
 
 -- Stored but not on the settings page
-M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true }
+M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, qualityDetected = true, telemetryChoice = true }
 
 -- The quality presets: each sets these knobs at once ('high' = the defaults before presets existed, 2026-10-28). A
 -- Steam Deck on Handheld in a forest (Patapsco, 2026-10-28): low 37.0 fps, high 31.5, ultra 30.9; 'medium' (its first-run
@@ -1134,9 +1139,39 @@ function M.showWelcome()
   M.navigate(M.WELCOME_ROUTE)
 end
 
--- EarthWelcome.vue's buttons: seen.
-function M.uiWelcomeDone()
+-- The telemetry choice (TELEMETRY.md; the user, 2026-11-08: "give all players a popup and let them choose before
+-- playing"): the server sends nothing until telemetryChoice reaches the consent version its hello names. The defaults
+-- the welcome page shows are its region's (server privacyregion.py, from this computer's time zone): 'neutral' (nothing
+-- ticked: the EU / EEA, China, Russia, India, unknown), 'perf_off' (performance unticked), 'all'.
+M.privacyRegion = 'neutral'
+M.privacyKnown = false            -- (the hello came: before it, the page shows nothing ticked and asks again)
+M.telemetryConsent = 1
+function M.serverPrivacy(region, consent)
+  if region == 'neutral' or region == 'perf_off' or region == 'all' then M.privacyRegion = region; M.privacyKnown = true end
+  if type(consent) == 'number' and consent >= 1 then M.telemetryConsent = math.floor(consent) end
+end
+function M.privacyNeeded() return (values.telemetryChoice or 0) < M.telemetryConsent end
+
+-- { region, needed, telemetry, perf, net } for the welcome page: before a choice, the region's defaults
+function M.uiPrivacy()
+  if M.privacyNeeded() then
+    local r = M.privacyRegion
+    local on = r ~= 'neutral' and values.telemetry ~= false       -- (a player who had switched it off: still off)
+    return { region = r, known = M.privacyKnown, needed = true, telemetry = on, net = on, perf = on and r == 'all' }
+  end
+  return { region = M.privacyRegion, known = M.privacyKnown, needed = false, telemetry = values.telemetry ~= false,
+    net = values.telemetryNet ~= false, perf = values.telemetryPerf ~= false }
+end
+
+-- EarthWelcome.vue's buttons: seen, and the telemetry choice it shows (choice: { telemetry, perf, net }) made.
+function M.uiWelcomeDone(choice)
   if (values.welcomeSeen or 0) < M.WELCOME_VERSION then M.set('welcomeSeen', M.WELCOME_VERSION) end
+  if type(choice) == 'table' then
+    M.set('telemetry', choice.telemetry == true)
+    M.set('telemetryPerf', choice.telemetry == true and choice.perf == true)
+    M.set('telemetryNet', choice.telemetry == true and choice.net == true)
+    M.set('telemetryChoice', M.telemetryConsent)
+  end
   return { ok = true }
 end
 
@@ -1205,8 +1240,8 @@ function M.onClientPostStartMission()
   appliedView = nil
   M.applyAll()
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
-  if level == M.LEVEL_ID and (values.welcomeSeen or 0) < M.WELCOME_VERSION then
-    welcomeAt = os.clock() + M.WELCOME_DELAY_S
+  if level == M.LEVEL_ID and ((values.welcomeSeen or 0) < M.WELCOME_VERSION or M.privacyNeeded()) then
+    welcomeAt = os.clock() + M.WELCOME_DELAY_S       -- (and until the telemetry choice is made: before playing)
   end
 end
 

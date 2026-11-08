@@ -31,6 +31,8 @@ log = logging.getLogger("earthd.telemetry")
 
 URL = os.environ.get("BNE_TELEMETRY_URL", "https://earth.tgforever.net/telemetry")
 ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
+CONSENT_VERSION = 1         # the welcome page's choice this release asks for (settings telemetryChoice): none before it
+LAST_FILE = "telemetry_last.json"   # the last report as sent (the settings page's "What is sent")
 REPORT_S = 300.0            # s between reports (the collector counts an install online for 2 of them)
 FIRST_S = 60.0              # s after the start before the first
 TIMEOUT_S = 10.0
@@ -61,6 +63,15 @@ def install_id(cache_dir):
     return v
 
 
+def choices(settings):
+    """{"main", "net", "perf"} the player chose (cpupin.player_settings): all False before the welcome page's choice
+    (telemetryChoice < CONSENT_VERSION), sub-switches only under the main one."""
+    if int(settings.get("telemetryChoice") or 0) < CONSENT_VERSION or settings.get("telemetry", True) is False:
+        return {"main": False, "net": False, "perf": False}
+    return {"main": True, "net": settings.get("telemetryNet", True) is not False,
+            "perf": settings.get("telemetryPerf", True) is not False}
+
+
 def os_name():
     s = platform.system().lower()
     if s == "linux":
@@ -78,14 +89,16 @@ class Reporter:
     """The report loop (a daemon thread). state() -> (game connected, in BeamMP)."""
 
     def __init__(self, cache_dir, version, state, proc_dir=None, url=URL, send=None, clock=time.monotonic,
-                 allowed=None):
+                 allowed=None, keep_id=True):
         self.cache_dir, self.version, self.state = cache_dir, str(version or ""), state
         self.proc_dir = proc_dir
         self.url = url
         self.send = send or self._post
         self.clock = clock
-        self.allowed = allowed or (lambda: True)    # (the settings page's switch, read before every report)
-        self.id = install_id(cache_dir)
+        # (the switches, read before every report: True / False, or {"main", "net", "perf"}: choices())
+        self.allowed = allowed or (lambda: True)
+        # keep_id False (privacyregion.NO_ID: Russia): a random id of this run only, never stored
+        self.id = install_id(cache_dir) if keep_id else secrets.token_hex(16)
         self.seen = {}              # pid -> {host: {counter: n}} last counted
         self.carry = {}             # host -> counts not yet delivered (a failed report)
         self._stop = threading.Event()
@@ -157,14 +170,29 @@ class Reporter:
 
     def report(self):
         sources = self.deltas()
-        if not self.allowed():          # (turned off on the settings page: nothing sent, these counts dropped)
+        a = self.allowed()
+        a = a if isinstance(a, dict) else {"main": bool(a), "net": bool(a), "perf": False}
+        if not a.get("main"):           # (off, or not chosen yet on the welcome page: nothing sent, these counts dropped)
             self.carry = {}
             return
+        if not a.get("net"):            # (network load off: no per-source counts)
+            sources = {}
         body = self.body(sources)
+        self._keep_last(body)
         if self.send(body):
             self.carry = {}
         else:
             self.carry = sources        # (sent with the next report)
+
+    def _keep_last(self, body):
+        """The report as sent, for the settings page's "What is sent" (LAST_FILE in the cache)."""
+        try:
+            p = os.path.join(self.cache_dir, LAST_FILE)
+            with open(p + ".tmp", "w", encoding="utf-8") as fh:
+                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "report": body}, fh, indent=1)
+            os.replace(p + ".tmp", p)
+        except OSError as e:
+            log.debug("telemetry last: %s", e)
 
     def _post(self, body):
         req = urllib.request.Request(self.url, json.dumps(body, separators=(",", ":")).encode("utf-8"),

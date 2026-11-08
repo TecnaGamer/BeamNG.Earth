@@ -111,5 +111,58 @@ class OptOutTest(unittest.TestCase):
             self.assertFalse(launcher.telemetry_on())
 
 
+class ChoiceTest(unittest.TestCase):
+    """Nothing before the welcome page's choice; the sub-switches only under the main one (TELEMETRY.md)."""
+
+    def test_choices(self):
+        c = telemetry.choices
+        self.assertEqual(c({}), {"main": False, "net": False, "perf": False}, "not chosen yet: nothing")
+        self.assertEqual(c({"telemetryChoice": telemetry.CONSENT_VERSION}), {"main": True, "net": True, "perf": True})
+        self.assertFalse(c({"telemetryChoice": 1, "telemetry": False})["net"], "main off: all off")
+        self.assertEqual(c({"telemetryChoice": 1, "telemetryNet": False, "telemetryPerf": False}),
+                         {"main": True, "net": False, "perf": False})
+
+    def test_report_follows_the_switches(self):
+        with tempfile.TemporaryDirectory() as d:
+            sent, a = [], [{"main": False, "net": False, "perf": False}]
+            r = telemetry.Reporter(d, "1.9.0", lambda: (True, False), send=lambda b: (sent.append(b), True)[1],
+                                   allowed=lambda: a[0])
+            r.deltas = lambda: {"api.example.org": {"req": 3, "mb": 1000}}
+            r.report()
+            self.assertEqual(sent, [], "not chosen: nothing sent")
+            a[0] = {"main": True, "net": False, "perf": False}
+            r.report()
+            self.assertEqual(sent[-1]["sources"], {}, "network load off: no per-source counts")
+            a[0] = {"main": True, "net": True, "perf": False}
+            r.report()
+            self.assertIn("api.example.org", sent[-1]["sources"])
+            with open(os.path.join(d, telemetry.LAST_FILE), encoding="utf-8") as f:
+                self.assertEqual(json.load(f)["report"], sent[-1], "the last report kept for What is sent")
+
+    def test_no_kept_id(self):
+        with tempfile.TemporaryDirectory() as d:
+            a = telemetry.Reporter(d, "1", lambda: (False, False), send=lambda b: True, keep_id=False)
+            b = telemetry.Reporter(d, "1", lambda: (False, False), send=lambda b: True, keep_id=False)
+            self.assertNotEqual(a.id, b.id)
+            self.assertFalse(os.path.exists(os.path.join(d, telemetry.ID_FILE)), "never stored")
+
+
+class RegionTest(unittest.TestCase):
+    def test_groups(self):
+        import privacyregion as p
+        cases = {"Europe/Berlin": p.NEUTRAL, "Europe/Moscow": p.NEUTRAL, "Asia/Shanghai": p.NEUTRAL,
+                 "Asia/Kolkata": p.NEUTRAL, "Europe/London": p.PERF_OFF, "America/Toronto": p.PERF_OFF,
+                 "America/Sao_Paulo": p.PERF_OFF, "Asia/Seoul": p.PERF_OFF, "Europe/Istanbul": p.PERF_OFF,
+                 "America/New_York": p.ALL, "Asia/Tokyo": p.ALL, "Australia/Sydney": p.ALL, "Europe/Zurich": p.ALL,
+                 "W. Europe Standard Time": p.NEUTRAL, "Eastern Standard Time": p.ALL, "": p.NEUTRAL, "UTC": p.NEUTRAL}
+        for z, want in cases.items():
+            self.assertEqual(p.for_zone(z), want, z)
+        self.assertTrue(p.is_russia("Asia/Novosibirsk") and not p.is_russia("Europe/Berlin"))
+
+    def test_the_hello_asks_for_the_reporters_consent_version(self):
+        import earthd
+        self.assertEqual(earthd.TELEMETRY_CONSENT, telemetry.CONSENT_VERSION)
+
+
 if __name__ == "__main__":
     unittest.main()

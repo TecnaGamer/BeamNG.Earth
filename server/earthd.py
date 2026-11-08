@@ -97,6 +97,7 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import privacyregion as privacyregionmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
@@ -157,6 +158,7 @@ PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
 WATERGUARD_VERSION = 1
+TELEMETRY_CONSENT = 1           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -6072,6 +6074,9 @@ class Connection:
                 # the mod's format is the newest it reads (a FORMAT 4 mod reads 3 too)
                 self.status(f"format mismatch: mod {msg.get('format')}, server {lay.format}")
             m = {"type": "hello", "protocol": PROTOCOL, "format": lay.format, "serverVersion": SERVER_VERSION,
+                 # the welcome page's telemetry defaults for this computer's region (privacyregion.py: its own time
+                 # zone, nothing asked of a server) and the consent version it asks for (telemetry.CONSENT_VERSION)
+                 "privacyRegion": privacyregionmod.region()[0], "telemetryConsent": TELEMETRY_CONSENT,
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
@@ -8425,7 +8430,9 @@ async def main_async(args):
             args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
             lambda: (bool(server.connections), getattr(server, "_share_hub", None) is not None),
             proc_dir=os.environ.get("BNE_NETSTATS_PROC"),
-            allowed=lambda: cpupin.player_settings(args.user_dir).get("telemetry", True) is not False).start()
+            # (the welcome page's choice and the settings page's switches: nothing before the choice; TELEMETRY.md)
+            allowed=lambda: telemetry.choices(cpupin.player_settings(args.user_dir)),
+            keep_id=not privacyregionmod.region()[1]).start()
         log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
                  "BNE_TELEMETRY=off turns it off)")
     log.info("startup: opening the local connection")

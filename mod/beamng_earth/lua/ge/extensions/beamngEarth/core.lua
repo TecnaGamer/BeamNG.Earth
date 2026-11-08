@@ -1096,6 +1096,10 @@ local function onMessage(msg)
       net.serverHello(nil, nil, msg)
     end
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
+    -- the welcome page's telemetry defaults for this computer's region and the choice the server waits for (settings.lua)
+    if rawget(_G, 'beamngEarth_settings') and beamngEarth_settings.serverPrivacy then
+      pcall(beamngEarth_settings.serverPrivacy, msg.privacyRegion, msg.telemetryConsent)
+    end
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
