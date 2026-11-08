@@ -1,0 +1,181 @@
+{
+  "bne_au_amen_steel": {
+    "name": "bne_au_amen_steel",
+    "mapTo": "bne_au_amen_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9bf94448-c2fb-5953-abef-b91423331de6",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.22,
+          0.23,
+          0.25,
+          1.0
+        ],
+        "metallicFactor": 0.5,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_orange": {
+    "name": "bne_au_amen_orange",
+    "mapTo": "bne_au_amen_orange",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a62f9eda-17ea-5742-8f3e-58b595e31d62",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.38,
+          0.08,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_blue": {
+    "name": "bne_au_amen_blue",
+    "mapTo": "bne_au_amen_blue",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3221988a-07f2-5b81-9dcf-8e8379043a50",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.2,
+          0.55,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_phone": {
+    "name": "bne_au_amen_phone",
+    "mapTo": "bne_au_amen_phone",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "47ccccc7-9f1c-5225-a54f-1183f5071222",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.12,
+          0.12,
+          0.13,
+          1.0
+        ],
+        "metallicFactor": 0.2,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_red": {
+    "name": "bne_au_amen_red",
+    "mapTo": "bne_au_amen_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6d31192c-8a29-55c7-b606-97538fa5cf51",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.8,
+          0.06,
+          0.05,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_white": {
+    "name": "bne_au_amen_white",
+    "mapTo": "bne_au_amen_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6f346bb1-bb16-580e-8ab1-eeeed44aa5b7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.92,
+          0.92,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_dark": {
+    "name": "bne_au_amen_dark",
+    "mapTo": "bne_au_amen_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f350629e-88f0-5928-840b-509788a50e9f",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.05,
+          0.05,
+          0.06,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_glass": {
+    "name": "bne_au_amen_glass",
+    "mapTo": "bne_au_amen_glass",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7b8e55dc-76cb-55cc-ac38-82ea057ddca5",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.65,
+          0.7,
+          0.72,
+          0.35
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.1
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "castShadows": false,
+    "doubleSided": true
+  }
+}

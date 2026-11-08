@@ -1881,7 +1881,30 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         recs.append(rec)
         if pads is not None and site.pad:
             pads.append((site.station.id, _pad_ll(site.pad, frame)))
+    recs.extend(_amenity_records(frame, md, box, osm, elev))     # fork: AU payphones and post boxes
     return recs, frozenset(skip)
+
+
+def _amenity_records(frame, md, box, osm, elev):  # fork: AU payphones and post boxes (streetamenities.py)
+    """The records of the OSM payphones and post boxes (cached cells' rows) this tile owns: one prop each, no areas. [] outside
+    a region with models (nothing else is read), and on any failure (the stations' records are never lost to them)."""
+    import roads
+    import streetamenities
+    try:
+        mine = [p for p in streetamenities.points(frame, osm) if roads.box_owns(box, p["x"], p["y"])]
+        if not mine:
+            return []
+        xs, ys = [p["x"] for p in mine], [p["y"] for p in mine]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        r = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys))) / 2 + 40.0
+        layers = [md.cell(k, layers=("buildings", "roads"), kind="demand") for k in _cells_near(frame, cx, cy, r)]
+        rls = [c.layers.get("roads") for c in layers]
+        sites = streetamenities.sites(mine, box, drive_lines(frame, rls, cx, cy, r),
+                                      buildings_touching(frame, [c.layers.get("buildings") for c in layers], cx, cy, r))
+        return [_record(site, frame, elev) for site in sites]
+    except Exception as e:
+        log.debug("street amenities of road tile: %s: %s", type(e).__name__, e)
+        return []
 
 
 def _charger_site(frame, md, ch, stations):

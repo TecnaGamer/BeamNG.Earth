@@ -38,7 +38,8 @@ KEEP_TAIL = 16 * 1024 * 1024        # ... besides its last 16 MB: the footer (ro
 PRUNE_EVERY_S = 30.0                # (MapData.osm_fuel_fetch prunes at most this often)
 # the amenities kept: fuel stations, and EV charging stations (the user, 2026-10-29: "real life ev stations mapped like
 # the gas stations are"), found in the same pass: the same columns, no more requests
-AMENITIES = ("fuel", "charging_station")
+# fork: and payphones and post boxes (amenity=telephone / post_box; streetamenities.py: Australia's street furniture), the same pass
+AMENITIES = ("fuel", "charging_station", "telephone", "post_box")
 FIND = ("bbox", "amenity")                              # step 1: the cell's fuel rows (no id: a third of
                                                         # the bytes; ids with the names in step 2)
 DETAIL = ("id", "brand", "name", "building")           # step 2: of the row groups that have any (no geometry:
