@@ -106,7 +106,7 @@ def _shape(path, mats, extra=False):
                         np.hstack([k, np.full((n, 1), 0.05), np.zeros((n, 1))])])
     T = np.stack([np.arange(n), np.arange(n) + n, np.arange(n) + 2 * n], axis=1)
     kw = dict(uvs2=np.full((3 * n, 2), 0.5), colors=np.full((3 * n, 4), 255, np.uint8)) if extra else {}
-    cdae.write(path, P, T, uvs=np.zeros((3 * n, 2)), material=mats, tri_materials=np.arange(n), object_name="prewarm",
+    cdae.write(path, P, T, close=False, uvs=np.zeros((3 * n, 2)), material=mats, tri_materials=np.arange(n), object_name="prewarm",
                **kw)
 
 

@@ -298,14 +298,17 @@ impl Mesh {
         if lean {
             ring = ring.iter().map(|r| LEAN.iter().map(|&j| r[j]).collect()).collect();
             prof = prof.iter().map(|r| LEAN.iter().map(|&j| r[j]).collect()).collect();
-            let ls: Vec<(usize, usize, i64, f64, f64)> = (0..LEAN.len() - 1).map(|i| (i, i + 1, 0, 0.0, 0.0)).collect();
+            let mut ls: Vec<(usize, usize, i64, f64, f64)> = (0..LEAN.len() - 1).map(|i| (i, i + 1, 0, 0.0, 0.0)).collect();
+            ls.push((LEAN.len() - 1, 0, 0, 0.0, 0.0));     // the underside: a closed solid (watertight)
             self.strips(&ring, &prof, &out, &s, &ls, None, 1);
         } else {
             let low: Vec<bool> = hr.iter().map(|&v| v < h - 1e-6).collect();
             let tac: Option<Vec<bool>> = if low.iter().any(|&v| v) {
                 Some((0..k - 1).map(|i| low[i] || low[i + 1]).collect())
             } else { None };
-            self.strips(&ring, &prof, &out, &s, &strips(), tac.as_deref(), slab);
+            let mut st = strips();
+            st.push((7, 0, 0, v_band_low(), v_band_low()));  // the underside: a closed solid (watertight)
+            self.strips(&ring, &prof, &out, &s, &st, tac.as_deref(), slab);
         }
         for (end, sgn, cap) in [(0usize, -1.0f64, caps.0), (k - 1, 1.0, caps.1)] {
             if !cap {
@@ -404,6 +407,7 @@ impl Mesh {
         }
         let c = [cx / m as f64, cy / m as f64];
         let drop = h + SINK + 2.5 * CROSS_SLOPE;
+        let mut bottom: Vec<[f64; 3]> = ring.iter().map(|r| r[0]).collect();    // the underside (watertight)
         for w2 in out.windows(2) {
             let (a, b) = (w2[0], w2[1]);
             let t = [b[0] - a[0], b[1] - a[1]];
@@ -415,6 +419,8 @@ impl Mesh {
             }
             let run = [nrm[0] * BACK_RUN * drop, nrm[1] * BACK_RUN * drop, -drop];
             let p = vec![a, b, [b[0] + run[0], b[1] + run[1], b[2] + run[2]], [a[0] + run[0], a[1] + run[1], a[2] + run[2]]];
+            bottom.push(p[3]);
+            bottom.push(p[2]);
             let len = (b[0] - a[0]).hypot(b[1] - a[1]) / CURB_REPEAT_M;
             let uv = vec![[0.0, v_light_low()], [len, v_light_low()], [len, v_band_low()], [0.0, v_band_low()]];
             let want = [mid[0] - c[0], mid[1] - c[1], 0.0];
@@ -425,6 +431,40 @@ impl Mesh {
                 self.t.push([tt[0] + base, tt[1] + base, tt[2] + base]);
                 self.m.push(0);
             }
+        }
+        self.underside(&bottom);
+    }
+
+    /// A flat-ish underside polygon (ear-clipped in plan), facing down: a corner piece closed below.
+    fn underside(&mut self, poly0: &[[f64; 3]]) {
+        let mut poly: Vec<[f64; 3]> = Vec::with_capacity(poly0.len());
+        for q in poly0 {
+            if poly.last().map_or(true, |l: &[f64; 3]| (l[0] - q[0]).hypot(l[1] - q[1]) > 1e-4) { poly.push(*q); }
+        }
+        while poly.len() > 3 && (poly[0][0] - poly[poly.len() - 1][0]).hypot(poly[0][1] - poly[poly.len() - 1][1]) <= 1e-4 {
+            poly.pop();
+        }
+        let m = poly.len();
+        if m < 3 {
+            return;
+        }
+        let xy: Vec<(f64, f64)> = poly.iter().map(|q| (q[0], q[1])).collect();
+        let mut area = 0.0;
+        for i in 0..m {
+            let j = (i + 1) % m;
+            area += xy[i].0 * xy[j].1 - xy[j].0 * xy[i].1;
+        }
+        let order: Vec<usize> = if area > 0.0 { (0..m).collect() } else { (0..m).rev().collect() };
+        let pts: Vec<(f64, f64)> = order.iter().map(|&i| xy[i]).collect();
+        let tris = crate::ear_clip(&pts);
+        let uv: Vec<[f64; 2]> = poly.iter().map(|q| [q[0] / CURB_REPEAT_M, v_band_low()]).collect();
+        let local = poly.clone();
+        let base = self.add(poly, uv);
+        for t in &tris {
+            let tt = orient([order[t[0] as usize] as i64, order[t[1] as usize] as i64, order[t[2] as usize] as i64],
+                            &local, [0.0, 0.0, -1.0]);
+            self.t.push([tt[0] + base, tt[1] + base, tt[2] + base]);
+            self.m.push(0);
         }
     }
 }

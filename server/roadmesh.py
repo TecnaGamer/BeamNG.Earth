@@ -2218,7 +2218,7 @@ def _tunnel_lamps(P, T, UV, M, nv, mid, u, z, hw, origin):
     return nv
 
 
-def write(path, mesh):
+def write(path, mesh, close=True):
     """mesh: build's (positions, tris, uvs, materials, tri material) and, with a dirt or gravel strip in it, its fade
     uv: the second uv, in the vertex format that also carries a colour (white: the strips' materials leave vertColor
     off, and the others in the mesh ignore it or multiply by 1)."""
@@ -2226,4 +2226,4 @@ def write(path, mesh):
     uvs2 = mesh[5] if len(mesh) > 5 else None
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
     return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road",
-                      colors=colors)
+                      colors=colors, close=close)   # (close "under": a tunnel's tubes, whose mouths are the way in)

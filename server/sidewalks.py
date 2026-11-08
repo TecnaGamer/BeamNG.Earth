@@ -188,7 +188,7 @@ class Builder:
     def _build(self):
         if self._built is None:
             import fast
-            fast.require(104, "sidewalk_mesh")
+            fast.require(104, "sidewalk_mesh")      # (150: runs and corners closed underneath; older: shells.close at the write)
             ps = self.pieces
             kind = np.array([p[0] for p in ps], np.int64)
             pts = np.ascontiguousarray(np.concatenate([p[1] for p in ps]) if ps else np.zeros((0, 3)))
