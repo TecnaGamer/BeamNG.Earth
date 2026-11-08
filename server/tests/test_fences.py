@@ -52,6 +52,30 @@ class PlaceTest(unittest.TestCase):
     def rows(self, feats, box=(0.0, 0.0, 100.0, 100.0)):
         return fences.rows(self.frame, lambda key: feats, box, lambda la, lo: np.full(np.shape(la), 5.0))
 
+    def test_mapped_wall_uses_path_bridge_height_without_lifting_an_untagged_wall(self):
+        import roads
+        from test_roads import features
+        f = features([[(0, 20), (100, 20)], [(50, -40), (50, 60)]], ["cycleway", "primary"],
+                     surfaces=[(0, "paved")], flags=[(0, "is_bridge")], levels=[(0, 1)])
+        elev = lambda la, lo: np.full(np.shape(la), 5.)
+        profile = roads.PathBridgeProfiles(self.frame, lambda key: f, elev)
+        parts = roads.deck_parts_for_barriers(None, profile, [f], (0., 0., 100., 100.))
+        self.assertEqual(len(parts), 1)
+        decks = [{"n": np.column_stack((xy, z)), "w": sp.width} for _, sp, xy, z, _ in parts]
+        for tagged in (False, True):
+            tags = {"wall": "noise_barrier", **({"bridge": "yes"} if tagged else {})}
+            infra = self.line("wall", tags, [[35., 21.], [65., 21.]])
+            got = fences.rows(self.frame, lambda key: infra, (0., 0., 100., 100.), elev, decks=decks)
+            self.assertTrue(got)
+            if tagged:
+                xy, z = parts[0][2:4]
+                # The stock wall origin is at one end; deck support is sampled at its centre.
+                expected = np.interp([row[1] + fences.WALL_ALONG for row in got], xy[:, 0], z)
+                np.testing.assert_allclose([row[3] for row in got], expected, atol=.03)
+                self.assertGreater(min(row[3] for row in got), 8.)
+            else:
+                np.testing.assert_allclose([row[3] for row in got], 5., atol=.02)
+
     def test_chain_link_panels_follow_the_line(self):
         got = self.rows(self.line("fence", {"fence_type": "chain_link"}, [[10.0, 50.0], [90.0, 50.0]]))
         self.assertGreaterEqual(len(got), 30)

@@ -344,7 +344,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             fast._ef.mask_segments(m, np.ascontiguousarray(np.concatenate(dst[0])), np.concatenate(dst[1]))
         return m
 
-    out = idx.copy()
+    import mappedpaths
+    out = mappedpaths.paint_materials(idx, lat, lon, square, feats_list)
     out[mask(lawn)] = LAWN
     # roundabout footprints: lawn under the grass photo fill (photo_roads), so tyres feel grass not asphalt scar
     for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon):
@@ -724,6 +725,8 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
         rgb = photo_corners(rgb, frame, x0, y0, size, corner_pads(frame, x0, y0, size, feats_list, urban_fn, widths))
         filled = _fill_island_photos(np.ascontiguousarray(rgb, np.uint8),
                                      _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths))
+    import mappedpaths
+    filled = mappedpaths.paint_photo(filled, frame, x0, y0, size, feats_list)
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         return filled

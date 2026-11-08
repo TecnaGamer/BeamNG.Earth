@@ -104,8 +104,7 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-# roads 9: OpenStreetMap's busways appended (osmtags.busway_features). Overture emits none, as with raceways.
-LAYER_VERSIONS = {"roads": 9}
+LAYER_VERSIONS = {"roads": 10}    # mapped path tags/geometry; retains upstream busways
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -447,7 +446,8 @@ class MapData:
             feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
                 feats = self._osm(feats, osm.result(),
-                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
+                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need),
+                                  lambda ids: self.osmtags.highway_geometry(key.bounds(), kind, way_ids=ids))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -554,18 +554,31 @@ class MapData:
         self.osmfuel.warm(kind)
 
     @staticmethod
-    def _osm(feats, got, geometry=None):
-        """The roads with the cell's OpenStreetMap tags joined in and its raceways and busways appended (Overture has
-        neither, GitHub #143). Busway ids sort before raceway ids, and both sort after an Overture id."""
+    def _osm(feats, got, geometry=None, path_geometry=None):
+        """Join exact OSM tags and append busways, missing paths and raceways in ascending ID order."""
         import mapgeom
         import osmtags
         tags, ways = got
-        # Busways first: "osm-busway-..." sorts before "osm-raceway-...", which mapgeom.concat requires.
-        # A way with no highway tag is a raceway, as every extra way was before busways existed.
-        for cls, build in (("busway", osmtags.busway_features), ("raceway", osmtags.raceway_features)):
-            picked = [w for w in ways if str(w.get("highway") or "raceway") == cls]
-            if picked:
-                feats = mapgeom.concat(feats, build(picked))
+        busways = [w for w in ways if str(w.get("highway") or "raceway") == "busway"]
+        if busways:
+            feats = mapgeom.concat(feats, osmtags.busway_features(busways))
+        if path_geometry is not None:
+            import mappedpaths
+            records = feats.attrs.get("src_record", ())
+            existing = {osmtags.way_id(str(r)) for r in records}
+            # Overture can merge several OSM ways into one feature. Its scoped source
+            # records already cover a bridge even when the longer approach is primary.
+            sources = feats.rules.get("src_ways")
+            if sources is not None:
+                existing.update(osmtags.way_id(str(r)) for r in sources.value)
+            missing = {wid for wid, t in tags.items()
+                       if t.get("osm_highway") in mappedpaths.STYLE and wid not in existing}
+            if missing:
+                paths = path_geometry(missing)
+                feats = mapgeom.concat(feats, osmtags.path_features(tags, paths))
+        raceways = [w for w in ways if str(w.get("highway") or "raceway") == "raceway"]
+        if raceways:
+            feats = mapgeom.concat(feats, osmtags.raceway_features(raceways))
         osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)

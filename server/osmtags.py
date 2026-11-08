@@ -33,6 +33,7 @@ import netfetch
 import overture
 import rangeread
 import xproc
+import mappedpaths
 
 log = logging.getLogger("earthd.mapdata")
 
@@ -44,6 +45,7 @@ PATH = "osm/highways.parquet"   # (the path DuckDB reads it under)
 
 # The query: OSM way id and the parsed tags (NULL where absent or not understood).
 _NUM = r"'^\s*([0-9]+(?:\.[0-9]+)?)'"
+PATH_HIGHWAYS = ', '.join(repr(c) for c in mappedpaths.CLASSES)
 COLUMNS = {
     "lanes": "TRY_CAST(regexp_extract(lanes, '^\\s*([0-9]+)\\s*$', 1) AS INTEGER)",
     "width": (f"TRY_CAST(regexp_extract(width, {_NUM}, 1) AS DOUBLE) * "
@@ -61,22 +63,27 @@ COLUMNS = {
     "name": "name",
     # a road not built yet (GitHub #184: a trunk road under construction, opening 2026-12-31, drawn as a finished road;
     # Overture calls highway=construction "unknown"): only these two values, every other highway NULL
-    "osm_highway": "CASE WHEN highway IN ('construction', 'proposed') THEN highway END",
+    "osm_highway": f"CASE WHEN highway IN ('construction', 'proposed', {PATH_HIGHWAYS}) THEN highway END",
+    "osm_bridge": f"CASE WHEN highway IN ({PATH_HIGHWAYS}) THEN bridge END",
+    "osm_tunnel": f"CASE WHEN highway IN ({PATH_HIGHWAYS}) THEN tunnel END",
     # a motorway's or trunk's (and their links') class: their current geometry is read to match ways Overture's
     # release still names by an older id (roadlanes.join, PR #471)
     "lane_hw": "CASE WHEN highway IN ('motorway', 'trunk', 'motorway_link', 'trunk_link') THEN highway END",
     "bx0": "bbox.xmin", "by0": "bbox.ymin", "bx1": "bbox.xmax", "by1": "bbox.ymax",
 }
-TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway", "lane_hw"}
+TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway", "lane_hw",
+                "osm_bridge", "osm_tunnel"}
 INT_COLUMNS = {"lanes", "osm_layer"}
 GROUPS_FILE = "groups.json"     # the version's parsed row groups (OsmTags._groups)
-TABLE_DIR = "rg"        # a row group's decoded ways (OsmTags._table), in the version's folder
+TABLE_DIR = "rg-paths-1"  # changed highway selection / path columns; old decoded rows remain evictable
 TABLE_MEM = 6           # decoded row groups kept in memory (~6 MB each; a place's cells share 3-5)
 EXACT32 = {"bx0", "by0", "bx1", "by1", "lanes", "osm_layer"}   # float32 (the file's bbox; small integers)
 TABLE_WAIT_S = 60.0     # a row group another process decodes is waited for this long
-USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name"}
+USED = {"id", "bbox", "lanes", "width", "maxspeed", "sidewalk", "lit", "smoothness", "surface", "oneway", "layer", "name",
+        "bridge", "tunnel"}
 FLOATS = ("lanes", "width", "maxspeed", "osm_layer")
-TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway")
+TEXTS = ("sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "osm_highway",
+         "osm_bridge", "osm_tunnel")
 GEOMETRY_MARGIN_M = 6.0    # m round a tagged highway's bbox a replaced way's line may reach (roadlanes.join's 6 m)
 UNBUILT = ("construction", "proposed")      # osm_highway's values: not drawn (roads.unbuilt)
 NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the same-named way it takes the tags of
@@ -175,13 +182,18 @@ class OsmTags:
                 self._forget()
         return {}, []
 
-    def highway_geometry(self, bounds, kind="demand", need=None):
+    def highway_geometry(self, bounds, kind="demand", need=None, way_ids=None):
         """{way id: (k, 2) lon/lat} of the tagged motorways / trunks (and their links) with a lane count whose bbox
         touches bounds: PR #471's match for a highway whose Overture way id OSM no longer has (roadlanes.join). Asked
         only then (roadlanes.join's geometry callback): the geometry column of their row groups was ~33 MB more of a
         cold downtown Los Angeles visit (4 road tiles, 2026-11-04) when every cell read it. need: [(lon0, lat0, lon1,
         lat1)] of the highways to match: only the ways whose bbox (GEOMETRY_MARGIN_M round it) holds one of them
-        (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read."""
+        (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read.
+        way_ids: instead read just these missing path IDs, without a motorway/lane-count requirement."""
+        # Explicit missing-path IDs use the same lazy geometry reader, never a whole extra layer.
+        wanted_ids = None if way_ids is None else set(way_ids)
+        if wanted_ids is not None and not wanted_ids:
+            return {}
         lon0, lat0, lon1, lat1 = bounds
         etag, remote = self.version(kind)
         rd = self._reader
@@ -204,6 +216,10 @@ class OsmTags:
                 m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
                                    & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
                 for r in _rows(t, m):
+                    if wanted_ids is not None:
+                        if int(r[0]) in wanted_ids:
+                            lane_rows.append(r[_ROW_FRN])
+                        continue
                     if r[_ROW_VAL + lanes] is None or r[_ROW_VAL + hw] is None:
                         continue
                     if need is not None:
@@ -228,7 +244,7 @@ class OsmTags:
                                         f'WHERE file_row_number IN ({wanted})').fetchall():
                 if wkb is not None:
                     p = _linestring(bytes(wkb))
-                    if p is not None:
+                    if p is not None and len(p) >= 2 and np.isfinite(p).all():
                         out[int(wid)] = p
         except rangeread.Changed:
             raise
@@ -323,7 +339,8 @@ class OsmTags:
         def load():
             try:
                 with np.load(path, allow_pickle=False) as f:
-                    if "lane_hw_ok" not in f.files or "bus" not in f.files:  # (decoded before busways: decoded again)
+                    if ("lane_hw_ok" not in f.files or "bus" not in f.files
+                            or not set(COLUMNS).issubset(f.files)):  # older decoded tag columns: decode again
                         return None
                     return {c: f[c] for c in f.files}
             except (OSError, ValueError, KeyError):
@@ -367,12 +384,14 @@ class OsmTags:
         rd = self._reader
         want = {c for c in g["cols"] if c in USED or c == "highway"}
         rd._fetch({PATH: remote}, {PATH: [r for c, rs in g["cols"].items() if c in want for r in rs]}, kind)
-        cols = ", ".join(f"{expr} AS \"{name}\"" for name, expr in COLUMNS.items())
-        # only the ways with a tag the roads use (and the raceways and busways): join() treats a way without one as
-        # one not here, and building a dict per way of every highway in the cell was most of this thread's CPU
+        optional = {"osm_bridge": "bridge", "osm_tunnel": "tunnel"}
+        cols = ", ".join(f"{expr if name not in optional or optional[name] in g['cols'] else 'NULL'} AS \"{name}\""
+                         for name, expr in COLUMNS.items())
+        # Only used tags, unbuilt ways and supplementary ways: join() treats an untagged road as absent.
+        # Building a dict for every highway in the cell was most of this thread's CPU
         # (osmtags, 14 CPU-s of a Deck's teleport, 2026-10-23)
-        some = " OR ".join([f"{c} IS NOT NULL" for c in sorted(USED - {"id", "bbox"})]
-                           + [f"highway IN ({', '.join(repr(v) for v in UNBUILT)})"])
+        some = " OR ".join([f"{c} IS NOT NULL" for c in sorted((USED - {"id", "bbox"}) & set(g['cols']))]
+                           + [f"highway IN ({', '.join(repr(v) for v in UNBUILT)}, {PATH_HIGHWAYS})"])
         got = con.execute(f"""SELECT id, highway = 'raceway', highway = 'busway', file_row_number, {cols}
             FROM read_parquet({uri}, file_row_number = true)
             WHERE file_row_number BETWEEN {g['first']} AND {g['first'] + g['n'] - 1}
@@ -538,6 +557,22 @@ def _appended_features(ways, cls, default_width=None, oneway=False):
     return f
 
 
+def path_features(tags, geometry):
+    """Missing OSM linear paths using the same feature/rule layout as supplementary raceways."""
+    import mapgeom as mg
+    ways = []
+    for wid in sorted(geometry):
+        tag = tags[wid]
+        ways.append({"id": wid, "coords": geometry[wid], "name": tag.get("name"),
+                     "surface": tag.get("osm_surface"), "width": tag.get("width"),
+                     "layer": tag.get("osm_layer"), "bridge": tag.get("osm_bridge"),
+                     "tunnel": tag.get("osm_tunnel")})
+    f = _appended_features(ways, "path")
+    if len(f):
+        f.attrs["class"] = mg.text_column([tags[w["id"]]["osm_highway"] for w in ways])
+    return f
+
+
 def _linestring(wkb):
     """(k, 2) lon/lat of a WKB LineString (2D, either byte order), else None."""
     import struct
@@ -586,11 +621,20 @@ def join(feats, tags, geometry=None):
     recs = feats.attrs.get("src_record")
     n = len(feats)
     ids = [way_id(str(recs[i])) if recs is not None else None for i in range(n)]
+    # A source path which Overture calls unknown must not enter vehicle consumers. Only exact-way
+    # evidence can change its physical class; a same-named street is not evidence about this path.
+    classes = [str(v) for v in feats.attrs.get("class", ["unknown"] * n)]
+    for i, wid in enumerate(ids):
+        hw = tags.get(wid, {}).get("osm_highway")
+        if hw in mappedpaths.CLASSES:
+            classes[i] = hw
+    feats.attrs["class"] = mg.text_column(classes)
     by_name = {}
     for w, t in tags.items():
         if t.get("name") and all(k in t for k in ("bx0", "by0", "bx1", "by1")):
             by_name.setdefault(str(t["name"]), []).append((w, t["bx0"], t["by0"], t["bx1"], t["by1"]))
-    named = [w if w in tags else _named_way(feats, i, by_name) for i, w in enumerate(ids)]
+    named = [w if w in tags or classes[i] in mappedpaths.CLASSES else _named_way(feats, i, by_name)
+             for i, w in enumerate(ids)]
     for c in FLOATS:
         if c == "lanes":
             classes = feats.attrs.get("class", [""] * n)
@@ -600,7 +644,7 @@ def join(feats, tags, geometry=None):
         feats.attrs["osm_" + c if not c.startswith("osm_") else c] = np.array(
             [float(tags.get(w, {}).get(c, np.nan)) if w is not None else np.nan for w in named], np.float64)
     for c in TEXTS:
-        src = ids if c == "osm_oneway" else named
+        src = ids if c in ("osm_oneway", "osm_highway", "osm_bridge", "osm_tunnel") else named
         feats.attrs[c if c.startswith("osm_") else "osm_" + c] = mg.text_column(
             [str(tags.get(w, {}).get(c, "")) if w is not None else "" for w in src])
     # A way without a lane count takes the count of the same-named way around it going the same way (one-way or

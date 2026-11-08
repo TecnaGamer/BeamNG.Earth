@@ -915,8 +915,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     town_faces = {}                     # the town signs' faces the tile's props use (BNE_TOWNSIGNS)
     towns = (town_signs(frame, tx, ty, out_dir, vfs_dir, town_faces)
              if props is not None and out_dir is not None else None)
+    path_bridges = (g.store.path_bridge_view(frame) if g is not None else
+                    roadsmod.ChainView(_chain_store("path_bridges", roadsmod.PathBridgeProfiles, elev), frame))
     chunks = roadsmod.build_tile(frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=bridges, widths=_s.widths,
                                  sign_obstacles=sign_obstacles,
+                                 path_bridges=path_bridges,
                                  walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                  props=props, lines=lines, wires=wires, town=town, park=park,
                                  left_hand=left_hand, mph=mph, buried=buried, lamp_region=lamp_region, country=country,
@@ -984,7 +987,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_decks = []
     rail_decks = []                 # railways.tile_mesh fills these in below (fences.py stands walls on them)
     try:
-        deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
+        deck_parts = roadsmod.deck_parts_for_barriers(bridges, path_bridges, cells,
+                                                      (box[0]-10, box[1]-10, box[2]+10, box[3]+10))
         if _bridge_fps:
             deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
         guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
@@ -1014,6 +1018,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         finish(guardrail_rows, [(np.asarray(ch['n']), ch['w'] / 2) for ch in drives if 'n' in ch and 'w' in ch])
     mark("roadside_signs")
     _piers, _beams = bridges.piers_in(box), bridges.beams_in(box)
+    if path_bridges is not None:
+        _piers += path_bridges.piers_in(box)
+        _beams += path_bridges.beams_in(box)
     if _bridge_fps:
         _piers, _beams = buildingsmod.bridge_stub_piers(_bridge_fps, _piers, _beams)
     P.dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams, ground=cover,
@@ -1037,7 +1044,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
-                                 return_decks=True)
+                                 return_decks=True,
+                                   path_decks=path_bridges.parts(cells, box) if path_bridges is not None else ())
     mark("railways")
     bld = None
     garage_sound = ()

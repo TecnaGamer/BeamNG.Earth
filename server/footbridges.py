@@ -48,11 +48,17 @@ def _width(feats, i, cls):
     return WIDTH_M.get(cls, WIDTH_DEFAULT_M)
 
 
-def parts(frame, cells, box, reach=REACH_M):
+def parts(frame, cells, box, reach=REACH_M, path_decks=()):
     """[(fid, xy (k, 2) every STEP_M, width m)]: the walkways' bridge pieces near box (x0, y0, x1, y1), each feature
-    once (by id), in id order."""
+    once (by id), in id order. path_decks holds already rendered (fid, spec, xy, z, lon) parts;
+    their source-matching, fully covered pieces need no second deck or elevation work."""
     import mapgeom
     import railways
+    import roads
+    handled = {}
+    for fid, _spec, xy, z, _lon in path_decks:
+        if len(xy) >= 2 and len(z) == len(xy) and np.isfinite(z).all():
+            handled.setdefault(str(fid), []).append((xy, 0.05))
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
     for feats in cells:
@@ -83,6 +89,10 @@ def parts(frame, cells, box, reach=REACH_M):
                                                    near):
                         continue
                     xy = railways._resample(xy, STEP_M)
+                    # The mapped path pipeline already renders this exact source piece. Keep other
+                    # parts of the same way and nearby parallel ways; never replace an unhandled span.
+                    if fid in handled and roads._on_carriageways(xy, dict(enumerate(handled[fid])), 0.0).all():
+                        continue
                     L = float(railways._arc(xy)[-1]) if len(xy) >= 2 else 0.0
                     if LEN_RANGE_M[0] <= L <= LEN_RANGE_M[1]:
                         out.append((fid, xy, _width(feats, i, c)))

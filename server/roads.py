@@ -37,6 +37,7 @@ import mapcells
 import mapgeom
 import roadmesh
 import staging
+import mappedpaths
 
 log = logging.getLogger("earthd.roads")
 
@@ -86,7 +87,7 @@ COBBLE = {"paving_stones", "sett", "cobblestone", "unhewn_cobblestone", "bricks"
 COBBLE_ALIASES = {"interlocking_pavers", "interlocking_stones", "pavers", "block_pavers", "paving_stone",
                   # OSM's surface=stone is mostly stone paving (flagstones, slabs), not a rock track (merge review of
                   # PR #119, 2026-10-22)
-                  "stone", "stones"}
+                  "stone", "stones", "flagstone", "flagstones", "tiles"}
 GRAVEL = {"gravel", "fine_gravel", "compacted", "pebblestone", "wbm", "laterite"}   # (water-bound macadam: PR #146)
 # ... and the values that do mean "no hard surface": an unrecognised one is not one of these (the class decides)
 UNPAVED = {"unpaved", "ground", "dirt", "earth", "mud", "grass", "grass_paver", "sand", "soil",
@@ -451,7 +452,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 7      # 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 8      # 8: mapped path classification/vehicle exclusion; 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -707,7 +708,8 @@ def _structure_width(feats, i):
     its whole length has no road_specs entry: its ranges were never lengthened over the roads under it; from cody196's
     PR #368), or None (not a drawn road)."""
     cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-    if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE or unbuilt(feats, i):
+    if (str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE
+            or cls in mappedpaths.CLASSES or unbuilt(feats, i)):
         return None
     rules = feats.rules
     width = _rule_value(rules.get("width"), i)
@@ -2570,7 +2572,8 @@ def _road_specs(feats, urban_fn, left_hand):
     lens = _lengths(feats) if ncon is not None else None
     for i in range(len(feats)):
         cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE or unbuilt(feats, i):
+        if (str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE
+                or cls in mappedpaths.CLASSES or unbuilt(feats, i)):
             out.append(None)
             continue
         rngs = raw_level_ranges(feats, i)        # (raw: _skew_decks reads these specs)
@@ -2937,7 +2940,8 @@ def _bridge_specs(feats, want="bridge"):
     ground = road_specs(feats)      # (rural: no parking on a deck; its divided carriageways, dual_carriageways)
     for i in range(len(feats)):
         cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
-        if str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE or unbuilt(feats, i):
+        if (str(feats.attrs.get("subtype", ["road"] * len(feats))[i]) != "road" or cls not in STYLE
+                or cls in mappedpaths.CLASSES or unbuilt(feats, i)):
             out.append(None)
             continue
         # (the lengthened ranges: a bridge's range carried onto the road joined at its end (_skew_decks) is a deck
@@ -4834,6 +4838,8 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     (railtags.LANE_COLUMNS: the lines lane by lane, markings.lane_plan); ws: its width at each point of pts where
     it tapers (taper_widths: its edges, curbs and lane lines follow); shift: its lines' shift (m, + left) at
     each point at a merge or split (shift_at: its markings only). Pure."""
+    if spec.cls in mappedpaths.CLASSES:
+        return []
     import markings
     out = []
     st = markings.style(country, lon)
@@ -6498,6 +6504,53 @@ def _shallow_full_low(s, g, floor, kinds):
             kinds[i:j + 1] = 1
         i = j + 1
     return floor, kinds
+
+
+def deck_parts_for_barriers(bridges, path_bridges, cells, box):
+    """Rendered deck heights for mapped barriers, without adding paths to vehicle-road consumers."""
+    return [part for view in (bridges, path_bridges) if view is not None
+            for part in view.parts(cells, box) if np.isfinite(part[3]).all()]
+
+
+class PathBridgeProfiles(BridgeProfiles):
+    """Mapped hard-surfaced path decks, isolated from vehicle-road chains."""
+    END_JOINS = False
+    specs_of = staticmethod(lambda feats: mappedpaths.specs(feats, bridge=True))
+    parts_of = staticmethod(mappedpaths.bridge_parts)
+    levels_of = staticmethod(lambda feats, i: [
+        float(feats.attrs["osm_layer"][i]) if "osm_layer" in feats.attrs
+        and np.isfinite(feats.attrs["osm_layer"][i]) else 1.0
+        for _ in mappedpaths.bridge_parts(feats, i)])
+
+    def _end_ons_of(self, lines, halves, levels, ground):
+        return []       # proximity to a vehicle deck does not establish a path connection
+
+    def _observed(self, comp, pool, lines, zs, level=1, pins=None):
+        return zs       # vehicle-carriageway observations are not path-deck measurements
+
+    def _solve(self, comp, pool, ground):
+        out = super()._solve(comp, pool, ground)
+        lines = [pool[k][1] for k in comp]
+        roads_ = [line for k, values in ground.items() if k[1] in ("g", "r") for line in values]
+        crossings = _crossings(lines, roads_)
+        if not crossings:
+            return out
+        heights = self._ground(np.array([c[2] for c in crossings]))
+        for i, line in enumerate(lines):
+            arc = np.r_[0., np.cumsum(np.linalg.norm(np.diff(line, axis=0), axis=1))]
+            z = out[i].copy()
+            clearance = deck_road_clear(self.depth.get(comp[i]))
+            for (part, at, _point), h in zip(crossings, heights):
+                if part == i:
+                    # Keep existing clearance after the vehicle solver's endpoint easing. A
+                    # bounded 10% inferred profile may lift the ends, but not invent large fills.
+                    z = np.maximum(z, h + clearance + DECK_STEP * 0.05 - .10 * np.abs(arc - at))
+            end_change = np.max(np.abs(z[[0, -1]] - out[i][[0, -1]]))
+            if end_change > mappedpaths.MAX_APPROACH_CHANGE_M:
+                log.warning("path bridge %s: clearance requires unsupported approach earthworks", comp[i][0])
+                z[:] = np.nan
+            out[i] = z
+        return out
 
 
 class TunnelProfiles(BridgeProfiles):
@@ -8918,7 +8971,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
-               sign_obstacles=None, roadside_jobs=None, towns=None):
+               sign_obstacles=None, roadside_jobs=None, towns=None, path_bridges=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -9078,6 +9131,16 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             chunks.append(ch)
         elif deck_context is not None:          # the decks around the tile (roadmesh.deck's parapet test)
             deck_context.append(ch)
+    # Independent path decks use the same mesh/collision export, without vehicle markings,
+    # traffic clearance, parking or furniture. Their height solver retains the road below.
+    if path_bridges is not None:
+        for ch in _bridge_chunks(frame, {}, elev, own_box, path_bridges, cells):
+            if ch.get("deck"):
+                decks_near.append(ch)
+            if not ch.get("ctx"):
+                chunks.append(ch)
+            elif deck_context is not None:
+                deck_context.append(ch)
     if tunnels is not None:                     # TunnelProfiles: road surfaces and lines through tunnels
         tch = _tunnel_chunks(tunnels, cells, (x0, y0, x1, y1), terrain_paint)
         chunks.extend(tch)

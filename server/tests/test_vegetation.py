@@ -32,6 +32,8 @@ class Feats:
         self.kind = np.full(len(rows), kind, np.uint8)
         self.rows = rows
         self.attrs = {"class": np.array(cls or [""] * len(rows), object)}
+        self.ids = np.array([f"id{i:03d}" for i in range(len(rows))])
+        self.rules = {}
         self.lonlat = np.concatenate([np.asarray(r, np.float64) for r in rows]) if rows else np.zeros((0, 2))
         self.coord_off = np.cumsum([0] + [len(r) for r in rows]).astype(np.int64)
         self.ring_off = np.arange(len(rows) + 1, dtype=np.int64)
@@ -39,6 +41,9 @@ class Feats:
 
     def parts(self, i):
         return [[np.asarray(self.rows[i], np.float64)]]
+
+    def __len__(self):
+        return len(self.kind)
 
 
 def cell_data():

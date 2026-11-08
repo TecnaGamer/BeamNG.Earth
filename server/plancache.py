@@ -65,7 +65,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 21     # 21: one bump for the 2026-11-08 PR batch: abandoned railways not graded (#953, #706), dirt roads on the coarse global elevation smoothed over DIRT_SIGMA_COARSE_M (#951, #835), rail viaduct decks' heights capped (#949), worn railway lines cut at motorways (#946, #918); 18: cutting probes located through grading.enu_to_ll_dense (heights moved < 0.1 mm); 17: PR #843 (restored highway and ramp shoulder widths); 16: walkway bridge spans cap the road under them (PR #842) and OSM busways graded (PR #836); 15: continuous subsea tunnel profiles and their approaches (PR #822, #792); 14: past an abutment end the ground falls away under a still-climbing deck (ABUT_UNDER_GRADE)
+PLANS_FORMAT = 22     # 22: mapped path classification and path-presence metadata; 21: one bump for the 2026-11-08 PR batch: abandoned railways not graded (#953, #706), dirt roads on the coarse global elevation smoothed over DIRT_SIGMA_COARSE_M (#951, #835), rail viaduct decks' heights capped (#949), worn railway lines cut at motorways (#946, #918); 18: cutting probes located through grading.enu_to_ll_dense (heights moved < 0.1 mm); 17: PR #843 (restored highway and ramp shoulder widths); 16: walkway bridge spans cap the road under them (PR #842) and OSM busways graded (PR #836); 15: continuous subsea tunnel profiles and their approaches (PR #822, #792); 14: past an abutment end the ground falls away under a still-climbing deck (ABUT_UNDER_GRADE)
                       # 13: centimetre-scale dirt wear and bounded edge displacement from random banking
                       # 12: dirt roads toned down (#783, #784; dev); PR #811's own 12: bounded, local dirt damage, independent of real
                       #     grades and DEM extensions
@@ -114,6 +114,7 @@ class PlanCache:
         self.source_versions = None  # callable for the versions actually known after a complete cell was built
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._lock = threading.Lock()
+        self.path_cells = {}     # optional metadata: absent in old, otherwise unchanged road-plan caches
 
     def _path(self, key):
         return os.path.join(self.dir, f"{int(key[0])}_{int(key[1])}_{int(key[2])}.npz")
@@ -132,6 +133,7 @@ class PlanCache:
                     return None
             with np.load(src, allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                self.path_cells[key] = meta.get("has_paths")
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
                 lists["w"] = _split(f, "w") if "w_n" in f.files else []
@@ -215,7 +217,7 @@ class PlanCache:
             return None
         return io.BytesIO(got[0]["plans.npz"])
 
-    def store(self, key, plans, keeps, covers, opens, persist=False):
+    def store(self, key, plans, keeps, covers, opens, persist=False, has_paths=None):
         """Write cell key's plans for the run's other processes; persist: also into the revisit cache (complete plans:
         nothing they read failed or was missing, Grader._plan_cell)."""
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
@@ -226,6 +228,8 @@ class PlanCache:
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
                           for _xy, sp in opens]}
+        if has_paths is not None:
+            meta["has_paths"] = bool(has_paths)
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
         try:
             _pack(arrays, "p", [p.xy for _f, p in plans])

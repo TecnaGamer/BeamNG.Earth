@@ -1389,9 +1389,10 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, path_decks=()):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
-    None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
+    None. path_decks prevents a second footbridge mesh for source pieces rendered by the path pipeline.
+    cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
     grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
@@ -1404,7 +1405,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     ex = (box[0] - roads.OVERLAP, box[1] - roads.OVERLAP, box[2] + roads.OVERLAP, box[3] + roads.OVERLAP)
     worn, gauges = {}, {}
     rails = parts(frame, cells, box, clip=True, worn=worn, gauges=gauges)
-    walk = footbridges.parts(frame, cells, box) if FOOTBRIDGES_ON else []    # (and the walkways' bridges: GitHub #905)
+    walk = footbridges.parts(frame, cells, box, path_decks=path_decks) if FOOTBRIDGES_ON else []    # (and the walkways' bridges: GitHub #905)
     exs = (ex[0] - STEP_M, ex[1] - STEP_M, ex[2] + STEP_M, ex[3] + STEP_M)
     if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()), exs) for *_, xy in rails):
         rails = []

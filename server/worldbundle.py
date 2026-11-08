@@ -234,9 +234,12 @@ def validate_artifact(data, artifact=None):
     if "meta" not in arrays or any(g + "_n" not in arrays for g in GROUPS):
         raise BundleError("Missing plan arrays")
     meta = _json(arrays["meta"].tobytes())
-    if not isinstance(meta, dict) or set(meta) != {"plans", "keeps", "covers", "opens"}:
+    required_meta = {"plans", "keeps", "covers", "opens"}
+    if (not isinstance(meta, dict) or not required_meta <= set(meta)
+            or set(meta) - required_meta - {"has_paths"}
+            or ("has_paths" in meta and not isinstance(meta["has_paths"], bool))):
         raise BundleError("Invalid plan metadata")
-    if any(not isinstance(v, list) or len(v) > MAX_ROWS for v in meta.values()):
+    if any(not isinstance(meta[k], list) or len(meta[k]) > MAX_ROWS for k in required_meta):
         raise BundleError("Invalid plan metadata counts")
     groups = {}
     for group in GROUPS:
@@ -404,6 +407,7 @@ class PinnedPlanCache:
         self.persist = None
         self.stats = {"read": 0, "written": 0, "waited": 0, "wait_s": 0.0}
         self._lock = threading.Lock()
+        self.path_cells = {}
 
     def load(self, key):
         entry = self.entries.get(_key(tuple(int(v) for v in key)))
@@ -412,7 +416,10 @@ class PinnedPlanCache:
         try:
             path = self.root / "blobs" / (entry["sha256"] + ".npz")
             with path.open("rb") as stream:
-                result = validate_artifact(stream.read(MAX_ARTIFACT_BYTES + 1), entry)
+                raw = stream.read(MAX_ARTIFACT_BYTES + 1)
+                result = validate_artifact(raw, entry)
+            with np.load(io.BytesIO(raw), allow_pickle=False) as arrays:
+                self.path_cells[key] = _json(arrays["meta"].tobytes()).get("has_paths")
         except OSError as exc:
             raise BundleError("Pinned road artifact is unavailable") from exc
         with self._lock:

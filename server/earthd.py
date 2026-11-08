@@ -2456,8 +2456,11 @@ class Server:
             towns = self.towns.maker(anchor.frame, roadsmod.cells_of_tile(anchor.frame, tx, ty,
                                                                           blockworker.TOWNS_MARGIN_M),
                                      self.out_dir, self.vfs_dir, town_faces)
+        path_bridges = (g.store.path_bridge_view(anchor.frame) if g is not None else
+                        self.chain_view(anchor, "path_bridges", elev))
         chunks = roadsmod.build_tile(anchor.frame, tx, ty, cells, elev, urban, walks=walks, deck_context=ctx, bridges=anchor.bridges,
                                      sign_obstacles=sign_obstacles,
+                                     path_bridges=path_bridges,
                                      walk_cuts=fuel_cuts,    # (the stations' made-up driveways: no sidewalk across them)
                                      widths=self.road_widths, props=props, lines=lines, wires=wires, town=town, park=park,
                                      left_hand=self.left_hand(anchor), mph=self.mph(anchor), buried=self.buried(anchor),
@@ -2516,7 +2519,8 @@ class Server:
         guardrail_decks = []
         rail_decks = []                 # railways.tile_mesh fills these in below (fences.py stands walls on them)
         try:
-            deck_parts = list(anchor.bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
+            deck_parts = roadsmod.deck_parts_for_barriers(anchor.bridges, path_bridges, cells,
+                                                          (box[0]-10, box[1]-10, box[2]+10, box[3]+10))
             deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
             guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                                for _fid, spec, xy, z, _lon in deck_parts]
@@ -2556,6 +2560,9 @@ class Server:
             _bridge_fps,
             anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
             anchor.bridges.beams_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else ())
+        if path_bridges is not None:
+            _piers = list(_piers) + path_bridges.piers_in(roadsmod.tile_bbox(tx, ty))
+            _beams = list(_beams) + path_bridges.beams_in(roadsmod.tile_bbox(tx, ty))
         dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams,
                                  ground=cover, parapets=parapets,
                                  low_parapet_decks=low_parapet_decks, pads=pads)
@@ -2568,7 +2575,8 @@ class Server:
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True)
+                                   return_decks=True,
+                                   path_decks=path_bridges.parts(cells, roadsmod.tile_bbox(tx, ty)) if path_bridges is not None else ())
         bld = None
         garage_sound = ()
         oil_wells = []
@@ -3300,6 +3308,8 @@ class Server:
                     p.infra_fn = lambda key: self.mapdata.cell(
                         key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
                 cls = roadsmod.BridgeProfiles
+            elif kind == "path_bridges":
+                cls, setup = roadsmod.PathBridgeProfiles, None
             else:
                 def setup(t):
                     t.wet = self.sea.depth if self.sea is not None else None

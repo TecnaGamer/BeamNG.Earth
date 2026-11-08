@@ -1746,6 +1746,7 @@ class _Planner:
         self.frame, self.md, self.elev, self.widths = frame, mapdata, elev, widths
         self.store, self.region = store, region
         self.cells = {}
+        self.path_cells = {}    # cell -> has built ground paths; None in older cached plans
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
         self.lock = threading.Lock()
         self.key_locks = {}     # cell key -> Lock: one thread plans a cell, the others wait for it
@@ -1800,6 +1801,7 @@ class _Planner:
             self.keeps.setdefault(key, got[1])
             self.covers.setdefault(key, got[2])
             self.opens.setdefault(key, got[3])
+            self.path_cells.setdefault(key, src.path_cells.get(key))
             return self.cells[key]
 
     def _cell_plans(self, key):
@@ -1831,6 +1833,7 @@ class _Planner:
             f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
             if shared is not None:
                 got = shared
+                self.path_cells[key] = getattr(self.shared, "path_cells", {}).get(key)
             else:
                 import stackdump    # (a slow plan holds every process waiting for it: say where it waits)
                 watch = stackdump.watch(PLAN_SLOW_S, f"cell {key}'s plans still being made after {PLAN_SLOW_S:.0f} s")
@@ -1841,7 +1844,7 @@ class _Planner:
             if got is None:
                 return []
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
-                self.shared.store(key, *got, persist=revisit.thread_faults() == f0
+                self.shared.store(key, *got, has_paths=self.path_cells.get(key), persist=revisit.thread_faults() == f0
                                   and revisit.thread_lidar_faults() == l0)
         finally:
             if mine:
@@ -1873,6 +1876,8 @@ class _Planner:
                 self.failed[key] = time.monotonic()
             return None
         plans = []
+        import mappedpaths
+        self.path_cells[key] = feats is not None and any(mappedpaths.engineered(sp) for sp in mappedpaths.specs(feats))
         if feats is not None and len(feats):
             specs = roadsmod.road_specs(feats, None, self.widths)
             parts, ids, clipped, rings = [], [], [], []
@@ -4350,6 +4355,26 @@ class PlanStore:
         import geotiles
         return geotiles.region_frame(*region)
 
+    def path_bridge_view(self, frame):
+        """One regional path-deck store shared by terrain approaches and rendered road tiles."""
+        with self.lock:
+            store = getattr(self, "_path_bridge_store", None)
+            if store is None:
+                def ground(lat, lon):
+                    lat, lon = np.asarray(lat), np.asarray(lon)
+                    raw = np.asarray(self.elev(lat, lon), np.float64)
+                    out = raw.ravel().copy()
+                    for planner, ix in self.planners_of(lat, lon):
+                        if ix is None:
+                            return planner.apply(lat, lon, raw, ROAD_LIFT, roads_only=True)
+                        out[ix] = planner.apply(lat.ravel()[ix], lon.ravel()[ix], raw.ravel()[ix],
+                                                ROAD_LIFT, roads_only=True)
+                    return out.reshape(raw.shape)
+                store = roadsmod.ChainStore(roadsmod.PathBridgeProfiles,
+                    lambda key: self.md.cell(key, layers=("roads",)).layers.get("roads"), ground)
+                self._path_bridge_store = store
+        return roadsmod.ChainView(store, frame)
+
     def planner(self, region):
         region = (int(region[0]), int(region[1]))
         with self.lock:
@@ -4508,13 +4533,22 @@ class Grader:
         base = np.asarray(base, np.float64)
         if base.size == 0:
             return base
+        def apply(pl, la, lo, z):
+            out = pl.apply(la, lo, z, lift, roads_only, planned_only)
+            if roads_only or planned_only:
+                return out
+            import mappedpaths
+            path_grader = pl.__dict__.get("_path_grader")
+            if path_grader is None:
+                path_grader = pl.__dict__.setdefault("_path_grader", mappedpaths.Grader(pl))
+            return path_grader.apply(la, lo, out, lift)
         parts = self.store.planners_of(lat, lon)
         if len(parts) == 1:
-            return parts[0][0].apply(lat, lon, base, lift, roads_only, planned_only)
+            return apply(parts[0][0], lat, lon, base)
         la, lo, b = lat.ravel(), lon.ravel(), base.ravel()
         out = np.array(b, np.float64, copy=True)
         for pl, idx in parts:
-            out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
+            out[idx] = apply(pl, la[idx], lo[idx], b[idx])
         return out.reshape(base.shape)
 
     def open_tunnels(self, lat, lon):
@@ -4746,10 +4780,11 @@ class PlanPack:
                                                            self.abd))
 
 
-def grade_points(px, py, base, plans, lift=0.0):
+def grade_points(px, py, base, plans, lift=0.0, *, band=None):
     """base at the points (px, py) graded under the plans (see the module doc; a list or a PlanPack of them), by the
     Rust loop (native/earthfast grade_points: a Python loop per segment was the server's largest CPU cost while driving,
-    2026-10-12). Pure."""
+    2026-10-12). Pure. band: built paths' fixed narrow transition, with their cores protected
+    against other paths' grading bands; None keeps the vehicle-road policy unchanged."""
     px = np.asarray(px, np.float64)
     py = np.asarray(py, np.float64)
     base = np.asarray(base, np.float64)
@@ -4769,11 +4804,15 @@ def grade_points(px, py, base, plans, lift=0.0):
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,
-                                 float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
+                                 float(EXTRAP_M), float(lift), float(SLOPE_RUN if band is None else 0.0),
+                                 float(T_MIN if band is None else band), float(T_MAX if band is None else band), float(STEEP_RUN),
                                  float(STEEP_T_MIN), float(BLEND_R), float(BUCKET),
-                                 float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M), float(WALL_AHEAD_M),
-                                 bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
-                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(ABUT_UNDER_GRADE),
+                                 float(WALL_CUT_M), float(WALL_T_M if band is None else band),
+                                 float(WALL_FLAT_M if band is None else 0.0),
+                                 float(WALL_AHEAD_M if band is None else 0.0),
+                                 bool(SEP_ON if band is None else True), float(SEP_FROM_M if band is None else 0.0),
+                                 float(SEP_FULL_M if band is None else 0.05), float(CORE_FADE_M if band is None else 0.5),
+                                 float(SIDE_FADE_M if band is None else 0.5), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(ABUT_UNDER_GRADE),
                                  np.ascontiguousarray(ABD, f64))
 
 

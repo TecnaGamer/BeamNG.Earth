@@ -67,6 +67,36 @@ class FootbridgeTest(unittest.TestCase):
         with unittest.mock.patch.object(railways, "FOOTBRIDGES_ON", False):
             self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [bridge()], valley))
 
+    def test_a_rendered_path_deck_has_one_owner_without_elevation_work(self):
+        f = bridge("cycleway")
+        xy = footbridges.parts(FRAME, [f], (0., 0., 256., 256.))[0][1]
+        decks = [(str(f.ids[0]), None, xy, np.full(len(xy), 10.), 0.)]
+        with unittest.mock.patch.object(footbridges, "deck", side_effect=AssertionError("duplicate profile")):
+            mesh = railways.tile_mesh(FRAME, 0, 0, [f],
+                lambda xy: self.fail("handled path needs no fallback elevation"), path_decks=decks)
+        self.assertIsNone(mesh)
+
+    def test_only_the_matching_source_piece_is_excluded(self):
+        f = bridge()
+        part = footbridges.parts(FRAME, [f], (0., 0., 256., 256.))[0]
+        fid, xy, _ = part
+        for source, line, z in (("another-way", xy, np.full(len(xy), 10.)),
+                                (fid, xy + [0., 1.], np.full(len(xy), 10.)),
+                                (fid, xy, np.full(len(xy), np.nan))):
+            with self.subTest(source=source, first=line[0].tolist()):
+                self.assertIsNotNone(railways.tile_mesh(FRAME, 0, 0, [f], valley,
+                    path_decks=[(source, None, line, z, 0.)]))
+
+    def test_an_unhandled_bridge_piece_of_the_same_way_keeps_its_fallback(self):
+        f = bridge()
+        fid, xy, _ = footbridges.parts(FRAME, [f], (0., 0., 256., 256.))[0]
+        # A separately mapped span sharing this feature's ID must not disappear.
+        f2 = bridge(line=((100., 140.), (160., 140.)))
+        got = footbridges.parts(FRAME, [f2], (0., 0., 256., 256.),
+            path_decks=[(fid, None, xy, np.full(len(xy), 10.), 0.)])
+        self.assertEqual(len(got), 1)
+        self.assertGreater(np.abs(got[0][1][:, 1] - xy[0, 1]).min(), 10.)
+
     def test_deck_rule(self):
         xy = np.c_[np.arange(0.0, 41.0, 2.0), np.zeros(21)]
         self.assertIsNotNone(footbridges.deck(xy, valley(xy + [110.0, 0.0]), []))
