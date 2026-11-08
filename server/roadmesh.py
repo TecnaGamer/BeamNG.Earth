@@ -829,6 +829,53 @@ def _shared(P, UV, T):
     return P[first], UV[first], inv.reshape(-1)[T]
 
 
+def _marks_on_decks(P, T, M, mats, fixed, cell=2.0):
+    """The markings on decks (triangles on fixed heights in a material only ever drawn in the "mark" layer) put on the
+    deck surface drawn under them (fixed base triangles: the deck asphalt, retriangulated over a junction by
+    _junction_surfaces), its height there + LIFT["mark"]; a marking triangle with a point off the deck surface (a line past a deck's end) left out (the user, 2026-11-07: markings follow the surface they are painted on
+    and stop at a deck's end; a lane line on its own heights rode up to 16 cm over the asphalt at Pittsburgh's deck
+    ends, 40.442792,-79.992235). (P, T, M, the triangles kept or None)."""
+    if not len(T) or not fixed.any():
+        return P, T, M, None
+    mark = np.array([LAYERS_OF_MAT.get(m) == {"mark"} for m in mats], bool)[np.asarray(M, np.int64)]
+    ot = mark & fixed
+    bt = ~mark & ~np.array([overlay_material(m) for m in mats], bool)[np.asarray(M, np.int64)] & fixed
+    if not ot.any() or not bt.any():
+        return P, T, M, None
+    B = T[bt]
+    A, Bv, C = P[B[:, 0]], P[B[:, 1]], P[B[:, 2]]
+    lo = np.floor(np.minimum(np.minimum(A, Bv), C)[:, :2] / cell).astype(np.int64)
+    hi = np.floor(np.maximum(np.maximum(A, Bv), C)[:, :2] / cell).astype(np.int64)
+    grid = {}
+    for t in range(len(B)):
+        for gx in range(lo[t, 0], hi[t, 0] + 1):
+            for gy in range(lo[t, 1], hi[t, 1] + 1):
+                grid.setdefault((gx, gy), []).append(t)
+    P = P.copy()
+    hit = np.zeros(len(P), bool)
+    for v in np.unique(T[ot].ravel()).tolist():
+        x, y = P[v, 0], P[v, 1]
+        cand = grid.get((int(np.floor(x / cell)), int(np.floor(y / cell))))
+        if not cand:
+            continue
+        c = np.asarray(cand)
+        a, b, cc = A[c], Bv[c], C[c]
+        d = (b[:, 1] - cc[:, 1]) * (a[:, 0] - cc[:, 0]) + (cc[:, 0] - b[:, 0]) * (a[:, 1] - cc[:, 1])
+        ok = np.abs(d) > 1e-12
+        dd = np.where(ok, d, 1.0)
+        l1 = ((b[:, 1] - cc[:, 1]) * (x - cc[:, 0]) + (cc[:, 0] - b[:, 0]) * (y - cc[:, 1])) / dd
+        l2 = ((cc[:, 1] - a[:, 1]) * (x - cc[:, 0]) + (a[:, 0] - cc[:, 0]) * (y - cc[:, 1])) / dd
+        l3 = 1.0 - l1 - l2
+        inside = ok & (l1 >= -1e-6) & (l2 >= -1e-6) & (l3 >= -1e-6)
+        if not inside.any():
+            continue
+        z = (l1 * a[:, 2] + l2 * b[:, 2] + l3 * cc[:, 2])[inside]
+        P[v, 2] = z[np.argmin(np.abs(z - P[v, 2]))] + LIFT["mark"]     # (the deck nearest its own height)
+        hit[v] = True
+    keep = ~ot | hit[T].all(1)      # (a triangle reaching past the deck's edge or end left out whole)
+    return P, T[keep], np.asarray(M)[keep], keep
+
+
 OVERLAY_DECK_END_M = 0.05  # m an overlay on a deck may reach past the end of the deck surface it is painted on
 
 
@@ -1093,6 +1140,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         if not len(T):
             return None
     M, TL, RI = M[tid], TL[tid], RI[tid]
+    FX = ~np.isfinite(TL)                       # per triangle: on its own fixed heights (a deck's), not draped
     if follow:
         dr = np.isfinite(TL)
         if dr.any():
@@ -1109,12 +1157,15 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 UV = np.concatenate([UV, fUV])
                 T = np.concatenate([T[~dr], fT + n0])
                 M = np.concatenate([M[~dr], M[dr][src]])
+                FX = np.r_[FX[~dr], np.zeros(len(fT), bool)]
                 RI = np.concatenate([RI[~dr], RI[dr][src]])
             else:
-                T, M, RI = T[~dr], M[~dr], RI[~dr]
+                T, M, RI, FX = T[~dr], M[~dr], RI[~dr], FX[~dr]
             if not len(T):
                 return None
         P, UV, T = _shared(P, UV, T)
+    P, T, M, keep = _marks_on_decks(P, T, M, mats, FX)
+    RI = RI[keep] if keep is not None else RI
     out = (P - np.asarray(origin, np.float64), T, UV, mats, M)
     if not any(m.startswith(FADE_PREFIX) for m in mats):
         return out
