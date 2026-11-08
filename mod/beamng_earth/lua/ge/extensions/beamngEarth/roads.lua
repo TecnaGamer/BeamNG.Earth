@@ -2267,6 +2267,9 @@ function M.ahead(x, y, hx, hy, dist)
         e.road = t.road ~= nil or (t.queued or 0) <= 0
         e.bld = t.bld ~= nil                    -- (a tile without buildings never has one)
         e.walk = t.walk ~= nil
+        for _, q in ipairs(walkQ) do              -- (a sidewalk / kerb import still queued: the walk lead)
+          if q.key == tkey then e.walkWait = true; break end
+        end
         local want, made, solid = 0, 0, 0
         for what in pairs(t.colWant or {}) do
           want = want + 1
@@ -2287,6 +2290,12 @@ function M.ahead(x, y, hx, hy, dist)
             end
           end
         end
+      end
+      -- the tree tile there (trees.lua, geotiles only): not arrived or still being placed (the tree lead)
+      if M.geo then
+        local T = package.loaded['beamngEarth/trees']
+        local tt = T and T.debugTiles and T.debugTiles()['g:' .. tostring(sq)]
+        e.trees = tt ~= nil and not tt.pending
       end
       out[#out + 1] = e
     end
