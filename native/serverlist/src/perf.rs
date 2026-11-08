@@ -89,6 +89,9 @@ pub struct ServerIn {
     catchup_s: Option<f64>,
     catchups: Option<f64>,
     errors: Option<HashMap<String, f64>>,
+    // per fingerprint, its error codes ("OSError:24": n; perfstats.ErrorPrints)
+    #[serde(rename = "errorCodes")]
+    error_codes: Option<HashMap<String, HashMap<String, f64>>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -303,6 +306,16 @@ struct DayFile {
     day: u64,
     groups: BTreeMap<String, Agg>,
     errors: BTreeMap<String, u64>,
+    #[serde(default)]
+    codes: BTreeMap<String, BTreeMap<String, u64>>,
+}
+
+fn fingerprint_ok(k: &str) -> bool {
+    k.len() == 8 && k.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+fn code_ok(c: &str) -> bool {
+    !c.is_empty() && c.len() <= 40 && c.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b':' | b'_' | b'-'))
 }
 
 struct Setup {
@@ -427,8 +440,21 @@ impl Perf {
             }
             if let Some(errs) = &s.errors {
                 for (k, n) in errs.iter().take(32) {
-                    if k.len() == 8 && k.bytes().all(|b| b.is_ascii_hexdigit()) && (f.errors.len() < MAX_ERRORS || f.errors.contains_key(k)) {
+                    if fingerprint_ok(k) && (f.errors.len() < MAX_ERRORS || f.errors.contains_key(k)) {
                         *f.errors.entry(k.to_ascii_lowercase()).or_default() += n.clamp(0.0, 1.0e6) as u64;
+                    }
+                }
+            }
+            if let Some(codes) = &s.error_codes {
+                for (k, by) in codes.iter().take(32) {
+                    if !fingerprint_ok(k) || !f.errors.contains_key(&k.to_ascii_lowercase()) {
+                        continue;
+                    }
+                    let e = f.codes.entry(k.to_ascii_lowercase()).or_default();
+                    for (c, n) in by.iter().take(4) {
+                        if code_ok(c) && (e.len() < 8 || e.contains_key(c)) {
+                            *e.entry(c.clone()).or_default() += n.clamp(0.0, 1.0e6) as u64;
+                        }
                     }
                 }
             }
@@ -488,19 +514,26 @@ impl Perf {
                            "bands": BANDS, "frameEdgesMs": EDGES_MS})
     }
 
-    /// The advanced page's part: the error fingerprints of the last 7 days (counts only).
+    /// The advanced page's part: the error fingerprints of the last 7 days: [fingerprint, count, {code: count}].
     pub fn errors(&self, unix_now: u64) -> serde_json::Value {
         let today = unix_now / 86400;
         let mut e: BTreeMap<&String, u64> = BTreeMap::new();
+        let mut c: BTreeMap<&String, BTreeMap<&String, u64>> = BTreeMap::new();
         for f in self.days.range(today.saturating_sub(6)..=today).map(|x| x.1) {
             for (k, n) in &f.errors {
                 *e.entry(k).or_default() += n;
+            }
+            for (k, by) in &f.codes {
+                for (code, n) in by {
+                    *c.entry(k).or_default().entry(code).or_default() += n;
+                }
             }
         }
         let mut v: Vec<(&String, u64)> = e.into_iter().collect();
         v.sort_by(|a, b| b.1.cmp(&a.1));
         v.truncate(50);
-        serde_json::json!(v)
+        let empty = BTreeMap::new();
+        serde_json::json!(v.into_iter().map(|(k, n)| serde_json::json!([k, n, c.get(k).unwrap_or(&empty)])).collect::<Vec<_>>())
     }
 }
 
@@ -519,7 +552,8 @@ mod tests {
                 "modSettings": {"quality": "high"}})).unwrap())
         } else { None };
         PerfIn { setup, game: Some(vec![w]), server: Some(serde_json::from_value(serde_json::json!(
-            {"catchups": 1, "catchupS": 30, "errors": {"a3f9c2e1": 2, "not-hex!": 9}})).unwrap()) }
+            {"catchups": 1, "catchupS": 30, "errors": {"a3f9c2e1": 2, "not-hex!": 9},
+             "errorCodes": {"a3f9c2e1": {"OSError:24": 1, "bad code!": 5}, "not-hex!": {"x": 1}}})).unwrap()) }
     }
 
     #[test]
@@ -547,7 +581,7 @@ mod tests {
         let causes = v["all"]["topCauses"].as_array().unwrap();
         assert!(causes.iter().all(|c| c[0] != "bad key!"));
         let e = p.errors(u + 600);
-        assert_eq!(e, serde_json::json!([["a3f9c2e1", 14]]));
+        assert_eq!(e, serde_json::json!([["a3f9c2e1", 14, {"OSError:24": 7}]]));
         assert!(!serde_json::to_string(&v).unwrap().contains("39.2"));
     }
 

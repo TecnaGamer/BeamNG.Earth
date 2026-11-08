@@ -225,7 +225,25 @@ class PerfTest(unittest.TestCase):
         self.assertEqual((srv["catchups"], srv["catchupS"], srv["memMB"]), (1, 40, 2048))
         (fp, n), = srv["errors"].items()
         self.assertEqual((len(fp), n), (8, 3))
+        self.assertEqual(srv["errorCodes"], {fp: {"KeyError": 3}})
         self.assertNotIn("Baltimore", json.dumps(srv))
+
+    def test_os_error_codes(self):
+        import perfstats
+        h = perfstats.ErrorPrints()
+        log = logging.getLogger("perfcodes")
+        log.addHandler(h)
+        try:
+            for err in (OSError(24, "Too many open files"), OSError(28, "No space left on device")):
+                try:
+                    raise err
+                except OSError:
+                    log.exception("far tile failed")       # (one line: one fingerprint, two codes)
+        finally:
+            log.removeHandler(h)
+        counts, codes = h.take()
+        (fp, n), = counts.items()
+        self.assertEqual((n, codes[fp]), (2, {"OSError:24": 1, "OSError:28": 1}))
 
     def test_only_under_the_switch(self):
         sent = []

@@ -105,7 +105,7 @@ Over each 5 minutes:
 
 | field | example | why |
 |---|---|---|
-| server errors | a short code made from the error's type and the line of our code it came from (`a3f9c2e1`), and how many times | which bugs players actually hit, so we fix those first |
+| server errors | a short code made from the error's type and the line of our code it came from (`a3f9c2e1`), how many times, and the error's type and number (`OSError:28`, "disk full") | which bugs players actually hit, so we fix those first; the number tells a full disk from a file in use |
 
 A fingerprint is a hash: it contains **no error message text, no file paths, no user names and no list of your
 other mods**. It only lets us count how often the same bug happens.

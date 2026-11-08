@@ -37,27 +37,37 @@ FINGERPRINTS = 24               # distinct error fingerprints a report carries
 
 class ErrorPrints(logging.Handler):
     """Counts the server's errors by fingerprint (fast.perf_fingerprint of the exception's type and the logging call's
-    module and line: never the message, a path or a value)."""
+    module and line: never the message, a path or a value) and, per fingerprint, the error's code: an OSError's
+    number (winerror on Windows, else errno: 24 too many open files, 28 disk full, 32 a file in use ...) beside its
+    type name. (2026-11-08: the first night's reports had nine OSError fingerprints, one 3,287 times, and nothing to
+    tell a full disk from Windows' open-files limit.)"""
 
     def __init__(self):
         super().__init__(level=logging.ERROR)
         self.counts = {}
+        self.codes = {}
         self._lock = threading.Lock()
 
     def emit(self, record):
         try:
+            exc = record.exc_info[1] if record.exc_info else None
             kind = record.exc_info[0].__name__ if record.exc_info and record.exc_info[0] else "log"
             key = fast.perf_fingerprint(kind, record.module, record.lineno)
+            num = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
+            code = f"{kind[:24]}:{num}" if isinstance(num, int) else kind[:24]
             with self._lock:
                 if key in self.counts or len(self.counts) < FINGERPRINTS:
                     self.counts[key] = self.counts.get(key, 0) + 1
+                    c = self.codes.setdefault(key, {})
+                    if code in c or len(c) < 4:
+                        c[code] = c.get(code, 0) + 1
         except Exception:
             pass
 
     def take(self):
         with self._lock:
-            out, self.counts = self.counts, {}
-        return out
+            out, codes, self.counts, self.codes = self.counts, self.codes, {}, {}
+        return out, codes
 
 
 class Collector:
@@ -123,8 +133,9 @@ class Collector:
                                               CORE_STEPS)
             self._cpu_last = (cpu, now)
             srv["memMB"] = fast.perf_step(mem, MEMORY_STEPS)
-        errs = self.errors.take()
+        errs, codes = self.errors.take()
         if errs:
             srv["errors"] = errs
+            srv["errorCodes"] = codes       # {fingerprint: {"OSError:24": n}} (the collector keeps them per day)
         out["server"] = srv
         return out
