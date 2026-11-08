@@ -125,6 +125,13 @@ export function stateLine(c) {
   return t
 }
 
+// A list from Lua: an array, or (Lua's tables reach the page as objects when empty or sparse) the object's values
+export function lines(v) {
+  if (Array.isArray(v)) return v
+  if (v && typeof v === "object") return Object.values(v).filter(x => typeof x === "string")
+  return []
+}
+
 export function size(n) {
   if (!n) return ""
   if (n >= 1 << 20) return `${(n / (1 << 20)).toFixed(1)} MB`

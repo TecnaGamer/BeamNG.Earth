@@ -73,7 +73,7 @@
           <template v-if="openCard.kind === 'companion'">It is a program that runs on this computer beside the game (with BeamNG.Earth's own Python), with the same access as any program you run.</template>
           <template v-else>It runs inside your game like any other mod you install, with the same access.</template>
           <template v-if="openCard.local">It is a file on this computer (the local list).</template>
-          <template v-else>It is downloaded from github.com/{{ openCard.repo }}</template><template v-if="openCard.oldFiles && openCard.oldFiles.length">; the older copies {{ openCard.oldFiles.join(", ") }} in your mods folder are removed</template>.
+          <template v-else>It is downloaded from github.com/{{ openCard.repo }}</template><template v-if="lines(openCard.oldFiles).length">; the older copies {{ lines(openCard.oldFiles).join(", ") }} in your mods folder are removed</template>.
         </div>
         <div class="addons-actions">
           <BngButton :accent="ACCENTS.main" @click="install(openCard)">I agree, install</BngButton>
@@ -130,7 +130,7 @@
         On a phone or tablet on the same Wi-Fi: {{ openCard.lanPage }}
       </div>
       <div v-if="openCard.kind === 'companion' && openCard.exitCode" class="addons-note is-error">
-        It stopped with an error ({{ openCard.exitCode }}). Its last lines: {{ (openCard.logTail || []).join(" · ") }}
+        It stopped with an error ({{ openCard.exitCode }}). Its last lines: {{ lines(openCard.logTail).join(" · ") }}
       </div>
       <div v-if="removeAsk === openCard.id" class="addons-actions">
         <span v-if="openCard.kind === 'companion'" class="addons-note">Remove {{ openCard.name }} and its own data (its recorded drives) from this computer?</span>
@@ -178,7 +178,7 @@ import { BngButton, ACCENTS } from "@/common/components/base"
 import {
   cards, loaded, listError, connected, inMp, openCard, detail, consentFor, actionMsg,
   open, back, refresh, install, cancelConsent, manage, onTextClick, openRepo, openDownload,
-  stateLine, size, day, progressText, start, stop,
+  stateLine, size, day, progressText, start, stop, lines,
 } from "./earthAddonsStore.js"
 
 const tab = ref("readme")
