@@ -669,6 +669,13 @@ def _envelope(s, req, grade=GRADE):
     return out
 
 
+DECK_RAISE_MAX_M = 15.0   # m a bridge deck may rise over the straight chord between its ends to clear high
+                            # ground under it (a bad-data ridge: over a real valley the chord already stands over the
+                            # floor, so genuine gorge viaducts are unaffected)
+SEED_LIFT_MAX_M = 20.0    # m a propagated deck height may lift a ground track over its own smoothed bed (one bad
+                            # deck must not poison kilometres of connected line, and the graded embankment with it)
+
+
 def deck_heights(s, z_ground, z_start, z_end):
     """A bridge's bed line: straight from z_start to z_end (the bed at its ends: a line keeps its grade over what it
     crosses, the stream or road under it goes down, and the bare-earth DEM has that dip), raised only where the ground
@@ -676,7 +683,12 @@ def deck_heights(s, z_ground, z_start, z_end):
     clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25.)"""
     s = np.asarray(s, np.float64)
     L = max(float(s[-1]), 1e-9)
-    req = np.maximum(z_start + (z_end - z_start) * s / L, np.asarray(z_ground, np.float64))
+    chord = z_start + (z_end - z_start) * s / L
+    req = np.maximum(chord, np.asarray(z_ground, np.float64))
+    # A single bad height under the deck (an unfiltered building/tree in the surface model, a DEM spike) must not
+    # raise the whole deck: over a real valley the chord already stands over the floor, so only the raise over the
+    # chord is capped (seen as a ~100 m deck hump with piers and graded embankment from one bad sample under it).
+    req = np.minimum(req, chord + DECK_RAISE_MAX_M)
     return _envelope(s, req)
 
 
@@ -809,9 +821,10 @@ def profile(rails, ground, underpasses=()):
         d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
         for n, (a, b, s) in enumerate(edges):
             reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
-            zb[n] = np.maximum(zb[n], reach)
             if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
-                zb[n] = _envelope(s, zb[n])
+                zb[n] = _envelope(s, np.maximum(zb[n], reach))
+            else:                               # a ground track follows its own bed: a distant deck carries the
+                zb[n] = np.minimum(np.maximum(zb[n], reach), zb[n] + SEED_LIFT_MAX_M)   # ramps to it, no higher
     return list(zip(zb, zgs))
 
 
