@@ -790,6 +790,12 @@ end
 -- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
 M.NEW_SHAPES_PER_FRAME = 1
 local touched, touchedItems, newShapes = {}, 0, 0
+local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
+  { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 } }     -- the last two passes' (M.frameWork)
+local workMade, workRemoved = 0, 0
+-- The last two passes' work ([1] the last): items made / removed, shapes touched and their items in the level, shapes
+-- new this session, Forests made.
+function M.frameWork() return frameWork end
 local newShapeCap = math.huge
 local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
@@ -1183,6 +1189,15 @@ function M.update(anchorId, player, view, frameMs)
     clock = stopwatch.new() } or nil
   local budget = M.PER_FRAME * M.EVERY_N
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
+  -- the previous pass's work, for a hitch's context (core.perfContext: the engine's tick pays for a pass's Forest
+  -- changes, 0.5 us an item of every shape touched; a repeatable 136-612 ms tick beside a Manhattan park, 2026-11-08)
+  local w = frameWork[2]
+  frameWork[2], frameWork[1] = frameWork[1], w
+  local nTouched = 0
+  for _ in pairs(touched) do nTouched = nTouched + 1 end
+  w.made, w.removed, w.shapes, w.items, w.new, w.forests = M.made - workMade, M.removed - workRemoved, nTouched,
+    touchedItems, newShapes, newForests
+  workMade, workRemoved = M.made, M.removed
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0

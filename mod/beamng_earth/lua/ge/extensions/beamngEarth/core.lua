@@ -2297,6 +2297,17 @@ local function perfContext()
   end
   local okT, ts = pcall(trees.status)
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end
+  local okW, fw = pcall(trees.frameWork)
+  if okW and fw then
+    for i = 1, 2 do
+      local w = fw[i]
+      if w.made + w.removed + w.forests > 0 then
+        d[#d + 1] = string.format('trees %s: +%d -%d items, %d shapes (%d items in the level)%s%s',
+          i == 1 and 'last pass' or 'pass before', w.made, w.removed, w.shapes, w.items,
+          w.new > 0 and (', ' .. w.new .. ' new shapes') or '', w.forests > 0 and (', ' .. w.forests .. ' new Forests') or '')
+      end
+    end
+  end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
