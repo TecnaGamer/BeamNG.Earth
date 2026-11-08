@@ -354,7 +354,8 @@ def _take_pads(fuel_pads):
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False):
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+          ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -405,7 +406,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks)
+                              chunks=chunks, ground_at=tuple(ground_at))
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
               "newShare": float(keep.get("new_share", 1.0))}
     idx = None

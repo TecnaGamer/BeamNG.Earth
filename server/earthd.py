@@ -430,6 +430,7 @@ class DynGate:
         return False
 TRACE_S = 60.0                  # BNGE_TRACEMALLOC: seconds between the memory reports ...
 TRACE_TOP = 15                  # ... and the allocation sites in each
+PROVISIONAL_ELSEWHERE = os.environ.get("BNGE_PROV_HERE") != "1"   # a teleport's first block in a block process
 LANE_REQUEST, LANE_PREFETCH = 0, 1     # Server.block_pools: the blocks the mod asks for / the prefetch
 HM_BUSY_TILE_WORKERS = 1    # far tiles built at once while a physics block is building in the server process (an
                             # anchor's first, or every one with --block-process off; the block processes' blocks do
@@ -3061,6 +3062,21 @@ class Server:
             # and the photo waited 16 s behind it on a Deck, 2026-10-23)
             base = self.urgent_base_pool.submit(self._base_photo, anchor, cx, cy, None, True, True)
             anchor.first_base = ((cx, cy), base)
+        pool = self.photo_pool or (self.block_pools[LANE_PREFETCH][0] if self.block_pools else None)
+        if pool is not None and PROVISIONAL_ELSEWHERE:
+            # in a block process: here it took 13-21 s at fresh dense places beside this interpreter's other work (its
+            # roadPaint above all), 3.9 s for the same block in a fresh process (.claude/work/rust_port_plan.md 1a,
+            # 2026-11-07); the follow blocks' stand-ins went there before (make_provisional_follow)
+            key = (anchor.id, cx, cy)
+            info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
+                               self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
+                               provisional=True, ground_at=tuple(ground_at)).result()
+            info.pop("started", None)
+            info.pop("finished", None)
+            info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True)
+            log.info("provisional block %s in %.2f s in a worker (%s)", key, time.perf_counter() - t0,
+                     " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
+            return info
         urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
         with urgent() if urgent is not None else contextlib.nullcontext():
             info = self._make_heightmap_here(anchor, cx, cy, progress, t0, q, base, provisional=True,
