@@ -27,6 +27,7 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod deckmerge;
 mod levels;
 mod tapers;
 mod islands;
@@ -5555,6 +5556,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
     // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
     m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
-    m.add("VERSION", 168)?;
+    // (bridge chain solving: _merge_overlaps' pair pulls, _ground_pins)
+    m.add_function(wrap_pyfunction!(deckmerge::deck_merge_round, m)?)?;
+    m.add_function(wrap_pyfunction!(deckmerge::deck_ground_pins, m)?)?;
+    m.add("VERSION", 169)?;
     Ok(())
 }

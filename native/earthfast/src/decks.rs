@@ -4,6 +4,9 @@
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+const BESIDE_BLOCK: usize = 16;         // segments per box (deck_beside)
+const BESIDE_PRUNE_M: f64 = 1e-6;       // m past reach a box must lie to be left out: far over the rounding
+
 /// Pairs (i, j), i < j, of parts whose samples q (part i's rows qoff[i]..qoff[i + 1]: its line every few m) come within
 /// (widths[i] + widths[j]) / 2 + touch of part j's line (pts rows poff[j]..poff[j + 1]) at 2 or more samples. Parts
 /// with fewer than 2 vertices are left out, as are pairs whose boxes are farther apart. The numpy version's sums.
@@ -31,6 +34,28 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                 bb[k] = r;
             }
         }
+        // each part's segments in boxes of BESIDE_BLOCK (a projection lies in its segment's box, to rounding; a NaN
+        // vertex is in no box, and min() passed over its segments' NaN distances)
+        let (mut bfirst, mut bx) = (Vec::with_capacity(n + 1), Vec::new());
+        for k in 0..n {
+            bfirst.push(bx.len());
+            let (a, b) = span(k);
+            let ns = (b - a).saturating_sub(1);
+            let mut s0 = 0;
+            while s0 < ns {
+                let s1 = (s0 + BESIDE_BLOCK).min(ns);
+                let mut r = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                for v in a + s0..=a + s1 {
+                    r[0] = r[0].min(pts[[v, 0]]);
+                    r[1] = r[1].min(pts[[v, 1]]);
+                    r[2] = r[2].max(pts[[v, 0]]);
+                    r[3] = r[3].max(pts[[v, 1]]);
+                }
+                bx.push(r);
+                s0 = s1;
+            }
+        }
+        bfirst.push(bx.len());
         let mut out: Vec<i64> = Vec::new();
         for i in 0..n {
             let (ia, ib) = span(i);
@@ -52,12 +77,25 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                 for s in qa..qb {
                     let (qx, qy) = (q[[s, 0]], q[[s, 1]]);
                     let mut d = f64::INFINITY;
-                    for v in ja..jb - 1 {
-                        let (px, py_) = (pts[[v, 0]], pts[[v, 1]]);
-                        let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
-                        let l2 = (abx * abx + aby * aby).max(1e-12);
-                        let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
-                        d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                    // (only whether d < reach counts: a box of BESIDE_BLOCK segments farther than reach + BESIDE_PRUNE_M
+                    // is left out, as is the rest once one segment is near enough; 2026-11-08, the same pairs)
+                    'blocks: for (b, r) in bx[bfirst[j]..bfirst[j + 1]].iter().enumerate() {
+                        let gx = (r[0] - qx).max(qx - r[2]).max(0.0);
+                        let gy = (r[1] - qy).max(qy - r[3]).max(0.0);
+                        if gx.hypot(gy) > reach + BESIDE_PRUNE_M {
+                            continue;
+                        }
+                        let v0 = ja + b * BESIDE_BLOCK;
+                        for v in v0..(v0 + BESIDE_BLOCK).min(jb - 1) {
+                            let (px, py_) = (pts[[v, 0]], pts[[v, 1]]);
+                            let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
+                            let l2 = (abx * abx + aby * aby).max(1e-12);
+                            let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
+                            d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                        }
+                        if d < reach {
+                            break 'blocks;
+                        }
                     }
                     if d < reach {
                         hits += 1;
