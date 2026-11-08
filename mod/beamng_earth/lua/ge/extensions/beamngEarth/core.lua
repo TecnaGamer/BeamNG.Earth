@@ -2232,7 +2232,9 @@ function M._alloc.text()
   table.sort(parts, function(x, y) return x[2] > y[2] end)
   local ps = {}
   for i = 1, math.min(4, #parts) do ps[#ps + 1] = string.format('%s %.0f', parts[i][1], parts[i][2] / 1024) end
-  return string.format(', alloc %.0f MB/min (decode %.0f%s%s)', a.total / 1024, a.decode / 1024,
+  -- (total: the whole game Lua's heap growth, the game's own UI / vehicles / gameplay too (a 2026-11-07 probe: ~20 of 108
+  -- MB/min ours, parked); decode, msg and parts: ours)
+  return string.format(', GE Lua garbage %.0f MB/min (ours: decode %.0f%s%s)', a.total / 1024, a.decode / 1024,
     top and string.format(', msg %s %.0f', top, topKb / 1024) or '', #ps > 0 and ('; parts ' .. table.concat(ps, ', ')) or '')
 end
 local function perfEngine()
