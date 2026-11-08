@@ -158,7 +158,17 @@ def optimize(interior,boundary,physical,road_records=(),openings=(),obstacles=()
                     if lo>.005 and first.geom_type=='LineString':macros.append((0.,lo,first,source))
                     if length-hi>.005 and last.geom_type=='LineString':macros.append((hi,length,last,source))
                     stations.update((lo,hi))
-        stations=sorted(stations);outgoing={i:[] for i in range(len(stations))}
+        # GEOS length/projection and math.dist can differ at the last few bits
+        # across platforms. A near-duplicate station makes a zero-length DAG
+        # edge which evaluate() rejects, falsely reporting missing source.
+        # Collapse only sub-micrometre numerical intervals, far below the
+        # existing 5 mm endpoint tolerance; retain the exact source endpoints.
+        distinct=[]
+        for value in sorted(max(0., min(length, float(s))) for s in stations):
+            if not distinct or value-distinct[-1]>1e-7:
+                distinct.append(value)
+        distinct[-1]=length
+        stations=distinct;outgoing={i:[] for i in range(len(stations))}
         def station(value):return min(range(len(stations)),key=lambda i:abs(stations[i]-value))
         def evaluate(edge):
             path=edge.geometry

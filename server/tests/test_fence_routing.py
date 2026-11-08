@@ -22,6 +22,15 @@ class RoutingTest(unittest.TestCase):
             interior=shapely.geometry.Polygon(list(interior.exterior.coords)[::-1])
         return fr.optimize(interior,boundary,[('mapped',physical)],[dict(id='road',radius=2.,geometry=road)])
 
+    def test_near_duplicate_source_stations_do_not_invent_missing_source(self):
+        boundary=LineString([(0,0),(32,0),(64,0),(100,0)])
+        physical=LineString([(32+1e-10,0),(64,0)])
+        runs,audit=fr.optimize(box(0,0,100,100),boundary,[('mapped',physical)])
+        self.assertFalse(audit['gaps'])
+        self.assertEqual(audit['source_coverage'][0]['unresolved_m'],0.)
+        self.assertAlmostEqual(audit['source_coverage'][0]['covered_m'],boundary.length)
+        self.assertTrue(any(r['confidence']=='physical' for r in runs))
+
     def test_whole_run_uses_physical_side_anchor(self):
         runs,audit=self.route()
         self.assertEqual(audit['road_preferences'],{'road':-1})

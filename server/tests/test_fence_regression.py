@@ -137,7 +137,8 @@ class RegressionTest(unittest.TestCase):
         expected=line.interpolate(.4,normalized=True)
         self.assertLess(meta['relation/252043']['allowed'].distance(expected),.01)
         facility=next(f for f in audit if 'relation/252043' in f['source_ids'])
-        self.assertEqual(facility['completeness']['status'],'consistent')
+        self.assertEqual(facility['completeness']['status'],'consistent',
+            (facility['completeness'],facility['routing']['gaps']))
         self.assertLess(facility['completeness']['unexpected_missing_m'],.02)
         self.assertEqual(facility['completeness']['duplicate_m'],0.)
 
