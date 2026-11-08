@@ -972,20 +972,26 @@ GAP_JOIN_M = 0.75           # (_skew_decks' tolerance for a road's end at anothe
 
 
 def _first_ring_ends(feats):
-    """(n, 2, 2) lon / lat of each feature's first ring's two ends (NaN: none), kept on feats."""
+    """(n, 4) lon / lat of each feature's first ring's two ends (lon0, lat0, lon1, lat1; NaN: none), kept on feats
+    (earthfast.first_ring_ends)."""
     got = feats.__dict__.get("_first_ring_ends")
     if got is None:
-        n = len(feats)
-        got = np.full((n, 2, 2), np.nan)
-        for i in range(n):
-            if feats.part_off[i + 1] <= feats.part_off[i]:
-                continue
-            r = feats.ring_off[feats.part_off[i]]
-            a, b = feats.coord_off[r], feats.coord_off[r + 1]
-            if b - a >= 2:
-                got[i, 0], got[i, 1] = feats.lonlat[a][:2], feats.lonlat[b - 1][:2]
-        feats.__dict__["_first_ring_ends"] = got
+        import fast
+        fast.require(169, "first_ring_ends")
+        ll = np.asarray(feats.lonlat, np.float64)
+        got = feats.__dict__["_first_ring_ends"] = fast._ef.first_ring_ends(
+            ll if ll.ndim == 2 else ll.reshape(-1, 2), np.ascontiguousarray(feats.coord_off, np.int64),
+            np.ascontiguousarray(feats.ring_off, np.int64), np.ascontiguousarray(feats.part_off, np.int64))
     return got
+
+
+def _spec_mask(feats, specs):
+    """(n,) uint8: 1 where specs (_road_specs_kept(feats)) has a spec, kept on feats for that list."""
+    got = feats.__dict__.get("_deck_gap_specs")
+    if got is None or got[0] is not specs:
+        got = feats.__dict__["_deck_gap_specs"] = (specs, np.fromiter((s is not None for s in specs), np.uint8,
+                                                                       len(specs)))
+    return got[1]
 
 
 def _deck_gaps(feats, i, rngs):
@@ -1011,34 +1017,27 @@ def _deck_gaps(feats, i, rngs):
     L = float(np.hypot(*np.diff(m, axis=0).T).sum())
     if L <= 0:
         return rngs
-    specs = road_specs(feats)
-    ends = _first_ring_ends(feats)
-    boxes = _feature_boxes(feats)
+    specs = _road_specs_kept(feats)
+    import fast
+    fast.require(169, "deck_gaps_round")
+    # (the other roads' ends at its two ends and near it, earthfast.deck_gaps_round: numpy over the whole layer for
+    # each road near a bridge was ~3/4 of this, 2026-11-08)
+    hits, others = fast._ef.deck_gaps_round(ring, _first_ring_ends(feats), _feature_boxes(feats),
+                                            _spec_mask(feats, specs), i, kx, ky, GAP_JOIN_M, GAP_JUNCTION_M + 1.0)
     end_deck = []
-    for e, p in ((0, ring[0]), (1, ring[-1])):
-        d = np.hypot((ends[:, :, 0] - p[0]) * kx, (ends[:, :, 1] - p[1]) * ky)
-        d[i] = np.inf
-        hit = [(int(j), int(k)) for j, k in zip(*np.nonzero(d < GAP_JOIN_M))]
-        ok = len(hit) == 1
+    for e in (0, 1):
+        j, k = hits[2 * e], hits[2 * e + 1]
+        ok = j >= 0
         if ok:
-            j, k = hit[0]
             rj = raw_level_ranges(feats, j)
             ok = any(kk == "bridge" and (a <= 1e-6 if k == 0 else b >= 1.0 - 1e-6) for a, b, kk in rj)
         end_deck.append(ok)
     bridges = [(a * L, b * L) for a, b, k in rngs if k == "bridge"]
-    pad = (GAP_JUNCTION_M + 1.0) / np.array([kx, ky])
-    lo, hi = ring.min(0) - pad, ring.max(0) + pad
-    near = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
-                          (boxes[:, 3] >= lo[1]))
-    others = [(ends[j, k] - ring[0]) * [kx, ky] for j in near if j != i and specs[j] is not None for k in (0, 1)
-              if np.isfinite(ends[j, k]).all()]
-    import fast
-    fast.require(105, "deck_gaps")
-    got = np.asarray(fast._ef.deck_gaps(np.ascontiguousarray(m), np.asarray(bridges, np.float64).reshape(-1, 2),
-                                        np.asarray(end_deck, np.int64),
-                                        np.asarray(others, np.float64).reshape(-1, 2), GAP_DECK_M, GAP_JUNCTION_M),
-                     np.float64).reshape(-1, 2)
-    if len(got) == len(bridges) and np.allclose(got, np.asarray(bridges, np.float64).reshape(-1, 2)):
+    got = fast._ef.deck_gaps(np.ascontiguousarray(m), np.asarray(bridges, np.float64).reshape(-1, 2),
+                             np.asarray(end_deck, np.int64), others, GAP_DECK_M, GAP_JUNCTION_M)
+    # (np.allclose's test, rtol 1e-5 / atol 1e-8, on these few numbers)
+    if len(got) == len(bridges) and all(x == y or (math.isfinite(y) and abs(x - y) <= 1e-8 + 1e-5 * abs(y))
+                                        for g, r in zip(got.tolist(), bridges) for x, y in zip(g, r)):
         return rngs
     out = [(float(min(max(a / L, 0.0), 1.0)), float(min(max(b / L, 0.0), 1.0)), "bridge") for a, b in got]
     out[0] = (0.0, out[0][1], "bridge") if got[0, 0] <= 1e-6 else out[0]
@@ -2009,6 +2008,11 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
     land cover), None = rural everywhere; called once for every candidate's points (its cost is per
     call: 2026-10-11, one call per road made 4.4 of a physics block's 6 s). Pure given urban_fn.
     Remembered on feats (mapdata keeps decoded cells in memory: every tile of a cell asked again)."""
+    return list(_road_specs_kept(feats, urban_fn, widths, left_hand))
+
+
+def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
+    """road_specs' list itself, the one remembered on feats when it was (callers must not change it)."""
     memo = feats.__dict__.setdefault("_road_specs", {})
     import franceroads
     k = (urban_fn, widths, bool(left_hand))
@@ -2048,7 +2052,7 @@ def road_specs(feats, urban_fn=None, widths=None, left_hand=False):
                             _FACTS_MEM.popitem(last=False)
         if keep:
             got = memo.setdefault(k, got)
-    return list(got)
+    return got
 
 
 # Lane tapers (the user, 2026-10-31: "the bridge geometry as lanes merge and split is rough"; bridgewidth.py: 54 of

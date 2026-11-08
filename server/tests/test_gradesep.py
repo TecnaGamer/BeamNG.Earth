@@ -254,5 +254,64 @@ class NeighboursHookTest(unittest.TestCase):
         self.assertEqual({id(f) for f in again if f is not None}, {id(f) for f in md.mem.values()})
 
 
+class NearMd(FakeMd):
+    """FakeMd with roads layers in the eight cells round KEY: lines through the cell's own (one the same feature as
+    the cell's own line id001, a copy as Overture has one in each cell it crosses) and far ones."""
+
+    def __init__(self, ground, own):
+        super().__init__(ground)
+        self.own = own
+
+    def cell(self, key, layers=(), kind="demand"):
+        dx, dy = key.x - KEY.x, key.y - KEY.y
+        lines = [[(-300.0 + 40 * dx, 30.0 * dy), (300.0, 30.0 * dy + 5.0)], [(5000.0, 5000.0), (5100.0, 5000.0)],
+                 [(0.0, -200.0), (0.0, 200.0)], [(20.0 * dx, -80.0), (20.0 * dx, 80.0)]]
+        ids = [f"n{dx}{dy}a", f"n{dx}{dy}b", "id001", f"n{dx}{dy}c"]
+        order = np.argsort(ids)
+        f = features([lines[i] for i in order], ["primary", "residential", "residential", "secondary"],
+                     flags=[(int(np.flatnonzero(order == 3)[0]), "is_tunnel", 0.4, 0.6)], ids=[ids[i] for i in order])
+        return SimpleNamespace(layers={"roads": f})
+
+
+class ReferenceTest(unittest.TestCase):
+    """_spans gives exactly the answers (and the probes' why) of the Python it was before its rows and lines moved to
+    earthfast (tests/gradesep_reference.py), whole rule and tunnels only."""
+
+    def check(self, f, md):
+        import gradesep_reference
+        for on in (True, False):
+            gradesep.ON = on
+            try:
+                f.__dict__.pop("_gradesep_why", None)
+                want = gradesep_reference.spans(md, KEY, f)
+                why = f.__dict__.pop("_gradesep_why", None)
+                got = gradesep._spans(md, KEY, f)
+                self.assertEqual(repr(got), repr(want))
+                self.assertEqual(repr(f.__dict__.get("_gradesep_why")), repr(why))
+            finally:
+                gradesep.ON = True
+
+    def test_the_fixtures(self):
+        flat0 = lambda e, n: np.zeros_like(e)    # noqa: E731
+        for f, ground in [
+                (cross(), embankment),
+                (cross(("motorway", "secondary"), flags=[(1, "is_tunnel", 0.45, 0.55)]), flat0),
+                (cross(("residential", "standard_gauge"), subtypes=["road", "rail"],
+                       flags=[(1, "is_tunnel", 0.45, 0.55)]), flat0),
+                (cross(flags=[(0, "is_bridge", 0.0, 0.4), (0, "is_bridge", 0.6, 1.0)]), flat0),
+                (features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
+                          ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]), flat0),
+                (features([[(-200.0, 0.0), (3.0, 0.0)], [(3.0, 0.0), (200.0, 0.0)], [(0.0, -200.0), (0.0, 200.0)]],
+                          ["residential"] * 3), embankment)]:
+            with self.subTest(n=len(f)):
+                self.check(f, FakeMd(ground))
+
+    def test_neighbours(self):
+        # the cell's own lines, its neighbours' over and under them (one its own line again), short tunnels in both
+        f = cross(("motorway", "secondary"), flags=[(1, "is_tunnel", 0.45, 0.55)])
+        self.check(f, NearMd(embankment, f))
+        self.check(cross(), NearMd(lambda e, n: np.zeros_like(e), None))
+
+
 if __name__ == "__main__":
     unittest.main()
