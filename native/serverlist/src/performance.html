@@ -41,7 +41,7 @@ td.r, th.r { text-align:right; font-variant-numeric:tabular-nums; white-space:no
 <div class="tiles">
   <div class="tile"><div class="n" id="fps">-</div><div class="l">average fps</div></div>
   <div class="tile"><div class="n" id="low1">-</div><div class="l">1% low fps</div></div>
-  <div class="tile"><div class="n" id="hph">-</div><div class="l">hitches (over 100 ms) per hour</div></div>
+  <div class="tile"><div class="n" id="hph">-</div><div class="l">hitches (over 100 ms) per hour of driving</div></div>
   <div class="tile"><div class="n" id="edge">-</div><div class="l">of the time held at the ground's edge</div></div>
   <div class="tile"><div class="n" id="hours">-</div><div class="l">hours of play measured</div></div>
 </div>
@@ -94,7 +94,7 @@ function draw() {
   const a = data && data.all;
   k.textContent = data ? data.kAnon : 5;
   fps.textContent = a ? n1(a.fps) : "-"; low1.textContent = a ? n1(a.low1) : "-";
-  hph.textContent = a ? n1(a.hitchesPerHour) : "-"; edge.textContent = a ? n1(a.edgeHeldPct) + "%" : "-";
+  hph.textContent = a ? n1(a.drivingHitchesPerHour ?? a.hitchesPerHour) : "-"; edge.textContent = a ? n1(a.edgeHeldPct) + "%" : "-";
   hours.textContent = a ? n1(a.hours) : "-";
   if (!a) {
     speed.innerHTML = `<tr><td class="empty">${data ? "Not enough players have sent performance data for this range yet." : "Could not load the statistics."}</td></tr>`;
@@ -120,7 +120,7 @@ function drawGroups() {
     <th class="r">Block wait</th><th class="r">Hours</th></tr>` + list.map(g => `<tr><td>${esc(name(g))}</td>
     <td class="r">${n1(g.fps)}<span class="bar" style="width:${Math.round((g.fps || 0) / top * 60)}px"></span></td>
     <td class="r">${n1(g.low1)}</td><td class="r">${n1(g.smooth)}%</td>
-    <td class="r ${g.hitchesPerHour > 30 ? "warn" : ""}">${n1(g.hitchesPerHour)}</td>
+    <td class="r ${(g.drivingHitchesPerHour ?? g.hitchesPerHour) > 30 ? "warn" : ""}">${n1(g.drivingHitchesPerHour ?? g.hitchesPerHour)}</td>
     <td class="r ${g.edgeHeldPct > 2 ? "warn" : ""}">${n1(g.edgeHeldPct)}%</td><td class="r">${n1(g.catchupPct)}%</td>
     <td class="r">${g.blockWait ? "~" + esc(g.blockWait) : "-"}</td><td class="r">${n1(g.hours)}</td></tr>`).join("");
 }

@@ -8,7 +8,7 @@ S.reset(0)
 local now = 0
 for _ = 1, 600 do S.frame(1000 / 60, 0); now = now + 1 / 60 end          -- 10 s stopped at 60 fps
 for _ = 1, 300 do S.frame(1000 / 30, 70); now = now + 1 / 30 end         -- 10 s at 70 mph, 30 fps
-S.frame(300, 70, 'terrainCommit 280')
+S.frame(300, 70, 'terrainCommit 280', true)
 S.frame(120, 70, nil)
 S.frame(1200, 70, 'C:\\Users\\me\\mod.lua 900')
 for i = 1, 20 do S.sample(i, { buildings = 800, loaded = { trees = 12345, roadTiles = 40 }, heapMB = 300, garbageMB = 150,
@@ -24,6 +24,7 @@ T.check(n == 903 and #out.fh == #S.FRAME_MS + 1, 'every frame in the histogram')
 T.check(out.bands.stopped and out.bands.s60 and math.abs(out.bands.stopped.s - 10) < 0.1 + 5 and out.bands.s60.fh[6] == 300,
   'per speed band: seconds and its own histogram (30 fps in the 22-33 ms bin)')
 T.check(out.hit[1] == 3 and out.hit[2] == 3 and out.hit[3] == 2 and out.hit[4] == 1, 'hitches over 50 / 100 / 250 / 1000 ms')
+T.check(out.hitLoad[1] == 1 and out.hitLoad[3] == 1 and out.hitLoad[4] == 0, 'the hitches while loading after a teleport apart')
 T.check(out.causes.terrainCommit == 1 and out.causes.outside == 1 and out.causes.other == 1,
   'causes: the part name, outside the timers, anything not a plain name is "other" (no path)')
 T.check(out.scene.urban and out.scene.urban >= 15, 'the scene by buildings (800: urban)')

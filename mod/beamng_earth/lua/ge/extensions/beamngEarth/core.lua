@@ -2365,7 +2365,8 @@ function M._psum.frame(ms, hrec)
   local p = st.player
   local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
   local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
-  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil)
+  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
+    st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
   if st.clock < ps.sampleAt then return end
   ps.sampleAt = st.clock + 1
   local okS, smp = pcall(ps.sample)

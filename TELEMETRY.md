@@ -93,7 +93,7 @@ Over each 5 minutes:
 |---|---|---|
 | frame times | how many frames fell into fixed steps (gives average fps, 1% low, 95th / 99th percentile) | how smooth the game was |
 | the same per speed band | the steps for town speeds vs the highway | so fast driving is not hidden in an average |
-| hitches | how many frames over 50 / 100 / 250 / 1000 ms, and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both) | which part to fix first |
+| hitches | how many frames over 50 / 100 / 250 / 1000 ms (and how many of those while loading after a teleport), and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both) | which part to fix first |
 | fps drops | how many, how long, the lowest (rounded) | stutter you notice |
 | memory (rounded) | the game's Lua memory and its garbage per minute; the BeamNG.Earth server's memory | running out of memory on 16 GB machines and the Steam Deck |
 | terrain blocks | how long each new ground block was waited for, in steps | whether the world keeps up with you |

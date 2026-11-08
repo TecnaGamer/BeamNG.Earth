@@ -16,7 +16,7 @@ import time
 import fast
 
 # the names a summary and a setup may carry (perfsummary.lua's; a settings table only its fixed lists' names)
-SUMMARY_NAMES = dict.fromkeys(("v", "s", "fh", "hit", "causes", "teleports", "blocks", "mapOpen", "bands", "scene",
+SUMMARY_NAMES = dict.fromkeys(("v", "s", "fh", "hit", "hitLoad", "causes", "teleports", "blocks", "mapOpen", "bands", "scene",
                                "loaded", "lua", "held", "roadsQueuedP90", "drops"))
 GAME_SETTINGS = ["GraphicOverallQuality", "GraphicMeshQuality", "GraphicTextureQuality", "GraphicTerrainQuality",
                  "GraphicLightingQuality", "GraphicShadowsQuality", "GraphicAnisotropic", "GraphicAntialiasType",

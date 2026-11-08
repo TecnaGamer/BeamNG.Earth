@@ -54,14 +54,16 @@ end
 
 local w
 function M.reset(now)
-  w = { t0 = now, ms = 0, fh = zeros(#M.FRAME_MS + 1), bands = {}, hit = zeros(#M.HITCH_MS), causes = {}, nCauses = 0,
+  w = { t0 = now, ms = 0, fh = zeros(#M.FRAME_MS + 1), bands = {}, hit = zeros(#M.HITCH_MS), hitLoad = zeros(#M.HITCH_MS),
+    causes = {}, nCauses = 0,
     scene = {}, loaded = {}, heap = 0, garbage = 0, held = { edge = 0, drop = 0, loading = 0 }, teleports = 0,
     blocks = zeros(#M.BLOCK_S + 1), nBlocks = 0, roadq = {}, mapOpen = 0, lastSample = nil }
 end
 M.reset(nil)
 
--- One frame: its ms, the car's speed (mph), and the name of its largest part (perflog.cause's, or nil) when slow.
-function M.frame(ms, mph, cause)
+-- One frame: its ms, the car's speed (mph), the name of its largest part (perflog.cause's, or nil) when slow, and
+-- whether the world is loading after a teleport (its hitches are counted apart too: hitLoad)
+function M.frame(ms, mph, cause, loading)
   if type(ms) ~= 'number' or ms ~= ms or ms <= 0 or ms > 60000 then return end
   w.ms = w.ms + ms
   local b = bin(ms, M.FRAME_MS)
@@ -73,7 +75,12 @@ function M.frame(ms, mph, cause)
   if not bd then bd = { s = 0, fh = zeros(#M.FRAME_MS + 1) }; w.bands[name] = bd end
   bd.s = bd.s + ms / 1000
   bd.fh[b] = bd.fh[b] + 1
-  for i, e in ipairs(M.HITCH_MS) do if ms >= e then w.hit[i] = w.hit[i] + 1 end end
+  for i, e in ipairs(M.HITCH_MS) do
+    if ms >= e then
+      w.hit[i] = w.hit[i] + 1
+      if loading then w.hitLoad[i] = w.hitLoad[i] + 1 end
+    end
+  end
   if ms >= M.CAUSE_MS then
     local k = M.causeKey(cause)
     if not w.causes[k] then
@@ -125,7 +132,7 @@ function M.take(now, drops)
   if not w.t0 then w.t0 = now end
   if now - w.t0 < M.WINDOW_S then return nil end
   if type(drops) == 'function' then drops = drops() end
-  local out = { v = M.VERSION, s = r(now - w.t0, 1), fh = w.fh, hit = w.hit, causes = w.causes,
+  local out = { v = M.VERSION, s = r(now - w.t0, 1), fh = w.fh, hit = w.hit, hitLoad = w.hitLoad, causes = w.causes,
     teleports = w.teleports, blocks = w.blocks, mapOpen = r(w.mapOpen, 5) }
   local bands = {}
   for k, b in pairs(w.bands) do bands[k] = { s = r(b.s, 5), fh = b.fh } end

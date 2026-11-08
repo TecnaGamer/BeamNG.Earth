@@ -62,6 +62,8 @@ pub struct WindowIn {
     s: Option<f64>,
     fh: Option<Vec<f64>>,
     hit: Option<Vec<f64>>,
+    #[serde(rename = "hitLoad")]
+    hit_load: Option<Vec<f64>>,
     causes: Option<HashMap<String, f64>>,
     teleports: Option<f64>,
     blocks: Option<Vec<f64>>,
@@ -116,6 +118,8 @@ pub struct Agg {
     pub s: f64,
     pub fh: Vec<u64>,
     pub hit: Vec<u64>,
+    #[serde(default)]
+    pub hit_load: Vec<u64>, // (of hit: while loading after a teleport)
     pub bands: BTreeMap<String, Band>,
     pub causes: BTreeMap<String, u64>,
     pub scene: BTreeMap<String, f64>,
@@ -161,6 +165,7 @@ impl Agg {
         self.s += o.s;
         add_vec(&mut self.fh, &o.fh, BINS);
         add_vec(&mut self.hit, &o.hit, HITCH_BINS);
+        add_vec(&mut self.hit_load, &o.hit_load, HITCH_BINS);
         for (k, b) in &o.bands {
             let e = self.bands.entry(k.clone()).or_default();
             e.s += b.s;
@@ -185,6 +190,7 @@ impl Agg {
 
     fn window(w: &WindowIn) -> Agg {
         let mut a = Agg { windows: 1, s: secs(w.s), fh: counts(&w.fh, BINS), hit: counts(&w.hit, HITCH_BINS),
+                          hit_load: counts(&w.hit_load, HITCH_BINS),
                           blocks: counts(&w.blocks, BLOCK_BINS), ..Default::default() };
         if let Some(bands) = &w.bands {
             for name in BANDS {
@@ -245,6 +251,12 @@ impl Agg {
         let mut causes: Vec<(&String, &u64)> = self.causes.iter().collect();
         causes.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
         causes.truncate(8);
+        // (hitches outside the loading after teleports: what driving feels like)
+        let driving = {
+            let h = self.hit.get(1).copied().unwrap_or(0).saturating_sub(self.hit_load.get(1).copied().unwrap_or(0));
+            let dh = ((ft - self.loading) / 3600.0).max(1e-9);
+            if ft - self.loading > 60.0 { serde_json::json!((h as f64 / dh * 10.0).round() / 10.0) } else { serde_json::Value::Null }
+        };
         let pct = |v: f64| if self.s > 0.0 { (v / self.s * 1000.0).round() / 10.0 } else { 0.0 };
         serde_json::json!({
             "installs": self.installs, "hours": (self.s / 360.0).round() / 10.0,
@@ -252,6 +264,7 @@ impl Agg {
             "smooth": if frames > 0 { (self.fh.iter().take(4).sum::<u64>() as f64 / frames as f64 * 1000.0).round() / 10.0 } else { 0.0 },
             "hitchesPerHour": (self.hit.get(1).copied().unwrap_or(0) as f64 / hours * 10.0).round() / 10.0,
             "bigHitchesPerHour": (self.hit.get(2).copied().unwrap_or(0) as f64 / hours * 10.0).round() / 10.0,
+            "drivingHitchesPerHour": driving,
             "dropsPerHour": (self.drops as f64 / hours * 10.0).round() / 10.0,
             "edgeHeldPct": pct(self.edge), "groundHoldPct": pct(self.drophold), "loadingPct": pct(self.loading),
             "catchupPct": pct(self.catchup_s), "teleportsPerHour": (self.teleports as f64 / hours * 10.0).round() / 10.0,
@@ -543,7 +556,7 @@ mod tests {
 
     fn report(gpu: &str, fps60: u64, with_setup: bool) -> PerfIn {
         let w: WindowIn = serde_json::from_value(serde_json::json!({
-            "v": 1, "s": 300, "fh": [0, 0, 0, fps60, 0, 0, 0, 1, 0, 0], "hit": [1, 1, 0, 0],
+            "v": 1, "s": 300, "fh": [0, 0, 0, fps60, 0, 0, 0, 1, 0, 0], "hit": [1, 1, 0, 0], "hitLoad": [1, 0, 0, 0],
             "bands": {"s60": {"s": 300, "fh": [0, 0, 0, fps60, 0, 0, 0, 1, 0, 0]}}, "scene": {"urban": 250, "town": 50},
             "held": {"edge": 15}, "blocks": [3, 1, 0, 0, 0, 0, 0, 0], "causes": {"terrainCommit": 1, "bad key!": 4},
             "lat": 39.2})).unwrap();
@@ -573,6 +586,7 @@ mod tests {
         assert_eq!(v["all"]["low1"], 59);       // (the 1 % in the 14-17 ms bin: 59 fps)
         assert_eq!(v["all"]["edgeHeldPct"], 5.0);
         assert_eq!(v["all"]["blockWait"], "0.5 s");
+        assert_eq!(v["all"]["drivingHitchesPerHour"], 12.0);    // (1 a 300 s window, none of them while loading)
         let gpus = v["groups"]["gpu"].as_array().unwrap();
         assert_eq!(gpus.len(), 1);              // the rare GPU alone is under K_ANON and "other" has 1 install: hidden
         assert_eq!(gpus[0]["name"], "NVIDIA GeForce RTX 3060");
