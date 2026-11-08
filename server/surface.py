@@ -77,6 +77,13 @@ CLASS_MATERIAL = {0: DIRT, 10: GRASS, 20: DUSTY, 30: GRASS, 40: DIRT, 50: DIRT, 
 LAWN_SHARE_HUMID = 0.9
 LAWN_SHARE_DRY = 0.75
 LAWN_PATCH_M = 30.0
+# Forest (WorldCover tree cover): the only ground the terrain's own roughness is kept on (the user, 2026-11-07: "keep
+# the unevenness only in the forests, the fields and the rest flat"). Read on a world-locked lattice of FOREST_CELL_M
+# (a binary mask bilinear in between: a wood's edge fades in over a couple of metres instead of a step, and a block
+# pays a few thousand samples instead of a million).
+FOREST = 10
+FOREST_CELL_M = 4.0
+FOREST_CELLS_MAX = 1000000  # the lattice's nodes at most (~4 x 4 km): points farther apart than that are read one by one
 # Past Web Mercator's limit (+-85.05 deg) there are no map cells: all of it is ice, Antarctica's ice sheet and the
 # Arctic Ocean's year-round sea ice (the user, 2026-10-22: "add polar support"), WorldCover's "snow and ice".
 POLAR_CLASS = 70
@@ -1670,6 +1677,62 @@ class Surface:
             out[inside] = r.sample(lon[inside], lat[inside])
         out[np.abs(lat) > mapcells.MAX_LAT] = POLAR_CLASS
         return out, complete
+
+    def forest(self, lat, lon):
+        """0..1 share of forest (WorldCover tree cover) at the points: where the terrain keeps its own roughness (the
+        user, 2026-11-07: the fields and the rest stay flat), a wood's edge fading in over a cell. The mask is read on
+        a world-locked lattice of FOREST_CELL_M (a few thousand samples a block, not a million), from the cached land
+        cover alone (a cell not cached yet reads as open ground: no roughening and no wait; its prefetch is queued),
+        so the same block or tile always gets the same values. Pure given the cache."""
+        lat = np.asarray(lat, np.float64)
+        lon = np.asarray(lon, np.float64)
+        if lat.size == 0:
+            return np.zeros(np.shape(lat), np.float32)
+        xm = lon * M_PER_DEG * np.cos(np.radians(lat))
+        ym = lat * M_PER_DEG
+        fx = xm / FOREST_CELL_M
+        fy = ym / FOREST_CELL_M
+        i0 = np.floor(fx)
+        j0 = np.floor(fy)
+        tx = fx - i0
+        ty = fy - j0
+        i0 = i0.astype(np.int64)
+        j0 = j0.astype(np.int64)
+        imin, jmin = int(i0.min()), int(j0.min())
+        imax, jmax = int(i0.max()) + 1, int(j0.max()) + 1
+        if (imax - imin + 1) * (jmax - jmin + 1) > FOREST_CELLS_MAX:
+            return self._forest_at(lat, lon)        # (sparse points over a wide land: no lattice of ours to pay for)
+        ii = np.arange(imin, imax + 1)
+        jj = np.arange(jmin, jmax + 1)
+        # (the lattice's own nodes read back to lat / lon by the same projection: a pure function of the world)
+        la = np.broadcast_to((jj * FOREST_CELL_M / M_PER_DEG)[:, None], (len(jj), len(ii)))
+        lo = np.broadcast_to((ii * FOREST_CELL_M)[None, :] /
+                             np.maximum(M_PER_DEG * np.cos(np.radians(la)), 1e-6), (len(jj), len(ii)))
+        vals = self._forest_at(la, lo)
+        ci = i0 - imin
+        cj = j0 - jmin
+        v00 = vals[cj, ci]
+        v10 = vals[cj, ci + 1]
+        v01 = vals[cj + 1, ci]
+        v11 = vals[cj + 1, ci + 1]
+        out = (v00 * (1.0 - tx) + v10 * tx) * (1.0 - ty) + (v01 * (1.0 - tx) + v11 * tx) * ty
+        return out.astype(np.float32)
+
+    def _forest_at(self, lat, lon):
+        """1.0 on tree cover, 0.0 elsewhere, from the cached cells only (no fault: this only shapes the ground's
+        roughness, nothing is built of it)."""
+        out = np.zeros(np.shape(lat), np.float32)
+        for key in mapcells.cells_for_points(lat, lon):
+            r = self._cached(key)
+            if r is None:
+                continue
+            lon0, lat0, lon1, lat1 = key.bounds()
+            inside = (lat >= lat0) & (lat < lat1) & (lon >= lon0) & (lon < lon1)
+            if not inside.any():
+                continue
+            out[inside] = r.sample(lon[inside], lat[inside]) == FOREST
+        out[np.abs(lat) > mapcells.MAX_LAT] = 0.0
+        return out
 
     def _is_queued(self, key):
         with self._lock:

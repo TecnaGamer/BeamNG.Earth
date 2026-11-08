@@ -735,10 +735,36 @@ DIRT_MAJOR_SHARE = float(os.environ.get("BNE_DIRT_MAJOR", "0.2"))  # a MAIN dirt
 # motorway ones (a mapped `secondary` gravel road is a main road where you drive it at 80 km/h)
 DIRT_SOFT_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
 # a forest track (highway=track) is worse than any of them: "you cannot even get up to speed on it" (the user, 2026-11-02)
-DIRT_TRACK_SHARE = float(os.environ.get("BNE_DIRT_TRACK", "2.5"))
-DIRT_TRACK_WAVE_SHARE = float(os.environ.get("BNE_DIRT_TRACK_WAVE", "0.5"))   # ... but less of the soft undulation:
-                                                                              # waves read as a pattern, holes do not
+DIRT_TRACK_SHARE = float(os.environ.get("BNE_DIRT_TRACK", "1.5"))
+DIRT_TRACK_WAVE_SHARE = float(os.environ.get("BNE_DIRT_TRACK_WAVE", "0.0"))   # ... and no soft undulation at all: the
+                                                                              # long waves were the "american rollercoaster";
+                                                                              # the damage is the triangles (DIRT_NODE_M)
 DIRT_VERTEX_STEP = 2.0          # m between a dirt road's plan vertices (4 m smoothed a pothole away)
+DIRT_NODE_M = float(os.environ.get("BNE_DIRT_NODE", "0.08"))  # m: the surface's own triangles, each plan vertex tilted
+                                                              # its own way (the user, 2026-11-07: a track is hard to
+                                                              # pass because its triangles are distorted, not by long
+                                                              # smooth waves -- "american rollercoaster")
+DIRT_TRACK_NODE = 3.4           # a forest track's share of it (a lane's: 1, a road signed as a main one's: DIRT_MAJOR_SHARE)
+DIRT_TRACK_W = float(os.environ.get("BNE_DIRT_TRACK_W", "0.45"))   # its holes are this share of a lane's width: narrow
+                                                                  # dips between the facets, not 5 m bowls rolling the car
+# A forest track is damaged in rough runs, calmer stretches between them: its triangles and humps for a few dozen metres,
+# then a stretch you can drive (the whole track as one washboard still read as waves from end to end; the user,
+# 2026-11-08: "волнами идет ... нужны просто ухабы")
+DIRT_TRACK_RUN_M = (12.0, 26.0)  # m: a rough run
+DIRT_TRACK_GAP_M = (18.0, 40.0)  # m: the calmer stretch after it
+DIRT_TRACK_EDGE_M = 2.5         # m: a run's ramps in and out (its humps start and end over this)
+DIRT_TRACK_QUIET = 0.15         # a calmer stretch keeps this share of the triangles: a track is never glass
+DIRT_HUMP_EVERY_M = 3.5         # m of a rough run per hump (a raised one, or a dip: see DIRT_HUMP_DIP)
+DIRT_HUMP_W_M = (2.5, 5.0)      # m: a hump's width
+DIRT_HUMP_D_M = (0.18, 0.42)    # m: its height -- a hump to be thrown over, not a wave
+DIRT_HUMP_DIP = 0.45            # a share of the humps are dips, this much deep (the pits are the deep ones)
+# A minor dirt road (a residential or unclassified gravel lane) is worn the same way -- runs of damage, calmer stretches
+# between them -- but barely: a few cm, noticed only over the wheel (the user, 2026-11-08: "по тому же принципу, но
+# совсем еле ощутимые")
+DIRT_MINOR_SHARE = 0.25         # its damage and triangles as a share of what a lane used to have
+DIRT_MINOR_RUN_M = (16.0, 32.0)  # m: a worn run
+DIRT_MINOR_GAP_M = (40.0, 90.0)  # m: the smooth stretch after it (most of the lane)
+DIRT_MINOR_QUIET = 0.3          # share of the triangles kept between the runs
 DIRT_UNDULATION_M = 0.15        # m: the soft rise and fall a country road keeps between its potholes
 DIRT_UNDULATION_WAVES = ((10.0, 1.0), (6.0, 0.8))
 DIRT_POTHOLE_EVERY_M = 5.0      # m of road per pothole, on average
@@ -751,6 +777,9 @@ DIRT_PIT_EVERY_M = 150.0        # m of road per deep pit
 DIRT_PIT_W_M = (2.0, 4.5)
 DIRT_PIT_D_M = (0.30, 0.50)
 DIRT_STEP_MAX_M = float(os.environ.get("BNE_DIRT_STEP", "0.35"))   # m: the steepest step between two 2 m samples
+DIRT_STEP_TRACK = 1.8          # ... a forest track's own cap (this much of it: its humps are walls otherwise)
+DIRT_GIVEBACK_M = 40.0         # m: where a capped step's lost height is given back (a long smooth tilt, local)
+DIRT_GIVEBACK_TRACK_M = 12.0   # ... a forest track's, short: the humps must not be smeared into 40 m waves
 DIRT_BASE_M = 25.0             # m: the bump pattern's own long waves are removed over this length, so a road keeps
                                # the terrain's course instead of sinking into it (the roads sat in a ditch, further in
                                # the worse it got: the damage's mean pulled them down along their length)
@@ -769,18 +798,23 @@ def dirt_taper(s_, length):
 
 
 def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
-    """What a minor dirt road is really like, one value per profile sample (n samples, ext: how many lie past the
-    part's ends): a soft undulation plus discrete damage -- potholes, broken patches (a step with soft edges) and the
-    odd deep pit -- placed from the road's own position, so every process builds the same ones. None for a built road
-    or a main one. The sizes are metres; BNE_DIRT_BUMP scales the lot (1: as here, 0: off)."""
+    """What a dirt road is really like, one value per profile sample (n samples, ext: how many lie past the part's
+    ends): a soft undulation and discrete damage -- potholes, broken patches (a step with soft edges), humps and the odd
+    deep pit -- in worn runs with calmer stretches between them, placed from the road's own position, so every process
+    builds the same ones. A forest track's runs are hard (DIRT_TRACK_*); a minor dirt road's are a few centimetres,
+    barely felt (DIRT_MINOR_*); a road signed as a main one has none, just its gentle own wear (DIRT_MAJOR_SHARE).
+    None for a built road. The sizes are metres; BNE_DIRT_BUMP scales the lot (1: as here, 0: off)."""
     if spec.kind in roadsmod.BUILT or DIRT_ROUGH <= 0.0:
         return None
     if spec.cls == "track":
-        scale, wave = DIRT_TRACK_SHARE, DIRT_TRACK_WAVE_SHARE
+        scale, wave, node_share = DIRT_TRACK_SHARE, DIRT_TRACK_WAVE_SHARE, DIRT_TRACK_NODE
+        span = (DIRT_TRACK_RUN_M, DIRT_TRACK_GAP_M, DIRT_TRACK_EDGE_M, DIRT_TRACK_QUIET)
     elif spec.cls in DIRT_SOFT_CLASSES:
-        scale = wave = DIRT_MAJOR_SHARE
-    else:
-        scale = wave = 1.0
+        scale = wave = node_share = DIRT_MAJOR_SHARE
+        span = None                                     # (a road signed as a main one: no runs, its own gentle wear)
+    else:                                               # a minor dirt road: the same runs, barely felt
+        scale = wave = node_share = DIRT_MINOR_SHARE
+        span = (DIRT_MINOR_RUN_M, DIRT_MINOR_GAP_M, DIRT_TRACK_EDGE_M, DIRT_MINOR_QUIET)
     if scale <= 0.0 and wave <= 0.0:
         return None
     xy = np.asarray(xy, np.float64)[:, :2]
@@ -790,6 +824,7 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     seed = (int(round(float(xy[0, 0]) * 7.0)) * 7919 + int(round(float(xy[0, 1]) * 7.0)) * 104729) & 0x7FFFFFFF
     rng = np.random.default_rng(seed)
     out = np.zeros(n)
+    length = float(s_[-1]) if len(s_) else 0.0
     share2 = 0.0
     for knot_m, wshare in DIRT_UNDULATION_WAVES:           # the road's own soft rise and fall
         if s_[-1] < knot_m:
@@ -804,6 +839,21 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     if float(out.std()) > 1e-9:
         out *= DIRT_UNDULATION_M * wave / math.sqrt(share2)
 
+    # (the damage in runs: mask 1 inside them, the quiet share between; ones where the class has none)
+    mask, runs = np.ones(n), []
+    if span is not None and length > 1.0:
+        mask[:] = span[3]
+        pos = float(rng.uniform(0.5 * span[1][0], span[1][1]))
+        while pos < length - 2.0:
+            end = min(length, pos + float(rng.uniform(*span[0])))
+            e = span[2]
+            w = np.clip(np.minimum(s_ - (pos - e), (end + e) - s_) / e, 0.0, 1.0)
+            mask = np.maximum(mask, w * w * (3.0 - 2.0 * w))
+            runs.append((pos, end))
+            pos = end + float(rng.uniform(*span[1]))
+    if span is not None:                                      # the soft undulation too, not just the triangles
+        out *= mask
+
     i_of = lambda pos: pos / float(step) + float(ext[0])    # (sample index of a distance along the part)
 
     def add(c, half, fn):                                  # a feature's few metres only (it is ~0 farther out):
@@ -815,21 +865,41 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     def bowl(c, w, d):                                     # a rounded hole: full depth in the middle, soft rim
         add(c, 1.5 * w, lambda x: -d * np.exp(-((x - c) / (0.45 * w)) ** 2))
 
-    length = float(s_[-1]) if len(s_) else 0.0
+    width_share = DIRT_TRACK_W if spec.cls == "track" else 1.0
+    node = DIRT_NODE_M * DIRT_ROUGH * node_share
+    if node > 0.0 and len(xy) >= 2:                        # the triangles of the surface, not a wave: the linear
+        cum = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]   # stretch between two vertices tilts its own
+        x = np.interp(s_, cum, xy[:, 0])                   # way, a hash of the vertex's own world position (the same
+        y = np.interp(s_, cum, xy[:, 1])                   # road: the same values in every process)
+        out += (_hash01(np.rint(x * 100.0).astype(np.int64), np.rint(y * 100.0).astype(np.int64), 149) - 0.5) * \
+            (2.0 * node) * mask
+
     if length > 10.0:
-        for _ in range(int(rng.poisson(max(1.0, length / DIRT_POTHOLE_EVERY_M)))):
-            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_POTHOLE_W_M)),
-                 float(rng.uniform(*DIRT_POTHOLE_D_M)) * DIRT_ROUGH * scale)
-        for _ in range(int(rng.poisson(max(1.0, length / DIRT_PATCH_EVERY_M)))):   # broken patch: a step, soft edges
-            c = float(rng.uniform(0.0, length))
-            w = float(rng.uniform(*DIRT_PATCH_W_M))
-            d = float(rng.uniform(*DIRT_PATCH_D_M)) * DIRT_ROUGH * scale * (1.0 if rng.random() < 0.5 else -1.0)
-            edge = 0.35 * w
-            add(c, 0.5 * w + 4.0 * edge, lambda x, c=c, w=w, d=d, edge=edge:
-                d * 0.5 * (np.tanh((x - (c - 0.5 * w)) / edge) - np.tanh((x - (c + 0.5 * w)) / edge)))
-        for _ in range(int(rng.poisson(max(0.3, length / DIRT_PIT_EVERY_M)))):      # the odd deep pit
-            bowl(float(rng.uniform(0.0, length)), float(rng.uniform(*DIRT_PIT_W_M)),
-                 float(rng.uniform(*DIRT_PIT_D_M)) * DIRT_ROUGH * scale)
+        for a, b in (runs or [(0.0, length)]):      # (a track's and a lane's damage only in their worn runs)
+            part_len = b - a
+            if part_len < 2.0:
+                continue
+            for _ in range(int(rng.poisson(max(1.0, part_len / DIRT_POTHOLE_EVERY_M)))):
+                bowl(float(rng.uniform(a, b)), float(rng.uniform(*DIRT_POTHOLE_W_M)) * width_share,
+                     float(rng.uniform(*DIRT_POTHOLE_D_M)) * DIRT_ROUGH * scale)
+            for _ in range(int(rng.poisson(max(1.0, part_len / DIRT_PATCH_EVERY_M)))):   # a broken patch: a step
+                c = float(rng.uniform(a, b))
+                w = float(rng.uniform(*DIRT_PATCH_W_M))
+                d = float(rng.uniform(*DIRT_PATCH_D_M)) * DIRT_ROUGH * scale * (1.0 if rng.random() < 0.5 else -1.0)
+                edge = 0.35 * w
+                add(c, 0.5 * w + 4.0 * edge, lambda x, c=c, w=w, d=d, edge=edge:
+                    d * 0.5 * (np.tanh((x - (c - 0.5 * w)) / edge) - np.tanh((x - (c + 0.5 * w)) / edge)))
+            for _ in range(int(rng.poisson(max(0.3, part_len / DIRT_PIT_EVERY_M)))):      # the odd deep pit
+                bowl(float(rng.uniform(a, b)), float(rng.uniform(*DIRT_PIT_W_M)) * width_share,
+                     float(rng.uniform(*DIRT_PIT_D_M)) * DIRT_ROUGH * scale)
+            if runs:                                # ухабы: humps to be thrown over, a track's or a lane's own bumps
+                for _ in range(max(1, int(part_len / DIRT_HUMP_EVERY_M))):
+                    c = float(rng.uniform(a, b))
+                    hw = float(rng.uniform(*DIRT_HUMP_W_M)) * width_share
+                    hd = float(rng.uniform(*DIRT_HUMP_D_M)) * DIRT_ROUGH * scale
+                    if rng.random() < DIRT_HUMP_DIP:
+                        hd = -hd
+                    add(c, 1.6 * hw, lambda x, c=c, hw=hw, hd=hd: hd * np.exp(-((x - c) / (0.45 * hw)) ** 2))
         if DIRT_BASE_M > 0.0 and length > 1.5 * DIRT_BASE_M:   # keep the terrain's own course: no net rise or fall
             k = max(1, int(DIRT_BASE_M / max(step, 1e-6)))
             pad = k // 2
@@ -849,9 +919,9 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     bumps = dirt_bumps(xy, spec, len(z), ext, step)
     if bumps is not None:                       # (not smoothed again: a pothole's edge is sharp, that is the point)
         z0 = zs + bumps[ext[0]:len(z) - ext[1]]
-        cap = DIRT_STEP_MAX_M
-        if bumps is not None and spec.cls == "track":       # a forest track may be steeper: it is a track, not a road
-            cap = DIRT_STEP_MAX_M * 1.6
+        cap, give_m = DIRT_STEP_MAX_M, DIRT_GIVEBACK_M
+        if spec.cls == "track":             # a forest track may be steeper: it is a track, not a road
+            cap, give_m = DIRT_STEP_MAX_M * DIRT_STEP_TRACK, DIRT_GIVEBACK_TRACK_M
         if cap > 0.0 and len(z0) > 1:               # but no walls: a pothole's far side is a slope, not a cliff
             d = np.clip(np.diff(z0), -cap, cap)
             capped = np.r_[z0[0], z0[0] + np.cumsum(d)]
@@ -859,7 +929,7 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
             # the whole road leaned it into the ground, the further the deeper)
             lost = z0 - capped
             if float(np.abs(lost).max()) > 1e-6:
-                back = smooth_profile(lost, step, 40.0)
+                back = smooth_profile(lost, step, give_m)
                 back += float(np.mean(lost - back))
                 capped += back
             z0 = capped
@@ -4942,18 +5012,24 @@ def _hash01(i, j, salt=0):
     return (h & np.uint64(0xFFFFFF)).astype(np.float64) / float(0x1000000)
 
 
-# The land off the roads roughened (PR #677): opt-in (BNE_TERRAIN_BUMPS=on) until it is one kernel applied the same way
-# on every ground path (provisional blocks and far tiles too) and kept off towns, water and building sites; on, it is
-# ~0.3-0.5 s of numpy per million samples on every block, road tile and far tile (2026-11-05 merge review).
-TERRAIN_BUMPS_ON = os.environ.get("BNE_TERRAIN_BUMPS", "off") == "on"
+# The land off the roads roughened (PR #677): one kernel applied the same way on every ground path (provisional blocks
+# and far tiles too) and kept off towns, water and building sites; it is ~0.3-0.5 s of numpy per million samples on
+# every block, road tile and far tile (2026-11-05 merge review). On in this build: the woods are the uneven ground (the
+# user, 2026-11-07); BNE_TERRAIN_BUMPS=off turns it back off.
+TERRAIN_BUMPS_ON = os.environ.get("BNE_TERRAIN_BUMPS", "on") == "on"
 
 
-def terrain_bumps(lat, lon):
+def terrain_bumps(lat, lon, cover=None):
     """World-locked roughness of the land off the roads (m), the same value whatever process or tile asks: value noise
     at a few sizes, about TERRAIN_ROUGH_M (std). 0.0 (nothing added) unless TERRAIN_BUMPS_ON, or when BNE_TERRAIN_BUMP
-    is 0."""
+    is 0. cover (0..1 per point, or None): the shares of the ground left rough -- the forests (surface.Surface.forest,
+    the user, 2026-11-07: "keep the unevenness only in the forests, the fields and the rest flat"); None: everywhere."""
     if not TERRAIN_BUMPS_ON or TERRAIN_ROUGH_M <= 0.0:
         return 0.0
+    if cover is not None:
+        cover = np.asarray(cover, np.float64)
+        if cover.size == 0 or not np.any(cover > 0.0):
+            return np.zeros(np.shape(np.asarray(lat)), np.float64)
     la = np.asarray(lat, np.float64)
     lo = np.asarray(lon, np.float64)
     y = la * 110574.0
@@ -4978,19 +5054,27 @@ def terrain_bumps(lat, lon):
         v = (v00 * (1.0 - sx) + v10 * sx) * (1.0 - sy) + (v01 * (1.0 - sx) + v11 * sx) * sy
         out += share * (v - 0.5)
         norm += share * share
-    return out * (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))
+    out *= (TERRAIN_ROUGH_M / (0.1875 * math.sqrt(norm)))
+    if cover is not None:
+        out = out * cover
+    return out
 
 
 class GradedDem:
-    """dem.Dem with sample() graded under the roads; everything else passes through."""
+    """dem.Dem with sample() graded under the roads; everything else passes through. cover (a callable lat, lon ->
+    0..1 per point, or None): where the land off the roads is roughened (the forests, surface.Surface.forest)."""
 
-    def __init__(self, dem, grader):
-        self._dem, self._grader = dem, grader
+    def __init__(self, dem, grader, cover=None):
+        self._dem, self._grader, self._cover = dem, grader, cover
 
     def sample(self, lat, lon, zoom, progress=None):
         base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
-        # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip)
-        base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
+        # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip):
+        # in the forests only
+        la = np.asarray(lat, np.float64)
+        lo = np.asarray(lon, np.float64)
+        cover = self._cover(la, lo) if self._cover is not None else None
+        base = np.asarray(base, np.float64) + terrain_bumps(la, lo, cover)
         return self._grader.apply(lat, lon, base)
 
     def __getattr__(self, name):

@@ -23,6 +23,9 @@ import numpy as np
 import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
+DIRT_DRAPE_STEP = 1.0   # m between a dirt / gravel strip's: the plan's facets come every 2 m and the physics block's
+                        # lattice is 1 m, so at 2 m the strip cut the corners of a track's distorted triangles (up to
+                        # ~16 cm) and sank into the ground (the user, 2026-11-07)
 LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01}   # m above the physics ground (lifted under roads
                                                         # by grading.ROAD_LIFT over the visible ground)
 
@@ -202,16 +205,23 @@ def ribbons(chunks, keep_none=False):
         half.append(float(c["w"]) / 2)
     if batch:
         fast.require(90, "ribbon_edges")
-        off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
-        L, R, S, Z, o = fast._ef.ribbon_edges(np.ascontiguousarray(np.concatenate(pts)), off,
-                                             np.asarray(half, np.float64), float(DRAPE_STEP))
+        # (a dirt strip is cut at the block's own 1 m lattice: its facets, not a 2 m chord through them)
+        steps = {}
         for n, k in enumerate(batch):
-            a, b = int(o[n]), int(o[n + 1])
-            if b - a < 2:
-                continue
             c = chunks[k]
-            out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
-                      Z[a:b] if c.get("fixed") else None)
+            step = DIRT_DRAPE_STEP if str(c.get("m", "")).startswith(FADE_PREFIX) else DRAPE_STEP
+            steps.setdefault(step, []).append(n)
+        for step, idx in steps.items():
+            off = np.r_[0, np.cumsum([len(pts[n]) for n in idx])].astype(np.int64)
+            L, R, S, Z, o = fast._ef.ribbon_edges(np.ascontiguousarray(np.concatenate([pts[n] for n in idx])), off,
+                                                  np.asarray([half[n] for n in idx], np.float64), float(step))
+            for i, n in enumerate(idx):
+                a, b = int(o[i]), int(o[i + 1])
+                if b - a < 2:
+                    continue
+                c = chunks[batch[n]]
+                out[batch[n]] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
+                                 Z[a:b] if c.get("fixed") else None)
     return out if keep_none else [r for r in out if r is not None]
 
 

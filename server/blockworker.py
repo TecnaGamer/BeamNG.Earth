@@ -300,9 +300,13 @@ def plan_ahead(g, frame, cx, cy, half):
 
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
-    the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
+    the sea floor carved in (--sea on), and the land off the roads roughened in the forests (grading.terrain_bumps,
+    surface.Surface.forest)."""
     import grading
-    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    surf = getattr(_s, "surface", None)
+    cover = surf.forest(la, lo) if surf is not None else None
+    z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64),
+                                                          cover)
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
     if _s.sea is not None:
@@ -2082,7 +2086,9 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
     if _s.sea is not None:
         base = seacarvemod.SeaDem(base, _s.sea if tile.level <= seacarvemod.CARVE_MAX_LEVEL else None)
-    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= 0) else base
+    surf = getattr(_s, "surface", None)
+    src = gradingmod.GradedDem(base, g, surf.forest if surf is not None else None) \
+        if (g is not None and tile.level <= 0) else base
     return farfield.build_tile(frame, src, tile, zoom, q, ref_zoom, with_sink=with_sink,
                                layout=layout)
 

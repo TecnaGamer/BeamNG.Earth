@@ -300,6 +300,9 @@ class ServerSurfaceTest(unittest.TestCase):
         def roads(self, lat, lon):
             return [], True
 
+        def forest(self, lat, lon):
+            return np.zeros(np.shape(np.asarray(lat)), np.float32)
+
     class Dem:
         def sample(self, lat, lon, zoom, progress=None):
             return np.full(np.shape(lat), 1500.0)
@@ -786,6 +789,64 @@ class GolfSurfaceTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[40, 40], expect))
         self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
         self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
+
+
+class ForestTest(unittest.TestCase):
+    """The terrain's own roughness is the forests' (the user, 2026-11-07: "keep the unevenness only in the forests,
+    the fields and the rest flat"): the mask reads the cached land cover on a world-locked lattice."""
+
+    def forest_of(self, cls):
+        md = FakeMapData(lambda key: cls)
+        s = sf.Surface(md)
+        self.addCleanup(s.close)
+        md.store(mapcells.cell_of(LAT, LON))
+        return s
+
+    def test_tree_cover_is_forest_and_a_field_is_not(self):
+        la = np.full((5, 5), LAT)
+        lo = np.full((5, 5), LON)
+        trees = self.forest_of(10).forest(la, lo)
+        self.assertTrue((trees > 0.99).all(), "tree cover: rough ground")
+        field = self.forest_of(40).forest(la, lo)
+        self.assertTrue((field == 0.0).all(), "cropland: flat")
+        town = self.forest_of(50).forest(la, lo)
+        self.assertTrue((town == 0.0).all(), "built-up: flat")
+
+    def test_uncached_is_open_ground(self):
+        s = self.forest_of(10)
+        s.md.cached.clear()             # (its prefetch is queued, never waited on)
+        self.assertTrue((s.forest(np.array([LAT, LAT]), np.array([LON, LON])) == 0.0).all())
+
+    def test_the_lattice_is_world_locked_with_soft_edges(self):
+        class S(sf.Surface):
+            def __init__(self):
+                pass
+
+            def _forest_at(self, lat, lon):
+                return ((np.asarray(lon) > LON) & (np.asarray(lat) > LAT)).astype(np.float32)
+        s = S()
+        la, lo = np.meshgrid(np.linspace(LAT - 0.002, LAT + 0.002, 31),
+                             np.linspace(LON - 0.002, LON + 0.002, 31), indexing="ij")
+        a = s.forest(la, lo)
+        b = s.forest(la[::3, ::5], lo[::3, ::5])
+        self.assertTrue(np.allclose(a[::3, ::5], b), "the same place, the same value, whatever the grid")
+        self.assertGreater(float(a[-1, -1]), 0.95)
+        self.assertLess(float(a[0, 0]), 0.05)
+        self.assertTrue(((a > 0.05) & (a < 0.95)).any(), "a wood's edge fades in, not a step")
+
+    def test_the_edges_agree_between_neighbours(self):
+        class S(sf.Surface):
+            def __init__(self):
+                pass
+
+            def _forest_at(self, lat, lon):
+                return ((np.asarray(lon) > LON) & (np.asarray(lat) > LAT)).astype(np.float32)
+        s = S()
+        la = np.linspace(LAT - 0.001, LAT + 0.001, 21)
+        lo = np.linspace(LON - 0.001, LON + 0.001, 21)
+        whole = s.forest(*np.meshgrid(la, lo, indexing="ij"))
+        part = s.forest(*np.meshgrid(la[:11], lo[:11], indexing="ij"))
+        self.assertTrue(np.allclose(whole[:11, :11], part), "a block and its neighbour's half: the same edge")
 
 
 if __name__ == "__main__":
