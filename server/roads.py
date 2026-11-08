@@ -312,6 +312,9 @@ HOME_RANGES_ON = os.environ.get("BNE_HOME_RANGES", "on") != "off"
 def _home_cell(feats, i):
     """str of feature i's home cell (the cell of its first point), kept per layer (level_ranges asks for it at every
     call: 95k cell_of in two Midtown cells' planning, 2026-11-02)."""
+    every = feats.__dict__.get("_home_cells_all")
+    if every is not None:
+        return every[i]
     memo = feats.__dict__.get("_home_cells")
     if memo is None:
         memo = feats.__dict__.setdefault("_home_cells", {})
@@ -321,6 +324,24 @@ def _home_cell(feats, i):
         a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
         got = memo[i] = str(mapcells.cell_of(float(feats.lonlat[a, 1]), float(feats.lonlat[a, 0])))
     return got
+
+
+def _home_cells(feats):
+    """[_home_cell(feats, i) for every feature], made at once (mapcells.cells_of: the same cells) and kept per layer
+    (lane_flow asked every feature's one by one: 175k calls, 1.3 CPU-s of a Midtown road tile, 2026-11-08)."""
+    every = feats.__dict__.get("_home_cells_all")
+    if every is not None:
+        return every
+    n = len(feats)
+    try:
+        import mapcells
+        a = np.asarray(feats.coord_off)[np.asarray(feats.ring_off)[np.asarray(feats.part_off)[:n]]]
+        ll = np.asarray(feats.lonlat, np.float64)[a] if n else np.zeros((0, 2))
+        every = [str(k) for k in mapcells.cells_of(ll[:, 1], ll[:, 0])]
+    except (IndexError, ValueError):
+        every = [_home_cell(feats, i) for i in range(n)]    # (one by one: the error, if any, of the feature asked)
+    feats.__dict__["_home_cells_all"] = every
+    return every
 
 
 def home_copy(feats, i):
@@ -2265,8 +2286,7 @@ def _lane_flow_home(feats):
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
             near = {}
         rows = {}
-        for i in range(len(feats)):
-            home = _home_cell(feats, i)
+        for i, home in enumerate(_home_cells(feats)):
             if home != me[0] and home in near:
                 rows.setdefault(home, []).append(i)
         for home, idx in rows.items():
@@ -2284,60 +2304,71 @@ _LANE_FLOW_DFLT = {}            # road class -> its one-way carriageway's lanes 
 
 
 def _lane_flow_ids(f):
-    """Layer f's road ids as a numpy str array (lane_flow's dedup), kept on it."""
+    """Layer f's road ids as UCS-4 rows (roadlanes.ucs4: lane_flow's dedup), kept on it."""
     got = f.__dict__.get("_lane_flow_ids")
     if got is None:
-        got = f.__dict__["_lane_flow_ids"] = np.asarray([str(x) for x in f.ids.tolist()], dtype=str)
+        import roadlanes
+        got = f.__dict__["_lane_flow_ids"] = roadlanes.ucs4(f.ids)
     return got
 
 
 def _lane_flow_rows(f):
-    """Layer f's rows for lane_flow, made once per layer (kept on it): (ids, first coordinate, end coordinate, attrs
-    (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's default lanes or nan). Each cell's solve
-    covers the 3 x 3 around it, so every layer's rows were made again for each of its neighbours' solves: 6 of
-    lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02)."""
+    """Layer f's rows for lane_flow, made once per layer (kept on it): (first and last coordinate (n, 4: lon, lat, lon,
+    lat; 0 without any), coordinate count, attrs (n, 4): one-way sign or 0, the map's lanes or nan, link, the class's
+    default lanes or nan). Each cell's solve covers the 3 x 3 around it, so every layer's rows were made again for each
+    of its neighbours' solves: 6 of lane_flow's 7 CPU-s in Manhattan's first visit, the solve itself 0.3 (2026-11-02);
+    the rows of all features at once (2026-11-08)."""
     got = f.__dict__.get("_lane_flow_rows")
     if got is not None:
         return got
+    import roadlanes
     n = len(f)
-    ids = f.ids.tolist()
     po = np.asarray(f.part_off, np.int64)
     starts = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[:n]]]
     ends = np.asarray(f.coord_off, np.int64)[np.asarray(f.ring_off, np.int64)[po[1:n + 1]]]
+    npts = np.ascontiguousarray(ends - starts, np.int64)
+    pts = np.zeros((n, 4))
+    some = npts > 0
+    if some.any():
+        ll = np.asarray(f.lonlat, np.float64)
+        pts[some, :2] = ll[starts[some]]
+        pts[some, 2:] = ll[ends[some] - 1]
     attrs = np.zeros((n, 4))
     attrs[:, 1] = np.nan
     attrs[:, 3] = np.nan
     cls_a, sub_a = f.attrs.get("class"), f.attrs.get("subtype")
-    import roadlanes
     counts = roadlanes.generated_counts(f)
-    for i in range(n):
-        if cls_a is None or str(cls_a[i]) not in LANE_FLOW_CLASSES or (sub_a is not None and str(sub_a[i]) != "road"):
-            continue
-        v = _rule_value(f.rules.get("oneway"), i)
-        if v is None:
-            continue
-        attrs[i, 0] = -1.0 if float(v) < 0 else 1.0
-        lanes = counts[i]
-        if lanes is not None:
-            attrs[i, 1] = float(int(lanes))
-        attrs[i, 2] = 1.0 if roadlanes.is_link(f, i) else 0.0
-        c = str(cls_a[i])
-        if c not in _LANE_FLOW_DFLT:
-            _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved", False, c,
-                                                  True))[1]
-        attrs[i, 3] = float(_LANE_FLOW_DFLT[c])
-    got = f.__dict__["_lane_flow_rows"] = (ids, starts, ends, attrs)
+    table = f.rules.get("oneway")
+    if cls_a is not None and n and table is not None and len(table.feature):
+        cls = np.asarray(cls_a).astype(str)
+        sel = np.isin(cls, sorted(LANE_FLOW_CLASSES))
+        if sub_a is not None:
+            sel &= np.asarray(sub_a).astype(str) == "road"
+        maj = table.majors(n)
+        sel &= maj >= 0
+        idx = np.flatnonzero(sel)
+        if len(idx):
+            v = np.asarray(table.value)[maj[idx]].astype(np.float64)
+            attrs[idx, 0] = np.where(v < 0, -1.0, 1.0)
+            attrs[idx, 1] = [np.nan if counts[i] is None else float(int(counts[i])) for i in idx.tolist()]
+            attrs[idx, 2] = np.where(roadlanes.links(f)[idx], 1.0, 0.0)
+            for c in np.unique(cls[idx]).tolist():
+                if c not in _LANE_FLOW_DFLT:
+                    _LANE_FLOW_DFLT[c] = lane_layout(Spec(carriageway(c, "paved", False, None, True, None), "paved",
+                                                          False, c, True))[1]
+                attrs[idx[cls[idx] == c], 3] = float(_LANE_FLOW_DFLT[c])
+    got = f.__dict__["_lane_flow_rows"] = (pts, npts, attrs)
     return got
 
 
 def _lane_flow_local(feats):
     """lane_flow solved over this cell and the eight around it (mapdata's _bnge_neighbours), per feature of this
-    cell. Remembered on feats."""
+    cell: earthfast.lane_flow_cells (each road id once, this cell's first). Remembered on feats."""
     got = feats.__dict__.get("_lane_flow")
     if got is not None:
         return got
     import fast
-    fast.require(118, "lane_flow")
+    fast.require(169, "lane_flow_cells")
     layers = [feats]
     hook = feats.__dict__.get("_bnge_neighbours")
     if hook is not None:
@@ -2345,42 +2376,13 @@ def _lane_flow_local(feats):
             layers += [f for f in hook() if f is not None and len(f)]
         except Exception as e:          # (this cell alone)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
-    # each road id once, this cell's first (the first row of each id over the layers in order: np.unique's first
-    # index; a set over every row of the nine layers was 0.25 s of 6 Midtown cells' facts, 2026-11-02)
     rows = [_lane_flow_rows(f) for f in layers]
-    id_arrays = [_lane_flow_ids(f) for f in layers]
-    keep = np.zeros(sum(len(a) for a in id_arrays), bool)
-    if len(keep):
-        _u, first = np.unique(np.concatenate(id_arrays), return_index=True)
-        keep[first] = True
-    coords, lens, attrs, mine = [], [], [], None
-    base = 0
-    for f, (ids, starts, ends, at), ida in zip(layers, rows, id_arrays):
-        sel = np.flatnonzero(keep[base:base + len(ida)]).astype(np.int64)
-        base += len(ida)
-        if f is feats and mine is None:
-            mine = sel                  # (its rows first: rows 0 .. len(mine) - 1)
-        if not len(sel):
-            continue
-        a, n_ = starts[sel], ends[sel] - starts[sel]
-        tot = int(n_.sum())
-        if tot:
-            # the selected features' coordinate ranges as one index array
-            first = np.concatenate([[0], np.cumsum(n_)[:-1]])
-            coords.append(f.lonlat[np.repeat(a - first, n_) + np.arange(tot)])
-        lens.append(n_)
-        attrs.append(at[sel])
+    ids = [_lane_flow_ids(f) for f in layers]
+    got = np.asarray(fast._ef.lane_flow_cells(ids, [r[0] for r in rows], [r[1] for r in rows], [r[2] for r in rows],
+                                              float(LANE_FLOW_MAX)))
     out = [None] * len(feats)
-    if lens:
-        n_all = np.concatenate(lens)
-        off = np.concatenate([[0], np.cumsum(n_all)]).astype(np.int64)
-        at_all = np.ascontiguousarray(np.concatenate(attrs), np.float64)
-        if off[-1]:
-            got = np.asarray(fast._ef.lane_flow(np.ascontiguousarray(np.concatenate(coords), np.float64), off, at_all,
-                                                float(LANE_FLOW_MAX)))
-            for r, i in enumerate((mine if mine is not None else np.zeros(0, np.int64)).tolist()):
-                x = got[r]
-                out[i] = None if not np.isfinite(x) or at_all[r, 2] > 0.5 else int(x)
+    for i in np.flatnonzero(np.isfinite(got) & ~(rows[0][2][:, 2] > 0.5)).tolist():
+        out[i] = int(got[i])
     feats.__dict__["_lane_flow"] = out
     return out
 

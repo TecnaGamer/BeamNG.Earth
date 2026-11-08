@@ -66,6 +66,14 @@ class RuleTable:
             self._major = maj
         return int(self._major[i]) if 0 <= i < len(self._major) else -1
 
+    def majors(self, n):
+        """major(i) of features 0 .. n - 1 as one int64 array."""
+        self.major(0)
+        out = np.full(n, -1, np.int64)
+        k = min(n, len(self._major))
+        out[:k] = self._major[:k]
+        return out
+
     def for_feature(self, i):
         r = self.rows(i)
         return list(zip(self.value[r].tolist(), self.start[r].tolist(), self.end[r].tolist()))
