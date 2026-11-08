@@ -31,6 +31,7 @@
         <div class="addon-meta">
           <span class="addon-badge" :class="{ 'is-on': c.installed && c.active !== false, 'is-update': c.update }">{{ stateLine(c) }}</span>
           <span v-if="c.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
+          <span v-if="c.local" class="addon-badge is-local">Local</span>
           <span v-if="c.latestDate" class="addon-date">{{ day(c.latestDate) }}</span>
         </div>
         <div v-if="c.status && c.status.text" class="addons-note" :class="{ 'is-error': c.status.state === 'error' }">{{ progressText(c.status) }}</div>
@@ -56,9 +57,10 @@
       <div class="addon-meta">
         <span class="addon-badge" :class="{ 'is-on': openCard.installed && openCard.active !== false, 'is-update': openCard.update }">{{ stateLine(openCard) }}</span>
         <span v-if="openCard.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
+        <span v-if="openCard.local" class="addon-badge is-local">Local</span>
         <span v-if="openCard.size" class="addon-date">{{ size(openCard.size) }}</span>
       </div>
-      <div v-if="openCard.note" class="addons-note">{{ openCard.note }}</div>
+      <div v-if="openCard.note && !(openCard.kind === 'companion' && openCard.canInstall)" class="addons-note">{{ openCard.note }}</div>
       <div v-if="openCard.tooNew" class="addons-note is-warn">This add-on needs a newer BeamNG.Earth: update BeamNG.Earth first.</div>
 
       <!-- the notice before the first install -->
@@ -68,8 +70,10 @@
           This add-on is made by <b>{{ openCard.author }}</b>, not by BeamNG.Earth.
           <template v-if="openCard.reviewed">BeamNG.Earth has looked through this version's files.</template>
           <template v-else>BeamNG.Earth has not reviewed this version.</template>
-          It runs inside your game like any other mod you install, with the same access.
-          It is downloaded from github.com/{{ openCard.repo }}<template v-if="openCard.oldFiles && openCard.oldFiles.length">; the older copies {{ openCard.oldFiles.join(", ") }} in your mods folder are removed</template>.
+          <template v-if="openCard.kind === 'companion'">It is a program that runs on this computer beside the game (with BeamNG.Earth's own Python), with the same access as any program you run.</template>
+          <template v-else>It runs inside your game like any other mod you install, with the same access.</template>
+          <template v-if="openCard.local">It is a file on this computer (the local list).</template>
+          <template v-else>It is downloaded from github.com/{{ openCard.repo }}</template><template v-if="openCard.oldFiles && openCard.oldFiles.length">; the older copies {{ openCard.oldFiles.join(", ") }} in your mods folder are removed</template>.
         </div>
         <div class="addons-actions">
           <BngButton :accent="ACCENTS.main" @click="install(openCard)">I agree, install</BngButton>
@@ -103,8 +107,34 @@
           @click="removeAsk = openCard.id"
         >Remove</BngButton>
       </div>
+      <!-- a program beside the game: installed and run by BeamNG.Earth (addonrun.py) -->
+      <div v-else-if="openCard.kind === 'companion' && openCard.canInstall" class="addons-actions">
+        <BngButton
+          v-if="!openCard.installed || openCard.update"
+          :accent="ACCENTS.main"
+          :disabled="busy(openCard)"
+          @click="install(openCard)"
+        >{{ openCard.installed ? "Update to " + openCard.latest : "Install" }}</BngButton>
+        <BngButton v-if="openCard.installed && !openCard.running" :accent="ACCENTS.main" :disabled="busy(openCard)" @click="manage(openCard, 'start')">Start</BngButton>
+        <BngButton v-if="openCard.running" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="manage(openCard, 'stop')">Stop</BngButton>
+        <BngButton v-if="openCard.running && openCard.page" :accent="ACCENTS.outlined" @click="openDownload(openCard.page)">Open its page</BngButton>
+        <BngButton
+          v-if="openCard.installed"
+          :accent="ACCENTS.outlined"
+          :disabled="busy(openCard)"
+          @click="manage(openCard, openCard.autostart ? 'autostart_off' : 'autostart_on')"
+        >{{ openCard.autostart ? "Starts with BeamNG.Earth: on" : "Starts with BeamNG.Earth: off" }}</BngButton>
+        <BngButton v-if="openCard.installed" :accent="ACCENTS.outlined" :disabled="busy(openCard)" @click="removeAsk = openCard.id">Remove</BngButton>
+      </div>
+      <div v-if="openCard.kind === 'companion' && openCard.running && openCard.lanPage" class="addons-note">
+        On a phone or tablet on the same Wi-Fi: {{ openCard.lanPage }}
+      </div>
+      <div v-if="openCard.kind === 'companion' && openCard.exitCode" class="addons-note is-error">
+        It stopped with an error ({{ openCard.exitCode }}). Its last lines: {{ (openCard.logTail || []).join(" · ") }}
+      </div>
       <div v-if="removeAsk === openCard.id" class="addons-actions">
-        <span class="addons-note">Remove {{ openCard.name }} from your mods folder? Its own saves stay.</span>
+        <span v-if="openCard.kind === 'companion'" class="addons-note">Remove {{ openCard.name }} and its own data (its recorded drives) from this computer?</span>
+        <span v-else class="addons-note">Remove {{ openCard.name }} from your mods folder? Its own saves stay.</span>
         <BngButton :accent="ACCENTS.main" @click="removeAsk = ''; manage(openCard, 'uninstall')">Remove</BngButton>
         <BngButton :accent="ACCENTS.outlined" @click="removeAsk = ''">Cancel</BngButton>
       </div>
@@ -114,6 +144,7 @@
 
       <!-- downloads of a companion / link add-on (the latest release's files) -->
       <div v-if="openCard.kind !== 'beamng-mod' && latestDownloads.length" class="addons-actions">
+        <span v-if="openCard.kind === 'companion'" class="addons-note">Its other downloads:</span>
         <BngButton v-for="d in latestDownloads" :key="d.url" :accent="ACCENTS.outlined" @click="openDownload(d.url)">{{ d.label }}</BngButton>
       </div>
 
@@ -202,6 +233,7 @@ onUnmounted(stop)
 .addon-badge.is-on { background: rgba(80, 200, 120, 0.25); }
 .addon-badge.is-update { background: rgba(255, 102, 0, 0.35); }
 .addon-badge.is-reviewed { background: rgba(80, 150, 255, 0.3); }
+.addon-badge.is-local { background: rgba(255, 180, 60, 0.3); }
 .addons-actions { display: flex; flex-wrap: wrap; gap: 0.5em; align-items: center; }
 .addons-actions.is-top { justify-content: space-between; }
 .addon-consent {

@@ -241,3 +241,56 @@ server.
 - Phase 0 (API v1): `beamngEarth_api` and the companion feed implemented with tests; the proposals above to send.
 - Phase 3: companions (Live GPS) started and stopped from the page once it ships a packaged program; `link` add-ons.
 - Phase 4: `beamng-earth-addon.json` manifests in the add-ons' repos; the registry on the BeamNG.Earth-data Pages site.
+
+## Changes apply without restarting the game
+
+The game's mod manager runs a mod's `modScript.lua` files when it mounts or turns on a mod, but an extension that is
+already loaded stays loaded: turning a mod off or removing it unloads nothing, and after an update `extensions.load`
+of the old (still loaded) extension does nothing. So with every hand-over the server sends the mod's code as it reads
+it from the zip (`addonrun.mod_code`: its own GE extensions `lua/ge/extensions/a/b.lua` -> `a_b`, their module names,
+whether it has `ui/` files), and the mod (`addons.lua`):
+
+- before an **update**, **Turn off** or **Remove**: unloads those of its extensions that are loaded and forgets its
+  required modules (`package.loaded`), so the new version's code is what runs (or none);
+- on **Install**, **Update** and **Turn on**: the mod manager runs its modScripts, which load the new code;
+- when it has UI files: reloads the UI a moment later (`reloadUI`), so its apps appear or go.
+
+BeamNG.Earth's own extensions are never unloaded. A mod's files that replace the game's own (`lua/ge/extensions/core/...`:
+found from the game's folder, `BNGEARTH_GAME_DIR`) are not unloaded live: the page asks for a restart for those, and
+for vehicle Lua says it applies when the vehicle is spawned again.
+
+## Programs beside the game (companions)
+
+A `companion` entry with `run` options is installed and run from the page:
+
+| run field | meaning |
+|---|---|
+| `args` | arguments (`--feed`) |
+| `page` | its own web page on this computer (`http://127.0.0.1:<port>/...`): the **Open its page** button |
+| `port` | the port it serves |
+| `lan` | it serves the player's Wi-Fi too (a phone): the page shows the address to type there |
+
+Install copies the release's Python file (checked against GitHub's SHA-256) into `<data>/addons/<id>/`. **Start** runs
+it with BeamNG.Earth's own Python (`BeamNG.Earth --run-addon FILE ARGS`; the dev tree: `python3 launcher.py
+--run-addon ...`), so players need no Python, with the companion feed's address in `BNE_FEED`; it ends with the server,
+and its output goes to `run.log` beside it. **Starts with BeamNG.Earth** starts it when the server starts. A companion
+entry without `run` is downloads only.
+
+## The local list (try an add-on first)
+
+`<data>/addons/local.json` (Linux: `~/.cache/beamng-earth/addons/local.json`; Windows:
+`%LOCALAPPDATA%\beamng-earth\addons\local.json`), the registry's format, each entry with `local: {file, tag}`
+(an absolute path on this computer). Shown with a **Local** badge; an entry with a registry id takes that one's place
+(a changed copy tried before its author releases it); its file is installed with its own SHA-256, and GitHub's releases
+still make its changelog. Only that file can add local entries.
+
+Example: Live GPS with its `--feed` mode (reads the position from the companion feed instead of the relay, so no
+`-bngeport` launch option):
+
+```json
+{"format": 1, "addons": [{"id": "live-gps", "name": "BeamNG.Earth Live GPS", "author": "Leopri2008",
+  "repo": "Leopri2008/BeamNG.Earth-LiveGPS", "kind": "companion", "summary": "...", "licence": "...",
+  "asset": "^bne_live_coords.*\\.py$",
+  "local": {"file": "/path/to/bne_live_coords.py", "tag": "v1.3-feed"},
+  "run": {"args": ["--feed"], "page": "http://127.0.0.1:47700/map", "port": 47700, "lan": true}}]}
+```

@@ -4082,8 +4082,16 @@ class Server:
         its first use."""
         if getattr(self, "_addons", None) is None:
             import addons as addonsmod
+            feed = getattr(self, "feed", None)
+            try:
+                data_dir = _app_modules()[0].data_dir()
+            except Exception:           # (no apppaths: beside the cache)
+                data_dir = None
             self._addons = addonsmod.Addons(self.user_dir, self.cache_dir, self.net,
-                                            version=updatesmod.local_version() or "")
+                                            version=updatesmod.local_version() or "", data_dir=data_dir,
+                                            feed_url=f"http://127.0.0.1:{feed.port}" if feed is not None and
+                                            getattr(feed, "port", None) else "",
+                                            game_dir=os.environ.get("BNGEARTH_GAME_DIR") or None)
         return self._addons
 
     def share_hub(self, send):
@@ -5587,8 +5595,30 @@ class Connection:
             log.warning("add-ons: install %s: %s: %s", aid, type(e).__name__, e)
             self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
             return
+        if apply is None:               # (a program beside the game: installed by the server itself)
+            self.send({"type": "addon_status", "id": aid, "state": "done", "text": "Installed. Press Start to run it."})
+            await self.addons_list()
+            return
         self.send({"type": "addon_status", "id": aid, "state": "ready", "text": "Downloaded and checked: installing..."})
         self.send(apply)
+
+    async def addon_run(self, aid, op):
+        """A program beside the game (kind companion): Start / Stop / Remove / autostart_on / autostart_off
+        (addons.Addons.run_op), with addon_status, then the list again."""
+        if not isinstance(aid, str) or op not in ("start", "stop", "uninstall", "autostart_on", "autostart_off"):
+            return
+        import addons as addonsmod
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, self.s.addons().run_op, aid, op)
+            text = {"start": "Running.", "stop": "Stopped.", "uninstall": "Removed.", "autostart_on":
+                    "Starts with BeamNG.Earth.", "autostart_off": "Starts only when you press Start."}[op]
+            self.send({"type": "addon_status", "id": aid, "state": "done", "text": text})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        except Exception as e:
+            log.warning("add-ons: %s %s: %s: %s", op, aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
 
     async def addon_applied(self, aid, op, ok, error):
         """The mod's answer after the game's mod manager installed / updated / enabled / disabled / removed the add-on:
@@ -6326,6 +6356,8 @@ class Connection:
             self.spawn(self.addon_detail(msg.get("id"), msg.get("refresh") is True))
         elif kind == "addon_install":           # ... Install / Update: downloaded and checked, then addon_apply
             self.spawn(self.addon_install(msg.get("id"), msg.get("consent") is True, msg.get("mp") is True))
+        elif kind == "addon_run":               # ... a program beside the game: start / stop / remove / autostart
+            self.spawn(self.addon_run(msg.get("id"), msg.get("op")))
         elif kind == "addon_applied":           # ... the game's mod manager did it (or not): logged, the list again
             self.spawn(self.addon_applied(msg.get("id"), msg.get("op"), msg.get("ok") is True, msg.get("error")))
         elif kind == "terrain_patch":           # ground under another vehicle's collision island (terrainpatch.lua)
@@ -8535,6 +8567,13 @@ async def main_async(args):
         except OSError as e:
             server.feed = None
             log.warning("companion feed off: %s", e)
+    # the programs beside the game set to start with BeamNG.Earth (addons.py, addonrun.py); ended with the server
+    import atexit
+    atexit.register(lambda: getattr(server, "_addons", None) is not None and server._addons.runner.stop_all())
+    try:
+        await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
+    except Exception as e:      # (an add-on that does not start never stops the server)
+        log.warning("add-ons: autostart: %s: %s", type(e).__name__, e)
     log.info("startup: opening the local connection")
     srv = await asyncio.start_server(
         lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)

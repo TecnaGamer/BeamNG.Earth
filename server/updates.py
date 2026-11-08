@@ -153,7 +153,9 @@ def open_page(url, popen=None, allow=None):
     Returns True if a browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
     environment (the AppImage's own libraries broke the browser it starts)."""
     import subprocess
-    if not openable(url) and not (allow is not None and isinstance(url, str) and url.startswith("https://")
+    # (allow: https, or a companion add-on's own page on this computer: http://127.0.0.1 / localhost, addons.py)
+    local = isinstance(url, str) and url.startswith(("http://127.0.0.1:", "http://localhost:"))
+    if not openable(url) and not (allow is not None and isinstance(url, str) and (url.startswith("https://") or local)
                                   and not any(c in url for c in ' "\'<>`\\\n\r') and allow(url)):
         return False
     popen = popen or subprocess.Popen

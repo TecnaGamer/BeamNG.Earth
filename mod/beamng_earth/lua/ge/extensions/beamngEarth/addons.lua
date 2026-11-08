@@ -11,8 +11,15 @@
 --     (workOffChangedMod ourselves). Older copies under the names the list gives (oldFiles) are deleted through it.
 --   - an update: core_modmanager.updateZipMod(old, new), the call the game's own download command uses ("crepe.zip",
 --     "crepe.zip.tmp", core/commandhandler.lua): the old file removed and unmounted, the new one renamed into its place
---     and mounted. A mod that was off is turned off again. Its Lua code already loaded keeps running until the game
---     starts again (the player is told).
+--     and mounted. A mod that was off is turned off again.
+--   - the code applies at once (the user, 2026-11-07: "make sure the game gets properly reloaded so it applies"): the
+--     game's mod manager runs a mod's modScripts when it mounts or turns it on, but an extension already loaded stays
+--     loaded (extensions.load of a loaded one does nothing, and turning off or removing unloads nothing). So before an
+--     update / turning off / removing, the mod's own extensions are unloaded and its required modules forgotten (the
+--     server lists them from the zip: addonrun.mod_code; BeamNG.Earth's own never), and when it has UI files the UI is
+--     reloaded after (RELOAD_UI_S), so its apps come and go. The game's own files a mod replaces need a restart (said).
+--   - a program beside the game (kind companion): Install / Start / Stop / Remove / autostart are the server's
+--     (addon_install, addon_run): nothing of the game's changes.
 --   - enable / disable / uninstall: activateMod / deactivateMod / deleteMod, as the game's own mod manager page does.
 -- Each waits for core_modmanager.isReady() (APPLY_WAIT_S at most) and never runs in a BeamMP session (BeamMP turns mods
 -- off and on itself). The player agrees once per add-on to a notice naming its author (consent, CONSENT_FILE); the
@@ -26,6 +33,7 @@ M.APPLY_WAIT_S = 60          -- the mod manager busy (a level loading) this long
 M.MOUNT_CHECK_S = 3          -- after the rename the file watcher has this long to mount the file, then we ask
 M.FILE = '^[%w][%w%._%-]*%.zip$'
 M.TMP_SUFFIX = '.bnge-tmp'
+M.RELOAD_UI_S = 1.5          -- after a hand-over that changed a mod with UI files: the UI reloaded this much later
 
 local list, listError, listAsked = nil, nil, false
 local details = {}            -- id -> the server's addon_detail (with serial)
@@ -34,10 +42,13 @@ local queue = {}              -- hand-overs waiting for the mod manager: { op, i
 local checks = {}             -- after a rename: { name, file, at, active, id }
 local consent = nil           -- id -> the author the player agreed to
 local clock, serial = 0, 0
+local reloadAt = nil          -- clock at which the UI is reloaded (a mod with UI files changed)
 
 -- (fields: the tests replace them)
 M.modmanager = function() return rawget(_G, 'core_modmanager') or (rawget(_G, 'extensions') and extensions.core_modmanager) end
 M.fs = function() return rawget(_G, 'FS') end
+M.extensions = function() return rawget(_G, 'extensions') end
+M.reloadUI = function() local f = rawget(_G, 'reloadUI'); if type(f) == 'function' then f() end end
 M.inMp = function()
   local mp = rawget(_G, 'MPCoreNetwork')
   if type(mp) ~= 'table' or type(mp.isMPSession) ~= 'function' then return false end
@@ -103,7 +114,7 @@ end
 function M.install(id, agreed)
   local a = entry(id)
   if not a then return false, 'not in the list' end
-  if a.kind ~= 'beamng-mod' then return false, 'this add-on is not installed from here' end
+  if a.kind ~= 'beamng-mod' and a.kind ~= 'companion' then return false, 'this add-on is not installed from here' end
   if M.inMp() then return false, 'not while a BeamMP server is joined: leave it first' end
   if not net.isConnected() then return false, 'the BeamNG.Earth app is not connected' end
   if not M.consented(id) then
@@ -117,14 +128,26 @@ function M.install(id, agreed)
 end
 
 -- Uninstall, enable or disable (op: 'uninstall' | 'enable' | 'disable') an installed add-on. True, or false and why.
+-- A program beside the game (kind companion): 'start' | 'stop' | 'uninstall' | 'autostart_on' | 'autostart_off', done by
+-- the server.
+local COMPANION_OPS = { start = 'Starting...', stop = 'Stopping...', uninstall = 'Removing...',
+  autostart_on = 'Saving...', autostart_off = 'Saving...' }
+
 function M.manage(id, op)
   local a = entry(id)
+  if a and a.kind == 'companion' then
+    if not COMPANION_OPS[op] then return false, 'unknown action' end
+    if not net.isConnected() then return false, 'the BeamNG.Earth app is not connected' end
+    setStatus(id, 'progress', COMPANION_OPS[op])
+    net.send({ type = 'addon_run', id = id, op = op })
+    return true
+  end
   if not a or a.kind ~= 'beamng-mod' or type(a.file) ~= 'string' or not a.file:match(M.FILE) then
     return false, 'not an installed add-on'
   end
   if op ~= 'uninstall' and op ~= 'enable' and op ~= 'disable' then return false, 'unknown action' end
   if M.inMp() then return false, 'not while a BeamMP server is joined: leave it first' end
-  queue[#queue + 1] = { op = op, id = id, file = a.file, since = clock }
+  queue[#queue + 1] = { op = op, id = id, file = a.file, since = clock, oldCode = a.code, code = a.code }
   setStatus(id, 'progress', op == 'uninstall' and 'Removing...' or (op == 'enable' and 'Turning on...' or 'Turning off...'))
   return true
 end
@@ -163,7 +186,8 @@ function M.onMessage(msg)
       if type(o) == 'string' and o:match(M.FILE) and o:lower() ~= file:lower() then old[#old + 1] = o end
     end
     queue[#queue + 1] = { op = msg.op == 'update' and 'update' or 'install', id = msg.id, file = file, tmp = tmp,
-      old = old, active = msg.active ~= false, tag = tostring(msg.tag or ''), apps = msg.uiApps, since = clock }
+      old = old, active = msg.active ~= false, tag = tostring(msg.tag or ''), apps = msg.uiApps, since = clock,
+      code = type(msg.code) == 'table' and msg.code or nil, oldCode = type(msg.oldCode) == 'table' and msg.oldCode or nil }
   end
 end
 
@@ -187,6 +211,52 @@ local function appsHint(apps)
   return ' Turn on its UI app (' .. table.concat(names, ', ') .. ') in the game\'s UI Apps menu.'
 end
 
+-- The mod's own code taken out of the running game (before an update / turning off / removing): its extensions
+-- unloaded, its required modules forgotten, so the new (or no) code is what runs. The number of extensions unloaded.
+function M.unloadCode(code)
+  if type(code) ~= 'table' then return 0 end
+  local ext, n = M.extensions(), 0
+  if ext and type(ext.isExtensionLoaded) == 'function' and type(ext.unload) == 'function' then
+    for _, name in ipairs(type(code.extensions) == 'table' and code.extensions or {}) do
+      if type(name) == 'string' and not name:lower():match('^beamngearth') and ext.isExtensionLoaded(name) then
+        pcall(ext.unload, name)
+        n = n + 1
+      end
+    end
+  end
+  local own = {}
+  for _, m in ipairs(type(code.modules) == 'table' and code.modules or {}) do
+    if type(m) == 'string' and not m:lower():match('^beamngearth') then own[m] = true end
+  end
+  if next(own) then
+    for k in pairs(package.loaded) do
+      if type(k) == 'string' and own[(k:gsub('%.', '/'))] then package.loaded[k] = nil end
+    end
+  end
+  return n
+end
+
+-- After a hand-over: the UI reloaded when the mod has UI files (its apps come or go); what still needs a restart.
+local function afterCode(job)
+  local note = ''
+  local codes = { job.code, job.oldCode }
+  local ui, over, veh = false, 0, false
+  for _, c in ipairs(codes) do
+    if type(c) == 'table' then
+      ui = ui or c.ui == true
+      over = math.max(over, tonumber(c.overrides) or 0)
+      veh = veh or c.vehicle == true
+    end
+  end
+  if ui then
+    reloadAt = clock + M.RELOAD_UI_S
+    note = note .. ' The UI reloads in a moment so its apps update.'
+  end
+  if over > 0 then note = note .. ' It changes ' .. over .. ' of the game\'s own files: restart BeamNG.drive for those.' end
+  if veh then note = note .. ' Vehicle changes apply when the vehicle is spawned again.' end
+  return note
+end
+
 -- One hand-over: true, or false and why.
 local function run(job, mm, f)
   local name = M.modName(job.file)
@@ -195,6 +265,7 @@ local function run(job, mm, f)
     local src = '/mods/' .. job.tmp
     if not exists(f, src) then return false, 'the downloaded file is gone' end
     if exists(f, dst) and dbEntry(mm, name) then
+      job.unloaded = M.unloadCode(job.oldCode)
       mm.updateZipMod(job.file, job.tmp)
       if exists(f, src) or not exists(f, dst) then return false, 'the mod manager did not take the new file' end
       job.op = 'update'
@@ -218,6 +289,7 @@ local function run(job, mm, f)
     checks[#checks + 1] = { id = job.id, name = name, file = job.file, at = clock + M.MOUNT_CHECK_S, active = job.active }
     return true
   elseif job.op == 'uninstall' then
+    job.unloaded = M.unloadCode(job.oldCode)
     if dbEntry(mm, name) then pcall(mm.deleteMod, name)
     elseif exists(f, dst) then pcall(f.removeFile, f, dst) end
     if exists(f, '/mods/' .. job.file .. M.TMP_SUFFIX) then pcall(f.removeFile, f, '/mods/' .. job.file .. M.TMP_SUFFIX) end
@@ -225,6 +297,7 @@ local function run(job, mm, f)
     return true
   else
     if not dbEntry(mm, name) then return false, 'the game does not know this mod yet' end
+    if job.op == 'disable' then job.unloaded = M.unloadCode(job.oldCode) end
     pcall(job.op == 'enable' and mm.activateMod or mm.deactivateMod, name)
     local e = dbEntry(mm, name)
     if not e or (e.active ~= false) ~= (job.op == 'enable') then return false, 'the mod manager did not change it' end
@@ -234,7 +307,7 @@ end
 
 local DONE_TEXT = {
   install = function(job) return 'Installed ' .. job.tag .. '.' .. appsHint(job.apps) end,
-  update = function(job) return 'Updated to ' .. job.tag .. '. Restart BeamNG.drive so the new version\'s code runs.' end,
+  update = function(job) return 'Updated to ' .. job.tag .. '.' end,
   uninstall = function() return 'Removed.' end,
   enable = function() return 'Turned on.' end,
   disable = function() return 'Turned off.' end,
@@ -242,6 +315,11 @@ local DONE_TEXT = {
 
 function M.tick(dt)
   clock = clock + (tonumber(dt) or 0)
+  if reloadAt and clock >= reloadAt and #queue == 0 and #checks == 0 then
+    reloadAt = nil
+    logI('reloading the UI (an add-on with UI files changed)')
+    pcall(M.reloadUI)
+  end
   if #queue == 0 and #checks == 0 then return end
   local mm, f = M.modmanager(), M.fs()
   local job = queue[1]
@@ -252,7 +330,7 @@ function M.tick(dt)
       local ok, done, why = pcall(run, job, mm, f)
       if not ok then done, why = false, tostring(done) end
       logI(job.op .. ' ' .. job.id .. ': ' .. (done and 'done' or ('failed: ' .. tostring(why))))
-      if done then setStatus(job.id, 'done', DONE_TEXT[job.op](job))
+      if done then setStatus(job.id, 'done', DONE_TEXT[job.op](job) .. afterCode(job))
       else setStatus(job.id, 'error', 'Could not finish: ' .. tostring(why)) end
       applied(job.id, job.op, done, not done and tostring(why) or nil)
     elseif clock - job.since > M.APPLY_WAIT_S then
@@ -306,6 +384,7 @@ function M.uiDetail(id) return details[id] end
 
 function M.reset()
   list, listError, listAsked, details, status, queue, checks, consent, serial = nil, nil, false, {}, {}, {}, {}, nil, 0
+  reloadAt = nil
 end
 
 return M

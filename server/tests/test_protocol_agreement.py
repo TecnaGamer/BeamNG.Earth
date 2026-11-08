@@ -206,6 +206,7 @@ MOD_TO_SERVER = {
     "addon_detail": {"id": F(str), "refresh": F(bool, OPT)},
     "addon_install": {"id": F(str), "consent": F(bool), "mp": F(bool, OPT)},
     "addon_applied": {"id": F(str), "op": F(str), "ok": F(bool), "error": F(str, OPT)},
+    "addon_run": {"id": F(str), "op": F(str)},     # a program beside the game: start / stop / uninstall / autostart
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
@@ -252,7 +253,7 @@ SERVER_TO_MOD = {
                      "error": F(str)},
     "addon_status": {"id": F(str), "state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT)},
     "addon_apply": {"id": F(str), "op": F(str), "file": F(str), "tmp": F(str), "old": F(list), "tag": F(str),
-                    "active": F(bool), "uiApps": F(list)},
+                    "active": F(bool), "uiApps": F(list), "code": F(dict), "oldCode": F(dict, OPT)},
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
     "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows

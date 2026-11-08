@@ -90,7 +90,8 @@ ok, why = A.install('truck', true)
 T.check(not ok and why:match('BeamMP'), 'no install in a BeamMP session')
 mp = false
 ok = A.install('gps', true)
-T.check(not ok, 'a companion is not installed from here')
+local g = last('addon_install')
+T.check(ok and g and g.id == 'gps', 'a companion: the server installs it (no hand-over)')
 ok = A.install('truck', true)
 local m = last('addon_install')
 T.check(ok and m and m.id == 'truck' and m.consent == true and m.mp == false, 'agreed: asked with consent')
@@ -145,13 +146,32 @@ mmCalls, fsCalls, sent = {}, {}, {}
 watcher = true
 db['truck-mod'] = { active = false }
 files['/mods/truck-mod.zip.bnge-tmp'] = true
+-- (its code loaded in the game: unloaded before the update, so the new version's runs; the UI reloaded after)
+local loadedExt, unloaded, uiReloads = { truckX_core = true, beamngEarth_core = true }, {}, 0
+A.extensions = function() return {
+  isExtensionLoaded = function(n) return loadedExt[n] == true end,
+  unload = function(n) loadedExt[n] = nil; unloaded[#unloaded + 1] = n end } end
+A.reloadUI = function() uiReloads = uiReloads + 1 end
+package.loaded['truckX/data'], package.loaded['truckX.more'], package.loaded['other/mod'] = {}, {}, {}
 A.onMessage({ type = 'addon_apply', id = 'truck', op = 'update', file = 'truck-mod.zip', tmp = 'truck-mod.zip.bnge-tmp',
-  tag = 'build-143', active = false })
+  tag = 'build-143', active = false, code = { extensions = { 'truckX_core' }, modules = { 'truckX/core' }, ui = true },
+  oldCode = { extensions = { 'truckX_core', 'truckX_gone', 'beamngEarth_core' }, modules = { 'truckX/data', 'truckX/more' },
+    ui = true } })
 A.tick(0.1)
 T.check(mmCalls[1] == 'updateZipMod truck-mod.zip truck-mod.zip.bnge-tmp', 'an update: the game\'s own updateZipMod')
-T.check(A.uiState().addons[1].status.text:match('Restart'), 'the player is told to restart for the new code')
+T.check(#unloaded == 1 and unloaded[1] == 'truckX_core', 'its loaded extension unloaded first (not a loaded one of ours)')
+T.check(loadedExt.beamngEarth_core == true, 'BeamNG.Earth\'s own extension never unloaded')
+T.check(package.loaded['truckX/data'] == nil and package.loaded['truckX.more'] == nil and package.loaded['other/mod'] ~= nil,
+  'its required modules forgotten (both name forms), others kept')
+local txt = A.uiState().addons[1].status.text
+T.check(txt:match('Updated to build%-143') and txt:match('UI reloads') and not txt:match('Restart'),
+  'no restart asked: the UI reloads for its apps')
+T.check(uiReloads == 0, 'the UI reload waits')
 A.tick(A.MOUNT_CHECK_S + 0.1)
 T.check(has(mmCalls, 'deactivateMod truck-mod') and db['truck-mod'].active == false, 'it was off: off again')
+A.tick(A.RELOAD_UI_S)
+T.check(uiReloads == 1, 'then the UI reloaded once')
+package.loaded['other/mod'] = nil
 T.check(not has(mmCalls, 'workOff /mods/truck-mod.zip added'), 'mounted by the watcher: not asked')
 -- an apply for install while the file is there already counts as an update
 files['/mods/truck-mod.zip.bnge-tmp'] = true

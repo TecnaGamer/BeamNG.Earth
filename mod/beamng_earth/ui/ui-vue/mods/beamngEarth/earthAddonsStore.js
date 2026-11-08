@@ -111,7 +111,13 @@ export function openDownload(url) { openLink(url) }
 
 // The card's state line: "Installed build-141 (update: build-142)", "Not installed", ...
 export function stateLine(c) {
-  if (c.kind !== "beamng-mod") return c.kind === "companion" ? "Runs beside the game" : "Download"
+  if (c.kind === "companion") {
+    if (!c.installed) return c.latest ? `Runs beside the game (latest: ${c.latest})` : "Runs beside the game"
+    let t = `Installed ${c.version || ""}`.trim() + (c.running ? ", running" : ", not running")
+    if (c.update && c.latest) t += ` (update: ${c.latest})`
+    return t
+  }
+  if (c.kind !== "beamng-mod") return "Download"
   if (!c.installed) return c.latest ? `Not installed (latest: ${c.latest})` : "Not installed"
   let t = `Installed ${c.version || ""}`.trim()
   if (c.active === false) t += ", turned off"

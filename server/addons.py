@@ -30,8 +30,18 @@ mounts), so the game mounts the new file itself. Enable / disable / uninstall ar
 sends addon_applied after each, logged here). Never while a BeamMP server is joined (it turns mods off), and only
 after the player agreed to that add-on (consent, the page's dialog naming the author).
 
-Kind "companion" (a program beside the game, LiveGPS) and "link": shown with their README, changelog and download
-links; installing them is not done yet (docs/ADDONS.md phase 3).
+Kind "companion" (a program beside the game, Live GPS): its release's Python file installed into <data>/addons/<id>/
+and run by BeamNG.Earth's own Python with the companion feed's address (addonrun.Runner: Start / Stop, "Start with
+BeamNG.Earth"); its entry's run: {args, page (its local web page, opened from the card), port, lan (it serves the
+player's Wi-Fi: a phone)}. Kind "link": README, changelog and downloads only.
+
+The local list (<data>/addons/local.json, LOCAL_NAME; same format, entries with local: {file, tag}): add-ons from a
+file on this computer, shown with a Local badge, an entry with a registry id in that one's place (a changed copy tried
+before its author releases it). Only this computer's own file says so: nothing from the network adds local entries.
+
+A game mod's code (addonrun.mod_code: its own GE extensions and modules, whether it has UI files) goes with every
+hand-over to the mod, which unloads it before an update / turning off / removing and reloads the UI after, so a change
+applies without restarting the game (the game's own files a mod replaces still need a restart: said on the page).
 """
 import hashlib
 import json
@@ -43,6 +53,7 @@ import time
 import urllib.request
 import zipfile
 
+import addonrun
 import netfetch
 
 log = logging.getLogger("addons")
@@ -70,6 +81,9 @@ _ZIP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.zip")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _APP = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _ORIGIN = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}")
+_PAGE = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}(?:/[A-Za-z0-9._~/-]{0,100})?")
+_ARG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]{0,40}")
+LOCAL_NAME = "local.json"
 _TEXT_MAX = {"name": 80, "author": 40, "summary": 400, "licence": 300, "note": 600}
 
 
@@ -79,14 +93,15 @@ class AddonError(RuntimeError):
 
 # --- the registry -----------------------------------------------------------------------------------------------
 
-def parse_registry(data):
-    """The valid entries of a registry document (a dict), in order; an invalid entry is left out (logged)."""
+def parse_registry(data, local=False):
+    """The valid entries of a registry document (a dict), in order; an invalid entry is left out (logged). local: the
+    local list (entries may name a file on this computer)."""
     if not isinstance(data, dict) or data.get("format") != REGISTRY_FORMAT or not isinstance(data.get("addons"), list):
         raise ValueError("not an add-on registry of format %d" % REGISTRY_FORMAT)
     out, seen = [], set()
     for raw in data["addons"]:
         try:
-            e = _entry(raw)
+            e = _entry(raw, local)
         except (ValueError, TypeError, re.error) as err:
             log.warning("add-ons: registry entry %r left out: %s", raw.get("id") if isinstance(raw, dict) else raw, err)
             continue
@@ -105,7 +120,7 @@ def _text(raw, key, need=True):
     return v.strip()
 
 
-def _entry(raw):
+def _entry(raw, local=False):
     if not isinstance(raw, dict):
         raise ValueError("not an object")
     e = {"id": raw.get("id"), "repo": raw.get("repo"), "kind": raw.get("kind")}
@@ -159,6 +174,32 @@ def _entry(raw):
     e["minEarth"] = raw.get("minEarth") or ""
     if not isinstance(e["minEarth"], str):
         raise ValueError("bad minEarth")
+    e["run"] = None
+    if e["kind"] == "companion" and raw.get("run") is not None:     # (none: downloads only, as a link)
+        run = raw["run"]
+        if not isinstance(run, dict):
+            raise ValueError("bad run")
+        args = run.get("args") or []
+        if not isinstance(args, list) or len(args) > 8 or not all(isinstance(a, str) and _ARG.fullmatch(a) for a in args):
+            raise ValueError("bad run args")
+        page = run.get("page") or ""
+        if page and not (isinstance(page, str) and _PAGE.fullmatch(page)):
+            raise ValueError("bad run page")
+        port = run.get("port")
+        if port is not None and not (isinstance(port, int) and 1024 <= port <= 65535):
+            raise ValueError("bad run port")
+        e["run"] = {"args": list(args), "page": page, "port": port, "lan": run.get("lan") is True}
+    e["local"] = None
+    if raw.get("local") is not None:
+        lo = raw["local"]
+        if not local:
+            raise ValueError("local entries only in the local list")
+        if not (isinstance(lo, dict) and isinstance(lo.get("file"), str) and os.path.isabs(lo["file"])):
+            raise ValueError("bad local file")
+        tag = lo.get("tag") or "local"
+        if not isinstance(tag, str) or len(tag) > 60:
+            raise ValueError("bad local tag")
+        e["local"] = {"file": lo["file"], "tag": tag}
     return e
 
 
@@ -337,12 +378,18 @@ def _db_active(user_dir, name):
 class Addons:
     """The registry, GitHub's pages for it and the add-ons installed in the game's user folder (user_dir)."""
 
-    def __init__(self, user_dir, cache_dir, net, version="", registry=None, md=None, clock=time.time):
+    def __init__(self, user_dir, cache_dir, net, version="", registry=None, md=None, clock=time.time, data_dir=None,
+                 feed_url="", game_dir=None):
         self.user_dir = user_dir
         self.mods = os.path.join(user_dir, "mods")
         self.net = net
         self.version = version or ""
-        self.entries = registry if registry is not None else load_registry()
+        self.data = os.path.join(data_dir or cache_dir, "addons")     # companions' files, the local list
+        self.game_dir = game_dir if game_dir and os.path.isdir(game_dir) else None
+        self.runner = addonrun.Runner(self.data, feed_url, clock=clock)
+        self._code = {}                 # sha256 -> mod_code of an installed mod zip
+        self.bundled = registry if registry is not None else load_registry()
+        self.entries = self._merge(self.bundled)
         self.github = GitHubCache(os.path.join(cache_dir, "addons"), net, clock=clock)
         self.md = md                    # (text, base, fold) -> (html, links); fast.md_html by default
         self._links = set()             # every URL an add-on's text showed (openable)
@@ -350,6 +397,23 @@ class Addons:
         self._busy = set()              # ids being downloaded
         self.lock = threading.Lock()
         self.clean_stale()
+
+    def local_path(self):
+        return os.path.join(self.data, LOCAL_NAME)
+
+    def _merge(self, entries):
+        """The registry's entries with the local list's (a local one with a registry id in that one's place)."""
+        try:
+            with open(self.local_path(), encoding="utf-8") as f:
+                local = parse_registry(json.load(f), local=True)
+        except FileNotFoundError:
+            local = []
+        except (OSError, ValueError) as e:
+            log.warning("add-ons: the local list %s: %s", self.local_path(), e)
+            local = []
+        by = {e["id"]: e for e in local}
+        out = [by.pop(e["id"], e) for e in entries]
+        return out + list(by.values())
 
     def entry(self, aid):
         for e in self.entries:
@@ -368,7 +432,10 @@ class Addons:
         return html, links
 
     def openable(self, url):
-        """Whether the page may open url in the browser: a link of an add-on's text, or a page of a registry repo."""
+        """Whether the page may open url in the browser: a link of an add-on's text, a page of a registry repo, or a
+        companion's own local page (openable_local)."""
+        if isinstance(url, str) and url.startswith("http://"):
+            return self.openable_local(url)
         if not isinstance(url, str) or not url.startswith("https://") or any(c in url for c in ' "\'<>`\\\n\r'):
             return False
         if any(url == f"https://github.com/{e['repo']}" or url.startswith(f"https://github.com/{e['repo']}/")
@@ -378,8 +445,26 @@ class Addons:
             return url in self._links
 
     def _releases(self, e, fresh=False):
-        body, age, stale = self.github.get(f"{API}{e['repo']}/releases?per_page={RELEASES_N}", fresh=fresh)
-        return releases(e, body), age, stale
+        """(releases, age, stale): a local entry's file first (the one Install takes), then GitHub's (the changelog;
+        none when GitHub does not answer)."""
+        lo = None
+        if e["local"]:
+            p = e["local"]["file"]
+            if os.path.isfile(p):
+                st = os.stat(p)
+                lo = {"tag": e["local"]["tag"], "name": f"{e['local']['tag']} (local file)",
+                      "date": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(st.st_mtime)), "prerelease": False,
+                      "body": f"A file on this computer: `{p}`", "links": [], "local": True,
+                      "asset": {"name": os.path.basename(p), "url": "", "size": st.st_size, "sha256": self._hash(p),
+                                "path": p}}
+        try:
+            body, age, stale = self.github.get(f"{API}{e['repo']}/releases?per_page={RELEASES_N}", fresh=fresh)
+            rels = releases(e, body)
+        except AddonError:
+            if lo is None:
+                raise
+            rels, age, stale = [], None, True
+        return ([lo] if lo else []) + rels, age, stale
 
     # --- what is installed ---
     def _hash(self, path):
@@ -417,7 +502,8 @@ class Addons:
              "uiApps": list(e["uiApps"]), "trust": e["trust"], "file": e["modFile"] or "", "oldFiles": [],
              "installed": False, "version": "", "latest": "", "latestDate": "", "size": 0, "update": False,
              "reviewed": False, "installedReviewed": False, "canInstall": False, "busy": e["id"] in self._busy,
-             "error": "", "age": None, "stale": False, "tooNew": False}
+             "error": "", "age": None, "stale": False, "tooNew": False, "local": bool(e["local"]),
+             "running": False, "autostart": False, "page": "", "lanPage": "", "code": None}
         try:
             rels, c["age"], c["stale"] = self._releases(e, fresh)
         except AddonError as err:
@@ -427,6 +513,19 @@ class Addons:
         if best:
             c.update(latest=best["tag"], latestDate=best["date"], size=best["asset"]["size"],
                      reviewed=best["asset"]["sha256"] in e["reviewed"])
+        if e["kind"] == "companion":
+            inst = self.runner.info(e["id"])
+            c.update(installed=inst["installed"], running=inst["running"], autostart=inst["autostart"],
+                     version=inst.get("version", ""), canInstall=bool(best) and e["run"] is not None)
+            if inst["installed"]:
+                c["update"] = bool(best) and best["asset"]["sha256"] != inst.get("sha256")
+                if inst.get("exit") not in (None, 0) and not inst["running"]:
+                    c["exitCode"] = inst["exit"]
+                    c["logTail"] = self.runner.log_tail(e["id"], 6)
+            run = e["run"] or {}
+            c["page"] = run.get("page", "")
+            if run.get("lan") and run.get("page"):
+                c["lanPage"] = run["page"].replace("127.0.0.1", _lan_ip()).replace("localhost", _lan_ip())
         if e["kind"] == "beamng-mod":
             inst = self.installed(e, rels)
             c.update(installed=inst["installed"], oldFiles=inst.get("oldFiles", []))
@@ -434,6 +533,7 @@ class Addons:
                 c.update(version=inst["version"] or "unknown", active=inst["active"],
                          installedReviewed=inst["sha256"] in e["reviewed"])
                 c["update"] = bool(best) and best["asset"]["sha256"] != inst["sha256"]
+                c["code"] = self.code(os.path.join(self.mods, e["modFile"]), inst["sha256"])
             if e["minEarth"] and self.version:
                 import updates
                 c["tooNew"] = updates.newer(e["minEarth"], self.version)
@@ -452,11 +552,19 @@ class Addons:
             log.info("add-ons: the registry on %s: %s; the bundled one stays", REGISTRY_URL, e)
             return
         if got:
-            self.entries = got
+            self.bundled = got
 
     def cards(self, fresh=False):
         self.refresh_registry(fresh)
+        self.entries = self._merge(self.bundled)       # (the local list read again: a file just added shows)
         return [self.card(e, fresh) for e in self.entries]
+
+    def code(self, path, sha):
+        """addonrun.mod_code of a mod zip, kept by its SHA-256."""
+        got = self._code.get(sha)
+        if got is None:
+            got = self._code[sha] = addonrun.mod_code(path, self.game_dir)
+        return got
 
     def detail(self, aid, fresh=False):
         """The add-on's page: its card, the README and the changelog as safe HTML (with their link lists)."""
@@ -476,7 +584,9 @@ class Addons:
         for r in rels:
             html, links = self._render(r["body"], f"https://github.com/{e['repo']}/releases/tag/{r['tag']}", True)
             downloads = list(r["links"])
-            if e["kind"] != "beamng-mod" and r["asset"]:     # (a program beside the game: its file, opened in the browser)
+            # (its file, opened in the browser: a link, or a program not run from here: no run options)
+            if (e["kind"] == "link" or (e["kind"] == "companion" and e["run"] is None)) and r["asset"] \
+                    and r["asset"]["url"]:
                 a = r["asset"]
                 downloads.insert(0, {"label": f"Download {a['name']}", "url": a["url"], "size": a["size"], "name": a["name"]})
             out["releases"].append({"tag": r["tag"], "name": r["name"], "date": r["date"],
@@ -507,6 +617,8 @@ class Addons:
         """Download the release the page offers for add-on aid into the mods folder and check it. Returns the
         addon_apply message for the mod ({id, op, file, tmp, old, tag, active, uiApps}). Raises AddonError."""
         e = self.entry(aid)
+        if e["kind"] == "companion":
+            return self.install_companion(aid, consent, progress)
         if e["kind"] != "beamng-mod":
             raise AddonError("this add-on is not installed from here: see its page")
         if mp:
@@ -535,10 +647,7 @@ class Addons:
             os.makedirs(self.mods, exist_ok=True)
             part = os.path.join(self.mods, e["modFile"] + PART)
             tmp = os.path.join(self.mods, e["modFile"] + TMP)
-            self._download(a["url"], part, a["size"], progress)
-            if (a["size"] and os.path.getsize(part) != a["size"]) or sha256_file(part) != a["sha256"]:
-                _remove(part)
-                raise AddonError("the download did not match GitHub's checksum (deleted)")
+            self._fetch(a, part, progress)
             why = check_mod_zip(part)
             if why:
                 _remove(part)
@@ -547,12 +656,121 @@ class Addons:
             op = "update" if inst["installed"] else "install"
             log.info("add-ons: %s %s %s (%s, %d bytes, sha256 %s) staged as %s", op, aid, best["tag"], a["name"],
                      a["size"], a["sha256"][:12], os.path.basename(tmp))
-            return {"type": "addon_apply", "id": aid, "op": op, "file": e["modFile"], "tmp": e["modFile"] + TMP,
-                    "old": inst.get("oldFiles", []), "tag": best["tag"],
-                    "active": inst.get("active") is not False, "uiApps": list(e["uiApps"])}
+            old_code = self.code(os.path.join(self.mods, e["modFile"]), inst["sha256"]) if inst["installed"] else None
+            msg = {"type": "addon_apply", "id": aid, "op": op, "file": e["modFile"], "tmp": e["modFile"] + TMP,
+                   "old": inst.get("oldFiles", []), "tag": best["tag"],
+                   "active": inst.get("active") is not False, "uiApps": list(e["uiApps"]),
+                   "code": addonrun.mod_code(tmp, self.game_dir)}
+            if old_code is not None:        # (the installed copy's code: unloaded before the update)
+                msg["oldCode"] = old_code
+            return msg
         finally:
             with self.lock:
                 self._busy.discard(aid)
+
+    def _fetch(self, a, dest, progress):
+        """The release's file to dest, checked against its SHA-256 (GitHub's digest, or a local file's own hash)."""
+        if a.get("path"):
+            import shutil
+            try:
+                shutil.copyfile(a["path"], dest)
+            except OSError as err:
+                _remove(dest)
+                raise AddonError(f"could not copy the local file ({err})") from err
+        else:
+            self._download(a["url"], dest, a["size"], progress)
+        if (a["size"] and os.path.getsize(dest) != a["size"]) or sha256_file(dest) != a["sha256"]:
+            _remove(dest)
+            raise AddonError("the file did not match its checksum (deleted)")
+
+    # --- companions (a program beside the game: addonrun.Runner) ---
+    def install_companion(self, aid, consent=False, progress=None):
+        """Install / update a companion: its release's Python file into <data>/addons/<id>/ (a running copy is
+        stopped first and started again after). Returns None (no hand-over to the mod). Raises AddonError."""
+        e = self.entry(aid)
+        if e["run"] is None:
+            raise AddonError("this program is not installed from here yet: see its page")
+        if not consent:
+            raise AddonError("the add-on's notice was not agreed to")
+        with self.lock:
+            if aid in self._busy:
+                raise AddonError("already downloading")
+            self._busy.add(aid)
+        try:
+            rels, _, _ = self._releases(e, fresh=True)
+            best = offered(e, rels)
+            if best is None:
+                raise AddonError("no release with the add-on's file was found")
+            a = best["asset"]
+            if not addonrun._SAFE.fullmatch(a["name"]):
+                raise AddonError(f"not a Python file: {a['name']}")
+            if a["size"] > DL_MAX:
+                raise AddonError("the file is too large")
+            inst = self.runner.installed(aid)
+            if inst and inst.get("sha256") == a["sha256"]:
+                raise AddonError("already up to date")
+            d = self.runner.dir(aid)
+            os.makedirs(d, exist_ok=True)
+            part = os.path.join(d, a["name"] + PART)
+            self._fetch(a, part, progress)
+            was = self.runner.running(aid)
+            self.runner.stop(aid)
+            if inst and inst["file"] != a["name"]:
+                _remove(os.path.join(d, inst["file"]))
+            os.replace(part, os.path.join(d, a["name"]))
+            self.runner.save_state(aid, file=a["name"], tag=best["tag"], sha256=a["sha256"],
+                                   local=bool(best.get("local")))
+            log.info("add-ons: %s %s %s (%s, %d bytes, sha256 %s) in %s", "update" if inst else "install", aid,
+                     best["tag"], a["name"], a["size"], a["sha256"][:12], d)
+            if was:
+                self.runner.start(aid, (e["run"] or {}).get("args", ()))
+            return None
+        finally:
+            with self.lock:
+                self._busy.discard(aid)
+
+    def run_op(self, aid, op):
+        """A companion's Start / Stop / Remove / autostart on / off. Raises AddonError."""
+        e = self.entry(aid)
+        if e["kind"] != "companion":
+            raise AddonError("not a program beside the game")
+        try:
+            if op == "start":
+                self.runner.start(aid, (e["run"] or {}).get("args", ()))
+            elif op == "stop":
+                self.runner.stop(aid)
+            elif op == "uninstall":
+                self.runner.remove(aid)
+                log.info("add-ons: %s removed", aid)
+            elif op in ("autostart_on", "autostart_off"):
+                if not self.runner.installed(aid):
+                    raise AddonError("not installed")
+                self.runner.save_state(aid, autostart=op == "autostart_on")
+            else:
+                raise AddonError("unknown action")
+        except RuntimeError as err:
+            raise AddonError(str(err)) from err
+
+    def autostart(self):
+        """The companions set to start with BeamNG.Earth, started (the server's start)."""
+        for e in self.entries:
+            if e["kind"] == "companion" and (self.runner.state(e["id"]) or {}).get("autostart") is True:
+                try:
+                    self.runner.start(e["id"], (e["run"] or {}).get("args", ()))
+                except RuntimeError as err:
+                    log.warning("add-ons: %s did not start: %s", e["id"], err)
+
+    def openable_local(self, url):
+        """A companion's own local web page (its entry's run.page, any path under its origin)."""
+        if not isinstance(url, str) or not url.startswith("http://"):
+            return False
+        for e in self.entries:
+            page = (e["run"] or {}).get("page") if e["kind"] == "companion" else ""
+            if page:
+                origin = "/".join(page.split("/")[:3])
+                if (url == origin or url.startswith(origin + "/")) and not any(c in url for c in ' "\'<>`\\\n\r'):
+                    return True
+        return False
 
     def _download(self, url, dest, size, progress):
         try:
@@ -618,6 +836,19 @@ def check_mod_zip(path):
     if not any(n.replace("\\", "/").startswith(MOD_TOP) for n in names):
         return "the downloaded zip is not laid out as a BeamNG mod (deleted)"
     return ""
+
+
+def _lan_ip():
+    """This computer's address on its network (the one a phone on the same Wi-Fi reaches), or 127.0.0.1."""
+    import socket
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("10.255.255.255", 1))          # (no packet is sent: it only picks the outgoing interface)
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
 
 
 def _remove(p):
