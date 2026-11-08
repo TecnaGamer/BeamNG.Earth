@@ -36,6 +36,7 @@ M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
+M.GROUP_MAX_M.high_mast_light = 800
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -191,6 +192,10 @@ M.CATALOG = {
   bench = { { ECA .. 'clutter/clutter_city_bench_wood', 0.9 } },
   bin = { { '/art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round', 1.1 }, { WCA .. 'objects/garbage_bin_a', 1.1 } },
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
+  streetlight_high_mast = { { '/levels/driver_training/art/shapes/buildings/s_light_pole_high_mast', 18.03 } },
+  streetlight_straight_mast = { { '/levels/driver_training/art/shapes/buildings/s_light_pole', 12.25 } },
+  streetlight_double_arm = { { WCA .. 'objects/pole_light_double', 13.76 } },
+  high_mast_light = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_lamp_lens', 1.0 } },
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- high-voltage lines' towers (server powerlines.py): the stock lattice tower (West Coast USA's is the same shape)
@@ -310,6 +315,7 @@ local MATERIALS = {
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
+  '/levels/driver_training/art/shapes/buildings',
   JV .. 'misc',     -- the cell tower
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
@@ -347,6 +353,7 @@ local foci = {}         -- other vehicles' collision foci { x, y, r, trees } (M.
 local dirty = true      -- a tree pass has work (M.update: a pass with none is skipped)
 local lastPass = nil    -- { anchor, x, y, vx, vy, clock } of the last full pass (M.update)
 local ghostSince = nil               -- since the last rebase that left ghost tiles (M.transform)
+M.NO_COLLIDE.high_mast_light = true
 local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
 local ready = false

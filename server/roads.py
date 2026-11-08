@@ -9161,6 +9161,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      decks=[(p, h) for p, h, _depth in traffic_decks], clearance=clearance,
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
+                                     mapped_lamps=[r[1:3] for r in props if r[0] in furniture.MAPPED_LAMP_GROUPS],
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     aisles = {fid for fid, (f, i, sp) in seen.items()

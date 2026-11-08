@@ -801,7 +801,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
-            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev)
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev, mapped_lamps=True)
             skip = frozenset(skip) | frozenset(barn_ids)
         except Exception as ex:
             log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)

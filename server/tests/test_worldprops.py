@@ -57,6 +57,108 @@ def elev(la, lo):
 
 
 class WorldPropsTest(unittest.TestCase):
+    def test_mapped_lamp_rule_is_global_and_preserves_unmapped_road_fallback(self):
+        import furniture
+        import roads
+        spec=roads.Spec(8.,"paved",True,"residential",False)
+        network=[("mapped",spec,np.array([[0.,50.,0.],[256.,50.,0.]]),0.),
+                 ("unmapped",spec,np.array([[0.,220.,0.],[256.,220.,0.]]),0.)]
+        self.assertEqual(furniture.mapped_lighting(network,{"unmapped":"yes"},[[100.,55.]]),
+                         {"mapped":"no","unmapped":"yes"})
+        self.assertEqual(furniture.mapped_lighting(network,{"mapped":"yes"},[]),{"mapped":"yes"})
+
+    def test_mapped_lamps_face_road_on_both_sides_and_ignore_footpath(self):
+        lamps = feats("infrastructure", [
+            ("west", (100.,120.), {"class":"street_lamp", "src_record":"n101@1",
+                "tags":json.dumps({"highway":"street_lamp","lamp_mount":"straight_mast","direction":"270"})}),
+            ("east", (120.,120.), {"class":"street_lamp", "src_record":"n102@1",
+                "tags":json.dumps({"highway":"street_lamp","lamp_mount":"straight_mast","direction":"90"})}),
+        ], mg.POINT)
+        roads = feats("roads", [
+            ("road", [(110.,0.),(110.,256.)], {"class":"residential"}),
+            ("path", [(99.,0.),(99.,256.)], {"class":"footway"}),
+        ],mg.LINE)
+        rows,_ = wp.tile_props(FRAME,0,0,FakeMD({"infrastructure":lamps,"roads":roads}),elev,mapped_lamps=True)
+        poles=sorted((r for r in rows if r[0]=="streetlight_straight_mast"),key=lambda r:r[1])
+        self.assertAlmostEqual(poles[0][4],90.,places=1)
+        self.assertAlmostEqual(poles[1][4],270.,places=1)
+        lenses=sorted((r for r in rows if r[0]=="lamplens"),key=lambda r:r[1])
+        self.assertGreater(lenses[0][1],poles[0][1])
+        self.assertLess(lenses[1][1],poles[1][1])
+        # Adjacent tiles must see the road just across their boundary.
+        roads = feats("roads",[("edge",[(260.,0.),(260.,256.)],{"class":"motorway"})],mg.LINE)
+        lamps = feats("infrastructure",[("edge",(254.,100.),{"class":"street_lamp","src_record":"n103@1"})],mg.POINT)
+        rows,_=wp.tile_props(FRAME,0,0,FakeMD({"infrastructure":lamps,"roads":roads}),elev,mapped_lamps=True)
+        self.assertAlmostEqual(next(r for r in rows if r[0]=="streetlight")[4],0.,places=1)
+
+    def test_lamp_rotation_uses_curved_road_segment_and_double_arm_normal(self):
+        line=np.array([[0.,0.],[100.,0.],[100.,100.]])
+        sources=[("curve",line,None)]
+        self.assertAlmostEqual(wp._lamp_yaw(np.array([110.,80.]),"streetlight",{},sources),180.)
+        # Median arms cross the carriageway even if a segment's endpoint is nearest.
+        diagonal=np.array([[0.,0.],[100.,100.]])
+        for geometry in (diagonal,diagonal[::-1]):
+            yaw=wp._lamp_yaw(np.array([50.,50.]),"streetlight_double_arm",{},[("road",geometry,None)])
+            self.assertAlmostEqual(yaw,135.)
+        layered=[("bridge",np.array([[101.,0.],[101.,200.]]),1.),
+                 ("ground",np.array([[90.,0.],[90.,200.]]),0.)]
+        self.assertAlmostEqual(wp._lamp_yaw(np.array([100.,100.]),"streetlight",{"layer":"0"},layered),180.)
+
+    def test_mapped_lamp_mounts_have_lighting_at_each_head(self):
+        infra = feats("infrastructure", [
+            ("double", (254., 100.), {"class": "street_lamp", "src_record": "n901@1",
+                "tags": json.dumps({"highway": "street_lamp", "lamp_mount": "double_arm"})}),
+            ("high", (100., 100.), {"class": "street_lamp", "src_record": "n902@1",
+                "tags": json.dumps({"highway": "street_lamp", "lamp_mount": "high_mast"})}),
+            ("straight", (160., 100.), {"class": "street_lamp", "src_record": "n903@1",
+                "tags": json.dumps({"highway": "street_lamp", "lamp_mount": "straight_mast", "direction": "90"})}),
+            ("off", (180., 180.), {"class": "street_lamp", "src_record": "n904@1",
+                "tags": json.dumps({"highway": "street_lamp", "lamp_mount": "double_arm", "disused": "yes"})}),
+        ], mg.POINT)
+        md = FakeMD({"infrastructure": infra})
+        rows, _ = wp.tile_props(FRAME, 0, 0, md, elev, mapped_lamps=True)
+        poles = {r[0]:r for r in rows if r[0].startswith("streetlight")}
+        self.assertEqual(set(poles), {"streetlight_double_arm", "streetlight_high_mast", "streetlight_straight_mast"})
+        self.assertEqual(poles["streetlight_straight_mast"][4], 90.)
+        self.assertEqual(poles["streetlight_straight_mast"][6], wp.STRAIGHT_MAST_H)
+        self.assertEqual(poles["streetlight_double_arm"][6], wp.DOUBLE_ARM_H)
+        ordinary = [r for r in rows if r[0] == "lamplens"]
+        flood = [r for r in rows if r[0] == "high_mast_light"]
+        self.assertEqual(len(ordinary), 3)  # straight + both double arms
+        self.assertEqual(len(flood), 1)
+        double = [r for r in ordinary if r[1] > 200]
+        self.assertEqual(sorted(r[1] for r in double), [249.1, 258.9])
+        self.assertEqual(sorted(r[4] for r in double), [0., 180.])
+        for r in double:
+            self.assertAlmostEqual(r[3]-poles["streetlight_double_arm"][3], 12.62, places=2)
+        self.assertEqual(flood[0][3], 22.9)
+        glow = [r for r in rows if r[0] == "lampglow"]
+        self.assertEqual(sorted(tuple(r[1:5]) for r in glow), sorted(tuple(r[1:5]) for r in ordinary+flood))
+        # A head crosses the tile boundary, but belongs to its pole's sole tile.
+        self.assertEqual(wp.tile_props(FRAME, 1, 0, md, elev, mapped_lamps=True)[0], [])
+
+    def test_mapped_lamps_are_osm_nodes_only(self):
+        infra = feats("infrastructure", [
+            ("a", (100., 120.), {"class": "street_lamp", "src_record": "n123@1"}),
+            ("b", (140., 120.), {"class": "street_lamp", "src_record": "w456@1"}),
+            ("c", (180., 120.), {"class": "street_lamp"}),
+            ("d", (200., 120.), {"class": "street_lamp", "src_record": "n789@1",
+                                  "tags": json.dumps({"highway": "street_lamp", "lamp_mount": "high_mast"})}),
+        ], mg.POINT)
+        md = FakeMD({"infrastructure": infra})
+        rows, _ = wp.tile_props(FRAME, 0, 0, md, elev, mapped_lamps=True)
+        lamps = [r for r in rows if r[0] == "streetlight"]
+        self.assertEqual(len(lamps), 1)
+        self.assertEqual(lamps[0][1:3], [100., 120.])
+        high = [r for r in rows if r[0] == "streetlight_high_mast"]
+        self.assertEqual(len(high), 1)
+        self.assertEqual(high[0][1:3], [200., 120.])
+        self.assertEqual(high[0][3], 5.)
+        self.assertEqual(high[0][6], wp.HIGH_MAST_H)
+        self.assertEqual(wp.tile_props(FRAME, 0, 0, md, elev)[0], rows)
+        self.assertEqual(wp.tile_props(FRAME, 0, 0, md, elev, mapped_lamps=False)[0], [])
+        self.assertEqual(wp.tile_props(FRAME, 1, 0, md, elev, mapped_lamps=True)[0], [])
+
     def md(self):
         infra = feats("infrastructure", [
             ("cell", (100.0, 120.0), {"class": "communication_tower"}),

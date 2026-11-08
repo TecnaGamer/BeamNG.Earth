@@ -552,6 +552,25 @@ G_LENS = "lamplens"
 # and a glow at each (tools/build_lamp_glow.py: a ball growing with distance, drawn at night only, so lamps show far off)
 G_GLOW = "lampglow"
 LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511)}
+MAPPED_LAMP_HEADS = {
+    "streetlight_straight_mast": ((-.00029, -.41864, 12.0477, -90.),),
+    "streetlight_double_arm": ((4.9, 0., 12.65, 0.), (-4.9, 0., 12.65, 180.)),
+    "streetlight_high_mast": ((0., 0., 17.9326, 0.),),
+}
+MAPPED_LAMP_GROUPS = {G_LAMP, "streetlight_straight_mast", "streetlight_double_arm", "streetlight_high_mast"}
+
+def mapped_lighting(roads, lighting, points):
+    """Mapped poles replace guessed lamps along their road; retain other roads' rules."""
+    result = dict(lighting or {})
+    if points is None or not len(points): return result
+    points = np.asarray(points,float).reshape(-1,2)
+    for fid, spec, line, _ in roads:
+        reach = spec.width/2+15.
+        line = np.asarray(line,float)[:,:2]
+        nearby = points[np.all(points >= line.min(0)-reach,axis=1) & np.all(points <= line.max(0)+reach,axis=1)]
+        if any(_seg_dist_min(p,line) <= reach for p in nearby): result[fid] = "no"
+    return result
+
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
@@ -581,6 +600,7 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
 LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
+LAMP_H.update(streetlight_straight_mast=12.25, streetlight_double_arm=13.76, streetlight_high_mast=18.03)
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
@@ -769,16 +789,21 @@ def lamp_lenses(rows):
     height over the catalog's, 1 for both), and a G_GLOW row at the same place."""
     out = []
     for r in rows:
-        head = LAMP_HEADS.get(r[0])
-        if head is None:
+        heads = MAPPED_LAMP_HEADS.get(r[0])
+        if heads is None:
+            head = LAMP_HEADS.get(r[0])
+            heads = (head,) if head is not None else ()
+        if not heads:
             continue
         a = math.radians(r[4])
         c, s_ = math.cos(a), math.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
-        hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
-        lens = [G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
-                round(r[3] + hz - LENS_DROP_M, 2), r[4], 1.0, 1.0, r[7]]
-        out += [lens, [G_GLOW] + lens[1:]]
+        for head in heads:
+            hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
+            group = "fr_lantern_light" if r[0] == "fr_lantern" else "high_mast_light" if r[0] == "streetlight_high_mast" else G_LENS
+            lens = [group, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
+                    round(r[3] + hz - LENS_DROP_M, 2), r[4]+(head[3] if len(head)>3 else 0.), 1.0, 1.0, r[7]]
+            out += [lens, [G_GLOW] + lens[1:]]
     return out
 
 
@@ -881,7 +906,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
-          clearance=None, development=None):
+          clearance=None, development=None, mapped_lamps=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -892,7 +917,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     development: local built-environment samples (development.py) for the street trees, hydrants, benches and bins;
     None: none of those. Lighting and mapped infrastructure stay independent."""
     spacing_of = lamp_spacing(region, dense=not town)
-    lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    lighting = mapped_lighting(roads, lighting, mapped_lamps)
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
 

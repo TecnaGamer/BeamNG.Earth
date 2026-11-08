@@ -1,0 +1,3 @@
+# Offline national builder only; not needed by normal gameplay/server workers.
+numpy
+osmium>=4.0,<5

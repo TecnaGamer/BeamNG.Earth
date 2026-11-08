@@ -2189,7 +2189,7 @@ class Server:
             # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
             try:
                 import worldprops
-                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev)
+                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev, mapped_lamps=True)
                 skip = frozenset(skip) | frozenset(barn_ids)
             except Exception as ex:
                 log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
@@ -6305,7 +6305,7 @@ class Connection:
             source = getattr(self.s.mapdata, "highway_signs", None)
             if source is not None and self.signs_on:      # (after the roads: signs only for road tiles sent)
                 self.signs.on_pose(self, aid, *self.focus, asyncio.get_running_loop(), self.s.build_signs_tile,
-                                   ready, version=source.tags.known())
+                                   ready, version=source.known())
         if self.turbine_geo and aid == self.active:
             anchor = self.s.anchors.get(aid)
             if anchor is not None:

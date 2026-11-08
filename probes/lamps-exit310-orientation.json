@@ -1,0 +1,150 @@
+{
+  "osm_timestamp": "2026-11-08T23:10:51Z",
+  "attribution": "\u00a9 OpenStreetMap contributors, ODbL 1.0",
+  "mapped_nodes": 20,
+  "oriented_nodes": 20,
+  "arms_toward_road": 20,
+  "lamps": [
+    {
+      "id": "osm:node:10542036777",
+      "group": "streetlight",
+      "yaw": 318.701,
+      "road_distance_m": 8.147,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571801",
+      "group": "streetlight_straight_mast",
+      "yaw": 95.735,
+      "road_distance_m": 14.721,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571802",
+      "group": "streetlight_straight_mast",
+      "yaw": 300.855,
+      "road_distance_m": 9.225,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571803",
+      "group": "streetlight_straight_mast",
+      "yaw": 210.515,
+      "road_distance_m": 8.644,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571804",
+      "group": "streetlight_straight_mast",
+      "yaw": 346.039,
+      "road_distance_m": 7.864,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571805",
+      "group": "streetlight_straight_mast",
+      "yaw": 212.649,
+      "road_distance_m": 9.291,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571806",
+      "group": "streetlight_straight_mast",
+      "yaw": 90.7,
+      "road_distance_m": 17.422,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571807",
+      "group": "streetlight_straight_mast",
+      "yaw": 183.964,
+      "road_distance_m": 9.544,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571808",
+      "group": "streetlight_straight_mast",
+      "yaw": 94.231,
+      "road_distance_m": 10.434,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571809",
+      "group": "streetlight_straight_mast",
+      "yaw": 94.93,
+      "road_distance_m": 10.981,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571810",
+      "group": "streetlight_straight_mast",
+      "yaw": 273.605,
+      "road_distance_m": 6.577,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571811",
+      "group": "streetlight",
+      "yaw": 3.811,
+      "road_distance_m": 9.112,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571812",
+      "group": "streetlight_straight_mast",
+      "yaw": 269.324,
+      "road_distance_m": 6.918,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571813",
+      "group": "streetlight_straight_mast",
+      "yaw": 269.324,
+      "road_distance_m": 7.279,
+      "arm_inward_m": 0.419
+    },
+    {
+      "id": "osm:node:13069571814",
+      "group": "streetlight",
+      "yaw": 183.811,
+      "road_distance_m": 8.3,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571815",
+      "group": "streetlight",
+      "yaw": 200.566,
+      "road_distance_m": 5.467,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571816",
+      "group": "streetlight",
+      "yaw": 93.055,
+      "road_distance_m": 8.117,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571817",
+      "group": "streetlight",
+      "yaw": 93.566,
+      "road_distance_m": 9.304,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571818",
+      "group": "streetlight",
+      "yaw": 93.154,
+      "road_distance_m": 14.877,
+      "arm_inward_m": 2.711
+    },
+    {
+      "id": "osm:node:13069571819",
+      "group": "streetlight",
+      "yaw": 94.731,
+      "road_distance_m": 11.009,
+      "arm_inward_m": 2.711
+    }
+  ],
+  "note": "Offline OSM geometry check, not an in-game or pavement-clearance verification"
+}

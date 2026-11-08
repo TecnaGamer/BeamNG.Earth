@@ -18,6 +18,7 @@ doubled and not cut in half. Deterministic (hashed yaw, colour and which boxes s
 import json
 import logging
 import math
+import re
 
 import numpy as np
 
@@ -55,7 +56,7 @@ BILL_ROAD_M = 120.0
 ROAD_MARGIN_M = 140.0
 
 
-def tile_props(frame, tx, ty, md, elev):
+def tile_props(frame, tx, ty, md, elev, mapped_lamps=True):
     """(rows, barn ids) of road tile (tx, ty). barn ids are the footprints replaced by the stock barn
     (buildings.road_tile_items skip). elev(lat, lon) is the ground. md None, or a cell that cannot be
     read, yields nothing of that layer."""
@@ -72,9 +73,13 @@ def tile_props(frame, tx, ty, md, elev):
     # ~0.15 s of each of its road tiles, for the few with either, 2026-11-03)
     roads_xy = _Once(lambda: _polylines(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=ROAD_MARGIN_M),
                                                       "roads")))
+    lamp_roads = _Once(lambda: _lamp_roads(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=ROAD_MARGIN_M),
+                                                      "roads")))
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     for feats, rows in infra:
+        if mapped_lamps:
+            _street_lamps(frame, feats, rows, (x0, y0, x1, y1), placed, lamp_roads)
         _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
         _billboards(frame, feats, rows, (x0, y0, x1, y1), roads_xy, placed)
     for feats, rows in land:
@@ -102,7 +107,126 @@ def tile_props(frame, tx, ty, md, elev):
     for p, zz in zip(placed, z):
         rows.append([p["group"], round(p["x"], 2), round(p["y"], 2), round(float(zz) + p["lift"], 2),
                      round(p["yaw"], 1), 1.0, round(p["h"], 2), round(p["rank"], 4)])
+    if mapped_lamps:
+        import furniture
+        rows.extend(furniture.lamp_lenses(rows))
     return rows, skip
+
+
+HIGH_MAST_H = 18.03             # ETK s_light_pole_high_mast visible bounds: z=0..18.032 m
+STRAIGHT_MAST_H = 12.25         # Driver Experience s_light_pole, authored cm converted to metres
+DOUBLE_ARM_H = 13.76            # WCA pole_light_double: -0.715..13.046 m; foundation stays buried
+MAPPED_LAMP_MODELS = {
+    "high_mast": ("streetlight_high_mast", HIGH_MAST_H),
+    "straight_mast": ("streetlight_straight_mast", STRAIGHT_MAST_H),
+    "double_arm": ("streetlight_double_arm", DOUBLE_ARM_H),
+}
+LAMP_ROAD_M = 80.0
+
+def _street_lamps(frame, feats, rows, box, placed, lamp_roads=None):
+    """Actual OSM lamp nodes only; no interpolation along lit ways."""
+    cls = _cls(feats)
+    for i in (range(len(feats.kind)) if rows is None else rows):
+        if int(feats.kind[i]) != mapgeom.POINT:
+            continue
+        source = feats.attrs.get("src_record", [""] * len(feats.kind))[i]
+        match = re.fullmatch(r"n(\d+)(?:@[^\s]+)?", str(source))
+        fid = "osm:node:"+match[1] if match else str(source)
+        tags = _tags_of(feats, i)
+        inactive = str(tags.get("location", "")).lower() in {"underground", "underwater", "indoor", "tunnel"}
+        inactive |= any(str(tags.get(k,"no")).lower() not in {"no","false","0","","none"}
+                        for k in ("disused","abandoned","demolished","razed","construction","proposed"))
+        if not re.fullmatch(r"osm:node:\d+",fid) or inactive:
+            continue
+        if tags.get("highway") != "street_lamp" and (cls is None or str(cls[i]) != "street_lamp"):
+            continue
+        xy = _ring_xy(feats, i, frame)
+        if xy is None:
+            continue
+        x, y = _centre(xy)
+        if not _inside(x, y, box) or any(p.get("lamp_id") == fid for p in placed):
+            continue
+        la, lo = _ll(frame, x, y)
+        group, height = MAPPED_LAMP_MODELS.get(tags.get("lamp_mount"), ("streetlight", 9.))
+        yaw = 0.
+        try:
+            bearing = float(tags.get("direction", ""))
+            if math.isfinite(bearing):
+                # OSM bearings: north=0, east=90; model arms: +X, except ETK's -Y.
+                yaw = ((180. if group == "streetlight_straight_mast" else 90.)-bearing) % 360.
+        except (TypeError, ValueError):
+            pass
+        if lamp_roads is not None and group != "streetlight_high_mast":
+            aligned = _lamp_yaw(np.array([x,y]), group, tags, lamp_roads())
+            if aligned is not None:
+                yaw = aligned
+        placed.append({"group": group,
+                       "x": x, "y": y, "lat": la, "lon": lo,
+                       "lift": 0., "h": height, "yaw": yaw, "rank": 0., "lamp_id": fid})
+
+def _lamp_roads(frame, layers):
+    """Nearby drivable centerlines, excluding footpaths, with stable source ordering."""
+    allowed = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential",
+               "unclassified", "service", "living_street", "motorway_link", "trunk_link",
+               "primary_link", "secondary_link", "tertiary_link"}
+    result = []
+    for feats, rows in layers:
+        def make():
+            lines, at = _layer_lines(frame, feats)
+            cls = _cls(feats)
+            found, indices = [], []
+            for line, i in zip(lines, at):
+                tags = _tags_of(feats,i)
+                kind = tags.get("highway") or (str(cls[i]) if cls is not None else "")
+                if kind not in allowed or tags.get("tunnel") in ("yes", "building_passage"):
+                    continue
+                level = tags.get("layer")
+                if level is None:
+                    table = feats.rules.get("layer")
+                    if table is not None:
+                        take = table.rows(i)
+                        if len(take): level = table.value[take[0]]
+                try: level = float(level) if level is not None else None
+                except (ValueError,TypeError): level = None
+                found.append((str(feats.ids[i]),line,level))
+                indices.append(i)
+            return found,indices
+        found, indices = _memo(feats,"lamp_roads",frame,make)
+        pick = _picked(feats,rows,indices)
+        result.extend(found if pick is None else (found[k] for k in np.flatnonzero(pick)))
+    return sorted(result,key=lambda r:(r[0],tuple(r[1][0]),tuple(r[1][-1])))
+
+def _lamp_yaw(point, group, tags, lines):
+    """Aim the model's actual arm toward pavement, using its closest road segment.
+
+    Road geometry takes precedence over absent/incorrect OSM direction bearings.
+    Double arms straddle the road: on its centerline, use the segment normal.
+    """
+    candidates = []
+    try: lamp_layer = float(tags["layer"]) if "layer" in tags else None
+    except (TypeError,ValueError): lamp_layer = None
+    for fid,line,level in lines:
+        if lamp_layer is not None and level is not None and lamp_layer != level: continue
+        a,ab = line[:-1],np.diff(line,axis=0)
+        length2 = (ab*ab).sum(1)
+        t = np.clip(((point-a)*ab).sum(1)/np.maximum(length2,1e-12),0.,1.)
+        delta = a+t[:,None]*ab-point
+        distances = (delta*delta).sum(1)
+        distances[length2 < 1e-12] = np.inf
+        k = int(np.argmin(distances))
+        if distances[k] > LAMP_ROAD_M**2: continue
+        candidates.append((float(distances[k]),fid,k,delta[k],ab[k]))
+    if not candidates: return None
+    _,_,_,delta,tangent = min(candidates,key=lambda c:c[:3])
+    if group == "streetlight_double_arm" or float(delta@delta) < .04:
+        # The mapped pole is on a centerline/median. There is no inward vector;
+        # use a perpendicular rather than turning the arms along the road.
+        delta = np.array([tangent[1],-tangent[0]])
+        if tuple(delta) < tuple(-delta): delta = -delta
+    target = math.degrees(math.atan2(float(delta[1]),float(delta[0])))
+    # Ordinary/WCA heads extend along local +X; ETK straight poles along -Y.
+    yaw = (target+(90. if group == "streetlight_straight_mast" else 0.)) % 360.
+    return yaw % 180. if group == "streetlight_double_arm" else yaw
 
 
 class _Once:

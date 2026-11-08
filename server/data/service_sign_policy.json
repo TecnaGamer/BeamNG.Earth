@@ -1,0 +1,15 @@
+{
+  "default": {
+    "distance_m": {"GAS": 4828, "FOOD": 4828, "LODGING": 4828, "CAMPING": 9656, "HOSPITAL": 9656},
+    "specific_categories": ["GAS", "FOOD", "LODGING", "CAMPING"],
+    "max_panels": 6,
+    "max_specific_signs": 3,
+    "advance_m": 1350,
+    "spacing_m": 200,
+    "width_m": 5.18,
+    "height_m": 3.05,
+    "clearance_m": 4,
+    "existing_sign_separation_m": 75
+  },
+  "states": {"WY": {"width_m": 5.18, "height_m": 3.05}}
+}

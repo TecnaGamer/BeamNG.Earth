@@ -14,6 +14,8 @@ import roads
 import signroads
 import signlayout
 import throughsigns
+import servicesigns
+import plazas
 
 log = logging.getLogger('earthd.highwaysigns')
 
@@ -24,6 +26,7 @@ class Source:
     def __init__(self, md, tags=None):
         self.tags = tags if tags is not None else railtags.SignTags(md.cache_dir, md.fetcher)
         self.md = md
+        self.services = servicesigns.Source()
         self.contexts = {}
         self.lock = threading.Lock()
         self.warned = -float('inf')
@@ -33,7 +36,14 @@ class Source:
 
     def version(self):
         """The sign data's build in use, or None (none yet)."""
-        return self.tags.version()
+        version = self.tags.version()
+        services = self.services.version()
+        return (version,services) if services else version
+
+    def known(self):
+        base = self.tags.known()
+        services = self.services.known()
+        return (base,services) if services else base
 
     def context(self, urban, widths):
         key = (urban, widths)
@@ -51,6 +61,7 @@ class Source:
         objects = milemarkers.query(frame, box)
         x0, y0, x1, y1 = box
         lat, lon, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.)
+        objects += self.services.query(float(np.min(lon)),float(np.min(lat)),float(np.max(lon)),float(np.max(lat)))
         try:
             objects += self.tags.query(float(np.min(lon)), float(np.min(lat)), float(np.max(lon)), float(np.max(lat)))
         except CancelledError:
@@ -126,12 +137,23 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             return None, None
         context = source.context(urban, widths)
         exits, overheads = guide_layout(frame, objects, context, box, elev, chunks, left_hand, mph)
+        service_mesh = None
+        if not left_hand and any(o.get('service_exit') for o in objects):
+            try:
+                area=(box[0]-100,box[1]-100,box[2]+100,box[3]+100)
+                nearby, overhead_nearby=guide_layout(frame,objects,context,area,elev,chunks,left_hand,mph)
+                service_mesh=servicesigns.build_tile(md,frame,objects,context,box,elev,chunks,nearby+overhead_nearby)
+            except CancelledError:
+                raise
+            except Exception:
+                log.warning('Service signs unavailable; existing signs continue',exc_info=True)
+
         miles = []
         for obj in milemarkers.unique_objects(objects):
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)
             miles.extend(milemarkers.place(frame, [obj], pavements, box, elev, chunks))
         origin = (box[0], box[1], 0.)
-        return throughsigns.build(exits, overheads, origin), milemarkers.build(miles, origin)
+        return plazas.merge(throughsigns.build(exits, overheads, origin), service_mesh), milemarkers.build(miles, origin)
     except CancelledError:
         raise
     except Exception as error:

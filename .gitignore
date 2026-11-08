@@ -32,3 +32,5 @@ build/
 native/serverlist/target/
 server/earthfast.FAST-BUILD-do-not-commit
 *.prof
+
+server/data/service_signs_us/
