@@ -445,6 +445,17 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
                 for ring in roads.ground_parts(feats, i):
                     e, n = mapgeom.enu_xy(feats, frame, ring)
                     rows.append((fid, sp, np.c_[e, n, np.zeros(len(e))], float(np.mean(ring[:, 0]))))
+        memo = {}       # (kind, fid, id(pts)) -> its result: plans asks again and again for the same rows
+
+        def remembered(kind, fn):
+            def get(fid, spec, pts):
+                k = (kind, fid, id(pts))
+                hit = memo.get(k)
+                if hit is None or hit[0] is not pts:
+                    hit = memo[k] = (pts, fn(fid, spec, pts))
+                return hit[1]
+            return get
+
         def geometry(fid, spec, pts):
             # Evaluate the same descriptors as build_tile; do not substitute the
             # older lane-transition or pavement generators for 1.8's versions.
@@ -465,7 +476,7 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
             return pts, spec.width if w is None else w
-        return plans(rows, terminals, geometry, pavement)
+        return plans(rows, terminals, remembered("g", geometry), remembered("p", pavement))
     owner = getattr(urban, '__self__', None)
     return _cache.get(frame, cells, (urban, widths, bool(left_hand), getattr(owner, 'epoch', 0)), build)
 
