@@ -53,6 +53,8 @@ REGISTRY_FORMAT = 1
 KINDS = ("beamng-mod", "companion", "link")
 API = "https://api.github.com/repos/"
 LANE = "addons"
+RETRIES = 2                 # a GitHub request that failed (5xx, 429, a timeout, no answer) asked again this often ...
+RETRY_S = 2.0               # ... after this many seconds times its attempt
 TTL_S = 3600.0              # a page from GitHub kept this long before it is asked again (conditionally)
 RELEASES_N = 8              # the releases asked for (the changelog; Trucking's bodies are ~66 KB each)
 README_MAX = 512 * 1024     # bytes of a README / a release's notes rendered at most
@@ -215,7 +217,21 @@ class GitHubCache:
         if have and have.get("etag"):
             headers["If-None-Match"] = have["etag"]
         try:
-            r = self.net.get(url, kind="demand", headers=headers, lane=LANE)
+            r = None
+            for attempt in range(RETRIES + 1):
+                try:
+                    r = self.net.get(url, kind="demand", headers=headers, lane=LANE)
+                    break
+                except netfetch.NotFound:
+                    raise
+                except (netfetch.FetchError, OSError) as e:
+                    # (GitHub's API answered 5xx or took ~10 s a request for a few minutes, 2026-11-07: the page said
+                    # "GitHub did not answer" on its first open, nothing on disk yet; a moment later every request
+                    # came back in 0.3 s)
+                    status = getattr(e, "status", None)
+                    if attempt == RETRIES or (status is not None and status < 500 and status != 429):
+                        raise
+                    time.sleep(RETRY_S * (attempt + 1))
         except (netfetch.FetchError, OSError) as e:
             if have:
                 log.info("add-ons: %s: %s; the copy on disk (%.0f h old)", url, e, (now - have.get("at", 0)) / 3600)

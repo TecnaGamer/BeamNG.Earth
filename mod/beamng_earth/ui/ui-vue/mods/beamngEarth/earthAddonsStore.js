@@ -23,7 +23,10 @@ export const openCard = computed(() => cards.value.find(c => c.id === openId.val
 function luaStr(s) { return JSON.stringify(String(s)) }
 
 function call(script, cb) {
-  engineLua(`beamngEarth_settings and beamngEarth_settings.${script} or nil`, cb)
+  // (with a callback the game evaluates an expression; without one it runs a statement, and "a and b or nil" alone is a
+  // Lua syntax error: opening an add-on showed a Lua error, 2026-11-07)
+  if (cb) engineLua(`beamngEarth_settings and beamngEarth_settings.${script} or nil`, cb)
+  else engineLua(`if beamngEarth_settings then beamngEarth_settings.${script} end`)
 }
 
 export function poll() {
