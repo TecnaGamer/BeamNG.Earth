@@ -104,13 +104,16 @@ def build(out=OUT):
                  "normalMap": VFS + "/" + kind + ".normal.png", "baseColorFactor": [1, 1, 1, 1],
                  "metallicFactor": 0, "roughnessFactor": .88, "vertColor": True}
         materials[name] = material(name, stage)
-    for kind in ("trim", "glass", "glass_lit", "metal"):
+    # (glass_lit_dim / _low: the same lit glass, dimmer at night by nightlights.lua's factor: each lit window its own
+    # brightness, the user, 2026-11-08)
+    for kind in ("trim", "glass", "glass_lit", "glass_lit_dim", "glass_lit_low", "metal"):
         name = "bne_fr_house_" + kind
         stage = {"baseColorFactor": [1, 1, 1, 1], "vertColor": True,
                  "metallicFactor": .7 if kind == "metal" else .05,
                  "roughnessFactor": .23 if kind.startswith("glass") else .55}
-        if kind == "glass_lit":
-            save_png(Image.new("RGB", (4, 4), (255, 235, 200)), out / "glass.emissive.png")
+        if kind.startswith("glass_lit"):
+            if kind == "glass_lit":
+                save_png(Image.new("RGB", (4, 4), (255, 235, 200)), out / "glass.emissive.png")
             stage.update(emissiveMap=VFS + "/glass.emissive.png", emissiveFactor=[0, 0, 0])
         materials[name] = material(name, stage)
     (out / "main.materials.json").write_text(json.dumps(materials, indent=2, sort_keys=True) + "\n", encoding="utf-8")

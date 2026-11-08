@@ -79,7 +79,12 @@ def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
 def window(m, a, d, out, s, bottom, width, height, mats, style, seed, lite=False, attic=False):
     import buildings as b
     trim = mats[style["trim"]]
-    dark = mats[b.custom_look("bne_fr_house_glass_lit" if b._hash01(seed, round(s, 4), "lit") < .3 else "bne_fr_house_glass", (.31, .38, .40))]
+    # (30 % lit, each lit one bright, dim or very dim: glass_lit, _dim, _low; the user, 2026-11-08: "the brightness of
+    # windows should be randomized at night")
+    lit = b._hash01(seed, round(s, 4), "lit")
+    glass = "bne_fr_house_" + ("glass_lit" if lit < .1 else "glass_lit_dim" if lit < .2 else "glass_lit_low" if lit < .3
+                               else "glass")
+    dark = mats[b.custom_look(glass, (.31, .38, .40))]
     # Whole frames behind inset panes: no alpha masks or stretched facade sheets.
     panel(m, a, d, out, s - width / 2 - .07, s + width / 2 + .07, bottom - .06, bottom + height + .07, trim, .035)
     panel(m, a, d, out, s - width / 2, s + width / 2, bottom, bottom + height, dark, .05)

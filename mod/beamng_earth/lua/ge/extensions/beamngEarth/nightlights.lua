@@ -9,6 +9,10 @@ M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
 M.MATERIALS = {
   bne_fr_house_glass_lit = { '1 0.82 0.60', 60 },
+  -- (the same, dimmer: each lit window its own brightness, francehouse_mesh.py; the glow saturates the screen from
+  -- ~0.3 of full, so these well below it)
+  bne_fr_house_glass_lit_dim = { '0.18 0.15 0.11', 60 },
+  bne_fr_house_glass_lit_low = { '0.05 0.04 0.03', 60 },
   bne_bld_facade = { '1 1 1', 200 },
   -- (the same sheet, its windows' levels turned: buildings.py FACADE_VARIANTS, a wall's floors one of the three)
   bne_bld_facade_b = { '1 1 1', 200 },
@@ -19,6 +23,8 @@ M.MATERIALS = {
   bne_bld_office_c = { '0.95 0.97 1', 70 },
   -- (shopfronts: their whole band lights up; at 320 nits, then 90, a grey-white strip along every street)
   bne_bld_shop = { '1 0.80 0.58', 30 },
+  bne_bld_shop_b = { '0.25 0.20 0.15', 30 },   -- (shops lit less or closed: buildings.py SHOP_VARIANTS, a bay each)
+  bne_bld_shop_c = { '0.06 0.05 0.035', 30 },
   -- the skyline's walls (buildings.py _sky_mesh, tools/build_sky_windows.py: 1-3 miles off)
   bne_bld_sky = { '1 1 1', 200 },
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright

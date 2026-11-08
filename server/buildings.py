@@ -76,6 +76,8 @@ FACADE = "bne_bld_facade"    # the plaster window sheet, tinted per building by 
 FACADE_VARIANTS = (FACADE, "bne_bld_facade_b", "bne_bld_facade_c")
 # ... and the metal sheet's (towers' curtain walls: its bays' night factors turned; 2026-11-08: "Do towers too")
 OFFICE_VARIANTS = (OFFICE, "bne_bld_office_b", "bne_bld_office_c")
+# ... and the shopfronts' (the same night map, dimmer by nightlights.lua's factor: a shop lit less, or closed)
+SHOP_VARIANTS = (SHOP, "bne_bld_shop_b", "bne_bld_shop_c")
 STUCCO = "bne_bld_stucco"   # plain stucco walls (windows laid over them from the sheet)
 ROOF_METAL = "bne_bld_roof_metal"   # standing-seam metal (barns, sheds, farm buildings)
 PANEL = "bne_bld_panel"     # precast concrete panels (big-box stores, strip malls)
@@ -100,7 +102,7 @@ LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behi
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
              LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + FACADE_VARIANTS[1:] \
-    + OFFICE_VARIANTS[1:]
+    + OFFICE_VARIANTS[1:] + SHOP_VARIANTS[1:]
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -942,7 +944,8 @@ WIN_W, WIN_H, WIN_SILL = 1.05, 1.75, 0.85   # m
 WIN_CELLS = np.array([(53, 154), (459, 562), (663, 764)], np.float64) / 1024
 _MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9], np.uint64)
 # a window sheet's material index -> its variants' (the first itself)
-_VARIANT_MI = {MATERIALS.index(v[0]): [MATERIALS.index(f) for f in v] for v in (FACADE_VARIANTS, OFFICE_VARIANTS)}
+_VARIANT_MI = {MATERIALS.index(v[0]): [MATERIALS.index(f) for f in v] for v in (FACADE_VARIANTS, OFFICE_VARIANTS,
+                                                                               SHOP_VARIANTS)}
 HOUSE_BAY_M = 3.4           # m between a house's windows
 DOOR_GAP_M = 0.75           # m each side of a front door kept free of the ground floor's windows
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
@@ -973,13 +976,17 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
     if mid:
+        # (slots: the facade, the shopfront, the laid-over windows, the facade's variants, the shopfront's)
         mats = [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
-                mat_idx["bne_bld_fac_white"] if spec.wall else None]
+                mat_idx["bne_bld_fac_white"] if spec.wall else None, None, None, None, None]
         if spec.wall:
             UV = _vary_windows(P, UV, mid)
         elif mats[0][0] in _VARIANT_MI:
-            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], split=not lite)   # (far tiles: a variant a floor)
-            mats += [(i, mats[0][1]) for i in _VARIANT_MI[mats[0][0]][1:]]
+            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4), not lite)
+            mats[3:5] = [(i, mats[0][1]) for i in _VARIANT_MI[mats[0][0]][1:]]
+        if mats[1] is not None and mats[1][0] in _VARIANT_MI:
+            P, UV, mid = _vary_bays(P, UV, mid, BAND_SHOP[0], BAND_SHOP[1], 1, (1, 5, 6), not lite)
+            mats[5:7] = [(i, mats[1][1]) for i in _VARIANT_MI[mats[1][0]][1:]]
         m.quads(P, UV, mid, mats)
 
 
@@ -1005,28 +1012,31 @@ def _vary_windows(P, UV, mid):
     return uv.ravel().tolist()
 
 
-def _vary_bays(P, UV, mid, band_k, bpt, split=True):
-    """The kernel's quads with each window-sheet bay (slot 0) one of its sheet's three night variants (FACADE_VARIANTS,
-    OFFICE_VARIANTS: slot 0, 3 or 4), hashed from its first corner. With split, a quad of band band_k spanning several
-    whole bays (a floor of a wall, or a floor's piece beside its door: the kernel draws it as one quad over its bays) is
-    cut at its bays, neighbours of the same variant kept as one quad: the same wall at the same scale; else (far tiles)
-    a variant a quad."""
+def _vary_bays(P, UV, mid, band_k, bpt, slot, to, split=True):
+    """The kernel's quads with each bay of a window sheet (material slot slot) one of its sheet's three night variants
+    (FACADE_VARIANTS, OFFICE_VARIANTS, SHOP_VARIANTS: the slots to), hashed from its first corner. With split, a quad of
+    band band_k spanning several whole bays (a floor of a wall, or a floor's piece beside its door: the kernel draws it
+    as one quad over its bays) is cut at its bays, neighbours of the same variant kept as one quad: the same wall at the
+    same scale. Else (far tiles: no more quads) each such quad one variant, its bays shifted along the band by a
+    whole number of bays (hashed too): a floor's pattern another than the next one's."""
     pq = np.array(P, np.float64).reshape(-1, 12)
     uv = np.array(UV, np.float64).reshape(-1, 8)
     mi = np.frombuffer(mid, np.uint8)
     eps = 1.5 / 1024
     u0, u1 = uv[:, 0] * bpt, uv[:, 2] * bpt
     nb = np.round(u1 - u0).astype(np.int64)
-    cut = ((mi == 0) & np.isclose(uv[:, 1], 1.0 - (band_k + 1) / BANDS + eps)
-           & np.isclose(uv[:, 5], 1.0 - band_k / BANDS - eps) & np.isclose(u0, np.round(u0))
-           & np.isclose(u1 - u0, nb) & (nb >= 2) & split)
+    whole = ((mi == slot) & np.isclose(uv[:, 1], 1.0 - (band_k + 1) / BANDS + eps)
+             & np.isclose(uv[:, 5], 1.0 - band_k / BANDS - eps) & np.isclose(u0, np.round(u0))
+             & np.isclose(u1 - u0, nb) & (nb >= 1))
+    cut = whole & (nb >= 2) & split
     n = np.where(cut, nb, 1)
     rep = np.repeat(np.arange(len(n)), n)                   # each bay's quad
     j = np.arange(len(rep)) - np.repeat(np.cumsum(n) - n, n)
     a, b = pq[rep, 0:3], pq[rep, 3:6]
-    var = np.zeros(len(rep), np.intp)
-    sheet = mi[rep] == 0
-    var[sheet] = _pick((a + (b - a) * (j / n[rep])[:, None])[sheet], 3)
+    pick = np.zeros(len(rep), np.intp)
+    sheet = mi[rep] == slot
+    pick[sheet] = _pick((a + (b - a) * (j / n[rep])[:, None])[sheet], 3 * bpt)
+    var = pick % 3
     run = np.ones(len(rep), bool)
     run[1:] = (rep[1:] != rep[:-1]) | (var[1:] != var[:-1])
     s0 = np.flatnonzero(run)
@@ -1043,8 +1053,13 @@ def _vary_bays(P, UV, mid, band_k, bpt, split=True):
         ua = np.round(u0[r][c])
         UV2[c, 0] = UV2[c, 6] = (ua + ja) / bpt
         UV2[c, 2] = UV2[c, 4] = (ua + jb) / bpt
+    if not split:
+        sh = whole[r]
+        if sh.any():
+            UV2[np.ix_(sh, [0, 2, 4, 6])] += (pick[s0][sh] // 3 / bpt)[:, None]
     out = mi[r].copy()
-    out[out == 0] = np.array([0, 3, 4], np.uint8)[var[s0][out == 0]]
+    on = out == slot
+    out[on] = np.array(to, np.uint8)[var[s0][on]]
     return P2.ravel().tolist(), UV2.ravel().tolist(), out.tobytes()
 
 
@@ -4278,8 +4293,11 @@ def _sky_mesh(items):
         zb = gmin
         fh = float(spec.floor_h or FLOOR_M) * SKY_WIN_FLOORS
         bw = SKY_BAY_M * SKY_WIN_BAYS
-        v0, v1 = (z0 - zb) / fh, (z1 - zb) / fh
-        u = 0.0
+        # (each building from its own bay and floor of the map, whole cells: the same map at every building's corner
+        # lit the same windows, 2026-11-08)
+        dv = int(_hash01(spec.seed, "sky v") * SKY_WIN_FLOORS) / SKY_WIN_FLOORS
+        v0, v1 = (z0 - zb) / fh + dv, (z1 - zb) / fh + dv
+        u = int(_hash01(spec.seed, "sky u") * SKY_WIN_BAYS) / SKY_WIN_BAYS
         for i in range(n):
             a, b = ring[i], ring[(i + 1) % n]
             if windows:

@@ -131,6 +131,72 @@
     ],
     "translucent": false
   },
+  "bne_bld_shop_b": {
+    "name": "bne_bld_shop_b",
+    "mapTo": "bne_bld_shop_b",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9c6dabfe-e222-5288-9e36-14a497ae60f4",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_b.color.png",
+        "normalMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_ao.data.png",
+        "metallicMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.png",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_shop_c": {
+    "name": "bne_bld_shop_c",
+    "mapTo": "bne_bld_shop_c",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "045478a7-2d03-5c95-9cac-4c41af03b83a",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_b.color.png",
+        "normalMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_ao.data.png",
+        "metallicMap": "/assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_office_night_e.png",
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
   "bne_bld_office": {
     "name": "bne_bld_office",
     "mapTo": "bne_bld_office",

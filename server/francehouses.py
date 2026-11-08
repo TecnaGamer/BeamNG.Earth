@@ -15,7 +15,8 @@ ON = os.environ.get("BNE_FR_HOUSES", "off").lower() in {"on", "true", "1"}
 INFER = os.environ.get("BNE_FR_HOUSES_INFER", "on").lower() not in {"off", "false", "0"}
 VERSION = "fr-houses-v1"
 MATERIALS = tuple("bne_fr_house_" + k for k in
-                  ("stucco", "stone", "brick", "wood", "roller", "tile", "canal", "slate", "trim", "glass", "glass_lit", "metal"))
+                  ("stucco", "stone", "brick", "wood", "roller", "tile", "canal", "slate", "trim", "glass", "glass_lit", "metal",
+                   "glass_lit_dim", "glass_lit_low"))
 HOUSE_CLASSES = {"house", "detached", "dwelling_house", "semidetached_house", "semi", "bungalow", "terrace"}
 UNTYPED = {"", "yes", "building", "residential"}
 NONHOUSE_NAMES = ("école", "ecole", "mairie", "chapelle", "église", "eglise", "mosquée", "collège", "lycée",

@@ -19,6 +19,9 @@ BAYS, FLOORS = 16, 16       # windows across and up the map (buildings.py SKY_BA
 CELL = 16                   # px a window's cell
 WIN = (3, 4, 13, 12)        # px of the cell the window fills (x0, y0, x1, y1 from the top)
 LIT = 0.4                   # share lit (the plaster sheet's ~40 %)
+# each lit one's brightness: (share, level) (the user, 2026-11-08: "the brightness of windows should be randomized at
+# night"; 0.6-1 drew them alike: the glow saturates the screen from ~0.3 of full)
+LEVELS = ((0.45, 1.0), (0.3, 0.2), (0.25, 0.06))
 WARM, COOL = (255, 196, 128), (220, 228, 255)
 
 
@@ -29,7 +32,9 @@ def main():
         for b in range(BAYS):
             if rng.random() >= LIT:
                 continue
-            c = np.array(COOL if rng.random() < 0.15 else WARM, np.float64) * (0.6 + 0.4 * rng.random())
+            u = rng.random()
+            level = next(lv for k, (_, lv) in enumerate(LEVELS) if u < sum(sh for sh, _ in LEVELS[:k + 1]))
+            c = np.array(COOL if rng.random() < 0.15 else WARM, np.float64) * level * (0.8 + 0.2 * rng.random())
             y0, x0 = f * CELL, b * CELL
             img[y0 + WIN[1]:y0 + WIN[3], x0 + WIN[0]:x0 + WIN[2]] = np.clip(c, 0, 255).astype(np.uint8)
     Image.fromarray(img).save(OUT)

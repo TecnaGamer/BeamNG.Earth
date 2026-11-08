@@ -97,6 +97,62 @@
     "translucent": false,
     "version": 1.5
   },
+  "bne_fr_house_glass_lit_dim": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/glass.emissive.png",
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.23,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_glass_lit_dim",
+    "name": "bne_fr_house_glass_lit_dim",
+    "persistentId": "2479f469-817c-5cb1-ac5d-81be272e5a3c",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_glass_lit_low": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/glass.emissive.png",
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.23,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_glass_lit_low",
+    "name": "bne_fr_house_glass_lit_low",
+    "persistentId": "a8a1e32d-6f9e-56b1-b18c-7ca46c4922f9",
+    "translucent": false,
+    "version": 1.5
+  },
   "bne_fr_house_metal": {
     "Stages": [
       {
