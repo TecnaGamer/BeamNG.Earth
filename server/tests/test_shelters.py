@@ -19,17 +19,22 @@ class KindTest(unittest.TestCase):
             attrs["tags"] = np.array([json.dumps(tags)])
         return type("F", (), {"attrs": attrs})()
 
-    def test_bus_stops_and_transit_shelters(self):
-        self.assertFalse(shelters.is_shelter(self.features("bus_stop"), 0))
-        self.assertTrue(shelters.is_shelter(self.features("bus_stop", {"shelter": "yes"}), 0))
-        self.assertFalse(shelters.is_shelter(self.features("amenity", {"highway": "bus_stop"}), 0))
-        self.assertTrue(shelters.is_shelter(self.features("amenity", {"highway": "bus_stop", "shelter": "yes"}), 0))
-        self.assertTrue(shelters.is_shelter(
-            self.features("amenity", {"amenity": "shelter", "shelter_type": "public_transport"}), 0))
-        self.assertFalse(shelters.is_shelter(self.features("bus_stop", {"shelter": "no"}), 0))
-        self.assertFalse(shelters.is_shelter(self.features("amenity", {"amenity": "shelter"}), 0))
-        self.assertFalse(shelters.is_shelter(self.features("platform"), 0))
-        self.assertFalse(shelters.is_shelter(self.features("bench"), 0))
+    def test_evidence_levels(self):
+        ev = lambda cls, tags=None: shelters.evidence(self.features(cls, tags), 0)
+        self.assertEqual(ev("bus_stop"), shelters.CANDIDATE)
+        self.assertEqual(ev("bus_stop", {"shelter": "yes"}), shelters.EXPLICIT)
+        self.assertEqual(ev("amenity", {"highway": "bus_stop"}), shelters.CANDIDATE)
+        self.assertEqual(ev("amenity", {"highway": "bus_stop", "shelter": "yes"}), shelters.EXPLICIT)
+        self.assertEqual(ev("amenity", {"amenity": "shelter", "shelter_type": "public_transport"}), shelters.EXPLICIT)
+        self.assertEqual(ev("bus_stop", {"shelter": "no"}), shelters.NONE)
+        self.assertEqual(ev("amenity", {"amenity": "shelter"}), shelters.NONE)
+        self.assertEqual(ev("bus_stop", {"public_transport": "stop_position"}), shelters.ON_ROAD)
+        self.assertEqual(ev("bus_stop", {"public_transport": "stop_position", "shelter": "yes"}),
+                         shelters.EXPLICIT_ON_ROAD)
+        self.assertEqual(ev("platform", {"public_transport": "platform", "bus": "yes"}), shelters.CANDIDATE)
+        self.assertEqual(ev("platform", {"public_transport": "platform", "train": "yes"}), shelters.NONE)
+        self.assertEqual(ev("platform"), shelters.NONE)
+        self.assertEqual(ev("bench"), shelters.NONE)
 
 
 class PlaceTest(unittest.TestCase):
@@ -79,8 +84,59 @@ class PlaceTest(unittest.TestCase):
     def test_a_stop_tagged_without_a_shelter_is_left_out(self):
         self.assertEqual(self.rows(self.stop([[50.0, 8.0]], tags={"shelter": "no"}), self.road()), [])
 
-    def test_a_plain_bus_stop_has_no_physical_shelter(self):
-        self.assertEqual(self.rows(self.stop([[50.0, 8.0]], tags={}), self.road()), [])
+    def test_a_plain_stop_beside_the_road_keeps_a_shelter_that_clears_it(self):
+        got = self.rows(self.stop([[50.0, 8.0]], tags={}), self.road())
+        self.assertEqual(len(got), 1)
+        self.assertAlmostEqual(got[0][4], 90.0, delta=0.5)
+
+    def test_a_plain_stop_node_on_the_carriageway_is_a_stop_position(self):
+        """Risoul / Briancon: highway=bus_stop on the road's own node, no shelter tag: nothing in the road."""
+        self.assertEqual(self.rows(self.stop([[50.0, 1.0]], tags={}), self.road()), [])
+        self.assertEqual(self.rows(self.stop([[50.0, 8.0]], tags={"public_transport": "stop_position"}),
+                                   self.road()), [])
+
+    def test_a_stop_position_gives_way_to_its_platform(self):
+        both = mapgeom.concat(
+            self.stop([[50.0, 0.0]], tags={"public_transport": "stop_position", "shelter": "yes"}, fid="a-pos"),
+            self.stop([[52.0, 9.0]], cls="platform", tags={"public_transport": "platform", "bus": "yes"},
+                      fid="b-platform"))
+        got = self.rows(both, self.road())
+        self.assertEqual(len(got), 1)
+        self.assertGreater(got[0][2], 8.0, "the shelter stands at the platform")
+
+    def test_a_tagged_stop_position_with_no_platform_stands_beside_the_road(self):
+        got = self.rows(self.stop([[50.0, 0.0]], tags={"public_transport": "stop_position", "shelter": "yes"}),
+                        self.road())
+        self.assertEqual(len(got), 1)
+        self.assertGreater(abs(got[0][2]), 4.0 + shelters.CURB_PAD_M)
+
+    def test_the_kerb_whose_edge_is_nearest_wins(self):
+        """A wide road's kerb 1 m away beats a footway centreline 3 m away (nearest edge, PR #889)."""
+        roads = self.road(width=16.0)                     # edge at y = 8
+        spec = type("S", (), {"width": 1.0})()
+        roads.append(("path", spec, np.array([[0., 12., 0.], [100., 12., 0.]]), 0.))
+        got = self.rows(self.stop([[50.0, 9.0]]), roads)
+        self.assertTrue(got)
+        self.assertAlmostEqual(got[0][4], 90.0, delta=0.5)
+
+    def test_the_base_is_at_the_lowest_corner(self):
+        got = shelters.rows(self.frame, lambda key: self.stop([[50.0, 8.0]]), (0., 0., 100., 100.),
+                            lambda la, lo: 5.0 + (np.asarray(la) - 39.2834) * 1e5, self.road())
+        self.assertEqual(len(got), 1)
+        lat_here = self.frame.enu_to_geodetic(np.array([got[0][1]]), np.array([got[0][2]]), np.zeros(1))[0][0]
+        centre = 5.0 + (lat_here - 39.2834) * 1e5
+        self.assertLess(got[0][3], centre + shelters.LIFT - 0.05)
+
+    def test_a_shelter_meeting_the_real_deck_is_set_back_before_being_left_out(self):
+        """The tile's solved deck can be wider than the mapped width the pose used (a sidewalk-expanded surface):
+        the shelter steps back from it instead of standing in it or being dropped."""
+        import furniture
+        clearance = furniture.RoadClearance([(5.6, np.array([[0., 0., 5.], [100., 0., 5.]]))])
+        got = shelters.rows(self.frame, lambda _: self.stop([[50., 1.]]), (0., 0., 100., 100.),
+                            lambda la, lo: np.full(np.shape(la), 5.), self.road(), clearance=clearance)
+        self.assertEqual(len(got), 1)
+        self.assertGreater(got[0][2] - shelters.STREET_X, 5.6)
+        self.assertLessEqual(got[0][2], 4.0 + shelters.CURB_PAD_M + shelters.STREET_X + max(shelters.PUSH_STEPS))
 
     def test_the_whole_shelter_keeps_clear_of_a_second_parallel_road(self):
         roads = self.road()
