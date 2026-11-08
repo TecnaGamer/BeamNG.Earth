@@ -101,7 +101,7 @@ class RailwayTest(unittest.TestCase):
         self.assertGreater(n_sleepers, 256 / railways.SLEEPER_EVERY * 0.95)
         self.assertGreaterEqual(P[:, 0].min(), -roads.OVERLAP - railways.STEP_M - 3.0)
 
-    def test_lean_collider_without_rails_and_sleepers(self):
+    def test_lean_collider_without_the_sleepers(self):
         # (PR #41) the collider is the bed alone: most of the track's triangles are its rails and sleepers
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat)
