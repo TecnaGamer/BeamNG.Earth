@@ -1572,7 +1572,9 @@ function closeCtx() { ctx.value = null }
 // picked from the right-click menu: straight away (a second "Teleport here?" with the same choices was one click too
 // many, the user 2026-10-14); a failure shows in the confirmation box
 // the 3D map instead (settings.uiOpen3d: remembered as the map key's style)
-function open3d() { engineLua("beamngEarth_settings and beamngEarth_settings.uiOpen3d and beamngEarth_settings.uiOpen3d() or nil") }
+// (a statement: without a callback the game runs the text as a chunk, where a bare "a and b() or nil" expression is a
+// syntax error, the "fatal Lua error" of the 3D map button, 2026-11-08)
+function open3d() { engineLua("if beamngEarth_settings and beamngEarth_settings.uiOpen3d then beamngEarth_settings.uiOpen3d() end") }
 function ctxTeleport() {
   if (!ctx.value || state.value.cannotGo) return
   const c = ctx.value
