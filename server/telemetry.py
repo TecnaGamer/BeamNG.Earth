@@ -31,11 +31,22 @@ log = logging.getLogger("earthd.telemetry")
 
 URL = os.environ.get("BNE_TELEMETRY_URL", "https://earth.tgforever.net/telemetry")
 ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
-CONSENT_VERSION = 1         # the welcome page's choice this release asks for (settings telemetryChoice): none before it
-# The performance section (perfstats.py) goes out only once the collector reads it (native/serverlist telemetry.rs) and
-# a release says so (raise CONSENT_VERSION with it: everyone is asked again). Until then it is measured and kept beside
-# the last report (LAST_FILE "perf_not_sent_yet") to check its sizes and values.
-PERF_UPLOAD = False
+# the welcome page's choice this version asks for (settings telemetryChoice): nothing is sent before it. 2: the
+# performance data is sent (from development builds first), everyone who chose under 1 is asked again
+CONSENT_VERSION = 2
+# The performance section (perfstats.py; the collector reads it: native/serverlist perf.rs) is sent by development
+# builds (the user, 2026-11-08: "start sending performance data on the dev builds. No release tonight"): "dev" = a
+# version with ".dev." / "-dev." in it (release.yml's development builds); True = every build (from the release whose
+# notes say so). Otherwise it is measured and kept beside the last report (LAST_FILE "perf_not_sent_yet").
+PERF_UPLOAD = "dev"
+
+
+def perf_upload(version):
+    """Whether this build sends the performance section."""
+    if PERF_UPLOAD is True:
+        return True
+    v = str(version or "")
+    return PERF_UPLOAD == "dev" and (".dev." in v or "-dev." in v)
 LAST_FILE = "telemetry_last.json"   # the last report as sent (the settings page's "What is sent")
 REPORT_S = 300.0            # s between reports (the collector counts an install online for 2 of them)
 FIRST_S = 60.0              # s after the start before the first
@@ -192,9 +203,10 @@ class Reporter:
                 log.debug("telemetry perf: %s: %s", type(e).__name__, e)
             if not a.get("perf"):
                 perf = None
-        if perf and PERF_UPLOAD:
+        upload = perf_upload(self.version)
+        if perf and upload:
             body["perf"] = perf
-        self._keep_last(body, None if PERF_UPLOAD else perf)
+        self._keep_last(body, None if upload else perf)
         if self.send(body):
             self.carry = {}
         else:

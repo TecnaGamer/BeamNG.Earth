@@ -119,9 +119,12 @@ class ChoiceTest(unittest.TestCase):
         c = telemetry.choices
         self.assertEqual(c({}), {"main": False, "net": False, "perf": False}, "not chosen yet: nothing")
         self.assertEqual(c({"telemetryChoice": telemetry.CONSENT_VERSION}), {"main": True, "net": True, "perf": True})
-        self.assertFalse(c({"telemetryChoice": 1, "telemetry": False})["net"], "main off: all off")
-        self.assertEqual(c({"telemetryChoice": 1, "telemetryNet": False, "telemetryPerf": False}),
+        v = telemetry.CONSENT_VERSION
+        self.assertFalse(c({"telemetryChoice": v, "telemetry": False})["net"], "main off: all off")
+        self.assertEqual(c({"telemetryChoice": v, "telemetryNet": False, "telemetryPerf": False}),
                          {"main": True, "net": False, "perf": False})
+        self.assertEqual(c({"telemetryChoice": v - 1}), {"main": False, "net": False, "perf": False},
+                         "chosen under an older consent version: asked again, nothing until then")
 
     def test_report_follows_the_switches(self):
         with tempfile.TemporaryDirectory() as d:
@@ -237,6 +240,23 @@ class PerfTest(unittest.TestCase):
             r.report()
             with open(os.path.join(d, telemetry.LAST_FILE), encoding="utf-8") as fh:
                 last = json.load(fh)
-        self.assertTrue(all("perf" not in b for b in sent))     # (PERF_UPLOAD off: never sent yet)
-        self.assertFalse(telemetry.PERF_UPLOAD)
+        self.assertTrue(all("perf" not in b for b in sent))     # (a release build: not sent yet)
         self.assertEqual(last["perf_not_sent_yet"], {"server": {"catchups": 1}})
+
+    def test_dev_builds_send_it(self):
+        self.assertTrue(telemetry.perf_upload("1.8.2-beta.dev.245"))
+        self.assertFalse(telemetry.perf_upload("1.8.2-beta"))
+        sent = []
+        with tempfile.TemporaryDirectory() as d:
+            r = telemetry.Reporter(d, "1.8.2-beta.dev.245", lambda: (True, False),
+                                   send=lambda b: (sent.append(b), True)[1],
+                                   allowed=lambda: {"main": True, "net": True, "perf": True},
+                                   perf=lambda: {"server": {"catchups": 1}})
+            r.report()
+            r2 = telemetry.Reporter(d, "1.8.2-beta.dev.245", lambda: (True, False),
+                                    send=lambda b: (sent.append(b), True)[1],
+                                    allowed=lambda: {"main": True, "net": True, "perf": False},
+                                    perf=lambda: {"server": {"catchups": 1}})
+            r2.report()
+        self.assertEqual(sent[0]["perf"], {"server": {"catchups": 1}})
+        self.assertNotIn("perf", sent[1])                       # (switch off: never)

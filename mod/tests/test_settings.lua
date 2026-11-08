@@ -87,6 +87,9 @@ T.check(settings.privacyNeeded() and settings.uiPrivacy().telemetry == false, 'a
 settings.uiWelcomeDone({ telemetry = true, perf = false, net = true })
 T.check(settings.get('telemetry') and not settings.get('telemetryPerf') and settings.get('telemetryNet')
   and settings.get('telemetryChoice') == 2, 'choice saved with the new version')
+settings.serverPrivacy('all', 3)
+local p3 = settings.uiPrivacy()
+T.check(p3.needed and p3.telemetry and p3.perf == false and p3.net, 'asked again: the boxes as chosen before, not the region\'s')
 settings.serverPrivacy('neutral', 1)
 
 ------------------------------------------------------------------------------------------

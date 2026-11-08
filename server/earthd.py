@@ -60,6 +60,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import contextlib  # noqa: E402
+import errno  # noqa: E402
 import glob  # noqa: E402
 import functools  # noqa: E402
 import itertools  # noqa: E402
@@ -159,7 +160,7 @@ PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
 WATERGUARD_VERSION = 1
-TELEMETRY_CONSENT = 1           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
+TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
 _NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
 
 
@@ -8617,7 +8618,7 @@ async def main_async(args):
             allowed=lambda: telemetry.choices(cpupin.player_settings(args.user_dir)),
             keep_id=not privacyregionmod.region()[1], perf=server.perf.take).start()
         logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
-        log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
+        log.info("telemetry: on, as the player chose on the welcome page (TELEMETRY.md; nothing before the choice; "
                  "BNE_TELEMETRY=off turns it off)")
     feed_srv = None
     if getattr(args, "companion_feed", "off") != "off":
@@ -8631,7 +8632,12 @@ async def main_async(args):
                      "0.0.0.0" if args.companion_feed == "lan" else "127.0.0.1", fport)
         except OSError as e:
             server.feed = None
-            log.warning("companion feed off: %s", e)
+            # (its port taken: another BeamNG.Earth server runs, a test's beside the player's own, or a second app; the
+            # feed is optional, the first one keeps it)
+            if getattr(e, "errno", None) in (errno.EADDRINUSE, 10048):
+                log.info("companion feed off: port %s is taken (another BeamNG.Earth server has it)", args.companion_port)
+            else:
+                log.warning("companion feed off: %s", e)
     # the programs beside the game set to start with BeamNG.Earth (addons.py, addonrun.py); ended with the server
     import atexit
     atexit.register(lambda: getattr(server, "_addons", None) is not None and server._addons.runner.stop_all())

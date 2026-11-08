@@ -1173,17 +1173,24 @@ M.telemetryConsent = 1
 function M.serverPrivacy(region, consent)
   if region == 'neutral' or region == 'perf_off' or region == 'all' then M.privacyRegion = region; M.privacyKnown = true end
   if type(consent) == 'number' and consent >= 1 then M.telemetryConsent = math.floor(consent) end
+  -- (a newer consent version than the one answered, learnt after the level started: the welcome page once more, once a
+  -- session; a player who chose under version 1 is asked again when the performance data starts, version 2)
+  local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
+  if M.privacyNeeded() and not M._privacyAsked and level == M.LEVEL_ID and not welcomeAt then
+    M._privacyAsked = true
+    welcomeAt = os.clock() + M.WELCOME_DELAY_S
+  end
 end
 function M.privacyNeeded() return (values.telemetryChoice or 0) < M.telemetryConsent end
 
 -- { region, needed, telemetry, perf, net } for the welcome page: before a choice, the region's defaults
 function M.uiPrivacy()
-  if M.privacyNeeded() then
+  if M.privacyNeeded() and (values.telemetryChoice or 0) == 0 then     -- (asked again: the boxes as they chose before)
     local r = M.privacyRegion
     local on = r ~= 'neutral' and values.telemetry ~= false       -- (a player who had switched it off: still off)
     return { region = r, known = M.privacyKnown, needed = true, telemetry = on, net = on, perf = on and r == 'all' }
   end
-  return { region = M.privacyRegion, known = M.privacyKnown, needed = false, telemetry = values.telemetry ~= false,
+  return { region = M.privacyRegion, known = M.privacyKnown, needed = M.privacyNeeded(), telemetry = values.telemetry ~= false,
     net = values.telemetryNet ~= false, perf = values.telemetryPerf ~= false }
 end
 
@@ -1266,6 +1273,7 @@ function M.onClientPostStartMission()
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
   if level == M.LEVEL_ID and ((values.welcomeSeen or 0) < M.WELCOME_VERSION or M.privacyNeeded()) then
     welcomeAt = os.clock() + M.WELCOME_DELAY_S       -- (and until the telemetry choice is made: before playing)
+    M._privacyAsked = M.privacyNeeded() or nil
   end
 end
 

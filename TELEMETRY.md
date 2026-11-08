@@ -157,10 +157,10 @@ before any of it is sent.
 
 - **From the release with the welcome-screen choice**: sections 1 and 6 (basic statistics and network load), only after
   your choice. Releases before it sent sections 1 and 6 by default, with an off switch in settings.
-- **Measured, not sent yet**: sections 2-5 (performance data). The app already measures them while Performance data
-  is ticked and keeps the latest next to the last report (`telemetry_last.json` in the cache folder, under
-  `perf_not_sent_yet`) so we can check them, but nothing of it is sent until a release whose notes say so. That release
-  will ask everyone again on the welcome screen first.
+- **Development builds** (the `dev.N` pre-releases): sections 2-5 (performance data) are sent from 2026-11-08 on,
+  only while Performance data is ticked. The welcome screen asks everyone again first (also those who chose before).
+- **Releases**: sections 2-5 are measured and kept next to the last report (`telemetry_last.json` in the cache folder,
+  under `perf_not_sent_yet`) but not sent until a release whose notes say so.
 - **Being added**: a **What is sent** button that shows the last report exactly as it left your computer, and the
   public performance page.
 
