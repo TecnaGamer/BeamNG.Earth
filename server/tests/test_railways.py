@@ -152,6 +152,28 @@ class RailwayTest(unittest.TestCase):
         y = P[np.unique(T)][:, 1]
         self.assertTrue(((y > 110.0) & (y < 130.0)).any(), "its track still drawn")
 
+    def test_worn_lines_are_cut_across_a_motorway(self):
+        """GitHub #918: an abandoned or disused line mapped across a motorway on the ground (the A20, its old beds
+        under the carriageway) is cut there, so its bed no longer dips the motorway; a line in use is not; an
+        abandoned line is cut at a trunk road too, a disused one is not."""
+        f = features([[(0.0, 60.0), (250.0, 60.0)], [(0.0, 100.0), (250.0, 100.0)], [(0.0, 140.0), (250.0, 140.0)],
+                      [(0.0, 200.0), (250.0, 200.0)], [(0.0, 230.0), (250.0, 230.0)],
+                      [(120.0, 0.0), (120.0, 180.0)], [(60.0, 190.0), (60.0, 250.0)]],
+                     ["standard_gauge"] * 5 + ["motorway", "trunk"], subtypes=["rail"] * 5 + ["road"] * 2,
+                     flags=[(1, "is_disused"), (2, "is_abandoned"), (3, "is_abandoned"), (4, "is_disused")])
+        rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0))
+        hw = roads.STYLE["motorway"][0] / 2
+
+        def over(fid, x):
+            return any(((xy[:, 0] > x - hw) & (xy[:, 0] < x + hw)).any() for i, _c, k, xy in rails if i == fid)
+        self.assertTrue(over("id000", 120.0), "a line in use keeps its track (a missing bridge is another matter)")
+        self.assertFalse(over("id001", 120.0), "a disused line cut at the motorway")
+        self.assertFalse(over("id002", 120.0), "an abandoned line cut at the motorway")
+        self.assertFalse(over("id003", 60.0), "an abandoned line cut at a trunk road")
+        self.assertTrue(over("id004", 60.0), "a disused line kept at a trunk road (its level crossing)")
+        self.assertEqual(len([1 for i, *_ in rails if i == "id002"]), 2, "both sides of the motorway kept")
+        self.assertEqual(railways._cut_worn_at_motorways(rails, {}, []), rails)
+
     def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_worn(self):
         """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
         an abandoned line beside it is drawn worn (Joensuu, 2026-10-25; the user, 2026-10-27: abandoned lines shown,
