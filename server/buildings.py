@@ -622,6 +622,18 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 2 + int(seed * 2)
         else:
             nf = 2 + int(seed * 3)
+    bag = attrs.get("b3") if isinstance(attrs.get("b3"), dict) else None
+    if bag and bag.get("height"):
+        h = float(bag["height"])                                    # the lidar roof, instead of the guessed rise
+        if bag.get("roof_height"):
+            rh = float(bag["roof_height"])
+        if bag.get("roof_shape"):
+            attrs = dict(attrs, roof_shape=bag["roof_shape"], roof_height=rh)
+        use = str(bag.get("use") or "").lower()
+        if "winkel" in use:
+            shop = True
+        elif "woon" in use:
+            shop = False
     roof_given = (attrs.get("roof_shape") or "").lower()
     if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
@@ -656,7 +668,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if roof in DOME_ROOFS:
         if hw < 1.0 or hw > DOME_MAX_HW:
             roof = "flat"
-    elif roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
+    elif bag is None and roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
                              or hw > (18.0 if barn else 20.0 if church else 14.0)):
         roof = "flat"
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
@@ -850,7 +862,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 windows=windows, steeple=church and area < 2500 and roof not in DOME_ROOFS, porch=porch, cls=cls,
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
-                else style.pitch)
+                else (math.degrees(math.atan2(float(rh), max(float(hw), 0.1))) if bag and roof != "flat" and rh
+                      else style.pitch))
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
@@ -2858,6 +2871,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
+        if ok[i0:i1].all():
+            import threedbag
+            at = threedbag.attach(at, float(la_all[i0:i1].mean()), float(lo_all[i0:i1].mean()),
+                                  abs(_area2(ring)) / 2)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
         spec.portal = bool(at.get("portal"))
