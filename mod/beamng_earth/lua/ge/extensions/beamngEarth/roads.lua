@@ -47,6 +47,9 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
+-- Railway tracks collide (settings railCollision, GitHub #821): off, the drawn track only renders and its lean collision
+-- mesh (railcol) is not made.
+M.railCollision = true
 M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
@@ -1820,12 +1823,21 @@ function M.update(gov, currentAnchor, player, view, a)
       held[#held + 1] = q           -- the car is on it: made once the car is clear (playerIn)
       t = nil
     end
+    -- railway collision off (railCollision): the lean collider is not made, the drawn track renders only; the entry is
+    -- kept (t.cq) so that setRailCollision(true) can make it again
+    local railOff = t and not M.railCollision and (q.what == 'rail' or q.what == 'railcol')
+    if railOff then
+      t.cq = t.cq or {}
+      t.cq[q.what] = q
+      t.colWant[q.what] = nil
+      if q.what == 'railcol' then t = nil end
+    end
     local walk = q.walk
     if t and q.geo then walk = M.geoWalk(t, q.what) end      -- (a geotile's part: placed as the tile is now)
     if t and walk then
       local t0 = now()
       loadMaterials()
-      local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
+      local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly or railOff   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
         (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
@@ -2213,6 +2225,43 @@ function M.setSignsEnabled(on)
       end
     end
   end
+  return true
+end
+
+-- Railway collision on / off (the settings page's railCollision, GitHub #821): the tracks' colliders are made or
+-- removed at once, in the tiles already here and in those still to come. Returns true if it changed.
+function M.setRailCollision(on)
+  on = on ~= false
+  if M.railCollision == on then return false end
+  M.railCollision = on
+  local function same(q, key, tile) return q.key == key and q.tile == tile and (q.what == 'rail' or q.what == 'railcol') end
+  local function without(list, key, tile)
+    local keep = {}
+    for _, q in ipairs(list) do if not same(q, key, tile) then keep[#keep + 1] = q end end
+    return keep
+  end
+  for key, t in pairs(tiles) do
+    local cq = t.cq
+    if cq and (cq.rail or cq.railcol) then
+      walkQ, parked, held = without(walkQ, key, t), without(parked, key, t), without(held, key, t)
+      for _, what in ipairs({ 'rail', 'railcol' }) do
+        local q = cq[what]
+        if q then
+          if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
+          if on then
+            if not q.renderOnly then t.colWant[what] = true end
+          else
+            t.colWant[what] = nil
+          end
+          -- off: the drawn track again as a render-only mesh (its railcol is simply not made); on: both as first queued
+          if on or what == 'rail' then
+            if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
+          end
+        end
+      end
+    end
+  end
+  collisionDirty = true
   return true
 end
 
