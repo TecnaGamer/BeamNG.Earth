@@ -528,6 +528,16 @@ do -- fork: Australia's T-junction chevron board (server tboards.py, tools/build
   T.check(trees.isBarrier('au_tboard') and trees.GROUP_MAX_M.au_tboard > 0 and trees.ONE_SPELLING.au_tboard,
     'au_tboard: never thinned, a draw distance, one spelling')
 end
+do -- fork: Australia's chevron markers, Wrong Way and gravel road signs (server auroadsigns.py, tools/build_au_roadsigns.py)
+  for _, s in ipairs({ { 'au_chevron_l', 'chevron_l', 1.6 }, { 'au_chevron_r', 'chevron_r', 1.6 },
+    { 'au_wrongway', 'wrongway', 2.1 }, { 'au_gravel', 'gravel', 2.5 } }) do
+    local shape, sc = trees.pick(s[1], s[3], 0.3)
+    T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_' .. s[2] and math.abs(sc - 1) < 1e-9,
+      s[1] .. ': its model at 1:1')
+    T.check(trees.isBarrier(s[1]) and trees.GROUP_MAX_M[s[1]] > 0 and trees.ONE_SPELLING[s[1]],
+      s[1] .. ': never thinned, a draw distance, one spelling')
+  end
+end
 do -- fork: Australia's Give Way and signals (server furniture.au_group, tools/build_au_traffic.py): their models at 1:1
   for g, h in pairs({ au_giveway = 2.7, au_signal = 4.0, au_signal_mast = 7.0 }) do
     local shape, sc = trees.pick(g, h, 0.3)
