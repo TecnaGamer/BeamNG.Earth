@@ -5392,6 +5392,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decks::deck_tents, m)?)?;
     m.add_function(wrap_pyfunction!(levels::tag_level_ranges, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_gather, m)?)?;
+    // (2026-11-08: gradesep._spans' rows and lines over the layers as they are; roads._deck_gaps' look round a road)
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_gather_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::first_ring_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_gaps_round, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
