@@ -13,6 +13,7 @@ far_geometry(...) (the far-tile workers, the same state) are its jobs. warm_q (a
 lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
+import collections
 import logging
 import os
 import queue
@@ -160,9 +161,19 @@ def _rss_mb():
 
 def _trace_memory(every_s=60.0, top=10):
     """BNGE_TRACEMALLOC: log this worker's resident size, what Python and numpy hold of it and its top allocation
-    sites every every_s (the rest is native: DuckDB, the allocator's free lists)."""
+    sites every every_s (the rest is native: DuckDB, the allocator's free lists). BNGE_TRACEMALLOC=N (N > 1): N frames
+    a site, each counted at its innermost frame in the server's own files (numpy's fromnumeric.py:54 named the line of
+    ours that made the array); slower, for the PC (on a Steam Deck even 1 frame stalled the drive)."""
     import tracemalloc
-    tracemalloc.start(1)
+    depth = max(1, int(os.environ.get("BNGE_TRACEMALLOC", "1") or 1))
+    tracemalloc.start(depth)
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def site(tb):
+        for fr in reversed(tb):                 # (most recent call last)
+            if os.path.dirname(os.path.abspath(fr.filename)) == here:
+                return f"{os.path.basename(fr.filename)}:{fr.lineno}"
+        return f"{os.path.basename(tb[-1].filename)}:{tb[-1].lineno}"
 
     def loop():
         log = logging.getLogger("earthd.worker")
@@ -170,9 +181,16 @@ def _trace_memory(every_s=60.0, top=10):
             time.sleep(every_s)
             snap = tracemalloc.take_snapshot()
             total = sum(st.size for st in snap.statistics("filename"))
+            if depth > 1:
+                by = collections.Counter()
+                for st in snap.statistics("traceback"):
+                    by[site(st.traceback)] += st.size
+                top_sites = by.most_common(top)
+            else:
+                top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
+                             for st in snap.statistics("lineno")[:top]]
             log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
-                     "; ".join(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} "
-                               f"{st.size / 1e6:.0f} MB" for st in snap.statistics("lineno")[:top]))
+                     "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
