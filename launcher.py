@@ -1896,8 +1896,8 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
-        row("Telemetry", "on: anonymous player count and data-source load, no location (BNE_TELEMETRY=off turns it off)"
-            if telemetry_on() else "off")
+        row("Telemetry", "anonymous, no location: as chosen on the game's welcome page, nothing before that "
+            "(BNE_TELEMETRY=off turns it off)" if telemetry_on() else "off")
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
                     server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")
