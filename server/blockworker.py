@@ -1609,8 +1609,10 @@ def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
     try:
         rows = kantstolpar.tile_rows(frame, near_roads, box, elev, country, mapped)
         if str(country or "").upper() == "AU":      # fork: Australia's curve warning signs (warnsigns.py)
+            import tboards
             import warnsigns
             rows = rows + warnsigns.tile_rows(frame, near_roads, box, elev, country, mapped)
+            rows = rows + tboards.tile_rows(frame, near_roads, box, elev, country)     # (fork: the T-junction boards, tboards.py)
         return rows
     except Exception as ex:
         log.warning("kantstolpar: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
