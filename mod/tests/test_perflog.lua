@@ -28,6 +28,9 @@ T.check(d[1] and d[1]:find('^perf drop 20 fps') and d[1]:find('usual 60', 1, tru
 run(10, 1000 / 60)
 local b = find('perf back')
 T.check(#b == 1 and b[1]:find('^perf back to 60 fps after') and b[1]:find('lowest 20', 1, true), 'back: how long, the lowest')
+local dr = P.takeDrops()
+T.check(dr.n == 1 and dr.s >= 9 and dr.s <= 16 and math.abs(dr.low - 20) < 1, 'the drops tally: one, its seconds, the lowest')
+T.check(P.takeDrops().n == 0, 'taken: a new tally')
 lines = {}
 now = now + 0.3
 local got = P.frame(300, now, ctx, { mod = { terrainCommit = 280 }, engine = { RenderShadows = 250, Lua = 20 } }, nil, nil)

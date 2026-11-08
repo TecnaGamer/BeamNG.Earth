@@ -288,12 +288,21 @@ T.check(trees.tileThreshold(0, { f = {}, s = trees.STRIDE, n = 0 }) == 1.0, 'no 
 
 -- rows packed flat: STRIDE numbers a row in the server's order, the readers' defaults, a broken row never shown
 do
-  local f = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
-  T.check(trees.STRIDE == 8 and #f == 32, 'flatten: 8 numbers a row')
-  T.check(table.concat(f, ',', 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
-  T.check(table.concat(f, ',', 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
+  -- (an FFI double array where there is FFI: read through these, not # or table.concat)
+  local function span(f, i, j)
+    local out = {}
+    for k = i, j do out[#out + 1] = string.format('%g', f[k]) end
+    return table.concat(out, ',')
+  end
+  local f, n = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
+  T.check(trees.STRIDE == 8 and n == 4, 'flatten: 8 numbers a row, the row count')
+  T.check(span(f, 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
+  T.check(span(f, 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
   T.check(f[24] == 2 and f[32] == 2, 'flatten: a row that is no table or has no position is never shown')
-  T.check(#trees.flatten(nil) == 0, 'flatten: no rows')
+  T.check(select(2, trees.flatten(nil)) == 0, 'flatten: no rows')
+  T.check(trees.FFI == (type(f) == 'cdata'), 'flatten: FFI doubles where there is FFI (the collector does not walk them)')
+  local p, pn = trees.packFlat({ 1, 2, 3, 4, 5, 6, 7, 8, 9, 'x' }, 8)
+  T.check(pn == 1 and p[1] == 1 and p[8] == 8, 'packFlat: whole rows only')
 end
 
 -- a server that knows the mod reads flat tiles (hello.vegFlat) sends { groups, stride, flat }: kept as decoded (no copy,
@@ -327,10 +336,10 @@ do
   local kept = false
   for i = 1, 20 do
     local name, v = debug.getupvalue(trees.status, i)
-    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].f == sent.flat end
+    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].n == 50 and v['8:0_0'].f[1] == sent.flat[1] end
   end
   T.check(count() == 50 and made() == fromRows, 'flat: the same items as the rows')
-  T.check(kept, 'flat: the decoded array itself is the tile\'s (no copy)')
+  T.check(kept, 'flat: the decoded array\'s rows are the tile\'s (packed as the collector does not walk them)')
   trees.clear()
   trees.onTile({ anchorId = 8, key = '0_0', path = '/t/wide', n = 50 }, 8)
   trees.update(8, { x = 50, y = 50 })

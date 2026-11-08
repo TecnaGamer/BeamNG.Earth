@@ -22,7 +22,7 @@ import roads
 import signroads
 
 KERNEL = 98                     # earthfast VERSION with speed_sign_place / speed_sign_mesh
-GENERAL_KERNEL = 162            # ... with speed_sign_general and speed_sign_place's kind, limit before and rank
+GENERAL_KERNEL = 169            # ... with speed_sign_general and speed_sign_place's kind, limit before and rank
 # m ahead of a speed-limit sign a German town makes a 50 its Ortstafel's (general: the mapped Ortstafel may stand
 # up to MAPPED_REACH_M before the estimate's town)
 GENERAL_AHEAD_M = (100.0, 200.0, 300.0)

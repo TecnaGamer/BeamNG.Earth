@@ -1393,7 +1393,7 @@ MAPPED_SKIP = {"motorway"}
 MAPPED_PROBE_M = 50.0           # m either way along its road the town's side of a mapped sign is read (state)
 MAPPED_REACH_M = 300.0          # m: an estimated sign of a mapped sign's town this near it is left out
 MAPPED_DEDUPE_M = 25.0          # m: a town's second mapped sign on a road this close to its first is the same post
-MAPPED_KERNEL = 162             # (fast.require: townsigns_de.rs)
+MAPPED_KERNEL = 169             # (fast.require: townsigns_de.rs)
 # m along the road either side of a mapped sign of a village the places do not have, whose built-up land says which
 # way it is (MAPPED_LOOK_STEP_M apart)
 MAPPED_LOOK_M, MAPPED_LOOK_STEP_M = 160.0, 20.0

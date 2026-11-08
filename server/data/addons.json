@@ -1,0 +1,5 @@
+{
+  "format": 1,
+  "note": "The curated add-ons the in-game Add-ons page offers (server/addons.py; docs/ADDONS.md). Empty until their authors have agreed to be listed. Only these repos can be installed from it; each add-on is downloaded from its author's own GitHub releases on the player's machine; nothing of theirs is copied here.",
+  "addons": []
+}

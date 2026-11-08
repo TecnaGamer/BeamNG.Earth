@@ -55,6 +55,35 @@ class CacheTest(unittest.TestCase):
             self.assertTrue(os.path.exists(db))            # (patched already: the cache is the patched one)
 
 
+class SkyColourTest(unittest.TestCase):
+    """skyLutSkyP.hlsl: the sky's colour from the camera's own place on the planet (curved world far from the
+    origin), patched, upgraded on an already patched game, backed up and restored."""
+
+    def test_sky_camera_line(self):
+        sky_src = "float4 main(Conn In) : SV_Target\n{\n    " + skypatch.SKY_OLD + "\n    return 0;\n}\n"
+        with tempfile.TemporaryDirectory() as d:
+            game, mod, bak, user = (os.path.join(d, n) for n in ("game", "mod", "bak", "user"))
+            src = os.path.join(game, *skypatch.SHADER.split("/"))
+            os.makedirs(os.path.dirname(src))
+            with open(src, "w") as fh:
+                fh.write(skypatch.patched(SHADER))          # (the camera volume patched already: an upgrade)
+            with open(os.path.join(game, *skypatch.MAIN.split("/")), "w") as fh:
+                fh.write("x\n")
+            sky = os.path.join(game, *skypatch.SKY.split("/"))
+            with open(sky, "w") as fh:
+                fh.write(sky_src)
+            self.assertEqual(skypatch.apply(game, mod, bak, user), "patched")
+            with open(sky) as fh:
+                text = fh.read()
+            self.assertIn(skypatch.SKY_NEW, text)
+            self.assertNotIn(skypatch.SKY_OLD, text)
+            self.assertTrue(any(n.startswith("skyLutSkyP.") for n in os.listdir(bak)))
+            self.assertEqual(skypatch.apply(game, mod, bak, user), "current")
+            self.assertEqual(skypatch.restore(game, mod, user), "restored")
+            with open(sky) as fh:
+                self.assertEqual(fh.read(), sky_src)
+
+
 class PatchTest(unittest.TestCase):
     def test_only_the_camera_volume_returns(self):
         out = skypatch.patched(SHADER)
