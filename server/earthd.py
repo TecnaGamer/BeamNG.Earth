@@ -7827,7 +7827,7 @@ class Connection:
                 else:
                     fut = self.s.delta_pool.submit(farfield.group_deltas, args)
                     loop = asyncio.get_running_loop()
-                    fut.add_done_callback(lambda _f: loop.call_soon_threadsafe(self.wake.set))
+                    fut.add_done_callback(lambda _f: loop.is_closed() or loop.call_soon_threadsafe(self.wake.set))
                 self.deltas[gk] = fut
             if not fut.done():
                 rest.append((adds, removes))
