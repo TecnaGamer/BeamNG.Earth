@@ -186,6 +186,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
     cells = list(cells)
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     seen, out = set(), []
+    wear_of = worn if worn is not None else {}
     for feats in cells:
         if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
             continue
@@ -202,8 +203,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
                 continue
             c = got[0]
             seen.add(fid)
-            if worn is not None and got[1]:
-                worn[fid] = got[1]
+            if got[1]:
+                wear_of[fid] = got[1]
             if gauges is not None:
                 g = osm_gauge(feats, i)
                 if g:
@@ -224,6 +225,8 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
                     if len(xy) >= 2:
                         out.append((fid, c, kind, xy))
     out.sort(key=lambda p: (p[0], p[2], float(p[3][0, 0]), float(p[3][0, 1])))
+    if any(kind == "ground" and wear_of.get(fid) for fid, _c, kind, _xy in out):
+        out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach))
     out = _drop_stubs(out)
     out = _span_underpasses(out, road_underpasses(frame, cells, box, reach))
     return _clip(out, near) if clip else out
@@ -615,6 +618,92 @@ def crossings(frame, cells, box, reach=REACH_M):
             for ring in roads.ground_parts(feats, i):
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 out.append((np.c_[e, n], sp.width / 2))
+    return out
+
+
+# A worn line (disused / abandoned) mapped across a motorway on the ground: the road was built over the old bed, and
+# the rails are long gone there (a motorway has no level crossing). Drawn and graded, the track's bed line made the
+# carriageway dip to it (GitHub #918: four such dips on the A20 in Mecklenburg-Vorpommern, the lines tagged historic,
+# abandoned or dismantled). The track is cut across the carriageway and WORN_CUT_M past its edges. An abandoned line
+# is cut at a trunk road too (rebuilt over it); a disused one only at a motorway (a trunk road's level crossing can
+# still have its rails).
+WORN_CUT_M = 6.0
+WORN_CUT_CLASSES = {1: {"motorway"}, 2: {"motorway", "trunk"}}
+WORN_CUT_MIN_SIN = 0.2      # (a crossing flatter than this cuts as if at this angle: the cut stays bounded)
+
+
+def motorway_crossings(frame, cells, box, reach=REACH_M):
+    """[(xy (k, 2), half width, class)]: the ground motorway and trunk carriageways (their links too) near box."""
+    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
+    seen, out = set(), []
+    for feats in cells:
+        if feats is None or len(feats) == 0 or "class" not in feats.attrs:
+            continue
+        clss = feats.attrs["class"]
+        fb = None
+        for i in range(len(feats)):
+            c = str(clss[i])
+            base = c[:-5] if c.endswith("_link") else c
+            if base not in ("motorway", "trunk"):
+                continue
+            fid = str(feats.ids[i])
+            if fb is None:
+                fb = feats.boxes(frame)
+            if fid in seen or not _box_hit(fb[i], near):
+                continue
+            seen.add(fid)
+            st = roads.STYLE.get(c) or roads.STYLE.get(base)
+            if st is None or roads.unbuilt(feats, i):
+                continue
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                if len(e) >= 2:
+                    out.append((np.c_[e, n], st[0] / 2.0, base))
+    return out
+
+
+def _segment_at(line, p):
+    """The direction (b - a) of line's segment nearest point p. Pure."""
+    a, b = line[:-1], line[1:]
+    d = b - a
+    t = np.clip(np.einsum("ij,ij->i", p - a, d) / np.maximum(np.einsum("ij,ij->i", d, d), 1e-9), 0.0, 1.0)
+    k = int(np.argmin(np.linalg.norm(p - (a + t[:, None] * d), axis=1)))
+    return d[k]
+
+
+def _cut_worn_at_motorways(rails, wear_of, roads_xy):
+    """rails with each worn ground part (wear_of {fid: 1 | 2}) cut where it crosses one of roads_xy ((xy, half width,
+    class): motorway_crossings) of its wear's WORN_CUT_CLASSES: no point within the carriageway's half width (over
+    the crossing's angle) and WORN_CUT_M either side of the crossing. Pure."""
+    if not roads_xy:
+        return rails
+    out = []
+    for fid, cls, kind, xy in rails:
+        w = wear_of.get(fid)
+        if kind != "ground" or not w:
+            out.append((fid, cls, kind, xy))
+            continue
+        lines = [(line, half) for line, half, c in roads_xy if c in WORN_CUT_CLASSES.get(w, ())]
+        if not lines:
+            out.append((fid, cls, kind, xy))
+            continue
+        s = _arc(xy)
+        cut = np.zeros(len(xy), bool)
+        for (line, half), hits in zip(lines, roads._crossings_by([xy], [ln for ln, _h in lines])):
+            for _pi, arc, p in hits:
+                j = int(np.clip(np.searchsorted(s, arc) - 1, 0, len(xy) - 2))
+                t = xy[j + 1] - xy[j]
+                r = _segment_at(line, p)        # (the road's direction at the crossing)
+                sin = abs(t[0] * r[1] - t[1] * r[0]) / max(np.linalg.norm(t) * np.linalg.norm(r), 1e-9)
+                cut |= np.abs(s - arc) <= half / max(sin, WORN_CUT_MIN_SIN) + WORN_CUT_M
+        if not cut.any():
+            out.append((fid, cls, kind, xy))
+            continue
+        keep = ~cut
+        idx = np.flatnonzero(keep)
+        for run in np.split(idx, np.flatnonzero(np.diff(idx) > 1) + 1) if len(idx) else []:
+            if len(run) >= 2:
+                out.append((fid, cls, kind, xy[run[0]:run[-1] + 1]))
     return out
 
 
