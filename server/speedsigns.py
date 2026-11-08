@@ -124,9 +124,17 @@ def _cell_rows(feats, frame, urban, widths, left_hand, mph, face=STYLE_VIENNA):
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([e, n])
         k = 0
+        ring = set()
+        if face == STYLE_AU:            # fork: no speed signs on roundabout rings (islands.ring_fids)
+            import islands
+            ring = islands.ring_fids([(str(feats.ids[i]), sp, np.column_stack([xy[o:o + len(ln)], np.zeros(len(ln))]),
+                                       None) for (i, sp, _), ln, o in
+                                      zip(picked, lines, np.cumsum([0] + [len(ln) for ln in lines[:-1]]))])
         for (i, sp, bridge), line in zip(picked, lines):
             pts = xy[k:k + len(line)]
             k += len(line)
+            if str(feats.ids[i]) in ring:
+                continue
             cons = [(float(con.start[r]), str(con.value[r])) for r in con.rows(i)] if con is not None else []
             skips = [(0.0, 1.0)] if bridge else [(a, b) for a, b, _ in roads.level_ranges(feats, i)]
             meta = (sp.width / 2, (int(sp.dir) or 1) if sp.oneway else 0, RANK.get(sp.cls, 0),
