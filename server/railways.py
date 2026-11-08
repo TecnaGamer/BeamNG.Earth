@@ -19,6 +19,7 @@ import os
 
 import numpy as np
 
+import footbridges
 import mapgeom
 import roads
 
@@ -60,6 +61,7 @@ CROSSING_PAD_M = 0.5        # m past a crossing road's edge the track stops (rai
 CROSSING_DZ = 1.5           # m: a road this far over or under the bed passes it by (no level crossing)
 VERTS_MAX = 60000           # under the engine's 16-bit indices (sleepers are dropped first past it)
 BALLAST = "bne_rail_ballast"
+FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbridges.py)
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
 SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_concrete stood out near-white, 2026-10-25)
 STEEL = "bne_rail_steel"            # rust-brown rails
@@ -1235,10 +1237,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
     ex = (box[0] - roads.OVERLAP, box[1] - roads.OVERLAP, box[2] + roads.OVERLAP, box[3] + roads.OVERLAP)
     worn, gauges = {}, {}
     rails = parts(frame, cells, box, clip=True, worn=worn, gauges=gauges)
-    if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
-                        (ex[0] - STEP_M, ex[1] - STEP_M, ex[2] + STEP_M, ex[3] + STEP_M)) for *_, xy in rails):
+    walk = footbridges.parts(frame, cells, box) if FOOTBRIDGES_ON else []    # (and the walkways' bridges: GitHub #905)
+    exs = (ex[0] - STEP_M, ex[1] - STEP_M, ex[2] + STEP_M, ex[3] + STEP_M)
+    if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()), exs) for *_, xy in rails):
+        rails = []
+    walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
+    if not rails and not walk:
         return None
-    prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails))
+    prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails)) if rails else []
     cr = crossings(frame, cells, box, reach=50.0) + tunnels
     crossers = []
     if cr:                                          # (one ground call for all of them: its cost is per call)
@@ -1311,6 +1317,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
                 sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
                 if sp is not None:
                     small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
+    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (VERTS_MAX - mesh.nv) // 8
