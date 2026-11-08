@@ -2193,6 +2193,34 @@ end
 
 -- The performance log (perflog.lua): where the player is and what the mod is doing, for its lines.
 local perfMetrics = {}
+-- The mod's Lua garbage over the last whole minute (perf lines' "alloc"): what the frames grew the heap by (a lower
+-- bound: collection steps inside a frame hide some), what decoding the server's messages made, and the message type
+-- whose handling made the most. LuaGC frames of up to 183 ms on a fast drive (Fells Point, 2026-11-07): which part
+-- of the mod feeds the collector. One collectgarbage('count') per step: microseconds.
+-- (on M, and its helpers fields: core.lua's main chunk is at Lua's 200-local limit, not one more fits)
+M._alloc = { at = nil, kb = nil, cur = { total = 0, decode = 0, types = {} }, last = nil }
+function M._alloc.roll(now)
+  local alloc = M._alloc
+  if not alloc.at then alloc.at = now end
+  if now - alloc.at >= 60 then
+    alloc.last, alloc.at = alloc.cur, now
+    alloc.cur = { total = 0, decode = 0, types = {} }
+  end
+end
+function M._alloc.frame()
+  local alloc = M._alloc
+  local kb = collectgarbage('count')
+  if alloc.kb and kb > alloc.kb then alloc.cur.total = alloc.cur.total + (kb - alloc.kb) end
+  alloc.kb = kb
+end
+function M._alloc.text()
+  local a = M._alloc.last
+  if not a then return '' end
+  local top, topKb = nil, 0
+  for k, v in pairs(a.types) do if v > topKb then top, topKb = k, v end end
+  return string.format(', alloc %.0f MB/min (decode %.0f%s)', a.total / 1024, a.decode / 1024,
+    top and string.format(', %s %.0f', top, topKb / 1024) or '')
+end
 local function perfEngine()
   local dbg = Engine and Engine.Debug
   if not (dbg and dbg.getLastPerformanceMetrics) then return nil end
@@ -2238,8 +2266,8 @@ local function perfContext()
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
   c.doing = table.concat(d, ', ')
-  c.extra = string.format('Lua %.0f MB%s', collectgarbage('count') / 1024,
-    st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '')
+  c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
+    st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '', M._alloc.text())
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection
@@ -2382,15 +2410,28 @@ local function onUpdate(dtReal, dtSim)
   do
     local nq = M._netq
     local function handle(msg)
-      local m0 = hitchClock()
+      local m0, kb0 = hitchClock(), collectgarbage('count')
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+      local dkb = collectgarbage('count') - kb0
+      if dkb > 0 then
+        local k, types = tostring(msg.type), M._alloc.cur.types
+        types[k] = (types[k] or 0) + dkb
+      end
       local ms = hitchClock() - m0
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
     end
-    for _, msg in ipairs(net.update(dtReal)) do
+    M._alloc.roll(st.clock)
+    M._alloc.frame()
+    local kbD = collectgarbage('count')
+    local msgs = net.update(dtReal)
+    local dD = collectgarbage('count') - kbD
+    local al = M._alloc
+    if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
+    al.kb = collectgarbage('count')        -- (the decode counted once: not again as the frame's growth)
+    for _, msg in ipairs(msgs) do
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
     local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
