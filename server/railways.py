@@ -618,6 +618,62 @@ def crossings(frame, cells, box, reach=REACH_M):
     return out
 
 
+# GitHub #579: a road's sidewalks and kerbs stop where a railway crosses it at grade (the ballast runs across them)
+WALK_CLEAR_M = BALLAST_TOP_M + BALLAST_H * BALLAST_SLOPE    # m from the track's centre: the ballast's foot
+WALK_MIN_SIN = 0.3          # a track this square or more to a road crosses it (a parallel one beside it leaves it be)
+
+
+def walk_cut_lines(frame, cells, box, reach=60.0):
+    """[(xy (k, 2), half width)]: the drawn railway tracks on the ground near box (trams left out: street track, its
+    sidewalks stay; Sweden's are rails.tram_lines), what a sidewalk crossing them stops at (roads.build_tile)."""
+    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
+    seen, out = set(), []
+    for feats in cells:
+        if feats is None or len(feats) == 0 or "subtype" not in feats.attrs:
+            continue
+        sub = feats.attrs["subtype"]
+        fb = feats.boxes(frame)
+        for i in range(len(feats)):
+            if str(sub[i]) != "rail":
+                continue
+            fid = str(feats.ids[i])
+            if fid in seen or not _box_hit(fb[i], near):
+                continue
+            seen.add(fid)
+            if drawn(feats, i) is None:
+                continue
+            for kind, rings in _pieces(feats, i):
+                if kind != "ground":
+                    continue
+                for ring in rings:
+                    e, n = mapgeom.enu_xy(feats, frame, ring)
+                    xy = np.c_[e, n]
+                    if len(xy) >= 2 and _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
+                                                 near):
+                        out.append((xy, WALK_CLEAR_M))
+    return out
+
+
+def crosses(a, b, min_sin=WALK_MIN_SIN):
+    """Does polyline b (k, 2) cross polyline a (m, 2) somewhere at |sin| >= min_sin between their segments?"""
+    a = np.asarray(a, np.float64)[:, :2]
+    b = np.asarray(b, np.float64)[:, :2]
+    if len(a) < 2 or len(b) < 2:
+        return False
+    if a[:, 0].max() < b[:, 0].min() or b[:, 0].max() < a[:, 0].min() or             a[:, 1].max() < b[:, 1].min() or b[:, 1].max() < a[:, 1].min():
+        return False
+    p, r = a[:-1, None, :], (a[1:] - a[:-1])[:, None, :]
+    q, s = b[None, :-1, :], (b[1:] - b[:-1])[None, :, :]
+    rxs = r[..., 0] * s[..., 1] - r[..., 1] * s[..., 0]
+    qp = q - p
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (qp[..., 0] * s[..., 1] - qp[..., 1] * s[..., 0]) / rxs
+        u = (qp[..., 0] * r[..., 1] - qp[..., 1] * r[..., 0]) / rxs
+        sin = np.abs(rxs) / (np.hypot(r[..., 0], r[..., 1]) * np.hypot(s[..., 0], s[..., 1]))
+    hit = (t >= 0) & (t <= 1) & (u >= 0) & (u <= 1) & (sin >= min_sin)
+    return bool(np.any(hit))
+
+
 def _resample(xy, step):
     s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
     if s[-1] <= 1e-6:
