@@ -145,7 +145,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
   vehicle menu work on it.
 - **Traffic**: stock BeamNG traffic and police can be switched on, and parked cars line the streets and fill
-  parking lots (stock BeamNG parking).
+  parking lots (stock BeamNG parking). On highways the traffic's road map reaches past the loaded ground, so cars
+  ahead no longer see the road end and turn round, and a car put back near you joins at the road's speed instead of
+  from a standstill (from ProxyFirewall202's contribution, PR #728). On highways of two or more lanes each way, traffic
+  held behind a slower vehicle (a truck) moves over and passes it when the next lane is clear, then keeps right again
+  (the game's AI does not overtake by itself; the map's Autodrive does not pass yet). On divided highways every other
+  car put back near you comes on the other carriageway, towards you, so there is traffic both ways. The number of
+  traffic cars is the game's own setting (Options > Gameplay > Traffic > Traffic amount; 0, automatic, is at most 10):
+  a fast CPU can take more.
 - Distant headlights and taillights move along the mapped roads at night while traffic is on, with density
   following the local time. Returning to a recently viewed road keeps established lights bright.
 
@@ -160,7 +167,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
-  laid out like the stock map.
+  laid out like the stock map. Layers > **Highways** (off by default) draws the US Interstates and US routes with their
+  shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
   route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
@@ -179,7 +187,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Pre-cached areas (Places panel) show their progress, can be paused or deleted, and their data is kept when the cache
   is full or cleared. Tick **Build the world too** (areas and routes up to 155 square miles) to have the roads,
   sidewalks, bridges, buildings and street furniture built ahead as well, so they load at once when you arrive;
-  otherwise the world itself is built when you get there.
+  otherwise the world itself is built when you get there. Tick **Fast** (or press **Fast** on a pre-cached area in the
+  Places panel) to have it done in minutes instead: the game pauses and the download and building get every CPU core
+  until it is done (each map host's own limits still apply); the game goes on by itself when it ends, or press
+  **Stop fast**.
 - In multiplayer the map has a **Players** list: follow a player, show everyone, or set the GPS to them. Teleport
   works without a car too (the free camera goes there).
 - **Autodrive**: the car drives itself along the GPS route (in lane, legal speed, minding traffic).
@@ -430,6 +441,21 @@ the top of `main.lua`. **Share helper** (in testing): to let the server's machin
 BeamNG.Earth's world server next to it, from the source:
 `python3 server/sharehelper.py --share-dir <BeamMP server>/Resources/Server/BeamNGEarth --cache <a folder for its map
 data> --procs 4`. It needs the same BeamNG.Earth version as the players and a few GB of disk for each area.
+
+## Usage statistics (telemetry)
+
+To see how many people play and how hard we are pushing the free map-data services we rely on, the world server
+sends a small anonymous report every 5 minutes: a random install id (created on your machine; no name, account or
+hardware id), the app version and operating system, whether the game is connected, whether it is a BeamMP session,
+and how many requests went to each data source (with their errors and rate limits). No positions or places are sent.
+The collector looks up your country from the connection's address and does not keep the address.
+
+The public numbers (players online, peaks, history, countries with at least 5 players) are at
+<https://earth.tgforever.net/players>.
+
+Turn reports off in the game: BeamNG.Earth's settings page, Interface, **Anonymous usage statistics** (from the next
+report on). Or set the environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in
+offline mode (`--offline`).
 
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.

@@ -26,7 +26,6 @@ URL = "https://data.openstreetmap.us/layercake/pois.parquet"
 PATH = "osm/pois.parquet"
 VERSION_TTL_S = 7 * 86400
 RETRY_S = 3600
-LATER_WAIT_S = 0.5          # a road tile waits this long for a cell's picnic rows (cells(wait=False))
 COLUMNS = ("id", "leisure", "amenity", "tourism")
 TABLES = {"picnic_table"}
 SITES = {"picnic_site"}
@@ -60,13 +59,18 @@ class Source:
                 k = (key.z, key.x, key.y)
                 feats = self._ready.get(k)
                 if feats is None:
-                    t = self._later(key)
-                    if t is not None:
-                        t.join(LATER_WAIT_S)    # (on disk already: read at once; a download: the next build)
+                    self._later(key)        # never waited for: the next build (its read began at the build's start)
                     feats = self._ready.get(k)
             if feats is not None and len(feats):
                 found.append(feats)
         return found
+
+    def prefetch(self, keys):
+        """The background reads of these cells started now (a road tile's build start), without waiting: by the time the
+        tile asks for them (cells(wait=False), at the end of its build) they are mostly there."""
+        for key in keys or ():
+            if (key.z, key.x, key.y) not in self._ready:
+                self._later(key)
 
     def _later(self, key):
         """The background read of cell key (started once): its thread, or None (the file is down)."""

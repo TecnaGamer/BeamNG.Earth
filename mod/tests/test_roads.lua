@@ -623,6 +623,17 @@ do
   for _, m in pairs(made) do m:delete() end
   roads.reset()
 end
+
+-- Dynamic sign text is one render-only mesh; resend/drop clean up the same way as wires.
+roads.reset(); gov.allow = nil
+files['/t/signs.json'] = '{ chunks = {}, signs = { shape = "/t/signs_3_0_0.cdae", pos = {0,0,0} } }'
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3)
+roads.update(gov,3)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'None', 'sign faces render only (posts collide separately)')
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3); roads.update(gov,3)
+T.check(#statics() == 1, 'revisited signs do not duplicate')
+roads.onDrop({anchorId=3,key='0_0'}); roads.update(gov,3)
+T.check(#statics() == 0, 'sign mesh deleted with tile')
 -- the materials' prewarm shape, and its sibling in the dirt and gravel strips' vertex format when the server wrote one
 do
   roads.reset()
@@ -693,7 +704,11 @@ do
   files['/t/urgent_cliff.json'] = '{chunks={},cliff={shape="/t/urgent_cliff.cdae",pos={0,0,0},bounds={400,100,10000,420,140,10020}}}'
   roads.onTile({anchorId=11,key='0_0',path='/t/urgent_cliff.json',n=0},11)
   roads.update(gov,11)
-  local piece = statics()[1]
+  local piece
+  for _, o in ipairs(statics()) do
+    if o:getField('shapeName') == '/t/urgent_cliff.cdae' then piece = o end
+  end
+  assert(piece, 'the cliff fixture was imported')
   function piece:getWorldBox() return {minExtents=vec3(400,100,10000),maxExtents=vec3(420,140,10020)} end
   T.check(piece.fields.collisionType=='Visible Mesh Final','distant contact stays enabled for the normal rebuild')
   T.check(not roads.urgentColliders(),'nearby tile does not make a distant cliff piece urgent')

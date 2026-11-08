@@ -401,6 +401,48 @@ class MeshTest(unittest.TestCase):
             self.assertGreater(P[:, 2].max(), spec.height + 1.5, "a ridge above the eaves")
 
 
+    # domes from the map's roof:shape (#593's thread: landmarks from the map data, not hand-made); a gable before
+    @staticmethod
+    def circle(r, n=24):
+        a = np.linspace(0.0, 2 * math.pi, n, endpoint=False)
+        return np.column_stack((r * np.cos(a), r * np.sin(a)))
+
+    def test_a_mapped_dome_is_a_dome(self):
+        ring = self.circle(10.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 30.0, "roof_shape": "dome",
+                                            "roof_height": 9.0})
+        self.assertEqual(spec.roof, "dome")
+        self.assertAlmostEqual(spec.height, 21.0, delta=0.01)            # the drum: the mapped height less the roof's
+        self.assertAlmostEqual(P[:, 2].max(), 30.0, delta=0.05)          # its top where the map puts it
+        top = P[P[:, 2] > spec.height + 0.01]
+        r = np.hypot(top[:, 0], top[:, 1])
+        self.assertLessEqual(r.max(), 10.0 + 0.01)                       # never wider than its drum
+        # a sphere's quarter: at half the rise its radius is ~cos(asin(0.5)) of the drum's
+        mid = top[np.abs(top[:, 2] - (spec.height + 4.5)) < 1.2]
+        self.assertTrue(len(mid))
+        far = bld.build([(spec, 0.0, 0.0)], lite=True)[0]
+        self.assertAlmostEqual(far[:, 2].max(), 30.0, delta=0.05)        # far away the same dome
+
+    def test_an_onion_dome_bulges_and_comes_to_a_point(self):
+        ring = self.circle(4.0)
+        spec, P = self.check_outward(ring, {"class": "church", "height": 20.0, "roof_shape": "onion"})
+        self.assertEqual(spec.roof, "onion")
+        rise = 20.0 - spec.height
+        self.assertAlmostEqual(rise, bld.DOME_RISE["onion"] * 4.0, delta=0.4)   # no roof:height: 1.6 x its radius
+        top = P[P[:, 2] > spec.height + 0.01]
+        self.assertGreater(np.hypot(top[:, 0], top[:, 1]).max(), 4.0 * 1.1)     # the bulge over the drum
+        self.assertAlmostEqual(P[:, 2].max(), 20.0, delta=0.05)
+
+    def test_a_dome_in_the_skyline(self):
+        spec = bld.plan(self.circle(12.0), {"class": "church", "height": 40.0, "roof_shape": "dome"})
+        P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
+        self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
+
+    def test_a_round_roof_is_still_a_gable(self):
+        spec = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "round"})
+        self.assertEqual(spec.roof, "gabled")
+
+
 class DoorTest(unittest.TestCase):
     def test_door_faces_the_road(self):
         spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})
@@ -613,6 +655,19 @@ class OverRoadTest(unittest.TestCase):
         self.assertAlmostEqual(over.min_h + over.height, 16.0, delta=0.01, msg="its top where it was")
         self.assertEqual(house.min_h, 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
+
+    def test_a_huge_footprint_with_streets_in_it_is_a_site_left_out(self):
+        # OSM's 1.35 km2 "Blueberry Commons" by I-94 (Huntley MT, 2026-11-05): a planned development tagged building,
+        # its streets inside, lifted over them as a 15 m wall over the prairie. A footprint over SITE_M2 that public
+        # roads run through is left out; the same size without a road in it (a real warehouse) stays
+        side = 400.0                                            # 16 ha
+        b = Feats(["S"], [self.ll(-72, -72, side, side)], **{"class": ["retail"], "height": [15.0]})
+        street = np.array([[-100.0, 128.0], [400.0, 128.0]])
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        self.assertGreater(side * side, bld.SITE_M2)
+        self.assertEqual(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[street]), [])
+        far = np.array([[-100.0, 600.0], [400.0, 600.0]])
+        self.assertEqual(len(bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=[far])), 1)
 
     def test_a_geosearch_hit_is_returned_as_custom(self):
         # a 3dmr.eu model found by geo-search (road_tile_items, threedmr.search_ids/model_info): the footprints
@@ -1290,6 +1345,68 @@ class FarLampTest(unittest.TestCase):
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
 
+
+
+
+class MappedRoofShapesTest(unittest.TestCase):
+    """roof:shape forms drawn as what they are, not bent to a gable or a hip."""
+    SHAPES = ("skillion", "half-hipped", "pyramidal", "mansard", "gambrel")
+
+    def spec(self, shape, seed=None):
+        ring = np.array([[0.0, 0.0], [14.0, 0.0], [14.0, 9.0], [0.0, 9.0]])
+        return bld.plan(ring, {"class": "house", "roof_shape": shape, "height": 11.0}, lat=50.0, lon=9.0, look=seed)
+
+    def faces(self, spec):
+        P, _, T, *_ = bld.build([(spec, 0.0, 0.0)])
+        return P[T]
+
+    def test_the_mapped_shape_is_kept(self):
+        for shape in self.SHAPES:
+            self.assertEqual(self.spec(shape).roof, shape)
+
+    def test_the_mapped_height_is_the_ridge(self):
+        for shape in self.SHAPES + ("gabled",):
+            s = self.spec(shape)
+            rise = bld.roof_rise(s.roof, bld.oriented_box(s.ring)[3], bld.roof_pitch(s))
+            self.assertAlmostEqual(s.height + rise, 11.0, delta=0.01, msg=shape)
+            self.assertAlmostEqual(self.faces(s)[:, :, 2].max(), 11.0, delta=0.15, msg=shape)
+
+    def test_every_face_looks_outwards(self):
+        for shape in self.SHAPES:
+            for seed in (0.2, 0.8):
+                s = self.spec(shape, seed)
+                f = self.faces(s)
+                f = f[f[:, :, 2].min(1) >= s.height - 0.5]          # the roof and the walls under it
+                n = np.cross(f[:, 1] - f[:, 0], f[:, 2] - f[:, 0])
+                f, n = f[np.linalg.norm(n, axis=1) > 1e-6], n[np.linalg.norm(n, axis=1) > 1e-6]
+                out = (f.mean(1) - np.array([7.0, 4.5, 0.0]))[:, :2]
+                ok = (n[:, 2] > 1e-6) | ((n[:, :2] * out).sum(1) > 0)
+                self.assertTrue(ok.all(), f"{shape}: {int((~ok).sum())} of {len(ok)} faces look inwards")
+
+    def test_each_form_is_its_own_shape(self):
+        tops = {}
+        for shape in self.SHAPES + ("gabled", "hipped"):
+            f = self.faces(self.spec(shape, 0.2))
+            v = np.unique(np.round(f.reshape(-1, 3), 2), axis=0)
+            tops[shape] = len(v)
+        self.assertEqual(len({tops[s] for s in ("pyramidal", "mansard", "half-hipped")}), 3, tops)
+
+    def test_a_lean_to_rises_from_one_wall_to_the_other(self):
+        lows = []
+        for seed in (0.2, 0.8):
+            s = self.spec("skillion", seed)
+            f = self.faces(s).reshape(-1, 3)
+            top = f[np.argmax(f[:, 2])]
+            lows.append(top[1] > 4.5)
+        self.assertEqual(set(lows), {True, False}, "the high side differs from building to building")
+
+    def test_a_nearly_square_house_can_be_a_pyramid(self):
+        ring = np.array([[0.0, 0.0], [9.0, 0.0], [9.0, 9.0], [0.0, 9.0]])
+        s = bld.plan(ring, {"class": "house", "roof_shape": "pyramidal"}, lat=50.0, lon=9.0)
+        f = self.faces(s).reshape(-1, 3)
+        top = f[np.argmax(f[:, 2])]
+        self.assertAlmostEqual(top[0], 4.5, delta=0.01)
+        self.assertAlmostEqual(top[1], 4.5, delta=0.01)
 
 
 if __name__ == "__main__":

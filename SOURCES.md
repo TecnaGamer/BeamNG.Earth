@@ -22,6 +22,14 @@ A few things hold for all of them:
 
 ## Map data: roads, buildings, water, land use
 
+On a network with no IPv4 route (IPv6-only, no NAT64), the public AWS S3 sources below switch to their regional
+dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`, IPv4 and IPv6) after the first IPv4 connection finds no
+route; everywhere else they are used as listed. The source names remain the identities for download budgets, status,
+cached files and `NO_PROXY`. Signed URLs, requests with an Authorization header and proxied requests keep their
+original endpoint. Other providers still need their own IPv6 support.
+For the OpenStreetMap keys read by the server and weekly data builders, see the
+[OSM tag inventory](docs/OSM_TAGS.md) and [Taginfo project file](docs/taginfo.json).
+
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings, and the town, state and country names in the status bar. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water (and the status bar without the town name) until it answers. Places you have visited load from disk. | named |
@@ -93,6 +101,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it does | What is sent | If it does not answer | Status line |
 |---|---|---|---|---|---|
+| NASA GIBS (VIIRS true colour) | `gibs.earthdata.nasa.gov` | The clouds you see from space: the latest satellite day round the point under you, only while the camera is far above the clouds. | Which map tiles round your position (no other data). | No clouds from orbit until it answers. | optional |
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
 | Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
@@ -111,6 +120,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 ## Data that comes with the app (no download)
 
 - **Country and state borders, big town names** (Natural Earth): the world map.
+- **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed

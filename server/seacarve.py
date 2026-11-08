@@ -109,6 +109,11 @@ LEVEL_Q = 0.1               # m: lake levels quantised (the same in every cell f
 LEVEL_SAMPLES = 4000
 LEVEL_PAD_PX = 2            # the level raster spread this far onto the shore (lookups beside the water)
 MEM_CELLS = 24              # rasters kept per process
+PREFETCH_THREADS = 2        # a teleport's cells built whole at once (prefetch_full: NOAA's max_conc; a Deck's 4 cores)
+LAND_CELLS = 24             # rasters without the sea's bathymetry kept per process (land_raster)
+FULL_THREADS = 8                # (FETCH_THREADS) cells built with their bathymetry in the background at once (land_raster): as many as
+                                # water() built side by side before (2 queued them: a far field waited, its non-waiting
+                                # lookups by the sea are unknown till then); NOAA's own max_conc still limits the requests
 EARTH_R = 6371000.0
 
 
@@ -304,6 +309,14 @@ def _cells_of(cx, cy):
 FETCH_THREADS = 8       # water cells fetched at once (water(), _build)
 
 
+def _near_sea(level, i0, j0):
+    """Whether any lookup's 2 x 2 pixels (corner i0, j0) hold the sea's level: the only pixels the bathymetry changes
+    (a lake at sea level keeps LAKE_NOT_SEA_M off it; the shore's spread level counts too, which only waits more)."""
+    q = [level[j0 + a, i0 + b] for a in (0, 1) for b in (0, 1)]
+    with np.errstate(invalid="ignore"):
+        return bool(np.any([np.abs(v - SEA_E) < LAKE_NOT_SEA_M / 2 for v in q]))
+
+
 class SeaCarver:
     """The water of the map-data cells near the player: the sea (level SEA_E) and lakes (each at its own
     level, measured from the DEM), with their floors carved from the shore."""
@@ -315,6 +328,11 @@ class SeaCarver:
         self._mem = OrderedDict()       # (x, y) -> ((depth, level) or None, complete, built at)
         self._lock = threading.Lock()
         self._cell_locks = {}
+        self._land = OrderedDict()      # (x, y) -> raster without the sea's bathymetry (land_raster)
+        self._pre = OrderedDict()       # (x, y) -> such a cell's state before its sea floor (_build, _finish)
+        self._full_ex = None            # (land_raster's background builds with it)
+        self._prefetch_ex = None        # (prefetch_full's)
+        self._full_asked = set()
         self._warm, self._warm_thread = [], None    # cells to build in the background (warm)
         self.warm_asked = 0             # warm() calls with cells: a lookup met a cell not at hand (earthd's water plans)
         self._warm_cv = threading.Condition()
@@ -355,14 +373,91 @@ class SeaCarver:
                 self._mem.move_to_end(k)
                 while len(self._mem) > MEM_CELLS:
                     self._mem.popitem(last=False)
+                self._land.pop(k, None)
+                self._full_asked.discard(k)
             return r
+
+    def land_raster(self, x, y):
+        """(raster, full) of cell (x, y) without waiting for the sea's bathymetry (NOAA's server: 1-22 s a request, two
+        at a time; a coastal first visit's road tiles waited minutes for it, Stavanger / Ryfylke 2026-11-06): the
+        raster() answer when at hand (full True), else the cell built without it (full False: its sea floor the
+        generic one, every other pixel as raster()'s) while raster() builds it with it in the background. A lookup
+        whose pixels hold no sea (water() checks their level) gets the same answer from either."""
+        k = (x, y)
+        now = time.monotonic()
+        with self._lock:
+            hit = self._mem.get(k)
+            if hit is not None and (hit[1] or now - hit[2] < BATHY_RETRY_S):
+                self._mem.move_to_end(k)
+                return hit[0], True
+            got = self._land.get(k)
+            if got is not None:
+                self._land.move_to_end(k)
+                return got, False
+            # (the cell's own lock, raster()'s: the warm loop's or a far tile's raster() and this never build one
+            # cell at once, each the whole of it; the second takes the first's)
+            lock = self._cell_locks.setdefault(k, threading.Lock())
+        p = self._path(x, y)
+        if p and (os.path.exists(p) or os.path.exists(_raw_path(p) or "")):
+            return self.raster(x, y), True      # (on disk: whole)
+        with lock:
+            with self._lock:
+                hit = self._mem.get(k)
+                if hit is not None and (hit[1] or time.monotonic() - hit[2] < BATHY_RETRY_S):
+                    return hit[0], True
+                got = self._land.get(k)
+                if got is not None:
+                    return got, False
+            r, complete = self._load(x, y, with_bathy=False)
+            with self._lock:
+                if complete:                    # (no sea in it: whole, and kept as raster() keeps it)
+                    self._mem[k] = (r, True, time.monotonic())
+                    self._mem.move_to_end(k)
+                    while len(self._mem) > MEM_CELLS:
+                        self._mem.popitem(last=False)
+                    return r, True
+                self._land[k] = r
+                while len(self._land) > LAND_CELLS:
+                    self._land.popitem(last=False)
+                ask = k not in self._full_asked
+                self._full_asked.add(k)
+                if ask and self._full_ex is None:
+                    self._full_ex = ThreadPoolExecutor(FULL_THREADS, thread_name_prefix="sea-full")
+        if ask:
+            self._full_ex.submit(self._full_bg, x, y)
+        return r, False
+
+    def prefetch_full(self, keys):
+        """Cells (x, y) built whole (with the sea's bathymetry) in the background now, nearest first as given: a
+        teleport's (earthd.warm_place), so NOAA's slow requests start at once and the road processes find the rasters on
+        disk (a bridge over the sea waits for its floor). PREFETCH_THREADS at a time. Returns how many were queued."""
+        with self._lock:
+            new = [(int(x), int(y)) for x, y in keys if (int(x), int(y)) not in self._full_asked
+                   and (int(x), int(y)) not in self._mem]
+            if not new:
+                return 0
+            self._full_asked.update(new)
+            if self._prefetch_ex is None:
+                self._prefetch_ex = ThreadPoolExecutor(PREFETCH_THREADS, thread_name_prefix="sea-prefetch")
+        for x, y in new:
+            self._prefetch_ex.submit(self._full_bg, x, y)
+        return len(new)
+
+    def _full_bg(self, x, y):
+        try:
+            self.raster(x, y)
+        except Exception:
+            log.exception("sea: building cell %s", (x, y))
+        finally:
+            with self._lock:
+                self._full_asked.discard((x, y))
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")
         lakes = "lakes" if self.dem is not None else "sea"
         return os.path.join(self.dir, str(rel), lakes, str(x), f"{y}.npz") if self.dir else None
 
-    def _load(self, x, y):
+    def _load(self, x, y, with_bathy=True):
         p = self._path(x, y)
         raw = _raw_path(p)
         if raw and os.path.exists(raw):
@@ -380,7 +475,7 @@ class SeaCarver:
                      f["outline"].astype(bool))
             self._second_use(x, y, raw, r)
             return r, True
-        r = self._build(x, y)
+        r = self._build(x, y, with_bathy)
         complete = r is None or r[3]
         if r is not None:
             r = (np.round(r[0] * 100.0).astype(np.float32) / 100.0, r[1], r[2])   # as the file gives back
@@ -409,7 +504,12 @@ class SeaCarver:
         else:
             seen.add((x, y))
 
-    def _build(self, x, y):
+    def _build(self, x, y, with_bathy=True):
+        if with_bathy:
+            with self._lock:
+                pre = self._pre.pop((x, y), None)
+            if pre is not None:
+                return self._finish(*pre, with_bathy=True)
         own = self._water((mapcells.ZOOM, x, y))
         if own is None or not (self._sea_rows(own).size
                                or (self.dem is not None and (self._lake_rows(own).size
@@ -498,9 +598,21 @@ class SeaCarver:
                 outline &= ~wide
         if self.dem is not None:        # streams and the rivers the DEM does not flatten: their lines
             self._carve_lines(x, y, ox, oy, n, px, depth, level, outline)
+        if not with_bathy and sea.any():
+            # (kept for the build with the bathymetry, land_raster's in the background: only the sea's floor is left to
+            # do, not the whole cell twice)
+            with self._lock:
+                self._pre[(x, y)] = (sea.copy(), depth.copy(), level.copy(), outline.copy(), ox, oy, n, px)
+                while len(self._pre) > LAND_CELLS:
+                    self._pre.popitem(last=False)
+        return self._finish(sea, depth, level, outline, ox, oy, n, px, with_bathy)
+
+    def _finish(self, sea, depth, level, outline, ox, oy, n, px, with_bathy):
+        """_build's last steps: the sea's floor (with its bathymetry when with_bathy and it can be had), the outline
+        and level pads, the cell cut out. (depth, level, outline, complete) or None."""
         complete = True
         if sea.any():
-            bathy = self._bathy(ox, oy, n)
+            bathy = self._bathy(ox, oy, n) if with_bathy else None
             if bathy is None:           # no bathymetry (offline, refused): the generic floor, not cached
                 complete = False
                 kmax = int(math.ceil(DEPTH_CAP / DEPTH_SLOPE / px)) + 2
@@ -948,22 +1060,37 @@ class SeaCarver:
             if len(need) > 1:
                 with ThreadPoolExecutor(min(len(need), FETCH_THREADS), thread_name_prefix="sea-cells") as ex:
                     list(ex.map(lambda k: self._water((mapcells.ZOOM, k[0], k[1])), need))
-                    list(ex.map(lambda k: self.raster(*k), need))
+                    list(ex.map(lambda k: self.land_raster(*k), need))
         for kx, ky in _cells_of(cx, cy):
             sel = (cx == kx) & (cy == ky)
-            if not wait and not self.ready(int(kx), int(ky)):
-                later.append((int(kx), int(ky)))
-                known[sel] = False
-                continue
-            r = self.raster(int(kx), int(ky))
+            if wait:
+                r, full = self.land_raster(int(kx), int(ky))
+            elif self.ready(int(kx), int(ky)):
+                r, full = self.raster(int(kx), int(ky)), True
+            else:
+                with self._lock:
+                    r = self._land.get((int(kx), int(ky)))
+                if r is None:
+                    later.append((int(kx), int(ky)))
+                    known[sel] = False
+                    continue
+                full = False
             if r is None:
                 continue
-            rd, rl = r[0], r[1]
             fx = mx[sel] - kx * CELL_PX + 0.5      # raster coords: pixel centres at i + 0.5 - 1
             fy = my[sel] - ky * CELL_PX + 0.5
-            i0 = np.clip(np.floor(fx).astype(np.int64), 0, rd.shape[1] - 2)
-            j0 = np.clip(np.floor(fy).astype(np.int64), 0, rd.shape[0] - 2)
+            i0 = np.clip(np.floor(fx).astype(np.int64), 0, r[0].shape[1] - 2)
+            j0 = np.clip(np.floor(fy).astype(np.int64), 0, r[0].shape[0] - 2)
             tx, ty = np.clip(fx - i0, 0, 1), np.clip(fy - j0, 0, 1)
+            if not full and _near_sea(r[1], i0, j0):
+                if not wait:                        # (by the sea: not at hand until its bathymetry is in)
+                    later.append((int(kx), int(ky)))
+                    known[sel] = False
+                    continue
+                r = self.raster(int(kx), int(ky))   # (a point by the sea: its floor waits for the bathymetry)
+                if r is None:
+                    continue
+            rd, rl = r[0], r[1]
             d[sel] = ((rd[j0, i0] * (1 - tx) + rd[j0, i0 + 1] * tx) * (1 - ty)
                       + (rd[j0 + 1, i0] * (1 - tx) + rd[j0 + 1, i0 + 1] * tx) * ty)
             ni = np.clip(np.floor(fx + 0.5).astype(np.int64), 0, rl.shape[1] - 1)
@@ -1009,10 +1136,12 @@ class SeaCarver:
         cy = np.floor(my / CELL_PX).astype(np.int64)
         later = []
         for kx, ky in _cells_of(cx, cy):
-            if not self.ready(kx, ky):
+            with self._lock:            # (the outlines are the same without the sea's bathymetry: land_raster)
+                land = self._land.get((int(kx), int(ky)))
+            if land is None and not self.ready(kx, ky):
                 later.append((kx, ky))
                 continue
-            r = self.raster(kx, ky)
+            r = land if land is not None else self.raster(kx, ky)
             if r is None:
                 continue
             sel = (cx == kx) & (cy == ky)

@@ -50,11 +50,13 @@ import os
 import random
 import ssl
 import threading
+import weakref
 import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import base64
+import errno
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -169,7 +171,9 @@ POLICIES = {
                                     breaker_threshold=6, breaker_window=120.0),
     # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
     # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
-    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
+    # (40/s, 24 at once, 80,000 a day: the user, 2026-11-07, "i think we could increase our own limit if needed": the 3D
+    # map's first views waited on 4,648 deferred EOX requests and used 23,258 of the 30,000 by mid-morning)
+    "tiles.maps.eox.at": HostPolicy(rate=40.0, burst=160.0, max_conc=24, daily_budget=80000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -181,6 +185,10 @@ POLICIES = {
     "tecnagamer.github.io": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=2000, allow_prefetch=True,
                                        offline_ok=True, miss_ttl=7 * DAY, timeout=20.0, max_attempts=2,
                                        base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
+    # the clouds seen from space (spaceclouds.py: NASA GIBS's latest VIIRS true-colour day, up to 144 small tiles when a
+    # camera rises above the clouds; public domain, no key)
+    "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
+                                          miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True),
@@ -297,6 +305,11 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
+# rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
+# tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                    daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case
@@ -328,6 +341,7 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
+    "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
     "photon.komoot.io": "the map's address search (the other search sources stand in)",
@@ -718,11 +732,40 @@ class HttpsTransport:
         return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body)."""
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+        hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
+        to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
+        on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
+        connection's IPv6 attempt. Source URLs stay the cache, quota and NO_PROXY identities; proxied requests are left
+        to the proxy."""
+        u = urlsplit(url)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        host = (u.hostname or "").lower()
+        auth = any(k.lower() == "authorization" for k in headers)
+        if proxy is None and host in _DUALSTACK_HOSTS:
+            dual = _dualstack(url, auth)
+            if dual != url:
+                return self._request_once(dual, headers, timeout, proxy)
+        try:
+            return self._request_once(url, headers, timeout, proxy)
+        except OSError as e:
+            if proxy is not None or not _no_route(e):
+                raise
+            dual = _dualstack(url, auth)
+            if dual == url:
+                raise
+            got = self._request_once(dual, headers, timeout, proxy)
+            if host not in _DUALSTACK_HOSTS:
+                _DUALSTACK_HOSTS.add(host)
+                log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
+                         urlsplit(dual).hostname)
+            return got
+
+    def _request_once(self, url, headers, timeout, proxy):
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:
@@ -783,6 +826,27 @@ class HttpsTransport:
                 # else: the server may have closed the idle keep-alive connection; reconnect once
 
 
+# IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
+# their dual-stack endpoints since (transport request)
+_DUALSTACK_HOSTS = set()
+# errno / WinError of a connection with no route to the address (an IPv6-only network, no NAT64): ENETUNREACH,
+# EHOSTUNREACH, EADDRNOTAVAIL; WSAENETUNREACH 10051, WSAEHOSTUNREACH 10065, WSAEADDRNOTAVAIL 10049
+_NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, 10051, 10065, 10049}
+
+
+def _no_route(e):
+    """Is OSError e a connection that found no route to the host's (IPv4) address?"""
+    return getattr(e, "winerror", None) in _NO_ROUTE or getattr(e, "errno", None) in _NO_ROUTE
+
+
+def _dualstack(url, authorized):
+    """The bucket's dual-stack endpoint URL for a known public S3 source (native earthfast s3_dualstack_url), else
+    url."""
+    import fast
+    fast.require(153, "S3 dual-stack endpoints")
+    return fast._ef.s3_dualstack_url(url, bool(authorized))
+
+
 # --- download speed ---------------------------------------------------------------------------
 RATE_MIN_BYTES = 512 * 1024     # a response this large or larger is a speed sample (smaller ones are mostly latency)
 RATE_WINDOW_S = 120.0           # the samples of the last this many seconds count ...
@@ -806,10 +870,64 @@ class Host:
         self.breaker = CircuitBreaker(policy.breaker_threshold, policy.breaker_window, policy.breaker_open,
                                       policy.breaker_max, clock)
         self.day = dict.fromkeys(COUNTERS, 0)       # this UTC day (persisted)
+        self.total = dict.fromkeys(COUNTERS, 0)     # this process's lifetime (telemetry.py sums every process's)
         self.minute = dict.fromkeys(COUNTERS, 0)    # since the last summary
         self.warned = 0.0                           # wall time of the 80 % budget warning (0 = none)
         self.warned_over = 0.0                      # ... and of the last over-budget one
         self.half_rate = False
+
+
+# --- every process's totals, for telemetry.py -------------------------------------------------------------------------
+# BNE_NETSTATS_PROC (earthd sets it before its worker processes start, so they inherit it): a folder where every process
+# writes its fetchers' lifetime per-host counters (<pid>.json, at most every PROC_WRITE_S, and at exit); the main
+# process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own.
+_PROC_DIR = os.environ.get("BNE_NETSTATS_PROC") or None
+PROC_WRITE_S = 30.0
+_ALL = weakref.WeakSet()            # this process's fetchers
+_proc_state = {"at": 0.0, "lock": threading.Lock(), "exit": False}
+
+
+def process_totals():
+    """{host: {counter: n}} of every fetcher of this process, over its lifetime."""
+    out = {}
+    for f in list(_ALL):
+        with f._lock:
+            for name, h in f._hosts.items():
+                d = out.setdefault(name, dict.fromkeys(COUNTERS, 0))
+                for k, v in h.total.items():
+                    d[k] += v
+    return out
+
+
+def write_process_totals():
+    """This process's totals to <BNE_NETSTATS_PROC>/<pid>.json (atomic)."""
+    if not _PROC_DIR:
+        return
+    try:
+        os.makedirs(_PROC_DIR, exist_ok=True)
+        path = os.path.join(_PROC_DIR, f"{os.getpid()}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"pid": os.getpid(), "at": time.time(), "hosts": process_totals()}, fh)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("net: process totals: %s", e)
+
+
+def _proc_writer():
+    st = _proc_state
+    now = time.monotonic()
+    if now - st["at"] < PROC_WRITE_S or not st["lock"].acquire(blocking=False):
+        return
+    try:
+        st["at"] = now
+        if not st["exit"]:
+            import atexit
+            atexit.register(write_process_totals)
+            st["exit"] = True
+        write_process_totals()
+    finally:
+        st["lock"].release()
 
 
 class Fetcher:
@@ -832,6 +950,7 @@ class Fetcher:
         self._flushed = clock()
         self._load_stats()
         self._rates = collections.deque(maxlen=64)     # (clock, MB/s) of the large responses (throughput)
+        _ALL.add(self)
 
     def throughput(self):
         """The median speed (MB/s) the large responses of the last RATE_WINDOW_S came in at, or None (too few)."""
@@ -1173,6 +1292,9 @@ class Fetcher:
         with self._lock:
             h.day[what] += n
             h.minute[what] += n
+            h.total[what] += n
+        if _PROC_DIR and what == "requests":
+            _proc_writer()
 
     def _count(self, h, what, n=1):
         self._rollover()

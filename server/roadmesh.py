@@ -201,7 +201,7 @@ def ribbons(chunks, keep_none=False):
         pts.append(p[:, :3])
         half.append(float(c["w"]) / 2)
     if batch:
-        fast.require(90, "ribbon_edges")
+        fast.require(155, "ribbon_edges")
         off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
         L, R, S, Z, o = fast._ef.ribbon_edges(np.ascontiguousarray(np.concatenate(pts)), off,
                                              np.asarray(half, np.float64), float(DRAPE_STEP))
@@ -1013,7 +1013,10 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         dr = np.isfinite(TL)
         if dr.any():
             grid, i0, j0 = _height_grid(frame, drawn or elev, P[:, :2], q, tris=T[dr])
-            fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0)
+            # Independent 2 cm approximations can bury paint lifted only 1 cm.
+            # A shared 2 mm tolerance keeps the combined error below that gap.
+            tol = .002 if "line_bne_fr_white" in mats else None
+            fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0, tol=tol)
             if len(fT):
                 lifts = TL[dr][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)

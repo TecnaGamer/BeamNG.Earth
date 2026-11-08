@@ -564,6 +564,10 @@ class RoadZ:
                                 json.dump([[f, list(a), list(b)] for f, a, b in getattr(got, "gaps", [])], fh)
                             staging.replace_cached(tmp, p + ".gaps.json")
                         got.save(p)
+                        if src == "lidar":      # (the cell whole on disk: its partial node reads have done their job)
+                            import shutil
+                            shutil.rmtree(os.path.join(self.dir, "eptparts", str(key).replace("/", "_")),
+                                          ignore_errors=True)
                     except Exception as e:
                         log.debug("roadz write %s: %s", p, e)
             with self._lock:
@@ -751,15 +755,41 @@ class RoadZ:
             mask[int((b[1] - bb[1]) // MASK_M):int((b[3] - bb[1]) // MASK_M) + 1,
                  int((b[0] - bb[0]) // MASK_M):int((b[2] - bb[0]) // MASK_M) + 1] = True
 
+        # each node's points (the boxes' only) kept on disk as they come in: a read this run stops (LidarDropped) goes
+        # on from there on the next visit instead of from nothing (a busy cell's read was dropped at every visit and
+        # downloaded again: a Fells Point road tile 43 s warm, 2026-11-06); keyed by the boxes, so other bridges or a
+        # changed map read their own
+        part_dir = None
+        if self.dir and key is not None:
+            import hashlib
+            h = hashlib.sha1(np.round(np.asarray(boxes, np.float64), 1).tobytes()).hexdigest()[:16]
+            part_dir = os.path.join(self.dir, "eptparts", str(key).replace("/", "_"), name.replace("/", "_"), h)
+
         def read(k):
             if key is not None and str(key) in self._dropped:
                 raise LidarDropped(str(key))
+            pp = os.path.join(part_dir, f"{k}.npz") if part_dir else None
+            if pp and os.path.exists(pp):
+                try:
+                    with np.load(pp) as z:
+                        return z["p"], z["c"]
+                except Exception as e:
+                    log.debug("roadz part %s: %s", pp, e)
             p, c = fast._ef.las_decode(self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz"), bb)
-            if not len(p):
-                return p, c
-            keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
-                        ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
-            return p[keep], c[keep]
+            if len(p):
+                keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
+                            ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
+                p, c = p[keep], c[keep]
+            if pp:
+                try:
+                    import staging
+                    os.makedirs(part_dir, exist_ok=True)
+                    tmp = f"{pp}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+                    np.savez(tmp, p=p, c=c)
+                    staging.replace_cached(tmp, pp)
+                except Exception as e:
+                    log.debug("roadz part write %s: %s", pp, e)
+            return p, c
         from runtimeprofiler import ThreadPoolExecutor
         with ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept") as pool:
             got = list(pool.map(read, nodes))           # (in node order: the same points whichever came first)

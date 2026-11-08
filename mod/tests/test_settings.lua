@@ -481,6 +481,34 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- Handled BigMap inputs stop before the menus' overlapping bindings (#766); the original policy is restored.
+do
+  local saved = { freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'), guihooks = rawget(_G, 'guihooks'),
+    pushActionMap = rawget(_G, 'pushActionMap'), popActionMap = rawget(_G, 'popActionMap') }
+  local find = scenetree.findObject
+  for _, previous in ipairs({false, true}) do
+    local am, sent = { trapHandledEvents = previous }, {}
+    local originalZoom = function() end
+    freeroam_bigMapMode = { zoomInOut = originalZoom }
+    scenetree.findObject = function(name) if name == 'BigMapActionMap' then return am end end
+    guihooks = { trigger = function(name, d) if name == settings.MAP_INPUT_EVENT then sent[#sent + 1] = d.kind end end }
+    pushActionMap, popActionMap = function() end, function() end
+    settings.mapControls(true)
+    settings.mapControls(true) -- opening twice must not replace the saved policy
+    freeroam_bigMapMode.zoomInOut(1, true)
+    -- The lower menu map receives the input only when the top action map allows a handled event through.
+    if not am.trapHandledEvents then freeroam_bigMapMode.onChangeUiFilter(1, 1) end
+    T.check(#sent == 1 and sent[1] == 'zoom_trigger', 'map zoom does not also cycle the cache layer')
+    freeroam_bigMapMode.onChangeUiFilter(1, -1)
+    T.check(sent[2] == 'filter', 'a dedicated bumper still cycles the cache layer')
+    settings.mapControls(false)
+    T.check(am.trapHandledEvents == previous and freeroam_bigMapMode.zoomInOut == originalZoom,
+      'map close restores action-map policy and stock callbacks')
+  end
+  scenetree.findObject = find
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's hold on the controls goes when the map stops asking for its state (its close lost, GitHub #252) or a level
 -- starts, never while it asks
 do

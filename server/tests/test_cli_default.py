@@ -191,6 +191,9 @@ class CliDefaultTest(unittest.TestCase):
         # The profiler adds an advertised capability, while default generation
         # must still match the historical M1 fixture in every existing field.
         self.assertEqual(got["hello"].pop("runtimeProfiler"), 2)
+        # (PR #817's stream lease: advertised, its id random per connection)
+        self.assertEqual(got["hello"].pop("streamLease"), 1)
+        self.assertIsInstance(got["hello"].pop("leaseId"), str)
         # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
         # be higher; its lowest, zBase and q are M1's here.
         self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))

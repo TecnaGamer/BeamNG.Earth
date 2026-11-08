@@ -24,7 +24,8 @@ class JoinTest(unittest.TestCase):
     def test_decoded_row_group_rows(self):
         # a row group's table (OsmTags._decode's layout): texts as UTF-8 blobs, numbers NaN where missing
         names = list(osmtags.COLUMNS)
-        t = {"id": np.array([7, 9], np.int64), "race": np.array([False, True]), "frn": np.array([100, 101], np.int64)}
+        t = {"id": np.array([7, 9], np.int64), "race": np.array([False, True]),
+             "bus": np.array([False, False]), "frn": np.array([100, 101], np.int64)}
         for c in names:
             if c in osmtags.TEXT_COLUMNS:
                 vals = ["Straße", None] if c == "name" else [None, None]
@@ -35,14 +36,14 @@ class JoinTest(unittest.TestCase):
             else:
                 t[c] = np.array([2.0 if c == "lanes" else np.nan, np.nan])
         rows = osmtags._rows(t, [0, 1])
-        self.assertEqual(rows[0][:3], (7, False, 100))
-        got = dict(zip(names, rows[0][3:]))
+        self.assertEqual(rows[0][:4], (7, False, False, 100))
+        got = dict(zip(names, rows[0][4:]))
         self.assertEqual(got["name"], "Straße")
         self.assertEqual(got["lanes"], 2)
         self.assertIsInstance(got["lanes"], int)
         self.assertIsNone(got["width"])
-        self.assertEqual(rows[1][:3], (9, True, 101))
-        self.assertTrue(all(v is None for v in rows[1][3:]))
+        self.assertEqual(rows[1][:4], (9, True, False, 101))
+        self.assertTrue(all(v is None for v in rows[1][4:]))
 
     def test_way_id(self):
         self.assertEqual(osmtags.way_id("w1360453999@2"), 1360453999)
@@ -252,6 +253,27 @@ class RacewayTest(unittest.TestCase):
         self.assertGreaterEqual(sp[1].width, roads.STYLE["raceway"][0])
         self.assertTrue(roads.bridge_specs(both)[2] is not None, "a raceway bridge")
         self.assertEqual(len(both.parts(3)[0][0]), 3)
+
+    def test_busway_is_a_paved_carriageway_and_sorts_before_a_raceway(self):
+        import mapgeom
+        ways = [{"id": 1433304574, "highway": "busway", "name": "Zuidtangent", "surface": "asphalt",
+                 "oneway": "yes", "coords": np.array([[4.667, 52.360], [4.666, 52.360]])},
+                {"id": 7399350, "highway": "busway", "name": "Zuidtangent", "tunnel": "yes", "layer": "-1",
+                 "coords": np.array([[4.671, 52.349], [4.671, 52.350]])}]
+        bw = osmtags.busway_features(ways)
+        self.assertEqual([str(v) for v in bw.ids], ["osm-busway-000007399350", "osm-busway-001433304574"])
+        self.assertEqual(str(bw.attrs["class"][0]), "busway")
+        sp = roads.road_specs(bw)
+        self.assertEqual(sp[1].kind, "paved")
+        self.assertAlmostEqual(sp[1].width, 7.0)
+        self.assertTrue(sp[1].oneway)
+        self.assertTrue(roads.tunnel_specs(bw)[0] is not None, "the canal crossing is a tunnel")
+        self.assertTrue(roads.road_specs(bw)[0] is None, "a tunnel its whole length is not also a ground road")
+        base = features([[(0, 0), (100, 0)]], ["residential"])
+        races = osmtags.raceway_features([{"id": 7, "coords": np.array([[0.0, 0.0], [0.01, 0.0]])}])
+        both = mapgeom.concat(mapgeom.concat(base, bw), races)
+        self.assertEqual(list(both.ids), sorted(both.ids))
+        self.assertIn("busway", navgraph.DRIVE)
 
     def test_not_graded(self):
         import grading

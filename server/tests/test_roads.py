@@ -352,12 +352,12 @@ class BuildTileTest(unittest.TestCase):
         drive = 2 * roads.LANE_W["motorway"]
         self.assertAlmostEqual(rural.width, drive + 2 * roads.SHOULDER_M)
         edges = [line[0][1] for look, w, line in roads.extras(rural, pts, -100.0) if look.get("kind") == "edge"]
-        self.assertEqual(sorted(round(abs(y), 2) for y in edges), [round(drive / 2, 2)] * 2,
+        self.assertEqual(sorted(round(abs(y - roads.driving_offset(rural)), 2) for y in edges), [round(drive / 2, 2)] * 2,
                          "edge lines between the lanes and the shoulders")
         self.assertEqual(lanes("motorway", True)[0], 2, "urban motorway carriageway")
         self.assertEqual(lanes("trunk", False)[0], 2, "rural divided trunk")
         # a ramp (one lane, LINK_M): its edge lines a lane apart, not inside the motorway's shoulders (GitHub #107)
-        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True, 2.5, 1)
+        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True, 2.5, 1, link=True, lanes=1)
         edges = [line[0][1] for look, w, line in roads.extras(ramp, pts, -100.0) if look.get("kind") == "edge"]
         self.assertAlmostEqual(abs(edges[0] - edges[1]), roads.LINK_LANE_M, places=2)
 

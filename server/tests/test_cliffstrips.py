@@ -259,6 +259,9 @@ class ProductionStrips(unittest.TestCase):
                 for i in range(1, len(parts)+1):
                     entry = manifest['cliffStrip'+str(i)]
                     self.assertEqual(entry['pos'], manifest['cliff']['pos'])
+                    strip = parts[i-1][0]
+                    self.assertEqual(entry['bounds'], strip.positions.min(axis=0).tolist() +
+                                     strip.positions.max(axis=0).tolist())
                     shape = cdae.read(Path(folder)/Path(entry['shape']).name)
                     self.assertEqual(shape['materials'][0]['name'], cs.MATERIAL)
 
