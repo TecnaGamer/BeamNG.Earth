@@ -237,8 +237,14 @@ class Vegetation:
                 x, y = self._warm.pop(0)
             try:
                 self.cell((mapcells.ZOOM, x, y))
-            except Exception:
-                log.exception("vegetation: building cell %s", (x, y))
+            except Exception as e:
+                import netfetch
+                if isinstance(e, netfetch.HostUnavailable):
+                    # (a host's circuit breaker open, or offline: expected, and the cell is built when it is asked
+                    # for; a traceback a cell was the first week's third most frequent error, ~5.5k)
+                    log.debug("vegetation: warming cell %s skipped: %s", (x, y), e)
+                else:
+                    log.exception("vegetation: building cell %s", (x, y))
 
     def ready(self, key):
         k = (int(key[1]), int(key[2]))
