@@ -426,6 +426,21 @@ BeamNG.Earth's world server next to it, from the source:
 `python3 server/sharehelper.py --share-dir <BeamMP server>/Resources/Server/BeamNGEarth --cache <a folder for its map
 data> --procs 4`. It needs the same BeamNG.Earth version as the players and a few GB of disk for each area.
 
+## Usage statistics (telemetry)
+
+To see how many people play and how hard we are pushing the free map-data services we rely on, the world server
+sends a small anonymous report every 5 minutes: a random install id (created on your machine; no name, account or
+hardware id), the app version and operating system, whether the game is connected, whether it is a BeamMP session,
+and how many requests went to each data source (with their errors and rate limits). No positions or places are sent.
+The collector looks up your country from the connection's address and does not keep the address.
+
+The public numbers (players online, peaks, history, countries with at least 5 players) are at
+<https://earth.tgforever.net/players>.
+
+Turn reports off in the game: BeamNG.Earth's settings page, Interface, **Anonymous usage statistics** (from the next
+report on). Or set the environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in
+offline mode (`--offline`).
+
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US

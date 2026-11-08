@@ -1,6 +1,10 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
+mod s3url;
+mod countrymap;
+mod carriageway_solver;
+mod carriageways;
 mod spaceclouds;
 mod cdaez;
 mod clearance;
@@ -39,6 +43,8 @@ mod sidewalks;
 mod roadz;
 mod fartex;
 mod farglobal;
+mod dirtsteps;
+mod gridinterp;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -48,6 +54,11 @@ use pyo3::prelude::*;
 /// it again behind the interpreter's busy threads, up to the switch interval (5 ms), so a call of a few microseconds
 /// cost milliseconds (the server's event loop on a Steam Deck spent ~22 s of a Baltimore teleport there, 2026-10-20).
 const RELEASE_MIN: usize = 200_000;
+
+#[pyfunction]
+fn s3_dualstack_url(url: &str, authorized: bool) -> String {
+    s3url::dualstack_url(url, authorized)
+}
 
 fn release<T, F>(py: Python<'_>, work: usize, f: F) -> T
 where
@@ -1427,7 +1438,9 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
-                     yield_ramp: f64) -> Bound<'py, PyArray1<f64>> {
+                     yield_ramp: f64, abut_under: f64, abut_d: PyReadonlyArray2<'py, f64>)
+                     -> Bound<'py, PyArray1<f64>> {
+    let abut_d = abut_d.as_array();         // (segments, 2): along its road to a start / end abutment, NaN: none
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
     let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
     let (rh, rid) = (rh.as_array(), rid.as_array());
@@ -1537,6 +1550,23 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
                         let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
                         target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
+                    }
+                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
+                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
+                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
+                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
+                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
+                        let len = l2.sqrt();
+                        let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
+                        let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
+                        let mut beyond = 0.0f64;
+                        if da.is_finite() {
+                            beyond = beyond.max(-along - da);
+                        }
+                        if db.is_finite() {
+                            beyond = beyond.max(along - len - db);
+                        }
+                        target -= beyond * abut_under;
                     }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
@@ -5301,6 +5331,8 @@ pub(crate) fn rtin_core(hv: &[f64], n: usize, max_err: f64) -> (Vec<[i64; 3]>, V
 
 #[pymodule]
 fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(countrymap::country_codes, m)?)?;
+    m.add_function(wrap_pyfunction!(countrymap::country_index, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_place, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
@@ -5488,6 +5520,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<traffic::Routes>()?;
     m.add_class::<clearance::Clearance>()?;
     m.add_class::<clearance::DeckLevels>()?;
-    m.add("VERSION", 151)?;
+    m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
+    m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
+    m.add("VERSION", 158)?;
+    m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
+    m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())
 }

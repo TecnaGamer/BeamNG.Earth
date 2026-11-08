@@ -83,6 +83,7 @@ MESH_CELLS = 8                     # render(): exact reprojection on an 8 x 8 gr
 FALLBACK_RGB = (100, 89, 69)       # no imagery anywhere: the terrain material's dirt colour
 POLAR_RGB = (226, 232, 240)        # ... past Web Mercator's limit, where it is all ice (polar ice sheet, sea ice): snow
 BLANK_RANGE = 2                    # a tile whose pixels all lie within this many levels is uniform
+SEA_RGB, SEA_TOL = (24, 44, 78), 3  # ... unless it is this colour: EOX cloudless' open sea (2023 and 2016 alike), data
 NODATA_MAX, NODATA_SHARE = 6, 0.02   # an export tile with > 2 % texels this black is outside the data
 NODATA_BLOCK = 8                   # px: inside a tile, a square this size all this black is outside the data
 NODATA_EDGE = 2                    # ... and this much round it (the JPEG's grey fringe on the black)
@@ -250,12 +251,20 @@ def mercator_px(lat, lon, z):
 def is_uniform(a):
     """True for a one-colour (blank) tile: every channel varies by at most BLANK_RANGE. A sparse sample first: its
     range is at most the tile's, so a photo is told apart without reducing every pixel (~9 s of a teleport's
-    fetch threads in Fells Point, 2026-10-16); only a sample that looks blank checks them all."""
+    fetch threads in Fells Point, 2026-10-16); only a sample that looks blank checks them all. One colour that is
+    EOX's open sea (SEA_RGB) is data, not a blank: taken for missing, the next layer was fetched for the same water
+    (Bergen: 374 of EOX 2023's tiles were its sea, and EOX 2016 drew them in the same blue)."""
     if a.ndim == 3 and a.shape[0] >= 32 and a.shape[1] >= 32:
         sm = a[::16, ::16]
         if int((sm.max(axis=(0, 1)).astype(int) - sm.min(axis=(0, 1))).max()) > BLANK_RANGE:
             return False
-    return int((a.max(axis=(0, 1)).astype(int) - a.min(axis=(0, 1))).max()) <= BLANK_RANGE
+    if int((a.max(axis=(0, 1)).astype(int) - a.min(axis=(0, 1))).max()) > BLANK_RANGE:
+        return False
+    if a.ndim == 3 and a.shape[-1] >= 3:
+        c = a.reshape(-1, a.shape[-1])[0, :3].astype(int)
+        if int(np.abs(c - np.array(SEA_RGB)).max()) <= SEA_TOL:
+            return False
+    return True
 
 
 MATCH_SIGMA_M = 40.0     # m: match_colours keeps the detail below this scale, the colours above it (20: haloes)
@@ -1475,6 +1484,14 @@ class Imagery:
             if m is None:
                 continue
             tx0, ty0, nx, ny, keys = m
+            if filled.any():
+                # a later source: only the tiles under the texels still unfilled (an all-sea tile of the first is
+                # one colour, "missing", and the whole footprint was fetched again from the next: at Bergen EOX's
+                # 2016 layer was fetched for 1347 of the 1792 tiles of its 2023 one, on the far field's slowest host)
+                need = _unfilled_tiles(filled, cells, cw, fx, fy)
+                keys = {t: kk for t, kk in keys.items() if t in need}
+                if not keys:
+                    continue
             try:
                 fin = self.finished(keys.values(), pending)
             except ImageryError as e:       # this source is unreachable: the next one may do
@@ -1563,6 +1580,25 @@ class EnuSquare:
         t = self.size / px
         la, _, _ = self.frame.enu_to_geodetic(self.x0 + (j + 0.5) * t, self.y0 + self.size - (i + 0.5) * t, 0.0)
         return la
+
+
+def _unfilled_tiles(filled, cells, cw, fx, fy):
+    """{(tx, ty)} of the tiles (global pixel coordinates fx, fy at the (cells + 1)^2 grid corners, as _mosaic_keys)
+    under the render cells (cw texels each, the last taking the rest) that still have unfilled texels, with the
+    bilinear taps' pixel round them. Pure."""
+    px = filled.shape[0]
+    out = set()
+    for r in range(cells):
+        r1 = px if r == cells - 1 else (r + 1) * cw
+        for c in range(cells):
+            c1 = px if c == cells - 1 else (c + 1) * cw
+            if filled[r * cw:r1, c * cw:c1].all():
+                continue
+            xs, ys = fx[r:r + 2, c:c + 2], fy[r:r + 2, c:c + 2]
+            for ty in range(int(math.floor(ys.min() - 1)) // TILE, int(math.floor(ys.max() + 1)) // TILE + 1):
+                for tx in range(int(math.floor(xs.min() - 1)) // TILE, int(math.floor(xs.max() + 1)) // TILE + 1):
+                    out.add((tx, ty))
+    return out
 
 
 class MercSquare:

@@ -310,13 +310,18 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None, context=None, **kwargs):
+            def __init__(self, netloc, port=None, timeout=None, context=None, **kwargs):
                 made.append(self)
                 self.sent = 0
                 self.context = context
+                self.netloc, self.requests, self.tunnel = netloc, [], None
+
+            def set_tunnel(self, host, port, headers=None):
+                self.tunnel = (host, port, headers)
 
             def request(self, method, path, headers=None):
                 self.sent += 1
+                self.requests.append((method, path, headers))
                 e = errors.pop(0) if errors else None
                 if e is not None:
                     raise e
@@ -360,6 +365,58 @@ class TransportTest(unittest.TestCase):
             tr, made = self.transport([])
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
         self.assertIs(made[0].context, context)
+
+    def test_public_s3_dualstack_only_after_no_ipv4_route(self):
+        """GitHub #763 / PR #808: an IPv6-only network (no NAT64) finds no route to a public S3 host's IPv4 address:
+        that request goes to the bucket's dual-stack endpoint, and so does every later one this run. A network where
+        IPv4 works is never sent there (http.client has no Happy Eyeballs: a broken IPv6 would stall each connection).
+        The source URL stays the cache / quota identity."""
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        source = "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/a%20b?versionId=abc"
+        headers = {"Range": "bytes=0-15", "If-Match": '"etag"'}
+        tr, made = self.transport([])
+        f = nf.Fetcher(transport=tr)
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            f.get(source, headers=headers)
+        self.assertEqual(made[0].netloc, nf.host_of(source), "IPv4 works: the source's own host")
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "Network is unreachable")])
+        f = nf.Fetcher(transport=tr)
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            f.get(source, headers=headers)
+            f.get(source + "&x=1", headers=headers)
+        dual = "overturemaps-us-west-2.s3.dualstack.us-west-2.amazonaws.com"
+        self.assertEqual([c.netloc for c in made], [nf.host_of(source), dual], "no route: the dual-stack endpoint")
+        self.assertEqual(made[1].requests[0][1], "/release/a%20b?versionId=abc")
+        self.assertEqual({k: made[1].requests[0][2][k] for k in headers}, headers)
+        self.assertEqual(len(made[1].requests), 2, "and from then on, straight there")
+        self.assertEqual(set(f.snapshot()), {nf.host_of(source)})
+
+    def test_other_errors_and_proxies_keep_the_source_host(self):
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        tr, made = self.transport([ConnectionResetError(errno.ECONNRESET, "reset")])
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            with self.assertRaises(OSError):
+                tr.request("https://copernicus-dem-30m.s3.amazonaws.com/a.tif", {}, 20)
+        self.assertEqual([c.netloc for c in made], ["copernicus-dem-30m.s3.amazonaws.com"])
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "unreachable")])
+        with mock.patch.object(tr, "_resolve_proxy", return_value=("proxy.test", 8080, None, None)):
+            with self.assertRaises(OSError):
+                tr.request("https://copernicus-dem-30m.s3.amazonaws.com/a.tif", {"Range": "bytes=0-15"}, 20)
+        self.assertEqual(made[0].tunnel[:2], ("copernicus-dem-30m.s3.amazonaws.com", 443), "a proxy routes it")
+
+    def test_authorized_s3_requests_keep_the_signed_host(self):
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "unreachable")])
+        source = "https://copernicus-dem-30m.s3.amazonaws.com/a.tif"
+        with self.assertRaises(OSError):
+            tr.request(source, {"Authorization": "AWS4-HMAC-SHA256 test"}, 20)
+        self.assertEqual([c.netloc for c in made], [nf.host_of(source)])
 
 
 class RetryTest(unittest.TestCase):

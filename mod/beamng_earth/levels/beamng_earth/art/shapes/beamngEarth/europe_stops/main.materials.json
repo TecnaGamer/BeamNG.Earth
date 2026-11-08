@@ -1,0 +1,1008 @@
+{
+  "bne_eu_stop_rim": {
+    "name": "bne_eu_stop_rim",
+    "mapTo": "bne_eu_stop_rim",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cf8b7d06-6f1b-5a88-ba0d-51ddf966b6a1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.72,
+          0.73,
+          1.0
+        ],
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.46
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_am_face": {
+    "name": "bne_eu_stop_am_face",
+    "mapTo": "bne_eu_stop_am_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c3fe57b4-4f25-5707-b913-742989bdc1d0",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_am.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_at_face": {
+    "name": "bne_eu_stop_at_face",
+    "mapTo": "bne_eu_stop_at_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "176f0298-24cc-5fea-94fb-32eb3c5fd9fb",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_at.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ba_face": {
+    "name": "bne_eu_stop_ba_face",
+    "mapTo": "bne_eu_stop_ba_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "938b7309-8daf-5b99-b144-474b546013e1",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ba.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_be_face": {
+    "name": "bne_eu_stop_be_face",
+    "mapTo": "bne_eu_stop_be_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d8128952-bf5e-5055-852c-a89d18ae37d9",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_be.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_bg_face": {
+    "name": "bne_eu_stop_bg_face",
+    "mapTo": "bne_eu_stop_bg_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f2226d78-e8a5-5cc0-8904-76f853e23229",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_bg.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ch_face": {
+    "name": "bne_eu_stop_ch_face",
+    "mapTo": "bne_eu_stop_ch_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "9905f243-a2fc-5df4-a246-4aafe46c33f1",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ch.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_cy_face": {
+    "name": "bne_eu_stop_cy_face",
+    "mapTo": "bne_eu_stop_cy_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2c43569a-c411-53d6-b096-ab723a21f4f8",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cy.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_cz_face": {
+    "name": "bne_eu_stop_cz_face",
+    "mapTo": "bne_eu_stop_cz_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a008c3ce-f614-521b-ba98-f9f0335e02d2",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_cz.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_de_face": {
+    "name": "bne_eu_stop_de_face",
+    "mapTo": "bne_eu_stop_de_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "bd0634e2-17fb-5c02-9df7-0ff8838e54ff",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_de.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_dk_face": {
+    "name": "bne_eu_stop_dk_face",
+    "mapTo": "bne_eu_stop_dk_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7fea6273-03ab-5bb7-aa5d-f8589213a97f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_dk.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ee_face": {
+    "name": "bne_eu_stop_ee_face",
+    "mapTo": "bne_eu_stop_ee_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2330d05f-cb96-58e9-8e66-2d76997797a4",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ee.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_es_face": {
+    "name": "bne_eu_stop_es_face",
+    "mapTo": "bne_eu_stop_es_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e88dd895-afe4-5858-8bbf-17c6fbf2c1d0",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_es.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_fi_face": {
+    "name": "bne_eu_stop_fi_face",
+    "mapTo": "bne_eu_stop_fi_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e1e23e69-ecc7-5374-b2e9-34f0efdc3fe0",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fi.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_fr_face": {
+    "name": "bne_eu_stop_fr_face",
+    "mapTo": "bne_eu_stop_fr_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "91af71af-0bfe-5264-8732-9bf7755ebf18",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_fr.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_gb_face": {
+    "name": "bne_eu_stop_gb_face",
+    "mapTo": "bne_eu_stop_gb_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3a115681-1f3e-541b-b739-7ba683162221",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gb.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ge_face": {
+    "name": "bne_eu_stop_ge_face",
+    "mapTo": "bne_eu_stop_ge_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b62064c0-65d2-5544-8834-5f8b935dc37e",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ge.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_gr_face": {
+    "name": "bne_eu_stop_gr_face",
+    "mapTo": "bne_eu_stop_gr_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "990054e3-773c-5b60-9fb9-ab131bd4fae7",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_gr.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_hr_face": {
+    "name": "bne_eu_stop_hr_face",
+    "mapTo": "bne_eu_stop_hr_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "3460d5ea-4b6f-54ec-95ac-354ea0c1ae17",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hr.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_hu_face": {
+    "name": "bne_eu_stop_hu_face",
+    "mapTo": "bne_eu_stop_hu_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7ec06a7e-b60b-559c-b07c-5433df8b3d1f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_hu.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ie_face": {
+    "name": "bne_eu_stop_ie_face",
+    "mapTo": "bne_eu_stop_ie_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "99789452-d8dc-5b74-9b5d-92f61b7b8a06",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ie.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_is_face": {
+    "name": "bne_eu_stop_is_face",
+    "mapTo": "bne_eu_stop_is_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5fec9170-3c1a-5fab-9a08-731b3a282ece",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_is.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_it_face": {
+    "name": "bne_eu_stop_it_face",
+    "mapTo": "bne_eu_stop_it_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "eff74d51-dce9-5432-a188-a154d20ee7a4",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_it.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_lt_face": {
+    "name": "bne_eu_stop_lt_face",
+    "mapTo": "bne_eu_stop_lt_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "093372f5-227b-56d0-80d6-b73f37f03bac",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lt.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_lu_face": {
+    "name": "bne_eu_stop_lu_face",
+    "mapTo": "bne_eu_stop_lu_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7620d492-3938-51fc-ae3c-35e0d4eceed9",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lu.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_lv_face": {
+    "name": "bne_eu_stop_lv_face",
+    "mapTo": "bne_eu_stop_lv_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "12b2b454-1e61-5145-955c-17b5da86d859",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_lv.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_md_face": {
+    "name": "bne_eu_stop_md_face",
+    "mapTo": "bne_eu_stop_md_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f73ded1b-5373-5af9-a255-10c4717b06d3",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_md.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_me_face": {
+    "name": "bne_eu_stop_me_face",
+    "mapTo": "bne_eu_stop_me_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cad65255-8efc-5689-8307-c1f9eb1a49a1",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_me.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_mk_face": {
+    "name": "bne_eu_stop_mk_face",
+    "mapTo": "bne_eu_stop_mk_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6d3b7af1-ebe7-579f-82d3-42aeb86e7077",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_mk.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_nl_face": {
+    "name": "bne_eu_stop_nl_face",
+    "mapTo": "bne_eu_stop_nl_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "87c79376-33a9-56ff-bf4a-85498890351d",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_nl.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_no_face": {
+    "name": "bne_eu_stop_no_face",
+    "mapTo": "bne_eu_stop_no_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0c66fa76-9ffc-5414-b4c6-4f591be38ff3",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_no.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_pl_face": {
+    "name": "bne_eu_stop_pl_face",
+    "mapTo": "bne_eu_stop_pl_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "dcd206ae-c5eb-54b4-b189-917bd5e75051",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pl.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_pt_face": {
+    "name": "bne_eu_stop_pt_face",
+    "mapTo": "bne_eu_stop_pt_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d0859c2d-9869-5178-b4c3-7fbc58c8fd02",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_pt.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ro_face": {
+    "name": "bne_eu_stop_ro_face",
+    "mapTo": "bne_eu_stop_ro_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d30d23d6-a9af-5391-912a-b9e4c3b949ef",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ro.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_rs_face": {
+    "name": "bne_eu_stop_rs_face",
+    "mapTo": "bne_eu_stop_rs_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4ca1ea13-880e-5224-8b3b-fe821e5c478c",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_rs.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ru_face": {
+    "name": "bne_eu_stop_ru_face",
+    "mapTo": "bne_eu_stop_ru_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d08379d1-9b74-5692-a4b8-cb7646fc2c7f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ru.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_se_face": {
+    "name": "bne_eu_stop_se_face",
+    "mapTo": "bne_eu_stop_se_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1a003b9f-f65b-5d2c-b710-0bd01305fa92",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_se.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_si_face": {
+    "name": "bne_eu_stop_si_face",
+    "mapTo": "bne_eu_stop_si_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fc1e0c47-6ed2-5f97-ac45-3ac6b587ef70",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_si.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_sk_face": {
+    "name": "bne_eu_stop_sk_face",
+    "mapTo": "bne_eu_stop_sk_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2312e348-b099-5cbb-8a8d-254850976121",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_sk.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_tr_face": {
+    "name": "bne_eu_stop_tr_face",
+    "mapTo": "bne_eu_stop_tr_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "eabea852-aaca-599c-a53f-4edc84c8d836",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_tr.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_ua_face": {
+    "name": "bne_eu_stop_ua_face",
+    "mapTo": "bne_eu_stop_ua_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a5b4cf19-a38c-50fc-8f52-fa75cd4c0fe4",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_ua.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_eu_stop_vienna_face": {
+    "name": "bne_eu_stop_vienna_face",
+    "mapTo": "bne_eu_stop_vienna_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "41b7377e-e4fb-5d35-9654-17d7c635ee84",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/europe_stops/bne_eu_stop_vienna.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "roughnessFactor": 0.48,
+        "metallicFactor": 0.0,
+        "retroreflectivity": 0.8
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

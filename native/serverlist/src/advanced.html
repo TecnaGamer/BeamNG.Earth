@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeamNG.Earth advanced statistics</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --mut:#5c6670; --line:#d9dee4; --warn:#c2410c; --a:#2f7de1; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1f25; --fg:#e8ecf0; --mut:#98a3ad; --line:#2c333b; --warn:#fb923c; --a:#5aa0ff; } }
+* { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif }
+main { max-width:1100px; margin:0 auto; padding:24px 16px 48px } h1 { font-size:20px; margin:0 0 4px } a { color:var(--a) }
+.sub { color:var(--mut); margin:0 0 16px }
+.card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:16px; overflow-x:auto }
+.card h2 { font-size:15px; margin:0 0 8px } .row { display:flex; flex-wrap:wrap; gap:16px } .row .card { flex:1 1 220px }
+table { width:100%; border-collapse:collapse } th, td { padding:5px 8px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap }
+td.r, th.r { text-align:right; font-variant-numeric:tabular-nums } .warn { color:var(--warn); font-weight:600 } .mut { color:var(--mut) }
+</style>
+</head>
+<body>
+<main>
+<h1>BeamNG.Earth advanced statistics</h1>
+<p class="sub"><a href="../players">Players</a> · Updated every minute. <span id="upd"></span></p>
+<div class="row">
+  <div class="card"><h2>Versions online</h2><table id="ver"></table></div>
+  <div class="card"><h2>Systems</h2><table id="sys"></table></div>
+  <div class="card"><h2>Countries</h2><table id="cty"></table></div>
+</div>
+<div class="card"><h2>Map-data sources, last 24 hours <span class="mut" id="mp"></span></h2><table id="src"></table>
+  <p class="mut">How many requests every reporting BeamNG.Earth app made to each source of maps, imagery and elevation.
+  429 means the source asked us to slow down; a source with more than 5 % failed requests is highlighted.
+  Each source is credited in the app and in <a href="https://github.com/TecnaGamer/BeamNG.Earth/blob/main/SOURCES.md">SOURCES.md</a>.</p></div>
+<div class="card"><h2>Requests per hour, last 7 days (the busiest sources)</h2><table id="hourly"></table></div>
+<p class="mut">From anonymous usage reports: a random install id, the app version and system, whether the game is
+connected, and the requests made to each source. No names, positions or IP addresses are kept. Players can turn reports
+off in BeamNG.Earth's settings (Interface: Anonymous usage statistics).</p>
+</main>
+<script>
+const base = location.pathname.replace(/players\/advanced\/?$/, "");
+const fmt = n => Math.round(n).toLocaleString();
+const pct = (a, b) => b ? (100 * a / b).toFixed(1) + " %" : "-";
+function region(c) { try { if (c.length == 2) return new Intl.DisplayNames([], { type: "region" }).of(c); } catch (e) {} return c === "??" ? "unknown" : c; }
+function kv(el, o, name) { const e = Object.entries(o).sort((a, b) => b[1] - a[1]);
+  el.innerHTML = e.length ? e.map(([k, v]) => `<tr><td>${name ? name(k) : (k || "?")}</td><td class="r">${fmt(v)}</td></tr>`).join("")
+    : "<tr><td class='mut'>none online</td></tr>"; }
+async function load() {
+  try {
+    const s = await (await fetch(base + "stats/advanced", { cache: "no-store" })).json();
+    kv(ver, s.versions); kv(sys, s.systems); kv(cty, s.countries, region); mp.textContent = `(BeamMP sessions online: ${s.beammp})`;
+    const rows = Object.entries(s.sources24h).sort((a, b) => b[1].req - a[1].req);
+    src.innerHTML = "<tr><th>source</th><th class=r>requests</th><th class=r>MB</th><th class=r>429</th><th class=r>4xx</th><th class=r>5xx</th><th class=r>errors</th><th class=r>retries</th></tr>" +
+      (rows.length ? rows.map(([h, v]) => { const bad = (v.e429 + v.e5xx + v.err) / Math.max(1, v.req) > 0.05;
+        return `<tr><td class="${bad ? "warn" : ""}">${h}</td><td class=r>${fmt(v.req)}</td><td class=r>${fmt(v.mb)}</td><td class=r>${fmt(v.e429)} (${pct(v.e429, v.req)})</td><td class=r>${fmt(v.e4xx)}</td><td class=r>${fmt(v.e5xx)}</td><td class=r>${fmt(v.err)}</td><td class=r>${fmt(v.retry)}</td></tr>`; }).join("")
+        : "<tr><td class='mut' colspan=8>no requests reported yet</td></tr>");
+    const top = rows.slice(0, 8).map(r => r[0]);
+    hourly.innerHTML = `<tr><th>hour</th><th class=r>online</th>${top.map(h => `<th class=r title="${h}">${h.split(".").slice(0, 2).join(".")}</th>`).join("")}</tr>` +
+      s.hourly.slice().reverse().map(h => `<tr><td>${new Date(h.t * 1000).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit" })}</td><td class=r>${h.online}</td>` +
+        top.map(k => `<td class=r>${h.sources[k] ? fmt(h.sources[k].req) : ""}</td>`).join("") + "</tr>").join("");
+    upd.textContent = "Last loaded " + new Date().toLocaleTimeString() + ".";
+  } catch (e) { upd.textContent = "Could not load the statistics."; }
+}
+load(); setInterval(load, 60000);
+</script>
+</body>
+</html>

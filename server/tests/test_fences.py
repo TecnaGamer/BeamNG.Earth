@@ -70,6 +70,26 @@ class PlaceTest(unittest.TestCase):
         self.assertAlmostEqual(float(np.median(np.diff(xs))), fences.WALL_LEN, delta=0.05)
         self.assertTrue(all(abs(r[4] - 270.0) < 0.5 for r in got))
 
+    # GitHub #775: the B 29's noise wall on its bridge (layer=1) stood on the road under the bridge
+    DECK = [{"n": np.array([[0.0, 22.0, 13.0], [100.0, 22.0, 13.0]]), "w": 8.0}]     # 8 m over the ground (5 m)
+
+    def deck_rows(self, tags, y=20.0):
+        feats = self.line("wall", dict({"wall": "noise_barrier"}, **tags), [[10.0, y], [90.0, y]])
+        return fences.rows(self.frame, lambda key: feats, (0.0, 0.0, 100.0, 100.0),
+                           lambda la, lo: np.full(np.shape(la), 5.0), decks=self.DECK)
+
+    def test_a_noise_wall_on_a_bridge_stands_on_its_deck(self):
+        for tags in ({"layer": "1"}, {"bridge": "yes"}):
+            got = self.deck_rows(tags)
+            self.assertTrue(got)
+            self.assertTrue(all(abs(r[3] - 13.0) < 0.02 for r in got), (tags, [r[3] for r in got]))
+
+    def test_a_noise_wall_under_or_beside_a_bridge_stays_on_the_ground(self):
+        for tags, y in (({}, 20.0), ({"layer": "-1"}, 20.0), ({"layer": "1"}, 60.0)):
+            got = self.deck_rows(tags, y)
+            self.assertTrue(got)
+            self.assertTrue(all(abs(r[3] - 5.0) < 0.02 for r in got), (tags, y, [r[3] for r in got]))
+
     def test_a_panel_past_the_tile_is_left_out(self):
         feats = self.line("fence", {"fence_type": "chain_link"}, [[-30.0, 10.0], [40.0, 10.0]])
         got = self.rows(feats, (0.0, 0.0, 100.0, 100.0))

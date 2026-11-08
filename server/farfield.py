@@ -59,6 +59,7 @@ import json
 import functools
 import math
 import os
+import time
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -754,6 +755,7 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
               float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
               (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
+    t0 = time.perf_counter()
     tiles, grefined, regions = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
         ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz)
@@ -762,13 +764,19 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
         out[t.key] = t
     refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
+    t1 = time.perf_counter()
     if regions:
         aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
                             GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
                             None, forced_level, view, region=Region(zf, regions))
         out.update(aout)
         refined |= aref
+    global LAST_GLOBAL_SELECT
+    LAST_GLOBAL_SELECT = (t1 - t0, time.perf_counter() - t1, len(regions or ()), len(tiles))
     return out, refined
+
+
+LAST_GLOBAL_SELECT = None   # (global part s, anchor part s, regions, global tiles) of the last select_global (logs)
 
 
 def global_frame_ll(z, x, y):

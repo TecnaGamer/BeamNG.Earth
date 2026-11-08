@@ -50,11 +50,13 @@ import os
 import random
 import ssl
 import threading
+import weakref
 import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 import base64
+import errno
 import urllib.request
 from urllib.parse import urlsplit
 
@@ -723,11 +725,40 @@ class HttpsTransport:
         return phost, pport, user, passw
 
     def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body)."""
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+        hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
+        to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
+        on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
+        connection's IPv6 attempt. Source URLs stay the cache, quota and NO_PROXY identities; proxied requests are left
+        to the proxy."""
+        u = urlsplit(url)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        host = (u.hostname or "").lower()
+        auth = any(k.lower() == "authorization" for k in headers)
+        if proxy is None and host in _DUALSTACK_HOSTS:
+            dual = _dualstack(url, auth)
+            if dual != url:
+                return self._request_once(dual, headers, timeout, proxy)
+        try:
+            return self._request_once(url, headers, timeout, proxy)
+        except OSError as e:
+            if proxy is not None or not _no_route(e):
+                raise
+            dual = _dualstack(url, auth)
+            if dual == url:
+                raise
+            got = self._request_once(dual, headers, timeout, proxy)
+            if host not in _DUALSTACK_HOSTS:
+                _DUALSTACK_HOSTS.add(host)
+                log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
+                         urlsplit(dual).hostname)
+            return got
+
+    def _request_once(self, url, headers, timeout, proxy):
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:
@@ -788,6 +819,27 @@ class HttpsTransport:
                 # else: the server may have closed the idle keep-alive connection; reconnect once
 
 
+# IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
+# their dual-stack endpoints since (transport request)
+_DUALSTACK_HOSTS = set()
+# errno / WinError of a connection with no route to the address (an IPv6-only network, no NAT64): ENETUNREACH,
+# EHOSTUNREACH, EADDRNOTAVAIL; WSAENETUNREACH 10051, WSAEHOSTUNREACH 10065, WSAEADDRNOTAVAIL 10049
+_NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, 10051, 10065, 10049}
+
+
+def _no_route(e):
+    """Is OSError e a connection that found no route to the host's (IPv4) address?"""
+    return getattr(e, "winerror", None) in _NO_ROUTE or getattr(e, "errno", None) in _NO_ROUTE
+
+
+def _dualstack(url, authorized):
+    """The bucket's dual-stack endpoint URL for a known public S3 source (native earthfast s3_dualstack_url), else
+    url."""
+    import fast
+    fast.require(153, "S3 dual-stack endpoints")
+    return fast._ef.s3_dualstack_url(url, bool(authorized))
+
+
 # --- download speed ---------------------------------------------------------------------------
 RATE_MIN_BYTES = 512 * 1024     # a response this large or larger is a speed sample (smaller ones are mostly latency)
 RATE_WINDOW_S = 120.0           # the samples of the last this many seconds count ...
@@ -811,10 +863,64 @@ class Host:
         self.breaker = CircuitBreaker(policy.breaker_threshold, policy.breaker_window, policy.breaker_open,
                                       policy.breaker_max, clock)
         self.day = dict.fromkeys(COUNTERS, 0)       # this UTC day (persisted)
+        self.total = dict.fromkeys(COUNTERS, 0)     # this process's lifetime (telemetry.py sums every process's)
         self.minute = dict.fromkeys(COUNTERS, 0)    # since the last summary
         self.warned = 0.0                           # wall time of the 80 % budget warning (0 = none)
         self.warned_over = 0.0                      # ... and of the last over-budget one
         self.half_rate = False
+
+
+# --- every process's totals, for telemetry.py -------------------------------------------------------------------------
+# BNE_NETSTATS_PROC (earthd sets it before its worker processes start, so they inherit it): a folder where every process
+# writes its fetchers' lifetime per-host counters (<pid>.json, at most every PROC_WRITE_S, and at exit); the main
+# process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own.
+_PROC_DIR = os.environ.get("BNE_NETSTATS_PROC") or None
+PROC_WRITE_S = 30.0
+_ALL = weakref.WeakSet()            # this process's fetchers
+_proc_state = {"at": 0.0, "lock": threading.Lock(), "exit": False}
+
+
+def process_totals():
+    """{host: {counter: n}} of every fetcher of this process, over its lifetime."""
+    out = {}
+    for f in list(_ALL):
+        with f._lock:
+            for name, h in f._hosts.items():
+                d = out.setdefault(name, dict.fromkeys(COUNTERS, 0))
+                for k, v in h.total.items():
+                    d[k] += v
+    return out
+
+
+def write_process_totals():
+    """This process's totals to <BNE_NETSTATS_PROC>/<pid>.json (atomic)."""
+    if not _PROC_DIR:
+        return
+    try:
+        os.makedirs(_PROC_DIR, exist_ok=True)
+        path = os.path.join(_PROC_DIR, f"{os.getpid()}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"pid": os.getpid(), "at": time.time(), "hosts": process_totals()}, fh)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("net: process totals: %s", e)
+
+
+def _proc_writer():
+    st = _proc_state
+    now = time.monotonic()
+    if now - st["at"] < PROC_WRITE_S or not st["lock"].acquire(blocking=False):
+        return
+    try:
+        st["at"] = now
+        if not st["exit"]:
+            import atexit
+            atexit.register(write_process_totals)
+            st["exit"] = True
+        write_process_totals()
+    finally:
+        st["lock"].release()
 
 
 class Fetcher:
@@ -837,6 +943,7 @@ class Fetcher:
         self._flushed = clock()
         self._load_stats()
         self._rates = collections.deque(maxlen=64)     # (clock, MB/s) of the large responses (throughput)
+        _ALL.add(self)
 
     def throughput(self):
         """The median speed (MB/s) the large responses of the last RATE_WINDOW_S came in at, or None (too few)."""
@@ -1178,6 +1285,9 @@ class Fetcher:
         with self._lock:
             h.day[what] += n
             h.minute[what] += n
+            h.total[what] += n
+        if _PROC_DIR and what == "requests":
+            _proc_writer()
 
     def _count(self, h, what, n=1):
         self._rollover()

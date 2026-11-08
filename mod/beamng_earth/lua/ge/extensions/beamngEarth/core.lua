@@ -26,6 +26,7 @@
 --   beamngEarth_core.setRebaseDistance(m)   beamngEarth_core.setFarBudget(ms)  (streaming budget, 1-4 ms)
 
 local M = {}
+M._anchorload = require('beamngEarth/anchorload')
 -- terrain-follow moves swap in the server's .ter when it sends one (terrain.swap); false: always importMaps
 M.TER_SWAP = true
 -- teleports and rebases land on an anchor on its grid (geodesy.snapAnchor; teleportTo, rebaseAnchor): the server's
@@ -124,7 +125,7 @@ local SKY_INTERVAL = 5.0       -- TimeOfDay lat/lon follow
 local VISIBLE_DISTANCE = 100000
 local LAG_PROBE_FRAMES = 10   -- simulated frames to watch for a rebase's vehicle move to show up
 local PLACE_DELAY_FRAMES = 2   -- let the collision rebuild settle before placing the vehicle
-local FLOOR_WAIT_S = 60        -- s a teleport into a tunnel waits for the tube's floor before giving up (car stays on top)
+local FLOOR_WAIT_S = 180       -- s a teleport into a tunnel waits for the tube's floor before giving up (car stays on top)
 local TELEPORT_RETRY_MAX_S = 60 -- s at most between the tries of a teleport whose first block failed (anchor_error)
 local FLOOR_HIT_M = 0.8        -- m the static collision found under floorZ + 2 may differ from floorZ: the tube is there
 local PRE_LIFT = 5             -- m above groundZ + 1 to hold the vehicle until it is placed
@@ -291,6 +292,7 @@ local function requestAnchor(lat, lon, purpose, cx, cy, place)
     return false
   end
   local id = nextId()
+  if purpose == 'teleport' then st.loadingFault = nil end
   st.pending = { requestId = id, purpose = purpose, lat = lat, lon = lon, sentAt = st.clock, cx = cx, cy = cy,
     place = place }
   net.send({ type = 'prepare_anchor', requestId = id, lat = lat, lon = lon, cx = cx or 0, cy = cy or 0,
@@ -531,7 +533,7 @@ local function commitTeleport(msg)
   if not ok then
     setStatus('Terrain import failed: ' .. tostring(err))
     st.retryAt = st.clock + rebase.RETRY_S -- don't re-request every frame
-    return false
+    return false, err
   end
   -- (the global far tiles stay, placed into the new anchor's world: farfield.lua)
   farfield.switchAnchor(msg.anchorId, false, { cx = tr.cx, cy = tr.cy }, st.sessionId, geodesy.newAnchor(msg.lat, msg.lon))
@@ -598,7 +600,7 @@ local function finishRebase()
   -- road geotiles: their content placed exactly into the new anchor (its rows' modules after their transforms above),
   -- the skins moved and lifted until the new anchor's come (roads.lua M.replace)
   roads.replace(rb.newAnchor, msg.anchorId)
-  sea.transform(xf, msg.anchorId)
+  sea.transform(xf, msg.anchorId, rb.newAnchor)
   navgraph.transform(xf, msg.anchorId)    -- (the AI's road graph too: applied again at once, the AI planning afresh)
   -- a resync with a restarted server keeps the previous session's tiles the same way (st.sessionId
   -- is the new session's): they go once the new session's tiles cover them
@@ -695,6 +697,37 @@ local function commitAnchor(msg, purpose)
   end
   if purpose == 'teleport' or not st.anchor then return commitTeleport(msg) end
   return commitRebase(msg, purpose)
+end
+
+function M.failAnchorLoad(kind, detail)
+  st.pending, st.teleportRetry = nil, nil
+  st.loadingFault = kind
+  loadprogress.start(st.clock)
+  setStatus('Ground load failed: ' .. tostring(detail))
+  if guihooks and guihooks.trigger then
+    pcall(guihooks.trigger, 'Message', { ttl = 20, category = 'bngEarthGround', icon = 'warning',
+      msg = M._anchorload.failure(kind) })
+  end
+end
+
+-- Keep the prepared files until a successful import. A failed import used to discard the only request and
+-- autoTeleportDone prevented another: an empty first map stayed at "Loading the ground" forever.
+function M.tryPreparedAnchor(p)
+  if M._anchorload.expired(p, nil, st.clock) then M.failAnchorLoad('timeout', 'first ground deadline exceeded'); return end
+  local tr, invalid = anchorTerrain(p.msg)
+  if not tr then M.failAnchorLoad('prepare', invalid); return end
+  local called, ok, err = pcall(commitAnchor, p.msg, p.purpose)
+  if called and ok then
+    st.pending, st.loadingFault = nil, nil
+    return
+  end
+  p.imports = (p.imports or 0) + 1
+  log('E', 'beamngEarth', 'ground import for request ' .. tostring(p.requestId) .. ': ' .. tostring(called and err or ok))
+  if not called or p.imports >= M._anchorload.IMPORT_TRIES then
+    M.failAnchorLoad('import', called and err or ok)
+    return
+  end
+  p.ready, p.importAt = true, st.clock + M._anchorload.IMPORT_RETRY_S * 2 ^ (p.imports - 1)
 end
 
 -- Terrain-follow commit (V1_1_SPEC 1a, V1_2_DESIGN 2.3), in a governor heavy slot, atomic in one
@@ -851,10 +884,11 @@ function M.floorCheck()
     st.floorZ, st.floorUntil = nil, nil
     return
   end
-  if not roads.settledFor(st.anchorId, 0, 0) then return end
+  local x, y = st.placeX or 0, st.placeY or 0     -- (the teleport's spot: a snapped anchor's is off the origin)
+  if not roads.settledFor(st.anchorId, x, y) then return end
   local ray = rawget(_G, 'castRayStatic')
   if not ray then return end
-  local from = vec3(0, 0, st.floorZ + 2)
+  local from = vec3(x, y, st.floorZ + 2)
   local d = ray(from, vec3(0, 0, -1), 6)
   if d and math.abs((from.z - d) - st.floorZ) < FLOOR_HIT_M then
     local z = st.floorZ
@@ -911,16 +945,23 @@ function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
 local function onMessage(msg)
   local t = msg.type
   if t == '_connected' then
+    if not net.isCurrent(msg) then return end -- a queued event of an already-replaced transport cannot start a snapshot
     -- sessions: the session folders our far tiles still use (a restarted server keeps them)
     -- slotsHeld: the pooled shape slots our objects hold, if the server is the one that sent them (a reconnect)
-    local held
-    if farfield.session() then
-      held = farfield.slotsHeld(farfield.session())
-      for _, h in ipairs(roads.slotsHeld(farfield.session())) do held[#held + 1] = h end
+    local leaseSession, leaseId = net.lease()
+    local snapshotSession = leaseSession or farfield.session()
+    local held = {}
+    if snapshotSession then
+      held = farfield.slotsHeld(snapshotSession)
+      for _, h in ipairs(roads.slotsHeld(snapshotSession)) do held[#held + 1] = h end
     end
+    local anchors = (snapshotSession == farfield.session()) and farfield.heldAnchors() or {}
+    if snapshotSession and snapshotSession == farfield.session() and st.anchorId then anchors[#anchors + 1] = st.anchorId end
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
-      sessions = roads.allHeldSessions(), slotSession = farfield.session(), slotsHeld = held, vegFlat = true,
+      waterguard = sea.GUARD_VERSION,
+      streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
+      sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
       geoTiles = require('beamngEarth/geotile').Z,
       -- (geotiles: vegetation in the global tiles' frames: trees.lua)
       roadGeo = roads.ROAD_GEO,        -- (road tiles as geotiles too: roads.lua)
@@ -934,6 +975,7 @@ local function onMessage(msg)
     setStatus('Connected to companion server')
   elseif t == '_disconnected' then
     st.pending, st.sessionId, st.terrainPending = nil, nil, nil
+    st.teleportRetry, st.loadingFault = nil, nil
     M.fastAreaPause(nil)        -- (a fast pre-cache's pause ends with the app that ran it)
     cacheInfo = nil
     st.serverNote, st.serverNoteDetail, st.terrainErrorAt = nil, nil, nil
@@ -949,6 +991,11 @@ local function onMessage(msg)
   elseif t == 'runtime_profiler' then
     require('beamngEarth/profiler').receive(msg.profile)
   elseif t == 'hello' then
+    if msg.streamLease == 1 and type(msg.leaseId) == 'string' then
+      net.serverHello(msg.sessionId, msg.leaseId, msg)
+    else
+      net.serverHello(nil, nil, msg)
+    end
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
@@ -1064,17 +1111,29 @@ local function onMessage(msg)
     pcall(mpsession.shareOut, msg)
   elseif t == 'terrain_patch' then
     pcall(terrainpatch.onPatch, msg)
+  elseif t == 'tunnel_floor' then        -- the teleport's spot is in a tunnel: down onto its floor once it collides
+    -- (only while the car is still at that spot: sent after anchor_ready, its tube's chains solved first)
+    local veh = getPlayerVehicle(0)
+    local vp = veh and veh:getPosition()
+    if msg.anchorId == st.anchorId and tonumber(msg.floorZ) and (not vp
+        or math.abs(vp.x - (st.placeX or 0)) + math.abs(vp.y - (st.placeY or 0)) < 15) then
+      st.floorZ, st.floorUntil = tonumber(msg.floorZ), st.clock + FLOOR_WAIT_S
+    end
   elseif t == 'space_clouds' then        -- the clouds seen from space (spaceclouds.lua / server spaceclouds.py)
     pcall(require('beamngEarth/spaceclouds').onMessage, msg, st.anchorId)
+  elseif t == 'anchor_progress' then
+    local p = st.pending
+    if p and msg.requestId == p.requestId and not p.ready then p.stage, p.progressAt = msg.stage, st.clock end
   elseif t == 'anchor_ready' then
     local p = st.pending
     if not p or msg.requestId ~= p.requestId then return end -- stale answer
+    if p.importAt then return end       -- duplicate ready while retrying the same files
     if p.purpose == 'rebase' or (p.purpose == 'resync' and st.anchor) then
       p.ready, p.msg = true, msg -- committed in updateWorld() (distance rule / when not paused)
       if p.purpose == 'rebase' and p.sentAt then st.anchorLatency = st.clock - p.sentAt end
     else
-      st.pending = nil
-      commitAnchor(msg, p.purpose)
+      p.msg = msg
+      M.tryPreparedAnchor(p)
     end
   elseif t == 'anchor_error' then
     local p = st.pending
@@ -1086,8 +1145,10 @@ local function onMessage(msg)
       -- asked again, RETRY_S doubling up to TELEPORT_RETRY_MAX_S: nothing else asks for it, and the world stayed
       -- empty (#286: the start block failed once and the map never loaded)
       local n = (p.retries or 0) + 1
+      if n >= M._anchorload.PREPARE_TRIES then M.failAnchorLoad('prepare', msg.error); return end
       local wait = math.min(TELEPORT_RETRY_MAX_S, rebase.RETRY_S * 2 ^ (n - 1))
-      st.teleportRetry = { lat = p.lat, lon = p.lon, cx = p.cx, cy = p.cy, place = p.place, n = n, at = st.clock + wait }
+      st.teleportRetry = { lat = p.lat, lon = p.lon, cx = p.cx, cy = p.cy, place = p.place, n = n, at = st.clock + wait,
+        firstAt = p.firstAt or p.sentAt }
       setStatus(string.format('Terrain failed (%s), trying again in %d s', tostring(msg.error), wait))
     else
       setStatus('Anchor request failed: ' .. tostring(msg.error))
@@ -1312,8 +1373,17 @@ local function cameraState()
   local okF, fx, fy, fz = pcall(cam.getForwardXYZ)
   if not okF or type(fx) ~= 'number' then return nil end
   local okV, fov = pcall(cam.getFovDeg)
-  return { x = x, y = y, z = z, fx = fx, fy = fy, fz = fz, fovDeg = (okV and type(fov) == 'number') and fov or 60,
+  local out = { x = x, y = y, z = z, fx = fx, fy = fy, fz = fz, fovDeg = (okV and type(fov) == 'number') and fov or 60,
     h = screenHeight() }
+  -- the 3D map (map3d.lua): what the view is about is the orbit's target on the ground, up to kilometres ahead of the
+  -- camera; the server centres the far field and the tiles round it there (camera_away: tx / ty), the camera's own
+  -- position still decides what is near the eye
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then
+    local g = cam.getGlobalCameras and cam.getGlobalCameras()[m3.CAMERA]
+    if g and g.target then out.tx, out.ty = g.target.x, g.target.y end
+  end
+  return out
 end
 
 -- The camera's {x, y} when it is more than VIEW_AWAY_M from the car (a free camera, a far chase camera): what is drawn
@@ -1323,9 +1393,10 @@ M.VIEW_AWAY_M = 50
 function M.viewAway()
   local c, p = st.cam, st.player
   if not c or not p or not c.x or not p.x then return nil end
-  local dx, dy = c.x - p.x, c.y - p.y
+  local cx, cy = c.tx or c.x, c.ty or c.y       -- (the 3D map's target first)
+  local dx, dy = cx - p.x, cy - p.y
   if dx * dx + dy * dy <= M.VIEW_AWAY_M * M.VIEW_AWAY_M then return nil end
-  return { x = c.x, y = c.y }
+  return { x = cx, y = cy }
 end
 
 local function updatePlayer(dt)
@@ -1496,6 +1567,13 @@ local function notePlayerPos(force)
 end
 
 local function updateWorld(dt)
+  if (st.pending and (st.pending.purpose == 'teleport' or st.pending.importAt)) or st.teleportRetry then
+    if M._anchorload.expired(st.pending, st.teleportRetry, st.clock) then
+      M.failAnchorLoad('timeout', 'first ground deadline exceeded')
+    elseif st.pending and st.pending.importAt and st.clock >= st.pending.importAt then
+      M.tryPreparedAnchor(st.pending)
+    end
+  end
   if st.floorZ and not st.placeFrames then M.floorCheck() end
   if st.placedAt and not st.placeFrames then M.fallGuard() end
   if st.placeFrames then
@@ -1511,7 +1589,9 @@ local function updateWorld(dt)
   local retry = st.teleportRetry
   if retry and not st.pending and st.clock >= retry.at and net.isConnected() then
     st.teleportRetry = nil
-    if requestAnchor(retry.lat, retry.lon, 'teleport', retry.cx, retry.cy, retry.place) then st.pending.retries = retry.n end
+    if requestAnchor(retry.lat, retry.lon, 'teleport', retry.cx, retry.cy, retry.place) then
+      st.pending.retries, st.pending.firstAt = retry.n, retry.firstAt
+    end
   end
 
   local pl = st.player
@@ -1524,7 +1604,7 @@ local function updateWorld(dt)
   -- nor between a rebase's two phases (st.rebasing): the car is already in the new frame while st.anchorId is still the
   -- old one, and the server, reading that position in the old frame, dropped every road tile around the car at each
   -- rebase (2026-10-17, 100 mph on the salt flats: 42 road tiles -> 0 at the rebase)
-  if st.poseTimer >= POSE_INTERVAL and net.isConnected() and anchorKnown() and not st.rebasing then
+  if st.poseTimer >= POSE_INTERVAL and net.isReady() and anchorKnown() and not st.rebasing then
     st.poseTimer = 0
     local c = st.cam
     -- held: previous anchors of this server's session only (the far field's older sessions' anchor
@@ -1798,6 +1878,8 @@ local function loadLine()
   local okF, fs = pcall(farfield.stats)
   if okF and fs then pend.far = fs.queued or 0 end
   loadLineText = loadprogress.line(st.clock, { placed = placed,
+    failure = st.loadingFault and M._anchorload.failure(st.loadingFault),
+    groundLine = M._anchorload.text(st.clock, st.pending, st.teleportRetry),
     progress = lp and lp.anchorId == st.anchorId and lp or nil, pending = pend }) or false
   return loadLineText
 end

@@ -55,10 +55,11 @@ end
 function M.line(now, info)
   if not load then return nil end
   info = info or {}
+  if info.failure then return info.failure end
   if now - load.since > M.MAX_S then load = nil; return nil end
   if not info.placed then
     load.quietSince = nil
-    return 'Loading the ground'
+    return info.groundLine or 'Loading the ground'
   end
   local prog, pend = info.progress or {}, info.pending or {}
   local parts, sumD, sumN, busy = {}, 0, 0, false

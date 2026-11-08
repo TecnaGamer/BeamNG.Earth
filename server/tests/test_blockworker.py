@@ -33,6 +33,9 @@ class FakeMapData:
     def versions(self):             # (part of the revisit cache's key)
         return {"pipeline": 0}
 
+    def side_prefetch(self, keys):  # (mapdata.MapData's: the props' per-cell sources started early)
+        return None
+
 
 def tmp_cache(test):
     """A revisit cache folder of the test's own (the tiles' keep-for-the-next-visit cache), removed after it."""
