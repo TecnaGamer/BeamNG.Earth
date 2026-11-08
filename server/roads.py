@@ -9551,7 +9551,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 if sp.oneway:
                     v = _rule_value(f.rules.get("oneway"), i)
                     dirs[fid] = (-1 if float(v) < 0 else 1) if v is not None else (sp.dir or 1)
-            park.extend(parking.curb_spots(roads, walks, own_box, left_hand, dirs))
+            import amsterdambays
+            inferred = parking.curb_spots(roads, walks, own_box, left_hand, dirs)
+            surveyed = amsterdambays.for_tile(frame, own_box, ground)
+            park.extend(amsterdambays.replace_overlapping(inferred, surveyed))
             if aisles:
                 park.extend(parking.aisle_spots(roads, aisles, own_box))
         if marks is not None and aisles:            # stall lines along the aisles (parking.aisle_markings)
