@@ -24,25 +24,12 @@ def sample(line, at):
 
 
 def project(line, points):
-    """Station, nearest point, tangent, signed left offset, and distance in xy."""
-    p = np.asarray(points)
-    d = np.diff(line[:, :2], axis=0)
-    length = np.linalg.norm(d, axis=1)
-    length = np.maximum(length, 1e-9)
-    t = ((p[:, None, :2] - line[None, :-1, :2]) * d).sum(2) / length ** 2
-    tc = np.clip(t, 0., 1.)
-    q = line[None, :-1, :2] + tc[:, :, None] * d
-    dist = ((p[:, None, :2] - q) ** 2).sum(2)
-    k = dist.argmin(1)
-    j = np.arange(len(p))
-    near = line[k] + tc[j, k, None] * np.diff(line, axis=0)[k]
-    tangent = d[k] / length[k, None]
-    # Extrapolate stations beyond the ends for trimming a longer source line.
-    fraction = np.where(((k == 0) & (t[j, k] < 0)) | ((k == len(d)-1) & (t[j, k] > 1)), t[j, k], tc[j, k])
-    station = roadmarkings.arc(line)[k] + fraction * length[k]
-    normal = np.c_[-tangent[:, 1], tangent[:, 0]]
-    offset = ((p[:, :2] - near[:, :2]) * normal).sum(1)
-    return station, near, tangent, offset, np.sqrt(dist[j, k])
+    """Station, nearest point, tangent, signed left offset, and distance in xy (earthfast.polyline_project: the
+    stations extrapolated beyond the ends, for trimming a longer source line)."""
+    import fast
+    fast.require(164, "polyline_project")
+    return fast._ef.polyline_project(np.ascontiguousarray(line, np.float64),
+                                     np.ascontiguousarray(np.atleast_2d(points), np.float64))
 
 
 def section(line, a, b):

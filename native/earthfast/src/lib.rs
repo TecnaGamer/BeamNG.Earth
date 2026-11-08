@@ -2,6 +2,7 @@
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
 mod gravity;
+mod polyproject;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
@@ -5516,6 +5517,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
     m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
@@ -5541,7 +5543,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
-    m.add("VERSION", 163)?;
+    m.add("VERSION", 164)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     Ok(())
