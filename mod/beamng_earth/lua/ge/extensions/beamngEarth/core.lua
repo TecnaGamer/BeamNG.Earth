@@ -540,7 +540,18 @@ local function commitTeleport(msg)
     return false, err
   end
   -- (the global far tiles stay, placed into the new anchor's world: farfield.lua)
-  farfield.switchAnchor(msg.anchorId, false, { cx = tr.cx, cy = tr.cy }, st.sessionId, geodesy.newAnchor(msg.lat, msg.lon))
+  -- the 3D map's Drive here, watched from above: every shown tile moved into the new frame and kept until the new
+  -- anchor's cover it, as a rebase (the user, 2026-11-07: "make it look seamless"; dropped, the land round the view
+  -- vanished at the teleport's commit)
+  local keepOld, newA = false, geodesy.newAnchor(msg.lat, msg.lon)
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if st.anchor and m3 and m3.isActive and m3.isActive() then
+    local xf = st.anchor:transformTo(newA)
+    farfield.transform(xf, newA)
+    pcall(require('beamngEarth/globe').transform, xf, msg.anchorId)
+    keepOld = true
+  end
+  farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy }, st.sessionId, newA)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
   st.placeFrames = PLACE_DELAY_FRAMES
   st.placeZ = (msg.groundZ or 0) + 1.0

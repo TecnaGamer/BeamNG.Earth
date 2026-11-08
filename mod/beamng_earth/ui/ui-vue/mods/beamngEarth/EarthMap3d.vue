@@ -270,8 +270,13 @@ function driveHere() {
   busy.value = true
   msg.value = ""
   engineLua("beamngEarth_map3d.driveHere()", r => {
-    busy.value = false
-    if (!r || !r.ok) msg.value = (r && r.error) || "Teleport failed"
+    if (!r || !r.ok) {
+      busy.value = false
+      msg.value = (r && r.error) || "Teleport failed"
+    } else if (r.pending) {
+      // (the map stays open over the place while it loads, then flies down to the car: map3d.driveStep)
+      msg.value = "Loading the place, then down to the car..."
+    } else busy.value = false
   })
 }
 

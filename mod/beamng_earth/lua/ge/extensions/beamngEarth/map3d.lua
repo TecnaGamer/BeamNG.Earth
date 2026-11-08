@@ -205,7 +205,15 @@ function M.setHeading(h)
   if g then g.heading = tonumber(h) or 0 end
 end
 
--- teleport the car to the place in the middle of the view, then fly down to it
+-- "Drive here": the car teleported to the place in the middle of the view first, the map staying open over it while
+-- its ground loads, then the camera flown down to the car and handed over (the user, 2026-11-07: "first teleport the
+-- car then it zooms the camera down to the car to make it look seamless"; it closed the map at once before, the car's
+-- camera over a place still loading). driveStep (onUpdate) runs it.
+M.DRIVE_WAIT_MAX_S = 90         -- the map goes down to the car after this even if its ground never said ready
+M.DRIVE_NEAR_M = 250            -- the flight's end over the car, then exit()'s path into its camera
+M.DRIVE_SETTLE_S = 0.6          -- after the ground is ready (the car set down) before the flight
+local drive = nil
+
 function M.driveHere()
   local s = M.state()
   if not s.active or not s.lat then return {ok = false, error = 'no place in view'} end
@@ -213,13 +221,41 @@ function M.driveHere()
   if not stg or not stg.uiMapTeleport then return {ok = false, error = 'BeamNG.Earth not loaded'} end
   local r = stg.uiMapTeleport(s.lat, s.lon, '')
   if r and r.ok then
-    active, transitioning = false, false
-    core_camera.setGlobalCameraByName(nil)
-    unpause()
-    if stg.navigate then stg.navigate('play') end
-    extensions.hook('onBeamngEarthMap3d', false)
+    drive = {at = os.clock(), stage = 'loading'}
+    r.pending = true
   end
   return r
+end
+
+function M.driving() return drive ~= nil end
+
+local function driveStep()
+  if not drive then return end
+  if not active then drive = nil return end
+  local core = rawget(_G, 'beamngEarth_core')
+  local st = core and core._state and core._state()
+  local now = os.clock()
+  if drive.stage == 'loading' then
+    local ready = st and not st.pending and core.groundReady and core.groundReady()
+    if ready then
+      drive.readyAt = drive.readyAt or now
+    else
+      drive.readyAt = nil
+    end
+    if (drive.readyAt and now - drive.readyAt >= M.DRIVE_SETTLE_S) or now - drive.at > M.DRIVE_WAIT_MAX_S then
+      local p = st and st.player
+      if p and p.lat and p.lon and not M.flying() then
+        M.flyTo(p.lat, p.lon, M.DRIVE_NEAR_M)
+        drive.stage = 'flying'
+      else
+        drive = nil
+        M.exit()
+      end
+    end
+  elseif drive.stage == 'flying' and not M.flying() then
+    drive = nil
+    M.exit()
+  end
 end
 
 -- the 2D map instead (the screen's 2D button): straight back to the car's camera, then the flat map
@@ -691,6 +727,7 @@ function M.onUpdate(dtReal)
   if not g then return end
   local s = M.state()
   flyStep(g, dtReal or 0.016)
+  driveStep()
   do
     local core = rawget(_G, 'beamngEarth_core')
     local a = core and core._state and core._state().anchor
