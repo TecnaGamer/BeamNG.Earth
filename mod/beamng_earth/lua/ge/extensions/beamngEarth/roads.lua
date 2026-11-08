@@ -2294,7 +2294,8 @@ function M.ahead(x, y, hx, hy, dist)
       -- the tree tile there (trees.lua, geotiles only): not arrived or still being placed (the tree lead)
       if M.geo then
         local T = package.loaded['beamngEarth/trees']
-        local tt = T and T.debugTiles and T.debugTiles()['g:' .. tostring(sq)]
+        local all = T and T.debugTiles and T.debugTiles()
+        local tt = type(all) == 'table' and all['g:' .. tostring(sq)] or nil
         e.trees = tt ~= nil and not tt.pending
       end
       out[#out + 1] = e
