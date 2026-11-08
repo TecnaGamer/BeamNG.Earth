@@ -35,6 +35,10 @@ KMH_DEFAULT = {"motorway": 120, "trunk": 100, "primary": 80, "secondary": 70}
 # Sweden's limits by law where no sign says otherwise, whatever the class: 50 km/h in a built-up area, 70 outside it
 # (bashastighet, Trafikförordningen 1998:1276 3 kap. 17 §), 110 on a motorway (9 kap. 1 §). Slower classes as above.
 SE_ROADS = {"trunk", "primary", "secondary", "tertiary", "unclassified", "residential"}
+# fork: Australia's km/h where no sign is mapped: 50 in a built-up area and 100 outside it by default (Australian Road
+# Rules 25), the arterials as posted in practice: (town, rural) by class
+AU_KMH = {"motorway": (100, 110), "trunk": (80, 100), "primary": (60, 100), "secondary": (60, 100),
+          "tertiary": (60, 80), "unclassified": (50, 80), "residential": (50, 50)}
 MPH = 0.44704
 LANE_W_M = 3.3
 SIMPLIFY_M = 0.6            # a shape point is kept where the chord would be off by more than this
@@ -65,6 +69,8 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if country == "AU" and spec.cls in AU_KMH:     # fork
+        return AU_KMH[spec.cls][0 if spec.urban else 1] / 1.609344
     if country == "SE" and spec.cls == "motorway":
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:

@@ -278,6 +278,23 @@
     "alphaRef": 64,
     "translucent": false
   },
+  "bne_au_speed": {
+    "name": "bne_au_speed",
+    "mapTo": "bne_au_speed",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_speed.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
   "bne_se_signs": {
     "name": "bne_se_signs",
     "mapTo": "bne_se_signs",

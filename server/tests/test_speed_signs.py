@@ -172,6 +172,48 @@ class GlueTest(unittest.TestCase):
         self.assertEqual(posted(130), 120)
         self.assertEqual(posted(20), 0, "slower than any step: no sign rather than a number above the limit")
 
+    def test_au_values_are_the_posted_steps(self):     # fork
+        posted = lambda kmh: speedsigns.posted(kmh / 1.609344, False, speedsigns.STYLE_AU)  # noqa: E731
+        self.assertEqual([posted(v) for v in (40, 45, 55, 56, 64, 70, 75, 96, 110, 120, 130)],
+                         [40, 40, 50, 60, 60, 70, 70, 100, 110, 110, 130])
+        self.assertEqual(posted(20), 0, "shared zones: no R4-1")
+        self.assertEqual(speedsigns.style("au", False), speedsigns.STYLE_AU)
+
+    def test_au_defaults_are_australian(self):          # fork
+        import navgraph
+
+        class Spec:
+            def __init__(self, cls, urban):
+                self.cls, self.urban = cls, urban
+
+        class Feats:
+            rules = {}
+        kmh = lambda cls, urban: navgraph.road_mph(Feats, 0, Spec(cls, urban), False, country="AU") * 1.609344  # noqa
+        self.assertAlmostEqual(kmh("residential", True), 50)
+        self.assertAlmostEqual(kmh("tertiary", True), 60)
+        self.assertAlmostEqual(kmh("primary", False), 100)
+        self.assertAlmostEqual(kmh("motorway", False), 110)
+
+    def test_au_mesh_faces_the_driver(self):            # fork
+        table = np.array([[0.0, 0.0, 10.0, 10.5, 0.0, 1.0, 60.0, 1.0, 0.0]])       # driving north
+        p, t, uv, mats, mi = speedsigns.au_mesh(table, (0.0, 0.0, 0.0))
+        self.assertEqual(mats, speedsigns.MATERIALS_AU)
+        face = t[mi == 0]
+        a, b, c = p[face[:, 0]], p[face[:, 1]], p[face[:, 2]]
+        self.assertTrue((np.cross(b - a, c - a)[:, 1] < 0).all())
+        used = np.unique(face)
+        for axis, along in ((0, 0), (2, 1)):
+            self.assertGreater(np.corrcoef(p[used, axis], uv[used, along])[0, 1], 0.999)
+        self.assertAlmostEqual(p[used, 0].max() - p[used, 0].min(), 0.60)
+        self.assertAlmostEqual(p[used, 2].min(), 10.5 + 1.52)
+        self.assertIsNone(speedsigns.au_mesh(np.array([[0, 0, 0, 0, 0, 1, 55.0, 1, 0]]), (0, 0, 0)))
+
+    def test_au_materials_are_in_the_mod(self):         # fork
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadside", "exit.materials.json")
+        with open(path, encoding="utf-8") as f:
+            self.assertLessEqual(set(speedsigns.MATERIALS_AU), set(json.load(f)))
+
     def test_c31_materials_are_in_the_mod(self):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
                             "beamng_earth", "art", "shapes", "beamngEarth", "roadside", "exit.materials.json")
