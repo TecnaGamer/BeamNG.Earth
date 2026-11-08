@@ -8623,6 +8623,11 @@ def fast_pool_size(cpus=None, gb=None, free=None):
 
 
 def main():
+    # (the GPU kernels' Vulkan instance without gamescope's WSI layer: the server draws nothing, and in a Steam Deck's
+    # Game Mode the layer failed an assert in vkCreateInstance and aborted the whole server, the game with it (Mesa
+    # 26.2-devel, 2026-11-07). Its implicit layer's own off switch; this process and its workers only, not the game)
+    if sys.platform.startswith("linux"):
+        os.environ.setdefault("DISABLE_GAMESCOPE_WSI", "1")
     # (this run's id, inherited by its worker processes: roadz keeps one lidar decision per map cell and run in it)
     os.environ.setdefault("BNGE_ROADZ_SESSION", f"{os.getpid()}.{int(time.time())}")
     home = os.path.expanduser("~")

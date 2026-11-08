@@ -255,6 +255,8 @@ def start_server(user_dir, extra, log_path, game_running=None):
         cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if sys.platform.startswith("linux"):    # (gamescope's WSI layer aborted the server's GPU kernels: earthd.main)
+        env.setdefault("DISABLE_GAMESCOPE_WSI", "1")
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
