@@ -11,7 +11,9 @@ Read from this computer's own time zone, never asked of a server: before the pla
     all      everything ticked: everywhere else (the US, Japan, Australia, Switzerland, Singapore, South Africa, ...)
 
 A time zone shared by countries of different groups takes the stricter (Windows' "GMT Standard Time" is London and
-Lisbon: neutral). Windows' "Eastern Standard Time" is the US and Canada: the US's ("all").
+Lisbon: neutral). Windows' "Eastern Standard Time" / "Pacific Standard Time" ... are the US's and Canada's alike, so on
+Windows the country of its region setting (Settings, Time & language, Region; HKCU Control Panel, International,
+Geo, Name: a two-letter code) is read too, and the stricter of the two groups is used (a Canadian Windows PC: perf_off).
 """
 import os
 import sys
@@ -85,6 +87,29 @@ def for_zone(name):
     return NEUTRAL
 
 
+# two-letter country codes (Windows' region setting); a code not listed is ALL
+_COUNTRY = {
+    **{c: NEUTRAL for c in (
+        "AT BE BG HR CY CZ DK EE FI FR DE GR HU IE IT LV LT LU MT NL PL PT RO SK SI ES SE "   # the EU
+        "IS LI NO "                                                                           # the EEA
+        "AL AD BA BY XK MD MC ME MK SM RS UA VA RU FO GL AX GI "                              # the rest of Europe
+        "CN HK MO IN").split()},
+    **{c: PERF_OFF for c in "GB GG JE IM CA BR TR KR".split()},
+}
+_STRICT = {NEUTRAL: 2, PERF_OFF: 1, ALL: 0}
+
+
+def for_country(code):
+    """The group of a two-letter country code, or None when there is none."""
+    if not isinstance(code, str) or len(code.strip()) != 2 or not code.strip().isalpha():
+        return None
+    return _COUNTRY.get(code.strip().upper(), ALL)
+
+
+def stricter(a, b):
+    return a if _STRICT[a] >= _STRICT[b] else b
+
+
 def is_russia(name):
     if not name:
         return False
@@ -122,7 +147,39 @@ def local_zone():
         return ""
 
 
+def local_country():
+    """Windows' region setting as a two-letter code, or "" (elsewhere: "", the time zone names the country)."""
+    if sys.platform != "win32":
+        return ""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Control Panel\International\Geo") as k:
+            name = str(winreg.QueryValueEx(k, "Name")[0]).strip("\x00 ")
+            if name:
+                return name
+    except OSError:
+        pass
+    try:            # (older setups keep only the numeric Nation: Windows turns it into the two-letter code)
+        import ctypes
+        k32 = ctypes.windll.kernel32
+        geo = k32.GetUserGeoID(16)                  # GEOCLASS_NATION
+        buf = ctypes.create_unicode_buffer(8)
+        if geo > 0 and k32.GetGeoInfoW(geo, 4, buf, 8, 0):     # GEO_ISO2
+            return buf.value
+    except (OSError, AttributeError, ValueError):
+        pass
+    return ""
+
+
+def decide(zone, country=""):
+    """(group, russia) from a time zone name and a country code: the stricter group of the two."""
+    group = for_zone(zone)
+    c = for_country(country)
+    if c is not None:
+        group = stricter(group, c)
+    return group, is_russia(zone) or (isinstance(country, str) and country.strip().upper() == "RU")
+
+
 def region():
     """(group, russia) of this computer."""
-    z = local_zone()
-    return for_zone(z), is_russia(z)
+    return decide(local_zone(), local_country())

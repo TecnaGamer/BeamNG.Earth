@@ -19,7 +19,8 @@ new kind of data) the welcome screen asks, with three switches:
 | ↳ **Network load** | the per-map-service request counts (section 6) |
 
 How the boxes start depends on the privacy rules where you are. BeamNG.Earth decides that **on your own computer,
-from its time zone setting**; it asks no server, and the time zone is not sent anywhere.
+from its time zone setting** (on Windows also its region setting, because Windows names the US's and Canada's time
+zones alike; the stricter of the two is used). It asks no server, and neither setting is sent anywhere.
 
 | where (by time zone) | boxes start |
 |---|---|

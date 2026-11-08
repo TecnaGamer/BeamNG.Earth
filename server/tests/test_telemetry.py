@@ -148,6 +148,18 @@ class ChoiceTest(unittest.TestCase):
 
 
 class RegionTest(unittest.TestCase):
+    def test_windows_country(self):
+        # Windows names the US's and Canada's zones alike: the region setting's country, the stricter group wins
+        import privacyregion
+        self.assertEqual(privacyregion.decide("Eastern Standard Time", "CA"), ("perf_off", False))
+        self.assertEqual(privacyregion.decide("Pacific Standard Time", "US"), ("all", False))
+        self.assertEqual(privacyregion.decide("Eastern Standard Time", "DE"), ("neutral", False))
+        self.assertEqual(privacyregion.decide("W. Europe Standard Time", "US"), ("neutral", False))
+        self.assertEqual(privacyregion.decide("Eastern Standard Time", ""), ("all", False))
+        self.assertEqual(privacyregion.decide("Eastern Standard Time", "??x"), ("all", False))
+        self.assertEqual(privacyregion.decide("Russian Standard Time", "RU"), ("neutral", True))
+        self.assertEqual(privacyregion.decide("America/New_York", "ru"), ("neutral", True))
+
     def test_groups(self):
         import privacyregion as p
         cases = {"Europe/Berlin": p.NEUTRAL, "Europe/Moscow": p.NEUTRAL, "Asia/Shanghai": p.NEUTRAL,
