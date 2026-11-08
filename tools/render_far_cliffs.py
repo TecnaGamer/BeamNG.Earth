@@ -33,7 +33,7 @@ colors.data.foreach_set('color',np.column_stack((color,np.ones(len(p)))).ravel()
 rock=bpy.data.materials.new('Canyon generated albedo');rock.use_nodes=True
 nodes=rock.node_tree.nodes;links=rock.node_tree.links
 bs=nodes.get('Principled BSDF');bs.inputs['Roughness'].default_value=.94
-tex=nodes.new('ShaderNodeTexImage');tex.image=bpy.data.images.load(str(ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_v3_base.color.png'))
+tex=nodes.new('ShaderNodeTexImage');tex.image=bpy.data.images.load(str(ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_reference_base.color.png'))
 tex.extension='REPEAT';links.new(tex.outputs['Color'],bs.inputs['Base Color'])
 mesh.materials.append(base);mesh.materials.append(rock)
 mesh.polygons.foreach_set('material_index',(labels>=0).astype(np.int32))

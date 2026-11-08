@@ -9,6 +9,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+from cliff_assets import DETAIL_ROUGHNESS_STRENGTH
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
@@ -17,7 +18,6 @@ DETAIL_REPEAT_M = 3.0
 DETAIL_COLOR_STRENGTH = .18
 DETAIL_NORMAL_STRENGTH = .22
 DETAIL_AO_STRENGTH = .22
-DETAIL_ROUGHNESS_STRENGTH = .35
 MAIN_NORMAL_STRENGTH = .30
 
 
@@ -108,7 +108,7 @@ def bake(albedo_name=None, prefix_name=None):
     mats=json.loads(path.read_text())
     stage=mats['bne_cliff_canyon_sat']['Stages'][0]
     albedo_name = albedo_name or Path(stage['baseColorMap']).name
-    prefix_name = prefix_name or albedo_name.split('_base.')[0]+'_faceted_near'
+    prefix_name = prefix_name or 'canyon_source'
     with Image.open(OUT/albedo_name) as im:
         lum = np.asarray(im.convert('L'),np.float32)/255
     normal,roughness,ao = channels(lum)
@@ -120,14 +120,14 @@ def bake(albedo_name=None, prefix_name=None):
                  roughnessMap=prefix+prefix_name+'_roughness.data.png',roughnessMapUseUV=0,roughnessFactor=1,
                  ambientOcclusionMap=prefix+prefix_name+'_ao.data.png',ambientOcclusionMapUseUV=0,metallicFactor=0)
     stage.pop('detailNormalMapUseUV',None)  # Not an engine field; use normalDetailMapUseUV.
-    stage.update(detailMap=prefix+'canyon_detail_dirt_rocky_v1.data.png',
+    stage.update(detailMap=prefix+'ground_detail.data.png',
                  detailMapUseUV=0, detailBaseColorMapStrength=DETAIL_COLOR_STRENGTH,
-                 detailNormalMap=prefix+'canyon_detail_dirt_rocky_v1.normal.dds',
+                 detailNormalMap=prefix+'ground_detail.normal.dds',
                  normalDetailMapUseUV=0, detailNormalMapStrength=DETAIL_NORMAL_STRENGTH,
                  detailScale=[WIDTH_M/DETAIL_REPEAT_M,HEIGHT_M/DETAIL_REPEAT_M],
-                 ambientOcclusionDetailMap=prefix+'canyon_detail_dirt_rocky_v1_ao.data.png',
+                 ambientOcclusionDetailMap=prefix+'ground_detail_ao.data.png',
                  detailAoMapStrength=DETAIL_AO_STRENGTH,
-                 roughnessDetailMap=prefix+'canyon_detail_dirt_rocky_v1_roughness.data.png',
+                 roughnessDetailMap=prefix+'ground_detail_roughness.data.png',
                  detailRoughnessMapStrength=DETAIL_ROUGHNESS_STRENGTH,
                  useAnisotropic=True)
     path.write_text(json.dumps(mats,indent=2)+'\n')

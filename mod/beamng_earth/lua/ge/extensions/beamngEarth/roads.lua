@@ -886,14 +886,21 @@ function M.geoWalk(t, what)
   return { shape = partShape(t, what), pos = { x, y, z }, rot = pp.q, collisionMesh = p.collisionMesh }
 end
 
--- A reconnect clears Forest items while retaining unchanged cliff meshes.
--- Reattach their rows once; repeated deliveries must not rebuild visible rocks.
-function M.restoreTalusRows(t, data)
+-- A reconnect clears Forest items while retaining unchanged meshes. Restore each
+-- population once; duplicate deliveries must not rebuild already visible objects.
+function M.restoreForestRows(t, data, field, prefix, stride, allowEmpty)
   local T = require('beamngEarth/trees')
-  if type(data.talus) ~= 'table' or type(data.talus.items) ~= 'table' or #data.talus.items == 0
-      or T.hasGeo('t' .. t.gkey) then return false end
-  T.onGeoRows('t' .. t.gkey, t.gkey, data.talus.items, data.talus.groups, 17,
+  local rows = data[field]
+  local key = prefix .. t.gkey
+  if type(rows) ~= 'table' or type(rows.items) ~= 'table'
+      or (not allowEmpty and #rows.items == 0) or T.hasGeo(key) then return false end
+  T.onGeoRows(key, t.gkey, rows.items, rows.groups, stride,
     t.frame, t.rowPivot or 0, t.anchorObj)
+  return true
+end
+
+function M.restoreTalusRows(t, data)
+  if not M.restoreForestRows(t, data, 'talus', 't', 17) then return false end
   t.talus = true
   return true
 end
@@ -918,19 +925,8 @@ function M.onGeoTile(msg, currentAnchor, a)
       for w in pairs(msg.slots) do slotDrop(msgSlot(msg, w)) end
     end
     old.anchor, old.orphan = currentAnchor, nil
-    -- (its furniture and guard rails again where trees.lua has them no more: a disconnect clears them all, trees.clear;
-    -- the poles near the car were gone after a server restart, their wires, part of the tile, still up: the Stelvio,
-    -- 2026-10-31)
-    local T = require('beamngEarth/trees')
-    if type(data.props) == 'table' and type(data.props.items) == 'table' and not T.hasGeo('p' .. old.gkey) then
-      T.onGeoRows('p' .. old.gkey, old.gkey, data.props.items, data.props.groups, nil, old.frame, old.rowPivot or 0,
-        old.anchorObj)
-    end
-    if type(data.guardrails) == 'table' and type(data.guardrails.items) == 'table' and #data.guardrails.items > 0
-        and not T.hasGeo('g' .. old.gkey) then
-      T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
-        old.rowPivot or 0, old.anchorObj)
-    end
+    M.restoreForestRows(old, data, 'props', 'p', nil, true)
+    M.restoreForestRows(old, data, 'guardrails', 'g', 17)
     M.restoreTalusRows(old, data)
     M.geoStats.kept = M.geoStats.kept + 1
     return true

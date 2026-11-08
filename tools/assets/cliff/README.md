@@ -17,7 +17,7 @@ CPU displacement maps are `server/cliff_height.png` and `server/cliff_cut_height
 ## Default cliff erosion normal
 
 `tools/bake_default_cliff_erosion.py` combines the existing 8192 x 8192
-`scan_v2_flat.normal.png` with the approved `canyon_far_v8.normal.png`.
+`natural_far.normal.png` with the approved `canyon_far.normal.png`.
 It adds their surface gradients, preserving the scan detail and the separate
 micro-normal slot without an additional runtime texture sample. The erosion
 uses the near canyon scale (274.32 m horizontally, 182.88 m vertically), with
@@ -25,10 +25,10 @@ periodic crop feathering and a 0.45 slope gain. The default cliff UV repeat
 remains 91.44 m; the larger erosion pattern is cropped into that repeat.
 
 Run the baker with Python, NumPy, OpenCV and Pillow. Have BeamNG cook the
-generated `scan_eroded_v1.normal.png`, then run the baker with
+generated `natural_near.normal.png`, then run the baker with
 `--publish <cooked DDS path>`. Publishing validates BC5_UNORM, full 8K
 resolution and all 14 mip levels before updating both default cliff materials
-to `scan_eroded_v1_ready.normal.dds`. The adjacent bake JSON records inputs
+to `natural_near.normal.dds`. The adjacent bake JSON records inputs
 and parameters. Keep the original scan normal for reproducible rebakes.
 
 
@@ -46,7 +46,7 @@ existing finish; scattered stock boulders retain their distinct authored maps.
 The broad near face range is bounded to 0.68–0.96 and the distant/contact range to
 0.75–0.97 before detail. Granular detail is restrained so it cannot overwhelm
 the broad variation. Roughness follows the normal UV set, including UV1 on
-far materials. The baked audit `relief_roughness_v1.json` records source hashes,
+far materials. The baked audit `roughness_bake.json` records source hashes,
 output hashes, ranges and convex/concave means. These are artistic estimates
 from shading relief, not measured roughness. Run `test_cliffroughness` to check
 curvature sign, wrapping, bounds, coverage and asset freshness.

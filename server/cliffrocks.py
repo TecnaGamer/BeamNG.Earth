@@ -300,9 +300,7 @@ def rock_colors(biomes, rgb=None, family=cliffmaterial.NATURAL):
         target_light = 180 + .25*(np.clip(luminance, 130, 210)-180)
         stone *= (target_light/np.maximum(luminance, 1))[..., None]
         mineral = np.where(valid[..., None], stone, mineral)
-        def linear(a):
-            return np.where(a <= .04045, a/12.92, ((a+.055)/1.055)**2.4)
-        gain = linear(np.clip(stone/255, 0, 1))/linear(SCAN_MEDIAN_SRGB)/ALBEDO_HEADROOM
+        gain = cc.linear(np.clip(stone/255, 0, 1))/cc.linear(SCAN_MEDIAN_SRGB)/ALBEDO_HEADROOM
         base = np.where(valid[..., None], np.clip(gain, .12, 1)*255, base)
     # Preserve the established exposure, but calibrate hue against the actual
     # diffuse + material factor. A shared scan-relative gain was too pink on

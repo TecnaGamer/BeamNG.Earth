@@ -109,7 +109,7 @@ class CurvatureRoughnessTest(unittest.TestCase):
         self.assertAlmostEqual(float(noise.mean()), 0, delta=.015)
 
     def test_all_packaged_rock_stages_use_aligned_nonuniform_maps(self):
-        audit=json.loads((bake.OUT/(bake.VERSION+'.json')).read_text())
+        audit=json.loads(bake.AUDIT_PATH.read_text())
         records={r['file']:r for r in audit['files']}
         checked=set()
         for file in ('cliff.materials.json','cliff_contact.materials.json'):

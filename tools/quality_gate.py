@@ -22,7 +22,7 @@ MODULES = (
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets", "test_subsea_tunnels", "test_tunnels",
     "test_worldbundle", "test_world_cache", "test_peerwork",
-    "test_host_package", "test_carriageway_solver",
+    "test_host_package", "test_carriageway_solver", "test_cliffassets",
 )
 
 

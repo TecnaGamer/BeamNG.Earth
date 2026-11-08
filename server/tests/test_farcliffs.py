@@ -419,7 +419,7 @@ class FarCliffsTest(unittest.TestCase):
     def test_far_normal_is_unit_length_and_preserves_detail_in_mips(self):
         from PIL import Image
         root=Path(__file__).resolve().parents[2]
-        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far_v8.normal.png'
+        path=root/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_far.normal.png'
         with Image.open(path) as im:
             n=np.asarray(im,dtype=float)/127.5-1
             mip=np.asarray(im.resize((32,32),Image.Resampling.BOX),dtype=float)/127.5-1
@@ -472,7 +472,7 @@ class FarCliffsTest(unittest.TestCase):
                 # New geological detail keeps the established near palette:
                 # compare rendered mean including the intentional near exposure reduction.
                 base=mod/stage['baseColorMap'].lstrip('/')
-                previous=base.parent/'canyon_v3_base.color.png'
+                previous=base.parent/'canyon_reference_base.color.png'
                 def mean_rgb(path):
                     with Image.open(path) as im:
                         rgb=np.asarray(im.convert('RGB'))

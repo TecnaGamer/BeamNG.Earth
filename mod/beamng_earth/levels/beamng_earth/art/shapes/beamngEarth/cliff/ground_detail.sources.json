@@ -3,45 +3,45 @@
   "origin": "Installed BeamNG.drive stock t_dirt_rocky terrain detail material",
   "files": [
     {
-      "file": "canyon_detail_dirt_rocky_source.color.dds",
+      "file": "ground_detail_source.color.dds",
       "sha256": "7e690c6aeb1b56469da2f958762fe939b1a904bcff11b53a91ed7fddb892e6a8",
       "source_archive": "terrain.zip",
       "source_path": "assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_b.color.dds"
     },
     {
-      "file": "canyon_detail_dirt_rocky_v1.normal.dds",
+      "file": "ground_detail.normal.dds",
       "sha256": "ff26db84212909c8eac976f8478992f69e91f18c8f5bba5f5949c7e0de98d6f7",
       "source_archive": "terrain.zip",
       "source_path": "assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_nm.normal.dds"
     },
     {
-      "file": "canyon_detail_dirt_rocky_source_ao.data.dds",
+      "file": "ground_detail_source_ao.data.dds",
       "sha256": "db279f76dfeda6a78686575e7d81931ddccdb531e7b73efe9c577cbe0c0fe9ae",
       "source_archive": "terrain.zip",
       "source_path": "assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_ao.data.dds"
     },
     {
-      "file": "canyon_detail_dirt_rocky_source_r.data.dds",
+      "file": "ground_detail_source_r.data.dds",
       "sha256": "e657eb5938e2342349c220e630c27f7f8befa4168327e72a7317aeba1a7a355d",
       "source_archive": "terrain.zip",
       "source_path": "assets/materials/terrain/rock/t_dirt_rocky/t_dirt_rocky_r.data.dds"
     },
     {
-      "file": "canyon_detail_dirt_rocky_v1.data.png",
+      "file": "ground_detail.data.png",
       "sha256": "2e89a2dba32b9e5657c38bd9ed8b8d5853f9b20301f043e9caca3d9cbeb21607",
-      "derived_from": "canyon_detail_dirt_rocky_source.color.dds",
+      "derived_from": "ground_detail_source.color.dds",
       "method": "linear luminance, local normalization, zero-mean detail at 0.5, RGB data"
     },
     {
-      "file": "canyon_detail_dirt_rocky_v1_ao.data.png",
+      "file": "ground_detail_ao.data.png",
       "sha256": "0cf54be68e7059e1d0e9f337f4b5051e1fa87048332bbff504792cf0877c255d",
-      "derived_from": "canyon_detail_dirt_rocky_source_ao.data.dds",
+      "derived_from": "ground_detail_source_ao.data.dds",
       "method": "half of linear stock AO; additive cavities, neutral at 0.5, floor quantization"
     },
     {
-      "file": "canyon_detail_dirt_rocky_v1_roughness.data.png",
+      "file": "ground_detail_roughness.data.png",
       "sha256": "82beab65ea95721d78cd8adaf06c88dabd24adc0c156d3bbee012be7f5bb8647",
-      "derived_from": "canyon_detail_dirt_rocky_source_r.data.dds",
+      "derived_from": "ground_detail_source_r.data.dds",
       "method": "half of mean-centered linear stock roughness plus 0.5"
     }
   ],

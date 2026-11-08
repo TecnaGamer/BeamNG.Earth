@@ -33,9 +33,9 @@ def main():
         height = archive.read(prefix+'_h.png')
         rgb = np.asarray(Image.open(BytesIO(archive.read(prefix+'_b.png'))).convert('RGB'), float)/255
         # Reuse the already bundled terrain assets; never reference a stock level.
-        for suffix, name in (('_b.color.dds','source.color.dds'),('_nm.normal.dds','v1.normal.dds'),
+        for suffix, name in (('_b.color.dds','source.color.dds'),('_nm.normal.dds','normal.dds'),
                              ('_ao.data.dds','source_ao.data.dds'),('_r.data.dds','source_r.data.dds')):
-            path = target/('canyon_detail_dirt_rocky_'+name)
+            path = target/('ground_detail.'+name if name == 'normal.dds' else 'ground_detail_'+name)
             if not path.exists():
                 path.write_bytes(archive.read(prefix+suffix))
     h = np.asarray(Image.open(BytesIO(height)), float)
@@ -55,10 +55,10 @@ def main():
     factor = 1.055*(1/mean)**(1/2.4)-.055
     root = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/'
     name = 'bne_cliff_contact_strip'
-    stage = dict(baseColorMap=root+'canyon_detail_dirt_rocky_source.color.dds', baseColorFactor=[*factor,1], vertColor=True,
-        normalMap=root+'canyon_detail_dirt_rocky_v1.normal.dds', normalMapStrength=.65,
-        roughnessMap=root+'canyon_detail_dirt_rocky_source_r.data.dds', roughnessFactor=1, metallicFactor=0,
-        ambientOcclusionMap=root+'canyon_detail_dirt_rocky_source_ao.data.dds', ambientOcclusionFactor=.35,
+    stage = dict(baseColorMap=root+'ground_detail_source.color.dds', baseColorFactor=[*factor,1], vertColor=True,
+        normalMap=root+'ground_detail.normal.dds', normalMapStrength=.65,
+        roughnessMap=root+'ground_detail_source_r.data.dds', roughnessFactor=1, metallicFactor=0,
+        ambientOcclusionMap=root+'ground_detail_source_ao.data.dds', ambientOcclusionFactor=.35,
         opacityMap=root+'contact_height_coverage.data.dds', opacityFactor=1, opacityMapUseUV=0,
         opacityDetailMap=root+'contact_threshold_coverage.data.dds', opacityDetailMapUseUV=1,
         detailOpacityMapStrength=1, detailScale=[1,1])

@@ -37,8 +37,8 @@
   },
   "files": [
     {
-      "file": "scan_eroded_v1_near_relief_roughness_v1.data.png",
-      "source": "scan_eroded_v1.normal.png",
+      "file": "natural_near_roughness.data.png",
+      "source": "natural_near.normal.png",
       "source_sha256": "229d6fe9a1669e9cc7c8ed41fe154db787c940108179c353016dc744fabab5a0",
       "sha256": "7fc96735479e4f2b2aa10a056429d7d36af24ae4fbf2c9408f495e2153081c31",
       "size": [
@@ -56,11 +56,12 @@
         0.9544455409049988
       ],
       "convex_mean": 0.7782323956489563,
-      "concave_mean": 0.9001219272613525
+      "concave_mean": 0.9001219272613525,
+      "noise_seed": 9910561500207309348
     },
     {
-      "file": "cut_restored_v1_near_relief_roughness_v1.data.png",
-      "source": "cut_restored_v1.normal.png",
+      "file": "limestone_cut_near_roughness.data.png",
+      "source": "limestone_cut.normal.png",
       "source_sha256": "d1fb304a1f127a5f2d5fa7548171c99562dd25cfc801f74302fd3aa0af92304f",
       "sha256": "878dbe5c32487ae56c31bdd8734aa941625db16d61e80ed3915ccfed64e04b8f",
       "size": [
@@ -78,11 +79,12 @@
         0.9441965818405151
       ],
       "convex_mean": 0.7821006178855896,
-      "concave_mean": 0.8962501287460327
+      "concave_mean": 0.8962501287460327,
+      "noise_seed": 15534988892366694837
     },
     {
-      "file": "arid_fractured_v1_near_relief_roughness_v1.data.png",
-      "source": "arid_fractured_v1.normal.png",
+      "file": "arid_near_roughness.data.png",
+      "source": "arid_near.normal.png",
       "source_sha256": "9e52384b9c8cbb147bb47c18d1fef9a3c3530eb4c3ba0b17311016213b4e45a9",
       "sha256": "230b231df00bc3dcc3c88a705c4b3e453975b72507f33f3ed330df895fe6d7ff",
       "size": [
@@ -100,11 +102,12 @@
         0.9503172039985657
       ],
       "convex_mean": 0.7840115427970886,
-      "concave_mean": 0.8988777995109558
+      "concave_mean": 0.8988777995109558,
+      "noise_seed": 13490527603496256993
     },
     {
-      "file": "canyon_v3_near_relief_roughness_v1.data.png",
-      "source": "canyon_v3.normal.png",
+      "file": "canyon_reference_near_roughness.data.png",
+      "source": "canyon_reference.normal.png",
       "source_sha256": "a1224f4d18bf7de128a1324abea235062f33b857a613e9a15a36dbc9b27b82cf",
       "sha256": "237640eb34d9cf52309f69426e417f56233c370fa663541e4c7e1acab4c7657c",
       "size": [
@@ -122,11 +125,12 @@
         0.9549268484115601
       ],
       "convex_mean": 0.7834927439689636,
-      "concave_mean": 0.8968532681465149
+      "concave_mean": 0.8968532681465149,
+      "noise_seed": 696652931495979850
     },
     {
-      "file": "canyon_v3_far_relief_roughness_v1.data.png",
-      "source": "canyon_v3.normal.png",
+      "file": "canyon_reference_far_roughness.data.png",
+      "source": "canyon_reference.normal.png",
       "source_sha256": "a1224f4d18bf7de128a1324abea235062f33b857a613e9a15a36dbc9b27b82cf",
       "sha256": "33414f1b5b3735f0cd6c6ab67d93c4a05e9d723adf0b6575421d1fe4a7967663",
       "size": [
@@ -144,11 +148,12 @@
         0.9654341340065002
       ],
       "convex_mean": 0.8334716558456421,
-      "concave_mean": 0.9131679534912109
+      "concave_mean": 0.9131679534912109,
+      "noise_seed": 696652931495979850
     },
     {
-      "file": "scan_v2_flat_far_relief_roughness_v1.data.png",
-      "source": "scan_v2_flat.normal.png",
+      "file": "natural_far_roughness.data.png",
+      "source": "natural_far.normal.png",
       "source_sha256": "8c23bce84f877ee8e2d72920f19991fa24212f8bb518a5a08a2d650f10d822be",
       "sha256": "26b54101336ac823ad6578af40bf3ebb52744f005ad9f9bc7515a0c78e0bbb86",
       "size": [
@@ -166,11 +171,12 @@
         0.9634085893630981
       ],
       "convex_mean": 0.8289207220077515,
-      "concave_mean": 0.9160248041152954
+      "concave_mean": 0.9160248041152954,
+      "noise_seed": 4481919377828426750
     },
     {
-      "file": "canyon_v5_eroded_near_v2_near_relief_roughness_v1.data.png",
-      "source": "canyon_v5_eroded_near_v2.normal.png",
+      "file": "canyon_near_roughness.data.png",
+      "source": "canyon_near.normal.png",
       "source_sha256": "ec505441c241dbfefb81c2af609e66b3dee3a15e5eeee71b014d35b47d01b691",
       "sha256": "bc497e9d47a164cafddff2762f895d72bfa295040eda9d459c32bc3c8d264ae5",
       "size": [
@@ -188,11 +194,12 @@
         0.9579294323921204
       ],
       "convex_mean": 0.7802084684371948,
-      "concave_mean": 0.9006300568580627
+      "concave_mean": 0.9006300568580627,
+      "noise_seed": 15009153146109736744
     },
     {
-      "file": "canyon_far_v8_far_relief_roughness_v1.data.png",
-      "source": "canyon_far_v8.normal.png",
+      "file": "canyon_far_roughness.data.png",
+      "source": "canyon_far.normal.png",
       "source_sha256": "725745455039bb3f6aba483fbe7e7d65fcec851906025718158b03cc942e93a1",
       "sha256": "c4d7bed5d78583dd9b7a78a00717be199b0564cdacfbe725c947f977ca9ff727",
       "size": [
@@ -210,11 +217,12 @@
         0.9632877111434937
       ],
       "convex_mean": 0.8269694447517395,
-      "concave_mean": 0.9159390330314636
+      "concave_mean": 0.9159390330314636,
+      "noise_seed": 17149330708112321576
     },
     {
-      "file": "arid_fractured_far_v1_far_relief_roughness_v1.data.png",
-      "source": "arid_fractured_far_v1.normal.png",
+      "file": "arid_far_roughness.data.png",
+      "source": "arid_far.normal.png",
       "source_sha256": "6ee994f063752a8e1006a9e1b3e494b11bdec7aefad60137f2f296966c5a945f",
       "sha256": "3ab4f19570ee4d40807a0e24dcd9853769e5a62719cb15b257ee3b95b0138337",
       "size": [
@@ -232,11 +240,12 @@
         0.9628722667694092
       ],
       "convex_mean": 0.832384467124939,
-      "concave_mean": 0.9153831005096436
+      "concave_mean": 0.9153831005096436,
+      "noise_seed": 14304318395455621313
     },
     {
-      "file": "canyon_detail_dirt_rocky_v1_contact_relief_roughness_v1.data.png",
-      "source": "canyon_detail_dirt_rocky_v1.normal.dds",
+      "file": "ground_detail_contact_roughness.data.png",
+      "source": "ground_detail.normal.dds",
       "source_sha256": "ff26db84212909c8eac976f8478992f69e91f18c8f5bba5f5949c7e0de98d6f7",
       "sha256": "7378a21fa09196859d767ba30c6b9165618f239e607a8dc0227f177cebe980d7",
       "size": [
@@ -254,7 +263,8 @@
         0.9554511904716492
       ],
       "convex_mean": 0.8151216506958008,
-      "concave_mean": 0.9126689434051514
+      "concave_mean": 0.9126689434051514,
+      "noise_seed": 7560309702652481480
     }
   ]
 }

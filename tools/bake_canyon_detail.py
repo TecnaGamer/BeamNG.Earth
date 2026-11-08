@@ -7,13 +7,13 @@ import numpy as np
 from PIL import Image
 
 OUT=Path(__file__).resolve().parents[1]/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
-COLOR='canyon_detail_dirt_rocky_v1.data.png'
-NORMAL='canyon_detail_dirt_rocky_v1.normal.dds'
-SOURCE='canyon_detail_dirt_rocky_source.color.dds'
-AO_SOURCE='canyon_detail_dirt_rocky_source_ao.data.dds'
-ROUGHNESS_SOURCE='canyon_detail_dirt_rocky_source_r.data.dds'
-AO='canyon_detail_dirt_rocky_v1_ao.data.png'
-ROUGHNESS='canyon_detail_dirt_rocky_v1_roughness.data.png'
+COLOR='ground_detail.data.png'
+NORMAL='ground_detail.normal.dds'
+SOURCE='ground_detail_source.color.dds'
+AO_SOURCE='ground_detail_source_ao.data.dds'
+ROUGHNESS_SOURCE='ground_detail_source_r.data.dds'
+AO='ground_detail_ao.data.png'
+ROUGHNESS='ground_detail_roughness.data.png'
 
 
 def detail_pbr(ao, roughness):
@@ -58,7 +58,7 @@ def bake():
             else:
                 record.update(derived_from=ROUGHNESS_SOURCE,method='half of mean-centered linear stock roughness plus 0.5')
         records.append(record)
-    (OUT/'canyon_detail_dirt_rocky_v1.sources.json').write_text(json.dumps(dict(author='BeamNG GmbH',
+    (OUT/'ground_detail.sources.json').write_text(json.dumps(dict(author='BeamNG GmbH',
         origin='Installed BeamNG.drive stock t_dirt_rocky terrain detail material',files=records,
         notes='Source albedo, normal, AO and roughness copied unchanged. Detail data derived by tools/bake_canyon_detail.py. BeamNG-owned assets and derivatives excluded from the project MIT license.'),indent=2)+'\n')
 

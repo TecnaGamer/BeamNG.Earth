@@ -34,7 +34,7 @@ BeamNG cooks each `.normal.png` into BC5 DDS; copy those cooked results to the
 corresponding `_ready.normal.dds` names referenced by the materials. Both checked
 runtime DDS files have a 4096-square base and complete mip chains. Do not point a
 material to an uncooked source PNG: that previously produced missing normals.
-`arid_fractured_v1_bake.json` beside the runtime textures records material settings.
+`arid_near_bake.json` beside the runtime textures records material settings.
 
 ## Placement and performance
 

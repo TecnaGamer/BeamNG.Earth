@@ -606,24 +606,7 @@ end
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   if clifftalus.isGroup(group) then
-    -- Use native large assets for outcrops; companion rocks may grow only a
-    -- little. Avoid selecting a tiny variant and magnifying its texture atlas.
-    local large = group:match('^talus_large_') ~= nil
-    local companion = group:match('^talus_face_') ~= nil
-    if not large and not companion then
-      local v = list[math.floor(rank * 7919) % #list + 1]
-      return v[1], math.max(.10, math.min(2.0, h/v[2]))
-    end
-    local maxScale = large and 1.0 or 1.25
-    local candidates = {}
-    local biggest = list[1]
-    for _, v in ipairs(list) do
-      if v[2] > biggest[2] then biggest = v end
-      if h <= v[2]*maxScale then candidates[#candidates+1] = v end
-    end
-    if #candidates == 0 then candidates[1] = biggest end
-    local v = candidates[math.floor(rank * 7919) % #candidates + 1]
-    return v[1], math.max(0.10, math.min(maxScale, h / v[2]))
+    return clifftalus.pick(group, list, h, rank)
   end
   local cands = {}
   for _, range in ipairs({ { 0.8, 1.25 }, { 0.6, 1.6 } }) do      -- near its size first, then wider

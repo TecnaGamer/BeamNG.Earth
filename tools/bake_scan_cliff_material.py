@@ -15,7 +15,7 @@ from assemble_cliff_scans import detail_from_normals, geometric_normal, unit, sa
 
 SOURCE = ROOT/'build/cliff-assembly'
 OUT = ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
-PREFIX = 'scan_v2'
+PREFIX = 'natural'
 
 
 def periodic(a, width):
@@ -127,7 +127,7 @@ def main(argv=None):
         Image.fromarray(np.rint(low/cm.RELIEF_M*65535).astype(np.uint16)).save(cm.HEIGHT_PATH)
     print('Baking normals against a flat reference', flush=True)
     normal = flat_normal(height, detail)
-    normal_suffix = 'flat.normal.png'
+    normal_suffix = 'far.normal.png'
     # Encode in strips too, avoiding multiple full-resolution float temporaries.
     encoded = np.empty(normal.shape,np.uint8)
     for start in range(0,normal.shape[0],128):
@@ -162,7 +162,7 @@ def main(argv=None):
         for key in list(stage):
             if 'detail' in key.lower():
                 del stage[key]
-        stage.update(detailMap=detail_root+'detail.data.dds', detailNormalMap=base+'cut_restored_micro_v1.normal.png',
+        stage.update(detailMap=detail_root+'detail.data.dds', detailNormalMap=base+'rock_grain.normal.png',
                      detailNormalMapStrength=.3, detailScale=[cm.WIDTH_M/1.2, cm.HEIGHT_M/1.2])
     material_path.write_text(json.dumps(material,indent=2)+'\n')
     meta = dict(source='build/cliff-assembly', size=size, span_m=[cm.WIDTH_M,cm.HEIGHT_M],
@@ -170,7 +170,7 @@ def main(argv=None):
                 normal_reference='flat',
                 normal='OpenGL +Y tangent-space full relief against undisplaced plane',
                 limitations='Full relief can reinforce slopes already represented by geometry; the flat bake favors visible detail.')
-    (OUT/'scan_bake.json').write_text(json.dumps(meta,indent=2))
+    (OUT/'natural_source_bake.json').write_text(json.dumps(meta,indent=2))
     (OUT/'SCAN_ATTRIBUTION.txt').write_text((SOURCE/'ATTRIBUTION.txt').read_text()+f'\nRuntime changes: periodic edge apron, relief scaling, flat-reference normal bake.\n')
     print('Normal map and binding updated' if args.normals_only else 'Runtime scan maps and CPU displacement baked', flush=True)
 

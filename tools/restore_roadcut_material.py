@@ -24,13 +24,13 @@ ASSETS = ROOT/'tools/assets/roadcut_generated'
 WORK = ROOT/'build/roadcut-restoration'
 OUT = ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
 SIZE = 4096
-PREFIX = 'cut_restored_v1'
+PREFIX = 'limestone_cut'
 COLOR_SIGMA = 40
 OVERLAP = 28
 MICRO_SPAN_M = 1.2
 MICRO_FILTER_M = .035
 MICRO_STRENGTH = .7
-MICRO_NAME = 'cut_restored_micro_v1.normal.png'
+MICRO_NAME = 'rock_grain.normal.png'
 
 
 def read_rgb(path):
@@ -204,7 +204,7 @@ def bake_micro():
                     span_m=MICRO_SPAN_M, filter_m=MICRO_FILTER_M,
                     strength=MICRO_STRENGTH, size=n.shape[0],
                     relief='High-pass scanned tangent slopes; no albedo-derived height')
-    (OUT/'cut_restored_micro_v1.json').write_text(json.dumps(metadata, indent=2)+'\n')
+    (OUT/'rock_grain.json').write_text(json.dumps(metadata, indent=2)+'\n')
     print(json.dumps(metadata), flush=True)
 
 

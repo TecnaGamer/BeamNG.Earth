@@ -1,6 +1,6 @@
 {
-  "source_normal": "scan_v2_flat.normal.png",
-  "erosion_normal": "canyon_far_v8.normal.png",
+  "source_normal": "natural_far.normal.png",
+  "erosion_normal": "canyon_far.normal.png",
   "size": [
     8192,
     8192

@@ -12,13 +12,14 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 from scipy.ndimage import gaussian_filter
+from cliff_assets import DETAIL_ROUGHNESS_STRENGTH
 
 ROOT = Path(__file__).resolve().parents[1]
 MOD = ROOT / 'mod/beamng_earth'
 ASSETS = MOD / 'levels/beamng_earth/art/shapes/beamngEarth'
 OUT = ASSETS / 'cliff'
 PREFIX = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/'
-VERSION = 'relief_roughness_v1'
+AUDIT_PATH = OUT / 'roughness_bake.json'
 # Most exposed faces remain dry stone. Small smoother patches are a separate pass.
 PROFILES = {'near': (.86, .18, .10), 'far': (.88, .13, .09), 'contact': (.88, .13, .09)}
 
@@ -116,7 +117,7 @@ def patch_reduction(shape, seed):
 def polished_patches(values, exposure, seed):
     """Apply uneven polish islands with fine rough interruptions throughout.
 
-    The previous 34% reduction is a ceiling. Soft boundaries and concave joints
+    The 34% reduction is a ceiling. Soft boundaries and concave joints
     keep their dry finish; finer grain breaks up each island's interior.
     """
     coarse = periodic_perlin(values.shape, PATCH_CELL_TEXELS, seed)
@@ -148,16 +149,35 @@ def source_for(name, stage):
     source = stage.get('normalMap')
     uv = stage.get('normalMapUseUV', 0)
     if not source:  # Legacy distant materials have no normal sample, but share its rock chart.
-        source = PREFIX + ('canyon_v3.normal.png' if 'canyon' in name else 'scan_v2_flat.normal.png')
+        source = PREFIX + ('canyon_reference.normal.png' if 'canyon' in name else 'natural_far.normal.png')
         uv = 0
     path = MOD / source.lstrip('/')
-    if path.name.endswith('_ready.normal.dds'):
-        path = path.with_name(path.name.replace('_ready.normal.dds', '.normal.png'))
+    # Authored PNG and cooked DDS share a stem; stock BC5 maps may have no PNG.
+    authoring = path.with_suffix('.png')
+    if path.suffix == '.dds' and authoring.is_file():
+        path = authoring
     return path, uv
+
+
+def roughness_filename(source, profile):
+    """One stable name per material role, independent of bake revisions."""
+    stem = source.name.split('.normal')[0]
+    if not stem.endswith('_' + profile):
+        stem += '_' + profile
+    return stem + '_roughness.data.png'
+
+
+def noise_seeds():
+    """Keep approved patch patterns stable when an authoring file is renamed."""
+    if not AUDIT_PATH.is_file():
+        return {}
+    return {record['source']: record['noise_seed']
+            for record in json.loads(AUDIT_PATH.read_text())['files']}
 
 
 def bake():
     records, generated = [], {}
+    seeds = noise_seeds()
     for file in ('cliff.materials.json', 'cliff_contact.materials.json'):
         path = ASSETS / file
         mats = json.loads(path.read_text(encoding='utf8'))
@@ -172,16 +192,16 @@ def bake():
                 normal = read_normal(source, max_side)
                 values, exposure = roughness(normal, profile)
                 patch_mask = np.zeros_like(values)
+                seed = seeds.get(source.name, int.from_bytes(hashlib.sha256(source.name.encode()).digest()[:8], 'little'))
                 if profile != 'far':
-                    seed = int.from_bytes(hashlib.sha256(source.name.encode()).digest()[:8], 'little')
                     values, patch_mask = polished_patches(values, exposure, seed)
-                filename = source.name.split('.normal')[0] + '_' + profile + '_' + VERSION + '.data.png'
+                filename = roughness_filename(source, profile)
                 Image.fromarray(np.uint8(np.rint(values*255))).convert('RGB').save(OUT / filename)
                 generated[key] = filename
                 records.append(dict(file=filename, source=source.name,
                     source_sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
                     sha256=hashlib.sha256((OUT/filename).read_bytes()).hexdigest(),
-                    size=list(values.shape[::-1]), profile=profile,
+                    size=list(values.shape[::-1]), profile=profile, noise_seed=seed,
                     patch_coverage=float(np.mean(patch_mask > .1)),
                     patch_core_coverage=float(np.mean(patch_mask > .95)),
                     percentiles=np.percentile(values, [0,5,50,95,100]).tolist(),
@@ -191,9 +211,9 @@ def bake():
             if 'roughnessDetailMap' in stage:
                 # Existing granular detail is additive. Keep its darkest texels
                 # from overpowering the conservative face-scale roughness.
-                stage['detailRoughnessMapStrength'] = .06
+                stage['detailRoughnessMapStrength'] = DETAIL_ROUGHNESS_STRENGTH
         path.write_text(json.dumps(mats, indent=2)+'\n', encoding='utf8')
-    (OUT/(VERSION+'.json')).write_text(json.dumps(dict(method=__doc__.strip(), profiles=PROFILES,
+    AUDIT_PATH.write_text(json.dumps(dict(method=__doc__.strip(), profiles=PROFILES,
         polished_patches=dict(reduction=PATCH_REDUCTION, strength_min=PATCH_STRENGTH_MIN,
             strength_cell_texels=PATCH_VARIATION_CELL_TEXELS,
             breakup_range=[BREAKUP_MIN, BREAKUP_MAX], breakup_cell_texels=BREAKUP_VARIATION_CELL_TEXELS,

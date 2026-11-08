@@ -4,7 +4,7 @@ from pathlib import Path
 
 import numpy as np
 import clifftypes
-from clifftypes import NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON, PLATEAU_RING
+from clifftypes import NATURAL, LIMESTONE_CUT, ARID_CUT, CANYON
 
 WIDTH_M = 91.44
 HEIGHT_M = 91.44
@@ -89,11 +89,6 @@ def geometry_sample(u, v, *, family=NATURAL):
         return beds
     scan = sample(u, np.asarray(v)*CANYON_HEIGHT_M/HEIGHT_M, family=NATURAL)
     return beds + CANYON_SCAN_RELIEF_WEIGHT*scan
-
-
-def canyon_region(lat, lon):
-    """Compatibility wrapper: the winning natural appearance is canyon."""
-    return natural_family(lat, lon) == CANYON
 
 
 def natural_family(lat, lon):

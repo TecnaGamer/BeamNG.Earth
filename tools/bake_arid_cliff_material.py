@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = pbr.OUT
 PREFIX = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/'
 REPEAT_M = 91.44
-NEAR = 'arid_fractured_v1'
-FAR = 'arid_fractured_far_v1'
+NEAR = 'arid_near'
+FAR = 'arid_far'
 
 
 def save(name, array):
@@ -62,7 +62,7 @@ def bake():
     near['name'] = near['mapTo'] = 'bne_cliff_roadcut_arid'
     stage = near['Stages'][0]
     stage.update(baseColorMap=PREFIX+NEAR+'_base.color.png',baseColorFactor=[1,1,1,1],
-        normalMap=PREFIX+NEAR+'_ready.normal.dds',normalMapUseUV=0,normalMapStrength=.32,
+        normalMap=PREFIX+NEAR+'.normal.dds',normalMapUseUV=0,normalMapStrength=.32,
         roughnessMap=PREFIX+NEAR+'_roughness.data.png',roughnessMapUseUV=0,roughnessFactor=1,
         ambientOcclusionMap=PREFIX+NEAR+'_ao.data.png',ambientOcclusionMapUseUV=0,
         detailScale=[REPEAT_M/3,REPEAT_M/3],metallicFactor=0)
@@ -74,7 +74,7 @@ def bake():
     far['Stages'][0].update(detailMap=PREFIX+FAR+'_base.color.png',detailMapUseUV=0,
         detailBaseColorMapStrength=strength,detailScale=[1,1],
         baseColorFactor=[*tiled.srgb(4/mean_gain).tolist(),1],
-        normalMap=PREFIX+FAR+'_ready.normal.dds',normalMapUseUV=1,normalMapStrength=.70,
+        normalMap=PREFIX+FAR+'.normal.dds',normalMapUseUV=1,normalMapStrength=.70,
         roughnessMap=PREFIX+FAR+'_roughness.data.png',roughnessMapUseUV=0,roughnessFactor=1,
         ambientOcclusionMap=PREFIX+FAR+'_ao.data.png',ambientOcclusionMapUseUV=0)
     mats[far['name']] = far

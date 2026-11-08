@@ -6,10 +6,10 @@ copied unchanged; the normal retains its mip chain. Neutral shader detail
 maps are reproducibly derived by tools/bake_canyon_detail.py.
 
 Exact original paths and SHA-256 hashes are in
-canyon_detail_dirt_rocky_v1.sources.json. These stock assets and derivatives
+ground_detail.sources.json. These stock assets and derivatives
 are BeamNG-owned content and excluded from the project's MIT license.
 Local copies prevent later game asset changes from breaking the material.
 
-Unused Italy, West Coast mesh-rock and t_rock_b trials have been pruned;
-their history remains in Git. The active distant v3/v4 textures and source
-inputs for the current 4K assembly remain in use and are retained.
+Superseded normal trials and pre-relief roughness maps have been removed;
+their history remains in Git. Retained source maps feed the current detail
+and roughness bakers. See SOURCES.md for the shared asset naming convention.

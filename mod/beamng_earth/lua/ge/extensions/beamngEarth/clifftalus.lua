@@ -6,22 +6,48 @@ M.STOCK = '/levels/johnson_valley/art/shapes/rocks/'
 M.SOURCE_MAPS = '/assets/materials/decal/rock/rocks_desert_ca/'
 -- Full model heights measured from engine world boxes; all three are authored
 -- multi-rock clusters with LODs. One Forest instance draws a whole collection.
-M.SHAPES = { { 's_rocks_desert_collection_01', 3.655 },
+M.RUBBLE_SHAPES = { { 's_rocks_desert_collection_01', 3.655 },
   { 's_rocks_desert_collection_02', 1.703 }, { 's_rocks_desert_collection_03', 2.253 } }
 M.UTAH = '/levels/utah/art/shapes/rocks/'
-M.SHAPES[#M.SHAPES+1] = {'utah_boulder_1',1.885,M.UTAH,'utah'}
-M.SHAPES[#M.SHAPES+1] = {'utah_boulder_3',1.698,M.UTAH,'utah'}
-M.SHAPES[#M.SHAPES+1] = {'utah_boulder_5',.560,M.UTAH,'utah'}
+M.COMPANION_SHAPES = {{'utah_boulder_1',1.885,M.UTAH,'utah'},
+  {'utah_boulder_3',1.698,M.UTAH,'utah'}, {'utah_boulder_5',.560,M.UTAH,'utah'}}
+for _, shape in ipairs(M.COMPANION_SHAPES) do M.RUBBLE_SHAPES[#M.RUBBLE_SHAPES+1] = shape end
 -- Native 16.6 m outcrops have much denser atlas coverage than the 1.7-1.9 m
 -- boulders. Only scale these down for the requested 4-10 m cliff projections.
-M.LARGE_SHAPES = {{'utah_rock_big_2_b',16.6963,M.UTAH,'utah'},
+M.OUTCROP_SHAPES = {{'utah_rock_big_2_b',16.6963,M.UTAH,'utah'},
   {'utah_rock_big_2_d',16.59375,M.UTAH,'utah'}}
 local loaded, texturesReady = {}, false
 
-function M.isGroup(g)
-  return type(g) == 'string' and (g:match('^talus_%x%x%x%x%x%x$') ~= nil
-    or g:match('^talus_large_%x%x%x%x%x%x$') ~= nil
-    or g:match('^talus_face_%x%x%x%x%x%x$') ~= nil)
+-- These group prefixes are persisted in cached tile rows. Keep their wire names
+-- stable while using one vocabulary for the three populations in code.
+function M.kind(group)
+  if type(group) ~= 'string' then return nil end
+  if group:match('^talus_large_%x%x%x%x%x%x$') then return 'outcrop' end
+  if group:match('^talus_face_%x%x%x%x%x%x$') then return 'companion' end
+  if group:match('^talus_%x%x%x%x%x%x$') then return 'rubble' end
+end
+
+function M.isGroup(group)
+  return M.kind(group) ~= nil
+end
+
+-- Forest selects by native model height so a small atlas is never magnified
+-- into a large outcrop. Rubble retains its authored collection distribution.
+function M.pick(group, list, height, rank)
+  local kind = M.kind(group)
+  local maxScale = kind == 'outcrop' and 1.0 or kind == 'companion' and 1.25 or 2.0
+  local candidates = list
+  if kind ~= 'rubble' then
+    candidates = {}
+    local biggest = list[1]
+    for _, variant in ipairs(list) do
+      if variant[2] > biggest[2] then biggest = variant end
+      if height <= variant[2]*maxScale then candidates[#candidates+1] = variant end
+    end
+    if #candidates == 0 then candidates[1] = biggest end
+  end
+  local variant = candidates[math.floor(rank * 7919) % #candidates + 1]
+  return variant[1], math.max(.10, math.min(maxScale, height/variant[2]))
 end
 
 function M.tint(g)
@@ -51,7 +77,6 @@ function M.prepareTextures()
   if texturesReady then return true end
   FS:directoryCreate(M.ROOT)
   local maps = {
-    { M.SOURCE_MAPS..'t_rocks_desert_ca_b.color.dds', 'base.color.dds' },
     { M.SOURCE_MAPS..'t_rocks_desert_ca_nm.normal.dds', 'normal.normal.dds' },
     { M.SOURCE_MAPS..'t_rocks_desert_ca_r.data.dds', 'roughness.data.dds' },
     { M.SOURCE_MAPS..'t_rocks_desert_ca_ao.data.dds', 'ao.data.dds' },
@@ -59,9 +84,9 @@ function M.prepareTextures()
     { M.SOURCE_MAPS..'t_rocks_pac_detail_n.normal.dds', 'detail.normal.dds' },
   }
   local utah = '/assets/materials/rocks/utah_rocks_b/t_rocks_utah_'
-  for _, pair in ipairs({{'b.color','base.color'},{'nm.normal','normal.normal'},
+  for _, pair in ipairs({{'nm.normal','normal.normal'},
     {'r.data','roughness.data'},{'ao.data','ao.data'},
-    {'detail_b.data','detail.data'},{'detail_nm.normal','detail.normal'}}) do
+    {'detail_nm.normal','detail.normal'}}) do
     maps[#maps+1] = {utah..pair[1]..'.dds','utah_'..pair[2]..'.dds'}
   end
   local changed = {}
@@ -91,12 +116,12 @@ function M.materials(group)
   local name, result = 'bne_'..group, {}
   -- Neutral scanned stone retains albedo detail without the arid texture's
   -- red/green patches on unrelated mesh UVs. Tint from the supporting cliff.
-  for _, prefix in ipairs({'', 'utah_'}) do
-    local baseMap = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/scan_v2_base.color.png'
-    local mean = {.33863778,.32368715,.30369500}
-    local id = name..(prefix == '' and '' or '_utah')
-    local factor = {srgb(linear(tint[1])/mean[1]),srgb(linear(tint[2])/mean[2]),
+  local baseMap = '/levels/beamng_earth/art/shapes/beamngEarth/cliff/natural_base.color.png'
+  local mean = {.33863778,.32368715,.30369500}
+  local factor = {srgb(linear(tint[1])/mean[1]),srgb(linear(tint[2])/mean[2]),
                     srgb(linear(tint[3])/mean[3]),1}
+  for _, prefix in ipairs({'', 'utah_'}) do
+    local id = name..(prefix == '' and '' or '_utah')
     result[id] = {name=id,mapTo=id,class='Material',version=1.5,groundType='ROCK',
       Stages={{baseColorMap=baseMap,
         normalMap=M.ROOT..prefix..'normal.normal.dds',
@@ -122,8 +147,9 @@ function M.catalog(group)
   local material = M.ROOT..group..'.materials.json'
   writeFile(material,jsonEncode(M.materials(group)))
   loadJsonMaterialsFile(material)
-  local shapes = group:match('^talus_large_') and M.LARGE_SHAPES
-    or group:match('^talus_face_') and {M.SHAPES[4],M.SHAPES[5],M.SHAPES[6]} or M.SHAPES
+  local kind = M.kind(group)
+  local shapes = kind == 'outcrop' and M.OUTCROP_SHAPES
+    or kind == 'companion' and M.COMPANION_SHAPES or M.RUBBLE_SHAPES
   for _, source in ipairs(shapes) do
     local path = M.ROOT..group..'_'..source[1]
     if not FS:fileExists(path..'.dae') then

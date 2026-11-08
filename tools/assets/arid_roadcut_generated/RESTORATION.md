@@ -11,15 +11,13 @@ remain registered to the source; fine chips and grain are synthesized.
 `restoration_tiles.json` records crop bounds, output sizes and hashes.
 `generation.json` preserves both exact prompts and the tool used.
 
-Rebuild maps with:
+This experiment is superseded by `tools/assets/arid_generated` and
+`tools/bake_arid_cliff_material.py`. Its unused images and baker were removed
+during cleanup. The prompts and restoration metadata remain as provenance;
+the original images and `tools/restore_arid_roadcut_material.py` are available
+in Git at commit `16300ecf` if the historical experiment needs reproduction.
 
-```powershell
-C:/Python311/python.exe tools/restore_arid_roadcut_material.py --bake --install
-```
-
-`--assemble` additionally needs the ignored outputs under
-`build/arid-roadcut-restoration`. The tracked composite makes normal rebakes
-independent of image-generation access.
+Historical bake notes follow (these do not describe the active material).
 
 Albedo, normal, roughness and AO are 4096 square at the established 91.44 m
 (300 ft) world scale. Narrow isotropic joints estimate relief without the

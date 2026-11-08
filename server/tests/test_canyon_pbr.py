@@ -68,7 +68,7 @@ class CanyonPbrTest(unittest.TestCase):
         self.assertNotIn('detailNormalMapUseUV',stage)
         self.assertEqual(stage['detailMapUseUV'],0)
         self.assertAlmostEqual(stage['detailScale'][1]/stage['detailScale'][0],2)
-        manifest=json.loads((pbr.OUT/'canyon_detail_dirt_rocky_v1.sources.json').read_text())
+        manifest=json.loads((pbr.OUT/'ground_detail.sources.json').read_text())
         for key in ('detailMap','detailNormalMap'):
             self.assertTrue(stage[key].startswith('/levels/beamng_earth/'))
             file=pbr.OUT/Path(stage[key]).name

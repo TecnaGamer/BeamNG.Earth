@@ -7,18 +7,18 @@ Cook the PNG in BeamNG before --publish accepts the BC5 DDS for runtime use.
 """
 import argparse
 import json
-import struct
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image
+from cliff_assets import read_bc5_normal
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = ROOT / 'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
-BASE_NORMAL = 'canyon_v5_faceted_near.normal.png'
-EROSION_NORMAL = 'canyon_far_v8.normal.png'
-OUTPUT_STEM = 'canyon_v5_eroded_near_v2'
+BASE_NORMAL = 'canyon_source.normal.png'
+EROSION_NORMAL = 'canyon_far.normal.png'
+OUTPUT_STEM = 'canyon_near'
 EROSION_WIDTH_SCALE = 3.0  # match FAR_CANYON_NORMAL_WIDTH_SCALE without scaling rock joints
 EROSION_WRAP_BLEND = .20  # close the enlarged crop smoothly inside the shared UV0 tile
 # The near material applies 0.30 strength to the combined map. This gives the
@@ -80,14 +80,8 @@ def bake():
 
 
 def publish(cooked):
-    data = Path(cooked).read_bytes()
-    if (data[:4] != b'DDS ' or data[84:88] != b'DX10'
-            or struct.unpack_from('<I', data, 128)[0] != 83
-            or struct.unpack_from('<II', data, 12) != (4096, 4096)
-            or struct.unpack_from('<I', data, 28)[0] != 13
-            or len(data) != 22369796):
-        raise ValueError('Expected a fully cooked 4096-square BC5_UNORM DDS with 13 mip levels')
-    name = OUTPUT_STEM + '_ready.normal.dds'
+    data = read_bc5_normal(cooked, 4096, 4096)
+    name = OUTPUT_STEM + '.normal.dds'
     (OUT / name).write_bytes(data)
     path = OUT.parent / 'cliff.materials.json'
     mats = json.loads(path.read_text())

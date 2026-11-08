@@ -11,7 +11,7 @@ T.check(not remapped:find('rocks_desert_ca',1,true),'private mesh does not bind 
 T.check(text:find('rocks_desert_ca',1,true) ~= nil,'source unchanged')
 local materials = talus.materials(group)
 local stage = materials['bne_'..group].Stages[1]
-T.check(stage.baseColorMap:find('scan_v2_base',1,true) ~= nil,'loose rubble uses the neutral scanned substrate')
+T.check(stage.baseColorMap:find('natural_base',1,true) ~= nil,'loose rubble uses the neutral scanned substrate')
 T.check(stage.baseColorFactor[1] > stage.baseColorFactor[3],'regional warm tint retained')
 T.check(stage.detailNormalMapStrength < .3,'micro normals restrained')
 
@@ -26,17 +26,17 @@ FS = {
  triggerFilesChanged=function(_,paths) notifications=notifications+#paths end,
  copyFile=function(_,src,dst) copies=copies+1; files[dst]='copied '..src end,
 }
-for _,shape in ipairs(talus.SHAPES) do files[(shape[3] or talus.STOCK)..shape[1]..'.dae']=shape[4]=='utah' and '<material id="utah_rocks_b"/>' or text end
-for _,shape in ipairs(talus.LARGE_SHAPES) do files[shape[3]..shape[1]..'.dae']='<material id="utah_rocks_b"/><material id="lod_vertcol"/>' end
+for _,shape in ipairs(talus.RUBBLE_SHAPES) do files[(shape[3] or talus.STOCK)..shape[1]..'.dae']=shape[4]=='utah' and '<material id="utah_rocks_b"/>' or text end
+for _,shape in ipairs(talus.OUTCROP_SHAPES) do files[shape[3]..shape[1]..'.dae']='<material id="utah_rocks_b"/><material id="lod_vertcol"/>' end
 readFile=function(p) return files[p] end
 writeFile=function(p,t) files[p]=t end
 jsonEncode=function() return '{}' end
 loadJsonMaterialsFile=function() loads=loads+1 end
 local catalog = talus.catalog(group)
-T.check(#catalog==6 and copies==12,'three clusters and three Utah boulders share twelve copied maps')
-T.check(notifications==12,'resource cache notified before initial material load')
-T.check(talus.catalog(group)==catalog and copies==12 and loads==1,'cached assets are not copied per instance')
-T.check(files[talus.STOCK..talus.SHAPES[1][1]..'.dae']==text,'installed game mesh never overwritten')
+T.check(#catalog==6 and copies==9,'three clusters and three Utah boulders share nine used texture maps')
+T.check(notifications==9,'resource cache notified before initial material load')
+T.check(talus.catalog(group)==catalog and copies==9 and loads==1,'cached assets are not copied per instance')
+T.check(files[talus.STOCK..talus.RUBBLE_SHAPES[1][1]..'.dae']==text,'installed game mesh never overwritten')
 local large = 'talus_large_c0a080'
 T.check(talus.isGroup(large),'large outcrop group accepted')
 local big = talus.catalog(large)
@@ -45,10 +45,10 @@ for _,v in ipairs(big) do
   T.check(v[1]:find('utah_rock_big_2_',1,true)~=nil,'large population excludes small boulder models')
   T.check(not files[v[1]..'.dae']:find('lod_vertcol',1,true),'large outcrop LOD also binds a private tinted material')
 end
-T.check(copies==12,'large rocks reuse private texture copies')
+T.check(copies==9,'large rocks reuse private texture copies')
 T.check(talus.materials(large)['bne_'..large..'_utah'] ~= nil,'large outcrop receives calibrated Utah tint')
 local outcrop = talus.materials(large)['bne_'..large..'_utah'].Stages[1]
-T.check(outcrop.baseColorMap:find('scan_v2_base',1,true) ~= nil,'arid outcrops use neutral scan detail with the supporting cliff tint')
+T.check(outcrop.baseColorMap:find('natural_base',1,true) ~= nil,'arid outcrops use neutral scan detail with the supporting cliff tint')
 T.check(outcrop.normalMap:find('utah_normal',1,true) ~= nil,'outcrops retain mesh-authored normal map')
 T.check(stage.vertColor==false and utah.vertColor==false,'stock vertex colors cannot alter regional tint')
 T.check(stage.detailMap==utah.detailMap and stage.detailBaseColorMapStrength==.18,'both families use restrained neutral detail')

@@ -11,6 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 from PIL import Image
+from cliff_assets import read_bc5_normal
 from bake_scan_cliff_material import periodic, resize_periodic
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,8 +22,8 @@ SOURCE = ROOT/'tools/assets/canyon_generated/source.png'
 OUT = ROOT/'mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/cliff'
 ALBEDO_SOURCE = ROOT/'tools/assets/canyon_generated/source-layered-v4.png'
 PALETTE_REFERENCE = ROOT/'tools/assets/canyon_generated/source-muted.png'
-ALBEDO_NAME = 'canyon_v4_base.color.png'
-PREFIX = 'canyon_v3'
+ALBEDO_NAME = 'canyon_far_base.color.png'
+PREFIX = 'canyon_reference'
 # BeamNG decodes material factors and vertex colors from sRGB. Encode the
 # linear gain, including values above one, so their headroom cancels exactly.
 TEXTURE_SIZE = 1024  # established normal/height bake; preserve approved macro relief
@@ -30,8 +31,8 @@ ALBEDO_SIZE = 4096  # runtime size; generated source is 1254, not native 4K deta
 WIDTH_M = 91.44
 HEIGHT_M = 182.88
 RELIEF_M = .65
-FAR_NORMAL_NAME = 'canyon_far_v8.normal.png'
-FAR_COOKED_NORMAL_NAME = 'canyon_far_v8_ready.normal.dds'
+FAR_NORMAL_NAME = 'canyon_far.normal.png'
+FAR_COOKED_NORMAL_NAME = 'canyon_far.normal.dds'
 FAR_FINE_RELIEF_M = .8125
 FAR_GROOVE_RMS_M = .784
 FAR_LEDGE_RMS_M = .64
@@ -158,7 +159,7 @@ def bake():
     for name,base,factor,near in (
         ('bne_cliff_canyon_sat',ALBEDO_NAME,canyon_factor,True),
         ('bne_far_cliff_canyon_sat',ALBEDO_NAME,canyon_factor,False),
-        ('bne_far_cliff_strata_sat','scan_v2_base.color.png',[*srgb(cm.FAR_STRATA_COLOR_FACTOR*cm.SATELLITE_HEADROOM),1],False)):
+        ('bne_far_cliff_strata_sat','natural_base.color.png',[*srgb(cm.FAR_STRATA_COLOR_FACTOR*cm.SATELLITE_HEADROOM),1],False)):
         stage=dict(baseColorMap=prefix+base,baseColorFactor=factor,metallicFactor=0,
                    roughnessFactor=.94,vertColor=True,useAnisotropic=True)
         if near:
@@ -168,7 +169,7 @@ def bake():
             stage.update(normalMap=prefix+PREFIX+'.normal.png',
                          roughnessMap=prefix+PREFIX+'_roughness.data.png',roughnessMapUseUV=0)
         else:
-            stage['normalMap'] = prefix+(FAR_NORMAL_NAME if 'canyon' in name else 'scan_v2_flat.normal.png')
+            stage['normalMap'] = prefix+(FAR_NORMAL_NAME if 'canyon' in name else 'natural_far.normal.png')
             stage['normalMapUseUV'] = 1  # separate world chart: larger features in coarse far LODs
             if 'canyon' in name:
                 stage['normalMapStrength'] = cm.FAR_CANYON_NORMAL_STRENGTH
@@ -179,7 +180,7 @@ def bake():
     # texture cannot introduce a fixed pink cast or an exposure step at edges.
     for family,base,normal_name in (
         ('canyon',ALBEDO_NAME,FAR_NORMAL_NAME),
-        ('strata','scan_v2_base.color.png','scan_v2_flat.normal.png')):
+        ('strata','natural_base.color.png','natural_far.normal.png')):
         strength = (cm.FAR_CANYON_ALBEDO_DETAIL_STRENGTH if family == 'canyon'
                     else cm.SATELLITE_ALBEDO_DETAIL_STRENGTH)
         total = np.zeros(3)
@@ -224,14 +225,7 @@ def publish_far_normal(cooked_path):
     then pass its real path here. This also makes releases independent of the
     runtime texture importer. The generated PNG remains the editable source.
     """
-    import struct
-    data = Path(cooked_path).read_bytes()
-    expected_size = 148 + sum(max(1,(TEXTURE_SIZE >> level)//4)**2*16 for level in range(11))
-    if (len(data) != expected_size or data[:4] != b'DDS ' or data[84:88] != b'DX10' or
-            struct.unpack_from('<I',data,128)[0] != 83 or
-            struct.unpack_from('<II',data,12) != (TEXTURE_SIZE,TEXTURE_SIZE) or
-            struct.unpack_from('<I',data,28)[0] != 11):
-        raise ValueError('Expected fully mipmapped 1024-square BC5_UNORM DDS')
+    data = read_bc5_normal(cooked_path, TEXTURE_SIZE, TEXTURE_SIZE)
     (OUT/FAR_COOKED_NORMAL_NAME).write_bytes(data)
     path = OUT.parent/'cliff.materials.json'
     mats = json.loads(path.read_text())

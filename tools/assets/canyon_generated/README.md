@@ -26,7 +26,7 @@ The selected source is **1254 x 1254**. The requested runtime albedo is
 The user chose to remain with the built-in generator instead of the API fallback.
 The resampling preserves the source; it cannot invent higher-resolution detail.
 
-Active albedo: `canyon_v4_base.color.png`, used by near canyon and distant canyon
+Active albedo: `canyon_far_base.color.png`, used by near canyon and distant canyon
 materials. Near material factors preserve the previous albedo's linear mean
 RGB, so existing satellite tints remain calibrated. Distant material mean
 compensation and boundary correction read the new asset. Its distinct mineral
@@ -163,14 +163,14 @@ normal length/mip detail and complete packaged BC5 mip payloads.
 V8 reduces broad groove relief by 30% (1.12 m to 0.784 m RMS) and increases
 fine channels, tributaries, rock chips and fine source relief by 25%. Broad
 beds, channel shapes, UV scales and material normal strength remain unchanged.
-Runtime uses `canyon_far_v8_ready.normal.dds`, cooked and validated before
-binding; the authoring output is `canyon_far_v8.normal.png`.
+Runtime uses `canyon_far.normal.dds`, cooked and validated before
+binding; the authoring output is `canyon_far.normal.png`.
 
 
 Near canyon erosion normal (2026-11-06)
 -------------------------------------
 `tools/bake_canyon_near_erosion.py` combines the approved
-`canyon_far_v8.normal.png` with `canyon_v5_faceted_near.normal.png` into a 4096-square
+`canyon_far.normal.png` with `canyon_source.normal.png` into a 4096-square
 normal. It adds surface gradients with periodic sampling, retains the separate
 3 m dirt-rocky detail normal, and uses the existing UV0 normal slot in both near
 canyon materials. No extra texture samples, mesh work, or distant-material changes.
@@ -183,6 +183,6 @@ their original scale. Existing color, roughness and AO are unchanged.
 After rebaking near PBR, run this tool again, cook its PNG through BeamNG, then
 run `tools/bake_canyon_near_erosion.py --publish <cooked DDS path>`. Publish verifies
 4096 x 4096 BC5_UNORM and the complete 13-level mip chain before binding
-`canyon_v5_eroded_near_v2_ready.normal.dds`. Ship the cooked DDS; never bind a fresh
+`canyon_near.normal.dds`. Ship the cooked DDS; never bind a fresh
 uncooked PNG in a running scene. Keep the faceted source normal for reproducible
 composition rather than feeding the previously combined result back into itself.
