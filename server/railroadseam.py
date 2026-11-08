@@ -79,8 +79,8 @@ def couple(xy, z, half, roads):
     both = np.isfinite(lo) & np.isfinite(hi)
     if not both.any():
         return z
-    mid = 0.5 * (lo + hi)
-    target = np.where(lo > hi, mid, np.clip(z, lo, hi))        # (a road on each side at other heights: between them)
+    mid = np.where(both, 0.5 * (np.where(both, lo, 0.0) + np.where(both, hi, 0.0)), z)
+    target = np.where(both & (lo > hi), mid, np.clip(z, lo, hi))        # (a road on each side at other heights: between them)
     d = np.where(both, target - z, 0.0)
     d = np.clip(d, -MAX_MOVE_M, MAX_MOVE_M)
     if not np.abs(d).max() > 1e-6:
