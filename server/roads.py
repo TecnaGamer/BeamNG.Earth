@@ -9580,9 +9580,10 @@ class Tracker:
         tile it has; the OSM test: a cell's OpenStreetMap fuel stations came after them, earthd Server.osm_fuel_want)."""
         self.sent -= set(keys)
 
-    def progress(self):
+    def progress(self, near_m=None):
         """(done, wanted) of the road tiles round the car at the last pose: done = sent to the mod, empty, or failed
-        and waiting for its retry (nothing more comes for it now). (0, 0) before a pose."""
+        and waiting for its retry (nothing more comes for it now). (0, 0) before a pose. (near_m: as GeoTracker's;
+        these tiles carry no distances, all count.)"""
         car = getattr(self, "car", ())
         done = sum(1 for k in car if k in self.sent or k in self.empty or k in self.retry)
         return done, len(car)
@@ -9760,11 +9761,16 @@ class GeoTracker:
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
-    def progress(self):
+    def progress(self, near_m=None):
         """(done, wanted) of the tiles round the car: done = content and this anchor's skin sent, or waiting for a
-        retry."""
-        done = sum(1 for k in self.car if (k in self.sent and k in self.skins) or k in self.retry)
-        return done, len(self.car)
+        retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
+        far edge, where a tile is always on its way while driving)."""
+        car = self.car
+        if near_m is not None:
+            dist = getattr(self, "car_m", {}) or {}
+            car = [k for k in car if dist.get(k, 0.0) <= near_m]
+        done = sum(1 for k in car if (k in self.sent and k in self.skins) or k in self.retry)
+        return done, len(car)
 
     def ready_tiles(self, frame, x, y, r):
         """The anchor road tiles (tx, ty) within r of (x, y) (tiles_near) whose road geotiles are all with the mod
@@ -9854,6 +9860,7 @@ class GeoTracker:
         s = math.hypot(vx, vy)
         car = geo_wanted(frame, x, y, vx, vy)
         self.car = set(car)
+        self.car_m = car                    # (progress(near_m): each wanted tile's m from the car)
         seen = {(a, b): d for a, b, d in geotiles.tiles_near(frame, *view, SEND_M)} if view else {}
         others = {}
         for f in foci:

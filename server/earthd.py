@@ -5080,6 +5080,9 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # block asked this long ago and not committed yet (still building, or its far tiles not live: the mod's gate), or the
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
+# ... the road tiles counted: those within this of the car (all of SEND_M's 640 m were never done while driving into
+# new streets: the boost on all drive long at 20-60 mph, Fells Point 2026-11-07)
+CATCHUP_ROADS_M = 300.0
 CATCHUP_CALM_S = 3.0
 BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "off") == "on"   # the data repo's packs (Server.bake_sync): off until
 # there are any (the user, 2026-11-02: no cloud baking while world gen changes daily; local packs, BeamMP servers, later)
@@ -6853,7 +6856,10 @@ class Connection:
                 and time.monotonic() - self.pending_at > CATCHUP_AFTER_S:
             return True
         if self.s.mapdata is not None:
-            done, want = self.roads.progress()
+            try:
+                done, want = self.roads.progress(near_m=CATCHUP_ROADS_M)
+            except TypeError:           # (a tracker without the radius)
+                done, want = self.roads.progress()
             return done < want
         return False
 
