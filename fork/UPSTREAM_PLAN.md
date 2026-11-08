@@ -1,74 +1,100 @@
-# Getting the QLD work upstream, and making it reusable worldwide
+# Getting the AU work into BeamNG.Earth (rewritten 2026-11-08)
 
-## 1. How to pitch
-1. Post on the BeamNG.Earth Discord (or open an issue): before and after screenshots of Yeppoon, Rockhampton, Brisbane and the M1, plus this split list. Ask the maintainer:
-   - which PRs they want first;
-   - whether they want new behaviour in Rust or Python;
-   - whether a "region pack" design (section 3) is welcome.
-2. Then send PRs one at a time, each small enough to review in one sitting.
+## Where things stand
+- **Fork:** 79 commits, 162 files, about 12.6k lines on top of upstream `a4053d3a`. Roughly 25% is server code, 28% generated shapes, 17% tests, 11% tools and 5% `fork/` docs.
+- **Upstream `dev`:** 184 commits ahead of our base. It touches six of our files: buildings, roads, surface, vegetation, furniture and blockworker.
+- **What changed upstream, and why it matters:**
+  - **PR #505, European regional scenery,** was merged as one large squashed commit. It is opt-in and off by default (`--regional-poles europe`, `BNE_FR_*` env flags), and was mostly Python. The maintainer then did their own speed and memory pass and ported the hot path (the country lookup) to Rust: `countrymap.rs`, `country_codes`.
+    - This is our template: one regional-scenery feature behind an opt-in switch, with an A/B timing table. A dozen tiny PRs is not the shape they merge.
+    - It also already places **chevrons and delineators** in Europe. Our chevron markers (CAMs) and guide posts must reuse its placement code and only add an AU look. A second system would be the first thing a reviewer rejects.
+  - **PR #597** (town signs) and **PR #843** (highway shields, ramp tapers) both touch the same sign and road code we do.
+  - **Add-on system** (`docs/ADDONS.md`): a registry of third-party mods. This is a fallback route if parts are refused: AU *assets* could ship as an add-on, but server logic can't.
+- **Policy** (`.claude/agent-rules.md`):
+  - New server logic belongs in Rust, and PRs target `dev`.
+  - In practice (#505) Python was accepted and the maintainer ported the hot spots. **Ask before porting anything.**
 
-## 2. PR split
-Each PR goes on its own branch, cut from a fresh `upstream/main`. Re-apply the change by hand rather than cherry-picking the fork merges, because upstream moves about 80 commits a day. Leave out all fork-only material:
-- Phase 0 setup (repo URLs, user agent, release workflow, BeamMP `LISTED`)
-- `fork/` docs
-- reference photos
-- the Mt Coot-tha hook
+## Phases
+Each phase ends with one full test run; during work, only targeted tests are run.
 
-| # | PR | Main files | Risk |
+### A. Ask first (one Discord post or issue, costs nothing)
+Post before/after screenshots (Yeppoon, Rockhampton, Brisbane, M1, Winton) and this shape, then ask:
+1. Should it come in as one opt-in "AU regional scenery" switch, like #505, or several PRs?
+2. Python first, with you porting hot spots as in #505, or Rust up front?
+3. Should the NVIS vegetation grid (1.1 MB) be bundled, or served from BeamNG.Earth-data like `regionaldata`?
+
+### B. Sync with upstream `dev`
+- Merge `upstream/dev` into `qld/main`, resolve the six overlapping files, and re-run the install.
+- Then build every AU feature on top of the shared parts:
+  - country from `countrymap` instead of our own polygons;
+  - #505's chevron and delineator placement;
+  - #843's ramp geometry for Wrong Way signs.
+
+### C. Fit the upstream shape
+1. **One switch.**
+   - All AU behaviour goes behind a single setting/flag in #505's style (e.g. `--regional-scenery au`, or extend `--regional-poles` to take `au`). Off means byte-identical tiles to upstream.
+   - Today it is gated on "is in Australia" only, which changes default output for every AU player. A reviewer will want it opt-in at first.
+2. **One region lookup.**
+   - Country comes from `countrymap.country_codes`. Keep `climate.au_state` (Natural Earth admin_1) only if states are still needed: QLD vs other building styles.
+   - Ask whether admin_1 can join the countrymap band files.
+3. **Cache keys:** the switch and the AU data files go into the format/revisit keys, so turning it on or off rebuilds tiles.
+
+### D. Strip
+- **Fork-only material** (never upstream):
+  - `fork/`;
+  - tester release notes;
+  - the update REPO pointing at the fork;
+  - the release workflow and `LISTED` edits;
+  - the Mt Coot-tha hook;
+  - `fork/reference/` photos;
+  - the parked LiDAR branch.
+- **Dead code sweep** (one Haiku pass): functions, constants, materials and shapes nothing references. Examples: unused speed-sign values (70/130 cells), superseded T-board meshes, leftover debug env flags.
+- **Assets:**
+  - Every PNG quantized; every `.dae` built by its `tools/build_au_*.py`.
+  - The builders merged into one `tools/build_au_assets.py`, so a reviewer can regenerate everything with one command.
+- **Docs:** one `docs/AUSTRALIA.md`, like #505's docs: what it adds, the data sources, the standards followed (AS 1742) and the switch. Credits go in `CREDITS.md`:
+  - NVIS (CC BY 4.0);
+  - Natural Earth;
+  - the Roadgeek 2014 font — check its licence permits redistribution in the app.
+
+### E. Trim tests
+- Keep **behaviour tests**: placement happens or doesn't, side and facing, gating off outside AU, switch off means unchanged output.
+- Drop tests that only pin tuning constants: exact sizes, colours, counts.
+- Merge the per-feature AU test files into a few: `test_au_roads`, `test_au_buildings`, `test_au_vegetation`, `test_au_amenities`.
+- Fix the two failures that predate our work (`test_bake_formats.test_plans_format`, and the `test_roads` import in `test_speed_signs`), or confirm they also fail on clean `upstream/dev`.
+- Re-record digests only for AU cases; check that the non-AU digests are untouched.
+- Target: about half the current test lines.
+
+### F. Measure (the maintainer always does this, so pre-empt it)
+- A/B over 16 road tiles in Brisbane and 16 rural tiles near Rockhampton, with buildings on and revisit off:
+  - switch off vs upstream (should be noise);
+  - switch on: time and peak memory.
+- Profile anything over +15% and fix or port the hot spot. Likely candidates: building geometry (1.3k lines) and the vegclass lookup.
+
+### G. Split into PRs, each opt-in under the same switch and each with screenshots plus the A/B table
+
+| # | PR | Main parts | Note |
 |---|---|---|---|
-| 1 | **Region polygons**: `climate.au_state` from Natural Earth admin_1, which replaces the lat/lon boxes. It lays the groundwork for everything below and is worth having upstream on its own. | climate.py, data, tool | low |
-| 2 | AU road markings: `_AU`, `_NZ` split, double barrier lines, 0.15 m edges | markings.py | low |
-| 3 | AU vegetation: eucalypt group, dry grass share, evergreen seasons | vegetation.py, season.py, groundcover.lua | low |
-| 4 | QLD building style: tints, Colorbond and tile roofs, gables continuing the wall, even brick UVs | buildings.py, materials | med |
-| 5 | QLD houses: high-set houses, eaves, gutters, solar, whirlybirds, carports, awnings, tanks, storey share | buildings.py | med to high (big diff, so this could become 2 PRs) |
-| 6 | Shop footpath awnings | buildings.py | med |
-| 7 | AU streetscape: nature strips, fences, kerb channel, poles and lamps, roundabout gardens | roads.py, surface.py, furniture.py, islands.py, shapes | med |
-| 8 | AU signs, part 1: direction boards style plus places data, real OSM destination text shard | dirsigns.py, data | low to med |
-| 9 | AU signs, part 2: Give Way, AU signals, guide posts, curve warnings, crash barriers, no-stopping lines | furniture.py, warnsigns.py, kantstolpar.py, navgraph.lua, shapes | med |
-| 10 | AU ground: red soils, cane fields | surface.py, terrain.lua | low |
-| 11 | AU servos (gas station kit) | — | low |
+| 1 | AU switch, region lookup, roads and signs | markings, speed signs and AU limits, Give Way, signals, guide posts (via #505 delineators), curve warnings, CAMs (via #505 chevrons), T boards, Wrong Way, gravel, no-stopping lines, direction board style | Most visible, lowest risk; sets up the switch the rest reuse |
+| 2 | AU vegetation | NVIS grid, palettes, eucalypt/rainforest/mallee groups, dry long grass, wet/dry season | Data hosting decided in A |
+| 3 | AU streetscape | nature strips, fences, kerb channel, poles and lamps, roundabout gardens, crash barriers (`aurails`) | |
+| 4 | AU houses and shops | high-set houses, Colorbond and tile roofs, eaves, solar, carports, tanks, awnings | Largest diff; may need splitting or porting |
+| 5 | AU street amenities and servos | payphones, post boxes, servo kit | Could be made generic (any country's phone box or post box from OSM) |
 
-**Before each PR:**
-- Run the full test suite once.
-- Re-record digests only for AU cases.
-- Check that the non-AU digests are unchanged.
-- Normalise line endings to match upstream; some fork merges changed CRLF to LF and back.
+Mechanics for each PR:
+- Cut a fresh branch from `upstream/dev` and re-apply by hand, not by cherry-pick.
+- Normalise line endings to upstream's.
+- Write commit messages in upstream's long descriptive style.
+- Add the screenshots and A/B table to the PR body.
+- Send them one at a time, waiting for each to merge.
 
-## 3. Rust: upstream policy (.claude/agent-rules.md, the maintainer, 2026-10-21)
-- New server logic goes in Rust (`native/earthfast`). Python is only thin glue: argument marshalling and calls.
-- Touching a Python algorithm means porting it, with no Python twin left behind (`fast.require()`, no fallback).
-- The mod stays Lua.
-- PRs target `dev`, not `main`.
-- The fork wrote everything in Python, to iterate fast without rebuilding the native module. **Every PR therefore needs a port before submission.** Sort the fork code three ways:
-  - **Data and tables** (markings styles, tints, shares, dirsigns_styles.json, places and destination shards, the state polygons, region packs): stays data, with no port needed.
-  - **Algorithms** (high-set house geometry, eaves, carports, awnings, brick UVs, fence and verge placement, curve detection, barrier rules, no-stopping lines, destination matching, the point-in-polygon lookup, soil and cane classification): port to Rust, keeping the Python tests as behaviour tests.
-  - **Lua** (groundcover, trees catalog, signals, terrain looks): stays Lua.
-  - Generated assets (.dae, materials) stay as they are, along with their `tools/` builders. Check whether upstream wants the builders in Python or Rust; tools may be exempt.
-- **Build:** a local MSVC build gives float digests that differ from upstream's committed `.pyd`. Before porting, rebuild the native module on a clean `upstream/dev` and re-record the goldens locally, so only our own diffs show. Or ask the maintainer how they record digests (CI or their machine).
-- **Workflow per PR:**
-  1. Branch from `upstream/dev`.
-  2. Port the module to Rust.
-  3. Test that the AU behaviour matches the fork version bit for bit.
-  4. Check the non-AU digests are unchanged.
-  5. Open the PR to `dev` with in-game screenshots (the maintainer insists on checking real-place imagery).
+### H. Fallback
+If a part is refused as too regional, ship its assets and Lua as an **add-on** through the registry (`docs/ADDONS.md`), and keep only generic hooks upstream.
 
-## 4. Making it worldwide: "region packs" (plan item 3.7)
-The fork shows what a region needs. Today it is hard-coded per country in each module, as `if region == "AU"` branches. The generic version:
+## Order and cost
+1. A, then B (needed regardless).
+2. C and D together in one pass.
+3. E.
+4. F.
+5. G, one PR at a time.
 
-1. **Region resolver**: one function, `region.at(lat, lon) -> ("AU", "QLD")`, backed by admin_0 and admin_1 polygons (PR 1, generalised to every country). Every module asks it, instead of keeping its own box or airport lookup.
-2. **Region pack**: `server/data/regions/<code>.json`. More specific packs inherit from broader ones: `AU-QLD` → `AU` → `oceania` → `default`. Keys:
-   - `markings`: line widths, colours, centre and edge rules (today `markings.STYLES`)
-   - `buildings`: tint palette, roof materials and shares, storey shares, house kits (high-set, eaves, solar, carport, awning) with probabilities
-   - `vegetation`: tree groups and shares, lawn and dry shares, evergreen flag
-   - `ground`: soil look rules (by Köppen class), crop looks (by WorldCover class plus a polygon)
-   - `streetscape`: verge type, fence kinds and shares, kerb and channel, pole and lamp models, island planting
-   - `signs`: board style (dirsigns_styles), speed sign face, give-way and stop rules, signal model, warning-sign thresholds, guide-post spacing, barrier rules
-   - `data`: optional shards (places, destinations)
-3. **Asset builders as templates**: `tools/build_au_*.py` already generate signs, posts, fences and signals procedurally from a few numbers. Turn them into one `tools/build_region_assets.py <pack>`, so a creator can make (for example) Japanese guide posts or UK fences by editing JSON, without needing modelling skills.
-4. **Cache keys**: hash the pack files into the `revisit` cache key and the format numbers. Otherwise edits to a pack won't show.
-5. **Docs for creators**: a "Make your region" guide covering:
-   - copying `AU.json`;
-   - gathering reference photos and the local standards (like `fork/QLD_REFERENCE.md`);
-   - tuning the numbers in game with the in-game test checklist.
-
-**Order:** do the resolver (step 1) first. Then move the AU branches into `AU.json` one module at a time, with digests unchanged, and only then advertise it to other creators.
+B and C are the expensive steps: conflicts, plus rewiring onto #505's code. D and E are cheap, mechanical Haiku/Sonnet passes.
