@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import beaches
 import fast
 
 import mapcells
@@ -36,12 +37,12 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 23          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 24          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
-                      # orchard rows and the deck mask)
+                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -518,6 +519,16 @@ class Vegetation:
                 lo2, la2 = _to4326(px[bare] + dx, py[bare] + dy)
                 near += lc.sample(lo2, la2) == WC["built"]
             free[bare[near >= 2]] = False
+        # a beach's sand (beaches.py, GitHub #578): neither rocks nor bushes
+        # (only the points that would get one: a few % of them, the test samples ~70 points round each)
+        sandy = np.flatnonzero(free & (u < pr + pb) & ((cls == WC["bare"]) | (cls == WC["grass"])))
+        if len(sandy):
+            sec = 1.0 / np.cos(np.radians(lat[sandy]))      # (Web Mercator metres per ground metre)
+            pxs, pys = px[sandy], py[sandy]
+
+            def at(idx, dx, dy):
+                return lc.sample(*_to4326(pxs[idx] + dx * sec[idx], pys[idx] + dy * sec[idx]))
+            free[sandy[beaches.sand_points(cls[sandy], at)]] = False
         rock = free & (u < pr)
         bare_rock = np.flatnonzero(rock & (cls == WC["bare"]))
         if len(bare_rock) and self.dem is not None:

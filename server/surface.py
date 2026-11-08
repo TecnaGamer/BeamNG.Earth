@@ -29,6 +29,7 @@ from runtimeprofiler import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw
 
+import beaches
 import fast
 import mapgeom
 import heightmap
@@ -129,6 +130,9 @@ def classify(classes, u, square, lat=None, lon=None):
             sub = idx[urban]
             sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
             idx[urban] = sub
+    sand = beaches.sand_grid(classes, square)      # a beach's grassland pixels: bare sand, no grass (GitHub #578)
+    if sand.any():
+        idx = np.where(sand, np.uint8(LOOSE), idx)
     u = np.asarray(u, np.float64)
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
