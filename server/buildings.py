@@ -1562,7 +1562,8 @@ def build(specs_and_ground, lite=False):
         return None
     P, UV, T, M, C = m.arrays()
     import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
-    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C))      # build_parts' vertex budget counts the closed mesh
+    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (build_parts' vertex budget counts the closed
+                        # mesh; the walls already reach SKIRT_M under the ground: the bottom capped there)
     return P, UV, T, M, MATERIALS, C
 
 
@@ -1640,7 +1641,8 @@ def collision_mesh(specs_and_ground):
         return None
     P, UV, T, M, C = m.arrays()
     import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
-    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C))      # build_parts' vertex budget counts the closed mesh
+    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (build_parts' vertex budget counts the closed
+                        # mesh; the walls already reach SKIRT_M under the ground: the bottom capped there)
     return P, UV, T, M, MATERIALS, C
 
 
@@ -3989,7 +3991,8 @@ def _sky_mesh(items):
         return None
     P, UV, T, M, C = m.arrays()
     import shells       # each building a closed solid, its bottom sunk (shells.close; the user, 2026-11-07), here so
-    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C))      # build_parts' vertex budget counts the closed mesh
+    P, T, M, (UV, C) = shells.close(P, T, M, (UV, C), skirt=False)  # (build_parts' vertex budget counts the closed
+                        # mesh; the walls already reach SKIRT_M under the ground: the bottom capped there)
     return P, UV, T, M, MATERIALS, C
 
 

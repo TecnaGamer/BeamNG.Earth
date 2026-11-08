@@ -438,7 +438,7 @@ LOD_TOP_SIZE = 2.0          # px: the size of the one (or the last, coarsest) de
 @profile_step('Native shape encoding')
 def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2=None,
            tangent_uvs=None, object_name="tile", tri_materials=None, colors=None, collision_only=False, lods=None,
-           collisions=None, close=False):
+           collisions=None, close=False, open_tris=None):
     """Shape bytes for one static mesh, laid out exactly as the engine writes a compiled
     Collada file with the same geometry.
 
@@ -466,7 +466,8 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     meshes. Not with collision_only or lods.
     close: every mesh (drawn, lods, collisions) closed into a solid first (shells.close: skirts and sunk bottoms
     under its open bottoms, caps on its other openings); "under": its bottoms only (a tunnel's tubes: their mouths are
-    the way in); False: as given."""
+    the way in); False: as given. open_tris (m,) bool: overlay triangles (the road mesh's markings) left as they are,
+    not closed themselves."""
     if collision_only:
         object_name = "Colmesh"
         lods = None
@@ -494,7 +495,7 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
     nmat = len(materials)
     if close:                   # every mesh a closed solid (shells.py; the user, 2026-11-07)
         positions, tris, tri_materials, normals, uvs, uvs2, tangent_uvs, colors = _closed(
-            positions, tris, tri_materials, normals, uvs, uvs2, tangent_uvs, colors, close)
+            positions, tris, tri_materials, normals, uvs, uvs2, tangent_uvs, colors, close, open_tris)
         lods = [(size, _closed_lod(d, close)) for size, d in lods] if lods else lods
         collisions = [_closed(Pc, Tc, TMc, None, None, None, None, None, close)[:3]
                       for Pc, Tc, TMc in collisions] if collisions else collisions
@@ -646,10 +647,11 @@ def _primitives(TM, nmat):
 VERTS_MAX_CLOSED = 65535   # a closed mesh past this many vertices is written as built (shells.stats over_limit)
 
 
-def _closed(P, T, TM, normals, uvs, uvs2, tangent_uvs, colors, how):
+def _closed(P, T, TM, normals, uvs, uvs2, tangent_uvs, colors, how, open_tris=None):
     import shells
     n0 = len(np.asarray(P).reshape(-1, 3))
-    P2, T2, TM2, pv = shells.close(P, T, TM, (uvs, uvs2, tangent_uvs, colors), mouths=how != "under")
+    P2, T2, TM2, pv = shells.close(P, T, TM, (uvs, uvs2, tangent_uvs, colors), mouths=how != "under",
+                                   open_tris=open_tris)
     if len(P2) > VERTS_MAX_CLOSED and len(P2) > n0:     # (the engine's 16-bit indices: left as built, counted)
         shells.stats["over_limit"] = shells.stats.get("over_limit", 0) + 1
         return P, T, TM, normals, uvs, uvs2, tangent_uvs, colors
@@ -673,10 +675,10 @@ def _closed_lod(d, how):
     return d
 
 
-def write(path, positions, tris, close=True, **kw):
+def write(path, positions, tris, close=True, open_tris=None, **kw):
     """encode() to path atomically (tmp + rename: the engine never sees a partial file), every mesh closed into a solid
     (close: encode's; the user, 2026-11-07: every piece Earth builds a closed 3D object)."""
-    data = encode(positions, tris, close=close, **kw)
+    data = encode(positions, tris, close=close, open_tris=open_tris, **kw)
     tmp = staging.tmp_for(path)
     with open(tmp, "wb") as f:
         f.write(data)

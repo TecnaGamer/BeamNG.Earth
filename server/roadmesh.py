@@ -120,6 +120,17 @@ def round_dirt_centerline(pts, half):
     return out if len(out) >= 2 else P
 
 
+LAYERS_OF_MAT = {}      # material -> the layers it was drawn in (ribbons): one only ever drawn over another surface
+                        # (markings, gutters, edge blends: layer != "base") is an overlay, left single-faced (write)
+
+
+def overlay_material(name):
+    """Whether the road mesh's material name is only ever an overlay (drawn over the closed road surface or the
+    ground: no hole to see through, so not closed itself; shells.close open_tris)."""
+    s = LAYERS_OF_MAT.get(name)
+    return bool(s) and "base" not in s
+
+
 def layer_of(chunk):
     if chunk.get("layer") in LIFT:             # a chunk naming its own (rails.py: sleepers over ballast, rails over both)
         return chunk["layer"]
@@ -196,6 +207,7 @@ def ribbons(chunks, keep_none=False):
                 hw = (np.interp(s - s[0], s0, np.asarray(c["ws"], np.float64)) / 2)[:, None]
             n = _normals(xy) * hw
             out[k] = (xy + n, xy - n, s / float(c.get("tl") or 10.0), c["m"], layer_of(c), z)
+            LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
             continue
         batch.append(k)
         pts.append(p[:, :3])
@@ -212,6 +224,7 @@ def ribbons(chunks, keep_none=False):
             c = chunks[k]
             out[k] = (L[a:b], R[a:b], _ribbon_v(S[a:b], c), c["m"], layer_of(c),
                       Z[a:b] if c.get("fixed") else None)
+            LAYERS_OF_MAT.setdefault(c["m"], set()).add(out[k][4])
     return out if keep_none else [r for r in out if r is not None]
 
 
@@ -2225,5 +2238,7 @@ def write(path, mesh, close=True):
     P, T, UV, mats, M = mesh[:5]
     uvs2 = mesh[5] if len(mesh) > 5 else None
     colors = None if uvs2 is None else np.full((len(P), 4), 255, np.uint8)
-    return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road",
+    over = np.array([overlay_material(m) for m in mats], bool) if len(mats) else np.zeros(0, bool)
+    open_tris = over[np.asarray(M, np.int64)] if over.any() and M is not None else None
+    return cdae.write(path, P, T, uvs=UV, uvs2=uvs2, material=mats, tri_materials=M, object_name="road", open_tris=open_tris,
                       colors=colors, close=close)   # (close "under": a tunnel's tubes, whose mouths are the way in)

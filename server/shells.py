@@ -18,6 +18,10 @@ import numpy as np
 WELD_M = 0.001
 SINK_M = 0.10           # m a bottom is sunk under the piece's foot (sidewalks.SINK)
 UNDER_NZ = 0.5
+BOTTOM_TOL_M = 0.05     # m a coarse bottom may be off its loop (half the skirt: it stays under the piece)
+CAP_TOL_M = 0.001       # m: a cap leaves out the ring's points this close to the line through their neighbours
+SLIT_W_M = 0.002        # m: ... or narrower than this on average (its area over half its perimeter): a cap's straight
+                        # runs left out within CAP_TOL_M
 SLIT_M2 = 1e-4          # m²: a loop enclosing less is a T-junction's slit, not an opening
 stats = {"meshes": 0, "loops": 0, "tris_in": 0, "tris_added": 0, "fanned": 0}
 
@@ -63,6 +67,38 @@ def loops(P, T):
     return out
 
 
+def open_loops(P, T):
+    """loops() but the slits: boundary loops touching each other (sharing a vertex) are taken together, and a group
+    enclosing under SLIT_M2 (its loops' Newell vectors summed) is a T-junction's slit, a long edge along shorter ones,
+    no gap. The mesh's real openings. Pure."""
+    P = np.asarray(P, np.float64).reshape(-1, 3)
+    ls = loops(P, T)
+    if not ls:
+        return []
+    _first, inv = _weld(P)
+    parent = list(range(len(ls)))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+    owner = {}
+    for i, loop in enumerate(ls):
+        for v in inv[np.asarray(loop)].tolist():
+            j = owner.setdefault(v, i)
+            if j != i:
+                parent[root(i)] = root(j)
+    area, per, own = {}, {}, []
+    for i, loop in enumerate(ls):
+        Q = P[loop]
+        own.append(np.linalg.norm(np.cross(Q, np.roll(Q, -1, 0)).sum(0)) * 0.5 >= SLIT_M2)  # (a slit on its own)
+        area[root(i)] = area.get(root(i), 0.0) + np.cross(Q, np.roll(Q, -1, 0)).sum(0) * 0.5
+        per[root(i)] = per.get(root(i), 0.0) + float(np.linalg.norm(np.roll(Q, -1, 0) - Q, axis=1).sum())
+    return [loop for i, loop in enumerate(ls)
+            if own[i] and np.linalg.norm(area[root(i)]) >= max(SLIT_M2, SLIT_W_M * 0.5 * per[root(i)])]
+
+
 def _tri2d(xy):
     """Ear-clipped triangles of the ring xy (k, 2) (either winding) and whether it took the ring whole."""
     import fast
@@ -88,6 +124,14 @@ def _cap(Q, want):
     xy = np.c_[(Q - c) @ u, (Q - c) @ v]
     t, whole = _tri2d(xy)
     k = len(Q)
+    if whole:               # a closed fan: ring edges used once, the inner ones twice (a ring folded in the plane fools
+        # the count)
+        e = np.sort(np.r_[t[:, [0, 1]], t[:, [1, 2]], t[:, [2, 0]]], 1)
+        ring = np.sort(np.c_[np.arange(k), (np.arange(k) + 1) % k], 1)
+        u, cnt = np.unique(e, axis=0, return_counts=True)
+        rs = {tuple(r) for r in ring.tolist()}
+        isr = np.array([tuple(x) in rs for x in u.tolist()], bool)
+        whole = int(isr.sum()) == k and bool((cnt[isr] == 1).all()) and bool((cnt[~isr] == 2).all())
     if not whole:
         t = np.array([[k, i, (i + 1) % k] for i in range(k)], np.int64)
     # each triangle facing want
@@ -98,15 +142,44 @@ def _cap(Q, want):
     return t, not whole
 
 
-def close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M):
+def _coarse(Q, tol=BOTTOM_TOL_M):
+    """Indices of the closed ring Q (k, 3) a coarse bottom keeps (Douglas-Peucker at tol, from 0 and the point
+    farthest from it), sorted: the bottom never more than tol off the ring, so it stays under its skirt's top."""
+    import sidewalks
+    k = len(Q)
+    if k <= 4:
+        return np.arange(k)
+    f = int(np.argmax(np.linalg.norm(Q - Q[0], axis=1)))
+    a = sidewalks.simplify(Q[:f + 1], tol)
+    b = sidewalks.simplify(np.vstack([Q[f:], Q[:1]]), tol) + f
+    keep = np.unique(np.r_[a, b[b < k]])
+    return keep if len(keep) >= 3 else np.arange(k)
+
+
+def close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M, open_tris=None, skirt=True):
+    """_close, and again on what it leaves (a loop that went with a slit group the first time). See _close."""
+    n0 = len(np.asarray(T).reshape(-1, 3))
+    P2, T2, TM2, pv = _close(P, T, TM, per_vertex, mouths, sink, open_tris, skirt)
+    if len(T2) > n0:
+        ot = None if open_tris is None else np.r_[np.asarray(open_tris, bool).ravel(), np.zeros(len(T2) - n0, bool)]
+        stats["meshes"] -= 1
+        stats["tris_in"] -= len(T2)
+        P2, T2, TM2, pv = _close(P2, T2, TM2, pv, mouths, sink, ot, skirt)
+    return P2, T2, TM2, pv
+
+
+def _close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M, open_tris=None, skirt=True):
     """The mesh (P (n, 3), T (m, 3), TM (m,) or None) closed: (P, T, TM, per-vertex arrays) with the skirts, bottoms
     and caps added (per_vertex: arrays (n, ...) or None, copied for the new vertices; a "normals" array is best given
-    as None and computed). Pure but for the module's stats."""
+    as None and computed). open_tris (m,) bool: triangles left as they are (overlays lying on a closed surface: the
+    road mesh's markings and edge blends), their edges no openings. skirt=False: a piece already sunk (a building's
+    walls reach buildings.SKIRT_M under the ground): its open bottoms capped where they are, no skirt. Pure but for the module's stats."""
     P = np.asarray(P, np.float64).reshape(-1, 3)
     T = np.asarray(T, np.int64).reshape(-1, 3)
     stats["meshes"] += 1
     stats["tris_in"] += len(T)
-    ls = loops(P, T)
+    shut = np.arange(len(T)) if open_tris is None else np.flatnonzero(~np.asarray(open_tris, bool).ravel())
+    ls = open_loops(P, T[shut])        # (a T-junction slit group left: no gap)
     if not ls:
         return P, T, TM, list(per_vertex)
     newP, newT, newM, src = [], [], [], []
@@ -115,7 +188,7 @@ def close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M):
     tri_of = None
     if tm is not None:          # a loop's material: its first vertex's triangle's
         tri_of = np.zeros(len(P), np.int64)
-        tri_of[T.ravel()] = np.repeat(np.arange(len(T)), 3)
+        tri_of[T[shut].ravel()] = np.repeat(shut, 3)
     for loop in ls:
         L = np.asarray(loop, np.int64)
         Q = P[L]
@@ -125,32 +198,45 @@ def close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M):
             continue
         mat = int(tm[tri_of[L[0]]]) if tm is not None else 0
         k = len(L)
-        if n[2] >= UNDER_NZ * nl:
-            # skirt: the loop's vertices copied (top ring) and lowered (bottom ring)
+        if n[2] >= UNDER_NZ * nl and skirt:
+            # skirt: the loop's vertices copied (top ring) down to a coarse lowered ring (the bottom's)
+            K = _coarse(Q)
             top = base + len(src)
             src.extend(L.tolist())
             newP.append(Q)
             bot = base + len(src)
-            src.extend(L.tolist())
-            newP.append(Q - [0.0, 0.0, sink])
+            src.extend(L[K].tolist())
+            Qb = Q[K] - [0.0, 0.0, sink]
+            newP.append(Qb)
+            m_ = len(K)
+            j = 0                               # the bottom vertex under top edge (i, i + 1): K[j] <= i
             for i in range(k):
-                j = (i + 1) % k
-                a, b, a2, b2 = top + i, top + j, bot + i, bot + j
-                newT += [[b, a, a2], [b, a2, b2]]
-                newM += [mat, mat]
-            t, fan = _cap(Q - [0.0, 0.0, sink], np.array([0.0, 0.0, -1.0]))
-            ring = bot
+                i1 = (i + 1) % k
+                newT.append([top + i1, top + i, bot + j])
+                newM.append(mat)
+                nxt = K[j + 1] if j + 1 < m_ else k
+                if i + 1 == nxt:
+                    j2 = (j + 1) % m_
+                    newT.append([top + i1, bot + j, bot + j2])
+                    newM.append(mat)
+                    j = j2 if j + 1 < m_ else j
+            t, fan = _cap(Qb, np.array([0.0, 0.0, -1.0]))
+            k = m_
+            ring, capQ = bot, Qb
         elif not mouths:
             continue
         else:
-            t, fan = _cap(Q, -n)
-            ring = base + len(src)
-            src.extend(L.tolist())
-            newP.append(Q)
+            # capped on the ring's corners only (its straight runs' points left out: their edges lie along the
+            # cap's, a T-junction's slit, no gap)
+            K = _coarse(Q, CAP_TOL_M)
+            t, fan = _cap(Q[K], -n)
+            ring, capQ = base + len(src), Q[K]
+            src.extend(L[K].tolist())
+            newP.append(Q[K])
         if fan:
             stats["fanned"] += 1
-            src.append(L[0])
-            newP.append(Q.mean(0)[None])
+            src.append(int(L[0]))
+            newP.append(capQ.mean(0)[None])
         newT += (t + ring).tolist()
         newM += [mat] * len(t)
         stats["loops"] += 1

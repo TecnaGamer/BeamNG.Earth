@@ -21,6 +21,8 @@ logging.basicConfig(level=logging.ERROR)
 import numpy as np
 
 TOL_M = 0.02            # m: an edge this close to the ground or another surface is sealed
+OVERLAY_TOL_M = 0.05    # m: an overlay (a road marking, an edge blend: drawn LIFT up to 1 cm over the surface, draped on
+                        # a 2 m lattice) this close to the ground lies on it
 HIGH_M = 2.5            # m: an edge this far over the ground is a structure's, in the air (counted apart)
 SAMPLE_M = 0.25         # m between samples along an edge
 WELD_M = 0.001          # m: vertices this close are one
@@ -133,6 +135,7 @@ def open_edges(meshes, ground_zs, keep=None):
         E, W, et, Tw = boundary_edges(m["P"], m["T"])
         m.update(E=E, W=W, et=et, Tw=Tw)
     S = Surfaces(meshes)
+    import shells
     out = []
     for mi, m in enumerate(meshes):
         E, W, et = m["E"], m["W"], m["et"]
@@ -141,6 +144,20 @@ def open_edges(meshes, ground_zs, keep=None):
         a, b = W[E[:, 0]], W[E[:, 1]]
         mid = 0.5 * (a + b)
         sel = np.ones(len(E), bool) if keep is None else keep(mid[:, :2])
+        # a T-junction's slit (a loop enclosing no area: a long edge along shorter ones) is no gap
+        slit = set()
+        real = {tuple(l) for l in shells.open_loops(m["P"], m["T"])}
+        for loop in shells.loops(m["P"], m["T"]):
+            Q = m["P"][loop]
+            if tuple(loop) not in real:
+                qq = np.round(Q / WELD_M).astype(np.int64)
+                for i in range(len(qq)):
+                    slit.add(frozenset((tuple(qq[i]), tuple(qq[(i + 1) % len(qq)]))))
+        if slit:
+            qa, qb = np.round(a / WELD_M).astype(np.int64), np.round(b / WELD_M).astype(np.int64)
+            sel &= np.array([frozenset((tuple(x), tuple(y))) not in slit for x, y in zip(qa, qb)], bool)
+        over = m.get("over")
+        e_over = over[et] if over is not None and len(over) else np.zeros(len(E), bool)
         L = np.linalg.norm(b - a, axis=1)
         for e in np.flatnonzero(sel & (L > 1e-4)):
             n = max(2, int(math.ceil(L[e] / SAMPLE_M)) + 1)
@@ -148,7 +165,7 @@ def open_edges(meshes, ground_zs, keep=None):
             s = a[e] + (b[e] - a[e]) * t
             gz = ground_zs(s[:, :2])
             h = s[:, 2] - gz
-            bad = ~(np.isnan(gz) | (h <= TOL_M))
+            bad = ~(np.isnan(gz) | (h <= (OVERLAY_TOL_M if e_over[e] else TOL_M)))
             if not bad.any():
                 continue
             bad[bad] = ~S.near(s[bad], mi, E[e, 0], E[e, 1])
@@ -210,13 +227,18 @@ def main():
             x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
             M = kw.get("tri_materials")
             how = kw.get("close", True)
+            ot = kw.get("open_tris")
             Pc, Tc, Mc = P, T, M
             if how:             # what cdae.encode writes: the mesh closed (shells.close)
                 import shells
-                Pc, Tc, Mc, _ = shells.close(P, T, M, mouths=how != "under")
+                Pc, Tc, Mc, _ = shells.close(P, T, M, mouths=how != "under", open_tris=ot)
+            nT = len(np.asarray(Tc).reshape(-1, 3))
+            over = np.zeros(nT, bool)
+            if ot is not None:  # the overlays (left single-faced, kept first by shells.close)
+                over[:len(ot)] = np.asarray(ot, bool)
             meshes.append({"kind": kind, "P": np.asarray(Pc, np.float64) + [x0, y0, 0.0],
                            "T": np.asarray(Tc, np.int64).reshape(-1, 3),
-                           "M": None if Mc is None else np.asarray(Mc).ravel()})
+                           "M": None if Mc is None else np.asarray(Mc).ravel(), "over": over})
         return orig_write(path, P, T, *a, **kw)
     cdae.write = grab_write
     out = tempfile.mkdtemp()
@@ -253,12 +275,14 @@ def main():
     shell = collections.defaultdict(lambda: [0, 0.0])     # the shells' openings in the area: boundary loops'
     for m in meshes:                                       # edges (a T-junction's slit, no area, left out)
         P, T = m["P"], m["T"]
+        if m.get("over") is not None and m["over"].any():
+            shell[(m["kind"], "overlay")][0] += int(m["over"].sum())      # (triangles, single-faced on a surface)
+            T = T[~m["over"]]
         tri_of = np.zeros(len(P), np.int64)
-        tri_of[T.ravel()] = np.repeat(np.arange(len(T)), 3)
-        for loop in shells.loops(P, T):
+        keep_i = np.flatnonzero(~m["over"]) if m.get("over") is not None else np.arange(len(T))
+        tri_of[T.ravel()] = np.repeat(keep_i, 3)
+        for loop in shells.open_loops(P, T):
             Q = P[loop]
-            if np.linalg.norm(np.cross(Q, np.roll(Q, -1, 0)).sum(0)) * 0.5 < shells.SLIT_M2:
-                continue
             mid = 0.5 * (Q + np.roll(Q, -1, 0))
             L = np.linalg.norm(np.roll(Q, -1, 0) - Q, axis=1)
             inside = np.hypot(mid[:, 0], mid[:, 1]) <= R

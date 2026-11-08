@@ -374,9 +374,8 @@ class MeshTest(unittest.TestCase):
         spec = bld.plan(ring, attrs)
         import shells
         P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
-        self.assertEqual(shells.loops(P, T) and [l for l in shells.loops(P, T) if len(l) > 2 and np.linalg.norm(
-            np.cross(P[l], np.roll(P[l], -1, 0)).sum(0)) * 0.5 >= shells.SLIT_M2], [], "a closed solid")
-        self.assertAlmostEqual(P[:, 2].min(), -bld.SKIRT_M - shells.SINK_M)      # its bottom sunk under the skirt
+        self.assertEqual(shells.open_loops(P, T), [], "a closed solid")
+        self.assertAlmostEqual(P[:, 2].min(), -bld.SKIRT_M)      # its bottom closed at the skirt's foot
         close = shells.close        # the faces as drawn before closing (the closing's own caps face the backs)
         shells.close = lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex))
         try:
@@ -402,7 +401,7 @@ class MeshTest(unittest.TestCase):
         self.assertGreater(P[:, 2].max(), 10.0, "boxes on a 600 m2 flat roof")
         # the walls reach SKIRT_M under the ground (hidden; fills the gap where the far field's coarse ground runs lower)
         self.assertAlmostEqual(P[:, 2].min(), -bld.SKIRT_M)
-        self.assertAlmostEqual(bld.build([(spec, 0.0, 0.0)], lite=True)[0][:, 2].min(), -bld.SKIRT_LITE_M - 0.1)
+        self.assertAlmostEqual(bld.build([(spec, 0.0, 0.0)], lite=True)[0][:, 2].min(), -bld.SKIRT_LITE_M)
 
     def test_gabled_and_hipped(self):
         for shape in ("gabled", "hipped"):
