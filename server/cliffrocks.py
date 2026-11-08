@@ -334,6 +334,7 @@ class Mesh:
     lod_scale: float = 1.0  # projected piece radius / original tile radius
     terrain_blend: bool = False  # UV1 is the opaque terrain rim; PBR uses UV0
     strip_colors: np.ndarray | None = None  # Build-only rock tint before satellite rim blending
+    debug_rocks: list = field(default_factory=list)  # Recorded rock footprints for the map
     debug_cuts: list = field(default_factory=list)  # Confirmed road-cut detector runs
     debug_coverage: list = field(default_factory=list)  # Geographic detector runs, independent of render detail
 
@@ -927,12 +928,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
         result.debug_coverage = debug_coverage
         result.debug_cuts = debug_cuts
         result.talus = rubble
-        # Recorded placements for a read-only map overlay; no render-mesh reads.
-        result.debug_rocks = []
-        for row in rubble:
-            latitude,longitude,_ = frame.enu_to_geodetic(*row[1:4])
-            result.debug_rocks.append([1 if row[0].startswith('talus_large_') else 2 if row[0].startswith('talus_face_') else 0,
-                round(float(longitude),7),round(float(latitude),7),round(float(row[6])*.5,2)])
+        result.debug_rocks = clifftalus.debug_footprints(frame, rubble)
         if decals:
             import cliffstrips
             def strip_ground(xy):

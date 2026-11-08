@@ -30,7 +30,7 @@ class WindTurbineStreamingTest(unittest.TestCase):
         tile = geotiles.geobox(*geotiles.tile_of(RECORD["lat"], RECORD["lon"]))
         parts = SimpleNamespace(chunks=[], dmesh=None, bld=None, props=[], wires=[], park=[], tmesh=None,
                                 fuel=[], rmesh=None, guardrail_rows=[], garage_sound=[], wells=[],
-                                turbines=[RECORD], ctx=None, walks_raw=[])
+                                turbines=[RECORD], ctx=None, walks_raw=[], cliff=None)
         saved = blockworker._geo_inputs.get(tile.key)
         try:
             with tempfile.TemporaryDirectory() as tmp:

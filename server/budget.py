@@ -160,6 +160,8 @@ _trimming = False
 # count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
 SHED_MB = 0
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
+PRESSURE_RESERVE_GB = 3.0  # Keep breathing room for the game and desktop on all machines.
+PRESSURE_SHED_MB = 768     # Only larger workers shed; called between completed jobs.
 SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
 _shedders = []
 shed_count = 0
@@ -210,14 +212,20 @@ def memory_mb():
 def maybe_shed():
     """Between jobs: the registered caches dropped when this process is over SHED_MB. True when it shed."""
     global shed_count
-    if not SHED_MB or not _shedders:
+    if not _shedders:
         return False
     import time
     global _last_shed
     if _last_shed is not None and time.monotonic() - _last_shed < SHED_MIN_S:
         return False
+    ceiling = SHED_MB
+    if not ceiling:
+        available = free_gb()
+        if available is None or available >= PRESSURE_RESERVE_GB:
+            return False
+        ceiling = PRESSURE_SHED_MB
     mb = memory_mb()
-    if mb is None or mb < SHED_MB:
+    if mb is None or mb < ceiling:
         return False
     _last_shed = time.monotonic()
     import gc
@@ -232,7 +240,7 @@ def maybe_shed():
     shed_count += 1
     after = memory_mb()
     logging.getLogger("earthd.worker").info("memory: pid %d at %.0f MB (over %d): caches dropped, now %.0f MB",
-                                            os.getpid(), mb, SHED_MB, after or 0)
+                                            os.getpid(), mb, ceiling, after or 0)
     return True
 
 

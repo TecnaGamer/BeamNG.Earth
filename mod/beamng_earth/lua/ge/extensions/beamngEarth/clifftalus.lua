@@ -140,27 +140,43 @@ function M.materials(group)
   return result
 end
 
-function M.catalog(group)
+-- Preparation is resumed by the Forest scheduler, never by incoming tile messages.
+-- Each step performs one asset operation; a group cannot monopolize a frame by
+-- writing all six model copies and compiling materials together.
+local preparing = {}
+function M.catalog(group, incremental)
   if loaded[group] then return loaded[group] end
-  if not M.isGroup(group) or not M.prepareTextures() then return nil end
-  local name, result = 'bne_'..group, {}
-  local material = M.ROOT..group..'.materials.json'
-  writeFile(material,jsonEncode(M.materials(group)))
-  loadJsonMaterialsFile(material)
-  local kind = M.kind(group)
-  local shapes = kind == 'outcrop' and M.OUTCROP_SHAPES
-    or kind == 'companion' and M.COMPANION_SHAPES or M.RUBBLE_SHAPES
-  for _, source in ipairs(shapes) do
+  if not M.isGroup(group) then return nil end
+  if not texturesReady then
+    if not M.prepareTextures() then return nil end
+    if incremental then return nil end
+  end
+  local state = preparing[group]
+  if not state then
+    local material = M.ROOT..group..'.materials.json'
+    local encoded = jsonEncode(M.materials(group))
+    if readFile(material) ~= encoded then writeFile(material,encoded) end
+    loadJsonMaterialsFile(material)
+    local kind = M.kind(group)
+    state = {result={}, shapes=kind == 'outcrop' and M.OUTCROP_SHAPES
+      or kind == 'companion' and M.COMPANION_SHAPES or M.RUBBLE_SHAPES}
+    preparing[group] = state
+    if incremental then return nil end
+  end
+  repeat
+    local source = state.shapes[#state.result+1]
     local path = M.ROOT..group..'_'..source[1]
     if not FS:fileExists(path..'.dae') then
-      local text = M.remapDae(readFile((source[3] or M.STOCK)..source[1]..'.dae'),name)
+      local text = M.remapDae(readFile((source[3] or M.STOCK)..source[1]..'.dae'),'bne_'..group)
       if not text then return nil end
       writeFile(path..'.dae',text)
     end
-    result[#result+1] = {path,source[2]}
-  end
-  loaded[group] = result
-  return result
+    state.result[#state.result+1] = {path,source[2]}
+    if #state.result == #state.shapes then
+      loaded[group], preparing[group] = state.result, nil
+      return state.result
+    end
+  until incremental
 end
 
 return M

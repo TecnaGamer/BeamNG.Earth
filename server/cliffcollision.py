@@ -15,7 +15,7 @@ MIN_TRIANGLES = 128
 
 def fracture_locks(positions, tris):
     """Keep sharp creases and their adjacent faces exact, including narrow slivers."""
-    edges, inverse, counts = clifflod._edge_groups(tris, len(positions))
+    edges, inverse, counts = clifflod.edge_groups(tris, len(positions))
     faces = positions[tris]
     normals = np.cross(faces[:, 1]-faces[:, 0], faces[:, 2]-faces[:, 0])
     normals /= np.maximum(np.linalg.norm(normals, axis=1), 1e-20)[:, None]

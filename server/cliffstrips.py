@@ -317,20 +317,15 @@ def build_reference(centerline, projector, half_width=HALF_WIDTH_M, spacing=SAMP
                 raise ValueError('Projected strip exceeds the bounded triangle budget')
     if not triangles:
         return None
-    # Weld shared fragment vertices without merging shading discontinuities.
-    p = np.asarray(positions)
-    t = np.asarray(thresholds)
-    normals = np.asarray(normals)
-    owners = np.asarray(owners)
-    key = np.column_stack((np.round(p, 7), np.round(normals, 6), np.round(t, 7), owners))
-    _, first, inverse = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    triangles = inverse[np.asarray(triangles)]
-    p, t, normals, owners = p[first], t[first], normals[first], owners[first]
-    uv = p @ projector.axes[:2].T / repeat
-    uv[:, 1] *= -1  # CDAE expects unflipped V.
-    uv2 = np.column_stack(((.5+t*(LOOKUP_WIDTH-1))/LOOKUP_WIDTH, np.full(len(t), .5)))
-    return Strip(p, np.asarray(triangles), uv, uv2, normals,
-                 owners, t)
+    return _finish_strip(projector, positions, normals, thresholds, owners, triangles, repeat)
+
+
+
+def _barycentric(faces, points):
+    """Weights in projected receiver XY; projection-axis lift leaves these unchanged."""
+    matrix = np.stack((faces[:, 1]-faces[:, 0], faces[:, 2]-faces[:, 0]), axis=2)
+    weights = np.linalg.solve(matrix, (points-faces[:, 0])[..., None])[..., 0]
+    return np.column_stack((1-weights.sum(1), weights))
 
 
 def build(centerline, projector, half_width=HALF_WIDTH_M, spacing=SAMPLE_M,
@@ -356,19 +351,23 @@ def build(centerline, projector, half_width=HALF_WIDTH_M, spacing=SAMPLE_M,
         normals *= np.where((normals @ projector.axes[2])[:, None] < 0, -1, 1)
     else:
         face = projector.local[owners, :, :2]
-        matrix = np.stack((face[:, 1]-face[:, 0], face[:, 2]-face[:, 0]), axis=2)
-        weights = np.linalg.solve(matrix, (rows[:, :2]-face[:, 0])[..., None])[..., 0]
-        bary = np.column_stack((1-weights.sum(1), weights))
+        bary = _barycentric(face, rows[:, :2])
         normals = unit(np.einsum('ij,ijk->ik', bary, projector.vertex_normals[owners]))
     world += projector.axes[2]*SURFACE_OFFSET_M
-    t = rows[:, 3]
-    key = np.column_stack((np.round(world, 7), np.round(normals, 6), np.round(t, 7), owners))
+    return _finish_strip(projector, world, normals, rows[:, 3], owners,
+                         np.arange(len(rows)).reshape(-1, 3), repeat)
+
+
+def _finish_strip(projector, positions, normals, thresholds, owners, triangles, repeat):
+    """Weld shared fragments without merging receiver or shading discontinuities."""
+    p, normals, t, owners = map(np.asarray, (positions, normals, thresholds, owners))
+    key = np.column_stack((np.round(p, 7), np.round(normals, 6), np.round(t, 7), owners))
     _, first, inverse = np.unique(key, axis=0, return_index=True, return_inverse=True)
-    p, t, normals, owners = world[first], t[first], normals[first], owners[first]
+    p, t, normals, owners = p[first], t[first], normals[first], owners[first]
     uv = p @ projector.axes[:2].T / repeat
-    uv[:, 1] *= -1
+    uv[:, 1] *= -1  # CDAE expects unflipped V.
     uv2 = np.column_stack(((.5+t*(LOOKUP_WIDTH-1))/LOOKUP_WIDTH, np.full(len(t), .5)))
-    return Strip(p, inverse.reshape(-1, 3), uv, uv2, normals, owners, t)
+    return Strip(p, inverse[np.asarray(triangles)], uv, uv2, normals, owners, t)
 
 
 # Limits apply to every cliff family, including road cuts. Sparse transition
@@ -495,8 +494,7 @@ def prepare(rock, ground_at):
     Retain only bounded rock receiver patches and contact centerlines. Geotiles
     cache these inputs, then project against each anchor's rendered terrain.
     """
-    import json
-    from pathlib import Path
+    from clifftransition import MEANS
     p = np.asarray(rock.positions, float); tri = np.asarray(rock.tris, np.int64)
     if not len(tri):
         return []
@@ -507,7 +505,7 @@ def prepare(rock, ground_at):
     faces = p[tri]; low, high = faces.min(1), faces.max(1)
     face_normals = unit(np.cross(faces[:, 1]-faces[:, 0], faces[:, 2]-faces[:, 0]))
     face_normals *= np.where(face_normals[:, 2:3] < 0, -1, 1)
-    means = np.asarray(json.loads(Path(__file__).with_name('cliff_transition_means.json').read_text()))
+    means = np.asarray(MEANS)
     families = np.zeros(len(tri), int) if rock.tri_materials is None else rock.tri_materials
     from cliffcolors import linear
     # Use the original cliff tint across the whole strip. The rendered cliff's
@@ -600,6 +598,34 @@ def tile_parts(rock, ground_at):
     return project_parts(prepare(rock, ground_at), ground_at)
 
 
+def _strip_tint(strip, projector, faces, albedo, ground_count):
+    """Blend receiver colors in linear light, with bounded ground-neighbor batches."""
+    # Tint the ground half from nearby rock; interpolate exact rock tint on
+    # the rock half. No satellite texture fetch or additional material variants.
+    cp = faces.reshape(-1, 3); cv = albedo.reshape(-1, 3)
+    tint = np.empty((len(strip.positions), 3))
+    mask = strip.receiver >= ground_count
+    # Ground inherits broad nearby cliff color, not every duplicated triangle
+    # corner. A 2 m color grid bounds this lookup; exact receiver barycentrics
+    # below retain full color detail on the rock side.
+    _, groups = np.unique(np.floor(cp/2).astype(np.int64), axis=0, return_inverse=True)
+    count = np.bincount(groups)
+    centers = np.column_stack([np.bincount(groups, weights=cp[:,k])/count for k in range(3)])
+    palette = np.column_stack([np.bincount(groups, weights=cv[:,k])/count for k in range(3)])
+    ground_ids = np.flatnonzero(~mask)
+    for start in range(0, len(ground_ids), 64):
+        ids = ground_ids[start:start+64]
+        distance = np.sum((strip.positions[ids,None]-centers[None])**2, axis=2)
+        tint[ids] = palette[distance.argmin(1)]
+    if mask.any():
+        local_ids = strip.receiver[mask]
+        f = projector.local[local_ids, :, :2]
+        point = ((strip.positions[mask]-projector.origin) @ projector.axes.T)[:, :2]
+        bary = _barycentric(f, point)
+        tint[mask] = np.einsum('ij,ijk->ik', bary, albedo[local_ids-ground_count])
+    return tint
+
+
 def project_parts(patches, ground_at):
     """Project bounded cached patches onto this anchor's actual terrain lattice."""
     from cliffcolors import srgb
@@ -610,9 +636,8 @@ def project_parts(patches, ground_at):
         run, faces, rn, albedo = (patch[k] for k in ('run', 'faces', 'normals', 'albedo'))
         lo, hi = run.min(0)-RECEIVER_MARGIN_M, run.max(0)+RECEIVER_MARGIN_M
         ground = ground_at.faces(lo,hi) if hasattr(ground_at,'faces') else ground_faces(ground_at,lo,hi)
-        ground_faces_ = ground
-        gn = unit(np.cross(ground_faces_[:, 1]-ground_faces_[:, 0], ground_faces_[:, 2]-ground_faces_[:, 0]))
-        receiver = np.concatenate((ground_faces_, faces))
+        gn = unit(np.cross(ground[:, 1]-ground[:, 0], ground[:, 2]-ground[:, 0]))
+        receiver = np.concatenate((ground, faces))
         normals = np.concatenate((np.repeat(gn[:, None, :], 3, axis=1), rn))
         normal = unit(rn.mean(axis=(0,1))+gn.mean(0))
         projector = Projector(receiver, normal, run.mean(0), vertex_normals=normals, index=False)
@@ -624,31 +649,7 @@ def project_parts(patches, ground_at):
             continue
         if strip is None or total+len(strip.tris) > TILE_TRIANGLES:
             continue
-        # Tint the ground half from nearby rock; interpolate exact rock tint on
-        # the rock half. No satellite texture fetch or additional material variants.
-        cp = faces.reshape(-1, 3); cv = albedo.reshape(-1, 3)
-        tint = np.empty((len(strip.positions), 3))
-        mask = strip.receiver >= len(ground_faces_)
-        # Ground inherits broad nearby cliff color, not every duplicated triangle
-        # corner. A 2 m color grid bounds this lookup; exact receiver barycentrics
-        # below retain full color detail on the rock side.
-        _, groups = np.unique(np.floor(cp/2).astype(np.int64), axis=0, return_inverse=True)
-        count = np.bincount(groups)
-        centers = np.column_stack([np.bincount(groups, weights=cp[:,k])/count for k in range(3)])
-        palette = np.column_stack([np.bincount(groups, weights=cv[:,k])/count for k in range(3)])
-        ground_ids = np.flatnonzero(~mask)
-        for start in range(0, len(ground_ids), 64):
-            ids = ground_ids[start:start+64]
-            distance = np.sum((strip.positions[ids,None]-centers[None])**2, axis=2)
-            tint[ids] = palette[distance.argmin(1)]
-        if mask.any():
-            local_ids = strip.receiver[mask]
-            f = projector.local[local_ids, :, :2]
-            point = ((strip.positions[mask]-projector.origin) @ projector.axes.T)[:, :2]
-            matrix = np.stack((f[:, 1]-f[:, 0], f[:, 2]-f[:, 0]), axis=2)
-            w = np.linalg.solve(matrix, (point-f[:, 0])[..., None])[..., 0]
-            bary = np.column_stack((1-w.sum(1), w))
-            tint[mask] = np.einsum('ij,ijk->ik', bary, albedo[local_ids-len(ground_faces_)])
+        tint = _strip_tint(strip, projector, faces, albedo, len(ground))
         # The projection-axis lift can cross into the next terrain triangle on
         # a steep fold. Correct the final XY location, not the pre-lift sample.
         strip.positions[:, 2] = np.maximum(strip.positions[:, 2],

@@ -99,7 +99,7 @@ class CliffLodTest(unittest.TestCase):
         # Include reversed, duplicated and open triangles; all affect locks.
         tris = np.concatenate((rock.tris, rock.tris[:20, ::-1]))
         expected = np.unique(clifflod.edges(tris), axis=0, return_inverse=True, return_counts=True)
-        actual = clifflod._edge_groups(tris, len(rock.positions))
+        actual = clifflod.edge_groups(tris, len(rock.positions))
         for old, new in zip(expected, actual):
             np.testing.assert_array_equal(old, new)
 

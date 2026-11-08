@@ -11,6 +11,16 @@ import geodesy
 
 
 class TalusTest(unittest.TestCase):
+    def test_debug_footprints_preserve_serialized_kind_and_geographic_precision(self):
+        frame = geodesy.EnuFrame(36, -114)
+        rows = [[kind, 12.3, -45.6, 789, 0, 0, height]
+                for kind, height in [('talus_large_rock', 8), ('talus_face_rock', 2), ('talus_rock', 1)]]
+        lat, lon, _ = frame.enu_to_geodetic(12.3, -45.6, 789)
+        expected = [[kind, round(float(lon), 7), round(float(lat), 7), radius]
+                    for kind, radius in [(1, 4), (2, 1), (0, .5)]]
+        self.assertEqual(talus.debug_footprints(frame, rows), expected)
+        self.assertEqual(talus.debug_footprints(frame, []), [])
+
     def fixture(self, box=(0,0,160,160), classes=None, blocked=None, keep=None, **kwargs):
         x = np.arange(41)*4.
         if keep is None:

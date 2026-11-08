@@ -99,6 +99,7 @@ class _State:
         import roads as _roads
         budget.register_shed(_roads.clear_facts_memory)
         budget.register_shed(self._clear_chunks)
+        budget.register_shed(_clear_skin_inputs)
 
     def _clear_chunks(self):
         with self.lock:
@@ -1102,6 +1103,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
 
 GEO_SKIN_MARGIN_M = 3.0     # m past a geotile's box its content keeps the skin's pieces (roads.build_tile skin_margin)
 GEO_FRAMES_KEPT = 64        # geotile frames' grading views kept per process (_frame_grader)
+GEO_CLIFF_INPUT_BYTES = 64 * 1024 * 1024  # Receiver arrays per worker, also bounded by tile count.
 GEO_INPUTS_KEPT = 96        # geotiles' skin inputs kept in memory per process (_skin_inputs)
 EXACT_TOL_COL_M = 0.03      # m a colliding part placed rigidly may be off before it gets its exact variant ...
 EXACT_TOL_M = 0.10          # ... and a render-only part
@@ -1109,6 +1111,30 @@ GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier")    # 
 _geo_lock = threading.Lock()
 _geo_graders = {}           # (lat0, lon0) -> grading.Grader view of a geotile's frame
 _geo_inputs = {}            # geotile key -> its skin inputs (dict), the most recently used last
+
+
+def _clear_skin_inputs():
+    """Drop reloadable overlay inputs between jobs under memory pressure."""
+    with _geo_lock:
+        _geo_inputs.clear()
+
+
+def _keep_skin_inputs(key, inputs):
+    """Keep small road records, but bound the cliff receiver arrays by bytes.
+
+    Dense cliff contacts can dwarf a road tile. Their disk copy remains available,
+    so eviction never discards the generated scenery or requires regenerating it.
+    """
+    def cliff_bytes(record):
+        return sum(value.nbytes for patch in record.get('cliff_strips', [])
+                   for value in patch.values() if isinstance(value, np.ndarray))
+
+    with _geo_lock:
+        _geo_inputs.pop(key, None)
+        _geo_inputs[key] = inputs
+        retained = sum(cliff_bytes(record) for record in _geo_inputs.values())
+        while len(_geo_inputs) > GEO_INPUTS_KEPT or retained > GEO_CLIFF_INPUT_BYTES:
+            retained -= cliff_bytes(_geo_inputs.pop(next(iter(_geo_inputs))))
 
 
 def _frame_grader(frame):
@@ -1249,10 +1275,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h,
                   "cliff_strips": getattr(P.cliff, "strip_inputs", [])}
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
-        with _geo_lock:
-            _geo_inputs[tile.key] = inputs
-            while len(_geo_inputs) > GEO_INPUTS_KEPT:
-                _geo_inputs.pop(next(iter(_geo_inputs)))
+        _keep_skin_inputs(tile.key, inputs)
         return f"{vfs_dir}/{names['json']}", n, {"h": h, "parts": parts}
     finally:
         import shutil
@@ -1383,10 +1406,7 @@ def _skin_inputs(key, out_dir, content):
             got = pickle.load(f)
     except (OSError, EOFError, pickle.UnpicklingError):
         return None
-    with _geo_lock:
-        _geo_inputs[key] = got
-        while len(_geo_inputs) > GEO_INPUTS_KEPT:
-            _geo_inputs.pop(next(iter(_geo_inputs)))
+    _keep_skin_inputs(key, got)
     return got
 
 

@@ -58,4 +58,11 @@ local function linear(v) return v<=.04045 and v/12.92 or ((v+.055)/1.055)^2.4 en
 for i,mean in ipairs({.33863778,.32368715,.30369500}) do
   T.check(math.abs(mean*linear(stage.baseColorFactor[i])-linear(talus.tint(group)[i]))<.000001,'mean albedo matches the source cliff in linear light')
 end
+local staged='talus_908070'
+local before=loads
+T.check(talus.catalog(staged,true)==nil and loads==before+1,'first step loads material only')
+for i=1,5 do T.check(talus.catalog(staged,true)==nil,'one model copy per preparation step') end
+local ready=talus.catalog(staged,true)
+T.check(ready and #ready==6,'catalog published only when complete')
+T.check(talus.catalog(staged,true)==ready and loads==before+1,'completed catalog reused without material reload')
 T.done('clifftalus')

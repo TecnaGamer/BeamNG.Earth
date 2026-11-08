@@ -22,7 +22,7 @@ def edges(tris):
     return np.sort(np.concatenate((tris[:, :2], tris[:, 1:], tris[:, ::2])), axis=1)
 
 
-def _edge_groups(tris, vertex_count):
+def edge_groups(tris, vertex_count):
     """Sort integer edge keys rather than NumPy's slower structured row keys."""
     e = edges(tris)
     keys, inverse, counts = np.unique(e[:, 0].astype(np.int64)*vertex_count+e[:, 1],
@@ -35,7 +35,7 @@ def _prepare(rock):
     p, t = np.asarray(rock.positions), np.asarray(rock.tris)
     n = len(p)
     material = np.zeros(len(t), np.int32) if rock.tri_materials is None else rock.tri_materials
-    e, inv, counts = _edge_groups(t, n)
+    e, inv, counts = edge_groups(t, n)
     locked = np.zeros(n, bool)
     locked[e[counts != 2].ravel()] = True
     emin, emax = np.full(len(e), np.iinfo(np.int32).max), np.full(len(e), -1)
@@ -116,7 +116,7 @@ def simplify(rock, cell_m, prepared=None, fallback=None):
         # A collapse must not create duplicate faces or more than two faces per edge.
         _, ti, tc = np.unique(np.sort(tri[keep], axis=1), axis=0, return_inverse=True, return_counts=True)
         bad[np.flatnonzero(keep)[tc[ti] > 1]] = True
-        ue, _, ec = _edge_groups(tri[keep], len(weights))
+        ue, _, ec = edge_groups(tri[keep], len(weights))
         bad_vertices = np.unique(ue[ec > 2])
         if len(bad_vertices):
             bad |= keep & np.isin(tri, bad_vertices).any(axis=1)

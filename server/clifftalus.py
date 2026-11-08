@@ -574,3 +574,14 @@ def rubble_rows(
             )
         )
     return out
+
+
+def debug_footprints(frame, rows):
+    """Recorded placements only: preserve serialized kind IDs and map precision."""
+    if not rows:
+        return []
+    positions = np.asarray([row[1:4] for row in rows], float)
+    latitudes, longitudes, _ = frame.enu_to_geodetic(*positions.T)
+    return [[1 if row[0].startswith('talus_large_') else 2 if row[0].startswith('talus_face_') else 0,
+             round(float(lon), 7), round(float(lat), 7), round(float(row[6]) * .5, 2)]
+            for row, lat, lon in zip(rows, latitudes, longitudes)]

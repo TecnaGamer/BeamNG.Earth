@@ -23,7 +23,22 @@ class ShedTest(unittest.TestCase):
 
     def test_off(self):
         budget.SHED_MB = 0
-        self.assertFalse(budget.maybe_shed())
+        with mock.patch.object(budget, "free_gb", return_value=8):
+            self.assertFalse(budget.maybe_shed())
+        self.assertEqual(self.calls, [])
+
+    def test_desktop_pressure_releases_large_worker_caches(self):
+        budget.SHED_MB = 0
+        with mock.patch.object(budget, 'free_gb', return_value=1), mock.patch.object(budget, 'memory_mb', return_value=1200):
+            self.assertTrue(budget.maybe_shed())
+            self.assertFalse(budget.maybe_shed(), 'cooldown prevents cache thrashing')
+        self.assertEqual(self.calls, [1])
+
+    def test_pressure_leaves_small_workers_and_unknown_memory_alone(self):
+        budget.SHED_MB = 0
+        for available, resident in [(1, 200), (None, 1200), (5, 1200)]:
+            with mock.patch.object(budget, 'free_gb', return_value=available), mock.patch.object(budget, 'memory_mb', return_value=resident):
+                self.assertFalse(budget.maybe_shed())
         self.assertEqual(self.calls, [])
 
     def test_under(self):

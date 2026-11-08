@@ -792,13 +792,6 @@ end
 
 -- A tile's items as a flat array (STRIDE numbers each, or more: stride), shown from the next update on.
 local function addTile(anchorId, tileKey, flat, stride, groups, geo)
-  for _, group in ipairs(groups or {}) do
-    if clifftalus.isGroup(group) and not M.CATALOG[group] then
-      local ok, catalog = pcall(clifftalus.catalog,group)
-      if ok and catalog then M.CATALOG[group] = catalog; M.GROUP_MAX_M[group] = 350
-      else log('W','beamngEarth.trees','cliff rubble copy unavailable: '..tostring(catalog)) end
-    end
-  end
   local key = geo and ('g:' .. tostring(tileKey)) or (anchorId .. ':' .. tostring(tileKey))
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
@@ -1325,7 +1318,7 @@ function M.update(anchorId, player, view, frameMs)
         local b = (i - 1) * s
         local r = f[b + F_RANK]
         local g = names[f[b + F_GROUP] + 1]
-        local cap = g and M.GROUP_MAX_M[g]
+        local cap = g and (M.GROUP_MAX_M[g] or (clifftalus.isGroup(g) and 350))
         local isGuardrail = M.isBarrier(g)
         if isGuardrail then
           -- Preserve continuous 3 m runs until a tile cap actually requires thinning.
@@ -1344,7 +1337,7 @@ function M.update(anchorId, player, view, frameMs)
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         if clifftalus.isGroup(g) and M.groupOff.cliff_rock then r = 2 end
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree
-        if g and not M.CATALOG[g] then
+        if g and not M.CATALOG[g] and not clifftalus.isGroup(g) then
           r = 2
           if not M.unknownGroups[g] then M.unknownGroups[g] = true; log('W', 'beamngEarth.trees', 'no shapes for group ' .. g) end
         end
@@ -1362,6 +1355,16 @@ function M.update(anchorId, player, view, frameMs)
             supported = cliffReady
           end
           if not supported then skipped = skipped or i; goto nextrow end
+        end
+        if r < want and clifftalus.isGroup(g) and not M.CATALOG[g] then
+          -- Yield after a single preparation step, including success: model
+          -- import gets its own frame and remains subject to allow()'s budget.
+          if elapsed() <= limit then
+            local ok, catalog = pcall(clifftalus.catalog, g, true)
+            if ok and catalog then M.CATALOG[g] = catalog; M.GROUP_MAX_M[g] = 350 end
+            if not ok then log('W', 'beamngEarth.trees', 'cliff asset preparation: '..tostring(catalog)) end
+          end
+          stop(t, i, skipped, want, band, near); return
         end
         local solid = near and not M.NO_COLLIDE[g or '']
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
