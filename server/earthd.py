@@ -1009,6 +1009,9 @@ class Server:
         self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
         self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
+        # the water plans (Connection.sea_tiles) apart: a plan takes seconds and holds while a teleport's block is
+        # built (pacer.hold), and the ground ahead (a few ms) queued behind them: 2.2 s at 275 km/h (2026-11-07)
+        self.sea_pool = ThreadPoolExecutor(1, thread_name_prefix="sea-plan")
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
         self.ui_pool = ThreadPoolExecutor(2, thread_name_prefix="map-ui")
@@ -7455,7 +7458,7 @@ class Connection:
                                                 sea.outline_at, level_at=carved, road_clear=road_clear())
                     shores = seacarvemod.shore_plan(frame, x, y, sea)     # (the mod's shore sound)
                     return tiles, rivers, shores, not missing[0] and sea.warm_asked == asked
-                tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.ground_pool, plan)
+                tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.sea_pool, plan)
                 if complete and self.sea_checked is not None and self.sea_checked[:2] == (aid, sq):
                     self.sea_checked = (aid, sq, self.sea_checked[2], True)
                 msg = ([t.to_msg() for t in tiles], [r.to_msg() for r in rivers], shores)
