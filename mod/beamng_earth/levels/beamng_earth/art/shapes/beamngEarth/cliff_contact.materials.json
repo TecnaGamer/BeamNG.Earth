@@ -6,10 +6,7 @@
     "version": 1.5,
     "alphaTest": true,
     "alphaRef": 224,
-    "translucent": true,
-    "translucentBlendOp": "LerpAlpha",
-    "translucentZWrite": false,
-    "translucentRecvShadows": true,
+    "translucent": false,
     "doubleSided": true,
     "castShadows": false,
     "Stages": [

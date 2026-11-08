@@ -20,7 +20,7 @@ COVERAGE_POWER = np.log(ALPHA_REF/255)/np.log(EROSION_BASE)
 
 
 def coverage_maps(height, threshold):
-    """Preserve H >= .505 + .52*t, with a bounded forward blend weight."""
+    """Preserve H >= .505 + .52*t, with bounded alpha coverage."""
     return height**COVERAGE_POWER, .5*(EROSION_BASE/(EROSION_BASE+EROSION_RANGE*threshold))**COVERAGE_POWER
 
 
@@ -62,13 +62,12 @@ def main():
         opacityMap=root+'contact_height_coverage.data.dds', opacityFactor=1, opacityMapUseUV=0,
         opacityDetailMap=root+'contact_threshold_coverage.data.dds', opacityDetailMapUseUV=1,
         detailOpacityMapStrength=1, detailScale=[1,1])
-    # Screen-space shadows ignore castShadows and trace opaque scene depth.
-    # Use the forward pass without depth writes; BlendOp=None selects opaque again.
-    # The compressed masks preserve height clipping while keeping forward alpha
-    # within [0, 1]. Never use over-range opacity to make surviving texels opaque.
+    # Render surviving texels as opaque cutouts, before vehicle glass. Combining
+    # alpha testing with forward blending sorts these strips against windshields
+    # and can leave them visibly brighter than the surrounding terrain.
+    # Opaque depth can participate in screen-space shadows despite castShadows.
     material = dict(name=name, mapTo=name, **{'class':'Material'}, version=1.5, alphaTest=True, alphaRef=ALPHA_REF,
-                    translucent=True, translucentBlendOp='LerpAlpha', translucentZWrite=False,
-                    translucentRecvShadows=True, doubleSided=True, castShadows=False, Stages=[stage,{},{},{}])
+                    translucent=False, doubleSided=True, castShadows=False, Stages=[stage,{},{},{}])
     (directory/'cliff_contact.materials.json').write_text(json.dumps({name:material}, indent=2)+'\n')
     (target/'contact_sources.json').write_text(json.dumps(dict(source=prefix+'_h.png',
         sha256=hashlib.sha256(height).hexdigest(), encoding='H=(.51+.49*h)^p; D(t)=.5*(.505/(.505+.52*t))^p; p=log(224/255)/log(.505)',

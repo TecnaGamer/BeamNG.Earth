@@ -49,9 +49,8 @@ class ProjectedStrips(unittest.TestCase):
         self.assertTrue(np.all(mixed >= np.minimum(rock,terrain)))
         self.assertTrue(np.all(mixed <= np.maximum(rock,terrain)))
         self.assertTrue(material['alphaTest'])
-        self.assertTrue(material['translucent'])
-        self.assertEqual(material['translucentBlendOp'],'LerpAlpha')
-        self.assertFalse(material['translucentZWrite'])
+        # Cutouts must render with opaque terrain before windshield blending.
+        self.assertFalse(material['translucent'])
         self.assertFalse(material['castShadows'])
 
     def test_frontmost_receiver_and_misses(self):
