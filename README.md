@@ -232,6 +232,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   per-frame processing budget; urgent ground and anchor answers remain independent of that queue.
 - Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
   data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
+  The [validation notes](docs/EXPLORATION_PERFORMANCE.md) record that manual exploration still showed frequent stutters.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core

@@ -851,7 +851,7 @@ local function commitTerrain(msg)
   farfield.onBlockCommit(msg.cx, msg.cy)
   local ls = swapped and terrain.lastSwap or nil
   local c = { load = tLoad, coll = tColl - tLoad, cover = sw() - tColl, f = {}, swap = swapped or nil,
-    ter = ls and ls.apply or nil,   -- the .ter load alone (ms)
+    ter = ls and ls.apply or nil,   -- material base-field prep and native .ter application (ms)
     mats = ls and ls.mats or nil, fresh = ls and ls.fresh or nil, at = { msg.cx, msg.cy } }
   table.insert(st.commits, c)
   if #st.commits > COMMIT_LOG then table.remove(st.commits, 1) end

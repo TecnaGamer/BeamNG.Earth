@@ -156,4 +156,48 @@ The 53-test general server run above was on the earlier base and was not repeate
 A preliminary upstream-only in-game smoke loaded the Earth level, physical terrain, imagery, vegetation and
 roads on BeamNG.drive 0.40.5 / DirectX 12, using an isolated user folder and a physical cache copy. An engine
 screenshot was inspected. This was not a controlled drive or an optimized-build acceptance test. No gameplay
-performance gain has been established; manual exploration and matched before/after validation remain pending.
+performance gain had been established at that point. The subsequent manual evaluation is recorded below.
+
+
+## November 8 manual exploration: stutters remain
+
+BeamNG.drive 0.40.5 / DirectX 12, Core i5-10600, 16 GB RAM, GTX 1660 SUPER. The driver explored from the same
+Sarreguemines start in the stock D15 4WD. Baseline `ac3e0901` used native API 168; combined `3c180b5d` used API 170.
+Each had a separate user folder and physically copied cache, with matching initial graphics/Earth settings.
+Time and weather were fixed; the companion ran offline. Start/end screenshots from both builds were inspected.
+No builds or server benchmarks ran during either drive. The driver reported frequent stutters on the baseline,
+and **about the same stutters on the combined build**.
+
+The observer sampled position/focus every two seconds and took frame snapshots approximately every 16 seconds.
+Its original header incorrectly says at most 15 seconds: the 15-second deadline was checked on a two-second tick.
+Each MCP sample tags a harness frame, excluded from the main statistics and counted separately. The table uses
+windows with at least one sampled speed above 1 m/s and every sampled focus flag true. Quantiles are not pooled.
+
+| Diagnostic subset | Baseline | Combined |
+| --- | ---: | ---: |
+| Measured wall time, excluding harness frames | 476.2 s | 396.6 s |
+| Weighted average FPS | 69.85 | 69.33 |
+| Frames over 50 ms | 56 | 58 |
+| Frames over 100 ms | 37 | 38 |
+| Longest included frame | 441.9 ms | 400.5 ms |
+| Excluded harness frames | 240 | 200 |
+| Longest excluded harness frame | 160.4 ms | 169.4 ms |
+
+This is one manually driven, ordered pair. Routes, speeds, impacts and streaming workloads differed; sampled
+path lengths were 6.49 and 6.81 miles. Shader/OS cache order was not controlled. Offline canopy-height misses
+also produced repeated background errors. These numbers support the finding that stutters remain, and cannot
+establish a causal percentage improvement or regression. The raw sampler benchmark above remains a component
+measurement. Its speedup does not establish improved gameplay fluidity.
+
+The combined build's existing commit ring retained 20 terrain moves: application-phase time was 44.1--56.0 ms
+(median 46.8 ms), with corresponding commit-frame intervals of 100.4--140.6 ms (median 120.1 ms). Collision-rebuild
+bookkeeping was effectively zero on these binary swaps. The `ter` counter includes material base-field
+preparation, max-height/position fields, the native terrain-file switch and `postApply`; it does not isolate
+one native function. Render and Lua engine timings must not be added as independent costs without establishing
+their nesting. The three changes leave this application phase intact.
+
+The exploration-stutter objective is therefore **not achieved**. The next investigation needs to separate
+these application substeps and their deferred render/physics work before selecting another optimization.
+The single physical TerrainBlock, atomic moves, graphics resolution and collision-coverage requirements remain
+in force. No new engine-level optimization has been validated. Detailed traces and the driver's sampled route
+remain local rather than being published with this source.
