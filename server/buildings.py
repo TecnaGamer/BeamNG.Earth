@@ -70,8 +70,9 @@ ROOF_SHINGLE = "bne_bld_roof_shingle"
 SIDING = "bne_bld_siding"
 FACADE = "bne_bld_facade"    # the plaster window sheet, tinted per building by vertex colour
 # ... the same sheet with its windows lit otherwise at night (tools/build_night_windows.py: each band's levels
-# turned), each floor of a wall one of the three (_vary_floors; the user, 2026-11-08: the windows' brightness randomized
-# at night, a wall's floors took the same band, so a window lit or dim was lit or dim all the way up)
+# turned), each window (a bay of a floor) one of the three (_vary_bays; the user, 2026-11-08: "the brightness of windows
+# should be randomized at night", "it needs to be randomized": a wall's floors took the same band, so a window lit or dim
+# was lit or dim all the way up, and along a floor the band's bays repeated)
 FACADE_VARIANTS = (FACADE, "bne_bld_facade_b", "bne_bld_facade_c")
 STUCCO = "bne_bld_stucco"   # plain stucco walls (windows laid over them from the sheet)
 ROOF_METAL = "bne_bld_roof_metal"   # standing-seam metal (barns, sheds, farm buildings)
@@ -973,7 +974,9 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         if spec.wall:
             UV = _vary_windows(P, UV, mid)
         elif mats[0][0] == _FACADE_MI[0]:
-            mid = _vary_floors(P, mid)
+            if not lite:            # (far tiles: a variant a floor)
+                P, UV, mid = _split_bays(P, UV, mid, band[0], band[1])
+            mid = _vary_bays(P, mid)
             mats += [(i, mats[0][1]) for i in _FACADE_MI[1:]]
         m.quads(P, UV, mid, mats)
 
@@ -1001,9 +1004,38 @@ def _vary_windows(P, UV, mid):
     return uv.ravel().tolist()
 
 
-def _vary_floors(P, mid):
-    """The kernel's mid with each window sheet quad (slot 0: a floor of a wall, or one bay of it) one of
-    FACADE_VARIANTS (slot 0, 3 or 4)."""
+def _split_bays(P, UV, mid, band_k, bpt):
+    """The kernel's quads with each window-sheet quad of band band_k (slot 0) that spans several of its bays (a floor
+    of a wall, or a floor's piece beside its door) cut into a quad per bay, in place: the same wall."""
+    uv = np.array(UV, np.float64).reshape(-1, 8)
+    eps = 1.5 / 1024
+    u0, u1 = uv[:, 0] * bpt, uv[:, 2] * bpt
+    nb = np.round(u1 - u0).astype(np.int64)
+    cut = ((np.frombuffer(mid, np.uint8) == 0) & np.isclose(uv[:, 1], 1.0 - (band_k + 1) / BANDS + eps)
+           & np.isclose(uv[:, 5], 1.0 - band_k / BANDS - eps) & np.isclose(u0, np.round(u0))
+           & np.isclose(u1 - u0, nb) & (nb >= 2))
+    if not cut.any():
+        return P, UV, mid
+    pq = np.array(P, np.float64).reshape(-1, 12)
+    n = np.where(cut, nb, 1)
+    rep = np.repeat(np.arange(len(n)), n)
+    j = np.arange(len(rep)) - np.repeat(np.cumsum(n) - n, n)
+    P2, UV2 = pq[rep], uv[rep]
+    c = cut[rep]
+    t0, t1 = (j / n[rep])[c, None], ((j + 1) / n[rep])[c, None]
+    a, b = pq[rep][c, 0:3], pq[rep][c, 3:6]
+    za, zb = pq[rep][c, 2:3], pq[rep][c, 8:9]
+    pa, pb = a + (b - a) * t0, a + (b - a) * t1
+    P2[c] = np.hstack([pa[:, :2], za, pb[:, :2], za, pb[:, :2], zb, pa[:, :2], zb])
+    ua = (np.round(u0[rep][c]) + j[c]) / bpt
+    UV2[c, 0] = UV2[c, 6] = ua
+    UV2[c, 2] = UV2[c, 4] = ua + 1.0 / bpt
+    return P2.ravel().tolist(), UV2.ravel().tolist(), np.frombuffer(mid, np.uint8)[rep].tobytes()
+
+
+def _vary_bays(P, mid):
+    """The kernel's mid with each window-sheet quad (slot 0: a bay of a floor, _split_bays) one of FACADE_VARIANTS
+    (slot 0, 3 or 4)."""
     mi = np.frombuffer(mid, np.uint8).copy()
     w = np.flatnonzero(mi == 0)
     if len(w):

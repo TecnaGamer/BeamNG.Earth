@@ -444,7 +444,7 @@ class MeshTest(unittest.TestCase):
 
 
 class NightWindowsTest(unittest.TestCase):
-    """Each lit window its own brightness at night (2026-11-08): a wall's floors each one of the window sheet's night
+    """Each lit window its own brightness at night (2026-11-08): each bay of a floor one of the window sheet's night
     variants, a laid-over window each one of the sash cells; the same every build."""
 
     class _Mats(dict):
@@ -460,7 +460,7 @@ class NightWindowsTest(unittest.TestCase):
         bld._walls(m, bld.Spec(**args), ring, 0.0, 18.0, self._Mats())
         return m
 
-    def test_floors_take_the_variants(self):
+    def test_bays_take_the_variants(self):
         m = self._wall()
         P = np.array(m.P).reshape(-1, 3)
         faces = np.array(m.T).reshape(-1, 3)
@@ -471,10 +471,28 @@ class NightWindowsTest(unittest.TestCase):
             p = P[tri]
             if np.allclose(p[:, 1], 0.0):                   # the first wall (y = 0)
                 on_edge0.setdefault(round(float(p[:, 2].min()) / 3.0), set()).add(mi)
-        self.assertGreater(len(set().union(*on_edge0.values())), 1, "one wall's floors all one variant")
+        self.assertTrue(all(len(v) > 1 for v in on_edge0.values()), "a floor's bays all one variant")
         self.assertEqual(m.M, self._wall().M)
         for f in bld.FACADE_VARIANTS[1:]:
             self.assertIn(f, bld.MATERIALS)
+
+    def test_split_keeps_the_wall(self):
+        """The bays cut from a floor cover it exactly, at the sheet's scale (u per metre of the floor's quad)."""
+        band = bld.BAND_BRICK
+        ring = rect(0, 0, 30, 14)
+        P, UV, mid = bld.fast._ef.building_walls(ring, 0.0, 18.0, False, False, band[0], band[1], [], 6, 3.0, False,
+                                                 0, 10.0, True, 0.37, False, 0, False, bld._WALL_CONSTS)
+        P2, UV2, mid2 = bld._split_bays(P, UV, mid, band[0], band[1])
+        self.assertGreater(len(mid2), len(mid))
+
+        def area(pl):
+            q = np.array(pl).reshape(-1, 4, 3)
+            return float(np.linalg.norm(np.cross(q[:, 1] - q[:, 0], q[:, 3] - q[:, 0]), axis=1).sum())
+        self.assertAlmostEqual(area(P), area(P2), 6)
+        q, uv = np.array(P2).reshape(-1, 4, 3), np.array(UV2).reshape(-1, 8)
+        cut = np.isclose(uv[:, 2] - uv[:, 0], 1.0 / band[1])
+        width = np.linalg.norm(q[cut, 1, :2] - q[cut, 0, :2], axis=1)
+        self.assertTrue(np.all(np.abs(width * band[1] / bld.TILE_PX_M - 1.0) < 0.15), width)
 
     def test_laid_over_windows_take_the_sash_cells(self):
         m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))
