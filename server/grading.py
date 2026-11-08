@@ -3521,12 +3521,8 @@ class _Planner:
                 for nu, ju, nl, jl, clear in seps:
                     if nl in loc and nu not in loc and zs[nu] is None:
                         h_ = d_[loc[nl]]
-                        # (a pull, not a bound: on a raised carriageway, a level-1 ramp over the motorway under a
-                        # level-4 one, the bound and its clearance over the motorway 40 m away could not both hold)
-                        dip = max(float(data[nu]["t"][ju]) - clear, float(data[nl]["t"][jl]) - CW_FAMILY_DIG_M)
-                        if dip < h_["t"][jl]:
-                            h_["t"][jl] = dip
-                            h_["w"][jl] = max(float(h_["w"][jl]), CW_PREF_W)
+                        h_["hi"][jl] = min(h_["hi"][jl], max(float(data[nu]["t"][ju]) - clear,
+                                                             float(data[nl]["t"][jl]) - CW_FAMILY_DIG_M))
                         # (and no deeper than that around it: under the deck its ground holds it nowhere, and the
                         # smoothing alone carried a dip 1.6 m past the bound)
                         s_l = samples[nl][1]
@@ -3535,21 +3531,7 @@ class _Planner:
             mine = [t_ for t_ in ties if t_[0] in loc]
             def solve_stage():
                 info = {}
-                # (a lower bound over an upper one wins: a dig limit over a deck's clearance under it, the deck above
-                # rising for the rest when it is solved; the Rust kernel's hard bounds call a crossing pair infeasible,
-                # where the active-set solve it replaced met halfway)
-                for c_ in d_:
-                    c_["hi"] = np.maximum(c_["hi"], c_["lo"])
                 profiles = _cw.solve(d_, cp, deadline=deadline, diagnostics=info)
-                if not info["converged"] and not info["feasible"]:
-                    # (the upper bounds dropped, the clearances over what is below kept: a deck too low over this
-                    # level rises with its own level)
-                    log.debug("grading: carriageway level %s infeasible (%s): again without its upper bounds", L,
-                              info["status"])
-                    for c_ in d_:
-                        c_["hi"] = np.full(len(c_["hi"]), np.inf)
-                    info = {}
-                    profiles = _cw.solve(d_, cp, deadline=deadline, diagnostics=info)
                 if not info["converged"]:
                     raise RuntimeError(f"carriageway level {L}: {info['status']} (feasible={info['feasible']})")
                 return profiles
