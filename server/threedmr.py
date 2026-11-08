@@ -56,7 +56,7 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 28  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 29  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
 # deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
 # and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
@@ -1424,7 +1424,11 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
     ax, du = surf["ax"], surf["du"]
     if tilt is not None and len(tilt) > 4:      # (only where the road runs on the deck: bridge_tilt's span)
         us = surf["u0"] + du * np.arange(Z.shape[0])
-        Z[(us < tilt[4][0] - du / 2) | (us > tilt[4][1] + du / 2)] = np.nan
+        valid = us[np.isfinite(Z).any(1)]
+        # An API origin can be offset from the mapped bridge. Its road ends then extend beyond the author's
+        # surface: clipping the other end as well removed valid collision while the visual deck stayed whole.
+        if len(valid) and tilt[4][0] >= valid[0] - du and tilt[4][1] <= valid[-1] + du:
+            Z[(us < tilt[4][0] - du / 2) | (us > tilt[4][1] + du / 2)] = np.nan
     rows = np.nonzero(np.isfinite(Z).any(1))[0]
     if not len(rows):
         return None
@@ -1483,7 +1487,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
         js = np.nonzero(ok[i])[0]
         ends.append((float(X[i, js].mean()), float(Y[i, js].mean()), float(np.median(Zt[i, js]))))
     name = f"threedmr_{model_id}_deck.cdae"
-    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True)
+    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True, material="bne_bridge_concrete")
     return {"shape": name, "verts": verts, "tris": T, "ends": ends}
 
 
@@ -2117,6 +2121,8 @@ def write_model(
     alpha_cutoff=None,
     tex_cache_dir=None,
     tilt=None,
+    support_plane=None,
+    foundation_ground=None,
 ):
     """Write threedmr_<id>.cdae (and its texture(s)) into out_dir, atomically. positions are centered on the
     mesh's own bbox center first (glTFs are not origin-centered: some carry their original georeferenced
@@ -2159,7 +2165,9 @@ def write_model(
     diagnostic, not a hard failure - a legitimately elevated deck, e.g. a bridge or a viewing platform, is
     also a large support_dz).
 
-    tilt: bridge_tilt's lean of a model bridge (its deck's ends onto the ground roads), added after the bedding."""
+    tilt: bridge_tilt's lean of a model bridge (its deck's ends onto the ground roads), added after the bedding.
+    support_plane overrides the density-based support height. foundation_ground(xy) samples terrain below the
+    centred model; the lowest footing vertices may extend down to it after bedding and tilt (never raised)."""
     P = np.array(positions, np.float64).reshape(-1, 3)
     P[:, 0] -= (
         P[:, 0].min() + P[:, 0].max()
@@ -2172,11 +2180,22 @@ def write_model(
     P[:, 0] += offset_xy[0]
     P[:, 1] += offset_xy[1]
     zmin = float(P[:, 2].min())
-    support_z = _support_z(P[:, 2])
+    feet = np.isclose(P[:, 2], zmin, rtol=0.0, atol=0.02)
+    support_z = _support_z(P[:, 2]) if support_plane is None else float(support_plane)
     support_dz = support_z - zmin
     P[:, 2] += (ground_z - 0.2) - support_z
     if tilt is not None:    # (a model bridge leaned onto its ground roads: bridge_tilt, in the centred frame)
         P[:, 2] += tilt_dz(tilt, P[:, :2] - np.asarray(offset_xy, np.float64))
+    if foundation_ground is not None and feet.any():
+        # Stretch only the author's lowest footing vertices after positioning the deck. Raising a bridge
+        # onto its roads must not raise its pile caps off the riverbed as well. No new triangles are needed.
+        floor = np.asarray(foundation_ground(P[feet, :2] - offset_xy), np.float64).reshape(-1) - 0.5
+        before = P[feet, 2].copy()
+        target = np.maximum(floor, before - 50.0)
+        target = np.where(np.isfinite(target), np.minimum(before, target), before)
+        P[feet, 2] = target
+        if not np.array_equal(before, target):
+            normals = None  # recompute normals for the stretched faces; retain all materials and UVs
 
     if len(P) <= SPLIT_VERTEX_TRIGGER:
         result = _write_section(

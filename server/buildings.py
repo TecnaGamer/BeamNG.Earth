@@ -3514,22 +3514,39 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             )
             gz = float(np.asarray(ground(la, lo), np.float64)[0])
             tilt = surf = None
+            support_plane = foundation_ground = None
             if is_bridge:
                 # the road over it is the model's: its deck traced (threedmr.bridge_deck_surface, in the frame
                 # write_model bakes it in: centred, bedded), both leaned so the deck's ends meet the ground roads
                 Pc = _centred(pos)
-                Pc[:, 2] += (gz - 0.2) - threedmr._support_z(Pc[:, 2])
+                support_plane = float(Pc[:, 2].min())
                 surf = threedmr.bridge_deck_surface(Pc, tris)
                 if surf is not None:
 
-                    def _ground_at(x, y, _c=c):
+                    def _ground_xy(xy, _c=c):
+                        xy = np.asarray(xy, np.float64).reshape(-1, 2)
                         gla, glo, _ = frame.enu_to_geodetic(
-                            np.array([_c["xy"][0] + x]), np.array([_c["xy"][1] + y]), np.zeros(1)
+                            _c["xy"][0] + xy[:, 0], _c["xy"][1] + xy[:, 1], np.zeros(len(xy))
                         )
-                        return float(np.asarray(ground(gla, glo), np.float64)[0])
+                        return np.asarray(ground(gla, glo), np.float64)
+
+                    def _ground_at(x, y):
+                        return float(_ground_xy([[x, y]])[0])
 
                     ends = [(x - c["xy"][0], y - c["xy"][1], z) for x, y, z in (road_ends or {}).get(cid, ())]
-                    tilt = threedmr.bridge_tilt(surf, _ground_at, cid, road_ends=ends)
+                    if not ends:
+                        # A footbridge is often absent from motor-road profiles. Keep its authored elevation
+                        # above its support datum; fitting its walkway to a DEM sample in water submerged it.
+                        samples = [gz]
+                        for u, v, _z in threedmr._deck_ends(surf):
+                            x, y = (u, v) if surf["ax"] == 0 else (v, u)
+                            samples.append(_ground_at(x, y))
+                        gz = max(z for z in samples if np.isfinite(z))
+                        log.info("3dmr model %s: no mapped road ends; retaining authored deck clearance", cid)
+                    surf = {**surf, "z": surf["z"] + (gz - 0.2) - support_plane}
+                    if ends:
+                        tilt = threedmr.bridge_tilt(surf, _ground_at, cid, road_ends=ends)
+                    foundation_ground = _ground_xy
                 else:
                     log.warning("3dmr model %s: bridge without a deck to drive on", cid)
             pngs = [_tex_to_png(t[0], t[1]) for t in textures]
@@ -3551,6 +3568,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs[0],
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    support_plane=support_plane,
+                    foundation_ground=foundation_ground,
                 )
             else:
                 res = threedmr.write_model(
@@ -3567,6 +3586,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff=alpha_cutoffs,
                     tex_cache_dir=cache_dir,
                     tilt=tilt,
+                    support_plane=support_plane,
+                    foundation_ground=foundation_ground,
                 )
             # a mesh over Torque's 16-bit IBO limit (threedmr.SPLIT_VERTEX_TRIGGER) comes back as several
             # sections (threedmr.write_model's "sections"), each its own TSStatic entry at the same pos -
@@ -3838,14 +3859,55 @@ def _mostly_under(fps, xy):
 
 def bridge_stub_chunks(fps, chunks):
     """chunks without the procedural bridge standing where a model bridge (bridge_footprints' fps) does: a bridge
-    chunk (roads._bridge_chunks: a "deck" surface, or a "fixed" line on it - its lane markings at the stub's
-    heights) half or more of whose nodes are under one (the stub's slab, abutments, parapets, skin and markings all
-    come from these; the ground roads it joins stay; tunnels too)."""
+    chunk (roads._bridge_chunks: a "deck" surface or a "fixed" line on it) is clipped at the model's footprint.
+    Uncovered approaches, ground roads and tunnels stay."""
     if not fps:
         return chunks
-    return [c for c in chunks
-            if not ((c.get("deck") or c.get("fixed")) and not c.get("tunnel") and c.get("n") is not None
-                    and len(c["n"]) and _mostly_under(fps, c["n"]))]
+    out = []
+    for c in chunks:
+        nodes = c.get("n")
+        if not ((c.get("deck") or c.get("fixed")) and not c.get("tunnel")
+                and nodes is not None and len(nodes) >= 2):
+            out.append(c)
+            continue
+        for part in _outside_bridge_nodes(fps, nodes):
+            out.append(c if part is nodes else {**c, "n": part})
+    return out
+
+
+def _outside_bridge_nodes(fps, nodes):
+    """Clip only covered segments, retaining mapped approaches outside an author's shorter deck.
+
+    Interpolate every node column together (height/width as well as xy). Testing a whole run's majority
+    used to delete its uncovered ends, exposing ungraded river banks and leaving a gap onto the model.
+    """
+    a = np.asarray(nodes, np.float64)
+    if len(a) < 2:
+        return [nodes]
+    sampled = []
+    for p, q in zip(a[:-1], a[1:]):
+        n = max(1, int(math.ceil(float(np.linalg.norm(q[:2] - p[:2])) / 2.0)))
+        sampled.extend(p + (q - p) * np.arange(n)[:, None] / n)
+    a = np.vstack([sampled, a[-1]])
+    covered = _under_bridges(fps, (a[:-1, :2] + a[1:, :2]) / 2)
+    if not covered.any():
+        return [nodes]
+    # Keep up to two short segments across each outside/inside transition. Midpoint sampling and the
+    # footprint's rounded columns otherwise permit a crack; overlap meets the sinking collision apron.
+    interior = covered.copy()
+    for shift in (1, 2):
+        interior[shift:] &= covered[:-shift]
+        interior[:-shift] &= covered[shift:]
+    covered = interior
+    out, start = [], None
+    for i, inside in enumerate(covered):
+        if not inside and start is None:
+            start = i
+        if start is not None and (inside or i == len(covered) - 1):
+            end = i if inside else i + 1
+            out.append(a[start:end + 1])
+            start = None
+    return out
 
 
 def bridge_stub_parts(fps, parts):
@@ -3853,7 +3915,12 @@ def bridge_stub_parts(fps, parts):
     medians and junction pads stood at the stub's heights)."""
     if not fps:
         return parts
-    return [p for p in parts if not _mostly_under(fps, p[2])]
+    out = []
+    for p in parts:
+        nodes = np.c_[np.asarray(p[2]), np.asarray(p[3])]
+        for part in _outside_bridge_nodes(fps, nodes):
+            out.append(p if part is nodes else (p[0], p[1], part[:, :2], part[:, 2], p[4]))
+    return out
 
 
 def bridge_road_ends(fps, bridges, cells):

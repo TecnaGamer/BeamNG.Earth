@@ -2430,6 +2430,7 @@ class Server:
         rmesh = railways.tile_mesh(anchor.frame, tx, ty,
                                    [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
                                    railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
+                                   model_bridges=_bridge_fps,
                                    far_ground=railways.point_ground(
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),

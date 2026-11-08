@@ -1222,7 +1222,7 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, model_bridges=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -1282,6 +1282,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
                 feet.append((foot, zs))
         else:
             cut = ~inside
+            if model_bridges:
+                import threedmr
+                # The imported deck already includes its railway. Leave the mapped approaches and ground
+                # tracks below road bridges intact; suppress only elevated track segments on the model.
+                for fp, centre, _mid in model_bridges:
+                    cut |= threedmr.under_footprint(fp, centre, xy)
         for i, j in _runs(cut):
             sl = slice(i, j + 1)
             p, uu, t, v = xy[sl], u[sl], top[sl], s[sl] / 3.0

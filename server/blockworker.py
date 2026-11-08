@@ -955,6 +955,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if rr_kits:
         props = (props or []) + rr_kits
     P.rmesh = railways.tile_mesh(frame, tx, ty, rcells, rground,
+                                 model_bridges=_bridge_fps,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)))
