@@ -328,6 +328,38 @@ class RailUnderAbutmentTest(unittest.TestCase):
         self.assertTrue((got <= was + 1e-9).all(), f"{got} over {was}")
         self.assertAlmostEqual(got[-1], 69.3, delta=0.05, msg="the cutting away from the bridge")
 
+    def test_an_approach_cut_short_of_its_abutment(self):
+        # (each map cell grades its own piece of a road, trim_plan: the piece ending at a cell's edge 2 m short of the
+        # abutment had no abutment end of its own, and its carriageway's round end reached over the deck: 75.3 m on
+        # the track's side under it, 70.6 m with the approach whole; Codex's review of PR #920. Cut twice too: a
+        # cell corner's sliver between)
+        rail = grading.rail_plan("w1", self.rail_xy, self.rail_z)
+        old = grading.Plan(self.rail_xy, self.rail_z, rail.half)
+        old.rid = rail.rid
+        n = np.array([1.0, -1.0]) / math.sqrt(2.0)
+        pts = np.array([self.c0 + k * n for k in (-2.5, -1.5, -0.75, 0.0, 0.75, 1.5, 2.5)])
+        base = np.full(len(pts), 69.4)
+        whole = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, rail])
+        whole_was = grading.grade_points(pts[:, 0], pts[:, 1], base, [self.approach, old])
+        for cuts in ((-2.0,), (-2.0, -1.0)):
+            edges = (-200.0,) + cuts + (200.0,)
+            pieces = [q for x0, x1 in zip(edges[:-1], edges[1:])
+                      for q in grading.trim_plan(self.approach, (x0, -200.0, x1, 200.0))]
+            self.assertEqual(len(pieces), len(cuts) + 1)
+            # every piece's segment its distance on to the abutment at (0, 0), as the whole approach's
+            pk = grading.PlanPack(pieces)
+            to = -pk.b[:, 0]
+            np.testing.assert_allclose(pk.abd[:, 1], np.where(to < grading.ABUT_NEAR_M, to, np.nan), atol=1e-9)
+            np.testing.assert_array_equal(pk.ab, (to < grading.ABUT_NEAR_M).astype(np.uint8))
+            # under the deck the rail bed's narrower carriageway raises the ground no more than with the approach
+            # whole (a cut blends its pieces' ends in a little more, the band whole as well)
+            got = grading.grade_points(pts[:, 0], pts[:, 1], base, pieces + [rail])
+            was = grading.grade_points(pts[:, 0], pts[:, 1], base, pieces + [old])
+            self.assertTrue((got - was <= whole - whole_was + 1e-6).all(),
+                            f"cut at {cuts}: {got} over {was} (whole: {whole} over {whole_was})")
+            top = grading.grade_points(np.array([-1.5]), np.array([0.0]), np.array([69.4]), pieces + [rail])
+            self.assertAlmostEqual(top[0], 75.4, delta=0.05, msg="the approach at its height")
+
 
 class SeparationTest(unittest.TestCase):
     """GitHub #92: a street in a cutting, a service road on the bank 7.5 m above it beside its core."""
