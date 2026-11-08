@@ -42,11 +42,35 @@ interrupt the road surface above them. After road-height alignment, vertices at
 the model's lowest footing tier extend down to 0.5 m below local terrain, by at most
 50 m. This retains triangle counts, textures and UVs, but stretches those faces;
 models with multiple foundation tiers may still need authored foundation edits.
-Feature version 29 invalidates previous baked models and cached bridge footprints.
+Feature version 31 invalidates previous baked models and cached bridge footprints.
 
-These changes do not alter terrain heights, terrain noise or road grading. Removing
-a whole procedural approach could expose the existing rough terrain beneath it;
-retaining the uncovered approach addresses that gap rather than flattening riverbanks.
+For bridges with an explicitly named `Asphalt` surface, motor-road entrances grade the connected ground road to the imported deck's
+actual edge and slope, using one cubic Hermite profile for both terrain and retained
+procedural connectors. These local profiles extend up to 180 m along connected
+roads and refuse endpoint corrections over 8 m. The native network grader remains
+the fixed reference for model placement, preventing terrain/placement feedback.
+The abutment fill blends over up to 12 m of the retained connector's last section;
+terrain beyond that short embankment is unchanged. Lower crossing roads and tracks
+are protected with smooth shoulder transitions. Profiles
+are shared between anchor views and apply only with 3DMR enabled. Terrain noise
+outside these local approach corridors is unchanged.
+
+Generic exposed floors are insufficient evidence for reshaping terrain: existing imports
+without an identified asphalt surface retain native approach grading. Road skins and
+off-block collision workers reconstruct the same grading context from the saved content
+flag, including when another process built that content. This prevents road skins being
+buried by a separately graded terrain block.
+
+On recognised bridges, a material named `Asphalt` (case-insensitive) uses the same
+`bne_bridge_asphalt` material as generated bridges, with the game's terrain asphalt
+maps. Other materials, including timber and markings, retain their authored appearance.
+Exposed downward-wound asphalt sheets are turned upward; closed slab undersides are
+retained. Neither operation adds triangles. This is an explicit material-name convention,
+not colour-based detection of arbitrary uploaded surfaces.
+
+Mount Henry (53) and Narrows (54) have position overrides matching the geographic
+origins in their GLB scene extras; their published pins were approximately 20 m south
+of those origins. This corrects these uploads locally without changing public metadata.
 
 This does not add full glTF PBR support, Draco decoding, multi-level or arbitrary
 looping-deck tracing, or a new vertical datum/anchor convention. The existing
@@ -57,7 +81,7 @@ synthetic mesh tests do not establish correct real-world road heights.
 Regression checks:
 
 ```
-python tools/run_tests.py test_model_bridge_detection test_threedmr test_buildings test_railways
+python tools/run_tests.py test_model_bridge_detection test_threedmr test_buildings test_railways test_bridgejoins
 ```
 
 These modules also run in the foundation quality gate. Fixtures are generated in
