@@ -3244,27 +3244,13 @@ def _joined_lines(lines, joins):
 
 def _ground_pins(lines, ground_lines):
     """The joints of decks (lines' ends shared by two or more) a ground road of PIN_ROAD_M or more goes on from (an
-    end of it within PIN_M): _pin's points. Pure."""
+    end of it within PIN_M): _pin's points (earthfast.deck_ground_pins: every end against every end, then each road's
+    two ends against the joints, was ~30 ms a Manhattan chain solve in numpy). Pure."""
     ends = np.array([p[:2] for ln in lines for p in (ln[0], ln[-1])], np.float64).reshape(-1, 2)
     if not len(ends) or not ground_lines:
         return []
-    # (every end against every end at once, in row blocks: one at a time was ~1 s of a Queensboro Bridge tile)
-    keep = np.zeros(len(ends), bool)
-    for r0 in range(0, len(ends), 512):
-        blk = ends[r0:r0 + 512]
-        d = np.hypot(ends[None, :, 0] - blk[:, None, 0], ends[None, :, 1] - blk[:, None, 1])
-        keep[r0:r0 + 512] = (d < 0.5).sum(1) > 1
-    shared = ends[keep]
-    if not len(shared):
-        return []
-    out = []
-    for gl in ground_lines:
-        gl = np.asarray(gl, np.float64)[:, :2]
-        if len(gl) < 2 or float(np.hypot(*np.diff(gl, axis=0).T).sum()) < PIN_ROAD_M:
-            continue
-        for e in (gl[0], gl[-1]):
-            out.extend(shared[np.hypot(e[0] - shared[:, 0], e[1] - shared[:, 1]) < PIN_M])
-    return out
+    import fast
+    return list(fast.deck_ground_pins(ends, ground_lines, PIN_ROAD_M, PIN_M))
 
 
 def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
@@ -3313,39 +3299,14 @@ def _merge_overlaps(lines, zs, widths, levels, rounds=3, pins=None):
             d = _dijkstra(adj, {node: 0.0})
             for k, (ea, eb, es) in enumerate(edges[:n]):
                 reach[k] = np.minimum(reach[k], zend + DECK_MAX_GRADE * np.minimum(d[ea] + es, d[eb] + (es[-1] - es)))
+    import fast
+    merge = fast.DeckMerge(lines, widths, pairs, [levels is not None and levels[i] == levels[j] for i, j in pairs],
+                           MERGE_TOUCH_M, DUAL_DECK_M)
     for _ in range(rounds):
         new = [z.copy() for z in zs]
-        acc = [np.zeros(len(z)) for z in zs]
-        cnt = [np.zeros(len(z)) for z in zs]
-        up = [np.zeros(len(z)) for z in zs]     # twin carriageways: how far up to the other's height
-        for i, j in pairs:
-            A, B = lines[i][:, :2], lines[j][:, :2]
-            P, Q = B[:-1], B[1:]
-            ab = Q - P
-            L2 = np.maximum((ab ** 2).sum(1), 1e-12)
-            t = np.clip(((A[:, None, :] - P[None]) * ab[None]).sum(2) / L2[None], 0, 1)
-            near = P[None] + t[..., None] * ab[None]
-            d = np.hypot(*(A[:, None, :] - near).transpose(2, 0, 1))
-            m = np.argmin(d, axis=1)
-            dmin = d[np.arange(len(A)), m]
-            tj = t[np.arange(len(A)), m]
-            zj = zs[j][m] + tj * (zs[j][np.minimum(m + 1, len(zs[j]) - 1)] - zs[j][m])
-            ta = np.gradient(A, axis=0)
-            tb = ab[m]
-            cos = np.abs((ta * tb).sum(1)) / (np.hypot(*ta.T) * np.hypot(*tb.T) + 1e-12)
-            # soft: full weight 2 m into the overlap and when parallel, none at its edge (a hard mask
-            # made 4 m steps mid-viaduct where a neighbour's footprint started)
-            depth = np.clip(((widths[i] + widths[j]) / 2 + MERGE_TOUCH_M - dmin) / 2.0, 0.0, 1.0)
-            w = depth * np.clip((cos - 0.85) / 0.1, 0.0, 1.0) * np.isfinite(zj)
-            acc[i] += w * np.nan_to_num(zj)
-            cnt[i] += w
-            if levels is not None and levels[i] == levels[j]:
-                # one level's carriageways side by side are one deck (the Tsing Ma Bridge's two directions stood 15 m
-                # apart in height, the one over the lower deck lifted by the stacking, 2026-10-18): the lower lifted
-                # to the higher, fading out from DUAL_DECK_M apart
-                w2 = np.clip((DUAL_DECK_M - dmin) / 10.0, 0.0, 1.0) * np.clip((cos - 0.85) / 0.1, 0.0, 1.0)
-                lift = np.where(np.isfinite(zj), w2 * np.maximum(np.nan_to_num(zj) - zs[i], 0.0), 0.0)
-                up[i] = np.maximum(up[i], lift)
+        # (every pair's points projected onto the other's line, weighted by overlap and parallelism, in Rust:
+        # earthfast.deck_merge_round, 0.75 s of a cold Manhattan road tile in numpy, 2026-11-08)
+        acc, cnt, up = merge.round(zs)
         for i in range(n):
             m = cnt[i] > 0
             new[i][m] = (zs[i][m] + acc[i][m]) / (1 + cnt[i][m])
@@ -6058,16 +6019,17 @@ class BridgeProfiles:
             water = self._gap(lines, nav, depth)
         rails = [(c[0], c[1], z, deck_road_clear(depth)) for c, z in zip(rcr, rail_z)]
         levels = [pool[k][3] for k in comp]
+        pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
         def solve(ground_fn):
             return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth),
-                                levels=levels, widths=[pool[k][0].width for k in comp], pins=_ground_pins(lines, gl))
+                                levels=levels, widths=[pool[k][0].width for k in comp], pins=pins)
         zs = solve(self._ground)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
         # _observed) (_end_ons)
         over = {}
         ons = self._end_ons_of(lines, [pool[c][0].width / 2 for c in comp], levels, ground)
-        final = self._observed(comp, pool, lines, zs, pins=_ground_pins(lines, gl)) if ons else zs
+        final = self._observed(comp, pool, lines, zs, pins=pins) if ons else zs
         for k, at, j, arc in ons:
             lj = np.asarray(lines[j], np.float64)[:, :2]
             sj = np.r_[0.0, np.cumsum(np.hypot(*np.diff(lj, axis=0).T))]
@@ -6092,7 +6054,7 @@ class BridgeProfiles:
             # filled players' consoles, GitHub #391, TGForever Discord 2026-10-28)
             log.debug("bridge clearance below %.1f m target: %s; abutment/grade or map constraints prevent full headroom",
                       MIN_BRIDGE_HEADROOM_M, [(comp[i], round(h, 2)) for i, h in deficits[:3]])
-        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=_ground_pins(lines, gl))
+        out = final if (ons and not over) else self._observed(comp, pool, lines, zs, pins=pins)
         hook = DECK_Z_HOOK
         if hook is not None:
             # (a carriageway's deck: the height its roads and decks were solved for together, grading's
