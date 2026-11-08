@@ -359,6 +359,7 @@ CW_DIG_FLOOR = os.environ.get("BNE_CW_DIG_FLOOR", "off") == "on"   # a carriagew
 # depth; a carriageway aims this much over it where nothing pulls against it. The user 2026-11-07: "6m of real
 # headroom ... otherwise we use OSM data", replacing a 6 m road-over-road floor, 4-5 m under the girders)
 CLEAR_AIM_M = float(os.environ.get("BNE_CLEAR_AIM", "0.5"))
+ENU_SHARE_ON = os.environ.get("BNE_ENU_SHARE", "on") != "off"   # a cell's road parts made once a run for every process (CW_ON)
 CW_HELP = os.environ.get("BNE_CW_HELP", "on") != "off"   # a cell's carriageway regions solved by the processes side by side
 CW_STREET_RISE_M = 2.0     # m a street's own ground at a crossing may stand over its level read past the deck
 RAMP_EASE_M = float(os.environ.get("BNE_RAMP_EASE", "60"))   # m from a street a slip road eases to a street's limits (0: off)
@@ -3322,7 +3323,13 @@ class _Planner:
         if CW_JUNCTION_W > 0 and streets:
             sends = np.array([e for st in streets for e in (st[0][0], st[0][-1])], f64)
             for n, (xy, s_, pi, br, raw) in enumerate(samples):
-                d = np.hypot(xy[:, None, 0] - sends[None, :, 0], xy[:, None, 1] - sends[None, :, 1]).min(1)
+                # (the street ends within the chain's box only: against every street end of the region's ~9 cells, this
+                # was half of a region's own time, 2026-11-08)
+                lo_c, hi_c = xy.min(0) - CW_JUNCTION_NEAR_M, xy.max(0) + CW_JUNCTION_NEAR_M
+                se = sends[((sends >= lo_c) & (sends <= hi_c)).all(1)]
+                if not len(se):
+                    continue
+                d = np.hypot(xy[:, None, 0] - se[None, :, 0], xy[:, None, 1] - se[None, :, 1]).min(1)
                 at = np.flatnonzero((d <= CW_JUNCTION_NEAR_M) & ~br)
                 for j in at:
                     # (the ground at the junction itself, the street's: read along the slip road it was its slope's
@@ -3476,44 +3483,45 @@ class _Planner:
                 data[n]["w"][g_] *= u * u * (3.0 - 2.0 * u)
         # couplings: ends at a branch point equal; one carriageway over another
         couplings = []
-        ends = []
-        for n, (xy, s, pi, br, raw) in enumerate(samples):
-            ends += [(n, 0, xy[0]), (n, len(xy) - 1, xy[-1])]
-        for a in range(len(ends)):
-            for b in range(a + 1, len(ends)):
-                na, ia, pa = ends[a]
-                nb, ib, pb = ends[b]
-                if na != nb and np.hypot(*(pa - pb)) <= _cw.COUPLE_M:
-                    couplings.append((na, ia, nb, ib, "eq", 0.0))
+        # (every pair of ends at once, in the order of the pairs' loop it replaced: that loop was most of a region's
+        # own time at Perth's interchange, ~600 ends, 2026-11-08)
+        e_n = np.repeat(np.arange(len(samples)), 2)
+        e_i = np.array([v for x in samples for v in (0, len(x[0]) - 1)], np.int64)
+        e_p = np.array([p for x in samples for p in (x[0][0], x[0][-1])], f64).reshape(-1, 2)
+        if len(e_p):
+            dd = np.hypot(e_p[:, None, 0] - e_p[None, :, 0], e_p[:, None, 1] - e_p[None, :, 1])
+            ok = np.triu(dd <= _cw.COUPLE_M, 1) & (e_n[:, None] != e_n[None, :])
+            for a, b in zip(*np.nonzero(ok)):
+                couplings.append((int(e_n[a]), int(e_i[a]), int(e_n[b]), int(e_i[b]), "eq", 0.0))
         # (an end meeting the inside of another chain: a slip road at its overpass road's node, solved with it)
         joined = _cw.branch_ties([x[0] for x in samples], [x[3] for x in samples])
         couplings += [(na, ia, nb, jb, "eq", 0.0) for na, ia, nb, jb in joined]
         cross = []
-        boxes = [(x[0].min(0), x[0].max(0)) for x in samples]
-        for na in range(len(chains)):
-            for nb in range(na + 1, len(chains)):
-                if (boxes[na][1] < boxes[nb][0]).any() or (boxes[nb][1] < boxes[na][0]).any():
-                    continue
-                hits = roadsmod._crossings_by([p_[1] for p_ in chains[na][0]], [p_[1] for p_ in chains[nb][0]])
-                for ib, lst in enumerate(hits):
-                    pb = chains[nb][0][ib]
-                    for c in lst:
-                        ia = int(c[0])
-                        pa = chains[na][0][ia]
-                        if pa[2] == pb[2] and not pa[2]:
-                            continue            # (two roads on the ground: a junction, not a separation)
-                        q = np.asarray(c[2], f64)
-                        ua, ub = _xs.dir_at(pa[1], q), _xs.dir_at(pb[1], q)
-                        sin = abs(ua[0] * ub[1] - ua[1] * ub[0])
-                        # (two decks mapped at different levels: a separation however shallow the angle, the ramps of a
-                        # stack cross at a few degrees; else lines lying along each other are a duplicate or a merge)
-                        stacked = pa[2] and pb[2] and _cw_level(pa) != _cw_level(pb)
-                        if sin < CW_MIN_SIN and not (stacked and sin >= CW_STACK_SIN):
-                            continue
-                        if min(np.hypot(*(pa[1][0] - q)), np.hypot(*(pa[1][-1] - q)), np.hypot(*(pb[1][0] - q)),
-                               np.hypot(*(pb[1][-1] - q))) < 2.0:
-                            continue            # (joined there)
-                        cross.append((na, ia, nb, ib, q, sin, ua))
+        b_lo = np.array([x[0].min(0) for x in samples], f64).reshape(-1, 2)
+        b_hi = np.array([x[0].max(0) for x in samples], f64).reshape(-1, 2)
+        apart = (b_hi[:, None, :] < b_lo[None, :, :]).any(2) | (b_hi[None, :, :] < b_lo[:, None, :]).any(2)
+        for na, nb in zip(*np.nonzero(np.triu(~apart, 1))):
+            na, nb = int(na), int(nb)
+            hits = roadsmod._crossings_by([p_[1] for p_ in chains[na][0]], [p_[1] for p_ in chains[nb][0]])
+            for ib, lst in enumerate(hits):
+                pb = chains[nb][0][ib]
+                for c in lst:
+                    ia = int(c[0])
+                    pa = chains[na][0][ia]
+                    if pa[2] == pb[2] and not pa[2]:
+                        continue            # (two roads on the ground: a junction, not a separation)
+                    q = np.asarray(c[2], f64)
+                    ua, ub = _xs.dir_at(pa[1], q), _xs.dir_at(pb[1], q)
+                    sin = abs(ua[0] * ub[1] - ua[1] * ub[0])
+                    # (two decks mapped at different levels: a separation however shallow the angle, the ramps of a
+                    # stack cross at a few degrees; else lines lying along each other are a duplicate or a merge)
+                    stacked = pa[2] and pb[2] and _cw_level(pa) != _cw_level(pb)
+                    if sin < CW_MIN_SIN and not (stacked and sin >= CW_STACK_SIN):
+                        continue
+                    if min(np.hypot(*(pa[1][0] - q)), np.hypot(*(pa[1][-1] - q)), np.hypot(*(pb[1][0] - q)),
+                           np.hypot(*(pb[1][-1] - q))) < 2.0:
+                        continue            # (joined there)
+                    cross.append((na, ia, nb, ib, q, sin, ua))
         # the interchange built from the ground up (OSM's layer the order, 2026-11-02): each chain's level is its
         # highest part's (a bridge's layer, 1 without one; 0 for a chain all on the ground). The lowest level's chains
         # are solved first, on the elevation, and kept; then each level up, over and joined to what is below and not
@@ -3918,7 +3926,7 @@ class _Planner:
                 if key not in self.enu_cache and self.enu_making.get(key) is ev:    # (its maker gave up: make it here)
                     break
         try:
-            out = self._cell_enu_calc(k, ground)
+            out = self._cell_enu_shared(k, ground)
             with self.lock:
                 self.enu_cache[key] = out
                 self.enu_cache.move_to_end(key)
@@ -3931,6 +3939,25 @@ class _Planner:
                     del self.enu_making[key]
             ev.set()
 
+    def _cell_enu_shared(self, k, ground):
+        """_cell_enu_calc, through the run's plan cache with CW_ON (made once a run, read by every process: the
+        carriageway regions round an interchange, solved in different processes, each made the same cells' parts
+        again); as it is without a plan cache or BNE_ENU_SHARE off."""
+        sh = self.shared
+        if not (CW_ON and ENU_SHARE_ON and sh is not None and hasattr(sh, "enu_load") and hasattr(k, "z")):
+            return self._cell_enu_calc(k, ground)
+        tag = f"{float(self.frame.lat0):.6f}_{float(self.frame.lon0):.6f}"
+        kk, g = (int(k.z), int(k.x), int(k.y)), ("1" if ground is True else "0" if not ground else str(ground))
+        got = sh.enu_load(tag, kk, g)
+        if got is not None:
+            return got
+        import revisit
+        f0 = revisit.thread_faults()
+        out = self._cell_enu_calc(k, ground)
+        if revisit.thread_faults() == f0:   # (kept only when nothing it read failed: a missing cell is asked again)
+            sh.enu_store(tag, kk, g, out)
+        return out
+
     def _headroom_at(self, pts):
         """(n,) m of headroom (with its margin) the decks over points (n, 2) of this frame keep: roads.Headroom."""
         hm = getattr(self, "_headroom", None)
@@ -3938,14 +3965,23 @@ class _Planner:
             with self.lock:
                 hm = getattr(self, "_headroom", None)
                 if hm is None:
+                    # (the limits from the cells' parts, shared between the processes with them: read from each
+                    # cell's roads layer here, the decode was 4 of a region's 16 s once the parts were shared)
                     hm = self._headroom = roadsmod.Headroom(
-                        self.frame, lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads"))
+                        self.frame, lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads"),
+                        lambda k: self._cell_enu(k).get("maxheight", ([], [])))
         return hm.at(pts)
 
     def _cell_enu_calc(self, k, ground):
         parts = {}
         f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
         span_ll = []
+        mh_lines, mh_vals = [], []
+        if f is not None and len(f) and ground and roadsmod.MAXHEIGHT_ON:
+            for ring, v in roadsmod.maxheight_lines(f):
+                e_, n_, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                mh_lines.append(np.stack([np.asarray(e_, np.float64), np.asarray(n_, np.float64)], axis=1))
+                mh_vals.append(float(v))
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
@@ -4036,7 +4072,8 @@ class _Planner:
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "end_of": end_of, "span_bridges": span_xy,
-                "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
+                "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
+                "maxheight": (mh_lines, mh_vals)}
 
     def _decks_ll(self, lonlat):
         """_decks_near of the cell holding the middle of a lon/lat part (a pin height's plan: the cell's own plans

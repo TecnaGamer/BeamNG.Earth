@@ -5681,8 +5681,8 @@ class Headroom:
     else MIN_BRIDGE_HEADROOM_M. cell_fn(cell key) -> the cell's roads layer (or None). Thread-safe."""
     DEFAULT = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M
 
-    def __init__(self, frame, cell_fn):
-        self.frame, self.cell_fn = frame, cell_fn
+    def __init__(self, frame, cell_fn, lines_fn=None):
+        self.frame, self.cell_fn, self.lines_fn = frame, cell_fn, lines_fn
         self.cells, self.lock = {}, threading.Lock()
 
     def _cell(self, key):
@@ -5690,6 +5690,13 @@ class Headroom:
         with self.lock:
             got = self.cells.get(k)
         if got is not None:
+            return got
+        if self.lines_fn is not None:       # (the stretches in this frame already: grading's shared cell parts)
+            got = self.lines_fn(key)
+            with self.lock:
+                if len(self.cells) > 256:
+                    self.cells.clear()
+                self.cells[k] = got
             return got
         lines, vals = [], []
         try:

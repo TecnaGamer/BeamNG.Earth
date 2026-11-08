@@ -402,6 +402,61 @@ class PlanCache:
         3-17 s, while the helpers' regions were taken over half done, 2026-11-08)."""
         return wait_any(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
 
+    # ---- a cell's road parts in a planner's frame (grading._Planner._cell_enu): made once a run, read by every
+    # process (every carriageway region reads its ~9 cells' parts, each cell's road specs the most of it, and the regions
+    # round an interchange are solved in different processes: each made the same cells again, 2026-11-08) ----
+
+    def _enu_path(self, tag, key, ground):
+        return os.path.join(self.dir, "enu", tag, f"{int(key[0])}_{int(key[1])}_{int(key[2])}_{ground}.npz")
+
+    def enu_load(self, tag, key, ground):
+        """grading._Planner._cell_enu_calc's dict of cell key (planner frame tag; ground: its argument), or None."""
+        try:
+            with np.load(self._enu_path(tag, key, ground), allow_pickle=False) as f:
+                meta = json.loads(bytes(f["meta"]).decode("utf-8"))
+                lists = {g: _split(f, g) for g in ("b", "g", "rb", "rg", "sp", "mh")}
+                ends = np.asarray(f["ends"], np.float64).reshape(-1, 2)
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+        return {"bridges": lists["b"], "bridge_cls": meta["bridge_cls"], "bridge_ids": meta["bridge_ids"],
+                "bridge_levels": meta["bridge_levels"], "bridge_half": meta["bridge_half"],
+                "ground": [(ln, h, c) for ln, h, c in zip(lists["g"], meta["ground_half"], meta["ground_cls"])],
+                "ground_ids": [tuple(g) for g in meta["ground_ids"]], "ground_link": meta["ground_link"],
+                "end_of": meta["end_of"], "span_bridges": lists["sp"], "ends": ends,
+                "rail_bridges": lists["rb"], "rail_ground": lists["rg"],
+                "maxheight": (lists["mh"], [float(v) for v in meta.get("maxheight", [])])}
+
+    def enu_store(self, tag, key, ground, d):
+        def py(v):
+            return v.item() if hasattr(v, "item") else v
+        try:
+            meta = {"bridge_cls": [py(c) for c in d["bridge_cls"]], "bridge_ids": [py(c) for c in d["bridge_ids"]],
+                    "bridge_levels": [float(v) for v in d["bridge_levels"]],
+                    "bridge_half": [float(v) for v in d["bridge_half"]],
+                    "ground_half": [float(h) for _ln, h, _c in d["ground"]],
+                    "ground_cls": [py(c) for _ln, _h, c in d["ground"]],
+                    "ground_ids": [[py(v) for v in g] for g in d["ground_ids"]],
+                    "ground_link": [bool(v) for v in d.get("ground_link", [])], "end_of": [int(v) for v in d["end_of"]],
+                    "maxheight": [float(v) for v in d.get("maxheight", ([], []))[1]]}
+            arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8),
+                      "ends": np.asarray(d["ends"], np.float64).reshape(-1, 2)}
+            f64 = lambda xs: [np.asarray(x, np.float64).reshape(-1, 2) for x in xs]
+            _pack(arrays, "b", f64(d["bridges"]))
+            _pack(arrays, "g", f64([ln for ln, _h, _c in d["ground"]]))
+            _pack(arrays, "rb", f64(d.get("rail_bridges", [])))
+            _pack(arrays, "rg", f64(d.get("rail_ground", [])))
+            _pack(arrays, "sp", f64(d.get("span_bridges", [])))
+            _pack(arrays, "mh", f64(d.get("maxheight", ([], []))[0]))
+            p = self._enu_path(tag, key, ground)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "wb") as fh:
+                np.savez(fh, **arrays)
+            os.replace(tmp, p)
+        except (OSError, ValueError, TypeError):
+            return False
+        return True
+
     def region_try(self, tag, home):
         """(region, False) when it is solved already; (None, True) when this process now solves it (region_release
         after region_store); (None, False) when another process is solving it: never waits (the helpers before a
