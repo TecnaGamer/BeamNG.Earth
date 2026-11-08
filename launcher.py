@@ -159,6 +159,9 @@ def cache_dir_arg(given, dd=None):
         if given.strip().lower() in ("", "default"):
             save_app_settings(dd, cacheDir=None)
             return None
+        bad = apppaths.drive_relative_problem(given)
+        if bad:                         # (GitHub #895: not the current folder in silence)
+            raise OSError(bad)
         path = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
         os.makedirs(path, exist_ok=True)
         save_app_settings(dd, cacheDir=path)
