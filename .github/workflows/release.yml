@@ -225,6 +225,13 @@ jobs:
           } > notes.md
           # every release's notes end with the launch steps (the user, 2026-11-04)
           { echo; echo "---"; echo; python3 tools/release_notes.py --launch-only "$v"; } >> notes.md
+          # Use reviewed player-facing notes only when updated since the previous dev build.
+          # Later builds cannot accidentally reuse this release's notes unchanged.
+          if [ -f .github/dev-release-notes.md ] && [ -n "$prev" ] &&
+             git rev-parse -q --verify "refs/tags/$prev" >/dev/null &&
+             ! git diff --quiet "$prev" "$GITHUB_SHA" -- .github/dev-release-notes.md; then
+            cp .github/dev-release-notes.md notes.md
+          fi
           gh release create "v$v" out/linux/* out/windows/* dist/BeamNG.Earth-BeamMP-Server-*.zip dist/BeamNG.Earth-Host-*.zip dist/BeamMP-Server-*-corresponding-source.zip \
             --target "$GITHUB_SHA" --title "BeamNG.Earth $v (development build)" --notes-file notes.md --prerelease
           # only the newest DEV_KEEP development builds stay (the releases page has no filter: the betas got lost among
