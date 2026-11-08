@@ -443,6 +443,51 @@ class MeshTest(unittest.TestCase):
         self.assertEqual(spec.roof, "gabled")
 
 
+class NightWindowsTest(unittest.TestCase):
+    """Each lit window its own brightness at night (2026-11-08): a wall's floors each one of the window sheet's night
+    variants, a laid-over window each one of the sash cells; the same every build."""
+
+    class _Mats(dict):
+        def __missing__(self, k):
+            return bld._Looks(1.0)[k]
+
+    def _wall(self, **kw):
+        ring = rect(0, 0, 30, 14)
+        args = dict(ring=ring, floors=6, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", band=bld.BAND_BRICK,
+                    shop=False, plain=False, wall=None, door=(0, 10.0), windows=None, front=0, seed=0.37)
+        args.update(kw)
+        m = bld.Mesh()
+        bld._walls(m, bld.Spec(**args), ring, 0.0, 18.0, self._Mats())
+        return m
+
+    def test_floors_take_the_variants(self):
+        m = self._wall()
+        P = np.array(m.P).reshape(-1, 3)
+        faces = np.array(m.T).reshape(-1, 3)
+        variants = [bld.MATERIALS.index(f) for f in bld.FACADE_VARIANTS]
+        on_edge0 = {}
+        for tri, mi in zip(faces, m.M):
+            self.assertIn(mi, variants)
+            p = P[tri]
+            if np.allclose(p[:, 1], 0.0):                   # the first wall (y = 0)
+                on_edge0.setdefault(round(float(p[:, 2].min()) / 3.0), set()).add(mi)
+        self.assertGreater(len(set().union(*on_edge0.values())), 1, "one wall's floors all one variant")
+        self.assertEqual(m.M, self._wall().M)
+        for f in bld.FACADE_VARIANTS[1:]:
+            self.assertIn(f, bld.MATERIALS)
+
+    def test_laid_over_windows_take_the_sash_cells(self):
+        m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))
+        uv = np.array(m.UV).reshape(-1, 8)
+        win = uv[np.isclose(uv[:, 1], bld.WIN_UV[2]) & np.isclose(uv[:, 5], bld.WIN_UV[3])]
+        self.assertGreater(len(win), 6)
+        cells = {tuple(c) for c in np.round(bld.WIN_CELLS, 6).tolist()}
+        got = {(round(a, 6), round(b, 6)) for a, b in win[:, [0, 2]].tolist()}
+        self.assertTrue(got <= cells and len(got) > 1, got)
+        self.assertEqual(m.UV, self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding",
+                                          door=(0, 0.5)).UV)
+
+
 class DoorTest(unittest.TestCase):
     def test_door_faces_the_road(self):
         spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})

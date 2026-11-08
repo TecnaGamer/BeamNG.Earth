@@ -5,6 +5,9 @@ maps beside the building materials (mod/.../art/shapes/beamngEarth/):
                           each a room's light (warm, now and then cool white; its own brightness, some dim), brighter
                           toward the ceiling, through
                           the curtains the sheet draws (the stock map lights only one row of it, four windows)
+  bne_facade_night_e_b.png, _c.png  the same sheet's windows, each band's levels turned by one and two openings
+                          (bne_bld_facade_b / _c: the same sheet by day; buildings.py gives each floor of a wall one
+                          of the three, so a lit window column is not lit all the way up)
   bne_office_night_e.png  the metal sheet (offices' curtain walls and shopfronts, bne_bld_office / bne_bld_shop): the
                           stock map (every window lit) with some bays dimmed, a few dark
 
@@ -41,6 +44,8 @@ OPENINGS = [
     [((46, 814, 154, 946), 0), ((252, 814, 360, 946), 0.15), ((458, 814, 566, 946), 0), ((662, 814, 770, 946), 0),
      ((866, 814, 974, 946), 1.0)],
 ]
+# the plaster sheet's night maps (buildings.py FACADE_VARIANTS' materials) and their turns
+FACADE_MAPS = (("bne_facade_night_e.png", 0), ("bne_facade_night_e_b.png", 1), ("bne_facade_night_e_c.png", 2))
 WARM = (1.0, 0.70, 0.38)       # incandescent / warm LED, ~2700 K
 WARMER = (1.0, 0.62, 0.30)
 COOL = (0.78, 0.86, 1.0)       # cool white, ~5000 K
@@ -55,17 +60,17 @@ def _read(zf, name):
     return Image.open(io.BytesIO(zf.read(name)))
 
 
-def facade(base):
-    """The plaster sheet's night map from its base colour (1024 x 1024 RGB)."""
+def facade(base, turn=0):
+    """The plaster sheet's night map from its base colour (1024 x 1024 RGB), each band's levels turned by turn
+    openings (FACADE_MAPS)."""
     b = np.asarray(base.convert("RGB"), np.float32) / 255.0
     luma = 0.3 * b[..., 0] + 0.59 * b[..., 1] + 0.11 * b[..., 2]
     out = np.zeros_like(b)
     k = 0
     for band in OPENINGS:
-        for cell in band:
-            if cell is None:
-                continue
-            (x0, y0, x1, y1), lvl = cell
+        cells = [c for c in band if c is not None]
+        for j, ((x0, y0, x1, y1), _) in enumerate(cells):
+            lvl = cells[(j - turn) % len(cells)][1]
             k += 1
             if not lvl:
                 continue
@@ -98,9 +103,10 @@ def main():
     ap.add_argument("--game", default=os.path.expanduser("~/.local/share/Steam/steamapps/common/BeamNG.drive"))
     a = ap.parse_args()
     with zipfile.ZipFile(os.path.join(a.game, "content", "assets", "materials", "trim.zip")) as zf:
-        f = facade(_read(zf, PLASTER))
-        o = office(_read(zf, METAL_E))
-    for img, name in ((f, "bne_facade_night_e.png"), (o, "bne_office_night_e.png")):
+        base = _read(zf, PLASTER)
+        out = [(facade(base, turn), name) for name, turn in FACADE_MAPS]
+        out.append((office(_read(zf, METAL_E)), "bne_office_night_e.png"))
+    for img, name in out:
         p = os.path.join(OUT, name)
         img.save(p, optimize=True)
         print(p, img.size, os.path.getsize(p), "bytes")

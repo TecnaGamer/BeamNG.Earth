@@ -69,6 +69,10 @@ ROOF_SLATE = "bne_bld_roof_slate"
 ROOF_SHINGLE = "bne_bld_roof_shingle"
 SIDING = "bne_bld_siding"
 FACADE = "bne_bld_facade"    # the plaster window sheet, tinted per building by vertex colour
+# ... the same sheet with its windows lit otherwise at night (tools/build_night_windows.py: each band's levels
+# turned), each floor of a wall one of the three (_vary_floors; the user, 2026-11-08: the windows' brightness randomized
+# at night, a wall's floors took the same band, so a window lit or dim was lit or dim all the way up)
+FACADE_VARIANTS = (FACADE, "bne_bld_facade_b", "bne_bld_facade_c")
 STUCCO = "bne_bld_stucco"   # plain stucco walls (windows laid over them from the sheet)
 ROOF_METAL = "bne_bld_roof_metal"   # standing-seam metal (barns, sheds, farm buildings)
 PANEL = "bne_bld_panel"     # precast concrete panels (big-box stores, strip malls)
@@ -92,7 +96,7 @@ LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosse
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS
+             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + FACADE_VARIANTS[1:]
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -933,6 +937,7 @@ WIN_W, WIN_H, WIN_SILL = 1.05, 1.75, 0.85   # m
 # laid-over window lit alike: they all took WIN_UV)
 WIN_CELLS = np.array([(53, 154), (459, 562), (663, 764)], np.float64) / 1024
 _MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9], np.uint64)
+_FACADE_MI = [MATERIALS.index(f) for f in FACADE_VARIANTS]
 HOUSE_BAY_M = 3.4           # m between a house's windows
 DOOR_GAP_M = 0.75           # m each side of a front door kept free of the ground floor's windows
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
@@ -963,28 +968,47 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
     if mid:
+        mats = [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
+                mat_idx["bne_bld_fac_white"] if spec.wall else None]
         if spec.wall:
             UV = _vary_windows(P, UV, mid)
-        m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
-                             mat_idx["bne_bld_fac_white"] if spec.wall else None])
+        elif mats[0][0] == _FACADE_MI[0]:
+            mid = _vary_floors(P, mid)
+            mats += [(i, mats[0][1]) for i in _FACADE_MI[1:]]
+        m.quads(P, UV, mid, mats)
 
 
-def _vary_windows(P, UV, mid):
-    """The kernel's quads' UV with each laid-over window (material slot 2, WIN_UV) moved to one of WIN_CELLS, hashed
-    from its first corner (cm): the same window the same cell every build."""
-    w = np.flatnonzero(np.frombuffer(mid, np.uint8) == 2)     # (the kernel's mid: bytes)
-    if not len(w):
-        return UV
-    uv = np.array(UV, np.float64).reshape(-1, 8)
+def _pick(P, w, n):
+    """For the kernel's quads w, a number in [0, n) hashed from each one's first corner (cm): the same quad the same
+    number every build."""
     h = (np.round(np.asarray(P, np.float64).reshape(-1, 12)[w, :3] * 100).astype(np.int64).view(np.uint64)
          * _MIX).sum(axis=1)
     h ^= h >> np.uint64(31)
     h *= np.uint64(0xBF58476D1CE4E5B9)
     h ^= h >> np.uint64(29)
-    cell = WIN_CELLS[(h % np.uint64(len(WIN_CELLS))).astype(np.intp)]
+    return (h % np.uint64(n)).astype(np.intp)
+
+
+def _vary_windows(P, UV, mid):
+    """The kernel's quads' UV with each laid-over window (material slot 2, WIN_UV) moved to one of WIN_CELLS."""
+    w = np.flatnonzero(np.frombuffer(mid, np.uint8) == 2)     # (the kernel's mid: bytes)
+    if not len(w):
+        return UV
+    uv = np.array(UV, np.float64).reshape(-1, 8)
+    cell = WIN_CELLS[_pick(P, w, len(WIN_CELLS))]
     uv[w, 0] = uv[w, 6] = cell[:, 0]
     uv[w, 2] = uv[w, 4] = cell[:, 1]
     return uv.ravel().tolist()
+
+
+def _vary_floors(P, mid):
+    """The kernel's mid with each window sheet quad (slot 0: a floor of a wall, or one bay of it) one of
+    FACADE_VARIANTS (slot 0, 3 or 4)."""
+    mi = np.frombuffer(mid, np.uint8).copy()
+    w = np.flatnonzero(mi == 0)
+    if len(w):
+        mi[w] = np.array([0, 3, 4], np.uint8)[_pick(P, w, len(FACADE_VARIANTS))]
+    return mi.tobytes()
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)

@@ -10,6 +10,9 @@ M.CHECK_S = 1.0
 M.MATERIALS = {
   bne_fr_house_glass_lit = { '1 0.82 0.60', 60 },
   bne_bld_facade = { '1 1 1', 200 },
+  -- (the same sheet, its windows' levels turned: buildings.py FACADE_VARIANTS, a wall's floors one of the three)
+  bne_bld_facade_b = { '1 1 1', 200 },
+  bne_bld_facade_c = { '1 1 1', 200 },
   -- (offices: 150 nits drew Manhattan's curtain-wall towers as white lanterns, TGForever Discord 2026-10-28)
   bne_bld_office = { '0.95 0.97 1', 70 },
   -- (shopfronts: their whole band lights up; at 320 nits, then 90, a grey-white strip along every street)

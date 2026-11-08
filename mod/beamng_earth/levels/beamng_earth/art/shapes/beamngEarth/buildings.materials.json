@@ -32,6 +32,72 @@
     ],
     "translucent": false
   },
+  "bne_bld_facade_b": {
+    "name": "bne_bld_facade_b",
+    "mapTo": "bne_bld_facade_b",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a599aa31-6717-5197-83da-734b47056fab",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_b.color.png",
+        "normalMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_ao.data.png",
+        "metallicMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_facade_night_e_b.png",
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_facade_c": {
+    "name": "bne_bld_facade_c",
+    "mapTo": "bne_bld_facade_c",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "369b96bf-2d65-5f58-9649-a694e51311e8",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_b.color.png",
+        "normalMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_ao.data.png",
+        "metallicMap": "/assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_facade_night_e_c.png",
+        "vertColor": true,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
   "bne_bld_shop": {
     "name": "bne_bld_shop",
     "mapTo": "bne_bld_shop",
