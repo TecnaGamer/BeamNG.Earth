@@ -392,6 +392,7 @@ MAP_TEX_OFF_PX = 128            # the 3D map: a far tile's texture off the scree
 MAP_TEX_MIN_PX = 128            # ... never under this on it ...
 MAP_TEX_OVERSAMPLE = 1.5        # ... and at most this many texels per screen pixel of its edge
 MAP_SCREEN_H = 1440.0           # ... for a screen this many pixels high
+FLY_TEX_EYE_M = 300.0           # flying higher than this over the ground: textures as fine as on screen too
 MAP_TEX_UPGRADE_S = 1.0         # shown tiles checked this often for a larger texture as the camera turns
 MAP_LOD_SCALE = 1.25            # ... and their detail reaching this much farther (Connection.kfun)
 MAP_DETAIL_EYE_M = 3000.0       # the 3D map's view frame: roads, trees round its target only below this eye ...
@@ -3920,15 +3921,26 @@ class Server:
         if isinstance(tile, farfield.Piece):
             tile = tile.base                # (a piece takes its node's texture: the same size)
         px = self.tex_size(tile.level)
-        cam = next((c.cam for c in self.connections if (getattr(c, "map_view", False) or getattr(c, "map_open", False))
-                    and c.active == anchor.id and isinstance(getattr(c, "cam", None), dict)
-                    and c.cam.get("tx") is not None), None)
-        if cam is None:
+        conn = None
+        for c in self.connections:
+            if c.active != anchor.id or not isinstance(getattr(c, "cam", None), dict):
+                continue
+            if (getattr(c, "map_view", False) or getattr(c, "map_open", False)) and c.cam.get("tx") is not None:
+                conn = c
+                break
+            # (flying high too, a plane or a free camera: the same rule; driving keeps every texture its level's, the
+            # camera turns round there in a moment)
+            if c.cam.get("fz") is not None and c.eye_clearance() > FLY_TEX_EYE_M:
+                conn = c
+                break
+        if conn is None:
             return px
+        cam = conn.cam
         try:
             x, y, z = float(cam["x"]), float(cam["y"]), float(cam["z"])
             fx, fy, fz = float(cam["fx"]), float(cam["fy"]), float(cam["fz"])
-            gz, fov = float(cam.get("tz") or 0.0), float(cam.get("fovDeg") or 60.0)
+            gz = float(cam["tz"]) if cam.get("tz") is not None else z - conn.eye_clearance()
+            fov = float(cam.get("fovDeg") or 60.0)
         except (KeyError, TypeError, ValueError):
             return px
         x0, y0, x1, y1 = tile.bbox
@@ -4113,6 +4125,12 @@ class Server:
         """Some connection has the 3D map open (its view frame or near the car)."""
         return any(getattr(c, "map_view", False) or getattr(c, "map_open", False) for c in self.connections)
 
+    def worker_retex(self):
+        """Re-render textures in the far-tile processes (raw photos): the 3D map open, or a camera flying high (the
+        textures there upgraded as the view turns: tile_tex_px)."""
+        return self.map_on() or any(c.eye_clearance() > FLY_TEX_EYE_M for c in self.connections
+                                    if hasattr(c, "eye_clearance"))
+
     def far_limit(self):
         """Far tiles built at once (far_gate): far_drive while driving (the game needs its cores), every worker with
         the 3D map open (the game paused) or while the loading boost is on (the player waits)."""
@@ -4144,7 +4162,7 @@ class Server:
         if is_global:
             zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
             gref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
-            if quick and self.far_pool is not None:
+            if self.far_pool is not None and self.imagery is not None:
                 # the 3D map: the quick texture in the far-tile process too (raw, what is on disk; the rest downloads
                 # meanwhile and re-renders it): the global tiles are most of a map view (2026-11-07, Spokane: 26 s each
                 # here, waiting on their photos one interpreter at a time)
@@ -4152,16 +4170,16 @@ class Server:
                 px = px_t
                 texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
                 frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
-                later = im.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px)
+                later = im.fetch_later(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px) if quick else []
                 if not later and (self.deshadow is not None or self.colormatch is not None):
                     later = [im.done_token()]
                 tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                        "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
-                       "season_mode": im.season_mode, "quick": bool(later)}
+                       "season_mode": im.season_mode, "quick": quick and bool(later)}
                 args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
                 built, got = self.far_pool.submit(*args).result()
                 if got is None and im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px,
-                                                   last_only=True):
+                                                   last_only=bool(tex["quick"])):
                     built, got = self.far_pool.submit(*args).result()
                 if got is not None:
                     done = (texture, got[0], got[1])
@@ -4196,8 +4214,10 @@ class Server:
                 later = self.imagery.fetch_later(anchor.frame, *imagerymod.gutter_square(
                     x0q, y0q, tile.size, px_t), px_t)
             use_fin = analyses and self.far_pool is not None and node is tile and self.fin_worker_worth()
-            if quick and analyses and not later and not use_fin and self.far_pool is not None and node is tile:
-                # (every photo on disk but no finished tiles: a first visit; raw now, finished re-rendered right after)
+            if analyses and not later and not use_fin and self.far_pool is not None and node is tile:
+                # (no finished tiles here yet: a first visit; raw now in the worker, finished re-rendered right after.
+                # Driving too, not only the 3D map (the user, 2026-11-07: "apply what we learned and optimized for the 3d
+                # map into driving and flying"): this interpreter rendered them one at a time beside the event loop)
                 later = [self.imagery.done_token()]
             raw_quick = bool(later) and analyses
             if FAR_TRACE:
@@ -4219,7 +4239,7 @@ class Server:
                 if analyses and not raw_quick:
                     tex["fin"] = {s.name: im._fin_sigs.setdefault(s.name, im._fin_sig(s)) for s in im.chain}
                 if raw_quick:
-                    tex["quick"] = True
+                    tex["quick"] = quick        # (driving: every photo, fetched first if missing; the map: what is there)
                 elif quick:     # (the 3D map: what is on disk now, the slow hosts' photos downloaded meanwhile)
                     x0q, y0q, _, _ = tile.bbox
                     later = im.fetch_later(anchor.frame, *imagerymod.gutter_square(x0q, y0q, tile.size, tex["px"]),
@@ -4231,14 +4251,14 @@ class Server:
                 built, got = self.far_pool.submit(*args).result()
                 if analyses and not raw_quick:
                     self.fin_worker_hits.append(got is not None)
-                if got is None and quick and analyses and not raw_quick:
+                if got is None and analyses and not raw_quick:
                     # the 3D map, the finished tiles not on disk (a first visit whose photos the prefetch brought
                     # already): raw in the worker too, finished right after it is shown, not in this interpreter
                     # (Tulsa 2026-11-07: ten first tiles 7 s each here, all at once)
                     later = later or [im.done_token()]
                     raw_quick = True
                     tex.pop("fin", None)
-                    tex["quick"] = True
+                    tex["quick"] = quick
                     args = args[:-1] + (tex,)
                     built, got = self.far_pool.submit(*args).result()
                 if got is None and (not analyses or raw_quick):
@@ -4463,7 +4483,7 @@ class Server:
         t0 = time.perf_counter()
         px = self.tile_tex_px(anchor, tile)
         pending = set()
-        if self.map_on() and self.far_pool is not None and self.imagery is not None and \
+        if self.worker_retex() and self.far_pool is not None and self.imagery is not None and \
                 isinstance(tile, farfield.GTile):
             ck = self.far_ck(anchor.id, tile.key)
             texture = self.texture_name(*ck, prev.rev + 1)
@@ -4478,7 +4498,7 @@ class Server:
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
                                cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px)
-        if self.map_on() and self.far_pool is not None and self.imagery is not None and \
+        if self.worker_retex() and self.far_pool is not None and self.imagery is not None and \
                 type(tile) is farfield.Tile and tile.level > 0:
             # the 3D map: the sharper texture (its photos in now) from the raw photos in a far-tile process, many at
             # once, not the finished pyramid in this one interpreter (2026-11-07: a landed city's ground stayed blurry
@@ -7950,7 +7970,7 @@ class Connection:
             done, _ = await asyncio.wait(futs + [self._stream_waker], return_when=asyncio.FIRST_COMPLETED)
             if self._stream_waker in done:
                 self._stream_waker = None
-            if (self.map_view or self.map_open) and anchor is not None and \
+            if (self.map_view or self.map_open or self.eye_clearance() > FLY_TEX_EYE_M) and anchor is not None and \
                     time.monotonic() - getattr(self, "_texup_at", 0.0) > MAP_TEX_UPGRADE_S:
                 # (the camera turned: tiles shown with a smaller texture than they now need on screen, sharper)
                 self._texup_at = time.monotonic()
