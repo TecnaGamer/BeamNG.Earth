@@ -184,4 +184,29 @@ class DebugLayersTest(unittest.TestCase):
             conn.roads.sent=set()
             self.assertIn("No recorded",dl.query(conn,self.message("cliff_generated"))["note"])
 
+    def test_recorded_outcrops_and_rubble_overlay_is_bounded_and_read_only(self):
+        frame=geodesy.EnuFrame(35,-110)
+        with tempfile.TemporaryDirectory() as tmp:
+            conn=SimpleNamespace(active=1,cliff_faces=True,cliff_rocks=True,
+                roads=SimpleNamespace(sent={(0,0)},geo=False),
+                s=SimpleNamespace(out_dir=tmp,anchors={1:SimpleNamespace(frame=frame)}))
+            path=Path(tmp)/"roads_1_0_0.json"
+            path.write_text(json.dumps({"debugCliffRocks":[[0,-110,35,1],[1,-109.999,35.001,3],[2,-110,35.001,1]]}))
+            result=dl.query(conn,self.message("cliff_rocks"))
+            self.assertEqual({f["type"] for f in result["features"]},{0,1,2})
+            self.assertTrue(all(len(f["ring"])==12 for f in result["features"]))
+            self.assertEqual(len(result["legend"]),3)
+            with patch.object(dl,"MAX_FEATURES",1):
+                result=dl.query(conn,self.message("cliff_rocks"))
+                self.assertEqual(len(result["features"]),1)
+                self.assertIn("limited",result["note"])
+            self.assertIn(2,{v["id"] for v in result["legend"]})
+            conn.cliff_rocks=False
+            self.assertIn("disabled",dl.query(conn,self.message("cliff_rocks"))["note"])
+            conn.cliff_rocks=True
+            path.write_text('{"debugCliffRocks":[]}')
+            self.assertEqual(dl.query(conn,self.message("cliff_rocks"))["features"],[])
+            path.write_text('{}')
+            self.assertIn("predate",dl.query(conn,self.message("cliff_rocks"))["note"])
+
 if __name__ == "__main__": unittest.main()

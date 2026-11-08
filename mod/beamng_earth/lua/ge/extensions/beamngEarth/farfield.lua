@@ -1362,17 +1362,17 @@ end
 -- cover part of a cell; every remainder needs a settled shown mesh (including the intentional block-edge under-floor).
 -- Retained/rebased and clipped global tiles deliberately do not admit NEW faces:
 -- their bounding boxes are not exact coverage. Existing faces stay through rebases.
-function M.groundReady(bounds)
+function M.groundReady(bounds, detailed)
   local b = blockShown() and block or nil
   local function meshCovers(x0, y0, x1, y1)
     if x1 <= x0 or y1 <= y0 then return true end
     local x, y = (x0 + x1) / 2, (y0 + y1) / 2
-    for l = exactLevel, M.MAX_LEVEL do
+    for l = exactLevel, detailed and exactLevel or M.MAX_LEVEL do
       local s = lattice.L0 * 2 ^ l
       local inst = live[l .. '_' .. floor(x / s) .. '_' .. floor(y / s)]
       if inst and inst.shown and inst.loaded and not inst.hidden and not inst.failed and not inst.doomed
           and not inst.rotated and not inst.grp
-          and (inst.cover == 'partial' or abs(inst.off or 0) <= M.EXACT_OFF)
+          and ((not detailed and inst.cover == 'partial') or abs(inst.off or 0) <= M.EXACT_OFF)
           and x0 >= inst.x0 and y0 >= inst.y0 and x1 <= inst.x1 and y1 <= inst.y1 then return true end
     end
     return false

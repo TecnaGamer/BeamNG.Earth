@@ -1579,7 +1579,9 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
             for i, part in enumerate(cliffstrips.project_parts(patches, surface), 1):
                 what = f"cliffStrip{i}"
                 cliffstrips.write(os.path.join(out_dir, names[what]), part)
-                data[what] = {"shape": f"{vfs_dir}/{names[what]}", "pos": [0,0,0]}
+                data[what] = {"shape": f"{vfs_dir}/{names[what]}", "pos": [0,0,0],
+                              "bounds": part[0].positions.min(axis=0).tolist() +
+                                        part[0].positions.max(axis=0).tolist()}
         except Exception:
             log.exception("cliff contact strips omitted; keeping road skin")
     mark("cliff_strips")

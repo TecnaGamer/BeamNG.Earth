@@ -1189,6 +1189,7 @@ const debugMode = ref("cliff_regions")
 const debugOptions = ref([
   { label: "Natural cliff regions", value: "cliff_regions" },
   { label: "Generated cliffs & road cuts", value: "cliff_generated" },
+  { label: "Cliff outcrops & rubble", value: "cliff_rocks" },
   { label: "Road-cut material regions", value: "cliff_cuts" },
 ])
 const debugData = ref(null), debugMessage = ref("")
@@ -1239,7 +1240,7 @@ function drawDebug() {
   if (!debugOn.value || !debugData.value) return
   paintDebugFeatures(ctx, debugData.value, {
     screen, width: w.value, world: 256 * Math.pow(2, view.value.z),
-    alpha: debugMode.value === "cliff_generated" ? 0.68 : 0.28,
+    alpha: ["cliff_generated", "cliff_rocks"].includes(debugMode.value) ? 0.68 : 0.28,
   })
 }
 function queueDebugDraw() {

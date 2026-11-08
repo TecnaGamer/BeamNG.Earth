@@ -22,31 +22,106 @@ class TalusTest(unittest.TestCase):
         return talus.rows(geodesy.EnuFrame(0,0),box,x,x,keep,classes,blocked,
                           np.zeros((40,40),int),elev, **kwargs)
 
-    def test_large_arid_outcrops_are_sparse_and_reject_canyon_crest_and_steep_ground(self):
-        gi,gj=np.meshgrid(np.arange(120),np.arange(60));gi,gj=gi.ravel(),gj.ravel()
-        family=np.full(len(gi),2);distance=np.full(len(gi),3.);slope=np.zeros(len(gi))
-        chosen=talus.large_outcrops(gi,gj,family,distance,slope)
-        self.assertGreater(chosen.sum(),0)
-        cells=np.column_stack((gi[chosen]//talus.LARGE_CELL_STEPS,gj[chosen]//talus.LARGE_CELL_STEPS))
-        self.assertEqual(len(cells),len(np.unique(cells,axis=0)))
-        for f,d,s in ((3,3,0),(0,3,0),(2,7,0),(2,3,40)):
-            self.assertFalse(talus.large_outcrops(gi,gj,np.full(len(gi),f),np.full(len(gi),d),np.full(len(gi),s)).any())
-        reverse=talus.large_outcrops(gi[::-1],gj[::-1],family[::-1],distance[::-1],slope[::-1])
-        np.testing.assert_array_equal(chosen,reverse[::-1])
+    def test_arid_outcrops_are_embedded_across_faces_not_toe_replacements(self):
+        from unittest.mock import patch
+        import cliffmaterial as cm
+        skin=lambda x,y,z: np.column_stack((x,y,z+3*np.sin(x/2)*np.sin(y/2)))
+        with patch.object(cm,'natural_family',return_value=cm.ARID_CUT):
+            rows=self.fixture(skin_at=skin)
+            large=[r for r in rows if r[0].startswith('talus_large_')]
+            self.assertGreater(len(large),0)
+            self.assertGreater(np.ptp([r[3] for r in large]),15)
+            for r in large:
+                self.assertTrue(4<=r[6]<=10)
+                basis=np.array(r[8:]).reshape(3,3)
+                np.testing.assert_allclose(basis@basis.T,np.eye(3),atol=2e-6)
+                self.assertGreaterEqual(basis[2,2],np.cos(np.radians(talus.OUTCROP_MAX_TILT_DEG))-.000001)
+            with patch.object(talus,'OUTCROP_BURIAL',(0.,0.)):
+                unburied=[r for r in self.fixture(skin_at=skin) if r[0].startswith('talus_large_')]
+            self.assertEqual(len(large),len(unburied))
+            for r,base in zip(large,unburied):
+                depth=np.linalg.norm(np.array(base[1:4])-r[1:4])/r[6]
+                self.assertGreater(depth,.349)
+                self.assertLess(depth,.451)
+            without_skin=self.fixture()
+            self.assertFalse(any(r[0].startswith('talus_large_') for r in without_skin))
+            for family in (cm.CANYON,cm.NATURAL):
+                with patch.object(cm,'natural_family',return_value=family):
+                    self.assertFalse(any(r[0].startswith('talus_large_') for r in self.fixture(skin_at=skin)))
+
+    def test_smooth_steep_faces_do_not_receive_outcrops(self):
+        from unittest.mock import patch
+        import cliffmaterial as cm
+        plane=lambda x,y,z: np.column_stack((x,y,20+3*(x-80)))
+        with patch.object(cm,'natural_family',return_value=cm.ARID_CUT):
+            rows=self.fixture(skin_at=plane)
+            self.assertTrue(rows)  # loose rubble still exists
+            self.assertFalse(any(r[0].startswith('talus_large_') for r in rows))
+        x=np.array([10.,20.]);y=np.array([10.,20.]);h=np.array([4.,6.])
+        sample=lambda x,y: np.column_stack((x,y,3*x))
+        n=np.tile(np.array([-3.,0,1])/np.sqrt(10),(2,1))
+        self.assertFalse(talus.rough_face(sample,x,y,sample(x,y),n,h,1).any())
+        jagged=lambda x,y: np.column_stack((x,y,3*x+3*np.sin(x/2)*np.sin(y/2)))
+        x,y=np.meshgrid(np.arange(4.,60.,2),np.arange(4.,60.,2));x,y=x.ravel(),y.ravel()
+        dx=jagged(x+.5,y)-jagged(x-.5,y);dy=jagged(x,y+.5)-jagged(x,y-.5)
+        n=np.cross(dx,dy);n/=np.linalg.norm(n,axis=1,keepdims=True)
+        selected=talus.rough_face(jagged,x,y,jagged(x,y),n,np.full_like(x,5),1)
+        self.assertGreater(float(selected.mean()),.01)
+        self.assertLess(float(selected.mean()),.95)
 
     def test_large_arid_rows_keep_ownership_and_road_clearance(self):
         from unittest.mock import patch
         import cliffmaterial as cm
         import roads
+        skin=lambda x,y,z: np.column_stack((x,y,z+3*np.sin(x/2)*np.sin(y/2)))
         with patch.object(cm,'natural_family',return_value=cm.ARID_CUT):
-            whole=self.fixture();left=self.fixture((0,0,70,160));right=self.fixture((70,0,160,160))
+            whole=self.fixture(skin_at=skin)
+            left=self.fixture((0,0,90,160),skin_at=skin);right=self.fixture((90,0,160,160),skin_at=skin)
             self.assertEqual({tuple(r) for r in whole},{tuple(r) for r in left+right})
-            large=[r for r in whole if r[0].startswith('talus_large_')]
-            self.assertGreater(len(large),0)
-            self.assertTrue(all(4<=r[6]<=8 for r in large))
-            corridor=roads._Segs({'road':(np.array([[65.,-100.],[65.,300.]]),3.)})
-            rows=self.fixture(road_segments=corridor)
+            corridor=roads._Segs({'road':(np.array([[85.,-100.],[85.,300.]]),3.)})
+            rows=self.fixture(skin_at=skin,road_segments=corridor)
+            self.assertLess(len(rows),len(whole))
             self.assertTrue(all(talus.road_clear(np.array([r[1:4]]),np.array([r[6]]),corridor)[0] for r in rows))
+
+    def test_outcrop_companions_share_tint_and_have_varied_smaller_sizes(self):
+        from unittest.mock import patch
+        import cliffmaterial as cm
+        skin=lambda x,y,z: np.column_stack((x,y,z+3*np.sin(x/2)*np.sin(y/2)))
+        with patch.object(cm,'natural_family',return_value=cm.ARID_CUT):
+            rows=self.fixture(skin_at=skin)
+            self.assertEqual(rows,self.fixture(skin_at=skin))
+            large=[r for r in rows if r[0].startswith('talus_large_')]
+            small=[r for r in rows if r[0].startswith('talus_face_')]
+            self.assertGreater(len(small),0)
+            self.assertGreater(np.ptp([r[6] for r in large]),2)
+            self.assertGreater(np.ptp([r[6] for r in small]),.5)
+            for r in small:
+                self.assertTrue(.7<=r[6]<=2.4)
+                self.assertIn(r[0][-6:],{b[0][-6:] for b in large})
+                distance=min(np.linalg.norm(np.array(r[1:4])-b[1:4]) for b in large)
+                self.assertLess(distance,12)
+                basis=np.array(r[8:]).reshape(3,3)
+                np.testing.assert_allclose(basis@basis.T,np.eye(3),atol=2e-6)
+                self.assertGreaterEqual(basis[2,2],np.cos(np.radians(12))-.000001)
+            plane=lambda x,y,z: np.column_stack((x,y,20+3*(x-80)))
+            self.assertFalse(any(r[0].startswith('talus_face_') for r in self.fixture(skin_at=plane)))
+
+    def test_toe_rubble_uses_source_detector_material(self):
+        from unittest.mock import patch
+        import cliffmaterial as cm
+        with patch.object(talus,'mineral_tints',wraps=talus.mineral_tints) as tint:
+            self.fixture(families=np.full((40,40),cm.ARID_CUT))
+            self.assertTrue(tint.called)
+            np.testing.assert_array_equal(tint.call_args.args[2],cm.ARID_CUT)
+
+    def test_base_rubble_is_buried_further_below_support(self):
+        from unittest.mock import patch
+        with patch.object(talus,'RUBBLE_BURIAL',.12): previous=self.fixture()
+        current=self.fixture()
+        self.assertEqual(len(previous),len(current))
+        for old,new in zip(previous,current):
+            self.assertLess(new[3],old[3])
+            self.assertAlmostEqual(np.linalg.norm(np.array(new[1:4])-old[1:4])/new[6],.10,delta=.003)
 
     def test_density_favors_stable_ground_below_cliff(self):
         p = talus.probability(np.array((0,25,28,35,44,78,85)),0)

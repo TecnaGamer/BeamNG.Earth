@@ -194,3 +194,27 @@ pixels and a detector cell. Independently validated terminal profiles may
 contribute the bank length and footprint; they cannot replace its six directly
 confirmed steep core cells. The map overlay records the resulting footprint
 from the production detector, with no extra generation work in map queries.
+
+### Embedded cliff outcrops and rubble
+
+Open **Layers > Debug Overlays > Regional placement > Cliff outcrops & rubble**.
+Purple symbols mark embedded arid-face outcrops; sand-colored symbols mark loose
+toe rubble. Round symbols approximate rock extents from recorded loaded tiles.
+The production selector, confirmed face mask, displaced surface, slope, land
+cover and road exclusions govern placement. Outcrops need visible cliff faces.
+No generation or downloads run for the overlay; empty, disabled, missing-metadata
+and query-limit states are reported. These are placements, not geological claims.
+Outcrops also require footprint-scale relief and changing surface normals;
+steep but wide smooth faces are excluded.
+
+Outcrops now use varied 4-10 m heights and a denser 9 m candidate lattice. Small
+embedded companion rocks around accepted rough-face outcrops are recorded as
+Outcrop companion rocks (blue) in Cliff outcrops & rubble. Smooth faces still
+fail the shared relief and changing-normal gates. All populations use the source
+cliff mineral tint over a neutral scanned substrate; toe rubble inherits the
+actual detector material, including confirmed road cuts.
+
+Large arid outcrop records use native Utah big_2_b/d models (~16.6 m), scaled
+down to the requested heights; companion variants are selected by size and
+limited to 1.25x native scale. Placement footprints and rough-face gates remain
+the same in Cliff outcrops & rubble.

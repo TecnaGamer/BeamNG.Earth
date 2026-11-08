@@ -606,9 +606,23 @@ end
 function M.pick(group, h, rank)
   local list = M.CATALOG[group] or M.CATALOG.deciduous
   if clifftalus.isGroup(group) then
-    local v = list[math.floor(rank * 7919) % #list + 1]
-    -- Large toe outcrops are authored as 4-8 m placements; retain that size.
-    local maxScale = group:match('^talus_large_') and 5.0 or 2.0
+    -- Use native large assets for outcrops; companion rocks may grow only a
+    -- little. Avoid selecting a tiny variant and magnifying its texture atlas.
+    local large = group:match('^talus_large_') ~= nil
+    local companion = group:match('^talus_face_') ~= nil
+    if not large and not companion then
+      local v = list[math.floor(rank * 7919) % #list + 1]
+      return v[1], math.max(.10, math.min(2.0, h/v[2]))
+    end
+    local maxScale = large and 1.0 or 1.25
+    local candidates = {}
+    local biggest = list[1]
+    for _, v in ipairs(list) do
+      if v[2] > biggest[2] then biggest = v end
+      if h <= v[2]*maxScale then candidates[#candidates+1] = v end
+    end
+    if #candidates == 0 then candidates[1] = biggest end
+    local v = candidates[math.floor(rank * 7919) % #candidates + 1]
     return v[1], math.max(0.10, math.min(maxScale, h / v[2]))
   end
   local cands = {}
@@ -806,7 +820,7 @@ local function addTile(anchorId, tileKey, flat, stride, groups, geo)
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = math.floor(#flat / stride),
+  local t = { anchor = anchorId, sourceKey = tostring(tileKey), f = flat, s = stride, n = math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -1154,6 +1168,16 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
 end
 
+-- Rocks are fitted to detailed terrain; coarse placeholders and sunken under-floors
+-- cannot support them. Test the current world position, including geotile placement.
+function M.rockGroundReady(t, i)
+  local b = (i-1)*t.s
+  local x, y, z = t.f[b+F_X], t.f[b+F_Y], t.f[b+F_Z]
+  if t.geo then x, y, z = geotile.apply(t.pl, x, y, z) end
+  local radius = math.max(2, tonumber(t.f[b+F_HEIGHT]) or 2)
+  return require('beamngEarth/farfield').groundReady({x-radius,y-radius,z,x+radius,y+radius,z}, true)
+end
+
 function M.update(anchorId, player, view, frameMs)
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
@@ -1293,6 +1317,7 @@ function M.update(anchorId, player, view, frameMs)
     local dist = oD[at]
     local want, band, near = oWant[at], oBand[at], oNear[at]
     t, fd = tiles[oKeys[at]], nil
+    local cliffReady = nil
     if t.moved then
       -- a moved geotile: its items made again at its placement (the first loop, next pass). Near, it must collide;
       -- far, the engine draws its items' distant impostors without the Forest's transform: a rebase's 767 m shift
@@ -1343,6 +1368,18 @@ function M.update(anchorId, player, view, frameMs)
         -- an item something else stands in for (navgraph.lua's switchable signal heads), or one in the way of
         -- something (townsigns.lua: a tree in front of a town sign); no call at all when nothing hides (every row)
         if g and (M.suppress or next(M.hiders)) and hidden(g, f[b + F_X], f[b + F_Y], t.anchor) then r = 2 end
+        -- Delay new rocks without spending the Forest model budget or blocking other groups.
+        if r < want and not t.made[i] and (g == 'rock' or g == 'desert_rock' or clifftalus.isGroup(g)) then
+          local supported = M.rockGroundReady(t, i)
+          if supported and clifftalus.isGroup(g) then
+            if cliffReady == nil then
+              local source = t.key or (t.sourceKey or oKeys[at]:match(':(.*)$') or ''):gsub('^t', '')
+              cliffReady = require('beamngEarth/roads').cliffPiecesReady(source, t.anchor)
+            end
+            supported = cliffReady
+          end
+          if not supported then skipped = skipped or i; goto nextrow end
+        end
         local solid = near and not M.NO_COLLIDE[g or '']
         if r < want and (not t.made[i] or (t.solid[i] == true) ~= solid) then
           local sh, sc = shapeOf(t, i)
@@ -1369,6 +1406,7 @@ function M.update(anchorId, player, view, frameMs)
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
           else skipped = skipped or i end
         end
+        ::nextrow::
       end
       t.shown = want
       t.band = band

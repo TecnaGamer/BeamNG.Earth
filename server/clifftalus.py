@@ -1,4 +1,4 @@
-"""Forest-instance rubble settled below the toes of sustained natural cliffs."""
+"""Embedded arid cliff outcrops and settled Forest-instance toe rubble."""
 import math
 from functools import lru_cache
 
@@ -12,7 +12,7 @@ SCATTER_M = 5.0
 SPACING_M = 2.0
 MAX_DENSITY = .65
 MAX_TILT_DEG = 28.0
-TINT_STEP = 16.0
+TINT_STEP = 8.0
 # Conservative pivot-centred sphere per metre of requested instance height.
 # Bounds measured in BeamNG for all six clifftalus.lua models: the widest is
 # collection_02 (~2.20). This also encloses tilted clusters and off-centre pivots.
@@ -168,30 +168,159 @@ def surface_sampler(xs, ys, heights, surface):
     return sample
 
 
-# At most one larger outcrop per 24 m geographic cell, on half the cells.
-LARGE_CELL_STEPS = 12
-LARGE_TOE_REACH_M = 6.0
-LARGE_MAX_SLOPE_DEG = 30.0
+# Sparse, world-anchored outcrops across confirmed arid faces, not loose toe stones.
+OUTCROP_SPACING_M = 9.0
+OUTCROP_DENSITY = .85
+OUTCROP_MIN_SLOPE_DEG = 38.0
+OUTCROP_HEIGHT_M = (4.0, 10.0)
+OUTCROP_BURIAL = (.35, .45)
+RUBBLE_BURIAL = .22
+OUTCROP_RELIEF_RATIO = .06
+OUTCROP_MIN_RELIEF_M = .18
+OUTCROP_NORMAL_SPREAD_DEG = 16.0
+OUTCROP_MAX_TILT_DEG = 12.0
+OUTCROP_CENTER_HEIGHT = .30
+OUTCROP_SCATTER_COUNT = 5
+OUTCROP_SCATTER_HEIGHT_M = (.7, 2.4)
 
 
-def large_outcrops(gi, gj, families, distance, slope):
-    """Sparse arid-only replacements; canyon precedence and base-only placement."""
+def rough_face(sample, x, y, positions, normal, height, scale):
+    """Require footprint-scale relief and changing normals, not just a steep plane.
+
+    Eight samples around the intended boulder measure the rendered rock surface.
+    Removing the local tangent plane avoids confusing slope with roughness.
+    """
+    radius=height*.5
+    ring=np.stack([sample(x+radius*np.cos(a)/scale,y+radius*np.sin(a))
+                   for a in np.arange(8)*np.pi/4],axis=1)-positions[:,None,:]
+    distances=np.sum(ring*normal[:,None,:],axis=2)
+    relief=np.std(distances,axis=1)
+    facets=np.cross(ring,np.roll(ring,-1,axis=1))
+    facets/=np.maximum(np.linalg.norm(facets,axis=2,keepdims=True),1e-9)
+    angles=np.degrees(np.arccos(np.clip(np.abs(np.sum(facets*normal[:,None,:],axis=2)),0,1)))
+    spread=np.percentile(angles,75,axis=1)
+    return (relief>=np.maximum(OUTCROP_MIN_RELIEF_M,height*OUTCROP_RELIEF_RATIO)) & (spread>=OUTCROP_NORMAL_SPREAD_DEG)
+
+
+
+def outcrop_rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev,
+                 color_at=None, skin_at=None, road_segments=None, families=None):
+    """Seat sparse rock projections inside the actual displaced arid cliff face."""
+    import cliffrocks as cr
     import cliffmaterial as cm
     from vegetation import _hash01
-    ci,cj = gi//LARGE_CELL_STEPS,gj//LARGE_CELL_STEPS
-    eligible = ((families==cm.ARID_CUT)&(distance<=LARGE_TOE_REACH_M)&
-                (slope<=LARGE_MAX_SLOPE_DEG)&(_hash01(ci,cj,41)<.5))
-    out = np.zeros(len(gi),bool)
-    k = np.flatnonzero(eligible)
-    if len(k):
-        order = np.lexsort((_hash01(gi[k],gj[k],42),cj[k],ci[k]))
-        k = k[order]
-        first = np.r_[True,(np.diff(ci[k])!=0)|(np.diff(cj[k])!=0)]
-        out[k[first]] = True
+    if skin_at is None or not np.any(keep): return []
+    scale = math.cos(math.radians(frame.lat0))
+    j,i = np.nonzero(keep & ~blocked)
+    buckets = np.unique(np.column_stack((np.floor(xs[i]/OUTCROP_SPACING_M),
+                                         np.floor(ys[j]/OUTCROP_SPACING_M))).astype(np.int64),axis=0)
+    if not len(buckets): return []
+    gi,gj = buckets.T
+    x = (gi+.2+.6*_hash01(gi,gj,51))*OUTCROP_SPACING_M
+    y = (gj+.2+.6*_hash01(gi,gj,52))*OUTCROP_SPACING_M
+    i,j = np.searchsorted(xs,x,side='right')-1,np.searchsorted(ys,y,side='right')-1
+    valid = (i>=0)&(i<keep.shape[1])&(j>=0)&(j<keep.shape[0])
+    k=np.flatnonzero(valid); gi,gj,x,y,i,j = [a[k] for a in (gi,gj,x,y,i,j)]
+    safe = np.isin(classes,(10,20,30,60,100))
+    safe &= ~cr._grow(classes==50,math.ceil(cr.CITY_BUFFER_M/(cr.GRID_M*scale)))
+    allowed = safe[:-1,:-1]&safe[1:,:-1]&safe[:-1,1:]&safe[1:,1:]&keep&~blocked
+    la,lo = y/cr.WORLD_M_PER_DEG,(x/cr.WORLD_M_PER_DEG+180)%360-180
+    family = np.broadcast_to(cm.natural_family(la,lo),la.shape) if families is None else families[j,i]
+    valid = allowed[j,i] & (family==cm.ARID_CUT) & (_hash01(gi,gj,53)<OUTCROP_DENSITY)
+    k=np.flatnonzero(valid); gi,gj,x,y,i,j,la,lo,family = [a[k] for a in (gi,gj,x,y,i,j,la,lo,family)]
+    if not len(k): return []
+    def sample(a,b):
+        z=np.asarray(elev(b/cr.WORLD_M_PER_DEG,(a/cr.WORLD_M_PER_DEG+180)%360-180),float)
+        skin=skin_at(a,b,z)
+        return np.column_stack(frame.geodetic_to_enu(skin[:,1]/cr.WORLD_M_PER_DEG,
+                                (skin[:,0]/cr.WORLD_M_PER_DEG+180)%360-180,skin[:,2]))
+    positions=sample(x,y)
+    # Normals of the displaced surface, including relief rather than only DEM slope.
+    dx=sample(x+.5/scale,y)-sample(x-.5/scale,y)
+    dy=sample(x,y+.5)-sample(x,y-.5)
+    normal=np.cross(dx,dy)
+    normal/=np.maximum(np.linalg.norm(normal,axis=1,keepdims=True),1e-9)
+    normal=np.where(normal[:,2:3]<0,-normal,normal)
+    slope=np.degrees(np.arccos(np.clip(normal[:,2],-1,1)))
+    owned=(positions[:,0]>=box[0])&(positions[:,0]<box[2])&(positions[:,1]>=box[1])&(positions[:,1]<box[3])
+    height=OUTCROP_HEIGHT_M[0]+np.diff(OUTCROP_HEIGHT_M)[0]*_hash01(gi,gj,54)**1.35
+    rough=rough_face(sample,x,y,positions,normal,height,scale)
+    yaw=_hash01(gi,gj,55)*2*np.pi
+    # Keep the mass gravity-oriented. The face normal controls burial, never
+    # the boulder's tall axis: perpendicular wall alignment looks glued on.
+    tilt=np.radians(np.minimum(slope*.12,OUTCROP_MAX_TILT_DEG))
+    horizontal=normal[:,:2]/np.maximum(np.linalg.norm(normal[:,:2],axis=1,keepdims=True),1e-9)
+    up=np.column_stack((horizontal*np.sin(tilt)[:,None],np.cos(tilt)))
+    tangent=np.column_stack((np.cos(yaw),np.sin(yaw),np.zeros(len(x))))
+    tangent-=up*np.sum(tangent*up,axis=1,keepdims=True)
+    tangent/=np.maximum(np.linalg.norm(tangent,axis=1,keepdims=True),1e-9)
+    bitangent=np.cross(up,tangent)
+    burial=OUTCROP_BURIAL[0]+np.diff(OUTCROP_BURIAL)[0]*_hash01(gi,gj,56)
+    positions-=normal*(height*burial)[:,None]
+    # Utah pivots sit below the volume centre (about 17-43% of model height).
+    # Lower the shared placement so the visible mass, not its foot, meets the face.
+    positions-=up*(height*OUTCROP_CENTER_HEIGHT)[:,None]
+    valid=rough & (slope>=OUTCROP_MIN_SLOPE_DEG) & np.all(np.isfinite(positions),axis=1)
+    valid &= road_clear(positions,np.round(height,3),road_segments)
+    rgb=None if color_at is None else color_at(la,lo)
+    tint=mineral_tints(biomes[j,i],rgb,family)
+    rank=_hash01(gi,gj,57)
+    out=[]
+    for at in np.flatnonzero(valid & owned):
+        group='talus_large_'+''.join(f'{v:02x}' for v in tint[at])
+        basis=np.concatenate((tangent[at],bitangent[at],up[at]))
+        out.append([group,*np.round(positions[at],3).tolist(),round(float(np.degrees(yaw[at])),2),
+                    1.,round(float(height[at]),3),round(float(rank[at]),5),*np.round(basis,6).tolist()])
+    # Companions are independently owned at their support point, so a cluster
+    # crossing a tile boundary is neither duplicated nor clipped to its parent.
+    parents=np.flatnonzero(valid)
+    for slot in range(OUTCROP_SCATTER_COUNT):
+        if not len(parents): break
+        pi,pj=gi[parents],gj[parents]
+        angle=(slot+_hash01(pi,pj,61+slot))*2*np.pi/OUTCROP_SCATTER_COUNT
+        radius=height[parents]*(.35+.30*_hash01(pi,pj,71+slot))
+        # Measure spacing along the face, not its horizontal projection.
+        grade=(normal[parents,0]*np.cos(angle)+normal[parents,1]*np.sin(angle))/np.maximum(normal[parents,2],.1)
+        radius/=np.sqrt(1+grade*grade)
+        sx=x[parents]+np.cos(angle)*radius/scale
+        sy=y[parents]+np.sin(angle)*radius
+        si,sj=np.searchsorted(xs,sx,side='right')-1,np.searchsorted(ys,sy,side='right')-1
+        inside=(si>=0)&(si<keep.shape[1])&(sj>=0)&(sj<keep.shape[0])
+        k=np.flatnonzero(inside)
+        if not len(k): continue
+        parent=parents[k]; sx,sy,si,sj,pi,pj=[a[k] for a in (sx,sy,si,sj,pi,pj)]
+        support=sample(sx,sy)
+        dx=sample(sx+.5/scale,sy)-sample(sx-.5/scale,sy)
+        dy=sample(sx,sy+.5)-sample(sx,sy-.5)
+        sn=np.cross(dx,dy); sn/=np.maximum(np.linalg.norm(sn,axis=1,keepdims=True),1e-9)
+        sn=np.where(sn[:,2:3]<0,-sn,sn)
+        sh=OUTCROP_SCATTER_HEIGHT_M[0]+np.diff(OUTCROP_SCATTER_HEIGHT_M)[0]*_hash01(pi,pj,81+slot)
+        local_family=(np.broadcast_to(cm.natural_family(sy/cr.WORLD_M_PER_DEG,
+                      (sx/cr.WORLD_M_PER_DEG+180)%360-180),sx.shape)
+                      if families is None else families[sj,si])
+        selected=allowed[sj,si] & (local_family==cm.ARID_CUT)
+        selected &= (support[:,0]>=box[0])&(support[:,0]<box[2])&(support[:,1]>=box[1])&(support[:,1]<box[3])
+        selected &= rough_face(sample,sx,sy,support,sn,np.maximum(sh,height[parent]*.75),scale)
+        seated=support-sn*(sh*.40)[:,None]-up[parent]*(sh*OUTCROP_CENTER_HEIGHT)[:,None]
+        selected &= np.all(np.isfinite(seated),axis=1)&road_clear(seated,np.round(sh,3),road_segments)
+        companion_rank=_hash01(pi,pj,91+slot)
+        for at in np.flatnonzero(selected):
+            owner=parent[at]
+            group='talus_face_'+''.join(f'{v:02x}' for v in tint[owner])
+            basis=np.concatenate((tangent[owner],bitangent[owner],up[owner]))
+            out.append([group,*np.round(seated[at],3).tolist(),round(float(np.degrees(yaw[owner])),2),
+                        1.,round(float(sh[at]),3),round(float(companion_rank[at]),5),
+                        *np.round(basis,6).tolist()])
     return out
 
 
-def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None, skin_at=None, road_segments=None):
+def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev,
+         color_at=None, skin_at=None, road_segments=None, families=None):
+    args=(frame,box,xs,ys,keep,classes,blocked,biomes,elev,color_at,skin_at,road_segments)
+    return toe_rows(*args,families=families) + outcrop_rows(*args,families=families)
+
+
+def toe_rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None, skin_at=None, road_segments=None, families=None):
     """17-field Forest rows with a tilted orthonormal basis and regional tint.
 
     The same geographic lattice owns every candidate across tile boundaries.
@@ -251,13 +380,9 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
     source_lo = ((xs[source_i]+xs[source_i+1])*.5/cr.WORLD_M_PER_DEG+180)%360-180
     rgb = None if color_at is None else color_at(source_la,source_lo)
     import cliffmaterial as cm
-    families = cm.natural_family(source_la,source_lo)
-    tint = mineral_tints(biomes[source_j,source_i],rgb,families)
+    source_family = cm.natural_family(source_la,source_lo) if families is None else families[source_j,source_i]
+    tint = mineral_tints(biomes[source_j,source_i],rgb,source_family)
     height = (.65+1.2*_hash01(gi[k],gj[k],34))*(1-.45*distance[k]/REACH_M)
-    # Replace a few existing toe stones with jagged Utah outcrops, not an extra
-    # population. Choose before tile ownership so neighbouring tiles agree.
-    large = large_outcrops(gi[k],gj[k],families,distance[k],slope[k])
-    height = np.where(large,4+4*_hash01(gi[k],gj[k],43),height)
     yaw = _hash01(gi[k],gj[k],35)*2*np.pi
     rank = _hash01(gi[k],gj[k],36)
     # Stones rest at a shallower attitude than the face, with random heading.
@@ -278,11 +403,11 @@ def rows(frame, box, xs, ys, keep, classes, blocked, biomes, elev, color_at=None
         positions = np.column_stack((se,sn,sz))
     else:
         positions = np.column_stack(frame.geodetic_to_enu(la[k],lo[k],z[k]))
-    positions -= normal*(height*.12)[:,None]
+    positions -= normal*(height*RUBBLE_BURIAL)[:,None]
     clear = owned[k] & road_clear(positions, np.round(height, 3), road_segments)
     out = []
     for at in np.flatnonzero(clear):
-        group = ('talus_large_' if large[at] else 'talus_') + ''.join(f'{v:02x}' for v in tint[at])
+        group = 'talus_' + ''.join(f'{v:02x}' for v in tint[at])
         basis = np.concatenate((tangent[at],bitangent[at],up[at]))
         out.append([group,*np.round(positions[at],3).tolist(),round(float(np.degrees(yaw[at])),2),
                     1.0,round(float(height[at]),3),round(float(rank[at]),5),*np.round(basis,6).tolist()])

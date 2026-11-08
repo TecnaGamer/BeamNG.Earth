@@ -100,8 +100,34 @@ class CliffStreamTest(unittest.TestCase):
         from types import SimpleNamespace
         rock = surface(5)
         positions = np.array([[-2., 1., 3.], [4., 5., 6.], [0., 3., 7.]])
-        rock.strips = [SimpleNamespace(positions=positions)]
+        rock.strips = [(SimpleNamespace(positions=positions), None)]
         with tempfile.TemporaryDirectory() as tmp, patch.object(cliffstrips, 'write'):
             roads.write_tile(tmp, '/test', 1, 2, 3, [], cliff_mesh=rock)
             data = json.loads(next(Path(tmp).glob('*.json')).read_text())
             self.assertEqual(data['cliffStrip1']['bounds'], [-2., 1., 3., 4., 5., 7.])
+
+
+class CliffSkinSupportTest(unittest.TestCase):
+    def test_draped_skin_publishes_projected_support_bounds(self):
+        import json
+        import blockworker as bw
+        import cliffstrips
+        import geotiles
+        import roadmesh
+        from types import SimpleNamespace
+        positions = np.array([[-2., 1., 3.], [4., 5., 6.], [0., 3., 7.]])
+        projected = [(SimpleNamespace(positions=positions), None)]
+        gx, gy = geotiles.tile_of(35.96, -114.66)
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(bw, '_s', SimpleNamespace(anchor=lambda *args: (None, None))), \
+             patch.object(bw, '_skin_inputs', return_value={'cliff_strips': ['source']}), \
+             patch.object(bw, 'tunnel_profiles', return_value=[]), \
+             patch.object(bw, '_with_plazas', return_value=None), \
+             patch.object(roadmesh, 'build', return_value=None), \
+             patch.object(cliffstrips, 'map_patches', return_value=['mapped']), \
+             patch.object(cliffstrips, 'project_parts', return_value=projected), \
+             patch.object(cliffstrips, 'write'):
+            path, _ = bw._geo_skin(1, 35.96, -114.66, 15, gx, gy, tmp, '/test', False, 0, 1/32, lambda: None)
+            data = json.loads((Path(tmp)/Path(path).name).read_text())
+            self.assertEqual(data['cliffStrip1']['pos'], [0,0,0])
+            self.assertEqual(data['cliffStrip1']['bounds'], [-2.,1.,3.,4.,5.,7.])

@@ -483,12 +483,14 @@ end
 
 -- Bounds are local to the shape pivot. Map all eight corners when a geotile
 -- rotates; a translated min/max pair is not a valid box after rebasing.
-function M.cliffWalkBounds(t, what, walk)
-  local part = t.geo and t.parts and t.parts[what] or walk
+function M.cliffWalkBounds(t, what, walk, skin)
+  -- Draped skins are already in anchor coordinates, unlike geotile content.
+  local geo = t.geo and not skin
+  local part = geo and t.parts and t.parts[what] or walk
   local b = part and part.bounds
   if not b or #b ~= 6 then return nil end
-  local pp = t.geo and t.pls and t.pls[what]
-  if t.geo and not pp then return nil end
+  local pp = geo and t.pls and t.pls[what]
+  if geo and not pp then return nil end
   local out = { math.huge, math.huge, math.huge, -math.huge, -math.huge, -math.huge }
   for i = 1, 4, 3 do for j = 2, 5, 3 do for k = 3, 6, 3 do
     local x, y, z = b[i]+part.pos[1], b[j]+part.pos[2], b[k]+part.pos[3]
@@ -884,6 +886,18 @@ function M.geoWalk(t, what)
   return { shape = partShape(t, what), pos = { x, y, z }, rot = pp.q, collisionMesh = p.collisionMesh }
 end
 
+-- A reconnect clears Forest items while retaining unchanged cliff meshes.
+-- Reattach their rows once; repeated deliveries must not rebuild visible rocks.
+function M.restoreTalusRows(t, data)
+  local T = require('beamngEarth/trees')
+  if type(data.talus) ~= 'table' or type(data.talus.items) ~= 'table' or #data.talus.items == 0
+      or T.hasGeo('t' .. t.gkey) then return false end
+  T.onGeoRows('t' .. t.gkey, t.gkey, data.talus.items, data.talus.groups, 17,
+    t.frame, t.rowPivot or 0, t.anchorObj)
+  t.talus = true
+  return true
+end
+
 -- Server message `roads_tile` for a geotile key: its content (data: the JSON; frame, h, slots, exact).
 function M.onGeoTile(msg, currentAnchor, a)
   a = a or anchorObj
@@ -917,6 +931,7 @@ function M.onGeoTile(msg, currentAnchor, a)
       T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
         old.rowPivot or 0, old.anchorObj)
     end
+    M.restoreTalusRows(old, data)
     M.geoStats.kept = M.geoStats.kept + 1
     return true
   end
@@ -976,6 +991,19 @@ function M.onGeoTile(msg, currentAnchor, a)
   return true
 end
 
+-- Rubble rows arrive with content, before its cliff meshes have finished importing.
+function M.cliffPiecesReady(key, aid)
+  local t = tiles[geotile.isKey(key) and geoKey(key) or tileKey(aid, key)]
+  if not t then return false end
+  local parts = t.parts or t.cliffSources or {}
+  for _, what in ipairs(M.CLIFF_WHATS) do
+    if parts[what] and (not M.cliffsEnabled or not t[what] or not scenetree.findObjectById(t[what])) then
+      return false
+    end
+  end
+  return true
+end
+
 -- Server message `roads_skin` {anchorId, key, data / path, slots}: the draped surfaces of a geotile for this anchor.
 -- The old skin's objects stay until the new ones are made (per part; what the new skin lacks: with its road mesh).
 function M.onSkin(msg, currentAnchor)
@@ -1018,8 +1046,8 @@ function M.onSkin(msg, currentAnchor)
     local w = data[what]
     local sl = msgSlot(msg, what)
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
-      if sl then w = { shape = sl.path, pos = w.pos }; t.slots[what] = sl end
-      t.skin[what] = { shape = w.shape, pos = w.pos }
+      if sl then w = { shape = sl.path, pos = w.pos, bounds = w.bounds }; t.slots[what] = sl end
+      t.skin[what] = { shape = w.shape, pos = w.pos, bounds = w.bounds }
       local q = { key = geoKey(msg.key), walk = w, what = what, tile = t, skin = true,
         renderOnly = what == 'road' or M.isCliffStrip(what) or (leanWalk and what == 'walk') }
       if not q.renderOnly then t.colWant[what] = true end
@@ -1232,7 +1260,8 @@ function M.onTile(msg, currentAnchor, a)
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
-        data[what] = { shape = sl.path, pos = data[what].pos }
+        data[what] = { shape = sl.path, pos = data[what].pos, bounds = data[what].bounds,
+          collisionMesh = data[what].collisionMesh }
         slots[what] = sl
       else
         slotDrop(sl)                -- nothing will load it
@@ -1242,6 +1271,8 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  tiles[key].cliffSources = {}
+  for _, what in ipairs(M.CLIFF_WHATS) do tiles[key].cliffSources[what] = data[what] end
   protectWater(tiles[key], data, a)
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
@@ -1987,9 +2018,9 @@ function M.update(gov, currentAnchor, player, view, a)
     local walk = q.walk
     if t and q.geo then walk = M.geoWalk(t, q.what) end      -- (a geotile's part: placed as the tile is now)
     if t and walk and (M.isCliff(q.what) or M.isCliffStrip(q.what)) then
-      local bounds = M.cliffWalkBounds(t, q.what, walk)
+      local bounds = M.cliffWalkBounds(t, q.what, walk, q.skin)
       -- Older packets have no bounds; retain their existing behaviour.
-      if bounds and not require('beamngEarth/farfield').groundReady(bounds) then
+      if bounds and not require('beamngEarth/farfield').groundReady(bounds, M.isCliffStrip(q.what)) then
         groundWaiting[#groundWaiting + 1] = q
         t = nil
         if #groundWaiting >= M.CLIFF_GROUND_CHECKS_PER_FRAME then break end

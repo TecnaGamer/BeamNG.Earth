@@ -44,6 +44,8 @@ jsonDecode = function(s)
   return d
 end
 local trees = require('beamngEarth/trees')
+require('beamngEarth/farfield').groundReady = function() return true end -- terrain fixture
+require('beamngEarth/roads').cliffPiecesReady = function() return true end -- cliff fixture
 trees.EVERY_N = 1               -- (every update works here; the batching is tested below)
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
@@ -51,12 +53,19 @@ trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
 local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
 
 -- the variant: a height inside its range, scaled to it
-trees.CATALOG.talus_large_c0a080 = {{'/temp/beamngEarth/shapes/cliff_talus_v2/large_utah',1.698}}
-local _, largeScale = trees.pick('talus_large_c0a080',8,0)
-T.check(math.abs(largeScale*1.698-8)<.001,'large Utah outcrop retains server height')
+trees.CATALOG.talus_large_c0a080 = {{'/temp/beamngEarth/shapes/cliff_talus_v2/large_utah',16.6963}}
+local _, largeScale = trees.pick('talus_large_c0a080',10,0)
+T.check(math.abs(largeScale*16.6963-10)<.001,'native large outcrop scales down to requested height')
 trees.CATALOG.talus_c0a080 = {{'/temp/beamngEarth/shapes/cliff_talus_v2/small_utah',1.698}}
 local _, smallScale = trees.pick('talus_c0a080',8,0)
 T.check(smallScale==2,'ordinary rubble retains existing scale cap')
+local _, cappedLarge = trees.pick('talus_large_c0a080',25,0)
+T.check(cappedLarge==1,'large outcrops never exceed native size')
+trees.CATALOG.talus_face_c0a080={{'tiny',.560},{'small',1.698},{'medium',1.885}}
+for _,rank in ipairs({0,.2,.6,.99}) do
+  local chosen,scale=trees.pick('talus_face_c0a080',2.3,rank)
+  T.check(chosen=='medium' and scale<=1.25,'companions choose a suitably sized mesh instead of enlarging tiny rocks')
+end
 local shape, sc = trees.pick('conifer', 20.0, 0.3)
 T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m conifer: a large fir near its size')
 shape, sc = trees.pick('rock', 0.6, 0.1)
@@ -724,6 +733,34 @@ do
   for _,g in ipairs(groups) do trees.CATALOG[g]=nil end
   trees.EVERY_N, trees.POOL_SPARE = every, spare
   trees.clear();trees.reset()
+end
+
+do
+  trees.clear(); trees.EVERY_N = 1; trees.FRAME_MS = math.huge; trees.POOL_SPARE = 0
+  local far = require('beamngEarth/farfield')
+  local roads = require('beamngEarth/roads')
+  local originalReady = roads.cliffPiecesReady
+  local ground, cliffs = false, false
+  far.groundReady = function(bounds, detailed)
+    T.check(detailed == true and bounds[1] < 10 and bounds[4] > 10, 'rock waits for detailed ground around its base')
+    return ground
+  end
+  roads.cliffPiecesReady = function(key, aid)
+    T.check(key == '0_0' and aid == 91, 'rubble waits for its own cliff tile')
+    return cliffs
+  end
+  trees.onRows(91,'t0_0',{{0,10,10,5,0,1,1,0},{1,10,10,5,0,1,1,0},{2,10,10,5,0,1,1,0}},
+    {'desert_rock','talus_c0a080','conifer'},8)
+  for _=1,10 do trees.update(91,{x=10,y=10}) end
+  T.check(count()==1,'missing terrain holds both rock groups without blocking trees')
+  ground=true
+  for _=1,10 do trees.update(91,{x=10,y=10}) end
+  T.check(count()==2,'ordinary rocks load on ground; rubble still waits for cliff faces')
+  cliffs=true
+  for _=1,10 do trees.update(91,{x=10,y=10}) end
+  T.check(count()==3,'waiting rubble loads when its cliffs arrive without player movement')
+  roads.cliffPiecesReady=originalReady
+  trees.clear()
 end
 
 T.done('test_trees')

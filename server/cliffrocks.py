@@ -904,7 +904,7 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
     rubble = []
     if rocks:
         skin_at = clifftalus.surface_sampler(xs, ys, h, surface_data[0])
-        rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at, road_segments=rubble_roads)
+        rubble = clifftalus.rows(frame, box, *coarse, elev, rubble_color_at, skin_at, road_segments=rubble_roads, families=detector_family)
 
     def project(p):
         return np.column_stack(frame.geodetic_to_enu(p[:, 1]/WORLD_M_PER_DEG,
@@ -929,6 +929,12 @@ def build(frame, box, elev, surface, road_cells=(), widths=None, color_at=None, 
         result.debug_coverage = debug_coverage
         result.debug_cuts = debug_cuts
         result.talus = rubble
+        # Recorded placements for a read-only map overlay; no render-mesh reads.
+        result.debug_rocks = []
+        for row in rubble:
+            latitude,longitude,_ = frame.enu_to_geodetic(*row[1:4])
+            result.debug_rocks.append([1 if row[0].startswith('talus_large_') else 2 if row[0].startswith('talus_face_') else 0,
+                round(float(longitude),7),round(float(latitude),7),round(float(row[6])*.5,2)])
         if decals:
             import cliffstrips
             def strip_ground(xy):

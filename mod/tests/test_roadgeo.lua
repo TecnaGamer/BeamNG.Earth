@@ -79,7 +79,7 @@ local skin = [[{ key = "]] .. key .. [[", anchorId = %d, q = 0.03125, pivot = { 
   road = { shape = "/s/rs_%d_road.cdae", pos = { %f, %f, 0 } },
   walk = { shape = "/s/rs_%d_walk.cdae", pos = { %f, %f, 0 } },
   walkcol = { shape = "/s/rs_%d_walkcol.cdae", pos = { %f, %f, 0 } },
-  cliffStrip24 = { shape = "/s/rs_%d_strip.cdae", pos = { 0, 0, 0 } },
+  cliffStrip24 = { shape = "/s/rs_%d_strip.cdae", pos = { 0, 0, 0 }, bounds = { 10, 20, 0, 50, 60, 1 } },
   colliders = { walk = { { 0, 0, 0, 1, 1, 1 } }, walkcol = { { 0, 0, 0, 1, 1, 1 } } } }]]
 local function skinOf(aid, a)
   local x, y = a:geodeticToWorld(clat, clon, 0)
@@ -98,7 +98,9 @@ end
 -- the content into anchor A: its parts placed at their pivots, its rows mapped exactly
 T.check(roads.onTile({ anchorId = 1, key = key, path = '/s/rg.json', n = 0, frame = { clat, clon }, h = 'abc' }, 1, A),
   'a geotile accepted')
+T.check(not roads.cliffPiecesReady(key,1),'rubble waits while cliff content is queued')
 run(1, A)
+T.check(roads.cliffPiecesReady(key,1),'rubble is admitted after all cliff pieces are imported')
 local bc = objsWith('rg_bldcol')
 T.check(#bc == 1 and #objsWith('rg_bld.') == 1 and #objsWith('rg_deck') == 1, 'its parts made once')
 T.check(#objsWith('rg_cliff') == 1 and objsWith('rg_cliff')[1].fields.collisionType == 'Visible Mesh Final',
@@ -156,7 +158,21 @@ do
 end
 
 -- its skin for A
-T.check(roads.onSkin(skinOf(1, A), 1), 'skin accepted')
+local groundChecks = 0
+require('beamngEarth/farfield').groundReady = function(bounds)
+  groundChecks = groundChecks + 1
+  T.check(bounds[1] == 10 and bounds[2] == 20 and bounds[4] == 50 and bounds[5] == 60,
+    'skin support bounds stay in anchor coordinates, not the geotile frame')
+  return false
+end
+local firstSkin = skinOf(1, A)
+-- Exercise the production pooled-shape path: it must preserve support bounds.
+firstSkin.slots = { cliffStrip24 = { '/s/rs_1_strip/slot_1.cdae', 1 } }
+T.check(roads.onSkin(firstSkin, 1), 'skin accepted')
+run(1, A)
+T.check(groundChecks > 0 and #objsWith('rs_1_strip') == 0 and #objsWith('mesh_1') == 0,
+  'terrain-draped strips wait for supporting ground while other skin parts load')
+require('beamngEarth/farfield').groundReady = function() return true end
 run(1, A)
 T.check(#objsWith('rs_1_road') == 1 and #objsWith('rs_1_walk.') == 1, 'skin made')
 local strip = objsWith('rs_1_strip')[1]
@@ -284,6 +300,22 @@ T.check(roads.status().geoStats.kept == 1, 'counted as kept')
 T.check(#called('windturbines', 'onRows') + #called('windturbines', 'placeRows') == turbineHandoffs,
   'same hash resend keeps the turbine owner and objects')
 T.check(objsWith('rg_signs')[1] == sign, 'regional signs kept after server restart')
+-- Talus disappeared on same-content reconnect even though its cliffs survived.
+do
+  local tr=package.loaded['beamngEarth/trees']
+  local before=#called('trees','onGeoRows')
+  tr.hasGeo=function(k) return k~='t'..key end
+  roads.onTile({anchorId=1,key=key,path='/s/rg.json',frame={clat,clon},h='abc'},1,B)
+  local restored=called('trees','onGeoRows')
+  T.check(#restored==before+1 and restored[#restored][3]=='t'..key,'same-content reconnect restores missing talus')
+  T.check(restored[#restored][7]==17,'restored rocks retain their full orientation basis')
+  tr.hasGeo=function() return true end
+  before=#restored
+  roads.onTile({anchorId=1,key=key,path='/s/rg.json',frame={clat,clon},h='abc'},1,B)
+  T.check(#called('trees','onGeoRows')==before,'repeat delivery does not duplicate existing rocks')
+  T.check(not roads.restoreTalusRows({gkey=key},{}),'no talus payload requires no restore')
+end
+
 
 -- a drop goes for good
 roads.onDrop({ anchorId = 1, key = key })

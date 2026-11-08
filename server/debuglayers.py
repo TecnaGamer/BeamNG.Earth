@@ -17,6 +17,7 @@ MAX_QUERY_BYTES = 16 * 1024 * 1024
 LAYERS = (
     {"id": "cliff_regions", "label": "Natural cliff regions"},
     {"id": "cliff_generated", "label": "Generated cliffs & road cuts"},
+    {"id": "cliff_rocks", "label": "Cliff outcrops & rubble"},
     {"id": "cliff_confirmed_cuts", "label": "Confirmed road cuts"},
     {"id": "cliff_cuts", "label": "Road-cut material regions"},
     {"id": "building_styles", "label": "Building style regions"},
@@ -68,8 +69,10 @@ def _overlap(lat, lon, bounds, pad=0):
     lon = (lon-(w+e)/2+180)%360-180+(w+e)/2
     return s-pad <= lat <= n+pad and w-pad <= lon <= e+pad
 
-def _generated(conn, bounds, *, cuts_only=False):
+def _generated(conn, bounds, *, cuts_only=False, rocks=False):
     """Only tiles already delivered to this connection; no scan of the world/cache."""
+    if rocks and not getattr(conn, "cliff_rocks", True):
+        return [], "Cliff rocks are disabled in graphics settings."
     if not conn.cliff_faces:
         return [], "Cliff faces are disabled. Enable them in graphics settings to generate and display faces."
     import geotiles
@@ -109,9 +112,20 @@ def _generated(conn, bounds, *, cuts_only=False):
         except (OSError, ValueError):
             missing += 1
             continue
-        debug = data.get("debugCliffCuts" if cuts_only else "debugCliffs")
+        debug = data.get("debugCliffRocks" if rocks else "debugCliffCuts" if cuts_only else "debugCliffs")
         if debug is None:
             missing += 1
+            continue
+        if rocks:
+            for kind,lon,lat,radius in debug:
+                if _overlap(lat,lon,bounds,.001):
+                    # Small round footprints avoid detector grid lines and distinguish
+                    # actual placement records from broad geographic rule previews.
+                    dy=max(radius,.5)/111320.; dx=dy/max(.01,math.cos(math.radians(lat)))
+                    features.append({"type":kind,"ring":[[lon+dx*math.cos(a),lat+dy*math.sin(a)]
+                        for a in np.linspace(0,2*math.pi,12,endpoint=False)]})
+                if len(features)>=MAX_FEATURES: break
+            if len(features)>=MAX_FEATURES: break
             continue
         for family,west,south,east,north in debug:
             if _overlap((south+north)/2,(west+east)/2,bounds,.001):
@@ -121,6 +135,8 @@ def _generated(conn, bounds, *, cuts_only=False):
         if len(features) >= MAX_FEATURES:
             break
     note = "Detected near faces and confirmed road cuts in loaded tiles; approximate detector cells, not exact mesh edges."
+    if rocks:
+        note = "Recorded embedded arid face outcrops using native large rock models, surrounding small rocks and loose cliff-toe rubble. Approximate rock extents; footprint-scale relief, changing normals, road clearance, land-cover and graphics settings gate placement."
     if cuts_only:
         note = "Confirmed road-cut detector footprints in loaded tiles, including profiled tapered banks and rural service-road cuts; slope, road-facing profile, crest, land cover and pavement clearance apply. Approximate cells, not exact mesh edges."
     if not features:
@@ -129,6 +145,7 @@ def _generated(conn, bounds, *, cuts_only=False):
         note += " Some tiles predate debug metadata; regenerated tiles will appear."
     if byte_limited or len(candidates)>MAX_TILES or len(features)>=MAX_FEATURES:
         note += " Display limited; zoom in for more coverage."
+    if rocks: return features,note
     return debugcontours.features([
         [f["type"], f["ring"][0][0], f["ring"][0][1], f["ring"][2][0], f["ring"][2][1]]
         for f in features]),note
@@ -145,8 +162,12 @@ def query(conn, msg):
             for name,ring in rule.regions]
         result["legend"] = legend("natural")
         result["note"] = "Sampled arid climate rock; exact layered canyon envelopes take precedence. Appearance priors, not geology. Slope, land cover and settings still gate near and distant faces."
-    elif layer in ("cliff_generated", "cliff_confirmed_cuts"):
-        result["features"],result["note"] = _generated(conn,bounds, cuts_only=layer == "cliff_confirmed_cuts")
+    elif layer in ("cliff_generated", "cliff_confirmed_cuts", "cliff_rocks"):
+        result["features"],result["note"] = _generated(conn,bounds, cuts_only=layer == "cliff_confirmed_cuts", rocks=layer == "cliff_rocks")
+        if layer == "cliff_rocks":
+            result["legend"] = [{"id":0,"label":"Loose toe rubble","color":"#d5bc88"},
+                                {"id":1,"label":"Embedded arid outcrops","color":"#b580ca"},
+                                {"id":2,"label":"Outcrop companion rocks","color":"#88bcca"}]
         if layer == "cliff_confirmed_cuts":
             result["legend"] = legend("road_cut")
     elif layer in {"cliff_cuts", "building_styles", "vegetation_trees", "vegetation_shrubs", "vegetation_rocks"}:
