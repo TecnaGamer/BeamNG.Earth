@@ -1,9 +1,11 @@
 """The grade separations the map has no bridge for (gradesep.py): a line whose ground stands above another's where they
 cross, a road over a railway's short tunnel, a short stretch between two decks; nothing on flat ground or a hillside;
 the spans in roads.level_ranges beside the map's own."""
+import gc
 import os
 import sys
 import unittest
+import weakref
 from types import SimpleNamespace
 
 import numpy as np
@@ -195,6 +197,61 @@ class JoinedTest(unittest.TestCase):
         self.assertEqual(len(b), 1)
         self.assertAlmostEqual(b[0][0], 0.0)
         self.assertGreater(b[0][1] * 197.0, 3.0)
+
+
+class NeighboursMd:
+    """MapData's cell() for neighbours_hook: each cell's roads layer a real Features, kept in `mem` (its memory cache)
+    until a test evicts it; `missing` cells have none. Every cell() asked is in `asked`."""
+
+    def __init__(self, missing=()):
+        self.mem, self.asked, self.missing = {}, [], set(missing)
+
+    def cell(self, key, layers=(), kind="demand"):
+        self.asked.append(key)
+        if key in self.missing:
+            return SimpleNamespace(layers={"roads": None})
+        f = self.mem.get(key)
+        if f is None:
+            f = self.mem[key] = features([[(0.0, 0.0), (50.0, 0.0)]], ["residential"])
+        return SimpleNamespace(layers={"roads": f})
+
+
+class NeighboursHookTest(unittest.TestCase):
+    """The roads layers of the eight cells round a cell (neighbours_hook) are handed back while the map data keeps them,
+    and never kept alive by the hook (GitHub #893: every layer held its neighbours, those theirs, so no roads layer a
+    server process decoded was ever freed by the map data's memory cap)."""
+
+    def test_a_neighbour_the_cache_let_go_of_is_freed(self):
+        md = NeighboursMd()
+        hook = gradesep.neighbours_hook(md, KEY)
+        refs = [weakref.ref(f) for f in hook() if f is not None]
+        self.assertEqual(len(refs), 8)
+        md.mem.clear()
+        gc.collect()
+        self.assertEqual(sum(r() is not None for r in refs), 0)
+
+    def test_live_neighbours_come_back_without_asking_again(self):
+        md = NeighboursMd()
+        hook = gradesep.neighbours_hook(md, KEY)
+        first = hook()
+        asked = len(md.asked)
+        again = hook()
+        self.assertEqual(len(md.asked), asked)
+        self.assertTrue(all(a is b for a, b in zip(first, again)))
+
+    def test_only_a_gone_one_is_asked_again(self):
+        east, west = mapcells.CellKey(KEY.z, KEY.x + 1, KEY.y), mapcells.CellKey(KEY.z, KEY.x - 1, KEY.y)
+        md = NeighboursMd(missing={west})
+        hook = gradesep.neighbours_hook(md, KEY)
+        self.assertEqual(sum(f is None for f in hook()), 1)          # (the missing one)
+        del md.mem[east]
+        gc.collect()
+        md.asked.clear()
+        again = hook()
+        self.assertEqual(md.asked, [east])                           # (not the missing one, not the live ones)
+        self.assertTrue(any(f is md.mem[east] for f in again))
+        self.assertEqual(sum(f is None for f in again), 1)
+        self.assertEqual({id(f) for f in again if f is not None}, {id(f) for f in md.mem.values()})
 
 
 if __name__ == "__main__":

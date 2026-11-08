@@ -236,6 +236,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
   keep working).
+- **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
+  Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
+  from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
+  own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
+  author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
+  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
@@ -437,9 +444,11 @@ The collector looks up your country from the connection's address and does not k
 The public numbers (players online, peaks, history, countries with at least 5 players) are at
 <https://earth.tgforever.net/players>.
 
-Turn reports off in the game: BeamNG.Earth's settings page, Interface, **Anonymous usage statistics** (from the next
-report on). Or set the environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in
-offline mode (`--offline`).
+**Nothing is sent until you choose.** The welcome screen asks first, with a main switch and two parts (performance
+data, network load); how the boxes start depends on your computer's time zone (nothing ticked in the EU and some
+other places). Change it any time in BeamNG.Earth's settings page, Interface (from the next report on), or set the
+environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in offline mode
+(`--offline`). Every field, why we want it and what happens to it: [TELEMETRY.md](TELEMETRY.md).
 
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.

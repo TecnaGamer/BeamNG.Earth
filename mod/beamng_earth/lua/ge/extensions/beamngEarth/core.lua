@@ -115,6 +115,12 @@ local perflog = require('beamngEarth/perflog')         -- hitches and frame-rate
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
 M.MOD_VERSION = MOD_VERSION
+-- The release this copy of the mod came with (release.lua, written by tools/package.py into a BeamMP server's copy), or
+-- nil (the dev tree, an older package): the hello names it so the app can say when it is not its own.
+function M.releaseVersion()
+  local ok, rel = pcall(require, 'beamngEarth/release')
+  return ok and type(rel) == 'string' and rel or nil
+end
 local lastHello = nil     -- the last server hello (scalars only; report.lua's hardware.json)
 local PROTOCOL = 4
 -- Far-tile artefact formats the mod reads: 3 (v1.3.1, 32-cell tiles) and 4 (docs/V1_4_SPEC.md 3.1
@@ -1049,6 +1055,9 @@ local function onMessage(msg)
     if snapshotSession and snapshotSession == farfield.session() and st.anchorId then anchors[#anchors + 1] = st.anchorId end
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
+    -- the release this copy of the mod came with (release.lua, written by the packaging: a BeamMP server's copy names
+    -- its version, and the app tells the player when it is not its own; none in the dev tree)
+    release = M.releaseVersion(),
       waterguard = sea.GUARD_VERSION,
       streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
       sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,
@@ -1087,6 +1096,10 @@ local function onMessage(msg)
       net.serverHello(nil, nil, msg)
     end
     require('beamngEarth/profiler').serverHello(msg.runtimeProfiler)
+    -- the welcome page's telemetry defaults for this computer's region and the choice the server waits for (settings.lua)
+    if rawget(_G, 'beamngEarth_settings') and beamngEarth_settings.serverPrivacy then
+      pcall(beamngEarth_settings.serverPrivacy, msg.privacyRegion, msg.telemetryConsent)
+    end
     st.sessionId = msg.sessionId
     M._trafficvisuals.session(msg.sessionId, msg.trafficVisuals == M._trafficvisuals.PROTO)
     st.refreshLater = nil       -- (a restarted server numbers its anchors from 1 again)
@@ -1257,7 +1270,7 @@ local function onMessage(msg)
       return
     end
     p.ready, p.msg = true, msg -- committed by the distance rule in updateWorld()
-    if p.sentAt then st.terrainLatency = st.clock - p.sentAt end
+    if p.sentAt then st.terrainLatency = st.clock - p.sentAt; pcall(M._psum.mod.block, st.terrainLatency) end
     st.terrainErrorAt = nil
   elseif t == 'terrain_refresh' then
     -- the graded block in place of a teleport's provisional one (server make_provisional; the user, 2026-10-22:
@@ -1406,6 +1419,8 @@ local function onMessage(msg)
   elseif t == 'sea' then
     -- the sea's water tiles near the player (server seatiles.py, --sea on): sea.lua
     sea.onMessage(msg)
+  elseif t == 'addons' or t == 'addon_detail' or t == 'addon_status' or t == 'addon_apply' or t == 'addon_added' then
+    M._addons.onMessage(msg)          -- the Add-ons page (addons.lua; server addons.py)
   elseif t == 'credits' then
     -- the sources around the player (server credits.py): msg.near, msg.far, drawn by credits.lua
     credits.onMessage(msg)
@@ -2165,6 +2180,14 @@ local hitches = {}
 local function mark(name, t0)
   local t = hitchClock()
   marks[name] = (marks[name] or 0) + (t - t0)
+  -- (the Lua garbage the part made since the last mark: M._alloc's per-part split for the perf lines)
+  local al = M._alloc
+  if al and al.markKb then
+    local kb = collectgarbage('count')
+    local d = kb - al.markKb
+    if d > 0 then al.cur.marks[name] = (al.cur.marks[name] or 0) + d end
+    al.markKb = kb
+  end
   return t
 end
 -- The mod's parts' ms in the last whole frame (diagnostics: a per-frame probe; not to be changed by the caller)
@@ -2193,12 +2216,50 @@ end
 
 -- The performance log (perflog.lua): where the player is and what the mod is doing, for its lines.
 local perfMetrics = {}
+-- The mod's Lua garbage over the last whole minute (perf lines' "alloc"): what the frames grew the heap by (a lower
+-- bound: collection steps inside a frame hide some), what decoding the server's messages made, and the message type
+-- whose handling made the most. LuaGC frames of up to 183 ms on a fast drive (Fells Point, 2026-11-07): which part
+-- of the mod feeds the collector. One collectgarbage('count') per step: microseconds.
+-- (on M, and its helpers fields: core.lua's main chunk is at Lua's 200-local limit, not one more fits)
+M._alloc = { at = nil, kb = nil, markKb = nil, cur = { total = 0, decode = 0, types = {}, marks = {} }, last = nil }
+function M._alloc.roll(now)
+  local alloc = M._alloc
+  if not alloc.at then alloc.at = now end
+  if now - alloc.at >= 60 then
+    alloc.last, alloc.at = alloc.cur, now
+    alloc.cur = { total = 0, decode = 0, types = {}, marks = {} }
+  end
+end
+function M._alloc.frame()
+  local alloc = M._alloc
+  local kb = collectgarbage('count')
+  if alloc.kb and kb > alloc.kb then alloc.cur.total = alloc.cur.total + (kb - alloc.kb) end
+  alloc.kb = kb
+end
+function M._alloc.text()
+  local a = M._alloc.last
+  if not a then return '' end
+  local top, topKb = nil, 0
+  for k, v in pairs(a.types) do if v > topKb then top, topKb = k, v end end
+  -- the frame's parts that made the most (mark names: roads, sea+trees, far, ...)
+  local parts = {}
+  for k, v in pairs(a.marks or {}) do parts[#parts + 1] = { k, v } end
+  table.sort(parts, function(x, y) return x[2] > y[2] end)
+  local ps = {}
+  for i = 1, math.min(4, #parts) do ps[#ps + 1] = string.format('%s %.0f', parts[i][1], parts[i][2] / 1024) end
+  -- (total: the whole game Lua's heap growth, the game's own UI / vehicles / gameplay too (a 2026-11-07 probe: ~20 of 108
+  -- MB/min ours, parked); decode, msg and parts: ours)
+  return string.format(', GE Lua garbage %.0f MB/min (ours: decode %.0f%s%s)', a.total / 1024, a.decode / 1024,
+    top and string.format(', msg %s %.0f', top, topKb / 1024) or '', #ps > 0 and ('; parts ' .. table.concat(ps, ', ')) or '')
+end
+M._perfOut = {}        -- (perfEngine's answer, refilled: perflog only sums it into its window; not a table a call)
 local function perfEngine()
   local dbg = Engine and Engine.Debug
   if not (dbg and dbg.getLastPerformanceMetrics) then return nil end
   for k in pairs(perfMetrics) do perfMetrics[k] = nil end
   if not pcall(dbg.getLastPerformanceMetrics, perfMetrics) then return nil end
-  local out = {}
+  local out = M._perfOut
+  for k in pairs(out) do out[k] = nil end
   for k, v in pairs(perfMetrics) do
     if type(v) == 'number' and not k:find('^phys') and not k:find('^virt') then out[k] = v end
   end
@@ -2238,8 +2299,8 @@ local function perfContext()
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
   c.doing = table.concat(d, ', ')
-  c.extra = string.format('Lua %.0f MB%s', collectgarbage('count') / 1024,
-    st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '')
+  c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
+    st.terrainLatency and string.format(', last block %.1fs', st.terrainLatency) or '', M._alloc.text())
   return c
 end
 local machineSent = false       -- the machine's lines sent to this server connection
@@ -2257,8 +2318,74 @@ local function perfMachine()
   end
   return out
 end
+-- The anonymous performance summary (perfsummary.lua, TELEMETRY.md sections 2-4): fed here, a window sent to the server
+-- every 5 minutes and the setup once a connection, only while the player has "Performance data" switched on (the server
+-- also keeps it only then). Counts and rounded steps; no position. (on M: core's main chunk is at the 200-local limit)
+M._psum = { mod = require('beamngEarth/perfsummary'), sampleAt = 0, setupSent = false }
+function M._psum.on()
+  local S = rawget(_G, 'beamngEarth_settings')
+  if not (S and S.get) then return false end
+  return S.get('telemetry') ~= false and S.get('telemetryPerf') ~= false and not (S.privacyNeeded and S.privacyNeeded())
+end
+function M._psum.sample()
+  local s = { heapMB = collectgarbage('count') / 1024 }
+  if M._alloc.last then s.garbageMB = M._alloc.last.total / 1024 end
+  local okS, sc = pcall(roads.scene)
+  local loaded = {}
+  if okS and sc then s.buildings = sc.buildings; loaded.roadTiles = sc.tiles; loaded.buildings = sc.buildings end
+  local okR, rs = pcall(roads.status)
+  if okR and rs then s.roadsQueued = (rs.queued or 0) + (rs.walksQueued or 0); loaded.farBuildings = rs.farBuildings end
+  local okT, ts = pcall(trees.status)
+  if okT and ts then loaded.trees = ts.items end
+  local okF, fs = pcall(farfield.stats)
+  if okF and fs then loaded.farTiles = fs.live end
+  local P = rawget(_G, 'beamngEarth_parking') or package.loaded['beamngEarth/parking']
+  local okP, ps = pcall(function() return P and P.status() end)
+  if okP and ps then loaded.parked = ps.spots end
+  local N = package.loaded['beamngEarth/nightlights']
+  local okN, ns = pcall(function() return N and N.status() end)
+  if okN and ns then loaded.lamps = ns.lit end
+  local okV, tv = pcall(function()
+    local api = rawget(_G, 'gameplay_traffic')
+    return api and api.getNumOfTraffic and api.getNumOfTraffic()
+  end)
+  if okV and type(tv) == 'number' then loaded.traffic = tv end
+  s.loaded = loaded
+  s.edge = st.guard and st.guard.pausedByUs or false
+  s.drop = dropHold.active or false
+  s.loading = st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  s.mapOpen = (m3 and m3.isActive and m3.isActive()) or false
+  return s
+end
+function M._psum.frame(ms, hrec)
+  local ps = M._psum
+  if not net.isConnected() then ps.setupSent = false; return end
+  if not ps.on() then return end
+  local p = st.player
+  local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
+  local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
+  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
+    st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  if st.clock < ps.sampleAt then return end
+  ps.sampleAt = st.clock + 1
+  local okS, smp = pcall(ps.sample)
+  if okS then ps.mod.sample(st.clock, smp) end
+  if not ps.setupSent then
+    local rep = rawget(_G, 'beamngEarth_report')
+    local okH, hw = pcall(function() return rep and rep.collectHardware and rep.collectHardware() end)
+    local S = rawget(_G, 'beamngEarth_settings')
+    if okH and hw then
+      local okU, setup = pcall(ps.mod.setup, hw, S and S.get)
+      if okU then net.send({ type = 'perf_setup', setup = setup }); ps.setupSent = true end
+    end
+  end
+  local summary = ps.mod.take(st.clock, perflog.takeDrops)
+  if summary then net.send({ type = 'perf_summary', summary = summary }) end
+end
 local function perfFrame(ms, hrec)
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
+  pcall(M._psum.frame, ms, hrec)
   if not net.isConnected() then
     machineSent = false
   elseif not machineSent and st.clock >= (machineTryAt or 0) then
@@ -2294,6 +2421,7 @@ local function onUpdate(dtReal, dtSim)
   dtReal = dtReal or 0
   local frameMs0 = frameTimer and frameTimer:stopAndReset() or dtReal * 1000
   net.setIdle(not st.inOurLevel and not st.active)
+  M._addons.tick(dtReal)       -- the Add-ons page's hand-overs to the game's mod manager (also in the menus)
   if not st.inOurLevel and not st.active then
     -- Other levels and the menus: nothing but the connection to the world server, kept open (on Linux the
     -- launcher's sign that the game still runs, launcher.game_connected; its messages only store what the
@@ -2316,6 +2444,7 @@ local function onUpdate(dtReal, dtSim)
   end
   prevMarks, marks = marks, prevMarks
   for k in pairs(marks) do marks[k] = nil end
+  if M._alloc then M._alloc.markKb = collectgarbage('count') end      -- (the frame's parts start counting here)
   local t = hitchClock()
   postfx.update(st.inOurLevel)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
@@ -2382,15 +2511,28 @@ local function onUpdate(dtReal, dtSim)
   do
     local nq = M._netq
     local function handle(msg)
-      local m0 = hitchClock()
+      local m0, kb0 = hitchClock(), collectgarbage('count')
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
+      local dkb = collectgarbage('count') - kb0
+      if dkb > 0 then
+        local k, types = tostring(msg.type), M._alloc.cur.types
+        types[k] = (types[k] or 0) + dkb
+      end
       local ms = hitchClock() - m0
       local c = nq.cost[tostring(msg.type)]
       if not c then c = { n = 0, ms = 0, max = 0 }; nq.cost[tostring(msg.type)] = c end
       c.n, c.ms, c.max = c.n + 1, c.ms + ms, math.max(c.max, ms)
     end
-    for _, msg in ipairs(net.update(dtReal)) do
+    M._alloc.roll(st.clock)
+    M._alloc.frame()
+    local kbD = collectgarbage('count')
+    local msgs = net.update(dtReal)
+    local dD = collectgarbage('count') - kbD
+    local al = M._alloc
+    if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
+    al.kb = collectgarbage('count')        -- (the decode counted once: not again as the frame's growth)
+    for _, msg in ipairs(msgs) do
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
     local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
@@ -2718,6 +2860,7 @@ end
 -- kind: 'teleport' (M.teleport) or 'start' (the level start's), for the recent places list; 'tool'
 -- (M.teleport with opts.record == false: test tools like tools/benchmark.lua) is not recorded
 teleportTo = function(lat, lon, name, kind)
+  pcall(M._psum.mod.teleport)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then
     setStatus('Teleport: invalid lat/lon')
@@ -3171,5 +3314,6 @@ M.onExtensionLoaded = onExtensionLoaded
 M.onExtensionUnloaded = onExtensionUnloaded
 
 M._trafficvisuals = require('beamngEarth/trafficvisuals')
+M._addons = require('beamngEarth/addons')       -- the Add-ons page's game side (a field: the 200-local limit)
 
 return M

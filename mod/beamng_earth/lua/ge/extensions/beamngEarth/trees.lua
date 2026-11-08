@@ -640,13 +640,23 @@ local newTable = (function()
   local ok, f = pcall(require, 'table.new')
   return ok and f or function() return {} end
 end)()
+-- The flat arrays as LuaJIT FFI doubles where there is FFI: the same 8 bytes a number, but the garbage collector does
+-- not walk them. As Lua tables the trees' tiles were ~59 MB of the game's ~220 MB Lua heap (Fells Point at speed,
+-- 2026-11-07: LuaGC frames of 183 ms), every number of them looked at on each collection cycle.
+local newDoubles = (function()
+  local ok, ffi = pcall(require, 'ffi')
+  if not ok or type(ffi) ~= 'table' or type(ffi.new) ~= 'function' then return nil end
+  local okT = pcall(ffi.new, 'double[?]', 1)
+  return okT and function(n) return ffi.new('double[?]', n + 1) end or nil     -- (+1: indexed from 1 as the tables)
+end)()
+M.FFI = newDoubles ~= nil
 
--- Pure: rows packed into a flat array (STRIDE numbers a row). A missing yaw, scale, height or rank is 0, 1, 10, 0 (as
--- the rows were read); a row that is not a table or has no position is never shown (HIDDEN).
+-- Pure: rows packed into a flat array (STRIDE numbers a row) and the number of rows. A missing yaw, scale, height or
+-- rank is 0, 1, 10, 0 (as the rows were read); a row that is not a table or has no position is never shown (HIDDEN).
 function M.flatten(rows, stride)
   local n, s = type(rows) == 'table' and #rows or 0, math.floor(tonumber(stride) or M.STRIDE)
   if s < M.STRIDE then s = M.STRIDE end
-  local f = newTable(n * s, 0)
+  local f = newDoubles and newDoubles(n * s) or newTable(n * s, 0)
   for i = 1, n do
     local r, b = rows[i], (i - 1) * s
     if type(r) ~= 'table' or not (r[F_X] and r[F_Y] and r[F_Z]) then r = HIDDEN end
@@ -657,7 +667,21 @@ function M.flatten(rows, stride)
       for j = M.STRIDE + 1, s do f[b + j] = type(r[j]) == 'number' and r[j] or 0 end
     end
   end
-  return f
+  return f, n
+end
+
+-- Pure: a flat array the server sent (hello.vegFlat: a decoded JSON array) as the tiles keep them (FFI doubles where
+-- there is FFI) and its number of rows. A non-number is 0.
+function M.packFlat(flat, stride)
+  local len = type(flat) == 'table' and #flat or 0
+  local n = math.floor(len / stride)
+  if not newDoubles then return flat, n end
+  local f = newDoubles(n * stride)
+  for i = 1, n * stride do
+    local v = flat[i]
+    f[i] = type(v) == 'number' and v or 0
+  end
+  return f, n
 end
 
 -- Pure: the variant v's spelling of a shape path (0: itself).
@@ -780,12 +804,12 @@ local function allow(shape)
 end
 
 -- A tile's items as a flat array (STRIDE numbers each, or more: stride), shown from the next update on.
-local function addTile(anchorId, tileKey, flat, stride, groups, geo)
+local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
   local key = geo and ('g:' .. tostring(tileKey)) or (anchorId .. ':' .. tostring(tileKey))
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = math.floor(#flat / stride),
+  local t = { anchor = anchorId, f = flat, s = stride, n = count or math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -842,9 +866,11 @@ function M.onTile(msg, currentAnchor, anchorObj)
   end
   if ok and type(data) == 'table' and type(data.flat) == 'table' and stride and stride >= M.STRIDE
       and stride == math.floor(stride) then
-    addTile(msg.anchorId, msg.key, data.flat, stride, data.groups, geo)
+    local flat, count = M.packFlat(data.flat, stride)
+    addTile(msg.anchorId, msg.key, flat, stride, data.groups, geo, count)
   elseif ok and type(data) == 'table' and type(data.items) == 'table' then
-    addTile(msg.anchorId, msg.key, M.flatten(data.items, M.STRIDE), M.STRIDE, data.groups, geo)
+    local flat, count = M.flatten(data.items, M.STRIDE)
+    addTile(msg.anchorId, msg.key, flat, M.STRIDE, data.groups, geo, count)
   else
     M.errors = M.errors + 1
     return
@@ -871,7 +897,8 @@ end
 function M.onRows(anchorId, tileKey, rows, groups, stride)
   stride = math.floor(tonumber(stride) or M.STRIDE)
   if stride < M.STRIDE then stride = M.STRIDE end
-  addTile(anchorId, tileKey, M.flatten(rows, stride), stride, groups)
+  local flat, count = M.flatten(rows, stride)
+  addTile(anchorId, tileKey, flat, stride, groups, nil, count)
 end
 
 -- Rows of a road geotile (roads.lua: its street furniture 'p<key>', guard rails 'g<key>'), in the tile's frame
@@ -882,7 +909,8 @@ function M.onGeoRows(tileKey, gkey, rows, groups, stride, frame, pivot, a)
   stride = math.floor(tonumber(stride) or M.STRIDE)
   if stride < M.STRIDE then stride = M.STRIDE end
   local geo = { frame = frame, pivot = pivot or 0, pl = geoPlacement(frame, a, pivot or 0) }
-  addTile(nil, tileKey, M.flatten(rows, stride), stride, groups, geo)
+  local flat, count = M.flatten(rows, stride)
+  addTile(nil, tileKey, flat, stride, groups, geo, count)
   local t = tiles['g:' .. tostring(tileKey)]
   t.key, t.anchorObj = gkey, a
   M.placeGeo(t)

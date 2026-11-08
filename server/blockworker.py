@@ -346,6 +346,18 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
+    """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
+    map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
+    (Server.build_veg_geo)."""
+    out = []
+    for gx, gy in tiles:
+        try:
+            out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
+        except Exception as e:
+            out.append(e)
+    return out
+
 def _take_pads(fuel_pads):
     """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
     only these (none when the server's gas stations are switched off)."""
@@ -826,6 +838,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     signs = [] if buildings and poleprofiles.kit_enabled(pole_profile) else None
     park = [] if buildings else None
     items = town = None
+    _scene = (0, 0.0) if buildings else None
     wrows = []
     _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
@@ -854,7 +867,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
-        town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
+        _cover = buildingsmod.coverage(items, side)
+        town = _cover < buildingsmod.POLES_COVERAGE
+        # (the tile's buildings and their footprint share: the mod's scene complexity for anonymous performance
+        # reports, perfsummary.lua; no place in them)
+        _scene = (len(items), round(float(_cover), 3))
     mark("items")
     rwalls = []
     ctx = []
@@ -1066,6 +1083,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
+    P.scene = _scene
     return P
 
 
@@ -1225,6 +1243,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         for what, info in parts.items():
             info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
         data["key"] = tile.key
+        _scene = getattr(P, "scene", None)
+        if _scene is not None:      # buildings, footprint share (perfsummary.lua; [0, 0] too: known empty, not unknown)
+            data["scene"] = [int(_scene[0]), float(_scene[1])]
         data["frame"] = [float(tile.frame.lat0), float(tile.frame.lon0)]
         data["box"] = [round(float(v), 4) for v in tile.box]
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)

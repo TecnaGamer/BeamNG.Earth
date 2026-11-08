@@ -69,6 +69,37 @@ class CatchUpTest(unittest.TestCase):
         self.assertFalse(c.catchup)
 
 
+class BehindTest(unittest.TestCase):
+    """Connection.behind: a pending block counts while it is not answered yet; answered, the commit is the mod's
+    (Fells Point 2026-11-07: answered in 0-4 s, the boost on 13-22 s after the request, at 20-60 mph)."""
+
+    def make(self, answered, roads=(5, 5)):
+        c = types.SimpleNamespace(pending_block="B", block="A", pending_at=time.monotonic() - 10,
+                                  pending_answered=answered, s=types.SimpleNamespace(mapdata=object()),
+                                  roads=types.SimpleNamespace(progress=lambda near_m=None: roads if near_m else (0, 9)))
+        return earthd.Connection.behind(c)
+
+    def test_unanswered_block_is_behind(self):
+        self.assertTrue(self.make(False))
+
+    def test_answered_block_is_not(self):
+        self.assertFalse(self.make(True))
+
+    def test_roads_still_count(self):
+        self.assertTrue(self.make(True, roads=(3, 5)))
+
+    def test_only_the_road_tiles_near_the_car(self):
+        self.assertFalse(self.make(True, roads=(5, 5)), "the radius asked: SEND_M's far edge (0 of 9) not counted")
+
+    def test_geotracker_progress_by_distance(self):
+        import roads
+        t = roads.GeoTracker()
+        t.car, t.car_m = {(1, 1), (2, 2), (3, 3)}, {(1, 1): 50.0, (2, 2): 250.0, (3, 3): 600.0}
+        t.sent, t.skins, t.retry = {(1, 1), (2, 2)}, {(1, 1), (2, 2)}, {}
+        self.assertEqual(t.progress(), (2, 3))
+        self.assertEqual(t.progress(near_m=300.0), (2, 2), "within 300 m: all done")
+
+
 if __name__ == "__main__":
     unittest.main()
 

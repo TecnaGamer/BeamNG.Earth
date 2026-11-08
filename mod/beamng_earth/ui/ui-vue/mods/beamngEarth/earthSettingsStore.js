@@ -68,7 +68,9 @@ export const settingsSchema = [
       { id: "profilerMode", type: "select", default: "essential", name: "Profiler mode", desc: "Essential keeps frame times, CPU/GPU totals, basic service traffic, average latency and disk space. Full adds detailed steps, worker traces, latency distributions and process I/O sampling.", options: [ { label: "Essential", value: "essential" }, { label: "Full", value: "full" } ] },
       { id: "statusBar", type: "bool", default: true, name: "Status bar", desc: "The bar at the top of the screen: the street and town you are in, loading progress and the frame rate." },
       { id: "placeNamesOnline", type: "bool", default: true, name: "Place names", desc: "Town, state and country names in the status bar, from map data the app downloads once per region (Overture Maps). Your position is not sent anywhere." },
-      { id: "telemetry", type: "bool", default: true, name: "Anonymous usage statistics", desc: "Every 5 minutes the app sends an anonymous report: a random install id, the app version and system, whether the game is running, and how many requests went to each map-data source. No names, positions or places; the country is looked up from your connection and the address is not kept. It shows how many people play (earth.tgforever.net/players) and keeps us from overloading the free map services. Off: no more reports from the next one on." },
+      { id: "telemetry", type: "bool", default: true, name: "Anonymous usage statistics", desc: "The main switch for the anonymous reports the app sends every 5 minutes: a random install id, the app version and system, whether the game and BeamMP are running. No names, accounts, positions or places; the country is looked up from your connection and the address is not kept. It shows how many people play (earth.tgforever.net/players). Off: nothing at all is sent, whatever the two switches below say. Every field and why: TELEMETRY.md in the BeamNG.Earth folder and on GitHub." },
+      { id: "telemetryPerf", type: "bool", default: true, name: "Performance data", desc: "Part of the anonymous reports: frame rate and hitches, how fast the world is built, the CPU / GPU model and the game and BeamNG.Earth settings, the kind of area you drive in (city, rural, ...) instead of where, and error codes. It shows what makes the game slow or crash on real players' machines.", showIf: c => c.telemetry !== false },
+      { id: "telemetryNet", type: "bool", default: true, name: "Network load", desc: "Part of the anonymous reports: how many requests went to each map-data service, so we can slow down or cache before a free service is overloaded.", showIf: c => c.telemetry !== false },
       { id: "mapStyle", type: "select", default: "2d", name: "Map style", desc: "What the map key (M) and the pause menu's Map open. 2D: the flat world map. 3D: the camera flies up from your car and you look around the real world like a map app (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel); the map key again flies back down to the car. The 3D map is experimental. The map key opens the style you switched to last.", options: [ { label: "2D", value: "2d" }, { label: "3D (experimental)", value: "3d" } ] },
       { id: "hudVisible", type: "bool", default: false, name: "Status window", desc: "The compact BeamNG.Earth status window (connection, location, loading, quick buttons). Also whether it opens at level start." },
       { id: "dashboardSatellite", type: "bool", default: true, name: "Satellite map on dashboards", desc: "BeamNG.Earth's satellite map on vehicles with dashboard screens. Off: the stock dashboard page." },
@@ -109,6 +111,12 @@ export const settingsSchema = [
         options: [ { label: "Low", value: "low" }, { label: "Normal", value: "normal" } ] },
       { id: "teleportPriority", type: "bool", default: false, name: "Full priority loading", desc: "When you join the world and after a teleport, the app builds the place on every CPU core and the game keeps only two, until the place around you has finished loading. The new place loads much faster; the game runs at a lower frame rate meanwhile. Takes effect at your next teleport or the next time you join." },
     ],
+  },
+  {
+    // third-party add-ons (EarthAddons.vue, earthAddonsStore.js): the page is the add-ons' own view, no settings rows
+    name: "Add-ons",
+    addons: true,
+    items: [],
   },
   {
     name: "Feedback",
@@ -159,7 +167,8 @@ export const settingsSchema = [
 // Each page's icon (the pause menu's side buttons take the icon's name, LayoutMenu's tabs the icon) and its button id
 // (the first keeps the old Mods-tab button's id: settings.lua M.BUTTON_ID, pageExists)
 export const PAGE_ICONS = { Graphics: "eyeOutlineOpened", World: "globe", Interface: "cogOutline",
-  Multiplayer: "peopleOutline", Storage: "floppyDisk", Feedback: "bug", About: "info", Developer: "code" }
+  Multiplayer: "peopleOutline", Storage: "floppyDisk", "Add-ons": "puzzleModule", Feedback: "bug", About: "info",
+  Developer: "code" }
 export const pageId = (name, i) => i === 0 ? "beamngEarth-settings" : "beamngEarth-settings-" + name.toLowerCase()
 
 // The quality presets' cards (settings.lua PRESETS: what each sets)

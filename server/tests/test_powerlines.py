@@ -11,8 +11,10 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parent))     # (power_reference: the original NumPy test oracle)
 import fast  # noqa: E402
 import powerlines  # noqa: E402
+from power_reference import margin as road_margin  # noqa: E402
 
 BOX = [-1e4, -1e4, 1e4, 1e4]
 
@@ -206,7 +208,7 @@ class OffRoadsTest(unittest.TestCase):
         # the other and back, it stood on the motorway. Now clear of both.
         roads = [(np.array([[-300.0, 0.0], [300.0, 0.0]]), 4.0), (np.array([[-300.0, 13.0], [300.0, 13.0]]), 4.0)]
         e2, n2 = self.moved(roads, [0.0], [0.8])
-        m = powerlines._margin(np.array([[e2[0], n2[0]]]), roads)[0]
+        m = road_margin(np.array([[e2[0], n2[0]]]), roads, powerlines.TOWER_ROAD_CLEAR_M)[0]
         self.assertGreaterEqual(m, -1e-6)
         self.assertLess(np.hypot(e2[0], n2[0] - 0.8), 15.0)       # the nearest clear spot: just off the one road
 
@@ -214,7 +216,7 @@ class OffRoadsTest(unittest.TestCase):
         # a tower in the corner of a crossroads: clear of both roads
         roads = [(np.array([[-300.0, 0.0], [300.0, 0.0]]), 5.0), (np.array([[0.0, -300.0], [0.0, 300.0]]), 5.0)]
         e2, n2 = self.moved(roads, [3.0], [4.0])
-        self.assertGreaterEqual(powerlines._margin(np.array([[e2[0], n2[0]]]), roads)[0], -1e-6)
+        self.assertGreaterEqual(road_margin(np.array([[e2[0], n2[0]]]), roads, powerlines.TOWER_ROAD_CLEAR_M)[0], -1e-6)
 
 class TowerFootprintTest(unittest.TestCase):
     """The native layout decides yaw; check its emitted rows against the tile's authoritative solved roads."""

@@ -60,6 +60,7 @@ os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
 import contextlib  # noqa: E402
+import errno  # noqa: E402
 import glob  # noqa: E402
 import functools  # noqa: E402
 import itertools  # noqa: E402
@@ -97,6 +98,8 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
+import privacyregion as privacyregionmod
+import perfstats  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
@@ -157,6 +160,14 @@ PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
 WATERGUARD_VERSION = 1
+TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
+_NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
+
+
+def _perf(server):
+    return getattr(server, "perf", None) or _NO_PERF
+
+
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -374,6 +385,9 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
+VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
+                                # for the rest of it
+VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
 WORLD_WARM_CONC = 2
@@ -445,6 +459,24 @@ PREFETCH_START = 200.0      # m (Chebyshev) from the block centre before prefetc
 PREFETCH_CHAIN = 4
 READY_STEPS = 2             # grid steps a built block may be from the mod's target and still be taken (follow.lua)
 PREFETCH_PARALLEL = 2
+# The prefetch lane's block processes: two on a machine with the cores and memory for them (PREFETCH_PARALLEL's two
+# blocks then build at once; with one process they took turns and a third of the blocks asked at 140-165 mph were not
+# built yet, 4.4 s each, while the server used ~3 of 16 cores, 2026-11-08), one on a small one (a Steam Deck's memory).
+# BNE_PREFETCH_PROCS sets it.
+PREFETCH_PROCS_CPUS = 12
+PREFETCH_PROCS_GB = 24.0
+
+
+def prefetch_procs():
+    """Block processes for the prefetch lane on this machine (PREFETCH_PROCS_*; BNE_PREFETCH_PROCS overrides)."""
+    if os.environ.get("BNE_PREFETCH_PROCS"):
+        try:
+            return max(1, min(4, int(os.environ["BNE_PREFETCH_PROCS"])))
+        except ValueError:
+            pass
+    import budget
+    gb = budget.total_gb() or 0.0
+    return 2 if (os.cpu_count() or 0) >= PREFETCH_PROCS_CPUS and gb >= PREFETCH_PROCS_GB and not budget.small() else 1
 READY_SET_M = 3000.0        # m: the built blocks round the player the mod is told of (terrain_ready_set)
 # The mod's terrain-follow rule (mod follow.lua): it asks once the player is more than
 # FOLLOW_PREPARE (Chebyshev) from the block centre, for snap256(player + v * FOLLOW_LEAD),
@@ -984,6 +1016,7 @@ class Server:
         self.fin_worker_tries = 0
         self.base_worker = 0                # base photos the block processes rendered (blockworker.base_photo)
         self.map_port = None                # the in-game map's tile endpoint (maptiles.py), hello.mapPort
+        self.feed = None                    # the companion feed (companionfeed.py), when on
         self.map_tiles = None               # its MapTiles: also written as files on request (map_tiles message)
         self.map_files = None               # the maptiles.TileFiles writing them (made by the first request)
         # (anchorId, key) of cached tiles built with the palette because the imagery failed; shown in
@@ -1009,6 +1042,9 @@ class Server:
         self.prov_pool = ThreadPoolExecutor(2, thread_name_prefix="provisional")    # follow blocks sent provisional
         self.prov_info = {}             # (aid, cx, cy) -> a provisional follow block's info (until the graded one)
         self.ground_pool = ThreadPoolExecutor(1, thread_name_prefix="ground-ahead")   # groundahead.py
+        # the water plans (Connection.sea_tiles) apart: a plan takes seconds and holds while a teleport's block is
+        # built (pacer.hold), and the ground ahead (a few ms) queued behind them: 2.2 s at 275 km/h (2026-11-07)
+        self.sea_pool = ThreadPoolExecutor(1, thread_name_prefix="sea-plan")
         # the world map's requests (GPS route, address search, map tiles): their own threads, so a teleport's tile
         # builds on the default pool do not hold them back (a route took 30 s after one, 2026-10-14)
         self.ui_pool = ThreadPoolExecutor(2, thread_name_prefix="map-ui")
@@ -1048,6 +1084,7 @@ class Server:
         # ProcessPoolExecutor of tile_workers, or None (built in tile_pool's threads)
         self.far_pool = far_pool
         self.road_pool = road_pool          # road tiles in processes (blockworker.roads_tile), else threads
+        self._veg_jobs, self._veg_job_lock = {}, threading.Lock()      # (_veg_geo_job)
         # the highway signs (signstream.py) in the same processes: no process of their own, their map cells warm there
         # (at most signstream.WORKERS a connection, only for road tiles sent)
         self.sign_pool = road_pool
@@ -1162,6 +1199,7 @@ class Server:
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)
+        self.perf = perfstats.Collector()   # the anonymous performance data of the reports (telemetry.py, perfstats.py)
         self.areas = None               # saved areas downloaded ahead (areas.Areas; main_async, with a Cache)
         self.fast_pool = None           # the saved areas' fast mode: its own road processes (fast_precache)
         self.make_fast_pool = None      # n -> such a pool (main_async: the road pool's initializer), or None
@@ -1690,13 +1728,15 @@ class Server:
         if self.road_pool is not None and self.mapdata is not None:
             # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
             t0, waited = time.perf_counter(), []
-            # (after the road tiles: RespawningPool.submit_low)
-            submit = getattr(self.road_pool, "submit_low", self.road_pool.submit)
-            got = poolsmod.result_running(submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
-                                                 self.out_dir, self.vfs_dir, flat), None, waited)
+            fut, i = self._veg_geo_job(anchor, zoom, gx, gy, flat)
+            got = poolsmod.result_running(fut, None, waited)
+            n = len(got)
+            got = got[i]
             if time.perf_counter() - t0 > ROAD_GEO_SLOW_S:
-                log.info("trees geotile %d_%d in %.1f s (queue %.1f)", gx, gy, time.perf_counter() - t0,
-                         waited[0] if waited else 0.0)
+                log.info("trees geotile %d_%d in %.1f s (queue %.1f, %d in its job)", gx, gy,
+                         time.perf_counter() - t0, waited[0] if waited else 0.0, n)
+            if isinstance(got, Exception):
+                raise got
             return got
         g = self.grader_for(anchor)
 
@@ -1715,6 +1755,31 @@ class Server:
         path, n = vegetationmod.write_tile(self.out_dir, self.vfs_dir, None, gx, gy, rows, flat=flat,
                                            geo={"key": geotiles.key(gx, gy), "frame": frame, "pivot": pivot})
         return path, n, frame, pivot
+
+    def _veg_geo_job(self, anchor, zoom, gx, gy, flat):
+        """(future, index): the road processes' job (blockworker.veg_geo_many) that builds geotile (gx, gy), its result
+        the index'th of the job's list. The tiles asked for while a job waits for its turn join it (VEG_GEO_BATCH at
+        most): one at a time, after the road tiles (RespawningPool.submit_low), each waited out the whole queue of
+        road tiles for its ~10 ms of work, and the trees fell behind the car (533 tree tiles pending, 22 s each,
+        2026-11-08)."""
+        submit = getattr(self.road_pool, "submit_low_lazy", None)
+        if submit is None:                  # (a plain executor: one tile a job)
+            return self.road_pool.submit(blockworker.veg_geo_many, anchor.id, anchor.lat, anchor.lon, zoom,
+                                         [(gx, gy)], self.out_dir, self.vfs_dir, flat), 0
+        key = (anchor.id, zoom, bool(flat))
+        with self._veg_job_lock:
+            job = self._veg_jobs.get(key)
+            if job is None or len(job[1]) >= VEG_GEO_BATCH or job[0].done():
+                tiles = []
+
+                def make_args(key=key, tiles=tiles, a=anchor):
+                    with self._veg_job_lock:            # (no more joins: the job is on its way)
+                        if self._veg_jobs.get(key, (None, None))[1] is tiles:
+                            del self._veg_jobs[key]
+                        return (a.id, a.lat, a.lon, zoom, list(tiles), self.out_dir, self.vfs_dir, flat), {}
+                job = self._veg_jobs[key] = (submit(blockworker.veg_geo_many, make_args), tiles)
+            job[1].append((gx, gy))
+            return job[0], len(job[1]) - 1
 
     def place_names(self):
         """The status bar's town / state / country lookup (placenames.PlaceNames), made at its first use: it shares the
@@ -4056,6 +4121,23 @@ class Server:
         pc.persist = (self.cache_dir, (plancachemod.FRAMES, sig, md))
         return pc
 
+    def addons(self):
+        """The Add-ons page's service (addons.py: the registry, GitHub's pages for it, the installed add-ons), made at
+        its first use."""
+        if getattr(self, "_addons", None) is None:
+            import addons as addonsmod
+            feed = getattr(self, "feed", None)
+            try:
+                data_dir = _app_modules()[0].data_dir()
+            except Exception:           # (no apppaths: beside the cache)
+                data_dir = None
+            self._addons = addonsmod.Addons(self.user_dir, self.cache_dir, self.net,
+                                            version=updatesmod.local_version() or "", data_dir=data_dir,
+                                            feed_url=f"http://127.0.0.1:{feed.port}" if feed is not None and
+                                            getattr(feed, "port", None) else "",
+                                            game_dir=os.environ.get("BNGEARTH_GAME_DIR") or None)
+        return self._addons
+
     def share_hub(self, send):
         """The BeamMP sharing hub (one per server: the session's mod connection sends through it; a new connection takes
         it over). -> (hub, created now)."""
@@ -5080,6 +5162,9 @@ BOOST_GRACE_S = 5.0         # (the car dropped into place moves a little at firs
 # block asked this long ago and not committed yet (still building, or its far tiles not live: the mod's gate), or the
 # roads round the car not built; off once caught up for CATCHUP_CALM_S
 CATCHUP_AFTER_S = 1.5
+# ... the road tiles counted: those within this of the car (all of SEND_M's 640 m were never done while driving into
+# new streets: the boost on all drive long at 20-60 mph, Fells Point 2026-11-07)
+CATCHUP_ROADS_M = 300.0
 CATCHUP_CALM_S = 3.0
 BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "off") == "on"   # the data repo's packs (Server.bake_sync): off until
 # there are any (the user, 2026-11-02: no cloud baking while world gen changes daily; local packs, BeamMP servers, later)
@@ -5155,6 +5240,7 @@ class Connection:
         self.pending_block = None       # the last prepare_terrain of the active anchor
         self.terrain_wait = 0           # prepare_terrain requests being built (roads.Tracker: the ground first)
         self.pending_at = None          # when the pending block was asked (on_pose: the catch-up boost)
+        self.pending_answered = False   # ... and whether its terrain_ready went (then the wait is the mod's, not ours)
         self.catchup = False            # the loading boost is on to catch up while driving (CATCHUP_*)
         self.caught_up_at = None
         self.predicted_block = None     # the terrain the prefetch expects next
@@ -5503,6 +5589,133 @@ class Connection:
         self.send({"type": "update_status", "state": "ready", "version": version,
                    "text": f"BeamNG.Earth {version} is downloaded. Close the game: the next time you start "
                            f"BeamNG.Earth it starts {os.path.basename(path)}."})
+
+    async def addons_list(self, refresh=False):
+        """The Add-ons page's list: 'addons' {addons: [card...], error?} (addons.Addons.cards)."""
+        try:
+            # (the loop's own pool, not ui_pool: GitHub can take seconds, the map's tiles must not wait behind it)
+            cards = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().cards, refresh)
+            self.send({"type": "addons", "addons": cards})
+        except Exception as e:          # never a reason to drop the connection
+            log.warning("add-ons: list: %s: %s", type(e).__name__, e)
+            self.send({"type": "addons", "addons": [], "error": f"{type(e).__name__}: {e}"[:200]})
+
+    async def addon_detail(self, aid, refresh=False):
+        """One add-on's page: 'addon_detail' {id, card, readme, readmeLinks, releases, error} (addons.Addons.detail)."""
+        if not isinstance(aid, str):
+            return
+        try:
+            d = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().detail, aid, refresh)
+        except Exception as e:
+            log.info("add-ons: detail %r: %s: %s", aid, type(e).__name__, e)
+            d = {"id": aid, "readme": "", "readmeLinks": [], "releases": [], "error": str(e)[:200]}
+        self.send({"type": "addon_detail", **d})
+
+    async def addon_install(self, aid, consent, mp):
+        """Install / Update: the release downloaded into the mods folder and checked (addons.Addons.stage), with
+        addon_status {id, state: progress | ready | error, text, done, total}; then addon_apply for the mod, which hands
+        it to the game's mod manager."""
+        if not isinstance(aid, str):
+            return
+        loop = asyncio.get_running_loop()
+        last = [0.0]
+
+        def progress(done, total):
+            now = time.monotonic()
+            if now - last[0] >= 0.5:
+                last[0] = now
+                loop.call_soon_threadsafe(self.send, {"type": "addon_status", "id": aid, "state": "progress",
+                                                      "done": done, "total": total, "text": "Downloading..."})
+        self.send({"type": "addon_status", "id": aid, "state": "progress", "done": 0, "total": 0,
+                   "text": "Asking GitHub..."})
+        import addons as addonsmod
+        try:
+            apply = await loop.run_in_executor(None, lambda: self.s.addons().stage(aid, consent, mp, progress))
+        except addonsmod.AddonError as e:
+            log.info("add-ons: install %s: %s", aid, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+            return
+        except Exception as e:
+            log.warning("add-ons: install %s: %s: %s", aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+            return
+        if apply is None:               # (a program beside the game: installed by the server itself)
+            self.send({"type": "addon_status", "id": aid, "state": "done", "text": "Installed. Press Start to run it."})
+            await self.addons_list()
+            return
+        self.send({"type": "addon_status", "id": aid, "state": "ready", "text": "Downloaded and checked: installing..."})
+        self.send(apply)
+
+    async def addon_add(self, text):
+        """Add from GitHub: the pasted repository put on the local list (addons.Addons.add_repo), with
+        addon_added {ok, id | error}, then the list again."""
+        import addons as addonsmod
+        try:
+            aid = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().add_repo, text)
+            self.send({"type": "addon_added", "ok": True, "id": aid})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_added", "ok": False, "error": str(e)})
+        except Exception as e:
+            log.warning("add-ons: add %r: %s: %s", text, type(e).__name__, e)
+            self.send({"type": "addon_added", "ok": False, "error": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
+
+    async def addon_options(self, aid, values):
+        """An add-on's Options tab saved (addons.Addons.set_options: checked, kept; a running program restarted with
+        them), with addon_status, then the list again."""
+        import addons as addonsmod
+        if not isinstance(aid, str):
+            return
+        try:
+            again = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().set_options, aid, values)
+            self.send({"type": "addon_status", "id": aid, "state": "done",
+                       "text": "Saved; restarted with them." if again else "Saved."})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        except Exception as e:
+            log.warning("add-ons: options %s: %s: %s", aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
+
+    async def addon_forget(self, aid):
+        """An add-on the player added taken off the list (addons.Addons.forget)."""
+        import addons as addonsmod
+        if not isinstance(aid, str):
+            return
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, self.s.addons().forget, aid)
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        await self.addons_list()
+
+    async def addon_run(self, aid, op):
+        """A program beside the game (kind companion): Start / Stop / Remove / autostart_on / autostart_off
+        (addons.Addons.run_op), with addon_status, then the list again."""
+        if not isinstance(aid, str) or op not in ("start", "stop", "uninstall", "autostart_on", "autostart_off"):
+            return
+        import addons as addonsmod
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, self.s.addons().run_op, aid, op)
+            text = {"start": "Running.", "stop": "Stopped.", "uninstall": "Removed.", "autostart_on":
+                    "Starts with BeamNG.Earth.", "autostart_off": "Starts only when you press Start."}[op]
+            self.send({"type": "addon_status", "id": aid, "state": "done", "text": text})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        except Exception as e:
+            log.warning("add-ons: %s %s: %s: %s", op, aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
+
+    async def addon_applied(self, aid, op, ok, error):
+        """The mod's answer after the game's mod manager installed / updated / enabled / disabled / removed the add-on:
+        logged (addons.Addons.applied), then the list again."""
+        if not isinstance(aid, str) or op not in ("install", "update", "uninstall", "enable", "disable"):
+            return
+        try:
+            self.s.addons().applied(aid, op, ok, error if isinstance(error, str) else "")
+        except Exception as e:
+            log.info("add-ons: applied %r: %s", aid, e)
+        await self.addons_list()
 
     async def place_previews(self, msg):
         """{"places": [{"key", "lat", "lon"}]} -> place_previews_ready {"keys"}: each place's picture for the level
@@ -5994,18 +6207,41 @@ class Connection:
         t.add_done_callback(self.tasks.discard)
         return t
 
+    def version_note(self, msg):
+        """Tell the player when the mod in their game is not this app's own (a BeamMP server sends its own copy of the
+        mod and turns the player's off): an older one has none of the faster tile paths the hello negotiates (before
+        1.7.2: no geotiles, every rebase rebuilt the world round the car: 'severe performance issues', players'
+        reports 2026-11-07). hello.release (release.lua, packaged with the mod) names its release when it has one."""
+        if not isinstance(msg.get("modVersion"), str) or "vegFlat" not in msg:
+            return                      # (not a BeamNG.Earth mod's hello: every one since 1.7.0 names these)
+        mine = updatesmod.local_version() or ""
+        theirs = msg.get("release") if isinstance(msg.get("release"), str) else ""
+        import geotiles
+        old_paths = msg.get("geoTiles") != geotiles.Z or msg.get("roadGeo") != roadsmod.ROAD_GEO
+        if theirs and mine and theirs != mine:
+            log.warning("hello: the mod is BeamNG.Earth %s, this app %s", theirs, mine)
+            self.status(f"The BeamNG.Earth mod in your game is {theirs}, your app is {mine}. On a BeamMP server its owner "
+                        "should run the same version as the players (the server's mod replaces yours): mismatched "
+                        "versions load the world slower.")
+        elif old_paths:
+            log.warning("hello: the mod is BeamNG.Earth 1.7.1 or older (no geotiles): the slow tile paths")
+            self.status("The BeamNG.Earth mod in your game is much older than your app (1.7.1 or older), so the world "
+                        "loads the slow way. On a BeamMP server: ask its owner to update the server's BeamNG.Earth mod.")
+        elif not getattr(self, "waterguard_ok", True):
+            self.status("The BeamNG.Earth mod in your game is older than your app: the world loads, but its underwater "
+                        "tunnels may flood. On a BeamMP server: ask its owner to update the server's BeamNG.Earth mod.")
+
     def dispatch(self, msg):
         if getattr(self, "closing", False):
             return
         kind = msg["type"]
         if kind == "hello":
+            # (an older mod without the water guard: its world still loads, only an underwater tunnel's water may come
+            # in. Refusing every world job left a BeamMP server's players, whose mod is the server's own copy, in an
+            # empty world whenever that copy was older than their app, 2026-11-07)
             self.waterguard_ok = self.s.sea is None or msg.get("waterguard") == WATERGUARD_VERSION
             if not self.waterguard_ok:
-                self.status("Mod update required: update BeamNG.Earth to use this server's underwater tunnels.")
-                return
-        elif not getattr(self, "waterguard_ok", True) and kind in {
-                "prepare_anchor", "prepare_terrain", "commit_anchor", "commit_terrain", "pose", "terrain_patch"}:
-            return  # no world jobs before a compatible hello; an older client would flood the generated bores
+                log.warning("hello: the mod has no water guard (older than this server): underwater tunnels may flood")
         if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
             # (a client that skipped hello: a fresh lease, not resumable, and the request goes on as before PR #817;
             # the mod always says hello first on its connection, so its reconnect still resumes before any request)
@@ -6027,6 +6263,9 @@ class Connection:
                 # the mod's format is the newest it reads (a FORMAT 4 mod reads 3 too)
                 self.status(f"format mismatch: mod {msg.get('format')}, server {lay.format}")
             m = {"type": "hello", "protocol": PROTOCOL, "format": lay.format, "serverVersion": SERVER_VERSION,
+                 # the welcome page's telemetry defaults for this computer's region (privacyregion.py: its own time
+                 # zone, nothing asked of a server) and the consent version it asks for (telemetry.CONSENT_VERSION)
+                 "privacyRegion": privacyregionmod.region()[0], "telemetryConsent": TELEMETRY_CONSENT,
                  "runtimeProfiler": 2, "appVersion": updatesmod.local_version() or "",     # the release (VERSION): the players' reports
                  "sessionId": self.s.sid, "streamLease": 1, "leaseId": lease_id,
                  "farFormat": self.s.far_format, "material": farfield.MATERIAL,
@@ -6073,7 +6312,9 @@ class Connection:
             if geo != self.veg.geo:
                 old = self.veg
                 old.close()
-                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, geo=geo)
+                # (in the road processes the waiting tiles share a job, so more may wait: _veg_geo_job)
+                per = VEG_GEO_PER_POSE if geo and self.s.road_pool is not None else vegetationmod.BUILD_PER_POSE
+                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, per_pose=per, geo=geo)
             if geo:
                 m["geoTiles"] = geotiles.Z
             self.traffic_visuals = (geo and msg.get("trafficVisuals") == distanttraffic.PROTO and self.s.traffic
@@ -6108,6 +6349,7 @@ class Connection:
             if self.global_far:
                 m["globalFar"] = farfield.GLOBAL_PROTO
             self.send(m)
+            self.version_note(msg)          # (after the hello and its protocol / format notes)
             if self.weather.msg is not None:        # a reconnected mod gets the weather again
                 self.send(self.weather.msg)
             if self.gravity.msg is not None:        # ... and its gravity
@@ -6188,12 +6430,30 @@ class Connection:
         elif kind == "update_now":              # the update notice's "Update now" (selfupdate.py)
             self.spawn(self.update_now())
         elif kind == "open_page":               # the update notice's button: the releases page (updates.open_page)
-            if not updatesmod.open_page(msg.get("url")):
+            # (and the Add-ons page's links: an add-on's own text or repo, addons.Addons.openable)
+            allow = self.s._addons.openable if getattr(self.s, "_addons", None) is not None else None
+            if not updatesmod.open_page(msg.get("url"), allow=allow):
                 log.info("open_page: refused %r", msg.get("url"))
         elif kind == "globe_req":               # the 3D map's whole-earth globe for an anchor (globe.py)
             self.spawn(self.globe(msg))
         elif kind == "space_clouds_req":        # the camera above the clouds: today's clouds round it (spaceclouds.py)
             self.spawn(self.space_clouds(msg))
+        elif kind == "addons_list":             # the Add-ons page: the list (addons.py)
+            self.spawn(self.addons_list(msg.get("refresh") is True))
+        elif kind == "addon_detail":            # ... one add-on's README and changelog
+            self.spawn(self.addon_detail(msg.get("id"), msg.get("refresh") is True))
+        elif kind == "addon_install":           # ... Install / Update: downloaded and checked, then addon_apply
+            self.spawn(self.addon_install(msg.get("id"), msg.get("consent") is True, msg.get("mp") is True))
+        elif kind == "addon_add":               # ... Add from GitHub: a pasted repository put on the local list
+            self.spawn(self.addon_add(msg.get("repo")))
+        elif kind == "addon_options":           # ... its Options tab saved
+            self.spawn(self.addon_options(msg.get("id"), msg.get("values")))
+        elif kind == "addon_forget":            # ... one the player added taken off the list
+            self.spawn(self.addon_forget(msg.get("id")))
+        elif kind == "addon_run":               # ... a program beside the game: start / stop / remove / autostart
+            self.spawn(self.addon_run(msg.get("id"), msg.get("op")))
+        elif kind == "addon_applied":           # ... the game's mod manager did it (or not): logged, the list again
+            self.spawn(self.addon_applied(msg.get("id"), msg.get("op"), msg.get("ok") is True, msg.get("error")))
         elif kind == "terrain_patch":           # ground under another vehicle's collision island (terrainpatch.lua)
             self.spawn(self.terrain_patch(msg))
         elif kind == "cache":
@@ -6215,6 +6475,10 @@ class Connection:
             for line in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
                 if isinstance(line, str):
                     log.info("game: %s", line[:PERF_LOG_CHARS].replace("\n", " "))
+        elif kind == "perf_setup":              # the anonymous performance data (perfsummary.lua; perfstats.py checks it):
+            _perf(self.s).on_setup(msg.get("setup"))      # the machine and settings, once a connection
+        elif kind == "perf_summary":            # ... and a 5-minute window of frame times, scene and world generation
+            _perf(self.s).on_summary(msg.get("summary"))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = road_tracker(self)
@@ -6636,6 +6900,7 @@ class Connection:
             # The pending block's L0 tiles stream first, so the commit never waits (§2.3).
             self.pending_block = self.s.layout.block_at(cx, cy)
             self.pending_at = time.monotonic()
+            self.pending_answered = False
             t1 = time.perf_counter()
             self.update_far()
             dt = time.perf_counter() - t1
@@ -6651,6 +6916,7 @@ class Connection:
                 key = (aid, cx, cy)
                 log.info("terrain_ready %s after %.0f ms (provisional: the graded block follows)", key,
                          (time.perf_counter() - t0) * 1000)
+                self._answered(aid, cx, cy)
                 self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, prov)})
                 return
             try:
@@ -6674,7 +6940,14 @@ class Connection:
         key = (aid, cx, cy)
         self.s.hm_sent.append(key)
         log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
+        self._answered(aid, cx, cy)
         self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
+
+    def _answered(self, aid, cx, cy):
+        """The pending block's terrain_ready went: from now on its commit is the mod's to make (the player reaching
+        its commit distance, its far tiles going live), which more server cores do not hasten (behind)."""
+        if aid == self.active and self.pending_block == self.s.layout.block_at(cx, cy):
+            self.pending_answered = True
 
     async def provisional_follow(self, anchor, cx, cy, job):
         """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
@@ -6833,13 +7106,20 @@ class Connection:
         self.s.evict_heightmaps()
 
     def behind(self):
-        """Is the world behind the driving player? The next block asked CATCHUP_AFTER_S ago and not committed (building,
-        or the mod waiting for its far tiles), or the road tiles round the car not all built."""
+        """Is the world behind the driving player? The next block asked CATCHUP_AFTER_S ago and not answered yet (still
+        building here), or the road tiles round the car not all built. A block answered but not committed is not:
+        the mod commits it when the player reaches its commit distance (and its far tiles are live), which more cores
+        here do not hasten. Counting it lent half the game's cores to the server again and again in town: blocks
+        answered 0-4 s after their request, the boost on 13-22 s after it, at 20-60 mph (Fells Point, 2026-11-07)."""
         if self.pending_block is not None and self.pending_block != self.block and self.pending_at is not None \
+                and not getattr(self, "pending_answered", False) \
                 and time.monotonic() - self.pending_at > CATCHUP_AFTER_S:
             return True
         if self.s.mapdata is not None:
-            done, want = self.roads.progress()
+            try:
+                done, want = self.roads.progress(near_m=CATCHUP_ROADS_M)
+            except TypeError:           # (a tracker without the radius)
+                done, want = self.roads.progress()
             return done < want
         return False
 
@@ -6864,6 +7144,7 @@ class Connection:
             return
         if self.catchup and not self.s.boost_on:
             self.catchup = False            # (ended elsewhere: free to start again)
+            _perf(self.s).catchup(False)
         if self.s.boost_on and not self.catchup:
             return
         behind = speed > CATCHUP_MIN_MS and self.behind()
@@ -6875,6 +7156,7 @@ class Connection:
                 self.catchup = self.s.boost_on
                 self.catchup_since, self.catchup_more = now, False
                 if self.catchup:
+                    _perf(self.s).catchup(True)
                     log.info("catch-up boost on (%.0f mph; next block asked %.1f s ago)", speed * 2.237,
                              now - self.pending_at if self.pending_at else -1)
             elif not getattr(self, "catchup_more", False) and now - getattr(self, "catchup_since", now) > CATCHUP_MORE_S \
@@ -6895,6 +7177,7 @@ class Connection:
             elif now - self.caught_up_at > CATCHUP_CALM_S:
                 self.s.load_boost(False, "caught up")
                 self.catchup, self.catchup_more = False, False
+                _perf(self.s).catchup(False)
                 log.info("catch-up boost off (caught up)")
 
     def commit_terrain(self, msg):
@@ -6947,6 +7230,10 @@ class Connection:
             self.held = {int(a) for a in held if isinstance(a, (int, float)) and not isinstance(a, bool)}
         self.s.claim_sessions(self, msg.get("sessions"))   # earlier runs' folders still in use (or released)
         self.weather.on_pose(self, msg.get("lat"), msg.get("lon"))
+        feed = getattr(self.s, "feed", None)
+        if feed is not None:            # the companion feed (companionfeed.py)
+            feed.publish(msg.get("lat"), msg.get("lon"), msg.get("speed"), msg.get("vx"), msg.get("vy"),
+                         msg.get("anchorId"))
         if isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
             self.pose_ll = (float(msg["lat"]), float(msg["lon"]))     # (the BeamMP share hub's prefetch)
         if self.s.surface is not None and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lon"), (int, float)):
@@ -7455,7 +7742,7 @@ class Connection:
                                                 sea.outline_at, level_at=carved, road_clear=road_clear())
                     shores = seacarvemod.shore_plan(frame, x, y, sea)     # (the mod's shore sound)
                     return tiles, rivers, shores, not missing[0] and sea.warm_asked == asked
-                tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.ground_pool, plan)
+                tiles, rivers, shores, complete = await self.loop.run_in_executor(self.s.sea_pool, plan)
                 if complete and self.sea_checked is not None and self.sea_checked[:2] == (aid, sq):
                     self.sea_checked = (aid, sq, self.sea_checked[2], True)
                 msg = ([t.to_msg() for t in tiles], [r.to_msg() for r in rivers], shores)
@@ -8137,14 +8424,14 @@ async def main_async(args):
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
-        for _ in (LANE_REQUEST, LANE_PREFETCH):
+        for lane in (LANE_REQUEST, LANE_PREFETCH):
             warm_q = ctx.Queue(maxsize=64)
             # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
             # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
             # (2026-11-04; blockworker._read_warm skips the empty list)
             warm_q.put_nowait((None, 0.0, 0.0, []))
             block_pools.append((poolsmod.RespawningPool(
-                "block", 1, mp_context=ctx, initializer=blockworker.init,
+                "block", prefetch_procs() if lane == LANE_PREFETCH else 1, mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
                           args.grading == "on" and args.roads == "on",
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
@@ -8363,9 +8650,40 @@ async def main_async(args):
             args.cache_dir, updatesmod.local_version() or SERVER_VERSION,
             lambda: (bool(server.connections), getattr(server, "_share_hub", None) is not None),
             proc_dir=os.environ.get("BNE_NETSTATS_PROC"),
-            allowed=lambda: cpupin.player_settings(args.user_dir).get("telemetry", True) is not False).start()
-        log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
+            # (the welcome page's choice and the settings page's switches: nothing before the choice; TELEMETRY.md)
+            allowed=lambda: telemetry.choices(cpupin.player_settings(args.user_dir)),
+            keep_id=not privacyregionmod.region()[1], perf=server.perf.take).start()
+        logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
+        log.info("telemetry: on, as the player chose on the welcome page (TELEMETRY.md; nothing before the choice; "
                  "BNE_TELEMETRY=off turns it off)")
+    feed_srv = None
+    if getattr(args, "companion_feed", "off") != "off":
+        # the player's position for programs beside the game (companionfeed.py; docs/ADDONS.md), read-only
+        import addons as addonsmod
+        import companionfeed
+        server.feed = companionfeed.Feed(updatesmod.local_version() or "", addonsmod.feed_origins(), args.companion_feed)
+        try:
+            feed_srv, fport = await server.feed.start(args.companion_port)
+            log.info("companion feed on %s:%d/v1/ (read-only)",
+                     "0.0.0.0" if args.companion_feed == "lan" else "127.0.0.1", fport)
+        except OSError as e:
+            server.feed = None
+            # (its port taken: another BeamNG.Earth server runs, a test's beside the player's own, or a second app; the
+            # feed is optional, the first one keeps it)
+            if getattr(e, "errno", None) in (errno.EADDRINUSE, 10048):
+                log.info("companion feed off: port %s is taken (another BeamNG.Earth server has it)", args.companion_port)
+            else:
+                log.warning("companion feed off: %s", e)
+    # the programs beside the game set to start with BeamNG.Earth (addons.py, addonrun.py); ended with the server
+    import atexit
+    atexit.register(lambda: getattr(server, "_addons", None) is not None and server._addons.runner.stop_all())
+    try:
+        # (only a server the launcher started: a test's or a tool's own server never starts the player's add-ons; the
+        # 2026-11-08 drive test started the real Live GPS add-on from the player's folder)
+        if os.environ.get("BNGEARTH_PARENT"):
+            await asyncio.get_running_loop().run_in_executor(None, server.addons().autostart)
+    except Exception as e:      # (an add-on that does not start never stops the server)
+        log.warning("add-ons: autostart: %s: %s", type(e).__name__, e)
     log.info("startup: opening the local connection")
     srv = await asyncio.start_server(
         lambda r, w: Connection(server, r, w).run(), "127.0.0.1", args.port)
@@ -8817,6 +9135,10 @@ def main():
     ap.add_argument("--map-tiles", choices=("on", "off"), default="on",
                     help="serve the in-game world map's tiles (the imagery chain, z/x/y JPEG) over HTTP on "
                          "127.0.0.1; its port goes in hello.mapPort (needs imagery)")
+    ap.add_argument("--companion-feed", choices=("off", "local", "lan"), default="local",
+                    help="the player's position, read-only, for programs beside the game (companionfeed.py, "
+                         "docs/ADDONS.md): local = this computer only (default), lan = also the local network")
+    ap.add_argument("--companion-port", type=int, default=47615, help="the companion feed's port")
     ap.add_argument("--map-port", type=int, default=0,
                     help="port of the map tile endpoint (default 0: any free port, sent in hello.mapPort)")
     ap.add_argument("--credits", choices=("on", "off"), default="on",
