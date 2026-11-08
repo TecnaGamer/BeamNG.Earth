@@ -242,7 +242,14 @@ def pin_tree(cpus, root=None):
         return n
     if not cpus or not hasattr(os, "sched_setaffinity"):
         return 0
-    kids = _children()
+    if root is None or root == os.getpid():
+        # (this process's tree: its worker processes as multiprocessing knows them, no read of every process's
+        # /proc/<pid>/stat: ~470 file reads, each giving the interpreter lock away, were 2 s event loop stalls while a
+        # teleport's boost came on, 2026-11-07)
+        import multiprocessing
+        kids = {os.getpid(): [p.pid for p in multiprocessing.active_children() if p.pid]}
+    else:
+        kids = _children()
     todo, n = [root or os.getpid()], 0
     while todo:
         pid = todo.pop()
