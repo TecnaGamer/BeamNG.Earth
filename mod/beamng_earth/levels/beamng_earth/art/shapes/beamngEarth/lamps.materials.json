@@ -27,5 +27,229 @@
     ],
     "castShadows": false,
     "doubleSided": true
+  },
+  "bne_lamp_glow0": {
+    "name": "bne_lamp_glow0",
+    "mapTo": "bne_lamp_glow0",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b46a0cf8-6579-5a91-b12b-122aced4a19a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow1": {
+    "name": "bne_lamp_glow1",
+    "mapTo": "bne_lamp_glow1",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ffb6f8e4-663f-5436-986e-98c315fc02dd",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow2": {
+    "name": "bne_lamp_glow2",
+    "mapTo": "bne_lamp_glow2",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6e09f34b-e4ae-59c2-a3f7-ba2e4cd2d3b3",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow3": {
+    "name": "bne_lamp_glow3",
+    "mapTo": "bne_lamp_glow3",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4213999f-4d49-5b62-a638-6e4b02126538",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow4": {
+    "name": "bne_lamp_glow4",
+    "mapTo": "bne_lamp_glow4",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "97cd9b64-8ddf-5d86-bdf8-23c28aa3948e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow5": {
+    "name": "bne_lamp_glow5",
+    "mapTo": "bne_lamp_glow5",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "458596d3-8b7f-54cb-8d72-6717a278f5ad",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow6": {
+    "name": "bne_lamp_glow6",
+    "mapTo": "bne_lamp_glow6",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "adb684aa-4012-5f12-b69f-e0b56a5e0134",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_lamp_glow7": {
+    "name": "bne_lamp_glow7",
+    "mapTo": "bne_lamp_glow7",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fd29c7ed-eb65-5028-adfd-969cf611eec6",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1.0,
+          0.66,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
   }
 }
