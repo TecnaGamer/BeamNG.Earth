@@ -162,6 +162,12 @@ class Shards:
             self.built, self.checked = built, now
         return built
 
+    def clear_memory(self):
+        """Drop the decoded shards kept in memory (budget.maybe_shed through MapData.clear_memory; ~20 MB a zoom-7
+        shard, never let go otherwise); they load again from disk when asked."""
+        with self.lock:
+            self.shards.clear()
+
     def shard(self, x, y):
         """The shard of z7 tile (x, y) (a dict), {} none there, None unreachable."""
         built = self.version()
