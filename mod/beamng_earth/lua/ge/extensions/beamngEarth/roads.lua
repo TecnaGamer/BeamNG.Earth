@@ -799,6 +799,10 @@ function M.onGeoTile(msg, currentAnchor, a)
   if not frame then lastError = 'road geotile without a frame: ' .. tostring(msg.key); return false end
   local t = { anchor = currentAnchor, geo = true, gkey = msg.key, frame = frame, h = h, objs = {}, queued = 0,
     colliders = {}, slots = {}, at = now(), colWant = {}, parts = {}, exactShape = {}, exactOf = {} }
+  -- (its buildings and their footprint share, server blockworker: the scene complexity, M.scene)
+  if type(data.scene) == 'table' and type(data.scene[1]) == 'number' then
+    t.sceneN, t.sceneCover = data.scene[1], tonumber(data.scene[2]) or 0
+  end
   local cols = type(data.colliders) == 'table' and data.colliders or {}
   local pivots, np = 0, 0
   for _, what in ipairs(M.CONTENT_WHATS) do
@@ -2442,6 +2446,25 @@ function M.status()
     urgentWalks = M.urgentWalks or 0, quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog,
     geo = M.geo or false, geoStats = M.geoStats, farGeo = M.farGeo or false, farGeoTiles = ngf,
     farGeoShown = ngShown }
+end
+
+-- The scene round the car for the anonymous performance reports (perfsummary.lua): the loaded road tiles (those within
+-- the send distance) with their buildings and mean footprint share. No place: counts only.
+-- (tiles built before their counts were sent have none: the known ones' total scaled to all; none known: nil)
+function M.scene()
+  local n, known, nb, cover = 0, 0, 0, 0
+  for _, t in pairs(tiles) do
+    if t.geo and not t.orphan then
+      n = n + 1
+      if t.sceneN then
+        known = known + 1
+        nb = nb + t.sceneN
+        cover = cover + (t.sceneCover or 0)
+      end
+    end
+  end
+  if known == 0 then return { tiles = n } end
+  return { tiles = n, buildings = math.floor(nb * n / known + 0.5), cover = cover / known }
 end
 
 local okSweep, swept = pcall(M.sweep)

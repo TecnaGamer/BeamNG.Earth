@@ -97,7 +97,8 @@ import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
-import privacyregion as privacyregionmod  # noqa: E402
+import privacyregion as privacyregionmod
+import perfstats  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
 import urgency as urgencymod  # noqa: E402
@@ -159,6 +160,13 @@ SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; 
                                     # more room for a teleport's burst before a reconnect)
 WATERGUARD_VERSION = 1
 TELEMETRY_CONSENT = 1           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
+_NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
+
+
+def _perf(server):
+    return getattr(server, "perf", None) or _NO_PERF
+
+
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
 SERVER_LIST_URL = "https://earth.tgforever.net/servers"
 # Tile/heightmap content format (hello.format) is the layout's: 3 = v1.3.1 (2 m lattice, fixed Q,
@@ -1183,6 +1191,7 @@ class Server:
         # The download cache's bookkeeping (cache.py): every producer reports its disk hits and writes
         self.cache = cache
         self.covermap = None            # the map's cache view (covermap.CoverMap; main_async, with a Cache)
+        self.perf = perfstats.Collector()   # the anonymous performance data of the reports (telemetry.py, perfstats.py)
         self.areas = None               # saved areas downloaded ahead (areas.Areas; main_async, with a Cache)
         self.fast_pool = None           # the saved areas' fast mode: its own road processes (fast_precache)
         self.make_fast_pool = None      # n -> such a pool (main_async: the road pool's initializer), or None
@@ -6429,6 +6438,10 @@ class Connection:
             for line in (lines if isinstance(lines, list) else [])[:PERF_LOG_LINES]:
                 if isinstance(line, str):
                     log.info("game: %s", line[:PERF_LOG_CHARS].replace("\n", " "))
+        elif kind == "perf_setup":              # the anonymous performance data (perfsummary.lua; perfstats.py checks it):
+            _perf(self.s).on_setup(msg.get("setup"))      # the machine and settings, once a connection
+        elif kind == "perf_summary":            # ... and a 5-minute window of frame times, scene and world generation
+            _perf(self.s).on_summary(msg.get("summary"))
         elif kind == "roads_reset":             # the mod dropped its roads (settings): send them all again
             self.roads.close()
             self.roads = road_tracker(self)
@@ -7094,6 +7107,7 @@ class Connection:
             return
         if self.catchup and not self.s.boost_on:
             self.catchup = False            # (ended elsewhere: free to start again)
+            _perf(self.s).catchup(False)
         if self.s.boost_on and not self.catchup:
             return
         behind = speed > CATCHUP_MIN_MS and self.behind()
@@ -7105,6 +7119,7 @@ class Connection:
                 self.catchup = self.s.boost_on
                 self.catchup_since, self.catchup_more = now, False
                 if self.catchup:
+                    _perf(self.s).catchup(True)
                     log.info("catch-up boost on (%.0f mph; next block asked %.1f s ago)", speed * 2.237,
                              now - self.pending_at if self.pending_at else -1)
             elif not getattr(self, "catchup_more", False) and now - getattr(self, "catchup_since", now) > CATCHUP_MORE_S \
@@ -7125,6 +7140,7 @@ class Connection:
             elif now - self.caught_up_at > CATCHUP_CALM_S:
                 self.s.load_boost(False, "caught up")
                 self.catchup, self.catchup_more = False, False
+                _perf(self.s).catchup(False)
                 log.info("catch-up boost off (caught up)")
 
     def commit_terrain(self, msg):
@@ -8599,7 +8615,8 @@ async def main_async(args):
             proc_dir=os.environ.get("BNE_NETSTATS_PROC"),
             # (the welcome page's choice and the settings page's switches: nothing before the choice; TELEMETRY.md)
             allowed=lambda: telemetry.choices(cpupin.player_settings(args.user_dir)),
-            keep_id=not privacyregionmod.region()[1]).start()
+            keep_id=not privacyregionmod.region()[1], perf=server.perf.take).start()
+        logging.getLogger().addHandler(server.perf.errors)    # (error fingerprints: perfstats.ErrorPrints)
         log.info("telemetry: on (anonymous: install id, version, OS, players online, data-source request counts; "
                  "BNE_TELEMETRY=off turns it off)")
     feed_srv = None

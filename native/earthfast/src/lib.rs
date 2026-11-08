@@ -48,6 +48,7 @@ mod farglobal;
 mod dirtsteps;
 mod gridinterp;
 mod streetlabels;
+mod perfclean;
 mod mdhtml;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5548,6 +5549,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
-    m.add("VERSION", 166)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_clean, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_step, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_fingerprint, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
+    m.add("VERSION", 167)?;
     Ok(())
 }

@@ -1,5 +1,6 @@
 """telemetry.py: anonymous usage reports (counts since the last report, every process's, kept when a send fails)."""
 import json
+import logging
 import os
 from pathlib import Path
 import sys
@@ -178,3 +179,64 @@ class RegionTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerfTest(unittest.TestCase):
+    """The performance section (perfstats.py, native perfclean.rs): only named fields of the allowed shapes, only under the
+    "Performance data" switch, held beside the last report while PERF_UPLOAD is off."""
+
+    def test_checked_on_the_way_in(self):
+        import perfstats
+        c = perfstats.Collector(tree=lambda: None)
+        c.on_setup({"cpu": "AMD Ryzen 7 5800XT\n", "res": "4k", "path": "C:/Users/me", "gameSettings": {"vsync": True,
+                    "home": "/home/me"}, "modSettings": {"quality": "high", "lastPlace": "Baltimore"}})
+        c.on_summary({"v": 1, "fh": [1, 2, "x"], "lat": 39.28, "note": "text", "scene": {"urban": 120, "a b": 1},
+                      "bands": {"s60": {"s": 120, "fh": [0, 5, 9]}}})
+        out = c.take()
+        self.assertEqual(out["setup"], {"cpu": "AMD Ryzen 7 5800XT", "res": "4k", "gameSettings": {"vsync": True},
+                                        "modSettings": {"quality": "high"}})
+        self.assertEqual(out["game"], [{"v": 1, "fh": [1, 2], "scene": {"urban": 120},
+                                        "bands": {"s60": {"s": 120, "fh": [0, 5, 9]}}}])
+        again = c.take()
+        self.assertNotIn("setup", again)        # (sent once, again only when it changes)
+        self.assertNotIn("game", again)
+
+    def test_catchup_and_errors(self):
+        import perfstats
+        t = [0.0]
+        c = perfstats.Collector(clock=lambda: t[0], tree=lambda: (10.0, 3000.0))
+        c.catchup(True)
+        t[0] = 42.0
+        c.catchup(False)
+        log = logging.getLogger("perftest")
+        log.addHandler(c.errors)
+        try:
+            for _ in range(3):
+                try:
+                    raise KeyError("Baltimore")
+                except KeyError:
+                    log.exception("oops at 39.28,-76.61")
+        finally:
+            log.removeHandler(c.errors)
+        srv = c.take()["server"]
+        self.assertEqual((srv["catchups"], srv["catchupS"], srv["memMB"]), (1, 40, 2048))
+        (fp, n), = srv["errors"].items()
+        self.assertEqual((len(fp), n), (8, 3))
+        self.assertNotIn("Baltimore", json.dumps(srv))
+
+    def test_only_under_the_switch(self):
+        sent = []
+        with tempfile.TemporaryDirectory() as d:
+            sw = {"main": True, "net": True, "perf": False}
+            r = telemetry.Reporter(d, "1", lambda: (True, False), send=lambda b: (sent.append(b), True)[1],
+                                   allowed=lambda: sw, perf=lambda: {"server": {"catchups": 1}})
+            r.report()
+            with open(os.path.join(d, telemetry.LAST_FILE), encoding="utf-8") as fh:
+                self.assertNotIn("perf_not_sent_yet", json.load(fh))
+            sw["perf"] = True
+            r.report()
+            with open(os.path.join(d, telemetry.LAST_FILE), encoding="utf-8") as fh:
+                last = json.load(fh)
+        self.assertTrue(all("perf" not in b for b in sent))     # (PERF_UPLOAD off: never sent yet)
+        self.assertFalse(telemetry.PERF_UPLOAD)
+        self.assertEqual(last["perf_not_sent_yet"], {"server": {"catchups": 1}})

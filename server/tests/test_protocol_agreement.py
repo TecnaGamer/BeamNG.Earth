@@ -152,6 +152,9 @@ MOD_TO_SERVER = {
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
     "perf_log": {"lines": F((list, dict))},
+    # the anonymous performance data (perfsummary.lua, perfstats.py; additive): the setup once a connection, 5-minute windows
+    "perf_setup": {"setup": F(dict)},
+    "perf_summary": {"summary": F(dict)},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
     # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
     # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)

@@ -1270,7 +1270,7 @@ local function onMessage(msg)
       return
     end
     p.ready, p.msg = true, msg -- committed by the distance rule in updateWorld()
-    if p.sentAt then st.terrainLatency = st.clock - p.sentAt end
+    if p.sentAt then st.terrainLatency = st.clock - p.sentAt; pcall(M._psum.mod.block, st.terrainLatency) end
     st.terrainErrorAt = nil
   elseif t == 'terrain_refresh' then
     -- the graded block in place of a teleport's provisional one (server make_provisional; the user, 2026-10-22:
@@ -2316,8 +2316,73 @@ local function perfMachine()
   end
   return out
 end
+-- The anonymous performance summary (perfsummary.lua, TELEMETRY.md sections 2-4): fed here, a window sent to the server
+-- every 5 minutes and the setup once a connection, only while the player has "Performance data" switched on (the server
+-- also keeps it only then). Counts and rounded steps; no position. (on M: core's main chunk is at the 200-local limit)
+M._psum = { mod = require('beamngEarth/perfsummary'), sampleAt = 0, setupSent = false }
+function M._psum.on()
+  local S = rawget(_G, 'beamngEarth_settings')
+  if not (S and S.get) then return false end
+  return S.get('telemetry') ~= false and S.get('telemetryPerf') ~= false and not (S.privacyNeeded and S.privacyNeeded())
+end
+function M._psum.sample()
+  local s = { heapMB = collectgarbage('count') / 1024 }
+  if M._alloc.last then s.garbageMB = M._alloc.last.total / 1024 end
+  local okS, sc = pcall(roads.scene)
+  local loaded = {}
+  if okS and sc then s.buildings = sc.buildings; loaded.roadTiles = sc.tiles; loaded.buildings = sc.buildings end
+  local okR, rs = pcall(roads.status)
+  if okR and rs then s.roadsQueued = (rs.queued or 0) + (rs.walksQueued or 0); loaded.farBuildings = rs.farBuildings end
+  local okT, ts = pcall(trees.status)
+  if okT and ts then loaded.trees = ts.items end
+  local okF, fs = pcall(farfield.stats)
+  if okF and fs then loaded.farTiles = fs.live end
+  local P = rawget(_G, 'beamngEarth_parking') or package.loaded['beamngEarth/parking']
+  local okP, ps = pcall(function() return P and P.status() end)
+  if okP and ps then loaded.parked = ps.spots end
+  local N = package.loaded['beamngEarth/nightlights']
+  local okN, ns = pcall(function() return N and N.status() end)
+  if okN and ns then loaded.lamps = ns.lit end
+  local okV, tv = pcall(function()
+    local api = rawget(_G, 'gameplay_traffic')
+    return api and api.getNumOfTraffic and api.getNumOfTraffic()
+  end)
+  if okV and type(tv) == 'number' then loaded.traffic = tv end
+  s.loaded = loaded
+  s.edge = st.guard and st.guard.pausedByUs or false
+  s.drop = dropHold.active or false
+  s.loading = st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  s.mapOpen = (m3 and m3.isActive and m3.isActive()) or false
+  return s
+end
+function M._psum.frame(ms, hrec)
+  local ps = M._psum
+  if not net.isConnected() then ps.setupSent = false; return end
+  if not ps.on() then return end
+  local p = st.player
+  local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
+  local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
+  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil)
+  if st.clock < ps.sampleAt then return end
+  ps.sampleAt = st.clock + 1
+  local okS, smp = pcall(ps.sample)
+  if okS then ps.mod.sample(st.clock, smp) end
+  if not ps.setupSent then
+    local rep = rawget(_G, 'beamngEarth_report')
+    local okH, hw = pcall(function() return rep and rep.collectHardware and rep.collectHardware() end)
+    local S = rawget(_G, 'beamngEarth_settings')
+    if okH and hw then
+      local okU, setup = pcall(ps.mod.setup, hw, S and S.get)
+      if okU then net.send({ type = 'perf_setup', setup = setup }); ps.setupSent = true end
+    end
+  end
+  local summary = ps.mod.take(st.clock, perflog.takeDrops)
+  if summary then net.send({ type = 'perf_summary', summary = summary }) end
+end
 local function perfFrame(ms, hrec)
   local lines = perflog.frame(ms, st.clock, perfContext, hrec, marks, perfEngine)
+  pcall(M._psum.frame, ms, hrec)
   if not net.isConnected() then
     machineSent = false
   elseif not machineSent and st.clock >= (machineTryAt or 0) then
@@ -2792,6 +2857,7 @@ end
 -- kind: 'teleport' (M.teleport) or 'start' (the level start's), for the recent places list; 'tool'
 -- (M.teleport with opts.record == false: test tools like tools/benchmark.lua) is not recorded
 teleportTo = function(lat, lon, name, kind)
+  pcall(M._psum.mod.teleport)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then
     setStatus('Teleport: invalid lat/lon')

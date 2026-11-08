@@ -63,15 +63,16 @@ Sent once per session, and again only when something changes.
 | CPU model, cores, threads | `AMD Ryzen 5 3600`, 6, 12 | which processors struggle with world generation |
 | GPU model, VRAM (rounded) | `NVIDIA GeForce RTX 3060`, 12 GB | which graphics cards hitch or run out of memory |
 | system RAM (rounded) | 32 GB | memory limits: the server's caches are sized from it |
-| cache drive | SSD / HDD | slow disks make loading slow |
-| screen resolution and refresh (rounded) | 1440p, 144 Hz | performance depends heavily on resolution |
+| operating system, window system | linux, wayland | driver and platform problems |
+| screen class and refresh (rounded) | 1440p, 144 Hz | performance depends heavily on resolution |
 | graphics API | DX11 / DX12 / Vulkan | driver-specific problems |
-| game graphics settings | preset, mesh, textures, terrain, lighting, shadows, AA, vsync, fps limit | to compare like with like |
-| BeamNG.Earth settings | quality preset, terrain detail, tree and building distance, ground photo size, view to horizon, traffic, weather / sky mode, map layers on | which of our options cost the most |
-| mod and app versions match | yes / no, both versions | on a BeamMP server the server's copy of the mod replaces yours; a mismatch makes loading slow |
+| game version | `0.40.5` | engine changes between updates |
+| game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
+| BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style | which of our options cost the most |
+| other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
 
-Amounts like RAM, VRAM and resolution are rounded into steps, so they describe a class of machine rather than one
-machine.
+Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
+here are read; nothing else from your game folder.
 
 ## 3. Scene complexity, instead of location (Performance data)
 
@@ -79,11 +80,10 @@ We never send where you are. To know how demanding the scene was, a report says 
 
 | field | example | why |
 |---|---|---|
-| area type | share of the 5 minutes in dense city / town / suburban / rural / wilderness / over water | a city costs far more than a field |
-| what was loaded (rounded) | road tiles, buildings, trees, far tiles, traffic and parked cars, lamps | what the game had to draw |
-| terrain type | flat / rolling / mountainous | hills change world-generation work |
-| how you moved | seconds stopped and in speed bands (under 30, 30-60, 60-100, 100-150, over 150 mph), flying, with the 2D or 3D map open | high speed is where world generation falls behind |
-| teleports | how many; first visit or a place you had been | first visits download data, revisits use the cache |
+| scene | seconds of the 5 minutes by how many buildings were loaded around you: none / rural / town / urban / dense | a city costs far more than a field |
+| what was loaded (rounded) | road tiles, buildings, far buildings, trees, far tiles, traffic cars, parked cars, lit lamps | what the game had to draw |
+| how you moved | seconds stopped and in speed bands (under 30, 30-60, 60-100, 100-150, over 150 mph), seconds with the 3D map open | high speed is where world generation falls behind |
+| teleports | how many | each teleport loads a new place |
 
 ## 4. Performance and world-generation speed (Performance data)
 
@@ -91,28 +91,27 @@ Over each 5 minutes:
 
 | field | example | why |
 |---|---|---|
-| frame times | a histogram in fixed steps (gives average fps, 1% low, 95th / 99th percentile) | how smooth the game was |
-| the same per speed band | fps and 1% low in town vs on the highway | so fast driving is not hidden in an average |
-| hitches | how many frames over 50 / 100 / 250 / 1000 ms, and what caused each (Lua, garbage collection, physics, rendering, shadows, the GPU, BeamNG.Earth's own parts) | which part to fix first |
-| fps drops | how many, how long, the lowest | stutter you notice |
-| memory (rounded) | game, Lua, BeamNG.Earth server | running out of memory on 16 GB machines and the Steam Deck |
-| teleport to playable | seconds, first visit and revisit separately | how long you wait after choosing a place |
-| terrain blocks | how many, how many were ready in time, how long the others took | whether the world keeps up with you |
-| keeping up | seconds with the edge warning, times and seconds the car was held, time the server needed extra CPU cores | the "world can't keep up" problem |
-| road tiles | how far ahead they were, how many waited | roads appearing late |
-| caches | how often the cache had what was needed | download vs disk |
-| server load | CPU cores used, memory peak, worker restarts | how hard BeamNG.Earth works your PC |
+| frame times | how many frames fell into fixed steps (gives average fps, 1% low, 95th / 99th percentile) | how smooth the game was |
+| the same per speed band | the steps for town speeds vs the highway | so fast driving is not hidden in an average |
+| hitches | how many frames over 50 / 100 / 250 / 1000 ms, and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both) | which part to fix first |
+| fps drops | how many, how long, the lowest (rounded) | stutter you notice |
+| memory (rounded) | the game's Lua memory and its garbage per minute; the BeamNG.Earth server's memory | running out of memory on 16 GB machines and the Steam Deck |
+| terrain blocks | how long each new ground block was waited for, in steps | whether the world keeps up with you |
+| keeping up | seconds held at the edge of the ground, seconds held until the ground loads, seconds loading after a teleport, how many times and how long the server borrowed extra CPU cores | the "world can't keep up" problem |
+| road tiles | how many were waiting (rounded) | roads appearing late |
+| server load | CPU cores the server used (rounded) | how hard BeamNG.Earth works your PC |
 
-## 5. Crash and error fingerprints (Performance data)
+## 5. Error fingerprints (Performance data)
 
 | field | example | why |
 |---|---|---|
 | server errors | a short code made from the error's type and the line of our code it came from (`a3f9c2e1`), and how many times | which bugs players actually hit, so we fix those first |
-| mod (Lua) errors | the same kind of code | the same, for the game side |
-| crashed last time | yes / no | crashes we otherwise never hear about |
 
 A fingerprint is a hash: it contains **no error message text, no file paths, no user names and no list of your
 other mods**. It only lets us count how often the same bug happens.
+
+Everything in sections 2-5 is checked by the app before it can leave your computer: only the fields named on this page,
+only numbers (and in section 2 short model names and settings values), so no position, path or free text can slip in.
 
 ## 6. Network load (Network load switch)
 
@@ -158,8 +157,11 @@ before any of it is sent.
 
 - **From the release with the welcome-screen choice**: sections 1 and 6 (basic statistics and network load), only after
   your choice. Releases before it sent sections 1 and 6 by default, with an off switch in settings.
-- **Being added**: sections 2-5 (performance data), a **What is sent** button that shows the last report exactly as it
-  left your computer, and the public performance page. They start with the release whose notes say so; this page is
-  updated with it.
+- **Measured, not sent yet**: sections 2-5 (performance data). The app already measures them while Performance data
+  is ticked and keeps the latest next to the last report (`telemetry_last.json` in the cache folder, under
+  `perf_not_sent_yet`) so we can check them, but nothing of it is sent until a release whose notes say so. That release
+  will ask everyone again on the welcome screen first.
+- **Being added**: a **What is sent** button that shows the last report exactly as it left your computer, and the
+  public performance page.
 
 Questions or concerns: open an issue on GitHub or ask on Discord.

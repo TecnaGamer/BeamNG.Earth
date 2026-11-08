@@ -32,6 +32,10 @@ log = logging.getLogger("earthd.telemetry")
 URL = os.environ.get("BNE_TELEMETRY_URL", "https://earth.tgforever.net/telemetry")
 ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 CONSENT_VERSION = 1         # the welcome page's choice this release asks for (settings telemetryChoice): none before it
+# The performance section (perfstats.py) goes out only once the collector reads it (native/serverlist telemetry.rs) and
+# a release says so (raise CONSENT_VERSION with it: everyone is asked again). Until then it is measured and kept beside
+# the last report (LAST_FILE "perf_not_sent_yet") to check its sizes and values.
+PERF_UPLOAD = False
 LAST_FILE = "telemetry_last.json"   # the last report as sent (the settings page's "What is sent")
 REPORT_S = 300.0            # s between reports (the collector counts an install online for 2 of them)
 FIRST_S = 60.0              # s after the start before the first
@@ -89,7 +93,7 @@ class Reporter:
     """The report loop (a daemon thread). state() -> (game connected, in BeamMP)."""
 
     def __init__(self, cache_dir, version, state, proc_dir=None, url=URL, send=None, clock=time.monotonic,
-                 allowed=None, keep_id=True):
+                 allowed=None, keep_id=True, perf=None):
         self.cache_dir, self.version, self.state = cache_dir, str(version or ""), state
         self.proc_dir = proc_dir
         self.url = url
@@ -97,6 +101,8 @@ class Reporter:
         self.clock = clock
         # (the switches, read before every report: True / False, or {"main", "net", "perf"}: choices())
         self.allowed = allowed or (lambda: True)
+        # perf(): the "perf" section (perfstats.Collector.take), sent only under the "Performance data" switch
+        self.perf = perf
         # keep_id False (privacyregion.NO_ID: Russia): a random id of this run only, never stored
         self.id = install_id(cache_dir) if keep_id else secrets.token_hex(16)
         self.seen = {}              # pid -> {host: {counter: n}} last counted
@@ -178,18 +184,32 @@ class Reporter:
         if not a.get("net"):            # (network load off: no per-source counts)
             sources = {}
         body = self.body(sources)
-        self._keep_last(body)
+        perf = None
+        if self.perf:
+            try:
+                perf = self.perf()          # (taken either way: nothing piles up while the switch is off)
+            except Exception as e:
+                log.debug("telemetry perf: %s: %s", type(e).__name__, e)
+            if not a.get("perf"):
+                perf = None
+        if perf and PERF_UPLOAD:
+            body["perf"] = perf
+        self._keep_last(body, None if PERF_UPLOAD else perf)
         if self.send(body):
             self.carry = {}
         else:
             self.carry = sources        # (sent with the next report)
 
-    def _keep_last(self, body):
-        """The report as sent, for the settings page's "What is sent" (LAST_FILE in the cache)."""
+    def _keep_last(self, body, held=None):
+        """The report as sent, for the settings page's "What is sent" (LAST_FILE in the cache); held: the performance
+        section measured but not sent yet (PERF_UPLOAD off: before the collector takes it)."""
         try:
             p = os.path.join(self.cache_dir, LAST_FILE)
+            d = {"at": time.strftime("%Y-%m-%d %H:%M:%S"), "report": body}
+            if held:
+                d["perf_not_sent_yet"] = held
             with open(p + ".tmp", "w", encoding="utf-8") as fh:
-                json.dump({"at": time.strftime("%Y-%m-%d %H:%M:%S"), "report": body}, fh, indent=1)
+                json.dump(d, fh, indent=1)
             os.replace(p + ".tmp", p)
         except OSError as e:
             log.debug("telemetry last: %s", e)
