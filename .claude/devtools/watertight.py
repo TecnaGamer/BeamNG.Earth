@@ -205,7 +205,7 @@ def main():
                                                                     "barrier", "rail", "bld", "bldcol", "railcol"}
     if "raw" in opts:       # --raw: the meshes as built, not closed (shells.close off): the before
         import shells
-        shells.close = lambda P, T, TM=None, per_vertex=(), mouths=True, sink=0.0: (P, T, TM, list(per_vertex))
+        shells.close = lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex))
     st = bw._State(os.path.expanduser("~/.cache/beamng-earth"), False, True, True, True, False, True, True)
     bw._s = st
     frame = geodesy.EnuFrame(LAT, LON)
