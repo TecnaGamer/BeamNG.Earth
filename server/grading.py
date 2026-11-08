@@ -359,6 +359,7 @@ CW_DIG_FLOOR = os.environ.get("BNE_CW_DIG_FLOOR", "off") == "on"   # a carriagew
 # depth; a carriageway aims this much over it where nothing pulls against it. The user 2026-11-07: "6m of real
 # headroom ... otherwise we use OSM data", replacing a 6 m road-over-road floor, 4-5 m under the girders)
 CLEAR_AIM_M = float(os.environ.get("BNE_CLEAR_AIM", "0.5"))
+CW_HELP = os.environ.get("BNE_CW_HELP", "on") != "off"   # a cell's carriageway regions solved by the processes side by side
 CW_STREET_RISE_M = 2.0     # m a street's own ground at a crossing may stand over its level read past the deck
 RAMP_EASE_M = float(os.environ.get("BNE_RAMP_EASE", "60"))   # m from a street a slip road eases to a street's limits (0: off)
 RAMP_SLOW_GRADE = 0.10      # a slip road's steepest grade at the street it meets (a secondary road's)
@@ -1795,7 +1796,15 @@ class _Planner:
             return got
         if failed is not None and time.monotonic() - failed < RETRY_S:
             return []               # offline: no block waits on the same failing fetch again
+        if CW_ON and CW_HELP:
+            try:
+                self._cw_help(key)
+            except Exception as e:      # (each region solved by whoever needs it first, as before)
+                log.debug("grading: carriageway regions round %s: %s: %s", key, type(e).__name__, e)
+        t_claim = time.perf_counter()
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
+        if mine:
+            log.info("cell %s: planning it here (process %d)", key, os.getpid())
         try:
             import revisit
             # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
@@ -1810,6 +1819,7 @@ class _Planner:
                     got = self._make_cell(key)
                 finally:
                     watch.cancel()
+                log.info("cell %s: planned in %.1f s (process %d)", key, time.perf_counter() - t_claim, os.getpid())
             if got is None:
                 return []
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
@@ -2585,24 +2595,27 @@ class _Planner:
         spans, rail_span = [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
+        gids = sorted(ground)
+        lines = [ground[g][0] for g in gids]
         for n, (b, fixed, rail) in enumerate(uniq):
             if rail and coarse:
                 continue
             L = float(np.hypot(*np.diff(b, axis=0).T).sum())
-            # (a carriageway's deck, any length, joined or not: its height is its profile's, the roads under it dip
-            # to clear it)
-            cw_deck = CW_ON and not rail and self._cw_z_at(b, b[:1]) is not None
-            if L < 2 * APPROACH_MIN_CROSS_M or (L > UNDER_MAX_BRIDGE_M and not rail and not cw_deck):
+            if L < 2 * APPROACH_MIN_CROSS_M:
                 continue
             d = np.hypot(ue[:, :, None, 0] - ue[n, None, None, :, 0], ue[:, :, None, 1] - ue[n, None, None, :, 1])
             d[n] = np.inf                       # (another part's end within 0.75 m of either of its ends: joined)
-            if rail or cw_deck or not (d < 0.75).any():
-                spans.append((b, L, fixed, rail))
-                rail_span.append(rail)
+            plain = rail or (L <= UNDER_MAX_BRIDGE_M and not (d < 0.75).any())
+            # (a carriageway's deck, any length, joined or not: its height is its profile's, the roads under it dip
+            # to clear it. Asked only of a deck a road here passes under: asked of every deck round the cell, each
+            # deck's own carriageway region was solved, two cells away and more, Perth 2026-11-08)
+            if not plain and not (CW_ON and any(roadsmod._crossings_by([b], lines))
+                                  and self._cw_z_at(b, b[:1]) is not None):
+                continue
+            spans.append((b, L, fixed, rail))
+            rail_span.append(rail)
         if not spans:
             return
-        gids = sorted(ground)
-        lines = [ground[g][0] for g in gids]
         crs = roadsmod._crossings_by([b for b, _L, _f, _r in spans], lines)
         ez, raised = {}, set()
 
@@ -2894,6 +2907,66 @@ class _Planner:
         a, b, _ = self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
         return np.asarray(self.elev(np.asarray(a, np.float64), np.asarray(b, np.float64)), np.float64).ravel()
 
+    def _cw_owner(self, home):
+        """The planner of the planning region holding cell home when it is not this one (None: this one, or no
+        store): a carriageway region is solved in that planner's frame only (_cw_region)."""
+        if self.store is None or not hasattr(home, "z") or not hasattr(self.store, "planner"):
+            return None
+        import geotiles
+        r = geotiles.region_of_cell(home)
+        return None if r == self.region else self.store.planner(r)
+
+    def _cw_help(self, key):
+        """Before planning cell key: the carriageway regions it will read (its own and its 8 neighbours', where its own
+        has a freeway) solved by the run's processes side by side, each taking the next one nobody has taken
+        (plancache.region_try: it never waits). The cell's planning then reads them, or waits for the one still being
+        solved. One after another in the process planning the cell, 13 regions round Perth's Hay - Wellington
+        interchange were ~41 of its ~46 s, while the other processes waited for its plans (the user, 2026-11-08:
+        "parallel areas")."""
+        sh = self.shared
+        if sh is None or not hasattr(sh, "region_try") or not hasattr(key, "z"):
+            return
+        if not self._cw_cell_parts(key):
+            return                  # (no freeway in the cell: nothing to help with)
+        ring = [(0, 0)] + [(dx, dy) for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dx, dy) != (0, 0)]
+        for dx, dy in ring:
+            home = type(key)(key.z, key.x + dx, key.y + dy)
+            owner = self._cw_owner(home)
+            if owner is not None:
+                owner._cw_help_one(home)
+                continue
+            self._cw_help_one(home)
+
+    def _cw_help_one(self, home):
+        """_cw_help for one region of this planner's own: solved here unless solved or being solved already."""
+        sh = self.shared
+        if sh is None or not hasattr(sh, "region_try"):
+            return
+        memo = self.__dict__.setdefault("_cw_regions", {})
+        tag = f"{float(self.frame.lat0):.6f}_{float(self.frame.lon0):.6f}"
+        hk = str(home)
+        with self.lock:
+            if hk in memo:
+                return
+        hkey = (int(home.z), int(home.x), int(home.y))
+        got, mine = sh.region_try(tag, hkey)
+        if got is None and not mine:
+            return              # (another process is solving it)
+        if got is None:
+            t0 = time.perf_counter()
+            try:
+                got = self._cw_region_calc(home, hk)
+                if not got.get("failed"):
+                    sh.region_store(tag, hkey, got)
+            finally:
+                sh.region_release(tag, hkey)
+            log.info("carriageway region %s solved in %.1f s (helping, process %d)", hk, time.perf_counter() - t0,
+                     os.getpid())
+        with self.lock:
+            if len(memo) > 64:
+                memo.clear()
+            memo[hk] = got
+
     def _cw_region(self, home):
         """Cell home's carriageways: the family parts within CW_MARGIN_M of it (from every cell there, each once), their
         chains (carriageways.chains) and those solved together (_cw_solve): {"parts": [...], "chains": [...],
@@ -2904,6 +2977,26 @@ class _Planner:
         with self.lock:
             got = memo.get(hk)
         if got is not None:
+            return got
+        owner = self._cw_owner(home)
+        if owner is not None:
+            # (solved in the frame of the planning region holding the home cell, whoever asks, then mapped here: solved
+            # in whichever frame asked first, a region at the seam of two planning regions (Perth's CBD, between cell
+            # rows 9727 and 9728) came out up to 0.55 m apart from one run to the next, the solve's two paths
+            # (the Rust kernel, the active-set fallback) taking turns on a borderline level, 2026-11-08)
+            src = owner._cw_region(home)
+            import geotiles
+
+            def m(xy):
+                return geotiles.world_xy_map(owner.frame, self.frame, np.asarray(xy, np.float64)[:, :2])
+            got = {"parts": [(q[0], m(q[1])) + tuple(q[2:]) for q in src["parts"]],
+                   "prof": {k: (m(xy), z) for k, (xy, z) in src["prof"].items()}}
+            if src.get("failed"):
+                got["failed"] = True
+            with self.lock:
+                if len(memo) > 64:
+                    memo.clear()
+                memo[hk] = got
             return got
         # (the process's other planners, each in its own planning region's frame: one solve, mapped into this frame;
         # where two planning regions meet each solved every carriageway region near the seam again, 9 of a Perth
@@ -2932,6 +3025,7 @@ class _Planner:
                         memo.clear()
                     memo[hk] = got
                 return got
+        t0 = time.perf_counter()
         try:
             got = self._cw_region_calc(home, hk)
             if mine and not got.get("failed"):
@@ -2939,6 +3033,11 @@ class _Planner:
         finally:
             if mine:
                 sh.region_release(tag, hkey)
+        import traceback
+        why = " < ".join(f.name for f in traceback.extract_stack(limit=12)[:-1][::-1]
+                         if f.name.startswith("_") and f.name not in ("_cw_region", "_bootstrap_inner"))[:160]
+        log.info("carriageway region %s solved in %.1f s (needed, process %d; from %s)", hk, time.perf_counter() - t0,
+                 os.getpid(), why)
         with self.lock:
             if len(memo) > 64:
                 memo.clear()

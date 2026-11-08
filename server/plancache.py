@@ -85,7 +85,8 @@ FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.P
 
 # BNE_* settings that change no plan (the caches' own, what is sent when): not part of a plan's signature
 NOT_PLAN_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
-                     "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_CW_DEBUG", "BNE_CW_DUMP")
+                     "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M", "BNE_CW_DEBUG", "BNE_CW_DUMP", "BNE_CW_HELP",
+                     "BNE_PLAN_WAIT_ANY")
 
 
 def switches_sig():
@@ -328,7 +329,10 @@ class PlanCache:
                 self.stats["waited"] += 1
             h = xproc._holder(self._path(key) + ".lock")
             holder.append(h[2] if h else None)
-        got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting)
+        if WAIT_ANY:
+            got, mine = wait_any(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting)
+        else:
+            got, mine = xproc.once(self._path(key) + ".lock", lambda: self.load(key), WAIT_S, on_wait=waiting)
         waited = time.monotonic() - t0
         if got is not None and waited > xproc.POLL_S:
             with self._lock:
@@ -393,11 +397,71 @@ class PlanCache:
         return True
 
     def region_claim(self, tag, home):
-        """As claim, for a carriageway region."""
-        return xproc.once(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
+        """As claim, for a carriageway region, but waiting for whichever process holds it, however urgent this one is
+        (xproc.once does a less urgent holder's work itself: three processes solved one Perth region at once, each
+        3-17 s, while the helpers' regions were taken over half done, 2026-11-08)."""
+        return wait_any(self._region_path(tag, home) + ".lock", lambda: self.region_load(tag, home), WAIT_S)
+
+    def region_try(self, tag, home):
+        """(region, False) when it is solved already; (None, True) when this process now solves it (region_release
+        after region_store); (None, False) when another process is solving it: never waits (the helpers before a
+        cell's planning, grading._Planner._cw_help)."""
+        got = self.region_load(tag, home)
+        if got is not None:
+            return got, False
+        lock = self._region_path(tag, home) + ".lock"
+        if not xproc.take(lock, "urgent"):
+            return None, False
+        got = self.region_load(tag, home)       # (stored between the look and the lock)
+        if got is not None:
+            xproc.release(lock)
+            return got, False
+        return None, True
 
     def region_release(self, tag, home):
         xproc.release(self._region_path(tag, home) + ".lock")
+
+
+# With the interchange solver a cell's plans take tens of seconds: a process waits for whichever holds a cell's lock,
+# however urgent it is, instead of planning the cell again beside it (three of the server's processes planned Perth's
+# Hay - Wellington cell at once, 17-32 s each, on the server's 6 cores, 2026-11-08). BNE_PLAN_WAIT_ANY on/off.
+WAIT_ANY = os.environ.get("BNE_PLAN_WAIT_ANY", "on" if os.environ.get("BNE_INTERCHANGE", "0").lower() in (
+    "1", "on", "yes", "true") else "off").lower() in ("1", "on", "yes", "true")
+
+
+def wait_any(lock, ready, wait_s, on_wait=None):
+    """xproc.once without its urgency rule: (result, False) when ready() gives it, at once or after waiting for the
+    holder; (None, True) when this process does the work (release the lock after writing it); (None, False) after
+    wait_s without it (done here, unlocked). A holder whose process is gone is passed over."""
+    got = ready()
+    if got is not None:
+        return got, False
+    t0 = last_check = time.monotonic()
+    waited = False
+    while True:
+        if xproc.take(lock, "urgent"):
+            got = ready()                       # (written by the process whose lock we just followed)
+            if got is not None:
+                xproc.release(lock)
+                return got, False
+            return None, True
+        if not waited:
+            waited = True
+            if on_wait is not None:
+                on_wait()
+        now = time.monotonic()
+        if now - t0 > wait_s:
+            return None, False
+        if now - last_check > 2.0:              # (its holder gone: the lock is free to take)
+            last_check = now
+            h = xproc._holder(lock)
+            if h is not None and not xproc.alive(h[2]):
+                xproc.release(lock)
+                continue
+        time.sleep(xproc.POLL_S)
+        got = ready()
+        if got is not None:
+            return got, False
 
 
 def _newest(d, depth=2):
