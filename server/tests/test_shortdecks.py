@@ -96,6 +96,31 @@ class WaterFillTest(unittest.TestCase):
         self.assertAlmostEqual(lift, 4.7 - 4.04, places=6)
         self.assertEqual(g._water_lift(line, [], line[0], lambda xy: np.full(len(xy), 5.0)), 0.0)
 
+    def test_frame_far_from_the_bridge(self):
+        # the requirement is in the frame's ENU heights (the Earth's curvature drops them d^2 / 2R), z_at gives geodetic
+        # ones: a bridge 15 km from the frame's origin still raises its approach by what it lacks (Zdrina, 2026-11-08:
+        # the lift was compared across 18 m and came out 0, a 1 m wall in a 17 m deck)
+        import geodesy
+        frame = geodesy.EnuFrame(50.5, 16.2)
+        g = self.grader(4.7)
+        g.frame = frame
+        line = np.c_[15000.0 + np.linspace(0, 105, 30), np.zeros(30)]
+
+        class Chains:
+            def _depth(self, lines):
+                return 0.9
+
+            def _water(self, lines, nav, depth):
+                out = []
+                for a in np.arange(20.0, 86.0, 16.0):
+                    la, lo, _ = frame.enu_to_geodetic(np.array([15000.0 + a]), np.zeros(1), 0.0)
+                    base = float(frame.geodetic_to_enu(la, lo, np.zeros(1))[2][0])      # (water at geodetic 0)
+                    out.append((0, a, base, 4.7))
+                return out
+        g._chains_for = lambda: Chains()
+        lift = g._water_lift(line, [], line[0], lambda xy: np.full(len(xy), 4.04))
+        self.assertAlmostEqual(lift, 4.7 - 4.04, delta=0.1)      # (the curve between abutment and requirement: 5 cm)
+
     def test_far_requirement_reached_on_grade(self):
         # a requirement far out from the abutment is reached by the deck's own grade: no fill
         line = np.c_[np.linspace(0, 400, 101), np.zeros(101)]

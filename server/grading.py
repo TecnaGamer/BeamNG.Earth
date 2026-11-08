@@ -3960,7 +3960,13 @@ class _Planner:
                 need.append(base + c)
             d = np.hypot(*(np.asarray(pts) - np.asarray(xy)[:2]).T)
             reach = np.asarray(need) - roadsmod.DECK_DESIGN_GRADE * np.maximum(d - roadsmod.DECK_ROAD_HALF - WATER_CURVE_M, 0.0)
-            return max(0.0, float(reach.max() - z_at(np.asarray(xy, np.float64)[None, :2])[0]))
+            # (need is in the frame's ENU heights, where the Earth's curvature has dropped them d^2 / 2R under the
+            # geodetic ones z_at gives: both on one scale, or a frame 15 km from the bridge saw 18 m of headroom
+            # and raised nothing: Zdrina's 17 m bridge over a river, 50.5172 N 16.2121 E, 2026-11-08)
+            p0 = np.asarray(xy, np.float64)[None, :2]
+            la0, lo0, _ = self.frame.enu_to_geodetic(p0[:, 0], p0[:, 1], 0.0)
+            z0 = float(self.frame.geodetic_to_enu(la0, lo0, np.asarray(z_at(p0), np.float64))[2][0])
+            return max(0.0, float(reach.max() - z0))
         except Exception as e:      # no fill rather than no grading
             log.debug("grading: water lift: %s: %s", type(e).__name__, e)
             return 0.0
