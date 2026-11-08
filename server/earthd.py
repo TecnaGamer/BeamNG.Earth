@@ -6019,8 +6019,10 @@ class Connection:
     def version_note(self, msg):
         """Tell the player when the mod in their game is not this app's own (a BeamMP server sends its own copy of the
         mod and turns the player's off): an older one has none of the faster tile paths the hello negotiates (before
-        1.7.3: no geotiles, every rebase rebuilt the world round the car: 'severe performance issues', players'
+        1.7.2: no geotiles, every rebase rebuilt the world round the car: 'severe performance issues', players'
         reports 2026-11-07). hello.release (release.lua, packaged with the mod) names its release when it has one."""
+        if not isinstance(msg.get("modVersion"), str) or "vegFlat" not in msg:
+            return                      # (not a BeamNG.Earth mod's hello: every one since 1.7.0 names these)
         mine = updatesmod.local_version() or ""
         theirs = msg.get("release") if isinstance(msg.get("release"), str) else ""
         import geotiles
@@ -6031,8 +6033,8 @@ class Connection:
                         "should run the same version as the players (the server's mod replaces yours): mismatched "
                         "versions load the world slower.")
         elif old_paths:
-            log.warning("hello: the mod is older than BeamNG.Earth 1.7.3 (no geotiles): the slow tile paths")
-            self.status("The BeamNG.Earth mod in your game is much older than your app (before 1.7.3), so the world "
+            log.warning("hello: the mod is BeamNG.Earth 1.7.1 or older (no geotiles): the slow tile paths")
+            self.status("The BeamNG.Earth mod in your game is much older than your app (1.7.1 or older), so the world "
                         "loads the slow way. On a BeamMP server: ask its owner to update the server's BeamNG.Earth mod.")
         elif not getattr(self, "waterguard_ok", True):
             self.status("The BeamNG.Earth mod in your game is older than your app: the world loads, but its underwater "
@@ -6049,7 +6051,6 @@ class Connection:
             self.waterguard_ok = self.s.sea is None or msg.get("waterguard") == WATERGUARD_VERSION
             if not self.waterguard_ok:
                 log.warning("hello: the mod has no water guard (older than this server): underwater tunnels may flood")
-            self.version_note(msg)
         if getattr(self, "lease", None) is None and kind in ("prepare_anchor", "commit_anchor", "prepare_terrain", "commit_terrain", "pose"):
             # (a client that skipped hello: a fresh lease, not resumable, and the request goes on as before PR #817;
             # the mod always says hello first on its connection, so its reconnect still resumes before any request)
@@ -6152,6 +6153,7 @@ class Connection:
             if self.global_far:
                 m["globalFar"] = farfield.GLOBAL_PROTO
             self.send(m)
+            self.version_note(msg)          # (after the hello and its protocol / format notes)
             if self.weather.msg is not None:        # a reconnected mod gets the weather again
                 self.send(self.weather.msg)
             if self.gravity.msg is not None:        # ... and its gravity

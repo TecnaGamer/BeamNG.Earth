@@ -149,9 +149,9 @@ class SubseaHandshakeTest(ServerHarness):
         # (a mod without the water guard: told its underwater tunnels may flood, but its world loads: refusing every
         # world job left BeamMP players, whose mod is the server's copy, in an empty world, 2026-11-07)
         self.server.sea = object()
-        hello = {"type": "hello", "protocol": 4, "format": self.MOD_FORMAT}
+        hello = {"type": "hello", "protocol": 4, "format": self.MOD_FORMAT, "modVersion": "0.4.0", "vegFlat": True}
         self.c.send(hello)
-        m, _seen = self.c.until(lambda m: m["type"] == "status")
+        m, _seen = self.c.until(lambda m: m["type"] == "status" and "older than your app" in m.get("text", ""))
         self.assertIn("older than your app", m["text"])
         poses = []
         self.conn().on_pose = poses.append
