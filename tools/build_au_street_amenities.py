@@ -28,7 +28,7 @@ COLOURS = {      # (base colour, metallic, roughness)
     "bne_au_amen_dark": ((0.05, 0.05, 0.06), 0.0, 0.6),
 }
 GLASS = "bne_au_amen_glass"
-GLASS_RGBA = (0.70, 0.76, 0.78, 0.18)       # clear, faintly grey
+GLASS_RGBA = (0.45, 0.52, 0.55, 0.22)       # clear, faintly grey
 
 
 def prism(m, mat, profile, y0, y1):
@@ -88,8 +88,12 @@ def materials():
                   "Stages": [{"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough},
                              {}, {}, {}]}
     out[GLASS] = {"name": GLASS, "mapTo": GLASS, "class": "Material", "version": 1.5, "persistentId": pid(GLASS),
-                  "Stages": [{"baseColorFactor": list(GLASS_RGBA), "metallicFactor": 0.0, "roughnessFactor": 0.1},
-                             {}, {}, {}], "translucent": True, "castShadows": False, "doubleSided": True}
+                  # the game reads the see-through amount from opacityFactor, not the colour's alpha (the alpha alone
+                  # left the panes opaque and near white in game), and blends it with LerpAlpha, as traffic.materials.json
+                  "Stages": [{"baseColorFactor": [*GLASS_RGBA[:3], 1.0], "opacityFactor": GLASS_RGBA[3],
+                              "metallicFactor": 0.0, "roughnessFactor": 0.1}, {}, {}, {}],
+                  "translucent": True, "translucentBlendOp": "LerpAlpha", "translucentZWrite": False,
+                  "castShadows": False, "doubleSided": True}
     with open(os.path.join(OUT, "au_street_amenities.materials.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
 

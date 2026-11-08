@@ -184,11 +184,12 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.7,
-          0.76,
-          0.78,
-          0.18
+          0.45,
+          0.52,
+          0.55,
+          1.0
         ],
+        "opacityFactor": 0.22,
         "metallicFactor": 0.0,
         "roughnessFactor": 0.1
       },
@@ -197,6 +198,8 @@
       {}
     ],
     "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
     "castShadows": false,
     "doubleSided": true
   }
