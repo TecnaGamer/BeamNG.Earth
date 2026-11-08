@@ -4471,13 +4471,50 @@ def road_id(fid):
     return zlib.crc32(str(fid).encode()) & 0x7FFFFFFF
 
 
+DUPE_XY_M = 0.05             # consecutive plan vertices this close are one vertex (a repeated OSM node, a trim
+                            # cut at a vertex, a junction snap moved an end centimetres to its junction): a centimetre
+                            # segment with metres of height divides by its length downstream (seen as a 430 m spike
+                            # and a pit beside it from 1.5 cm for 5.8 m)
+
+
+def _dedupe_plan(p):
+    """A plan without its zero-length segments (None: nothing left), its other arrays carried along (a run of
+    duplicates keeps the last height: a junction snap's). The input plan is never changed."""
+    xy = np.asarray(p.xy, np.float64)[:, :2]
+    n = len(xy)
+    if n < 2:
+        return None
+    if bool((np.hypot(*np.diff(xy, axis=0).T) > DUPE_XY_M).all()):
+        return p
+    keep = [0]
+    for i in range(1, n):
+        if float(np.hypot(*(xy[i] - xy[keep[-1]]))) > DUPE_XY_M:
+            keep.append(i)
+        else:
+            keep[-1] = i
+    keep = np.array(keep, np.int64)
+    if len(keep) < 2:
+        return None
+    seg_ok = np.hypot(*np.diff(xy, axis=0).T) > DUPE_XY_M
+    q = Plan(np.ascontiguousarray(xy[keep]), np.ascontiguousarray(np.asarray(p.z, np.float64)[keep]), p.half,
+             p.abut, None if p.cut is None else np.ascontiguousarray(np.asarray(p.cut, np.float64)[seg_ok]),
+             p.road_half)
+    q.rid, q.max_wall = getattr(p, "rid", -1), getattr(p, "max_wall", q.max_wall)
+    bk = getattr(p, "bank", None)
+    q.bank = None if bk is None else np.ascontiguousarray(np.asarray(bk, np.float64)[keep])
+    q.steep = bool(getattr(p, "steep", False))
+    wd = getattr(p, "widen", None)
+    q.widen = None if wd is None else np.ascontiguousarray(np.asarray(wd, np.float64)[keep])
+    return q
+
+
 class PlanPack:
     """Plans (a list, in grade_points' order) as grade_points takes them: every segment's arrays concatenated once, with
     each plan's box; a call keeps the segments of the plans whose boxes meet its points', in the same order (built per
     call, the plans' Python loop cost a Canton tile set ~1 s, 2026-10-25)."""
 
     def __init__(self, plans):
-        rows = [(k, p) for k, p in enumerate(plans) if len(p.xy) >= 2]
+        rows = [(k, q) for k, p in enumerate(plans) if (q := _dedupe_plan(p)) is not None and len(q.xy) >= 2]
         self.n = len(rows)
         if not self.n:
             return
