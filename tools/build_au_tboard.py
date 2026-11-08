@@ -55,15 +55,35 @@ def board(near):
     m = Mesh(6)
     z0, z1 = LOW, TOP
     x = WIDTH / 2
-    m.face(WHITE, [(-x, FRONT, z0), (x, FRONT, z0), (x, FRONT, z1), (-x, FRONT, z1)])
+    m.face(FACE, [(-x, FRONT, z0), (x, FRONT, z0), (x, FRONT, z1), (-x, FRONT, z1)],
+           [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)])     # the chevrons: face_png()
     m.face(STEEL, [(x, BACK, z0), (-x, BACK, z0), (-x, BACK, z1), (x, BACK, z1)])
     for a, b in (((-x, z0), (x, z0)), ((x, z0), (x, z1)), ((x, z1), (-x, z1)), ((-x, z1), (-x, z0))):
         m.face(STEEL, [(a[0], BACK, a[1]), (b[0], BACK, b[1]), (b[0], FRONT, b[1]), (a[0], FRONT, a[1])])
-    if near:
-        chevrons(m)
     for px in POSTS:
         m.cylinder(STEEL, px, BACK + POST_R, -POST_SINK, z1, POST_R, caps=False)
     return m
+
+
+FACE = "bne_au_tboard_face"
+BAND_M = 0.32                       # m: each black / white band's width along the board (bold, as the photos)
+SLOPE = 1.0                         # m along the board per m up: the chevrons' arms run corner to corner of the face
+
+
+def face_png(path, px_w=1024):
+    """The face as the real boards are painted: bands of chevrons pointing outward from a black diamond in the middle, at
+    full height, cut off by the board's ends (black corners)."""
+    import numpy as np
+    from PIL import Image
+    ss = 4
+    w, h = px_w * ss, round(px_w * HEIGHT / WIDTH) * ss
+    x = (np.arange(w) + 0.5) / w * WIDTH - WIDTH / 2
+    y = (np.arange(h) + 0.5) / h * HEIGHT - HEIGHT / 2
+    X, Y = np.meshgrid(np.abs(x), np.abs(y))
+    s_ = X - SLOPE * (HEIGHT / 2 - Y)            # constant along a chevron's outline; < 0 is the middle diamond
+    black = ((np.floor(s_ / BAND_M).astype(int) % 2) == 1) | (s_ < 0)      # (one solid diamond in the middle)
+    img = np.where(black[..., None], 8, 236).astype(np.uint8).repeat(3, axis=2)
+    Image.fromarray(img).resize((w // ss, h // ss), Image.LANCZOS).save(path, optimize=True)
 
 
 def materials():
@@ -73,6 +93,10 @@ def materials():
         out[k] = {"name": k, "mapTo": k, "class": "Material", "version": 1.5, "persistentId": pid(k),
                   "Stages": [{"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough},
                              {}, {}, {}]}
+    out[FACE] = {"name": FACE, "mapTo": FACE, "class": "Material", "version": 1.5, "persistentId": pid(FACE),
+                 "Stages": [{"baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard.png",
+                             "metallicFactor": 0.0, "roughnessFactor": 0.3}, {}, {}, {}]}
+    face_png(os.path.join(OUT, "bne_au_tboard.png"))
     with open(os.path.join(OUT, "au_tboard.materials.json"), "w", encoding="utf-8") as fh:
         json.dump(out, fh, indent=2)
 

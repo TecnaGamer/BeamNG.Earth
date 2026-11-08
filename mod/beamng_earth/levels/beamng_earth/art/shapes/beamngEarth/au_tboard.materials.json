@@ -64,5 +64,22 @@
       {},
       {}
     ]
+  },
+  "bne_au_tboard_face": {
+    "name": "bne_au_tboard_face",
+    "mapTo": "bne_au_tboard_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a4e9b0a9-8ecc-5660-8a38-d1c507e49573",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard.png",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }
