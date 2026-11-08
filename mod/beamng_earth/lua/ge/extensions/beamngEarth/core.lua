@@ -2280,7 +2280,7 @@ local function onUpdate(dtReal, dtSim)
     end
     parking.update(st.anchorId, not (st.player and st.player.camera) and st.player or nil, pb, gov)  -- (no car: none parked)
     t = mark('parking', t)
-    navgraph.update(st.anchorId, pb, gov)
+    navgraph.update(st.anchorId, pb, gov, st.anchor)
     t = mark('navgraph', t)
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)

@@ -181,6 +181,13 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 
 ## User mods mentioned in the docs (not part of BeamNG.Earth)
 
+Dutch Groenpol traffic-signal models and textures: Sven's user-confirmed
+`Groenpol.fbx`, supplied for this integration. Derived component provenance and
+source hash are included in `levels/beamng_earth/art/shapes/beamngEarth/groenpol/provenance.json`.
+Offline signal/lane context uses OpenStreetMap contributors (ODbL), Rijkswaterstaat
+WKD built-up road sections and the bounded PDOK BGT surface context. See
+`docs/NL_VRI.md` for scope and remaining visual acceptance.
+
 BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic Driver Camera,
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the

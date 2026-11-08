@@ -1,0 +1,38 @@
+{
+  "format": 1,
+  "zoom": 14,
+  "data": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/context_v1.bin",
+  "tiles": 11362,
+  "sources": {
+    "wkd_komgrenzen_2026-10.zip.source.json": {
+      "url": "https://downloads.rijkswaterstaatdata.nl/wkd/geogegevens/Geopackage/Komgrenzen/01-10-2026.zip",
+      "sha256": "22a4a65be7a13b00cbbb63b7205e6d51e6bac825f5420d2d1ca352400084072e",
+      "query": null,
+      "bytes": 181990877
+    },
+    "osm_turn_lanes_nl.json.source.json": {
+      "url": "https://overpass-api.de/api/interpreter",
+      "sha256": "09d69b8478716446dae0547d1f8630c07856695984bd5575c9d36ed9cbf12d38",
+      "query": "[out:json][timeout:180][maxsize:134217728];area[\"ISO3166-1\"=\"NL\"][\"admin_level\"=\"2\"]->.a;way[\"highway\"][~\"^turn:lanes(:forward|:backward)?$\"~\".\"](area.a);out tags geom;",
+      "bytes": 35673487
+    },
+    "osm_car_signal_nodes_nl.json.source.json": {
+      "url": "https://overpass-api.de/api/interpreter",
+      "query": "[out:json][timeout:180][maxsize:268435456];area[\"ISO3166-1\"=\"NL\"][\"admin_level\"=\"2\"]->.a;node[\"highway\"=\"traffic_signals\"](area.a)->.s;way(bn.s)[\"highway\"~\"^(motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street|service|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link)$\"][\"motor_vehicle\"!~\"^(no|agricultural|forestry)$\"][\"access\"!=\"no\"]->.w;node(w.w)[\"highway\"=\"traffic_signals\"](area.a);out body;",
+      "filter": "nodes_on_motor_vehicle_road_ways",
+      "bytes": 3612212,
+      "sha256": "f2896e946ac73398f351b25175ddbf28711d6777841a57f6b543b2491fc34dd3"
+    }
+  },
+  "wkd_inside_sections": 1259824,
+  "osm_turn_ways": 47126,
+  "osm_car_signal_nodes": 22512,
+  "matching": "WKD/OSM spatial matching, not surveyed H1/H2 position or an NWB-to-Overture identity join",
+  "attribution": "Rijkswaterstaat / NDW WKD KOM_BORDEN 2026-10; OpenStreetMap contributors (ODbL)",
+  "wkd_complete_country": "NL",
+  "coordinate_quantization_mercator_m": 0.5,
+  "simplification_m": 1,
+  "data_bytes": 47899029,
+  "data_sha256": "d1cdf826f70e47767a59c4ce002f09a1671f93a51ece6163799fa3d07364a565",
+  "osm_base_timestamp": "2026-11-06T21:32:19Z"
+}

@@ -5,3 +5,4 @@
 tools/nl_test_source/** -text whitespace=cr-at-eol
 tools/nl_site_source/** -text whitespace=cr-at-eol
 mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/nl_*/** -text whitespace=cr-at-eol
+mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/groenpol/** -text whitespace=cr-at-eol

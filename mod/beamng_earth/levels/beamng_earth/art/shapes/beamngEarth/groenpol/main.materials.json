@@ -1,0 +1,298 @@
+{
+  "bne_sven_groenpol_s0_body_v4": {
+    "name": "bne_sven_groenpol_s0_body_v4",
+    "mapTo": "bne_sven_groenpol_s0_body_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": true
+  },
+  "bne_sven_groenpol_s0_lens_0_v4": {
+    "name": "bne_sven_groenpol_s0_lens_0_v4",
+    "mapTo": "bne_sven_groenpol_s0_lens_0_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_0_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s0_lens_1_v4": {
+    "name": "bne_sven_groenpol_s0_lens_1_v4",
+    "mapTo": "bne_sven_groenpol_s0_lens_1_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_1_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s0_lens_2_v4": {
+    "name": "bne_sven_groenpol_s0_lens_2_v4",
+    "mapTo": "bne_sven_groenpol_s0_lens_2_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_2_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s0_dark_v4": {
+    "name": "bne_sven_groenpol_s0_dark_v4",
+    "mapTo": "bne_sven_groenpol_s0_dark_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_BaseColor.png",
+        "baseColorFactor": [
+          0.008,
+          0.008,
+          0.008,
+          1
+        ],
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s1_body_v4": {
+    "name": "bne_sven_groenpol_s1_body_v4",
+    "mapTo": "bne_sven_groenpol_s1_body_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": true
+  },
+  "bne_sven_groenpol_s1_lens_0_v4": {
+    "name": "bne_sven_groenpol_s1_lens_0_v4",
+    "mapTo": "bne_sven_groenpol_s1_lens_0_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_0_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s1_lens_1_v4": {
+    "name": "bne_sven_groenpol_s1_lens_1_v4",
+    "mapTo": "bne_sven_groenpol_s1_lens_1_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_1_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s1_lens_2_v4": {
+    "name": "bne_sven_groenpol_s1_lens_2_v4",
+    "mapTo": "bne_sven_groenpol_s1_lens_2_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "colorPaletteMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/lens_channel_2_v2.color.png",
+        "instanceDiffuse": true,
+        "instanceEmissive": true,
+        "emissive": true,
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 5000
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  },
+  "bne_sven_groenpol_s1_dark_v4": {
+    "name": "bne_sven_groenpol_s1_dark_v4",
+    "mapTo": "bne_sven_groenpol_s1_dark_v4",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/groenpol/groenpol_nl_d.png",
+        "baseColorFactor": [
+          0.008,
+          0.008,
+          0.008,
+          1
+        ],
+        "roughnessFactor": 0.65
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false,
+    "castShadows": false
+  }
+}
