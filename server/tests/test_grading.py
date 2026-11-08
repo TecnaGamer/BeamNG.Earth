@@ -935,6 +935,25 @@ class UnderpassTest(unittest.TestCase):
                 with unittest.mock.patch.object(grading, "UNDER_CHAIN_ON", False):
                     self.assertAlmostEqual(self._split_dip(lines, len(lines)), 10.0, delta=0.1, msg="(off: no dip)")
 
+    def test_a_road_ending_short_of_the_junction_dips_with_it(self):
+        """A road whose end the map left 1.6 m short of a junction the dip lowers (Tonkin Highway at Morley Drive,
+        GitHub #915): it is one of the dip's network (UNDER_NODE_M) and goes down with the junction; at 0.5 m it kept
+        its ground, more than snap_junctions takes under the junction, a step of several metres (the bug)."""
+        f = features([[(-200, 0), (14, 0)], [(14, 0), (14, 150)], [(15.6, 0), (250, 0)], [(0, -20), (0, 20)]],
+                     ["residential", "residential", "residential", "motorway"], flags=[(3, "is_bridge")])
+        xs = np.arange(15.6, 60.0, 2.0)
+        la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+
+        def grade():
+            g = grading.Grader(FRAME, FakeMD(f), lambda la_, lo_: np.full(np.shape(la_), 10.0))
+            z = g.apply(la, lo, np.full(len(xs), 10.0))
+            return float(np.abs(np.diff(z) / 2.0).max()), float(z[0])
+        steep, z0 = grade()
+        self.assertLess(z0, 10.0 - 1.5, "(the case: the junction dug)")
+        self.assertLessEqual(steep, grading.UNDER_MAX_GRADE + 0.01)
+        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5):
+            self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
+
     def test_merge_span_chains(self):
         a = np.array([[0.0, 0.0], [10.0, 0.0]])
         b = np.array([[20.0, 0.0], [10.0, 0.0]])          # (reversed: its end meets a's end)

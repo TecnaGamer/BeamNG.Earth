@@ -13,6 +13,7 @@ Places reported as badly built bridges or interchanges, captured on 2026-11-08 a
 | `interchange_silistra_936.npz` | GitHub #936 | 44.097069, 27.139581 |
 | `interchange_italy_967.npz` | GitHub #967 | 42.570363, 12.615334 |
 | `interchange_m1_ireland_960.npz` | GitHub #960 | 54.036322, -6.385183 |
+| `interchange_perth_915.npz` | GitHub #915 | -31.889125, 115.919020 |
 
 Each holds the `roads` layer (mapgeom.Features arrays, prefix `cell<i>.`) of every z14 cell within
 1200 m of the point, Overture release 2026-10-21.0, and the raw elevation `dem.Dem.sample` gives at

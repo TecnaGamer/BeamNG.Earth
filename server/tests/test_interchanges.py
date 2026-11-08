@@ -63,5 +63,16 @@ class OverpassHeadroomTest(unittest.TestCase):
         self.assertEqual(r["low"], [])
 
 
+
+class JunctionGapTest(unittest.TestCase):
+    """GitHub #915: at Tonkin Highway x Morley Drive a trunk road ends 1.7 m short of its junction; at 0.5 m it was
+    left out of the underpass's dip and stood as 40-90 % steps where it met the lowered roads (grading.UNDER_NODE_M)."""
+
+    def test_no_steps_round_the_interchange(self):
+        r = replay("perth_915", interchange=False)
+        self.assertLess(r["road_max_grade"], 0.25)
+        self.assertEqual(r["low"], [])
+
+
 if __name__ == "__main__":
     unittest.main()

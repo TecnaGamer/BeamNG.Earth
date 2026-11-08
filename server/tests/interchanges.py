@@ -38,6 +38,7 @@ SITES = {       # name: (GitHub issue, what was reported)
     "silistra_936": (936, "Aydemir, Silistra: a weird impassable bridge"),
     "italy_967": (967, "Italian freeway near Orte: an overpass at the same level as the road under it"),
     "m1_ireland_960": (960, "M1 Newry to Dublin: bridges too low, clipping into the road below"),
+    "perth_915": (915, "Tonkin Highway x Morley Drive, Perth: the underpass and the overpass both at ground level"),
 }
 RADIUS_M = 400.0
 STEP_M = 4.0
