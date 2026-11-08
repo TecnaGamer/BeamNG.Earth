@@ -445,6 +445,24 @@ PREFETCH_START = 200.0      # m (Chebyshev) from the block centre before prefetc
 PREFETCH_CHAIN = 4
 READY_STEPS = 2             # grid steps a built block may be from the mod's target and still be taken (follow.lua)
 PREFETCH_PARALLEL = 2
+# The prefetch lane's block processes: two on a machine with the cores and memory for them (PREFETCH_PARALLEL's two
+# blocks then build at once; with one process they took turns and a third of the blocks asked at 140-165 mph were not
+# built yet, 4.4 s each, while the server used ~3 of 16 cores, 2026-11-08), one on a small one (a Steam Deck's memory).
+# BNE_PREFETCH_PROCS sets it.
+PREFETCH_PROCS_CPUS = 12
+PREFETCH_PROCS_GB = 24.0
+
+
+def prefetch_procs():
+    """Block processes for the prefetch lane on this machine (PREFETCH_PROCS_*; BNE_PREFETCH_PROCS overrides)."""
+    if os.environ.get("BNE_PREFETCH_PROCS"):
+        try:
+            return max(1, min(4, int(os.environ["BNE_PREFETCH_PROCS"])))
+        except ValueError:
+            pass
+    import budget
+    gb = budget.total_gb() or 0.0
+    return 2 if (os.cpu_count() or 0) >= PREFETCH_PROCS_CPUS and gb >= PREFETCH_PROCS_GB and not budget.small() else 1
 READY_SET_M = 3000.0        # m: the built blocks round the player the mod is told of (terrain_ready_set)
 # The mod's terrain-follow rule (mod follow.lua): it asks once the player is more than
 # FOLLOW_PREPARE (Chebyshev) from the block centre, for snap256(player + v * FOLLOW_LEAD),
@@ -8179,14 +8197,14 @@ async def main_async(args):
     plancachemod.start_run(args.cache_dir)      # (before the workers: they inherit the run's id)
     if args.block_process == "on":
         ctx = multiprocessing.get_context("spawn")
-        for _ in (LANE_REQUEST, LANE_PREFETCH):
+        for lane in (LANE_REQUEST, LANE_PREFETCH):
             warm_q = ctx.Queue(maxsize=64)
             # its feeder thread started now, not at the first warm_roads on the event loop: Thread.start waits for the
             # new thread to run, and a loaded machine stalled the loop 3.4 s there at a first visit's first pose
             # (2026-11-04; blockworker._read_warm skips the empty list)
             warm_q.put_nowait((None, 0.0, 0.0, []))
             block_pools.append((poolsmod.RespawningPool(
-                "block", 1, mp_context=ctx, initializer=blockworker.init,
+                "block", prefetch_procs() if lane == LANE_PREFETCH else 1, mp_context=ctx, initializer=blockworker.init,
                 initargs=(args.cache_dir, args.offline, args.roads == "on",
                           args.grading == "on" and args.roads == "on",
                           args.road_widths == "on" and args.roads == "on", args.surface == "on", warm_q,
