@@ -482,7 +482,7 @@ class Underwater(unittest.TestCase):
 
 
 class SplitRanges(unittest.TestCase):
-    """roads.tag_level_ranges joins a segment's tunnel ranges closer than TUNNEL_GAP_M only where one source way runs on
+    """roads.tag_level_ranges joins a segment's tunnel ranges only where one source way runs on
     through the gap (2026-11-08, Potaarde under the R0 at Strombeek-Bever: three underpasses of a track, 24 m and 8 m
     of open track between them, merged into one 157 m tunnel and graded as an open cut through the R0's lanes)."""
 
@@ -511,9 +511,9 @@ class SplitRanges(unittest.TestCase):
         f = self.feats([("w1@1", 0.0, 0.15), ("w2@1", 0.15, 0.25), ("w3@1", 0.25, 0.9), ("w4@1", 0.9, 1.0)])
         self.assertEqual(self.ranges(f), [(0.0, 0.15, "tunnel"), (0.25, 0.8, "tunnel")])
 
-    def test_without_source_ways_the_gap_alone_decides(self):
+    def test_a_segment_of_one_way_joins_all_its_gaps(self):
         self.assertEqual(self.ranges(self.feats(None)), [(0.0, 0.8, "tunnel")])
 
-    def test_a_long_gap_inside_one_way_stays_open(self):
-        f = self.feats([("w8@12", 0.0, 1.0)], tunnels=((0.0, 0.1), (0.3, 0.5)))      # 40 m: past TUNNEL_GAP_M
-        self.assertEqual(self.ranges(f), [(0.0, 0.1, "tunnel"), (0.3, 0.5, "tunnel")])
+    def test_a_long_gap_inside_one_way_is_joined_too(self):
+        f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.6), ("w9@3", 0.6, 1.0)], tunnels=((0.0, 0.1), (0.3, 0.5)))
+        self.assertEqual(self.ranges(f), [(0.0, 0.5, "tunnel")])         # (40 m: the way's tag covers it all)

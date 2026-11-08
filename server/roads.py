@@ -451,7 +451,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 8      # 8: a segment's tunnel ranges joined over a short gap only inside one source way (TUNNEL_GAP_M); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 8      # 8: a segment's tunnel ranges joined only over a gap inside one source way (was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1262,9 +1262,12 @@ def tag_level_ranges(feats, i):
     segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
     bridge was a tunnel, under water for most of it, and left out, 2026-10-18); overlapping ranges merged (a tunnel
     wins over a bridge), touching ones of the same kind joined; a tunnel shorter than PASSAGE_M between two bridge
-    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges closer than
-    TUNNEL_GAP_M are one tunnel (Overture splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry
-    Tunnel's segment). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
+    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges with one source way
+    (the "src_ways" rule) running over the gap between them are one tunnel (OpenStreetMap tags a whole way: the gap is
+    Overture's, which splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry Tunnel's segment);
+    a gap that is a way of its own is open ground (152 of 152 gaps round Brussels, 2026-11-08: the track between its
+    underpasses under the R0 and its ramps at Strombeek-Bever, joined by gap length alone (under 30 m), was graded as
+    an open cut through the R0's lanes). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
     got = feats.__dict__.get("_tag_ranges")
     if got is None:
         got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
@@ -1318,17 +1321,12 @@ def _tag_ranges_all(feats):
         *_tag_rule_rows(feats.rules.get("level"), "level"), *_src_way_rows(feats.rules.get("src_ways")),
         np.ascontiguousarray(ll),
         np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
-        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M, TUNNEL_GAP_M)
+        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M)
     rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
     return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[i], ol[i + 1])] for i in range(len(feats))]
 
 
 PASSAGE_M = 40.0        # m: a tunnel range this short between two bridge ranges is a passage through a tower
-TUNNEL_GAP_M = 30.0     # m: tunnel ranges of a segment this close together are one tunnel, where one source way (the
-# "src_ways" rule) runs on through the gap: Overture split the Fort McHenry Tunnel's range inside its one OSM way. A gap
-# that is a way of its own is open ground between two tunnels (59 of 59 such gaps round Brussels, 2026-11-08: the yards
-# between building passages, the track between its underpasses under the R0 and its ramps at Strombeek-Bever, whose
-# merged 157 m "tunnel" was graded as an open cut through the R0's lanes). A segment without the rule: the gap alone.
 
 
 def _feature_length_m(feats, i):
