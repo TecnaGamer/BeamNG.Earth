@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import netfetch  # noqa: E402
@@ -245,6 +246,7 @@ class PerfTest(unittest.TestCase):
         (fp, n), = counts.items()
         self.assertEqual((n, codes[fp]), (2, {"OSError:24": 1, "OSError:28": 1}))
 
+    @mock.patch.object(telemetry, "PERF_UPLOAD", "dev")
     def test_only_under_the_switch(self):
         sent = []
         with tempfile.TemporaryDirectory() as d:
@@ -261,6 +263,14 @@ class PerfTest(unittest.TestCase):
         self.assertTrue(all("perf" not in b for b in sent))     # (a release build: not sent yet)
         self.assertEqual(last["perf_not_sent_yet"], {"server": {"catchups": 1}})
 
+    def test_releases_send_it_too(self):
+        # (the user, 2026-11-08: "releases should be the same as dev"; still only under the player's choice)
+        self.assertTrue(telemetry.perf_upload("1.9.0-beta"))
+        self.assertTrue(telemetry.perf_upload("1.9.0-beta.dev.300"))
+        with mock.patch.object(telemetry, "PERF_UPLOAD", "dev"):
+            self.assertFalse(telemetry.perf_upload("1.9.0-beta"))
+
+    @mock.patch.object(telemetry, "PERF_UPLOAD", "dev")
     def test_dev_builds_send_it(self):
         self.assertTrue(telemetry.perf_upload("1.8.2-beta.dev.245"))
         self.assertFalse(telemetry.perf_upload("1.8.2-beta"))
