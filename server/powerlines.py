@@ -7,9 +7,13 @@ reach a substation (Overture infrastructure class substation areas; no towers in
 West Coast USA's switchgear (its yard's parts as a kit, a smaller one where it does not fit) and fenced with chain link.
 The layouts in Rust (earthfast.power_line_layout, earthfast.substation_yard).
 """
+import logging
+
 import numpy as np
 
 import fast
+
+log = logging.getLogger("earthd.powerlines")
 
 G_PYLON = "pylon"
 # Lines under HV_MIN_V stand on poles, not the 36 m lattice tower: a 66 kV line runs on poles along the street in town
@@ -206,10 +210,27 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     RoadClearance: sampled tapers and actual shifted / sidewalk-expanded decks, never tunnel vaults. Full stock
     colliders are checked AFTER native layout (which decides tower yaw). Unlike moving a point away from one road,
     this also covers crossroads, a rotated tower's corners and services. A tower with no safe footprint is omitted;
-    its overhead conductors remain, not cut at a tile boundary."""
-    import roads
+    its overhead conductors remain, not cut at a tile boundary.
+
+    A cache read that fails (an OSError: PermissionError opening an Overture infrastructure file on Windows, PR #861's
+    review at 50.8468, 7.0975) leaves this tile without power lines instead of dropping it: the caller has already
+    built its decks, and an exception here lost the whole road tile (a viaduct never arrived). The rows are added
+    only once the whole layout succeeded, never half a line's towers."""
     if md is None:
         return
+    got_props, got_wires = [], []
+    try:
+        _tile_lines(frame, tx, ty, md, elev, got_props, got_wires, clearance)
+    except OSError as e:
+        log.warning("power lines: tile %s_%s left out: %s: %s", tx, ty, type(e).__name__, e)
+        return
+    props.extend(got_props)
+    wires.extend(got_wires)
+
+
+def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
+    """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
+    import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen = [], [], set()

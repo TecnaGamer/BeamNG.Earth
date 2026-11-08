@@ -157,10 +157,6 @@ class VoltageTest(unittest.TestCase):
         self.assertFalse(pl.low_voltage('{"voltage":"high"}'))
         self.assertFalse(pl.low_voltage(""))
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class OffRoadsTest(unittest.TestCase):
     """TGForever Discord 2026-10-28: a pylon on a highway's shoulder (its mapped tower node a few metres off)."""
 
@@ -300,3 +296,55 @@ class TowerFootprintTest(unittest.TestCase):
         for (a, ar), (b, br) in zip(wires, old_wires):
             np.testing.assert_array_equal(a, b)
             self.assertEqual(ar, br)
+
+
+class CacheErrorTest(unittest.TestCase):
+    """A cache file the server cannot open (PermissionError, PR #861's review at 50.8468, 7.0975): the tile goes on
+    without its power lines, never with half of them; the caller's rows (its decks' furniture) are left as they were."""
+
+    def run_with(self, fail_on=None, ground_fails=False):
+        from test_roads import FRAME
+        good = TowerFootprintTest.place.__get__(TowerFootprintTest())   # (the same one-line infrastructure)
+        props_ok, wires_ok = good()
+        self.assertTrue(props_ok and wires_ok)
+
+        def cell(key, layers, kind):
+            if fail_on in layers:
+                raise PermissionError(13, "Access is denied", "overture/infrastructure/x.npz")
+            return real.cell(key, layers, kind)
+
+        import mapgeom
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([100., 200.]), np.array([100., 100.]), 0.)
+        infra = mapgeom.Features(
+            layer="infrastructure", ids=np.array(["line"]), kind=np.array([mapgeom.LINE], np.uint8),
+            part_off=np.array([0, 1], np.int64), ring_off=np.array([0, 1], np.int64),
+            coord_off=np.array([0, 2], np.int64), lonlat=np.column_stack([lo, la]),
+            attrs={"class": np.array(["power_line"])}, rules={})
+
+        class Real:
+            def cell(self, key, layers, kind):
+                from types import SimpleNamespace
+                return SimpleNamespace(layers={"infrastructure": infra} if "infrastructure" in layers else {"roads": None})
+        real = Real()
+        md = type("Md", (), {"cell": staticmethod(cell)})()
+        def ground(la, lo):
+            if ground_fails:
+                raise PermissionError(13, "Access is denied", "dem/12_2130_1366.npz")
+            return np.zeros(np.shape(la))
+        props, wires = [["deck_rail", 1.0]], [("deck wire", 0.1)]
+        with self.assertLogs("earthd.powerlines", "WARNING") as logged:
+            powerlines.tile_lines(FRAME, 0, 0, md, ground, props, wires)
+        self.assertEqual(props, [["deck_rail", 1.0]])
+        self.assertEqual(wires, [("deck wire", 0.1)])
+        self.assertIn("PermissionError", logged.output[0])
+
+    def test_infrastructure_unreadable(self):
+        self.run_with("infrastructure")
+
+    def test_ground_unreadable_after_lines_were_read(self):
+        """The failure after the lines were read and laid out (the ground under the towers): nothing of it is added."""
+        self.run_with(ground_fails=True)
+
+
+if __name__ == "__main__":
+    unittest.main()
