@@ -385,6 +385,9 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
+VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
+                                # for the rest of it
+VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
 WORLD_WARM_CONC = 2
@@ -1081,6 +1084,7 @@ class Server:
         # ProcessPoolExecutor of tile_workers, or None (built in tile_pool's threads)
         self.far_pool = far_pool
         self.road_pool = road_pool          # road tiles in processes (blockworker.roads_tile), else threads
+        self._veg_jobs, self._veg_job_lock = {}, threading.Lock()      # (_veg_geo_job)
         # the highway signs (signstream.py) in the same processes: no process of their own, their map cells warm there
         # (at most signstream.WORKERS a connection, only for road tiles sent)
         self.sign_pool = road_pool
@@ -1724,13 +1728,15 @@ class Server:
         if self.road_pool is not None and self.mapdata is not None:
             # (in a road tile process: here they took the server's one interpreter from the far textures and plans)
             t0, waited = time.perf_counter(), []
-            # (after the road tiles: RespawningPool.submit_low)
-            submit = getattr(self.road_pool, "submit_low", self.road_pool.submit)
-            got = poolsmod.result_running(submit(blockworker.veg_geo, anchor.id, anchor.lat, anchor.lon, zoom, gx, gy,
-                                                 self.out_dir, self.vfs_dir, flat), None, waited)
+            fut, i = self._veg_geo_job(anchor, zoom, gx, gy, flat)
+            got = poolsmod.result_running(fut, None, waited)
+            n = len(got)
+            got = got[i]
             if time.perf_counter() - t0 > ROAD_GEO_SLOW_S:
-                log.info("trees geotile %d_%d in %.1f s (queue %.1f)", gx, gy, time.perf_counter() - t0,
-                         waited[0] if waited else 0.0)
+                log.info("trees geotile %d_%d in %.1f s (queue %.1f, %d in its job)", gx, gy,
+                         time.perf_counter() - t0, waited[0] if waited else 0.0, n)
+            if isinstance(got, Exception):
+                raise got
             return got
         g = self.grader_for(anchor)
 
@@ -1749,6 +1755,31 @@ class Server:
         path, n = vegetationmod.write_tile(self.out_dir, self.vfs_dir, None, gx, gy, rows, flat=flat,
                                            geo={"key": geotiles.key(gx, gy), "frame": frame, "pivot": pivot})
         return path, n, frame, pivot
+
+    def _veg_geo_job(self, anchor, zoom, gx, gy, flat):
+        """(future, index): the road processes' job (blockworker.veg_geo_many) that builds geotile (gx, gy), its result
+        the index'th of the job's list. The tiles asked for while a job waits for its turn join it (VEG_GEO_BATCH at
+        most): one at a time, after the road tiles (RespawningPool.submit_low), each waited out the whole queue of
+        road tiles for its ~10 ms of work, and the trees fell behind the car (533 tree tiles pending, 22 s each,
+        2026-11-08)."""
+        submit = getattr(self.road_pool, "submit_low_lazy", None)
+        if submit is None:                  # (a plain executor: one tile a job)
+            return self.road_pool.submit(blockworker.veg_geo_many, anchor.id, anchor.lat, anchor.lon, zoom,
+                                         [(gx, gy)], self.out_dir, self.vfs_dir, flat), 0
+        key = (anchor.id, zoom, bool(flat))
+        with self._veg_job_lock:
+            job = self._veg_jobs.get(key)
+            if job is None or len(job[1]) >= VEG_GEO_BATCH or job[0].done():
+                tiles = []
+
+                def make_args(key=key, tiles=tiles, a=anchor):
+                    with self._veg_job_lock:            # (no more joins: the job is on its way)
+                        if self._veg_jobs.get(key, (None, None))[1] is tiles:
+                            del self._veg_jobs[key]
+                        return (a.id, a.lat, a.lon, zoom, list(tiles), self.out_dir, self.vfs_dir, flat), {}
+                job = self._veg_jobs[key] = (submit(blockworker.veg_geo_many, make_args), tiles)
+            job[1].append((gx, gy))
+            return job[0], len(job[1]) - 1
 
     def place_names(self):
         """The status bar's town / state / country lookup (placenames.PlaceNames), made at its first use: it shares the
@@ -6281,7 +6312,9 @@ class Connection:
             if geo != self.veg.geo:
                 old = self.veg
                 old.close()
-                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, geo=geo)
+                # (in the road processes the waiting tiles share a job, so more may wait: _veg_geo_job)
+                per = VEG_GEO_PER_POSE if geo and self.s.road_pool is not None else vegetationmod.BUILD_PER_POSE
+                self.veg = vegetationmod.Tracker(old.send_m, old.drop_m, per_pose=per, geo=geo)
             if geo:
                 m["geoTiles"] = geotiles.Z
             self.traffic_visuals = (geo and msg.get("trafficVisuals") == distanttraffic.PROTO and self.s.traffic

@@ -346,6 +346,18 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
+    """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
+    map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
+    (Server.build_veg_geo)."""
+    out = []
+    for gx, gy in tiles:
+        try:
+            out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
+        except Exception as e:
+            out.append(e)
+    return out
+
 def _take_pads(fuel_pads):
     """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
     only these (none when the server's gas stations are switched off)."""
