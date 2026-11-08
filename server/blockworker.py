@@ -981,6 +981,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
     low_parapet_decks = set()
     deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
+    guardrail_decks = []
+    rail_decks = []                 # railways.tile_mesh fills these in below (fences.py stands walls on them)
     try:
         deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
         if _bridge_fps:
@@ -1031,10 +1033,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
-    P.rmesh = railways.tile_mesh(frame, tx, ty, rcells, rground,
+    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)))
+                                     ("raw",) + tuple(rkey)),
+                                 return_decks=True)
     mark("railways")
     bld = None
     garage_sound = ()
@@ -1062,7 +1065,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
-                                                                        for _f, spec, xy, z, _l in deck_parts]))
+                                                                        for _f, spec, xy, z, _l in deck_parts] + rail_decks))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic

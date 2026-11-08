@@ -734,6 +734,13 @@ def _envelope(s, req, grade=GRADE):
     return out
 
 
+DECK_RAISE_MAX_M = 15.0   # m a bridge deck may rise over the straight chord between its ends to clear high
+                            # ground under it (a bad-data ridge: over a real valley the chord already stands over the
+                            # floor, so genuine gorge viaducts are unaffected)
+SEED_LIFT_MAX_M = 20.0    # m a propagated deck height may lift a ground track over its own smoothed bed (one bad
+                            # deck must not poison kilometres of connected line, and the graded embankment with it)
+
+
 def deck_heights(s, z_ground, z_start, z_end):
     """A bridge's bed line: straight from z_start to z_end (the bed at its ends: a line keeps its grade over what it
     crosses, the stream or road under it goes down, and the bare-earth DEM has that dip), raised only where the ground
@@ -741,7 +748,12 @@ def deck_heights(s, z_ground, z_start, z_end):
     clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25.)"""
     s = np.asarray(s, np.float64)
     L = max(float(s[-1]), 1e-9)
-    req = np.maximum(z_start + (z_end - z_start) * s / L, np.asarray(z_ground, np.float64))
+    chord = z_start + (z_end - z_start) * s / L
+    req = np.maximum(chord, np.asarray(z_ground, np.float64))
+    # A single bad height under the deck (an unfiltered building/tree in the surface model, a DEM spike) must not
+    # raise the whole deck: over a real valley the chord already stands over the floor, so only the raise over the
+    # chord is capped (seen as a ~100 m deck hump with piers and graded embankment from one bad sample under it).
+    req = np.minimum(req, chord + DECK_RAISE_MAX_M)
     return _envelope(s, req)
 
 
@@ -874,9 +886,10 @@ def profile(rails, ground, underpasses=()):
         d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
         for n, (a, b, s) in enumerate(edges):
             reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
-            zb[n] = np.maximum(zb[n], reach)
             if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
-                zb[n] = _envelope(s, zb[n])
+                zb[n] = _envelope(s, np.maximum(zb[n], reach))
+            else:                               # a ground track follows its own bed: a distant deck carries the
+                zb[n] = np.minimum(np.maximum(zb[n], reach), zb[n] + SEED_LIFT_MAX_M)   # ramps to it, no higher
     return list(zip(zb, zgs))
 
 
@@ -1287,12 +1300,14 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
-    grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25)."""
+    grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
+    return the bridge decks' centrelines ([{"n": xy+z line, "w": width}], the bed plus its ballast), for mapped
+    furniture (fences.py) to stand on: the profile is already made here, no second pass."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tunnels = road_underpasses(frame, cells, box)
@@ -1306,8 +1321,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
         rails = []
     walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
     if not rails and not walk:
-        return None
+        return (None, []) if return_decks else None
     prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails)) if rails else []
+    decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
+               "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
+              for (_, cls, kind, xy), (zb, _zg) in zip(rails, prof) if kind == "bridge"]
+             if return_decks else [])
     cr = crossings(frame, cells, box, reach=50.0) + tunnels
     crossers = []
     if cr:                                          # (one ground call for all of them: its cost is per call)
@@ -1390,8 +1409,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
         mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], mi)
     out = mesh.result()
     if out is not None and len(out[0]) > VERTS_MAX:     # (the ballast and rails alone past it: a rail yard)
-        return None
-    return out
+        return (None, decks) if return_decks else None
+    return (out, decks) if return_decks else out
 
 
 # The materials only drawn (from mpsteppe's lean rail collider, in Madderose's PR #41): the rails and sleepers were ~88 %

@@ -201,6 +201,36 @@ class GradePointsTest(unittest.TestCase):
         j = (np.abs(px - 10) < 0.5) & (np.abs(py) < 0.5)
         self.assertTrue(np.isfinite(out1[j]).all())
 
+    def test_duplicate_end_vertex_does_not_spike(self):
+        # A plan whose last vertex sits 1.5 cm past the previous one (a repeated map node, a trim cut at a vertex,
+        # a junction snap moved the end to its junction), their heights set 209.0/214.8 m by the junction snap,
+        # graded beside the abutting plan to 430.9 m with a pit beside it. Near-zero-length segments are dropped:
+        # the blend stays finite and near the plans' heights.
+        a = np.array([[-70.4, 3.4], [-66.6, 4.5], [-62.7, 5.6], [-58.9, 6.7], [-55.0, 7.8], [-51.2, 8.9],
+                      [-47.3, 9.9], [-43.4, 10.9], [-39.5, 11.9], [-35.6, 12.8], [-31.8, 13.7], [-27.9, 14.6],
+                      [-24.0, 15.5], [-20.1, 16.4], [-16.2, 17.3], [-12.3, 18.3], [-8.4, 19.2], [-4.5, 20.1],
+                      [-0.6, 21.0], [-0.585, 21.0]])
+        pa = grading.Plan(a, np.array([209.5, 209.5, 209.4, 209.4, 209.4, 209.4, 209.3, 209.3, 209.3, 209.2,
+                                       209.2, 209.2, 209.2, 209.1, 209.1, 209.1, 209.1, 209.0, 209.0, 214.8]),
+                         6.55)
+        b = np.array([[-0.6, 21.0], [3.3, 21.8], [7.1, 22.6], [11.0, 23.3], [14.9, 24.1], [18.7, 24.9],
+                      [22.6, 25.7], [26.5, 26.4], [30.3, 27.2], [34.2, 28.0], [36.1, 28.4]])
+        pb = grading.Plan(b, np.array([214.8, 214.7, 214.6, 214.4, 214.3, 214.2, 214.0, 213.8, 213.6, 213.4,
+                                       213.3]),
+                         7.4, abut=(False, True), road_half=4.4)
+        pb.cut = np.array([[np.nan] * 6] * 4 + [[np.nan, np.nan, np.nan, 12.4, 212.0, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.8, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.5, 16.4],
+                                                [np.nan, np.nan, np.nan, 13.4, 211.3, 16.4],
+                                                [np.nan, np.nan, np.nan, 13.4, 211.1, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.0, 17.4]])
+        px = np.array([0.0, -0.6, 5.0, -0.6])
+        py = np.array([26.0, 21.0, 23.0, 15.0])
+        out = grading.grade_points(px, py, np.full(4, 209.0), [pa, pb])
+        self.assertTrue(np.isfinite(out).all(), "finite everywhere")
+        self.assertLess(float(out.max()), 240.0, "no spike")
+        self.assertGreater(float(out.min()), 200.0, "no pit")
+
 
 class AbutmentTest(unittest.TestCase):
     """GitHub #38 (the D1 near Presov): a motorway onto a bridge over a road in a cutting 8 m under it."""
