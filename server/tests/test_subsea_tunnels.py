@@ -145,23 +145,22 @@ class SubseaProfileTest(unittest.TestCase):
 
 
 class SubseaHandshakeTest(ServerHarness):
-    def test_an_older_mod_cannot_start_world_jobs_with_flooded_tunnels(self):
+    def test_an_older_mod_still_gets_its_world_and_is_told(self):
+        # (a mod without the water guard: told its underwater tunnels may flood, but its world loads: refusing every
+        # world job left BeamMP players, whose mod is the server's copy, in an empty world, 2026-11-07)
         self.server.sea = object()
         hello = {"type": "hello", "protocol": 4, "format": self.MOD_FORMAT}
         self.c.send(hello)
         m, _seen = self.c.until(lambda m: m["type"] == "status")
-        self.assertIn("Mod update required", m["text"])
+        self.assertIn("older than your app", m["text"])
         poses = []
         self.conn().on_pose = poses.append
         self.c.send({"type": "pose"})
         self.c.send(dict(hello, waterguard=1))  # FIFO acknowledgement: the old client's pose was processed first
-        m, _seen = self.c.until(lambda m: m["type"] == "hello")
+        m, _seen = self.c.until(lambda m: m["type"] == "hello" and "waterguard" in m)    # (the older one's reply first)
         self.assertEqual(m["waterguard"], 1)
-        self.assertEqual(poses, [])
-        self.c.send({"type": "pose"})
-        self.c.send(dict(hello, waterguard=1))
-        self.c.until(lambda m: m["type"] == "hello")
-        self.assertEqual(len(poses), 1)
+        self.assertEqual(len(poses), 1, "the older mod's pose was handled")
+
 
 
 class CapturedRyfylkeTest(unittest.TestCase):

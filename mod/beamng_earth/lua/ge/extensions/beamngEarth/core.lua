@@ -115,6 +115,12 @@ local perflog = require('beamngEarth/perflog')         -- hitches and frame-rate
 local LEVEL_ID = 'beamng_earth'
 local MOD_VERSION = '0.4.0'
 M.MOD_VERSION = MOD_VERSION
+-- The release this copy of the mod came with (release.lua, written by tools/package.py into a BeamMP server's copy), or
+-- nil (the dev tree, an older package): the hello names it so the app can say when it is not its own.
+function M.releaseVersion()
+  local ok, rel = pcall(require, 'beamngEarth/release')
+  return ok and type(rel) == 'string' and rel or nil
+end
 local lastHello = nil     -- the last server hello (scalars only; report.lua's hardware.json)
 local PROTOCOL = 4
 -- Far-tile artefact formats the mod reads: 3 (v1.3.1, 32-cell tiles) and 4 (docs/V1_4_SPEC.md 3.1
@@ -1049,6 +1055,9 @@ local function onMessage(msg)
     if snapshotSession and snapshotSession == farfield.session() and st.anchorId then anchors[#anchors + 1] = st.anchorId end
     -- vegFlat: the vegetation tiles may come as one flat array of numbers (trees.lua onTile), no table per tree
     net.send({ type = 'hello', protocol = PROTOCOL, format = FORMAT, modVersion = MOD_VERSION,
+    -- the release this copy of the mod came with (release.lua, written by the packaging: a BeamMP server's copy names
+    -- its version, and the app tells the player when it is not its own; none in the dev tree)
+    release = M.releaseVersion(),
       waterguard = sea.GUARD_VERSION,
       streamLease = 1, leaseSession = leaseSession, leaseId = leaseId,
       sessions = roads.allHeldSessions(), slotSession = snapshotSession, slotsHeld = held, held = anchors, vegFlat = true,

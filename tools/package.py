@@ -14,6 +14,7 @@ plugin, beammp/Server) and the server's README (beammp/README.md).
 import argparse
 import os
 import sys
+import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -89,6 +90,11 @@ def beammp_zip(out_dir, ver):
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(src, "rb") as f:
                 z.writestr(info, f.read())
+        # (the release this copy is: its hello names it, and a player's app whose version differs says so: a BeamMP
+        # server's mod replaces the players' own, and a mismatch loaded the world the slow way unseen, 2026-11-07)
+        info = zipfile.ZipInfo("lua/ge/extensions/beamngEarth/release.lua", past_stamp(time.time()))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(info, f"return {ver!r}\n")
     path = os.path.join(out_dir, f"BeamNG.Earth-BeamMP-Server-{ver}.zip")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("Resources/Client/beamng_earth.zip", mod.getvalue(), zipfile.ZIP_STORED)

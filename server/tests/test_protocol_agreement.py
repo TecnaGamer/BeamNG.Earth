@@ -90,7 +90,8 @@ def F(types, *flags):
 MOD_TO_SERVER = {
     # sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a
     # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
-    "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "sessions": F((list, dict), OPT),
+    "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "release": F(str, OPT),
+              "sessions": F((list, dict), OPT),
               "waterguard": F(int, OPT),  # required for world generation when the server enables water
               # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
               "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
