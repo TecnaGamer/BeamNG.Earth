@@ -46,6 +46,7 @@
         4096
       ],
       "profile": "near",
+      "noise_seed": 9910561500207309348,
       "patch_coverage": 0.07457780838012695,
       "patch_core_coverage": 0.015534579753875732,
       "percentiles": [
@@ -56,31 +57,30 @@
         0.9544455409049988
       ],
       "convex_mean": 0.7782323956489563,
-      "concave_mean": 0.9001219272613525,
-      "noise_seed": 9910561500207309348
+      "concave_mean": 0.9001219272613525
     },
     {
       "file": "limestone_cut_near_roughness.data.png",
       "source": "limestone_cut.normal.png",
-      "source_sha256": "d1fb304a1f127a5f2d5fa7548171c99562dd25cfc801f74302fd3aa0af92304f",
-      "sha256": "878dbe5c32487ae56c31bdd8734aa941625db16d61e80ed3915ccfed64e04b8f",
+      "source_sha256": "88809b8147e26bf82796dbd52a35eb345a0457c8bdfd54b1da43963113b3ca2c",
+      "sha256": "cf8ad4dbfe9a08b51f93f05f44127ce60014714684fa452cc0f96f753a44d10a",
       "size": [
         4096,
         4096
       ],
       "profile": "near",
-      "patch_coverage": 0.07507002353668213,
-      "patch_core_coverage": 0.014965951442718506,
+      "noise_seed": 15534988892366694837,
+      "patch_coverage": 0.07883727550506592,
+      "patch_core_coverage": 0.016610562801361084,
       "percentiles": [
-        0.4877530038356781,
-        0.7519350647926331,
-        0.8592653870582581,
-        0.9075331687927246,
-        0.9441965818405151
+        0.49149656295776367,
+        0.7632511854171753,
+        0.8882764577865601,
+        0.9599999785423279,
+        0.9599999785423279
       ],
-      "convex_mean": 0.7821006178855896,
-      "concave_mean": 0.8962501287460327,
-      "noise_seed": 15534988892366694837
+      "convex_mean": 0.8087096214294434,
+      "concave_mean": 0.946544885635376
     },
     {
       "file": "arid_near_roughness.data.png",
@@ -92,6 +92,7 @@
         4096
       ],
       "profile": "near",
+      "noise_seed": 13490527603496256993,
       "patch_coverage": 0.07932162284851074,
       "patch_core_coverage": 0.0162317156791687,
       "percentiles": [
@@ -102,8 +103,7 @@
         0.9503172039985657
       ],
       "convex_mean": 0.7840115427970886,
-      "concave_mean": 0.8988777995109558,
-      "noise_seed": 13490527603496256993
+      "concave_mean": 0.8988777995109558
     },
     {
       "file": "canyon_reference_near_roughness.data.png",
@@ -115,6 +115,7 @@
         1024
       ],
       "profile": "near",
+      "noise_seed": 696652931495979850,
       "patch_coverage": 0.08423233032226562,
       "patch_core_coverage": 0.017113685607910156,
       "percentiles": [
@@ -125,8 +126,7 @@
         0.9549268484115601
       ],
       "convex_mean": 0.7834927439689636,
-      "concave_mean": 0.8968532681465149,
-      "noise_seed": 696652931495979850
+      "concave_mean": 0.8968532681465149
     },
     {
       "file": "canyon_reference_far_roughness.data.png",
@@ -138,6 +138,7 @@
         1024
       ],
       "profile": "far",
+      "noise_seed": 696652931495979850,
       "patch_coverage": 0.0,
       "patch_core_coverage": 0.0,
       "percentiles": [
@@ -148,8 +149,7 @@
         0.9654341340065002
       ],
       "convex_mean": 0.8334716558456421,
-      "concave_mean": 0.9131679534912109,
-      "noise_seed": 696652931495979850
+      "concave_mean": 0.9131679534912109
     },
     {
       "file": "natural_far_roughness.data.png",
@@ -161,6 +161,7 @@
         1024
       ],
       "profile": "far",
+      "noise_seed": 4481919377828426750,
       "patch_coverage": 0.0,
       "patch_core_coverage": 0.0,
       "percentiles": [
@@ -171,8 +172,7 @@
         0.9634085893630981
       ],
       "convex_mean": 0.8289207220077515,
-      "concave_mean": 0.9160248041152954,
-      "noise_seed": 4481919377828426750
+      "concave_mean": 0.9160248041152954
     },
     {
       "file": "canyon_near_roughness.data.png",
@@ -184,6 +184,7 @@
         4096
       ],
       "profile": "near",
+      "noise_seed": 15009153146109736744,
       "patch_coverage": 0.07863056659698486,
       "patch_core_coverage": 0.016188740730285645,
       "percentiles": [
@@ -194,8 +195,7 @@
         0.9579294323921204
       ],
       "convex_mean": 0.7802084684371948,
-      "concave_mean": 0.9006300568580627,
-      "noise_seed": 15009153146109736744
+      "concave_mean": 0.9006300568580627
     },
     {
       "file": "canyon_far_roughness.data.png",
@@ -207,6 +207,7 @@
         1024
       ],
       "profile": "far",
+      "noise_seed": 17149330708112321576,
       "patch_coverage": 0.0,
       "patch_core_coverage": 0.0,
       "percentiles": [
@@ -217,8 +218,7 @@
         0.9632877111434937
       ],
       "convex_mean": 0.8269694447517395,
-      "concave_mean": 0.9159390330314636,
-      "noise_seed": 17149330708112321576
+      "concave_mean": 0.9159390330314636
     },
     {
       "file": "arid_far_roughness.data.png",
@@ -230,6 +230,7 @@
         1024
       ],
       "profile": "far",
+      "noise_seed": 14304318395455621313,
       "patch_coverage": 0.0,
       "patch_core_coverage": 0.0,
       "percentiles": [
@@ -240,8 +241,7 @@
         0.9628722667694092
       ],
       "convex_mean": 0.832384467124939,
-      "concave_mean": 0.9153831005096436,
-      "noise_seed": 14304318395455621313
+      "concave_mean": 0.9153831005096436
     },
     {
       "file": "ground_detail_contact_roughness.data.png",
@@ -253,6 +253,7 @@
         1024
       ],
       "profile": "contact",
+      "noise_seed": 7560309702652481480,
       "patch_coverage": 0.06659507751464844,
       "patch_core_coverage": 0.012513160705566406,
       "percentiles": [
@@ -263,8 +264,7 @@
         0.9554511904716492
       ],
       "convex_mean": 0.8151216506958008,
-      "concave_mean": 0.9126689434051514,
-      "noise_seed": 7560309702652481480
+      "concave_mean": 0.9126689434051514
     }
   ]
 }

@@ -134,6 +134,18 @@ def polished_patches(values, exposure, seed):
     return result.astype(np.float32), mask
 
 
+def limestone_cavity_roughness(values, albedo, ao):
+    """Suppress sharp reflections in dark stone and cavities, without metalness.
+
+    AO controls indirect illumination; increased roughness also broadens and
+    weakens direct specular highlights that AO alone cannot remove.
+    """
+    dark = np.clip((.62-albedo)/.30, 0, 1)
+    cavity = np.clip((1-ao)/.35, 0, 1)
+    weight = np.maximum(dark, cavity)
+    return values*(1-weight) + np.maximum(values, .96)*weight
+
+
 def read_normal(path, max_side):
     with Image.open(path) as im:
         im = im.convert('RGB')
@@ -195,6 +207,12 @@ def bake():
                 seed = seeds.get(source.name, int.from_bytes(hashlib.sha256(source.name.encode()).digest()[:8], 'little'))
                 if profile != 'far':
                     values, patch_mask = polished_patches(values, exposure, seed)
+                if source.name == 'limestone_cut.normal.png':
+                    with Image.open(OUT/'limestone_cut_base.color.png') as im:
+                        albedo = np.asarray(im.convert('L'), np.float32)/255
+                    with Image.open(OUT/'limestone_cut_ao.data.png') as im:
+                        ao = np.asarray(im.convert('L'), np.float32)/255
+                    values = limestone_cavity_roughness(values, albedo, ao)
                 filename = roughness_filename(source, profile)
                 Image.fromarray(np.uint8(np.rint(values*255))).convert('RGB').save(OUT / filename)
                 generated[key] = filename

@@ -61,11 +61,14 @@
         "roughnessMapUseUV": 0,
         "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.png",
-        "detailNormalMapStrength": 0.7,
+        "detailNormalMapStrength": 0.35,
         "detailScale": [
           76.2,
           76.2
-        ]
+        ],
+        "normalMapStrength": 0.48,
+        "normalMapUseUV": 0,
+        "ambientOcclusionMapUseUV": 0
       },
       {},
       {},
@@ -499,12 +502,14 @@
         "roughnessMapUseUV": 0,
         "detailMap": "/temp/beamngEarth/shapes/cliff_talus_v2/detail.data.dds",
         "detailNormalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/rock_grain.normal.png",
-        "detailNormalMapStrength": 0.7,
+        "detailNormalMapStrength": 0.35,
         "detailScale": [
           76.2,
           76.2
         ],
-        "normalMapUseUV": 0
+        "normalMapUseUV": 0,
+        "normalMapStrength": 0.48,
+        "ambientOcclusionMapUseUV": 0
       },
       {
         "baseColorFactor": [
