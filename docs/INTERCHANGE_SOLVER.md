@@ -2,9 +2,51 @@
 
 Branch `feat/interchange-refine` (yahms), on top of the merged interchange solver (#671). Everything here is
 opt-in: `BNE_INTERCHANGE=1` (with #482's `BNE_JUNCTION_PAD=1`, `BNE_NEIGHBOURS=1`, `BNE_RAIL_FLAT_SEP=1` for the
-full set). With the switch off nothing changes, except that the roads cells (layer 9) now carry the
+full set; see "How to turn it on" below). With the switch off nothing changes, except that the roads cells (layer 10) now carry the
 `maxheight_m` rule: each cell is rebuilt once (from the cached Overture rows where present). Test place: Perth, the Mitchell Freeway at Hay / Murray /
 Wellington Streets (-31.9505, 115.8492).
+
+## How to turn it on
+
+The solver is read from environment variables when BeamNG.Earth starts, so set them in the window you start it from
+(they last until that window is closed). Plans made with it on are cached apart from the default ones, so it can be
+turned on and off freely.
+
+- **Windows, the download** (`BeamNG.Earth-<version>.exe`): open a Command Prompt in the folder with the file
+  (type `cmd` in Explorer's address bar there), then
+  ```
+  set BNE_INTERCHANGE=1
+  BeamNG.Earth-<version>.exe
+  ```
+  In PowerShell: `$env:BNE_INTERCHANGE = "1"; .\BeamNG.Earth-<version>.exe`
+- **Linux, the AppImage:** `BNE_INTERCHANGE=1 ./BeamNG.Earth-<version>-x86_64.AppImage`
+- **From the source:** the same `set` (Windows) before `run_server.bat` or `python start.py`, or
+  `BNE_INTERCHANGE=1 ./run_server.sh` (Linux).
+
+For the full set (junction pads, neighbouring cells planned together, rail level crossings flattened), add
+`BNE_JUNCTION_PAD=1`, `BNE_NEIGHBOURS=1` and `BNE_RAIL_FLAT_SEP=1` the same way. They cost load time (Perth: the ground
+under the car about 15 s later than with `BNE_INTERCHANGE` alone).
+
+Settings worth knowing, all optional:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `BNE_CARRIAGEWAYS` | `on` | `off`: crossings only, no freeway profiles |
+| `BNE_MAXHEIGHT` | `on` | `off`: 6 m headroom everywhere, OSM `maxheight` ignored |
+| `BNE_CW_MARGIN` | `700` | metres past the cell a freeway is solved over |
+| `BNE_CW_FALLBACK` | `py` | `off`: no Python solve where the Rust kernel finds a level infeasible |
+| `BNE_CW_HELP` | `on` | solve the regions a cell needs side by side, on idle workers |
+| `BNE_CLEAR_AIM` | `0.5` | metres a deck aims above the minimum headroom |
+
+### Suggested release-notes text
+
+> **New, opt-in: interchange solver.** Freeways, their ramps and the streets crossing them are now graded together
+> as one height problem, with bridge headroom from OpenStreetMap's `maxheight`, walls under freeway decks, and
+> smoother freeway profiles at speed. It is off by default while it is tested. To try it on Windows, open a Command
+> Prompt in the folder with the download and run `set BNE_INTERCHANGE=1` and then `BeamNG.Earth-<version>.exe`
+> (Linux: `BNE_INTERCHANGE=1 ./BeamNG.Earth-<version>-x86_64.AppImage`). Around big interchanges the ground under
+> the car takes about 35 % longer to load with it on (Perth CBD: 30 s to 41 s). Found something off? Comment on the
+> pull request, #PR, with the place (coordinates) and a screenshot.
 
 ## What it does now
 

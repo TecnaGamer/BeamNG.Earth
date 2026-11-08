@@ -25,6 +25,7 @@ ENV = "BNGE_WORLD_BUNDLE"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 SIGNATURE = re.compile(r"w[01]s[01]\Z")
 GROUPS = ("p", "z", "c", "b", "w", "k", "v", "o")   # plancache.store's array groups
+OPTIONAL_GROUPS = ("t", "tz")   # ... and, with the interchange solver, its freeway decks' lines and heights (decktops)
 
 
 class BundleError(ValueError):
@@ -192,7 +193,8 @@ def validate_artifact(data, artifact=None):
         raise BundleError("Artifact exceeds size limit")
     if artifact is not None and (len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]):
         raise BundleError("Artifact integrity mismatch")
-    allowed = {"meta"} | set(GROUPS) | {g + "_n" for g in GROUPS}
+    allowed = {"meta"} | set(GROUPS) | {g + "_n" for g in GROUPS} | set(OPTIONAL_GROUPS) | \
+        {g + "_n" for g in OPTIONAL_GROUPS}
     arrays = {}
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -234,8 +236,19 @@ def validate_artifact(data, artifact=None):
     if "meta" not in arrays or any(g + "_n" not in arrays for g in GROUPS):
         raise BundleError("Missing plan arrays")
     meta = _json(arrays["meta"].tobytes())
-    if not isinstance(meta, dict) or set(meta) != {"plans", "keeps", "covers", "opens"}:
+    if not isinstance(meta, dict) or set(meta) - {"tops"} != {"plans", "keeps", "covers", "opens"}:
         raise BundleError("Invalid plan metadata")
+    tops = meta.get("tops")
+    if tops is not None:
+        tn, zn = arrays.get("t_n"), arrays.get("tz_n")
+        t, tz = arrays.get("t"), arrays.get("tz")
+        if (tn is None or zn is None or t is None or tz is None or len(tn) != len(tops) or len(zn) != len(tops)
+                or not np.array_equal(tn, zn) or (tn < 2).any() or t.ndim != 2 or t.shape[1] != 2 or tz.ndim != 1
+                or len(t) != int(tn.sum()) or len(tz) != len(t) or not np.isfinite(t).all()
+                or not np.isfinite(tz).all() or not all(_number(v, 0.0, 1000.0) for v in tops)):
+            raise BundleError("Invalid deck tops")
+    elif any(g in arrays or g + "_n" in arrays for g in OPTIONAL_GROUPS):
+        raise BundleError("Unreferenced array data")
     if any(not isinstance(v, list) or len(v) > MAX_ROWS for v in meta.values()):
         raise BundleError("Invalid plan metadata counts")
     groups = {}

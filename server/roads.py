@@ -5700,7 +5700,7 @@ class Headroom:
             return got
         lines, vals = [], []
         try:
-            feats = self.cell_fn(key)
+            feats = self.cell_fn(key) if self.cell_fn is not None else None
         except Exception as ex:     # (no limits: the default headroom)
             log.debug("headroom: cell %s: %s: %s", k, type(ex).__name__, ex)
             feats = None
@@ -6176,8 +6176,9 @@ class BridgeProfiles:
             nav = 0.0
         depth = self._depth(lines) if bridge_profile_mode() == "curve" else None
         # (each road under at its own headroom: OSM's maxheight where it has one, Headroom)
-        hrm = self.__dict__.setdefault("headroom", Headroom(self.frame, self.cell_fn))
-        hr = hrm.at(np.array([c[2] for c in cr], np.float64)) if cr else []
+        hrm = self.__dict__.setdefault("headroom", Headroom(self.frame, getattr(self, "cell_fn", None)))
+        hr = hrm.at(np.array([c[2] for c in cr], np.float64)) if cr and MAXHEIGHT_ON else \
+            [Headroom.DEFAULT] * len(cr)
         # (as the road's height lowered by the difference: a crossing with its own clearance is water's or a rail's to
         # deck_profile, without a road's level corridor and at-grade junctions)
         required = [(c[0], c[1], float(z) + float(h) - Headroom.DEFAULT) for c, z, h in zip(cr, road_z, hr)]

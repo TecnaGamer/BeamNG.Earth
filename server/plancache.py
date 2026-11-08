@@ -245,9 +245,10 @@ class PlanCache:
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
-                "tops": [float(hw) for _xy, _z, hw in tops],
                 "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
                           for _xy, sp in opens]}
+        if tops:            # (only with the interchange solver's freeway decks: as before without them, worldbundle's form)
+            meta["tops"] = [float(hw) for _xy, _z, hw in tops]
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
         try:
             _pack(arrays, "p", [p.xy for _f, p in plans])
@@ -258,8 +259,9 @@ class PlanCache:
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])
-            _pack(arrays, "t", [np.asarray(xy, np.float64) for xy, _z, _hw in tops])
-            _pack(arrays, "tz", [np.asarray(z, np.float64) for _xy, z, _hw in tops])
+            if tops:
+                _pack(arrays, "t", [np.asarray(xy, np.float64) for xy, _z, _hw in tops])
+                _pack(arrays, "tz", [np.asarray(z, np.float64) for _xy, z, _hw in tops])
             p = self._path(key)
             os.makedirs(self.dir, exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"

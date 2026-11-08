@@ -1805,7 +1805,7 @@ class _Planner:
         t_claim = time.perf_counter()
         shared, mine = (self.shared.claim(key) if self.shared is not None else (None, False))
         if mine:
-            log.info("cell %s: planning it here (process %d)", key, os.getpid())
+            log.debug("cell %s: planning it here (process %d)", key, os.getpid())
         try:
             import revisit
             # (this thread's faults: the planning threads of a process plan cells side by side, and another's fault
@@ -1820,7 +1820,7 @@ class _Planner:
                     got = self._make_cell(key)
                 finally:
                     watch.cancel()
-                log.info("cell %s: planned in %.1f s (process %d)", key, time.perf_counter() - t_claim, os.getpid())
+                log.debug("cell %s: planned in %.1f s (process %d)", key, time.perf_counter() - t_claim, os.getpid())
             if got is None:
                 return []
             if mine:        # (kept for later visits too when complete: nothing it read failed or was missing)
@@ -2961,7 +2961,7 @@ class _Planner:
                     sh.region_store(tag, hkey, got)
             finally:
                 sh.region_release(tag, hkey)
-            log.info("carriageway region %s solved in %.1f s (helping, process %d)", hk, time.perf_counter() - t0,
+            log.debug("carriageway region %s solved in %.1f s (helping, process %d)", hk, time.perf_counter() - t0,
                      os.getpid())
         with self.lock:
             if len(memo) > 64:
@@ -3034,11 +3034,12 @@ class _Planner:
         finally:
             if mine:
                 sh.region_release(tag, hkey)
-        import traceback
-        why = " < ".join(f.name for f in traceback.extract_stack(limit=12)[:-1][::-1]
-                         if f.name.startswith("_") and f.name not in ("_cw_region", "_bootstrap_inner"))[:160]
-        log.info("carriageway region %s solved in %.1f s (needed, process %d; from %s)", hk, time.perf_counter() - t0,
-                 os.getpid(), why)
+        if log.isEnabledFor(logging.DEBUG):
+            import traceback
+            why = " < ".join(f.name for f in traceback.extract_stack(limit=12)[:-1][::-1]
+                             if f.name.startswith("_") and f.name not in ("_cw_region", "_bootstrap_inner"))[:160]
+            log.debug("carriageway region %s solved in %.1f s (needed, process %d; from %s)", hk,
+                      time.perf_counter() - t0, os.getpid(), why)
         with self.lock:
             if len(memo) > 64:
                 memo.clear()
@@ -3639,6 +3640,13 @@ class _Planner:
             def solve_stage():
                 info = {}
                 profiles = _cw.solve(d_, cp, deadline=deadline, diagnostics=info)
+                if not info["converged"] and info.get("infeasible") and _cw.FALLBACK_PY:
+                    # (the interchange solver's bounds over-constrain a level now and then: the kernel's hard bounds
+                    # call it infeasible, the active-set solve meets them halfway. Without it, Perth's interchange
+                    # failed 115 times over 15 regions and fell back to the per-road grading, 2026-11-08)
+                    log.debug("grading: carriageway level %s: %s, the active-set solve instead", L, info["status"])
+                    profiles = _cw.solve_py(d_, cp, deadline=deadline)
+                    info = {"converged": True, "status": "py", "feasible": True}
                 if not info["converged"]:
                     raise RuntimeError(f"carriageway level {L}: {info['status']} (feasible={info['feasible']})")
                 return profiles
@@ -3948,14 +3956,21 @@ class _Planner:
             return self._cell_enu_calc(k, ground)
         tag = f"{float(self.frame.lat0):.6f}_{float(self.frame.lon0):.6f}"
         kk, g = (int(k.z), int(k.x), int(k.y)), ("1" if ground is True else "0" if not ground else str(ground))
-        got = sh.enu_load(tag, kk, g)
-        if got is not None:
+        try:
+            got = sh.enu_load(tag, kk, g)
+        except Exception as e:      # (made here, as without a plan cache)
+            log.debug("grading: cell parts of %s: shared: %s: %s", k, type(e).__name__, e)
+            got = None
+        if isinstance(got, dict):
             return got
         import revisit
         f0 = revisit.thread_faults()
         out = self._cell_enu_calc(k, ground)
         if revisit.thread_faults() == f0:   # (kept only when nothing it read failed: a missing cell is asked again)
-            sh.enu_store(tag, kk, g, out)
+            try:
+                sh.enu_store(tag, kk, g, out)
+            except Exception as e:
+                log.debug("grading: cell parts of %s: not shared: %s: %s", k, type(e).__name__, e)
         return out
 
     def _headroom_at(self, pts):

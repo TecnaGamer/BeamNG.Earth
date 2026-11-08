@@ -166,6 +166,56 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(os.listdir(root), ["new"], "a run still writing (its newest folder) is kept")
 
 
+class InterchangeShareTest(unittest.TestCase):
+    """The interchange solver's additions to the run's plan cache: the freeway decks' tops with a cell's plans, a cell's
+    road parts (grading._Planner._cell_enu) and the non-blocking region claim."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.c = plancache.PlanCache(self.dir, "s")
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def test_deck_tops_round_trip(self):
+        tops = [(np.array([[0.0, 0.0], [10.0, 0.0]]), np.array([20.0, 21.0]), 6.5)]
+        self.c.store(KEY, [], [], [], [], tops)
+        got = self.c.load(KEY)
+        self.assertEqual(len(got), 5)
+        (xy, z, hw), = got[4]
+        np.testing.assert_array_equal(xy, tops[0][0])
+        np.testing.assert_array_equal(z, tops[0][1])
+        self.assertEqual(hw, 6.5)
+        self.c.store((14, 4000, 6001), [], [], [], [])         # (none: the form without the solver)
+        self.assertEqual(self.c.load((14, 4000, 6001))[4], [])
+
+    def test_cell_parts_round_trip(self):
+        d = {"bridges": [np.array([[0.0, 0.0], [5.0, 1.0]])], "bridge_cls": ["motorway"], "bridge_ids": ["a"],
+             "bridge_levels": [1.0], "bridge_half": [7.5], "ground": [(np.array([[1.0, 1.0], [2.0, 2.0]]), 4.0, "primary")],
+             "ground_ids": [("b", 0, 40.0, 1.0)], "ground_link": [False], "end_of": [0, 0],
+             "span_bridges": [], "ends": np.array([[0.0, 0.0], [5.0, 1.0]]), "rail_bridges": [], "rail_ground": [],
+             "maxheight": ([np.array([[0.0, 0.0], [3.0, 0.0]])], [4.5])}
+        self.assertIsNone(self.c.enu_load("f", KEY, "1"))
+        self.assertTrue(self.c.enu_store("f", KEY, "1", d))
+        got = self.c.enu_load("f", KEY, "1")
+        np.testing.assert_array_equal(got["bridges"][0], d["bridges"][0])
+        self.assertEqual(got["ground"][0][1:], (4.0, "primary"))
+        self.assertEqual(got["ground_ids"], [("b", 0, 40.0, 1.0)])
+        self.assertEqual(got["maxheight"][1], [4.5])
+        np.testing.assert_array_equal(got["ends"], d["ends"])
+
+    def test_region_try_never_waits(self):
+        got, mine = self.c.region_try("f", KEY)
+        self.assertEqual((got, mine), (None, True))
+        other = plancache.PlanCache(self.dir, "s")
+        self.assertEqual(other.region_try("f", KEY), (None, False))     # (being solved: not waited for)
+        self.c.region_store("f", KEY, {"parts": [], "prof": {}})
+        self.c.region_release("f", KEY)
+        got, mine = other.region_try("f", KEY)
+        self.assertEqual((got, mine), ({"parts": [], "prof": {}}, False))
+
+
 class LockTest(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp()

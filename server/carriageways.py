@@ -57,7 +57,7 @@ ROUNDS = 150            # sparse QP iterations at most
 # s one region's solves may take at most: exhaustion is reported and the region is not persisted. A worker past
 # earthd's road-tile timeout (300 s) is restarted, its work lost, and the tile built again from the start.
 BUDGET_S = float(os.environ.get("BNE_CW_BUDGET_S", "30"))
-FALLBACK_PY = os.environ.get("BNE_CW_FALLBACK", "py") == "py"     # an infeasible cluster: the active-set solve (solve_py)
+FALLBACK_PY = os.environ.get("BNE_CW_FALLBACK", "py") == "py"     # grading: an infeasible level, the active-set solve (solve_py)
 TOUCH_M = 0.75          # m: parts whose ends are this close are joined
 COUPLE_M = 2.5          # m: a chain's end this close to another chain meets it and is held to its height (a slip road's
                         # end lies up to ~2 m short of the node its overpass starts at: it stayed at the ground beside a
@@ -233,12 +233,7 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     budget = max(0.0, budget)
     z, info = fast._ef.carriageway_profiles(pack(target), pack(weights_), pack(lower), pack(upper), offsets,
                                            parameters, rows, values, rounds, budget)
-    if not info["feasible"] and FALLBACK_PY:
-        log.debug("carriageways: %d chains, %d couplings: %s, the active-set solve instead", len(chains), len(cp),
-                  info["status"])
-        if diagnostics is not None:
-            diagnostics.update(info, converged=True, fallback="py")
-        return solve_py(chains, couplings, deadline=deadline)
+
     if diagnostics is not None:
         diagnostics.update(info)
     if not info["converged"] or not info["feasible"]:
@@ -250,9 +245,10 @@ def solve(chains, couplings=(), rounds=ROUNDS, deadline=None, diagnostics=None):
     return [z[a:b] for a, b in zip(offsets[:-1], offsets[1:])]
 
 
-# The active-set solve the Rust kernel replaced (PR #814), kept for what the kernel calls infeasible: it meets
-# conflicting bounds halfway (MU stiff), where the interchange solver's bounds (clearances, dig limits, street levels)
-# can over-constrain a level; and it takes a grade and K per sample (solve_py).
+# The active-set solve the Rust kernel replaced (PR #814), kept for grading to call where the kernel reports a level
+# infeasible (solve keeps the kernel's own answer, an explicit failure): it meets conflicting bounds halfway (MU
+# stiff), where the interchange solver's bounds (clearances, dig limits, street levels) can over-constrain a level;
+# and it takes a grade and K per sample (solve_py).
 MU = 1.0e6              # the stiffness of an active limit
 DENSE_N = 250           # chains up to this many samples solved densely (LAPACK), longer ones banded
 W_MIN = 1.0e-3          # the least weight of a sample's ground
