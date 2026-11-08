@@ -2351,7 +2351,9 @@ function M._psum.sample()
   end)
   if okV and type(tv) == 'number' then loaded.traffic = tv end
   s.loaded = loaded
-  s.edge = st.guard and st.guard.pausedByUs or false
+  -- held at the edge: the guard holding the car back (mode 'hold') or the rare full pause; the first night counted
+  -- only the pause (0.0 % over 233 hours)
+  s.edge = (st.guard and (st.guard.mode == 'hold' or st.guard.pausedByUs)) and true or false
   s.drop = dropHold.active or false
   s.loading = st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil
   local m3 = rawget(_G, 'beamngEarth_map3d')
@@ -2365,8 +2367,13 @@ function M._psum.frame(ms, hrec)
   local p = st.player
   local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
   local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
-  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
-    st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  -- only frames the player is playing: not paused (menus, the edge guard's pause: that time is counted as held) and
+  -- not in the background, where the game slows its own frames down (the game's lowPerformance sampler does the same)
+  local focused = not Engine.isProgramFocused or Engine.isProgramFocused()
+  if focused and not simPaused() then
+    ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
+      st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  end
   if st.clock < ps.sampleAt then return end
   ps.sampleAt = st.clock + 1
   local okS, smp = pcall(ps.sample)
