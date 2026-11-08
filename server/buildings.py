@@ -550,8 +550,21 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     nf = attrs.get("num_floors")
     if terminal and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
         h, nf = 13.0, 2                                 # an airport terminal: two tall glass storeys
+    chargers = 0
     if garage and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)):
-        nf = 4 + int(seed * 2)
+        info = None
+        here = attrs.get("_at")
+        if here:
+            import rdwparking
+            try:
+                info = rdwparking.lookup(here[0], here[1])
+            except Exception:
+                info = None
+        if info and info.get("capacity"):
+            nf = rdwparking.floors_for(info["capacity"], area)
+            chargers = int(info.get("chargers") or 0)
+        else:
+            nf = 4 + int(seed * 2)
     if cls == "hangar" and (h is None or not np.isfinite(h)):
         h, nf = 12.0, 1
     if church and (h is None or not np.isfinite(h)) and (nf is None or not np.isfinite(nf)) and area < 2500:
@@ -826,6 +839,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     else:       # the region's pitched roofs (the US: slate or shingle by the seed, their first four tints)
         mat, tints = style.roofs[min(int(seed * len(style.roofs)), len(style.roofs) - 1)]
         roof_mat = f"{mat}|{tints[int(_hash01(seed, 'roof') * len(tints))]}"
+    if chargers and roof == "flat":
+        roof_mat = f"{ROOF_METAL}|0"
     rc = parse_color(attrs.get("roof_color"))
     if rc is not None:
         base_rmat = roof_mat.split("|")[0]
@@ -2858,6 +2873,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = dict(at, _fr_location=(hlat, hlon), _fr_altitude=float(np.nanmean(g_all[i0:i1])),
                       _fr_part=look is not None or mh > .5, _fr_neighbours=int(sh),
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
+        if ok[i0:i1].all():
+            blat, blon = float(la_all[i0:i1].mean()), float(lo_all[i0:i1].mean())
+            if 50.75 <= blat <= 53.7 and 3.2 <= blon <= 7.3:
+                at = dict(at, _at=(blat, blon))
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
         spec.portal = bool(at.get("portal"))
