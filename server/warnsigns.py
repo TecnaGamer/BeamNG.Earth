@@ -111,12 +111,12 @@ def bends(xy, radius_m=SHARP_RADIUS_M, min_deflection=MIN_DEFLECTION_DEG):
     return out, length
 
 
-def _row(group, q, travel, z):
+def _row(group, q, travel, z, height=HEIGHT_M):
     """The Forest row of sign group at q (2,), its face to the traffic going in unit direction travel (2,): the models
     look down -Y with the post at their origin, so the row's X is that traffic's right."""
     fx, fy = float(travel[1]), float(-travel[0])
     return [guardrails.GROUPS.index(group), round(float(q[0]), 3), round(float(q[1]), 3), round(z, 3),
-            round(math.degrees(math.atan2(fy, fx)), 2), 0.0, HEIGHT_M, 0.0, fx, fy, 0.0, -fy, fx, 0.0, 0.0, 0.0, 1.0]
+            round(math.degrees(math.atan2(fy, fx)), 2), 0.0, height, 0.0, fx, fy, 0.0, -fy, fx, 0.0, 0.0, 0.0, 1.0]
 
 
 def signs(spec, xy):
