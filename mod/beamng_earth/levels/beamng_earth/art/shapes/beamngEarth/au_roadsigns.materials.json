@@ -1,0 +1,75 @@
+{
+  "bne_au_roadsign_steel": {
+    "name": "bne_au_roadsign_steel",
+    "mapTo": "bne_au_roadsign_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cad62e72-8328-5800-8796-313f2e57fba0",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_chevron_face": {
+    "name": "bne_au_chevron_face",
+    "mapTo": "bne_au_chevron_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "cb6d1ea9-c755-5d60-9ecb-6e11d0aa4fda",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_chevron.png",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_wrongway_face": {
+    "name": "bne_au_wrongway_face",
+    "mapTo": "bne_au_wrongway_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "4d8c21ec-4148-507c-8d65-8087a1c2956b",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_wrongway.png",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_gravel_face": {
+    "name": "bne_au_gravel_face",
+    "mapTo": "bne_au_gravel_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7be52759-0508-52ee-879e-06aae7e5440d",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_gravel.png",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}
