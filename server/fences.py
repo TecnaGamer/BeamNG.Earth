@@ -135,6 +135,15 @@ def rows(frame, infra_fn, box, elev, decks=()):
                 continue
             seen.add(fid)
             hint = _deck_level_hint(feats, i) if decks else None
+            if hint is None and decks:
+                # Overture keeps a way's OSM layer in the feature's own level, not always in its tags
+                # (rail-viaduct noise walls seen with tags without layer, level=2.0): that counts as on a bridge.
+                try:
+                    lv = float(np.asarray(feats.attrs.get("level"))[i])
+                except (TypeError, ValueError, IndexError):
+                    lv = float("nan")
+                if lv == lv:
+                    hint = True if lv > 0 else (False if lv < 0 else None)
             length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
             for part in feats.parts(i):
                 if not part or len(part[0]) < 2:
