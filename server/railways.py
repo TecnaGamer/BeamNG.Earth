@@ -1235,12 +1235,14 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
-    grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25)."""
+    grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
+    return the bridge decks' centrelines ([{"n": xy+z line, "w": width}], the bed plus its ballast), for mapped
+    furniture (fences.py) to stand on: the profile is already made here, no second pass."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tunnels = road_underpasses(frame, cells, box)
@@ -1250,8 +1252,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
     rails = parts(frame, cells, box, clip=True, worn=worn, gauges=gauges)
     if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
                         (ex[0] - STEP_M, ex[1] - STEP_M, ex[2] + STEP_M, ex[3] + STEP_M)) for *_, xy in rails):
-        return None
+        return (None, []) if return_decks else None
     prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails))
+    decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
+               "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
+              for (_, cls, kind, xy), (zb, _zg) in zip(rails, prof) if kind == "bridge"]
+             if return_decks else [])
     cr = crossings(frame, cells, box, reach=50.0) + tunnels
     crossers = []
     if cr:                                          # (one ground call for all of them: its cost is per call)
@@ -1333,8 +1339,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None):
         mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], mi)
     out = mesh.result()
     if out is not None and len(out[0]) > VERTS_MAX:     # (the ballast and rails alone past it: a rail yard)
-        return None
-    return out
+        return (None, decks) if return_decks else None
+    return (out, decks) if return_decks else out
 
 
 # The materials only drawn (from mpsteppe's lean rail collider, in Madderose's PR #41): the rails and sleepers were ~88 %

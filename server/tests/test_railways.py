@@ -523,6 +523,22 @@ class RoadUnderpassTest(unittest.TestCase):
 class UnderpassNeighbourTest(unittest.TestCase):
     """Only the track actually over the road gets a span and its clearance."""
 
+    def test_return_decks_hands_the_bridge_decks_to_fences(self):
+        # fences.py stands mapped noise walls on these instead of the ground under them.
+        f = features([[(-400.0, 100.0), (100.0, 100.0)], [(100.0, 100.0), (150.0, 100.0)],
+                      [(150.0, 100.0), (640.0, 100.0)]], ["standard_gauge"] * 3, subtypes=["rail"] * 3,
+                     flags=[(1, "is_bridge")])
+        mesh, decks = railways.tile_mesh(FRAME, 0, 0, [f], flat, return_decks=True)
+        self.assertIsNotNone(mesh)
+        self.assertEqual(len(decks), 1)
+        line = np.asarray(decks[0]["n"], np.float64)
+        self.assertEqual(line.shape[1], 3)
+        self.assertLess(abs(float(line[:, 2].mean()) - (10.0 + railways.BALLAST_H)), 0.6)
+        self.assertEqual(decks[0]["w"], 2 * railways.DECK_HALF_M)
+        self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [], flat, return_decks=True)[0])
+        plain = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        self.assertEqual(len(plain), 5, "without return_decks the mesh tuple is unchanged")
+
     def test_non_crossing_neighbour_stays_on_ground(self):
         for y in (114.0, 122.0):
             with self.subTest(neighbour_y=y):

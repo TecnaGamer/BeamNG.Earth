@@ -90,6 +90,16 @@ class PlaceTest(unittest.TestCase):
             self.assertTrue(got)
             self.assertTrue(all(abs(r[3] - 5.0) < 0.02 for r in got), (tags, y, [r[3] for r in got]))
 
+    def test_a_noise_wall_on_a_rail_viaduct_stands_on_its_deck(self):
+        # A rail viaduct's noise walls (layer=2) stood across the street under it instead of on it. Rail decks
+        # come from railways.tile_mesh's return_decks, in the same format as road decks.
+        rail = [{"n": np.array([[-70.0, 3.0, 225.0], [70.0, 27.0, 225.0]]), "w": 4.8}]
+        feats = self.line("wall", {"wall": "noise_barrier", "layer": "2"}, [[-60.0, 5.0], [60.0, 25.0]])
+        got = fences.rows(self.frame, lambda key: feats, (-100.0, -100.0, 100.0, 100.0),
+                          lambda la, lo: np.full(np.shape(la), 210.0), decks=rail)
+        self.assertTrue(got)
+        self.assertTrue(all(abs(r[3] - 225.0) < 0.1 for r in got), [r[3] for r in got])
+
     def test_a_panel_past_the_tile_is_left_out(self):
         feats = self.line("fence", {"fence_type": "chain_link"}, [[-30.0, 10.0], [40.0, 10.0]])
         got = self.rows(feats, (0.0, 0.0, 100.0, 100.0))
