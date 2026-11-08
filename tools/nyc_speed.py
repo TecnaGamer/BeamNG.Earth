@@ -110,19 +110,33 @@ def lua(code, timeout=30):
 
 
 def gps_path(start, end):
-    """The GPS's road route start -> end as [(lat, lon)], corners rounded (the car must be at start)."""
-    lua(f"require('beamngEarth/gps').setDestination({end[0]}, {end[1]}, 'nyc_speed') return 1")
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < ROUTE_WAIT_S:
-        time.sleep(2)
-        r = lua("local r = require('beamngEarth/gps').route() return r and jsonEncode(r.points) or ''")
-        if r:
-            pts = [(float(p[0]), float(p[1])) for p in json.loads(r)]
-            if len(pts) >= 2:
-                break
-    else:
-        raise SystemExit("no GPS route")
-    lua("require('beamngEarth/gps').clear() return 1")
+    """The GPS's road route start -> end as [(lat, lon)], corners rounded (the car must be at start).
+    BNGE_ROUTE_CACHE=<folder>: the route's points kept there and used again (A/B runs drive the same route, and an
+    older build whose GPS asked a public router that answered RateLimited still drives: 2026-11-08 bisect)."""
+    cache = os.environ.get("BNGE_ROUTE_CACHE")
+    cfile = (os.path.join(cache, "route_%.4f_%.4f_%.4f_%.4f.json" % (start[0], start[1], end[0], end[1]))
+             if cache else None)
+    pts = None
+    if cfile and os.path.exists(cfile):
+        with open(cfile) as f:
+            pts = [tuple(p) for p in json.load(f)]
+    if pts is None:
+        lua(f"require('beamngEarth/gps').setDestination({end[0]}, {end[1]}, 'nyc_speed') return 1")
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < ROUTE_WAIT_S:
+            time.sleep(2)
+            r = lua("local r = require('beamngEarth/gps').route() return r and jsonEncode(r.points) or ''")
+            if r:
+                pts = [(float(p[0]), float(p[1])) for p in json.loads(r)]
+                if len(pts) >= 2:
+                    break
+        else:
+            raise SystemExit("no GPS route")
+        lua("require('beamngEarth/gps').clear() return 1")
+        if cfile:
+            os.makedirs(cache, exist_ok=True)
+            with open(cfile, "w") as f:
+                json.dump(pts, f)
     lat0 = pts[0][0]
     kx = 111320.0 * math.cos(math.radians(lat0))
     xy = [((lo - pts[0][1]) * kx, (la - lat0) * 110540.0) for la, lo in pts]
