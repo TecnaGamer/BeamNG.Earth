@@ -346,6 +346,18 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
+    """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
+    map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
+    (Server.build_veg_geo)."""
+    out = []
+    for gx, gy in tiles:
+        try:
+            out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
+        except Exception as e:
+            out.append(e)
+    return out
+
 def _take_pads(fuel_pads):
     """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
     only these (none when the server's gas stations are switched off)."""
@@ -354,7 +366,8 @@ def _take_pads(fuel_pads):
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False):
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+          ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -405,7 +418,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks)
+                              chunks=chunks, ground_at=tuple(ground_at))
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
               "newShare": float(keep.get("new_share", 1.0))}
     idx = None
@@ -864,6 +877,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     signs = [] if buildings and poleprofiles.kit_enabled(pole_profile) else None
     park = [] if buildings else None
     items = town = None
+    _scene = (0, 0.0) if buildings else None
     wrows = []
     _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
@@ -892,7 +906,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
-        town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
+        _cover = buildingsmod.coverage(items, side)
+        town = _cover < buildingsmod.POLES_COVERAGE
+        # (the tile's buildings and their footprint share: the mod's scene complexity for anonymous performance
+        # reports, perfsummary.lua; no place in them)
+        _scene = (len(items), round(float(_cover), 3))
     mark("items")
     rwalls = []
     ctx = []
@@ -1108,6 +1126,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
+    P.scene = _scene
     return P
 
 
@@ -1268,6 +1287,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         for what, info in parts.items():
             info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
         data["key"] = tile.key
+        _scene = getattr(P, "scene", None)
+        if _scene is not None:      # buildings, footprint share (perfsummary.lua; [0, 0] too: known empty, not unknown)
+            data["scene"] = [int(_scene[0]), float(_scene[1])]
         data["frame"] = [float(tile.frame.lat0), float(tile.frame.lon0)]
         data["box"] = [round(float(v), 4) for v in tile.box]
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
@@ -2275,6 +2297,37 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
 
 
 WORKER_IMAGERY_TILES = 96      # decoded imagery tiles a far-tile worker keeps (imagery.MEM_TILES: 512, the server's)
+
+
+def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
+    """far_global_geometry and its texture here (the 3D map's quick render of a global far tile: the Mercator square's
+    photo from the imagery tiles on disk, raw, rock faces drawn), written to tex["path"]: (Built, (texture bytes,
+    sources used)), or (Built, None) when a photo tile it needs is not on disk. In the server's own interpreter these
+    waited 26 s each at a fresh city, one at a time (2026-11-07)."""
+    import geotiles
+    import imagery as imagerymod
+    import rockface as rockfacemod
+    built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    im = _imagery(tex)
+    px = tex["px"]
+    try:
+        im.quick_all = bool(tex.get("quick"))
+        try:
+            rgb, used = im.render_merc(z, x, y, px)
+        finally:
+            im.quick_all = False
+    except imagerymod.ImageryError:
+        return built, None
+    if built.grid is not None:          # (earthd.Server.rock_faces, its tile_where for a global tile)
+        try:
+            g = np.asarray(built.grid)
+            s = built.size
+            rgb = rockfacemod.rock(rgb, geotiles.frame(x, y, z), *imagerymod.gutter_square(-s / 2, -s / 2, s, px), g,
+                                   -s / 2, -s / 2, s / (g.shape[1] - 1))
+        except Exception as e:
+            log.debug("rock faces of global %s: %s", (z, x, y), e)
+    n = imagerymod.write_dds(tex["path"], rgb)
+    return built, (n, used)
 
 
 def _imagery(tex):

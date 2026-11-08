@@ -17,6 +17,7 @@
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
 
+mod perf;
 mod telemetry;
 
 use serde::{Deserialize, Serialize};
@@ -312,13 +313,22 @@ fn main() {
         std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("telemetry"))).unwrap_or_else(|| PathBuf::from("telemetry"))
     });
     let token = std::env::var("BNGE_TELEMETRY_TOKEN").ok().filter(|t| t.len() >= 16);
+    // the performance totals (perf.rs); the key of the installs' daily keyed hashes lives in memory only, new each start
+    let salt = {
+        let mut buf = [0u8; 8];
+        let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf));
+        u64::from_le_bytes(buf) ^ SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+    };
+    let mut perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
     let mut tel = telemetry::Telemetry::new(Some(tel_dir));
     // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
     // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
     let mut advanced: Option<(Instant, String)> = None;
+    let mut perf_cache: HashMap<u64, (Instant, String)> = HashMap::new();
     loop {
         let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
         tel.tick(Instant::now(), unix_now);
+        perf.tick(Instant::now(), unix_now);
         let mut req = match server.recv_timeout(Duration::from_secs(5)) {
             Ok(Some(r)) => r,
             Ok(None) => continue,
@@ -352,10 +362,16 @@ fn main() {
                 match (read, client_ip(&req)) {
                     (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
                     (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(&body) {
-                        Ok(r) => {
+                        Ok(mut r) => {
                             let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
+                            let (id, p) = (r.id(), r.perf.take());
                             match tel.report(ip, cc, r, now, unix_now) {
-                                Ok(()) => json(200, "{\"ok\":true}".into()),
+                                Ok(()) => {
+                                    if let (Some(p), Some((v, os))) = (p, tel.info(&id)) {
+                                        perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
+                                    }
+                                    json(200, "{\"ok\":true}".into())
+                                }
                                 Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
                             }
                         }
@@ -387,9 +403,23 @@ fn main() {
                     (None, _) => json(404, "{\"error\":\"not found\"}".into()),
                 }
             }
+            (Method::Get, "/stats/performance") => {
+                // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
+                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+                let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(7).min(400);
+                let fresh = perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
+                if !fresh {
+                    perf_cache.insert(days, (now, perf.public(unix_now, days).to_string()));
+                }
+                json(200, perf_cache[&days].1.clone())
+            }
+            (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
             (Method::Get, "/stats/advanced") => {
                 if advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
-                    advanced = Some((now, tel.private(now, unix_now).to_string()));
+                    let mut v = tel.private(now, unix_now);
+                    v["errors7d"] = perf.errors(unix_now);
+                    advanced = Some((now, v.to_string()));
                 }
                 json(200, advanced.as_ref().unwrap().1.clone())
             }

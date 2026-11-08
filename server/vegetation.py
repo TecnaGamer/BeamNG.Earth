@@ -1331,7 +1331,10 @@ class Tracker:
                 return [(a, b) for a, b, _d in geotiles.tiles_near(frame, px, py, r, z)]
             keys = [c for a, b, _d in geotiles.tiles_near(frame, px, py, r, self.group_z)
                     for c in geotiles.children(a, b, self.group_z, z)]
-            return sorted(keys, key=lambda k: (self._geo_dist(k, px, py, own=True), k))
+            if not keys:
+                return keys
+            d = geotiles.dists(self.frame, keys, z, [(px, py)])[:, 0].tolist()     # (_geo_dist(own=True) of each)
+            return [k for _d, k in sorted(zip(d, keys))]
         skip = set()
         if self.inner is not None:
             for p in spots:
@@ -1352,13 +1355,35 @@ class Tracker:
             self.building.add((gx, gy))
             fut = self.futs[(gx, gy)] = loop.run_in_executor(self.pool, build, gx, gy)
             fut.add_done_callback(lambda f, k=(gx, gy): self._built_geo(conn, k, f))
-        for k in [k for k in list(self.sent) if all(self._geo_dist(k, *p) > self.drop_m for p in spots)
-                  and all(self._geo_dist(k, f[0], f[1]) > f[2] + 256.0 for f in foci)]:
+        for k in self._far_sent(spots, foci):
             self.sent.discard(k)
             conn.send({"type": f"{self.kind}_drop", "anchorId": aid, "key": geotiles.key(*k, z)})
             gone = getattr(getattr(conn, "s", None), "geo_dropped", None)
             if callable(gone):              # (its session files: deleted once no game has it, GitHub #599)
                 gone(self.kind, k, geotiles.key(*k, z))
+
+    def _far_sent(self, spots, foci):
+        """The sent tiles farther than drop_m from every spot and than its reach + 256 m from every focus (_geo_dist
+        of each pair, by group when group_z): one batch call (earthfast.geo_tiles_dist; tile by tile from Python they
+        were whole seconds of a busy event loop, 2026-11-07)."""
+        import geotiles
+        sent = list(self.sent)
+        if not sent:
+            return []
+        z = self.z or geotiles.Z
+        keys, kz = sent, z
+        if self.group_z is not None:
+            keys, kz = [geotiles.parent(k[0], k[1], z, self.group_z) for k in sent], self.group_z
+        pts = [tuple(p[:2]) for p in spots] + [(f[0], f[1]) for f in foci]
+        if not pts:
+            return sent
+        d = geotiles.dists(self.frame, keys, kz, pts)
+        far = np.ones(len(sent), bool)
+        if spots:
+            far &= (d[:, :len(spots)] > self.drop_m).all(axis=1)
+        if foci:
+            far &= (d[:, len(spots):] > np.asarray([f[2] + 256.0 for f in foci], np.float64)).all(axis=1)
+        return [k for k, f in zip(sent, far.tolist()) if f]
 
     def _geo_dist(self, k, x, y, own=False):
         """m from (x, y) to geotile k's quad in the anchor's world (to its group's, group_z, unless own)."""

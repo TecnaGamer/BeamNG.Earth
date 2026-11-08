@@ -59,6 +59,15 @@ pub struct Report {
     game: Option<bool>,
     mp: Option<bool>,
     sources: Option<HashMap<String, SourceIn>>,
+    // the performance section (perf.rs), only from players who chose "Performance data"
+    #[serde(default)]
+    pub perf: Option<crate::perf::PerfIn>,
+}
+
+impl Report {
+    pub fn id(&self) -> String {
+        self.id.to_ascii_lowercase()
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
@@ -225,6 +234,11 @@ impl Telemetry {
         if fs::write(&tmp, serde_json::to_string(&list).unwrap()).is_ok() {
             let _ = fs::rename(&tmp, dir.join("installs.json"));
         }
+    }
+
+    /// An install's (version, OS) as kept from its last report.
+    pub fn info(&self, id: &str) -> Option<(String, String)> {
+        self.installs.get(id).map(|i| (i.v.clone(), i.os.clone()))
     }
 
     /// (online, in game) now.
@@ -475,7 +489,8 @@ mod tests {
     fn rep(id: &str, game: bool, req: u64) -> Report {
         let mut s = HashMap::new();
         s.insert("overturemaps-us-west-2.s3.amazonaws.com".to_string(), SourceIn { req: Some(req), mb: Some(1.5), e429: Some(1), ..Default::default() });
-        Report { id: id.into(), v: Some("1.8.2".into()), os: Some("linux".into()), game: Some(game), mp: Some(false), sources: Some(s) }
+        Report { id: id.into(), v: Some("1.8.2".into()), os: Some("linux".into()), game: Some(game), mp: Some(false), sources: Some(s),
+                 perf: None }
     }
 
     #[test]

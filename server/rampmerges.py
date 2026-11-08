@@ -24,25 +24,12 @@ def sample(line, at):
 
 
 def project(line, points):
-    """Station, nearest point, tangent, signed left offset, and distance in xy."""
-    p = np.asarray(points)
-    d = np.diff(line[:, :2], axis=0)
-    length = np.linalg.norm(d, axis=1)
-    length = np.maximum(length, 1e-9)
-    t = ((p[:, None, :2] - line[None, :-1, :2]) * d).sum(2) / length ** 2
-    tc = np.clip(t, 0., 1.)
-    q = line[None, :-1, :2] + tc[:, :, None] * d
-    dist = ((p[:, None, :2] - q) ** 2).sum(2)
-    k = dist.argmin(1)
-    j = np.arange(len(p))
-    near = line[k] + tc[j, k, None] * np.diff(line, axis=0)[k]
-    tangent = d[k] / length[k, None]
-    # Extrapolate stations beyond the ends for trimming a longer source line.
-    fraction = np.where(((k == 0) & (t[j, k] < 0)) | ((k == len(d)-1) & (t[j, k] > 1)), t[j, k], tc[j, k])
-    station = roadmarkings.arc(line)[k] + fraction * length[k]
-    normal = np.c_[-tangent[:, 1], tangent[:, 0]]
-    offset = ((p[:, :2] - near[:, :2]) * normal).sum(1)
-    return station, near, tangent, offset, np.sqrt(dist[j, k])
+    """Station, nearest point, tangent, signed left offset, and distance in xy (earthfast.polyline_project: the
+    stations extrapolated beyond the ends, for trimming a longer source line)."""
+    import fast
+    fast.require(164, "polyline_project")
+    return fast._ef.polyline_project(np.ascontiguousarray(line, np.float64),
+                                     np.ascontiguousarray(np.atleast_2d(points), np.float64))
 
 
 def section(line, a, b):
@@ -445,6 +432,17 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
                 for ring in roads.ground_parts(feats, i):
                     e, n = mapgeom.enu_xy(feats, frame, ring)
                     rows.append((fid, sp, np.c_[e, n, np.zeros(len(e))], float(np.mean(ring[:, 0]))))
+        memo = {}       # (kind, fid, id(pts)) -> its result: plans asks again and again for the same rows
+
+        def remembered(kind, fn):
+            def get(fid, spec, pts):
+                k = (kind, fid, id(pts))
+                hit = memo.get(k)
+                if hit is None or hit[0] is not pts:
+                    hit = memo[k] = (pts, fn(fid, spec, pts))
+                return hit[1]
+            return get
+
         def geometry(fid, spec, pts):
             # Evaluate the same descriptors as build_tile; do not substitute the
             # older lane-transition or pavement generators for 1.8's versions.
@@ -465,7 +463,7 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
             return pts, spec.width if w is None else w
-        return plans(rows, terminals, geometry, pavement)
+        return plans(rows, terminals, remembered("g", geometry), remembered("p", pavement))
     owner = getattr(urban, '__self__', None)
     return _cache.get(frame, cells, (urban, widths, bool(left_hand), getattr(owner, 'epoch', 0)), build)
 

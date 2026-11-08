@@ -16,8 +16,8 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 162 # the newest kernel signature the server calls (earthd checks it at start; 162: dejunction.rs, the
-                  # German junction kernel, over dev's 161)
+MIN_VERSION = 169 # the newest kernel signature the server calls (earthd checks it at start; 169: dejunction.rs, the
+                  # German junction kernel, over dev's 168)
 
 
 class NativeMissing(RuntimeError):
@@ -101,3 +101,36 @@ def gpu():
         except Exception:
             _GPU = ""
     return _GPU or None
+
+
+def perf_clean(v, strings=False, allowed=None):
+    """v as an anonymous report may carry it, or None (native perfclean.rs: numbers, lists of numbers, small tables
+    under plain names; strings only with strings=True; allowed: {name: None | [name, ...]}, the names it may have;
+    perfstats.py)."""
+    require(167, "perf_clean")
+    return _ef.perf_clean(v, bool(strings), allowed)
+
+
+def perf_step(v, steps):
+    """The largest of steps (ascending) not above v."""
+    require(167, "perf_step")
+    return _ef.perf_step(float(v), [float(x) for x in steps])
+
+
+def perf_fingerprint(kind, module, line):
+    """An error's fingerprint: 8 hex characters of a hash of kind:module:line (no message, no value)."""
+    require(167, "perf_fingerprint")
+    return _ef.perf_fingerprint(str(kind), str(module), int(line))
+
+
+def proc_tree(root):
+    """(CPU seconds, resident MB) of process root and every process under it, or None (not Linux)."""
+    require(167, "proc_tree")
+    return _ef.proc_tree(int(root))
+
+
+def md_html(text, base, fold_details=False):
+    """(html, [url, ...]): an add-on's Markdown (README, release notes) as the Add-ons page's safe HTML (native
+    mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
+    require(166, "md_html")
+    return _ef.md_html(str(text), str(base), bool(fold_details))

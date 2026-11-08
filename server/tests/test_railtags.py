@@ -1,4 +1,5 @@
 """railtags.py: the weekly rail shards joined to Overture's rail segments by OSM way id."""
+import glob
 import gzip
 import json
 import os
@@ -51,6 +52,15 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1, "the cell's nodes only")
             n = len(fetch.asked)
             railtags.RailTags(d, fetch).join(f, key)        # (from disk: the manifest's day and the shard)
+            self.assertEqual(len(fetch.asked), n)
+            # (the shard's decoded form beside it, read by the next process instead of the shard: the same tags)
+            side = glob.glob(os.path.join(d, "pagesdata", "rail", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+            self.assertEqual(len(side), 1)
+            os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+            f.attrs.pop("osm_railway")
+            railtags.RailTags(d, fetch).join(f, key)
+            self.assertEqual(list(f.attrs["osm_railway"]), ["proposed", "rail", None])
+            self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
     def test_no_shard_no_tags(self):
@@ -146,7 +156,7 @@ class RuleTagsTest(unittest.TestCase):
     """The German road rules (priority_road, zone:maxspeed: the shard's "rules", apart from its "ways") and sign
     nodes of a lane shard."""
 
-    def _join(self, shard, src_ways=None, lt_out=None):
+    def _join(self, shard, src_ways=None, lt_out=None, from_side=False):
         f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 0.0), (5.0, 5.0)]], ["primary", "residential"],
                      subtypes=["road", "road"])
         f.attrs["src_record"] = np.array(["w21@3", "w22@1"])
@@ -163,6 +173,14 @@ class RuleTagsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             lt = railtags.LaneTags(d, _Fetcher(files))
             lt.join(f, key)
+            if from_side:       # (the next process: the shard's decoded form beside it, the shard itself gone)
+                side = glob.glob(os.path.join(d, "pagesdata", "lanes", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+                self.assertEqual(len(side), 1)
+                os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+                for c in railtags.RULE_COLUMNS:
+                    f.attrs.pop(railtags.lane_attr(c))
+                lt = railtags.LaneTags(d, _Fetcher({"lanes/manifest.json": files["lanes/manifest.json"]}))
+                lt.join(f, key)
             if lt_out is not None:
                 lt_out.append(lt.shard(sx, sy))
         return f
@@ -187,6 +205,14 @@ class RuleTagsTest(unittest.TestCase):
         self.assertNotIn("junk", rules.keys)
         self.assertEqual(rules.get_many("priority_road", ["30", "31", None, "25"]), ["designated", None, None, "end"])
         self.assertEqual(rules.get_many("zone:maxspeed", []), [])
+
+    def test_rules_from_the_side_file(self):
+        got = []
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]}, "zone:maxspeed": {"DE:20": [22]}}},
+                       lt_out=got, from_side=True)
+        self.assertIsInstance(got[0]["rules"], railtags.Rules, "made Rules as from the shard")
+        self.assertEqual(list(f.attrs["osm_priority_road"]), ["designated", None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), [None, "DE:20"])
 
     def test_rules_delta_coded(self):
         r = railtags.Rules({"priority_road": {"designated": [100, 5, 125]}})

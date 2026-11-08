@@ -64,6 +64,8 @@ IMAGERY = {
 }
 IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.items()})   # their own wording
 IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
+# (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
+IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
 ELEVATION = {
     demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
@@ -91,6 +93,7 @@ SHORT = {
     "img:de_bw": "LGL BW", "img:de_nds": "LGLN", "img:de_berlin": "Geoportal Berlin", "img:de_hessen": "HVBG Hessen",
     "img:japan": "GSI Japan", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
     "img:ontario": "Ontario GEO", "img:bcortho": "LidarBC photos (OGL-BC)",
+    "img:bngs2": "ESA WorldCover Sentinel-2 2021 (Copernicus)",
     f"dem:{demmod.MAPTERHORN['name']}": "Mapterhorn", f"dem:{demmod.AWS['name']}": "AWS Terrain Tiles / Mapzen",
     f"dem:{polardem.SOURCE}": "Copernicus DEM (DLR, Airbus)",
     "dem:hrdem": "NRCan HRDEM (OGL-Canada)", "dem:lidarbc": "LidarBC (OGL-BC)",

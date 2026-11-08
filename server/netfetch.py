@@ -145,7 +145,9 @@ POLICIES = {
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
-    "basemap.nationalmap.gov": HostPolicy(rate=50.0, burst=150.0, max_conc=24, daily_budget=150000,
+    # (2026-11-07, the user: "i think its safe to increase USGS": 100/s, 32 at once; behind CloudFront, telemetry over
+    # ~500 players showed no 429 and 0.1 % errors at 50/s, and the 3D map's fresh views waited on ~1,350 deferred)
+    "basemap.nationalmap.gov": HostPolicy(rate=100.0, burst=300.0, max_conc=32, daily_budget=150000,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):
@@ -305,6 +307,10 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
+_CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
+POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
+                                 offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
 # IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
 # rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
 # tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
@@ -317,6 +323,7 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
+    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
@@ -1216,6 +1223,9 @@ class Fetcher:
             else:
                 self._succeeded(h)
             return Response(status, body, rh, elapsed)
+        if status == 304:                   # "not modified": the answer to a request with If-None-Match (addons.py's
+            self._succeeded(h)              # GitHub pages); only such a request gets one
+            return Response(status, body or b"", rh, elapsed)
         if status in (404, 410):
             self._count(h, "s404")
             self._succeeded(h)              # the host answered: it is healthy
@@ -1250,12 +1260,12 @@ class Fetcher:
 
     @ioprofiler.session_request
     @contextmanager
-    def session(self, url, kind="demand"):
+    def session(self, url, kind="demand", lane=None):
         """For a caller that does its own HTTP (gravity.py's resumable download through urllib, which
         follows SourceForge's mirror redirects): admission, a slot and a token for one request. Inside,
         set `s.status` and `s.nbytes`; an exception counts as a failure (an HTTPError's status and
-        Retry-After are honoured) and is re-raised."""
-        h, probe = self._admit(url, kind)
+        Retry-After are honoured) and is re-raised. lane: as get's."""
+        h, probe = self._admit(url, kind, lane)
         try:
             sem = self._acquire(h, url, kind)
         except FetchError:
