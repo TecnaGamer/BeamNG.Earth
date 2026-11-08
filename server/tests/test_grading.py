@@ -792,6 +792,31 @@ class MajorRoadTest(unittest.TestCase):
         g = grading.Grader(FRAME, FakeMD(f), self.bumpy)
         return {fid: p for fid, p in g._cell_plans(mapcells.cell_of(LAT, LON))}
 
+    def test_dirt_roads_on_coarse_elevation_do_not_follow_its_noise(self):
+        """GitHub #835: on the coarse global model (30 m cells, metres of noise) a minor dirt road smoothed over 6 m
+        rode every bump of the data. There it is smoothed over DIRT_SIGMA_COARSE_M; on fine elevation it is not."""
+        spec = roads.Spec(3.5, "dirt", False, "unclassified")
+        self.assertEqual(grading.profile_sigma(spec), grading.DIRT_SIGMA_MINOR_M)
+        self.assertEqual(grading.profile_sigma(spec, coarse=True), grading.DIRT_SIGMA_COARSE_M)
+        self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified"), coarse=True),
+                         grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified")), "paved: unchanged")
+
+        def noisy(la, lo):
+            x = np.asarray(FRAME.geodetic_to_enu(la, lo, 0.0)[0], np.float64)
+            return 100.0 + 0.02 * x + 1.5 * np.sin(x / 9.0) + 0.8 * np.sin(x / 4.3 + 1.0)
+        xs = np.arange(-200.0, 201.0, 2.0)
+        la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        part = [(np.c_[lo, la], spec)]
+        with unittest.mock.patch.object(grading, "DIRT_ROUGH", 0.0):     # (the profile alone, not the potholes)
+            fine = grading.plan_roads(FRAME, part, noisy, cuts=False)[0]
+            rough = grading.plan_roads(FRAME, part, noisy, cuts=False, coarse=True)[0]
+
+        def bumpiness(p):
+            core = p.z[30:-30]
+            return float(np.abs(np.diff(core, 2)).mean())
+        self.assertLess(bumpiness(rough), 0.25 * bumpiness(fine))
+        self.assertAlmostEqual(float(np.polyfit(rough.xy[:, 0], rough.z, 1)[0]), 0.02, delta=0.01, msg="the grade kept")
+
     def test_major_roads_smoothed_more(self):
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "motorway")), grading.SIGMA_MAJOR_M)
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "motorway", link=True)), grading.SIGMA_M)
