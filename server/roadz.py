@@ -30,6 +30,7 @@ Malformed vector survey records are isolated: invalid XY splits a line into vali
 bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
 existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
 """
+import contextlib
 import gzip
 import json
 import logging
@@ -115,7 +116,28 @@ LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 # wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
 # (2026-11-05); those left to the rule are faults (built again with their lidar on a later visit)
 LIDAR_GAPS_SLOW_WAIT_S = 1.0
+# Fast pre-cache's world builds (blockworker.prebuild_geo, its own road processes and the game paused) wait this long
+# for a cell's lidar instead of dropping it: the area's own lidar steps read only the cells round its box, and a
+# geotile's roads reach cells further out; dropping those made every geotile of a pre-cache fail without a sound reason
+# (2026-11-08: 9 of 16 at Lower Manhattan on a slow connection, each read cut off after 8 s). Live play, and the slow
+# pre-cache that shares the live road pool, keep LIDAR_GAPS_WAIT_S.
+PRECACHE_LIDAR_WAIT_S = float(os.environ.get("BNGE_PRECACHE_LIDAR_WAIT", "900"))
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
+
+
+@contextlib.contextmanager
+def precache_gaps_wait(seconds=None):
+    """Wait as long as a fast pre-cache's geotile build can for its cells' lidar (blockworker.prebuild_geo): its own
+    road processes, the game paused, no live tile waits on them. Restores the live values after."""
+    global LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
+    old = LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
+    LIDAR_GAPS_WAIT_S = LIDAR_GAPS_SLOW_WAIT_S = float(PRECACHE_LIDAR_WAIT_S if seconds is None else seconds)
+    try:
+        yield
+    finally:
+        LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S = old
+
+
 # The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
 # from a measured deck end (the gap candidates) is measured too, from that end while its surface starts within
 # APPROACH_END_TOL_M of the deck's measured end, up to where it is back on our DTM (APPROACH_REJOIN_M, two stations

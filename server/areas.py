@@ -214,6 +214,21 @@ def pinned_world(cache_dir):
     return out
 
 
+def world_fuel_steps(geo_tiles):
+    """The OpenStreetMap fuel cells the world phase's geotiles read (gasstations.station_cells, earthd.osm_fuel_cells'
+    geo rule), in geotile order. A world build reads them from the cache only and is not kept while one is missing
+    (gasstations.tile_sites faults), so the area fetches them before its geotiles (GitHub #917: the plan never
+    fetched them, so every geotile with a station was thrown away)."""
+    import gasstations
+    import geotiles
+    out = {}
+    for gx, gy in geo_tiles:
+        frame = geotiles.frame(gx, gy)
+        for k in gasstations.station_cells(frame, geotiles.geobox(gx, gy), None):
+            out[(int(k[0]), int(k[1]), int(k[2]))] = True
+    return [("fuel", z, x, y) for z, x, y in out]
+
+
 def plan_steps(tiles, hm_zooms, img_zoom, layers):
     """The download plan of an area (tiles(z, ring) -> its [(x, y)] at zoom z with ring more round them: box_tiles,
     route_tiles), in order: ("cell", z, x, y, layer) for the map data cells (with CELL_RING), ("dem", z, x, y) at the
@@ -380,7 +395,12 @@ class Areas:
             prov = roadz.PROVIDER
             lidar = [("lidar", CELL_Z, x, y) for x, y in tiles(CELL_Z, CELL_RING)
                      if prov is not None and prov.lidar_wanted((CELL_Z, x, y))]
-            return lidar + [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
+            geo = [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
+            md = self.s.mapdata
+            fuel = (world_fuel_steps((st[2], st[3]) for st in geo)
+                    if md is not None and getattr(self.s, "gas_stations", False)
+                    and hasattr(md, "osm_fuel_cached") else [])
+            return lidar + fuel + geo
         raise ValueError(f"unknown area phase {phase!r}")
 
     def steps(self, box, mode=DEFAULT_MODE, route=None):
@@ -402,6 +422,12 @@ class Areas:
             return self.s.geo_prebuilt(step[2], step[3]) is not None
         if kind == "lidar":
             return roadz.PROVIDER is None or roadz.PROVIDER.lidar_on_disk(step[1:4])
+        if kind == "fuel":
+            cached = getattr(self.s.mapdata, "osm_fuel_cached", None)
+            if cached is None:
+                return True
+            import mapcells
+            return cached(mapcells.CellKey(step[1], step[2], step[3])) is not None
         return done_imgs is not None and img_key(step) in done_imgs
 
     def plan(self, s, w, n, e, mode=DEFAULT_MODE):
@@ -436,7 +462,7 @@ class Areas:
         im = self.s.imagery
         sizes = self._sizes()
         req = {}
-        missing = {"cell": set(), "layer": 0, "dem": 0, "img": 0}
+        missing = {"cell": set(), "layer": 0, "dem": 0, "img": 0, "fuel": 0}
         dl = disk = 0.0
         for st in steps:
             if st[0] == "cell":
@@ -448,6 +474,11 @@ class Areas:
                     missing["dem"] += 1
                     req["tiles.mapterhorn.com"] = req.get("tiles.mapterhorn.com", 0) + 1
                     dl += sizes["dem"]
+            elif st[0] == "fuel":       # (OpenStreetMap's fuel stations: a few range reads a cell, ~25 KB)
+                if not self._present(st):
+                    missing["fuel"] += 1
+                    req["data.openstreetmap.us"] = req.get("data.openstreetmap.us", 0) + 3
+                    dl += 25e3
         cells = len(missing["cell"])
         if cells:
             req["overturemaps-us-west-2.s3.us-west-2.amazonaws.com"] = cells * 4     # (a few range reads a cell)
@@ -483,7 +514,7 @@ class Areas:
             hosts.append([host, int(r), round(d, 2)])
         seconds = n_req * REQUEST_S + cells * CELL_S + geo_missing * WORLD_TILE_S
         return {"ok": True, "km2": round(km2, 2), "items": len(steps),
-                "missing": missing["layer"] + missing["dem"] + missing["img"],
+                "missing": missing["layer"] + missing["dem"] + missing["img"] + missing["fuel"],
                 "downloadBytes": int(dl), "diskBytes": int(disk), "seconds": int(seconds), "days": round(days, 2),
                 "hosts": hosts, "excluded": sorted(excluded), "worldTiles": len(geo), "worldMissing": geo_missing}
 
@@ -912,6 +943,12 @@ class Areas:
         if kind == "lidar":
             if roadz.PROVIDER is not None and roadz.PROVIDER.lines("lidar", st[1:4]) is None:
                 raise RuntimeError("road height lidar not had")         # (the next pass tries again)
+            return
+        if kind == "fuel":
+            fetch = getattr(self.s.mapdata, "osm_fuel_fetch", None)
+            if fetch is not None:
+                import mapcells
+                fetch(mapcells.CellKey(st[1], st[2], st[3]), kind="predownload")
             return
         if kind == "cell":
             import mapcells
