@@ -1,37 +1,5 @@
 {
   "format": 1,
-  "note": "The curated add-ons the in-game Add-ons page offers (server/addons.py; docs/ADDONS.md). Only these repos can be installed from it. Each add-on is downloaded from its author's own GitHub releases on the player's machine; nothing of theirs is copied here.",
-  "addons": [
-    {
-      "id": "trucking-dc",
-      "name": "Worldwide Trucking Career: Dangerous Contracts",
-      "author": "MadMerick01",
-      "repo": "MadMerick01/BeamNG-Worldwide-Trucking-Career-Dangerous-Contracts",
-      "kind": "beamng-mod",
-      "summary": "A freight career on the real map: job boards in 178,000 real towns, a garage, trailers, fuel, punctures and dangerous high-paid roads.",
-      "licence": "Source available, not open source: free to download and play; re-uploading or sharing changed copies is not allowed.",
-      "asset": "^worldwide-trucking-dangerous-contracts\\.zip$",
-      "modFile": "worldwide-trucking-dangerous-contracts.zip",
-      "oldFiles": ["earth-freight-sim.zip", "earth_freight.zip"],
-      "uiApps": ["TruckingCareerDC"],
-      "trust": "latest",
-      "reviewed": [],
-      "minEarth": "1.8.0"
-    },
-    {
-      "id": "live-gps",
-      "name": "BeamNG.Earth Live GPS",
-      "author": "Leopri2008",
-      "repo": "Leopri2008/BeamNG.Earth-LiveGPS",
-      "kind": "companion",
-      "summary": "Your Android phone's GPS follows your car, so Google Maps or Waze track your drive; plus a live map in any browser, a drive recorder and a fog-of-the-world map.",
-      "licence": "All rights reserved: free for personal use; no redistribution.",
-      "asset": "^bne_live_coords.*\\.py$",
-      "links": [
-        {"label": "Android app (APK)", "asset": "^BNE-Mock-GPS.*\\.apk$"}
-      ],
-      "note": "A program that runs beside the game (it needs Python 3.8 or newer on this PC), not a game mod. Download it from its releases page and follow its README. Installing it from this page is planned once it can run without Python.",
-      "minEarth": "1.8.0"
-    }
-  ]
+  "note": "The curated add-ons the in-game Add-ons page offers (server/addons.py; docs/ADDONS.md). Empty until their authors have agreed to be listed. Only these repos can be installed from it; each add-on is downloaded from its author's own GitHub releases on the player's machine; nothing of theirs is copied here.",
+  "addons": []
 }

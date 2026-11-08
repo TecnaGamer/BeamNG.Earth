@@ -135,15 +135,12 @@ class Base(unittest.TestCase):
 
 class RegistryTest(unittest.TestCase):
     def test_bundled_registry_is_valid(self):
+        # (empty until the add-ons' authors agreed to be listed, the user 2026-11-08: "i havent talked to any of the
+        # mod authors yet"; every entry it has must be valid)
         es = addons.load_registry()
-        ids = [e["id"] for e in es]
-        self.assertIn("trucking-dc", ids)
-        self.assertIn("live-gps", ids)
         with open(addons.REGISTRY_PATH, encoding="utf-8") as f:
             self.assertEqual(len(es), len(json.load(f)["addons"]), "every bundled entry is valid")
-        t = next(e for e in es if e["id"] == "trucking-dc")
-        self.assertEqual(t["modFile"], "worldwide-trucking-dangerous-contracts.zip")
-        self.assertTrue(t["asset"].search("worldwide-trucking-dangerous-contracts.zip"))
+        self.assertEqual(len({e["id"] for e in es}), len(es), "no id twice")
 
     def test_invalid_entries_are_left_out(self):
         bad = [dict(registry()["addons"][0], **ch) for ch in (
