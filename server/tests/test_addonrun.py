@@ -134,5 +134,56 @@ class LocalCompanionTest(unittest.TestCase):
         self.assertFalse(self.a.cards()[0]["installed"])
 
 
+class AddFromGitHubTest(unittest.TestCase):
+    def make(self, repo_info, rels):
+        d = tempfile.mkdtemp(prefix="addrepo_")
+        a = addons.Addons(os.path.join(d, "user"), os.path.join(d, "cache"), FakeNet(), registry=addons.parse_registry(
+            {"format": 1, "addons": [{"id": "known", "name": "K", "author": "x", "repo": "Owner/Known", "kind": "link",
+                                      "summary": "s", "licence": "l", "asset": ""}]}), data_dir=os.path.join(d, "data"))
+        pages = {"/repos/someone/cool-mod": repo_info, "/repos/Owner/Known": {"full_name": "Owner/Known"},
+                 "/repos/someone/cool-mod/releases": rels}
+
+        def get(url, accept=None, fresh=False):
+            for k, v in pages.items():
+                if url.split("api.github.com")[1].split("?")[0].lower() == k.lower():     # (as GitHub: any case)
+                    return json.dumps(v), 0.0, False
+            raise addons.AddonError("GitHub did not answer (404)")
+        a.github.get = get
+        return a
+
+    def test_a_zip_release_is_a_game_mod(self):
+        a = self.make({"full_name": "someone/Cool-Mod", "description": "A mod", "license": {"name": "MIT License"}},
+                      [{"tag_name": "v2", "prerelease": True, "assets": [{"name": "x.py"}]},
+                       {"tag_name": "v1", "assets": [{"name": "Cool_Mod_v1.zip"}]}])
+        aid = a.add_repo("https://github.com/someone/cool-mod/releases/tag/v1")
+        e = a.entry(aid)
+        self.assertEqual((aid, e["kind"], e["modFile"], e["added"], e["licence"]),
+                         ("cool-mod", "beamng-mod", "cool-mod.zip", True, "MIT License"))
+        with open(a.local_path()) as f:
+            self.assertEqual([x["id"] for x in json.load(f)["addons"]], ["cool-mod"])
+        self.assertTrue([c for c in a.cards() if c["id"] == aid][0]["added"])
+        self.assertEqual(a.add_repo("someone/cool-mod"), aid, "pasted again: the same entry")
+        a.forget(aid)
+        with self.assertRaises(addons.AddonError):
+            a.entry(aid)
+        with self.assertRaisesRegex(addons.AddonError, "only add-ons you added"):
+            a.forget("known")
+
+    def test_a_py_release_is_a_program_and_known_ones_are_not_added_twice(self):
+        a = self.make({"full_name": "someone/cool-mod"}, [{"tag_name": "v1", "assets": [{"name": "tool.py"}]}])
+        self.assertEqual(a.entry(a.add_repo("someone/cool-mod"))["kind"], "companion")
+        self.assertEqual(a.add_repo("owner/known"), "known")
+
+    def test_refused(self):
+        a = self.make({"full_name": "someone/cool-mod"}, [])
+        with self.assertRaisesRegex(addons.AddonError, "no release"):
+            a.add_repo("someone/cool-mod")
+        for bad in ("not a repo", "a/../b", "https://gitlab.com/a/b", ""):
+            with self.assertRaises(addons.AddonError):
+                a.add_repo(bad)
+        with self.assertRaisesRegex(addons.AddonError, "could not read"):
+            a.add_repo("nobody/nothing")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1419,7 +1419,7 @@ local function onMessage(msg)
   elseif t == 'sea' then
     -- the sea's water tiles near the player (server seatiles.py, --sea on): sea.lua
     sea.onMessage(msg)
-  elseif t == 'addons' or t == 'addon_detail' or t == 'addon_status' or t == 'addon_apply' then
+  elseif t == 'addons' or t == 'addon_detail' or t == 'addon_status' or t == 'addon_apply' or t == 'addon_added' then
     M._addons.onMessage(msg)          -- the Add-ons page (addons.lua; server addons.py)
   elseif t == 'credits' then
     -- the sources around the player (server credits.py): msg.near, msg.far, drawn by credits.lua

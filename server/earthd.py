@@ -5602,6 +5602,31 @@ class Connection:
         self.send({"type": "addon_status", "id": aid, "state": "ready", "text": "Downloaded and checked: installing..."})
         self.send(apply)
 
+    async def addon_add(self, text):
+        """Add from GitHub: the pasted repository put on the local list (addons.Addons.add_repo), with
+        addon_added {ok, id | error}, then the list again."""
+        import addons as addonsmod
+        try:
+            aid = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().add_repo, text)
+            self.send({"type": "addon_added", "ok": True, "id": aid})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_added", "ok": False, "error": str(e)})
+        except Exception as e:
+            log.warning("add-ons: add %r: %s: %s", text, type(e).__name__, e)
+            self.send({"type": "addon_added", "ok": False, "error": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
+
+    async def addon_forget(self, aid):
+        """An add-on the player added taken off the list (addons.Addons.forget)."""
+        import addons as addonsmod
+        if not isinstance(aid, str):
+            return
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, self.s.addons().forget, aid)
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        await self.addons_list()
+
     async def addon_run(self, aid, op):
         """A program beside the game (kind companion): Start / Stop / Remove / autostart_on / autostart_off
         (addons.Addons.run_op), with addon_status, then the list again."""
@@ -6356,6 +6381,10 @@ class Connection:
             self.spawn(self.addon_detail(msg.get("id"), msg.get("refresh") is True))
         elif kind == "addon_install":           # ... Install / Update: downloaded and checked, then addon_apply
             self.spawn(self.addon_install(msg.get("id"), msg.get("consent") is True, msg.get("mp") is True))
+        elif kind == "addon_add":               # ... Add from GitHub: a pasted repository put on the local list
+            self.spawn(self.addon_add(msg.get("repo")))
+        elif kind == "addon_forget":            # ... one the player added taken off the list
+            self.spawn(self.addon_forget(msg.get("id")))
         elif kind == "addon_run":               # ... a program beside the game: start / stop / remove / autostart
             self.spawn(self.addon_run(msg.get("id"), msg.get("op")))
         elif kind == "addon_applied":           # ... the game's mod manager did it (or not): logged, the list again

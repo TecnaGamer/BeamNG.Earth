@@ -207,6 +207,8 @@ MOD_TO_SERVER = {
     "addon_install": {"id": F(str), "consent": F(bool), "mp": F(bool, OPT)},
     "addon_applied": {"id": F(str), "op": F(str), "ok": F(bool), "error": F(str, OPT)},
     "addon_run": {"id": F(str), "op": F(str)},     # a program beside the game: start / stop / uninstall / autostart
+    "addon_add": {"repo": F(str)},                  # Add from GitHub: the pasted repository
+    "addon_forget": {"id": F(str)},                 # an add-on the player added, taken off the list
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
@@ -252,6 +254,7 @@ SERVER_TO_MOD = {
     "addon_detail": {"id": F(str), "card": F(dict, OPT), "readme": F(str), "readmeLinks": F(list), "releases": F(list),
                      "error": F(str)},
     "addon_status": {"id": F(str), "state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT)},
+    "addon_added": {"ok": F(bool), "id": F(str, OPT), "error": F(str, OPT)},     # Add from GitHub's answer
     "addon_apply": {"id": F(str), "op": F(str), "file": F(str), "tmp": F(str), "old": F(list), "tag": F(str),
                     "active": F(bool), "uiApps": F(list), "code": F(dict), "oldCode": F(dict, OPT)},
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
@@ -433,7 +436,7 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
                        "addons", "addon_detail", "addon_status",     # the Add-ons page: only when it asks (online;
-                       "addon_apply",                                # test_addons, test_addons.lua)
+                       "addon_apply", "addon_added",                 # test_addons, test_addons.lua)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)

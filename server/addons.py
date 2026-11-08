@@ -39,6 +39,11 @@ The local list (<data>/addons/local.json, LOCAL_NAME; same format, entries with 
 file on this computer, shown with a Local badge, an entry with a registry id in that one's place (a changed copy tried
 before its author releases it). Only this computer's own file says so: nothing from the network adds local entries.
 
+Add from GitHub (the user, 2026-11-07: "add an option where people can paste github repos to install any addon"): the
+player pastes owner/name or a github.com link; its latest release decides what it is (a .zip: a game mod, checked as
+any; a .py: a program beside the game; else downloads only) and the entry goes into the local list with added: true
+(a badge, the notice says nobody has looked at it, "Remove from my list"). Only the player's own paste adds one.
+
 A game mod's code (addonrun.mod_code: its own GE extensions and modules, whether it has UI files) goes with every
 hand-over to the mod, which unloads it before an update / turning off / removing and reloads the UI after, so a change
 applies without restarting the game (the game's own files a mod replaces still need a restart: said on the page).
@@ -189,6 +194,9 @@ def _entry(raw, local=False):
         if port is not None and not (isinstance(port, int) and 1024 <= port <= 65535):
             raise ValueError("bad run port")
         e["run"] = {"args": list(args), "page": page, "port": port, "lan": run.get("lan") is True}
+    e["added"] = raw.get("added") is True
+    if e["added"] and not local:
+        raise ValueError("added entries only in the local list")
     e["local"] = None
     if raw.get("local") is not None:
         lo = raw["local"]
@@ -503,7 +511,7 @@ class Addons:
              "installed": False, "version": "", "latest": "", "latestDate": "", "size": 0, "update": False,
              "reviewed": False, "installedReviewed": False, "canInstall": False, "busy": e["id"] in self._busy,
              "error": "", "age": None, "stale": False, "tooNew": False, "local": bool(e["local"]),
-             "running": False, "autostart": False, "page": "", "lanPage": "", "code": None}
+             "running": False, "autostart": False, "page": "", "lanPage": "", "code": None, "added": e["added"]}
         try:
             rels, c["age"], c["stale"] = self._releases(e, fresh)
         except AddonError as err:
@@ -760,6 +768,88 @@ class Addons:
                 except RuntimeError as err:
                     log.warning("add-ons: %s did not start: %s", e["id"], err)
 
+    # --- Add from GitHub ---
+    def add_repo(self, text):
+        """Add a GitHub repo the player pasted to the local list (added: true). Returns its id. Raises AddonError."""
+        repo = parse_repo(text)
+        try:
+            body, _, _ = self.github.get(f"{API}{repo}", fresh=True)
+            info = json.loads(body)
+        except (AddonError, ValueError) as err:
+            raise AddonError(f"could not read {repo} on GitHub ({err})") from err
+        if not isinstance(info, dict) or not isinstance(info.get("full_name"), str):
+            raise AddonError(f"no repository {repo} on GitHub")
+        repo = info["full_name"]
+        if not _REPO.fullmatch(repo):
+            raise AddonError("an unusual repository name")
+        for e in self.entries:          # (already on the list: that one)
+            if e["repo"].lower() == repo.lower():
+                return e["id"]
+        try:
+            body, _, _ = self.github.get(f"{API}{repo}/releases?per_page={RELEASES_N}", fresh=True)
+            rels = json.loads(body)
+        except (AddonError, ValueError) as err:
+            raise AddonError(f"could not read its releases ({err})") from err
+        names = []
+        for r in rels if isinstance(rels, list) else ():
+            if isinstance(r, dict) and not r.get("draft") and not r.get("prerelease"):
+                names = [str(a.get("name") or "") for a in r.get("assets") or () if isinstance(a, dict)]
+                break
+        if not names:
+            raise AddonError("it has no release with files to install (only repositories with GitHub releases work)")
+        aid = _repo_id(repo, {e["id"] for e in self.entries})
+        owner, name = repo.split("/", 1)
+        lic = info.get("license") if isinstance(info.get("license"), dict) else {}
+        raw = {"id": aid, "name": name[:80], "author": owner[:40], "repo": repo, "added": True,
+               "summary": (str(info.get("description") or "") or f"{name} from github.com/{repo}")[:400],
+               "licence": (str(lic.get("name") or "") or "No licence named in the repository")[:300],
+               "trust": "latest"}
+        if any(n.lower().endswith(".zip") for n in names):
+            raw.update(kind="beamng-mod", asset=r"\.zip$", modFile=f"{aid}.zip")
+        elif any(addonrun._SAFE.fullmatch(n) for n in names):
+            raw.update(kind="companion", asset=r"\.py$", run={"args": []})
+        else:
+            raw.update(kind="link", asset="")
+        _entry(raw, local=True)                  # (the same checks as any entry)
+        doc = self._read_local()
+        doc["addons"] = [a for a in doc["addons"] if a.get("repo", "").lower() != repo.lower()] + [raw]
+        self._write_local(doc)
+        self.entries = self._merge(self.bundled)
+        log.info("add-ons: %s added from github.com/%s (%s)", aid, repo, raw["kind"])
+        return aid
+
+    def forget(self, aid):
+        """An entry the player added taken off the local list (not while installed). Raises AddonError."""
+        e = self.entry(aid)
+        if not e["added"]:
+            raise AddonError("only add-ons you added can be removed from the list")
+        if (e["kind"] == "beamng-mod" and self.installed(e)["installed"]) or \
+                (e["kind"] == "companion" and self.runner.installed(aid)):
+            raise AddonError("remove it first")
+        doc = self._read_local()
+        doc["addons"] = [a for a in doc["addons"] if a.get("id") != aid]
+        self._write_local(doc)
+        self.entries = self._merge(self.bundled)
+        log.info("add-ons: %s taken off the list", aid)
+
+    def _read_local(self):
+        try:
+            with open(self.local_path(), encoding="utf-8") as f:
+                doc = json.load(f)
+            if isinstance(doc, dict) and isinstance(doc.get("addons"), list):
+                return doc
+        except (OSError, ValueError):
+            pass
+        return {"format": REGISTRY_FORMAT, "addons": []}
+
+    def _write_local(self, doc):
+        doc.setdefault("format", REGISTRY_FORMAT)
+        p = self.local_path()
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(doc, f, indent=2)
+        os.replace(p + ".tmp", p)
+
     def openable_local(self, url):
         """A companion's own local web page (its entry's run.page, any path under its origin)."""
         if not isinstance(url, str) or not url.startswith("http://"):
@@ -836,6 +926,33 @@ def check_mod_zip(path):
     if not any(n.replace("\\", "/").startswith(MOD_TOP) for n in names):
         return "the downloaded zip is not laid out as a BeamNG mod (deleted)"
     return ""
+
+
+_URL = re.compile(r"(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9-]{1,39})/([A-Za-z0-9._-]{1,100})(?:[/?#].*)?")
+
+
+def parse_repo(text):
+    """owner/name of a pasted repository (owner/name, or a github.com link to it or to a page in it). AddonError."""
+    t = (text or "").strip() if isinstance(text, str) else ""
+    m = _URL.fullmatch(t)
+    repo = f"{m.group(1)}/{m.group(2)}" if m else t
+    if repo.endswith(".git"):
+        repo = repo[:-4]
+    if not _REPO.fullmatch(repo) or ".." in repo:
+        raise AddonError("paste a GitHub repository: owner/name or its github.com link")
+    return repo
+
+
+def _repo_id(repo, taken):
+    """A list id for a pasted repository: its name in lower case ([a-z0-9-]), made unique."""
+    base = re.sub(r"[^a-z0-9]+", "-", repo.split("/", 1)[1].lower()).strip("-")[:30] or "addon"
+    if not base[0].isalnum():
+        base = "a" + base
+    base = base if len(base) >= 2 else base + "-x"
+    aid, n = base, 2
+    while aid in taken:
+        aid, n = f"{base}-{n}", n + 1
+    return aid
 
 
 def _lan_ip():

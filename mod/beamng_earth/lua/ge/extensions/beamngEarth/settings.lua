@@ -721,6 +721,8 @@ function M.uiAddonOpen(id, refresh) return M.addonsCall('requestDetail', id, ref
 function M.uiAddonDetail(id) return M.addonsCall('uiDetail', id) end
 function M.uiAddonInstall(id, agreed) return M.addonsCall('install', id, agreed) end
 function M.uiAddonManage(id, op) return M.addonsCall('manage', id, op) end
+function M.uiAddonAdd(repo) return M.addonsCall('add', repo) end
+function M.uiAddonForget(id) return M.addonsCall('forget', id) end
 
 ------------------------------------------------------------------------------------------
 -- The world map (ui/ui-vue/mods/beamngEarth/EarthMap.vue: a route of its own, and a pause-menu

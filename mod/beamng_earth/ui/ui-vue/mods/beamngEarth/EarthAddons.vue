@@ -32,6 +32,7 @@
           <span class="addon-badge" :class="{ 'is-on': c.installed && c.active !== false, 'is-update': c.update }">{{ stateLine(c) }}</span>
           <span v-if="c.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
           <span v-if="c.local" class="addon-badge is-local">Local</span>
+          <span v-if="c.added" class="addon-badge is-added">Added by you</span>
           <span v-if="c.latestDate" class="addon-date">{{ day(c.latestDate) }}</span>
         </div>
         <div v-if="c.status && c.status.text" class="addons-note" :class="{ 'is-error': c.status.state === 'error' }">{{ progressText(c.status) }}</div>
@@ -40,6 +41,17 @@
 
       <div class="addons-actions">
         <BngButton :accent="ACCENTS.outlined" :disabled="!connected" @click="refresh">Check for updates</BngButton>
+      </div>
+
+      <!-- Add from GitHub: any repository with releases, put on the player's own list -->
+      <div class="addon-add">
+        <div class="addon-add-title">Add from GitHub</div>
+        <div class="addons-note">Paste a GitHub repository (owner/name or its link). Its latest release is used: a .zip installs as a game mod, a .py runs beside the game. Only add things from people you trust: nobody has checked them.</div>
+        <div class="addons-actions">
+          <input v-model="repoText" class="addon-add-input" type="text" placeholder="github.com/owner/name" @keydown.enter="addRepo(repoText)" @keydown.stop @keyup.stop />
+          <BngButton :accent="ACCENTS.main" :disabled="!connected || inMp || !repoText.trim() || (adding && adding.state === 'progress')" @click="addRepo(repoText)">Add</BngButton>
+        </div>
+        <div v-if="adding && adding.text" class="addons-note" :class="{ 'is-error': adding.state === 'error' }">{{ adding.text }}</div>
       </div>
     </template>
 
@@ -58,6 +70,7 @@
         <span class="addon-badge" :class="{ 'is-on': openCard.installed && openCard.active !== false, 'is-update': openCard.update }">{{ stateLine(openCard) }}</span>
         <span v-if="openCard.reviewed" class="addon-badge is-reviewed">Reviewed by BeamNG.Earth</span>
         <span v-if="openCard.local" class="addon-badge is-local">Local</span>
+        <span v-if="openCard.added" class="addon-badge is-added">Added by you</span>
         <span v-if="openCard.size" class="addon-date">{{ size(openCard.size) }}</span>
       </div>
       <div v-if="openCard.note && !(openCard.kind === 'companion' && openCard.canInstall)" class="addons-note">{{ openCard.note }}</div>
@@ -68,6 +81,7 @@
         <div class="addon-consent-title">Install {{ openCard.name }}?</div>
         <div>
           This add-on is made by <b>{{ openCard.author }}</b>, not by BeamNG.Earth.
+          <template v-if="openCard.added"><b>You added it yourself: it is not on BeamNG.Earth's list and nobody has checked it.</b> Install it only if you trust its author.</template>
           <template v-if="openCard.reviewed">BeamNG.Earth has looked through this version's files.</template>
           <template v-else>BeamNG.Earth has not reviewed this version.</template>
           <template v-if="openCard.kind === 'companion'">It is a program that runs on this computer beside the game (with BeamNG.Earth's own Python), with the same access as any program you run.</template>
@@ -132,6 +146,9 @@
       <div v-if="openCard.kind === 'companion' && openCard.exitCode" class="addons-note is-error">
         It stopped with an error ({{ openCard.exitCode }}). Its last lines: {{ lines(openCard.logTail).join(" · ") }}
       </div>
+      <div v-if="openCard.added && !openCard.installed" class="addons-actions">
+        <BngButton :accent="ACCENTS.outlined" @click="forget(openCard)">Remove from my list</BngButton>
+      </div>
       <div v-if="removeAsk === openCard.id" class="addons-actions">
         <span v-if="openCard.kind === 'companion'" class="addons-note">Remove {{ openCard.name }} and its own data (its recorded drives) from this computer?</span>
         <span v-else class="addons-note">Remove {{ openCard.name }} from your mods folder? Its own saves stay.</span>
@@ -178,11 +195,12 @@ import { BngButton, ACCENTS } from "@/common/components/base"
 import {
   cards, loaded, listError, connected, inMp, openCard, detail, consentFor, actionMsg,
   open, back, refresh, install, cancelConsent, manage, onTextClick, openRepo, openDownload,
-  stateLine, size, day, progressText, start, stop, lines,
+  stateLine, size, day, progressText, start, stop, lines, adding, addRepo, forget,
 } from "./earthAddonsStore.js"
 
 const tab = ref("readme")
 const removeAsk = ref("")
+const repoText = ref("")
 
 function busy(c) { return !!(c.busy || (c.status && c.status.state === "progress")) }
 
@@ -234,6 +252,11 @@ onUnmounted(stop)
 .addon-badge.is-update { background: rgba(255, 102, 0, 0.35); }
 .addon-badge.is-reviewed { background: rgba(80, 150, 255, 0.3); }
 .addon-badge.is-local { background: rgba(255, 180, 60, 0.3); }
+.addon-badge.is-added { background: rgba(255, 90, 90, 0.3); }
+.addon-add { margin-top: 1.2em; padding-top: 0.8em; border-top: 1px solid rgba(255, 255, 255, 0.15); }
+.addon-add-title { font-weight: 600; margin-bottom: 0.3em; }
+.addon-add-input { flex: 1 1 18em; min-width: 12em; padding: 0.4em 0.6em; color: inherit; background: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 4px; font: inherit; }
 .addons-actions { display: flex; flex-wrap: wrap; gap: 0.5em; align-items: center; }
 .addons-actions.is-top { justify-content: space-between; }
 .addon-consent {

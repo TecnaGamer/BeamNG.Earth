@@ -43,6 +43,7 @@ local checks = {}             -- after a rename: { name, file, at, active, id }
 local consent = nil           -- id -> the author the player agreed to
 local clock, serial = 0, 0
 local reloadAt = nil          -- clock at which the UI is reloaded (a mod with UI files changed)
+local adding = nil            -- Add from GitHub: { state = 'progress' | 'done' | 'error', text, id }
 
 -- (fields: the tests replace them)
 M.modmanager = function() return rawget(_G, 'core_modmanager') or (rawget(_G, 'extensions') and extensions.core_modmanager) end
@@ -152,6 +153,26 @@ function M.manage(id, op)
   return true
 end
 
+-- Add from GitHub: the pasted repository (owner/name or its link) put on the player's own list by the server.
+function M.add(repo)
+  if type(repo) ~= 'string' or #repo < 3 or #repo > 300 then return false, 'paste a GitHub repository' end
+  if M.inMp() then return false, 'not while a BeamMP server is joined: leave it first' end
+  if not net.isConnected() then return false, 'the BeamNG.Earth app is not connected' end
+  adding = { state = 'progress', text = 'Reading it on GitHub...' }
+  serial = serial + 1
+  net.send({ type = 'addon_add', repo = repo })
+  return true
+end
+
+-- One the player added, taken off their list.
+function M.forget(id)
+  local a = entry(id)
+  if not a or a.added ~= true then return false, 'only add-ons you added can be removed from the list' end
+  if not net.isConnected() then return false, 'the BeamNG.Earth app is not connected' end
+  net.send({ type = 'addon_forget', id = id })
+  return true
+end
+
 ------------------------------------------------------------------------------------------
 -- the server's messages
 
@@ -172,6 +193,10 @@ function M.onMessage(msg)
     if type(msg.id) == 'string' then
       setStatus(msg.id, tostring(msg.state or ''), tostring(msg.text or ''), tonumber(msg.done), tonumber(msg.total))
     end
+  elseif t == 'addon_added' then
+    adding = msg.ok == true and { state = 'done', text = 'Added to your list.', id = tostring(msg.id or '') }
+      or { state = 'error', text = tostring(msg.error or 'could not add it') }
+    serial = serial + 1
   elseif t == 'addon_apply' then
     local a = type(msg.id) == 'string' and entry(msg.id) or nil
     local file, tmp = msg.file, msg.tmp
@@ -377,14 +402,14 @@ function M.uiState()
     out[#out + 1] = c
   end
   return { addons = out, error = listError, asked = listAsked, loaded = list ~= nil, connected = net.isConnected(),
-    mp = M.inMp(), serial = serial }
+    mp = M.inMp(), serial = serial, adding = adding }
 end
 
 function M.uiDetail(id) return details[id] end
 
 function M.reset()
   list, listError, listAsked, details, status, queue, checks, consent, serial = nil, nil, false, {}, {}, {}, {}, nil, 0
-  reloadAt = nil
+  reloadAt, adding = nil, nil
 end
 
 return M

@@ -14,6 +14,7 @@ export const openId = ref("")          // the add-on whose page is open ("" = th
 export const detail = ref(null)        // its README and changelog (the server's addon_detail)
 export const consentFor = ref("")      // the add-on whose notice is showing (Install pressed the first time)
 export const actionMsg = ref({})       // id -> the last refusal from Lua ("needs your agreement first", ...)
+export const adding = ref(null)        // Add from GitHub: { state, text, id } (addons.lua)
 let detailSerial = -1
 let timer = null
 let users = 0
@@ -40,6 +41,7 @@ export function poll() {
     listError.value = res.error || ""
     connected.value = res.connected === true
     inMp.value = res.mp === true
+    adding.value = res.adding || null
     const c = openCard.value
     if (c && c.detailSerial !== detailSerial) fetchDetail()
   })
@@ -86,6 +88,23 @@ export function install(card) {
 }
 
 export function cancelConsent() { consentFor.value = "" }
+
+// Add from GitHub: the pasted repository put on the player's own list (the server reads it on GitHub)
+export function addRepo(text) {
+  const t = String(text || "").trim()
+  if (!t) return
+  call(`uiAddonAdd(${luaStr(t)})`, res => {
+    if (res && res.ok === false) adding.value = { state: "error", text: res.error || "Could not add it" }
+    setTimeout(poll, 300)
+  })
+}
+
+export function forget(card) {
+  call(`uiAddonForget(${luaStr(card.id)})`, res => {
+    answer(card.id, res)
+    back()
+  })
+}
 
 export function manage(card, op) {
   call(`uiAddonManage(${luaStr(card.id)}, ${luaStr(op)})`, res => answer(card.id, res))
