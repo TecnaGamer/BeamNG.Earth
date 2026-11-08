@@ -235,6 +235,33 @@ class AreasTest(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(len(s.mapdata.got) + len(s.dem.got), n, "paused: no more downloads")
 
+    def test_items_failing_every_pass_end_as_unavailable(self):
+        """GitHub #917: a DEM tile no host has failed every pass, and the area stood at 99 % all night (a pass every
+        half hour). After MAX_FAILED_PASSES passes in a row the area is done, the tile counted unavailable; a restart
+        keeps the note, Resume tries again."""
+        s = StubServer()
+        bad = next(st[1:] for st in areas.Areas(self.tmp.name, s).steps(BOX) if st[0] == "dem")
+        real = s.dem.predownload
+
+        def predownload(z, x, y):
+            if (z, x, y) == bad:
+                raise OSError("404 from every host")
+            return real(z, x, y)
+        s.dem.predownload = predownload
+        with mock.patch.object(areas, "PASS_RETRY_S", 0.0):
+            a, _ = self.make(server=s, start=True)
+            ok, aid = a.add(*BOX)
+            self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        m = a.message()["areas"][0]
+        self.assertEqual(m["done"], m["total"])
+        self.assertIn("1 items unavailable", m["msg"])
+        a.close()
+        b, _ = self.make(server=s)
+        self.assertIn("unavailable", b.message()["areas"][0]["msg"], "the note survives a restart")
+        self.assertTrue(b.command(aid, "resume"))
+        self.assertEqual(b.areas[0]["failedPasses"], 0, "Resume: new tries")
+        self.assertEqual(b.message()["areas"][0]["msg"], "")
+
     def test_refused_requests_wait_and_budgets_wait_for_tomorrow(self):
         s = StubServer()
         for st in areas.Areas(self.tmp.name, s).steps(BOX):     # (only the DEM left to fetch)
