@@ -5616,6 +5616,23 @@ class Connection:
             self.send({"type": "addon_added", "ok": False, "error": f"{type(e).__name__}: {e}"[:200]})
         await self.addons_list()
 
+    async def addon_options(self, aid, values):
+        """An add-on's Options tab saved (addons.Addons.set_options: checked, kept; a running program restarted with
+        them), with addon_status, then the list again."""
+        import addons as addonsmod
+        if not isinstance(aid, str):
+            return
+        try:
+            again = await asyncio.get_running_loop().run_in_executor(None, self.s.addons().set_options, aid, values)
+            self.send({"type": "addon_status", "id": aid, "state": "done",
+                       "text": "Saved; restarted with them." if again else "Saved."})
+        except addonsmod.AddonError as e:
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": str(e)})
+        except Exception as e:
+            log.warning("add-ons: options %s: %s: %s", aid, type(e).__name__, e)
+            self.send({"type": "addon_status", "id": aid, "state": "error", "text": f"{type(e).__name__}: {e}"[:200]})
+        await self.addons_list()
+
     async def addon_forget(self, aid):
         """An add-on the player added taken off the list (addons.Addons.forget)."""
         import addons as addonsmod
@@ -6383,6 +6400,8 @@ class Connection:
             self.spawn(self.addon_install(msg.get("id"), msg.get("consent") is True, msg.get("mp") is True))
         elif kind == "addon_add":               # ... Add from GitHub: a pasted repository put on the local list
             self.spawn(self.addon_add(msg.get("repo")))
+        elif kind == "addon_options":           # ... its Options tab saved
+            self.spawn(self.addon_options(msg.get("id"), msg.get("values")))
         elif kind == "addon_forget":            # ... one the player added taken off the list
             self.spawn(self.addon_forget(msg.get("id")))
         elif kind == "addon_run":               # ... a program beside the game: start / stop / remove / autostart

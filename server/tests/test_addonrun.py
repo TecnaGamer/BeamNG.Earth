@@ -185,5 +185,73 @@ class AddFromGitHubTest(unittest.TestCase):
             a.add_repo("nobody/nothing")
 
 
+class OptionsTest(unittest.TestCase):
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="addonopts_")
+        script = os.path.join(self.d, "tool_v1.py")
+        with open(script, "w") as f:
+            f.write(COMPANION)
+        reg = addons.parse_registry({"format": 1, "addons": [{
+            "id": "tool", "name": "Tool", "author": "someone", "repo": "someone/tool", "kind": "companion",
+            "summary": "s", "licence": "l", "asset": r"^tool.*\.py$", "local": {"file": script, "tag": "v1"},
+            "run": {"args": ["--feed"], "page": "http://127.0.0.1:{port}/map", "lan": True},
+            "options": [{"key": "port", "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535,
+                         "arg": "--port"},
+                        {"key": "fast", "label": "Fast", "type": "bool", "arg": "--fast", "env": "BNE_FAST"},
+                        {"key": "units", "label": "Units", "type": "choice", "choices": ["km/h", "mph"], "env": "BNE_UNITS"}]}]},
+            local=True)
+        self.a = addons.Addons(os.path.join(self.d, "user"), os.path.join(self.d, "cache"), FakeNet(), registry=reg,
+                               data_dir=os.path.join(self.d, "data"))
+        self.addCleanup(self.a.runner.stop_all)
+
+    def test_defaults_values_args_and_page(self):
+        e = self.a.entry("tool")
+        self.assertEqual(self.a.values(e), {"port": 47700, "fast": False, "units": "km/h"})
+        self.assertEqual(self.a.run_args(e), (["--feed", "--port", "47700"], {"BNE_FAST": "0", "BNE_UNITS": "km/h"}))
+        self.assertEqual(self.a.page(e), "http://127.0.0.1:47700/map")
+        self.assertFalse(self.a.set_options("tool", {"port": 47800, "fast": True, "units": "mph", "other": 1}))
+        self.assertEqual(self.a.run_args(e), (["--feed", "--port", "47800", "--fast"], {"BNE_FAST": "1", "BNE_UNITS": "mph"}))
+        c = self.a.cards()[0]
+        self.assertEqual(c["page"], "http://127.0.0.1:47800/map")
+        self.assertEqual({o["key"]: o["value"] for o in c["options"]}, {"port": 47800, "fast": True, "units": "mph"})
+        self.assertTrue(self.a.openable("http://127.0.0.1:47800/map") and not self.a.openable("http://127.0.0.1:47700/map"))
+        for bad in ({"port": 80}, {"port": "x"}, {"port": True}, {"units": "knots"}, {"fast": "yes"}):
+            with self.assertRaisesRegex(addons.AddonError, "not a valid value"):
+                self.a.set_options("tool", bad)
+        self.assertEqual(self.a.values(e)["port"], 47800, "a refused save changes nothing")
+
+    def test_a_running_program_restarts_with_them(self):
+        self.a.cards()
+        self.a.stage("tool", consent=True)
+        self.a.run_op("tool", "start")
+        seen = os.path.join(self.a.runner.dir("tool"), "seen.txt")
+        end = time.monotonic() + 20
+        while not os.path.exists(seen) and time.monotonic() < end:
+            time.sleep(0.1)
+        os.remove(seen)
+        self.assertTrue(self.a.set_options("tool", {"port": 47901}))
+        end = time.monotonic() + 20
+        while not os.path.exists(seen) and time.monotonic() < end:
+            time.sleep(0.1)
+        with open(seen) as f:
+            self.assertIn("--port 47901", f.read())
+
+    def test_bad_declarations_refused(self):
+        for bad in ([{"key": "Port", "type": "int"}], [{"key": "p", "type": "float"}],
+                    [{"key": "p", "type": "int", "env": "LD_PRELOAD"}], [{"key": "p", "type": "choice", "choices": []}],
+                    [{"key": "p", "type": "int", "arg": "; rm -rf"}], [{"key": "p", "type": "int"}] * 2):
+            with self.assertRaises(ValueError):
+                addons.parse_options(bad)
+
+    def test_a_mod_zips_own_declaration(self):
+        p = os.path.join(self.d, "m.zip")
+        with zipfile.ZipFile(p, "w") as z:
+            z.writestr("lua/ge/extensions/m/core.lua", "x")
+            z.writestr(addons.MANIFEST, json.dumps({"options": [{"key": "level", "type": "int", "min": 1, "max": 5,
+                                                                 "default": 3}]}))
+        man = addonrun.mod_code(p)["manifest"]
+        self.assertEqual(addons.parse_options(man["options"])[0]["default"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -168,12 +168,33 @@
       <div class="addon-tabs">
         <BngButton :accent="tab === 'readme' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'readme'">Description</BngButton>
         <BngButton :accent="tab === 'changes' ? ACCENTS.main : ACCENTS.outlined" @click="tab = 'changes'">Changelog</BngButton>
+        <BngButton v-if="lines(openCard.options).length" :accent="tab === 'options' ? ACCENTS.main : ACCENTS.outlined" @click="openOptions">Options</BngButton>
+      </div>
+      <!-- the add-on's own options (its declaration: docs/ADDONS.md "Options"); saved by the server, a running program restarted -->
+      <div v-if="tab === 'options' && lines(openCard.options).length" class="addon-options">
+        <div v-for="o in lines(openCard.options)" :key="o.key" class="addon-option">
+          <label class="addon-option-label">{{ o.label }}</label>
+          <input v-if="o.type === 'int'" v-model.number="edits[o.key]" class="addon-add-input addon-option-num" type="number" :min="o.min" :max="o.max" step="1" @keydown.stop @keyup.stop />
+          <input v-else-if="o.type === 'text'" v-model="edits[o.key]" class="addon-add-input" type="text" maxlength="200" @keydown.stop @keyup.stop />
+          <select v-else-if="o.type === 'choice'" v-model="edits[o.key]" class="addon-add-input">
+            <option v-for="ch in lines(o.choices)" :key="ch" :value="ch">{{ ch }}</option>
+          </select>
+          <BngButton v-else-if="o.type === 'bool'" :accent="edits[o.key] ? ACCENTS.main : ACCENTS.outlined" @click="edits[o.key] = !edits[o.key]">{{ edits[o.key] ? "On" : "Off" }}</BngButton>
+          <span v-if="o.type === 'int'" class="addon-date">{{ o.min }} to {{ o.max }} (default {{ o.default }})</span>
+          <div v-if="o.help" class="addons-note">{{ o.help }}</div>
+        </div>
+        <div class="addons-actions">
+          <BngButton :accent="ACCENTS.main" :disabled="!connected || busy(openCard)" @click="saveOptions(openCard, edits)">Save</BngButton>
+          <BngButton :accent="ACCENTS.outlined" @click="resetEdits(true)">Defaults</BngButton>
+          <span v-if="openCard.running" class="addons-note">Saving restarts it with the new options.</span>
+        </div>
       </div>
       <div v-if="!detail" class="addons-note">Loading...</div>
       <template v-else>
         <div v-if="detail.error" class="addons-note is-error">{{ detail.error }}</div>
         <!-- (the server's HTML: only its own tags, text escaped, no scripts, styles or addresses: mdhtml.rs) -->
-        <div v-if="tab === 'readme'" class="addon-md" @click="onTextClick($event, detail.readmeLinks)" v-html="detail.readme"></div>
+        <div v-if="tab === 'options'"></div>
+        <div v-else-if="tab === 'readme'" class="addon-md" @click="onTextClick($event, detail.readmeLinks)" v-html="detail.readme"></div>
         <template v-else>
           <div v-for="r in detail.releases || []" :key="r.tag" class="addon-release">
             <div class="addon-release-head">
@@ -195,12 +216,24 @@ import { BngButton, ACCENTS } from "@/common/components/base"
 import {
   cards, loaded, listError, connected, inMp, openCard, detail, consentFor, actionMsg,
   open, back, refresh, install, cancelConsent, manage, onTextClick, openRepo, openDownload,
-  stateLine, size, day, progressText, start, stop, lines, adding, addRepo, forget,
+  stateLine, size, day, progressText, start, stop, lines, adding, addRepo, forget, saveOptions,
 } from "./earthAddonsStore.js"
 
 const tab = ref("readme")
 const removeAsk = ref("")
 const repoText = ref("")
+const edits = ref({})       // the Options tab's values being edited
+
+function resetEdits(defaults) {
+  const out = {}
+  for (const o of lines(openCard.value && openCard.value.options)) out[o.key] = defaults ? o.default : o.value
+  edits.value = out
+}
+
+function openOptions() {
+  tab.value = "options"
+  resetEdits(false)
+}
 
 function busy(c) { return !!(c.busy || (c.status && c.status.state === "progress")) }
 
@@ -253,6 +286,10 @@ onUnmounted(stop)
 .addon-badge.is-reviewed { background: rgba(80, 150, 255, 0.3); }
 .addon-badge.is-local { background: rgba(255, 180, 60, 0.3); }
 .addon-badge.is-added { background: rgba(255, 90, 90, 0.3); }
+.addon-options { margin: 0.6em 0; }
+.addon-option { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5em; margin: 0.4em 0; }
+.addon-option-label { min-width: 10em; font-weight: 600; }
+.addon-option-num { flex: 0 0 8em; min-width: 6em; }
 .addon-add { margin-top: 1.2em; padding-top: 0.8em; border-top: 1px solid rgba(255, 255, 255, 0.15); }
 .addon-add-title { font-weight: 600; margin-bottom: 0.3em; }
 .addon-add-input { flex: 1 1 18em; min-width: 12em; padding: 0.4em 0.6em; color: inherit; background: rgba(0, 0, 0, 0.35);

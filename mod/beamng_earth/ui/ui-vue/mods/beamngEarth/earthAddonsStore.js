@@ -99,6 +99,12 @@ export function addRepo(text) {
   })
 }
 
+// Options tab: the values as a Lua table (the game's jsonDecode); the server checks each against its option
+export function saveOptions(card, values) {
+  const json = JSON.stringify(values || {})
+  call(`uiAddonOptions(${luaStr(card.id)}, jsonDecode(${luaStr(json)}))`, res => answer(card.id, res))
+}
+
 export function forget(card) {
   call(`uiAddonForget(${luaStr(card.id)})`, res => {
     answer(card.id, res)

@@ -13,14 +13,20 @@
 --   onBeamNGEarthWorldReady(info)     the world around the player is loaded (after the level loads, a teleport)
 --   onBeamNGEarthTeleported(info)     a teleport finished: info.lat / lon where the player is now
 --   onBeamNGEarthRouteArrived(info)   the GPS destination reached: info.lat / lon / name
--- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived'), which returns a handle for api.off(handle).
+--   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
+-- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions'), which returns a handle for
+-- api.off(handle).
+--
+-- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
+-- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
+-- on its Options tab; api.addonOptions(id) is { key = value } (the defaults until then), or nil before the list came.
 -- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 0
-local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true }
+M.MAJOR, M.MINOR = 1, 1
+local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
-  routeArrived = 'onBeamNGEarthRouteArrived' }
+  routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -179,6 +185,12 @@ function M.on(event, fn)
 end
 
 function M.off(handle) listeners[handle] = nil end
+
+-- { key = value } of add-on id's options (its Options tab), or nil (no such add-on, or the list not come yet)
+function M.addonOptions(id)
+  local addons = mod('addons')
+  return addons and type(addons.optionValues) == 'function' and addons.optionValues(id) or nil
+end
 
 -- (ours: the mod's modules say when something happens; gps.lua at arrival)
 function M._event(event, info)

@@ -44,6 +44,7 @@ local consent = nil           -- id -> the author the player agreed to
 local clock, serial = 0, 0
 local reloadAt = nil          -- clock at which the UI is reloaded (a mod with UI files changed)
 local adding = nil            -- Add from GitHub: { state = 'progress' | 'done' | 'error', text, id }
+local optKnown = {}           -- id -> the option values the mods last saw (the addonOptions event)
 
 -- (fields: the tests replace them)
 M.modmanager = function() return rawget(_G, 'core_modmanager') or (rawget(_G, 'extensions') and extensions.core_modmanager) end
@@ -164,6 +165,27 @@ function M.add(repo)
   return true
 end
 
+-- An add-on's Options tab saved: values { key = value } (the server checks each against its option).
+function M.setOptions(id, values)
+  local a = entry(id)
+  if not a or type(values) ~= 'table' then return false, 'no such add-on' end
+  if not net.isConnected() then return false, 'the BeamNG.Earth app is not connected' end
+  setStatus(id, 'progress', 'Saving...')
+  net.send({ type = 'addon_options', id = id, values = values })
+  return true
+end
+
+-- { key = value } of an add-on's options as the list has them (beamngEarth_api.addonOptions), or nil.
+function M.optionValues(id)
+  local a = entry(id)
+  if not a then return nil end
+  local out = {}
+  for _, o in ipairs(type(a.options) == 'table' and a.options or {}) do
+    if type(o) == 'table' and type(o.key) == 'string' then out[o.key] = o.value end
+  end
+  return out
+end
+
 -- One the player added, taken off their list.
 function M.forget(id)
   local a = entry(id)
@@ -180,6 +202,19 @@ function M.onMessage(msg)
   local t = msg.type
   if t == 'addons' then
     list = type(msg.addons) == 'table' and msg.addons or {}
+    -- (an add-on's options changed since the mods last saw them: told, beamngEarth_api's addonOptions event; the first
+    -- time an add-on's values come is no change)
+    local api = rawget(_G, 'beamngEarth_api')
+    for _, a in ipairs(list) do
+      local now, was = M.optionValues(a.id), optKnown[a.id]
+      if was and now then
+        local changed = false
+        for k, v in pairs(now) do if was[k] ~= v then changed = true end end
+        for k in pairs(was) do if now[k] == nil then changed = true end end
+        if changed and api and type(api._event) == 'function' then pcall(api._event, 'addonOptions', { id = a.id, values = now }) end
+      end
+      optKnown[a.id] = (now and next(now) ~= nil) and now or nil
+    end
     listError = type(msg.error) == 'string' and msg.error or nil
     serial = serial + 1
   elseif t == 'addon_detail' then
@@ -409,7 +444,7 @@ function M.uiDetail(id) return details[id] end
 
 function M.reset()
   list, listError, listAsked, details, status, queue, checks, consent, serial = nil, nil, false, {}, {}, {}, {}, nil, 0
-  reloadAt, adding = nil, nil
+  reloadAt, adding, optKnown = nil, nil, {}
 end
 
 return M

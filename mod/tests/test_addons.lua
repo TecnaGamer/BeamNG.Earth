@@ -232,4 +232,24 @@ A.onMessage({ type = 'addon_detail', id = 'truck', readme = '<p>x</p>', readmeLi
 T.check(A.uiDetail('truck').readme == '<p>x</p>' and A.uiState().addons[1].detailSerial > 0, 'the detail kept, its serial on the card')
 T.check(A.requestDetail('truck', true) and last('addon_detail').refresh == true, 'the detail asked again')
 
+-- options: the list's values for the mods (beamngEarth_api.addonOptions), a change told as the addonOptions event
+local seenOpt = {}
+_G.beamngEarth_api = { _event = function(ev, info) seenOpt[#seenOpt + 1] = { ev, info } end }
+local function withOpts(port)
+  return { type = 'addons', addons = { { id = 'truck', kind = 'beamng-mod', file = 'truck-mod.zip', author = 'MadMerick01',
+    options = { { key = 'port', type = 'int', value = port }, { key = 'on', type = 'bool', value = true } } } } }
+end
+A.onMessage(withOpts(47700))
+local v = A.optionValues('truck')
+T.check(v and v.port == 47700 and v.on == true, 'the values as { key = value }')
+T.check(#seenOpt == 0, 'the first list: no change told')
+A.onMessage(withOpts(47800))
+T.check(#seenOpt == 1 and seenOpt[1][1] == 'addonOptions' and seenOpt[1][2].id == 'truck' and seenOpt[1][2].values.port == 47800,
+  'a changed value: the addonOptions event with the new values')
+A.onMessage(withOpts(47800))
+T.check(#seenOpt == 1, 'unchanged: not told again')
+T.check(A.setOptions('truck', { port = 47900 }) and last('addon_options').values.port == 47900, 'Save: sent to the server')
+T.check(A.optionValues('nope') == nil, 'no such add-on: nil')
+_G.beamngEarth_api = nil
+
 T.done('test_addons')

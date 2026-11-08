@@ -209,6 +209,7 @@ MOD_TO_SERVER = {
     "addon_run": {"id": F(str), "op": F(str)},     # a program beside the game: start / stop / uninstall / autostart
     "addon_add": {"repo": F(str)},                  # Add from GitHub: the pasted repository
     "addon_forget": {"id": F(str)},                 # an add-on the player added, taken off the list
+    "addon_options": {"id": F(str), "values": F(dict)},     # its Options tab saved
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]

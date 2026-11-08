@@ -44,6 +44,13 @@ player pastes owner/name or a github.com link; its latest release decides what i
 any; a .py: a program beside the game; else downloads only) and the entry goes into the local list with added: true
 (a badge, the notice says nobody has looked at it, "Remove from my list"). Only the player's own paste adds one.
 
+Options (the user, 2026-11-07: "add an options tab that addons can make use of, for example ... the port"): an
+add-on declares them (its entry's options, a game mod's beamngEarth_addon.json in its zip, a pasted repository's at
+its root: parse_options): [{key, label, type: int | bool | text | choice, default, min, max, choices, help, arg, env}].
+The page's Options tab shows them; the values are kept in <data>/addons/<id>/options.json. A program beside the game
+gets each as its arg (--port 47800; a bool: the arg alone when on) and / or env (BNE_* only), and its run.page may name
+them ({port}); saving restarts it when it runs. A game mod reads them from the modding API (beamngEarth_api.addonOptions).
+
 A game mod's code (addonrun.mod_code: its own GE extensions and modules, whether it has UI files) goes with every
 hand-over to the mod, which unloads it before an update / turning off / removing and reloads the UI after, so a change
 applies without restarting the game (the game's own files a mod replaces still need a restart: said on the page).
@@ -86,8 +93,14 @@ _ZIP = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.zip")
 _SHA = re.compile(r"[0-9a-f]{64}")
 _APP = re.compile(r"[A-Za-z0-9_-]{1,64}")
 _ORIGIN = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}")
-_PAGE = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}(?:/[A-Za-z0-9._~/-]{0,100})?")
+_PAGE = re.compile(r"http://(?:127\.0\.0\.1|localhost):(?:[0-9]{2,5}|\{[a-z][A-Za-z0-9_]{0,30}\})(?:/[A-Za-z0-9._~/-]{0,100})?")
 _ARG = re.compile(r"--?[A-Za-z0-9][A-Za-z0-9-]{0,40}")
+_OPT_KEY = re.compile(r"[a-z][A-Za-z0-9_]{0,30}")
+_OPT_ENV = re.compile(r"BNE_[A-Z0-9_]{1,40}")
+OPT_TYPES = ("int", "bool", "text", "choice")
+OPTIONS_MAX = 16
+OPTIONS_FILE = "options.json"
+MANIFEST = "beamngEarth_addon.json"     # an add-on's own declaration (a mod zip's top, a repository's root)
 LOCAL_NAME = "local.json"
 _TEXT_MAX = {"name": 80, "author": 40, "summary": 400, "licence": 300, "note": 600}
 
@@ -176,6 +189,7 @@ def _entry(raw, local=False):
         if not isinstance(o, str) or not _ORIGIN.fullmatch(o):
             raise ValueError("bad feedOrigins")
         e["feedOrigins"].append(o)
+    e["options"] = parse_options(raw.get("options"))
     e["minEarth"] = raw.get("minEarth") or ""
     if not isinstance(e["minEarth"], str):
         raise ValueError("bad minEarth")
@@ -209,6 +223,77 @@ def _entry(raw, local=False):
             raise ValueError("bad local tag")
         e["local"] = {"file": lo["file"], "tag": tag}
     return e
+
+
+def parse_options(raw):
+    """An add-on's declared options, checked (ValueError): [{key, label, type, default, min, max, choices, help, arg,
+    env}]; none -> []."""
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or len(raw) > OPTIONS_MAX:
+        raise ValueError("bad options")
+    out, keys = [], set()
+    for o in raw:
+        if not isinstance(o, dict) or not isinstance(o.get("key"), str) or not _OPT_KEY.fullmatch(o["key"]):
+            raise ValueError("bad option key")
+        if o["key"] in keys:
+            raise ValueError("option key twice")
+        keys.add(o["key"])
+        t = o.get("type")
+        if t not in OPT_TYPES:
+            raise ValueError("bad option type")
+        label = o.get("label") or o["key"]
+        help_ = o.get("help") or ""
+        if not isinstance(label, str) or len(label) > 60 or not isinstance(help_, str) or len(help_) > 300:
+            raise ValueError("bad option label / help")
+        opt = {"key": o["key"], "label": label, "type": t, "help": help_, "arg": None, "env": None}
+        if o.get("arg") is not None:
+            if not isinstance(o["arg"], str) or not _ARG.fullmatch(o["arg"]):
+                raise ValueError("bad option arg")
+            opt["arg"] = o["arg"]
+        if o.get("env") is not None:
+            if not isinstance(o["env"], str) or not _OPT_ENV.fullmatch(o["env"]):
+                raise ValueError("bad option env (BNE_ names only)")
+            opt["env"] = o["env"]
+        if t == "int":
+            lo, hi = o.get("min", -(1 << 31)), o.get("max", 1 << 31)
+            if not all(isinstance(v, int) and not isinstance(v, bool) for v in (lo, hi)) or lo > hi:
+                raise ValueError("bad option range")
+            opt.update(min=lo, max=hi)
+        elif t == "choice":
+            ch = o.get("choices")
+            if not (isinstance(ch, list) and 0 < len(ch) <= 20 and all(isinstance(c, str) and 0 < len(c) <= 60 for c in ch)):
+                raise ValueError("bad option choices")
+            opt["choices"] = list(ch)
+        elif t == "text":
+            opt["maxLength"] = 200
+        ok, default = _opt_value(opt, o.get("default", {"int": opt.get("min", 0) if t == "int" else 0, "bool": False,
+                                                       "text": "", "choice": (o.get("choices") or [""])[0]}[t]))
+        if not ok:
+            raise ValueError("bad option default")
+        opt["default"] = default
+        out.append(opt)
+    return out
+
+
+def _opt_value(opt, v):
+    """(ok, the value as its type) of a value for an option."""
+    t = opt["type"]
+    if t == "int":
+        if isinstance(v, bool):
+            return False, None
+        try:
+            iv = int(v)
+        except (TypeError, ValueError):
+            return False, None
+        if isinstance(v, float) and v != iv:
+            return False, None
+        return (opt["min"] <= iv <= opt["max"]), iv
+    if t == "bool":
+        return isinstance(v, bool), v
+    if t == "text":
+        return (isinstance(v, str) and len(v) <= 200 and not any(c in v for c in "\0\n\r")), v
+    return (isinstance(v, str) and v in opt["choices"]), v
 
 
 def load_registry(path=REGISTRY_PATH):
@@ -511,7 +596,8 @@ class Addons:
              "installed": False, "version": "", "latest": "", "latestDate": "", "size": 0, "update": False,
              "reviewed": False, "installedReviewed": False, "canInstall": False, "busy": e["id"] in self._busy,
              "error": "", "age": None, "stale": False, "tooNew": False, "local": bool(e["local"]),
-             "running": False, "autostart": False, "page": "", "lanPage": "", "code": None, "added": e["added"]}
+             "running": False, "autostart": False, "page": "", "lanPage": "", "code": None, "added": e["added"],
+             "options": []}
         try:
             rels, c["age"], c["stale"] = self._releases(e, fresh)
         except AddonError as err:
@@ -531,9 +617,9 @@ class Addons:
                     c["exitCode"] = inst["exit"]
                     c["logTail"] = self.runner.log_tail(e["id"], 6)
             run = e["run"] or {}
-            c["page"] = run.get("page", "")
-            if run.get("lan") and run.get("page"):
-                c["lanPage"] = run["page"].replace("127.0.0.1", _lan_ip()).replace("localhost", _lan_ip())
+            c["page"] = self.page(e)
+            if run.get("lan") and c["page"]:
+                c["lanPage"] = c["page"].replace("127.0.0.1", _lan_ip()).replace("localhost", _lan_ip())
         if e["kind"] == "beamng-mod":
             inst = self.installed(e, rels)
             c.update(installed=inst["installed"], oldFiles=inst.get("oldFiles", []))
@@ -546,6 +632,8 @@ class Addons:
                 import updates
                 c["tooNew"] = updates.newer(e["minEarth"], self.version)
             c["canInstall"] = bool(best) and not c["tooNew"]
+        vals = self.values(e)
+        c["options"] = [dict(o, value=vals[o["key"]]) for o in self.options_of(e)]
         return c
 
     def refresh_registry(self, fresh=False):
@@ -731,7 +819,7 @@ class Addons:
             log.info("add-ons: %s %s %s (%s, %d bytes, sha256 %s) in %s", "update" if inst else "install", aid,
                      best["tag"], a["name"], a["size"], a["sha256"][:12], d)
             if was:
-                self.runner.start(aid, (e["run"] or {}).get("args", ()))
+                self.runner.start(aid, *self.run_args(e))
             return None
         finally:
             with self.lock:
@@ -744,7 +832,7 @@ class Addons:
             raise AddonError("not a program beside the game")
         try:
             if op == "start":
-                self.runner.start(aid, (e["run"] or {}).get("args", ()))
+                self.runner.start(aid, *self.run_args(e))
             elif op == "stop":
                 self.runner.stop(aid)
             elif op == "uninstall":
@@ -764,9 +852,92 @@ class Addons:
         for e in self.entries:
             if e["kind"] == "companion" and (self.runner.state(e["id"]) or {}).get("autostart") is True:
                 try:
-                    self.runner.start(e["id"], (e["run"] or {}).get("args", ()))
+                    self.runner.start(e["id"], *self.run_args(e))
                 except RuntimeError as err:
                     log.warning("add-ons: %s did not start: %s", e["id"], err)
+
+    # --- options ---
+    def options_of(self, e):
+        """The add-on's options: its entry's, else an installed game mod's own beamngEarth_addon.json."""
+        if e["options"]:
+            return e["options"]
+        if e["kind"] == "beamng-mod":
+            inst = self.installed(e)
+            if inst["installed"]:
+                man = (self.code(os.path.join(self.mods, e["modFile"]), inst["sha256"]) or {}).get("manifest") or {}
+                try:
+                    return parse_options(man.get("options"))
+                except ValueError as err:
+                    log.info("add-ons: %s's own options left out: %s", e["id"], err)
+        return []
+
+    def values(self, e):
+        """{key: value} of the add-on's options: the saved ones that are still valid, else the defaults."""
+        saved = {}
+        try:
+            with open(os.path.join(self.runner.dir(e["id"]), OPTIONS_FILE), encoding="utf-8") as f:
+                got = json.load(f)
+            saved = got if isinstance(got, dict) else {}
+        except (OSError, ValueError):
+            pass
+        out = {}
+        for o in self.options_of(e):
+            ok, v = _opt_value(o, saved.get(o["key"], o["default"])) if o["key"] in saved else (True, o["default"])
+            out[o["key"]] = v if ok else o["default"]
+        return out
+
+    def set_options(self, aid, values):
+        """Save the player's values (each checked against its option). True when a running program was restarted
+        for them. Raises AddonError."""
+        e = self.entry(aid)
+        opts = self.options_of(e)
+        if not opts:
+            raise AddonError("this add-on has no options")
+        if not isinstance(values, dict):
+            raise AddonError("no values")
+        cur = self.values(e)
+        for o in opts:
+            if o["key"] in values:
+                ok, v = _opt_value(o, values[o["key"]])
+                if not ok:
+                    raise AddonError(f"{o['label']}: not a valid value")
+                cur[o["key"]] = v
+        d = self.runner.dir(aid)
+        os.makedirs(d, exist_ok=True)
+        with open(os.path.join(d, OPTIONS_FILE + ".tmp"), "w", encoding="utf-8") as f:
+            json.dump(cur, f)
+        os.replace(os.path.join(d, OPTIONS_FILE + ".tmp"), os.path.join(d, OPTIONS_FILE))
+        log.info("add-ons: %s options saved: %s", aid, cur)
+        if e["kind"] == "companion" and self.runner.running(aid):
+            self.runner.stop(aid)
+            self.runner.start(aid, *self.run_args(e))
+            return True
+        return False
+
+    def run_args(self, e):
+        """(args, env) a program beside the game starts with: its run args, then its options' (arg value / env)."""
+        args, env = list((e["run"] or {}).get("args", ())), {}
+        vals = self.values(e)
+        for o in self.options_of(e):
+            v = vals[o["key"]]
+            if o["arg"]:
+                if o["type"] == "bool":
+                    if v:
+                        args.append(o["arg"])
+                elif v != "":
+                    args += [o["arg"], str(v)]
+            if o["env"]:
+                env[o["env"]] = ("1" if v else "0") if o["type"] == "bool" else str(v)
+        return args, env
+
+    def page(self, e):
+        """The program's own page with its options' values in it ({port}), or "" (none, or not a local page then)."""
+        page = (e["run"] or {}).get("page", "")
+        if not page:
+            return ""
+        vals = self.values(e)
+        out = re.sub(r"\{([a-z][A-Za-z0-9_]{0,30})\}", lambda m: str(vals.get(m.group(1), m.group(0))), page)
+        return out if _PAGE.fullmatch(out) and "{" not in out else ""
 
     # --- Add from GitHub ---
     def add_repo(self, text):
@@ -810,7 +981,29 @@ class Addons:
             raw.update(kind="companion", asset=r"\.py$", run={"args": []})
         else:
             raw.update(kind="link", asset="")
-        _entry(raw, local=True)                  # (the same checks as any entry)
+        try:            # (the author's own declaration at the repository's root: its options, a program's run)
+            text, _, _ = self.github.get(f"{API}{repo}/contents/{MANIFEST}", accept="application/vnd.github.raw+json",
+                                         fresh=True)
+            man = json.loads(text) if len(text) <= 64 * 1024 else {}
+        except (AddonError, ValueError):
+            man = {}
+        if isinstance(man, dict):
+            if man.get("options") is not None:
+                try:
+                    parse_options(man["options"])
+                    raw["options"] = man["options"]     # (kept as written: _entry parses it again)
+                except (ValueError, TypeError) as err:
+                    log.info("add-ons: %s's %s options left out: %s", repo, MANIFEST, err)
+            if raw["kind"] == "companion" and isinstance(man.get("run"), dict):
+                raw["run"] = {k: man["run"][k] for k in ("args", "page", "port", "lan") if k in man["run"]}
+        try:
+            _entry(raw, local=True)              # (the same checks as any entry)
+        except ValueError:
+            raw.pop("options", None)
+            raw["run"] = {"args": []} if raw["kind"] == "companion" else raw.get("run")
+            if raw.get("run") is None:
+                raw.pop("run", None)
+            _entry(raw, local=True)
         doc = self._read_local()
         doc["addons"] = [a for a in doc["addons"] if a.get("repo", "").lower() != repo.lower()] + [raw]
         self._write_local(doc)
@@ -855,7 +1048,7 @@ class Addons:
         if not isinstance(url, str) or not url.startswith("http://"):
             return False
         for e in self.entries:
-            page = (e["run"] or {}).get("page") if e["kind"] == "companion" else ""
+            page = self.page(e) if e["kind"] == "companion" else ""
             if page:
                 origin = "/".join(page.split("/")[:3])
                 if (url == origin or url.startswith(origin + "/")) and not any(c in url for c in ' "\'<>`\\\n\r'):

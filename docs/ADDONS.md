@@ -294,3 +294,34 @@ Example: Live GPS with its `--feed` mode (reads the position from the companion 
   "local": {"file": "/path/to/bne_live_coords.py", "tag": "v1.3-feed"},
   "run": {"args": ["--feed"], "page": "http://127.0.0.1:47700/map", "port": 47700, "lan": true}}]}
 ```
+
+## Options (an add-on's own settings)
+
+An add-on declares its options and the page's **Options** tab shows them. The declaration comes from its list entry
+(`options`), else from a `beamngEarth_addon.json` the author ships (a game mod: at its zip's top; a repository
+added from GitHub: at its root):
+
+```json
+{"options": [
+  {"key": "port", "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535, "arg": "--port",
+   "help": "The port its live map and the phone app use."},
+  {"key": "units", "label": "Units", "type": "choice", "choices": ["km/h", "mph"], "env": "BNE_UNITS"},
+  {"key": "fog", "label": "Fog of the world", "type": "bool", "default": true, "arg": "--fog"}
+],
+ "run": {"args": ["--feed"], "page": "http://127.0.0.1:{port}/map", "lan": true}}
+```
+
+| field | meaning |
+|---|---|
+| `key` | `[a-z][A-Za-z0-9_]*`, at most 16 options |
+| `type` | `int` (with `min` / `max`), `bool`, `text` (200 characters), `choice` (with `choices`) |
+| `label`, `help` | what the tab shows |
+| `default` | its value until the player changes it (checked like any value) |
+| `arg` | a program beside the game gets `arg value` (a bool: `arg` alone when on) |
+| `env` | ... and / or this environment variable (names starting with `BNE_` only) |
+
+The values are kept in `<data>/addons/<id>/options.json`; each saved value is checked against its option. A running
+program is restarted with them when they are saved; its `run.page` may name them (`{port}`), so **Open its page** and
+the Wi-Fi address follow. A game mod reads them with `beamngEarth_api.addonOptions(id)` (`{key = value}`, the
+defaults until saved; API 1.1, `has('options')`) and hears of a change through `onBeamNGEarthAddonOptions(info)`
+(`info.id`, `info.values`) or `api.on('addonOptions', fn)`.

@@ -45,7 +45,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 0, 'version 1.0')
+T.check(api.version() == 1 and select(2, api.version()) == 1, 'version 1.1 (options)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -152,5 +152,12 @@ api._event('teleported', { lat = 1, lon = 2 })
 T.check(#got == 1, 'off: no more calls')
 api._event('routeArrived', { lat = 3, lon = 4, name = 'Depot' })
 T.check(hooks[#hooks][1] == 'onBeamNGEarthRouteArrived' and hooks[#hooks][2].name == 'Depot', 'route arrived hook')
+
+T.check(api.has('options') and select(2, api.version()) >= 1, 'options: has() and minor version 1')
+package.loaded['beamngEarth/addons'] = { optionValues = function(id) return id == 'x' and { port = 1 } or nil end }
+T.check(api.addonOptions('x').port == 1 and api.addonOptions('y') == nil, 'addonOptions from the add-ons list')
+api._event('addonOptions', { id = 'x', values = { port = 2 } })
+T.check(hooks[#hooks][1] == 'onBeamNGEarthAddonOptions' and hooks[#hooks][2].values.port == 2, 'options hook')
+package.loaded['beamngEarth/addons'] = nil
 
 T.done('test_api')

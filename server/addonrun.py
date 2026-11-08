@@ -42,11 +42,18 @@ def mod_code(path, game_dir=None):
     """What a mod zip's GE Lua is, for loading it live: {extensions: [names of its own extensions: lua/ge/extensions/a/b.lua
     -> a_b], modules: [their require names: a/b], overrides: n (the game's own files it replaces: a restart applies
     those), ui: has ui/ files, vehicle: has vehicle Lua or vehicles}. BeamNG.Earth's own names are never listed."""
+    manifest = None
     try:
         with zipfile.ZipFile(path) as z:
             names = [n.replace("\\", "/") for n in z.namelist()]
+            if "beamngEarth_addon.json" in names:      # (the author's own declaration: its options; addons.py)
+                try:
+                    raw = z.read("beamngEarth_addon.json")
+                    manifest = json.loads(raw.decode("utf-8")) if len(raw) <= 64 * 1024 else None
+                except (ValueError, KeyError, RuntimeError):
+                    manifest = None
     except (OSError, zipfile.BadZipFile, RuntimeError):
-        return {"extensions": [], "modules": [], "overrides": 0, "ui": False, "vehicle": False}
+        return {"extensions": [], "modules": [], "overrides": 0, "ui": False, "vehicle": False, "manifest": None}
     ext, mods, over = [], [], 0
     pre = "lua/ge/extensions/"
     for n in names:
@@ -62,7 +69,8 @@ def mod_code(path, game_dir=None):
         mods.append(rel)
     return {"extensions": ext[:CODE_MAX], "modules": mods[:CODE_MAX], "overrides": over,
             "ui": any(n.startswith("ui/") for n in names),
-            "vehicle": any(n.startswith(("lua/vehicle/", "vehicles/")) for n in names)}
+            "vehicle": any(n.startswith(("lua/vehicle/", "vehicles/")) for n in names),
+            "manifest": manifest if isinstance(manifest, dict) else None}
 
 
 def command(script, args=()):
@@ -127,7 +135,7 @@ class Runner:
             del self.procs[aid]
             return False
 
-    def start(self, aid, args=()):
+    def start(self, aid, args=(), extra_env=None):
         """Run the installed file; raises RuntimeError with the reason for the player."""
         st = self.installed(aid)
         if st is None:
@@ -151,6 +159,7 @@ class Runner:
         env["PYTHONUNBUFFERED"] = "1"
         if self.feed_url:
             env["BNE_FEED"] = self.feed_url
+        env.update(extra_env or {})
         kw = {}
         if os.name == "nt":
             kw["creationflags"] = 0x08000000 | 0x00000200     # CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
