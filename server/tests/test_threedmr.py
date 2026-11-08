@@ -1153,6 +1153,10 @@ class PositionOverrideTest(unittest.TestCase):
     def test_position_override_known_id(self):
         self.assertEqual(threedmr.position_override(22), (16.06120, 108.22790, 0.0))
 
+    def test_perth_bridges_use_the_authored_geographic_origins(self):
+        self.assertEqual(threedmr.position_override(53), (-32.0342069, 115.8580457, 0.0))
+        self.assertEqual(threedmr.position_override(54), (-31.96332685, 115.84694035, 0.0))
+
     def test_position_override_unknown_id_is_none(self):
         self.assertIsNone(threedmr.position_override(99))
 
@@ -1941,8 +1945,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_29(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 29)
+    def test_version_is_31(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 31)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -2292,6 +2296,25 @@ class BridgeDeckTest(unittest.TestCase):
         P = got["P"]
         base = self.P[:, 2] - threedmr._support_z(self.P[:, 2]) - 0.2
         np.testing.assert_allclose(P[:, 2] - base, -2.0 + 0.01 * (P[:, 0] + 100.0), atol=1e-9)
+
+    def test_shared_asphalt_material_survives_compilation(self):
+        with tempfile.TemporaryDirectory() as d:
+            got = threedmr.write_model(d, 54, self.P, self.T, None, None, [None, None], 0.,
+                                      tri_materials=np.zeros(len(self.T), np.int64),
+                                      material_aliases={0: 'bne_bridge_asphalt'})
+            shape = cdae.read(os.path.join(d, got['shape']))
+        self.assertEqual(got['materials'][0], 'bne_bridge_asphalt')
+        self.assertTrue(any('bne_bridge_asphalt' in str(m) for m in shape['materials']))
+
+    def test_asphalt_top_normal_repair_preserves_closed_slab_bottom(self):
+        P = np.array([[0.,0.,2.],[1.,0.,2.],[0.,1.,2.],
+                      [0.,0.,1.],[1.,0.,1.],[0.,1.,1.]])
+        T = np.array([[0,2,1],[3,5,4]])
+        repaired, count = threedmr.bridge_asphalt_top(P,T,np.zeros(2,int),
+            [(None,None,None,False,None,False,'Asphalt')])
+        self.assertEqual(count,1)
+        np.testing.assert_array_equal(repaired[1],T[1])
+        self.assertGreater(np.cross(P[repaired[0,1]]-P[0],P[repaired[0,2]]-P[0])[2],0.)
 
 
 class DownloadTlsTest(unittest.TestCase):

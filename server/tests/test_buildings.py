@@ -894,7 +894,7 @@ class CustomModelSuppressionTest(unittest.TestCase):
     def test_suppress_radius_clamped(self):
         custom = [{"id": 41, "xy": (10.0, 10.0)}, {"id": 3, "xy": (20.0, 20.0)}]
 
-        def gltf_mesh(glb, model_id=None):
+        def gltf_mesh(glb, model_id=None, include_material_names=False):
             return self._gltf_mesh((0.5, 0.5) if model_id == 41 else (900.0, 900.0))
 
         ground = lambda la, lo: np.zeros(np.shape(la))
@@ -914,7 +914,7 @@ class CustomModelSuppressionTest(unittest.TestCase):
         # nothing suppressed; a model up to MODEL_MAX_M (the Dragon Bridge, 842 m) is
         custom = [{"id": 29, "xy": (10.0, 10.0)}, {"id": 22, "xy": (20.0, 20.0)}]
 
-        def gltf_mesh(glb, model_id=None):
+        def gltf_mesh(glb, model_id=None, include_material_names=False):
             return self._gltf_mesh((61000.0, 37000.0) if model_id == 29 else (842.0, 83.0))
 
         ground = lambda la, lo: np.zeros(np.shape(la))
@@ -951,7 +951,7 @@ class CustomModelSuppressionTest(unittest.TestCase):
         write_result = dict(section0, sections=[section0, section1])
         updated = []
         with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
-             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None: self._gltf_mesh((569.0, 81.0))), \
+             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None, **kw: self._gltf_mesh((569.0, 81.0))), \
              mock.patch("threedmr.write_model", return_value=write_result), \
              mock.patch("threedmr.update_materials", side_effect=lambda *a, **k: updated.append(a[1])):
             entries, radii, _b = bld._custom_tile_entries(self.f, custom, ground, "/tmp/s1", "/temp/beamngEarth/s1")
@@ -971,7 +971,7 @@ class CustomModelSuppressionTest(unittest.TestCase):
         ground = lambda la, lo: np.zeros(np.shape(la))
         with mock.patch.dict(threedmr.POSITION_OVERRIDES, {22: (16.06120, 108.22790, 30.0)}), \
              mock.patch("threedmr.fetch_model", return_value=b"glb"), \
-             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None: self._gltf_mesh((2.0, 2.0))), \
+             mock.patch("threedmr.gltf_mesh", side_effect=lambda glb, model_id=None, **kw: self._gltf_mesh((2.0, 2.0))), \
              mock.patch("threedmr.osm_yaw") as osm_yaw, \
              mock.patch("threedmr.write_model",
                        return_value={"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22",
@@ -1048,7 +1048,7 @@ class CustomModelTextureSurvivesSweepTest(unittest.TestCase):
     out_dir being removed."""
 
     @staticmethod
-    def _gltf_mesh(glb, model_id=None):
+    def _gltf_mesh(glb, model_id=None, include_material_names=False):
         pos = np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 10.0, 1.0]])
         uvs = np.zeros((3, 2))
         tris = np.array([[0, 1, 2]])
@@ -1743,6 +1743,15 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual(writer.call_args.kwargs["support_plane"], 3.0)
         self.assertTrue(callable(writer.call_args.kwargs["foundation_ground"]))
         fault.assert_not_called()
+
+    def test_only_explicit_bridge_asphalt_uses_the_shared_road_material(self):
+        mesh = list(self._slab())
+        mesh[4] = [(None, None, None, False, None, False, 'Asphalt')]
+        _, writer, _, _ = self._bake(mesh=mesh)
+        self.assertEqual(writer.call_args.kwargs['material_aliases'], {0: 'bne_bridge_asphalt'})
+        mesh[4] = [(None, None, None, False, None, False, 'Jarrah timber')]
+        _, writer, _, _ = self._bake(mesh=mesh)
+        self.assertEqual(writer.call_args.kwargs['material_aliases'], {})
 
     def test_partial_coverage_preserves_both_approaches_and_node_attributes(self):
         fps = [(self.FP, (0.0, 0.0), 22)]

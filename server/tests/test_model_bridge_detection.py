@@ -68,7 +68,7 @@ class ModelBridgeDetectionTest(unittest.TestCase):
                                             (box(88, 60), {"categories": ["bridge"]}, 0),
                                             (box(35, 30, 204), {}, 1)):
             with self.subTest(info=info, extent=p.max(0)), tempfile.TemporaryDirectory() as d:
-                mesh = (p, None, None, None, None, None)
+                mesh = (p, None, np.empty((0, 3), dtype=int), None, [], np.empty(0, dtype=int))
                 with mock.patch("threedmr.fetch_model", return_value=b"glb"), \
                      mock.patch("threedmr.gltf_mesh", return_value=mesh), \
                      mock.patch("threedmr.model_info", return_value=info), \
