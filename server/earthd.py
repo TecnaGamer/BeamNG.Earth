@@ -164,6 +164,9 @@ SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; 
 # stream starts no new tile: the credits only pace the socket, and without this the producer ran on while the queue grew
 # to its hard limit (4,096 messages / SEND_BUFFER_MAX) and the transport was closed. A stream_ack below it wakes it again.
 DISPATCH_HIGH_WATER = 512
+# ... and above which the pose starts no road, sign, turbine or tree tile (they resume on the next pose once it drains):
+# twice the far stream's mark, so the far tiles, which refill the queue to their mark, never hold the car's detail back.
+DETAIL_HIGH_WATER = 2 * DISPATCH_HIGH_WATER
 WATERGUARD_VERSION = 1
 TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
 _NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
@@ -6011,10 +6014,10 @@ class Connection:
             return self._write_frame(protocol.encode(msg))
         return False
 
-    def dispatch_behind(self):
-        """Is the game DISPATCH_HIGH_WATER ordinary messages or more behind (negotiated credits only)?"""
+    def dispatch_behind(self, mark=None):
+        """Is the game `mark` (DISPATCH_HIGH_WATER) ordinary messages or more behind (negotiated credits only)?"""
         flow = getattr(self, "stream_dispatch", None)
-        return flow is not None and flow.queued_messages >= DISPATCH_HIGH_WATER
+        return flow is not None and flow.queued_messages >= (DISPATCH_HIGH_WATER if mark is None else mark)
 
     def _write_frame(self, data):
         lease = getattr(self, "lease", None)
@@ -7426,6 +7429,7 @@ class Connection:
         # built as round a car: none of them shows from there, and their builds held the far tiles back and stalled the
         # event loop 2.1 s over Turin, 2026-11-07; nearer the ground they come, as what the view shows)
         detail = not (self.map_view and self.eye_clearance() > MAP_DETAIL_EYE_M)
+        detail = detail and not self.dispatch_behind(DETAIL_HIGH_WATER)   # (the game catches up first)
         if self.s.mapdata is not None and aid == self.active and detail:
             if getattr(self.roads, "geo", False):
                 anchor = self.s.anchors.get(aid)

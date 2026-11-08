@@ -115,6 +115,20 @@ class StreamDispatchTest(unittest.TestCase):
             self.assertFalse(c.wake.is_set())
         self.assertFalse(self.connection().dispatch_behind(), "a legacy client is never held back")
 
+    def test_the_cars_detail_waits_only_past_twice_the_far_mark(self):
+        """The far stream refills the queue up to DISPATCH_HIGH_WATER: the road, sign, turbine and tree tiles of the
+        pose hold back only at DETAIL_HIGH_WATER, above it, so the far tiles never starve the car's own."""
+        self.assertGreater(earthd.DETAIL_HIGH_WATER, earthd.DISPATCH_HIGH_WATER)
+        c = self.connection(1)
+        with mock.patch.object(earthd, "DISPATCH_HIGH_WATER", 3), mock.patch.object(earthd, "DETAIL_HIGH_WATER", 6):
+            for k in range(5):
+                c.send(dict(type="roads_tile", key=k))      # 1 in flight, 4 queued
+            self.assertTrue(c.dispatch_behind())
+            self.assertFalse(c.dispatch_behind(earthd.DETAIL_HIGH_WATER))
+            for k in range(2):
+                c.send(dict(type="roads_tile", key=10 + k))
+            self.assertTrue(c.dispatch_behind(earthd.DETAIL_HIGH_WATER))
+
     def test_urgent_messages_still_share_the_total_byte_bound(self):
         c = self.connection(1)
         for k in range(3):
