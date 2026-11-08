@@ -5553,6 +5553,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::perf_step, m)?)?;
     m.add_function(wrap_pyfunction!(perfclean::perf_fingerprint, m)?)?;
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
-    m.add("VERSION", 167)?;
+    // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
+    m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
+    m.add("VERSION", 168)?;
     Ok(())
 }
