@@ -836,6 +836,9 @@ function M.pick(group, h, rank)
     cands = { best }
   end
   local v = cands[math.floor(rank * 7919) % #cands + 1]
+  -- Mapped panel dimensions have already been validated by the server. Clamping
+  -- their scale would disagree with its panel spacing, origins and ground lift.
+  if group == "chainlink" or group == "noisewall" then return v[1], h / v[2] end
   return v[1], math.max(0.3, math.min(2.5, h / v[2]))
 end
 

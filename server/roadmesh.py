@@ -1520,14 +1520,21 @@ UV_M = 0.25             # uv per m on a barrier (the concrete's repeat: 4 m)
 def barrier_solid(edge, inward, z, h, v=None, section=JERSEY):
     """A closed barrier along an outer edge (k, 2): its section (offset toward `inward` (k, 2) m, share of the height
     h (k,)) swept from the base heights z (k,), both ends capped: a watertight solid whose every face looks out (no
-    culled face shows from any side). (positions (k n, 3), triangles, uv). Pure."""
+    culled face shows from any side). A (k, n, 2) section supplies per-station offsets/height shares, e.g. bounded
+    wall mitres; the existing (n, 2) section is constant. (positions, triangles, uv). Pure."""
     edge, inward = np.asarray(edge, np.float64), np.asarray(inward, np.float64)
     z, h = np.asarray(z, np.float64), np.asarray(h, np.float64)
-    k, n = len(edge), len(section)
+    varying = np.ndim(section) == 3
+    k, n = len(edge), len(section[0]) if varying else len(section)
     inward = inward / np.maximum(np.hypot(inward[:, 0], inward[:, 1]), 1e-9)[:, None]
     if section is JERSEY:                           # (m up per station: the section narrowing toward an end)
         secs = np.array([jersey_section(float(hh)) for hh in h], np.float64)        # (k, n, 2)
         off2, up2 = secs[:, :, 0], secs[:, :, 1]
+    elif varying:
+        profile = np.asarray(section, np.float64)
+        if profile.shape != (k, n, 2):
+            raise ValueError("barrier section must have one profile per station")
+        off2, up2 = profile[:, :, 0], h[:, None] * profile[:, :, 1]
     else:                                           # (a share of h)
         off2 = np.tile([q[0] for q in section], (k, 1)).astype(np.float64)
         up2 = h[:, None] * np.array([q[1] for q in section], np.float64)[None, :]

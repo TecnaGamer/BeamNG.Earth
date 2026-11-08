@@ -4,6 +4,7 @@ import math
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -34,6 +35,34 @@ class KindTest(unittest.TestCase):
 
 
 class PlaceTest(unittest.TestCase):
+    def test_scaled_noise_wall_fits_the_road_without_reviving_a_gate_panel(self):
+        wall = self.line("wall", {"wall": "noise_barrier", "height": "4.8"}, [[10., 9.], [90., 9.]])
+        spec = type("S", (), {"width": 14.})()
+        road = [("road", spec, np.array([[0., 0., 5.], [100., 0., 5.]]), None)]
+        kwargs = dict(roads=road)
+        got = fences.rows(self.frame, lambda key: wall, (0., 0., 100., 100.),
+                          lambda la, lo: np.full(np.shape(la), 5.), **kwargs)
+        self.assertTrue(got)
+        for row in got:
+            self.assertEqual(row[5:7], [2., 4.8])
+            a = math.radians(row[4])
+            face_y = row[2] + row[5] * (2.5 * math.sin(a) + 2.0 * math.cos(a))
+            self.assertAlmostEqual(face_y, 7. + fences.WALL_EDGE_M, delta=.05)
+        got = fences.rows(self.frame, lambda key: wall, (0., 0., 100., 100.),
+                          lambda la, lo: np.full(np.shape(la), 5.),
+                          gate_clearance=lambda *args: False, **kwargs)
+        self.assertEqual(got, [])
+
+    def test_precomputed_regional_rows_are_reused(self):
+        wall = self.line("fence", {"fence_type": "chain_link"}, [[10., 9.], [90., 9.]])
+        regional = [["fr_hedge", 10., 9., 5., 0., 1., 2., 0.]]
+        with mock.patch.object(fences, "french_rows") as build:
+            got = fences.rows(self.frame, lambda key: wall, (0., 0., 100., 100.),
+                              lambda la, lo: np.full(np.shape(la), 5.),
+                              french=True, french_data=(regional, {"line-1"}))
+        self.assertEqual(got, regional)
+        build.assert_not_called()
+
     def setUp(self):
         self.frame = geodesy.EnuFrame(39.2834, -76.5934, 0.0)
 
@@ -61,6 +90,32 @@ class PlaceTest(unittest.TestCase):
         xs = np.array([r[1] for r in got])
         self.assertAlmostEqual(float(np.median(np.diff(np.sort(xs)))), fences.CHAIN_LEN, delta=0.05)
         self.assertTrue(all(abs(r[2] - 50.0) < 0.05 and abs(r[4]) < 0.5 and abs(r[3] - 5.16) < 0.02 for r in got))
+
+    def test_mapped_height_scales_panel_spacing_origins_and_lift(self):
+        for group, cls, tags, base, pitch in (
+                (fences.G_CHAIN, "fence", {"fence_type": "chain_link"}, fences.CHAIN_H, fences.CHAIN_LEN),
+                (fences.G_WALL, "wall", {"wall": "noise_barrier"}, fences.WALL_H, fences.WALL_LEN)):
+            for height in (.5, 3., 6.):
+                with self.subTest(group=group, height=height):
+                    f = self.line(cls, dict(tags, height=f"{height * 100} cm"), [[10., 50.], [90., 50.]])
+                    f.attrs["height"] = np.array([9.])  # source tags take precedence
+                    rows = self.rows(f)
+                    self.assertGreater(len(rows), 2)
+                    np.testing.assert_allclose([r[6] for r in rows], height)
+                    self.assertAlmostEqual(float(np.median(np.diff(sorted(r[1] for r in rows)))),
+                                           pitch * height / base, delta=.03)
+                    shift = fences.CHAIN_OX * height / base if group == fences.G_CHAIN else -fences.WALL_ALONG * height / base
+                    centres = np.array([r[1] - shift for r in rows])
+                    np.testing.assert_allclose((centres - 10.) / (pitch * height / base) % 1., .5, atol=.015)
+                    lift = fences.CHAIN_LIFT * height / base if group == fences.G_CHAIN else 0.
+                    np.testing.assert_allclose([r[3] for r in rows], 5. + lift, atol=.02)
+
+    def test_height_attribute_and_invalid_tag_fallback(self):
+        f = self.line("fence", {"fence_type": "chain_link", "height": "nan"}, [[10., 50.], [90., 50.]])
+        f.attrs["height"] = np.array([2.1])
+        self.assertTrue(all(r[6] == 2.1 for r in self.rows(f)))
+        f.attrs["height"] = np.array([-1.])
+        self.assertTrue(all(r[6] == fences.CHAIN_H for r in self.rows(f)))
 
     def test_a_plain_fence_is_not_chain_link(self):
         self.assertEqual(self.rows(self.line("fence", {"barrier": "fence"}, [[10.0, 50.0], [90.0, 50.0]])), [])
