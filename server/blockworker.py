@@ -1245,11 +1245,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import barriers
         import fences
         boundary_meshes = {}
+        hedge_props = []
         try:
             regional = (fences.french_rows(frame, infra_fn, box, elev, near_roads)
                         if frontage_country == "FR" else ([], set()))
             boundary_meshes, gate_clearance = barriers.tile(frame, tx, ty, _s.md,
-                railways.point_ground(frame, elev), lines, props, exclude_fids=regional[1])
+                railways.point_ground(frame, elev), lines, props, exclude_fids=regional[1], hedge_props=hedge_props)
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
                                                                         for _f, spec, xy, z, _l in deck_parts] + rail_decks,
                                      roads=near_roads, french=frontage_country == "FR", gate_clearance=gate_clearance, french_data=regional))
@@ -1326,6 +1327,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
     if radar_props:
         props = (props or []) + radar_props
+    P.hedge_props = hedge_props if buildings else []
     P.boundary_meshes = boundary_meshes if buildings else None
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
@@ -1368,7 +1370,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
                                barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces,
                                walk_ground=lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q),
-                               speed_traps=P.speed_traps, bus_col=P.bus_col, boundary_meshes=P.boundary_meshes) + (P.fuel_pads, P.fuel_tried)
+                               speed_traps=P.speed_traps, bus_col=P.bus_col, boundary_meshes=P.boundary_meshes, hedge_props=P.hedge_props) + (P.fuel_pads, P.fuel_tried)
     mark("write")
     return out
 
@@ -1474,7 +1476,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
                                    turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None),
                                    speed_traps=getattr(P, "speed_traps", ()), bus_col=getattr(P, "bus_col", None),
-                                   boundary_meshes=getattr(P, "boundary_meshes", None))
+                                   boundary_meshes=getattr(P, "boundary_meshes", None), hedge_props=getattr(P, "hedge_props", ()))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)

@@ -2797,11 +2797,12 @@ class Server:
             import barriers
             import fences
             boundary_meshes = {}
+            hedge_props = []
             try:
                 regional = (fences.french_rows(anchor.frame, infra_fn, box, elev, near_roads)
                             if frontage_country == "FR" else ([], set()))
                 boundary_meshes, gate_clearance = barriers.tile(anchor.frame, tx, ty, self.mapdata,
-                    railways.point_ground(anchor.frame, elev), lines, props, exclude_fids=regional[1])
+                    railways.point_ground(anchor.frame, elev), lines, props, exclude_fids=regional[1], hedge_props=hedge_props)
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[
                     {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks,
                     roads=near_roads, french=frontage_country == "FR", gate_clearance=gate_clearance, french_data=regional))
@@ -2893,7 +2894,7 @@ class Server:
                                    turbines=turbine_rows, towns=town_faces,
                                    walk_ground=lambda x, y: roadmeshmod.drawn_ground(
                                        anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
-                                   speed_traps=speed_traps, boundary_meshes=boundary_meshes if self.buildings else None)
+                                   speed_traps=speed_traps, boundary_meshes=boundary_meshes if self.buildings else None, hedge_props=hedge_props if self.buildings else None)
 
     def set_dej(self, on):
         """The settings page's German junction signs switch (message german_junctions): True when it changed (the road

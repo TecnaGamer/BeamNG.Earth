@@ -334,6 +334,7 @@ M.SLOW_UNIT_MS = 60
 local function dropTile(key)
   local t = tiles[key]
   if not t then return end
+  if t.hedgeKey then require('beamngEarth/trees').dropKey(t.hedgeKey) end
   for _, sl in pairs(t.slots or {}) do slotDrop(sl) end
   for w, v in pairs(t.oldSkin or {}) do       -- (a geotile's previous skin and replaced parts: road geotiles below)
     if type(w) == 'string' and w:sub(1, 2) == 's:' then slotDrop(v) else deleteQ[#deleteQ + 1] = v end
@@ -350,7 +351,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'hedgeStock', 'hedgeStock2', 'hedgeStock3', 'hedgeStock4' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
@@ -608,7 +609,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'hedgeStock', 'hedgeStock2', 'hedgeStock3', 'hedgeStock4' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -714,6 +715,47 @@ function M.mapTurbines(pl, recs)
   return out
 end
 
+local function hedgeRows(key, t, data, anchorId, tileKey)
+  if type(data.hedges) ~= 'table' or type(data.hedges.items) ~= 'table' then return end
+  local function visible(on)
+    if tiles[key] ~= t then return false end
+    if on then
+      local count = 0
+      for what in pairs(t.geo and t.parts or data) do
+        if what:match('^hedgeStock%d*$') then
+          count = count + 1
+          local id = t[what] or (t.oldPart and t.oldPart[what])
+          if not (id and scenetree.findObjectById(id)) then return false end
+        end
+      end
+      if count == 0 then return false end
+    end
+    t.stockVisible = on
+    for what, id in pairs(t) do
+      if type(what) == 'string' and what:match('^hedgeStock%d*$') and type(id) == 'number' then
+        local obj = scenetree.findObjectById(id)
+        if obj then obj:setHidden(on) end
+      end
+    end
+    for what, id in pairs(t.oldPart or {}) do
+      if what:match('^hedgeStock%d*$') then
+        local obj = scenetree.findObjectById(id)
+        if obj then obj:setHidden(on) end
+      end
+    end
+    return true
+  end
+  local trees = require('beamngEarth/trees')
+  if t.geo then
+    trees.onGeoHedges('h' .. t.gkey, t.gkey, data.hedges.items, data.hedges.groups,
+      t.frame, t.rowPivot or 0, t.anchorObj, visible)
+    t.hedgeKey = 'g:h' .. t.gkey
+  else
+    trees.onHedges(anchorId, 'h' .. tostring(tileKey), data.hedges.items, data.hedges.groups, visible)
+    t.hedgeKey = anchorId .. ':h' .. tostring(tileKey)
+  end
+end
+
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
@@ -730,6 +772,7 @@ local function geoRows(key, t, data, replacing)
     require('beamngEarth/nightlights').onRows(key, M.mapRows(pl, data.props.items, 2, 5), data.props.groups)
     t.props = true
   end
+  if not replacing then hedgeRows(key, t, data) end
   if type(data.guardrails) == 'table' and type(data.guardrails.items) == 'table' and #data.guardrails.items > 0 then
     if not replacing then
       require('beamngEarth/trees').onGeoRows('g' .. t.gkey, t.gkey, data.guardrails.items, data.guardrails.groups,
@@ -830,6 +873,7 @@ function M.onGeoTile(msg, currentAnchor, a)
       T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
         old.rowPivot or 0, old.anchorObj)
     end
+    if type(data.hedges) == 'table' and not T.hasGeo('h' .. old.gkey) then hedgeRows(key, old, data) end
     M.geoStats.kept = M.geoStats.kept + 1
     return true
   end
@@ -1145,7 +1189,7 @@ function M.onTile(msg, currentAnchor, a)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
-      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'hedgeStock', 'hedgeStock2', 'hedgeStock3', 'hedgeStock4', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1180,6 +1224,7 @@ function M.onTile(msg, currentAnchor, a)
     require('beamngEarth/nightlights').onRows(key, data.props.items, data.props.groups)   -- (the lamps' light)
     tiles[key].props = true
   end
+  hedgeRows(key, tiles[key], data, msg.anchorId, msg.key)
   if type(data.guardrails) == 'table' and type(data.guardrails.items) == 'table' and #data.guardrails.items > 0 then
     require('beamngEarth/trees').onRows(msg.anchorId, 'g' .. tostring(msg.key),
       data.guardrails.items, data.guardrails.groups, 17)
@@ -1242,7 +1287,7 @@ function M.onTile(msg, currentAnchor, a)
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
   for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
-      'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4' }) do
+      'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'hedgeStock', 'hedgeStock2', 'hedgeStock3', 'hedgeStock4' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -1673,7 +1718,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol', 'boundary', 'boundary2', 'boundary3', 'boundary4', 'hedge', 'hedge2', 'hedge3', 'hedge4', 'hedgeStock', 'hedgeStock2', 'hedgeStock3', 'hedgeStock4',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 function M.transform(xf, geodesy)
@@ -1936,6 +1981,10 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
         if isRoad then t[q.what] = id else
           t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
+        end
+        if q.what:match('^hedgeStock%d*$') then
+          local obj = scenetree.findObjectById(id)
+          if obj then obj:setHidden(t.stockVisible == true) end
         end
       else lastError = tostring(id) end
       local ms = now() - t0

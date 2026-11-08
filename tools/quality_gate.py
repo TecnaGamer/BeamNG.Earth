@@ -30,6 +30,7 @@ MODULES = (
     "test_host_package", "test_container",
     "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata", "test_bdtopo",
     "test_barriers", "test_boundary_rendering",
+    "test_stock_hedges",
 )
 
 

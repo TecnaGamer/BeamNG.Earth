@@ -11490,7 +11490,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=(), bus_col=None, boundary_meshes=None):
+               walk_ground=None, speed_traps=(), bus_col=None, boundary_meshes=None, hedge_props=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -11593,6 +11593,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                    collision_only=True)
         data["buscol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["buscol"] = bus_col[1]
+    if hedge_props:
+        data["hedges"] = {"groups": ["mapped_hedge"], "items": [[0] + row[1:] for row in hedge_props]}
     if boundary_meshes:
         x0, y0, _, _ = tile_bbox(tx, ty)
         for what, (mesh, bounds) in boundary_meshes.items():

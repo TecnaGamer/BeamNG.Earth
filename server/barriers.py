@@ -22,7 +22,7 @@ MATCH_M = 1.0
 GATE_WIDTH_M = 3.5
 MAX_VERTS = 60000
 PARTS = 4                        # as for buildings: each shape stays under the engine's 16-bit indices
-FIELDS = tuple(f"{kind}{n if n > 1 else ''}" for kind in ("boundary", "hedge") for n in range(1, PARTS + 1))
+FIELDS = tuple(f"{kind}{n if n > 1 else ''}" for kind in ("boundary", "hedge", "hedgeStock") for n in range(1, PARTS + 1))
 KINDS = {"fence", "wall", "hedge"}
 GATES = {"gate", "lift_gate", "entrance"}
 DEFAULTS = {"fence": (1.3, 0.12), "wall": (1.5, 0.3), "hedge": (1.8, 0.8)}
@@ -30,6 +30,15 @@ WOOD = "bne_boundary_wood"
 WALL_NEUTRAL = "bne_wall_neutral"
 METAL = "bne_barrier_metal"
 HEDGE = "bne_barrier_hedge"
+HEDGE_CORE = "bne_hedge_core"
+# Italy's cypress_hedge_3m: native object bounds, all visible detail levels (metres).
+# Forest scales uniformly; only shapes fitting the mapped width/height may replace a mesh.
+HEDGE_HEIGHT = 1.69180287
+HEDGE_WIDTH = 0.8498748
+HEDGE_PITCH = 1.84               # overlaps even the shortest (2.0444 m) detail level
+HEDGE_REACH = 1.35               # half length plus a conservative wind/end allowance
+HEDGE_MAX_ITEMS = 256            # a whole hedge tile fits below every Forest rank cap
+
 # Reuse the upstream hard-face topology once; tiny posts/rails need only an affine transform of it.
 # Avoid rebuilding the general extrusion's face loops for every small post or rail.
 _PRISM_P, _PRISM_T, _PRISM_UV = roadmesh.barrier_solid(
@@ -339,6 +348,72 @@ class _Mesh:
         if group:
             emit(group)
 
+    def hedge(self, a, b, width, za, zb, height, station, end_station=None, simple=False):
+        """Stock cypress leaf cards around an inset core; no opaque exterior box.
+
+        Cards follow source stations, with deterministic offsets and atlas choices. Clip their geometry and UVs
+        together at the mapped envelope, including gate ends; no card extends into an opening.
+        """
+        length = np.linalg.norm(b - a)
+        if length < 1e-6:
+            return
+        stop = station + length if end_station is None else end_station
+        direction = (b - a) / length
+        normal = np.array([-direction[1], direction[0]])
+        if simple:
+            # Extreme density retains the old eight-vertex budget with two cutout sheets, never a solid wall.
+            p = np.array([[*a, za], [*b, zb], [*b, zb + height], [*a, za + height],
+                          [*(a - normal * width / 2), za + height / 2],
+                          [*(b - normal * width / 2), zb + height / 2],
+                          [*(b + normal * width / 2), zb + height / 2],
+                          [*(a + normal * width / 2), za + height / 2]])
+            uv = np.array([[station, 0], [stop, 0], [stop, height], [station, height],
+                           [station, 0], [stop, 0], [stop, width], [station, width]]) * [2, 1]
+            self.add(p, np.array([[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]]), uv, HEDGE)
+            return
+        # The core is narrower and lower than the leaf envelope; its stock leaf texture fills small sight gaps.
+        self.prism(a, b, width * 0.55, za, zb, height * 0.88, HEDGE_CORE, station)
+        self.uv[-1] *= [3, 2]
+        points, tex, triangles = [], [], []
+
+        def card(x, y, z, u, v, atlas):
+            first = len(points)
+            x, y, z = np.broadcast_arrays(x, y, z)
+            xy = a + x[:, None] * direction + y[:, None] * normal
+            points.extend(np.c_[xy, za + (zb - za) * x / length + z])
+            col, row = atlas % 2, (atlas // 2) % 4
+            tex.extend(np.c_[(col + u) / 2, (row + v) / 4])
+            triangles.extend([[first, first + 1, first + 2], [first, first + 2, first + 3]])
+
+        rows = max(1, int(np.ceil(height / 0.5)))
+        for cell in range(int(np.floor(station / 0.55)) - 1, int(np.ceil(stop / 0.55)) + 1):
+            centre = (cell + 0.5) * 0.55
+            lo, hi = max(station, centre - 0.43), min(stop, centre + 0.43)
+            if hi - lo < 1e-6:
+                continue
+            x = np.array([lo, hi, hi, lo])
+            u = (x - centre + 0.43) / 0.86
+            x = (x - station) * length / (stop - station)
+            for side in (-1, 1):
+                for row in range(rows):
+                    noise = np.sin(cell * 12.9898 + row * 78.233 + side * 37.719)
+                    centre_z = (row + 0.5) * height / rows + noise * 0.06 * min(height, 1)
+                    bottom, top = max(0, centre_z - 0.4), min(height, centre_z + 0.4)
+                    z = np.array([bottom, bottom, top, top])
+                    v = (z - centre_z + 0.4) / 0.8
+                    # Slightly crossed, recessed layers break repeated flat panels while staying inside mapped width.
+                    y = side * width * (0.36 + noise * 0.07) + (u - 0.5) * width * 0.1
+                    card(x, y, z, u, v, cell * 3 + row * 5 + side)
+            card(x, np.array([-0.5, -0.5, 0.5, 0.5]) * width,
+                 height * (0.94 + 0.03 * np.sin(cell * 7.13)), u, np.array([0., 0, 1, 1]), cell * 7)
+        # Leafy ends, including short pieces next to gates, use their own atlas coordinates.
+        for end in (0, 1):
+            for row in range(rows):
+                bottom, top = max(0, (row + 0.5) * height / rows - 0.4), min(height, (row + 0.5) * height / rows + 0.4)
+                card(np.full(4, end * length), np.array([-0.5, 0.5, 0.5, -0.5]) * width,
+                     np.array([bottom, bottom, top, top]), np.array([0., 1, 1, 0]),
+                     np.array([0., 0, 1, 1]), int(station / 0.55) + row + end)
+        self.add(np.asarray(points), np.asarray(triangles), np.asarray(tex), HEDGE)
 
     def result(self):
         return (np.concatenate(self.p), np.concatenate(self.t), np.concatenate(self.uv),
@@ -351,13 +426,14 @@ class _Mesh:
         return out
 
 
-def _spans(r, box):
+def _spans(r, box, extra=()):
     """Exact gap and tile cuts; sample phase stays on the original piece, not the clipped tile."""
     s = r.s
     # Clip before resampling: a huge feature may contain many kilometres outside this tile.
     for piece in roads.clip_polyline(np.c_[r.xy, s], *box):
         start, end = piece[0, 2], piece[-1, 2]
         cuts = [start, end, *piece[:, 2]]
+        cuts.extend(v for v in extra if start < v < end)
         cuts.extend(np.arange(np.ceil(start / STEP_M) * STEP_M, end, STEP_M))
         for lo, hi, _ in r.gaps:
             cuts.extend([np.clip(lo, start, end), np.clip(hi, start, end)])
@@ -367,23 +443,93 @@ def _spans(r, box):
                 yield a, b, _at(r.xy, s, np.array([a, b]))
 
 
-def tile_meshes(runs, box, ground, road_lines=()):
+def _hedge_items(runs, box, ground, road_lines):
+    """Fitting stock pieces and their fallback intervals. No pieces cross openings or tile boundaries."""
+    candidates = []
+    others = {n: (xy, half) for n, (xy, half, *_) in enumerate(road_lines)}
+    for nr, r in enumerate(runs):
+        if r.kind != "hedge":
+            continue
+        scale = r.height / HEDGE_HEIGHT
+        if not 0.3 <= scale <= 2.5 or abs(HEDGE_WIDTH * scale - r.width) > min(0.15, r.width * 0.2):
+            continue
+        pitch, reach = HEDGE_PITCH * scale, HEDGE_REACH * scale
+        for part in roads.clip_polyline(np.c_[r.xy, r.s], *box):
+            start, end = part[0, 2] + reach, part[-1, 2] - reach
+            if end < start:
+                continue
+            for at in np.arange(np.ceil(start / pitch) * pitch, end + 1e-6, pitch):
+                if any(lo - reach <= at <= hi + reach for lo, hi, _ in r.gaps):
+                    continue
+                q = _at(r.xy, r.s, at + np.array([-reach, 0, reach]))
+                d = q[2] - q[0]
+                length = np.linalg.norm(d)
+                if length < 2 * reach * 0.995:
+                    continue            # a bend or doubled-back source piece: retain the continuous mesh
+                d /= length
+                normal = np.array([-d[1], d[0]])
+                if abs((q[1] - q[0]) @ normal) > 0.05 * scale:
+                    continue
+                # The full foliage envelope, not just its centre, belongs to this tile.
+                corners = np.concatenate([q + normal * HEDGE_REACH * 0.45 * scale,
+                                          q - normal * HEDGE_REACH * 0.45 * scale])
+                if (corners < box[:2]).any() or (corners >= box[2:]).any():
+                    continue
+                if others and roads._on_carriageways(q, others, HEDGE_WIDTH * scale / 2 + 0.2 * scale).any():
+                    continue
+                candidates.append((nr, at, pitch, scale, q, d, normal))
+                if len(candidates) > HEDGE_MAX_ITEMS:
+                    return [], {}       # bounded work and coverage: the entire tile keeps its mesh
+    if not candidates:
+        return [], {}
+    heights = np.asarray(ground(np.concatenate([c[4] for c in candidates])), np.float64).reshape(-1, 3)
+    rows, cover = [], {}
+    for (nr, at, pitch, scale, q, d, normal), z in zip(candidates, heights):
+        if not np.isfinite(z).all() or np.ptp(z) > min(0.15, runs[nr].height * 0.1):
+            continue                    # yaw-only Forest pieces must not float on steep or uneven ground
+        # Centre the asymmetric authored bounds; put their lowest vertex on the sampled ground.
+        pos = q[1] + (0.030677 * d + 0.012328 * normal) * scale
+        rows.append([0, *pos.tolist(), float(z.min() + 0.056516 * scale),
+                     float(np.degrees(np.arctan2(d[1], d[0]))), 1, runs[nr].height, 0])
+        cover.setdefault(nr, []).append((at - pitch / 2, at + pitch / 2))
+    return rows, cover
+
+
+def tile_meshes(runs, box, ground, road_lines=(), hedge_props=None):
     """{boundary[2..4], hedge[2..4]: roadmesh mesh}. Ground receives only visible local sample points.
 
     Walls and fences collide with their visible geometry; leaf-textured hedge volumes only render.
     No random ranks or panel caps: simplification must never make a hole in a physical boundary.
     """
-    meshes = {k: _Mesh((box[0], box[1], 0)) for k in ("boundary", "hedge")}
+    runs = [r for r in runs if not r.existing]
+    meshes = {k: _Mesh((box[0], box[1], 0)) for k in ("boundary", "hedge", "hedgeStock")}
+    rows, cover = _hedge_items(runs, box, ground, road_lines) if hedge_props is not None else ([], {})
+    prepared = [(r, list(_spans(r, box, [v for span in cover.get(nr, ()) for v in span])))
+                for nr, r in enumerate(runs)]
+    def leaf_cost(length, height):
+        # Upper bound including cards straddling either cut, core and end caps; no elevation work needed.
+        n = int(np.ceil((length + 0.86) / 0.55)) + 1
+        h = max(1, int(np.ceil((height + 0.1) / 0.5)))
+        return 24 + 4 * (n * (2 * h + 1) + 2 * h)
+    budget = sum(sum(leaf_cost(sb - sa, r.height) for sa, sb, _ in spans) +
+                 sum(leaf_cost(r.width, r.height) for p in r.xy[1:-1]
+                     if (p >= box[:2]).all() and (p < box[2:]).all())
+                 for r, spans in prepared if r.kind == "hedge")
+    simple_hedges = budget > PARTS * MAX_VERTS
+    if simple_hedges:
+        # Preserve the old tile's vertex budget. Even the lean skin uses the stock cutout material, never opaque boxes.
+        rows, cover = [], {}
+        prepared = [(r, list(_spans(r, box))) for r in runs]
+    if hedge_props is not None:
+        hedge_props.extend(rows)
     # Only drawn vehicle-road classes clear boundaries; untyped legacy footprints still count.
     others = {n: (xy, half) for n, (xy, half, *extra) in enumerate(road_lines)
               if not extra or not extra[0] or extra[0] in roads.STYLE}
     conflicts = 0
     def blocked(xy, gap):
         return roads._on_carriageways(xy, others, gap) if others else np.zeros(len(xy), bool)
-    for r in runs:
-        if r.existing:
-            continue
-        spans = list(_spans(r, box))
+    for nr, (r, spans) in enumerate(prepared):
+        intervals = cover.get(nr, ())
         if spans and others:
             probes = np.concatenate([np.array([p[0], p.mean(0), p[1]]) for _, _, p in spans])
             hit = blocked(probes, r.width / 2 + 0.05).reshape(-1, 3).any(1)
@@ -395,11 +541,15 @@ def tile_meshes(runs, box, ground, road_lines=()):
         z = np.asarray(ground(xy), np.float64).reshape(-1, 2)
         if not np.isfinite(z).all():
             continue
-        mesh = meshes["hedge" if r.kind == "hedge" else "boundary"]
         if r.kind == "wall":
             meshes["boundary"].wall(r, spans, z)
             continue
         for (sa, sb, (a, b)), (za, zb) in zip(spans, z):
+            stock = any(lo <= (sa + sb) / 2 <= hi for lo, hi in intervals)
+            mesh = meshes["hedgeStock" if stock else "hedge" if r.kind == "hedge" else "boundary"]
+            if r.kind == "hedge":
+                mesh.hedge(a, b, r.width, za - 0.1, zb - 0.1, r.height + 0.1, sa, sb, simple_hedges)
+                continue
             if r.style in {"wall", "hedge", "panel", "mesh"}:
                 mesh.prism(a, b, r.width, za - 0.1, zb - 0.1, r.height + 0.1, r.material, sa)
                 if r.style in {"wall", "hedge"}:
@@ -443,6 +593,7 @@ def tile_meshes(runs, box, ground, road_lines=()):
                                    gz + h * r.height - 0.025, gz + h * r.height - 0.025, 0.05,
                                    "m_gm_concrete_plain")
         if r.kind in {"wall", "hedge"}:
+            mesh = meshes["hedge" if r.kind == "hedge" else "boundary"]
             # Fill the outer wedge between butt-ended prisms at sharp source vertices.
             s = r.s
             for j, p in enumerate(r.xy[1:-1], 1):
@@ -456,8 +607,12 @@ def tile_meshes(runs, box, ground, road_lines=()):
                 if abs(a[0] * b[1] - a[1] * b[0]) < 1e-6:
                     continue
                 gz = float(ground(p[None, :])[0])
-                mesh.prism(p - [r.width / 2, 0], p + [r.width / 2, 0], r.width,
-                           gz - 0.1, gz - 0.1, r.height + 0.1, r.material)
+                if r.kind == "hedge":
+                    mesh.hedge(p - [r.width / 2, 0], p + [r.width / 2, 0], r.width,
+                               gz - 0.1, gz - 0.1, r.height + 0.1, s[j], simple=simple_hedges)
+                else:
+                    mesh.prism(p - [r.width / 2, 0], p + [r.width / 2, 0], r.width,
+                               gz - 0.1, gz - 0.1, r.height + 0.1, r.material)
         if r.kind != "wall":
             s = r.s
             at = [v for lo, hi, _ in r.gaps for v in (lo - 0.1, hi + 0.1) if 0 <= v <= s[-1]]
@@ -479,14 +634,16 @@ def tile_meshes(runs, box, ground, road_lines=()):
     return out
 
 
-def tile(frame, tx, ty, md, ground, road_lines, props, exclude_fids=()):
+def tile(frame, tx, ty, md, ground, road_lines, props, hedge_props=None, exclude_fids=()):
     """One optional boundary build shared by both tile producers; failures preserve existing scenery."""
     runs = load(frame, tx, ty, md)
     if exclude_fids:
         runs = [r for r in runs if r.fid not in exclude_fids]
     try:
-        meshes = tile_meshes(runs, roads.tile_bbox(tx, ty), ground, road_lines)
+        meshes = tile_meshes(runs, roads.tile_bbox(tx, ty), ground, road_lines, hedge_props=hedge_props)
     except (OSError, ValueError) as exc:
+        if hedge_props is not None:
+            hedge_props.clear()
         log.warning("boundary tile %s_%s omitted: %s", tx, ty, exc)
         return {}, None
     suppress_fences(props, runs)

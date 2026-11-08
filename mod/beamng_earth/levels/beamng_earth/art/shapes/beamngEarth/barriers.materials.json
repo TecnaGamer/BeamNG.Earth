@@ -13,49 +13,72 @@
           1
         ],
         "metallicFactor": 0.65,
-        "roughnessFactor": 0.65,
-        "vertColor": false
+        "roughnessFactor": 0.65
       },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
+      {},
+      {},
+      {}
     ]
   },
   "bne_barrier_hedge": {
-    "name": "bne_barrier_hedge",
-    "mapTo": "bne_barrier_hedge",
-    "class": "Material",
-    "version": 1.5,
     "Stages": [
       {
-        "baseColorMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_b.color.dds",
-        "normalMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_nm.normal.dds",
-        "roughnessMap": "/assets/materials/tree/cypress/t_cypress_leaves/t_cypress_leaves_r.data.dds",
+        "ambientOcclusionMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_ao.data.png",
+        "baseColorMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_b.color.png",
+        "normalMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_nm.normal.png",
+        "opacityMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_o.data.png",
+        "roughnessMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_r.data.png",
         "baseColorFactor": [
-          0.65,
-          0.75,
-          0.6,
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "alphaRef": 75,
+    "alphaTest": true,
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "version": 1.5,
+    "name": "bne_barrier_hedge",
+    "mapTo": "bne_barrier_hedge",
+    "class": "Material"
+  },
+  "bne_hedge_core": {
+    "Stages": [
+      {
+        "ambientOcclusionMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_ao.data.png",
+        "baseColorMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_b.color.png",
+        "normalMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_nm.normal.png",
+        "roughnessMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
           1
         ],
-        "metallicFactor": 0,
-        "vertColor": false
+        "opacityMap": "/assets/materials/tree/cypress/t_cypress_leaves_distant/t_cypress_leaves_distant_o.data.png"
       },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
-    ]
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": true,
+    "invertBackFaceNormals": true,
+    "subSurface": true,
+    "subSurfaceIntensity": 1,
+    "version": 1.5,
+    "name": "bne_hedge_core",
+    "mapTo": "bne_hedge_core",
+    "class": "Material",
+    "alphaTest": true,
+    "alphaRef": 75
   },
   "bne_wall_neutral": {
     "name": "bne_wall_neutral",
@@ -78,50 +101,12 @@
         "vertColor": false,
         "roughnessFactor": 0.95
       },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
+      {},
+      {},
+      {}
     ],
     "translucent": false,
     "groundType": "CONCRETE"
-  },
-  "bne_boundary_wood": {
-    "name": "bne_boundary_wood",
-    "mapTo": "bne_boundary_wood",
-    "class": "Material",
-    "version": 1.5,
-    "Stages": [
-      {
-        "baseColorMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_b.color.png",
-        "normalMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_nm.normal.png",
-        "roughnessMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_r.data.png",
-        "ambientOcclusionMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_ao.data.png",
-        "metallicFactor": 0,
-        "baseColorFactor": [
-          1,
-          1,
-          1,
-          1
-        ],
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
-    ],
-    "translucent": false
   },
   "bne_wall_brick": {
     "name": "bne_wall_brick",
@@ -143,15 +128,9 @@
         ],
         "vertColor": false
       },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
+      {},
+      {},
+      {}
     ],
     "translucent": false
   },
@@ -175,15 +154,35 @@
         ],
         "vertColor": false
       },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_boundary_wood": {
+    "name": "bne_boundary_wood",
+    "mapTo": "bne_boundary_wood",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
       {
+        "baseColorMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_b.color.png",
+        "normalMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_r.data.png",
+        "ambientOcclusionMap": "/assets/materials/tileable/wood/weatherboards/t_weatherboards_ao.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
         "vertColor": false
       },
-      {
-        "vertColor": false
-      },
-      {
-        "vertColor": false
-      }
+      {},
+      {},
+      {}
     ],
     "translucent": false
   },

@@ -1,5 +1,10 @@
 # Mapped boundaries
 
+Hedge inner coverage uses the stock leaf opacity map as well as its colour/normal maps. An opaque inner
+box can become conspicuous as the leaf cards thin with distance. Stock models use their authored LODs for the loaded road tile
+lifetime; there is no additional 150 m stock-to-mesh switch. Missing assets, reset and payload replacement still
+restore the continuous backstop. Authored LODs can retain their own detail and shading differences.
+
 With buildings enabled, near road tiles draw mapped, ground-level fences, ordinary walls and linear hedges from
 the existing Overture infrastructure layer. Closed linear ways remain boundaries; polygon hedge areas do not
 become perimeter fences. Guardrails, retaining walls and elevated/underground boundaries are separate systems.
@@ -26,8 +31,8 @@ Valid physical dimensions accept metres, centimetres and explicit feet/inches. M
 Timber fences use open rails; recorded railings use vertical metal bars. Pickets, panels, plain wire,
 barbed wire and electric fences use simple construction-specific geometry. Existing chain-link and noise-wall
 assets retain their stock renderer when no valid physical width requires a dimensioned mesh; electric and barbed combinations are visual details, without shock physics.
-Walls use existing brick, stone or concrete materials. Hedges are continuous, leaf-textured volumes using the
-installed game's cypress textures, not individual shrubs. Missing fence construction uses timber rails.
+Walls use existing brick, stone or concrete materials. Hedges reuse installed cypress foliage and materials;
+stock fitting and continuous fallback coverage are described below. Missing fence construction uses timber rails.
 These are documented visual fallbacks, not measured local dimensions or exact replicas of every fence type.
 
 Unspecified wall material uses a neutral, rough stock plaster finish. Explicit supported materials take precedence
@@ -80,3 +85,11 @@ Road-fitted noise panels retain mapped scale and gate exclusions after their pla
 Vehicle clearance uses the existing `roads.STYLE` classification. Untyped legacy footprints keep
 their clearance behavior; foot/cycle/bridle paths and steps do not invent gaps. This renderer has
 no dependency on the separate mapped-path contribution.
+
+Stock hedge refinement reuses Italy's authored cypress shape when its uniform scale fits both
+mapped width and height, terrain variation is small and the complete span fits between gates and
+bends. Other spans use clipped stock-leaf cards with an inset core, not opaque outer cuboids.
+Dense tiles use bounded cutout sheets. Stock items stay non-colliding and retain authored wind.
+Whole Forests remain hidden until every item and its replaceable backstop mesh are ready; the
+backstop returns on missing assets, settings changes and replacement. Both ordinary
+and geotile rows reuse the current placement and cleanup paths. No stock artwork is redistributed.
