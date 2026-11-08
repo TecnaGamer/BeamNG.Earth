@@ -214,12 +214,14 @@ M.DRIVE_NEAR_M = 250            -- the flight's end over the car, then exit()'s 
 M.DRIVE_SETTLE_S = 0.6          -- after the ground is ready (the car set down) before the flight
 local drive = nil
 
-function M.driveHere()
+function M.driveHere(lat, lon, name)
   local s = M.state()
-  if not s.active or not s.lat then return {ok = false, error = 'no place in view'} end
+  if not s.active then return {ok = false, error = 'the 3D map is not open'} end
+  lat, lon = tonumber(lat) or s.lat, tonumber(lon) or s.lon
+  if not lat or not lon then return {ok = false, error = 'no place in view'} end
   local stg = rawget(_G, 'beamngEarth_settings')
   if not stg or not stg.uiMapTeleport then return {ok = false, error = 'BeamNG.Earth not loaded'} end
-  local r = stg.uiMapTeleport(s.lat, s.lon, '')
+  local r = stg.uiMapTeleport(lat, lon, name or '')
   if r and r.ok then
     drive = {at = os.clock(), stage = 'loading'}
     r.pending = true
@@ -269,6 +271,9 @@ function M.to2d()
   unpause()
   extensions.hook('onBeamngEarthMap3d', false)
   local stg = rawget(_G, 'beamngEarth_settings')
+  -- (the map key opens the style switched to last: the user, 2026-11-07, "have the game remember which map mode the
+  -- player last switched to")
+  if stg and stg.set then pcall(stg.set, 'mapStyle', '2d') end
   if stg and stg.navigate then stg.navigate(stg.MAP_ROUTE) end
 end
 
@@ -282,6 +287,88 @@ end
 
 -- the 3D map screen's poll (EarthMap3d.vue): state() and the place under the view (the status bar asks the server
 -- about the view's target while the map is open: core.lua)
+-- ---- the 2D map's clicks on the 3D view (the user, 2026-11-07: "i want to be able to set waypoints by clicking on the
+-- map and have a right click menu like the 2d map"; "overall try to make the ui almost the same on both maps")
+-- The ground's lat / lon under screen point (sx, sy) of a w x h screen: the camera's ray through it against the earth's
+-- sphere at the view target's height (the anchor's frame: its centre at ecefToEnu(0, 0, 0)); nil off the earth.
+function M.pick(sx, sy, w, h)
+  local core = rawget(_G, 'beamngEarth_core')
+  local a = core and core._state and core._state().anchor
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  if not active or not a or not a.ecefToEnu or not g then return nil end
+  sx, sy, w, h = tonumber(sx), tonumber(sy), tonumber(w), tonumber(h)
+  if not sx or not w or w <= 0 or h <= 0 then return nil end
+  local p, q = core_camera.getPosition(), quat(core_camera.getQuat())
+  local f, r, u = q * vec3(0, 1, 0), q * vec3(1, 0, 0), q * vec3(0, 0, 1)
+  local tv = math.tan(math.rad(core_camera.getFovDeg() or 60) / 2)
+  local d = (f + r * ((2 * sx / w - 1) * tv * w / h) + u * ((1 - 2 * sy / h) * tv)):normalized()
+  local ox, oy, oz = a:ecefToEnu(0, 0, 0)
+  local c = vec3(ox, oy, oz)
+  local R = (p - c):length() - math.max(0, g.dist * math.sin(g.pitch))     -- (the target's radius: its height kept)
+  local oc = p - c
+  local b = oc:dot(d)
+  local disc = b * b - (oc:dot(oc) - R * R)
+  if disc < 0 then return nil end
+  local t = -b - math.sqrt(disc)
+  if t <= 0 then return nil end
+  local hit = p + d * t
+  local lat, lon = a:worldToGeodetic(hit.x, hit.y, hit.z)
+  return {lat = lat, lon = lon}
+end
+
+-- the clicked spot's marker (EarthMap3d.vue's target) and the GPS destination's, drawn in the world: a pin standing on
+-- the ground, its size kept on the screen
+local marker = nil
+function M.setMarker(lat, lon)
+  lat, lon = tonumber(lat), tonumber(lon)
+  marker = (lat and lon) and {lat = lat, lon = lon} or nil
+end
+local pinTarget, pinGps = nil, nil
+local function drawPin(a, lat, lon, colour)
+  if not debugDrawer then return end
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  local x, y, z = a:geodeticToEnu(lat, lon, (g and g.ground) or 0)
+  local gz = be and be:getSurfaceHeightBelow(vec3(x, y, z + 9000))
+  if gz and gz == gz and gz > z - 600 and gz < z + 9000 then z = gz end
+  local base = vec3(x, y, z)
+  local d = math.max(1, (core_camera.getPosition() - base):length())
+  local s = d * 0.012
+  debugDrawer:drawCylinder(base, base + vec3(0, 0, s * 4), s * 0.12, colour)
+  debugDrawer:drawSphere(base + vec3(0, 0, s * 4), s * 0.7, colour)
+end
+local function drawPins(a)
+  if marker then
+    pinTarget = pinTarget or ColorF(1, 0.42, 0.11, 0.95)
+    drawPin(a, marker.lat, marker.lon, pinTarget)
+  end
+  local okG, gs = pcall(function() return require('beamngEarth/gps').status() end)
+  if okG and gs and gs.lat and gs.lon then
+    pinGps = pinGps or ColorF(0.16, 0.55, 1, 0.95)
+    drawPin(a, gs.lat, gs.lon, pinGps)
+  end
+end
+M._drawPins = drawPins
+
+-- the screen back when something else put the driving HUD up over the open map (the user, 2026-11-07: "the map ui
+-- will sometimes dissapear"): the map's own route again a moment later
+local reshowAt = nil
+function M.onUiChangedState(toState)
+  if active and not transitioning and toState ~= M.ROUTE and type(toState) == 'string'
+      and toState:sub(1, 4) ~= 'menu' and toState ~= 'loading' then
+    reshowAt = os.clock() + 0.25
+  end
+end
+local function reshow()
+  if reshowAt and os.clock() >= reshowAt then
+    reshowAt = nil
+    if active and not transitioning then
+      local stg = rawget(_G, 'beamngEarth_settings')
+      if stg and stg.navigate then stg.navigate(M.ROUTE) end
+    end
+  end
+end
+M._reshow = reshow
+
 function M.uiState()
   local s = M.state()
   local core = rawget(_G, 'beamngEarth_core')
@@ -731,7 +818,8 @@ function M.onUpdate(dtReal)
   do
     local core = rawget(_G, 'beamngEarth_core')
     local a = core and core._state and core._state().anchor
-    if a then pcall(drawRoute, a, dtReal or 0.016) end
+    if a then pcall(drawRoute, a, dtReal or 0.016); pcall(drawPins, a) end
+    reshow()
   end
   if returning then
     if not viewFramed() then

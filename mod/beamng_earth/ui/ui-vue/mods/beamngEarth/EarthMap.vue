@@ -205,6 +205,7 @@
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
         </div>
       </div>
+      <button v-if="!embedded" class="map-btn" @click="open3d" title="The 3D map (experimental): fly over the real world like a map app">3D map</button>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
     </div>
 
@@ -1570,6 +1571,8 @@ function onContext(ev) {
 function closeCtx() { ctx.value = null }
 // picked from the right-click menu: straight away (a second "Teleport here?" with the same choices was one click too
 // many, the user 2026-10-14); a failure shows in the confirmation box
+// the 3D map instead (settings.uiOpen3d: remembered as the map key's style)
+function open3d() { engineLua("beamngEarth_settings and beamngEarth_settings.uiOpen3d and beamngEarth_settings.uiOpen3d() or nil") }
 function ctxTeleport() {
   if (!ctx.value || state.value.cannotGo) return
   const c = ctx.value
