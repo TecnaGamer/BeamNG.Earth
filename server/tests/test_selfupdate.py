@@ -125,5 +125,61 @@ class DownloadTest(unittest.TestCase):
         self.assertIsNone(selfupdate.staged("1.5.5-beta", self.me))
 
 
+class PruneTest(unittest.TestCase):
+    """GitHub #900: the old copies beside the running one go, except the ones a shortcut or a way back needs."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def files(self, *names):
+        for n in names:
+            Path(self.dir, n).write_bytes(b"x")
+
+    def left(self):
+        return sorted(os.listdir(self.dir))
+
+    def test_keeps_the_previous_and_the_oldest_while_no_shortcut_is_known(self):
+        self.files("BeamNG.Earth-1.8.0-beta.exe", "BeamNG.Earth-1.8.1-beta.exe", "BeamNG.Earth-1.8.1-beta.dev.3.exe",
+                   "BeamNG.Earth-1.8.2-beta.exe", "BeamNG.Earth-1.9.0-beta.exe", "BeamNG.Earth-1.8.0-beta.zip",
+                   "notes.txt", "BeamNG.Earth-1.8.0-beta-x86_64.AppImage")
+        me = os.path.join(self.dir, "BeamNG.Earth-1.8.2-beta.exe")
+        gone = selfupdate.prune_old("1.8.2-beta", me)
+        self.assertEqual(sorted(gone), ["BeamNG.Earth-1.8.1-beta.exe"], "(beta.dev.3 is after beta: the previous)")
+        self.assertEqual(self.left(), ["BeamNG.Earth-1.8.0-beta-x86_64.AppImage", "BeamNG.Earth-1.8.0-beta.exe",
+                                       "BeamNG.Earth-1.8.0-beta.zip", "BeamNG.Earth-1.8.1-beta.dev.3.exe",
+                                       "BeamNG.Earth-1.8.2-beta.exe", "BeamNG.Earth-1.9.0-beta.exe", "notes.txt"],
+                         "this copy, a newer one, other kinds of file and the AppImage are left alone")
+
+    def test_the_hand_over_source_is_kept_and_the_oldest_then_goes(self):
+        self.files("BeamNG.Earth-1.7.0.exe", "BeamNG.Earth-1.7.4.exe", "BeamNG.Earth-1.8.0-beta.exe",
+                   "BeamNG.Earth-1.8.1-beta.exe", "BeamNG.Earth-1.8.2-beta.exe")
+        me = os.path.join(self.dir, "BeamNG.Earth-1.8.2-beta.exe")
+        selfupdate.note_started_from(os.path.join(self.dir, "BeamNG.Earth-1.7.4.exe"), me)
+        selfupdate.note_started_from(os.path.join(self.dir, "BeamNG.Earth-1.7.4.exe"), me)
+        selfupdate.note_started_from(os.path.join(tempfile.gettempdir(), "BeamNG.Earth-1.0.0.exe"), me)
+        self.assertEqual(json.loads(Path(self.dir, selfupdate.KEEP).read_text())["started_from"],
+                         ["BeamNG.Earth-1.7.4.exe"], "noted once, only from this folder")
+        gone = selfupdate.prune_old("1.8.2-beta", me)
+        self.assertEqual(sorted(gone), ["BeamNG.Earth-1.7.0.exe", "BeamNG.Earth-1.8.0-beta.exe"])
+        self.assertIn("BeamNG.Earth-1.7.4.exe", self.left(), "the shortcut's copy kept")
+        self.assertIn("BeamNG.Earth-1.8.1-beta.exe", self.left(), "the previous version kept")
+
+    def test_nothing_for_a_source_copy_or_a_single_old_copy(self):
+        self.files("BeamNG.Earth-1.8.1-beta.exe", "BeamNG.Earth-1.8.2-beta.exe")
+        me = os.path.join(self.dir, "BeamNG.Earth-1.8.2-beta.exe")
+        self.assertEqual(selfupdate.prune_old("1.8.2-beta", me), [])
+        self.assertEqual(selfupdate.prune_old("1.8.2-beta", os.path.join(self.dir, "start.py")), [])
+        self.assertEqual(selfupdate.prune_old("not a version", me), [])
+        self.assertEqual(len(self.left()), 2)
+
+    def test_a_locked_copy_is_not_reported(self):
+        self.files("BeamNG.Earth-1.8.0.exe", "BeamNG.Earth-1.8.1.exe", "BeamNG.Earth-1.8.2.exe", "BeamNG.Earth-1.8.3.exe")
+        me = os.path.join(self.dir, "BeamNG.Earth-1.8.3.exe")
+        self.assertEqual(selfupdate.prune_old("1.8.3", me, remove=lambda p: None), [])
+
+
 if __name__ == "__main__":
     unittest.main()
