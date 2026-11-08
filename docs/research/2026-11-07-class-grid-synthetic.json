@@ -1,0 +1,155 @@
+{
+  "kind": "decoded-input class sampling only; not a whole-world/gameplay speedup",
+  "native": 160,
+  "python": "3.10.11",
+  "size": 1024,
+  "square": 1,
+  "frame": [
+    39.282,
+    -76.59
+  ],
+  "cpus": "6,7,8,9,10,11",
+  "pairs": 9,
+  "inputs": "seeded synthetic rasters",
+  "source_sha256": {
+    "server\\surface.py": "f54fb6dd04759f1838a212266f730a960fd6e61098a5c82d50234e18d83b4dc4",
+    "native\\earthfast\\src\\classgrid.rs": "d8018d76f5f60ec9671bef763eff12ca670612855a0f41afac2cc32d9ac32d87"
+  },
+  "routes": {
+    "straight": {
+      "points": 9437184,
+      "passes_ms": {
+        "base": [
+          1569.8790998430923,
+          1584.5344001427293,
+          1581.3637000974268,
+          1569.878499954939,
+          1587.2840998927131,
+          1591.8408997822553,
+          1569.0864999778569,
+          1583.8730999967083,
+          1560.5798001633957
+        ],
+        "cached": [
+          578.3045998541638,
+          573.5913999378681,
+          569.6523000951856,
+          590.6189000234008,
+          598.1663001002744,
+          585.9408000251278,
+          595.0275001814589,
+          594.5785999065265,
+          559.401499805972
+        ]
+      },
+      "median_route_ms": {
+        "base": 1581.3637000974268,
+        "cached": 585.9408000251278
+      },
+      "change_percent": -62.947119629151196,
+      "output_sha256": [
+        "70315813bab368c99a667b16039ef7c5bea3f7c5ef737548caf13c598125c223",
+        "814187e807ca0d17cb40995bad1deb7e74293a14eb6fd3119b4af8496e1c147c",
+        "2ef8990f3d661d02da0da2bb04905aba7867a29c2464dd51a34249900fb52308",
+        "2002fbfb253016763c0e046170f4fe56ba7d89d056f7f325b0efc07cccef5401",
+        "feda3d5b3bd091bbf66310abf87bdf5b6ece957cc566f09cc2779c39cc9aabb4",
+        "fd5e6824c74a9ea91df0282cffdb5df5baf5b6e6b64e91a4c07ec2c1064bc6f9",
+        "5a6269724c1ea8b3c388c81e85beddb9a10659098eeb5b2f6b45052f8f8fbff6",
+        "1c01be655637955a6fd8ad1d9f17a723a94888fc04742dd173bc500bda8015c1",
+        "e5cdab757b6ccb10376877f0ebfa0081b9df190d1fcbcd6f05d25933ac569d05"
+      ],
+      "cold_fill_included": true,
+      "class_sample_cache_bytes": 2097152
+    },
+    "diagonal": {
+      "points": 9437184,
+      "passes_ms": {
+        "base": [
+          1553.8686002837494,
+          1549.2233999539167,
+          1550.6190001033247,
+          1554.0157001232728,
+          1613.5298002045602,
+          1529.7141000628471,
+          1550.4412000300363,
+          1556.6731998696923,
+          1539.5874999230728
+        ],
+        "cached": [
+          848.4351000515744,
+          840.2518995571882,
+          848.2177002588287,
+          845.5554001266137,
+          833.0996999284253,
+          831.2821998260915,
+          838.7834000168368,
+          830.8690001722425,
+          835.8032000251114
+        ]
+      },
+      "median_route_ms": {
+        "base": 1550.6190001033247,
+        "cached": 838.7834000168368
+      },
+      "change_percent": -45.906544421231466,
+      "output_sha256": [
+        "70315813bab368c99a667b16039ef7c5bea3f7c5ef737548caf13c598125c223",
+        "219b54d052aa4900e14cbcbff8279f0de6d1e0af0b6fb02b77cf27f1627d6e2d",
+        "214c88daba884b66cd370af9e99498f21a0cdcc24e0d38811ebd6b1c00fbf19e",
+        "fa621dd7c8a811d6ef88d8e589cce9f5413944ec00e1879d68e907700dccdfba",
+        "445cbba404095cceeb8985d69850933ce5a251e8555aebe6e97ed7d139d0aecc",
+        "4d2fd8b2864d2334059720ba9e0d13d7812da2b88d3eab3dbe943b856f9b0488",
+        "526a6f1d36bbbdc768655a870e75149b78b2cc79b7935adc4ee15e61d97af473",
+        "fe0754850c02de00d87c507a389cf156eb558ebe9e3d1cc45d7d6522d7d7e7b0",
+        "e66e2d3739e7f1041f2697fcbaea004b09beda104388b4cd1db99dc3dc4520e7"
+      ],
+      "cold_fill_included": true,
+      "class_sample_cache_bytes": 3014656
+    },
+    "turn_revisit": {
+      "points": 9437184,
+      "passes_ms": {
+        "base": [
+          1549.421500065364,
+          1546.2232998106629,
+          1606.1619996326044,
+          1591.9768000021577,
+          1553.5645000636578,
+          1531.2668998958543,
+          1550.5126998759806,
+          1581.0131998732686,
+          1592.3548999708146
+        ],
+        "cached": [
+          318.52179986890405,
+          319.30640002246946,
+          327.26910000201315,
+          323.5386001178995,
+          329.96900007128716,
+          315.90789975598454,
+          312.37180007155985,
+          316.565899993293,
+          313.23270010761917
+        ]
+      },
+      "median_route_ms": {
+        "base": 1553.5645000636578,
+        "cached": 318.52179986890405
+      },
+      "change_percent": -79.49735592852099,
+      "output_sha256": [
+        "70315813bab368c99a667b16039ef7c5bea3f7c5ef737548caf13c598125c223",
+        "814187e807ca0d17cb40995bad1deb7e74293a14eb6fd3119b4af8496e1c147c",
+        "2ef8990f3d661d02da0da2bb04905aba7867a29c2464dd51a34249900fb52308",
+        "01f2e3a905fd00ff8848c69c75bc64dec5e79a3234c739f04b4c850139d50b07",
+        "214c88daba884b66cd370af9e99498f21a0cdcc24e0d38811ebd6b1c00fbf19e",
+        "1accbfa84754fb81e6d8d49847a6403d369d913e6bb3f60023d12d5ec6d79bda",
+        "ee47368a4dc8e6420c324bf749b77c958dd0fdaab7ae2eacce6a4418a77844bc",
+        "ab61fc3570759df1f5354f2786d6919bdbda578a0dc731b67c7308bee925f4c5",
+        "70315813bab368c99a667b16039ef7c5bea3f7c5ef737548caf13c598125c223"
+      ],
+      "cold_fill_included": true,
+      "class_sample_cache_bytes": 1638400
+    }
+  }
+}

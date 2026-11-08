@@ -51,6 +51,7 @@ mod streetlabels;
 mod perfclean;
 mod mdhtml;
 mod streamflow;
+mod classgrid;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -5549,6 +5550,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
     m.add_class::<streamflow::StreamDispatch>()?;
     m.add_function(wrap_pyfunction!(streamflow::stream_controlled, m)?)?;
+    m.add_class::<classgrid::ClassGridCache>()?;
+    m.add_class::<classgrid::ClassGridPlan>()?;
+    m.add_function(wrap_pyfunction!(classgrid::class_grid_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
@@ -5558,6 +5562,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
     // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
     m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
-    m.add("VERSION", 169)?;
+    m.add("VERSION", 170)?;
     Ok(())
 }

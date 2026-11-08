@@ -13,7 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 MODULES = (
     "test_protocol", "test_protocol_agreement", "test_geodesy", "test_cache",
-    "test_budget", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
+    "test_budget", "test_class_grid", "test_install", "test_updates", "test_selfupdate", "test_bmplaunch",
     "test_launcher_linux", "test_launcher_lifecycle", "test_process_lifecycle",
     "test_connection_cleanup", "test_initial_loading", "test_tile_ownership", "test_matslots", "test_stream_reconnect", "test_stream_dispatch",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",

@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import fast
@@ -91,6 +92,17 @@ class StreamDispatchTest(unittest.TestCase):
         c.lease = SimpleNamespace(connection=object())
         c.dispatch(dict(type="stream_ack", seq=1))
         self.assertEqual([m["key"] for m in self.messages()], ["first"])
+
+    def test_urgent_messages_still_share_the_total_byte_bound(self):
+        c = self.connection(1)
+        for k in range(3):
+            self.assertTrue(c.send(dict(type="roads_tile", key=k)))
+        critical = dict(type="status", text="urgent")
+        bound = c.stream_dispatch.queued_bytes + len(protocol.encode(critical)) - 1
+        with mock.patch.object(earthd, "SEND_BUFFER_MAX", bound):
+            self.assertFalse(c.send(critical))
+        self.assertTrue(c.closing)
+        self.assertEqual(len(self.frames), 1)
 
 
 if __name__ == "__main__":
