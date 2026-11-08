@@ -3954,6 +3954,11 @@ class Server:
         if self.net.slow() is not None:     # (map data at a crawl: a new place's roads take minutes: GitHub #241;
             # no number in it: the note is re-sent whenever its text changes)
             parts.append("slow internet connection: new places take a few minutes to load")
+        disk = getattr(self, "disk_cache", None)
+        if disk is not None and disk.managed and disk.disk_short() > 0:
+            # (a full drive fails far tiles, blocks and caches with "No space left on device": the first week's most
+            # frequent errors; the cache is cut back to its reserve, but other files may fill the drive)
+            parts.append("your drive is nearly full: free some space (the download cache is cut back)")
         return "Degraded: " + "; ".join(parts) if parts else ""
 
     def level_summary(self):
@@ -8545,6 +8550,7 @@ async def main_async(args):
     except Exception as e:      # (no saved areas; never the server)
         log.warning("saved areas: %s", e)
     try:            # the map's cache view: its index built in the background from the cache's keys (covermap.py)
+        server.disk_cache = disk            # (net_note: a drive short of its free reserve, cache.disk_short)
         server.covermap = covermapmod.CoverMap(disk, args.cache_dir, mapdata if args.roads == "on" else None,
                                                server.world_signature).start()
     except Exception as e:      # (the map's view stays empty; never the server)
