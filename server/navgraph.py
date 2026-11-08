@@ -77,6 +77,11 @@ US_MOTORWAY_MPH = {
 # names: maplayers.js) within CITY_KM: the road specs' `urban` (built up along the road: sidewalks, parking) took I-94
 # past Huntley MT (a few hundred people) for a city's interstate, 65 where the state's limit is 80 outside its
 # urbanized areas (Billings, rank 4).
+# ... and the other fast classes outside towns, where no limit is mapped: the rural limit most states set for a two-lane
+# highway by statute (55 mph; Texas 70 on its numbered highways, FM roads among them, 60 on the others), not the town
+# speeds of DRIVE: a farm-to-market road in Texas was driven at 30-35 where it is 55-70 (GitHub #888). Not unclassified
+# and below (county and gravel roads vary too much); a road built up along it (spec.urban) keeps URBAN_MPH_CAP.
+US_RURAL_MPH = {"trunk": 65, "primary": 55, "secondary": 55, "tertiary": 45}
 CITY_RANK = 6
 CITY_KM = 12.0
 _state_memo = {}
@@ -155,6 +160,8 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
         state, city = _us_place(feats, i)
         if state in US_MOTORWAY_MPH:
             return float(US_MOTORWAY_MPH[state][1 if spec.urban and city else 0])
+    if country == "US" and not spec.urban and spec.cls in US_RURAL_MPH and not getattr(spec, "link", False):
+        return float(US_RURAL_MPH[spec.cls])
     if country == "SE" and spec.cls == "motorway":
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:

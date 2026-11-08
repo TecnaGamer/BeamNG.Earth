@@ -303,6 +303,29 @@ class RulesTest(unittest.TestCase):
         self.assertEqual(navgraph.road_mph(at(49.5, -97.0), 0, rural, country="US"), 65.0, "outside the states: 65")
         self.assertEqual(len(navgraph.US_MOTORWAY_MPH), 51)
 
+    def test_us_rural_highways_default_to_55(self):
+        """GitHub #888: a Texas farm-to-market road with no mapped limit was driven at town speeds; outside towns the
+        fast classes take the usual rural limit, in town (and anywhere outside the US) as before."""
+        class F:
+            rules = {}
+        rural = roads.Spec(7.0, "paved", False, "secondary", False)
+        self.assertEqual(navgraph.road_mph(F, 0, rural, country="US"), 55.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="tertiary"), country="US"), 45.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="trunk"), country="US"), 65.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(urban=True), country="US"), 35.0, "in town: the cap")
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(link=True), country="US"), 40.0, "a slip road")
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="unclassified"), country="US"), 30.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural), 40.0, "no country: as before")
+
+        class Mapped:
+            class _T:
+                start, end, value = [0.0], [1.0], [72.42]
+
+                def rows(self, i):
+                    return [0]
+            rules = {"max_speed_kmh": _T()}
+        self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, rural, country="US"), 45.0, places=1, msg="mapped wins")
+
     def test_swedish_defaults_are_the_law(self):
         class F:
             rules = {}
