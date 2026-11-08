@@ -1,0 +1,36 @@
+name: highway shields
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BNE_TELEMETRY: "off"
+
+jobs:
+  shields:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Dependencies
+        # pyosmium exercises the existing weekly PBF builder; not an app dependency.
+        run: python -m pip install -r server/requirements.txt osmium
+      - name: Shield recognition, automatic generation and distribution
+        run: python tools/run_tests.py test_nationwide_shields test_state_highway_shields test_route_repeaters test_streamed_route_shields test_guide_shield_textures test_road_source_recovery test_shield_distribution test_highway_signs test_sign_tags test_through_signs test_sign_packaging test_signready --par 2 --logs build/shield-tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: shield-tests-${{ matrix.os }}
+          path: build/shield-tests/*.log
+          if-no-files-found: warn

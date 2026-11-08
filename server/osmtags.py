@@ -26,6 +26,8 @@ import os
 import re
 import threading
 import time
+import tempfile
+from concurrent.futures import CancelledError
 
 import numpy as np
 
@@ -39,7 +41,7 @@ log = logging.getLogger("earthd.mapdata")
 URL = "https://data.openstreetmap.us/layercake/highways.parquet"
 HOST = "data.openstreetmap.us"
 VERSION_TTL_S = 7 * 86400       # a pinned version is checked again after this long (the file changes ~weekly)
-RETRY_S = 3600                  # the source unreachable: asked again after this long (offline, blocked, gone)
+RETRY_S = 60                    # bounded recovery probes; netfetch still enforces host backoff/budgets
 PATH = "osm/highways.parquet"   # (the path DuckDB reads it under)
 
 # The query: OSM way id and the parsed tags (NULL where absent or not understood).
@@ -138,15 +140,27 @@ class OsmTags:
                     m = rangeread.CONTENT_RANGE.match(r.headers.get("content-range", ""))
                     if not etag or not m or m.group(3) == "*":
                         raise rangeread.RangeError(f"{self.url}: no ETag or size")
+                except CancelledError:
+                    raise
                 except Exception:
                     os.makedirs(os.path.dirname(down), exist_ok=True)
                     open(down, "w").close()
                     raise
                 size = int(m.group(3))
                 os.makedirs(os.path.dirname(pin), exist_ok=True)
-                with open(pin + ".tmp", "w") as f:
-                    f.write(f"{etag}\n{size}\n{time.time()}\n")
-                os.replace(pin + ".tmp", pin)
+                # Multiple workers may discover a replacement at once.
+                fd, temp = tempfile.mkstemp(prefix="pinned-", suffix=".tmp", dir=os.path.dirname(pin))
+                try:
+                    with os.fdopen(fd, "w") as f:
+                        f.write(f"{etag}\n{size}\n{time.time()}\n")
+                    os.replace(temp, pin)
+                finally:
+                    if os.path.exists(temp):
+                        os.remove(temp)
+                try:
+                    os.remove(down)
+                except FileNotFoundError:
+                    pass
             d = os.path.join(self.raw_dir, self.DIR, re.sub(r"[^A-Za-z0-9]+", "_", etag).strip("_"))
             self._remote = (etag, rangeread.RemoteFile([self.url], size, d, self.fetcher, if_match=etag))
             self._checked = time.time()

@@ -11,7 +11,7 @@ import numpy as np
 
 ZOOM = 7
 FORMAT = 1
-KINDS = {"exit": "exit", "through": "through", "mile": "mile_marker"}     # shard "k" -> the sign modules' key
+KINDS = {"exit": "exit", "through": "through", "mile": "mile_marker", "shield": "roadside"}
 PATHS = ("approach", "ramp")        # [[lon, lat], ...] in "d", stored as encode_path's integers
 
 

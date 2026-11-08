@@ -15,6 +15,7 @@ import unicodedata
 
 import numpy as np
 import routeshields
+import highwayroutes
 
 MAIN_CLASSES = ('motorway', 'trunk')
 LINK_CLASSES = ('motorway_link', 'trunk_link')
@@ -529,10 +530,19 @@ def route_symbols(routes, state=''):
                 kind, region, number = 'state', state, upper
             else:
                 kind, region, number = 'text', '', raw
-            key = kind, region, number, qualifier or ''
-            if number and key not in seen:
+            symbol = dict(kind=kind, state=region, number=number, qualifier=qualifier or '')
+            # Shared network rules also cover FM/RM, lettered and design variants.
+            reference = re.sub(r'\s+(NORTH|SOUTH|EAST|WEST)$', '', upper)
+            recognized = highwayroutes.recognize({'ref': reference}, state=state)
+            if recognized:
+                shared = highwayroutes.panel(recognized[0])
+                symbol.update(shared)
+                if shared.get('modifier'):
+                    symbol['qualifier'] = shared['modifier']
+            key = symbol['kind'], symbol['state'], symbol['number'], symbol['qualifier'], highwayroutes.identity(symbol)[0] if symbol['kind'] != 'text' else ''
+            if symbol['number'] and key not in seen:
                 seen.add(key)
-                out.append(dict(kind=kind, state=region, number=number, qualifier=qualifier or ''))
+                out.append(symbol)
     return out[:3]
 
 
@@ -641,7 +651,10 @@ def dimensions(label, kind, state=''):
 
 
 class Mesh:
-    def __init__(self, origin):
+    def __init__(self, origin, out_dir=None, vfs_dir=None, faces=None):
+        self.out_dir, self.vfs_dir = out_dir, vfs_dir
+        self.faces = faces if faces is not None else {}
+        self.materials = list(GUIDE_MATERIALS)
         self.origin = np.asarray(origin)
         self.p, self.t, self.uv, self.mi = [], [], [], []
         self.centre = self.face = self.right = None
@@ -769,6 +782,33 @@ class Mesh:
         if kind=='text':
             self.guide_text(route['number'],y,bottom+.04,min(.40,h*.8),w)
             return
+        if self.out_dir is not None:
+            current = highwayroutes.current_panel(route)
+            template = highwayroutes.registry()['templates'].get(current.get('template'), {})
+            if kind == 'state' or template.get('image'):
+                import routefaces
+                name, texture = routefaces.face(current, self.out_dir, self.vfs_dir)
+                self.faces[name] = texture
+                if name not in self.materials:
+                    self.materials.append(name)
+                # Fit the artwork inside the existing inset without moving board text.
+                aspect = template.get('aspect', 1.)
+                sw, sh = min(w, h*aspect), min(h, w/aspect)
+                base = bottom+(h-sh)/2
+                profile = routefaces.contour(current.get('template')) if not current.get('modifier') or current['modifier'] in template.get('modifiers', ()) else None
+                if profile is None:
+                    points = np.array([[-.5,0.],[.5,0.],[.5,1.],[-.5,1.]])
+                    triangles = [(0,1,2),(0,2,3)]
+                else:
+                    points, triangles = profile
+                points = points*[sw,sh]+[y,base]
+                for tri in triangles:
+                    vertices = points[list(tri)]
+                    self.triangle([(.082,*p) for p in vertices],self.materials.index(name))
+                    self.uv[-3:] = [((float(p[0])-y)/sw+.5,(float(p[1])-base)/sh) for p in vertices]
+                if route.get('qualifier') and template.get('modifier_plaque', True):
+                    self.guide_text(route['qualifier'],y,bottom+h+.04,.16,w+.12)
+                return
         profile=routeshields.marker(route.get('state','')) if kind=='state' else None
         if profile is not None:
             # A single opaque white cutout. Concave outlines are triangulated
@@ -904,7 +944,7 @@ class Mesh:
 
     def result(self):
         if not self.t: return None
-        materials = GUIDE_MATERIALS if max(self.mi)>=len(MATERIALS) else MATERIALS
+        materials = self.materials if len(self.materials)>len(GUIDE_MATERIALS) else GUIDE_MATERIALS if max(self.mi)>=len(MATERIALS) else MATERIALS
         return np.asarray(self.p), np.asarray(self.t), np.asarray(self.uv), materials, np.asarray(self.mi)
 
 

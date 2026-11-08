@@ -9,6 +9,11 @@ import numpy as np
 
 import exitsigns
 import milemarkers
+import routemarkers
+import routerepeaters
+import streamedroutes
+import routeindex
+import plazas
 import railtags
 import roads
 import signroads
@@ -24,6 +29,8 @@ class Source:
     def __init__(self, md, tags=None):
         self.tags = tags if tags is not None else railtags.SignTags(md.cache_dir, md.fetcher)
         self.md = md
+        self.repeaters = routerepeaters.Source(md.raw_dir, md.fetcher) if hasattr(md, 'raw_dir') else None
+        self.streamed = streamedroutes.Source(md) if hasattr(md,'cell') and hasattr(md,'raw_dir') else None
         self.contexts = {}
         self.lock = threading.Lock()
         self.warned = -float('inf')
@@ -60,14 +67,52 @@ class Source:
             if now - self.warned >= 60.:
                 self.warned = now
                 log.warning('OSM signs unavailable; bundled mile markers remain: %s: %s', type(error).__name__, error)
-        return objects
+        streamed_ready = False
+        if self.streamed is not None:
+            try:
+                found = self.streamed.query(float(np.min(lon)),float(np.min(lat)),
+                                           float(np.max(lon)),float(np.max(lat)), objects)
+                if found is not None:
+                    objects += found
+                    streamed_ready = True
+            except CancelledError:
+                raise
+            except Exception as error:
+                now = time.monotonic()
+                if now-self.warned>=60.:
+                    self.warned=now
+                    log.warning('Streamed route markers unavailable; using existing fallback: %s', error)
+        if self.repeaters is not None and not streamed_ready:
+            try:
+                objects += self.repeaters.query(float(np.min(lon)), float(np.min(lat)),
+                                                float(np.max(lon)), float(np.max(lat)), objects)
+            except CancelledError:
+                raise
+            except Exception as error:
+                now = time.monotonic()
+                if now - self.warned >= 60.:
+                    self.warned = now
+                    log.warning('OSM route repeaters unavailable; indexed signs remain: %s', error)
+        shield_objects=[o for o in objects if o.get('roadside',{}).get('type')=='shield']
+        # Old custom records may predate the stored travel axis.
+        for obj in shield_objects:
+            extra=obj['roadside']
+            path=np.asarray(extra.get('approach',()),float)
+            if not extra.get('axis') and len(path)>=2:
+                axis=(path[-1]-path[0])*[np.cos(np.radians(obj['lat'])),1.]
+                if np.linalg.norm(axis)>1e-12:
+                    extra['axis']=(axis/np.linalg.norm(axis)).tolist()
+        ready=[o for o in shield_objects if o['roadside'].get('axis')]
+        ready_ids={o['id'] for o in ready}
+        untouched=[o for o in objects if o['id'] not in ready_ids]
+        return untouched+routeindex.unique(ready)
 
 
 def tile_objects(source, frame, tx, ty):
     """Guide-sign and mile-reference sources that may place a sign in this tile (an exit's signs stand up to
     exitsigns.APPROACH_M before its junction)."""
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
-    m = exitsigns.QUERY_MARGIN + signlayout.MARGIN
+    m = max(exitsigns.QUERY_MARGIN + signlayout.MARGIN, routerepeaters.HALO_M)
     return source.objects(frame, (x0 - m, y0 - m, x1 + m, y1 + m))
 
 
@@ -114,7 +159,8 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
     return ([s for s in exits if signlayout.owns(box, s)], [s for s in overheads if signlayout.owns(box, s)])
 
 
-def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None):
+def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None,
+               out_dir=None, vfs_dir=None, faces=None):
     """Return (exit mesh, mile-marker mesh); optional scenery cannot stop road generation."""
     source = getattr(md, 'highway_signs', None)
     if source is None:
@@ -122,6 +168,7 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
     try:
         box = roads.tile_bbox(tx, ty)
         objects = tile_objects(source, frame, tx, ty)
+        objects = list({obj['id']: obj for obj in objects}.values())
         if not objects:
             return None, None
         context = source.context(urban, widths)
@@ -130,8 +177,25 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
         for obj in milemarkers.unique_objects(objects):
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)
             miles.extend(milemarkers.place(frame, [obj], pavements, box, elev, chunks))
+        shields = []
+        obstacles = {}
+        for obj in objects:
+            if obj.get('roadside', {}).get('type') != 'shield':
+                continue
+            pavements = routemarkers.source_pavements(frame, obj, context, left_hand)
+            import signplacement
+            point=exitsigns._xy(frame,[[obj['lon'],obj['lat']]])[0]
+            key=tuple(np.floor(point/roads.TILE).astype(int))
+            if key not in obstacles:
+                # Source-owned neighbourhood, independent of the requesting tile.
+                obstacles[key]=signplacement.for_tile(frame,*key,md,())
+            placed = routemarkers.place(frame, obj, pavements, box, elev, chunks, left_hand,obstacles[key])
+            if placed is not None:
+                shields.append(placed)
         origin = (box[0], box[1], 0.)
-        return throughsigns.build(exits, overheads, origin), milemarkers.build(miles, origin)
+        return (plazas.merge(throughsigns.build(exits, overheads, origin, out_dir=out_dir, vfs_dir=vfs_dir, faces=faces),
+                             routemarkers.build(shields, origin, out_dir, vfs_dir, faces)),
+                milemarkers.build(miles, origin))
     except CancelledError:
         raise
     except Exception as error:

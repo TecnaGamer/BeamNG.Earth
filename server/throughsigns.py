@@ -66,6 +66,10 @@ def label(tags, relations=()):
         return None
     # ref describes this road; destination:ref is a fallback when it is unmapped.
     routes = values(tags.get('ref')) or refs
+    import highwayroutes
+    relation_routes = highwayroutes.recognize({}, relations)
+    if relation_routes:
+        routes = [' '.join(filter(None, (r.network, r.ref, r.modifier))) for r in relation_routes]
     directions = {cardinal(r.get('direction')) for r in relations
                   if r.get('role', '') not in ('forward', 'backward') or
                   r['role'] == ('forward' if direction > 0 else 'backward')}
@@ -411,8 +415,8 @@ class Mesh(signs.Mesh):
         self.centre = anchor
 
 
-def build(exits, overheads, origin):
-    mesh = Mesh(origin)
+def build(exits, overheads, origin, out_dir=None, vfs_dir=None, faces=None):
+    mesh = Mesh(origin, out_dir, vfs_dir, faces)
     for sign in exits:
         mesh.panel(sign)
     for sign in overheads:

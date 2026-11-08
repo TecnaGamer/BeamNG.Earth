@@ -16,8 +16,10 @@ Records (server/signshards.py: the z7 shard of each record's point, paths delta-
     (throughsigns.index_records, every SPACING_M of an equally labelled chain);
   - "mile": Interstate mile references (milemarkers.osm_records): mapped highway=milestone nodes on an Interstate
     carriageway (US:I route relations or an "I nn" ref) and the whole miles between two compatible ones.
-Two passes over the planet (as build_rail_tags.py): the junction / milestone nodes, the motorway and trunk ways and
-links (their node ids kept) and the route=road relations first, then those nodes' places. Exits are indexed per z7
+  - "shield": relation-first federal/state reassurance markers at route starts and junctions (routeindex), with
+    mapped M1 markers preferred over inferred stations.
+Three passes over a rereadable planet: US route membership, then junction / milestone / sign nodes and selected
+ways and route relations, then those ways' node places. Exits are indexed per z7
 tile of their junction with the mainline ways within MARGIN_DEG (an approach is 1.8 km): a planet's whole motorway
 network never sits in one dict. Data: (c) OpenStreetMap contributors, ODbL 1.0.
 """
@@ -40,8 +42,10 @@ import exitsigns  # noqa: E402
 import milemarkers  # noqa: E402
 import signshards  # noqa: E402
 import throughsigns  # noqa: E402
+import routeindex  # noqa: E402
+import highwayroutes  # noqa: E402
 
-WAY_KEYS = tuple(dict.fromkeys(throughsigns.WAY_KEYS + milemarkers.WAY_KEYS))
+WAY_KEYS = tuple(dict.fromkeys(throughsigns.WAY_KEYS + milemarkers.WAY_KEYS + routeindex.WAY_KEYS))
 NODE_KEYS = tuple(dict.fromkeys(exitsigns.EXIT_KEYS + milemarkers.TAG_KEYS + ("highway",)))
 MAIN, LINKS = set(exitsigns.MAIN_CLASSES), set(exitsigns.LINK_CLASSES)
 MARGIN_DEG = 0.05           # mainline ways this far round an exit tile (latitude degrees: ~5.5 km > APPROACH_M)
@@ -65,21 +69,41 @@ def _rail():
     return build_rail_tags
 
 
+class Junctions(dict):
+    def __init__(self):
+        super().__init__()
+        self.shields=[]
+
+
 def first_pass(src):
     """(main ways, links [(id, node refs, tags)], junction node tags {id: tags}, milestones {id: (lon, lat, tags)},
     relations {way id: [{direction, role}]}, route ways [(way id, route, direction, state)])."""
-    with _rail()._Source(src) as f:
-        return _first_pass(f)
-
-
-def _first_pass(src):
+    # A small relation-only prepass lets us retain relation-only state routes
+    # without loading every primary/secondary/tertiary way on the planet.
+    # Streaming callers must supply a rereadable URL or local file.
+    if src == '-':
+        # Preserve the original stdin importer; relation-only minor roads need
+        # the rereadable source prepass (documented in the shield system guide).
+        with _rail()._Source(src) as f:
+            return _first_pass(f)
     import osmium
-    main, links, junctions, milestones = [], [], {}, {}
+    members=set()
+    with _rail()._Source(src) as f:
+        for rel in osmium.FileProcessor(f,osmium.osm.RELATION).with_filter(osmium.filter.KeyFilter('route')):
+            if rel.tags.get('type')=='route' and rel.tags.get('route')=='road' and highwayroutes.network(rel.tags.get('network')):
+                members.update(m.ref for m in rel.members if m.type=='w')
+    with _rail()._Source(src) as f:
+        return _first_pass(f,members)
+
+
+def _first_pass(src, route_members=frozenset()):
+    import osmium
+    main, links, junctions, milestones = [], [], Junctions(), {}
     relations, route_rows, cache = defaultdict(list), [], {}
     main_ids = set()
     t0, k = time.time(), 0
     fp = osmium.FileProcessor(src, osmium.osm.NODE | osmium.osm.WAY | osmium.osm.RELATION)
-    for o in fp.with_filter(osmium.filter.KeyFilter("highway", "route")):
+    for o in fp.with_filter(osmium.filter.KeyFilter("highway", "route", "traffic_sign", "traffic_sign:forward", "traffic_sign:backward")):
         k += 1
         if k % 1_000_000 == 0:
             print(f"  pass 1: {k:,} objects, {len(main):,} mainline ways, {len(links):,} links, "
@@ -87,6 +111,8 @@ def _first_pass(src):
         tags = o.tags
         if o.is_node():
             hw = tags.get("highway")
+            if o.location.valid() and any(k in tags for k in ('traffic_sign','traffic_sign:forward','traffic_sign:backward')):
+                junctions.shields.append((o.id,(o.location.lon,o.location.lat),dict(tags)))
             if hw not in ("motorway_junction", "milestone") or not o.location.valid():
                 continue
             t = {key: tags[key] for key in NODE_KEYS if key in tags}
@@ -96,17 +122,19 @@ def _first_pass(src):
                 milestones[o.id] = (o.location.lon, o.location.lat, t)
         elif o.is_way():
             hw = tags.get("highway")
-            if hw not in MAIN and hw not in LINKS or len(o.nodes) < 2:
+            state_route = hw in routeindex.ROAD_CLASSES and (
+                o.id in route_members or highwayroutes.recognize({k:tags[k] for k in ('ref','network') if k in tags}))
+            if (hw not in MAIN and hw not in LINKS and not state_route) or len(o.nodes) < 2:
                 continue
             row = (o.id, np.array([n.ref for n in o.nodes], np.int64),
                    _intern(cache, {key: tags[key] for key in WAY_KEYS if key in tags}))
-            if hw in MAIN:
+            if hw not in LINKS:
                 main.append(row)
                 main_ids.add(o.id)
             else:
                 links.append(row)
         elif o.is_relation():
-            if tags.get("route") != "road":
+            if tags.get("type") != "route" or tags.get("route") != "road":
                 continue
             ref = str(tags.get("ref", ""))
             direction = milemarkers.cardinal(tags.get("direction"))
@@ -116,8 +144,9 @@ def _first_pass(src):
                 if m.type != "w" or m.ref not in main_ids:
                     continue
                 posted = throughsigns.cardinal(m.role) or throughsigns.cardinal(tags.get("direction"))
-                if posted:
-                    relations[m.ref].append({"direction": posted, "role": m.role})
+                relation = {key: tags[key] for key in ('type','route','network','ref','modifier','destination:ref') if key in tags}
+                relation.update(direction=posted,role=m.role)
+                relations[m.ref].append(relation)
                 if interstate:
                     route_rows.append((m.ref, int(ref), direction, state))
     return main, links, junctions, milestones, dict(relations), route_rows
@@ -208,6 +237,7 @@ def _record(kind, oid, lon, lat, d):
 
 def exits(main, links, junctions, relations, places):
     """exitsigns.index_records per z7 tile of the links' first nodes, with the mainline ways near it."""
+    main=[row for row in main if row[2].get('highway') in exitsigns.MAIN_CLASSES]
     groups = defaultdict(list)
     for row in links:
         refs = row[1]
@@ -249,7 +279,8 @@ def exit_records(found):
 
 def through(main, found, relations, places):
     """throughsigns.index_records over the mainline ways with a destination block (few: a planet in one go)."""
-    ways = [(w, r.tolist(), t) for w, r, t in main if throughsigns.label(t, relations.get(w, ())) is not None]
+    ways = [(w, r.tolist(), t) for w, r, t in main if t.get('highway') in MAIN and
+            throughsigns.label(t, relations.get(w, ())) is not None]
     if not ways:
         return []
     coords = places.coords(np.concatenate([np.asarray(r, np.int64) for _, r, _ in ways]))
@@ -339,8 +370,13 @@ def main():
     print(f"overhead stations: {len(over):,}, {time.time() - t0:.0f} s", flush=True)
     mile = miles(main_ways, milestones, route_rows, places)
     print(f"mile references: {len(mile):,}, {time.time() - t0:.0f} s", flush=True)
-    write(a.out, exit_records(found) + over + mile,
-          {"exits": len(found), "through": len(over), "miles": len(mile)})
+    coords = places.coords(ids)
+    shield_ways=[(w,r.tolist(),t) for w,r,t in main_ways+links]
+    shields = routeindex.unique(routeindex.mapped_records(shield_ways,coords,relations,junctions.shields)+
+                                routeindex.index_records(shield_ways,coords,relations))
+    shield_records = [_record('shield',o['id'],o['lon'],o['lat'],o['ways'][0]) for o in shields]
+    write(a.out, exit_records(found) + over + mile + shield_records,
+          {"exits": len(found), "through": len(over), "miles": len(mile), "shields":len(shields)})
     print(f"done in {time.time() - t0:.0f} s")
 
 

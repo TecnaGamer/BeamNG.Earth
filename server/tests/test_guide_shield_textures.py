@@ -1,0 +1,75 @@
+"""Shared shield artwork on existing green guide boards."""
+from pathlib import Path
+import sys
+import tempfile
+import unittest
+from unittest import mock
+import numpy as np
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import exitsigns
+import throughsigns
+import highwayroutes
+import routefaces
+from test_advance_sign_layout import sign
+
+
+class GuideTexturesTest(unittest.TestCase):
+    def test_mixed_green_exit_uses_wy_art_and_preserves_federal_meshes(self):
+        board = sign(routes=('WY 210', 'US 30', 'I 80'))
+        board['state'] = 'WY'
+        before = exitsigns.advance_layout(board)
+        with tempfile.TemporaryDirectory() as tmp:
+            faces = {}
+            mesh = throughsigns.build([board], [], (0,0,0), tmp, '/cache', faces)
+            name, texture = routefaces.face(highwayroutes.panel(highwayroutes.Route('US:WY','210')), tmp, '/cache')
+            self.assertEqual(faces, {name: texture})
+            self.assertIn(name, mesh[3])
+            self.assertIn(exitsigns.GUIDE_MATERIALS.index('bne_guide_red'), mesh[4])
+            self.assertEqual(exitsigns.advance_layout(board), before)
+            selected = mesh[1][mesh[4] == mesh[3].index(name)]
+            vertices = mesh[0][selected]
+            normals = np.cross(vertices[:,1]-vertices[:,0],vertices[:,2]-vertices[:,0])
+            self.assertTrue(np.all(normals[:,1] < 0), 'faces point toward approaching traffic')
+            uv = mesh[2][selected]
+            self.assertTrue(np.all((uv >= -1e-6) & (uv <= 1+1e-6)))
+            with mock.patch('imagery.write_dds') as write:
+                throughsigns.build([board], [], (0,0,0), tmp, '/cache', {})
+                write.assert_not_called()
+
+    def test_overhead_through_and_exit_panels_register_shared_faces(self):
+        for is_exit in (False, True):
+            board = dict(centre=[0.,0.,0.], travel=[0.,1.], bottom=5.5,
+                         poles=[-5.,5.], bases=[0.,0.], side=1, state='WY', distance='1 MILE',
+                         panels=[dict(offset=0., width=7., height=5., exit=is_exit,
+                                      label=dict(ref='10' if is_exit else '', names=['Cheyenne'],
+                                                 routes=['WY 210','US 30','I 80'], direction='EAST'))])
+            with tempfile.TemporaryDirectory() as tmp:
+                faces = {}
+                mesh = throughsigns.build([], [board], (0,0,0), tmp, '/cache', faces)
+                self.assertEqual(len(faces), 1)
+                self.assertIn(next(iter(faces)), mesh[3])
+
+    def test_special_networks_and_border_identity(self):
+        routes = exitsigns.route_symbols(['FM 1234','CO 14','I 80'], 'WY')
+        self.assertEqual([highwayroutes.identity(r)[0] for r in routes], ['US:TX:FM','US:CO','US:I'])
+        self.assertEqual(exitsigns.route_symbols(['SR 210'],'WY')[0]['state'], 'WY')
+        label = throughsigns.label(dict(highway='motorway', oneway='yes', ref='80', destination='Laramie'),
+                                   [dict(type='route', route='road', network='US:I', ref='80')])
+        self.assertEqual(exitsigns.route_symbols(label['routes'],'WY')[0]['kind'], 'interstate')
+
+    def test_artwork_preserves_aspect_inside_reserved_inset(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            mesh = exitsigns.Mesh((0,0,0), tmp, '/cache', {})
+            mesh.centre = np.zeros(3); mesh.face = np.array([0.,-1.,0.]); mesh.right = np.array([1.,0.,0.])
+            route = exitsigns.route_symbols(['CO 123'],'WY')[0]
+            mesh.route_shield(dict(route,y=0.,bottom=0.,width=1.2,height=.95))
+            vertices = np.asarray(mesh.p)
+            width, height = np.ptp(vertices[:,0]), np.ptp(vertices[:,2])
+            template = highwayroutes.registry()['templates'][highwayroutes.template_for('US:CO','123')]
+            self.assertLessEqual(width, 1.2+1e-6)
+            self.assertLessEqual(height, .95+1e-6)
+            self.assertAlmostEqual(width/height, template.get('aspect',1.))
+
+
+if __name__ == '__main__':
+    unittest.main()

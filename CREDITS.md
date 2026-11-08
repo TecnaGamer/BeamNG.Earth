@@ -185,3 +185,30 @@ BWM_Weather, TAA Standalone, PerformanceTweaker, Enhanced Vehicle FX, Realistic 
 Dynamic Damage Particles, Dynamic Scratches, SparkMod: other authors' mods the project owner uses;
 BeamNG.Earth only coexists with them (e.g. the weather module backs off when BWM_Weather drives the
 weather). The pause-menu integration follows the pattern of the TAA Standalone mod.
+
+
+## Nationwide highway shield library
+
+- State-specific numberless shield templates: 87 imported public-domain source
+  drawings plus Wyoming's existing public-domain adaptation. Individual source
+  files, authors, checksums and license records are in
+  `server/data/shields/artwork_sources.json` and `NOTICE.md`.
+- Wide Minnesota template: **MN-blank wide.svg**, **Taniya Wilburn**, adapted
+  under **CC BY-SA 4.0**. Source:
+  https://commons.wikimedia.org/wiki/File:MN-blank_wide.svg ; license:
+  https://creativecommons.org/licenses/by-sa/4.0/ . Changes include resizing,
+  layout and generated number compositing; Minnesota-wide derivative graphics
+  retain that license. Full attribution/change notice: `server/data/shields/NOTICE.md`.
+- Nationwide road-route relation/way index: **© OpenStreetMap contributors**,
+  **ODbL-1.0**, snapshot 2026-11-08T10:34:50Z. Source and database checksums,
+  membership counts and build provenance: `server/data/shields/route_relations.manifest.json`.
+
+- Wyoming numberless shield artwork: adaptation of Wikimedia Commons
+  [WY-210.svg](https://commons.wikimedia.org/wiki/File:WY-210.svg) by Vishwin60,
+  identified there as public domain (PD MUTCD WY). Includes the bucking horse
+  and rider. Source, build and license notes: `server/data/shields/NOTICE.md`.
+- Bundled Wyoming route station database: **© OpenStreetMap contributors**,
+  ODbL-1.0; the JSON header records its snapshot timestamp and source hash.
+- The generated number textures reuse Roadgeek 2014 Series EEM 3.1 (MIT);
+  the font notice is retained in `server/data/shields/Roadgeek-LICENSE.txt`.
+

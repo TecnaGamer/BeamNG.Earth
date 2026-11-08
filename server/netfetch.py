@@ -1101,6 +1101,11 @@ class Fetcher:
             self._count(h, "s404")
             self._succeeded(h)              # the host answered: it is healthy
             return NotFound(f"{url}: HTTP {status}", url, h.name, status=status)
+        if status == 412:
+            # A pinned dataset was replaced. The caller must refresh its version;
+            # this is a healthy HTTP response, not a host outage.
+            self._succeeded(h)
+            return FetchFailed(f"{url}: HTTP {status}", url, h.name, status=status)
         ra = parse_retry_after(rh.get("retry-after"), self.wall()) if status in (429, 503) else None
         if status == 429:
             self._count(h, "s429")
