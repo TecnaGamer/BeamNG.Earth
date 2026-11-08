@@ -12,7 +12,8 @@ local M = {}
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/shapes/buildings/main.materials.json',     -- m_gasstation_tyrannos
   '/levels/west_coast_usa/art/shapes/objects/main.materials.json',                          -- corrugation
   '/levels/east_coast_usa/art/shapes/buildings/main.materials.json',                        -- (US East's units)
-  '/levels/italy/art/shapes/buildings/main.materials.json' }    -- (Europe's EV chargers: docs/research/2026-10-29-ev-chargers.md)
+  '/levels/italy/art/shapes/buildings/main.materials.json',     -- (Europe's EV chargers: docs/research/2026-10-29-ev-chargers.md)
+  '/levels/beamng_earth/art/shapes/beamngEarth/au_street_amenities.materials.json' }   -- fork: AU payphones and post boxes (streetamenities.py)
 M.CLEAR_S = 0.5            -- the POI list gathered again at most this often (s)
 M.ENERGY = { 'gasoline', 'diesel' }
 M.now = os.clock
