@@ -708,6 +708,9 @@ local function geoRows(key, t, data, replacing)
     require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, data.park, 1, 4))
     t.park = true
   end
+  if type(data.fleet) == 'table' then
+    require('beamngEarth/navgraph').setFleet(data.fleet)
+  end
   if type(data.fuel) == 'table' and data.fuel[1] then
     require('beamngEarth/gasstations').onRows(t.anchor, key, M.mapStations(pl, data.fuel))
     t.fuel = true
@@ -1145,6 +1148,9 @@ function M.onTile(msg, currentAnchor, a)
   if type(data.park) == 'table' and data.park[1] then      -- curbside parking spots (parking.lua)
     require('beamngEarth/parking').onRows(msg.anchorId, key, data.park)
     tiles[key].park = true
+  end
+  if type(data.fleet) == 'table' then
+    require('beamngEarth/navgraph').setFleet(data.fleet)
   end
   if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)
     require('beamngEarth/gasstations').onRows(msg.anchorId, key, data.fuel)

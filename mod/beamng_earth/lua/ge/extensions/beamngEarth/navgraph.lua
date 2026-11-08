@@ -752,6 +752,27 @@ local function startTraffic()
   end
 end
 
+M.fleet = nil
+
+-- The CBS shares of the gemeente under the player (roads.lua, fleetmix.py). Car and truck are the weights
+-- the stock traffic group already uses. A missing table leaves those weights as they are.
+function M.setFleet(shares)
+  if type(shares) ~= 'table' or type(shares.car) ~= 'number' then return end
+  local truck = (tonumber(shares.van) or 0) + (tonumber(shares.truck) or 0)
+  M.fleet = { car = shares.car, truck = math.max(truck, 0.02) }
+  local utils = rawget(_G, 'gameplay_traffic_trafficUtils')
+  if not utils or utils.__bneFleet or type(utils.getBaseGroupParams) ~= 'function' then return end
+  local base = utils.getBaseGroupParams
+  utils.getBaseGroupParams = function(...)
+    local params = base(...)
+    if M.fleet and params and type(params.filters) == 'table' then
+      params.filters.Type = { car = M.fleet.car, truck = M.fleet.truck }
+    end
+    return params
+  end
+  utils.__bneFleet = true
+end
+
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
 -- back on the new place's graph once it is in.
 local heldActive = nil

@@ -10267,6 +10267,17 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
             data["townsigns"] = {g: towns[g] for g in groups if g in towns}
     if park:                        # parking.py's spots [x, y, z, heading] for the stock parked cars (parking.lua)
         data["park"] = park
+    place = getattr(tx, "frame", None)
+    box = getattr(tx, "box", None)
+    if place is not None and box is not None:
+        try:
+            import fleetmix
+            lat, lon, _ = place.enu_to_geodetic((box[0] + box[2]) / 2, (box[1] + box[3]) / 2, 0.0)
+            mix = fleetmix.shares(float(lat), float(lon))
+        except Exception:
+            mix = None
+        if mix:
+            data["fleet"] = mix
     if fuel:                        # gasstations.tile_sites' stations: pumps and refuel areas (gasstations.lua)
         data["fuel"] = fuel
     if custom_entries:              # buildings.road_tile's 3dmr.eu models (ours), [{shape, pos}]

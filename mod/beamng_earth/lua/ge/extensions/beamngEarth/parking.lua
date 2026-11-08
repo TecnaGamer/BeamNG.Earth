@@ -240,15 +240,39 @@ local function hookSetup()
   local gp = rawget(_G, 'gameplay_parking')
   if not gp or gp.__bngeEarthHooked or type(gp.setupVehicles) ~= 'function' then return end
   local orig = gp.setupVehicles
-  gp.setupVehicles = function(...)
+  gp.setupVehicles = function(amount, options)
     if M.enabled and lastPlayer and next(spots) and (dirty or not sites) then
       lastBuild, dirty = os.clock(), false
       local ok, err = pcall(rebuild, lastPlayer)
       if not ok then log('W', 'beamngEarth', 'parking: ' .. tostring(err)) end
     end
-    return orig(...)
+    local fleet = require('beamngEarth/navgraph').fleet
+    if type(fleet) == 'table' then
+      local group = M.fleetGroup(amount, fleet)
+      if group then
+        if type(options) ~= 'table' then options = {} end
+        if not options.vehGroup then options.vehGroup = group end
+      end
+    end
+    return orig(amount, options)
   end
   gp.__bngeEarthHooked = true
+end
+
+function M.fleetGroup(amount, fleet)
+  local utils = rawget(_G, 'gameplay_traffic_trafficUtils')
+  local spawn = rawget(_G, 'core_multiSpawn')
+  if not utils or not spawn or type(spawn.createGroup) ~= 'function' or type(utils.getBaseGroupParams) ~= 'function' then
+    return nil
+  end
+  local ok, params = pcall(utils.getBaseGroupParams)
+  if not ok or type(params) ~= 'table' then return nil end
+  params.allConfigs, params.minPop = true, 0
+  params.filters = params.filters or {}
+  params.filters.Type = { car = fleet.car, truck = fleet.truck }
+  local n = (type(amount) == 'number' and amount > 0) and amount or 8
+  local okG, group = pcall(spawn.createGroup, n, params)
+  if okG and type(group) == 'table' and group[1] then return group end
 end
 
 -- blk: the block's ground box {x0, y0, x1, y1} (nil: no limit).
