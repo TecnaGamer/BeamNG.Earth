@@ -24,7 +24,7 @@
         "vertColor": true,
         "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1.normal.dds",
         "normalMapStrength": 0.65,
-        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_source_r.data.dds",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_v1_contact_relief_roughness_v1.data.png",
         "roughnessFactor": 1,
         "metallicFactor": 0,
         "ambientOcclusionMap": "/levels/beamng_earth/art/shapes/beamngEarth/cliff/canyon_detail_dirt_rocky_source_ao.data.dds",
@@ -38,7 +38,8 @@
         "detailScale": [
           1,
           1
-        ]
+        ],
+        "roughnessMapUseUV": 0
       },
       {},
       {},
