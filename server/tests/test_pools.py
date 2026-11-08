@@ -117,6 +117,32 @@ class RespawnTest(unittest.TestCase):
         finally:
             p.shutdown()
 
+    def test_lazy_low_jobs_take_their_arguments_at_handover(self):
+        """submit_low_lazy: the arguments are made when the job goes to the processes, so what was added while it
+        waited goes with it (the trees geotiles that join one job, Server._veg_geo_job)."""
+        import time
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN)
+        try:
+            p.submit(time.sleep, 0.5).result(timeout=30)        # (the process started)
+            busy = [p.submit(time.sleep, 0.5) for _ in range(2)]
+            first = p.submit_low_lazy(sorted, lambda: (([3, 1],), {}))          # (handed over beside them)
+            waiting = [2]
+            later = p.submit_low_lazy(sorted, lambda: ((list(waiting),), {}))
+            time.sleep(0.2)
+            self.assertFalse(later.running())
+            waiting += [9, 0]
+            self.assertEqual(first.result(timeout=30), [1, 3])
+            self.assertEqual(later.result(timeout=30), [0, 2, 9])
+            self.assertTrue(all(f.done() for f in busy))
+
+            def broken():
+                raise KeyError("x")
+            with self.assertRaises(KeyError):
+                p.submit_low_lazy(sorted, broken).result(timeout=30)
+            self.assertEqual(p.submit_low(abs, -4).result(timeout=30), 4)     # (the loop still runs)
+        finally:
+            p.shutdown()
+
     def test_jobs_in_flight_are_counted(self):
         """inflight (Server.live_busy: the saved areas' downloads wait for it): up at a submit, down when the job ends,
         fails or is cancelled, also when a pool made again cancels its futures (its own lock: no deadlock)."""

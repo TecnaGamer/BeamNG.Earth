@@ -378,9 +378,21 @@ SSE_HYSTERESIS = 0.5
 SSE_SPACING_CAP = 2.0
 
 
+def out_of_view(cone, x0, y0, x1, y1, d):
+    """The factor a node's distance counts with in the selection for the 3D map's view cone (9 values: view_cone's 8
+    and the factor): 1 in the cone, the factor outside (earthfast farglobal.rs out_of_view, the same rule)."""
+    if len(cone) < 9 or d <= 0.0:
+        return 1.0
+    cx, cy, cz = (x0 + x1) / 2 - cone[0], (y0 + y1) / 2 - cone[1], cone[7] - cone[2]
+    r = math.sqrt(cx * cx + cy * cy + cz * cz)
+    slack = math.asin(min(1.0, math.hypot(x1 - x0, y1 - y0) * 0.5 / max(r, 1.0)))
+    a = math.acos(max(-1.0, min(1.0, (cx * cone[3] + cy * cone[4] + cz * cone[5]) / max(r, 1e-9))))
+    return 1.0 if a - slack <= math.acos(max(-1.0, min(1.0, cone[6]))) else max(1.0, cone[8])
+
+
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
            radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0):
+           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0, cone=None):
     """Desired tiles for a player at (px, py).
 
     region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
@@ -436,6 +448,8 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                     d = math.hypot(max(x0 - px, 0.0, px - x1), max(y0 - py, 0.0, py - y1))
                 lim = switch_distance(lvl, kfun, radii, min_level)
                 d3 = math.hypot(d, eye_h)       # (eye_h: the camera's height over the ground; select_global)
+                if cone is not None:
+                    d3 *= out_of_view(cone, x0, y0, x1, y1, d)
                 split = d3 < lim or (node in prev_refined and d3 < (1.0 + h) * lim)
                 if not split and view is not None and d < view.reach * lim:
                     px_ = view.pixels(node, x0, y0, x1, y1)
@@ -609,6 +623,7 @@ GLOBAL_MAX_LAT = 84.5          # deg: the selection's whole radius must stay wit
 GLOBAL_MIN_AREA = 1e-3          # m^2: an overlap below this is a shared edge, not an overlap
 GLOBAL_OVERLAP_REL = 0.01      # ... and below this of the smaller footprint (the quads' straight edges off the curved parallels)
 GLOBAL_NEED = 160               # earthfast farglobal.rs (160: far_global_select eye_h)
+GLOBAL_CONE_NEED = 162          # (162: its view cone, the 3D map: farglobal.rs out_of_view)
 GLOBAL_GEO_VERSION = 1          # bump: every global tile's cached geometry / texture is built again
 GLOBAL_PROTO = 1                # hello.globalFar: the mod places global far tiles (farfield.lua GLOBAL_FAR)
 
@@ -756,11 +771,11 @@ class Region:
 
 def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
                   max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0):
+                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0, cone=None):
     """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
     anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
     select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
-    fast.require(GLOBAL_NEED, "global far tiles")
+    fast.require(GLOBAL_NEED if cone is None else GLOBAL_CONE_NEED, "global far tiles")
     kfun = kfun or layout.k
     radii = NEAR_RADII[layout.cells] if radii is None else radii
     gprev = [tuple(n[1:]) for n in prev_refined if len(n) == 4]
@@ -777,7 +792,8 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
     t0 = time.perf_counter()
     tiles, grefined, regions = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h))
+        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h),
+        *(([float(v) for v in cone],) if cone is not None else ()))
     out = {}
     for z, x, y, q, s in tiles:
         t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
@@ -798,7 +814,7 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
     if regions:
         aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
                             GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
-                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h)
+                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h, cone=cone)
         out.update(aout)
         refined |= aref
     global LAST_GLOBAL_SELECT

@@ -9113,6 +9113,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     crosswalk_look = junctions.CROSSWALK
     priority = None if nodes is None else nodes["priority"]
     trams = []                                  # ... and what no raised sidewalk or median runs over (rails.tram_lines)
+    rail_cuts = []                              # ... nor over a railway crossing the road at grade (GitHub #579)
+    if walks is not None:
+        import railways
+        rail_cuts = railways.walk_cut_lines(frame, cells, own_box)
     if str(country or "").upper() == "SE":
         import furniture
         import markings as _gw
@@ -9280,9 +9284,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                            if (fid, f2) in cornered or f2 in ring_dir
                            else sidewalk_stop(spec, fid, s2, f2)))
                          for f2, s2, p2, _ in roads if f2 != fid] + list(walk_cuts) + trams
+        crossing_rails = [c for c in rail_cuts if railways.crosses(pts[:, :2], c[0])]
+        walk_blockers += crossing_rails
         # a median's band stops at the other carriageways' curbs only (their sidewalk is on their far side: it cut
         # one carriageway's half of Boston Street's median away)
-        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid] + trams
+        curb_blockers = [(p2[:, :2], s2.width / 2) for f2, s2, p2, _ in roads if f2 != fid] + trams + crossing_rails
         cut_boxes = {}                          # (_within_any's boxes of this road's cut lists)
         lb_memo = {}                            # (line_blockers by look kind and side, below)
         line_base = [(f2, s2, p2, l2) for f2, s2, p2, l2 in roads
@@ -9365,7 +9371,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             chunks.append(_chunk(look, w, c))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads]
-                                   + list(walk_cuts))       # (a cut's gap stays open: a driveway crosses it)
+                                   + list(walk_cuts) + rail_cuts)   # (a cut's gap stays open: a driveway, a railway)
         drain_runs = []                         # (walks entry, side, real ends, width): drains once on the ground
         for rn in runs_near:
             fid, side, w, run0 = rn["fid"], rn["side"], rn["w"], rn["pts"]
@@ -9580,9 +9586,10 @@ class Tracker:
         tile it has; the OSM test: a cell's OpenStreetMap fuel stations came after them, earthd Server.osm_fuel_want)."""
         self.sent -= set(keys)
 
-    def progress(self):
+    def progress(self, near_m=None):
         """(done, wanted) of the road tiles round the car at the last pose: done = sent to the mod, empty, or failed
-        and waiting for its retry (nothing more comes for it now). (0, 0) before a pose."""
+        and waiting for its retry (nothing more comes for it now). (0, 0) before a pose. (near_m: as GeoTracker's;
+        these tiles carry no distances, all count.)"""
         car = getattr(self, "car", ())
         done = sum(1 for k in car if k in self.sent or k in self.empty or k in self.retry)
         return done, len(car)
@@ -9634,8 +9641,10 @@ class Tracker:
             t0 = self.started.get(k)
             if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                 self.stuck_said.add(k)
-                log.warning("roads tile %s of anchor %d: building for %.0f s (%d tiles in flight, %d sent): the road "
-                            "workers may be stuck", k, aid, now - t0, len(self.building), len(self.sent))
+                # (not "may be stuck": players read it as broken and cleared their caches, which only made the next
+                # try slower; the time counts the wait for a free road process too)
+                log.warning("roads tile %s of anchor %d: not ready after %.0f s (%d tiles in flight, %d sent): "
+                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
         def far(k):
             return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
                 and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
@@ -9760,11 +9769,16 @@ class GeoTracker:
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
-    def progress(self):
+    def progress(self, near_m=None):
         """(done, wanted) of the tiles round the car: done = content and this anchor's skin sent, or waiting for a
-        retry."""
-        done = sum(1 for k in self.car if (k in self.sent and k in self.skins) or k in self.retry)
-        return done, len(self.car)
+        retry. near_m: only those within it of the car (the catch-up boost: the ground under the car, not SEND_M's
+        far edge, where a tile is always on its way while driving)."""
+        car = self.car
+        if near_m is not None:
+            dist = getattr(self, "car_m", {}) or {}
+            car = [k for k in car if dist.get(k, 0.0) <= near_m]
+        done = sum(1 for k in car if (k in self.sent and k in self.skins) or k in self.retry)
+        return done, len(car)
 
     def ready_tiles(self, frame, x, y, r):
         """The anchor road tiles (tx, ty) within r of (x, y) (tiles_near) whose road geotiles are all with the mod
@@ -9854,6 +9868,7 @@ class GeoTracker:
         s = math.hypot(vx, vy)
         car = geo_wanted(frame, x, y, vx, vy)
         self.car = set(car)
+        self.car_m = car                    # (progress(near_m): each wanted tile's m from the car)
         seen = {(a, b): d for a, b, d in geotiles.tiles_near(frame, *view, SEND_M)} if view else {}
         others = {}
         for f in foci:
@@ -9914,8 +9929,8 @@ class GeoTracker:
             t0 = self.started.get(k)
             if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                 self.stuck_said.add(k)
-                log.warning("road geotile %s of anchor %d: building for %.0f s (%d in flight, %d sent): the road "
-                            "workers may be stuck", k, aid, now - t0, len(self.building), len(self.sent))
+                log.warning("road geotile %s of anchor %d: not ready after %.0f s (%d in flight, %d sent): "
+                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
 
         def far(k):
             q = geotiles.quad(frame, *k)

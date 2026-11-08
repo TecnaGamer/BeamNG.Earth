@@ -201,6 +201,36 @@ class GradePointsTest(unittest.TestCase):
         j = (np.abs(px - 10) < 0.5) & (np.abs(py) < 0.5)
         self.assertTrue(np.isfinite(out1[j]).all())
 
+    def test_duplicate_end_vertex_does_not_spike(self):
+        # A plan whose last vertex sits 1.5 cm past the previous one (a repeated map node, a trim cut at a vertex,
+        # a junction snap moved the end to its junction), their heights set 209.0/214.8 m by the junction snap,
+        # graded beside the abutting plan to 430.9 m with a pit beside it. Near-zero-length segments are dropped:
+        # the blend stays finite and near the plans' heights.
+        a = np.array([[-70.4, 3.4], [-66.6, 4.5], [-62.7, 5.6], [-58.9, 6.7], [-55.0, 7.8], [-51.2, 8.9],
+                      [-47.3, 9.9], [-43.4, 10.9], [-39.5, 11.9], [-35.6, 12.8], [-31.8, 13.7], [-27.9, 14.6],
+                      [-24.0, 15.5], [-20.1, 16.4], [-16.2, 17.3], [-12.3, 18.3], [-8.4, 19.2], [-4.5, 20.1],
+                      [-0.6, 21.0], [-0.585, 21.0]])
+        pa = grading.Plan(a, np.array([209.5, 209.5, 209.4, 209.4, 209.4, 209.4, 209.3, 209.3, 209.3, 209.2,
+                                       209.2, 209.2, 209.2, 209.1, 209.1, 209.1, 209.1, 209.0, 209.0, 214.8]),
+                         6.55)
+        b = np.array([[-0.6, 21.0], [3.3, 21.8], [7.1, 22.6], [11.0, 23.3], [14.9, 24.1], [18.7, 24.9],
+                      [22.6, 25.7], [26.5, 26.4], [30.3, 27.2], [34.2, 28.0], [36.1, 28.4]])
+        pb = grading.Plan(b, np.array([214.8, 214.7, 214.6, 214.4, 214.3, 214.2, 214.0, 213.8, 213.6, 213.4,
+                                       213.3]),
+                         7.4, abut=(False, True), road_half=4.4)
+        pb.cut = np.array([[np.nan] * 6] * 4 + [[np.nan, np.nan, np.nan, 12.4, 212.0, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.8, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.5, 16.4],
+                                                [np.nan, np.nan, np.nan, 13.4, 211.3, 16.4],
+                                                [np.nan, np.nan, np.nan, 13.4, 211.1, 17.4],
+                                                [np.nan, np.nan, np.nan, 12.4, 211.0, 17.4]])
+        px = np.array([0.0, -0.6, 5.0, -0.6])
+        py = np.array([26.0, 21.0, 23.0, 15.0])
+        out = grading.grade_points(px, py, np.full(4, 209.0), [pa, pb])
+        self.assertTrue(np.isfinite(out).all(), "finite everywhere")
+        self.assertLess(float(out.max()), 240.0, "no spike")
+        self.assertGreater(float(out.min()), 200.0, "no pit")
+
 
 class AbutmentTest(unittest.TestCase):
     """GitHub #38 (the D1 near Presov): a motorway onto a bridge over a road in a cutting 8 m under it."""
@@ -792,6 +822,31 @@ class MajorRoadTest(unittest.TestCase):
         g = grading.Grader(FRAME, FakeMD(f), self.bumpy)
         return {fid: p for fid, p in g._cell_plans(mapcells.cell_of(LAT, LON))}
 
+    def test_dirt_roads_on_coarse_elevation_do_not_follow_its_noise(self):
+        """GitHub #835: on the coarse global model (30 m cells, metres of noise) a minor dirt road smoothed over 6 m
+        rode every bump of the data. There it is smoothed over DIRT_SIGMA_COARSE_M; on fine elevation it is not."""
+        spec = roads.Spec(3.5, "dirt", False, "unclassified")
+        self.assertEqual(grading.profile_sigma(spec), grading.DIRT_SIGMA_MINOR_M)
+        self.assertEqual(grading.profile_sigma(spec, coarse=True), grading.DIRT_SIGMA_COARSE_M)
+        self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified"), coarse=True),
+                         grading.profile_sigma(roads.Spec(7.0, "paved", False, "unclassified")), "paved: unchanged")
+
+        def noisy(la, lo):
+            x = np.asarray(FRAME.geodetic_to_enu(la, lo, 0.0)[0], np.float64)
+            return 100.0 + 0.02 * x + 1.5 * np.sin(x / 9.0) + 0.8 * np.sin(x / 4.3 + 1.0)
+        xs = np.arange(-200.0, 201.0, 2.0)
+        la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+        part = [(np.c_[lo, la], spec)]
+        with unittest.mock.patch.object(grading, "DIRT_ROUGH", 0.0):     # (the profile alone, not the potholes)
+            fine = grading.plan_roads(FRAME, part, noisy, cuts=False)[0]
+            rough = grading.plan_roads(FRAME, part, noisy, cuts=False, coarse=True)[0]
+
+        def bumpiness(p):
+            core = p.z[30:-30]
+            return float(np.abs(np.diff(core, 2)).mean())
+        self.assertLess(bumpiness(rough), 0.25 * bumpiness(fine))
+        self.assertAlmostEqual(float(np.polyfit(rough.xy[:, 0], rough.z, 1)[0]), 0.02, delta=0.01, msg="the grade kept")
+
     def test_major_roads_smoothed_more(self):
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "motorway")), grading.SIGMA_MAJOR_M)
         self.assertEqual(grading.profile_sigma(roads.Spec(7.0, "paved", False, "motorway", link=True)), grading.SIGMA_M)
@@ -1091,6 +1146,31 @@ class RacewayKeepTest(unittest.TestCase):
         base = sloped(la, lo)
         out = g.apply(la, lo, base)
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
+
+    def test_track_smoothed_along_its_banking_kept(self):
+        """GitHub #833: the elevation data's short bumps along a racetrack are smoothed away; its banking (the ground's
+        slope across it) and its long crests stay."""
+        f = features([[(-400, 0), (400, 0)]], ["raceway"])
+
+        def ground(e, n):
+            return 10.0 + 0.3 * n + 0.15 * np.sin(2 * np.pi * e / 6.0) + 3.0 * np.sin(2 * np.pi * e / 600.0)
+
+        def elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return ground(np.asarray(e), np.asarray(n))
+        g = grading.Grader(FRAME, FakeMD(f), elev)
+        e = np.repeat(np.arange(-100.0, 100.0, 0.7), 3)
+        n = np.tile([-4.0, 0.0, 4.0], len(e) // 3)
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+        base = elev(la, lo)
+        ee, nn, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+        smooth = 10.0 + 0.3 * np.asarray(nn) + 3.0 * np.sin(2 * np.pi * np.asarray(ee) / 600.0)
+        out = g.apply(la, lo, base)
+        self.assertGreater(float(np.abs(base - smooth).max()), 0.14)
+        np.testing.assert_allclose(out, smooth, atol=0.04, err_msg="the bumps gone, banking and crest kept")
+        with unittest.mock.patch.object(grading, "RACEWAY_SMOOTH_ON", False):
+            off = grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, base)
+        np.testing.assert_allclose(off, base, atol=1e-9, err_msg="BNE_RACEWAY_SMOOTH=off: the ground as it is")
 
 
 

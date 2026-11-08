@@ -837,6 +837,9 @@ class MapData:
         with self._mem_lock:
             self._mem.clear()
             self._mem_bytes = 0
+        for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
+            if tags is not None:
+                tags.clear_memory()
 
     def _remember(self, k, entry):
         """Keep a decoded layer for the next cell() of it (at most MEM_MB in all, least recently used out)."""

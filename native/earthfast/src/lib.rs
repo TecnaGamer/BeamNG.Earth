@@ -5,6 +5,8 @@ mod cliffstream;
 mod cliffstrips;
 mod clifftransition;
 mod devraster;
+mod gravity;
+mod polyproject;
 mod s3url;
 mod countrymap;
 mod carriageway_solver;
@@ -50,6 +52,8 @@ mod farglobal;
 mod dirtsteps;
 mod gridinterp;
 mod streetlabels;
+mod perfclean;
+mod mdhtml;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -1087,7 +1091,7 @@ fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py
     let (h, w, ch) = (a.shape()[0], a.shape()[1], a.shape()[2]);
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
-    // block rows in bands across the cores (a 4096Â² base photo was 0.46 s on one, 2026-10-28)
+    // block rows in bands across the cores (a 4096² base photo was 0.46 s on one, 2026-10-28)
     let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1).min(8).min(nby.max(1));
     let rows_per = (nby + threads - 1) / threads.max(1);
     std::thread::scope(|sc| {
@@ -2359,7 +2363,7 @@ pub(crate) fn mip_levels_core(img: numpy::ndarray::ArrayView3<u8>, lut: numpy::n
     let mut out = Vec::new();
     let mut lin: Vec<f32>;
     if h > 1 && w > 1 {
-        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096Â² RGBA photo): the vertical then the
+        // level 1 from the bytes at once (the level-0 floats were 268 MB for a 4096² RGBA photo): the vertical then the
         // horizontal averages, in that order, of the same floats
         let (nh, nw) = (h / 2, w / 2);
         let row0 = w * nc;
@@ -5220,7 +5224,7 @@ fn paint_lines<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, segs: PyRea
 }
 
 /// farfield.build_tile's adaptive mesh: the right-triangulated irregular network (RTIN, a 4-8 hierarchy, as Mapbox's
-/// Martini, but with each triangle's true error: every grid point inside it) of a (2^k + 1)Â² height grid h [j, i]
+/// Martini, but with each triangle's true error: every grid point inside it) of a (2^k + 1)² height grid h [j, i]
 /// (j north) whose surface is within max_err (m) of every grid height.
 /// Returns (tris (m, 3) int64: grid indices j * n + i, counter-clockwise from +Z; surf (n, n): the mesh's surface at
 /// every grid point; the largest |surf - h|). The top split is the SW-NE diagonal and the finest cells split SW-NE
@@ -5234,7 +5238,7 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
     let n = g.nrows();
     let t = n.wrapping_sub(1);
     if g.ncols() != n || n < 3 || !t.is_power_of_two() {
-        return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)Â² grid"));
+        return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)² grid"));
     }
     let hv: Vec<f64> = g.iter().copied().collect();
     let (tris, surf, worst) = py.allow_threads(|| rtin_core(&hv, n, max_err));
@@ -5513,10 +5517,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geotiles::geo_tile_quad, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_tiles_near, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_quad_dist, m)?)?;
+    m.add_function(wrap_pyfunction!(geotiles::geo_tiles_dist, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_map, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_world_to_geodetic, m)?)?;
     m.add_function(wrap_pyfunction!(geotiles::geo_placement, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f32, m)?)?;
+    m.add_function(wrap_pyfunction!(gravity::gravity_row_sums_f64, m)?)?;
+    m.add_function(wrap_pyfunction!(polyproject::polyline_project, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
@@ -5551,8 +5559,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
-    m.add("VERSION", 162)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
+    m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_clean, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_step, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::perf_fingerprint, m)?)?;
+    m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
+    // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
+    m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
+    m.add("VERSION", 168)?;
     Ok(())
 }

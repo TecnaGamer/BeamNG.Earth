@@ -63,6 +63,7 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 | USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
 | USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
+| BeamNG.Earth's own tile host (Sentinel-2, ESA WorldCover 2021 composite, CC BY 4.0) | `tiles.tgforever.net` | the whole land to ~40 m per pixel, the distant land; packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. | The sources below, as before. | named |
 | Sentinel-2 cloudless (EOX) | `tiles.maps.eox.at` | the whole world, 10 m per pixel; the distant land everywhere and the near ground outside the regions above. Also the world map's base layers. | New ground outside the regions above may stay plain (the land cover's colours). | named |
 
 Regional services, each used only inside its own area:
@@ -70,7 +71,7 @@ Connecticut (`cteco.uconn.edu`), Massachusetts (`tiles.arcgis.com`), Washington 
 Indiana (`di-ingov.img.arcgis.com`), Ohio (`maps.ohio.gov`), North Carolina (`services.nconemap.gov`),
 Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`), New York State
 (`orthos.its.ny.gov`), New Jersey (`maps.nj.gov`), Delaware (`imagery.firstmap.delaware.gov`), Vermont
-(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Spain
+(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Portugal (`cartografia.dgterritorio.gov.pt`), Spain
 (`tms-pnoa-ma.idee.es`), the Netherlands (`service.pdok.nl`), Luxembourg (`wmts1.geoportail.lu`), Austria
 (`maps.wien.gv.at`), South Tyrol (`geoservices.buergernetz.bz.it`), Italy (`wms.pcn.minambiente.it`), Poland
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders

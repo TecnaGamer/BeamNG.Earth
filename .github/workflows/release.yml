@@ -87,7 +87,13 @@ jobs:
         run: python -m pip install pyinstaller==6.22.3 -r server/requirements.txt
       - name: appimagetool
         run: |
-          curl -sSLo appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          # a failed or half download once arrived as a non-program file (Exec format error, dev.248): retry until it is an ELF
+          for i in 1 2 3 4 5; do
+            curl -fsSL --retry 3 -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
+              && [ "$(head -c 4 appimagetool | od -An -tx1 | tr -d ' ')" = 7f454c46 ] && break
+            echo "appimagetool download $i not an ELF, retrying"; sleep 10
+          done
+          [ "$(head -c 4 appimagetool | od -An -tx1 | tr -d ' ')" = 7f454c46 ]
           chmod +x appimagetool
           mv appimagetool appimagetool.AppImage
       - name: Build the AppImage

@@ -34,6 +34,29 @@ class CacheDirTest(unittest.TestCase):
             self.assertIn("cannot use", err)
             self.assertIsNone(apppaths.saved_cache_dir(dd), "nothing kept")
 
+    def test_drive_relative_path_refused(self):
+        """GitHub #895: c:\\games\\beamng-cache with its backslashes dropped by the shell is c:gamesbeamng-cache,
+        a folder under the current one (the home folder): refused, with how to write it."""
+        for p in ("c:gamesbeamng-cache", '"C:games"', "d:"):
+            self.assertTrue(apppaths.drive_relative(p), p)
+        for p in (r"c:\games\beamng-cache", "c:/games/beamng-cache", r"\\server\share\cache", "/home/x/cache",
+                  "cache", "", None, "~/cache"):
+            self.assertFalse(apppaths.drive_relative(p), p)
+        self.assertIn("c:/games/beamng-cache", apppaths.drive_relative_problem("c:gamesbeamng-cache"))
+        with tempfile.TemporaryDirectory() as dd:
+            d, err = apppaths.set_cache_dir("c:gamesbeamng-cache", dd)
+            self.assertIsNone(d)
+            self.assertIn("drive letter", err)
+            self.assertIsNone(apppaths.saved_cache_dir(dd), "nothing kept")
+        sys.path.insert(0, str(ROOT))
+        import launcher
+        with tempfile.TemporaryDirectory() as dd:
+            with self.assertRaises(OSError):
+                launcher.cache_dir_arg("c:gamesbeamng-cache", dd)
+            self.assertIsNone(apppaths.saved_cache_dir(dd))
+            where = os.path.join(dd, "games", "beamng-cache")
+            self.assertEqual(launcher.cache_dir_arg(where, dd), where, "a full path with backslashes is kept")
+
 
 class GameDirTest(unittest.TestCase):
     def setUp(self):

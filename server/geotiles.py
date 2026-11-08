@@ -111,6 +111,18 @@ def quad_dist(q, x, y):
     return float(_ef().geo_quad_dist(np.ascontiguousarray(q, np.float64), float(x), float(y)))
 
 
+def dists(anchor, keys, z, points):
+    """(len(keys), len(points)) m from each point (x, y) to each zoom-z tile's quad in anchor's world: quad_dist(quad(..))
+    of every pair in one call (earthfast.geo_tiles_dist; the trackers' per-pose passes asked tile by tile)."""
+    import fast
+    fast.require(165, "geo_tiles_dist")
+    k = np.asarray(keys, np.int64).reshape(-1, 2)
+    p = np.asarray(points, np.float64).reshape(-1, 2)
+    return _ef().geo_tiles_dist(float(anchor.lat0), float(anchor.lon0), int(z), np.ascontiguousarray(k[:, 0]),
+                                np.ascontiguousarray(k[:, 1]), np.ascontiguousarray(p[:, 0]),
+                                np.ascontiguousarray(p[:, 1]))
+
+
 NEAR_Q_M = 16.0         # tiles_near's points snapped to a grid of this many metres on the ground (its memo)
 NEAR_MEMO = 4096        # tiles_near answers kept
 _near_memo = OrderedDict()

@@ -661,7 +661,9 @@ end
 -- new tiles waited, loaded but hidden, for their whole group: ~125 of them for 15 s over Memphis, then one pop). The
 -- group then starts as always and takes them from there (their offset back to its own).
 M.PREVIEW_LIFT_MIN_M = 5
-M.PREVIEW_LIFT_EYE_SHARE = 0.03     -- at most this share of the eye's height (never seen from up there)
+-- (0.03 drew the lifted tiles' skirts as dark lines on hillsides as the 3D map's detail steps came, Rapid City
+-- 2026-11-07; a coarse tile showing through in places is the lesser evil)
+M.PREVIEW_LIFT_EYE_SHARE = 0.008    -- at most this share of the eye's height (never seen from up there)
 local preview = {on = false, eye = 0}
 
 function M.setPreview(on, eye)

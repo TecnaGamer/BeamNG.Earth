@@ -2,7 +2,7 @@
 
 The server is one Python process: its threads share one interpreter lock, so while three far-tile workers
 built, a physics block took 3-10x longer than alone (land cover 1.4 s instead of 0.1 s), too long to follow a
-car at 58 m/s, where the 512Â² block moves every 2.2 s. This process builds the blocks the follow and the
+car at 58 m/s, where the 512² block moves every 2.2 s. This process builds the blocks the follow and the
 prefetch ask for on a core of its own. It keeps its own DEM reader, road plans (grading.Grader per anchor),
 street widths, height chunks and land-cover reader over the same disk caches. All of them are deterministic,
 so a block built here is the one the server would build (the far tiles, graded in the server process, agree
@@ -13,6 +13,7 @@ far_geometry(...) (the far-tile workers, the same state) are its jobs. warm_q (a
 lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
+import collections
 import logging
 import os
 import queue
@@ -161,9 +162,19 @@ def _rss_mb():
 
 def _trace_memory(every_s=60.0, top=10):
     """BNGE_TRACEMALLOC: log this worker's resident size, what Python and numpy hold of it and its top allocation
-    sites every every_s (the rest is native: DuckDB, the allocator's free lists)."""
+    sites every every_s (the rest is native: DuckDB, the allocator's free lists). BNGE_TRACEMALLOC=N (N > 1): N frames
+    a site, each counted at its innermost frame in the server's own files (numpy's fromnumeric.py:54 named the line of
+    ours that made the array); slower, for the PC (on a Steam Deck even 1 frame stalled the drive)."""
     import tracemalloc
-    tracemalloc.start(1)
+    depth = max(1, int(os.environ.get("BNGE_TRACEMALLOC", "1") or 1))
+    tracemalloc.start(depth)
+    here = os.path.dirname(os.path.abspath(__file__))
+
+    def site(tb):
+        for fr in reversed(tb):                 # (most recent call last)
+            if os.path.dirname(os.path.abspath(fr.filename)) == here:
+                return f"{os.path.basename(fr.filename)}:{fr.lineno}"
+        return f"{os.path.basename(tb[-1].filename)}:{tb[-1].lineno}"
 
     def loop():
         log = logging.getLogger("earthd.worker")
@@ -171,9 +182,16 @@ def _trace_memory(every_s=60.0, top=10):
             time.sleep(every_s)
             snap = tracemalloc.take_snapshot()
             total = sum(st.size for st in snap.statistics("filename"))
+            if depth > 1:
+                by = collections.Counter()
+                for st in snap.statistics("traceback"):
+                    by[site(st.traceback)] += st.size
+                top_sites = by.most_common(top)
+            else:
+                top_sites = [(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}", st.size)
+                             for st in snap.statistics("lineno")[:top]]
             log.info("memory pid %d: rss %.0f MB, traced %.0f MB; top: %s", os.getpid(), _rss_mb(), total / 1e6,
-                     "; ".join(f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno} "
-                               f"{st.size / 1e6:.0f} MB" for st in snap.statistics("lineno")[:top]))
+                     "; ".join(f"{k} {v / 1e6:.0f} MB" for k, v in top_sites))
     threading.Thread(target=loop, daemon=True, name="trace-mem").start()
 
 
@@ -347,6 +365,18 @@ def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
     return path, n, frame, pivot
 
 
+def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
+    """veg_geo of each geotile (gx, gy) of tiles in one job: [its result, or the exception it raised]. A tile whose
+    map cell this process has is ~10 ms; one job each, every one waited behind the road tiles in the pool's queue
+    (Server.build_veg_geo)."""
+    out = []
+    for gx, gy in tiles:
+        try:
+            out.append(veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat))
+        except Exception as e:
+            out.append(e)
+    return out
+
 def _take_pads(fuel_pads):
     """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
     only these (none when the server's gas stations are switched off)."""
@@ -355,7 +385,8 @@ def _take_pads(fuel_pads):
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False):
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+          ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -406,7 +437,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks)
+                              chunks=chunks, ground_at=tuple(ground_at))
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
               "newShare": float(keep.get("new_share", 1.0))}
     idx = None
@@ -826,6 +857,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     signs = [] if buildings and poleprofiles.kit_enabled(pole_profile) else None
     park = [] if buildings else None
     items = town = None
+    _scene = (0, 0.0) if buildings else None
     wrows = []
     _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
@@ -854,7 +886,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
-        town = buildingsmod.coverage(items, side) < buildingsmod.POLES_COVERAGE
+        _cover = buildingsmod.coverage(items, side)
+        town = _cover < buildingsmod.POLES_COVERAGE
+        # (the tile's buildings and their footprint share: the mod's scene complexity for anonymous performance
+        # reports, perfsummary.lua; no place in them)
+        _scene = (len(items), round(float(_cover), 3))
     mark("items")
     rwalls = []
     ctx = []
@@ -946,6 +982,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     infra_fn = lambda key: _s.md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
     low_parapet_decks = set()
     deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
+    guardrail_decks = []
+    rail_decks = []                 # railways.tile_mesh fills these in below (fences.py stands walls on them)
     try:
         deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
         if _bridge_fps:
@@ -1001,10 +1039,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     rr_kits = railways.crossing_props(frame, tx, ty, rcells, rground, left_hand, fra_kits)   # level crossings
     if rr_kits:
         props = (props or []) + rr_kits
-    P.rmesh = railways.tile_mesh(frame, tx, ty, rcells, rground,
+    P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                                     ("raw",) + tuple(rkey)))
+                                     ("raw",) + tuple(rkey)),
+                                 return_decks=True)
     mark("railways")
     bld = None
     garage_sound = ()
@@ -1032,7 +1071,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
-                                                                        for _f, spec, xy, z, _l in deck_parts]))
+                                                                        for _f, spec, xy, z, _l in deck_parts] + rail_decks))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
@@ -1071,6 +1110,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
+    P.scene = _scene
     return P
 
 
@@ -1265,6 +1305,9 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         for what, info in parts.items():
             info["col"] = what in GEO_COLLIDING or (what.startswith("bld") and not lean)
         data["key"] = tile.key
+        _scene = getattr(P, "scene", None)
+        if _scene is not None:      # buildings, footprint share (perfsummary.lua; [0, 0] too: known empty, not unknown)
+            data["scene"] = [int(_scene[0]), float(_scene[1])]
         data["frame"] = [float(tile.frame.lat0), float(tile.frame.lon0)]
         data["box"] = [round(float(v), 4) for v in tile.box]
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
@@ -1295,7 +1338,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
-                 country=None, scratch_vfs="/x", pole_profile=None, cliffs=(True, True, True)):
+                 country=None, scratch_vfs="/x", pole_profile=None, cliffs=(True, True, True), wait_gaps=False):
     """Saved areas' world phase (areas.py, the user 2026-10-29: "pre generate along a route or area"): geotile (gx, gy)'s
     road content (_geo_content: roads, sidewalks, bridges, buildings, street furniture) built into the revisit cache
     ahead of play; nothing for the game (its files written to scratch, then removed). The revisit key when the content
@@ -1309,8 +1352,14 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     if not os.path.exists(path):
         os.makedirs(scratch, exist_ok=True)
         try:
-            _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
-                         lamp_region, country, pole_profile=pole_profile, cliffs=cliffs)
+            if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)
+                import roadz
+                with roadz.precache_gaps_wait():
+                    _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
+                                 lamp_region, country, pole_profile=pole_profile, cliffs=cliffs)
+            else:               # (the live road pool: keep its short lidar wait, live play shares these processes)
+                _geo_content(gx, gy, zoom, scratch, scratch_vfs, buildings, left_hand, mph, gas_stations, buried,
+                             lamp_region, country, pole_profile=pole_profile, cliffs=cliffs)
         finally:
             for name in geo_names(tile_key).values():
                 try:
@@ -2260,6 +2309,37 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
 
 
 WORKER_IMAGERY_TILES = 96      # decoded imagery tiles a far-tile worker keeps (imagery.MEM_TILES: 512, the server's)
+
+
+def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
+    """far_global_geometry and its texture here (the 3D map's quick render of a global far tile: the Mercator square's
+    photo from the imagery tiles on disk, raw, rock faces drawn), written to tex["path"]: (Built, (texture bytes,
+    sources used)), or (Built, None) when a photo tile it needs is not on disk. In the server's own interpreter these
+    waited 26 s each at a fresh city, one at a time (2026-11-07)."""
+    import geotiles
+    import imagery as imagerymod
+    import rockface as rockfacemod
+    built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    im = _imagery(tex)
+    px = tex["px"]
+    try:
+        im.quick_all = bool(tex.get("quick"))
+        try:
+            rgb, used = im.render_merc(z, x, y, px)
+        finally:
+            im.quick_all = False
+    except imagerymod.ImageryError:
+        return built, None
+    if built.grid is not None:          # (earthd.Server.rock_faces, its tile_where for a global tile)
+        try:
+            g = np.asarray(built.grid)
+            s = built.size
+            rgb = rockfacemod.rock(rgb, geotiles.frame(x, y, z), *imagerymod.gutter_square(-s / 2, -s / 2, s, px), g,
+                                   -s / 2, -s / 2, s / (g.shape[1] - 1))
+        except Exception as e:
+            log.debug("rock faces of global %s: %s", (z, x, y), e)
+    n = imagerymod.write_dds(tex["path"], rgb)
+    return built, (n, used)
 
 
 def _imagery(tex):

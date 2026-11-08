@@ -41,6 +41,7 @@ table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom
 <main>
 <h1>BeamNG.Earth players</h1>
 <p class="sub">Live counts from BeamNG.Earth apps that send anonymous usage reports. <a href="players/advanced" id="adv">Advanced statistics</a> ·
+  <a href="performance" id="perfLink">Performance</a> ·
   <span class="live"><span class="dot off" id="dot"></span><span id="upd">connecting</span></span></p>
 <div class="tiles">
   <div class="tile"><div class="n" id="online">-</div><div class="l">online now</div></div>
@@ -53,7 +54,7 @@ table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom
   <div class="ranges" id="ranges">
     <button data-r="1h">1 hour</button><button data-r="6h">6 hours</button><button data-r="24h">24 hours</button>
     <button data-r="7d">7 days</button><button data-r="30d">30 days</button><button data-r="1y">1 year</button>
-    <button data-r="10y">10 years</button><button data-r="custom">Custom</button>
+    <button data-r="all">All time</button><button data-r="custom">Custom</button>
   </div>
   <div class="custom" id="custom">
     <label>From <input type="datetime-local" id="from"></label>
@@ -69,14 +70,17 @@ table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom
   <p class="foot">A country is listed once it has at least 5 players online; smaller counts are grouped as "other".</p></div>
 <p class="foot">Anonymous: each report carries a random install id, the app version and system, whether the game is
 connected, and how many requests went to each map-data source. No names, accounts, positions or IP addresses are kept;
-the country is looked up from the address and the address is discarded. Players can turn reports off in BeamNG.Earth's
-settings (Interface: Anonymous usage statistics) or with <code>BNE_TELEMETRY=off</code>.</p>
+the country is looked up from the address and the address is discarded. Players choose what to send on BeamNG.Earth's
+welcome screen and can change it in its settings (Interface: Anonymous usage statistics) or turn it off with
+<code>BNE_TELEMETRY=off</code>.</p>
 </main>
 <script>
 const base = location.pathname.replace(/players\/?$/, "");
 const fmt = n => Number(n).toLocaleString();
-const PRESETS = { "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "1y": 365 * 86400, "10y": 3650 * 86400 };
-let range = { kind: "24h" }, data = null, timer = null;
+const PRESETS = { "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "1y": 365 * 86400,
+  "all": 20 * 365 * 86400 };
+// "all": from the first statistics on (the range's dataSince, learnt from the first answer)
+let range = { kind: "24h" }, data = null, timer = null, since = null;
 
 // --- live numbers -------------------------------------------------------------------------------------------------
 function setN(el, v) { const s = fmt(v); if (el.textContent !== s) { if (el.textContent !== "-") { el.classList.add("flash");
@@ -96,7 +100,8 @@ async function live() {
 function bounds() {
   const now = Math.floor(Date.now() / 1000);
   if (range.kind === "custom") return [range.from, Math.min(range.to, now)];
-  return [now - PRESETS[range.kind], now];
+  if (range.kind === "all" && since) return [Math.min(since, now - 3600), now];
+  return [now - (PRESETS[range.kind] || 86400), now];
 }
 function toLocalInput(t) { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
 function saveUrl() {
@@ -118,6 +123,7 @@ async function loadRange() {
     const r = await fetch(`${base}stats/range?from=${a}&to=${b}`, { cache: "no-store" });
     data = await r.json();
     if (!r.ok) throw new Error(data.error || r.status);
+    if (range.kind === "all" && data.dataSince && since !== data.dataSince) { since = data.dataSince; return loadRange(); }
     draw();
     const step = data.step, unit = step >= 86400 ? `${step / 86400} day` : step >= 3600 ? `${step / 3600} hour` : `${step / 60} min`;
     res.textContent = `Each point is the highest count in ${unit}${parseFloat(unit) > 1 ? "s" : ""}.` +
@@ -189,9 +195,11 @@ apply.onclick = () => {
   if (p.get("from")) { const f = +p.get("from"), t = +(p.get("to") || Date.now() / 1000);
     if (f < t) { range = { kind: "custom", from: f, to: t }; for (const b of ranges.children) b.classList.toggle("on", b.dataset.r === "custom");
       custom.classList.add("show"); from.value = toLocalInput(f); to.value = toLocalInput(t); loadRange(); return; } }
-  select(PRESETS[p.get("range")] ? p.get("range") : "24h");
+  const r = p.get("range") === "10y" ? "all" : p.get("range");      // (old links: "10 years" became "All time")
+  select(PRESETS[r] ? r : "24h");
 })();
 adv.href = base + "players/advanced";
+perfLink.href = base + "performance";
 live(); setInterval(live, 10000);
 </script>
 </body>

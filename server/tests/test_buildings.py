@@ -1164,6 +1164,27 @@ class MachineLearnedFootprintTest(unittest.TestCase):
         self.assertFalse(bld._ml_false(house, None, None, road))
         self.assertFalse(bld._ml_false(lorry, None, None, None))
 
+    def test_vehicle_in_a_wide_roads_outer_lane(self):
+        """I-280 at Cupertino (2026-11-08, Overture aed44c00-9b91-4017-848a-55432a14efa4): Microsoft's 8 x 30 m outline
+        of a lorry 7.0 m from the centre line of a 5-lane, 26 m wide carriageway stood as a house in the fast lane
+        (ML_ROAD_M alone reached its middle two lanes). With the road's drawn half-width it is on the lanes; a house
+        past the road's edge stays, and so does everything ML_ROAD_M did not reach on a road without a width."""
+        road = bld.RoadLines([np.array([[0.0, 0.0], [200.0, 0.0]])])
+        road.half.append(13.0)
+        lorry = np.array([[50, 2.95], [80.1, 2.95], [80.1, 11.05], [50, 11.05]], float)     # centre 7.0 m out
+        self.assertTrue(bld._ml_false(lorry, None, None, road))
+        house = np.array([[50, 15], [62, 15], [62, 25], [50, 25]], float)                  # centre 20 m out
+        self.assertFalse(bld._ml_false(house, None, None, road))
+        edge = np.array([[50, 13.0], [62, 13.0], [62, 15.4], [50, 15.4]], float)           # centre 14.2 m out
+        self.assertFalse(bld._ml_false(edge, None, None, road), "past half-width + ML_ROAD_EDGE_M")
+        self.assertFalse(bld._ml_false(lorry, None, None, [road[0]]), "(no width known: ML_ROAD_M as before)")
+        lane = bld.RoadLines([road[0]])
+        lane.half.append(2.5)                                                           # a 5 m lane: ML_ROAD_M still
+        car = np.array([[50, 1.5], [55, 1.5], [55, 5.5], [50, 5.5]], float)                # centre 3.5 m out
+        self.assertTrue(bld._ml_false(car, None, None, lane))
+        lane.half[0] = None
+        self.assertTrue(bld._ml_false(car, None, None, lane), "(a line without a spec: ML_ROAD_M)")
+
 
     def test_in_a_median(self):
         """GitHub #90: a 10 x 9 m footprint between the carriageways of Moscow's Bolshaya Tulskaya (7.6 m from each)
@@ -1289,6 +1310,21 @@ class RoadLinesTest(unittest.TestCase):
         self.assertFalse(((xs > 110) & (xs < 120)).any(), "nothing on the bridge's stretch")
         ring = np.array([[20, 126.8], [35, 126.8], [35, 129.2], [20, 129.2], [20, 126.8]], np.float64)
         self.assertTrue(bld._ml_false(ring, [], [], lines), "a lorry-sized outline on its lanes: not a building")
+        self.assertEqual(len(lines.half), len(lines), "a half-width per line")
+
+    def test_lines_carry_the_drawn_half_width(self):
+        """road_lines' half-widths are road_specs' width / 2 (a 26 m carriageway: 13 m), and the I-280 lorry's outline
+        7 m off its centre line is left out with them (ML_ROAD_EDGE_M)."""
+        from test_roads import FRAME, features
+        f = features([[(-100, 128), (356, 128)], [(-100, 60), (356, 60)]], ["motorway", "residential"],
+                     widths=[(0, 26.0)])
+        lines = bld.road_lines(FRAME, [f], 0.0, 0.0)
+        self.assertEqual(len(lines), 2)
+        self.assertAlmostEqual(lines.half[0], 13.0, places=3)
+        self.assertLess(lines.half[1], 13.0, "the street its own (narrower) width")
+        lorry = np.array([[20, 131], [50.1, 131], [50.1, 139.1], [20, 139.1], [20, 131]], np.float64)
+        self.assertTrue(bld._ml_false(lorry, [], [], lines))
+        self.assertFalse(bld._ml_false(lorry, [], [], list(lines)), "(the plain lines: ML_ROAD_M alone missed it)")
 
 
 

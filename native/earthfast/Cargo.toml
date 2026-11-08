@@ -33,6 +33,9 @@ clarabel = { version = "0.11.1", default-features = false, features = ["serde"] 
 # Apache-2.0), the picture encoded by png (pure Rust, MIT / Apache-2.0)
 fontdue = "0.9"
 png = "0.17"
+# The Add-ons page's README and release notes as safe HTML (mdhtml.rs: our own tags from the parser's events, no raw
+# HTML passed through); pulldown-cmark, pure Rust, MIT
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [profile.release]
 opt-level = 3

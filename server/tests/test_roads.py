@@ -502,6 +502,31 @@ class BuildTileTest(unittest.TestCase):
         self.assertTrue(all(c for w in cut for c, end in zip(w["caps"], (w["pts"][0], w["pts"][-1]))
                             if abs(end[0] - 50) < 6 and end[1] < 100), "the cut ends capped")
 
+    def test_sidewalks_stop_at_a_level_crossing(self):
+        # GitHub #579: a railway across a town street at x = 120; the sidewalks ran on over the ballast and rails.
+        # A track parallel to the street (y = 140, beside its north sidewalk) leaves it be.
+        import railways
+        town = lambda la, lo: np.ones(np.shape(la), bool)       # noqa: E731
+
+        def walks_of(lines, classes, subtypes):
+            f = features(lines, classes, ids=[f"id{i:03d}" for i in range(len(lines))], subtypes=subtypes)
+            walks = []
+            roads.build_tile(FRAME, 0, 0, [f], flat, town, walks=walks)
+            return walks
+
+        def near_x(walks, x, d):
+            return [p for w in walks for p in roads.densify(np.asarray(w["pts"], np.float64), 0.25) if abs(p[0] - x) < d]
+
+        street = [(-300, 100), (300, 100)]
+        plain = walks_of([street], ["secondary"], ["road"])
+        self.assertTrue(near_x(plain, 120, 1.0), "the sidewalks run past x = 120 with no railway")
+        crossed = walks_of([street, [(120, -100), (120, 300)]], ["secondary", "standard_gauge"], ["road", "rail"])
+        self.assertTrue(crossed, "the sidewalks are still there")
+        self.assertFalse(near_x(crossed, 120, railways.WALK_CLEAR_M - 0.5), "a gap over the track")
+        self.assertTrue(near_x(crossed, 120, 8.0), "and only round it")
+        beside = walks_of([street, [(-300, 108), (300, 108)]], ["secondary", "standard_gauge"], ["road", "rail"])
+        self.assertTrue(near_x(beside, 120, 1.0), "a track beside the street cuts nothing")
+
     def test_sidewalk_mesh_runs_and_drains(self):
         import tempfile
         import cdae
@@ -938,7 +963,7 @@ class TrackerTest(unittest.TestCase):
             await asyncio.sleep(0.05)
             return logs
         logs = asyncio.run(go())
-        stuck = [m for m in logs.output if "may be stuck" in m]
+        stuck = [m for m in logs.output if "not ready after" in m]
         self.assertEqual(len(stuck), len(set(stuck)), "each tile once")
         self.assertTrue(stuck)
         tr.close()

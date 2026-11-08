@@ -578,8 +578,11 @@ G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA
 # Networks in Europe" (ICF Consulting, 2003; Europacable / Sycabel km of overhead and underground LV line, ~2000), the
 # underground share of each country's low-voltage km. Countries not listed: mostly overhead (the US, Canada, Japan,
 # Australia, most of the world). Old figures: the shares have only grown since.
-BURIED_LV = {"NL": 1.0, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30, "FR": 0.27,
-             "PT": 0.19, "AT": 0.15, "ES": 0.14}
+# Switzerland (not in that study; GitHub #911: poles along rural Swiss roads that have none): ElCom's line inventory at
+# 2009-12-31, 78,837 km of low-voltage cable (network level 7) to 12,720 km of low-voltage overhead line, 0.86; ElCom's
+# "ElCom in 2024, a brief overview": 90 % of the distribution network underground.
+BURIED_LV = {"NL": 1.0, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
+             "FR": 0.27, "PT": 0.19, "AT": 0.15, "ES": 0.14}
 
 
 def buried_share(country):

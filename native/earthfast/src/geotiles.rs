@@ -278,7 +278,7 @@ pub fn geo_tile_of<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
                         -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray1<i64>>) {
     let (la, lo) = (lat.as_array(), lon.as_array());
     let m = la.len();
-    let (xs, ys): (Vec<i64>, Vec<i64>) = py.allow_threads(|| (0..m).map(|i| tile_of(la[i], lo[i], z)).unzip());
+    let (xs, ys): (Vec<i64>, Vec<i64>) = crate::release(py, m * 40, || (0..m).map(|i| tile_of(la[i], lo[i], z)).unzip());
     (xs.into_pyarray(py), ys.into_pyarray(py))
 }
 
@@ -297,6 +297,35 @@ pub fn geo_tile_quad<'py>(py: Python<'py>, lat0: f64, lon0: f64, z: u32, x: i64,
     numpy::ndarray::Array2::from_shape_vec((4, 2), q.iter().flatten().copied().collect()).unwrap().into_pyarray(py)
 }
 
+/// geotiles.dists: (n, m) m from each point (px, py) to each zoom-z tile (xs, ys)'s quad in the world of the frame at
+/// (lat0, lon0): quad + quad_dist for every pair in one call (the trackers' per-pose drop pass called them once per
+/// tile and spot from Python, 2026-11-07).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn geo_tiles_dist<'py>(py: Python<'py>, lat0: f64, lon0: f64, z: u32, xs: PyReadonlyArray1<'py, i64>,
+                           ys: PyReadonlyArray1<'py, i64>, px: PyReadonlyArray1<'py, f64>,
+                           pyy: PyReadonlyArray1<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (xs, ys, px, pyy) = (xs.as_array(), ys.as_array(), px.as_array(), pyy.as_array());
+    if xs.len() != ys.len() || px.len() != pyy.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geo_tiles_dist: xs/ys or px/py lengths differ"));
+    }
+    let (n, m) = (xs.len(), px.len());
+    let (xv, yv): (Vec<i64>, Vec<i64>) = (xs.iter().copied().collect(), ys.iter().copied().collect());
+    let (pv, qv): (Vec<f64>, Vec<f64>) = (px.iter().copied().collect(), pyy.iter().copied().collect());
+    let out = crate::release(py, n * (m + 4) * 60, || {
+        let f = Frame::new(lat0, lon0);
+        let mut out = Vec::with_capacity(n * m);
+        for i in 0..n {
+            let q = quad(&f, z, xv[i], yv[i]);
+            for j in 0..m {
+                out.push(quad_dist(&q, pv[j], qv[j]));
+            }
+        }
+        out
+    });
+    Ok(numpy::ndarray::Array2::from_shape_vec((n, m), out).unwrap().into_pyarray(py))
+}
+
 /// geotiles.quad_dist: m from (x, y) to a quad (4, 2) (0 inside).
 #[pyfunction]
 pub fn geo_quad_dist(q: PyReadonlyArray2<'_, f64>, x: f64, y: f64) -> f64 {
@@ -312,7 +341,10 @@ pub fn geo_quad_dist(q: PyReadonlyArray2<'_, f64>, x: f64, y: f64) -> f64 {
 #[pyfunction]
 pub fn geo_tiles_near(py: Python<'_>, lat0: f64, lon0: f64, z: u32, x: f64, y: f64, r: f64) -> Vec<(i64, i64, f64)> {
     let f = Frame::new(lat0, lon0);
-    py.allow_threads(|| near(&f, z, x, y, r))
+    // (a few tiles round a point: released only for a big radius; the call itself cost 5-28 ms waiting for the GIL
+    // back behind the server's busy threads, .claude/work/rust_port_plan.md 1b)
+    let n_est = ((r / (40_075_016.0 / (1u64 << z) as f64)).powi(2) * 4.0 + 1.0) as usize;
+    crate::release(py, n_est * 400, || near(&f, z, x, y, r))
 }
 
 /// geotiles.world_map: points (n, 3) of the world of the frame (slat, slon) in that of (dlat, dlon), exactly.
@@ -322,7 +354,7 @@ pub fn geo_world_map<'py>(py: Python<'py>, slat: f64, slon: f64, dlat: f64, dlon
     let (s, d) = (Frame::new(slat, slon), Frame::new(dlat, dlon));
     let p = pts.as_array();
     let (m, k) = (p.nrows(), p.ncols());
-    let out: Vec<f64> = py.allow_threads(|| {
+    let out: Vec<f64> = crate::release(py, m * 300, || {
         let mut out = Vec::with_capacity(m * 3);
         for i in 0..m {
             let z = if k > 2 { p[[i, 2]] } else { 0.0 };
@@ -343,7 +375,7 @@ pub fn geo_world_to_geodetic<'py>(py: Python<'py>, lat0: f64, lon0: f64, pts: Py
     let f = Frame::new(lat0, lon0);
     let p = pts.as_array();
     let (m, k) = (p.nrows(), p.ncols());
-    let (la, lo, h) = py.allow_threads(|| {
+    let (la, lo, h) = crate::release(py, m * 300, || {
         let (mut la, mut lo, mut h) = (Vec::with_capacity(m), Vec::with_capacity(m), Vec::with_capacity(m));
         for i in 0..m {
             let g = f.world_to_geodetic(p[[i, 0]], p[[i, 1]], if k > 2 { p[[i, 2]] } else { 0.0 });

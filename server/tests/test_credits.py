@@ -520,7 +520,9 @@ class SessionCreditsTest(test_server.ServerHarness):
         self.assertEqual([x["type"] for x in before if x["type"] == "hello"], ["hello"])
         # the player 50 km east: only AWS under the near tiles once the far field there is in
         self.pose(aid, 50000, 0)
-        _, moving = c.until(lambda m: m["type"] == "far_done", 120)
+        # (300 s: the whole far field of a new place, built beside the gate's other test servers; it ran out at 120 s
+        # in three parallel gates of 2026-11-08 and passed alone each time)
+        _, moving = c.until(lambda m: m["type"] == "far_done", 300)
         self.pose(aid, 50000, 0)
         later = self.credits_msgs(moving + c.drain(3 * self.INTERVAL))
         self.assertTrue(later)

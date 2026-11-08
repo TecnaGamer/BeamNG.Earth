@@ -1,4 +1,5 @@
 """railtags.py: the weekly rail shards joined to Overture's rail segments by OSM way id."""
+import glob
 import gzip
 import json
 import os
@@ -51,6 +52,15 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1, "the cell's nodes only")
             n = len(fetch.asked)
             railtags.RailTags(d, fetch).join(f, key)        # (from disk: the manifest's day and the shard)
+            self.assertEqual(len(fetch.asked), n)
+            # (the shard's decoded form beside it, read by the next process instead of the shard: the same tags)
+            side = glob.glob(os.path.join(d, "pagesdata", "rail", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+            self.assertEqual(len(side), 1)
+            os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+            f.attrs.pop("osm_railway")
+            railtags.RailTags(d, fetch).join(f, key)
+            self.assertEqual(list(f.attrs["osm_railway"]), ["proposed", "rail", None])
+            self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
     def test_no_shard_no_tags(self):

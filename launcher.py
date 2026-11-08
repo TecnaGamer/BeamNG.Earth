@@ -159,6 +159,9 @@ def cache_dir_arg(given, dd=None):
         if given.strip().lower() in ("", "default"):
             save_app_settings(dd, cacheDir=None)
             return None
+        bad = apppaths.drive_relative_problem(given)
+        if bad:                         # (GitHub #895: not the current folder in silence)
+            raise OSError(bad)
         path = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
         os.makedirs(path, exist_ok=True)
         save_app_settings(dd, cacheDir=path)
@@ -240,6 +243,17 @@ def run_server(argv):
     earthd.main()
 
 
+def run_addon(argv):
+    """--run-addon FILE ARGS: a companion add-on's Python file run with this app's own Python (addonrun.py: the packaged
+    app has no other), ended when the server that started it ends (BNGEARTH_PARENT: watch_parent)."""
+    watch_parent()
+    import runpy
+    script = argv[0]
+    sys.argv = [script] + list(argv[1:])
+    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+    runpy.run_path(script, run_name="__main__")
+
+
 def telemetry_on():
     """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off; never under CI or a test
     run (the first night's 'players' were mostly the release workflow's Windows test servers: each a new install)."""
@@ -255,6 +269,14 @@ def start_server(user_dir, extra, log_path, game_running=None):
         cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if sys.platform.startswith("linux"):    # (gamescope's WSI layer aborted the server's GPU kernels: earthd.main)
+        env.setdefault("DISABLE_GAMESCOPE_WSI", "1")
+    try:            # (the game's own files: an add-on mod replacing one needs a restart, addonrun.mod_code)
+        gd = game_install_dir()
+        if gd:
+            env["BNGEARTH_GAME_DIR"] = str(gd)
+    except Exception:
+        pass
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
@@ -1558,6 +1580,10 @@ def beammp_wait_seconds(value):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--run-addon":     # (before tee_log: its output is its own run.log)
+        ensure_ca_certs()
+        run_addon(sys.argv[2:])
+        return
     tee_log()
     ensure_ca_certs()
     if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
@@ -1873,8 +1899,8 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
-        row("Telemetry", "on: anonymous player count and data-source load, no location (BNE_TELEMETRY=off turns it off)"
-            if telemetry_on() else "off")
+        row("Telemetry", "anonymous, no location: as chosen on the game's welcome page, nothing before that "
+            "(BNE_TELEMETRY=off turns it off)" if telemetry_on() else "off")
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
                     server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")

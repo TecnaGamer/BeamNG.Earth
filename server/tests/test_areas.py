@@ -235,6 +235,33 @@ class AreasTest(unittest.TestCase):
         time.sleep(0.2)
         self.assertEqual(len(s.mapdata.got) + len(s.dem.got), n, "paused: no more downloads")
 
+    def test_items_failing_every_pass_end_as_unavailable(self):
+        """GitHub #917: a DEM tile no host has failed every pass, and the area stood at 99 % all night (a pass every
+        half hour). After MAX_FAILED_PASSES passes in a row the area is done, the tile counted unavailable; a restart
+        keeps the note, Resume tries again."""
+        s = StubServer()
+        bad = next(st[1:] for st in areas.Areas(self.tmp.name, s).steps(BOX) if st[0] == "dem")
+        real = s.dem.predownload
+
+        def predownload(z, x, y):
+            if (z, x, y) == bad:
+                raise OSError("404 from every host")
+            return real(z, x, y)
+        s.dem.predownload = predownload
+        with mock.patch.object(areas, "PASS_RETRY_S", 0.0):
+            a, _ = self.make(server=s, start=True)
+            ok, aid = a.add(*BOX)
+            self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        m = a.message()["areas"][0]
+        self.assertEqual(m["done"], m["total"])
+        self.assertIn("1 items unavailable", m["msg"])
+        a.close()
+        b, _ = self.make(server=s)
+        self.assertIn("unavailable", b.message()["areas"][0]["msg"], "the note survives a restart")
+        self.assertTrue(b.command(aid, "resume"))
+        self.assertEqual(b.areas[0]["failedPasses"], 0, "Resume: new tries")
+        self.assertEqual(b.message()["areas"][0]["msg"], "")
+
     def test_refused_requests_wait_and_budgets_wait_for_tomorrow(self):
         s = StubServer()
         for st in areas.Areas(self.tmp.name, s).steps(BOX):     # (only the DEM left to fetch)
@@ -349,6 +376,43 @@ class AreasTest(unittest.TestCase):
             self.assertIn("too large", b.plan(*BOX, mode="world")["error"])
         self.assertTrue(b.command(aid, "delete"))
         self.assertEqual(areas.pinned_world(self.tmp.name), set(), "deleted: unpinned")
+
+    def test_world_mode_fetches_the_gas_stations_cells_first(self):
+        # a geotile's gas stations read OpenStreetMap's fuel cells from the cache only and fault the build while one
+        # is missing (gasstations.tile_sites): the world phase fetches them before its geotiles
+        class FuelMapData(StubMapData):
+            def __init__(self):
+                super().__init__()
+                self.fuel = set()
+
+            def osm_fuel_cached(self, key):
+                return [] if tuple(key) in self.fuel else None
+
+            def osm_fuel_fetch(self, key, kind="prefetch"):
+                self.fuel.add(tuple(key))
+                return []
+
+        s = StubServer()
+        s.mapdata = FuelMapData()
+        s.gas_stations = True
+        a, _ = self.make(server=s, start=True)
+        steps = a.phase_steps("world", BOX)
+        fuel = [st for st in steps if st[0] == "fuel"]
+        self.assertTrue(fuel)
+        kinds = [st[0] for st in steps if st[0] in ("lidar", "fuel", "geo")]
+        self.assertEqual(kinds, sorted(kinds, key=["lidar", "fuel", "geo"].index), "fuel before the geotiles")
+        ok, aid = a.add(*BOX, mode="world")
+        self.assertTrue(ok, aid)
+        self.assertTrue(wait_for(lambda: a.message()["areas"][0]["state"] == "done"))
+        self.assertEqual({tuple(st[1:]) for st in fuel}, s.mapdata.fuel)
+
+    def test_precache_gaps_wait_restores_the_live_values(self):
+        # a world build may wait for its lidar; live play's short wait must be back after it
+        import roadz
+        old = roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S
+        with roadz.precache_gaps_wait(7.0):
+            self.assertEqual((roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S), (7.0, 7.0))
+        self.assertEqual((roadz.LIDAR_GAPS_WAIT_S, roadz.LIDAR_GAPS_SLOW_WAIT_S), old)
 
     def test_fast_mode(self):
         # Tann2019 2026-11-05: "instead of an hour for the route i want it to be done in minutes, use all my cores,

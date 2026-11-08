@@ -74,6 +74,33 @@ T.check(n == #settings.ORDER, 'every SCHEMA key is in ORDER (or HIDDEN)')
 -- the one-time welcome: due in our level until seen, then not again
 T.check(settings.get('welcomeSeen') == 0, 'welcome not seen yet')
 T.check(settings.uiWelcomeDone().ok and settings.get('welcomeSeen') == settings.WELCOME_VERSION, 'seen: stored')
+-- the telemetry choice (TELEMETRY.md): asked until made; the boxes start as the region says (nothing ticked before the
+-- hello named it); the sub-switches are off with the main one; the choice is the server's consent version
+T.check(settings.privacyNeeded(), 'telemetry choice: needed before one is made')
+local p0 = settings.uiPrivacy()
+T.check(p0.needed and not p0.known and p0.telemetry == false and p0.perf == false and p0.net == false,
+  'before the hello: nothing ticked')
+settings.serverPrivacy('perf_off', 1)
+local p1 = settings.uiPrivacy()
+T.check(p1.known and p1.telemetry and p1.net and p1.perf == false, 'perf_off: performance unticked')
+settings.serverPrivacy('all', 1)
+T.check(settings.uiPrivacy().perf == true, 'all: everything ticked')
+settings.serverPrivacy('bogus', 'x')
+T.check(settings.privacyRegion == 'all' and settings.telemetryConsent == 1, 'bad region / consent ignored')
+settings.uiWelcomeDone({ telemetry = false, perf = true, net = true })
+T.check(settings.get('telemetry') == false and settings.get('telemetryPerf') == false and settings.get('telemetryNet') == false
+  and settings.get('telemetryChoice') == 1 and not settings.privacyNeeded(), 'main off: the parts off too, choice made')
+local p2 = settings.uiPrivacy()
+T.check(not p2.needed and p2.telemetry == false, 'after the choice: the saved values')
+settings.serverPrivacy('all', 2)
+T.check(settings.privacyNeeded() and settings.uiPrivacy().telemetry == false, 'a new consent version asks again (an off switch stays off)')
+settings.uiWelcomeDone({ telemetry = true, perf = false, net = true })
+T.check(settings.get('telemetry') and not settings.get('telemetryPerf') and settings.get('telemetryNet')
+  and settings.get('telemetryChoice') == 2, 'choice saved with the new version')
+settings.serverPrivacy('all', 3)
+local p3 = settings.uiPrivacy()
+T.check(p3.needed and p3.telemetry and p3.perf == false and p3.net, 'asked again: the boxes as chosen before, not the region\'s')
+settings.serverPrivacy('neutral', 1)
 
 ------------------------------------------------------------------------------------------
 -- validation

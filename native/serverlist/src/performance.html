@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeamNG.Earth performance</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --mut:#5c6670; --line:#d9dee4; --a:#2f7de1; --b:#20a36b; --w:#d9822b; --sel:#e8f0fc; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1f25; --fg:#e8ecf0; --mut:#98a3ad; --line:#2c333b; --a:#5aa0ff; --b:#3ccf8e; --w:#f0a050; --sel:#1d2c42; } }
+* { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif }
+main { max-width:1080px; margin:0 auto; padding:24px 16px 48px }
+h1 { font-size:22px; margin:0 0 4px } .sub { color:var(--mut); margin:0 0 20px }
+a { color:var(--a) }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px }
+.tile, .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px }
+.tile .n { font-size:28px; font-weight:650; font-variant-numeric:tabular-nums } .tile .l { color:var(--mut); font-size:13px }
+.card { margin-bottom:16px } .card h2 { font-size:15px; margin:0 0 10px }
+.ranges, .tabs { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px }
+.ranges button, .tabs button { font:inherit; font-size:13px; padding:4px 10px; border:1px solid var(--line); border-radius:6px;
+  background:var(--card); color:var(--fg); cursor:pointer }
+.ranges button.on, .tabs button.on { background:var(--sel); border-color:var(--a) }
+.scroll { overflow-x:auto }
+table { width:100%; border-collapse:collapse; font-size:14px } th { text-align:left; color:var(--mut); font-weight:500; font-size:12px; padding:4px 8px 6px 0;
+  border-bottom:1px solid var(--line); white-space:nowrap } td { padding:6px 8px 6px 0; border-bottom:1px solid var(--line) }
+td.r, th.r { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap }
+.bar { display:inline-block; height:8px; border-radius:2px; background:var(--a); vertical-align:middle; margin-left:6px }
+.warn { color:var(--w) }
+.note, .foot { color:var(--mut); font-size:12px }
+.empty { color:var(--mut); padding:12px 0 }
+</style>
+</head>
+<body>
+<main>
+<h1>BeamNG.Earth performance</h1>
+<p class="sub">How smoothly the game runs and how well the world keeps up, from players who chose to send anonymous
+  performance data. <a href="players">Players online</a></p>
+<div class="ranges" id="ranges">
+  <button data-d="1">24 hours</button><button data-d="7">7 days</button><button data-d="30">30 days</button>
+  <button data-d="365">1 year</button><button data-d="0">All time</button>
+</div>
+<div class="tiles">
+  <div class="tile"><div class="n" id="fps">-</div><div class="l">average fps</div></div>
+  <div class="tile"><div class="n" id="low1">-</div><div class="l">1% low fps</div></div>
+  <div class="tile"><div class="n" id="hph">-</div><div class="l">hitches (over 100 ms) per hour of driving</div></div>
+  <div class="tile"><div class="n" id="edge">-</div><div class="l">of the time held at the ground's edge</div></div>
+  <div class="tile"><div class="n" id="hours">-</div><div class="l">hours of play measured</div></div>
+</div>
+<div class="card">
+  <h2>By speed</h2>
+  <div class="scroll"><table id="speed"></table></div>
+  <p class="note">High speed is where world generation has the most work: the ground ahead must be built before you reach it.</p>
+</div>
+<div class="card">
+  <h2>Compare</h2>
+  <div class="tabs" id="tabs"></div>
+  <div class="scroll"><table id="groups"></table></div>
+  <p class="note" id="knote"></p>
+</div>
+<p class="foot">Anonymous: reports carry no name, account, position or place. Each 5-minute window is added to daily
+  totals and then discarded; a group (a GPU model, a CPU model, a preset, ...) is shown only when at least <span id="k">5</span>
+  installs are behind it, the rest are summed as "other". What is collected and why:
+  <a href="https://github.com/TecnaGamer/BeamNG.Earth/blob/main/TELEMETRY.md">TELEMETRY.md</a>.</p>
+</main>
+<script>
+const base = location.pathname.replace(/performance\/?$/, "");
+const DIMS = [["gpu", "GPU"], ["cpu", "CPU"], ["preset", "Quality preset"], ["res", "Screen"], ["ram", "RAM"],
+  ["os", "System"], ["v", "Version"], ["scene", "Scene"]];
+const BAND = { stopped: "Stopped", u30: "Under 30 mph", s30: "30-60 mph", s60: "60-100 mph", s100: "100-150 mph", s150: "Over 150 mph" };
+const SCENE = { empty: "No buildings", rural: "Rural", town: "Town", urban: "Urban", dense: "Dense city" };
+let days = 7, dim = "gpu", data = null;
+const n1 = v => v == null ? "-" : Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 });
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+function setRange(d) {
+  days = d;
+  for (const b of ranges.children) b.classList.toggle("on", Number(b.dataset.d) === d);
+  history.replaceState(null, "", location.pathname + "?days=" + d + "&by=" + dim);
+  load();
+}
+function setDim(d) {
+  dim = d;
+  for (const b of tabs.children) b.classList.toggle("on", b.dataset.k === d);
+  history.replaceState(null, "", location.pathname + "?days=" + days + "&by=" + dim);
+  drawGroups();
+}
+async function load() {
+  try {
+    const r = await fetch(`${base}stats/performance?days=${days}`, { cache: "no-store" });
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+  } catch (e) { data = null; }
+  draw();
+}
+function draw() {
+  const a = data && data.all;
+  k.textContent = data ? data.kAnon : 5;
+  fps.textContent = a ? n1(a.fps) : "-"; low1.textContent = a ? n1(a.low1) : "-";
+  hph.textContent = a ? n1(a.drivingHitchesPerHour ?? a.hitchesPerHour) : "-"; edge.textContent = a ? n1(a.edgeHeldPct) + "%" : "-";
+  hours.textContent = a ? n1(a.hours) : "-";
+  if (!a) {
+    speed.innerHTML = `<tr><td class="empty">${data ? "Not enough players have sent performance data for this range yet." : "Could not load the statistics."}</td></tr>`;
+  } else {
+    const rows = Object.keys(BAND).filter(b => a.bands[b]).map(b => {
+      const x = a.bands[b];
+      return `<tr><td>${BAND[b]}</td><td class="r">${n1(x.fps)}</td><td class="r">${n1(x.low1)}</td><td class="r">${n1(x.minutes / 60)}</td></tr>`;
+    });
+    speed.innerHTML = `<tr><th>Speed</th><th class="r">Average fps</th><th class="r">1% low</th><th class="r">Hours</th></tr>` + rows.join("");
+  }
+  tabs.innerHTML = DIMS.map(([key, name]) => `<button data-k="${key}" class="${key === dim ? "on" : ""}">${name}</button>`).join("");
+  for (const b of tabs.children) b.onclick = () => setDim(b.dataset.k);
+  drawGroups();
+}
+function drawGroups() {
+  const list = (data && data.groups && data.groups[dim]) || [];
+  knote.textContent = data && data.all ? `Groups with fewer than ${data.kAnon} installs are summed as "other" (or left out when that is still fewer).` : "";
+  if (!list.length) { groups.innerHTML = `<tr><td class="empty">No group has enough installs yet.</td></tr>`; return; }
+  const top = Math.max(...list.map(g => g.fps || 0), 1);
+  const name = g => dim === "scene" ? (SCENE[g.name] || g.name) : g.name;
+  groups.innerHTML = `<tr><th>${esc(DIMS.find(d => d[0] === dim)[1])}</th><th class="r">Average fps</th><th class="r">1% low</th>
+    <th class="r">Smooth frames</th><th class="r">Hitches / h</th><th class="r">Edge held</th><th class="r">Extra cores</th>
+    <th class="r">Block wait</th><th class="r">Hours</th></tr>` + list.map(g => `<tr><td>${esc(name(g))}</td>
+    <td class="r">${n1(g.fps)}<span class="bar" style="width:${Math.round((g.fps || 0) / top * 60)}px"></span></td>
+    <td class="r">${n1(g.low1)}</td><td class="r">${n1(g.smooth)}%</td>
+    <td class="r ${(g.drivingHitchesPerHour ?? g.hitchesPerHour) > 30 ? "warn" : ""}">${n1(g.drivingHitchesPerHour ?? g.hitchesPerHour)}</td>
+    <td class="r ${g.edgeHeldPct > 2 ? "warn" : ""}">${n1(g.edgeHeldPct)}%</td><td class="r">${n1(g.catchupPct)}%</td>
+    <td class="r">${g.blockWait ? "~" + esc(g.blockWait) : "-"}</td><td class="r">${n1(g.hours)}</td></tr>`).join("");
+}
+for (const b of ranges.children) b.onclick = () => setRange(Number(b.dataset.d));
+const q = new URLSearchParams(location.search);
+if (q.has("by") && DIMS.some(d => d[0] === q.get("by"))) dim = q.get("by");
+setRange(q.has("days") ? Math.max(0, Math.min(400, Number(q.get("days")) || 0)) : 7);
+setInterval(load, 300000);
+</script>
+</body>
+</html>
