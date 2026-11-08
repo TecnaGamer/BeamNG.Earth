@@ -87,6 +87,12 @@ def tile(md, gx, gy, elev, urban_fn=None, widths=None, left_hand=False, mph=True
     feats = [md.cell(k, layers=("roads",), kind="background").layers.get("roads") for k in keys]
     paths = build(t.frame, feats, elev, t.box, urban_fn, widths, left_hand, mph, major_only,
                   bridges=bridge_source(t.frame) if bridge_source is not None else None)
+    if paths:
+        try:
+            import ndwflow
+            ndwflow.apply(paths, t.frame)
+        except Exception:
+            pass
     heights = [p[2] for path in paths for p in path["points"]]
     return {"v": PROTO, "key": t.key, "frame": [float(t.frame.lat0), float(t.frame.lon0)],
             "pivot": float(np.median(heights)) if heights else 0.0, "paths": paths}
