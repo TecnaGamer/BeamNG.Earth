@@ -927,6 +927,12 @@ class Mesh:
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
 WIN_UV = (53 / 1024, 154 / 1024, 1.0 - (512 + 238) / 1024, 1.0 - (512 + 45) / 1024)
 WIN_W, WIN_H, WIN_SILL = 1.05, 1.75, 0.85   # m
+# the laid-over windows' cells (u0, u1 px of the sheet's sash band, WIN_UV's v): sash windows alike by day (their
+# curtains differ), each window one of them (_vary_windows), so at night their brightness differs window by window
+# (tools/build_night_windows.py; the user, 2026-11-08: "the brightness of windows should be randomized at night", every
+# laid-over window lit alike: they all took WIN_UV)
+WIN_CELLS = np.array([(53, 154), (459, 562), (663, 764)], np.float64) / 1024
+_MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9], np.uint64)
 HOUSE_BAY_M = 3.4           # m between a house's windows
 DOOR_GAP_M = 0.75           # m each side of a front door kept free of the ground floor's windows
 WIN_OUT_M = 0.03            # m the window stands proud of its wall
@@ -957,8 +963,28 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
     if mid:
+        if spec.wall:
+            UV = _vary_windows(P, UV, mid)
         m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
                              mat_idx["bne_bld_fac_white"] if spec.wall else None])
+
+
+def _vary_windows(P, UV, mid):
+    """The kernel's quads' UV with each laid-over window (material slot 2, WIN_UV) moved to one of WIN_CELLS, hashed
+    from its first corner (cm): the same window the same cell every build."""
+    w = np.flatnonzero(np.frombuffer(mid, np.uint8) == 2)     # (the kernel's mid: bytes)
+    if not len(w):
+        return UV
+    uv = np.array(UV, np.float64).reshape(-1, 8)
+    h = (np.round(np.asarray(P, np.float64).reshape(-1, 12)[w, :3] * 100).astype(np.int64).view(np.uint64)
+         * _MIX).sum(axis=1)
+    h ^= h >> np.uint64(31)
+    h *= np.uint64(0xBF58476D1CE4E5B9)
+    h ^= h >> np.uint64(29)
+    cell = WIN_CELLS[(h % np.uint64(len(WIN_CELLS))).astype(np.intp)]
+    uv[w, 0] = uv[w, 6] = cell[:, 0]
+    uv[w, 2] = uv[w, 4] = cell[:, 1]
+    return uv.ravel().tolist()
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)

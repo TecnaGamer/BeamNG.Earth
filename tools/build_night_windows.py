@@ -2,7 +2,8 @@
 maps beside the building materials (mod/.../art/shapes/beamngEarth/):
 
   bne_facade_night_e.png  the plaster window sheet (m_highrise_plaster, bne_bld_facade): about 40 % of its windows lit (West Coast USA at night: most of its windows dark),
-                          each a room's light (warm, now and then cool white), brighter toward the ceiling, through
+                          each a room's light (warm, now and then cool white; its own brightness, some dim), brighter
+                          toward the ceiling, through
                           the curtains the sheet draws (the stock map lights only one row of it, four windows)
   bne_office_night_e.png  the metal sheet (offices' curtain walls and shopfronts, bne_bld_office / bne_bld_shop): the
                           stock map (every window lit) with some bays dimmed, a few dark
@@ -27,14 +28,18 @@ PLASTER = "assets/materials/trim/plaster/t_highrise_plaster/t_highrise_plaster_b
 METAL_E = "assets/materials/trim/metal/t_highrise_metal/t_highrise_metal_e.color.dds"
 
 # The plaster sheet's window openings (x0, y0, x1, y1 px of 1024, image top first), measured from the image, per band
-# (buildings.py BAND_TALL, BAND_PANEL, BAND_SASH, BAND_BRICK), and whether each one is lit. Band 2's bays 1 and 4 are
-# open (black) windows buildings.py never uses.
+# (buildings.py BAND_TALL, BAND_PANEL, BAND_SASH, BAND_BRICK), and each one's brightness at night (0: dark). Band 2's
+# bays 1 and 4 are open (black) windows buildings.py never uses.
+# (Each lit window its own brightness, the user, 2026-11-08: "the brightness of windows should be randomized at night":
+# every lit window glowed alike. The glow saturates the screen from ~0.3 of full (factor 0.4 looked as 1 in game), so
+# the levels go well below that to show. The sash band's three are also the laid-over windows' cells, buildings.py
+# WIN_CELLS_PX, one hashed per window: bright, dim, very dim.)
 OPENINGS = [
-    [((80, 26, 198, 236), 1), ((330, 26, 446, 236), 0), ((578, 26, 988, 236), 1)],
-    [((52, 306, 202, 460), 1), ((308, 306, 458, 460), 0), ((566, 306, 716, 460), 0), ((822, 306, 972, 460), 1)],
-    [((60, 566, 146, 716), 1), None, ((466, 566, 554, 716), 0), ((670, 566, 756, 716), 1), None],
-    [((46, 814, 154, 946), 0), ((252, 814, 360, 946), 1), ((458, 814, 566, 946), 0), ((662, 814, 770, 946), 0),
-     ((866, 814, 974, 946), 1)],
+    [((80, 26, 198, 236), 1.0), ((330, 26, 446, 236), 0), ((578, 26, 988, 236), 0.12)],
+    [((52, 306, 202, 460), 0.06), ((308, 306, 458, 460), 0), ((566, 306, 716, 460), 0), ((822, 306, 972, 460), 1.0)],
+    [((60, 566, 146, 716), 1.0), None, ((466, 566, 554, 716), 0.05), ((670, 566, 756, 716), 0.18), None],
+    [((46, 814, 154, 946), 0), ((252, 814, 360, 946), 0.15), ((458, 814, 566, 946), 0), ((662, 814, 770, 946), 0),
+     ((866, 814, 974, 946), 1.0)],
 ]
 WARM = (1.0, 0.70, 0.38)       # incandescent / warm LED, ~2700 K
 WARMER = (1.0, 0.62, 0.30)
@@ -60,9 +65,9 @@ def facade(base):
         for cell in band:
             if cell is None:
                 continue
-            (x0, y0, x1, y1), lit = cell
+            (x0, y0, x1, y1), lvl = cell
             k += 1
-            if not lit:
+            if not lvl:
                 continue
             col = np.array(COOL if k % 5 == 0 else (WARMER if k % 3 == 0 else WARM), np.float32)
             h, w = y1 - y0, x1 - x0
@@ -72,7 +77,7 @@ def facade(base):
             # brighter still
             glow = (0.75 + 0.25 * (1.0 - yy)) * (0.8 + 0.2 * (1.0 - xx * xx))
             cloth = 0.45 + 0.55 * np.clip((luma[y0:y1, x0:x1] - 0.45) / 0.5, 0.0, 1.0)
-            out[y0:y1, x0:x1] = col[None, None, :] * (glow * cloth)[..., None]
+            out[y0:y1, x0:x1] = col[None, None, :] * (lvl * glow * cloth)[..., None]
     return Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
 
