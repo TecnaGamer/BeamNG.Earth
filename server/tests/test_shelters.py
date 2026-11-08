@@ -28,6 +28,11 @@ class KindTest(unittest.TestCase):
         self.assertFalse(shelters.is_shelter(self.features("bus_stop", {"shelter": "no"}), 0))
         self.assertFalse(shelters.is_shelter(self.features("amenity", {"amenity": "shelter"}), 0))
         self.assertFalse(shelters.is_shelter(self.features("platform"), 0))
+        # a stop_position node is where the bus halts, on the road: a shelter only when it says so
+        self.assertFalse(shelters.is_shelter(
+            self.features("bus_stop", {"highway": "bus_stop", "public_transport": "stop_position"}), 0))
+        self.assertTrue(shelters.is_shelter(
+            self.features("bus_stop", {"public_transport": "stop_position", "shelter": "yes"}), 0))
         self.assertFalse(shelters.is_shelter(self.features("bench"), 0))
 
 
@@ -89,6 +94,45 @@ class PlaceTest(unittest.TestCase):
         y0 = got[0][2]
         low = 2.0 + 0.5 * (y0 - shelters.STREET_X - 8.0)       # the street-side posts, the lowest
         self.assertAlmostEqual(got[0][3], low + shelters.LIFT, delta=0.05)
+
+    def road_across(self, x=50.0, width=6.0):
+        spec = type("S", (), {"width": width})()
+        return ("across", spec, np.array([[x, -60.0, 0.0], [x, 60.0, 0.0]]), None)
+
+    def on_road(self, feats, roads, box=(0.0, -20.0, 100.0, 100.0)):
+        """Rows, and the deepest body point of each in any carriageway."""
+        got = self.rows(feats, roads, box)
+        return got, [shelters._intrusion(r[1], r[2], r[4], roads) for r in got]
+
+    def test_a_stop_on_a_junction_node_stands_clear_of_every_road(self):
+        # a stop node at the T junction of an 8 m road along x and a 6 m road across it: no body point on either
+        roads = list(self.road()) + [self.road_across()]
+        for fid in ("a", "b", "c", "d", "e", "f"):          # whichever side the hash would have picked
+            got, deep = self.on_road(self.stop([[50.0, 0.0]], fid=fid), roads)
+            if got:
+                self.assertLessEqual(deep[0], shelters.BODY_ON_ROAD_M, (fid, got))
+
+    def test_a_stop_on_the_centre_line_picks_the_side_with_room(self):
+        # a service lane runs alongside, 2 m past the main road's edge on the +y side: the free side is -y
+        lane = ("lane", type("S", (), {"width": 4.0})(), np.array([[0.0, 7.0, 0.0], [100.0, 7.0, 0.0]]), None)
+        roads = list(self.road()) + [lane]
+        for fid in ("a", "b", "c", "d", "e", "f"):
+            got, deep = self.on_road(self.stop([[50.0, 0.0]], fid=fid), roads)
+            self.assertEqual(len(got), 1, fid)
+            self.assertLessEqual(deep[0], shelters.BODY_ON_ROAD_M, fid)
+            self.assertLess(got[0][2], 0.0, fid)
+
+    def test_a_stop_with_no_clear_spot_is_left_out(self):
+        # two wide roads 1 m apart leave no room for a 1.5 m wide shelter between them
+        spec = type("S", (), {"width": 40.0})()
+        roads = [("w", spec, np.array([[0.0, 20.5, 0.0], [100.0, 20.5, 0.0]]), None),
+                 ("e", spec, np.array([[0.0, -20.5, 0.0], [100.0, -20.5, 0.0]]), None)]
+        self.assertEqual(self.rows(self.stop([[50.0, 0.0]]), roads, (0.0, -20.0, 100.0, 100.0)), [])
+
+    def test_a_stop_position_node_without_a_shelter_tag_is_left_out(self):
+        tags = {"highway": "bus_stop", "public_transport": "stop_position"}
+        self.assertEqual(self.rows(self.stop([[50.0, 0.0]], tags=tags), self.road()), [])
+        self.assertEqual(len(self.rows(self.stop([[50.0, 0.0]], tags=dict(tags, shelter="yes")), self.road())), 1)
 
     def test_a_stop_in_the_carriageway_is_set_back_to_the_curb(self):
         got = self.rows(self.stop([[50.0, 1.0]]), self.road())
