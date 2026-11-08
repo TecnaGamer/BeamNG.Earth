@@ -267,6 +267,17 @@ CORNERS_ON = os.environ.get("BNE_GRADE_CORNERS", "on") != "off"
 UNGRADED = {"raceway"}      # classes planned by nobody: the terrain is their surface (an oval's banking, GitHub #143) ...
 UNGRADED_MARGIN_M = 2.0     # ... and nothing else grades their carriageway (+ this: kerbs, apron): a road crossing a
                             # track, or a tunnel's open approach under one, cut a flat trench through Daytona's banking
+# A raceway's surface (GitHub #833: a GT3 flat out through a Nordschleife kink was launched by the elevation data's
+# bumps): the terrain still, so the banking stays (Daytona's 31 degrees), but smoothed along the track: the ground's
+# along-track Gaussian at each offset across, on a grid of RACEWAY_STEP_M along by RACEWAY_ACROSS_M across (the surface
+# itself, not a correction to the point's ground: one of 2 m steps under-shot 6 m bumps by half); each map segment's own, the line continued RACEWAY_EXTEND sigmas past its ends (straight on,
+# or round a closed loop) so its ends are smoothed too and every segment's is a pure function of its line and the DEM.
+# It fades out over UNGRADED_MARGIN_M (kerbs, apron) to the plain ground. BNE_RACEWAY_SMOOTH=off: the ground as it is.
+RACEWAY_SMOOTH_ON = os.environ.get("BNE_RACEWAY_SMOOTH", "on") != "off"
+RACEWAY_SIGMA_M = float(os.environ.get("BNE_RACEWAY_SIGMA", "10.0"))
+RACEWAY_STEP_M = 2.0
+RACEWAY_ACROSS_M = 1.0
+RACEWAY_EXTEND = 3.0
 # The same structural headroom as the deck solver, including the lower road's
 # physical surface lift. A stale 6.7 m target forced short motorway decks into
 # clearance humps even after their underpass had been graded (Otto, Wyoming).
@@ -403,6 +414,79 @@ def resample(xy, step):
         return xy[:1].copy(), np.zeros(1)
     fast.require(0, "resample")
     return fast._ef.resample(np.ascontiguousarray(np.asarray(xy, np.float64)[:, :2]), float(step))
+
+
+def raceway_surface(frame, elev, xy, hw, sigma=None):
+    """(line (k, 2) every RACEWAY_STEP_M, its stations (k,), offsets across (nt,), surface (k, nt) m) of one raceway
+    segment xy (half width hw, its margin in): RACEWAY_* above. None for a line under 2 points."""
+    sigma = RACEWAY_SIGMA_M if sigma is None else float(sigma)
+    xy = np.asarray(xy, np.float64)[:, :2]
+    line, st = resample(xy, RACEWAY_STEP_M)
+    k = len(line)
+    if k < 2 or st[-1] <= 0.0:
+        return None
+    step = float(st[-1]) / (k - 1) if k > 1 else RACEWAY_STEP_M
+    m = max(1, int(math.ceil(RACEWAY_EXTEND * sigma / RACEWAY_STEP_M)))
+    closed = k > 3 and math.hypot(*(line[0] - line[-1])) < 1.0
+    if closed and k > 2 * m + 2:
+        head, tail = line[-1 - m:-1], line[1:m + 1]
+    else:
+        def unit(v):
+            return v / max(math.hypot(*v), 1e-9)
+        t0, t1 = unit(line[0] - line[1]), unit(line[-1] - line[-2])
+        d = step * np.arange(1, m + 1)[:, None]
+        head, tail = (line[0] + t0 * d)[::-1], line[-1] + t1 * d
+    full = np.concatenate([head, line, tail])
+    tan = np.gradient(full, axis=0)
+    tan /= np.maximum(np.hypot(tan[:, 0], tan[:, 1]), 1e-9)[:, None]
+    nor = np.stack([-tan[:, 1], tan[:, 0]], axis=1)             # (left)
+    nt = int(math.ceil(2.0 * hw / RACEWAY_ACROSS_M)) + 1
+    offs = np.linspace(-hw, hw, nt)
+    pts = full[:, None, :] + offs[None, :, None] * nor[:, None, :]
+    la, lo, _ = frame.enu_to_geodetic(pts[..., 0].ravel(), pts[..., 1].ravel(), 0.0)
+    z = np.asarray(elev(la, lo), np.float64).reshape(len(full), nt)
+    zs = np.stack([smooth_profile(z[:, j], step, sigma) for j in range(nt)], axis=1)
+    return line, np.arange(k) * step, offs, zs[len(head):len(head) + k]
+
+
+def raceway_ground(e, n, base, zones, margin=None):
+    """base (the ground at points e, n) as the raceways' smoothed surfaces (zones: [(line, stations, offsets, surface)]
+    from raceway_surface): each point by its nearest zone it lies on (station on the segment, offset within), all of
+    it on the carriageway, fading out over margin (UNGRADED_MARGIN_M) to base at its edge. A point on none keeps base."""
+    margin = UNGRADED_MARGIN_M if margin is None else float(margin)
+    e = np.asarray(e, np.float64)
+    n = np.asarray(n, np.float64)
+    out = np.array(base, np.float64, copy=True)
+    if not len(e) or not zones:
+        return out
+    import fast
+    fast.require(164, "polyline_project")
+    pts = np.ascontiguousarray(np.stack([e, n], axis=1))
+    best = np.full(len(e), np.inf)
+    add = np.zeros(len(e))
+    ex0, ex1, ny0, ny1 = float(e.min()), float(e.max()), float(n.min()), float(n.max())
+    for line, st, offs, corr in zones:
+        hw = float(offs[-1])
+        if line[:, 0].min() - hw > ex1 or line[:, 0].max() + hw < ex0 or                 line[:, 1].min() - hw > ny1 or line[:, 1].max() + hw < ny0:
+            continue
+        station, _near, _tan, off, dist = fast._ef.polyline_project(np.ascontiguousarray(line, np.float64), pts)
+        station, off, dist = np.asarray(station), np.asarray(off), np.asarray(dist)
+        ok = (station >= 0.0) & (station <= st[-1]) & (np.abs(off) <= hw) & (dist < best)
+        if not ok.any():
+            continue
+        idx = np.flatnonzero(ok)
+        fs = np.clip(station[idx] / max(float(st[1] - st[0]), 1e-9), 0.0, len(st) - 1.0)
+        i = np.minimum(np.floor(fs).astype(np.int64), len(st) - 2)
+        a = fs - i
+        ft = np.clip((off[idx] - offs[0]) / max(float(offs[1] - offs[0]), 1e-9), 0.0, len(offs) - 1.0)
+        j = np.minimum(np.floor(ft).astype(np.int64), len(offs) - 2)
+        b = ft - j
+        c = (corr[i, j] * (1 - a) * (1 - b) + corr[i + 1, j] * a * (1 - b) + corr[i, j + 1] * (1 - a) * b
+             + corr[i + 1, j + 1] * a * b)
+        u = np.clip((hw - np.abs(off[idx])) / max(margin, 1e-9), 0.0, 1.0)
+        add[idx] = (c - out[idx]) * u * u * (3 - 2 * u)
+        best[idx] = dist[idx]
+    return out + add
 
 
 class Plan:
@@ -4126,14 +4210,14 @@ class _Planner:
             if not keys:
                 return base
         plans, pack = self._plan_set(keys, roads_only)
-        if not plans:
+        if not plans and not (RACEWAY_SMOOTH_ON and self._has_keeps()):
             return base
         e, n, _ = self.frame.geodetic_to_enu(lat.ravel(), lon.ravel(), 0.0)
         e, n = np.asarray(e), np.asarray(n)
-        out = grade_points(e, n, base.ravel(), pack, lift)
+        out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
         race = self._on_kept(e, n)
-        if race is not None:                # (the terrain is a racetrack's surface: GitHub #143)
-            out[race] = base.ravel()[race]
+        if race is not None:                # (the terrain is a racetrack's surface: GitHub #143, smoothed: #833)
+            out[race] = self._raceway_ground(e[race], n[race], base.ravel()[race])
         keep = self._over_tunnels(e, n)
         if keep is not None:
             # (a small change stays: a road over the tunnel lies on its own graded profile, the ground over the tunnel
@@ -4167,6 +4251,33 @@ class _Planner:
                 continue
             out.append((la, lo, spec))
         return out
+
+    def _has_keeps(self):
+        with self.lock:
+            return any(self.keeps.values())
+
+    def _raceway_ground(self, e, n, base):
+        """base at the points on a raceway (_on_kept) smoothed along it (raceway_ground; RACEWAY_SMOOTH_ON)."""
+        if not RACEWAY_SMOOTH_ON or self.elev is None:
+            return base
+        with self.lock:
+            lines = sorted({(round(float(xy[0, 0]), 2), round(float(xy[0, 1]), 2), round(float(xy[-1, 0]), 2),
+                             round(float(xy[-1, 1]), 2), len(xy), round(float(hw), 3)): (xy, hw)
+                            for v in self.keeps.values() for xy, hw in v}.items())
+        memo = self.__dict__.setdefault("_raceway_memo", OrderedDict())
+        zones = []
+        for key, (xy, hw) in lines:
+            with self.lock:
+                got = memo.get(key)
+            if got is None:
+                got = raceway_surface(self.frame, self.elev, xy, hw) or ()
+                with self.lock:
+                    memo[key] = got
+                    while len(memo) > 256:
+                        memo.popitem(last=False)
+            if got:
+                zones.append(got)
+        return raceway_ground(e, n, base, zones)
 
     def _on_kept(self, e, n):
         """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None."""
@@ -4356,6 +4467,7 @@ class Grader:
     _keys = staticmethod(_Planner._keys)
     _over_tunnels = _Planner._over_tunnels  # (a namespace with covers and lock: tests)
     _on_kept = _Planner._on_kept
+    _raceway_ground = _Planner._raceway_ground
 
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once), in this frame's world; roads_only: not the tunnels'

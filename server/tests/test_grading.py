@@ -1092,6 +1092,31 @@ class RacewayKeepTest(unittest.TestCase):
         out = g.apply(la, lo, base)
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
 
+    def test_track_smoothed_along_its_banking_kept(self):
+        """GitHub #833: the elevation data's short bumps along a racetrack are smoothed away; its banking (the ground's
+        slope across it) and its long crests stay."""
+        f = features([[(-400, 0), (400, 0)]], ["raceway"])
+
+        def ground(e, n):
+            return 10.0 + 0.3 * n + 0.15 * np.sin(2 * np.pi * e / 6.0) + 3.0 * np.sin(2 * np.pi * e / 600.0)
+
+        def elev(la, lo):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return ground(np.asarray(e), np.asarray(n))
+        g = grading.Grader(FRAME, FakeMD(f), elev)
+        e = np.repeat(np.arange(-100.0, 100.0, 0.7), 3)
+        n = np.tile([-4.0, 0.0, 4.0], len(e) // 3)
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+        base = elev(la, lo)
+        ee, nn, _ = FRAME.geodetic_to_enu(la, lo, 0.0)
+        smooth = 10.0 + 0.3 * np.asarray(nn) + 3.0 * np.sin(2 * np.pi * np.asarray(ee) / 600.0)
+        out = g.apply(la, lo, base)
+        self.assertGreater(float(np.abs(base - smooth).max()), 0.14)
+        np.testing.assert_allclose(out, smooth, atol=0.04, err_msg="the bumps gone, banking and crest kept")
+        with unittest.mock.patch.object(grading, "RACEWAY_SMOOTH_ON", False):
+            off = grading.Grader(FRAME, FakeMD(f), elev).apply(la, lo, base)
+        np.testing.assert_allclose(off, base, atol=1e-9, err_msg="BNE_RACEWAY_SMOOTH=off: the ground as it is")
+
 
 
 class NeverRaisedTest(unittest.TestCase):
