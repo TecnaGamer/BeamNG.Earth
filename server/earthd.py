@@ -5155,6 +5155,7 @@ class Connection:
         self.pending_block = None       # the last prepare_terrain of the active anchor
         self.terrain_wait = 0           # prepare_terrain requests being built (roads.Tracker: the ground first)
         self.pending_at = None          # when the pending block was asked (on_pose: the catch-up boost)
+        self.pending_answered = False   # ... and whether its terrain_ready went (then the wait is the mod's, not ours)
         self.catchup = False            # the loading boost is on to catch up while driving (CATCHUP_*)
         self.caught_up_at = None
         self.predicted_block = None     # the terrain the prefetch expects next
@@ -6636,6 +6637,7 @@ class Connection:
             # The pending block's L0 tiles stream first, so the commit never waits (§2.3).
             self.pending_block = self.s.layout.block_at(cx, cy)
             self.pending_at = time.monotonic()
+            self.pending_answered = False
             t1 = time.perf_counter()
             self.update_far()
             dt = time.perf_counter() - t1
@@ -6651,6 +6653,7 @@ class Connection:
                 key = (aid, cx, cy)
                 log.info("terrain_ready %s after %.0f ms (provisional: the graded block follows)", key,
                          (time.perf_counter() - t0) * 1000)
+                self._answered(aid, cx, cy)
                 self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, prov)})
                 return
             try:
@@ -6674,7 +6677,14 @@ class Connection:
         key = (aid, cx, cy)
         self.s.hm_sent.append(key)
         log.info("terrain_ready %s after %.0f ms", key, (time.perf_counter() - t0) * 1000)
+        self._answered(aid, cx, cy)
         self.send({"type": "terrain_ready", "requestId": req, "anchorId": aid, **self.terrain_msg(key, info)})
+
+    def _answered(self, aid, cx, cy):
+        """The pending block's terrain_ready went: from now on its commit is the mod's to make (the player reaching
+        its commit distance, its far tiles going live), which more server cores do not hasten (behind)."""
+        if aid == self.active and self.pending_block == self.s.layout.block_at(cx, cy):
+            self.pending_answered = True
 
     async def provisional_follow(self, anchor, cx, cy, job):
         """A follow block's provisional stand-in (PROVISIONAL_FOLLOW_S): None when the graded block came in time (or
@@ -6833,9 +6843,13 @@ class Connection:
         self.s.evict_heightmaps()
 
     def behind(self):
-        """Is the world behind the driving player? The next block asked CATCHUP_AFTER_S ago and not committed (building,
-        or the mod waiting for its far tiles), or the road tiles round the car not all built."""
+        """Is the world behind the driving player? The next block asked CATCHUP_AFTER_S ago and not answered yet (still
+        building here), or the road tiles round the car not all built. A block answered but not committed is not:
+        the mod commits it when the player reaches its commit distance (and its far tiles are live), which more cores
+        here do not hasten. Counting it lent half the game's cores to the server again and again in town: blocks
+        answered 0-4 s after their request, the boost on 13-22 s after it, at 20-60 mph (Fells Point, 2026-11-07)."""
         if self.pending_block is not None and self.pending_block != self.block and self.pending_at is not None \
+                and not getattr(self, "pending_answered", False) \
                 and time.monotonic() - self.pending_at > CATCHUP_AFTER_S:
             return True
         if self.s.mapdata is not None:
