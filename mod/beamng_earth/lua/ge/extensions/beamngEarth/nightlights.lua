@@ -40,6 +40,61 @@ M.MATERIALS = {
   bne_lm_dial = { '1 0.97 0.88', 160 },
 }
 
+-- Late at night fewer windows are lit (the user, 2026-11-08: "have less lit windows depending on how late it is,
+-- peaking at 5 am"): each window sheet's night variants (buildings.py: a bay or a house window each one of the three;
+-- francehouse_mesh.py's lit glass) go dark at their own hours, the third from 21:30 to 1:00, the second from 1:00 to
+-- 5:00, both lit again by 6:30-7:00; the first stays lit all night (at 5 am about a third of the evening's windows).
+-- M.LATE: a group's fraction of its night glow by the clock hour ({ hour, fraction }, from the evening on), drawn in
+-- M.STEPS (the glow saturates the screen from ~0.3 of full: a straight fade showed only at its end), so a material
+-- changes a few times a night.
+M.STEPS = { 0, 0.02, 0.05, 0.1, 0.18, 0.3, 1 }
+M.LATE = {
+  b = { { 1, 1 }, { 5, 0 }, { 6.5, 1 } },
+  c = { { 21.5, 1 }, { 1, 0 }, { 5, 0 }, { 7, 1 } },
+  sky = { { 21.5, 1 }, { 5, 0.67 }, { 6.5, 1 } },     -- (the skyline: its own windows, one material)
+}
+M.GROUP = {
+  bne_bld_facade_b = 'b', bne_bld_facade_c = 'c', bne_bld_office_b = 'b', bne_bld_office_c = 'c',
+  bne_bld_shop_b = 'b', bne_bld_shop_c = 'c', bne_fr_house_glass_lit_dim = 'b', bne_fr_house_glass_lit_low = 'c',
+  bne_bld_sky = 'sky',
+}
+
+-- The clock hour by the stock environment (0 .. 24; its time 0 is noon), nil without one.
+function M.hour()
+  local env = rawget(_G, 'core_environment')
+  if type(env) ~= 'table' or type(env.getTimeOfDay) ~= 'function' then return nil end
+  local ok, tod = pcall(env.getTimeOfDay)
+  if not ok or type(tod) ~= 'table' or type(tod.time) ~= 'number' then return nil end
+  return (tod.time * 24 + 12) % 24
+end
+
+-- Pure: a material's share of its night glow at the clock hour (1 for those without a group, or no hour).
+function M.level(name, hour)
+  local late = M.LATE[M.GROUP[name]]
+  if not late or not hour then return 1 end
+  local function since(h) return (h - 12) % 24 end    -- (hours from noon: the night in one piece)
+  local t, f = since(hour), late[#late][2]
+  if t <= since(late[1][1]) then
+    f = late[1][2]
+  else
+    for i = 2, #late do
+      local a, b = since(late[i - 1][1]), since(late[i][1])
+      if t <= b then
+        f = late[i - 1][2] + (late[i][2] - late[i - 1][2]) * (b > a and (t - a) / (b - a) or 1)
+        break
+      end
+    end
+  end
+  return M.STEPS[math.floor(f * (#M.STEPS - 1) + 0.5) + 1]
+end
+
+local function scaled(rgb, k)
+  if k >= 1 then return rgb end
+  local out = {}
+  for v in rgb:gmatch('%S+') do out[#out + 1] = string.format('%.4g', (tonumber(v) or 0) * k) end
+  return table.concat(out, ' ')
+end
+
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest
 -- the camera (their lenses: the road tiles' lamplens rows, furniture.py), pointing down: within AROUND_M all round, and
 -- out to NEAR_M in front of the camera (within VIEW_COS of its heading; the user, 2026-10-27: "at night street lamps
@@ -67,6 +122,7 @@ M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
 local lastCheck = -1e9
+local shown = {}         -- material name -> the factor and nits set (set again only when they change)
 local lastLights = -1e9
 M.night = nil            -- the state applied (nil: none yet)
 M.errors = 0
@@ -84,22 +140,29 @@ function M.isNight()
   return st.isNight == true
 end
 
-local function apply(night)
+local function apply(night, hour)
   for name, glow in pairs(M.MATERIALS) do
-    local m = scenetree.findObject(name)
-    if m then
-      local ok = pcall(function()
-        m:setField('emissiveFactor', 0, night and glow[1] or '0 0 0')
-        m:setField('emissiveIntensityNits', 0, tostring(night and glow[2] or -1))
-        m:flush()
-        m:reload()
-      end)
-      if not ok then M.errors = M.errors + 1 end
+    local factor = night and scaled(glow[1], M.level(name, hour)) or '0 0 0'
+    local nits = tostring(night and glow[2] or -1)
+    local want = factor .. '|' .. nits
+    if shown[name] ~= want then
+      local m = scenetree.findObject(name)
+      if m then
+        local ok = pcall(function()
+          m:setField('emissiveFactor', 0, factor)
+          m:setField('emissiveIntensityNits', 0, nits)
+          m:flush()
+          m:reload()
+        end)
+        if ok then shown[name] = want else M.errors = M.errors + 1 end
+      end
     end
   end
-  -- the lamps' far glow (trees.lua's lampglow group, off by day)
-  local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  if night ~= M.night then
+    -- the lamps' far glow (trees.lua's lampglow group, off by day)
+    local okt, trees = pcall(require, 'beamngEarth/trees')
+    if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  end
   M.night = night
 end
 
@@ -236,13 +299,14 @@ local function stepLights(night)
   for _, e in ipairs(free) do if e.at then place(e, nil) end end
 end
 
--- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S).
+-- Every frame (core.lua; cheap: the materials looked at every CHECK_S, set only when day / night or their hour's step
+-- changes; the lights every LIGHTS_S).
 function M.update()
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
     local night = M.isNight()
-    if night ~= nil and night ~= M.night then apply(night) end
+    if night ~= nil then apply(night, M.hour()) end
   end
   if now - lastLights >= M.LIGHTS_S and (M.night or #pool > 0) then
     lastLights = now
@@ -253,7 +317,7 @@ end
 
 -- A new level or session: the materials are new (applied again at the next check), the lights gone.
 function M.reset()
-  M.night, lastCheck, lastLights = nil, -1e9, -1e9
+  M.night, lastCheck, lastLights, shown = nil, -1e9, -1e9, {}
   for _, e in ipairs(pool) do
     local o = scenetree.findObjectById(e.id)
     if o then o:delete() end

@@ -49,4 +49,38 @@ core_environment.getLightState = function() return { isNight = false } end
 clock = clock + 2; nl.update()
 T.check(light and light.fields.isEnabled == 'false' and nl.status().errors == 0, 'day disables without errors')
 nl.reset()
+
+-- Late at night fewer windows lit, fewest at 5 am: the variants dark at their own hours, the first all night.
+T.check(nl.level('bne_bld_facade', 5) == 1 and nl.level('bne_lamp_lens', 3) == 1, 'the first variant, the lamps: all night')
+T.check(nl.level('bne_bld_facade_c', 20) == 1 and nl.level('bne_bld_facade_b', 23) == 1, 'all lit in the evening')
+T.check(nl.level('bne_bld_facade_c', 1.5) == 0 and nl.level('bne_bld_office_b', 3) < 1, 'the third dark by 1, the second going')
+T.check(nl.level('bne_bld_facade_b', 5) == 0 and nl.level('bne_bld_shop_c', 5) == 0, 'at 5 am only the first lit')
+T.check(nl.level('bne_bld_facade_b', 7) == 1 and nl.level('bne_bld_facade_c', 12) == 1, 'all lit again by morning')
+local prev, fewer = 2, true
+for h = 21.5, 29, 0.25 do                             -- (21:30 to 5 am)
+  local k = nl.level('bne_bld_facade_c', h % 24) + nl.level('bne_bld_facade_b', h % 24)
+  fewer = fewer and k <= prev
+  prev = k
+end
+T.check(fewer and prev == 0, 'fewer and fewer to 5 am')
+T.check(nl.level('bne_bld_sky', 5) > 0 and nl.level('bne_bld_sky', 5) < 1, 'the skyline dimmer, not dark')
+local tod = 0.5                                       -- (midnight: the stock time 0.5)
+core_environment = { getLightState = function() return { isNight = true } end,
+                     getTimeOfDay = function() return { time = tod } end }
+T.check(math.abs(nl.hour()) < 1e-9, 'the clock hour from the stock time')
+local mats = {}
+for _, name in ipairs({ 'bne_bld_facade', 'bne_bld_facade_c' }) do
+  local o = S.newObject('Material'); o:registerObject(name); mats[name] = o
+end
+clock = clock + 2; nl.update()
+T.check(mats.bne_bld_facade.fields.emissiveFactor == '1 1 1' and mats.bne_bld_facade_c.fields.emissiveFactor ~= '1 1 1',
+  'midnight: the third dimmed: ' .. tostring(mats.bne_bld_facade_c.fields.emissiveFactor))
+local before = S.calls.reload_Material or 0
+clock = clock + 2; nl.update()
+T.check((S.calls.reload_Material or 0) == before, 'nothing set again while its step is the same')
+tod = (3 - 12) / 24 % 1                               -- (3 am)
+clock = clock + 2; nl.update()
+T.check(mats.bne_bld_facade_c.fields.emissiveFactor == '0 0 0' and mats.bne_bld_facade.fields.emissiveFactor == '1 1 1',
+  '3 am: the third dark')
+nl.reset()
 T.done('test_nightlights')

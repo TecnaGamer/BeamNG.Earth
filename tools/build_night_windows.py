@@ -57,6 +57,14 @@ COOL = (0.78, 0.86, 1.0)       # cool white, ~5000 K
 # from street to roof, and Manhattan's towers glowed white all over, TGForever Discord 2026-10-28)
 OFFICE_BAYS = [(5, (0.55, 0.0, 0.8, 0.0, 0.3)), (4, (0.0, 0.7, 0.25, 0.0)), (2, (1.0, 1.0)), (1, (0.6,))]
 OFFICE_MAPS = (("bne_office_night_e.png", 0), ("bne_office_night_e_b.png", 1), ("bne_office_night_e_c.png", 2))
+# The curtain-wall bands (BAND_OFFICE, BAND_OFFICE2) drawn anew, not the stock map dimmed: its lit bays glowed flat grey
+# from edge to edge, so a tower whose bays each took a variant read as grey static (the user, 2026-11-08). Their panes
+# (between the stock map's mullions) in rooms of 1-3 panes, a room dark or lit (OFFICE_LIT of them) at one of
+# OFFICE_LEVELS (share, level), fluorescent white or now and then warm; each map its own rooms.
+CURTAIN = (0, 1)
+OFFICE_LIT = 0.32
+OFFICE_LEVELS = ((0.4, 0.85), (0.35, 0.25), (0.25, 0.08))
+OFFICE_WHITE, OFFICE_WARM = (0.86, 0.92, 1.0), (1.0, 0.80, 0.55)
 
 
 def _read(zf, name):
@@ -89,16 +97,45 @@ def facade(base, turn=0):
     return Image.fromarray(np.clip(out * 255.0 + 0.5, 0, 255).astype(np.uint8))
 
 
+def _panes(lum):
+    """A band's panes (x0, x1) from its stock map's luminance (h, w): the runs of columns brighter than the mullions."""
+    col = lum.mean(0)
+    glass = col >= col.max() * 0.45
+    edges = np.flatnonzero(np.diff(np.concatenate(([0], glass.astype(np.int8), [0]))))
+    return [(int(x0), int(x1)) for x0, x1 in zip(edges[::2], edges[1::2]) if x1 - x0 >= 4]
+
+
 def office(stock_e, turn=0):
-    """The metal sheet's night map: the stock one, some bays dimmed, each band's factors turned by turn bays
-    (OFFICE_MAPS)."""
+    """The metal sheet's night map (OFFICE_MAPS' turn): its curtain-wall bands' panes lit room by room (CURTAIN),
+    the others the stock map with some bays dimmed, each band's factors turned by turn bays."""
     e = np.asarray(stock_e.convert("RGB"), np.float32)
     H, W = e.shape[:2]
     bh = H // len(OFFICE_BAYS)
+    rng = np.random.default_rng(20261108 + turn)
     for i, (n, f) in enumerate(OFFICE_BAYS):
+        band = e[i * bh:(i + 1) * bh]
+        if i in CURTAIN:
+            lum = band.mean(2)
+            shape = np.clip(lum / max(np.percentile(lum, 98), 1.0), 0.0, 1.0)
+            out = np.zeros_like(band)
+            panes = _panes(lum)
+            k = 0
+            while k < len(panes):
+                room = panes[k:k + int(rng.integers(1, 4))]
+                k += len(room)
+                if rng.random() >= OFFICE_LIT:
+                    continue
+                u = rng.random()
+                level = next(lv for j, (_, lv) in enumerate(OFFICE_LEVELS)
+                             if u < sum(sh for sh, _ in OFFICE_LEVELS[:j + 1]))
+                col = np.array(OFFICE_WARM if rng.random() < 0.25 else OFFICE_WHITE, np.float32) * 255.0 * level
+                for x0, x1 in room:
+                    out[:, x0:x1] = col[None, None, :] * shape[:, x0:x1, None]
+            e[i * bh:(i + 1) * bh] = out
+            continue
         for j in range(n):
             x0, x1 = j * W // n, (j + 1) * W // n
-            e[i * bh:(i + 1) * bh, x0:x1] *= f[(j - turn) % n]
+            band[:, x0:x1] *= f[(j - turn) % n]
     return Image.fromarray(np.clip(e + 0.5, 0, 255).astype(np.uint8))
 
 

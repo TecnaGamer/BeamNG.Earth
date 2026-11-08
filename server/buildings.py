@@ -944,6 +944,7 @@ WIN_W, WIN_H, WIN_SILL = 1.05, 1.75, 0.85   # m
 WIN_CELLS = np.array([(53, 154), (459, 562), (663, 764)], np.float64) / 1024
 _MIX = np.array([0x9E3779B97F4A7C15, 0xC2B2AE3D27D4EB4F, 0x165667B19E3779F9], np.uint64)
 # a window sheet's material index -> its variants' (the first itself)
+_VARIANT_MI_OFFICE = MATERIALS.index(OFFICE)
 _VARIANT_MI = {MATERIALS.index(v[0]): [MATERIALS.index(f) for f in v] for v in (FACADE_VARIANTS, OFFICE_VARIANTS,
                                                                                SHOP_VARIANTS)}
 HOUSE_BAY_M = 3.4           # m between a house's windows
@@ -976,13 +977,16 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
     if mid:
-        # (slots: the facade, the shopfront, the laid-over windows, the facade's variants, the shopfront's)
+        # (slots: the facade, the shopfront, the laid-over windows, the facade's variants, the shopfront's, the
+        # laid-over windows')
         mats = [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
-                mat_idx["bne_bld_fac_white"] if spec.wall else None, None, None, None, None]
+                mat_idx["bne_bld_fac_white"] if spec.wall else None, None, None, None, None, None, None]
         if spec.wall:
-            UV = _vary_windows(P, UV, mid)
+            UV, mid = _vary_windows(P, UV, mid)
+            mats[7:9] = [(i, mats[2][1]) for i in _VARIANT_MI[mats[2][0]][1:]]
         elif mats[0][0] in _VARIANT_MI:
-            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4))
+            P, UV, mid = _vary_bays(P, UV, mid, band[0], band[1], 0, (0, 3, 4),
+                                    shuffle=mats[0][0] == _VARIANT_MI_OFFICE)
             mats[3:5] = [(i, mats[0][1]) for i in _VARIANT_MI[mats[0][0]][1:]]
         if mats[1] is not None and mats[1][0] in _VARIANT_MI:
             P, UV, mid = _vary_bays(P, UV, mid, BAND_SHOP[0], BAND_SHOP[1], 1, (1, 5, 6))
@@ -1000,23 +1004,30 @@ def _pick(pts, n):
 
 
 def _vary_windows(P, UV, mid):
-    """The kernel's quads' UV with each laid-over window (material slot 2, WIN_UV) moved to one of WIN_CELLS (hashed
-    from its first corner)."""
-    w = np.flatnonzero(np.frombuffer(mid, np.uint8) == 2)     # (the kernel's mid: bytes)
+    """The kernel's quads' UV and mid with each laid-over window (material slot 2, WIN_UV) moved to one of WIN_CELLS
+    and one of FACADE_VARIANTS (slot 2, 7 or 8: they go dark at their own hours, nightlights.lua), both hashed from its
+    first corner."""
+    mi = np.frombuffer(mid, np.uint8)               # (the kernel's mid: bytes)
+    w = np.flatnonzero(mi == 2)
     if not len(w):
-        return UV
+        return UV, mid
     uv = np.array(UV, np.float64).reshape(-1, 8)
-    cell = WIN_CELLS[_pick(np.asarray(P, np.float64).reshape(-1, 12)[w, :3], len(WIN_CELLS))]
+    pts = np.asarray(P, np.float64).reshape(-1, 12)[w, :3]
+    cell = WIN_CELLS[_pick(pts, len(WIN_CELLS))]
     uv[w, 0] = uv[w, 6] = cell[:, 0]
     uv[w, 2] = uv[w, 4] = cell[:, 1]
-    return uv.ravel().tolist()
+    mi = mi.copy()
+    mi[w] = np.array([2, 7, 8], np.uint8)[_pick(pts + (0.37, 0.11, 0.0), 3)]
+    return uv.ravel().tolist(), mi.tobytes()
 
 
-def _vary_bays(P, UV, mid, band_k, bpt, slot, to):
+def _vary_bays(P, UV, mid, band_k, bpt, slot, to, shuffle=False):
     """The kernel's quads with each bay of a window sheet (material slot slot) one of its sheet's three night variants
     (FACADE_VARIANTS, OFFICE_VARIANTS, SHOP_VARIANTS: the slots to), hashed from its first corner. A quad of band band_k
     spanning several whole bays (a floor of a wall, or a floor's piece beside its door: the kernel draws it as one quad
     over its bays) is cut at its bays, neighbours of the same variant kept as one quad: the same wall at the same scale.
+    shuffle (the curtain walls, whose bays are alike by day): each cut bay also any bay of the band (hashed), so a
+    floor's bays are 3 x bpt looks, not 3 (a tower's lit bays stood in columns, 2026-11-08).
     (Far tiles too: a variant a floor with its bays shifted drew a tower's alternating lit and dark bays as zigzags,
     2026-11-08.)"""
     pq = np.array(P, np.float64).reshape(-1, 12)
@@ -1034,9 +1045,14 @@ def _vary_bays(P, UV, mid, band_k, bpt, slot, to):
     a, b = pq[rep, 0:3], pq[rep, 3:6]
     var = np.zeros(len(rep), np.intp)
     sheet = mi[rep] == slot
-    var[sheet] = _pick((a + (b - a) * (j / n[rep])[:, None])[sheet], 3)
+    first = a + (b - a) * (j / n[rep])[:, None]
+    var[sheet] = _pick(first[sheet], 3)
+    idx = np.round(u0[rep]).astype(np.int64) + j            # each bay's bay of the band (u: idx / bpt ..)
+    if shuffle:
+        sh = cut[rep]
+        idx[sh] = _pick(first[sh] + (0.5, 0.25, 0.0), bpt)
     run = np.ones(len(rep), bool)
-    run[1:] = (rep[1:] != rep[:-1]) | (var[1:] != var[:-1])
+    run[1:] = (rep[1:] != rep[:-1]) | (var[1:] != var[:-1]) | ((idx[1:] - idx[:-1] - 1) % bpt != 0)
     s0 = np.flatnonzero(run)
     s1 = np.append(s0[1:], len(rep)) - 1
     r = rep[s0]
@@ -1048,9 +1064,9 @@ def _vary_bays(P, UV, mid, band_k, bpt, slot, to):
         za, zb = pq[r][c, 2:3], pq[r][c, 8:9]
         pa, pb = qa + (qb - qa) * (ja / nr)[:, None], qa + (qb - qa) * (jb / nr)[:, None]
         P2[c] = np.hstack([pa[:, :2], za, pb[:, :2], za, pb[:, :2], zb, pa[:, :2], zb])
-        ua = np.round(u0[r][c])
-        UV2[c, 0] = UV2[c, 6] = (ua + ja) / bpt
-        UV2[c, 2] = UV2[c, 4] = (ua + jb) / bpt
+        ua = idx[s0][c]
+        UV2[c, 0] = UV2[c, 6] = ua / bpt
+        UV2[c, 2] = UV2[c, 4] = (ua + jb - ja) / bpt
     out = mi[r].copy()
     on = out == slot
     out[on] = np.array(to, np.uint8)[var[s0][on]]

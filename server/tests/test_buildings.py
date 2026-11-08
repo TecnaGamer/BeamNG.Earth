@@ -482,6 +482,17 @@ class NightWindowsTest(unittest.TestCase):
         self.assertTrue(set(bld.OFFICE_VARIANTS) <= names, names)
         self.assertIn(bld.SHOP, names)                      # (the shopfront floor as it was)
         self.assertFalse(names & set(bld.FACADE_VARIANTS))
+        # a curtain wall's bays any bay of the band: the bays at one place on the wall differ floor to floor (their lit
+        # bays stood in columns)
+        P = np.array(m.P).reshape(-1, 4, 3)
+        uv = np.array(m.UV).reshape(-1, 8)
+        office = {bld.MATERIALS.index(f) for f in bld.OFFICE_VARIANTS}
+        quad_m = np.array(m.M[::2])
+        at = {}
+        for q, u, mi in zip(P, uv, quad_m):
+            if mi in office and np.allclose(q[:, 1], 0.0) and q[0, 2] > 4.0:
+                at.setdefault(round(float(q[0, 0]), 2), set()).add(round(float(u[0]), 4))
+        self.assertTrue(at and max(len(v) for v in at.values()) > 2, at)
 
     def test_shopfronts_take_the_shop_variants(self):
         m = self._wall(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True)
@@ -539,6 +550,8 @@ class NightWindowsTest(unittest.TestCase):
         cells = {tuple(c) for c in np.round(bld.WIN_CELLS, 6).tolist()}
         got = {(round(a, 6), round(b, 6)) for a, b in win[:, [0, 2]].tolist()}
         self.assertTrue(got <= cells and len(got) > 1, got)
+        # ... and one of the facade's night variants each (they go dark at their own hours)
+        self.assertTrue(set(bld.FACADE_VARIANTS) <= {bld.MATERIALS[i] for i in m.M})
         self.assertEqual(m.UV, self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding",
                                           door=(0, 0.5)).UV)
 
