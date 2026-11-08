@@ -115,6 +115,11 @@ def point_ground(frame, elev, key=None):
 
 
 GRADE_HALF_M = BALLAST_TOP_M + 1.2     # m: the ground graded flat to the bed line either side of a track (grade_plans)
+# An abandoned line (wear 2) is not graded: no cutting or embankment is laid for it, its worn track lies on the ground
+# as it is (tile_mesh follows the drawn ground). Its mapped remnants are often a few metres off their old bed, or the
+# bed is gone: graded to a 2 % line, they cut walls into mountainsides (GitHub #706, Nikko and Mount Haruna) and
+# trenches across the land (#837). A disused line (1) keeps its bed, graded as before.
+UNGRADED_WEAR = 2
 GRADE_REACH_M = 60.0        # m round a grading cell the lines are taken for its bed plans (the track's smoothing and the
                             # ramps near it: REACH_M's 200 m had every cell profile ~1 km of line, 8.5 of 13 s at the A11)
 
@@ -133,9 +138,11 @@ def grade_plans(frame, cells, box, elev):
     embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
     cells = list(cells)
     tunnels = road_underpasses(frame, cells, box, GRADE_REACH_M)
-    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True)
+    worn = {}
+    rails = parts(frame, cells, box, reach=GRADE_REACH_M, clip=True, worn=worn)
     if not rails:
         return []
+    ungraded = {fid for fid, w in worn.items() if w >= UNGRADED_WEAR}
     memo_key = ("dem", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
     memo = _GROUND_MEMO.setdefault(memo_key, {})
 
@@ -158,7 +165,7 @@ def grade_plans(frame, cells, box, elev):
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
     for (fid, _c, kind, xy), (zb, _zg) in zip(rails, profile(rails, ground, tunnels)):
-        if kind != "ground":
+        if kind != "ground" or fid in ungraded:
             continue
         if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
                     (box[0] - pad, box[1] - pad, box[2] + pad, box[3] + pad)):
