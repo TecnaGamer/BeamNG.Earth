@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 168 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 169 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -133,3 +133,41 @@ def md_html(text, base, fold_details=False):
     mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
     require(166, "md_html")
     return _ef.md_html(str(text), str(base), bool(fold_details))
+
+
+def ucs4(values):
+    """values (a numpy unicode array, else each one's str) as (n, width) uint32: its UCS-4 code points, NUL padded
+    (the native string kernels' input: no Python string per value)."""
+    a = np.asarray(values)
+    if a.dtype.kind != "U":
+        a = np.array([str(v) for v in a.tolist()], dtype=str)
+    a = np.ascontiguousarray(a.reshape(-1), a.dtype.newbyteorder("="))
+    w = a.dtype.itemsize // 4
+    return a.view(np.uint32).reshape(len(a), w) if w else np.zeros((len(a), 0), np.uint32)
+
+
+def way_tag_rows(codes, ids, idx):
+    """(n,) int64 per record (codes: ucs4 of Overture source records, "w<id>@<version>") the tag set index of its way in
+    a lane / rail shard (railtags.Ways: its sorted ids, their tag set indices): -1 without a way id or not in the
+    shard, -2 for railtags.way_id to decide (non-ASCII after the digits, past int64). Native waytags.rs."""
+    require(169, "way_tag_rows")
+    return _ef.way_tag_rows(codes, np.ascontiguousarray(ids, np.int64), np.ascontiguousarray(idx, np.int32))
+
+
+def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
+    """railtags.LaneTags.join's parts (native waytags.rs): (features (f,), [[(start, end, way id, tags), ...] each])
+    of the rule rows codes (ucs4 of their records) of features feature (sorted), tags the shard's tag sets (its
+    tags[k] or a new {} without), ask(k) -> (way id, tags) where railtags.way_id decides."""
+    require(169, "lane_parts")
+    return _ef.lane_parts(codes, np.ascontiguousarray(feature, np.int64), np.ascontiguousarray(start, np.float64),
+                          np.ascontiguousarray(end, np.float64), np.ascontiguousarray(ids, np.int64),
+                          np.ascontiguousarray(idx, np.int32), tags, ask)
+
+
+def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):
+    """grading.deck_capped's native work (underdeck.rs): (code, out) with code 0 z as it is, 1 z as float64, 2 out."""
+    require(169, "deck_capped")
+    off, q, sv, lb, half = flat
+    return _ef.deck_capped(pts, np.ascontiguousarray(z, np.float64), np.ascontiguousarray(la, np.float64),
+                           np.ascontiguousarray(box, np.float64), bool(test_box), off, q, sv,
+                           np.ascontiguousarray(lb, np.float64), half, float(max_m), float(side_m), float(min_cross))

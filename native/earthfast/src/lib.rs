@@ -50,6 +50,8 @@ mod gridinterp;
 mod streetlabels;
 mod perfclean;
 mod mdhtml;
+mod waytags;
+mod underdeck;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -5555,6 +5557,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
     // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
     m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
-    m.add("VERSION", 168)?;
+    m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
+    m.add("VERSION", 169)?;
     Ok(())
 }
