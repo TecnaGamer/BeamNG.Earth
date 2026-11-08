@@ -1774,11 +1774,14 @@ end
 function M.update(gov, currentAnchor, player, view, a)
   -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
   -- that asynchronous rebuild before restoring deep water over its old bore.
-  local keepWater = {}
-  for _, r in ipairs(waterReleases) do
-    if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+  if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
+    local keepWater = {}
+    for _, r in ipairs(waterReleases) do
+      if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+    end
+    waterReleases = keepWater
   end
-  waterReleases, waterReloads = keepWater, reloads
+  waterReloads = reloads
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
