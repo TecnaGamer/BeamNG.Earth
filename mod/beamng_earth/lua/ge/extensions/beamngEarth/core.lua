@@ -2165,6 +2165,14 @@ local hitches = {}
 local function mark(name, t0)
   local t = hitchClock()
   marks[name] = (marks[name] or 0) + (t - t0)
+  -- (the Lua garbage the part made since the last mark: M._alloc's per-part split for the perf lines)
+  local al = M._alloc
+  if al and al.markKb then
+    local kb = collectgarbage('count')
+    local d = kb - al.markKb
+    if d > 0 then al.cur.marks[name] = (al.cur.marks[name] or 0) + d end
+    al.markKb = kb
+  end
   return t
 end
 -- The mod's parts' ms in the last whole frame (diagnostics: a per-frame probe; not to be changed by the caller)
@@ -2198,13 +2206,13 @@ local perfMetrics = {}
 -- whose handling made the most. LuaGC frames of up to 183 ms on a fast drive (Fells Point, 2026-11-07): which part
 -- of the mod feeds the collector. One collectgarbage('count') per step: microseconds.
 -- (on M, and its helpers fields: core.lua's main chunk is at Lua's 200-local limit, not one more fits)
-M._alloc = { at = nil, kb = nil, cur = { total = 0, decode = 0, types = {} }, last = nil }
+M._alloc = { at = nil, kb = nil, markKb = nil, cur = { total = 0, decode = 0, types = {}, marks = {} }, last = nil }
 function M._alloc.roll(now)
   local alloc = M._alloc
   if not alloc.at then alloc.at = now end
   if now - alloc.at >= 60 then
     alloc.last, alloc.at = alloc.cur, now
-    alloc.cur = { total = 0, decode = 0, types = {} }
+    alloc.cur = { total = 0, decode = 0, types = {}, marks = {} }
   end
 end
 function M._alloc.frame()
@@ -2218,8 +2226,14 @@ function M._alloc.text()
   if not a then return '' end
   local top, topKb = nil, 0
   for k, v in pairs(a.types) do if v > topKb then top, topKb = k, v end end
-  return string.format(', alloc %.0f MB/min (decode %.0f%s)', a.total / 1024, a.decode / 1024,
-    top and string.format(', %s %.0f', top, topKb / 1024) or '')
+  -- the frame's parts that made the most (mark names: roads, sea+trees, far, ...)
+  local parts = {}
+  for k, v in pairs(a.marks or {}) do parts[#parts + 1] = { k, v } end
+  table.sort(parts, function(x, y) return x[2] > y[2] end)
+  local ps = {}
+  for i = 1, math.min(4, #parts) do ps[#ps + 1] = string.format('%s %.0f', parts[i][1], parts[i][2] / 1024) end
+  return string.format(', alloc %.0f MB/min (decode %.0f%s%s)', a.total / 1024, a.decode / 1024,
+    top and string.format(', msg %s %.0f', top, topKb / 1024) or '', #ps > 0 and ('; parts ' .. table.concat(ps, ', ')) or '')
 end
 local function perfEngine()
   local dbg = Engine and Engine.Debug
@@ -2344,6 +2358,7 @@ local function onUpdate(dtReal, dtSim)
   end
   prevMarks, marks = marks, prevMarks
   for k in pairs(marks) do marks[k] = nil end
+  if M._alloc then M._alloc.markKb = collectgarbage('count') end      -- (the frame's parts start counting here)
   local t = hitchClock()
   postfx.update(st.inOurLevel)
   require('beamngEarth/enginepref').update(st.inOurLevel)      -- (the settings' object detail: our level only)
