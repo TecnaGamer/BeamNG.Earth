@@ -126,6 +126,7 @@ class LocalCompanionTest(unittest.TestCase):
         self.assertTrue(self.a.cards()[0]["autostart"])
         self.a.run_op("tool", "stop")
         self.assertFalse(self.a.runner.running("tool"))
+        self.assertNotIn("exitCode", self.a.cards()[0], "a Stop is no error")
         self.a.autostart()
         self.assertTrue(self.a.runner.running("tool"), "started with BeamNG.Earth")
         self.a.run_op("tool", "uninstall")

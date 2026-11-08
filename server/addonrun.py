@@ -186,7 +186,9 @@ class Runner:
                     p.wait(STOP_WAIT_S)
                 except subprocess.TimeoutExpired:
                     pass
-        self.exits[aid] = p.returncode
+        # (stopped by the player: no error to show, whatever terminate() left as its exit code: -15 here, 1 on
+        # Windows; the card said "stopped with an error" after Stop, 2026-11-07)
+        self.exits.pop(aid, None)
         log.info("add-ons: %s stopped", aid)
 
     def stop_all(self):
