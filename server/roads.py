@@ -9641,8 +9641,10 @@ class Tracker:
             t0 = self.started.get(k)
             if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                 self.stuck_said.add(k)
-                log.warning("roads tile %s of anchor %d: building for %.0f s (%d tiles in flight, %d sent): the road "
-                            "workers may be stuck", k, aid, now - t0, len(self.building), len(self.sent))
+                # (not "may be stuck": players read it as broken and cleared their caches, which only made the next
+                # try slower; the time counts the wait for a free road process too)
+                log.warning("roads tile %s of anchor %d: not ready after %.0f s (%d tiles in flight, %d sent): "
+                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
         def far(k):
             return tile_distance(k[0], k[1], x, y) > DROP_M and (not view or tile_distance(k[0], k[1], *view) > DROP_M) \
                 and all(tile_distance(k[0], k[1], f[0], f[1]) > f[2] + TILE for f in foci)
@@ -9927,8 +9929,8 @@ class GeoTracker:
             t0 = self.started.get(k)
             if t0 is not None and now - t0 > TILE_STUCK_S and k not in self.stuck_said:
                 self.stuck_said.add(k)
-                log.warning("road geotile %s of anchor %d: building for %.0f s (%d in flight, %d sent): the road "
-                            "workers may be stuck", k, aid, now - t0, len(self.building), len(self.sent))
+                log.warning("road geotile %s of anchor %d: not ready after %.0f s (%d in flight, %d sent): "
+                            "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
 
         def far(k):
             q = geotiles.quad(frame, *k)

@@ -963,7 +963,7 @@ class TrackerTest(unittest.TestCase):
             await asyncio.sleep(0.05)
             return logs
         logs = asyncio.run(go())
-        stuck = [m for m in logs.output if "may be stuck" in m]
+        stuck = [m for m in logs.output if "not ready after" in m]
         self.assertEqual(len(stuck), len(set(stuck)), "each tile once")
         self.assertTrue(stuck)
         tr.close()
