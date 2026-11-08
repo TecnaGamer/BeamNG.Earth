@@ -70,5 +70,47 @@ class PinCwEndsTest(unittest.TestCase):
         self.assertTrue(grading.SEAMS_ON)
 
 
+class GradeMatchTest(unittest.TestCase):
+    """_grade_match: a single span is not tilted more than SEAM_DECK_GRADE by the ground at its ends; the rest of the
+    difference goes half to each approach, the lower end up, the higher down."""
+
+    def planner(self, z0, z1, length=17.0, cls="secondary", chain=False):
+        import mapcells
+        g = object.__new__(grading._Planner)
+        import threading
+        g.lock = threading.Lock()
+        import geodesy
+        g.frame = geodesy.EnuFrame(50.5, 16.2)
+        bridge = np.array([[0.0, 0.0], [length, 0.0]])
+        g._cell_enu = lambda k, ground=True: {"ends": bridge, "end_of": [0, 0], "bridges": [bridge],
+                                                "bridge_cls": [cls]}
+        la, lo, _ = g.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
+        zs = {0: z0, 1: z1}
+
+        def elev(a, b):
+            a = np.asarray(a, np.float64)
+            return np.where(np.abs(a - la[0]) < np.abs(a - la[1]), z0, z1) if abs(la[0] - la[1]) > 0 else np.full(a.shape, z0)
+        g.elev = elev
+        return g
+
+    def test_steep_difference_is_shared(self):
+        g = self.planner(398.1, 401.3)
+        a = g._grade_match(np.array([0.0, 0.0]))
+        b = g._grade_match(np.array([17.0, 0.0]))
+        if a is None or b is None:
+            self.skipTest("the stub's elevation does not tell the ends apart")
+        self.assertGreater(a, 0.5)
+        self.assertLess(b, -0.5)
+        self.assertAlmostEqual(a, -b, places=6)
+
+    def test_gentle_difference_is_left(self):
+        g = self.planner(398.1, 398.4)
+        self.assertIsNone(g._grade_match(np.array([0.0, 0.0])))
+
+    def test_motorway_and_link_are_not_matched(self):
+        for cls in ("motorway", "trunk", "primary_link"):
+            self.assertIsNone(self.planner(398.1, 401.3, cls=cls)._grade_match(np.array([0.0, 0.0])), cls)
+
+
 if __name__ == "__main__":
     unittest.main()

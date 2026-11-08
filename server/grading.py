@@ -466,6 +466,9 @@ SEAM_RUN_MAX_M = 80.0       # ... and at most this
 SEAM_SIDE_M = 3.0           # m: a road's end this close to a pinned end meets the same abutment: it goes down from it
 SEAM_SIDE_GRADE = 0.10      # ... at this grade (a street off a freeway's bridge end), over SEAM_SIDE_RUN_M at least ...
 SEAM_SIDE_RUN_M = (12.0, 40.0)
+SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
+                            # rest of their difference is shared between the two approaches (_grade_match) ...
+SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
 
 
 def median_profile(z, step, width):
@@ -2536,6 +2539,14 @@ class _Planner:
                     continue
                 got = self._end_lift(e)
                 if got is None:
+                    gm = self._grade_match(e) if SEAMS_ON else None
+                    if gm is not None and not _never_raised(specs[i]):
+                        # (the deck is the chord between its abutments: the ground at the ends 3-4 m apart over 17 m, a wall
+                        # in it, or a 2 m hump to meet it; the approaches take the difference half each, the lower up, the
+                        # higher down: road 303 at Zdrina, Velke Petrovice, 2026-11-09)
+                        a = approach_add(p.xy, at_end, abs(gm), p.half, (), SLOPE_RUN)
+                        if a is not None:
+                            add = (a if gm > 0 else -a) if add is None else add + (a if gm > 0 else -a)
                     continue
                 if _never_raised(specs[i]) and not got[3] and not (len(got) > 5 and got[5]):
                     continue
@@ -3950,6 +3961,60 @@ class _Planner:
                   [(classes[li], round(t, 1), round(w, 1)) for li, t, w in zip(cr_line, low, w_down)], lift,
                   [round(t, 1) for _p, t in out["cross"]])
         return out
+
+    def _grade_match(self, xy):
+        """m (signed) the approach at the bridge end xy is raised (> 0) or lowered (< 0) so the single span it ends is no
+        steeper than SEAM_DECK_GRADE: half of what the ground at its two ends differs by over that, the lower end up, the
+        higher down, within SEAM_MATCH_MAX_M; None for a chain, a carriageway's or never-raised class's bridge, or when the
+        slope is fine. A pure function of the map around the bridge, cached per point."""
+        k = (round(float(xy[0]) * 2), round(float(xy[1]) * 2))
+        with self.lock:
+            cache = self.__dict__.setdefault("_gm_cache", {})
+            if k in cache:
+                return cache[k]
+        res = None
+        try:
+            res = self._grade_match_calc(np.asarray(xy, np.float64))
+        except Exception as e:      # no match rather than no grading
+            log.debug("grading: grade match at %s: %s: %s", k, type(e).__name__, e)
+        with self.lock:
+            return cache.setdefault(k, res)
+
+    def _grade_match_calc(self, xy):
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
+        home = mapcells.cell_of(float(la[0]), float(lo[0]))
+        hc = self._cell_enu(home, ground=False)
+        if not len(hc["ends"]):
+            return None
+        d = np.hypot(hc["ends"][:, 0] - xy[0], hc["ends"][:, 1] - xy[1])
+        hit = np.flatnonzero(d <= APPROACH_TOUCH_M)
+        if not len(hit):
+            return None
+        bi = hc["end_of"][int(hit[0])]
+        bridge = np.asarray(hc["bridges"][bi], np.float64)[:, :2]
+        cls = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi]
+        if cls is None or cls in APPROACH_SKIP or str(cls).endswith("_link") or (
+                CW_ON and _cw.family(cls) is not None):
+            return None
+        lam, lom, _ = self.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
+        pad = 50.0 / 111320.0
+        padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lam)))))
+        keys = sorted(set(mapcells.cells_for_points(lam, lom, pad, padlon)) | {home}, key=str)
+        bridges = [b for kk in keys for b in self._cell_enu(kk, ground=False)["bridges"]]
+        if bridge_chain(bridge, bridges) or not bridge_chain_ends_free(bridge, bridges, bridge[0])                 or not bridge_chain_ends_free(bridge, bridges, bridge[-1]):
+            return None             # (a chain, or a joint: its ends are no abutments)
+        L = float(np.hypot(*np.diff(bridge, axis=0).T).sum())
+        if L < 4.0:
+            return None
+        ends = np.array([bridge[0], bridge[-1]])
+        ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
+        z = np.asarray(self.elev(ela, elo), np.float64).reshape(-1)
+        deficit = abs(float(z[1] - z[0])) - SEAM_DECK_GRADE * L
+        if deficit < 2 * APPROACH_MIN_LIFT:
+            return None
+        half = min(deficit / 2.0, SEAM_MATCH_MAX_M)
+        mine = 0 if np.hypot(*(ends[0] - xy)) <= np.hypot(*(ends[1] - xy)) else 1
+        return half if z[mine] < z[1 - mine] else -half
 
     def _end_lift_raw(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
