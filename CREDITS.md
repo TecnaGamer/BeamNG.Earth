@@ -30,6 +30,16 @@ only, nothing redistributed. Licence notes marked *(verify)* must be re-checked 
 
 ## Map data (downloaded at runtime by the companion server and cached on the player's disk)
 
+The infrastructure update also includes small verified OpenStreetMap snapshots:
+`server/data/wwvb_antennas.json`, the `osm_infrastructure_*.json` test fixtures,
+and `server/tests/fixtures/fe_warren_power_supports.json`,
+retrieved 8 November 2026 from the OpenStreetMap API. © OpenStreetMap contributors,
+ODbL-1.0; see https://www.openstreetmap.org/copyright. Original IDs, coordinates,
+tags and source URLs are retained. WWVB's selection context was checked against
+NIST's Radio Station WWVB description. See `docs/OSM_INFRASTRUCTURE_MAPPING.md`.
+Infrastructure meshes/textures are referenced from the player's installed game;
+only numeric measurements and hashes are recorded in the asset audit fixture.
+
 | Data | Provider | Used for | Licence / terms | Attribution | Status |
 |---|---|---|---|---|---|
 | IGN BD TOPO, `troncon_de_route` (road links with per-vertex heights; Geoplateforme WFS, data.geopf.fr) | IGN (Institut national de l'information geographique et forestiere) | France: measured bridge deck and tunnel floor heights, and ground road heights where the terrain is coarse (`server/roadz.py`, BNE_ROADZ); the WFS request follows Madderose's PR #456 | Licence Ouverte / Etalab 2.0 | "IGN BD TOPO (Licence Ouverte 2.0)" | branch (2026-10-29) |

@@ -33,7 +33,7 @@ class RuralLightingTest(unittest.TestCase):
     def tile(self, f, cover, tx=0):
         props = []
         roads.build_tile(FRAME, tx, 0, [f], lambda la, lo: np.zeros(np.shape(la)),
-                         cover, walks=[], props=props, lamp_region=furniture.lamp_region("US", "US-WY"))
+                         cover, walks=[], props=props, lamp_region=furniture.lamp_region("US", "US-UT"))
         return [r for r in props if r[0] in (furniture.G_LAMP, furniture.G_POLELAMP)]
 
     def test_rural_i80_parallel_pavement_is_not_urban(self):
@@ -62,6 +62,22 @@ class RuralLightingTest(unittest.TestCase):
     def test_unknown_lighting_keeps_inference(self):
         self.assertEqual(self.tile(*self.corridor(tag="unknown")), [])
         self.assertTrue(self.tile(*self.corridor(urban=True, tag="unknown")))
+
+    def test_wyoming_only_mapped_points(self):
+        self.assertEqual(furniture.lamp_region("US", "US-WY"), "na:osm-points")
+        from test_furniture import road, LampTest
+        for cls in ("motorway", "trunk", "primary", "residential"):
+            for link in (False, True):
+                for tag in (None, "yes", "no"):
+                    r = road("wy", cls, True)
+                    r = (r[0], r[1]._replace(link=link), r[2], r[3])
+                    walks = LampTest().walks(r, 1) + LampTest().walks(r, -1)
+                    rows = furniture.place([r], [], (0, 0, 256, 256), region="na:osm-points",
+                                           lighting={"wy": tag}, town=True)
+                    rows += furniture.place([r], walks, (0, 0, 256, 256), region="na:osm-points",
+                                            lighting={"wy": tag}, town=True)
+                    self.assertFalse(any(x[0] in (furniture.G_LAMP, furniture.G_POLELAMP, "fr_lantern")
+                                         for x in rows), (cls, link, tag))
 
 
 if __name__ == "__main__":

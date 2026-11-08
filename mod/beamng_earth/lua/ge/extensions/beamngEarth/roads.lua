@@ -360,6 +360,7 @@ local function dropTile(key)
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
+  if t.infrastructure then require('beamngEarth/mappedinfra').dropKey(key) end
   sea.release(t.waterguard)
   tiles[key] = nil
 end
@@ -680,6 +681,16 @@ function M.mapTurbines(pl, recs)
   return out
 end
 
+function M.mapInfrastructure(pl, recs)
+  local out = M.mapTurbines(pl, recs)
+  for _, r in ipairs(out) do
+    if type(r['end']) == 'table' and #r['end'] == 3 then
+      r['end'] = { geotile.apply(pl, unpack(r['end'])) }
+    end
+  end
+  return out
+end
+
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
@@ -722,6 +733,9 @@ local function geoRows(key, t, data, replacing)
   local turbineRows = M.mapTurbines(pl, data.turbines)
   if replacing then turbines.placeRows(key, turbineRows) else turbines.onRows(key, turbineRows) end
   t.turbines = #turbineRows > 0
+  local infraRows = M.mapInfrastructure(pl, data.infrastructure)
+  require('beamngEarth/mappedinfra').onRows(key, infraRows)
+  t.infrastructure = #infraRows > 0
   if type(data.sound) == 'table' and data.sound[1] then
     local amb = require('beamngEarth/ambience')
     local flat = M.mapFlat(pl, data.sound, 8, 2, 8)
@@ -1156,6 +1170,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   require('beamngEarth/windturbines').onRows(key, type(data.turbines) == 'table' and data.turbines or {})
   tiles[key].turbines = type(data.turbines) == 'table' and #data.turbines > 0
+  require('beamngEarth/mappedinfra').onRows(key, data.infrastructure)
+  tiles[key].infrastructure = type(data.infrastructure) == 'table' and #data.infrastructure > 0
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true

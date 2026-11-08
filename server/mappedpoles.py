@@ -1,13 +1,17 @@
-"""Mapped rural French utility poles; no roadside presence or spacing guesses.
+"""Mapped utility poles; no roadside presence or spacing guesses.
 
 Read the existing Overture infrastructure layer (OSM source tags). Only actual
 pole points produce props. A mapped minor/overhead cable or telecom line may
 connect those points; a road or an isolated line never invents supports.
-Urban scenery, other countries and the mode off retain their previous rules.
+
+BNE_MAPPED_POLES (on by default) uses the audited electric_pole_wood_old_01
+and the installed wire_30m_01 / wire_40m_01 shapes in every country, including
+France. With it off, the older opt-in French kit path remains available.
+A road with mapped poles along it gets no guessed ones (furniture.place).
 """
 import json
 import math
-import re
+import os
 
 import numpy as np
 
@@ -20,6 +24,12 @@ LINES = {"minor_line", "cable", "communication_line"}
 MATCH_M = 1.5
 MAX_SPAN_M = 80.0                 # furniture.wire_lines' existing limit
 MARGIN_M = MAX_SPAN_M + 5.0
+# (everywhere: the lines OpenStreetMap calls minor_line are mostly the 10-30 kV ones across the fields, 90-160 m
+# between their mapped poles in a German village's, up to 300; a guessed roadside run keeps 80)
+EVERYWHERE_MAX_SPAN_M = 250.0
+# Mapped poles outside the French scenery (the user, 2026-11-07: "for everywhere where it exists"): a village whose
+# poles are in OpenStreetMap got its guessed ones on the wrong roads and sides, or none (furniture.BURIED_LV)
+EVERYWHERE = os.environ.get("BNE_MAPPED_POLES", "on").lower() not in {"off", "0", "false", "no"}
 
 
 def _tags(value):
@@ -47,8 +57,21 @@ def _wire_line(cls, tags):
                                    and tags.get("location") in {"overhead", "overground"})
 
 
+def _drawable_pole(cls, tags):
+    if not _active(tags) or tags.get("power") == "tower":
+        return False
+    if (str(tags.get("communication:mobile_phone", "")).strip().lower() == "yes"
+            and tags.get("power") != "pole" and cls != "power_pole"):
+        return False  # owned by the communications tower renderer
+    if tags.get("man_made") in {"mast", "tower"} and tags.get("power") != "pole":
+        return False
+    return not (cls == "utility_pole" and tags.get("utility") and not (
+        set(str(tags["utility"]).split(";")) & {"power", "telecom"}))
+
+
 def _records(layers):
     """Stable source identity, including features repeated in adjacent map cells."""
+    import mappedinfra
     rows = {}
     for f in layers:
         if f is None or "class" not in f.attrs:
@@ -57,7 +80,7 @@ def _records(layers):
         for i in selected:
             cls = str(f.attrs["class"][i])
             source = str(f.attrs["src_record"][i]) if "src_record" in f.attrs else ""
-            key = re.sub(r"@.*$", "", source) if re.match(r"^[nw]\d+", source) else str(f.ids[i])
+            key = mappedinfra.source_id(source, f.ids[i])
             record = (str(f.ids[i]), f, i, cls)
             if key not in rows or record[0] < rows[key][0]:
                 rows[key] = record
@@ -98,17 +121,27 @@ def _style(base, tags, height):
     return poleprofiles.PoleStyle(chosen.group, h, anchors, chosen.wire_radius)
 
 
-def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
-    """Append mapped rural FR props and wires in the existing furniture formats.
+def _french_kit(pole_profile):
+    return franceroads.ON and poleprofiles.kit_enabled(pole_profile)
+
+
+def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, everywhere=False, building_rings=(),
+          connect=True, wanted=None):
+    """Append mapped poles and wires. The global path emits named infrastructure records;
+    the legacy French path emits the existing Forest rows and wire polylines.
 
     Points retain their mapped side and coordinates. Missing mapping is unknown,
     not evidence of a buried network. No photo/location-specific exception.
+    everywhere uses stock shapes globally, ignores urban_fn and preserves mapped height metadata.
     """
-    if not franceroads.ON or not poleprofiles.kit_enabled(pole_profile):
+    if not everywhere and not _french_kit(pole_profile):
         return
     import countrybounds
-    index = countrybounds.bundled()
-    choose = poleprofiles.selector(pole_profile, frame)
+    index = countrybounds.bundled() if not everywhere else None
+    import mappedinfra
+    choose = poleprofiles.selector(pole_profile, frame) if not everywhere else None
+    max_span = EVERYWHERE_MAX_SPAN_M if everywhere else MAX_SPAN_M
+    margin = max_span + 5.
     x0, y0, x1, y1 = box
     nodes, lines, high, supports = {}, [], [], []
     for key, f, i, cls, tags in _records(layers):
@@ -117,21 +150,23 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
             if not np.isfinite(ll).all():
                 continue
             lon, lat = map(float, ll)
-            if not (-5.3 < lon < 9.8 and 41.3 < lat < 51.2):
+            if not everywhere and not (-5.3 < lon < 9.8 and 41.3 < lat < 51.2):
                 continue
             x, y, _ = frame.geodetic_to_enu(lat, lon, 0.)
-            if not (x0 - MARGIN_M <= x <= x1 + MARGIN_M and y0 - MARGIN_M <= y <= y1 + MARGIN_M):
+            if not (x0 - margin <= x <= x1 + margin and y0 - margin <= y <= y1 + margin):
                 continue
             supports.append([x, y])
-            if not _active(tags):
+            if wanted is not None and key not in wanted:
                 continue
-            if index.at(lat, lon) != "FR":
+            if not _drawable_pole(cls, tags):
                 continue
-            if cls == "utility_pole" and tags.get("utility") and not (
-                    set(str(tags["utility"]).split(";")) & {"power", "telecom"}):
+            if not everywhere and index.at(lat, lon) != "FR":
                 continue
             height = f.attrs["height"][i] if "height" in f.attrs else None
-            nodes[key] = (np.array([x, y], float), lat, lon, tags, height)
+            wire_tags = dict(tags)
+            if cls == "communication_pole":
+                wire_tags.setdefault("utility", "telecom")
+            nodes[key] = (np.array([x, y], float), lat, lon, wire_tags, height)
         elif int(f.kind[i]) == 2 and _active(tags) and (cls == "power_line" or _wire_line(cls, tags)):
             for part_index, part in enumerate(f.parts(i)):
                 for ring_index, ll in enumerate(part):
@@ -141,27 +176,27 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
                     xy = np.c_[x, y]
                     # Keep neighbouring segments, not an entire 100 km line.
                     a, b = xy[:-1], xy[1:]
-                    near = ((np.maximum(a[:, 0], b[:, 0]) >= x0 - MARGIN_M)
-                            & (np.minimum(a[:, 0], b[:, 0]) <= x1 + MARGIN_M)
-                            & (np.maximum(a[:, 1], b[:, 1]) >= y0 - MARGIN_M)
-                            & (np.minimum(a[:, 1], b[:, 1]) <= y1 + MARGIN_M))
-                    if cls == "power_line":
+                    near = ((np.maximum(a[:, 0], b[:, 0]) >= x0 - margin)
+                            & (np.minimum(a[:, 0], b[:, 0]) <= x1 + margin)
+                            & (np.maximum(a[:, 1], b[:, 1]) >= y0 - margin)
+                            & (np.minimum(a[:, 1], b[:, 1]) <= y1 + margin))
+                    if cls == "power_line" and not everywhere:
                         high.extend(xy[np.r_[near, False] | np.r_[False, near]])
                         continue
                     # Separate runs avoid bridging an excursion outside the query.
                     starts = np.flatnonzero(near & ~np.r_[False, near[:-1]])
                     ends = np.flatnonzero(near & ~np.r_[near[1:], False]) + 2
-                    lines.extend(((key, part_index, ring_index, int(a)), xy[a:b]) for a, b in zip(starts, ends))
+                    lines.extend(((key, part_index, ring_index, int(a)), xy[a:b], cls) for a, b in zip(starts, ends))
     if not nodes:
         return
-    if urban_fn is not None:
+    if urban_fn is not None and not everywhere:
         keys = list(nodes)
         lat = np.array([nodes[k][1] for k in keys])
         lon = np.array([nodes[k][2] for k in keys])
         urban = np.broadcast_to(np.asarray(urban_fn(lat, lon), bool), lat.shape)
         nodes = {k: nodes[k] for k, is_urban in zip(keys, urban) if not is_urban}
-    # Existing powerlines.py already places a pylon at these high-line vertices.
-    # Do not stack a second prop where that pipeline renders the same support.
+    # The legacy French path still delegates high-line supports. The global path
+    # emits actual mapped poles; powerlines replaces its own placeholders by source ID.
     high = np.asarray(high, float).reshape(-1, 2)
     unique, occupied = {}, set()
     for key, node in sorted(nodes.items()):
@@ -177,17 +212,25 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
     points = np.array([unique[key][0] for key in keys])
     yaw, spans = {}, {}
     supports = np.asarray(supports, float)
-    for line_key, line in sorted(lines, key=lambda r: r[0]):
+    for line_key, line, line_cls in sorted(lines, key=lambda r: r[0]):
         dist, station, segment = _project(points, line)
         all_dist, all_station, _ = _project(supports, line)
         matched = np.flatnonzero(dist <= MATCH_M)
+        if everywhere:
+            # Actual way vertices establish connectivity. A nearby pole along a segment, or on a crossing
+            # unrelated way, is not evidence of membership in this circuit.
+            matched = np.array([j for j in matched if np.linalg.norm(line - points[j], axis=1).min() <= .25], int)
+            matched = np.array([j for j in matched if not (
+                line_cls != "communication_line" and unique[keys[j]][3].get("utility") == "telecom")], int)
         for j in matched:
             d = line[segment[j] + 1] - line[segment[j]]
-            yaw.setdefault(keys[j], furniture._yaw(-d[1], d[0]) % 180.)
+            yaw.setdefault(keys[j], round(furniture._yaw(-d[1], d[0]) % 180., 6) % 180.)
+        if not connect or line_cls == "power_line":
+            continue  # powerlines owns these conductors, but their mapped poles use this same pose
         matched = sorted(matched, key=lambda j: (station[j], keys[j]))
         for a, b in zip(matched[:-1], matched[1:]):
             length = float(np.linalg.norm(points[b] - points[a]))
-            if not 5. <= length <= MAX_SPAN_M or station[b] - station[a] > MAX_SPAN_M:
+            if not 5. <= length <= max_span or station[b] - station[a] > max_span:
                 continue
             if np.any((all_dist <= MATCH_M) & (all_station > station[a] + .01)
                       & (all_station < station[b] - .01)):
@@ -205,18 +248,39 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
     poles = {}
     for k, key in enumerate(keys):
         xy, _, _, tags, height = unique[key]
-        style = _style(choose(key, *xy, float(z[k])), tags, height)
-        pole = (*map(float, xy), float(z[k]), yaw.get(key, 0.), style)
+        # Global poles use measured model anchors, scaled with the mapped height and origin offset.
+        if everywhere:
+            h = mappedinfra.height(tags, height, "pole")
+            scale = h / mappedinfra.MODEL["pole"][0]
+            style = poleprofiles.PoleStyle("mapped_power_pole", h,
+                tuple(tuple(v * scale for v in p) for p in mappedinfra.POLE_ANCHORS), .008)
+            ground_z = float(z[k])
+            pole_z = ground_z - mappedinfra.MODEL["pole"][1] * scale
+        else:
+            style = _style(choose(key, *xy, float(z[k])), tags, height)
+            pole_z = float(z[k])
+        if not math.isfinite(pole_z):
+            continue
+        pole = (*map(float, xy), pole_z, yaw.get(key, 0.), style)
         poles[key] = pole
         if furniture._owns(box, *xy):
-            props.append([style.group, round(pole[0], 2), round(pole[1], 2), round(pole[2], 2),
-                          round(pole[3], 1), 1., style.height, 0.])
+            if everywhere:
+                props.append(mappedinfra.record("pole", mappedinfra.source_id(key, key), *xy, ground_z,
+                                                tags, height, pole[3], float(lat[k]), float(lon[k])))
+            else:
+                props.append([style.group, round(pole[0], 2), round(pole[1], 2), round(pole[2], 2),
+                              round(pole[3], 1), 1., style.height, 0.])
     for a, b in sorted(spans):
         # Stable source-id ownership, including reversed/repeated line geometry.
+        if a not in poles or b not in poles:
+            continue
         pa, pb = poles[a], poles[b]
         if not furniture._owns(box, pa[0], pa[1]):
             continue
         aa, ab = pa[4].wire_anchors, pb[4].wire_anchors
+        if aa is None and ab is None:   # two stock poles: the stock wires, as between guessed ones
+            wires.extend(furniture.wire_lines([pa[:4], pb[:4]], max_span=max_span))
+            continue
         if aa is None or ab is None or len(aa) != len(ab):
             continue
         def attachment(p, anchor):
@@ -224,15 +288,58 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None):
             c, s = math.cos(angle), math.sin(angle)
             x, y, z = anchor
             return (p[0] + c * x - s * y, p[1] + s * x + c * y, p[2] + z, 0.)
-        for ac, bc in zip(aa, ab):
-            wires.extend(furniture.wire_lines([attachment(pa, ac), attachment(pb, bc)],
-                         ((0., 0., 0.),), max(pa[4].wire_radius or .012, pb[4].wire_radius or .012)))
+        for conductor, (ac, bc) in enumerate(zip(aa, ab)):
+            start, end = attachment(pa, ac)[:3], attachment(pb, bc)[:3]
+            if everywhere:
+                if mappedinfra.span_clear(frame, start, end, elev, building_rings):
+                    wires.append(mappedinfra.wire_record(mappedinfra.source_id(a, a), mappedinfra.source_id(b, b),
+                                                        start, end, conductor))
+            else:
+                wires.extend(furniture.wire_lines([(*start, 0.), (*end, 0.)],
+                             ((0., 0., 0.),), max(pa[4].wire_radius or .012, pb[4].wire_radius or .012)))
 
 
-def tile_poles(frame, tx, ty, md, elev, props, wires, pole_profile, urban_fn=None):
-    if md is None or not franceroads.ON or not poleprofiles.kit_enabled(pole_profile):
+def _layers(md, frame, tx, ty, margin=MARGIN_M):
+    import roads
+    return [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+            for k in roads.cells_of_tile(frame, tx, ty, margin=margin)]
+
+
+def tile_poles(frame, tx, ty, md, elev, props, wires, pole_profile, urban_fn=None, infrastructure=None):
+    if md is None or not (EVERYWHERE or _french_kit(pole_profile)):
         return
     import roads
-    layers = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
-              for k in roads.cells_of_tile(frame, tx, ty, margin=MARGIN_M)]
-    place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, urban_fn)
+    layers = _layers(md, frame, tx, ty, EVERYWHERE_MAX_SPAN_M + 5. if EVERYWHERE else MARGIN_M)
+    if _french_kit(pole_profile) and not EVERYWHERE:
+        place(frame, roads.tile_bbox(tx, ty), layers, elev, props, wires, pole_profile, urban_fn)
+    if EVERYWHERE:
+        import worldprops as wp
+        arrays, which, starts, ends, _ = wp._building_rings(frame, wp._layer(md,
+            roads.cells_of_tile(frame, tx, ty, margin=EVERYWHERE_MAX_SPAN_M + 5.), "buildings"))
+        rings = [arrays[int(i)][int(a):int(b)] for i, a, b in zip(which, starts, ends)]
+        place(frame, roads.tile_bbox(tx, ty), layers, elev, infrastructure if infrastructure is not None else props,
+              wires, pole_profile, everywhere=True, building_rings=rings)
+
+
+def road_points(md, frame, tx, ty, pole_profile=None):
+    """(n, 2) ENU points of the mapped poles near a road tile that place(everywhere=True) draws (furniture.place's
+    mapped_poles: a road along them guesses none), or None: the mode off, no map data."""
+    if md is None or not EVERYWHERE:
+        return None
+    out = []
+    occupied = set()
+    records = list(_records(_layers(md, frame, tx, ty)))
+    for _key, f, i, cls, tags in records:
+        if cls not in POLES or int(f.kind[i]) != 1 or not _drawable_pole(cls, tags):
+            continue
+        ll = f.parts(i)[0][0][0]
+        if not np.isfinite(ll).all():
+            continue
+        lon, lat = map(float, ll)
+        x, y, _ = frame.geodetic_to_enu(lat, lon, 0.)
+        point = (round(lat, 7), round(lon, 7))
+        if point in occupied:
+            continue
+        occupied.add(point)
+        out.append((x, y))
+    return np.asarray(out, float).reshape(-1, 2)

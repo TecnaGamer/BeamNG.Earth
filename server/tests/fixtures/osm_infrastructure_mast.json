@@ -1,0 +1,20 @@
+{
+  "source": "https://api.openstreetmap.org/api/0.6/node/12495919213.json",
+  "retrieved": "2026-11-08",
+  "licence": "ODbL-1.0, copyright OpenStreetMap contributors",
+  "elements": [
+    {
+      "type": "node",
+      "id": 12495919213,
+      "lat": 41.3113556,
+      "lon": -105.628422,
+      "version": 1,
+      "tags": {
+        "communication:mobile_phone": "yes",
+        "man_made": "mast",
+        "tower:construction": "lattice",
+        "tower:type": "communication"
+      }
+    }
+  ]
+}

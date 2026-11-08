@@ -1,0 +1,1491 @@
+{
+  "source": "https://api.openstreetmap.org/api/0.6/map?bbox=-105.058,40.669,-105.032,40.688",
+  "retrieved": "2026-11-08",
+  "licence": "ODbL-1.0, copyright OpenStreetMap contributors",
+  "context": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwvb",
+  "elements": [
+    {
+      "type": "node",
+      "id": 1122692044,
+      "version": 7,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6802987,
+      "lon": -105.0516082
+    },
+    {
+      "type": "node",
+      "id": 1122695902,
+      "version": 8,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:construction": "guyed_lattice",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6815653,
+      "lon": -105.0494791
+    },
+    {
+      "type": "node",
+      "id": 1122705125,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6829624,
+      "lon": -105.0526314
+    },
+    {
+      "type": "node",
+      "id": 1122705126,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6750611,
+      "lon": -105.043691
+    },
+    {
+      "type": "node",
+      "id": 1122705130,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6767699,
+      "lon": -105.0465668
+    },
+    {
+      "type": "node",
+      "id": 1122705133,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6789089,
+      "lon": -105.0484608
+    },
+    {
+      "type": "node",
+      "id": 1122705136,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6740281,
+      "lon": -105.046037
+    },
+    {
+      "type": "node",
+      "id": 1122705137,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6723037,
+      "lon": -105.043151
+    },
+    {
+      "type": "node",
+      "id": 1124807112,
+      "version": 6,
+      "tags": {
+        "frequency": "5000000",
+        "man_made": "tower",
+        "name": "5 MHz",
+        "source:name": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6783746,
+      "lon": -105.0408163
+    },
+    {
+      "type": "node",
+      "id": 1124807113,
+      "version": 3,
+      "tags": {
+        "man_made": "tower",
+        "tower:type": "communication"
+      },
+      "lat": 40.6807201,
+      "lon": -105.0412788
+    },
+    {
+      "type": "node",
+      "id": 1124807114,
+      "version": 3,
+      "tags": {
+        "man_made": "tower",
+        "tower:type": "communication"
+      },
+      "lat": 40.678945,
+      "lon": -105.0416186
+    },
+    {
+      "type": "node",
+      "id": 1124807122,
+      "version": 6,
+      "tags": {
+        "frequency": "10000000",
+        "man_made": "tower",
+        "name": "10 MHz",
+        "source:name": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6799773,
+      "lon": -105.0408738
+    },
+    {
+      "type": "node",
+      "id": 1124807123,
+      "version": 6,
+      "tags": {
+        "frequency": "20000000",
+        "man_made": "tower",
+        "name": "20 MHz",
+        "source:name": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6814213,
+      "lon": -105.0418496
+    },
+    {
+      "type": "node",
+      "id": 1124807124,
+      "version": 6,
+      "tags": {
+        "frequency": "25000000",
+        "man_made": "tower",
+        "name": "25 MHz",
+        "source:name": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6807439,
+      "lon": -105.042392
+    },
+    {
+      "type": "node",
+      "id": 1124807125,
+      "version": 4,
+      "tags": {
+        "frequency": "2500000",
+        "man_made": "tower",
+        "name": "2.5 MHz",
+        "name:source": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6819683,
+      "lon": -105.04259
+    },
+    {
+      "type": "node",
+      "id": 1124807126,
+      "version": 6,
+      "tags": {
+        "frequency": "15000000",
+        "man_made": "tower",
+        "name": "15 MHz",
+        "source:name": "https://en.wikipedia.org/wiki/WWV_(radio_station)#Transmission_system",
+        "tower:type": "communication"
+      },
+      "lat": 40.6791658,
+      "lon": -105.0407055
+    },
+    {
+      "type": "node",
+      "id": 8552051336,
+      "version": 2,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6796658,
+      "lon": -105.0418118
+    },
+    {
+      "type": "node",
+      "id": 10719153309,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6871157,
+      "lon": -105.0382266
+    },
+    {
+      "type": "node",
+      "id": 10719153310,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6870832,
+      "lon": -105.0381596
+    },
+    {
+      "type": "node",
+      "id": 10719153311,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6866327,
+      "lon": -105.0372892
+    },
+    {
+      "type": "node",
+      "id": 10719153312,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.686261,
+      "lon": -105.0365992
+    },
+    {
+      "type": "node",
+      "id": 10719153313,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6859762,
+      "lon": -105.0360748
+    },
+    {
+      "type": "node",
+      "id": 10719153314,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6854454,
+      "lon": -105.0351106
+    },
+    {
+      "type": "node",
+      "id": 10719153315,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6858994,
+      "lon": -105.0341088
+    },
+    {
+      "type": "node",
+      "id": 10719153316,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6863662,
+      "lon": -105.0330654
+    },
+    {
+      "type": "node",
+      "id": 10719153317,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6871284,
+      "lon": -105.0330023
+    },
+    {
+      "type": "node",
+      "id": 10719153318,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.687886,
+      "lon": -105.0329299
+    },
+    {
+      "type": "node",
+      "id": 10719153319,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.688696,
+      "lon": -105.0328374
+    },
+    {
+      "type": "node",
+      "id": 10719153320,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6887901,
+      "lon": -105.0328454
+    },
+    {
+      "type": "node",
+      "id": 10719153321,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6895497,
+      "lon": -105.0329353
+    },
+    {
+      "type": "node",
+      "id": 10719153322,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6899727,
+      "lon": -105.0324243
+    },
+    {
+      "type": "node",
+      "id": 10719153323,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6906062,
+      "lon": -105.0328843
+    },
+    {
+      "type": "node",
+      "id": 10719153324,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6911991,
+      "lon": -105.0333041
+    },
+    {
+      "type": "node",
+      "id": 10719153325,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6917828,
+      "lon": -105.0337292
+    },
+    {
+      "type": "node",
+      "id": 10719153326,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6924925,
+      "lon": -105.0343428
+    },
+    {
+      "type": "node",
+      "id": 10719153327,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6931738,
+      "lon": -105.0349282
+    },
+    {
+      "type": "node",
+      "id": 10719153328,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6938617,
+      "lon": -105.035525
+    },
+    {
+      "type": "node",
+      "id": 10719153329,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6945491,
+      "lon": -105.0361211
+    },
+    {
+      "type": "node",
+      "id": 10719153330,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6952517,
+      "lon": -105.0367226
+    },
+    {
+      "type": "node",
+      "id": 10719153331,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.695783,
+      "lon": -105.0371785
+    },
+    {
+      "type": "node",
+      "id": 10719153332,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6963412,
+      "lon": -105.03766
+    },
+    {
+      "type": "node",
+      "id": 10719153333,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6968821,
+      "lon": -105.0381227
+    },
+    {
+      "type": "node",
+      "id": 10719153334,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6973437,
+      "lon": -105.0385505
+    },
+    {
+      "type": "node",
+      "id": 10719153335,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6976274,
+      "lon": -105.0385398
+    },
+    {
+      "type": "node",
+      "id": 10719153336,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6983575,
+      "lon": -105.0385237
+    },
+    {
+      "type": "node",
+      "id": 10719153337,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6990783,
+      "lon": -105.0384928
+    },
+    {
+      "type": "node",
+      "id": 10719153338,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.6997489,
+      "lon": -105.0384787
+    },
+    {
+      "type": "node",
+      "id": 10719153339,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.700421,
+      "lon": -105.0384533
+    },
+    {
+      "type": "node",
+      "id": 10719153340,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7011017,
+      "lon": -105.0384399
+    },
+    {
+      "type": "node",
+      "id": 10719153341,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7017834,
+      "lon": -105.0384271
+    },
+    {
+      "type": "node",
+      "id": 10719153342,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7022038,
+      "lon": -105.0384124
+    },
+    {
+      "type": "node",
+      "id": 10719153343,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7029155,
+      "lon": -105.0383976
+    },
+    {
+      "type": "node",
+      "id": 10719153344,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7036658,
+      "lon": -105.0383748
+    },
+    {
+      "type": "node",
+      "id": 10719153345,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7040282,
+      "lon": -105.0383634
+    },
+    {
+      "type": "node",
+      "id": 10719153346,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7046906,
+      "lon": -105.0383446
+    },
+    {
+      "type": "node",
+      "id": 10719153347,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7053667,
+      "lon": -105.0383379
+    },
+    {
+      "type": "node",
+      "id": 10719153348,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7060498,
+      "lon": -105.0383225
+    },
+    {
+      "type": "node",
+      "id": 10719153349,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7066786,
+      "lon": -105.0383295
+    },
+    {
+      "type": "node",
+      "id": 10719153350,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7073994,
+      "lon": -105.0383084
+    },
+    {
+      "type": "node",
+      "id": 10719153351,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7080841,
+      "lon": -105.0383064
+    },
+    {
+      "type": "node",
+      "id": 10719153352,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7087525,
+      "lon": -105.038289
+    },
+    {
+      "type": "node",
+      "id": 10719153353,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.709147,
+      "lon": -105.0382783
+    },
+    {
+      "type": "node",
+      "id": 10719153354,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7094865,
+      "lon": -105.0382736
+    },
+    {
+      "type": "node",
+      "id": 10719153355,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7100645,
+      "lon": -105.0382695
+    },
+    {
+      "type": "node",
+      "id": 10719153356,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7106363,
+      "lon": -105.0382491
+    },
+    {
+      "type": "node",
+      "id": 10719153357,
+      "version": 2,
+      "tags": {
+        "line_attachment": "pin",
+        "material": "wood",
+        "power": "pole"
+      },
+      "lat": 40.7112719,
+      "lon": -105.0382591
+    },
+    {
+      "type": "node",
+      "id": 10719153358,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7119426,
+      "lon": -105.0382508
+    },
+    {
+      "type": "node",
+      "id": 10719153359,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7126603,
+      "lon": -105.0382394
+    },
+    {
+      "type": "node",
+      "id": 10719153360,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7133856,
+      "lon": -105.0382313
+    },
+    {
+      "type": "node",
+      "id": 10719153361,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7141053,
+      "lon": -105.0382306
+    },
+    {
+      "type": "node",
+      "id": 10719153362,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7148209,
+      "lon": -105.0382152
+    },
+    {
+      "type": "node",
+      "id": 10719153363,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7155355,
+      "lon": -105.0382045
+    },
+    {
+      "type": "node",
+      "id": 10719153364,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7162572,
+      "lon": -105.0381938
+    },
+    {
+      "type": "node",
+      "id": 10719153365,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7169784,
+      "lon": -105.0381837
+    },
+    {
+      "type": "node",
+      "id": 10719153366,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7176721,
+      "lon": -105.038181
+    },
+    {
+      "type": "node",
+      "id": 10719153367,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7184126,
+      "lon": -105.0381629
+    },
+    {
+      "type": "node",
+      "id": 10719153368,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7191978,
+      "lon": -105.0381602
+    },
+    {
+      "type": "node",
+      "id": 10719153369,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7199713,
+      "lon": -105.0381348
+    },
+    {
+      "type": "node",
+      "id": 10719153370,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.720754,
+      "lon": -105.038116
+    },
+    {
+      "type": "node",
+      "id": 10719153371,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7214279,
+      "lon": -105.0381106
+    },
+    {
+      "type": "node",
+      "id": 10719153372,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7222054,
+      "lon": -105.0381059
+    },
+    {
+      "type": "node",
+      "id": 10719153373,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7230638,
+      "lon": -105.0380939
+    },
+    {
+      "type": "node",
+      "id": 10719153374,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.723852,
+      "lon": -105.038069
+    },
+    {
+      "type": "node",
+      "id": 10719153375,
+      "version": 1,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7246752,
+      "lon": -105.038065
+    },
+    {
+      "type": "node",
+      "id": 10719153376,
+      "version": 2,
+      "tags": {
+        "power": "pole"
+      },
+      "lat": 40.7255707,
+      "lon": -105.0380426
+    },
+    {
+      "type": "way",
+      "id": 97086165,
+      "version": 2,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705133,
+        1122705125
+      ],
+      "geometry": [
+        {
+          "lat": 40.6789089,
+          "lon": -105.0484608
+        },
+        {
+          "lat": 40.6829624,
+          "lon": -105.0526314
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 97086166,
+      "version": 2,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705126,
+        1122705137,
+        1122705136
+      ],
+      "geometry": [
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        },
+        {
+          "lat": 40.6723037,
+          "lon": -105.043151
+        },
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913046,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122692044,
+        1122705133,
+        1122695902
+      ],
+      "geometry": [
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        },
+        {
+          "lat": 40.6789089,
+          "lon": -105.0484608
+        },
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913047,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705136,
+        1122705126
+      ],
+      "geometry": [
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        },
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913048,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122695902,
+        1122705125,
+        1122692044
+      ],
+      "geometry": [
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        },
+        {
+          "lat": 40.6829624,
+          "lon": -105.0526314
+        },
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913049,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705130,
+        1122705137
+      ],
+      "geometry": [
+        {
+          "lat": 40.6767699,
+          "lon": -105.0465668
+        },
+        {
+          "lat": 40.6723037,
+          "lon": -105.043151
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913050,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122692044,
+        1122695902
+      ],
+      "geometry": [
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        },
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913051,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705136,
+        1122705130,
+        1122705126
+      ],
+      "geometry": [
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        },
+        {
+          "lat": 40.6767699,
+          "lon": -105.0465668
+        },
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 1152429961,
+      "version": 1,
+      "tags": {
+        "power": "minor_line"
+      },
+      "nodes": [
+        10719153376,
+        10719153375,
+        10719153374,
+        10719153373,
+        10719153372,
+        10719153371,
+        10719153370,
+        10719153369,
+        10719153368,
+        10719153367,
+        10719153366,
+        10719153365,
+        10719153364,
+        10719153363,
+        10719153362,
+        10719153361,
+        10719153360,
+        10719153359,
+        10719153358,
+        10719153357,
+        10719153356,
+        10719153355,
+        10719153354,
+        10719153353,
+        10719153352,
+        10719153351,
+        10719153350,
+        10719153349,
+        10719153348,
+        10719153347,
+        10719153346,
+        10719153345,
+        10719153344,
+        10719153343,
+        10719153342,
+        10719153341,
+        10719153340,
+        10719153339,
+        10719153338,
+        10719153337,
+        10719153336,
+        10719153335,
+        10719153334,
+        10719153333,
+        10719153332,
+        10719153331,
+        10719153330,
+        10719153329,
+        10719153328,
+        10719153327,
+        10719153326,
+        10719153325,
+        10719153324,
+        10719153323,
+        10719153322,
+        10719153321,
+        10719153320,
+        10719153319,
+        10719153318,
+        10719153317,
+        10719153316,
+        10719153315,
+        10719153314,
+        10719153313,
+        10719153312,
+        10719153311,
+        10719153310,
+        10719153309
+      ],
+      "geometry": [
+        {
+          "lat": 40.7255707,
+          "lon": -105.0380426
+        },
+        {
+          "lat": 40.7246752,
+          "lon": -105.038065
+        },
+        {
+          "lat": 40.723852,
+          "lon": -105.038069
+        },
+        {
+          "lat": 40.7230638,
+          "lon": -105.0380939
+        },
+        {
+          "lat": 40.7222054,
+          "lon": -105.0381059
+        },
+        {
+          "lat": 40.7214279,
+          "lon": -105.0381106
+        },
+        {
+          "lat": 40.720754,
+          "lon": -105.038116
+        },
+        {
+          "lat": 40.7199713,
+          "lon": -105.0381348
+        },
+        {
+          "lat": 40.7191978,
+          "lon": -105.0381602
+        },
+        {
+          "lat": 40.7184126,
+          "lon": -105.0381629
+        },
+        {
+          "lat": 40.7176721,
+          "lon": -105.038181
+        },
+        {
+          "lat": 40.7169784,
+          "lon": -105.0381837
+        },
+        {
+          "lat": 40.7162572,
+          "lon": -105.0381938
+        },
+        {
+          "lat": 40.7155355,
+          "lon": -105.0382045
+        },
+        {
+          "lat": 40.7148209,
+          "lon": -105.0382152
+        },
+        {
+          "lat": 40.7141053,
+          "lon": -105.0382306
+        },
+        {
+          "lat": 40.7133856,
+          "lon": -105.0382313
+        },
+        {
+          "lat": 40.7126603,
+          "lon": -105.0382394
+        },
+        {
+          "lat": 40.7119426,
+          "lon": -105.0382508
+        },
+        {
+          "lat": 40.7112719,
+          "lon": -105.0382591
+        },
+        {
+          "lat": 40.7106363,
+          "lon": -105.0382491
+        },
+        {
+          "lat": 40.7100645,
+          "lon": -105.0382695
+        },
+        {
+          "lat": 40.7094865,
+          "lon": -105.0382736
+        },
+        {
+          "lat": 40.709147,
+          "lon": -105.0382783
+        },
+        {
+          "lat": 40.7087525,
+          "lon": -105.038289
+        },
+        {
+          "lat": 40.7080841,
+          "lon": -105.0383064
+        },
+        {
+          "lat": 40.7073994,
+          "lon": -105.0383084
+        },
+        {
+          "lat": 40.7066786,
+          "lon": -105.0383295
+        },
+        {
+          "lat": 40.7060498,
+          "lon": -105.0383225
+        },
+        {
+          "lat": 40.7053667,
+          "lon": -105.0383379
+        },
+        {
+          "lat": 40.7046906,
+          "lon": -105.0383446
+        },
+        {
+          "lat": 40.7040282,
+          "lon": -105.0383634
+        },
+        {
+          "lat": 40.7036658,
+          "lon": -105.0383748
+        },
+        {
+          "lat": 40.7029155,
+          "lon": -105.0383976
+        },
+        {
+          "lat": 40.7022038,
+          "lon": -105.0384124
+        },
+        {
+          "lat": 40.7017834,
+          "lon": -105.0384271
+        },
+        {
+          "lat": 40.7011017,
+          "lon": -105.0384399
+        },
+        {
+          "lat": 40.700421,
+          "lon": -105.0384533
+        },
+        {
+          "lat": 40.6997489,
+          "lon": -105.0384787
+        },
+        {
+          "lat": 40.6990783,
+          "lon": -105.0384928
+        },
+        {
+          "lat": 40.6983575,
+          "lon": -105.0385237
+        },
+        {
+          "lat": 40.6976274,
+          "lon": -105.0385398
+        },
+        {
+          "lat": 40.6973437,
+          "lon": -105.0385505
+        },
+        {
+          "lat": 40.6968821,
+          "lon": -105.0381227
+        },
+        {
+          "lat": 40.6963412,
+          "lon": -105.03766
+        },
+        {
+          "lat": 40.695783,
+          "lon": -105.0371785
+        },
+        {
+          "lat": 40.6952517,
+          "lon": -105.0367226
+        },
+        {
+          "lat": 40.6945491,
+          "lon": -105.0361211
+        },
+        {
+          "lat": 40.6938617,
+          "lon": -105.035525
+        },
+        {
+          "lat": 40.6931738,
+          "lon": -105.0349282
+        },
+        {
+          "lat": 40.6924925,
+          "lon": -105.0343428
+        },
+        {
+          "lat": 40.6917828,
+          "lon": -105.0337292
+        },
+        {
+          "lat": 40.6911991,
+          "lon": -105.0333041
+        },
+        {
+          "lat": 40.6906062,
+          "lon": -105.0328843
+        },
+        {
+          "lat": 40.6899727,
+          "lon": -105.0324243
+        },
+        {
+          "lat": 40.6895497,
+          "lon": -105.0329353
+        },
+        {
+          "lat": 40.6887901,
+          "lon": -105.0328454
+        },
+        {
+          "lat": 40.688696,
+          "lon": -105.0328374
+        },
+        {
+          "lat": 40.687886,
+          "lon": -105.0329299
+        },
+        {
+          "lat": 40.6871284,
+          "lon": -105.0330023
+        },
+        {
+          "lat": 40.6863662,
+          "lon": -105.0330654
+        },
+        {
+          "lat": 40.6858994,
+          "lon": -105.0341088
+        },
+        {
+          "lat": 40.6854454,
+          "lon": -105.0351106
+        },
+        {
+          "lat": 40.6859762,
+          "lon": -105.0360748
+        },
+        {
+          "lat": 40.686261,
+          "lon": -105.0365992
+        },
+        {
+          "lat": 40.6866327,
+          "lon": -105.0372892
+        },
+        {
+          "lat": 40.6870832,
+          "lon": -105.0381596
+        },
+        {
+          "lat": 40.6871157,
+          "lon": -105.0382266
+        }
+      ]
+    }
+  ]
+}

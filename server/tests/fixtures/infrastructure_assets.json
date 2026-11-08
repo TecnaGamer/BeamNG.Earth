@@ -1,0 +1,676 @@
+{
+  "pylon": {
+    "sha256": "c57f69381342d2534209e657d0929c240448455c49474786706effd9c8eab3f4",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "Colmesh_s_pylon-1": {
+        "min": [
+          -3.8927542883587627,
+          -4.151576317322729,
+          -5.872508468413258
+        ],
+        "max": [
+          3.8927552883372454,
+          4.151580297716945,
+          29.817953175286107
+        ]
+      },
+      "s_pylon_L80": {
+        "min": [
+          -3.9022322890608265,
+          -4.220107322399025,
+          -5.886340469437836
+        ],
+        "max": [
+          3.902232289039235,
+          4.229496303488417,
+          29.913613182371932
+        ]
+      },
+      "s_pylon_L700": {
+        "min": [
+          -3.9022327644407957,
+          -4.28006022973854,
+          -5.8863400359716405
+        ],
+        "max": [
+          3.902232764419204,
+          4.28897009011146,
+          29.91361438626036
+        ]
+      },
+      "s_pylon_L350": {
+        "min": [
+          -3.877047604440796,
+          -4.28006022973854,
+          -5.8863400359716405
+        ],
+        "max": [
+          3.8770476044192046,
+          4.28897009011146,
+          29.91361438626036
+        ]
+      }
+    },
+    "anchors": {},
+    "materials": [
+      "ind_metal_trim",
+      "lod_vertcol",
+      "m_concrete_plain",
+      "m_gm_concrete_tiles_ground",
+      "trim_industrial"
+    ],
+    "archive": "levels/automation_test_track.zip",
+    "path": "/levels/automation_test_track/art/shapes/objects/pylon.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "ind_metal_trim": [
+        "/art/shapes/garage_and_dealership/main.materials.json"
+      ],
+      "lod_vertcol": [
+        "/art/shapes/common/common.materials.json"
+      ],
+      "m_concrete_plain": [
+        "/levels/automation_test_track/art/shapes/buildings/main.materials.json",
+        "/levels/west_coast_usa/art/shapes/buildings/main.materials.json"
+      ],
+      "m_gm_concrete_tiles_ground": [
+        "/levels/automation_test_track/art/shapes/buildings/main.materials.json"
+      ],
+      "trim_industrial": [
+        "/levels/automation_test_track/art/shapes/buildings/main.materials.json"
+      ]
+    },
+    "texture_references": {
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_ao.data.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_b.color.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_m.data.png": "installed DDS",
+      "/assets/materials/trim/metal/m_metal_trim/ind_metal_trim_nm.normal.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_o.data.png": "installed DDS",
+      "/assets/materials/breakup/utah_breakup/utah_breakup_texture.dds": "installed",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_r.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_concrete_plain/t_concrete_plain_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_concrete_plain/t_concrete_plain_b.color.png": "installed DDS",
+      "/levels/automation_test_track/art/terrains/t_macro_asphalt_b.color.png": "installed DDS",
+      "/levels/automation_test_track/art/terrains/t_macro_asphalt_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_concrete_plain/t_concrete_plain_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_concrete_plain/t_concrete_plain_r.data.png": "installed DDS",
+      "/assets/materials/breakup/t_breakup_general/t_breakup_general_b.color.png": "installed DDS",
+      "/assets/materials/breakup/t_breakup_general/t_breakup_general_o.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/t_concrete_plain_detail/t_concrete_plain_detail.data.png": "installed DDS",
+      "/assets/materials/breakup/t_breakup_general/t_breakup_general_r.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/m_gm_concrete_tiles_ground/t_gm_concrete_tiles_ground_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/m_gm_concrete_tiles_ground/t_gm_concrete_tiles_ground_d.color.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_m_gm_concrete_tiles_ground/t_gm_concrete_tiles_ground_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/concrete/att_m_gm_concrete_tiles_ground/t_gm_concrete_tiles_ground_r.data.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_ao.data.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_b.color.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_m.data.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_nm.normal.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_o.data.png": "installed DDS",
+      "/assets/materials/trim/metal/trim_industrial/t_trim_industrial_r.data.png": "installed DDS"
+    }
+  },
+  "celltower": {
+    "sha256": "5605c6fb84e28eef24492c508966cd5f8a231d23fb9cfcedeffd3de8082b5746",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "celltower_a250": {
+        "min": [
+          -2.735696,
+          -1.753393,
+          -0.02262997
+        ],
+        "max": [
+          2.720203,
+          3.092386,
+          28.91397
+        ]
+      },
+      "celltower_a500": {
+        "min": [
+          -2.735696,
+          -1.812604,
+          -0.02262997
+        ],
+        "max": [
+          2.720203,
+          3.092386,
+          28.91397
+        ]
+      },
+      "Colmesh-1": {
+        "min": [
+          -2.59113,
+          -1.623313,
+          -0.02262997
+        ],
+        "max": [
+          2.59113,
+          2.864656,
+          28.90733
+        ]
+      }
+    },
+    "anchors": {},
+    "materials": [
+      "catchfence",
+      "concrete_plain",
+      "industrial",
+      "lod_vertcol",
+      "metal_galvanized",
+      "metal_plates",
+      "power_cables"
+    ],
+    "archive": "levels/johnson_valley.zip",
+    "path": "/levels/johnson_valley/art/shapes/misc/celltower.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "catchfence": [
+        "/levels/automation_test_track/art/shapes/objects/main.materials.json",
+        "/levels/johnson_valley/art/shapes/misc/main.materials.json",
+        "/levels/west_coast_usa/art/shapes/objects/main.materials.json"
+      ],
+      "concrete_plain": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "industrial": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "lod_vertcol": [
+        "/art/shapes/common/common.materials.json"
+      ],
+      "metal_galvanized": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "metal_plates": [
+        "/levels/johnson_valley/art/shapes/misc/main.materials.json",
+        "/levels/west_coast_usa/art/shapes/objects/main.materials.json"
+      ],
+      "power_cables": [
+        "/levels/johnson_valley/art/shapes/misc/main.materials.json",
+        "/levels/west_coast_usa/art/shapes/objects/main.materials.json"
+      ]
+    },
+    "texture_references": {
+      "/assets/materials/tileable/metal/catchfence/t_catchfence_01_b.color.png": "installed DDS",
+      "/assets/materials/tileable/metal/catchfence/t_catchfence_01_m.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/catchfence/t_catchfence_01_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/metal/catchfence/t_catchfence_01_o.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/catchfence/t_catchfence_01_r.data.png": "installed DDS",
+      "/assets/materials/baked_props/catchfence/catchfence_d.dds": "installed",
+      "/assets/materials/baked_props/catchfence/catchfence_n.dds": "installed",
+      "/assets/materials/baked_props/catchfence/catchfence_s.dds": "installed",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_ao.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_b.color.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_m.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_nm.normal.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_o.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_r.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_galvanized/t_metal_galvanized_01_b.color.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_galvanized/t_metal_galvanized_02_m.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_galvanized/t_metal_galvanized_02_r.data.png": "installed DDS",
+      "/assets/materials/breakup/t_breakup_general/t_breakup_general_b.color.png": "installed DDS",
+      "/assets/materials/breakup/t_breakup_general/t_breakup_general_o.data.png": "installed DDS",
+      "/assets/materials/baked_props/metal_plates/metal_plates_d.dds": "installed",
+      "/assets/materials/baked_props/metal_plates/metal_plates_n.dds": "installed",
+      "/assets/materials/baked_props/metal_plates/metal_plates_r.dds": "installed",
+      "/assets/materials/baked_props/metal_plates/metal_plates_s.dds": "installed",
+      "/assets/materials/tileable/metal/metal_plates/t_metal_plates_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_plates/t_metal_plates_b.color.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_plates/t_metal_plates_m.data.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_plates/t_metal_plates_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/metal/metal_plates/t_metal_plates_r.data.png": "installed DDS",
+      "/assets/materials/baked_props/cables/cables_d.dds": "installed",
+      "/assets/materials/baked_props/cables/cables_n.dds": "installed",
+      "/assets/materials/baked_props/cables/cables_s.dds": "installed",
+      "/assets/materials/trim/plastic/power_cables/t_power_cables_b.color.png": "installed DDS",
+      "/assets/materials/trim/plastic/power_cables/t_power_cables_o.data.png": "installed DDS"
+    }
+  },
+  "mast": {
+    "sha256": "523c4eb48cc1eff02b64ef2b2f3bad8bf74dbcb01d1db35b4f63b20273e58faa",
+    "up_axis": "Z_UP",
+    "unit": {
+      "meter": "1",
+      "name": "meter"
+    },
+    "nodes": {
+      "italy_bld_antenna_a667": {
+        "min": [
+          -1.8495284473,
+          -1.8364193039999999,
+          -0.4217695501
+        ],
+        "max": [
+          1.8497105527,
+          1.836830696,
+          29.5348848499
+        ]
+      },
+      "italy_bld_antenna_a34": {
+        "min": [
+          -1.8431133353,
+          -1.796916316,
+          -0.42176583780000004
+        ],
+        "max": [
+          1.8521805367000004,
+          1.8404499680000002,
+          29.534899624600005
+        ]
+      },
+      "Colmesh-1": {
+        "min": [
+          -1.6859084473000001,
+          -1.685794304,
+          -0.4217743802000001
+        ],
+        "max": [
+          1.6860915527000002,
+          1.6862056960000003,
+          22.888923664600004
+        ]
+      }
+    },
+    "anchors": {},
+    "materials": [
+      "italy_antenna",
+      "italy_bld_electric_wire",
+      "italy_bld_metal",
+      "italy_bld_old_concrete",
+      "lod_vertcol"
+    ],
+    "archive": "levels/italy.zip",
+    "path": "/levels/italy/art/shapes/buildings/italy_bld_antenna.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "italy_antenna": [
+        "/levels/italy/art/shapes/buildings/main.materials.json"
+      ],
+      "italy_bld_electric_wire": [],
+      "italy_bld_metal": [
+        "/art/shapes/garage_and_dealership/Clutter/main.materials.json"
+      ],
+      "italy_bld_old_concrete": [],
+      "lod_vertcol": [
+        "/art/shapes/common/common.materials.json"
+      ]
+    },
+    "texture_references": {
+      "/assets/materials/trim/metal/italy_antenna/italy_antenna_d.dds": "installed",
+      "/assets/materials/trim/metal/italy_antenna/italy_antenna_n.dds": "installed",
+      "/assets/materials/trim/metal/italy_antenna/italy_antenna_s.dds": "installed",
+      "/assets/materials/tileable/metal/italy_bld_metal/t_italy_bld_metal_b.color.png": "installed DDS",
+      "/assets/materials/tileable/metal/italy_bld_metal/t_italy_bld_metal_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/metal/italy_bld_metal/t_italy_bld_metal_r.data.png": "installed DDS"
+    }
+  },
+  "tower": {
+    "sha256": "37f655f2c0720dff131912b6d8f6b754056e7c03cd642b901cc03a9251ebdf27",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "s_antenna_L120": {
+        "min": [
+          -4.094851,
+          -4.094851,
+          0.0
+        ],
+        "max": [
+          4.094851,
+          4.094851,
+          61.14521
+        ]
+      },
+      "s_antenna_L50": {
+        "min": [
+          -4.094851,
+          -4.094851,
+          0.0
+        ],
+        "max": [
+          4.094851,
+          4.094851,
+          48.45651
+        ]
+      },
+      "Colmesh_s_antenna-1": {
+        "min": [
+          -4.539580532473,
+          -4.5603174836177,
+          -3.179352
+        ],
+        "max": [
+          4.4622273191531,
+          4.4155761387115,
+          60.8822
+        ]
+      },
+      "s_antenna_L2000": {
+        "min": [
+          -4.510066,
+          -4.510059,
+          -1.8
+        ],
+        "max": [
+          4.510062,
+          4.510064,
+          60.8822
+        ]
+      },
+      "s_antenna_L600": {
+        "min": [
+          -4.510064,
+          -4.510061,
+          -1.8
+        ],
+        "max": [
+          4.510062,
+          4.510063,
+          60.8822
+        ]
+      },
+      "s_antenna_L250": {
+        "min": [
+          -4.5100631919972,
+          -4.510061075258251,
+          -1.658544
+        ],
+        "max": [
+          4.5100622572082,
+          4.5100627246027,
+          60.66708
+        ]
+      }
+    },
+    "anchors": {},
+    "materials": [
+      "concrete_plain",
+      "construction",
+      "industrial",
+      "lod_vertcol"
+    ],
+    "archive": "levels/west_coast_usa.zip",
+    "path": "/levels/west_coast_usa/art/shapes/buildings/antenna.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "concrete_plain": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "construction": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "industrial": [
+        "/art/shapes/objects/main.materials.json"
+      ],
+      "lod_vertcol": [
+        "/art/shapes/common/common.materials.json"
+      ]
+    },
+    "texture_references": {
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_b.color.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/concrete/concrete_plain/t_concrete_plain_r.data.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_ao.data.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_b.color.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_e.color.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_nm.normal.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_o.data.png": "installed DDS",
+      "/assets/materials/atlas/construction/t_construction_r.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_ao.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_b.color.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_m.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_nm.normal.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_o.data.png": "installed DDS",
+      "/assets/materials/baked_props/t_industrial/t_industrial_r.data.png": "installed DDS"
+    }
+  },
+  "pole": {
+    "sha256": "65878aaee3ce6c070723dfa4ff6d12d2d4919e7459847c89ad42788c59d954c9",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "electric_pole_wood_old_01_a700": {
+        "min": [
+          -0.7310104,
+          -0.1889804,
+          -0.08351135
+        ],
+        "max": [
+          0.7689895,
+          0.1161192,
+          9.962272
+        ]
+      },
+      "electric_pole_wood_old_01_a150": {
+        "min": [
+          -0.7310104,
+          -0.2052985,
+          -0.08357721
+        ],
+        "max": [
+          0.7689895,
+          0.1214421,
+          9.916511
+        ]
+      },
+      "Colmesh_electric_pole_wood_old_01-1": {
+        "min": [
+          -0.7310104,
+          -0.1891471,
+          -0.08339232
+        ],
+        "max": [
+          0.7689895,
+          0.162312,
+          9.948142
+        ]
+      },
+      "electric_pole_wood_old_01_a60": {
+        "min": [
+          -0.7310104,
+          -0.1470904,
+          -0.08357721
+        ],
+        "max": [
+          0.7689895,
+          0.1214421,
+          9.916511
+        ]
+      }
+    },
+    "anchors": {
+      "anchorPoint_5": [
+        0.6190262,
+        -0.1304009,
+        6.192549
+      ],
+      "anchorPoint_7": [
+        0.2690277,
+        -0.1304009,
+        6.192549
+      ],
+      "anchorPoint_8": [
+        -0.2309723,
+        -0.1304009,
+        6.192549
+      ],
+      "anchorPoint_9": [
+        -0.5809707,
+        -0.1304009,
+        6.192549
+      ],
+      "anchorPoint_6": [
+        0.6694779,
+        -0.125222,
+        7.245391
+      ],
+      "anchorPoint_10": [
+        -0.6304421,
+        -0.125222,
+        7.245351
+      ],
+      "anchorPoint_11": [
+        -0.5226234,
+        0.003783733,
+        9.209692
+      ]
+    },
+    "materials": [
+      "ind_metal_trim",
+      "m_electric_wires",
+      "m_oldwood"
+    ],
+    "archive": "art_shapes.zip",
+    "path": "/art/shapes/common/power_lines_procedural/electric_pole_wood_old_01.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "ind_metal_trim": [
+        "/art/shapes/garage_and_dealership/main.materials.json"
+      ],
+      "m_electric_wires": [
+        "/art/shapes/common/power_lines_procedural/main.materials.json"
+      ],
+      "m_oldwood": [
+        "/art/shapes/common/power_lines_procedural/main.materials.json"
+      ]
+    },
+    "texture_references": {
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_ao.data.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_b.color.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_m.data.png": "installed DDS",
+      "/assets/materials/trim/metal/m_metal_trim/ind_metal_trim_nm.normal.png": "installed DDS",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_o.data.png": "installed DDS",
+      "/assets/materials/breakup/utah_breakup/utah_breakup_texture.dds": "installed",
+      "/assets/materials/trim/metal/ind_metal_trim/ind_metal_trim_r.data.png": "installed DDS",
+      "/assets/materials/tileable/wood/oldwood/t_old_wood_ao.data.png": "installed DDS",
+      "/assets/materials/tileable/wood/oldwood/t_old_wood_b.color.png": "installed DDS",
+      "/assets/materials/tileable/wood/oldwood/t_old_wood_nm.normal.png": "installed DDS",
+      "/assets/materials/tileable/wood/oldwood/t_old_wood_r.data.png": "installed DDS"
+    }
+  },
+  "wire30": {
+    "sha256": "6ffa320bf00e1a6a2f7a309cb3bb2bf9160dbb2787253f078927686983f6a966",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "wire_30m_a500": {
+        "min": [
+          -0.0016281,
+          -0.007794201,
+          -1.278578
+        ],
+        "max": [
+          30.00138,
+          0.007794201,
+          0.004447102
+        ]
+      },
+      "Colmesh_wire_30m-1": {
+        "min": [
+          -0.0016281,
+          -0.007794201,
+          -1.278578
+        ],
+        "max": [
+          30.00138,
+          0.007794201,
+          0.004447102
+        ]
+      }
+    },
+    "anchors": {
+      "anchorPoint_3": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "anchorPoint_4": [
+        30.0,
+        0.0,
+        0.0
+      ]
+    },
+    "materials": [
+      "m_electric_wires"
+    ],
+    "archive": "art_shapes.zip",
+    "path": "/art/shapes/common/power_lines_procedural/wire_30m_01.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "m_electric_wires": [
+        "/art/shapes/common/power_lines_procedural/main.materials.json"
+      ]
+    },
+    "texture_references": {}
+  },
+  "wire40": {
+    "sha256": "ba0a142dd30e89498837f928971e3696da616be7a15beaa68e2d9b80a38e8550",
+    "up_axis": "Z_UP",
+    "unit": {
+      "name": "meter",
+      "meter": "1"
+    },
+    "nodes": {
+      "wire_40m_01_a500": {
+        "min": [
+          -0.001229882,
+          -0.007794201,
+          -1.278578
+        ],
+        "max": [
+          40.00104,
+          0.007794201,
+          0.00446999
+        ]
+      }
+    },
+    "anchors": {
+      "anchorPoint_1": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "anchorPoint_2": [
+        40.0,
+        0.0,
+        0.0
+      ]
+    },
+    "materials": [
+      "m_electric_wires"
+    ],
+    "archive": "art_shapes.zip",
+    "path": "/art/shapes/common/power_lines_procedural/wire_40m_01.dae",
+    "resource_type": "COLLADA shape",
+    "material_files": {
+      "m_electric_wires": [
+        "/art/shapes/common/power_lines_procedural/main.materials.json"
+      ]
+    },
+    "texture_references": {}
+  }
+}

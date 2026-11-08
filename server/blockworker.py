@@ -30,6 +30,7 @@ import geodesy
 import grading as gradingmod
 import heightmap
 import mapdata as mapdatamod
+import mappedpoles
 import netfetch
 import plancache
 import roadwidth as roadwidthmod
@@ -633,10 +634,12 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None):
     import revisit
     import threedmr
+    import mappedinfra
     k = revisit.key("roads", round(float(lat), 7), round(float(lon), 7), zoom, tx, ty, bool(sidewalks), float(lift),
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
-                    pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)))
+                    pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
+                    mappedinfra.signature(), furniture.LIGHTING_VERSION)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), md=_md_versions(), pole_profile=pole_profile)
@@ -833,6 +836,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads)
     mark("fuel")
     props = [] if buildings else None
+    infrastructure = []
     lines = [] if buildings else None
     wires = [] if buildings else None
     signs = [] if buildings and poleprofiles.kit_enabled(pole_profile) else None
@@ -850,7 +854,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
-            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev)
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev,
+                                                   mapped_lamps=lamp_region == "na:osm-points")
             skip = frozenset(skip) | frozenset(barn_ids)
         except Exception as ex:
             log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
@@ -910,7 +915,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
-                                 clearance_out=clearance, towns=towns)
+                                 clearance_out=clearance, towns=towns,
+                                 # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
+                                 mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
+                                               if props is not None else None))
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground
@@ -1038,9 +1046,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # past the tile planned the grading of 12 more map cells per road tile (16 cells planned, 40 roads cells read
         # for one Szeged tile against 1.6.3's 4 and 16; the grading only moves ground near roads, which towers keep off)
         powerlines.tile_lines(frame, tx, ty, _s.md, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
-                              props, wires, clearance=clearance[0] if clearance else None)
-        import mappedpoles
-        mappedpoles.tile_poles(frame, tx, ty, _s.md, elev, props, wires, pole_profile, urban)
+                              props, wires, clearance=clearance[0] if clearance else None, pole_elev=drawn,
+                              infrastructure=infrastructure)
+        mappedpoles.tile_poles(frame, tx, ty, _s.md, drawn, props, wires, pole_profile, urban,
+                               infrastructure=infrastructure)
+        import mappedinfra
+        infrastructure.extend(mappedinfra.tile_structures(frame, tx, ty, _s.md, drawn))
         import fences
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
@@ -1080,6 +1091,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
+    P.infrastructure = infrastructure
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
@@ -1105,6 +1117,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
+                              infrastructure=getattr(P, "infrastructure", ()),
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
                               barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces) + (P.fuel_pads,)
@@ -1207,6 +1220,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         # (roads.write_tile writes the shapes and the rows; its names are the anchor tile's: written aside, renamed)
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
                                    P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
+                                   infrastructure=getattr(P, "infrastructure", ()),
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    signs=getattr(P, "signs", None), custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
@@ -1272,9 +1286,11 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     built in: threedmr.local_signature)."""
     import revisit
     import threedmr
+    import mappedinfra
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
-                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir))
+                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), mappedinfra.signature(),
+                       furniture.LIGHTING_VERSION)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,

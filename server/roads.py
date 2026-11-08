@@ -8918,7 +8918,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
-               sign_obstacles=None, roadside_jobs=None, towns=None):
+               sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -8938,7 +8938,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     vaults), also used by powerlines.tile_lines. development: a local context (development.py) sampled only by
     furniture.place for the street trees, hydrants, benches and bins on these sidewalks. towns(roads, box,
     left_hand, rings) -> prop rows: the town entry and exit signs among props (townentry.Towns.maker; BNE_TOWNSIGNS;
-    rings: the roundabout rings' ids, which have none). Pure given its inputs (sorted by feature id)."""
+    rings: the roundabout rings' ids, which have none). mapped_poles: furniture.place's (the mapped utility poles'
+    points: no guessed ones along them). Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
     import furniture
@@ -9420,7 +9421,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs,
+                                     defer_gore=detailed_signs, mapped_poles=mapped_poles,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if signs is not None and props is not None:
@@ -10129,7 +10130,8 @@ def sound_boxes(chunks):
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
-               bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None):
+               bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
+               infrastructure=()):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -10158,6 +10160,17 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["wells"] = list(wells)
     if turbines:                                            # mapped OSM wind turbines (near collision owners)
         data["turbines"] = list(turbines)
+    mapped = (list(infrastructure or ()) + [p for p in (props or ()) if isinstance(p, dict)]
+              + [w for w in (wires or ()) if isinstance(w, dict)])
+    props = [p for p in (props or ()) if not isinstance(p, dict)]
+    if mapped:
+        # Transmission supports now follow the same tile ownership as their wire spans.
+        # Their named TSStatic records replace the corresponding legacy Forest rows.
+        replaced = {(r["forestGroup"], round(r["x"], 2), round(r["y"], 2), round(r["z"], 2))
+                    for r in mapped if r.get("forestGroup")}
+        props = [p for p in props if (p[0], p[1], p[2], p[3]) not in replaced]
+        data["infrastructure"] = sorted({r["id"]: r for r in mapped}.values(), key=lambda r: r["id"])
+    wires = [w for w in (wires or ()) if not isinstance(w, dict)]
     if road_mesh is not None:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"road_{aid}_{tx}_{ty}.cdae"

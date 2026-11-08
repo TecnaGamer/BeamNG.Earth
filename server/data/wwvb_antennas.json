@@ -1,0 +1,341 @@
+{
+  "source": "https://api.openstreetmap.org/api/0.6/map?bbox=-105.058,40.669,-105.032,40.688",
+  "retrieved": "2026-11-08",
+  "licence": "ODbL-1.0, copyright OpenStreetMap contributors",
+  "context": "https://www.nist.gov/pml/time-and-frequency-division/time-distribution/radio-station-wwvb",
+  "elements": [
+    {
+      "type": "node",
+      "id": 1122692044,
+      "version": 7,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6802987,
+      "lon": -105.0516082
+    },
+    {
+      "type": "node",
+      "id": 1122695902,
+      "version": 8,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:construction": "guyed_lattice",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6815653,
+      "lon": -105.0494791
+    },
+    {
+      "type": "node",
+      "id": 1122705125,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6829624,
+      "lon": -105.0526314
+    },
+    {
+      "type": "node",
+      "id": 1122705126,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6750611,
+      "lon": -105.043691
+    },
+    {
+      "type": "node",
+      "id": 1122705130,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6767699,
+      "lon": -105.0465668
+    },
+    {
+      "type": "node",
+      "id": 1122705133,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB North",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6789089,
+      "lon": -105.0484608
+    },
+    {
+      "type": "node",
+      "id": 1122705136,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6740281,
+      "lon": -105.046037
+    },
+    {
+      "type": "node",
+      "id": 1122705137,
+      "version": 6,
+      "tags": {
+        "communication:radio": "yes",
+        "height": "122",
+        "man_made": "tower",
+        "name": "WWVB South",
+        "tower:function": "radiator",
+        "tower:type": "communication",
+        "wikipedia": "en:WWVB#Antennas"
+      },
+      "lat": 40.6723037,
+      "lon": -105.043151
+    },
+    {
+      "type": "way",
+      "id": 97086165,
+      "version": 2,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705133,
+        1122705125
+      ],
+      "geometry": [
+        {
+          "lat": 40.6789089,
+          "lon": -105.0484608
+        },
+        {
+          "lat": 40.6829624,
+          "lon": -105.0526314
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 97086166,
+      "version": 2,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705126,
+        1122705137,
+        1122705136
+      ],
+      "geometry": [
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        },
+        {
+          "lat": 40.6723037,
+          "lon": -105.043151
+        },
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913046,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122692044,
+        1122705133,
+        1122695902
+      ],
+      "geometry": [
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        },
+        {
+          "lat": 40.6789089,
+          "lon": -105.0484608
+        },
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913047,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705136,
+        1122705126
+      ],
+      "geometry": [
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        },
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913048,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122695902,
+        1122705125,
+        1122692044
+      ],
+      "geometry": [
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        },
+        {
+          "lat": 40.6829624,
+          "lon": -105.0526314
+        },
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913049,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705130,
+        1122705137
+      ],
+      "geometry": [
+        {
+          "lat": 40.6767699,
+          "lon": -105.0465668
+        },
+        {
+          "lat": 40.6723037,
+          "lon": -105.043151
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913050,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122692044,
+        1122695902
+      ],
+      "geometry": [
+        {
+          "lat": 40.6802987,
+          "lon": -105.0516082
+        },
+        {
+          "lat": 40.6815653,
+          "lon": -105.0494791
+        }
+      ]
+    },
+    {
+      "type": "way",
+      "id": 759913051,
+      "version": 1,
+      "tags": {
+        "frequency": "60000",
+        "power": "line"
+      },
+      "nodes": [
+        1122705136,
+        1122705130,
+        1122705126
+      ],
+      "geometry": [
+        {
+          "lat": 40.6740281,
+          "lon": -105.046037
+        },
+        {
+          "lat": 40.6767699,
+          "lon": -105.0465668
+        },
+        {
+          "lat": 40.6750611,
+          "lon": -105.043691
+        }
+      ]
+    }
+  ]
+}

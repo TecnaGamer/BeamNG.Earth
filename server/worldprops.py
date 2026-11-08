@@ -55,7 +55,7 @@ BILL_ROAD_M = 120.0
 ROAD_MARGIN_M = 140.0
 
 
-def tile_props(frame, tx, ty, md, elev):
+def tile_props(frame, tx, ty, md, elev, mapped_lamps=False):
     """(rows, barn ids) of road tile (tx, ty). barn ids are the footprints replaced by the stock barn
     (buildings.road_tile_items skip). elev(lat, lon) is the ground. md None, or a cell that cannot be
     read, yields nothing of that layer."""
@@ -75,6 +75,8 @@ def tile_props(frame, tx, ty, md, elev):
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
     for feats, rows in infra:
+        if mapped_lamps:
+            _street_lamps(frame, feats, rows, (x0, y0, x1, y1), placed)
         _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
         _billboards(frame, feats, rows, (x0, y0, x1, y1), roads_xy, placed)
     for feats, rows in land:
@@ -103,6 +105,32 @@ def tile_props(frame, tx, ty, md, elev):
         rows.append([p["group"], round(p["x"], 2), round(p["y"], 2), round(float(zz) + p["lift"], 2),
                      round(p["yaw"], 1), 1.0, round(p["h"], 2), round(p["rank"], 4)])
     return rows, skip
+
+
+def _street_lamps(frame, feats, rows, box, placed):
+    """Actual OSM lamp nodes only; no interpolation along lit ways."""
+    import mappedinfra
+    import mappedpoles
+    cls = _cls(feats)
+    for i in (range(len(feats.kind)) if rows is None else rows):
+        if int(feats.kind[i]) != mapgeom.POINT:
+            continue
+        source = feats.attrs.get("src_record", [""] * len(feats.kind))[i]
+        fid = mappedinfra.source_id(source, feats.ids[i])
+        tags = _tags_of(feats, i)
+        if not fid.startswith("osm:node:") or not mappedpoles._active(tags):
+            continue
+        if tags.get("highway") != "street_lamp" and (cls is None or str(cls[i]) != "street_lamp"):
+            continue
+        xy = _ring_xy(feats, i, frame)
+        if xy is None:
+            continue
+        x, y = _centre(xy)
+        if not _inside(x, y, box) or any(p.get("lamp_id") == fid for p in placed):
+            continue
+        la, lo = _ll(frame, x, y)
+        placed.append({"group": "streetlight", "x": x, "y": y, "lat": la, "lon": lo,
+                       "lift": 0., "h": 9., "yaw": 0., "rank": 0., "lamp_id": fid})
 
 
 class _Once:
@@ -248,12 +276,22 @@ def _ll(frame, x, y):
 
 
 def _towers(frame, feats, rows, box, placed):
+    import mappedinfra
     cls = _cls(feats)
     if cls is None:
         return
     ids = getattr(feats, "ids", None)
     for i in (range(len(feats.kind)) if rows is None else rows.tolist()):
         kind = str(cls[i])
+        # Communications structures use mappedinfra's audited stock shapes and stable source IDs.
+        # Specialized water/radar/etc. handling below remains independent.
+        tags = _tags_of(feats, i)
+        if kind in CELL_CLASSES:
+            import mappedpoles
+            if not mappedpoles._active(tags) or tags.get("power"):
+                continue
+        if mappedinfra.asset_for(kind, tags):
+            continue
         if kind in CELL_CLASSES:
             group, h, lift = "celltower", CELL_H, CELL_LIFT
         elif kind in WATER_CLASSES:

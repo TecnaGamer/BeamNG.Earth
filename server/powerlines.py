@@ -200,21 +200,23 @@ def _off_roads(frame, md, e, n, ll, clear_m=None):
     return e, n
 
 
-def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
+def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None, pole_elev=None, infrastructure=None):
     """Add road tile (tx, ty)'s towers, gantries, substation yards (props rows, furniture.place's form) and conductors
     (wires polylines) of the power lines near it; elev(lat, lon): the ground. clearance is build_tile's shared
     RoadClearance: sampled tapers and actual shifted / sidewalk-expanded decks, never tunnel vaults. Full stock
     colliders are checked AFTER native layout (which decides tower yaw). Unlike moving a point away from one road,
-    this also covers crossroads, a rotated tower's corners and services. A tower with no safe footprint is omitted;
-    its overhead conductors remain, not cut at a tile boundary."""
+    this also covers crossroads, a rotated tower's corners and services. infrastructure receives the streamed
+    visible supports, including render-only ones where a collider is unsafe and the endpoints of visible spans.
+    Forest rows remain for older callers; write_tile removes their duplicates when support records are present."""
     import roads
     if md is None:
         return
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
-    lines, poles, seen = [], [], set()
+    lines, poles, seen, layers, cables = [], [], set(), [], {}
     for key in cells:
         f = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+        layers.append((key, f))
         if f is None or not len(f.kind) or f.attrs.get("class") is None:
             continue
         cls, tags = f.attrs["class"].astype(str), f.attrs.get("tags")
@@ -224,6 +226,11 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
             if fid in seen or any(u in t for u in UNDERGROUND):
                 continue
             seen.add(fid)
+            import json
+            try:
+                cables[fid] = int(json.loads(t).get("cables", 0))
+            except (ValueError, TypeError, AttributeError):
+                pass
             into = poles if low_voltage(t) else lines
             for part in f.parts(i):
                 for ring in part:
@@ -231,17 +238,20 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
                         into += [(fid, r) for r in _near(frame, np.asarray(ring, np.float64), (x0, y0, x1, y1))]
     subs = _substations(frame, cells, md)
     fast.require(82, "power_line_layout")
+    import powersupports
+    supports = powersupports.Lookup(frame, md, layers)
     ends = np.zeros((0, 4))
     for group, h, arms, clear_m, wire_r, these in ((G_PYLON, PYLON_H, ARMS, TOWER_ROAD_CLEAR_M, WIRE_R, lines),
                                                   (G_POLE, POLE_H, POLE_ARMS, POLE_ROAD_CLEAR_M, POLE_WIRE_R, poles)):
         got = _lay(frame, md, elev, subs, these, group, h, arms, clear_m, wire_r, (x0, y0, x1, y1), props, wires,
-                   clearance)
+                   clearance, supports=supports, pole_elev=pole_elev, cables=cables, infrastructure=infrastructure)
         if len(got):
             ends = np.vstack([ends, got])
     _yards(frame, elev, subs, ends, (x0, y0, x1, y1), props)
 
 
-def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance):
+def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, props, wires, clearance,
+         supports=None, pole_elev=None, cables=None, infrastructure=None):
     """The towers (group, h m tall; conductors at arms) and conductors of lines [(fid, lon/lat ring)] (tile_lines);
     returns their ends (n, 4) at the substations."""
     from polygon import Path
@@ -252,6 +262,9 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
         ll = np.concatenate([r for _, r in lines])
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
         e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
+        overrides = supports.for_vertices(ll, pole_elev or elev) if supports is not None else {}
+        # Keep the native skeleton unchanged so neighboring towers retain their exact
+        # layout. Its pole placeholders are replaced below at the actual mapped points.
         la2, lo2, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
         la2, lo2 = np.asarray(la2, np.float64), np.asarray(lo2, np.float64)
         _, _, z = frame.geodetic_to_enu(la2, lo2, np.asarray(elev(la2, lo2), np.float64))
@@ -265,13 +278,28 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
             stop |= here
         towers, ends, wp, wo = fast._ef.power_line_layout(pts, off, stop, arms, SAG, SEG_M, MIN_SPAN_M, MAX_SPAN_M,
                                                           DEDUPE_M, END_MERGE_M, GANTRY_FRONT, [x0, y0, x1, y1])
+        if infrastructure is not None:
+            import powersupports
+            infrastructure.extend(powersupports.support_records(frame, ll, pts, off, stop, overrides,
+                supports.tower_ids(ll) if supports is not None else {}, box, group, h,
+                PYLON_H if group == G_PYLON else POLE_SHAPE_H, clearance, MIN_SPAN_M, MAX_SPAN_M))
         for x, y, zz, yaw in towers:
+            if any(np.hypot(x - pts[i, 0], y - pts[i, 1]) <= .25 for i in overrides):
+                continue  # the same source ID is emitted as the actual wood model below
             row = [group, round(float(x), 2), round(float(y), 2), round(float(zz), 2), round(float(yaw), 1),
                    1.0, h, 0.0]
             if clearance is None or clearance.clear(row):
                 props.append(row)
-        for a, b in zip(wo[:-1], wo[1:]):
-            wires.append((np.asarray(wp[a:b]), wire_r))
+        owned = {r["id"]: r for r in overrides.values() if x0 <= r["x"] < x1 and y0 <= r["y"] < y1}
+        props.extend(owned[k] for k in sorted(owned))
+        if overrides:
+            import powersupports
+            counts = {i: (cables or {}).get(fid, len(arms)) for i, (fid, _) in enumerate(lines)}
+            wires.extend(powersupports.wires(wp, wo, pts, off, stop, overrides, box, len(arms), counts,
+                                             MIN_SPAN_M, MAX_SPAN_M, wire_r))
+        else:
+            for a, b in zip(wo[:-1], wo[1:]):
+                wires.append((np.asarray(wp[a:b]), wire_r))
     return np.asarray(ends, np.float64).reshape(-1, 4)
 
 

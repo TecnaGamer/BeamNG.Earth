@@ -12,6 +12,7 @@ import billboardsource  # noqa: E402
 import geodesy  # noqa: E402
 import mapgeom as mg  # noqa: E402
 import worldprops as wp  # noqa: E402
+import mappedinfra
 
 FRAME = geodesy.EnuFrame(40.44, -80.00)
 
@@ -57,6 +58,20 @@ def elev(la, lo):
 
 
 class WorldPropsTest(unittest.TestCase):
+    def test_mapped_lamps_are_osm_nodes_only(self):
+        infra = feats("infrastructure", [
+            ("a", (100., 120.), {"class": "street_lamp", "src_record": "n123@1"}),
+            ("b", (140., 120.), {"class": "street_lamp", "src_record": "w456@1"}),
+            ("c", (180., 120.), {"class": "street_lamp"}),
+        ], mg.POINT)
+        md = FakeMD({"infrastructure": infra})
+        rows, _ = wp.tile_props(FRAME, 0, 0, md, elev, mapped_lamps=True)
+        lamps = [r for r in rows if r[0] == "streetlight"]
+        self.assertEqual(len(lamps), 1)
+        self.assertEqual(lamps[0][1:3], [100., 120.])
+        self.assertEqual(wp.tile_props(FRAME, 0, 0, md, elev)[0], [])
+        self.assertEqual(wp.tile_props(FRAME, 1, 0, md, elev, mapped_lamps=True)[0], [])
+
     def md(self):
         infra = feats("infrastructure", [
             ("cell", (100.0, 120.0), {"class": "communication_tower"}),
@@ -89,19 +104,19 @@ class WorldPropsTest(unittest.TestCase):
 
     def test_towers(self):
         rows, _ = self.rows()
-        cell = self.by(rows, "celltower")
+        cell = mappedinfra.tile_structures(FRAME, 0, 0, self.md(), elev)
         water = self.by(rows, "watertower")
         self.assertEqual(len(cell), 1)
         self.assertEqual(len(water), 1)
-        self.assertAlmostEqual(cell[0][3], 5.02, places=2)
-        self.assertAlmostEqual(cell[0][6], wp.CELL_H, places=2)
+        self.assertAlmostEqual(cell[0]["z"], 5. - mappedinfra.MODEL["tower"][1], places=2)
+        self.assertEqual(cell[0]["asset"], "tower")
         self.assertAlmostEqual(water[0][3], 5.0 + wp.WATER_LIFT, places=2)
         self.assertAlmostEqual(water[0][6], wp.WATER_H, places=2)
         self.assertFalse(any(r[0] == "pylon" for r in rows))
-        other, _ = self.rows(1, 0)
-        self.assertEqual(len(self.by(other, "celltower")), 1)
-        self.assertAlmostEqual(self.by(other, "celltower")[0][1], 300.0, delta=1.0)
-        self.assertEqual(len(self.by(rows, "celltower")), 1)
+        other = mappedinfra.tile_structures(FRAME, 1, 0, self.md(), elev)
+        self.assertEqual(len(other), 1)
+        self.assertAlmostEqual(other[0]["x"], 300.0, delta=1.0)
+        self.assertEqual(self.by(rows, "celltower"), [])
 
     def test_containers_line_up_and_stay_out_of_buildings(self):
         rows, _ = self.rows()

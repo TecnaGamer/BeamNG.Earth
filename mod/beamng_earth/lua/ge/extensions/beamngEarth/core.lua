@@ -81,6 +81,7 @@ local pumpjacks = require('beamngEarth/pumpjacks') -- oil wells' pump jacks (ser
 local nightlights = require('beamngEarth/nightlights') -- the buildings' windows lit at night
 pumpjacks.onCollide = roads.markCollisionDirty
 require('beamngEarth/windturbines').onCollide = roads.markCollisionDirty
+require('beamngEarth/mappedinfra').onCollide = roads.markCollisionDirty
 local parking = require('beamngEarth/parking') -- parked cars on the road tiles' spots (stock gameplay_parking)
 local gasstations = require('beamngEarth/gasstations') -- pumps and the stock refuel prompt (server gasstations.py)
 -- (the stations' pump islands: lit at night)
@@ -620,6 +621,7 @@ local function finishRebase()
   ambience.transform(xf)
   pumpjacks.transform(xf)
   require('beamngEarth/windturbines').transform(xf)
+  require('beamngEarth/mappedinfra').transform(xf)
   require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
   gasstations.transform(xf)
@@ -2800,6 +2802,7 @@ local function onClientEndMission()
   ambience.reset()
   pumpjacks.reset()
   require('beamngEarth/windturbines').reset()
+  require('beamngEarth/mappedinfra').reset()
   require('beamngEarth/turbinestream').reset()
   nightlights.reset()
   parking.reset()
