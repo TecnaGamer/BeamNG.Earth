@@ -16,11 +16,10 @@
 ## Phases
 Each phase ends with one full test run; during work, only targeted tests are run.
 
-### A. Ask first (one Discord post or issue, costs nothing)
-Post before/after screenshots (Yeppoon, Rockhampton, Brisbane, M1, Winton) and this shape, then ask:
-1. Should it come in as one opt-in "AU regional scenery" switch, like #505, or several PRs?
-2. Python first, with you porting hot spots as in #505, or Rust up front?
-3. Should the NVIS vegetation grid (1.1 MB) be bundled, or served from BeamNG.Earth-data like `regionaldata`?
+### A. Decided from #505's precedent (no need to ask)
+1. One opt-in switch, default off, sent as a few themed PRs.
+2. Python first, with an A/B table; the maintainer ports the hot spots.
+3. The NVIS grid (1.1 MB) is bundled, like #505's 0.7 MB `fr_house_*.bin`. Only data of tens of MB goes to BeamNG.Earth-data.
 
 ### B. Sync with upstream `dev`
 - Merge `upstream/dev` into `qld/main`, resolve the six overlapping files, and re-run the install.
