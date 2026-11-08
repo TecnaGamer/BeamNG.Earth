@@ -2077,7 +2077,12 @@ class _Planner:
                     import railways     # (the cells around only where this one has a line: their fetches cost)
                     rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                               for k in railways.cells_near(self.frame, own)]
+                    beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
+                              for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
                     for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
+                        if beside:      # (the bed beside a road: where the ground between has room for its slope)
+                            import railroadseam
+                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
                         # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
                         # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
