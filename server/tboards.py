@@ -19,15 +19,15 @@ COUNTRIES = warnsigns.COUNTRIES
 CLASSES = warnsigns.CLASSES | {"unclassified"}
 JOIN_M = 3.0                    # m: how near A's end must be to B's line
 END_M = 5.0                     # m: nearer than this to B's end it is B's end, not its interior
-DIR_M = 10.0                    # m: A's direction at its end is read over this much road
+DIR_M = 30.0                    # m: A's direction at its end is read over this much road (10 m read the flare of a turn lane: the board stood off to one side)
 MIN_ROAD_M = 30.0               # m: a road shorter than this is not read for a T
 MIN_DEG = 60.0                  # A meets B at 60-120 degrees
 FAR_M = 3.0                     # m beyond B's edge the board's centre stands
-HALF_M = 1.8                    # m: half the board's length
+HALF_M = 2.4                    # m: half the board's length
 ROAD_CLEAR_M = 1.0              # m the board stands clear of another road's edge
 BEYOND_M = (3.0, 40.0)          # m past the T along A's axis, and ...
 BESIDE_M = 8.0                  # ... within this of it: a road there is A carrying on (a crossroads)
-HEIGHT_M = 1.6                  # the model's height (tools/build_au_tboard.py)
+HEIGHT_M = 1.7                  # the model's height (tools/build_au_tboard.py)
 COS_MIN = float(np.cos(np.radians(MIN_DEG)))      # (A meets B at 60-120 degrees: its |cos| against B's line is at most this)
 
 

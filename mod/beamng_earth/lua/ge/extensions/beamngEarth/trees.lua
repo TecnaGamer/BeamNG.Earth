@@ -326,9 +326,9 @@ for _, g in ipairs({ 'au_warn_curve_l', 'au_warn_curve_r', 'au_warn_turn_l', 'au
   M.GROUP_MAX_M[g] = 400
   M.ONE_SPELLING[g] = true
 end
--- fork: Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): 3.6 m x 0.6 m on four posts, 1.6 m
+-- fork: Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): 4.8 m x 0.9 m on five posts, 1.7 m
 -- high, the face to local -Y (the driver coming up the road that ends at the T); few, so one spelling, seen from 400 m
-M.CATALOG.au_tboard = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard', 1.6 } }
+M.CATALOG.au_tboard = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard', 1.7 } }
 M.GROUP_MAX_M.au_tboard = 400
 M.ONE_SPELLING.au_tboard = true
 -- fork: Australia's boundary fences (server buildings.au_fence, tools/build_au_streetscape.py): Colorbond sheet in six colours and

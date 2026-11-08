@@ -15,15 +15,15 @@ import uuid
 
 from build_rail_crossing_props import OUT, Mesh, write_dae
 
-WIDTH, HEIGHT = 3.6, 0.6            # m: the board
-LOW = 1.0                           # m: its lower edge over the ground
+WIDTH, HEIGHT = 4.8, 0.9            # m: the board (the rural size: Outback and Qld T boards in photos ~5 m)
+LOW = 0.8                           # m: its lower edge over the ground
 TOP = LOW + HEIGHT                  # m: the model's height
-POST_R, POST_SINK = 0.04, 0.3
-POSTS = (-1.5, -0.5, 0.5, 1.5)      # m: along the board
+POST_R, POST_SINK = 0.05, 0.3
+POSTS = (-2.0, -1.0, 0.0, 1.0, 2.0)  # m: along the board
 FRONT, BACK = -0.045, -0.025        # m: the board's front and back faces' Y (the posts just behind it)
 INK = -0.004                        # m: the black stands this far in front of the white
-CHEVRON = (0.30, 0.26)              # m: a chevron's width (along the board) and half its height
-PITCH, STRIPE = 0.40, 0.10          # m: chevrons' spacing along the board, and a stripe's width along it
+CHEVRON = (0.45, 0.38)              # m: a chevron's width (along the board) and half its height: bold, as the real ones
+PITCH, STRIPE = 0.50, 0.22          # m: chevrons' spacing along the board, and a stripe's width along it
 COLOURS = {
     "bne_au_tboard_white": ((0.92, 0.92, 0.90), 0.1, 0.3),      # retroreflective white
     "bne_au_tboard_black": ((0.02, 0.02, 0.02), 0.0, 0.5),

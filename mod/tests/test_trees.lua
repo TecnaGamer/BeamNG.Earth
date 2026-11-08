@@ -522,8 +522,8 @@ do -- fork: Australia's warning signs (server warnsigns.py, tools/build_au_warns
   T.check(trees.isBarrier('au_guidepost_red') and not trees.isBarrier('au_warning') and not trees.isBarrier('deciduous'),
     'the stock barrier rule still holds beside the signs')
 end
-do -- fork: Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): its 1.6 m model at 1:1, never thinned
-  local shape, sc = trees.pick('au_tboard', 1.6, 0.3)
+do -- fork: Australia's T-junction chevron board (server tboards.py, tools/build_au_tboard.py): its 1.7 m model at 1:1, never thinned
+  local shape, sc = trees.pick('au_tboard', 1.7, 0.3)
   T.check(shape == '/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard' and math.abs(sc - 1) < 1e-9, 'au_tboard: its model at 1:1')
   T.check(trees.isBarrier('au_tboard') and trees.GROUP_MAX_M.au_tboard > 0 and trees.ONE_SPELLING.au_tboard,
     'au_tboard: never thinned, a draw distance, one spelling')
