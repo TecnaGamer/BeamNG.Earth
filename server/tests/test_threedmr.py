@@ -1941,8 +1941,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_28(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 28)
+    def test_version_is_29(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 29)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -2264,6 +2264,25 @@ class BridgeDeckTest(unittest.TestCase):
         inside = threedmr.under_footprint(fp, (1000.0, 2000.0), [[1000.0, 2000.0], [1090.0, 2009.0], [1000.0, 2015.0],
                                                                   [1120.0, 2000.0]])
         self.assertEqual(inside.tolist(), [True, True, False, False])
+
+    def test_offset_mapped_span_does_not_remove_the_other_end(self):
+        tilt = (0, -80.0, 0.0, 0.0, (-80.0, 120.0))
+        with tempfile.TemporaryDirectory() as d:
+            got = threedmr.write_bridge_deck(d, 22, self.surf, tilt)
+        self.assertLess(got["verts"][:, 0].min(), -100.0)
+        self.assertGreater(got["verts"][:, 0].max(), 100.0)
+
+    def test_footings_extend_to_ground_without_changing_deck_or_topology(self):
+        P = np.array([[0., 0., 0.], [1., 0., 0.], [0., 0., 8.], [1., 0., 8.]])
+        T = np.array([[0, 1, 2], [1, 3, 2]])
+        with tempfile.TemporaryDirectory() as d, mock.patch("threedmr._write_section") as writer:
+            threedmr.write_model(d, 22, P, T, None, None, None, 5.0,
+                                 support_plane=0.0, foundation_ground=lambda xy: np.full(len(xy), -3.0))
+        baked = writer.call_args.args[2]
+        np.testing.assert_allclose(baked[:2, 2], -3.5)
+        np.testing.assert_allclose(baked[2:, 2], 12.8)
+        np.testing.assert_array_equal(writer.call_args.args[3], T)
+        self.assertEqual(baked.shape, P.shape)
 
     def test_write_model_leans_by_the_tilt(self):
         tilt = (0, -100.0, -2.0, 0.01, (-100.0, 100.0))

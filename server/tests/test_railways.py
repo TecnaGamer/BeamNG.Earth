@@ -20,6 +20,22 @@ def flat(xy):
 
 
 class RailwayTest(unittest.TestCase):
+    def test_imported_bridge_suppresses_only_covered_elevated_track(self):
+        fp = {"bridge": True, "ax": 0, "u0": 80., "du": 2., "cols": [[90., 110.]] * 51}
+        fps = [(fp, (0., 0.), 54)]
+        for elevated in (False, True):
+            with self.subTest(elevated=elevated):
+                f = features([[(-50., 100.), (300., 100.)]], ["standard_gauge"], subtypes=["rail"],
+                             flags=[(0, "is_bridge")] if elevated else [])
+                mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, model_bridges=fps)
+                self.assertIsNotNone(mesh)
+                P, T, _, mats, M = mesh
+                steel = P[np.unique(T[M == mats.index(railways.STEEL)])]
+                centre = (steel[:, 0] > 90.) & (steel[:, 0] < 170.)
+                self.assertEqual(bool(centre.any()), not elevated)
+                self.assertTrue((steel[:, 0] < 70.).any())
+                self.assertTrue((steel[:, 0] > 190.).any())
+
     def test_distant_bridge_of_a_nearby_feature_is_not_profiled(self):
         # One feature crosses the tile, but its last 100 m is a bridge 5 km away.
         f = features([[(-100.0, 100.0), (5000.0, 100.0), (5100.0, 100.0)]],

@@ -1683,7 +1683,7 @@ class ModelBridgeTest(unittest.TestCase):
         return (P, np.zeros((len(P), 2)), np.array(T, np.int64), None, [(None, None, None, False, None)],
                 np.zeros(len(T), np.int64))
 
-    def _bake(self, mesh=None, info=None, **patches):
+    def _bake(self, mesh=None, info=None, road_ends=True, **patches):
         custom = [{"id": 22, "xy": (10.0, 10.0)}]
         ground = lambda la, lo: np.zeros(np.shape(la))
         res = {"shape": "threedmr_22.cdae", "texture": None, "material": "threedmr_22", "has_alpha": False,
@@ -1700,7 +1700,7 @@ class ModelBridgeTest(unittest.TestCase):
                 with mock.patch.multiple("threedmr", **patches) if patches else mock.patch("os.sep", os.sep):
                     entries, radii, _b = bld._custom_tile_entries(
                         self.f, custom, ground, out, "/temp/beamngEarth/s1",
-                        road_ends={22: [(-80.0, 10.0, 1.0), (100.0, 10.0, 2.0)]})
+                        road_ends={22: [(-80.0, 10.0, 1.0), (100.0, 10.0, 2.0)]} if road_ends else {})
                 files = sorted(os.listdir(out))
         return entries, write_model, fault, files
 
@@ -1735,6 +1735,33 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual([(e["shape"].rsplit("/", 1)[1], e.get("col", True)) for e in entries],
                          [("threedmr_22.cdae", True)])
         fault.assert_called()
+
+    def test_footbridge_without_motor_road_ends_keeps_authored_clearance(self):
+        entries, writer, fault, _ = self._bake(road_ends=False)
+        self.assertEqual(len(entries), 2)
+        self.assertIsNone(writer.call_args.kwargs["tilt"])
+        self.assertEqual(writer.call_args.kwargs["support_plane"], 3.0)
+        self.assertTrue(callable(writer.call_args.kwargs["foundation_ground"]))
+        fault.assert_not_called()
+
+    def test_partial_coverage_preserves_both_approaches_and_node_attributes(self):
+        fps = [(self.FP, (0.0, 0.0), 22)]
+        nodes = np.array([[-150., 0., 1., 4.], [150., 0., 7., 10.]])
+        chunks = bld.bridge_stub_chunks(fps, [{"deck": True, "fixed": True, "n": nodes}])
+        self.assertEqual(len(chunks), 2)
+        self.assertEqual(chunks[0]["n"][0, 0], -150.)
+        self.assertEqual(chunks[1]["n"][-1, 0], 150.)
+        self.assertAlmostEqual(chunks[0]["n"][-1, 0], -100., delta=2.)
+        self.assertAlmostEqual(chunks[1]["n"][0, 0], 100., delta=2.)
+        self.assertGreater(chunks[0]["n"][-1, 0], -100., "approach overlaps the model at the join")
+        self.assertLess(chunks[1]["n"][0, 0], 100.)
+        for chunk in chunks:
+            a = chunk["n"]
+            np.testing.assert_allclose(a[:, 2], 1. + (a[:, 0] + 150.) / 50.)
+            np.testing.assert_allclose(a[:, 3], a[:, 2] + 3.)
+        parts = bld.bridge_stub_parts(fps, [("a", None, nodes[:, :2], nodes[:, 2], 115.)])
+        self.assertEqual(len(parts), 2)
+        self.assertTrue(all(p[4] == 115. for p in parts))
 
     def test_stub_chunks_under_the_model_left_out(self):
         fps = [(self.FP, (0.0, 0.0), 22)]
