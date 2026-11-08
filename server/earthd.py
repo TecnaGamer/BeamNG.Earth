@@ -374,9 +374,9 @@ ROAD_PROCESSES = 2              # road-tile processes (--block-process on, --roa
 # visit's slowest tiles take ~1 min on a busy 6-core laptop and several times that on a Steam Deck, where a tile given
 # up at 2 min would be built and given up again for good; BNGE_ROAD_TILE_TIMEOUT=<s> to change it
 ROAD_GEO_SLOW_S = 3.0           # a road geotile slower than this is logged (queue and build)
-VEG_GEO_BATCH = 16              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
+VEG_GEO_BATCH = 32              # trees geotiles one road-process job builds at most (_veg_geo_job): its nearest wait
                                 # for the rest of it
-VEG_GEO_PER_POSE = 32           # trees geotiles asked for at once when the road processes build them: two jobs' worth
+VEG_GEO_PER_POSE = 64           # trees geotiles asked for at once when the road processes build them: two jobs' worth
 SLOW_SELECT_S = 0.25            # a far-tile selection (update_far, on the event loop) slower than this is logged
 WORLD_WARM_Z = 7                # the rough earth's tiles (Server.start_world_warm): 16,384, ~260 km at the equator
 WORLD_WARM_CONC = 2
