@@ -2002,7 +2002,7 @@ class Server:
         path = os.path.join(self.out_dir, f"patch_{aid}")      # (+ _<cell>.cdae a piece: shared by patches)
         if self.road_pool is not None:
             parts, n = self.road_pool.submit(blockworker.terrain_patch, aid, anchor.lat, anchor.lon,
-                                             anchor.zooms[0], box, path).result()
+                                             anchor.zooms[0], box, path, models=self.buildings).result()
         else:
             zoom, g = anchor.zooms[0], self.grader_for(anchor)
 
@@ -2357,8 +2357,8 @@ class Server:
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks)
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
-            chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
-            ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
+            chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks, getattr(g, 'model_joins', None), anchor.frame)
+            ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx, getattr(g, 'model_joins', None), anchor.frame)
             if props is not None:
                 props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
 
@@ -2370,7 +2370,7 @@ class Server:
                 pad_parts = list(anchor.bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
                 pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(
                     anchor.frame, cells, urban, self.road_widths, self.left_hand(anchor)))
-                pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
+                pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts, getattr(g, 'model_joins', None), anchor.frame)
                 pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
                                                anchor.bridges._ground, own=False)
             except Exception as ex:
@@ -2383,7 +2383,7 @@ class Server:
         deck_parts = []                 # the bridges' parts near the tile (the median barriers' on joined decks too)
         try:
             deck_parts = list(anchor.bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
-            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
+            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts, getattr(g, 'model_joins', None), anchor.frame)
             guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                                for _fid, spec, xy, z, _lon in deck_parts]
             guardrail_rows = guardrailsmod.forest_rows(anchor.frame, infra_fn, box, elev,
@@ -2743,6 +2743,10 @@ class Server:
                     self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                 grader.dem = self.dem                # (its urgent lane: _plan_missing)
                 grader.shared = plancachemod.for_grader(self.cache_dir, grader, self.road_widths, grader.wet)
+                if self.buildings:
+                    import bridgejoins
+                    bridgejoins.configure(grader, os.path.dirname(self.out_dir), lambda la,lo:
+                        self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)))
                 anchor.grader = grader       # publish only after a pinned bundle passed compatibility checks
             return anchor.grader
 
@@ -2915,7 +2919,7 @@ class Server:
                 pfut = self.hm_proc[key] = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block))
+                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block), models=self.buildings)
                 try:
                     info = pfut.result()
                 finally:
@@ -3146,6 +3150,11 @@ class Server:
         if cs is None:
             cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")  # noqa: E731
             if kind == "bridges":
+                base_grader = anchor.grader  # chain_view is called under grader_lock
+                if getattr(base_grader, 'model_joins', None) is not None:
+                    def elev(la, lo):
+                        z = self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                        return base_grader.apply_base(la, lo, z, gradingmod.ROAD_LIFT)
                 def setup(p):
                     p.wet = self.sea.depth if self.sea is not None else None    # (decks clear the water)
                     p.infra_fn = lambda key: self.mapdata.cell(

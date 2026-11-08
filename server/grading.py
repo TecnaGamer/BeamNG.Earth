@@ -4358,6 +4358,13 @@ class Grader:
     @profile_step('Road grading')
     def apply(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
         """_Planner.apply by the points' regions (the anchor plays no part). Same shape as base."""
+        out = self.apply_base(lat, lon, base, lift, roads_only, planned_only)
+        joins = getattr(self, "model_joins", None)
+        return (joins.apply(lat, lon, out, height_offset=lift-ROAD_LIFT)
+                if joins is not None and not (planned_only or roads_only) else out)
+
+    def apply_base(self, lat, lon, base, lift=0.0, roads_only=False, planned_only=False):
+        """Original network grading, also the fixed height reference used to place imported bridges."""
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         base = np.asarray(base, np.float64)

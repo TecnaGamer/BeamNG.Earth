@@ -3373,7 +3373,12 @@ def _model_mesh(c, cache_dir):
         # yaw (it is not a 3dmr.eu upload to straighten; the player orients their own STL themselves)
         return threedmr.load_local_model(cache_dir, c["local"])
     glb = threedmr.fetch_model(cid, cache_dir)
-    pos, uvs, tris, nrm, textures, tri_materials = threedmr.gltf_mesh(glb, model_id=cid)
+    pos, uvs, tris, nrm, textures, tri_materials = threedmr.gltf_mesh(glb, model_id=cid, include_material_names=True)
+    if _is_bridge(pos, _bridge_info(c, cache_dir)):
+        tris, flipped = threedmr.bridge_asphalt_top(pos, tris, tri_materials, textures)
+        if flipped:
+            nrm = None
+            log.info("3dmr model %s: corrected %d downward asphalt top triangle(s)", cid, flipped)
     latlon = c.get("latlon")
     if latlon is not None and len(pos):
         zmin, zmax = float(pos[:, 2].min()), float(pos[:, 2].max())
@@ -3554,6 +3559,9 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             has_alphas = [t[3] for t in textures]
             alpha_cutoffs = [t[4] for t in textures]
             double_sideds = [bool(t[5]) if len(t) > 5 else True for t in textures]   # (one-sided: modelled back faces)
+            # Explicit material role only: match the map's asphalt without recolouring glass, timber or markings.
+            aliases = {i: "bne_bridge_asphalt" for i, t in enumerate(textures)
+                       if is_bridge and len(t) > 6 and str(t[6]).strip().casefold() == "asphalt"}
             if len(pngs) == 1:
                 res = threedmr.write_model(
                     out_dir,
@@ -3570,6 +3578,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     tilt=tilt,
                     support_plane=support_plane,
                     foundation_ground=foundation_ground,
+                    material_aliases=aliases,
                 )
             else:
                 res = threedmr.write_model(
@@ -3588,6 +3597,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     tilt=tilt,
                     support_plane=support_plane,
                     foundation_ground=foundation_ground,
+                    material_aliases=aliases,
                 )
             # a mesh over Torque's 16-bit IBO limit (threedmr.SPLIT_VERTEX_TRIGGER) comes back as several
             # sections (threedmr.write_model's "sections"), each its own TSStatic entry at the same pos -
@@ -3612,6 +3622,8 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                     alpha_cutoff,
                     double_sided,
                 ) in _section_mat_tex(sec, factors, has_alphas, alpha_cutoffs, double_sideds):
+                    if material in aliases.values():
+                        continue  # the shared road material is supplied by the mod, never redefined per model
                     texture_vfs = f"{tex_vfs_dir}/{tex_name}" if tex_name else None
                     threedmr.update_materials(
                         user_dir, material, texture_vfs, factor, has_alpha, alpha_cutoff,
@@ -3857,7 +3869,7 @@ def _mostly_under(fps, xy):
     return len(xy) > 0 and _under_bridges(fps, xy[:, :2]).mean() >= 0.5
 
 
-def bridge_stub_chunks(fps, chunks):
+def bridge_stub_chunks(fps, chunks, joins=None, frame=None):
     """chunks without the procedural bridge standing where a model bridge (bridge_footprints' fps) does: a bridge
     chunk (roads._bridge_chunks: a "deck" surface or a "fixed" line on it) is clipped at the model's footprint.
     Uncovered approaches, ground roads and tunnels stay."""
@@ -3871,6 +3883,8 @@ def bridge_stub_chunks(fps, chunks):
             out.append(c)
             continue
         for part in _outside_bridge_nodes(fps, nodes):
+            if joins is not None:
+                part = joins.nodes(frame, part)
             out.append(c if part is nodes else {**c, "n": part})
     return out
 
@@ -3910,7 +3924,7 @@ def _outside_bridge_nodes(fps, nodes):
     return out
 
 
-def bridge_stub_parts(fps, parts):
+def bridge_stub_parts(fps, parts, joins=None, frame=None):
     """roads.BridgeProfiles.parts' (fid, spec, xy, z, lon) without those under a model bridge (their guard rails,
     medians and junction pads stood at the stub's heights)."""
     if not fps:
@@ -3919,6 +3933,8 @@ def bridge_stub_parts(fps, parts):
     for p in parts:
         nodes = np.c_[np.asarray(p[2]), np.asarray(p[3])]
         for part in _outside_bridge_nodes(fps, nodes):
+            if joins is not None:
+                part = joins.nodes(frame, part)
             out.append(p if part is nodes else (p[0], p[1], part[:, :2], part[:, 2], p[4]))
     return out
 

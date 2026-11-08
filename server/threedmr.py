@@ -56,7 +56,7 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 29  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 31  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
 # deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
 # and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
@@ -445,6 +445,10 @@ SEARCH_CORRECT_R_M = 40000.0
 # model's mesh is already oriented west-east as downloaded - nothing to rotate.
 POSITION_OVERRIDES = {
     22: (16.06120, 108.22790, 0.0),
+    # Perth bridges: published pins are ~20 m south of the geographic origins retained in the GLB scene
+    # extras ("Origin latitude" / "Origin longitude"). The meshes are already oriented to true north.
+    53: (-32.0342069, 115.8580457, 0.0),
+    54: (-31.96332685, 115.84694035, 0.0),
 }
 
 
@@ -1260,7 +1264,8 @@ def _nan_filter(Z, size, how):
     return np.where(np.isfinite(Z), out, np.nan)
 
 
-def bridge_deck_surface(positions, tris):
+def bridge_deck_surface(positions, tris, step_m=BRIDGE_STEP_M,
+                        tier_below=BRIDGE_TIER_BELOW_M, tier_above=BRIDGE_TIER_ABOVE_M):
     """The top of a bridge model's own road deck, sampled on a grid in positions' own frame: {"ax" (0: the bridge
     runs along x, 1: along y), "u0", "du", "v0", "dv", "z" (nu, nv) heights, NaN off the deck}; None when the mesh
     has no deck to drive on. Per column across the bridge its deck level is the median of the floors open above
@@ -1322,7 +1327,7 @@ def bridge_deck_surface(positions, tris):
         last, i = mid, mid + step
         while 0 <= i < nu and abs(i - last) <= 4:
             if np.isfinite(level[i]):
-                if abs(level[i] - level[last]) > BRIDGE_STEP_M * max(1, abs(i - last)):
+                if abs(level[i] - level[last]) > step_m * max(1, abs(i - last)):
                     break
                 keep[i], last = True, i
             i += step
@@ -1334,7 +1339,7 @@ def bridge_deck_surface(positions, tris):
         for j, (_allz, upz) in enumerate(floors[i]):
             if upz is None:
                 continue
-            w = upz[(upz >= level[i] - BRIDGE_TIER_BELOW_M) & (upz <= level[i] + BRIDGE_TIER_ABOVE_M)]
+            w = upz[(upz >= level[i] - tier_below) & (upz <= level[i] + tier_above)]
             if len(w):
                 Z[i, j] = float(w.max())
     Z = _nan_filter(Z, (1, 1), np.nanmedian)
@@ -1692,7 +1697,7 @@ def _gltf_double_sided(gltf, mat_idx):
     return bool(mats[mat_idx].get("doubleSided", False))
 
 
-def gltf_mesh(glb, model_id=None):
+def gltf_mesh(glb, model_id=None, include_material_names=False):
     """Decode a .glb into one combined mesh: (positions (n,3) float64, uvs (n,2) float64, tris (m,3) int64,
     normals (n,3) float64 or None, textures, tri_materials (m,) int64). Y-up (glTF) is converted to Z-up
     (BeamNG) and v is flipped to the Collada convention (v_dae = 1 - v_gltf). textures is a list of (bytes,
@@ -1843,11 +1848,45 @@ def gltf_mesh(glb, model_id=None):
     positions, uvs, normals, tris, tri_materials = _dedup_tris(
         positions, uvs, normals, tris, tri_materials, model_id=model_id, double_sided=double_sided
     )
-    textures = [tex + (ds,) for tex, ds in zip(textures, double_sided)]
+    names = {slot: (gltf.get("materials", [])[mi].get("name", "")
+                    if mi is not None and 0 <= mi < len(gltf.get("materials", [])) else "")
+             for mi, slot in tex_slot.items()}
+    textures = [tex + (ds,) + ((names.get(i, ""),) if include_material_names else ())
+                for i, (tex, ds) in enumerate(zip(textures, double_sided))]
 
     if len(tris) > MAX_TRIANGLES:
         raise UnsupportedModelError(f"3dmr model {model_id}: {len(tris)} triangles (over {MAX_TRIANGLES})")
     return positions, uvs, tris, normals, textures, tri_materials
+
+
+def bridge_asphalt_top(positions, tris, tri_materials, textures):
+    """Correct downward-wound exposed asphalt sheets; retain lower faces of closed road slabs.
+
+    Recalculating normals on disconnected Blender planes can reverse arbitrary strips. A named road surface's
+    exposed top must face up, including when the importer substitutes its usual opaque road material.
+    """
+    slots = [i for i,t in enumerate(textures) if len(t) > 6 and str(t[6]).strip().casefold() == 'asphalt']
+    T = np.asarray(tris, np.int64)
+    if not slots:
+        return T, 0
+    P = np.asarray(positions, np.float64)
+    selected = np.isin(tri_materials, slots)
+    used = np.unique(T[selected])
+    if not len(used):
+        return T, 0
+    q = np.round(P[used, :2]*1000.).astype(np.int64)
+    _, inverse = np.unique(q, axis=0, return_inverse=True)
+    zmax = np.full(int(inverse.max())+1, -np.inf)
+    np.maximum.at(zmax, inverse, P[used, 2])
+    top = np.zeros(len(P), bool)
+    top[used] = P[used, 2] >= zmax[inverse]-.002
+    normal = np.cross(P[T[:, 1]]-P[T[:, 0]], P[T[:, 2]]-P[T[:, 0]])
+    flip = selected & (normal[:, 2] < -1e-8) & top[T].all(1)
+    if not flip.any():
+        return T, 0
+    T = T.copy()
+    T[flip] = T[flip][:, [0, 2, 1]]
+    return T, int(flip.sum())
 
 
 # --- writing the shape, texture and material --------------------------------------------
@@ -1974,6 +2013,7 @@ def _write_section(
     alpha_cutoff,
     force_multi=False,
     tex_cache_dir=None,
+    material_aliases=None,
 ):
     """One section's worth of write_model's own write: threedmr_<name_id>.cdae (+ its texture(s)), named
     exactly as write_model always has for an unsplit model (force_multi False, name_id the model_id itself -
@@ -1996,7 +2036,7 @@ def _write_section(
 
     multi = force_multi or isinstance(png_bytes, (list, tuple))
     if not multi:
-        material = f"threedmr_{name_id}"
+        material = (material_aliases or {}).get(0, f"threedmr_{name_id}")
         cdae.write(
             os.path.join(out_dir, shape_name),
             P,
@@ -2007,7 +2047,7 @@ def _write_section(
             object_name=material,
         )
         result = {"shape": shape_name, "texture": None, "material": material}
-        if png_bytes:
+        if png_bytes and 0 not in (material_aliases or {}):
             tex_name = f"threedmr_{name_id}.png"
             write_tex(tex_name, png_bytes)
             result["texture"] = tex_name
@@ -2020,7 +2060,7 @@ def _write_section(
         return result
 
     pngs = png_bytes if isinstance(png_bytes, (list, tuple)) else [png_bytes]
-    materials = [f"threedmr_{name_id}_{i}" for i in range(len(pngs))]
+    materials = [(material_aliases or {}).get(i, f"threedmr_{name_id}_{i}") for i in range(len(pngs))]
     cdae.write(
         os.path.join(out_dir, shape_name),
         P,
@@ -2036,7 +2076,7 @@ def _write_section(
     # image (observed on 3dmr.eu id 10: 234 materials, several byte-identical) write one
     # file and point at it, instead of one file per slot regardless of content
     for i, png in enumerate(pngs):
-        if png:
+        if png and i not in (material_aliases or {}):
             digest = hashlib.sha256(png).hexdigest()
             tex_name = written.get(digest)
             if tex_name is None:
@@ -2123,6 +2163,7 @@ def write_model(
     tilt=None,
     support_plane=None,
     foundation_ground=None,
+    material_aliases=None,
 ):
     """Write threedmr_<id>.cdae (and its texture(s)) into out_dir, atomically. positions are centered on the
     mesh's own bbox center first (glTFs are not origin-centered: some carry their original georeferenced
@@ -2210,6 +2251,7 @@ def write_model(
             has_alpha,
             alpha_cutoff,
             tex_cache_dir=tex_cache_dir,
+            material_aliases=material_aliases,
         )
         result["support_dz"] = support_dz
         return result
@@ -2237,6 +2279,7 @@ def write_model(
             alpha_cutoff,
             force_multi=(k > 0),
             tex_cache_dir=tex_cache_dir,
+            material_aliases=material_aliases,
         )
         for k, sec in enumerate(sections)
     ]

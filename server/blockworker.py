@@ -354,7 +354,8 @@ def _take_pads(fuel_pads):
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
-def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False):
+def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+          models=False):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -365,6 +366,10 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     anchor_s = time.perf_counter() - t0
     if provisional:             # (earthd.Server.make_provisional's ground: no road plans, tunnels, arches or sea floor)
         g, chunks = None, None
+    if models and g is not None:
+        import bridgejoins
+        bridgejoins.configure(g, os.path.dirname(out_dir), lambda la,lo: ground(None, la, lo,
+            _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)))
     frame = geodesy.EnuFrame(lat, lon)
     keep = {}
     grade_s = [0.0]
@@ -493,7 +498,14 @@ def _bridges(aid, frame, elev):
     """The anchor's view (roads.ChainView) of this process's bridge chains (deck heights of whole chains, each solved
     once whatever the anchor: roads.ChainStore)."""
     import roads as roadsmod
-    return roadsmod.ChainView(_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup), frame)
+    # Entrance fills must not feed back into their bridge's own fitted height.
+    g = _frame_grader(frame)
+    if g is None or not getattr(g.store, '_model_join_contexts', None):
+        return roadsmod.ChainView(_chain_store("bridges", roadsmod.BridgeProfiles, elev, _bridge_setup), frame)
+    def base(la, lo):
+        z = ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+        return g.apply_base(la, lo, z, gradingmod.ROAD_LIFT) if g is not None else z
+    return roadsmod.ChainView(_chain_store("bridges", roadsmod.BridgeProfiles, base, _bridge_setup), frame)
 
 
 NAV_GRADED_M = 900.0        # m (Chebyshev) round the AI graph's centre where its ground is graded in full: the road tiles'
@@ -562,11 +574,15 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     return path, len(graph["nodes"]), len(graph["edges"])
 
 
-def terrain_patch(aid, lat, lon, zoom, box, path):
+def terrain_patch(aid, lat, lon, zoom, box, path, models=False):
     """earthd.Server.build_terrain_patch here (road-tile pool): the collision patch of the ground over box under a
     collision island off the terrain block (terrainpatch.py), the block's own ground (graded, lifted under roads)."""
     import terrainpatch
     g, _ = _s.anchor(aid, lat, lon)
+    if models and g is not None:
+        import bridgejoins
+        bridgejoins.configure(g, os.path.dirname(os.path.dirname(path)), lambda la,lo: ground(None,la,lo,
+            _s.dem.sample(la,lo,gradingmod.PROFILE_ZOOM)))
     frame = geodesy.EnuFrame(lat, lon)
 
     def elev(la, lo):
@@ -750,6 +766,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import poleprofiles
     tx, ty = (tile, None) if hasattr(tile, "box") else tile
     P = _Parts()
+    P.models = bool(buildings)
     # everything the tile will ask for, fetched at once (one after another, a fresh place's first tile took ~1 min)
     _s.md.warm(roadsmod.tile_needs(frame, tx, ty, buildings, _s.widths is not None,
                                    1 + seacarvemod.LINE_CELLS if _s.sea is not None else 0))
@@ -762,6 +779,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
              for k in roadsmod.cells_of_tile(frame, tx, ty,
                  200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)]
     mark("anchor")
+
+    if buildings and g is not None and cache_dir:
+        import bridgejoins
+        bridgejoins.configure(g, cache_dir, lambda la,lo: ground(None, la, lo,
+            _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)))
 
     def elev(la, lo):           # the physics ground (lifted under roads: grading.ROAD_LIFT)
         z = ground(frame, la, lo, _s.dem.sample(la, lo, zoom))
@@ -879,8 +901,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("markings")
     if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
         _n0 = len(chunks)
-        chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
-        ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
+        chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks, getattr(g, 'model_joins', None), frame)
+        ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx, getattr(g, 'model_joins', None), frame)
         if props is not None:
             props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
         log.info("3dmr: %d procedural bridge chunk(s) left out under model bridge(s) %s", _n0 - len(chunks),
@@ -892,7 +914,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         pad_parts = list(bridges.parts(cells, (box[0] - 40, box[1] - 40, box[2] + 40, box[3] + 40)))
         pad_parts = roadsmod.shifted_parts(pad_parts, roadsmod.deck_shift_fn(frame, cells, urban, _s.widths, left_hand))
         if _bridge_fps:
-            pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts)
+            pad_parts = buildingsmod.bridge_stub_parts(_bridge_fps, pad_parts, getattr(g, 'model_joins', None), frame)
         pads_near = roadsmod.deck_pads([(f, sp, xy, z) for f, sp, xy, z, _lon in pad_parts], near_roads, box,
                                        bridges._ground, own=False)
     except Exception as ex:
@@ -907,7 +929,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     try:
         deck_parts = list(bridges.parts(cells, (box[0]-10, box[1]-10, box[2]+10, box[3]+10)))
         if _bridge_fps:
-            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts)
+            deck_parts = buildingsmod.bridge_stub_parts(_bridge_fps, deck_parts, getattr(g, 'model_joins', None), frame)
         guardrail_decks = [{"n": np.column_stack((xy, z)), "w": spec.width}
                            for _fid, spec, xy, z, _lon in deck_parts]
         guardrail_rows = guardrailsmod.forest_rows(frame, infra_fn, box, elev,
@@ -1191,7 +1213,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         data["h"] = h
         text = json.dumps(data, separators=(",", ":"), sort_keys=True)
         _write_bytes(os.path.join(out_dir, names["json"]), text.encode("utf-8"))
-        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h}
+        inputs = {"chunks": P.chunks, "ctx": P.ctx, "walks": P.walks_raw, "h": h,
+                  "models": bool(getattr(P,"models",False))}
         _write_bytes(os.path.join(out_dir, names["inputs"]), pickle.dumps(inputs, protocol=4))
         with _geo_lock:
             _geo_inputs[tile.key] = inputs
@@ -1443,6 +1466,10 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         return None
     frame = geodesy.EnuFrame(lat, lon)
     g, _ = _s.anchor(aid, lat, lon)
+    if inputs.get('models') and g is not None:
+        import bridgejoins
+        bridgejoins.configure(g, os.path.dirname(out_dir), lambda la,lo: ground(None,la,lo,
+            _s.dem.sample(la,lo,gradingmod.PROFILE_ZOOM)))
     quad = np.asarray(geotiles.quad(frame, gx, gy), np.float64)
     qx0, qy0 = float(quad[:, 0].min()), float(quad[:, 1].min())
     qx1, qy1 = float(quad[:, 0].max()), float(quad[:, 1].max())
