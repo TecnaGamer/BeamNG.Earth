@@ -4,7 +4,11 @@
 order, before the broad Spanish source. The newer flights cover the north;
 white missing tiles fall through to 2018, then the normal global chain.
 The services advertise a mainland bounding box, including blank surrounding
-land and sea. It is a request filter, not a precise coverage polygon.
+land and sea. It is a request filter, not a precise coverage polygon. The
+2021 box stops at 39.50 N: its flights hold imagery only north of ~39.58 N
+(tested from Portugal: Braga to Leiria have it; Santarém, Lisbon, Évora and
+Faro come back ~97 % white), and each empty 1024 px export cost ~260 ms
+before the 2018 fallback.
 
 Both use the existing lazy WMS export path (one 1024 px image per z15
 parent, cached as z17 children), the ordinary shared per-host limits, and

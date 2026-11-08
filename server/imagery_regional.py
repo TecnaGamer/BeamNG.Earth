@@ -69,10 +69,13 @@ REGIONAL = {
                "&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}",
                "IGN BD ORTHO (Licence Ouverte 2.0)", (41.30, -5.20, 51.10, 9.60), "xyz", False),
     # Newer northern flights first; blank parts fall through to the mainland 2018
-    # coverage. Both services advertise this box, not a rectangular northern edge.
-    # Keep both ahead of Spain, whose broad box also includes Portugal.
+    # coverage. Both services advertise the whole mainland, but the 2021 flights hold
+    # imagery only north of ~39.58 N (Braga to Leiria; Santarem, Lisbon, Evora and Faro
+    # come back ~97 % white, ~260 ms per empty z15 parent: PR #868's review). 39.5 keeps
+    # the south from asking it first. Keep both ahead of Spain, whose broad box also
+    # includes Portugal.
     "pt_dgt2021": ("https://cartografia.dgterritorio.gov.pt/ortos2021/service?LAYERS=Ortos2021-RGB&" + DGT_WMS,
-                   "DGT Portugal orthophotos 2021 (CC BY 4.0)", (36.72, -10.20, 42.28, -5.95), "export", False),
+                   "DGT Portugal orthophotos 2021 (CC BY 4.0)", (39.50, -10.20, 42.28, -5.95), "export", False),
     "pt_dgt2018": ("https://cartografia.dgterritorio.gov.pt/ortos2018/service?LAYERS=Ortos2018-RGB&" + DGT_WMS,
                    "DGT Portugal orthophotos 2018 (CC BY 4.0)", (36.72, -10.20, 42.28, -5.95), "export", False),
     "spain": ("https://tms-pnoa-ma.idee.es/1.0.0/pnoa-ma/{z}/{x}/{ty}.jpeg", "PNOA (c) IGN Espana (CC BY 4.0)",

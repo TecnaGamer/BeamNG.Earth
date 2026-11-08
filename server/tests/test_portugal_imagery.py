@@ -85,11 +85,19 @@ class PortugalImageryTest(unittest.TestCase):
 
     def test_blank_northern_flights_fall_back_to_2018_and_stay_cached(self):
         im, transport = self.make(newer=False)
+        self.warm(im, 39.74, -8.81)                  # Leiria: inside the 2021 box, here without its imagery
+        self.assertEqual(self.map_source(im, 39.74, -8.81), "pt_dgt2018")
+        self.assertIn("Ortos2021-RGB", transport.requests)
+        before = len(transport.requests)
+        self.assertEqual(self.map_source(im, 39.74, -8.81), "pt_dgt2018")
+        self.assertEqual(len(transport.requests), before)
+
+    def test_the_south_never_asks_the_northern_flights(self):
+        """Lisbon, south of the 2021 flights: straight to 2018, no empty 2021 export first."""
+        im, transport = self.make()
         self.warm(im)
         self.assertEqual(self.map_source(im, 38.67254, -9.15231), "pt_dgt2018")
-        before = len(transport.requests)
-        self.assertEqual(self.map_source(im, 38.67254, -9.15231), "pt_dgt2018")
-        self.assertEqual(len(transport.requests), before)
+        self.assertNotIn("Ortos2021-RGB", transport.requests)
 
     def test_empty_portuguese_coverage_allows_spanish_photos(self):
         im, _ = self.make(newer=False, older=False)
