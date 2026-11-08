@@ -8,13 +8,13 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.22,
-          0.23,
-          0.25,
+          0.62,
+          0.64,
+          0.66,
           1.0
         ],
-        "metallicFactor": 0.5,
-        "roughnessFactor": 0.5
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.35
       },
       {},
       {},
@@ -74,13 +74,35 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.12,
-          0.12,
-          0.13,
+          0.55,
+          0.57,
+          0.6,
           1.0
         ],
-        "metallicFactor": 0.2,
-        "roughnessFactor": 0.5
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.4
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_amen_kick": {
+    "name": "bne_au_amen_kick",
+    "mapTo": "bne_au_amen_kick",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "69957b5e-5bee-5daf-bbf0-70e8734e5713",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.3,
+          0.31,
+          0.33,
+          1.0
+        ],
+        "metallicFactor": 0.4,
+        "roughnessFactor": 0.6
       },
       {},
       {},
@@ -162,10 +184,10 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.65,
           0.7,
-          0.72,
-          0.35
+          0.76,
+          0.78,
+          0.18
         ],
         "metallicFactor": 0.0,
         "roughnessFactor": 0.1

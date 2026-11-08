@@ -18,16 +18,17 @@ from build_rail_crossing_props import OUT, Mesh, write_dae
 
 SINK = 0.1
 COLOURS = {      # (base colour, metallic, roughness)
-    "bne_au_amen_steel": ((0.22, 0.23, 0.25), 0.5, 0.5),
+    "bne_au_amen_steel": ((0.62, 0.64, 0.66), 0.7, 0.35),      # brushed stainless
     "bne_au_amen_orange": ((0.95, 0.38, 0.08), 0.1, 0.35),
     "bne_au_amen_blue": ((0.05, 0.20, 0.55), 0.1, 0.4),
-    "bne_au_amen_phone": ((0.12, 0.12, 0.13), 0.2, 0.5),
+    "bne_au_amen_phone": ((0.55, 0.57, 0.60), 0.6, 0.4),      # the phone's silver body
+    "bne_au_amen_kick": ((0.30, 0.31, 0.33), 0.4, 0.6),       # the lower panels
     "bne_au_amen_red": ((0.80, 0.06, 0.05), 0.1, 0.4),
     "bne_au_amen_white": ((0.92, 0.92, 0.90), 0.0, 0.5),
     "bne_au_amen_dark": ((0.05, 0.05, 0.06), 0.0, 0.6),
 }
 GLASS = "bne_au_amen_glass"
-GLASS_RGBA = (0.65, 0.70, 0.72, 0.35)       # grey, see-through
+GLASS_RGBA = (0.70, 0.76, 0.78, 0.18)       # clear, faintly grey
 
 
 def prism(m, mat, profile, y0, y1):
@@ -45,25 +46,31 @@ def payphone():
         for sy in (-1, 1):                                          # the four corner posts
             m.box(S, (sx * 0.425, sy * 0.375, 0.85), (0.025, 0.025, 0.95))
     m.box(S, (0.0, 0.0, -0.04), (0.45, 0.40, 0.06))                 # the floor
-    for sx in (-1, 1):                                              # glass: both sides and the back
-        m.box(GLASS, (sx * 0.425, 0.0, 0.96), (0.006, 0.35, 0.84))
-    m.box(GLASS, (0.0, 0.375, 0.96), (0.40, 0.006, 0.84))
+    # glass: one double-sided pane a side and the back (a thin glass box sorted its faces badly: a dark triangle across
+    # each pane in game), over a steel kick panel
+    for sx in (-1, 1):
+        m.face(GLASS, [(sx * 0.425, -0.35, 0.50), (sx * 0.425, 0.35, 0.50), (sx * 0.425, 0.35, 1.80),
+                       (sx * 0.425, -0.35, 1.80)])
+        m.box("bne_au_amen_kick", (sx * 0.425, 0.0, 0.27), (0.008, 0.35, 0.23))
+    m.face(GLASS, [(-0.40, 0.375, 0.50), (0.40, 0.375, 0.50), (0.40, 0.375, 1.80), (-0.40, 0.375, 1.80)])
+    m.box("bne_au_amen_kick", (0.0, 0.375, 0.27), (0.40, 0.008, 0.23))
     m.box(B, (0.0, 0.0, 1.86), (0.46, 0.41, 0.06))                  # the band under the hood
     prism(m, O, [(-0.48, 1.92), (0.48, 1.92), (0.48, 2.05), (0.43, 2.14), (0.30, 2.19), (0.0, 2.20),
                  (-0.30, 2.19), (-0.43, 2.14), (-0.48, 2.05)], -0.43, 0.43)
-    m.box(P, (0.0, 0.27, 1.25), (0.15, 0.09, 0.25))                 # the phone unit on the back wall
-    m.box(P, (-0.12, 0.17, 1.28), (0.04, 0.04, 0.10))               # its handset
+    m.box(P, (0.0, 0.30, 1.30), (0.17, 0.06, 0.32))                 # the phone unit on the back wall
+    m.box("bne_au_amen_dark", (0.0, 0.239, 1.48), (0.10, 0.002, 0.06))       # its screen
+    m.box("bne_au_amen_dark", (0.03, 0.239, 1.25), (0.06, 0.002, 0.08))      # its keypad
+    m.box("bne_au_amen_dark", (-0.13, 0.22, 1.32), (0.035, 0.035, 0.11))     # its handset
     return m
 
 
 def postbox():
     m = Mesh(4)
     m.box("bne_au_amen_dark", (0.0, 0.0, 0.0), (0.28, 0.25, 0.10))  # the plinth
-    prism(m, "bne_au_amen_red", [(-0.25, 0.10), (0.25, 0.10), (0.25, 1.12), (0.22, 1.19), (0.13, 1.23), (0.0, 1.25),
-                                 (-0.13, 1.23), (-0.22, 1.19), (-0.25, 1.12)], -0.225, 0.225)
-    m.box("bne_au_amen_white", (0.0, 0.0, 0.62), (0.256, 0.231, 0.07))      # the band
-    m.box("bne_au_amen_dark", (0.0, -0.2265, 1.04), (0.19, 0.003, 0.05))    # the slot's plate
-    m.box("bne_au_amen_dark", (0.0, -0.229, 1.04), (0.15, 0.003, 0.0175))   # the slot
+    prism(m, "bne_au_amen_red", [(-0.25, 0.1), (0.25, 0.1), (0.25, 1.0), (0.2378, 1.0695), (0.2023, 1.1323), (0.1469, 1.182), (0.0773, 1.214), (0.0, 1.225), (-0.0773, 1.214), (-0.1469, 1.182), (-0.2023, 1.1323), (-0.2378, 1.0695), (-0.25, 1.0)], -0.225, 0.225)     # a round top
+    m.box("bne_au_amen_white", (0.0, 0.0, 0.70), (0.256, 0.231, 0.06))      # the band
+    m.box("bne_au_amen_dark", (0.0, -0.2265, 0.92), (0.19, 0.003, 0.05))    # the slot's plate
+    m.box("bne_au_amen_dark", (0.0, -0.229, 0.92), (0.15, 0.003, 0.0175))   # the slot
     return m
 
 
