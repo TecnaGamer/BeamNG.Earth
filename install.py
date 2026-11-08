@@ -508,7 +508,7 @@ def setup_venv(dry_run):
             hint = ("On Debian/Ubuntu: sudo apt install python3-venv" if not IS_WIN else
                     "Reinstall Python from python.org (keep the default options, tick 'Add python.exe to PATH').")
             fail("could not create the virtual environment. " + hint)
-    say("Python packages: installing the server's requirements (numpy, Pillow, duckdb, fsspec) ...")
+    say("Python packages: installing the server's requirements (numpy, Pillow, Shapely, duckdb, fsspec) ...")
     cmd = [py, "-m", "pip", "install", "--disable-pip-version-check"]
     if IS_WIN:
         # Without a matching wheel (e.g. a newer Python), pip tries to compile DuckDB and fails without MSVC.

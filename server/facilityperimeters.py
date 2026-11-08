@@ -19,6 +19,7 @@ from shapely.geometry import Polygon,LineString,shape
 from shapely.ops import unary_union,substring
 from shapely.strtree import STRtree
 import geodesy
+import perimeterevidence
 import mapcells
 import mapgeom
 
@@ -34,21 +35,11 @@ _selection_jobs={}
 
 
 def evidence_paths():
-    paths=[EVIDENCE]
-    if CONSTRAINTS.exists():paths.append(CONSTRAINTS)
-    if os.environ.get('BNE_PERIMETER_OVERRIDES'):
-        paths.append(Path(os.environ['BNE_PERIMETER_OVERRIDES']))
-    return paths
+    return perimeterevidence.paths(EVIDENCE, CONSTRAINTS)
 
 
 def evidence_signature():
-    h=hashlib.sha256()
-    for path in evidence_paths():
-        h.update(str(path).encode())
-        try:h.update(path.read_bytes())
-        except FileNotFoundError:
-            if path!=EVIDENCE: raise
-    return h.hexdigest()
+    return perimeterevidence.signature(EVIDENCE, CONSTRAINTS)
 
 
 def evidence():

@@ -143,8 +143,8 @@ def code_key():
             if got is None or any(n.endswith(".py") for n in os.listdir(here)):
                 got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
             h.update(got)
-            import facilityperimeters
-            h.update(facilityperimeters.evidence_signature().encode())
+            import perimeterevidence
+            h.update(perimeterevidence.signature().encode())
             for k in sorted(os.environ):                # (the build switches: BNE_*)
                 if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())

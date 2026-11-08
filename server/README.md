@@ -64,7 +64,7 @@ python3 server/earthd.py --port 47613 --user-dir ~/.local/share/BeamNG/BeamNG.dr
 | `--credits` | `on` | Data credits for the mod's on-screen overlay (`credits.py`; `credits` messages, see below): the imagery / elevation / weather sources of the tiles within 2 km of the player and of the far field (with `--colormatch s2`, a texture the seam feather corrected also names the S2 references), sent on change, at most once a second. `off`: no message (the mod shows `hello.attribution`). `Server()` has none |
 | `-v` | off | Debug logging, with the event loop's stalls over 0.25 s and the main thread's stack at that moment ("event loop stalled") |
 
-Requirements: Python 3 (3.10+), numpy, Pillow (≥ 11, for its DXT1 encoder) with WebP support. No
+Requirements: Python 3 (3.10+), numpy, Pillow (≥ 11, for its DXT1 encoder) with WebP support, and Shapely 2.x for facility perimeter geometry. No
 API keys, no other packages (the `.cdae` writer has its own msgpack encoder). The map-data pipeline
 (`mapdata.py`, "Map data" below; not used by earthd yet) also needs `duckdb` (≥ 1.5) and `fsspec`:
 `pip install -r server/requirements.txt`.
