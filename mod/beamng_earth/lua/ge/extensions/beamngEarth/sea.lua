@@ -416,7 +416,15 @@ function M.update(anchorId, player)
       madeRivers[key], riverBox[key], riverHidden[key] = nil, nil, nil
     end
   end
-  local n, nudge = 0, fluidDirty
+  -- (a rebuilt water volume re-places a slow car only when it is in that water: with "nudge = fluidDirty" every
+  -- tunnel or water-guard change of the streamed road tiles reset a stopped car in place, wherever it was, every few
+  -- seconds or minutes: players' reports on the dev builds since PR #822, 2026-11-08)
+  local n, nudge = 0, false
+  if fluidDirty and player then
+    for _, t in pairs(want.tiles) do
+      if inside(t, player) and player.z < t.z + 1 then nudge = true; break end
+    end
+  end
   fluidDirty = false
   for key, r in pairs(want.rivers) do
     if not madeRivers[key] then

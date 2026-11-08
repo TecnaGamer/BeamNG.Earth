@@ -182,4 +182,17 @@ T.check(sea.status().guards == 1, 'geotile shape deletion also waits for the col
 roads.collisionRebuilt()
 roads.update(gov, 1, player, nil, a); roads.update(gov, 1, player, nil, a)
 T.check(sea.status().guards == 0, 'the last geotile collision reference is released')
+
+-- A stopped car out of the water: a tunnel's protection arriving and going (the streamed road tiles do this all the
+-- time) rebuilds the water but never re-places the car (players' "resets when stationary", 2026-11-08: every such
+-- change reset a stopped car in place, wherever it was)
+player.x, player.y, player.z = 0, 0, 25
+sea.onMessage(message(1))
+for _ = 1, 70 do sea.update(1, player) end
+local before = car.nudges
+sea.protect('land-car', bore, anchor)
+for _ = 1, 10 do sea.update(1, player) end
+sea.release('land-car')
+for _ = 1, 10 do sea.update(1, player) end
+T.check(#water() > 0 and car.nudges == before, 'a stopped car above the water is not re-placed when the water is rebuilt')
 T.done('test_subsea_water')
