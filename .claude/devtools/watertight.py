@@ -181,7 +181,8 @@ def open_edges(meshes, ground_zs, keep=None):
 def edge_kind(mesh_kind, mat):
     if mesh_kind in ("walks", "walkcol"):
         return "kerb" if mat == 0 else "sidewalk"
-    return {"road": "road", "deck": "deck", "tunnel": "mouth",   # (a tunnel's open loops: its mouths, the way in) "barrier": "wall", "rail": "rail"}.get(mesh_kind,
+    # (a tunnel's open loops: its mouths, the way in)
+    return {"road": "road", "deck": "deck", "tunnel": "mouth", "barrier": "wall", "rail": "rail"}.get(mesh_kind,
                                                                                                     mesh_kind)
 
 

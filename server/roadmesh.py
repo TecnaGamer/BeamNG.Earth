@@ -829,6 +829,76 @@ def _shared(P, UV, T):
     return P[first], UV[first], inv.reshape(-1)[T]
 
 
+OVERLAY_DECK_END_M = 0.05  # m an overlay on a deck may reach past the end of the deck surface it is painted on
+
+
+def _overlays_on_decks(rbc):
+    """The overlays (markings, layer != "base") on a deck follow the deck surface they are painted on and stop at
+    its end (the user, 2026-11-07: a lane line's own fixed heights, knotted elsewhere than its deck's, rode up to
+    4 cm over the asphalt and on past the deck's end 0.3 m over the ground, Pittsburgh 40.443,-79.9928): each of
+    their cross sections takes the height of the nearest point of its fid's base deck ribbons' centre line, and the
+    sections whose nearest point is past an end of that line are left out (the ribbon cut to its longest run on the
+    deck). Ribbons on the ground and decks' own surfaces as they were."""
+    base = {}
+    for r, c in rbc:
+        if r[5] is not None and r[4] == "base" and c.get("deck"):
+            mid = (np.asarray(r[0]) + np.asarray(r[1])) * 0.5
+            hw = np.hypot(*(np.asarray(r[0]) - np.asarray(r[1])).T) * 0.5
+            base.setdefault(c.get("fid"), []).append((np.c_[mid, np.asarray(r[5], np.float64)], hw))
+    if not base:
+        return rbc
+    out = []
+    for r, c in rbc:
+        left, right, v, m, layer, z = r
+        # (its own road's deck; a line of another way painted over a deck: any deck under it)
+        lines = base.get(c.get("fid")) or [x for v_ in base.values() for x in v_]
+        if z is None or layer == "base" or not lines or len(left) < 2:
+            out.append((r, c))
+            continue
+        mid = (np.asarray(left) + np.asarray(right)) * 0.5
+        bz = np.full(len(mid), np.nan)
+        bd = np.full(len(mid), np.inf)
+        own = c.get("fid") in base
+        for ln, hw in lines:
+            if len(ln) < 2:
+                continue
+            a, b = ln[:-1, :2], ln[1:, :2]
+            ab = b - a
+            L2 = np.maximum((ab * ab).sum(1), 1e-12)
+            t = ((mid[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None]
+            tc = np.clip(t, 0.0, 1.0)
+            q = a[None] + tc[..., None] * ab[None]
+            d = np.hypot(*(mid[:, None, :] - q).transpose(2, 0, 1))
+            j = np.argmin(d, 1)
+            k = np.arange(len(mid))
+            # past an end: beyond the line's first or last segment by more than OVERLAY_DECK_END_M
+            seg_len = np.sqrt(L2[j])
+            past = ((j == 0) & (t[k, j] * seg_len < -OVERLAY_DECK_END_M)) |                    ((j == len(ab) - 1) & ((t[k, j] - 1.0) * seg_len > OVERLAY_DECK_END_M))
+            zz = ln[j, 2] + tc[k, j] * (ln[j + 1, 2] - ln[j, 2])
+            wide = np.maximum(hw[j], hw[np.minimum(j + 1, len(hw) - 1)]) + OVERLAY_DECK_END_M
+            better = (d[k, j] < bd) & ~past & (d[k, j] <= wide)      # (on the deck surface as drawn: within its half width)
+            bz[better], bd[better] = zz[better], d[k, j][better]
+        on = np.isfinite(bz)
+        if on.all():
+            out.append(((left, right, v, m, layer, bz), c))
+            continue
+        # the longest run of sections on the deck
+        best, run, s0 = (0, 0), 0, 0
+        for i, f in enumerate(np.r_[on, False]):
+            if f:
+                if run == 0:
+                    s0 = i
+                run += 1
+            else:
+                if run > best[1] - best[0]:
+                    best = (s0, s0 + run)
+                run = 0
+        a_, b_ = best
+        if b_ - a_ >= 2:
+            out.append(((left[a_:b_], right[a_:b_], v[a_:b_], m, layer, bz[a_:b_]), c))
+    return out
+
+
 @profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
@@ -856,6 +926,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if any(r[5] is not None for r, _c in rbc):  # (trimmed as deck() trims their slabs: context, the decks around)
         ctx = [(r, c) for r, c in ribbon_pairs(list(context)) if r[5] is not None]
         rbc = list(trim_overlaps(rbc, ctx, junctions))
+    rbc = _overlays_on_decks(rbc)
     # (each deck end with its layer and width: a ground ribbon's end takes the edges of a deck end of its own layer and
     # a like width only; the nearest of any kind gave a ground centre line (0.12 m) the deck asphalt's 7.1 m edges at
     # a Pittsburgh bridge's end, GitHub #739)
