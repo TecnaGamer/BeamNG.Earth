@@ -1240,6 +1240,38 @@ def barrier_solid(edge, inward, z, h, v=None, section=JERSEY):
     return P, T, UV
 
 
+def _slabs_from_tops(P, T, UV, M, tops, side):
+    """The decks' slabs as closed solids from their tops as drawn (the user, 2026-11-07: watertight): per slab depth,
+    the tops of its pieces taken together (their shared end rows weld: no wall inside a deck) and closed by
+    shells.close: sides straight down the depth from every edge of the outline, the underside under them, in the
+    side material. Sides from each piece's own edge rows left 13 cm slivers where a junction field retriangulated
+    the top (Pittsburgh 40.44225,-79.99391). P, T, UV, M with the tops replaced (T absolute indices)."""
+    import shells
+    off = np.r_[0, np.cumsum([len(a) for a in P])]
+    drop = set()
+    add = []
+    for depth, idx in sorted(tops.items()):
+        pp = np.concatenate([P[i] for i in idx])
+        uu = np.concatenate([UV[i] for i in idx])
+        base = np.r_[0, np.cumsum([len(P[i]) for i in idx])]
+        tt = np.concatenate([T[i] - off[i] + base[j] for j, i in enumerate(idx)])
+        mt = np.concatenate([M[i] for i in idx])
+        P2, T2, M2, (UV2,) = shells.close(pp, tt, np.full(len(tt), side), (uu,), sink=depth)
+        M2 = np.asarray(M2).copy()
+        M2[:len(tt)] = mt
+        add.append((P2, T2, UV2, M2))
+        drop.update(idx)
+    keep = [i for i in range(len(P)) if i not in drop]
+    P_, T_, UV_, M_, nv = [], [], [], [], 0
+    for i in keep:
+        P_.append(P[i]), UV_.append(UV[i]), M_.append(M[i]), T_.append(T[i] - off[i] + nv)
+        nv += len(P[i])
+    for P2, T2, UV2, M2 in add:
+        P_.append(P2), UV_.append(UV2), M_.append(M2), T_.append(T2 + nv)
+        nv += len(P2)
+    return P_, T_, UV_, M_
+
+
 def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=None, parapet_h=PARAPET_H,
          low_parapet_decks=(), pads=()):
     """The bridge decks of a tile as one colliding mesh: per "deck" chunk a slab of opaque concrete
@@ -1308,6 +1340,7 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
     covered = _parapet_cover([(r, c) for r, c in rb], cov_ctx)
     medians = _median_gaps([(r, c) for r, c in rb],
                            [(r, c) for r, c in zip(ribbons(list(context)), context) if r[5] is not None])
+    tops = {}               # slab depth -> the indices of its pieces' tops in P (_slabs_from_tops)
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         active_field = junctions.get(c.get('fid'))
         k = len(z)
@@ -1334,11 +1367,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         # (the top plain asphalt, under the road's own surface: where that does not cover it, between decks side by
         # side, a median, a gore, the slab showed as pale concrete wedges, US-101 over the Los Angeles River)
         across = float(np.median(np.hypot(*(el - er).T))) / DECK_TOP_TILE_M
+        i0, nv0 = len(P), nv
         quads(L, R, 0.0, across, v * DECK_TOP_V, v * DECK_TOP_V, top if not c.get("tunnel") else side,
               np.array([0.0, 0.0, 1.0]))
-        quads(L, Lb, 0.0, 0.1, v, v, side, out_l)
-        quads(R, Rb, 0.0, 0.1, v, v, side, -out_l)
-        quads(Lb, Rb, 0.0, 1.0, v, v, side, np.array([0.0, 0.0, -1.0]))
+        # the slab a closed solid from its top's own outline (the user, 2026-11-07: watertight): sides straight down
+        # `slab` from every edge of the top as drawn (a junction field retriangulates the top: sides built from the
+        # chunk's edge rows left 13 cm slivers between them, Pittsburgh 40.44225,-79.99391), the underside under them
+        tops.setdefault(round(slab, 3), []).append(i0)
         if c.get("tunnel"):                     # a tunnel's floor: the slab alone
             continue
         # girders under the slab
@@ -1367,6 +1402,9 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
             T.append(bt_ + nv)
             M.append(np.full(len(bt_), side))
             nv += len(bp)
+    if tops:                # (the tops of a deck's pieces closed together: their shared end rows weld, no wall between)
+        P, T, UV, M = _slabs_from_tops(P, T, UV, M, tops, side)
+        nv = sum(len(a) for a in P)
     for p in _piers_clear(piers, rb):
         _pier(p, origin, P, T, UV, M, side)
         nv = sum(len(a) for a in P)

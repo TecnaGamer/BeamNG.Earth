@@ -19,9 +19,8 @@ WELD_M = 0.001
 SINK_M = 0.10           # m a bottom is sunk under the piece's foot (sidewalks.SINK)
 UNDER_NZ = 0.5
 BOTTOM_TOL_M = 0.05     # m a coarse bottom may be off its loop (half the skirt: it stays under the piece)
-CAP_TOL_M = 0.001       # m: a cap leaves out the ring's points this close to the line through their neighbours
-SLIT_W_M = 0.002        # m: ... or narrower than this on average (its area over half its perimeter): a cap's straight
-                        # runs left out within CAP_TOL_M
+
+SLIT_W_M = 0.002        # m: ... or narrower than this on average (its area over half its perimeter)
 SLIT_M2 = 1e-4          # m²: a loop enclosing less is a T-junction's slit, not an opening
 stats = {"meshes": 0, "loops": 0, "tris_in": 0, "tris_added": 0, "fanned": 0}
 
@@ -43,10 +42,23 @@ def loops(P, T):
     T, Tw = T[ok], Tw[ok]
     H = np.concatenate([Tw[:, [0, 1]], Tw[:, [1, 2]], Tw[:, [2, 0]]])
     Ho = np.concatenate([T[:, [0, 1]], T[:, [1, 2]], T[:, [2, 0]]])
+    # the open half-edges: per edge, its uses one way less the other way's (a manifold edge's one use; an edge three
+    # faces share, the one left over), so every vertex has as many going out as coming in and every walk closes
     key = np.sort(H, 1)
-    _, inv_e, cnt = np.unique(key, axis=0, return_inverse=True, return_counts=True)
-    b = cnt[inv_e.ravel()] == 1
-    H, Ho = H[b], Ho[b]
+    sgn = np.where(H[:, 0] < H[:, 1], 1, -1)
+    _, inv_e = np.unique(key, axis=0, return_inverse=True)
+    inv_e = inv_e.ravel()
+    sur = np.bincount(inv_e, weights=sgn).astype(np.int64)
+    s_e = sur[inv_e]
+    pick = np.zeros(len(H), bool)
+    order = np.argsort(inv_e, kind="stable")
+    seen = {}
+    for h in order.tolist():                    # each edge's surplus taken from its half-edges going its way
+        e = int(inv_e[h])
+        if s_e[h] != 0 and np.sign(s_e[h]) == sgn[h] and seen.get(e, 0) < abs(int(s_e[h])):
+            pick[h] = True
+            seen[e] = seen.get(e, 0) + 1
+    H, Ho = H[pick], Ho[pick]
     nxt = {}
     for (a, c), (oa, _oc) in zip(H.tolist(), Ho.tolist()):
         nxt.setdefault(a, []).append((c, oa))
@@ -76,6 +88,19 @@ def open_loops(P, T):
     if not ls:
         return []
     _first, inv = _weld(P)
+    # a loop with no edge used by a single face is faces sharing edges the wrong way round (an edge three or four
+    # faces meet at, a flipped face): no gap, nothing to see through
+    Tw = inv[np.asarray(T, np.int64).reshape(-1, 3)]
+    key = np.sort(np.concatenate([Tw[:, [0, 1]], Tw[:, [1, 2]], Tw[:, [2, 0]]]), 1)
+    u, cnt = np.unique(key, axis=0, return_counts=True)
+    single = {tuple(x) for x in u[cnt == 1].tolist()}
+
+    def has_single(loop):
+        w = inv[np.asarray(loop)]
+        return any((min(a, b), max(a, b)) in single for a, b in zip(w.tolist(), np.roll(w, -1).tolist()))
+    ls = [l for l in ls if has_single(l)]
+    if not ls:
+        return []
     parent = list(range(len(ls)))
 
     def root(i):
@@ -226,9 +251,8 @@ def _close(P, T, TM=None, per_vertex=(), mouths=True, sink=SINK_M, open_tris=Non
         elif not mouths:
             continue
         else:
-            # capped on the ring's corners only (its straight runs' points left out: their edges lie along the
-            # cap's, a T-junction's slit, no gap)
-            K = _coarse(Q, CAP_TOL_M)
+            # capped on every ring point (edge to edge: a cap edge along several short ones, a T-join, flickers)
+            K = np.arange(len(Q))     # (every ring point: edge to edge, no T-join)
             t, fan = _cap(Q[K], -n)
             ring, capQ = base + len(src), Q[K]
             src.extend(L[K].tolist())
