@@ -78,7 +78,10 @@ def plans_format():
     """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
     them), "<plans>.<facts>"."""
     import roads
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}"
+    import grading
+    # (the grade guard, off by default, makes other plans: its own key, so that the two never mix and nobody else's
+    # plans are thrown away)
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's

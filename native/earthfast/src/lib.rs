@@ -19,6 +19,7 @@ mod roadgeom;
 mod shore;
 mod photofill;
 mod ambience;
+mod gradeguard;
 mod power;
 mod underpass;
 mod coarseease;
