@@ -1353,7 +1353,11 @@ def _cell_bounds(feats):
         if me is None:
             return None
         import mapcells
-        got = feats.__dict__["_bnge_cell_bounds"] = mapcells.CellKey(*(int(v) for v in str(me[0]).split("/"))).bounds()
+        try:
+            got = mapcells.CellKey(*(int(v) for v in str(me[0]).split("/"))).bounds()
+        except (TypeError, ValueError):     # (not a z/x/y cell: a test's or a caller's own name)
+            return None
+        feats.__dict__["_bnge_cell_bounds"] = got
     return got
 
 
