@@ -8106,7 +8106,11 @@ def retaining_walls(frame, roads, elev, exact, decks=()):
                     ground_at(face[sl] + th, range(i, j + 1)), z[sl] + max_h + BACK_TOP_OVER_M), floor[sl]))
                 out.append({"base": base, "top": top, "back_top": back_top, "foot": z[sl] - WALL_FOOT_M,
                             "mountain": bool(mountain),
-                            "toward": -out_n[sl], "thick": th, "concrete": concrete, "rock": rural and tall,
+                            "toward": -out_n[sl], "thick": th,
+                            # (a wall that runs under a deck is the abutment's concrete along its whole length, whatever
+                            # the road: a minor road's cutting is stone, a piece has one look)
+                            "concrete": concrete or bool(WALL_UNDER_DECK_ON and np.isfinite(floor[sl]).any()),
+                            "rock": rural and tall,
                             "road_z": z[sl], "clear": _clear_depth(base, out_n[sl], np.full(len(base), CLIFF_REACH_M),
                                                                    others, fid),
                             "edge": xy[sl] + out_n[sl] * (rh + CLIFF_EDGE_M)})
