@@ -25,6 +25,7 @@ MODULES = (
     "test_host_package", "test_carriageway_solver",
     "test_portugal_imagery",
     "test_rail_crossing_assets",
+    "test_native_stress",
 )
 
 
