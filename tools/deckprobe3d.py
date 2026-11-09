@@ -126,7 +126,12 @@ for (fid, *_), (xy, z, spec, level) in sorted(decks.items()):
                 zre = float(np.interp(a, arc[ok], zr[ok])) if ok.sum() >= 2 else np.nan
                 cl.append((round(zre - zg, 2), round(float(np.interp(a, arc, z)) - zg, 2), ground[gi][1]))
         row["clear"] = sorted(cl)[:4]
-    if args.dump and fid.startswith(args.dump):
+    if args.dump is not None and fid.startswith(args.dump) and real is None:
+        for gi, cr in enumerate(roads._crossings_by([xy], [gl for _f, _c, gl in ground])):
+            for _pi, a, pt in cr:
+                zg = float(ground_up(np.asarray([pt], np.float64))[0])
+                print(f"   crossing {ground[gi][1]} at {a:.1f} m: ours {float(np.interp(a, arc, z)) - zg:.2f} m over it")
+    if args.dump is not None and fid.startswith(args.dump):
         zr_ = np.full(len(xy), np.nan)
         if real is not None:
             ok_ = np.isfinite(real)
