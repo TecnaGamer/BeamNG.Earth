@@ -9,7 +9,6 @@
 -- edge carries its speed limit and lanes; the road rules come from a file of ours (the level's info.json has none);
 -- a reset by someone else (map.reset() with no graph rebuilds an empty one from our level) is undone next frame.
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 local localplayers = require('beamngEarth/localplayers')
 local overtake = require('beamngEarth/overtake')
 local controlled = {}
@@ -550,9 +549,9 @@ function M.stuck(since, now, d)
 end
 
 -- Traffic cars the block left behind (or all, after a teleport), and stuck ones, are respawned on the graph.
-local stillSince = {}   -- car id -> wallnow() it stopped moving
-local seenAt = {}       -- car id -> { x, y, wallnow() it appeared there }
-local lastTeleport = {} -- car id -> wallnow() it was last teleported
+local stillSince = {}   -- car id -> os.clock() it stopped moving
+local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
+local lastTeleport = {} -- car id -> os.clock() it was last teleported
 local syncTrafficPool
 local function guard(b, all)
   local gt = gameplay_traffic
@@ -561,7 +560,7 @@ local function guard(b, all)
   local me = playerId()
   local pv = me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition() or nil
-  local now = wallnow()
+  local now = os.clock()
   -- paused: nothing moves, nobody is stuck (the clocks start again after it)
   local paused = simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause()
   if paused then table.clear(stillSince) end
@@ -1005,7 +1004,7 @@ end
 
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
-  local t0 = wallnow()
+  local t0 = os.clock()
   if applied then
     local ok, err = pcall(launchRespawned, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end
@@ -1016,7 +1015,7 @@ function M.update(aid, b, gov)
     lastGuard = t0
     local ok, err = pcall(guard, b, false)
     if not ok then log('W', 'beamngEarth', 'navgraph guard: ' .. tostring(err)) end
-    local g = (wallnow() - t0) * 1000
+    local g = (os.clock() - t0) * 1000
     stats.guardMs = g
     stats.guardMaxMs = math.max(stats.guardMaxMs or 0, g)
   end
@@ -1036,7 +1035,7 @@ function M.update(aid, b, gov)
   -- a small block move alone does not re-apply (each apply is a ~40 ms frame); one of RECLIP_M does
   if not (dirty or foreign) and applied and M.boxMoved(applied.box, b) >= M.RECLIP_M then dirty = true end
   if not (dirty or foreign) then return end
-  local t = wallnow()
+  local t = os.clock()
   if t - lastApply < M.MIN_GAP_S and not foreign and not urgent then return end
   -- (a moved graph, M.transform: built in one go and applied in this frame, whatever the frame budget: until the cars
   -- have it their AI drives on points of the old frame)
