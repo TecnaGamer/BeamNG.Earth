@@ -202,6 +202,16 @@ class PortalCover(unittest.TestCase):
         self.assertEqual(roads.portal_cover(kinds, cover, park).tolist(), kinds.tolist())
         self.assertEqual(roads.portal_cover(np.zeros(5, np.int64), np.full(5, 3.0), trunk).tolist(), [0] * 5)
 
+    def test_a_short_end_run_is_the_tube_it_leads_into(self):
+        # CA-1's northbound Tom Lantos bore: a 4 m low arch before the full tube, a notch of sky over its short face
+        trunk = Spec(5.8, "paved", False, "trunk")
+        kinds = np.array([0, 2, 2, 2, 2])
+        cover = np.array([3.0, 20.0, 50.0, 60.0, 40.0])
+        self.assertEqual(roads.portal_cover(kinds, cover, trunk, np.array([0.0, 4.0, 8.0, 12.0, 16.0])).tolist(),
+                         [2, 2, 2, 2, 2])
+        self.assertEqual(roads.portal_cover(kinds, cover, trunk, np.array([0.0, 30.0, 34.0, 38.0, 42.0]))[0], 1,
+                         "a long one stays a low arch")
+
 
 class ArchRaise(unittest.TestCase):
     def test_ground_over_a_low_arch_stays_over_its_vault(self):
@@ -315,6 +325,19 @@ class TwinTunnels(unittest.TestCase):
         self.assertAlmostEqual(float(mid[0, 2]), 10.0, places=6)
         self.assertEqual(roads.twin_tunnels(self.parts(gap=40.0)), [], "apart: two tubes")
         self.assertEqual(roads.twin_tunnels(self.parts(dz=5.0)), [], "one over the other: two tubes")
+
+    def test_own_sections_and_continuations_not_twins(self):
+        # CA-1's northbound Tom Lantos bore: a 4 m low-arch section at its portal, then the 1.3 km tube, paired as
+        # twins, the tube left out (2026-11-09)
+        sp = Spec(5.8, "paved", False, "trunk")
+        stub = ("w.0#0", sp, np.array([[0.0, 0.0], [4.0, 0.0]]), np.array([10.0, 10.1]), 0.0)
+        tube = ("w.0#1", sp, np.array([[4.0, 0.0], [600.0, 0.0]]), np.array([10.1, 22.0]), 0.0)
+        self.assertEqual(roads.twin_tunnels([stub, tube]), [], "one tunnel's own sections")
+        other = ("v.0#0", sp, np.array([[0.0, 0.0], [4.0, 0.0]]), np.array([10.0, 10.1]), 0.0)
+        self.assertEqual(roads.twin_tunnels([other, tube]), [], "another segment going on from its end")
+        # (twin bores still pair when one is mapped as several sections)
+        a, b = self.parts()
+        self.assertEqual(len(roads.twin_tunnels([("a.0#1",) + a[1:], ("b.0#0",) + b[1:]])), 1)
 
     def test_chunks_one_tube_round_both(self):
         class T:
@@ -479,6 +502,31 @@ class Underwater(unittest.TestCase):
         w = np.zeros(50, bool)
         w[40:] = True
         self.assertEqual(roads.wet_run_inside(xy, w), 0.0)              # at an end: a portal on a bank
+
+
+class PortalDecks(unittest.TestCase):
+    """roads._portal_decks: a short ground gap between a tunnel's portal and a bridge of the same road is bridge (CA-1's
+    northbound Tom Lantos bore: 18 m of ground between them graded as a 22 % drop onto the bridge, 2026-11-09)."""
+
+    def feats(self, gap_m, side_road=False):
+        from test_roads import features
+        # 1000 m west-east: tunnel 0-0.5, then gap_m of ground, then a bridge to 0.8
+        a = 0.5 + gap_m / 1000.0
+        lines, classes = [[(-500, 0), (500, 0)]], ["trunk"]
+        if side_road:                           # (a road ending in the gap: a junction there)
+            lines.append([(gap_m / 2, 0), (gap_m / 2, 50)])
+            classes.append("residential")
+        return features(lines, classes, flags=[(0, "is_tunnel", 0.0, 0.5), (0, "is_bridge", a, 0.8)])
+
+    def ranges(self, f):
+        return [(round(a, 3), round(b, 3), k) for a, b, k in roads._portal_decks(f, 0, roads.tag_level_ranges(f, 0))]
+
+    def test_a_short_gap_is_bridge(self):
+        self.assertEqual(self.ranges(self.feats(18.0)), [(0.0, 0.5, "tunnel"), (0.5, 0.8, "bridge")])
+
+    def test_a_long_gap_or_a_junction_stays_ground(self):
+        self.assertEqual(self.ranges(self.feats(60.0)), [(0.0, 0.5, "tunnel"), (0.56, 0.8, "bridge")])
+        self.assertEqual(self.ranges(self.feats(18.0, side_road=True)), [(0.0, 0.5, "tunnel"), (0.518, 0.8, "bridge")])
 
 
 class SplitRanges(unittest.TestCase):

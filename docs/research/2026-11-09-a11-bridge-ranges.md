@@ -19,7 +19,7 @@ These are source/profile checks, not surveyed dimensions or a live driving/colli
 - The focused run passes 156 tests: `test_bridge_ranges test_grading test_deckjoins test_underpass_profiles test_bridgeprofile test_bridge_level_spans test_bake_formats`.
 - Independent review found provisional range publication and exact-float duplicate recognition defects. Each was reproduced with a failing test and corrected. Natural smoothed copies differing by 4.7 micrometers now give the same 42.763153155 m lower-road height with one or five copies.
 - 104 Lua modules, both node map-math suites, 12 Rust serverlist tests, and mod/BeamMP packaging pass.
-- Cache formats: road facts 11 and plans 27; previous facts/plans are rebuilt. These follow the 10/26 versions used by upstream's #1009 fix.
+- Cache formats: road facts 12 and plans 28; previous facts/plans are rebuilt. These follow the 11/27 versions used by upstream's placement and tunnel changes.
 
 ## Broad-suite environment notes
 
@@ -54,8 +54,10 @@ The complete `tools/quality_gate.py` run also passes in the isolated Python 3.12
 
 GitHub Actions on `36b54f09` passed Ubuntu's complete gate and Windows' seven bake-format tests. With the Germany module now importable, Windows exposed an additional test portability issue: its cache-eviction test asserted Linux's exact missing-file error text. That assertion was removed; the test still requires a warning, false lookups during backoff, a build-cache fault, no downloads during backoff, and a successful re-fetch afterwards.
 
-## Integration with the #1009 fix
+## Integration with the latest dev
 
 Upstream `797d47ad` adds the separate Hämeenlinna underpass fix and uses facts 10 / plans 26. Merging it retains that behavior and the A11 changes, advances the versions to 11/27, and regenerates the golden using the corrected CI fixture. The CI dependency and OS-independent cache-recovery checks are preserved.
 
 All 296 focused road, grading, bridge, grade-separation, and bake-format tests pass. The complete Python 3.12 quality gate also passes: 56 server modules, Lua, Node, Rust, and packaging. The A11 profile measurements remain unchanged. At #1009, the merged code now generates four road bridges over the motorway, with modeled usable clearance of 6.47–9.28 m at the checked crossings. That improvement comes from the upstream #1009 fix, rather than the A11 correction.
+
+The subsequent merge of upstream `97319d10` retains PR #1014's placement geometry, PR #1016's tunnel corrections, and the CI fixes now adopted upstream. Cache versions advance to 12/28, with the golden regenerated on the combined tree. All 376 focused tests and the complete Python 3.12 CI quality gate pass, including placement, tunnel, and interchange coverage; the A11 profile and clearance remain unchanged.

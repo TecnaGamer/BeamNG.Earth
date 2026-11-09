@@ -285,6 +285,9 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             add(verge, c, r, width / 2 + ROAD_EDGE_M + VERGE_M)    # (VERGE_M past the road's material)
 
     copies = roadsmod.copies_of(feats_list)     # (each joint's taper from its own cell: roads.joint_desc)
+    import geodesy
+    placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
+    pfr = geodesy.EnuFrame(la_c, lo_c) if placement.on else None
 
     def taper_of(f):
         return roadsmod.road_tapers(f, urban_fn, widths)
@@ -311,6 +314,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             mw = roadsmod.median_width(specs[i])
             ms = roadsmod.median_side(specs[i])
             for ring in roadsmod.ground_parts(feats, i):      # not bridges / tunnels
+                if pfr is not None:
+                    ring = placement.ring(pfr, feats, i, ring, specs[i], fid)
                 line(ring[:, 0], ring[:, 1], specs[i], aisle,
                      roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
@@ -425,6 +430,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
     nroad = 0
     seen = set()
     copies = roadsmod.copies_of(feats_list)     # (each joint's taper from its own cell: roads.joint_desc)
+    placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
 
     def taper_of(f):
         return roadsmod.road_tapers(f, urban_fn, widths)
@@ -445,6 +451,7 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
                 continue
             hw = (sp.width / 2 + PHOTO_ROAD_EDGE_M) * px_m
             for ring in roadsmod.ground_parts(feats, i):
+                ring = placement.ring(frame, feats, i, ring, sp, fid)
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 c = (np.asarray(e) - x0) * px_m
                 r = (y0 + size - np.asarray(n)) * px_m
@@ -500,6 +507,7 @@ def gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
 def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
     import markings
     near, seen = [], set()
+    placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -512,6 +520,7 @@ def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
                 continue
             seen.add(fid)
             for k, ring in enumerate(roadsmod.ground_parts(feats, i)):
+                ring = placement.ring(frame, feats, i, ring, sp, fid)
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 if e.max() < box[0] or e.min() > box[2] or n.max() < box[1] or n.min() > box[3]:
                     continue
