@@ -234,6 +234,24 @@ class PlaceTest(unittest.TestCase):
             cy = r[2] + 1.25 * math.sin(a) + 2.0 * math.cos(a)
             self.assertGreaterEqual(abs(cy), 7.0 - 1e-6, "a panel over the carriageway")
 
+    def test_no_panel_stands_on_the_carriageway_at_any_angle(self):
+        # GitHub #1022 (a wildlife overpass over the S7, its deck not built): a wall crossing the road at 45 degrees
+        # (neither along it nor across it) left panels on the lanes; none stands within the carriageway now
+        wall = self.line("wall", {"wall": "noise_barrier"}, [[20.0, 30.0], [80.0, -30.0]])
+        spec = type("S", (), {"width": 14.0})()
+        road = [("road", spec, np.array([[0.0, 0.0, 5.0], [100.0, 0.0, 5.0]]), None)]
+        got = fences.rows(self.frame, lambda key: wall, (0.0, -50.0, 100.0, 50.0),
+                          lambda la, lo: np.full(np.shape(la), 5.0), roads=road)
+        self.assertTrue(got)                    # (the panels off the road stay)
+        for r in got:
+            a = math.radians(r[4])
+            cx = r[1] + 1.25 * math.cos(a) - 2.0 * math.sin(a)
+            cy = r[2] + 1.25 * math.sin(a) + 2.0 * math.cos(a)
+            tx, ty = -math.sin(a), math.cos(a)
+            for sgn in (0.0, 1.0, -1.0):
+                self.assertGreaterEqual(abs(cy + sgn * 2.0 * ty), 7.0 + fences.WALL_ON_ROAD_M - 1e-6,
+                                        "a panel on the carriageway")
+
     def test_a_wall_on_a_bridge_ignores_the_road_under_it(self):
         # A rail viaduct's wall crosses a road below: the road is nearer in XY, but at another level, and must
         # not take the wall (it stood on the road below, or turned across it).

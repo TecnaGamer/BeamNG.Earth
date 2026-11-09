@@ -34,6 +34,7 @@ WALL_EDGE_M = 0.5           # m between the carriageway's edge and the wall's fa
 WALL_FIT_REACH_M = 20.0     # m: a wall farther from every carriageway keeps its mapped line
 WALL_FIT_MAX_DEG = 40.0     # a wall this far off the carriageway's direction is not laid along it
 WALL_ACROSS_DEG = 50.0      # ... and over the carriageway: never drawn, the wall must not cross the road
+WALL_ON_ROAD_M = 0.3        # m past a carriageway's edge no wall panel stands, whatever its direction (GitHub #1022)
 WALL_LEVEL_M = 3.0          # m: a carriageway this far above or below the wall is not the one it runs along
 WALL_DECK_REACH_M = 4.0     # m past a deck's edge a bridge wall (its own layer/bridge tags) still stands on it
                             # (a road passing under a rail viaduct)
@@ -369,6 +370,38 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
             for i in np.flatnonzero(across).tolist():
                 p = pending[i]
                 pending[i] = p[:9] + (False,) + p[10:]      # (never a panel across the road)
+            # nor one standing on a carriageway at its own level, whatever its direction: a wall mapped along the edges of
+            # a wildlife overpass over the S7 (Jankowo Gdanskie, GitHub #1022), its deck not built, left panels on the
+            # lanes after the across rule took the rest (its centre or either end within the carriageway + WALL_ON_ROAD_M)
+            keep_ix = [i for i, p in enumerate(pending) if p[0] == G_WALL and p[9]]
+            if keep_ix:
+                kp = np.array([[pending[i][4], pending[i][5]] for i in keep_ix], np.float64)
+                kt = np.array([[pending[i][10], pending[i][11]] for i in keep_ix], np.float64)
+                probes = (kp, kp + kt * (WALL_LEN / 2.0), kp - kt * (WALL_LEN / 2.0))
+                kref = ref[keep_ix]
+                on = np.zeros(len(keep_ix), bool)
+                for line, half, is_deck in fits:
+                    if is_deck:
+                        continue
+                    xy_l = line[:, :2]
+                    a, b = xy_l[:-1], xy_l[1:]
+                    d = b - a
+                    l2 = np.maximum((d * d).sum(1), 1e-12)
+                    for pt in probes:
+                        v = pt[:, None, :] - a[None, :, :]
+                        t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
+                        q = a[None, :, :] + t[:, :, None] * d[None, :, :]
+                        dm = np.hypot(q[:, :, 0] - pt[:, None, 0], q[:, :, 1] - pt[:, None, 1])
+                        k = np.argmin(dm, axis=1)
+                        r = np.arange(len(pt))
+                        lev = np.ones(len(pt), bool)
+                        if line.shape[1] >= 3:
+                            zq = line[k, 2] + t[r, k] * (line[k + 1, 2] - line[k, 2])
+                            lev = np.abs(zq - kref) <= WALL_LEVEL_M
+                        on |= (dm[r, k] < half + WALL_ON_ROAD_M) & lev
+                for j in np.flatnonzero(on).tolist():
+                    p = pending[keep_ix[j]]
+                    pending[keep_ix[j]] = p[:9] + (False,) + p[10:]
     xy = np.array([[p[1], p[2]] for p in pending], np.float64)
     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
