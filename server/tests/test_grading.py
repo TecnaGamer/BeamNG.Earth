@@ -1202,6 +1202,8 @@ class RacewayKeepTest(unittest.TestCase):
         out = g.apply(la, lo, base)
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
 
+    @unittest.mock.patch.object(grading, "UNGRADED", {"raceway"})
+    @unittest.mock.patch.object(grading, "RACEWAY_ON", False)
     def test_track_smoothed_along_its_banking_kept(self):
         """GitHub #833: the elevation data's short bumps along a racetrack are smoothed away; its banking (the ground's
         slope across it) and its long crests stay."""

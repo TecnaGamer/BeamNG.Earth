@@ -373,7 +373,8 @@ UNGRADED_MARGIN_M = 2.0     # ... and nothing else grades their carriageway (+ t
 # or round a closed loop) so its ends are smoothed too and every segment's is a pure function of its line and the DEM.
 # It fades out over UNGRADED_MARGIN_M (kerbs, apron) to the plain ground. BNE_RACEWAY_SMOOTH=off: the ground as it is.
 RACEWAY_SMOOTH_ON = os.environ.get("BNE_RACEWAY_SMOOTH", "on") != "off"
-RACEWAY_SIGMA_M = float(os.environ.get("BNE_RACEWAY_SIGMA", "10.0"))
+RACEWAY_SMOOTH_SIGMA_M = float(os.environ.get("BNE_RACEWAY_SIGMA", "10.0"))
+# (#833's along-track sigma for an UNGRADED raceway (BNE_RACEWAY=off); RACEWAY_SIGMA_M is the graded raceway's profile)
 RACEWAY_STEP_M = 2.0
 RACEWAY_ACROSS_M = 1.0
 RACEWAY_EXTEND = 3.0
@@ -586,7 +587,7 @@ def resample(xy, step):
 def raceway_surface(frame, elev, xy, hw, sigma=None):
     """(line (k, 2) every RACEWAY_STEP_M, its stations (k,), offsets across (nt,), surface (k, nt) m) of one raceway
     segment xy (half width hw, its margin in): RACEWAY_* above. None for a line under 2 points."""
-    sigma = RACEWAY_SIGMA_M if sigma is None else float(sigma)
+    sigma = RACEWAY_SMOOTH_SIGMA_M if sigma is None else float(sigma)
     xy = np.asarray(xy, np.float64)[:, :2]
     line, st = resample(xy, RACEWAY_STEP_M)
     k = len(line)
