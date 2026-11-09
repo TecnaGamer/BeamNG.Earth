@@ -32,6 +32,9 @@ CELL_H, CELL_LIFT = 28.93, 0.02
 # reaches -1.29; lifting by that pipe left the feet in the air. Dropping to the pad tops puts the
 # visible feet on the ground and buries the pads.
 WATER_H, WATER_LIFT = 26.16, -0.60
+# A water tower with a mapped height (Overture's height, else OSM's height=; GitHub #887: the one model stood for the
+# 45-60 m towers of big towns too) is the model scaled to it, within WATER_SCALE (whole: a taller tank is wider too).
+WATER_SCALE = (0.5, 2.4)
 CONT_H = 2.59
 # dragbillboard: z 0..11.95, the poster centred near the origin and facing local +y.
 BILL_H, BILL_LIFT = 11.95, 0.0
@@ -247,6 +250,26 @@ def _ll(frame, x, y):
     return float(la[0]), float(lo[0])
 
 
+def water_scale(feats, i):
+    """The water tower model's scale for feature i: its mapped height (Overture's height attribute, else the height=
+    tag, metres) over WATER_H within WATER_SCALE, 1 without one."""
+    h = float("nan")
+    hs = feats.attrs.get("height")
+    if hs is not None and i < len(hs):
+        try:
+            h = float(hs[i])
+        except (TypeError, ValueError):
+            pass
+    if not h == h:
+        try:
+            h = float(str(_tags_of(feats, i).get("height", "")).replace("m", "").strip())
+        except ValueError:
+            pass
+    if not (h == h and h > 0):
+        return 1.0
+    return float(min(max(h / WATER_H, WATER_SCALE[0]), WATER_SCALE[1]))
+
+
 def _towers(frame, feats, rows, box, placed):
     cls = _cls(feats)
     if cls is None:
@@ -257,7 +280,8 @@ def _towers(frame, feats, rows, box, placed):
         if kind in CELL_CLASSES:
             group, h, lift = "celltower", CELL_H, CELL_LIFT
         elif kind in WATER_CLASSES:
-            group, h, lift = "watertower", WATER_H, WATER_LIFT
+            s = water_scale(feats, i)
+            group, h, lift = "watertower", WATER_H * s, WATER_LIFT * s
         else:
             continue
         if int(feats.kind[i]) not in (mapgeom.POINT, mapgeom.POLYGON):
