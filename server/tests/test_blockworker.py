@@ -187,7 +187,7 @@ class NavgraphTest(unittest.TestCase):
         want = navgraph.build(FRAME, [md.cell(k).layers.get("roads") for k in keys], elev, (0.0, 0.0), None,
                               decks={}, widths=None, left_hand=False, mph=True)
         want["rules"] = rules
-        self.assertEqual(got, json.loads(json.dumps(want, separators=(",", ":"))))
+        self.assertEqual(got, json.loads(json.dumps(navgraph.short_ids(want), separators=(",", ":"))))
         self.assertGreater(n_nodes, 2)
         self.assertEqual((n_nodes, n_edges), (len(want["nodes"]), len(want["edges"])))
 
@@ -230,7 +230,7 @@ class GermanReadGateTest(unittest.TestCase):
                 blockworker.roads_tile(1, at[0], at[1], 15, 0, 0, out, "/temp/x", True, 0.05, country="DE",
                                        de_junctions=on)
             else:
-                st.enter_context(mock.patch.object(navgraph, "build", lambda *a, **k: {"nodes": [], "edges": []}))
+                st.enter_context(mock.patch.object(navgraph, "build", lambda *a, **k: {"nodes": {}, "edges": []}))
                 blockworker.navgraph(1, at[0], at[1], 15, 0.0, 0.0, out, "/temp/x", 7, False, True,
                                      {"country": "DE", "de_junctions": on})
         return bool(calls)
@@ -266,7 +266,7 @@ class GermanReadGateTest(unittest.TestCase):
                                              airports=None, sea=None, lock=threading.Lock(), cache_dir=tmp_cache(self),
                                              bridges={}, anchor=lambda aid, lat, lon: (None, None))
             with mock.patch.object(blockworker, "_de_routes", lambda md, keys: [layer] if keys else []), \
-                    mock.patch.object(navgraph, "build", lambda *a, **k: got.update(k) or {"nodes": [], "edges": []}), \
+                    mock.patch.object(navgraph, "build", lambda *a, **k: got.update(k) or {"nodes": {}, "edges": []}), \
                     tempfile.TemporaryDirectory() as out:
                 blockworker.navgraph(1, at[0], at[1], 15, 0.0, 0.0, out, "/temp/x", 7, False, True,
                                      {"country": "DE", "de_junctions": on})
