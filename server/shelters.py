@@ -222,6 +222,42 @@ def _clear_of_roads(ox, oy, yaw, roads):
     return ox, oy
 
 
+RAIL_SLIDES_M = (0.0, 2.0, -2.0, 4.0, -4.0, 6.0, -6.0, 9.0, -9.0, 12.0, -12.0, 15.0, -15.0)
+
+
+def _rail_short(ox, oy, yaw, rails):
+    """m the worst post of a shelter stands inside a track's ballast (an item's half width + POST_PAD_M from its
+    axis), 0 when clear. rails: railxing.rail_obstacles' [(id, half width, polyline (k, 3))]."""
+    worst = 0.0
+    for item in rails or ():
+        pts = np.asarray(item[2], np.float64)
+        if len(pts) < 2:
+            continue
+        a, b = pts[:-1, :2], pts[1:, :2]
+        ab = b - a
+        ab2 = np.maximum((ab * ab).sum(1), 1e-9)
+        for p in _posts(ox, oy, yaw):
+            t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
+            d = float(np.hypot(*(p - (a + t[:, None] * ab)).T).min())
+            worst = max(worst, float(item[1]) + POST_PAD_M - d)
+    return worst
+
+
+def _clear_of_rails(ox, oy, yaw, roads, rails):
+    """(x, y) of a shelter slid along the curb (RAIL_SLIDES_M, the nearest first) to where no post is in a track's
+    ballast and none on a carriageway, or None: the road and the track leave it no room (Nemiia, prospekt Heroiv,
+    48.4553 N 27.7815 E: a track 3 m past the road's edge, the shelter stood on the rails, 2026-11-08)."""
+    if not rails or _rail_short(ox, oy, yaw, rails) <= 1e-3:
+        return ox, oy
+    rad = math.radians(yaw)
+    vx, vy = -math.sin(rad), math.cos(rad)             # local +y: along the curb
+    for s in RAIL_SLIDES_M[1:]:
+        cx, cy = _clear_of_roads(ox + s * vx, oy + s * vy, yaw, roads)
+        if _rail_short(cx, cy, yaw, rails) <= 1e-3:
+            return cx, cy
+    return None
+
+
 def _place(fid, x, y, roads, flip=False):
     """(origin x, y, yaw, ambiguous) with the signed face toward the road and the shelter on the sidewalk; ambiguous
     when the point is on the centre line, so that either side could be the right one (flip takes the other).
@@ -288,7 +324,24 @@ def _base_heights(frame, elev, xy, yaw):
     return np.asarray(z, np.float64).reshape(5, n).min(axis=0)
 
 
-def rows(frame, infra_fn, box, elev, roads=()):
+def _rails_near(frame, road_cell_fn, box):
+    """railxing.rail_obstacles of the tracks round box, [] without the level-crossing kit (BNE_RAIL_XING) or the cells."""
+    if road_cell_fn is None:
+        return []
+    try:
+        import railxing
+        if not railxing.ENABLED:
+            return []
+        x0, y0, x1, y1 = (float(v) for v in box)
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.0005, pad_lon=0.0005, max_cells=64)
+        return railxing.rail_obstacles(frame, [road_cell_fn(k) for k in keys], box)
+    except Exception as ex:             # shelters as before rather than none
+        log.debug("shelters: tracks unavailable: %s: %s", type(ex).__name__, ex)
+        return []
+
+
+def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] of the bus shelters whose stop is inside box."""
     if infra_fn is None:
         return []
@@ -300,6 +353,7 @@ def rows(frame, infra_fn, box, elev, roads=()):
         return []
     pending = []
     seen = set()
+    rails = _rails_near(frame, road_cell_fn, box)
     for key in keys:
         try:
             feats = infra_fn(key)
@@ -325,6 +379,11 @@ def rows(frame, infra_fn, box, elev, roads=()):
                 log.debug("shelters: stop %s at (%.1f, %.1f) left out: no spot clear of the carriageways",
                           fid, spot[0], spot[1])
                 continue
+            if rails:
+                got = _clear_of_rails(pose[0], pose[1], pose[2], roads, rails)
+                if got is None:         # (no room between the road and the track: the stop keeps its sign only)
+                    continue
+                pose = (got[0], got[1], pose[2])
             pending.append(pose)
     if not pending:
         return []
