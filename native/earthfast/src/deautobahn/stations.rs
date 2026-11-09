@@ -96,7 +96,11 @@ pub(crate) fn stations(kind: Junction, has: &Content, ref_s: f64, gore_s: f64, p
 pub(crate) fn stations_follow(kind: Junction, has: &Content, ref_s: f64, gore_s: f64, prev_exit_s: Option<f64>,
                               follow: bool, profile: &Profile, skips: &[(f64, f64)]) -> Vec<Station> {
     let kreuz = matches!(kind, Junction::Kreuz | Junction::Dreieck);
-    let limit = prev_exit_s.map(|p| p - AFTER_EXIT_M).unwrap_or(f64::INFINITY);
+    // the bound: the previous junction's exit, and the approach's own end (a walk that stopped early: no station
+    // past its last sample)
+    let end = profile.s.iter().copied().filter(|v| v.is_finite()).fold(f64::NEG_INFINITY, f64::max);
+    let end = if end.is_finite() { end } else { f64::INFINITY };
+    let limit = prev_exit_s.map(|p| p - AFTER_EXIT_M).unwrap_or(f64::INFINITY).min(end);
     let advance = has.through.is_some() || !has.exits.is_empty();
     // the big boards by priority: the announcement, the 500 m advance board, a Kreuz's 1000 m one
     let mut wanted: Vec<(Board, u32)> = Vec::new();
@@ -207,6 +211,21 @@ mod tests {
             (Board::Direction, 125.0, Mount::Portal, None),
             (Board::Gore, 0.0, Mount::GoreSign, None),
         ]);
+    }
+
+    #[test]
+    fn chain_fits_a_short_approach() {
+        // the approach walk stopped 290 m out (an end, a bend, an ambiguous fork): no station past its last sample,
+        // where they would all land on that sample (Codex review of #999); the chain squeezed as at a close junction
+        let s: Vec<f64> = (0..30).map(|i| i as f64 * 10.0).collect();
+        let l = vec![3.0; s.len()];
+        let st = stations(Junction::Exit, &has(Junction::Exit, true, false), 125.0, 0.0, None,
+                          &Profile { s: &s, lanes: &l }, &[]);
+        assert!(st.iter().all(|x| !(x.s > 290.0)), "{:?}", st.iter().map(|x| (x.board, x.s)).collect::<Vec<_>>());
+        let a = find(&st, Board::Announce).unwrap();
+        assert_eq!((a.s, a.printed_m), (290.0, Some(150)));
+        assert!(find(&st, Board::Countdown(3)).is_none() && find(&st, Board::Countdown(1)).is_some());
+        assert!(find(&st, Board::Direction).is_some());
     }
 
     #[test]
