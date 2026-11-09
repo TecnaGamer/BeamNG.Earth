@@ -63,6 +63,19 @@ class BridgeLiftsTest(unittest.TestCase):
         self.assertEqual(len(out), 1)
         self.assertAlmostEqual(float(out[0][0][0]), 0.0)
 
+    def test_junction_at_grade_near_the_abutment(self):
+        # (a road meeting a deck 10 m from its free end where the deck cannot get roads.AT_GRADE_M over it is the
+        # junction the deck profile treats at grade: no approach fill on its account. A track sharing a bridge's
+        # mapped node came under an end skewed onto that junction and the fill rose 8 m over its own ground)
+        line = np.c_[np.linspace(0, 70, 36), np.zeros(36)]
+        near = [np.array([[10.0, -50], [10, 50]])]
+        flat = lambda xy: np.full(len(xy), FLAT)        # noqa: E731
+        self.assertEqual(grading.bridge_lifts(line, [line], near, flat), [])
+        # (the same crossing, low enough under the deck for the deck to clear it, is still a road under it)
+        low = lambda xy: np.where(np.abs(xy[:, 0] - 10.0) < 4.0, FLAT - 5.0, FLAT)     # noqa: E731
+        out = grading.bridge_lifts(line, [line], near, low)
+        self.assertEqual(len(out), 2)
+
     def test_short_part_of_a_chain_raises_its_free_end(self):
         # (GitHub #306, BR-343 at Teresina: the deck carried 5 m onto the road joined at its end; that short part no
         # road crosses under must still raise its free end for the carriageways under the rest of the chain, or the
