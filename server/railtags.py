@@ -29,6 +29,8 @@ ON = os.environ.get("BNE_RAILTAGS", "on") != "off"
 SHARD_ZOOM = 7
 MANIFEST_TTL_S = 24 * 3600      # the build in use is checked again after this long
 RETRY_S = 3600                  # unreachable: asked again after this long
+SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
+FETCH_WAIT_S = 90.0             # s a caller waits for another thread's manifest fetch (then goes on without the data)
 COLUMNS = ("railway", "gauge", "electrified", "service", "usage")
 
 
@@ -124,6 +126,8 @@ class Shards:
         self.checked = 0.0
         self.shards = {}            # (x, y) -> dict
         self.down_at = 0.0
+        self.fetching = None        # threading.Event while a manifest fetch runs (the others wait for its answer)
+        self.shard_down = {}        # (x, y) -> when it could not be had (SHARD_RETRY_S)
 
     def known(self):
         """The build in use as far as known without asking the network (versions(): every tile's cache key); before
@@ -146,24 +150,64 @@ class Shards:
         return self.built if self.built is not None else got
 
     def version(self):
-        """The build in use ("built" of its manifest), or None (none reachable yet)."""
+        """The build in use ("built" of its manifest), or None (none reachable yet).
+
+        The manifest pinned on disk is used whatever its age: a stale one (MANIFEST_TTL_S) is refreshed in the
+        background, one fetch at a time, and kept if that fails. Without one (a first run) one thread fetches it and
+        the others wait for its answer. (2026-11-09, the night of 1.9.0: GitHub answered 504s for hours; every road
+        worker process asked each dataset's manifest for itself, 2 tries x 20 s, two at a time, and dropped the data it
+        had on disk once a day's manifest was due: world gen hung at 15 % for players; a test with 10 s 504s cost a
+        first tile 17 s.)"""
         if not ON or self.fetcher is None:
             return None
         now = time.time()
         with self.lock:
             if self.built is not None and now - self.checked < MANIFEST_TTL_S:
                 return self.built
-            if now - self.down_at < RETRY_S and self.built is None:
-                return None
         pin = os.path.join(self.dir, "manifest.json") if self.dir else None
-        built = None
-        if pin and os.path.exists(pin) and now - os.path.getmtime(pin) < MANIFEST_TTL_S:
+        pinned, age = None, None
+        if pin and os.path.exists(pin):
             try:
+                age = now - os.path.getmtime(pin)
                 with open(pin, encoding="utf-8") as fh:
-                    built = json.load(fh).get("built")
+                    pinned = json.load(fh).get("built")
             except (OSError, ValueError):
-                built = None
-        if built is None:
+                pinned = None
+        if pinned is not None:
+            refresh = False
+            with self.lock:
+                if pinned != self.built and (self.built is None or age < MANIFEST_TTL_S):
+                    self.shards.clear()
+                    self.built = pinned
+                if age < MANIFEST_TTL_S:
+                    self.checked = now - age
+                elif self.fetching is None and now - self.down_at >= RETRY_S:
+                    self.fetching = threading.Event()
+                    self.checked = now          # (asked once; the next check after MANIFEST_TTL_S or a failure)
+                    refresh = True
+                built = self.built
+            if refresh:
+                threading.Thread(target=self._refresh, name=f"{self.name}-manifest", daemon=True).start()
+            return built
+        with self.lock:
+            if self.built is None and now - self.down_at < RETRY_S:
+                return None
+            ev = self.fetching
+            mine = ev is None
+            if mine:
+                ev = self.fetching = threading.Event()
+        if not mine:
+            ev.wait(FETCH_WAIT_S)
+            with self.lock:
+                return self.built
+        return self._refresh(now)
+
+    def _refresh(self, now=None):
+        """Fetch the manifest (this thread holds self.fetching), pin it, and take its build; the build in use when it
+        cannot be had."""
+        now = time.time() if now is None else now
+        pin = os.path.join(self.dir, "manifest.json") if self.dir else None
+        try:
             try:
                 body = self.fetcher.get(f"{self.base}/manifest.json", kind="demand").body
                 built = json.loads(body.decode("utf-8")).get("built")
@@ -172,16 +216,21 @@ class Shards:
                     with open(pin + ".part", "wb") as fh:
                         fh.write(body)
                     os.replace(pin + ".part", pin)
-            except Exception as e:      # (offline, not published yet: without it)
+            except Exception as e:      # (offline, not published yet: without it, or with the build pinned before)
                 log.debug("%s manifest: %s: %s", self.name, type(e).__name__, e)
                 with self.lock:
                     self.down_at = now
                     return self.built   # (a build learnt before stays in use)
-        with self.lock:
-            if built != self.built:
-                self.shards.clear()
-            self.built, self.checked = built, now
-        return built
+            with self.lock:
+                if built != self.built:
+                    self.shards.clear()
+                self.built, self.checked = built, now
+            return built
+        finally:
+            with self.lock:
+                ev, self.fetching = self.fetching, None
+            if ev is not None:
+                ev.set()
 
     def clear_memory(self):
         """Drop the decoded shards kept in memory (budget.maybe_shed through MapData.clear_memory; ~20 MB a zoom-7
@@ -215,6 +264,8 @@ class Shards:
             except (OSError, ValueError):
                 got = None
         if got is None:
+            if time.time() - self.shard_down.get((x, y), 0.0) < SHARD_RETRY_S:
+                return None             # (failed a moment ago: not every tile waits for it again)
             try:
                 body = self.fetcher.get(f"{self.base}/{x}/{y}.json.gz", kind="demand").body
                 got = json.loads(gzip.decompress(body).decode("utf-8"))
@@ -222,6 +273,7 @@ class Shards:
                 body, got = None, {}
             except Exception as e:
                 log.debug("%s %s/%s: %s: %s", self.name, x, y, type(e).__name__, e)
+                self.shard_down[(x, y)] = time.time()
                 return None
             if path:
                 os.makedirs(d, exist_ok=True)

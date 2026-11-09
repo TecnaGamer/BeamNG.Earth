@@ -82,6 +82,72 @@ class RailTagsTest(unittest.TestCase):
 
 
 
+class OutageTest(unittest.TestCase):
+    """GitHub down (the night of 1.9.0: 504s for hours): the data on disk stays in use, a stale manifest is refreshed in
+    the background, concurrent callers make one request, and a failed shard is not asked again by every tile."""
+
+    class Down:
+        def __init__(self, delay=0.0):
+            self.calls, self.delay = [], delay
+
+        def get(self, url, kind="demand", **_kw):
+            import time
+            self.calls.append(url)
+            time.sleep(self.delay)
+            raise netfetch.FetchFailed(url + ": HTTP 504", url)
+
+    def test_a_stale_pin_stays_in_use_and_is_refreshed_in_the_background(self):
+        import time
+        with tempfile.TemporaryDirectory() as d:
+            down = self.Down(delay=0.3)
+            s = railtags.Shards(d, down, "rail")
+            os.makedirs(s.dir)
+            pin = os.path.join(s.dir, "manifest.json")
+            with open(pin, "w") as fh:
+                json.dump({"built": "old"}, fh)
+            old = time.time() - railtags.MANIFEST_TTL_S - 60
+            os.utime(pin, (old, old))
+            t = time.time()
+            self.assertEqual(s.version(), "old")
+            self.assertLess(time.time() - t, 0.2, "no wait for the network")
+            for _ in range(50):
+                if s.fetching is None and down.calls:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(len(down.calls), 1, "one background refresh")
+            self.assertEqual(s.version(), "old", "kept when the refresh failed")
+            self.assertEqual(len(down.calls), 1, "not asked again at once")
+
+    def test_without_a_pin_concurrent_callers_make_one_request(self):
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            down = self.Down(delay=0.3)
+            s = railtags.Shards(d, down, "rail")
+            got = []
+            ts = [threading.Thread(target=lambda: got.append(s.version())) for _ in range(6)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            self.assertEqual(got, [None] * 6)
+            self.assertEqual(len(down.calls), 1)
+
+    def test_a_failed_shard_is_not_asked_by_every_tile(self):
+        with tempfile.TemporaryDirectory() as d:
+            calls = []
+
+            class Half:
+                def get(self, url, kind="demand", **_kw):
+                    calls.append(url)
+                    if url.endswith("manifest.json"):
+                        return type("R", (), {"body": json.dumps({"built": "b"}).encode()})()
+                    raise netfetch.FetchFailed(url + ": HTTP 504", url)
+            s = railtags.Shards(d, Half(), "rail")
+            self.assertIsNone(s.shard(10, 20))
+            self.assertIsNone(s.shard(10, 20))
+            self.assertEqual(sum(u.endswith("/10/20.json.gz") for u in calls), 1)
+
+
 class KnownPinnedTest(unittest.TestCase):
     """Shards.known(): the pinned manifest's build before this run asked for it (the tiles' cache keys the same from
     a run's start: None until the manifest came before, 2026-11-04)."""

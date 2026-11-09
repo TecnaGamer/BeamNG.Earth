@@ -24,9 +24,11 @@ log = logging.getLogger("regionaldata")
 LOCAL = None               # (tests: patched; else BNE_REGIONAL_DIR, read when asked: _local)
 NAME = "regional"
 RETRY_S = 60.0              # an unreachable Pages asked again after this long
+MANIFEST_TTL_S = 24 * 3600  # the manifest pinned on disk is used at once; one older than this is refreshed in the background
+FETCH_WAIT_S = 90.0         # s a caller waits for another thread's manifest fetch
 
 _lock = threading.Lock()
-_state = {"cache": None, "fetcher": None, "manifest": None, "down_at": 0.0, "cells": {}}
+_state = {"cache": None, "fetcher": None, "manifest": None, "down_at": 0.0, "cells": {}, "fetching": None}
 
 
 def _local():
@@ -48,21 +50,21 @@ def _dir():
     return os.path.join(_state["cache"], "pagesdata", NAME) if _state["cache"] else None
 
 
-def manifest():
-    """The build's manifest (dict) or None (none reachable)."""
-    with _lock:
-        if _state["manifest"] is not None:
-            return _state["manifest"]
-        if _local() is None and time.time() - _state["down_at"] < RETRY_S:
-            return None
-    got = None
-    if _local() is not None:
-        try:
-            with open(os.path.join(_local(), "manifest.json"), encoding="utf-8") as fh:
-                got = json.load(fh)
-        except (OSError, ValueError) as e:
-            log.warning("BNE_REGIONAL_DIR %s: %s", _local(), e)
-    elif _state["fetcher"] is not None:
+def _pinned():
+    """(the manifest pinned on disk, its age s), or (None, None)."""
+    d = _dir()
+    try:
+        path = os.path.join(d, "manifest.json")
+        age = time.time() - os.path.getmtime(path)
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh), age
+    except (OSError, TypeError, ValueError):
+        return None, None
+
+
+def _refresh():
+    """Fetch the manifest (this thread holds _state["fetching"]) and pin it; the one in use when it cannot be had."""
+    try:
         try:
             body = _state["fetcher"].get(f"{_base()}/manifest.json", kind="demand").body
             got = json.loads(body.decode("utf-8"))
@@ -74,18 +76,68 @@ def manifest():
                 os.replace(os.path.join(d, "manifest.json.part"), os.path.join(d, "manifest.json"))
         except Exception as e:      # (offline, not published yet: the last one pinned on disk, else none)
             log.info("regional data manifest: %s: %s", type(e).__name__, e)
-            d = _dir()
-            try:
-                with open(os.path.join(d, "manifest.json"), encoding="utf-8") as fh:
-                    got = json.load(fh)
-            except (OSError, TypeError, ValueError):
-                got = None
+            got = None
+        with _lock:
+            if got is None:
+                _state["down_at"] = time.time()
+            else:
+                _state["manifest"] = got
+            return _state["manifest"]
+    finally:
+        with _lock:
+            ev, _state["fetching"] = _state.get("fetching"), None
+        if ev is not None:
+            ev.set()
+
+
+def manifest():
+    """The build's manifest (dict) or None (none reachable). The one pinned on disk at once, whatever its age (one older
+    than MANIFEST_TTL_S refreshed in the background); without one, one thread fetches it and the others wait for it.
+    (It was fetched by every process at its start, before the disk copy, and the night of 1.9.0 GitHub answered 504s
+    for hours: a road process's first tile waited for it behind the other Pages manifests.)"""
     with _lock:
-        if got is None:
-            _state["down_at"] = time.time()
+        if _state["manifest"] is not None:
+            return _state["manifest"]
+        if _local() is None and time.time() - _state["down_at"] < RETRY_S:
+            return None
+    if _local() is not None:
+        try:
+            with open(os.path.join(_local(), "manifest.json"), encoding="utf-8") as fh:
+                got = json.load(fh)
+        except (OSError, ValueError) as e:
+            log.warning("BNE_REGIONAL_DIR %s: %s", _local(), e)
+            got = None
+        with _lock:
+            if got is None:
+                _state["down_at"] = time.time()
+            else:
+                _state["manifest"] = got
+            return _state["manifest"]
+    if _state["fetcher"] is None:
+        return None
+    pinned, age = _pinned()
+    with _lock:
+        if _state["manifest"] is not None:
+            return _state["manifest"]
+        if pinned is not None:
+            _state["manifest"] = pinned
+            refresh = age >= MANIFEST_TTL_S and _state.get("fetching") is None
+            if refresh:
+                _state["fetching"] = threading.Event()
         else:
-            _state["manifest"] = got
-        return _state["manifest"]
+            ev = _state.get("fetching")
+            mine = ev is None
+            if mine:
+                ev = _state["fetching"] = threading.Event()
+    if pinned is not None:
+        if refresh:
+            threading.Thread(target=_refresh, name="regional-manifest", daemon=True).start()
+        return pinned
+    if not mine:
+        ev.wait(FETCH_WAIT_S)
+        with _lock:
+            return _state["manifest"]
+    return _refresh()
 
 
 def signature():
