@@ -1003,7 +1003,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                  (lambda: fencebuildings.nearby(frame,tx,ty,_s.md,elev,fence_geometry,out_dir,vfs_dir)) if buildings else None,
                  selected_mapped=perimeter_mapped,transport_geometry=chunks+list(ctx),
                  transport_meshes=[(P.rmesh,(box[0],box[1],0.),'generated-railway'),
-                                   (P.dmesh,(box[0],box[1],0.),'generated-bridge','bridge')],strict=True,status_out=P.perimeter_report,exclusive_geometry_out=perimeter_exclusive))
+                                   (P.dmesh,(box[0],box[1],0.),'generated-bridge','bridge')],status_out=P.perimeter_report,exclusive_geometry_out=perimeter_exclusive))
     if buildings:
         import fences
         try:props.extend(fences.rows(frame,infra_fn,box,elev,exclude_ids=perimeter_mapped,exclude_geometry=perimeter_exclusive))

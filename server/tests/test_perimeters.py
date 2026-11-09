@@ -203,7 +203,7 @@ class GlobalPerimeterTest(unittest.TestCase):
                 lon0,lat0,lon1,lat1=mf.CELL.bounds()
                 self.assertLess(feat.lonlat[:,0].min(),lon0)
                 self.assertGreater(feat.lonlat[:,0].max(),lon1)
-                self.assertIn('perimeter_areas.1',md.path(mf.CELL,'perimeter_areas'))
+                self.assertIn('perimeter_areas.2',md.path(mf.CELL,'perimeter_areas'))
                 # Source snapshots and normal land-use cache keep their existing versions.
                 self.assertNotEqual(md.path(mf.CELL,'land_use'),md.path(mf.CELL,'perimeter_areas'))
             finally: md.close()

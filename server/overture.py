@@ -206,11 +206,11 @@ LAYERS = {
 }
 # Complete OSM-sourced facility polygons; the ordinary land_use layer is clipped.
 _PERIMETER_WHERE = (
-    "json_extract_string(tags, '$.landuse') IN ('industrial','military','quarry') OR "
+    "json_extract_string(tags, '$.landuse') IN ('industrial','military','quarry','railway') OR "
     "json_extract_string(tags, '$.military') = 'base' OR "
     "json_extract_string(tags, '$.aeroway') = 'aerodrome' OR "
     "json_extract_string(tags, '$.industrial') = 'mine' OR "
-    "class IN ('industrial','military','quarry','mine','airport','aerodrome')")
+    "class IN ('industrial','military','quarry','mine','airport','aerodrome','railway')")
 for _layer, _type in (("perimeter_areas", "land_use"), ("perimeter_infrastructure", "infrastructure")):
     LAYERS[_layer] = dict(theme="base", type=_type, clip=False,
         cols=f"subtype, class, {_NAME}, {_SRC_OWN}, {_TAGS}",

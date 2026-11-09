@@ -1,8 +1,10 @@
 # Fences around industrial, military, and airport areas
 
-Facility perimeters use full mapped boundaries rather than tile-clipped polygons. Industrial sites, military facilities, airports and quarries share the same selection and placement pipeline. Mapped physical fences take priority; independent secured compounds retain their own fences.
+Facility perimeters use full mapped boundaries rather than tile-clipped polygons. Industrial sites, railway land-use areas (including rail yards), military facilities, airports and quarries share the same selection and placement pipeline. Railway land-use polygons use the industrial perimeter policy; individual track lines remain transport corridors. Mapped physical fences take priority; independent secured compounds retain their own fences.
 
 The server selects a geographic fence network first, then fits stock chain-link sections to the rendered terrain. Stable path identities, panel spacing and tile ownership keep connected boundaries consistent across tile edges and reloads. Duplicate source geometry is assigned one owner. Road, railway, bridge and building checks prevent unsafe placements; gate evidence preserves openings. Diagnostics distinguish missing source geometry from panels omitted during placement.
+
+Perimeters are optional road-tile content. Source or terrain-fitting failures are recorded and prevent persistent caching of incomplete geometry, but do not withhold roads or bridges. Valid panels remain available when other panels cannot fit the terrain. Strict validation is available for offline diagnostics. Perimeter source layer version 2 includes railway land-use areas; old filtered cells are replaced through new cache keys without a manual cache purge.
 
 The client streams nearby stock fence sections with bounded work per frame, transforms them with the world origin, and removes them when their owning tiles unload. Collision activation is batched and can wait until the player clears a panel while its visible mesh remains present. Proprietary game assets are referenced at runtime and are not redistributed.
 

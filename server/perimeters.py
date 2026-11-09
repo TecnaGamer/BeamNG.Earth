@@ -15,7 +15,7 @@ import mapcells
 import mapgeom
 import geodesy
 
-VERSION = 8
+VERSION = 9
 class PerimeterPending(RuntimeError):
     """A valid tile must be retried; an empty optional result is not complete."""
 MODEL = '/levels/Industrial/art/shapes/buildings/ind_mesh_fence_4m.dae'
@@ -37,6 +37,8 @@ def classify(tags, cls=''):
         return None
     if tags.get('landuse') in ('industrial', 'military', 'quarry'):
         return tags['landuse']
+    if tags.get('landuse') == 'railway':
+        return 'industrial'
     if tags.get('military') == 'base':
         return 'military'
     if tags.get('aeroway') == 'aerodrome':
@@ -47,7 +49,7 @@ def classify(tags, cls=''):
         return None
     # Normalized class survives when Overture has not retained the source tag.
     return {'industrial': 'industrial', 'military': 'military', 'quarry': 'quarry',
-            'mine': 'mine', 'airport': 'airport', 'aerodrome': 'airport'}.get(cls)
+            'mine': 'mine', 'airport': 'airport', 'aerodrome': 'airport', 'railway': 'industrial'}.get(cls)
 
 
 def osm_id(feats, i):
@@ -634,8 +636,14 @@ def tile_rows(frame, md, infra_fn, box, elev, roads, surface=None, building_fn=N
                     lambda key:md.cell(key,layers=('roads',),kind='demand').layers.get('roads'),surface,building_fn=building_fn,
                     selected_mapped=claimed,transport_geometry=transport_geometry,transport_meshes=transport_meshes,
                     routing_context=dict(roads=context['roads']),stage_report=stages,exclusive_geometry_out=exclusive_geometry_out)
-        if stages.get('terrain_failures') and strict:
-            raise PerimeterPending('pass 2 terrain placement failed: '+json.dumps(stages,sort_keys=True))
+        if stages.get('terrain_failures'):
+            # A rejected fence panel must never withhold the road/bridge tile.
+            # Keep valid panels, and prevent incomplete optional geometry from
+            # entering the persistent revisit cache.
+            import revisit
+            revisit.fault()
+            if strict:
+                raise PerimeterPending('pass 2 terrain placement failed: '+json.dumps(stages,sort_keys=True))
         if strict and stages.get('planned_sections',0)>0 and not result and stages.get('clearance_omissions'):
             raise PerimeterPending('pass 1 route exists but pass 2 rejected every mesh: '+json.dumps(stages,sort_keys=True))
         if selected_mapped is not None:selected_mapped.update(claimed)

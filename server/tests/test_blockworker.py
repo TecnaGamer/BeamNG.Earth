@@ -27,7 +27,7 @@ class FakeMapData:
 
     def cell(self, key, layers=(), kind="demand"):
         # Explicit empty optional source layers are complete data. A missing
-        # perimeter layer now correctly defers the production tile for retry.
+        # perimeter layer marks optional geometry incomplete without hiding roads.
         result={layer:mapgeom.empty(layer) for layer in layers if layer!='roads'}
         result['roads']=self.feats if key==self.first else (mapgeom.empty('roads') if 'roads' in layers else None)
         return SimpleNamespace(layers=result)

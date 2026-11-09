@@ -18,7 +18,7 @@ MODULES = (
     "test_connection_cleanup", "test_tile_ownership", "test_matslots",
     "test_netfetch", "test_mapdata", "test_rangeread", "test_grading", "test_roadz", "test_roadz_inputs",
     "test_road_seams", "test_roadgeo", "test_fast", "test_restart",
-    "test_revisit", "test_perimeter_dependencies", "test_authoritative_perimeters",
+    "test_revisit", "test_perimeter_dependencies", "test_perimeter_availability", "test_authoritative_perimeters",
     "test_fence_routing", "test_fence_overhaul", "test_fence_regression", "test_plancache", "test_chunkcache", "test_pools",
     "test_prefetch_chain", "test_demand", "test_roadwidth", "test_roadcorners",
     "test_sketchfab_assets",
