@@ -4974,6 +4974,18 @@ def _dedupe_plan(p):
     return q
 
 
+def rail_plan(fid, xy, z):
+    """The Plan of a railway's bed line (railways.grade_plans' fid, xy (k, 2), z (k,)): the ground flat to the bed
+    GRADE_HALF_M either side of the track, its carriageway (grade_points' rh: what never gives way) the ballast's top.
+    Past the ballast the band gives way to another road's carriageway at another level, as a road's verge does: the
+    whole band its own, it blended into the approach of a short bridge over it whose abutment stood inside the band, and
+    the deck end, which takes that ground, sat 2.5-3.4 m under the road going on from it (GitHub #909, the A11 over the
+    Gramzower Museumsbahn)."""
+    p = Plan(xy, z, railwaysmod.GRADE_HALF_M, road_half=railwaysmod.BALLAST_TOP_M)
+    p.rid = road_id(RAIL_TAG + fid)
+    return p
+
+
 class PlanPack:
     """Plans (a list, in grade_points' order) as grade_points takes them: every segment's arrays concatenated once, with
     each plan's box; a call keeps the segments of the plans whose boxes meet its points', in the same order (built per
@@ -5019,39 +5031,9 @@ class PlanPack:
                 if apex:
                     leg = np.searchsorted(np.asarray(apex), np.arange(nseg[n]), side="right")
                     self.rid[s0[n]:s0[n + 1]] += leg.astype(np.int64) << LEG_RID_SHIFT
-        ab = np.zeros(int(s0[-1]), bool)
-        # per segment near a bridge abutment: the distance along its road from its start back to a start abutment
-        # (column 0) and from its end on to an end abutment (column 1), NaN if none: the ground past the abutment,
-        # over the deck, falls away at ABUT_UNDER_GRADE (grade_points), whichever of its road's segments reaches it
-        abd = np.full((int(s0[-1]), 2), np.nan)
-        cut = np.full((int(s0[-1]), 6), np.nan)
-        for n, (_k, p) in enumerate(rows):
-            abut = getattr(p, "abut", (False, False))
-            if (abut[0] or abut[1]) and s0[n + 1] > s0[n]:
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p.xy[:, :2], axis=0).T))]
-                if abut[0]:
-                    near = arc[:-1] < ABUT_NEAR_M
-                    ab[s0[n]:s0[n + 1]] |= near
-                    abd[s0[n]:s0[n + 1], 0] = np.where(near, arc[:-1], np.nan)
-                if abut[1]:
-                    near = arc[-1] - arc[1:] < ABUT_NEAR_M
-                    ab[s0[n]:s0[n + 1]] |= near
-                    abd[s0[n]:s0[n + 1], 1] = np.where(near, arc[-1] - arc[1:], np.nan)
-            c = getattr(p, "cut", None)
-            if c is not None:
-                cut[s0[n]:s0[n + 1]] = c
-        self.ab = ab.astype(np.uint8)
-        self.abd = abd
-        self.cut = cut
-        self.st = np.repeat(np.array([bool(getattr(p, "steep", False)) for _k, p in rows], np.uint8), nseg)
-        # each segment's link: bit 0 its plan goes on before it, bit 1 after it (grade_points' EXTRAP_M); a plan's end
-        # where another plan's end lies and the road carries straight on through it (outward directions within
-        # LINK_TURN_DEG of opposite) goes on too: one road planned per map cell, a road renamed at a point
-        first = np.zeros(int(nseg.sum()), bool)
-        last = np.zeros(int(nseg.sum()), bool)
-        ends = np.cumsum(nseg)
-        first[(ends - nseg)[nseg > 0]] = True
-        last[(ends - 1)[nseg > 0]] = True
+        # a plan's end where another plan's end lies and the road carries straight on through it (outward directions
+        # within LINK_TURN_DEG of opposite) goes on: one road planned per map cell, a road renamed at a point. Per
+        # (plan, end) the (plan, end)s it goes on into
         at = {}
         for n, (_k, p) in enumerate(rows):
             if nseg[n] <= 0:
@@ -5063,15 +5045,85 @@ class PlanPack:
                 if ln > 1e-9:
                     at.setdefault((round(float(q[0]), 1), round(float(q[1]), 1)), []).append((n, e, d / ln))
         cos_min = -math.cos(math.radians(LINK_TURN_DEG))
+        goes_on = {}
         for group in at.values():
             if len(group) < 2:
                 continue
             for n, e, d in group:
-                if any(m != n and float(d @ d2) <= cos_min for m, _e2, d2 in group):
-                    if e == 0:
-                        first[ends[n] - nseg[n]] = False
+                into = [(m, e2) for m, e2, d2 in group if m != n and float(d @ d2) <= cos_min]
+                if into:
+                    goes_on[(n, e)] = into
+        flags = [getattr(p, "abut", (False, False)) for _k, p in rows]
+        lens = {}
+
+        def beyond(n, e):
+            # m along the road from plan n's end e, through the plans it goes on into, to an abutment within
+            # ABUT_NEAR_M, or NaN (the nearest, every way it goes on; a ring road's links come round to it)
+            import heapq
+            best, todo, done = math.inf, [(0.0, n, e)], set()
+            while todo:
+                acc, a, ea = heapq.heappop(todo)
+                if acc >= best:
+                    break
+                if (a, ea) in done:
+                    continue
+                done.add((a, ea))
+                for m, e2 in goes_on.get((a, ea), ()):
+                    if flags[m][e2]:
+                        best = min(best, acc)
+                        continue
+                    if m not in lens:
+                        lens[m] = float(np.hypot(*np.diff(np.asarray(rows[m][1].xy, f64)[:, :2], axis=0).T).sum())
+                    far = acc + lens[m]
+                    if far >= ABUT_NEAR_M:
+                        continue
+                    if flags[m][1 - e2]:
+                        best = min(best, far)
                     else:
-                        last[ends[n] - 1] = False
+                        heapq.heappush(todo, (far, m, 1 - e2))
+            return best if best < ABUT_NEAR_M else math.nan
+
+        ab = np.zeros(int(s0[-1]), bool)
+        # per segment near a bridge abutment: the distance along its road from its start back to a start abutment
+        # (column 0) and from its end on to an end abutment (column 1), NaN if none: the ground past the abutment,
+        # over the deck, falls away at ABUT_UNDER_GRADE (grade_points), whichever of its road's segments reaches it.
+        # The road's own abutment through the plans it goes on into too: the piece a map cell's edge cuts a few
+        # metres short of an abutment (trim_plan: no abutment end of its own) reached over the deck with its
+        # carriageway's round end, and a railway's bed under it gave way to it (Codex's review of PR #920, GitHub #909)
+        abd = np.full((int(s0[-1]), 2), np.nan)
+        cut = np.full((int(s0[-1]), 6), np.nan)
+        for n, (_k, p) in enumerate(rows):
+            off = [0.0 if flags[n][e] else beyond(n, e) if (n, e) in goes_on else math.nan for e in (0, 1)]
+            if (math.isfinite(off[0]) or math.isfinite(off[1])) and s0[n + 1] > s0[n]:
+                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p.xy[:, :2], axis=0).T))]
+                if math.isfinite(off[0]):
+                    to = arc[:-1] + off[0]
+                    near = to < ABUT_NEAR_M
+                    ab[s0[n]:s0[n + 1]] |= near
+                    abd[s0[n]:s0[n + 1], 0] = np.where(near, to, np.nan)
+                if math.isfinite(off[1]):
+                    to = arc[-1] - arc[1:] + off[1]
+                    near = to < ABUT_NEAR_M
+                    ab[s0[n]:s0[n + 1]] |= near
+                    abd[s0[n]:s0[n + 1], 1] = np.where(near, to, np.nan)
+            c = getattr(p, "cut", None)
+            if c is not None:
+                cut[s0[n]:s0[n + 1]] = c
+        self.ab = ab.astype(np.uint8)
+        self.abd = abd
+        self.cut = cut
+        self.st = np.repeat(np.array([bool(getattr(p, "steep", False)) for _k, p in rows], np.uint8), nseg)
+        # each segment's link: bit 0 its plan goes on before it, bit 1 after it (grade_points' EXTRAP_M)
+        first = np.zeros(int(nseg.sum()), bool)
+        last = np.zeros(int(nseg.sum()), bool)
+        ends = np.cumsum(nseg)
+        first[(ends - nseg)[nseg > 0]] = True
+        last[(ends - 1)[nseg > 0]] = True
+        for n, e in goes_on:
+            if e == 0:
+                first[ends[n] - nseg[n]] = False
+            else:
+                last[ends[n] - 1] = False
         self.lk = ((~first).astype(np.uint8) | ((~last).astype(np.uint8) << 1)).astype(np.uint8)
         self.box = np.array([p.bbox for _k, p in rows], f64).reshape(-1, 4)
         self.of = np.repeat(np.arange(self.n), nseg)
@@ -5110,9 +5162,9 @@ def grade_points(px, py, base, plans, lift=0.0):
         return out
     A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK, ABD = got
     import fast
-    fast.require(152, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(169, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
-                                             # given way to whole: 134)
+                                             # given way to whole: 134, no carriageway past an abutment end: 169)
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,
