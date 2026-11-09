@@ -377,11 +377,14 @@ RAW_ELEV = None
 
 LEVEL_BRIDGES_ON = os.environ.get("BNE_RAIL_LEVEL_BRIDGES", "on") != "off"   # (plan 035: Nachod's "ravine")
 LEVEL_BRIDGE_MAX_M = 40.0   # m: a rail bridge this short or shorter over a road on level ground is no bridge
+LEVEL_BRIDGE_SEP_M = 1.5    # m: level ground: the track's ground past the bridge's ends less than this over the road's
+LEVEL_BRIDGE_OUT_M = 8.0    # m past each end of the bridge, along the track, where its ground is taken
 
 
 def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
-    """flat_rail_crossing whatever BNE_RAIL_FLAT_SEP, for short rail bridges (LEVEL_BRIDGE_MAX_M): the natural ground at
-    the bridge's ends stands less than roads.AT_GRADE_M over the road's under it. A short mapped bridge over a primary
+    """Is the short rail bridge (LEVEL_BRIDGE_MAX_M) over road_xy (crossing it at arc at) on level ground? The track's
+    natural ground LEVEL_BRIDGE_OUT_M past each of its ends (the higher one) stands less than LEVEL_BRIDGE_SEP_M over the
+    road's (the median of FLAT_SAMPLE_M about the crossing). A short mapped bridge over a primary
     road beside Nachod station on level ground (lidar: 344 m at both) dug the road 4 m down, and the bed beside it with
     it (railroadseam): a ravine the user saw, 2026-11-09. Off lidar (no RAW_ELEV): False."""
     if not LEVEL_BRIDGES_ON:
@@ -389,12 +392,26 @@ def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
     b = np.asarray(bridge_xy, np.float64)[:, :2]
     if len(b) < 2 or float(_arc(b)[-1]) > LEVEL_BRIDGE_MAX_M:
         return False
-    global FLAT_SEP_ON
-    was, FLAT_SEP_ON = FLAT_SEP_ON, True
+    elev = elev if elev is not None else RAW_ELEV
+    if elev is None:
+        return False
+    road_xy = np.asarray(road_xy, np.float64)[:, :2]
+    s = _arc(road_xy)
+    a = np.clip(at + np.asarray(FLAT_SAMPLE_M), 0.0, s[-1])
+    road = np.c_[np.interp(a, s, road_xy[:, 0]), np.interp(a, s, road_xy[:, 1])]
+    outs = []                       # (the track's own ground past each end: a mapped bridge's end may lie on the cut's
+    for i, j in ((0, 1), (-1, -2)):  # slope, Nachod's road 14 under the Kladska line, 1.3 m over the road there)
+        d = b[i] - b[j]
+        outs.append(b[i] + d / max(float(np.hypot(*d)), 1e-9) * LEVEL_BRIDGE_OUT_M)
+    pts = np.r_[road, np.asarray(outs)]
+    la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
     try:
-        return flat_rail_crossing(frame, bridge_xy, road_xy, at, elev)
-    finally:
-        FLAT_SEP_ON = was
+        z = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64).ravel()
+    except Exception:
+        return False
+    if not np.all(np.isfinite(z)):
+        return False
+    return bool(float(np.max(z[-2:])) < float(np.median(z[:-2])) + LEVEL_BRIDGE_SEP_M)
 
 
 def level_bridges(frame, cells, rails, reach_box):
@@ -1169,6 +1186,70 @@ def _flush(s, zb, blk, zroad):
     low = np.min(np.where(delta[None, :] < 0, target[None, :] + d, np.inf), axis=1)
     high = np.max(np.where(delta[None, :] > 0, target[None, :] - d, -np.inf), axis=1)
     return np.minimum(np.maximum(zb, high), low)
+
+
+SEAM_FLUSH_ON = os.environ.get("BNE_RAIL_SEAM_FLUSH", "on") != "off"
+
+
+def seam_roads(xy, zb, roads_):
+    """railroadseam.couple's roads ([(xy (k, 2), z (k,), half width)]) for the track xy with bed zb, each road it crosses
+    at grade (its line crossing the track's, CROSSING_DZ of the bed's rail top) taken at the bed a flush crossing gives
+    there (_flush: the road less RAIL_TOP_M): couple took the bed to the road's own height, 0.55 m over the flush bed, for
+    25 m either side of the crossing, and the ground graded to it buried the ballast and sleepers there (Nachod's Kladska,
+    2026-11-09). Pure."""
+    if not SEAM_FLUSH_ON or not roads_ or len(xy) < 2:
+        return roads_
+    at = {id(r[0]) for r in seam_crossers(xy, zb, roads_)}
+    return [(rxy, np.asarray(rz, np.float64) - (RAIL_TOP_M - FLUSH_LIFT_M), rh) if id(rxy) in at else (rxy, rz, rh)
+            for rxy, rz, rh in roads_]
+
+
+def flush_to_plans(xy, zb, roads_):
+    """The bed zb of the track xy flush (_flush) with the road plans ([(xy (k, 2), z (k,), half width)]) it crosses at
+    grade, at their planned heights: grade_plans flushed it to the DEM's road, which the road's plan then lays lower
+    or higher (Nachod's Kladska: 0.23 m lower, and tile_mesh, flush with the graded road, lay the ballast that much
+    under the ground). Pure."""
+    if not SEAM_FLUSH_ON or not roads_ or len(xy) < 2:
+        return zb
+    xy = np.asarray(xy, np.float64)[:, :2]
+    zb = np.asarray(zb, np.float64)
+    crossers = [(np.asarray(r, np.float64)[:, :2], float(h), np.asarray(z, np.float64)[:len(r)])
+                for r, z, h in seam_crossers(xy, zb, roads_)]
+    if not crossers:
+        return zb
+    blk = _blocked(xy, zb, crossers)
+    if not blk.any():
+        return zb
+    zr = np.empty(int(blk.sum()))
+    for n, p in enumerate(xy[blk]):
+        best = None
+        for ln, _h, z in crossers:
+            d = np.hypot(*(ln - p).T)
+            k = int(np.argmin(d))
+            if best is None or d[k] < best[0]:
+                best = (float(d[k]), float(z[k]))
+        zr[n] = best[1]
+    return _flush(_arc(xy), zb, blk, zr)
+
+
+def seam_crossers(xy, zb, roads_):
+    """Of roads_ ([(xy, z, half)]), those the track xy (bed zb) crosses at grade: its line crossing theirs within
+    CROSSING_DZ of its rail top. Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    zb = np.asarray(zb, np.float64)
+    s = _arc(xy)
+    lo, hi = xy.min(0) - 1.0, xy.max(0) + 1.0
+    out = []
+    for rxy, rz, rh in roads_:
+        r = np.asarray(rxy, np.float64)[:, :2]
+        if len(r) < 2 or (r.max(0) < lo).any() or (r.min(0) > hi).any():
+            continue
+        hits = roads._crossings([xy], [r])
+        rzz = np.asarray(rz, np.float64)[:len(r)]
+        if hits and any(abs(float(rzz[int(np.argmin(np.hypot(*(r - pt).T)))])
+                            - (float(np.interp(arc, s, zb)) + RAIL_TOP_M)) < CROSSING_DZ for _p, arc, pt in hits):
+            out.append((rxy, rz, rh))
+    return out
 
 
 def _blocked(xy, z, crossers):

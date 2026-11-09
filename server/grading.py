@@ -336,6 +336,11 @@ UNDER_CLEAR_M = roadsmod.DECK_ROAD_CLEAR + ROAD_LIFT
 UNDER_GRADE = 0.06          # the dip's ramps
 UNDER_MAX_BRIDGE_M = 120.0  # only single short spans (both ends on the ground): a chain's inner ends are no abutments
 UNDER_MAX_DROP_M = 8.0      # never lowered more than this (bad data: rather a low bridge than a pit)
+# On lidar a road under a rail bridge is where the survey has it (a town's underpass is lower than a road bridge's 6 m:
+# Nachod's road 14 under the Kladska line, 3.5 m under the track's ground, was dug 3.8 m down and its junctions with it,
+# a ravine the user saw, 2026-11-09): lowered at most this much (plan 035). BNE_RAIL_UNDER_LIDAR_DROP=off: as before.
+_rud = os.environ.get("BNE_RAIL_UNDER_LIDAR_DROP", "1.0")
+RAIL_UNDER_LIDAR_DROP_M = None if _rud == "off" else float(_rud)
 UNDER_FLAT_M = 12.0         # m either side of the crossing kept at the dip's full depth (under_dip)
 UNDER_MAX_GRADE = 0.10      # a dip's ramp made steeper, up to this, to end inside its road part (under_dip)
 UNDER_JOINT_FLAT_M = 12.0   # at a junction, every road takes the deepest dip within this of it ...
@@ -2250,7 +2255,9 @@ class _Planner:
                             load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
-                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside)
+                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, railways.seam_roads(xy, z, beside))
+                            if railways.railxing.ENABLED:   # (flush with the roads' plans, as tile_mesh with the graded road)
+                                z = railways.flush_to_plans(xy, z, beside)
                         # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
                         # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
                         # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
@@ -3216,6 +3223,8 @@ class _Planner:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)
             target = max(top, z - UNDER_MAX_DROP_M)
+            if rail_span[bi] and lidar and RAIL_UNDER_LIDAR_DROP_M is not None:
+                target = max(target, z - RAIL_UNDER_LIDAR_DROP_M)
             if UNDER_SEA_ON and z >= floor:
                 target = max(target, floor)     # (not under the sea's surface: its water tiles would flood it)
             if target < z - 0.1:

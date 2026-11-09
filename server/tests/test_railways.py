@@ -309,6 +309,24 @@ class RailwayTest(unittest.TestCase):
         with unittest.mock.patch.object(railways, "RAW_ELEV", valley):
             self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
 
+        def cut(la, lo):            # (the bridge's mapped ends down the cut's sides: Nachod's road 14, 2026-11-09)
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 344.0 - 4.0 * (np.abs(np.asarray(e) - 120.0) < 11.0)
+        with unittest.mock.patch.object(railways, "RAW_ELEV", cut):
+            self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
+
+    def test_a_road_crossing_at_grade_couples_the_bed_as_the_flush_crossing(self):
+        xy = np.c_[np.arange(0.0, 101.0, 2.0), np.zeros(51)]
+        zb = np.full(51, 100.0)
+        road = (np.array([[50.0, -20.0], [50.0, 20.0]]), np.array([100.5, 100.5]), 4.0)
+        beside = (np.array([[0.0, 10.0], [100.0, 10.0]]), np.array([101.0, 101.0]), 3.0)
+        got = railways.seam_roads(xy, zb, [road, beside])
+        self.assertAlmostEqual(float(got[0][1][0]), 100.5 - (railways.RAIL_TOP_M - railways.FLUSH_LIFT_M))
+        self.assertEqual(float(got[1][1][0]), 101.0, "a road beside the track is as it is")
+        z = railways.flush_to_plans(xy, zb, [road])
+        self.assertAlmostEqual(float(z[25]), 100.5 + railways.FLUSH_LIFT_M - railways.RAIL_TOP_M, places=6)
+        self.assertEqual(float(z[0]), 100.0)
+
     def test_a_footway_over_a_double_track_is_one_crossing(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)], [(-50.0, 104.5), (300.0, 104.5)], [(120.0, 60.0), (120.0, 150.0)]],
                      ["standard_gauge", "standard_gauge", "footway"], subtypes=["rail", "rail", "road"])
