@@ -157,6 +157,50 @@ def index_records(main_ways, links, coords, node_tags):
     return out
 
 
+
+def _de_delta(coords, a, b):
+    p, q = np.asarray(coords[a]), np.asarray(coords[b])
+    return (q-p)*[111320.*math.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
+
+
+def _de_unit(d):
+    return d/max(float(np.linalg.norm(d)), 1e-9)
+
+
+def de_walk(neighbours, coords, start, second, first_way, limit, downstream=False):
+    """The German sign data's carriageway walk (tools/build_sign_tags.py): index_records' upstream rule (the best
+    aligned edge, stopping at a bend over ~49 degrees or an ambiguous fork) from start, its first step to second along
+    first_way, on to limit metres; upstream over incoming edges {node: [(from, way id, tags)]} or downstream over
+    outgoing ones {node: [(to, way id, tags)]}. (nodes, s of each node from start, edges [[way id, s from, s to]],
+    stop: 'limit' | 'end' | 'bend' | 'ambiguous')."""
+    step = float(np.linalg.norm(_de_delta(coords, second, start)))
+    nodes, s, visited = [start, second], [0., step], {start, second}
+    edges, stop = [[first_way, 0., step]], 'limit'
+    while s[-1] < limit:
+        at, before = nodes[-1], nodes[-2]
+        travel = _de_unit(_de_delta(coords, before, at) if downstream else _de_delta(coords, at, before))
+        choices = []
+        for other, wid, _ in neighbours.get(at, ()):
+            if other in visited or other not in coords:
+                continue
+            d = _de_delta(coords, at, other) if downstream else _de_delta(coords, other, at)
+            choices.append((float(_de_unit(d)@travel), other, wid))
+        choices.sort(key=lambda c: (-c[0], c[2], c[1]))
+        if not choices:
+            stop = 'end'; break
+        if choices[0][0] < .65:
+            stop = 'bend'; break
+        if len(choices) > 1 and choices[0][0]-choices[1][0] < .12:
+            stop = 'ambiguous'; break
+        _, other, wid = choices[0]
+        length = float(np.linalg.norm(_de_delta(coords, at, other)))
+        if edges[-1][0] == wid:
+            edges[-1][2] = s[-1]+length
+        else:
+            edges.append([wid, s[-1], s[-1]+length])
+        nodes.append(other); visited.add(other); s.append(s[-1]+length)
+    return nodes, s, edges, stop
+
 def _xy(frame, lonlat):
     p = np.asarray(lonlat, float)
     e, n, _ = frame.geodetic_to_enu(p[:, 1], p[:, 0], 0.)

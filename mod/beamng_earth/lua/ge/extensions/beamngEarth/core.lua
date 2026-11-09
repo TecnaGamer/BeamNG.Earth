@@ -1135,7 +1135,7 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
-    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false

@@ -1,0 +1,173 @@
+{
+  "bne_de_letters_white": {
+    "name": "bne_de_letters_white",
+    "mapTo": "bne_de_letters_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "af6afdd7-d4a3-586a-ad6c-de4453b306e9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.913,
+          0.932,
+          0.913,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.png",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
+  },
+  "bne_de_letters_black": {
+    "name": "bne_de_letters_black",
+    "mapTo": "bne_de_letters_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ee50586e-9712-5ce9-b792-252163d8a803",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.005,
+          0.005,
+          0.005,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_letters_o.data.png",
+        "opacityFactor": 1.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false,
+    "alphaTest": true,
+    "alphaRef": 64,
+    "translucent": false
+  },
+  "bne_de_blue": {
+    "name": "bne_de_blue",
+    "mapTo": "bne_de_blue",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c00097d4-76ba-5900-9718-a6d27dd74929",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.014,
+          0.25,
+          0.52,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_de_white": {
+    "name": "bne_de_white",
+    "mapTo": "bne_de_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2235c009-5ecf-5359-af69-9420f817b96c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.913,
+          0.932,
+          0.913,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_de_yellow": {
+    "name": "bne_de_yellow",
+    "mapTo": "bne_de_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "812e47a3-735f-5e8f-ae44-241faca3401a",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.93,
+          0.565,
+          0.0,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_de_green": {
+    "name": "bne_de_green",
+    "mapTo": "bne_de_green",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a77a7e02-2215-5d1e-a569-89fd5b963bb2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.0,
+          0.242,
+          0.089,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  },
+  "bne_de_black": {
+    "name": "bne_de_black",
+    "mapTo": "bne_de_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e14f7822-6a74-5b8e-bbc6-213c4af14abf",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.005,
+          0.005,
+          0.005,
+          1
+        ],
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": true
+  }
+}
