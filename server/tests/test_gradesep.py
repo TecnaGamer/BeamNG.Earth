@@ -313,5 +313,38 @@ class ReferenceTest(unittest.TestCase):
         self.check(cross(), NearMd(lambda e, n: np.zeros_like(e), None))
 
 
+class ElsewhereTest(unittest.TestCase):
+    """roads._gradesep_elsewhere: a road's home cell takes the spans the other cells it crosses found for it (CA-1 by
+    Wilder Tunnel, 2026-11-09: its bridge over the underpass was found in the tunnel's cell only, its home cell next
+    door had none, and every copy took the home cell's ranges)."""
+
+    def copies(self, found_east):
+        lon1 = KEY.bounds()[2]
+        e_edge = (lon1 - LON) * roads_m_lon()
+        line = [[(e_edge - 300.0, 0.0), (e_edge + 300.0, 0.0)]]   # (starts in KEY, ends in the cell east of it)
+        east = mapcells.CellKey(KEY.z, KEY.x + 1, KEY.y)
+        home, other = features(line, ["trunk"], ids=["ca1"]), features(line, ["trunk"], ids=["ca1"])
+        home.__dict__.update(_bnge_cell=(str(KEY), "roads", ()), _bnge_neighbours=lambda: [other],
+                             _bnge_gradesep=lambda f: {})
+        other.__dict__.update(_bnge_cell=(str(east), "roads", ()), _bnge_neighbours=lambda: [home],
+                              _bnge_gradesep=lambda f: found_east)
+        return home, other
+
+    def test_the_home_cell_takes_a_bridge_found_where_the_road_goes_on(self):
+        home, other = self.copies({0: [(0.6, 0.62, "bridge")]})
+        self.assertEqual(roads._gradesep_elsewhere(home, 0), [(0.6, 0.62, "bridge")])
+        self.assertEqual(roads._level_ranges(home, 0), [(0.6, 0.62, "bridge")])
+        self.assertEqual(roads._gradesep_elsewhere(other, 0), [], "not its home: it takes the home copy's")
+
+    def test_nothing_found_elsewhere_changes_nothing(self):
+        home, _other = self.copies({})
+        self.assertEqual(roads._level_ranges(home, 0), [])
+
+
+def roads_m_lon():
+    from test_roads import M_LON
+    return M_LON
+
+
 if __name__ == "__main__":
     unittest.main()

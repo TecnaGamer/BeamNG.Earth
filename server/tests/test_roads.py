@@ -1626,6 +1626,14 @@ class TunnelReachTest(unittest.TestCase):
                                [(0, "is_tunnel", 0.45, 0.55)])
             self.assertEqual([(round(a, 4), round(b, 4), k) for a, b, k in got], [(0.45, 0.55, "tunnel")], other)
 
+    def test_its_own_approach_joined_at_the_portal_keeps_the_portal(self):
+        # an underpass under I-280 (37.6002, -122.4240): the service road's tunnel starts at its feature's first point,
+        # its approach a separate road ending there and going on in line. It was taken for a road alongside and the
+        # portal moved 5 m in, onto the embankment: the underpass graded as an open road, a trench across the freeway
+        got = self._ranges([[(0.0, 0.0), (400.0, 0.0)], [(-28.0, -4.0), (0.0, 0.0)]], ["service", "service"],
+                           [(0, "is_tunnel", 0.0, 0.25)])
+        self.assertEqual([(round(a, 4), round(b, 4), k) for a, b, k in got], [(0.0, 0.25, "tunnel")])
+
 
 class TunnelCoverRoadsTest(unittest.TestCase):
     """GitHub #450: a covered tunnel section goes on until the road crossing over it is covered."""
