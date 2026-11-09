@@ -144,12 +144,33 @@ class UnderpassTest(unittest.TestCase):
         self.assertEqual(roads.level_ranges(f, 1), [])          # (its tunnel: ground under the bridge)
 
     def test_a_long_tunnel_in_short_pieces_stays_a_tunnel(self):
-        # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, no underpass
+        # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, with 6 m of ground
+        # over it where the road crosses (more than roads.TUNNEL_OPEN_COVER): no underpass
+        _, n0, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        mound = lambda e, n: np.where((np.abs(n - n0[0]) < 45.0) & (np.abs(e - e0[0]) < 30.0), 6.0, 0.0)   # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
+                            ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]), mound)
+        self.assertEqual(roads.level_ranges(f, 0), [])
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
+
+    def test_a_long_tunnel_in_the_open_is_an_underpass(self):
+        # GitHub #1009 (Highway 3 under Paasikiventie, Hameenlinna): the same 100 m tunnel with the ground over it no
+        # higher than past its portals (a cutting the DEM shows open under the bridge): opened anyway
+        # (roads.TUNNEL_OPEN_COVER), so the road crossing over it is a bridge, not graded down into the cutting
+        e0, _, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        cutting = lambda e, n: np.where(np.abs(e - e0[0]) < 12.0, 0.0, 7.0)       # noqa: E731
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
+                            ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]), cutting)
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
+        self.assertIn([], [roads.level_ranges(f, i) for i in (1, 2)], "the piece it crosses: ground, no tube")
+
+    def test_a_long_tunnel_on_flat_ground_stays_a_tunnel(self):
+        # the same on a flat DEM (a covered tunnel the DEM does not show): no bridge over it
         f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],
                             ["motorway", "secondary", "secondary"], flags=[(1, "is_tunnel"), (2, "is_tunnel")]),
                    lambda e, n: np.zeros_like(e))
         self.assertEqual(roads.level_ranges(f, 0), [])
-        self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
 
     def test_a_short_tunnel_through_a_hill_stays_a_tunnel(self):
         # 20 m of ground over the road crossing it above the portals' approaches
