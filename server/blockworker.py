@@ -1043,7 +1043,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
-                              P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=P.drag, rail_mesh=P.rmesh,
+                              P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=getattr(P, "drag", None), rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
                               barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines) + (P.fuel_pads,)
@@ -1143,7 +1143,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
     try:
         # (roads.write_tile writes the shapes and the rows; its names are the anchor tile's: written aside, renamed)
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
-                                   P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=P.drag, rail_mesh=P.rmesh,
+                                   P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=getattr(P, "drag", None), rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
