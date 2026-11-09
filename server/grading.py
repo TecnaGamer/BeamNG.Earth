@@ -458,6 +458,20 @@ ABUT_FAR_M = 40.0           # ... against its grade from ABUT_NEAR_M to this far
 ABUT_STEEP = 0.15           # a fall this much steeper than that grade, near the end: the valley's side, not the road
 ABUT_MIN_M = 0.3            # m: a smaller fill at the end is left out
 ABUT_MAX_M = 8.0            # m filled at most
+SEAMS_ON = os.environ.get("BNE_SEAMS", "on") != "off"
+SEAM_MIN_M = 0.05           # m: a carriageway road's abutment end this far off its deck's end is pulled back to it
+SEAM_GRADE = 0.03           # ... eased out along the road at this grade (XS_FIXED_GRADE's: a freeway's ramp) ...
+SEAM_RUN_MIN_M = 24.0       # ... over at least this ...
+SEAM_RUN_MAX_M = 80.0       # ... and at most this
+SEAM_SIDE_M = 3.0           # m: a road's end this close to a pinned end meets the same abutment: it goes down from it
+SEAM_SIDE_GRADE = 0.10      # ... at this grade (a street off a freeway's bridge end), over SEAM_SIDE_RUN_M at least ...
+SEAM_SIDE_RUN_M = (12.0, 40.0)
+SEAM_MOUTH_M = 12.0         # m a street off a deck's abutment keeps the abutment's height: the junction's wedge of the deck's
+                            # level (a wider mouth than the carriageway's own) stands over the street's road no lower than this
+SEAM_MOUTH_GRADE = 0.08     # ... and goes back to its own profile at this grade
+SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
+                            # rest of their difference is shared between the two approaches (_grade_match) ...
+SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
 
 
 def median_profile(z, step, width):
@@ -2035,6 +2049,12 @@ class _Planner:
                     junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+            if SEAMS_ON and CW_ON and plans:
+                try:            # the deck's height at each carriageway road's abutment end, whatever the passes did to it
+                    if self._pin_cw_ends(plans, pspecs) and JUNCTION_SNAP_ON:
+                        snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
+                except Exception as e:      # the plans as the passes left them rather than no grading
+                    log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -2063,8 +2083,17 @@ class _Planner:
                     import railways     # (the cells around only where this one has a line: their fetches cost)
                     rcells = [self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
                               for k in railways.cells_near(self.frame, own)]
+                    beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
+                              for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
                     for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
-                        p = Plan(xy, z, railways.GRADE_HALF_M)
+                        if beside:      # (the bed beside a road: where the ground between has room for its slope)
+                            import railroadseam
+                            z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside)
+                        # (the carriageway of the bed's plan is the ballast's top, not the whole flat band: past it the band
+                        # gives way to a road beside it. A track 3 m past a primary's edge, prospekt Heroiv in Nemiia, was
+                        # blended with the road over the road's shoulder: a ditch at its edge; as upstream's #920)
+                        p = Plan(xy, z, railways.GRADE_HALF_M,
+                                 road_half=railways.BALLAST_TOP_M if SEAMS_ON else None)
                         p.rid = road_id(RAIL_TAG + fid)
                         plans.append((RAIL_TAG + fid, p))
                         pclip.append(True)
@@ -2513,6 +2542,14 @@ class _Planner:
                     continue
                 got = self._end_lift(e)
                 if got is None:
+                    gm = self._grade_match(e) if SEAMS_ON else None
+                    if gm is not None and not _never_raised(specs[i]):
+                        # (the deck is the chord between its abutments: the ground at the ends 3-4 m apart over 17 m, a wall
+                        # in it, or a 2 m hump to meet it; the approaches take the difference half each, the lower up, the
+                        # higher down: road 303 at Zdrina, Velke Petrovice, 2026-11-09)
+                        a = approach_add(p.xy, at_end, abs(gm), p.half, (), SLOPE_RUN)
+                        if a is not None:
+                            add = (a if gm > 0 else -a) if add is None else add + (a if gm > 0 else -a)
                     continue
                 if _never_raised(specs[i]) and not got[3] and not (len(got) > 5 and got[5]):
                     continue
@@ -3386,6 +3423,110 @@ class _Planner:
             np_.steep = getattr(p, "steep", False)
             plans[n] = (fid, np_)
 
+    def _pin_cw_ends(self, plans, specs):
+        """SEAMS_ON: each motorway- or trunk-family plan's end that is a bridge abutment (Plan.abut) back to the height
+        of its carriageway's profile there, which is the height the deck was drawn at (roads.DECK_Z_HOOK). The passes
+        after _apply_carriageways (the grade guard, the junction snaps) fit a plan's end to the roads and the ground
+        beside it, so the road came up to its deck's end 1.4-1.7 m under it: a step into the bridge (the M-21 over a
+        street in Nemiia, 48.4656 N 27.7711 E, 2026-11-08). The profile is taken back where the plan has it within
+        3 m, the plan's own offset there where not; either eased out over SEAM_GRADE (SEAM_RUN_MIN_M .. MAX_M) so no
+        new step lies further on. Plans changed in place; whether any was."""
+        done = False
+        pins = []                           # (x, y, z) of the ends pulled back to their decks
+        for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+            if sp is None or _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is None:
+                continue
+            ab = getattr(p, "abut", None)
+            if ab is None or not (ab[0] or ab[1]):
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            base = str(fid).split(":")[0]
+            z = np.array(p.z, np.float64)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            prof = self._cw_z_at(xy, xy, base)      # (None where a vertex is off the profile: ends read one by one)
+            out = z.copy()
+            for end, flag in ((0, ab[0]), (-1, ab[1])):
+                if not flag:
+                    continue
+                at = self._cw_z_at(xy, xy[end:end + 1] if end == 0 else xy[end:], base)
+                if at is None:
+                    continue
+                d = float(np.asarray(at)[0]) - float(z[end])
+                if abs(d) < SEAM_MIN_M:
+                    pins.append((float(xy[end][0]), float(xy[end][1]), float(z[end]) + d))     # (the streets' mouths)
+                    continue
+                run = float(np.clip(abs(d) / SEAM_GRADE, SEAM_RUN_MIN_M, SEAM_RUN_MAX_M))
+                a = s if end == 0 else s[-1] - s
+                t = np.clip(1.0 - a / run, 0.0, 1.0)
+                w = t * t * (3.0 - 2.0 * t)
+                out = out + ((prof - z) if prof is not None else d) * w
+                pins.append((float(xy[end][0]), float(xy[end][1]), float(z[end]) + d))
+            if np.abs(out - z).max() > 1e-6:
+                np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
+                plans[n] = (fid, np_)
+                done = True
+        # the roads that end at the same abutment (a street off the bridge's end): down from the deck's height
+        for n, ((fid, p), sp) in enumerate(zip(plans, specs)):
+            if not pins or sp is None or _cw.family(getattr(sp, "cls", None) + ("_link" if _is_link(sp) else "")) is not None:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            z = np.array(p.z, np.float64)
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            out = z.copy()
+            for end in (0, -1):
+                near = [q for q in pins if math.hypot(q[0] - xy[end][0], q[1] - xy[end][1]) <= SEAM_SIDE_M]
+                if not near:
+                    continue
+                d = float(np.mean([q[2] for q in near])) - float(z[end])
+                a = s if end == 0 else s[-1] - s
+                if abs(d) >= SEAM_MIN_M:
+                    run = float(np.clip(abs(d) / SEAM_SIDE_GRADE, *SEAM_SIDE_RUN_M))
+                    t = np.clip(1.0 - a / run, 0.0, 1.0)
+                    out = out + d * t * t * (3.0 - 2.0 * t)
+                out = self._hold_mouth(out, a)
+            if np.abs(out - z).max() > 1e-6:
+                np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
+                plans[n] = (fid, np_)
+                done = True
+        return done
+
+    @staticmethod
+    def _hold_mouth(z, a):
+        """z (n,) of a street at the end of a deck, a (n,) the distance of each vertex from that end: the end's height held
+        for SEAM_MOUTH_M (the wedge of the deck's level the junction makes beside the carriageway: 48.46547 N 27.77097 E,
+        Nemiia, 2026-11-09: it stood 0.5 m over the street, as a step with a concrete edge), then back to the street's own
+        profile at SEAM_MOUTH_GRADE. A street that does not meet its own profile again inside its length is left as it was."""
+        n = len(z)
+        order = np.argsort(a, kind="stable")
+        za, aa = np.asarray(z, np.float64)[order], np.asarray(a, np.float64)[order]
+        held = aa <= SEAM_MOUTH_M
+        if n < 3 or held.sum() < 2 or held.all():
+            return z
+        out = za.copy()
+        out[held] = za[0]
+        prev, ap = za[0], max(float(aa[held][-1]), 0.0)
+        for i in np.flatnonzero(~held):
+            lim = SEAM_MOUTH_GRADE * (aa[i] - ap)
+            dz = za[i] - prev
+            if abs(dz) <= lim:
+                res = np.asarray(z, np.float64).copy()
+                res[order] = out
+                return res
+            prev += lim if dz > 0 else -lim
+            ap = aa[i]
+            out[i] = prev
+        return z
+
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M
         of a bridge's end in their own cell."""
@@ -3852,6 +3993,60 @@ class _Planner:
                   [round(t, 1) for _p, t in out["cross"]])
         return out
 
+    def _grade_match(self, xy):
+        """m (signed) the approach at the bridge end xy is raised (> 0) or lowered (< 0) so the single span it ends is no
+        steeper than SEAM_DECK_GRADE: half of what the ground at its two ends differs by over that, the lower end up, the
+        higher down, within SEAM_MATCH_MAX_M; None for a chain, a carriageway's or never-raised class's bridge, or when the
+        slope is fine. A pure function of the map around the bridge, cached per point."""
+        k = (round(float(xy[0]) * 2), round(float(xy[1]) * 2))
+        with self.lock:
+            cache = self.__dict__.setdefault("_gm_cache", {})
+            if k in cache:
+                return cache[k]
+        res = None
+        try:
+            res = self._grade_match_calc(np.asarray(xy, np.float64))
+        except Exception as e:      # no match rather than no grading
+            log.debug("grading: grade match at %s: %s: %s", k, type(e).__name__, e)
+        with self.lock:
+            return cache.setdefault(k, res)
+
+    def _grade_match_calc(self, xy):
+        la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
+        home = mapcells.cell_of(float(la[0]), float(lo[0]))
+        hc = self._cell_enu(home, ground=False)
+        if not len(hc["ends"]):
+            return None
+        d = np.hypot(hc["ends"][:, 0] - xy[0], hc["ends"][:, 1] - xy[1])
+        hit = np.flatnonzero(d <= APPROACH_TOUCH_M)
+        if not len(hit):
+            return None
+        bi = hc["end_of"][int(hit[0])]
+        bridge = np.asarray(hc["bridges"][bi], np.float64)[:, :2]
+        cls = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi]
+        if cls is None or cls in APPROACH_SKIP or str(cls).endswith("_link") or (
+                CW_ON and _cw.family(cls) is not None):
+            return None
+        lam, lom, _ = self.frame.enu_to_geodetic(bridge[:, 0], bridge[:, 1], 0.0)
+        pad = 50.0 / 111320.0
+        padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lam)))))
+        keys = sorted(set(mapcells.cells_for_points(lam, lom, pad, padlon)) | {home}, key=str)
+        bridges = [b for kk in keys for b in self._cell_enu(kk, ground=False)["bridges"]]
+        if bridge_chain(bridge, bridges) or not bridge_chain_ends_free(bridge, bridges, bridge[0])                 or not bridge_chain_ends_free(bridge, bridges, bridge[-1]):
+            return None             # (a chain, or a joint: its ends are no abutments)
+        L = float(np.hypot(*np.diff(bridge, axis=0).T).sum())
+        if L < 4.0:
+            return None
+        ends = np.array([bridge[0], bridge[-1]])
+        ela, elo, _ = self.frame.enu_to_geodetic(ends[:, 0], ends[:, 1], 0.0)
+        z = np.asarray(self.elev(ela, elo), np.float64).reshape(-1)
+        deficit = abs(float(z[1] - z[0])) - SEAM_DECK_GRADE * L
+        if deficit < 2 * APPROACH_MIN_LIFT:
+            return None
+        half = min(deficit / 2.0, SEAM_MATCH_MAX_M)
+        mine = 0 if np.hypot(*(ends[0] - xy)) <= np.hypot(*(ends[1] - xy)) else 1
+        return half if z[mine] < z[1 - mine] else -half
+
     def _end_lift_raw(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
         home = mapcells.cell_of(float(la[0]), float(lo[0]))
@@ -3960,7 +4155,13 @@ class _Planner:
                 need.append(base + c)
             d = np.hypot(*(np.asarray(pts) - np.asarray(xy)[:2]).T)
             reach = np.asarray(need) - roadsmod.DECK_DESIGN_GRADE * np.maximum(d - roadsmod.DECK_ROAD_HALF - WATER_CURVE_M, 0.0)
-            return max(0.0, float(reach.max() - z_at(np.asarray(xy, np.float64)[None, :2])[0]))
+            # (need is in the frame's ENU heights, where the Earth's curvature has dropped them d^2 / 2R under the
+            # geodetic ones z_at gives: both on one scale, or a frame 15 km from the bridge saw 18 m of headroom
+            # and raised nothing: Zdrina's 17 m bridge over a river, 50.5172 N 16.2121 E, 2026-11-08)
+            p0 = np.asarray(xy, np.float64)[None, :2]
+            la0, lo0, _ = self.frame.enu_to_geodetic(p0[:, 0], p0[:, 1], 0.0)
+            z0 = float(self.frame.geodetic_to_enu(la0, lo0, np.asarray(z_at(p0), np.float64))[2][0])
+            return max(0.0, float(reach.max() - z0))
         except Exception as e:      # no fill rather than no grading
             log.debug("grading: water lift: %s: %s", type(e).__name__, e)
             return 0.0

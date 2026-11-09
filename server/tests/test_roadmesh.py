@@ -563,7 +563,11 @@ class DeckRulesTest(unittest.TestCase):
 
     def test_water_clearance(self):
         import roads
-        self.assertEqual(roads.water_clear(10.0), roads.WATER_CLEAR_MIN)
+        self.assertEqual(roads.water_clear(10.0), roads.WATER_SMALL_MIN, "a stream: the road's own level")
+        self.assertLess(roads.water_clear(17.0), 1.0)
+        self.assertLess(roads.water_clear(25.0), roads.water_clear(35.0))
+        self.assertLessEqual(roads.water_clear(39.9), roads.water_clear(40.0) + 1e-6, "no step into the full rule")
+        self.assertAlmostEqual(roads.water_clear(40.0), 6.0)
         self.assertAlmostEqual(roads.water_clear(250.0), 37.5)
         self.assertEqual(roads.water_clear(5000.0), roads.WATER_CAUSEWAY_CLEAR, "a causeway")
 

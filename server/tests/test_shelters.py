@@ -158,6 +158,24 @@ class PlaceTest(unittest.TestCase):
     def test_a_stop_past_the_tile_is_left_out(self):
         self.assertEqual(self.rows(self.stop([[-5.0, 8.0]]), self.road()), [])
 
+    def test_a_shelter_stays_off_a_track_beside_the_road(self):
+        # a track 3 m past the road's edge (Nemiia, prospekt Heroiv, 2026-11-08) that bends away from it at x = 70: the
+        # stop at x = 30 stood on the rails; it slides along the curb to where the track has left (or is left out)
+        feats = self.stop([[30.0, 8.0]])
+        axis = np.array([[x, 7.2 + max(0.0, x - 55.0) * 0.6, 0.0] for x in np.linspace(0.0, 100.0, 51)])
+        rails = [("rail:1", 2.6, axis)]
+        road = self.road()
+        self.assertEqual(shelters._rail_short(30.0, 8.0, 90.0, []), 0.0)
+        self.assertGreater(shelters._rail_short(30.0, 8.0, 90.0, rails), 0.5)
+        got = shelters._clear_of_rails(30.0, 8.0, 90.0, road, rails)
+        self.assertIsNone(got)              # (within the 15 m it can slide the track is still beside the road)
+        axis_far = np.array([[x, 7.2 + max(0.0, x - 35.0) * 1.0, 0.0] for x in np.linspace(0.0, 100.0, 51)])
+        got = shelters._clear_of_rails(30.0, 8.0, 90.0, road, [("rail:1", 2.6, axis_far)])
+        self.assertIsNotNone(got)
+        self.assertLessEqual(shelters._rail_short(got[0], got[1], 90.0, [("rail:1", 2.6, axis_far)]), 1e-3)
+        self.assertGreater(abs(got[0] - 30.0), 1.0, "it slid along the road")
+        self.assertEqual(len(self.rows(feats, road)), 1, "no tracks: the shelter stands")
+
     def test_catalog_names_the_stock_shape(self):
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         path = os.path.join(root, "mod", "beamng_earth", "lua", "ge", "extensions", "beamngEarth", "trees.lua")

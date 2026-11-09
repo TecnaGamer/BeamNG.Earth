@@ -3521,10 +3521,23 @@ def water_clear(w):
     WATER_CAUSEWAY_M is a causeway, low over the water. Pure."""
     if w > WATER_CAUSEWAY_M:
         return WATER_CAUSEWAY_CLEAR
-    return float(np.clip(WATER_CLEAR_SHARE * w, WATER_CLEAR_MIN, WATER_CLEAR_MAX))
+    full = float(np.clip(WATER_CLEAR_SHARE * w, WATER_CLEAR_MIN, WATER_CLEAR_MAX))
+    if SEAMS_WATER_ON and w < WATER_SMALL_M:
+        # a stream or a small river is crossed at the road's own level, a metre over the water at most: the full rule
+        # stood a 17 m bridge 2 m over the banks, its approach raised to meet it (Zdrina, road 303, 2026-11-09: "in
+        # reality it is not that high, or the climb is smoother"). From WATER_SMALL_LOW_M of run to WATER_SMALL_M the
+        # clearance grows with the square of the run's length from WATER_SMALL_MIN to the full rule's.
+        u = max(w - WATER_SMALL_LOW_M, 0.0) / (WATER_SMALL_M - WATER_SMALL_LOW_M)
+        full_at = float(np.clip(WATER_CLEAR_SHARE * WATER_SMALL_M, WATER_CLEAR_MIN, WATER_CLEAR_MAX))
+        return float(min(full, WATER_SMALL_MIN + (full_at - WATER_SMALL_MIN) * u * u))
+    return full
 
 
 WATER_CLEAR_SHARE = 0.15
+SEAMS_WATER_ON = os.environ.get("BNE_SEAMS", "on") != "off"
+WATER_SMALL_M = 40.0        # a wet run shorter than this is a stream or a small river (water_clear)
+WATER_SMALL_LOW_M = 25.0    # ... one up to this is crossed at WATER_SMALL_MIN
+WATER_SMALL_MIN = 0.0       # m of clearance over the ground (the bed) under a stream's bridge
 WATER_CLEAR_MIN = 2.5
 WATER_CLEAR_MAX = 40.0
 WATER_CAUSEWAY_M = 1500.0

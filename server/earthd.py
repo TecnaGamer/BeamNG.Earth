@@ -2639,7 +2639,8 @@ class Server:
                 log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import shelters
             try:
-                props.extend(shelters.rows(anchor.frame, infra_fn, box, elev, near_roads))
+                props.extend(shelters.rows(anchor.frame, infra_fn, box, elev, near_roads, lambda k: self.mapdata.cell(
+                    k, layers=("roads",), kind="demand").layers.get("roads")))
             except Exception as ex:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
