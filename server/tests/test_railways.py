@@ -88,7 +88,7 @@ class RailwayTest(unittest.TestCase):
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, "fi")
         self.assertIsNotNone(mesh)
         P, T, UV, mats, M = mesh
-        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL, railways.COLLIDER, railways.SLEEPER])
+        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL, railways.SLEEPER, railways.COLLIDER])
         self.assertLess(len(P), railways.VERTS_MAX)
         self.assertEqual(int(T.max()) + 1, len(P))
         steel = P[np.unique(T[M == 2])]
@@ -152,6 +152,22 @@ class RailwayTest(unittest.TestCase):
         self.assertAlmostEqual(cl[3] - cl[2], railways.COLLIDER_W, delta=0.01)
         self.assertGreaterEqual(float(v[:, 2].max() - v[:, 2].min()), 0.30, "at least 30 cm tall")
 
+    def test_collider_runs_through_a_level_crossing_and_stops_in_a_switch(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]],
+                     ["standard_gauge", "secondary"], subtypes=["rail", "road"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        c = P[np.unique(T[M == mats.index(railways.COLLIDER)])]
+        self.assertTrue(((c[:, 0] > 112) & (c[:, 0] < 128)).any(), "boxes across the road: the flange has its inner face")
+        self.assertGreater(float(c[:, 0].max() - c[:, 0].min()), 250.0, "the boxes run the tile's length")
+        # a side track leaving the main one at 20 degrees: the boxes of both stop where they meet
+        g = features([[(-50.0, 100.0), (300.0, 100.0)], [(100.0, 100.0), (300.0, 190.0)]],
+                     ["standard_gauge", "standard_gauge"], subtypes=["rail", "rail"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [g], flat)
+        c = P[np.unique(T[M == mats.index(railways.COLLIDER)])]
+        near = (c[:, 0] > 101) & (c[:, 0] < 105) & (np.abs(c[:, 1] - 100.0) < 3.0)
+        self.assertFalse(near.any(), "no box in the switch")
+        self.assertTrue(((c[:, 0] > 200) & (np.abs(c[:, 1] - 100.0) < 2.0)).any(), "the through track goes on")
+
     def test_a_tile_past_the_vertex_budget_keeps_its_main_lines(self):
         long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]
         short = [[(100.0, 120.0 + 2.0 * k), (130.0, 120.0 + 2.0 * k)] for k in range(8)]
@@ -173,9 +189,10 @@ class RailwayTest(unittest.TestCase):
         f = features([[(0.0, 100.0), (250.0, 100.0)], [(120.0, 0.0), (120.0, 250.0)]], ["standard_gauge", "secondary"],
                      subtypes=["rail", "road"])
         P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
-        x = P[np.unique(T)][:, 0]
+        drawn = np.asarray(M) != mats.index(railways.COLLIDER)       # (the physics boxes run on across it: see below)
+        x = P[np.unique(T[drawn])][:, 0]
         hw = roads.road_specs(f)[1].width / 2
-        self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing on the road")
+        self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing drawn on the road")
 
     def test_abandoned_lines_are_drawn_but_not_graded(self):
         """GitHub #706 / #837: an abandoned line's bed graded to a 2 % line cut walls into mountainsides. It gets no

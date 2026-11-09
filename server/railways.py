@@ -1490,6 +1490,57 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
+SWITCH_M = 1.7              # m: a track point this near another track's line, crossing it at SWITCH_MIN_SIN or more, is a
+SWITCH_MIN_SIN = 0.087      # switch or a crossing: no collider box there (the flange of the through track would strike the side
+                            # track's rail; a real switch's blades and frog leave the gap)
+
+
+def _switch_masks(rails):
+    """Per part: bool (n,), the points inside a switch (SWITCH_M from another part's line, crossing it at SWITCH_MIN_SIN or
+    more; parallel and duplicated lines are left alone). Pure, order of rails alone."""
+    cell = SWITCH_M
+    grid = {}
+    dirs = []
+    for n, (_f, c, _k, xy) in enumerate(rails):
+        d = np.gradient(xy, axis=0)
+        d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+        dirs.append(d)
+        if c == "tram":
+            continue
+        for i, (x, y) in enumerate(np.floor(xy / cell).astype(np.int64).tolist()):
+            grid.setdefault((x, y), []).append((n, i))
+    out = []
+    for n, (_f, c, _k, xy) in enumerate(rails):
+        m = np.zeros(len(xy), bool)
+        if c != "tram":
+            for i, (x, y) in enumerate(np.floor(xy / cell).astype(np.int64).tolist()):
+                for gx in (x - 1, x, x + 1):
+                    for gy in (y - 1, y, y + 1):
+                        for k, j in grid.get((gx, gy), ()):
+                            if k == n:
+                                continue
+                            o = rails[k][3][j]
+                            if math.hypot(o[0] - xy[i, 0], o[1] - xy[i, 1]) < SWITCH_M and                                     abs(dirs[n][i, 0] * dirs[k][j, 1] - dirs[n][i, 1] * dirs[k][j, 0]) >= SWITCH_MIN_SIN:
+                                m[i] = True
+        out.append(m)
+    return out
+
+
+def _collider(mesh, p, uu, t, v, half_g, up):
+    """The rails' physics boxes along a run (points p, left unit uu, ballast top t, arc v): per rail a top, an inner face at
+    exactly the gauge and an outer face COLLIDER_W further out, from COLLIDER_DOWN under the ballast top to the rail's top."""
+    coll = mesh.mat(COLLIDER)
+    zt = t - SLEEPER_SINK + SLEEPER_H + RAIL_H
+    zl = t - COLLIDER_DOWN
+    out_l = np.c_[uu, np.zeros(len(p))]
+    gin = half_g - RAIL_HEAD / 2
+    for sg in (1, -1):
+        ci, co = p + uu * sg * gin, p + uu * sg * (gin + COLLIDER_W)
+        mesh.strip(np.c_[ci, zt], np.c_[co, zt], 0.0, 0.02, v, coll, up)
+        mesh.strip(np.c_[ci, zl], np.c_[ci, zt], 0.0, 0.05, v, coll, -sg * out_l)
+        mesh.strip(np.c_[co, zl], np.c_[co, zt], 0.0, 0.05, v, coll, sg * out_l)
+
+
 def _foot_limits(xy, side, foot, others, crossers):
     """Per vertex: the ballast foot's width, clipped at a road's carriageway edge or another track's deck so a fill's
     side is a wall there, not a slope over the road/track (the wide double-track embankment's foot ran over the road
@@ -1571,11 +1622,12 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         for line, hw in cr:
             crossers.append((line, hw, zc[k:k + len(line)]))
             k += len(line)
+    switch = _switch_masks(rails)
     mesh = _Mesh((box[0], box[1], 0.0))
     ballast, concrete, steel = mesh.mat(BALLAST), mesh.mat(CONCRETE), mesh.mat(STEEL)
     up = np.array([0.0, 0.0, 1.0])
     small = []                                      # sleepers and piers: drawn last, as room allows
-    for (fid, cls, kind, xy), (zb, zg), gone in zip(rails, prof, carried):
+    for (fid, cls, kind, xy), (zb, zg), sw, gone in zip(rails, prof, switch, carried):
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
                  (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
         if gone or not inside.any():
@@ -1644,18 +1696,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 mesh.strip(np.c_[a, st + RAIL_H], np.c_[b, st + RAIL_H], 0.0, 0.02, v, steel_w, up)
                 mesh.strip(np.c_[a, st], np.c_[a, st + RAIL_H], 0.0, 0.05, v, steel_w, out_l)
                 mesh.strip(np.c_[b, st], np.c_[b, st + RAIL_H], 0.0, 0.05, v, steel_w, -out_l)
-            if cls != "tram":       # (the rails' physics: one box a side, its inner face exactly the gauge, 38 cm tall, 30 cm thick)
-                coll = mesh.mat(COLLIDER)
-                zt, zl = st + RAIL_H, t - COLLIDER_DOWN
-                gin = half_g - RAIL_HEAD / 2
-                for sg in (1, -1):
-                    ci, co = p + uu * sg * gin, p + uu * sg * (gin + COLLIDER_W)
-                    mesh.strip(np.c_[ci, zt], np.c_[co, zt], 0.0, 0.02, v, coll, up)
-                    mesh.strip(np.c_[ci, zl], np.c_[ci, zt], 0.0, 0.05, v, coll, -sg * out_l)
-                    mesh.strip(np.c_[co, zl], np.c_[co, zt], 0.0, 0.05, v, coll, sg * out_l)
+            if cls != "tram":
                 sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
                 if sp is not None:
                     small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
+        if cls != "tram":       # (the rails' physics, on straight through a level crossing: its rail tops lie 3 cm over the
+            for i, j in _runs(~inside | sw):     # road, as the bed is flush with it; none in a switch: SWITCH_M)
+                sl = slice(i, j + 1)
+                _collider(mesh, xy[sl], u[sl], top[sl], s[sl] / 3.0, half_g, up)
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
