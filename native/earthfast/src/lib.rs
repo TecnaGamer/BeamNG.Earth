@@ -52,6 +52,8 @@ mod streetlabels;
 mod perfclean;
 mod mdhtml;
 mod roadlanes;
+mod waytags;
+mod underdeck;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -5567,6 +5569,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (bridge chain solving: _merge_overlaps' pair pulls, _ground_pins)
     m.add_function(wrap_pyfunction!(deckmerge::deck_merge_round, m)?)?;
     m.add_function(wrap_pyfunction!(deckmerge::deck_ground_pins, m)?)?;
-    m.add("VERSION", 169)?;
+    m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
+    m.add("VERSION", 170)?;
     Ok(())
 }

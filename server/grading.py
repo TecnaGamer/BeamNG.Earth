@@ -2349,10 +2349,10 @@ class _Planner:
         xy = np.asarray(xy, np.float64)
         if len(xy) < 2:
             return False
-        for p in (xy[0], xy[-1]):
-            la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
-            ends = np.asarray(self._cell_enu(mapcells.cell_of(float(la[0]), float(lo[0])), ground=False)["ends"],
-                              np.float64).reshape(-1, 2)
+        tips = xy[[0, -1]]
+        las, los, _ = self.frame.enu_to_geodetic(tips[:, 0], tips[:, 1], 0.0)     # (both ends in one call: per point)
+        for p, la, lo in zip(tips, las.tolist(), los.tolist()):
+            ends = np.asarray(self._cell_enu(mapcells.cell_of(la, lo), ground=False)["ends"], np.float64).reshape(-1, 2)
             if len(ends) and (np.hypot(ends[:, 0] - p[0], ends[:, 1] - p[1]) <= APPROACH_TOUCH_M).any():
                 return True
         return False
@@ -4893,130 +4893,59 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
 
 
 class _Decks(list):
-    """deck_capped's decks [(line (k, 2), half width)] with box (n, 4): each line's x0, y0, x1, y1; and seg(k): line k's
-    segments, made once (deck_capped tests every near deck's at once)."""
+    """deck_capped's decks [(line (k, 2), half width)] with box (n, 4): each line's x0, y0, x1, y1; and flat(): every
+    line's segments, made once (deck_capped tests every near deck's at once)."""
 
     def __init__(self, decks):
         super().__init__(decks)
         self.box = np.array([(*np.asarray(ln, np.float64)[:, :2].min(0), *np.asarray(ln, np.float64)[:, :2].max(0))
                              for ln, _h in self], np.float64).reshape(-1, 4)
-        self.segs = {}
 
-    def seg(self, k):
-        """Line k's (segment starts (m, 2), vectors (m, 2), lengths (m,), arcs at their starts (m,), its length), as a
-        test of it alone made them (its own diff, hypot, cumsum: bit for bit), or None without a segment."""
-        got = self.segs.get(k, False)
-        if got is not False:
-            return got
-        b = np.asarray(self[k][0], np.float64)[:, :2]
-        got = None
-        if len(b) >= 2:
-            s = np.diff(b, axis=0)
-            lb = np.hypot(*s.T)
-            sb = np.r_[0.0, np.cumsum(lb)]
-            got = (b[:-1], s, lb, sb[:-1], float(sb[-1]))
-        self.segs[k] = got
+    def flat(self):
+        """Every line's segments in one: (off (n + 1,): line k's rows off[k]..off[k + 1] (none without a segment),
+        starts (m, 2), vectors (m, 2), lengths (m,), each line's half width (n,)), made once (deck_capped's native
+        test: each line's own differences and np.hypot, elementwise)."""
+        got = getattr(self, "_flat", None)
+        if got is None:
+            lines = [np.asarray(ln, np.float64)[:, :2] for ln, _h in self]
+            have = [b for b in lines if len(b) >= 2]
+            off = np.r_[0, np.cumsum([max(len(b) - 1, 0) for b in lines])].astype(np.int64)
+            if have:
+                pts = np.concatenate(have)
+                d = np.diff(pts, axis=0)
+                keep = np.ones(len(d), bool)
+                keep[np.cumsum([len(b) for b in have])[:-1] - 1] = False      # (from one line's end to the next)
+                q, s = np.ascontiguousarray(pts[:-1][keep]), np.ascontiguousarray(d[keep])
+                lb = np.hypot(*s.T)
+            else:
+                q, s, lb = np.zeros((0, 2)), np.zeros((0, 2)), np.zeros(0)
+            got = self._flat = (off, q, s, lb, np.array([float(h) for _ln, h in self], np.float64))
         return got
-
-
-DECK_HITS_CELLS = 1 << 18   # (pts segments x deck segments) a deck_capped line test takes at once (memory: ~8 arrays)
-
-
-def _deck_hits(pts, decks, near):
-    """Where polyline pts (n, 2) crosses the near decks of _Decks decks (their indices): (arcs on pts, arcs on the
-    deck, |sin| of the angle, the deck's index) of each crossing, every near deck's segments in one test (a loop per
-    deck was most of deck_capped's ~0.1 ms a call, 2026-11-03), and pts' arcs (n,). The same products in the same
-    order per pair of segments as one deck at a time (elementwise: bit for bit). Pure."""
-    p, r = pts[:-1], np.diff(pts, axis=0)
-    la = np.hypot(*r.T)
-    sa = np.r_[0.0, np.cumsum(la)]
-    ks, sg = [], []
-    for k in near:
-        got = decks.seg(int(k))
-        if got is not None:
-            ks.append(int(k))
-            sg.append(got)
-    if not sg:
-        return (), (), (), (), sa
-    q_all, s_all = np.concatenate([g[0] for g in sg]), np.concatenate([g[1] for g in sg])
-    lb_all, sb_all = np.concatenate([g[2] for g in sg]), np.concatenate([g[3] for g in sg])
-    own = np.repeat(np.asarray(ks, np.int64), [len(g[2]) for g in sg])
-    out_a, out_b, out_s, out_k = [], [], [], []
-    step = max(1, DECK_HITS_CELLS // max(1, len(r)))
-    for c0 in range(0, len(own), step):
-        q, s = q_all[c0:c0 + step], s_all[c0:c0 + step]
-        s0, s1 = s[None, :, 0], s[None, :, 1]
-        rxs = r[:, None, 0] * s1 - r[:, None, 1] * s0
-        qp0, qp1 = q[None, :, 0] - p[:, None, 0], q[None, :, 1] - p[:, None, 1]
-        ok = np.abs(rxs) > 1e-12
-        den = np.where(ok, rxs, 1.0)
-        t = (qp0 * s1 - qp1 * s0) / den
-        i, j = np.nonzero(ok & (t >= 0.0) & (t <= 1.0))
-        if not len(i):
-            continue
-        # (the arc on the deck where the arc on pts is in range only: the same products, pair by pair)
-        u = (qp0[i, j] * r[i, 1] - qp1[i, j] * r[i, 0]) / den[i, j]
-        m = (u >= 0.0) & (u <= 1.0)
-        if not m.any():
-            continue
-        i, j, u = i[m], j[m], u[m]
-        g = c0 + j
-        lb = lb_all[g]
-        out_s.append(np.abs(rxs[i, j]) / np.maximum(la[i] * lb, 1e-12))
-        out_a.append(sa[i] + t[i, j] * la[i])
-        out_b.append(sb_all[g] + u * lb)
-        out_k.append(own[g])
-    if not out_a:
-        return (), (), (), (), sa
-    return (np.concatenate(out_a), np.concatenate(out_b), np.concatenate(out_s), np.concatenate(out_k), sa)
 
 
 def deck_capped(pts, z, decks):
     """z (n,), the ground at points pts (n, 2) along a road in order, capped where decks [(line (k, 2), half width)]
     cross over it (UNDER_DECK_*): from UNDER_DECK_SIDE_M past the deck's sides, at most the straight line between the
     ground there. A crossing within APPROACH_MIN_CROSS_M of a deck's end is a junction at grade and is left. Returns z
-    itself when nothing is capped. Pure."""
+    itself when nothing is capped. Pure. (native underdeck.rs: every near deck's segments against the road's in one
+    call; numpy per road part was ~half of plan_roads on a dense tile, 2026-11-08)"""
     if not decks or len(pts) < 2:
         return z
-    pts = np.asarray(pts, np.float64)[:, :2]
-    lo_p, hi_p = pts.min(0) - UNDER_DECK_MAX_M, pts.max(0) + UNDER_DECK_MAX_M
-    if isinstance(decks, _Decks):           # (every deck's box at once; ~0.9 ms a call in Manhattan as a loop)
-        box = decks.box
-        near = np.flatnonzero((box[:, 2] >= lo_p[0]) & (box[:, 3] >= lo_p[1]) & (box[:, 0] <= hi_p[0])
-                              & (box[:, 1] <= hi_p[1]))
-    else:                                   # (a plain list: each deck's own test, the near ones' segments made here)
+    pts = np.ascontiguousarray(np.asarray(pts, np.float64)[:, :2])
+    test_box = isinstance(decks, _Decks)    # (every deck's box at once)
+    if not test_box:                        # (a plain list: each deck's own test, the near ones' segments made here)
+        lo_p, hi_p = pts.min(0) - UNDER_DECK_MAX_M, pts.max(0) + UNDER_DECK_MAX_M
         lines = [(np.asarray(ln, np.float64)[:, :2], h) for ln, h in decks]
         decks = _Decks([(ln, h) for ln, h in lines
                         if len(ln) >= 2 and not ((ln.max(0) < lo_p).any() or (ln.min(0) > hi_p).any())])
-        near = np.arange(len(decks))
-    if not len(near):
-        return z
-    arcs, on_deck, sin, which, s = _deck_hits(pts, decks, near)
-    wins = []
-    for a, b, sn, k in zip(arcs, on_deck, sin, which):
-        length = decks.seg(int(k))[4]
-        if APPROACH_MIN_CROSS_M <= b <= length - APPROACH_MIN_CROSS_M:
-            h = min(float(decks[int(k)][1]) / max(float(sn), 0.2), UNDER_DECK_MAX_M) + UNDER_DECK_SIDE_M
-            wins.append((float(a) - h, float(a) + h))
-    if not wins:
-        return z
-    z = np.asarray(z, np.float64)
-    out = z.copy()
-    wins.sort()
-    merged = [list(wins[0])]
-    for a, b in wins[1:]:
-        if a <= merged[-1][1]:
-            merged[-1][1] = max(merged[-1][1], b)
-        else:
-            merged.append([a, b])
-    for a, b in merged:
-        a, b = max(a, 0.0), min(b, float(s[-1]))
-        inn = (s > a) & (s < b)
-        if b - a < 1e-6 or not inn.any():
-            continue
-        za, zb = float(np.interp(a, s, z)), float(np.interp(b, s, z))
-        out[inn] = np.minimum(out[inn], za + (zb - za) * (s[inn] - a) / (b - a))
-    return out if (out < z).any() else z
+        if not len(decks):
+            return z
+    r = np.diff(pts, axis=0)
+    la = np.hypot(*r.T)
+    import fast
+    code, out = fast.deck_capped(pts, z, la, decks.box, test_box, decks.flat(), UNDER_DECK_MAX_M,
+                                 UNDER_DECK_SIDE_M, APPROACH_MIN_CROSS_M)
+    return z if code == 0 else np.asarray(z, np.float64) if code == 1 else out
 
 
 def fill_abutment(z, at_end, step=PROFILE_STEP):
