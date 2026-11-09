@@ -18,7 +18,7 @@ import busstations as bs
 import railstations as rs
 
 RAIL_TOP_M = 0.58           # the rail head over the bed (railways.RAIL_TOP_M: ballast 0.3 - sleeper sink 0.08 + sleeper 0.2 + rail 0.16)
-SMOOTH_N = 5                # reference points averaged along the track (REF_STEP_M apart): the DEM's noise out of it
+SMOOTH_N = 13               # reference points averaged along the track (REF_STEP_M apart): the DEM's noise out of it
 REF_STEP_M = 4.0
 REF_NEAR_M = 14.0           # track points this near the platform are its reference
 REF_REACH_M = 25.0          # a platform with no edge at a track follows the nearest track within this
