@@ -7524,8 +7524,9 @@ class Connection:
         return xy
 
     def camera_away(self, cam):
-        """The camera's (x, y) from a pose's cam when it is more than VIEW_AWAY_M from the car (a free camera, a far
-        chase camera), else None. What is drawn follows it: the far field, and the road, tree and far building tiles
+        """The point a pose's cam is about when it is more than VIEW_AWAY_M from the car, else None: the 3D map's
+        orbit target (tx / ty) when the pose carries one, otherwise the camera's own (x, y) (a free camera, a far
+        chase camera). What is drawn follows it: the far field, and the road, tree and far building tiles
         round it as well as round the car; what collides stays round the car (the terrain block, the road and
         building colliders in the tiles round the car, the nav graph). The user, 2026-10-20: "All collision ...
         should be following the car while visual stuff should follow the camera"."""
