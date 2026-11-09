@@ -111,8 +111,8 @@ local foreign = false
 local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
 M.HEADS_ONLY = true      -- setupSignals sees only our signal heads, not every TSStatic (applySignals)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
--- (wall time: os.clock is the process's CPU time summed over all the game's threads, so a busy frame read several
--- times too long; the navgraph "signals" 156 ms of a Baltimore drive, 2026-11-09, was measured that way)
+-- (the stopwatch's wall clock for the parts of an apply; in the game os.clock reads the same, measured 2026-11-09 on
+-- Linux and Windows)
 local stopwatch = require('beamngEarth/stopwatch')
 local wall = stopwatch.clock()       -- ms since load, monotonic (one clock: stopwatch.clock() makes a new one)
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
