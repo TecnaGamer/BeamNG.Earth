@@ -9,6 +9,7 @@ Overture's classes and flags, as before. Data (c) OpenStreetMap contributors, OD
 """
 import gzip
 import json
+import zipfile
 import logging
 import os
 import re
@@ -317,7 +318,7 @@ def _load_idx(path):
             w.ids, w.idx = z["ids"].astype(np.int64, copy=False), z["idx"].astype(np.int32, copy=False)
             w.tags = json.loads(z["tags"].tobytes().decode("utf-8"))
             got = json.loads(z["rest"].tobytes().decode("utf-8"))
-    except (OSError, ValueError, KeyError) as e:
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as e:    # (EOFError: empty, BadZipFile: cut short)
         log.debug("%s: %s", path, e)
         return None
     if not isinstance(got, dict) or not isinstance(w.tags, list) or len(w.ids) != len(w.idx):

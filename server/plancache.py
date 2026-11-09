@@ -21,6 +21,7 @@ import os
 import shutil
 import threading
 import time
+import zipfile
 
 import numpy as np
 
@@ -135,7 +136,7 @@ class PlanCache:
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
                 lists["w"] = _split(f, "w") if "w_n" in f.files else []
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
             return None
         plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
         for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
@@ -331,7 +332,7 @@ class PlanCache:
             with np.load(self._region_path(tag, home), allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lines, cx, cz = _split(f, "l"), _split(f, "x"), _split(f, "q")
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
             return None
         parts, prof = [], {}
         for m, ln in zip(meta["parts"], lines):

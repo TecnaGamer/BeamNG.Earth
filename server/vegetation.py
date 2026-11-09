@@ -263,8 +263,10 @@ class Vegetation:
         p = self._path(x, y)
         fields = ("lon", "lat", "height", "radius", "kind", "group", "rank", "yaw", "scale")
         if p and os.path.exists(p):
-            with np.load(p, allow_pickle=False) as f:
-                return Items(*(f[n] for n in fields))
+            # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
+            got = staging.read_npz(p, lambda f: Items(*(f[n] for n in fields)), "trees cell")
+            if got is not None:
+                return got
         self._tl.dem_failed = False
         items = self._build(x, y)
         # (a cell built while the DEM could not answer, offline or no tile, lacks its slope rocks: it serves this
