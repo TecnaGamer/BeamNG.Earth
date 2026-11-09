@@ -484,7 +484,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 9      # 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 10     # 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1040,6 +1040,49 @@ def _spec_mask(feats, specs):
     return got[1]
 
 
+# A ground piece shorter than PORTAL_DECK_M between a tunnel's portal and a bridge of the same road, with no other road
+# meeting it, is the bridge going on to the portal: graded on its own it joined a portal floor taken from a steep
+# hillside to an abutment taken lower down it, a 3.7 m drop in 16 m (22 %) out of CA-1's northbound Tom Lantos bore
+# onto its bridge (37.5825, -122.5096, 2026-11-09; the southbound bore's bridge starts at its portal and was level).
+PORTAL_DECK_M = 30.0
+
+
+def _portal_decks(feats, i, rngs):
+    """rngs (feature i's level ranges, sorted) with each short ground gap between a tunnel and a bridge (PORTAL_DECK_M,
+    no road meeting it) made bridge. Pure given feats."""
+    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
+    if not rings or len(rngs) < 2:
+        return rngs
+    ring = rings[0][:, :2]
+    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
+    if L <= 0:
+        return rngs
+    out = list(rngs)
+    for n in range(len(out) - 1):
+        (a0, b0, k0), (a1, b1, k1) = out[n], out[n + 1]
+        if {k0, k1} != {"tunnel", "bridge"} or not 0.0 < (a1 - b0) * L <= PORTAL_DECK_M:
+            continue
+        gap = sub_polyline(ring, b0, a1)
+        ends = _first_ring_ends(feats)
+        mask = _spec_mask(feats, _road_specs_kept(feats))
+        boxes = _feature_boxes(feats)
+        pad = (GAP_JUNCTION_M + 1.0) / np.array([kx, ky])
+        lo, hi = gap.min(0) - pad, gap.max(0) + pad
+        cand = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
+                              (boxes[:, 3] >= lo[1]) & (mask > 0))
+        gm = (gap - ring[0]) * [kx, ky]
+        pe = np.array([e for j in cand if j != i for e in (ends[j, :2], ends[j, 2:])], np.float64).reshape(-1, 2)
+        pe = (pe[np.isfinite(pe).all(1)] - ring[0]) * [kx, ky]
+        if len(pe) and float(_seg_dist(pe, gm[:-1], gm[1:]).min()) <= GAP_JUNCTION_M:
+            continue
+        if k0 == "bridge":
+            out[n] = (a0, a1, "bridge")
+        else:
+            out[n + 1] = (b0, b1, "bridge")
+    return out
+
+
 def _deck_gaps(feats, i, rngs):
     """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*;
     earthfast.deck_gaps). A road with a tunnel range keeps its own. Pure given feats."""
@@ -1047,7 +1090,7 @@ def _deck_gaps(feats, i, rngs):
         return rngs
     kinds = [r[2] for r in rngs] if rngs else ()   # (most roads have no range: 127k calls in two cells' planning)
     if "tunnel" in kinds:
-        return rngs
+        return _portal_decks(feats, i, rngs) if "bridge" in kinds else rngs
     if "bridge" not in kinds:
         near = _near_bridge_ends(feats)
         if near is not None and not near[i]:
@@ -4611,26 +4654,31 @@ TUNNEL_ROAD_REACH_M = 15.0
 PORTAL_SHALLOW_COVER_M = 1.5    # m: a major road's open end run with at least this much ground over its floor is covered
 
 
-def portal_cover(kinds, cover, spec):
+def portal_cover(kinds, cover, spec, s=None):
     """kinds with a major road's (CONCRETE_WALL_CLASSES) open run at either end of its tunnel covered (a low arch, in
     concrete: roadmesh) where the median ground over its floor is PORTAL_SHALLOW_COVER_M or more: the map's portal is a
     cut-and-cover box under shallow ground there (the Gotthard road tunnel's north portal under the meadow at
     Goeschenen stood 90 m further in, an open cut before it, 2026-10-28). Park roads keep their open cuts (Central
-    Park's transverses). The meshes (TunnelProfiles) and the grading both."""
+    Park's transverses). A run shorter than SECTION_MIN_M (s: the samples' arc) is the section it leads into instead:
+    a 4 m low arch before CA-1's northbound Tom Lantos tube had a 5 m tube's portal face, the 6.8 m tube's terrain hole
+    right behind it open above that face, a notch of sky in the hill over the mouth (2026-11-09). The meshes
+    (TunnelProfiles) and the grading both."""
     kinds = np.array(kinds, np.int64)
     if spec is None or spec.cls not in CONCRETE_WALL_CLASSES or not (kinds > 0).any():
         return kinds
     cover = np.asarray(cover, np.float64)
     n = len(kinds)
     for rng in (range(n), range(n - 1, -1, -1)):
-        run = []
+        run, nxt = [], None
         for q in rng:
             if kinds[q] != 0:
+                nxt = q
                 break
             run.append(q)
         if run and len(run) < n and np.isfinite(cover[run]).any() and \
                 float(np.nanmedian(cover[run])) >= PORTAL_SHALLOW_COVER_M:
-            kinds[run] = 1
+            short = s is not None and nxt is not None and abs(float(s[nxt]) - float(s[run[0]])) < SECTION_MIN_M
+            kinds[run] = kinds[nxt] if short else 1
     return kinds
 
 
@@ -6819,7 +6867,7 @@ class TunnelProfiles(BridgeProfiles):
                 kinds = np.where(cover_ground - floor >= TUNNEL_COVER - .02, 2, 0)
             else:
                 floor, kinds = tunnel_sections(s, g)
-                kinds = portal_cover(kinds, g - floor, pool[k][0])
+                kinds = portal_cover(kinds, g - floor, pool[k][0], s)
                 kinds = self._cover_roads(xy, s, kinds, ground)
             secs, i = [], 0
             while i < len(kinds):
@@ -8186,6 +8234,27 @@ TWIN_DZ_M = 2.0         # ... with its floor within this of the other's: twin tu
                         # the Route des Tamarins' two carriageways 9.5 m apart on Réunion, each an 11 m road in its own
                         # tube, the tubes through each other's walls and portals)
 TWIN_STEP_M = 10.0
+TWIN_JOIN_M = 1.0       # m: parts with ends this near, heading away from there opposite ways, are one tube going on
+
+
+def _tunnel_road(fid):
+    """The map feature of a tunnel part's id (TunnelProfiles' "fid.j#n" sub-parts: one feature's sections). Pure."""
+    s = str(fid).split("#", 1)[0]
+    return s.rsplit(".", 1)[0] if "." in s else s
+
+
+def _goes_on(xa, xb):
+    """Does one polyline carry on from the other's end (an end of each within TWIN_JOIN_M, leaving it opposite ways)?
+    Pure."""
+    for ea in (0, -1):
+        for eb in (0, -1):
+            if np.hypot(*(xa[ea] - xb[eb])) > TWIN_JOIN_M:
+                continue
+            ta = xa[1 if ea == 0 else -2] - xa[ea]
+            tb = xb[1 if eb == 0 else -2] - xb[eb]
+            if float(ta @ tb) < 0.0:
+                return True
+    return False
 
 
 def _line_near(xy, other):
@@ -8225,6 +8294,12 @@ def twin_tunnels(parts):
             if j in taken or len(xb) < 2:
                 continue
             xb = np.asarray(xb, np.float64)
+            # a tunnel's own sections (a low arch at its portal, then the full tube) and a part going on from another's
+            # end lie "beside" each other only where they meet: CA-1's northbound Tom Lantos bore (37.5775, -122.5115)
+            # was paired with its own 4 m portal section, its 1.3 km tube marked no_tube and only the 4 m built round
+            # it: its floor in the open inside the mountain (2026-11-09)
+            if _tunnel_road(fa) == _tunnel_road(fb) or _goes_on(xa, xb):
+                continue
             reach = (sa.width + sb.width) / 2 + 2 * roadmesh.TUNNEL_SHOULDER + 1.0      # their tubes would overlap
             d, q = _line_near(P, xb)
             near = d < reach

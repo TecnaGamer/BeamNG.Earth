@@ -4370,7 +4370,7 @@ class _Planner:
                     pack = PlanPack(list(road_plans)) if pack is None else pack
                     g[[0, -1]] = grade_points(xy[[0, -1], 0], xy[[0, -1], 1], g[[0, -1]], pack)
                 floor, kinds = roadsmod.tunnel_sections(s, g)
-                kinds = roadsmod.portal_cover(kinds, g - floor, ts[i])
+                kinds = roadsmod.portal_cover(kinds, g - floor, ts[i], s)
                 if over is None:
                     over = self._roads_over_tunnels(feats, ts)
                 kinds = roadsmod.cover_roads(xy, s, kinds, *over)
