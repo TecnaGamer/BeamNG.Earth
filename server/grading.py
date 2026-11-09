@@ -2020,12 +2020,14 @@ class _Planner:
         plans = []
         if feats is not None and len(feats):
             specs = roadsmod.road_specs(feats, None, self.widths)
+            placement = roadsmod.placement_context([feats], None, self.widths)     # (as the road tiles draw them)
             parts, ids, clipped, rings = [], [], [], []
             box = self._clip_box(key)
             keeps = []
             for i in range(len(feats)):
                 if specs[i] is not None and specs[i].cls in UNGRADED:
                     for ring in roadsmod.ground_parts(feats, i):
+                        ring = placement.ring(self.frame, feats, i, ring, specs[i])
                         e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                         keeps.append((np.stack([np.asarray(e), np.asarray(n)], axis=1),
                                       specs[i].width / 2 + UNGRADED_MARGIN_M))
@@ -2033,6 +2035,7 @@ class _Planner:
                 if specs[i] is None:
                     continue
                 for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
+                    ring = placement.ring(self.frame, feats, i, ring, specs[i])
                     pieces = self._near_cell(np.asarray(ring, np.float64), box)
                     for r in pieces:
                         parts.append((r, specs[i]))
@@ -2213,12 +2216,13 @@ class _Planner:
         if feats is not None and len(feats):
             if specs is None:
                 specs = roadsmod.road_specs(feats, None, self.widths)
+            placement = roadsmod.placement_context([feats], None, self.widths)     # (as _make_cell's parts)
             rows = []
             for i in range(len(feats)):
                 if specs[i] is None or specs[i].cls in UNGRADED:
                     continue
                 for ring in roadsmod.ground_parts(feats, i):
-                    rows.append((i, np.asarray(ring, np.float64)))
+                    rows.append((i, placement.ring(self.frame, feats, i, np.asarray(ring, np.float64), specs[i])))
             if rows:            # (the frame's conversion once for all: it is per call)
                 allr = np.concatenate([r for _, r in rows])
                 e, n, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
@@ -3731,6 +3735,7 @@ class _Planner:
         if f is not None and len(f):
             bs = roadsmod.bridge_specs(f)
             rs = roadsmod.road_specs(f, None, self.widths) if ground else [None] * len(f)
+            placement = roadsmod.placement_context([f], None, self.widths)     # (as the road tiles draw them)
             classes = f.attrs.get("class")
             subtypes = f.attrs.get("subtype")
             for i in range(len(f)):
@@ -3749,7 +3754,7 @@ class _Planner:
                 for kind, sp, ps in (("bridge", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
                                      ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
                     for j, ring in enumerate(ps):
-                        ring = np.asarray(ring, np.float64)
+                        ring = placement.ring(self.frame, f, i, np.asarray(ring, np.float64), sp, fid)
                         kk = (fid, kind, j)
                         lv = float(blv[j]) if kind == "bridge" and j < len(blv) else 0.0
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):

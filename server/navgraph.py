@@ -306,6 +306,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
+    placement = roads.placement_context(feats_list, urban_fn, widths, left_hand)    # (as the road tiles draw them)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
     pieces = {}             # fid -> [ground part (k, 2)]: the road tiles' roads (designs._arm_line: an arm's own road)
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
@@ -361,7 +362,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
                                       lambda f: roads.road_tapers(f, urban_fn, widths, left_hand))
                 for ring_ll in roads.ground_parts(feats, i):
-                    ring_ll = np.asarray(ring_ll, np.float64)
+                    ring_ll = placement.ring(frame, feats, i, np.asarray(ring_ll, np.float64), rspecs[i], fid)
                     if len(ring_ll) < 2:
                         continue
                     ge, gn, _ = frame.geodetic_to_enu(ring_ll[:, 1], ring_ll[:, 0], 0.0)
@@ -434,6 +435,11 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             full.append(order[-1])
             xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
             deck_xy = xy.copy()
+            if placement.on:            # (the AI's lanes where the road tiles draw a placed carriageway's)
+                la_, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                psh = placement.shift(feats, i, lo_, la_, spec, fid)
+                if psh is not None:
+                    xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], psh)[:, :2]
             offset = roads.driving_offset(spec)
             if abs(offset) > 1e-6:
                 xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], offset)[:, :2]

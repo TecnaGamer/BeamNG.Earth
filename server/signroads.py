@@ -116,6 +116,7 @@ class Context(signcontext.Context):
             return got
         rows, polys = [], []
         specs = cell_specs(feats, self.urban, self.widths, left_hand)
+        placement = roads.placement_context([feats], self.urban, self.widths, left_hand)  # (as the road tiles draw)
         for i, value in enumerate(specs):
             if value is None:
                 continue
@@ -124,6 +125,7 @@ class Context(signcontext.Context):
             for ring in roads.ground_parts(feats, i):
                 if len(ring) < 2:
                     continue
+                ring = placement.ring(frame, feats, i, ring, value)
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 line = np.c_[e, n, np.zeros(len(ring))]
                 sp, line, width = outline(value, line, frame, left_hand, link)
