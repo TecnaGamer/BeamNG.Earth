@@ -433,6 +433,14 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
                     e, n = mapgeom.enu_xy(feats, frame, ring)
                     rows.append((fid, sp, np.c_[e, n, np.zeros(len(e))], float(np.mean(ring[:, 0]))))
         memo = {}       # (kind, fid, id(pts)) -> its result: plans asks again and again for the same rows
+        placement = roads.placement_context(cells, urban, widths, left_hand)    # (the mains where build_tile draws them)
+
+        def placed(fid, spec, pts, lon, lat):
+            if not placement.on:
+                return pts
+            f, i = copies[fid][0]
+            sh = placement.shift(f, i, lon, lat, spec, fid)
+            return pts if sh is None else roads.offset_polyline(pts, sh)
 
         def remembered(kind, fn):
             def get(fid, spec, pts):
@@ -455,6 +463,7 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             if w is None:
                 w = spec.width
             sh = roads.shift_at(ls, lon, lat) if ls else None
+            pts = placed(fid, spec, pts, lon, lat)
             return (roads.offset_polyline(pts, sh) if sh is not None else pts), w
         def pavement(fid, spec, pts):
             # On the ground only the markings shift; the native width taper
@@ -462,7 +471,7 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
             lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width
-            return pts, spec.width if w is None else w
+            return placed(fid, spec, pts, lon, lat), spec.width if w is None else w
         return plans(rows, terminals, remembered("g", geometry), remembered("p", pavement))
     owner = getattr(urban, '__self__', None)
     return _cache.get(frame, cells, (urban, widths, bool(left_hand), getattr(owner, 'epoch', 0)), build)

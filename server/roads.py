@@ -2533,6 +2533,9 @@ def lane_shifts(feats, urban_fn=None, widths=None, left_hand=False):
                 got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
             for i, t in got.items():
                 out[i] = tuple(t)
+            for i in got:                       # (a placed carriageway: its placement says where its lanes are)
+                if is_placed(feats, i, specs[i] or bridge[i]):
+                    out[i] = ()
     memo[k] = out
     return out
 
@@ -2552,6 +2555,326 @@ def shift_at(shifts, lon, lat):
             t = np.clip(d / span, 0.0, 1.0)
             out += np.where(near, shift * (1.0 - t * t * (3.0 - 2.0 * t)), 0.0)
     return out if hit else None
+
+
+# OpenStreetMap's placement=* on one-way carriageways (docs/research/2026-11-09-osm-placement-design.md): where the
+# way's line runs across its lanes, "the lanes ... numbered from left to right with the leftmost lane equal to lane
+# number 1", "viewed in the direction of the OSM-way" (Proposed_features/placement). Mapped where a lane is added beside
+# the through lanes (an exit lane: lanes=3, placement=right_of:1); drawn centred, such a piece stood half a lane or more
+# to the line's side (the A93 before Kreuz Regensburg: 2 m into the median, over the other carriageway, no barrier).
+PLACEMENT_EASE_M_PER_M = 40.0       # m of easing per m the shift changes between two parts of a road (as SHIFT_M_PER_M)
+PLACEMENT_EASE_M = (40.0, 160.0)    # m at the least and most ...
+PLACEMENT_EASE_SHARE = 0.45         # ... and at most this share of each part's length on its side
+PLACEMENT_RULES = {"right_of": 0.0, "middle_of": 0.5, "left_of": 1.0}    # lanes past k the line stands at
+
+
+def _placement_lanes(v):
+    try:
+        n = int(float(str(v).split(";")[0]))
+    except (TypeError, ValueError):
+        return None
+    return n if n >= 1 else None
+
+
+def placement_full(tags, spec):
+    """The full shift (m, to the right of the OpenStreetMap way's direction) placement=* in tags gives a one-way
+    carriageway with spec: relative to the line the game draws centred, (n/2 - k + c) lanes of LANE_W, n the way's lanes
+    (its own tag, else the spec's), k the tag's lane (clamped to 1..n), c 0 / 0.5 / 1 for right_of / middle_of /
+    left_of; at most (width - one lane) / 2, so the line stays on the asphalt. 0.0 without one: links, two-way roads
+    (their placement:forward / :backward are not read), transition, a value that does not parse."""
+    if not tags or spec is None or spec.link or not spec.oneway:
+        return 0.0
+    value = str(tags.get("placement") or "").strip()
+    rule, _, num = value.partition(":")
+    if rule not in PLACEMENT_RULES:
+        return 0.0
+    k = _placement_lanes(num)
+    n = _placement_lanes(tags.get("lanes")) or _placement_lanes(spec.lanes)
+    if k is None or n is None:
+        return 0.0
+    k = min(k, n)
+    w = LANE_W.get(spec.cls, LANE_W_DEFAULT)
+    d = (n / 2.0 - k + PLACEMENT_RULES[rule]) * w
+    cap = max(0.0, (float(spec.width) - w) / 2.0)
+    return float(np.clip(d, -cap, cap))
+
+
+def _part_shift(t, spec):
+    """placement_full of a lane-tag part's tags t, to the right of the feature's geometry (m): the spec's one-way
+    direction, against it where the way says oneway=-1."""
+    d = placement_full(t, spec)
+    if d:
+        against = str((t or {}).get("oneway", "")).strip() == "-1"
+        d *= (spec.dir or 1) * (-1.0 if against else 1.0)
+    return d
+
+
+def _end_shift(feats, i, spec, e):
+    """Feature i's placement shift at its end e (0: its start, 1: its end; its first / last lane-tag part's), m left of
+    its geometry (offset_polyline's sign); 0.0 unplaced."""
+    if spec is None:
+        return 0.0
+    parts = sorted(lane_tag_parts(feats, i), key=lambda p: (float(p[0]), float(p[1])))
+    if not parts:
+        return 0.0
+    return -_part_shift((parts[-1] if e else parts[0])[3], spec)
+
+
+def placement_shift(feats, i, lon, lat, spec, joints=()):
+    """Per point (lon, lat arrays on feature i) the lateral shift (m, + left of its geometry: offset_polyline's) that
+    puts its lanes where placement=* says (_part_shift per lane-tag part, lane_tag_parts), eased between parts of
+    different shifts (smoothstep, PLACEMENT_EASE_*), plus its joints' ((lon, lat, span m, delta m), ...: Placement.joints)
+    deltas, each smoothstepped from its whole at the joint to none span m from it as taper_widths runs a width; None
+    where nothing moves it. Pure."""
+    parts = lane_tag_parts(feats, i)
+    if spec is None:
+        return None
+    full = sorted((float(a), float(b), _part_shift(t, spec)) for a, b, _wid, t in parts or ())
+    placed = any(d for _, _, d in full)
+    joints = [j for j in joints or () if j[2] > 0 and abs(j[3]) > 1e-9]
+    if not placed and not joints:
+        return None
+    lon, lat = np.asarray(lon, np.float64).ravel(), np.asarray(lat, np.float64).ravel()
+    out = np.zeros(lon.shape)
+    if placed:
+        line = np.asarray(feats.parts(i)[0][0], np.float64)
+        lat0 = float(np.mean(line[:, 1]))
+        mx, my = 111320.0 * math.cos(math.radians(lat0)), 110540.0
+        q = np.c_[(line[:, 0] - line[0, 0]) * mx, (line[:, 1] - line[0, 1]) * my]
+        p = np.c_[(lon - line[0, 0]) * mx, (lat - line[0, 1]) * my]
+        seg = np.diff(q, axis=0)
+        seg_len = np.hypot(seg[:, 0], seg[:, 1])
+        cum = np.concatenate([[0.0], np.cumsum(seg_len)])
+        total = float(cum[-1])
+        if total > 0.0 and len(seg):
+            # each point's arc length: its nearest point on the line
+            rel = p[:, None, :] - q[None, :-1, :]
+            t = np.clip((rel * seg[None]).sum(2) / np.maximum(seg_len ** 2, 1e-12)[None], 0.0, 1.0)
+            dist = np.hypot(*(rel - t[:, :, None] * seg[None]).transpose(2, 0, 1))
+            k = dist.argmin(axis=1)
+            s = cum[k] + t[np.arange(len(p)), k] * seg_len[k]
+            frac = s / total
+            # (a point outside every part: the nearest part's; parts need not cover the whole feature)
+            shift = np.array([min(full, key=lambda r: max(r[0] - f, f - r[1], 0.0))[2] for f in frac])
+            for (a0, b0, d0), (a1, b1, d1) in zip(full[:-1], full[1:]):
+                if abs(d1 - d0) < 1e-9:
+                    continue
+                ease = float(np.clip(PLACEMENT_EASE_M_PER_M * abs(d1 - d0), *PLACEMENT_EASE_M))
+                left = min(ease / 2, PLACEMENT_EASE_SHARE * (b0 - a0) * total)
+                right = min(ease / 2, PLACEMENT_EASE_SHARE * (b1 - a1) * total)
+                at = b0 * total
+                zone = (s > at - left) & (s < at + right)
+                if zone.any() and left + right > 0:
+                    u = (s[zone] - (at - left)) / (left + right)
+                    shift[zone] = d0 + (d1 - d0) * u * u * (3.0 - 2.0 * u)
+            out -= shift
+    for jlon, jlat, span, delta in joints:
+        d = np.hypot((lon - jlon) * 111320.0 * math.cos(math.radians(jlat)), (lat - jlat) * 110540.0)
+        t = np.clip(d / span, 0.0, 1.0)
+        out += np.where(d < span, delta * (1.0 - t * t * (3.0 - 2.0 * t)), 0.0)
+    return out
+
+
+def is_placed(feats, i, spec):
+    """Whether a part of feature i has a placement=* that moves it (placement_full)."""
+    return spec is not None and any(placement_full(t, spec) for _a, _b, _w, t in lane_tag_parts(feats, i))
+
+
+def _placement_rows(feats):
+    """The rows whose lane tags carry a placement (a filter, before placement_full; its LANE_PARTS or lane column).
+    Remembered on feats."""
+    got = feats.__dict__.get("_placement_rows")
+    if got is None:
+        import railtags
+        rows = set()
+        parts = feats.attrs.get(railtags.LANE_PARTS)
+        for i, ps in enumerate(parts if parts is not None else ()):
+            if ps and any(t and t.get("placement") for _a, _b, _w, t in ps):
+                rows.add(i)
+        col = feats.attrs.get(railtags.lane_attr("placement"))
+        if col is not None:
+            rows.update(i for i, v in enumerate(col) if v not in (None, ""))
+        got = feats.__dict__["_placement_rows"] = frozenset(rows)
+    return got
+
+
+def _end_key(lon, lat):
+    return (int(round(float(lon) * 1e6)), int(round(float(lat) * 1e6)))
+
+
+def _end_index(feats):
+    """({end key: [(row, end 0 / 1)]}, [(start key, end key)] per row; None for a row of under 2 points) of the roads'
+    lines as _tapers hands them to the taper kernel (keys as its: lon / lat in 1e-6 degrees). Remembered on feats."""
+    got = feats.__dict__.get("_end_index")
+    if got is None:
+        n = len(feats)
+        index, keys = {}, [None] * n
+        if n:
+            starts = feats.coord_off[feats.ring_off[feats.part_off[:-1]]]
+            stops = feats.coord_off[feats.ring_off[feats.part_off[1:]]]
+            for i, (a, b) in enumerate(zip(starts.tolist(), stops.tolist())):
+                if b - a < 2:
+                    continue
+                k = (_end_key(*feats.lonlat[a]), _end_key(*feats.lonlat[b - 1]))
+                keys[i] = k
+                index.setdefault(k[0], []).append((i, 0))
+                index.setdefault(k[1], []).append((i, 1))
+        got = feats.__dict__["_end_index"] = (index, keys)
+    return got
+
+
+def _deck_end(feats, i, e):
+    """Whether feature i's end e is on its deck (a bridge range reaching it, with a bridge spec)."""
+    if bridge_specs(feats)[i] is None:
+        return False
+    return any(kind == "bridge" and (a0 <= 1e-3 if e == 0 else b0 >= 1 - 1e-3) for a0, b0, kind in level_ranges(feats, i))
+
+
+class Placement:
+    """Where placement=* moves the roads of a set of cells (placement_context): a placed carriageway's lanes where its
+    tags put them (placement_shift), and at a joint where it meets one other road end to end, both roads' centres run
+    to the mean of their two there (a deck's end stands: the ground runs to it) over the joint's taper (road_tapers:
+    their widths run to the mean the same way, so both edges stay continuous; an unplaced exit-lane neighbour moves half
+    its widening toward the added lane, its median edge where it was) or, at one width, eased about it (PLACEMENT_EASE_*).
+    A junction of more roads: none (the taper kernel's rule: the width changes across it; an exit lane's end where the
+    ramp leaves keeps its median edge as it is). Without a placement in the cells: nothing moves, at no cost."""
+
+    def __init__(self, cells, urban_fn=None, widths=None, left_hand=False):
+        self.cells = [f for f in (cells or ()) if f is not None and len(f)]
+        self.args = (urban_fn, widths, bool(left_hand))
+        self.on = any(_placement_rows(f) for f in self.cells)
+        self.copies = copies_of(self.cells) if self.on else None
+        self._index = None
+
+    def _ends(self):
+        """{end key: [(feats, row, end, id)]}: every road with an end where a placed one's lies, from the joint's own
+        cell where it is at hand (it holds every road meeting there: joint_desc), else from any copy (one per id)."""
+        if self._index is None:
+            import mapcells
+            keys = set()
+            for f in self.cells:
+                ek = _end_index(f)[1]
+                for i in _placement_rows(f):
+                    if ek[i] is not None:
+                        keys.update(ek[i])
+            out = {}
+            for k in keys:
+                own, other = [], {}
+                cell = str(mapcells.cell_of(k[1] / 1e6, k[0] / 1e6))
+                for f in self.cells:
+                    rows = _end_index(f)[0].get(k)
+                    if not rows:
+                        continue
+                    specs, bspecs = road_specs(f, *self.args), bridge_specs(f)
+                    cid = f.__dict__.get("_bnge_cell")
+                    for j, e in rows:
+                        if specs[j] is None and bspecs[j] is None:
+                            continue            # (not a road the taper kernel counts)
+                        r = (f, j, e, str(f.ids[j]))
+                        if cid is not None and str(cid[0]) == cell:
+                            own.append(r)
+                        else:
+                            other.setdefault(r[3], r)
+                out[k] = own if own else list(other.values())
+            self._index = out
+        return self._index
+
+    def _target(self, f, i, fid, spec, e, k, deck=False):
+        """(delta m, ours alone) feature i's centre takes at its end e (key k; deck: its deck's end, with its bridge
+        spec): the mean of its shift and the one other road's there (_end_shift), less its own; a ground end meeting a
+        deck's end runs to the deck's (ours alone moves), a deck's end meeting the ground stands (None). None without
+        exactly one other road."""
+        others = [r for r in self._ends().get(k, ()) if r[3] != fid]
+        if len(others) != 1:
+            return None
+        g, j, ej, _ = others[0]
+        other_deck = _deck_end(g, j, ej)
+        if deck and not other_deck:
+            return None
+        other_spec = bridge_specs(g)[j] if other_deck else road_specs(g, *self.args)[j]
+        dx = _end_shift(f, i, spec, e)
+        dy = _end_shift(g, j, other_spec, ej) * (1.0 if e != ej else -1.0)    # (end to end: its left is ours)
+        alone = other_deck and not deck
+        return ((dy if alone else 0.5 * (dx + dy)) - dx, alone)
+
+    def joints(self, f, i, fid):
+        """Feature i's joint deltas ((lon, lat, span m, delta m), ...) for placement_shift, for every ring of it: its
+        ground ends' (road_tapers, its road spec) and its deck's ends' (deck_tapers, its bridge spec), so its own deck's
+        abutment inside a ground joint's taper eases with the ground (and the ground beside a deck joint); () none."""
+        if not self.on:
+            return ()
+        out = ()
+        for deck, spec in ((False, road_specs(f, *self.args)[i]), (True, bridge_specs(f)[i])):
+            if spec is not None:
+                out += self._joints(f, i, fid, spec, deck)
+        return out
+
+    def _joints(self, f, i, fid, spec, deck):
+        """joints' of one kind of end (deck: its deck's ends, spec its bridge spec; else its ground ends)."""
+        ends = _end_index(f)[1][i]
+        index = self._ends()
+        if ends is None or not any(k in index for k in ends) or ends[0] == ends[1]:
+            return ()
+        mine = [e for e in (0, 1) if ends[e] in index and _deck_end(f, i, e) == deck]
+        if not mine:
+            return ()
+        out, done = [], set()
+        tapers = joint_desc(self.copies.get(fid, [(f, i)]),
+                            deck_tapers if deck else (lambda g: road_tapers(g, *self.args)))
+        for tlon, tlat, _w, span in tapers or ():
+            k = _end_key(tlon, tlat)
+            e = next((e for e in mine if ends[e] == k), None)
+            if e is None:
+                continue                        # (its own deck's or a hairpin's taper, or no placed road there)
+            done.add(k)
+            got = self._target(f, i, fid, spec, e, k, deck)
+            if got is not None:
+                out.append((float(tlon), float(tlat), float(span), got[0]))
+        a, b = f.coord_off[f.ring_off[f.part_off[i]]], f.coord_off[f.ring_off[f.part_off[i + 1]]]
+        for e in mine:
+            if ends[e] in done:
+                continue
+            got = self._target(f, i, fid, spec, e, ends[e], deck)
+            if got is None or abs(got[0]) < 1e-9:
+                continue
+            delta, alone = got
+            # one width: no taper; eased about the joint (each side half; at a deck's end ours all of it)
+            ease = float(np.clip(PLACEMENT_EASE_M_PER_M * abs(delta) * (1.0 if alone else 2.0), *PLACEMENT_EASE_M))
+            line = f.lonlat[a:b]
+            length = float(np.hypot(np.diff(line[:, 0]) * 111320.0 * math.cos(math.radians(float(line[0, 1]))),
+                                    np.diff(line[:, 1]) * 110540.0).sum())
+            span = min(ease if alone else ease / 2, PLACEMENT_EASE_SHARE * length)
+            p = line[-1 if e else 0]
+            out.append((float(p[0]), float(p[1]), span, delta))
+        return tuple(out)
+
+    def shift(self, f, i, lon, lat, spec, fid=None):
+        """placement_shift of feature i with its joints (spec: the ring's, its bridge spec on its deck); None where
+        nothing moves it."""
+        if not self.on or spec is None:
+            return None
+        fid = str(f.ids[i]) if fid is None else str(fid)
+        return placement_shift(f, i, lon, lat, spec, self.joints(f, i, fid))
+
+    def ring(self, frame, f, i, ring, spec, fid=None):
+        """ring (lon / lat (k, 2), a piece of feature i; spec: the piece's, its bridge spec on its deck) moved by its
+        shift, in frame's metres; ring itself where nothing moves it."""
+        ring = np.asarray(ring, np.float64)
+        if not self.on or len(ring) < 2:
+            return ring
+        sh = self.shift(f, i, ring[:, 0], ring[:, 1], spec, fid)
+        if sh is None or not np.any(np.abs(sh) > 1e-9):
+            return ring
+        e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+        moved = offset_polyline(np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64), np.zeros(len(ring))], sh)
+        la, lo, _ = frame.enu_to_geodetic(moved[:, 0], moved[:, 1], 0.0)
+        return np.c_[np.asarray(lo, np.float64), np.asarray(la, np.float64)]
+
+
+def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
+    """The Placement of cells' roads with road_specs(feats, urban_fn, widths, left_hand)'s widths: one per tile (each
+    caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks)."""
+    return Placement(cells, urban_fn, widths, left_hand)
 
 
 def _spec_json(sp):
@@ -8457,20 +8780,28 @@ def _fork(parts):
 
 def deck_shift_fn(frame, cells, urban_fn=None, widths=None, left_hand=False):
     """shift_of(fid, pts (k, 2+)) -> per point the lateral shift (m, + left) of deck part fid at a merge / split
-    (lane_shifts of its feature in cells, the tile's road specs), or None: one rule for the deck chunks (build_tile)
-    and the junction pads round a tile (deck_pads' callers), so a fork's pad meets its decks."""
+    (lane_shifts of its feature in cells, the tile's road specs) and where placement=* puts its lanes (Placement, its
+    bridge spec), or None: one rule for the deck chunks (build_tile) and the junction pads round a tile (deck_pads'
+    callers), so a fork's pad meets its decks."""
     where = copies_of(cells)
+    placement = placement_context(cells, urban_fn, widths, left_hand)
 
     def shift_of(fid, pts):
         got = where.get(str(fid))
         if not got:
             return None
         ls = joint_desc(got, lambda f: lane_shifts(f, urban_fn, widths, left_hand))
-        if not ls:
+        if not ls and not placement.on:
             return None
         pts = np.asarray(pts, np.float64)
         la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-        return shift_at(ls, lo, la)
+        out = shift_at(ls, lo, la) if ls else None
+        if placement.on:
+            f, i = got[0]
+            pl = placement.shift(f, i, lo, la, bridge_specs(f)[i], fid)
+            if pl is not None:
+                out = pl if out is None else np.asarray(out, np.float64) + pl
+        return out
     return shift_of
 
 
@@ -9080,6 +9411,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if specs[i] is None or str(feats.ids[i]) in seen:
                 continue
             seen[str(feats.ids[i])] = (feats, i, specs[i])
+    placement = placement_context(cells, urban_fn, widths, left_hand)
     rings = []                                  # (fid, spec, lon/lat ring) near the tile (xy at h = 0)
     for fid in sorted(seen):
         feats, i, spec = seen[fid]
@@ -9090,6 +9422,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             e, n = mapgeom.enu_xy(feats, frame, ring)
             if (e.max() < near[0] or e.min() > near[2] or n.max() < near[1] or n.min() > near[3]):
                 continue
+            ring = placement.ring(frame, feats, i, ring, spec, fid)     # (where placement=* puts its lanes)
             rings.append((fid, spec, ring))
     roads = []                                  # (fid, spec, centreline (k, 3), lon) near the tile
     if rings:                                   # one elevation call for every ring (the grader's cost
