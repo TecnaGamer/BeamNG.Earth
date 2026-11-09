@@ -280,6 +280,36 @@ for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500
 end
+-- Germany's junction signs (server designs.py GROUPS and HEIGHTS, tools/build_median_props.py's DE_SIGNS): each
+-- mesh is its sign at its true size (Größe 1 to 3, some over a 1002 plate, a roundabout's 205 over its 215), so rows
+-- carry these heights and draw at 1:1. Few items a tile: one spelling each (ONE_SPELLING), shown out to 300 m.
+local DE_SIGNS = { de_z205_g1 = 2.519, de_z205 = 2.742, de_z205_g3 = 3.038, de_z206_g1 = 2.9, de_z206 = 2.9,
+  de_z206_g3 = 3.05, de_z301_g1 = 2.519, de_z301 = 2.742, de_z301_g3 = 3.038, de_z306_g1 = 2.571, de_z306 = 2.816,
+  de_z306_g3 = 3.142, de_z307_g1 = 2.571, de_z307 = 2.816, de_z307_g3 = 3.142, de_z205_p0_g1 = 2.989,
+  de_z205_p0 = 3.392, de_z205_p0_g3 = 3.838, de_z205_p1_g1 = 2.989, de_z205_p1 = 3.392, de_z205_p1_g3 = 3.838,
+  de_z205_p2_g1 = 2.989, de_z205_p2 = 3.392, de_z205_p2_g3 = 3.838, de_z205_p3_g1 = 2.989, de_z205_p3 = 3.392,
+  de_z205_p3_g3 = 3.838, de_z205_p4_g1 = 2.989, de_z205_p4 = 3.392, de_z205_p4_g3 = 3.838, de_z205_p5_g1 = 2.989,
+  de_z205_p5 = 3.392, de_z205_p5_g3 = 3.838, de_z205_p6_g1 = 2.989, de_z205_p6 = 3.392, de_z205_p6_g3 = 3.838,
+  de_z205_p7_g1 = 2.989, de_z205_p7 = 3.392, de_z205_p7_g3 = 3.838, de_z205_p8_g1 = 2.989, de_z205_p8 = 3.392,
+  de_z205_p8_g3 = 3.838, de_z205_p9_g1 = 2.989, de_z205_p9 = 3.392, de_z205_p9_g3 = 3.838, de_z206_p0_g1 = 3.55,
+  de_z206_p0 = 3.55, de_z206_p0_g3 = 3.85, de_z206_p1_g1 = 3.55, de_z206_p1 = 3.55, de_z206_p1_g3 = 3.85,
+  de_z206_p2_g1 = 3.55, de_z206_p2 = 3.55, de_z206_p2_g3 = 3.85, de_z206_p3_g1 = 3.55, de_z206_p3 = 3.55,
+  de_z206_p3_g3 = 3.85, de_z206_p4_g1 = 3.55, de_z206_p4 = 3.55, de_z206_p4_g3 = 3.85, de_z206_p5_g1 = 3.55,
+  de_z206_p5 = 3.55, de_z206_p5_g3 = 3.85, de_z206_p6_g1 = 3.55, de_z206_p6 = 3.55, de_z206_p6_g3 = 3.85,
+  de_z206_p7_g1 = 3.55, de_z206_p7 = 3.55, de_z206_p7_g3 = 3.85, de_z206_p8_g1 = 3.55, de_z206_p8 = 3.55,
+  de_z206_p8_g3 = 3.85, de_z206_p9_g1 = 3.55, de_z206_p9 = 3.55, de_z206_p9_g3 = 3.85, de_z306_p0_g1 = 3.041,
+  de_z306_p0 = 3.466, de_z306_p0_g3 = 3.942, de_z306_p1_g1 = 3.041, de_z306_p1 = 3.466, de_z306_p1_g3 = 3.942,
+  de_z306_p2_g1 = 3.041, de_z306_p2 = 3.466, de_z306_p2_g3 = 3.942, de_z306_p3_g1 = 3.041, de_z306_p3 = 3.466,
+  de_z306_p3_g3 = 3.942, de_z306_p4_g1 = 3.041, de_z306_p4 = 3.466, de_z306_p4_g3 = 3.942, de_z306_p5_g1 = 3.041,
+  de_z306_p5 = 3.466, de_z306_p5_g3 = 3.942, de_z306_p6_g1 = 3.041, de_z306_p6 = 3.466, de_z306_p6_g3 = 3.942,
+  de_z306_p7_g1 = 3.041, de_z306_p7 = 3.466, de_z306_p7_g3 = 3.942, de_z306_p8_g1 = 3.041, de_z306_p8 = 3.466,
+  de_z306_p8_g3 = 3.942, de_z306_p9_g1 = 3.041, de_z306_p9 = 3.466, de_z306_p9_g3 = 3.942,
+  de_z205_z215_g1 = 3.169, de_z205_z215 = 3.392, de_z205_z215_g3 = 3.838 }
+for g, h in pairs(DE_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
+  M.GROUP_MAX_M[g] = 300
+  M.ONE_SPELLING[g] = true
+end
 -- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
 -- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
 M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
@@ -317,7 +347,7 @@ M.GROUP_MAX_M.golfflag = 400
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)

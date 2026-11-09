@@ -73,7 +73,7 @@ def server(md, out):
         left_hand=lambda a: False, mph=lambda a: True, anchor_q=lambda a: None, buried=lambda a: 0.0,
         country=lambda a: 'US', lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None,
         airports=None, near_visual='detail', out_dir=out, vfs_dir='/temp/test', sidewalks=False,
-        _tunnel_ground=lambda a, g: None)
+        _tunnel_ground=lambda a, g: None, dej_on=True)    # (the German junction signs' setting, on)
     ns.chain_view = lambda *a, **kw: earthd.Server.chain_view(ns, *a, **kw)
     return ns
 

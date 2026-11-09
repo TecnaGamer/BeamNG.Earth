@@ -42,6 +42,9 @@ const PRIMARY: i64 = 5;
 const TRUNK: i64 = 6;
 const MOTORWAY: i64 = 7;
 
+// (A twin in Python: server/dezones.py mirrors STRAIGHT_COS, STRAIGHT_MARGIN, TANGENT_M, JUNCTION_IN_URBAN_M,
+// ALONG_STEPS_M, OUT_STEP_M, OUT_MAX_M, CLEAR_M and clear() for Germany's zone signs (zones, outside_zones: the
+// 274 a 274.1 / 274.2 replaces is this kernel's): change them together.)
 const STRAIGHT_COS: f64 = 0.75;     // a junction's straight on continuation: within ~41 degrees ...
 const STRAIGHT_MARGIN: f64 = 0.1;   // ... and clearly straighter than the next best
 const TANGENT_M: f64 = 10.0;        // m of a piece its direction at an end is taken over

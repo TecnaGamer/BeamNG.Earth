@@ -9,6 +9,9 @@ the middle of Borås, Göteborg, Stockholm, Malmö and Umeå: 7427 crossings, 95
 A crossing with no word on its paint counts as painted. crossing=uncontrolled is OpenStreetMap's word for a marked
 crossing without signals; of the signal crossings that say, 614 of 722 have a zebra; of the bare ones that say, 296 of
 492. A guess, but the map's majority in each case, and all of them are mapped crossings where a kerb is lowered.
+
+Germany reads the same nodes when its junction signs are on (wanted): its own reading of the crossings (de_paint, for
+designs.junction_paint's Zeichen 293) and the stop and give-way points (designs.mapped_rows).
 """
 import json
 import logging
@@ -37,20 +40,57 @@ M15_L, M15_FAST_L, M15_FAST_KMH = junctions.CROSSWALK["w"], 4.0, 60.0
 M16_SIDE, M16_GAP, M16_RIDE = 0.50, 0.50, 2.5
 
 
+def wanted(country, de=False):
+    """Whether a place's road tiles and road graph read the map's crossing, stop and give-way nodes (read): Sweden's
+    always (its paint and signs are the map's), Germany's when its junction signs are on (de: the setting on and the
+    junctions the tile decides, or the graph's window, reaching into Germany: designs.reads_here; the country code
+    alone is the nearest airport's). Nowhere else: no read, the guesses as before."""
+    return str(country or "").upper() == "SE" or bool(de)
+
+
+def _marks(tags):
+    return set(str(tags.get("crossing:markings", "")).replace(":", ";").split(";")) - {""}
+
+
 def paint(tags):
     """M15 | M16 | 0: what a crossing node's OpenStreetMap tags say is on the road. crossing:markings=dots (and dashes) is
     a row of squares each side, a cycle crossing; surface alone is a coloured or paved crossing with no white on it."""
-    marks = set(str(tags.get("crossing:markings", "")).replace(":", ";").split(";")) - {""}
+    marks = _marks(tags)
     what = (M15 if marks & {"zebra", "yes"} else 0) | (M16 if marks & {"dots", "dashes"} else 0)
     if what or marks:
         return what
     return 0 if tags.get("crossing") in UNPAINTED else M15
 
 
+DE_MARKED = ("zebra", "marked", "uncontrolled")     # crossing=: a marked crossing without signals
+
+
+def de_paint(tags):
+    """M15 (a Fußgängerüberweg, Zeichen 293) | 0: Germany's reading of a crossing node's tags (Sweden's majority guess
+    in paint() is not Germany's: a Fußgängerüberweg is rare, and the design paints "only where OpenStreetMap maps
+    a marked crossing ... unmarked crossings get none"). None at signals, whatever the markings
+    (crossing=traffic_signals or crossing:signals=yes; VwV-StVO zu § 26 Rn. 5: "In der Nähe von Lichtzeichenanlagen ...
+    dürfen Fußgängerüberwege nicht angelegt werden"); else crossing:markings decides where mapped (zebra, or yes: an
+    unsignalised marked crossing is a Fußgängerüberweg in Germany; no, dots, lines, surface ...: none); else
+    crossing=zebra / marked / uncontrolled, or crossing_ref=zebra. A bare highway=crossing, crossing=island (a refuge,
+    no markings), unmarked, informal: none. The road it is on decides the rest (designs.junction_paint: in town and at
+    most 50 km/h, zu § 26 Rn. 1: "Fußgängerüberwege dürfen nur innerhalb geschlossener Ortschaften und nicht auf
+    Straßen angelegt werden, auf denen schneller als 50 km/h gefahren werden darf")."""
+    if tags.get("crossing") == "traffic_signals" or tags.get("crossing:signals") == "yes":
+        return 0
+    marks = _marks(tags)
+    if marks:
+        return M15 if marks & {"zebra", "yes"} else 0
+    return M15 if tags.get("crossing") in DE_MARKED or tags.get("crossing_ref") == "zebra" else 0
+
+
 def nodes(frame, infra_list):
-    """{"crossings": [(x, y, paint)], "stop_lines": (n, 2) xy of the mapped stop lines (road_marking=stop_line on a signal
-    or stop node), "priority": (n, 3) x, y, 1 at a stop sign and 0 at a give-way sign} of infrastructure Features of map
-    cells, each node once; None when none could be read or they have no tags (the road tiles then guess, as elsewhere)."""
+    """{"crossings": [(x, y, paint)], "zebras": [(x, y)] of those painted M15 and no signal's (sesigns' B3),
+    "de_crossings": [(x, y, de_paint)] Germany's reading of the same crossings, M15 none within SIGNALS_NEAR_M of a
+    mapped signal (designs.junction_paint), "stop_lines": (n, 2) xy of the mapped stop lines (road_marking=stop_line on
+    a signal or stop node), "priority": (n, 3) x, y, 1 at a stop sign and 0 at a give-way sign} of infrastructure
+    Features of map cells, each node once; None when none could be read or they have no tags (the road tiles then
+    guess, as elsewhere)."""
     if not infra_list or all(f is None for f in infra_list):
         return None
     seen, found = set(), []
@@ -82,10 +122,11 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority, zebras, signals = [], [], [], [], []
+    crossings, lines, priority, zebras, signals, de = [], [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
+            de.append((float(p[0]), float(p[1]), de_paint(tag)))
             if paint(tag) & M15 and tag.get("crossing") != "traffic_signals":
                 zebras.append((float(p[0]), float(p[1])))
         elif cls == "traffic_signals":
@@ -94,8 +135,13 @@ def nodes(frame, infra_list):
             priority.append((float(p[0]), float(p[1]), float(cls == "stop")))
         if cls != "crossing" and tag.get("road_marking") == "stop_line":
             lines.append((float(p[0]), float(p[1])))
-    zebras = [z for z in zebras if not any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)]
-    return {"crossings": crossings, "zebras": zebras, "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
+
+    def lit(z):
+        return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
+    zebras = [z for z in zebras if not lit(z)]
+    de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
+    return {"crossings": crossings, "zebras": zebras, "de_crossings": de,
+            "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 
 
@@ -121,12 +167,14 @@ def _squares(mid, u, n, half, z):
     return out
 
 
-def place(roads, found):
+def place(roads, found, on=None):
     """(crosswalks [{"a", "b", "w"[, "paint": False]}], squares [(4, 3)], ramps {(fid, side): [(point, u, t0, t1)]}) of the
     crossing nodes in found (nodes) on the paved roads in roads [(fid, spec, centreline (k, 3), lon)]: square to the road
     from kerb to kerb, a crosswalk without paint standing for M16's band so the lines stop at it too. Crossing and cycle
     crossing side by side go along the road's own direction, the same from every tile: the tags don't say which side
-    each is on. A crossing with no paint still gets its lowered kerbs; a node on a junction is left out."""
+    each is on. A crossing with no paint still gets its lowered kerbs; a node on a junction is left out. on: a list
+    given, each crosswalk's road (fid, spec) appended to it in the crosswalks' order (Germany's: designs.junction_paint
+    asks where a Fußgängerüberweg may be)."""
     lines = [(fid, spec, np.asarray(pts, np.float64)) for fid, spec, pts, _ in roads
              if spec.kind in ("paved", "cobble") and spec.cls != "motorway" and len(pts) >= 2]
     walks, squares, ramps, taken = [], [], {}, []
@@ -165,9 +213,13 @@ def place(roads, found):
         if what & M15:
             m = c + u * at_m15
             walks.append({"a": np.r_[m + n * half, z], "b": np.r_[m - n * half, z], "w": long_})
+            if on is not None:
+                on.append((fid, spec))
         if what & M16:
             m = c + u * at_m16
             walks.append({"a": np.r_[m + n * half, z], "b": np.r_[m - n * half, z], "w": band, "paint": False})
+            if on is not None:
+                on.append((fid, spec))
             squares += _squares(m + u * (band - M16_SIDE) / 2, u, n, half, z)
             squares += _squares(m - u * (band - M16_SIDE) / 2, u, n, half, z)
     return walks, squares, ramps

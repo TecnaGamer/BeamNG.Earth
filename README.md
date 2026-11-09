@@ -93,6 +93,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   name, hung on a lamp or utility pole that stands there, else on a stand of its own.
 - Opt-in (`BNE_REGIONAL_POLES=poles`): each European country's own utility poles, and steel or concrete street lamps
   with a bracket arm instead of the stock American post.
+- German junction signs (off by default for now; Settings > World > German junction signs): Germany's right of way as its
+  signs show it: Zeichen 306 / 307 along priority roads, 301 at single junctions, 205 where a road gives way and the
+  map's 206 stops, with the 1002 plate where the priority road bends; no signs at right before left in residential
+  streets, and 274.1 / 274.2 where a mapped 30 zone begins and ends. The Wartelinie at a 205, the Haltlinie at a stop
+  and zebras only where mapped replace the US stop signs and crosswalks, and traffic gives way and stops by the same
+  decision. Germany is found by its real border. The signs are worked out from the map (road classes and numbers,
+  mapped priority roads, zones and stop and give-way points), so they are a good guess, not a copy of the real ones.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
@@ -507,6 +514,10 @@ The repository contains only code; all map data is downloaded at runtime and cac
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
   (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).
+- German junction signs: the faces of Zeichen 205, 206, 301, 306, 307, 274.1, 274.2 and Zusatzzeichen 1002 after the
+  Verkehrszeichenkatalog and the VwV-StVO (BMDV / BASt; amtliche Werke, § 5 UrhG); lettering: D-DIN (SIL OFL 1.1,
+  Datto); priority roads, 30 zones and junction sign nodes: OpenStreetMap contributors (ODbL; rebuilt weekly from the
+  planet by the BeamNG.Earth-data repo).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).

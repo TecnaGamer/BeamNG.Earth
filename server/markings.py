@@ -309,6 +309,11 @@ CAR_ROOM_M = 5.0        # m from the line to a crossing behind it, for a car bet
                         # the crossing (VGU 2024 12.2.1.4.1, 12.2.1.4.2 råd, both lines)
 # M13: 0.40 m wide (TSFS 2010:171 4 kap. 4 §), at signals at least 2.0 m before a crossing (VGU 2024 K237740)
 M13_W, M13_SIGNAL_CROSSWALK_M = 0.40, 2.0
+# Germany (docs/research/2026-10-28-road-markings-standards.md 3.1): the Haltlinie Z 294 0.50 m wide (RMS 4.6), at a 206
+# (VwV-StVO zu Zeichen 206 Rn. 4); the Wartelinie Z 341 a Breitstrich 0.50 m wide, its dashes 0.50 m with 0.25 m gaps
+# (RMS 4.7.2), where a 205 stands (VwV-StVO zu Zeichen 341 Rn. 1)
+Z294_W = 0.50
+Z341_W, Z341_DASH, Z341_GAP = 0.50, 0.50, 0.25
 
 
 def _way_in(line, s, at, spec, left_hand):
@@ -336,11 +341,12 @@ def _past_crossing(along, st, crosswalks, spec, at, gap, room):
     return at
 
 
-def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
+def stop_lines(arms, crosswalks, mapped=None, left_hand=False, w=M13_W):
     """(stop lines [{"a", "b", "w", "stop": True}], line cuts {fid: [(junction point, u, m along)]}) of arms [(fid, spec,
     centreline from the junction, half the crossing road's width, what)] (furniture.give_way_arms): M13 across the lanes
     coming in, where the map has it (mapped: (n, 2), secrossings.nodes) or else at least 1.0 m from the crossing road's
-    edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it."""
+    edge (VGU 2024 12.2.1.4.1), and at signals before any crossing. The road's lines end at it. w: the line's width
+    (Germany's Haltlinie: Z294_W)."""
     import furniture
     out, cuts = [], {}
     for fid, spec, line, wide, what in arms:
@@ -363,9 +369,35 @@ def stop_lines(arms, crosswalks, mapped=None, left_hand=False):
         if at + 2.0 > s[-1]:
             continue                        # (a stub: nowhere to stop)
         c, _, n, (lo, hi) = _way_in(line, s, at, spec, left_hand)
-        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": M13_W, "stop": True})
+        out.append({"a": np.r_[c[:2] + n * lo, c[2]], "b": np.r_[c[:2] + n * hi, c[2]], "w": w, "stop": True})
         u = (along[1, :2] - along[0, :2]) if len(along) > 1 else line[1, :2] - line[0, :2]
         cuts.setdefault(fid, []).append((line[0, :2].copy(), u / max(float(np.hypot(*u)), 1e-6), at))
+    return out, cuts
+
+
+def wait_lines(arms, crosswalks, left_hand=False):
+    """(dashes [(4, 3) quads], line cuts {fid: [(junction point, u, m along)]}) of Germany's Wartelinie Z 341 on arms
+    [(fid, spec, centreline from the junction, half the crossing road's width)] (designs.line_arms: the 205 arms and a
+    roundabout's entries): where stop_lines stands a line (at least 1.0 m from the crossing road's edge, past a
+    crosswalk with no room for a car before it; a stub none), across the half coming in, whole 0.50 m dashes 0.25 m
+    apart (markings.dashes) in the middle of it, each Z341_W wide. The road's lines end at it, as at a stop line."""
+    import furniture
+    lines, cuts = stop_lines([(fid, spec, line, wide, furniture.G_STOP) for fid, spec, line, wide in arms], crosswalks,
+                             None, left_hand, Z341_W)
+    pitch = Z341_DASH + Z341_GAP
+    out = []
+    for ln in lines:
+        a, b = np.asarray(ln["a"], np.float64), np.asarray(ln["b"], np.float64)
+        d = b - a
+        span = float(np.hypot(*d[:2]))
+        count = int((span + Z341_GAP) // pitch)
+        if count < 1:
+            continue
+        n = d / span                                        # (across the lane: d's z is 0)
+        t = np.array([-n[1], n[0], 0.0]) * Z341_W / 2      # (along the road: the Breitstrich's half width)
+        spare = (span - (count * pitch - Z341_GAP)) / 2
+        for p in dashes(np.stack([a + n * spare, b - n * spare]), (Z341_DASH, Z341_GAP)):
+            out.append(np.stack([p[0] + t, p[-1] + t, p[-1] - t, p[0] - t]))
     return out, cuts
 
 
