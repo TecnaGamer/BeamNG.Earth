@@ -2630,6 +2630,11 @@ class Server:
         dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams,
                                  ground=cover, parapets=parapets,
                                  low_parapet_decks=low_parapet_decks, pads=pads)
+        import fences
+        try:                        # the mapped stone walls (GitHub #938), in the retaining walls' stone
+            rwalls = rwalls + fences.stone_walls(anchor.frame, infra_fn, box, elev, roads=near_roads)
+        except Exception as ex:
+            log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         import railways
         rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
