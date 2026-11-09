@@ -377,11 +377,26 @@ M._drawPins = drawPins
 -- the screen back when something else put the driving HUD up over the open map (the user, 2026-11-07: "the map ui
 -- will sometimes dissapear"): the map's own route again a moment later
 local reshowAt = nil
+local uiRoute, uiFrom, uiAt = nil, nil, -1e9    -- the screen last switched to, the one before it, when (onUiChangedState)
 function M.onUiChangedState(toState)
   if active and not transitioning and toState ~= M.ROUTE and type(toState) == 'string'
       and toState:sub(1, 4) ~= 'menu' and toState ~= 'loading' then
     reshowAt = os.clock() + 0.25
   end
+  if type(toState) == 'string' and toState ~= uiRoute then uiRoute, uiFrom, uiAt = toState, uiRoute, os.clock() end
+end
+
+-- Esc: the game's back (ui/menuManager navigationBack) takes our screen to its backTarget 'play' and says so with
+-- onMenuToggled(false); the re-show above then put the map's screen straight back, so Esc did nothing (the user,
+-- 2026-11-08: "pressing esc dosnt exit map mode"; the log: play / beamngEarthMap3d again 0.3 s later, six times). Back
+-- from our own screen closes the map; back from the pause menu over the map goes back to the map, as before.
+function M.onMenuToggled(show)
+  if show or not active or transitioning then return end
+  -- (on our screen still, or just left it for 'play': the back's own switch may be reported before this hook)
+  local fromOurs = uiRoute == M.ROUTE or (uiRoute == 'play' and uiFrom == M.ROUTE and os.clock() - uiAt < 1.0)
+  if not fromOurs then return end
+  reshowAt = nil
+  M.exit()
 end
 local function reshow()
   if reshowAt and os.clock() >= reshowAt then
