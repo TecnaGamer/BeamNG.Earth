@@ -85,7 +85,7 @@ pub fn town_sign_snap<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off
                            nodes: PyReadonlyArray2<'py, f64>, snap_m: f64) -> Bound<'py, PyArray2<f64>> {
     let (p, n) = (rows::<2>(&pts.as_array()), rows::<2>(&nodes.as_array()));
     let o = off.as_array().to_vec();
-    let got = py.allow_threads(|| snap(&p, &o, &n, snap_m));
+    let got = py.detach(|| snap(&p, &o, &n, snap_m));
     let flat: Vec<f64> = got.iter().flatten().copied().collect();
     numpy::ndarray::Array2::from_shape_vec((got.len(), 3), flat).expect("shape").into_pyarray(py)
 }
@@ -101,7 +101,7 @@ pub fn town_sign_select<'py>(py: Python<'py>, changes: PyReadonlyArray2<'py, f64
     let ct: Vec<[i64; 2]> = change_towns.as_array().outer_iter().map(|r| [r[0], r[1]]).collect();
     let s = rows::<4>(&signs.as_array());
     let st = sign_towns.as_array().to_vec();
-    let (kc, ks) = py.allow_threads(|| select(&c, &ct, &s, &st, reach_m, dedupe_m));
+    let (kc, ks) = py.detach(|| select(&c, &ct, &s, &st, reach_m, dedupe_m));
     (kc.into_pyarray(py), ks.into_pyarray(py))
 }
 
