@@ -22,6 +22,7 @@ flagged as bridge / tunnel or off ground level are left out), the navgraph.
 import json
 import logging
 import math
+import re
 import collections
 import hashlib
 import os
@@ -156,10 +157,10 @@ def look_of(spec, fid=None):
         n = 0 if fid is None else int.from_bytes(hashlib.blake2s(str(fid).encode(), digest_size=2).digest(), "little")
         look = {**look, "m": vary[n % len(vary)]}
     return {**look, "tl": round(float(look["aspect"]) * float(spec.width), 2)}
-Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides parking mountain",
-                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None, True, False))   # median: m to the other carriageway's centre line
+Spec = namedtuple("Spec", "width kind urban cls oneway walk dir kmh gap median lanes surf link sides parking mountain race",
+                  defaults=(False, 2.5, 0, None, None, None, None, None, False, None, True, False, None))   # median: m to the other carriageway's centre line
 # (parking: whether a town street's carriageway holds parking lanes: _swedish_specs; mountain: a mountain pass road,
-# _mountain_roads)
+# _mountain_roads; race: a raceway's type, racetypes.py)
 # (sides: the sidewalk sides OpenStreetMap's sidewalk tag gives (_osm_sidewalks; walk_sides' +1 left / -1 right of the
 # geometry, () none), None where it has none: the class and land-cover rule, has_sidewalks; from mpsteppe's PR #292)
 # (lanes: resolved count, both directions on a two-way road, including highway/ramp defaults; None unknown elsewhere.
@@ -258,6 +259,30 @@ EDGE_STRIP_M = 1.0
 # 2026-10-28, the user: "compare against high res satellite photos"): no strips on tertiary and unclassified roads,
 # narrow ones on secondaries
 EDGE_STRIP_CLASS_M = {"tertiary": 0.0, "unclassified": 0.0, "secondary": 0.25}
+# Racetracks (racetracks branch, 2026-11-03; BNE_RACEWAY=off: as before): drawn as a racing surface, not a country
+# road: no edge strip (12 m, not 14), no dirt edge decal (raceway_rules); gradesep.py gives them no bridges and
+# buildings.road_lines counts them (a footprint they run through is a structure over them)
+RACEWAY_ON = os.environ.get("BNE_RACEWAY", "on") != "off"
+if RACEWAY_ON:
+    EDGE_STRIP_CLASS_M["raceway"] = 0.0
+
+
+PIT_LANE_M = 8.0            # m: a racetrack's pit lane without a mapped width (its fast and working lanes; the garages
+                            # stand beside it: at 12 m Interlagos' pit garages stood in it, 2026-11-03)
+PIT_NAME = re.compile(r"\bpits?\b", re.I)     # (Pit Lane, Pit Entry, Pit Exit)
+
+
+def pit_lane(feats, i):
+    """Whether raceway feature i is a pit lane by its name (Pit Lane, Pit Entry / Exit: OSM raceways carry no
+    pit tag of their own in Layercake's columns). Pure."""
+    nm = feats.attrs.get("name")
+    v = None if nm is None else nm[i]
+    return isinstance(v, str) and bool(PIT_NAME.search(v))
+
+
+def raceway_rules(spec):
+    """Whether spec is a racetrack drawn by the raceway rules (RACEWAY_ON)."""
+    return RACEWAY_ON and getattr(spec, "cls", None) == "raceway"
 URBAN_CLASS = 50                # ESA WorldCover "built-up"
 URBAN_SAMPLE_M = 20.0          # uniform arc-length samples; OSM vertex density must not decide road treatment
 URBAN_SHARE = 0.5               # a road is urban when this share of its distance samples is built-up ...
@@ -445,7 +470,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 4      # 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 14     # 14: short ovals "short_oval" (the class width), pit lanes off the loop. 13: speedway ovals by their one-way main loop (racetypes.speedway). 12: speedway ovals only on a closed loop of gentle pieces (racetypes.oval_loop). 11 (10 a test build without water): a bridge range straight off a tube under a racetrack, no road, rail or water under it, ground (RACE_IDLE_BRIDGE). 9: the racetracks branch's 8 and 1.8.2's 4 merged. 8: a tunnel under a racetrack's portal two squares past its band (RACE_PORTAL_MARGIN_M 6); 7: a tunnel under a racetrack carried into the way joined at its end (_carried_tunnel_ends); 6: drag strips 20 m, speedway ovals 18 m (racetypes.py, Spec.race); 5: tunnels under a racetrack carried along their road out of its band (_race_tunnel_reach); 4 (3 was a broken pit-lane test, cached): racetracks (BNE_RACEWAY): 12 m, pit lanes 8 m; 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads || 1.8.2: 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -839,6 +864,194 @@ def _tunnel_reach(feats, i, rngs):
     return [r for r in out if r[1] > r[0]]      # (a tunnel left shorter than nothing: ground)
 
 
+RACE_TUNNEL_MAX_M = 400.0   # m: tunnel ranges up to this long under a racetrack get their portals out of its band
+RACE_IDLE_BRIDGE_ON = os.environ.get("BNE_RACE_IDLE_BRIDGE", "on") != "off"   # (water from the cell's water layer
+# (mapdata's _bnge_water hook): without it Bira Circuit's bridge over water at a tube was grounded, 2026-11-07)
+RACE_IDLE_BRIDGE_MAX_M = 60.0   # m: a bridge range off a tube's portal this short with no road or rail under it is the
+                                # approach's ground (_race_tunnel_reach); longer ones may span water this layer lacks
+RACE_TUNNEL_GROW_M = 80.0   # m along its own road a portal may move out (Navarra's access tunnel: its road ran on in
+                            # the shoulder of the next way for 30 m, its approach a 4 m cut in the band, 2026-11-03)
+
+
+def _race_tunnel_reach(feats, i, rngs):
+    """rngs with feature i's short tunnel ranges (RACE_TUNNEL_MAX_M) that end on a racetrack's band (its carriageway +
+    RACE_BAND_SHOULDER_M + PORTAL_CLEAR_M, the portal's half width either side) grown along the road's own line until
+    each portal is clear of every band (RACE_TUNNEL_GROW_M at most; never into a neighbouring range): the track keeps
+    its surface over the whole tube and the approach starts outside it. Pure given feats."""
+    specs = road_specs(feats)
+    if specs[i] is None or raceway_rules(specs[i]):
+        return rngs
+    if not _has_raceway(feats):
+        return rngs
+    tun = [n for n, (_, _, k) in enumerate(rngs) if k == "tunnel"]
+    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
+    if not rings:
+        return rngs
+    carried = _carried_tunnel_ends(feats, i, rings[0]) if not any(
+        rngs[n][0] <= 1e-6 or rngs[n][1] >= 1 - 1e-6 for n in tun) else []
+    if not tun and not carried:
+        return rngs
+    ring = rings[0]
+    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    m = (ring[:, :2] - ring[0, :2]) * [kx, ky]
+    sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
+    L = float(sm[-1])
+    if L <= 0:
+        return rngs
+    import roadmesh
+    half = specs[i].width / 2 + roadmesh.TUNNEL_SHOULDER + roadmesh.PORTAL_FRAME
+    pad = (RACE_TUNNEL_GROW_M + 40.0) / ky
+    lo, hi = ring[:, :2].min(0) - [pad * ky / kx, pad], ring[:, :2].max(0) + [pad * ky / kx, pad]
+    boxes = _feature_boxes(feats)
+    near = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
+                          (boxes[:, 3] >= lo[1]))
+    bands = []
+    for j in near:
+        if j == i or specs[j] is None or not raceway_rules(specs[j]):
+            continue
+        for g in _raw_ground_parts(feats, j):
+            g = (np.asarray(g, np.float64)[:, :2] - ring[0, :2]) * [kx, ky]
+            if len(g) >= 2:
+                bands.append((g, specs[j].width / 2 + RACE_BAND_SHOULDER_M + PORTAL_CLEAR_M))
+    if not bands:
+        return rngs
+
+    def at(sv):
+        return np.array([np.interp(sv, sm, m[:, 0]), np.interp(sv, sm, m[:, 1])])
+
+    def on_band(sv, sgn):
+        c = at(sv)
+        t = at(min(max(sv + sgn, 0.0), L)) - c
+        t = t / max(float(np.hypot(*t)), 1e-9)
+        nv = np.array([-t[1], t[0]])
+        pts = np.array([c, c + nv * half, c - nv * half])
+        for g, hw in bands:
+            a, d = g[:-1], np.diff(g, axis=0)
+            l2 = np.maximum((d * d).sum(1), 1e-9)
+            for p in pts:
+                tt = np.clip(((p - a) * d).sum(1) / l2, 0.0, 1.0)
+                if np.hypot(*(a + tt[:, None] * d - p).T).min() < hw:
+                    return True
+        return False
+
+    out = list(rngs)
+    # (a tunnel of the road joined at an end of this one that reaches that end still on a band goes on into this one:
+    # Michigan's infield tunnel began at its way's first node beside the track, the way before it at grade, a 9 m
+    # cliff at its portal, 2026-11-05)
+    for at_end in carried:
+        sv = L if at_end else 0.0
+        if not on_band(sv, -1.0 if at_end else 1.0):
+            continue
+        if any(a * L <= sv + 1e-6 and b * L >= sv - 1e-6 for a, b, _k in out):
+            continue
+        out.append((1.0, 1.0, "tunnel") if at_end else (0.0, 0.0, "tunnel"))
+        out.sort()
+    tun = [n for n, (_, _, k) in enumerate(out) if k == "tunnel"]
+    idle = []           # (bridge ranges straight off a tube under a band)
+    for n in tun:
+        a0, b0 = out[n][0] * L, out[n][1] * L
+        if b0 - a0 > RACE_TUNNEL_MAX_M:
+            continue
+        # (only a tube under a track: some of it on a band)
+        if not any(on_band(sv, 1.0) for sv in np.linspace(a0, b0, max(2, int((b0 - a0) / 2.0) + 1))):
+            continue
+        if b0 - a0 < 1e-6 and not (a0 <= 1e-6 or b0 >= L - 1e-6):
+            continue
+        prev = out[n - 1][1] * L if n > 0 else 0.0
+        nxt = out[n + 1][0] * L if n + 1 < len(out) else L
+        a, b = a0, b0
+        while a > max(prev, a0 - RACE_TUNNEL_GROW_M) and on_band(a, -1.0):
+            a = max(a - 1.0, prev)
+        while b < min(nxt, b0 + RACE_TUNNEL_GROW_M) and on_band(b, 1.0):
+            b = min(b + 1.0, nxt)
+        out[n] = (a / L, b / L, "tunnel")
+        idle.extend(m_ for m_ in (n - 1, n + 1) if 0 <= m_ < len(out) and out[m_][2] == "bridge" and
+                    min(abs(out[m_][1] * L - a), abs(out[m_][0] * L - b)) <= 1.0)
+    if idle and RACE_IDLE_BRIDGE_ON:
+        # (a bridge range straight off a dug tube's portal that nothing crosses under (no road or rail of the map:
+        # their lines; water is not in this layer, see RACE_IDLE_BRIDGE_MAX_M) is the approach's own: ground, graded
+        # and dug with it. Laid as a deck over the raw ground it rose 110 % off Darlington's infield portal, 7 m over
+        # the tube's floor, 2026-11-07)
+        own = [((r_[:, :2] - ring[0, :2]) * [kx, ky]) for r_ in rings]
+        others = []
+        for j in near:
+            if j == i or specs[j] is None:
+                continue
+            for g in feats.parts(j):
+                for r_ in g:
+                    if len(r_) >= 2:
+                        others.append((np.asarray(r_, np.float64)[:, :2] - ring[0, :2]) * [kx, ky])
+        # (and water: the cell's own water lines and areas, on demand; without them at hand, none dropped)
+        wet_lines = None
+        hook = feats.__dict__.get("_bnge_water")
+        if hook is not None:
+            try:
+                wf = hook()
+            except Exception:
+                wf = None
+            wet_lines = []
+            if wf is not None:
+                for j in range(len(wf)):
+                    for g in wf.parts(j):
+                        for r_ in g:
+                            if len(r_) >= 2:
+                                wet_lines.append((np.asarray(r_, np.float64)[:, :2] - ring[0, :2]) * [kx, ky])
+        drop = set()
+        for m_ in (set(idle) if wet_lines is not None else ()):
+            a_, b_ = out[m_][0] * L, out[m_][1] * L
+            if b_ - a_ > RACE_IDLE_BRIDGE_MAX_M:
+                continue
+            sv = np.linspace(a_, b_, max(2, int((b_ - a_) / 1.0) + 1))
+            seg = np.stack([np.interp(sv, sm, m[:, 0]), np.interp(sv, sm, m[:, 1])], 1)
+            if any(_crosses(seg, o) for o in others) or any(_crosses(seg, w) for w in wet_lines):
+                continue
+            # (inside a water area: a bridge along a lake or river polygon, its outline not crossed)
+            mid = seg[len(seg) // 2]
+            if any(len(w) >= 3 and np.hypot(*(w[0] - w[-1])) < 1.0 and _point_in_ring(mid, w) for w in wet_lines):
+                continue
+            drop.add(m_)
+        out = [r for k_, r in enumerate(out) if k_ not in drop]
+    return [r for r in out if r[1] > r[0]]
+
+
+def _has_raceway(feats):
+    got = feats.__dict__.get("_has_raceway")
+    if got is None:
+        got = feats.__dict__["_has_raceway"] = any(sp is not None and raceway_rules(sp) for sp in road_specs(feats))
+    return got
+
+
+def _carried_tunnel_ends(feats, i, ring):
+    """[at_end (bool)] of feature i's ends where another road (not a racetrack) joins whose map tunnel range reaches
+    its own end there (raw_level_ranges). Pure given feats."""
+    specs = road_specs(feats)
+    kx = 111320.0 * math.cos(math.radians(float(ring[0, 1])))
+    ends = ((False, ring[0, :2]), (True, ring[-1, :2]))
+    boxes = _feature_boxes(feats)
+    out = []
+    for at_end, p in ends:
+        r = 2.0 / 111320.0
+        near = np.flatnonzero((boxes[:, 0] <= p[0] + r * 111320.0 / kx) & (boxes[:, 2] >= p[0] - r * 111320.0 / kx) &
+                              (boxes[:, 1] <= p[1] + r) & (boxes[:, 3] >= p[1] - r))
+        for k in near:
+            if k == i or specs[k] is None or raceway_rules(specs[k]):
+                continue
+            rr = [x for x in raw_level_ranges(feats, k) if x[2] == "tunnel"]
+            if not rr:
+                continue
+            kr = [np.asarray(q, np.float64) for part in feats.parts(k) for q in part if len(q) >= 2]
+            if not kr:
+                continue
+            q0, q1 = kr[0][0, :2], kr[0][-1, :2]
+            for fr, q in ((0.0, q0), (1.0, q1)):
+                if float(np.hypot((q[0] - p[0]) * kx, (q[1] - p[1]) * 111320.0)) <= 1.5 and                         any(a <= fr + 0.01 and b >= fr - 0.01 for a, b, _k in rr):
+                    out.append(at_end)
+                    break
+            if out and out[-1] == at_end:
+                break
+    return out
+
+
 def _bridge_ends(feats):
     """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell."""
     got = feats.__dict__.get("_bridge_ends")
@@ -897,6 +1110,8 @@ def _skew_decks(feats, i, rngs):
     onto i (Overture makes most short bridges a segment of their own). Pure given feats."""
     if any(k == "tunnel" for _, _, k in rngs):
         rngs = _tunnel_reach(feats, i, rngs)
+    if RACEWAY_ON:
+        rngs = _race_tunnel_reach(feats, i, rngs)
     if not SKEW_ON:
         return rngs
     if any(k == "bridge" for _, _, k in rngs):
@@ -1416,6 +1631,17 @@ PORTAL_EXTEND_MAX_M = 25.0  # going on straight up to this far past the mapped e
 PORTAL_JOIN_M = 1.5         # a road this near a tunnel's end meets it there (a garage ramp ending in a street), not over it
 UNDERPASS_MAX_M = 80.0      # only tunnel parts this short (an underpass) under roads of PORTAL_CLASSES are carried on
 PORTAL_CLASSES = {"motorway", "trunk", "primary", "secondary"}
+# (and racetracks, BNE_RACEWAY: an access tunnel mapped as the track's width alone came out with its portal and its dug
+# approach at the carriageway's edge, a 12 m cut beside Watkins Glen's Esses: carried on until this much more is clear,
+# a run-off's and a portal wall's room)
+# (6: the band's shoulder, grading.RACE_SHOULDER_M 4 m, and two lattice squares more, over which the ground over the
+# tube is the track's embankment: at 4 the portal stood at the band's edge, and the hole the block cuts in front of it
+# took the squares on the edge, a sawtooth in Daytona's run-off, the owner 2026-11-05: no hole inside the band, ever)
+RACE_PORTAL_MARGIN_M = 6.0
+PORTAL_EXTEND_RACE_M = 60.0  # m an end under a racetrack may go on (a tunnel under a straight and its pit lane side by
+                            # side: Navarra's ended between them, in the next band, 2026-11-03)
+if RACEWAY_ON:
+    PORTAL_CLASSES = PORTAL_CLASSES | {"raceway"}
 
 
 def _clear_portals(feats, i, parts):
@@ -1441,6 +1667,16 @@ def _clear_portals(feats, i, parts):
                 ring = _clear_end(feats, i, ring, at_start, half)
         out.append(ring)
     return out
+
+
+def _point_in_ring(p, ring):
+    """Is point p (2,) inside closed ring (k, 2) (even-odd)? Pure."""
+    x, y = float(p[0]), float(p[1])
+    a, b = ring[:-1], ring[1:]
+    c = ((a[:, 1] > y) != (b[:, 1] > y))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        xi = a[:, 0] + (y - a[:, 1]) * (b[:, 0] - a[:, 0]) / (b[:, 1] - a[:, 1])
+    return bool(np.count_nonzero(c & (x < xi)) % 2)
 
 
 def _crosses(a, b):
@@ -1475,7 +1711,8 @@ def _portal_roads(feats):
             parts.append(np.asarray(g, np.float64))
     bb = np.array([(g[:, 0].min(), g[:, 0].max(), g[:, 1].min(), g[:, 1].max()) for g in parts]).reshape(-1, 4)
     idx = {"j": np.asarray(js, np.int64), "parts": parts, "minx": bb[:, 0], "maxx": bb[:, 1], "miny": bb[:, 2],
-           "maxy": bb[:, 3], "hw": [rs[j].width / 2 for j in js]}
+           "maxy": bb[:, 3], "hw": [rs[j].width / 2 + (RACE_PORTAL_MARGIN_M if raceway_rules(rs[j]) else 0.0)
+                                    for j in js]}
     feats.__dict__["_portal_roads"] = idx
     return idx
 
@@ -1492,8 +1729,8 @@ def _clear_end(feats, i, ring, at_start, half):
     q = tail[min(np.searchsorted(s, 3.0), len(tail) - 1)]
     d = -q / max(float(np.hypot(*q)), 1e-9)                            # out of the tunnel
     nrm = np.array([-d[1], d[0]])
-    reach = (half + PORTAL_EXTEND_MAX_M + 40.0) / ky                   # roads that could matter, in degrees
-    roads_m = []
+    reach = (half + PORTAL_EXTEND_RACE_M + 40.0) / ky                   # roads that could matter, in degrees
+    roads_m, race_end = [], False
     idx = _portal_roads(feats)
     near = np.flatnonzero((idx["miny"] <= p0[1] + reach) & (idx["maxy"] >= p0[1] - reach) &
                           ((idx["minx"] - p0[0]) * kx / ky <= reach) & ((p0[0] - idx["maxx"]) * kx / ky <= reach) &
@@ -1503,10 +1740,24 @@ def _clear_end(feats, i, ring, at_start, half):
         gm = (g - p0) * [kx, ky]
         a_, d_ = gm[:-1], np.diff(gm, axis=0)
         t_ = np.clip(-(a_ * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
-        if float(np.hypot(*(a_ + t_[:, None] * d_).T).min()) < PORTAL_JOIN_M or not _crosses(m, gm):
-            continue                        # joined here (an end at it or a T junction) / not over the tunnel
+        d0 = float(np.hypot(*(a_ + t_[:, None] * d_).T).min())
+        if d0 < PORTAL_JOIN_M:
+            continue                        # joined here (an end at it or a T junction)
+        over = _crosses(m, gm)
+        if not over:
+            # (not over the tunnel: but a racetrack's piece beside the one it passes under, nearer this end than the
+            # other, is cleared too: a tunnel carried past the way it crosses ended in the next way's band, its mouth
+            # a 4 m pit in Navarra's racing line, 2026-11-03)
+            rs_ = road_specs(feats)[idx["j"][n_]]
+            if not (RACEWAY_ON and raceway_rules(rs_)):
+                continue
+            o = tail[-1]
+            a2, t2 = a_ - o, np.clip(-((a_ - o) * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
+            if d0 >= float(np.hypot(*(a2 + t2[:, None] * d_).T).min()) or d0 > idx["hw"][n_] + half + grading.T_MAX:
+                continue
         hw = idx["hw"][n_]
-        roads_m.append((gm, ((0, hw + grading.T_MAX), (1, hw + PORTAL_CLEAR_M), (2, hw + PORTAL_CLEAR_M))))
+        race_end |= bool(RACEWAY_ON and raceway_rules(road_specs(feats)[idx["j"][n_]]))
+        roads_m.append((gm, ((0, hw + (grading.T_MAX if over else PORTAL_CLEAR_M)), (1, hw + PORTAL_CLEAR_M), (2, hw + PORTAL_CLEAR_M))))
 
     def clear(c):
         pts = np.array([c, c + nrm * half, c - nrm * half])
@@ -1521,7 +1772,7 @@ def _clear_end(feats, i, ring, at_start, half):
         return True
     if not roads_m or clear(np.zeros(2)):
         return ring
-    for ext in np.arange(1.0, PORTAL_EXTEND_MAX_M + 1e-6, 1.0):
+    for ext in np.arange(1.0, (PORTAL_EXTEND_RACE_M if race_end else PORTAL_EXTEND_MAX_M) + 1e-6, 1.0):
         if clear(d * ext):
             k = max(1, int(math.ceil(ext / 4.0)))
             add = np.array([d * ext * (t / k) for t in range(1, k + 1)]) / [kx, ky] + p0
@@ -2547,6 +2798,8 @@ def _road_specs(feats, urban_fn, left_hand):
         link = roadlanes.is_link(feats, i)
         if rule_w is None and link:
             rule_w = _link_width(lanes or (1 if ow else 2))
+        if rule_w is None and cls == "raceway" and RACEWAY_ON and pit_lane(feats, i):
+            rule_w = PIT_LANE_M
         dk = _dir_kmh(feats, i, ncon, lens)
         if dk[1] is None:                       # OpenStreetMap's speed limit where Overture has none
             ms = _osm(feats, "maxspeed", i, 5.0, 200.0)
@@ -2598,7 +2851,36 @@ def _road_specs(feats, urban_fn, left_hand):
                 width = _osm(feats, "width", j, *OSM_WIDTH_M)
             w = carriageway(sp.cls, sp.kind, False, width, sp.oneway, sp.lanes)
             out[j] = sp._replace(urban=False, width=_dual_width(sp._replace(urban=False), w, sp.median, feats, j))
-    return _mountain_roads(feats, _osm_sidewalks(feats, _rural_connectors(feats, out)))
+    return _race_kinds(feats, _mountain_roads(feats, _osm_sidewalks(feats, _rural_connectors(feats, out))))
+
+
+def race_kind(feats, i):
+    """A raceway feature's type (osmtags osm_race: racetypes.py), None for none."""
+    col = feats.attrs.get("osm_race")
+    v = None if col is None else col[i]
+    return v if isinstance(v, str) and v else None
+
+
+def _race_kinds(feats, specs):
+    """specs with the drag strips and speedway ovals marked (Spec.race) and, without a mapped width, at their type's
+    width (racetypes.road_width). Pure."""
+    if not RACEWAY_ON or "osm_race" not in feats.attrs:
+        return specs
+    import racetypes
+    out = list(specs)
+    for i, sp in enumerate(specs):
+        if sp is None or sp.cls != "raceway":
+            continue
+        rk = race_kind(feats, i)
+        if rk is None:
+            continue
+        sp = sp._replace(race=rk)
+        w = racetypes.road_width(rk)
+        if w is not None and _rule_value(feats.rules.get("width"), i) is None \
+                and _osm(feats, "width", i, *OSM_WIDTH_M) is None:
+            sp = sp._replace(width=w)
+        out[i] = sp
+    return out
 
 
 # Mountain pass roads (the user, 2026-10-31: the Stelvio Pass; its aerial: 6.1 m of asphalt between edge lines, no
@@ -4866,7 +5148,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             for side in (1, -1):
                 for k in range(1, n):
                     mark("lane", "line_white", lw_, offset_polyline(pts, side * k * lw * scale), pat)
-    if kind == "paved" and not has_sidewalks(spec):          # no curb: the asphalt's edge
+    if kind == "paved" and not has_sidewalks(spec) and not raceway_rules(spec):   # no curb: the asphalt's edge
         dw = EDGE_DECAL["w"]
         for side in (1, -1):
             line = offset_polyline(base, side * (wv / 2 + (EDGE_DECAL_AT - 0.5) * dw))
@@ -4937,7 +5219,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             for side in (1, -1):
                 for k in range(1, n):
                     out.append((LANE_LINE, LANE_LINE["w"], offset_polyline(pts, side * k * lw)))
-    if kind == "paved" and not has_sidewalks(spec):          # no curb: the asphalt's edge
+    if kind == "paved" and not has_sidewalks(spec) and not raceway_rules(spec):   # no curb: the asphalt's edge
         dw = EDGE_DECAL["w"]
         for side in (1, -1):
             line = offset_polyline(pts, side * (w / 2 + (EDGE_DECAL_AT - 0.5) * dw))
@@ -6564,7 +6846,13 @@ class TunnelProfiles(BridgeProfiles):
                     # ground near a mouth, its stone top 2 m over the E6 beside it (an underpass in Norway, GitHub #2)
                     s_ = s[a:b + 1]
                     inner = (s_ >= s_[0] + ARCH_SIZE_SKIP_M) & (s_ <= s_[-1] - ARCH_SIZE_SKIP_M)
-                    if inner.any():
+                    under_race = self._under_raceway(xy[a:b + 1], ground)
+                    if under_race is not None:
+                        # (a tube dug under a racetrack, BNE_RACEWAY_DIG: sized by the cover under the track, not
+                        # by the ground's own open cut past it, which is the approach: IMS's service tunnels came
+                        # out 3.6 m low arches under 7 m of track)
+                        base = float(c_[under_race].min())
+                    elif inner.any():
                         base = min(base, float(c_[inner].min()))
                     low_h = MAJOR_LOW_H if pool[k][0] is not None and pool[k][0].cls in CONCRETE_WALL_CLASSES \
                         else TUNNEL_LOW_H         # (a motorway's box clears a truck, its top in a mound if need be)
@@ -6642,6 +6930,27 @@ class TunnelProfiles(BridgeProfiles):
         for i in range(len(feats)):
             if rs[i] is not None:
                 self._hw[(str(feats.ids[i]), "g")] = rs[i].width / 2
+
+    def _under_raceway(self, xy, ground):
+        """Which samples of a tunnel section xy (k, 2) lie under a raceway's carriageway (+ RACE_PORTAL_MARGIN_M), when
+        the digs are on (grading.RACE_DIG_ON), else None (None too where none do)."""
+        import grading
+        if not grading.RACE_DIG_ON:
+            return None
+        m = np.zeros(len(xy), bool)
+        for gk, lns in (ground or {}).items():
+            if not str(gk[0] if isinstance(gk, tuple) else gk).startswith("osm-raceway-"):
+                continue
+            hw = self._hw.get(gk)
+            if hw is None:
+                continue
+            for ln in lns:
+                ln = np.asarray(ln, np.float64).reshape(-1, 2)
+                for q0, q1 in zip(ln[:-1], ln[1:]):
+                    d = q1 - q0
+                    t = np.clip(((xy - q0) @ d) / max(float(d @ d), 1e-12), 0.0, 1.0)
+                    m |= np.hypot(*(xy - (q0 + t[:, None] * d)).T) <= hw + RACE_PORTAL_MARGIN_M
+        return m if m.any() else None
 
     def _cover_roads(self, xy, s, kinds, ground):
         """kinds with each covered section carried on until the ground roads crossing over it are covered (their
@@ -7192,6 +7501,43 @@ def tunnel_floor_at(parts, x, y):
     return best
 
 
+RACE_BAND_SHOULDER_M = 4.0  # m past a racetrack's carriageway its band (grading.RACE_SHOULDER_M): no tunnel mouth's
+                            # cut, arch soil or hole in it
+
+
+def race_band_mask(cells, frame, e, n):
+    """Which anchor-frame points (e, n) lie on a racetrack's band (its ground parts' carriageway +
+    RACE_BAND_SHOULDER_M, round at the vertices) in cells (roads Features or None); None for none. BNE_RACEWAY=off:
+    None."""
+    if not RACEWAY_ON or not len(e):
+        return None
+    e, n = np.asarray(e, np.float64), np.asarray(n, np.float64)
+    lo_e, hi_e, lo_n, hi_n = e.min(), e.max(), n.min(), n.max()
+    mask = np.zeros(len(e), bool)
+    for feats in cells:
+        if feats is None or len(feats) == 0:
+            continue
+        rs = road_specs(feats)
+        for i, sp in enumerate(rs):
+            if sp is None or not raceway_rules(sp):
+                continue
+            hw = sp.width / 2 + RACE_BAND_SHOULDER_M
+            for ring in ground_parts(feats, i):
+                xe, xn = mapgeom.enu_xy(feats, frame, ring)
+                xy = np.c_[xe, xn]
+                if len(xy) < 2 or xy[:, 0].max() < lo_e - hw or xy[:, 0].min() > hi_e + hw or                         xy[:, 1].max() < lo_n - hw or xy[:, 1].min() > hi_n + hw:
+                    continue
+                for a, b in zip(xy[:-1], xy[1:]):
+                    k = np.flatnonzero((e >= min(a[0], b[0]) - hw) & (e <= max(a[0], b[0]) + hw) &
+                                       (n >= min(a[1], b[1]) - hw) & (n <= max(a[1], b[1]) + hw) & ~mask)
+                    if not len(k):
+                        continue
+                    d = b - a
+                    t = np.clip(((e[k] - a[0]) * d[0] + (n[k] - a[1]) * d[1]) / max(float(d @ d), 1e-12), 0.0, 1.0)
+                    mask[k[np.hypot(e[k] - a[0] - t * d[0], n[k] - a[1] - t * d[1]) <= hw]] = True
+    return mask if mask.any() else None
+
+
 def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
     """arch_raise for ground heights at the points (la, lo) of a block in the anchor-frame box (x0, y0, x1, y1),
     the tunnels from the map cells under it. z as it was when the cells are not at hand."""
@@ -7209,8 +7555,16 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
         if not parts or not tunnels.heights:
             return z
         e, n, _ = frame.geodetic_to_enu(np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel(), 0.0)
-        return arch_raise(parts, tunnels.heights, np.asarray(e), np.asarray(n),
-                          np.asarray(z, np.float64).ravel(), getattr(tunnels, "mouths", None)).reshape(np.shape(z))
+        e, n = np.asarray(e), np.asarray(n)
+        z0 = np.asarray(z, np.float64).ravel()
+        out = arch_raise(parts, tunnels.heights, e, n, z0, getattr(tunnels, "mouths", None))
+        # (a racetrack's band keeps its graded surface: a low arch's mouth cut to its floor, or its soil raised, on
+        # the band pitted Navarra's racing line 4 m where an access tunnel's end lay in the next way's band, 2026-11-03)
+        ch = np.flatnonzero(out != z0)          # (only the points the arches moved)
+        band = race_band_mask(cells, frame, e[ch], n[ch]) if len(ch) else None
+        if band is not None:
+            out[ch[band]] = z0[ch[band]]
+        return out.reshape(np.shape(z))
     except Exception as ex:         # no raise rather than no block (a network error quietly; a bug where it shows)
         (log.debug if isinstance(ex, OSError) else log.warning)("arch raise: %s: %s", type(ex).__name__, ex)
         return z
@@ -7253,6 +7607,7 @@ def spare_carriageways(mask, parts, cells, frame, cx, cy, square):
     its lanes (GitHub #450, the A-7 near Málaga, a 2 m drop at the edge of a carriageway beside an underpass's mouth)."""
     import fast
     own = {str(p[0]).split("#")[0] for p in parts}
+    bands = []
     ends = np.array([np.asarray(p[2], np.float64)[k, :2] for p in parts for k in (0, -1) if len(p[2])], np.float64)
     others = []
     for feats in cells:
@@ -7268,18 +7623,29 @@ def spare_carriageways(mask, parts, cells, frame, cx, cy, square):
                 xy = np.c_[e, n]
                 if len(xy) < 2:
                     continue
-                if len(ends) and min(float(np.min(np.hypot(*(ends - xy[0]).T))),
-                                     float(np.min(np.hypot(*(ends - xy[-1]).T)))) < HOLE_JOIN_M:
+                race = RACEWAY_ON and raceway_rules(sp)
+                if not race and len(ends) and min(float(np.min(np.hypot(*(ends - xy[0]).T))),
+                                                  float(np.min(np.hypot(*(ends - xy[-1]).T)))) < HOLE_JOIN_M:
                     continue            # (its approach: the mouth is cut into it)
-                others.append((fid, sp.width / 2, xy))
+                # (a racetrack's band whole, its shoulders too: never a hole in it, the track's surface first)
+                others.append((fid, sp.width / 2 + (RACE_BAND_SHOULDER_M if race else 0.0), xy))
+                if race:
+                    bands.append((fid, sp.width / 2 + RACE_BAND_SHOULDER_M, xy))
     if not others:
         return mask
     oth = fast.Others(others)
+    rb = fast.Others(bands) if bands else None
     n = mask.shape[0]
     x0, y0 = cx - n * square / 2, cy - n * square / 2
     out = mask.copy()
     for iy, ix in zip(*np.nonzero(mask)):
-        if not oth.clear((x0 + ix * square, y0 + iy * square), None, HOLE_ROAD_MARGIN):
+        x, y = x0 + ix * square, y0 + iy * square
+        if not oth.clear((x, y), None, HOLE_ROAD_MARGIN):
+            out[iy, ix] = False
+        # (a racetrack's band: no corner of the square the sample cuts in it either, the owner 2026-11-05: no hole
+        # inside the band, ever; a sample beside the band cut the square reaching onto it, Daytona's run-off)
+        elif rb is not None and any(not rb.clear((x + dx, y + dy), None, HOLE_ROAD_MARGIN)
+                                    for dx, dy in ((square, 0.0), (0.0, square), (square, square))):
             out[iy, ix] = False
     return out
 
@@ -9748,7 +10114,7 @@ def sound_boxes(chunks):
 
 def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None, deck_mesh=None, bld=None,
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
-               rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
+               rail_mesh=None, drag=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=()):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
@@ -9868,6 +10234,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         data["park"] = park
     if fuel:                        # gasstations.tile_sites' stations: pumps and refuel areas (gasstations.lua)
         data["fuel"] = fuel
+    if drag:                        # dragstrips.tile_strips: drag strips for the stock drag system (dragstrips.lua)
+        data["drag"] = drag
     if custom_entries:              # buildings.road_tile's 3dmr.eu models (ours), [{shape, pos}]
         data["b3dmr"] = custom_entries
 

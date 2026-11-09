@@ -1292,6 +1292,32 @@ class FarLampTest(unittest.TestCase):
 
 
 
+class RacewayThroughTest(unittest.TestCase):
+    def test_raceways_are_through_roads(self):
+        # a footprint a racetrack runs through is a structure over it (BNE_RACEWAY: Interlagos' pavilion, 2026-11-03)
+        import buildings
+        self.assertEqual("raceway" in buildings.THROUGH_CLASSES, os.environ.get("BNE_RACEWAY", "on") != "off")
+
+    def test_race_lines_lift_any_footprint_they_run_through(self):
+        # a pit garage 6 m deep the track runs through: lifted over it (a street's needs ROAD_THROUGH_M, 15 m)
+        import buildings
+        ring = np.array([[0.0, -3.0], [6.0, -3.0], [6.0, 3.0], [0.0, 3.0], [0.0, -3.0]])
+        line = np.array([[-50.0, 0.0], [50.0, 0.0]])
+        self.assertLess(buildings.road_through(ring, [line]), buildings.ROAD_THROUGH_M)
+        self.assertGreaterEqual(buildings.road_through(ring, [line.view(buildings.RaceLine)]), buildings.RACE_THROUGH_M)
+
+    def test_machine_found_footprint_on_a_wide_tracks_band_dropped(self):
+        # (Spa, 2026-11-07: an 18 m piece, an unclassed footprint 2.6 m inside its carriageway, 6.4 m off its line)
+        import buildings
+        line = np.array([[-100.0, 0.0], [100.0, 0.0]]).view(buildings.RaceLine)
+        line.half = 9.0
+        ring = np.array([[0.0, 6.4], [20.0, 6.4], [20.0, 30.0], [0.0, 30.0], [0.0, 6.4]])
+        self.assertFalse(buildings._near_lines(ring, [line], buildings.RACE_HALF_M))
+        self.assertTrue(buildings._ml_on_race_band(ring, [line]))
+        far = ring + [0.0, 20.0]
+        self.assertFalse(buildings._ml_on_race_band(far, [line]))
+
+
 if __name__ == "__main__":
     unittest.main()
 

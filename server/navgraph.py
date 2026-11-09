@@ -27,6 +27,10 @@ DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secon
          # traffic stays off them while a follow / chase / route AI can use them. Rural Europe: the box's nodes about
          # double (Czech farmland 136 -> 235, Black Forest 141 -> 288; a city block has ~700-1000)
          "track": (0.2, 15)}
+# A road mapped along a racetrack (Overture's service roads on Lime Rock's track, 2026-11-03: everyday traffic drove the
+# circuit) is not driven: this share of its points on a raceway's carriageway (+ RACE_MARGIN_M) leaves it out.
+RACE_SHARE = 0.5
+RACE_MARGIN_M = 1.0
 SKIP_SUBCLASSES = {"driveway", "parking_aisle", "sidewalk", "crosswalk", "cycle_crossing"}
 URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (spec.urban) unless mapped
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was
@@ -193,6 +197,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
     node_fid = {}           # name -> the feature it was made on (its deck, if any)
     pending_by = {}         # name -> (-width, fid) of the road whose point it is (the widest's, then the lower id)
+    race = _raceway_lines(frame, feats_list, widths, urban_fn, left_hand)
     # the stretches through tunnels, left out of the graph (no ground there for the AI), for the minimap only
     # (minimaproads.lua: its lines broke at every tunnel and every underpass mapped as one; the user, 2026-11-04)
     lines = []              # [x1, y1, x2, y2, drivability]
@@ -271,6 +276,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         prop_arms.setdefault("c" + str(con.value[r]), []).append(
                             (fid, rspecs[i], dd / dl, np.array([p[j0][0], p[j0][1], 0.0]), end, L))
             if spec.cls not in DRIVE or roads._rule_value(sub, i) in SKIP_SUBCLASSES:
+                continue
+            if race and _on_raceway(p, race) >= RACE_SHARE:
                 continue
             tunnel_ranges = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
             # the nodes along it: connectors at their arc length, shape points that bend it, long gaps split
@@ -711,3 +718,48 @@ class Tracker:
         path, n, m = res
         conn.send({"type": "navgraph", "anchorId": aid, "path": path, "cx": round(centre[0], 1),
                    "cy": round(centre[1], 1), "nodes": n, "edges": m, "serial": serial})
+
+
+def _raceway_lines(frame, feats_list, widths, urban_fn, left_hand):
+    """[(half width + RACE_MARGIN_M, centreline (k, 2))] of the raceways in feats_list, in the frame."""
+    out, seen = [], set()
+    for feats in feats_list:
+        if feats is None or len(feats) == 0 or "class" not in feats.attrs:
+            continue
+        cls = feats.attrs["class"]
+        idx = [i for i in range(len(feats)) if str(cls[i]) == "raceway" and str(feats.ids[i]) not in seen]
+        if not idx:
+            continue
+        specs = roads.road_specs(feats, urban_fn, widths, left_hand)
+        for i in idx:
+            seen.add(str(feats.ids[i]))
+            w = specs[i].width if specs[i] is not None else 12.0
+            for part in feats.parts(i) or []:
+                if part and len(part[0]) >= 2:
+                    ll = np.asarray(part[0], np.float64)
+                    e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
+                    out.append((w / 2 + RACE_MARGIN_M, np.stack([e, n], 1)))
+    return out
+
+
+def _on_raceway(p, race):
+    """The share of polyline p's points (resampled every 2 m) on a raceway's carriageway (race: _raceway_lines)."""
+    seg = np.hypot(*np.diff(p, axis=0).T)
+    s = np.concatenate([[0.0], np.cumsum(seg)])
+    if s[-1] <= 0:
+        return 0.0
+    t = np.linspace(0.0, s[-1], max(2, int(s[-1] / 2.0) + 1))
+    q = np.stack([np.interp(t, s, p[:, 0]), np.interp(t, s, p[:, 1])], 1)
+    lo, hi = q.min(0), q.max(0)
+    on = np.zeros(len(q), bool)
+    for hw, c in race:
+        if (c[:, 0].max() + hw < lo[0] or c[:, 0].min() - hw > hi[0] or
+                c[:, 1].max() + hw < lo[1] or c[:, 1].min() - hw > hi[1]):
+            continue
+        a, d = c[:-1], np.diff(c, axis=0)
+        ll = np.maximum((d * d).sum(1), 1e-12)
+        for k in np.flatnonzero(~on):
+            u = np.clip(((q[k] - a) * d).sum(1) / ll, 0.0, 1.0)
+            if float(np.hypot(*(q[k] - (a + u[:, None] * d)).T).min()) <= hw:
+                on[k] = True
+    return float(on.mean())

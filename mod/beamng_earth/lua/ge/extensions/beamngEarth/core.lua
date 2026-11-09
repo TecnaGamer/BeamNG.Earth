@@ -595,6 +595,7 @@ local function finishRebase()
   require('beamngEarth/turbinestream').reanchor(rb.newAnchor)
   nightlights.transform(xf)
   gasstations.transform(xf)
+  pcall(require('beamngEarth/dragstrips').transform, xf)
   -- road geotiles: their content placed exactly into the new anchor (its rows' modules after their transforms above),
   -- the skins moved and lifted until the new anchor's come (roads.lua M.replace)
   roads.replace(rb.newAnchor, msg.anchorId)
@@ -1584,6 +1585,7 @@ local function updateWorld(dt)
     end
   end
   if (action == 'commit' or action == 'resync') and st.paused then action = nil end -- vehicles move only with physics running
+  if action == 'commit' and require('beamngEarth/dragstrips').holdRebase() then action = nil end -- (a drag run's data is in this frame)
   if action == 'prefetch' then
     if net.isConnected() then
       local aLat, aLon, cx, cy = M._rebaseRequest(pl)
@@ -2244,6 +2246,7 @@ local function onUpdate(dtReal, dtSim)
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
     roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor)
     gasstations.update(gov)
+    pcall(require('beamngEarth/dragstrips').update, gov)
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
     t = mark('far', t)
@@ -2418,6 +2421,7 @@ local function onClientEndMission()
   require('beamngEarth/enginepref').restore()
   pcall(terrainpatch.clear)
   pcall(gasstations.reset)
+  pcall(require('beamngEarth/dragstrips').reset)
   pcall(farcars.reset)
   pcall(mpsession.reset)
   gps.reset()
@@ -2900,7 +2904,10 @@ end
 
 M.onUpdate = onUpdate
 -- the stock gas stations' POI list (gameplay/rawPois.lua): ours, so freeroam/gasStations.lua offers "Refuel" at them
-M.onGetRawPoiListForLevel = function(levelIdentifier, elements) gasstations.pois(levelIdentifier, elements) end
+M.onGetRawPoiListForLevel = function(levelIdentifier, elements)
+  gasstations.pois(levelIdentifier, elements)
+  pcall(require('beamngEarth/dragstrips').pois, levelIdentifier, elements)
+end
 M.onPreRender = onPreRender
 M.onUiChangedState = onUiChangedState
 M.onClientStartMission = onClientStartMission

@@ -96,6 +96,7 @@ import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
 import parking as parkingmod  # noqa: E402
 import gasstations as gasstationsmod  # noqa: E402
+import dragstrips as dragstripsmod  # noqa: E402
 import roads as roadsmod  # noqa: E402
 import rails as railsmod  # noqa: E402
 import randomplace as randomplacemod  # noqa: E402
@@ -2305,6 +2306,11 @@ class Server:
             self.country(anchor), guardrail_rows, tx, ty, chunks, wide)
         guardrail_rows = guardrail_rows + blockworker._kantstolpe_rows(
             anchor.frame, near_roads, box, elev, self.country(anchor), guardrail_rows, tx, ty)
+        try:                        # (track walls: jersey barriers, racefurniture.jersey_rows)
+            import racefurniture
+            guardrail_rows = guardrail_rows + racefurniture.tile_jersey_rows(anchor.frame, box, self.mapdata, elev)
+        except Exception as ex:
+            log.warning("track walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         guardrail_rows = guardrail_rows + blockworker._sign_rows(
             anchor.frame, cell_fn, near_roads, sign_nodes, box, elev, urban, self.road_widths, self.left_hand(anchor),
             self.country(anchor), tx, ty, wide)
@@ -2353,6 +2359,11 @@ class Server:
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev))
             except Exception as ex:
                 log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import racefurniture
+            try:
+                props.extend(racefurniture.tile_rows(anchor.frame, box, self.mapdata, elev))
+            except Exception as ex:
+                log.warning("racefurniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import picnic
             land_fn = lambda key: self.mapdata.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
             bld_fn = lambda key: self.mapdata.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
@@ -2384,6 +2395,7 @@ class Server:
                 log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
+                                   drag=dragstripsmod.tile_strips(anchor.frame, tx, ty, self.mapdata, elev),
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, wells=oil_wells, bld_none=bool(self.buildings),
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
@@ -3040,7 +3052,7 @@ class Server:
                     t.wet = self.sea.depth if self.sea is not None else None
                     t.raw = lambda la, lo: self.ground(None, la, lo, self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
                     if g is not None:
-                        t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)
+                        t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only="ends")
                 cls = roadsmod.TunnelProfiles
             cs = stores[kind] = roadsmod.ChainStore(cls, cell_fn, elev, setup)
         return roadsmod.ChainView(cs, anchor.frame)

@@ -479,3 +479,60 @@ class Underwater(unittest.TestCase):
         w = np.zeros(50, bool)
         w[40:] = True
         self.assertEqual(roads.wet_run_inside(xy, w), 0.0)              # at an end: a portal on a bank
+
+
+class UnderTrack(unittest.TestCase):
+    """The owner 2026-11-05: no terrain hole inside a raceway's band, ever; the tube fully hidden under it."""
+
+    def test_depth_hides_the_tube(self):
+        d = grading.race_tube_depth()
+        # the vault + the hole margin + the lattice's interpolation on the steepest banking, over the DEM margin
+        self.assertGreaterEqual(d - grading.RACE_UNDER_DEM_M,
+                                roadmesh.TUNNEL_H + roads.TUNNEL_HOLE_MARGIN + grading.RACEWAY_BANK_MAX * 1.0 - 1e-9)
+        for cls, w in (("footway", 2.0), ("service", 3.0), ("primary", 7.0)):
+            self.assertGreaterEqual(grading.race_tunnel_use(Spec(w, "paved", False, cls, False))[2], d - 1e-9, cls)
+
+    def test_no_hole_in_the_band(self):
+        # a tube along x under a track band |x| <= 15 m banked up across it, its ground at the dig's least (the
+        # depth less the DEM's margin) on the low side; outside the band the ground falls to the floor (the portals)
+        n, sq = 128, 1.0
+        x0 = -n * sq / 2
+        xs = x0 + np.arange(n) * sq
+        X, Y = np.meshgrid(xs, xs)
+        floor = 10.0
+        top = floor + grading.race_tube_depth() - grading.RACE_UNDER_DEM_M
+        band = np.abs(X) <= 15.0
+        surf = top + grading.RACEWAY_BANK_MAX * np.clip(Y + 20.0, 0.0, None)
+        # past the band: the embankment over the tube's covered end (RACE_COVER_PAST_M), then the portal's open cut
+        past = np.abs(X) - 15.0
+        u = np.where(band, surf, np.where(past <= grading.RACE_COVER_PAST_M,
+                                          surf - grading.RACE_EMBANK_SLOPE * past, floor))
+        part = ("t", Spec(7.0, "paved", False, "service", False), line(-60, 60), np.full(31, floor), 0.0)
+        m = roads.tunnel_hole_mask([part], u, 0.0, 0.0, sq)
+        self.assertTrue(m.any())                                    # the portals outside the band are open
+        self.assertEqual(roads.RACE_PORTAL_MARGIN_M, grading.RACE_SHOULDER_M + grading.RACE_COVER_PAST_M)
+        hit = np.argwhere(m)
+        # (a hole sample cuts the engine square it is the south-west corner of: every corner outside the band)
+        hx0 = xs[hit[:, 1]]
+        bad = (hx0 + sq >= -15.0) & (hx0 <= 15.0)
+        self.assertFalse(bad.any(), f"a hole cell touches the band: {sorted(set(hx0[bad].tolist()))}")
+        # and the tube's top + the hole margin under the surface all along the crossing
+        self.assertTrue((u[band & (np.abs(Y) <= 7.0)] >= floor + roadmesh.TUNNEL_H + roads.TUNNEL_HOLE_MARGIN).all())
+
+
+class RaceSurface(unittest.TestCase):
+    def test_one_plane_across_a_banked_curve(self):
+        # a 300 m radius arc in 4 m segments, banked 0.6: grade_points' blend of the neighbouring segments read along
+        # their own lines dips the racing line; race_surface is the plane at the nearest point
+        r = 300.0
+        a = np.arange(0.0, 0.8, 4.0 / r)
+        xy = np.c_[r * np.cos(a), r * np.sin(a)]
+        p = grading.Plan(xy, np.full(len(xy), 50.0), 13.0, road_half=9.0)
+        p.bank = np.full(len(xy), -0.6)
+        aa = np.linspace(0.1, 0.7, 400)
+        for off in (-8.0, 0.0, 8.0):
+            q = np.c_[(r - off) * np.cos(aa), (r - off) * np.sin(aa)]
+            z = grading.race_surface(q[:, 0], q[:, 1], [p])
+            d2 = np.abs(z[2:] - 2 * z[1:-1] + z[:-2])
+            self.assertLess(float(d2.max()), 0.005, off)
+            self.assertLess(float(np.abs(z - (50.0 - 0.6 * off)).max()), 0.05, off)

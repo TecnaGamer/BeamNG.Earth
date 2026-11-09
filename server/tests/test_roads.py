@@ -236,6 +236,18 @@ class DualCarriagewayTest(unittest.TestCase):
         self.assertFalse(any(s.oneway for s in roads.road_specs(f)))
 
 
+class RacewayLookTest(unittest.TestCase):
+    """Racetracks (BNE_RACEWAY): no rural edge strips, no dirt edge decal along the track."""
+
+    def test_no_edge_strip_or_decal(self):
+        if not roads.RACEWAY_ON:
+            self.skipTest("BNE_RACEWAY=off")
+        sp = roads.road_specs(features([[(0, 0), (300, 0)]], ["raceway"]))[0]
+        self.assertAlmostEqual(sp.width, roads.STYLE["raceway"][0])
+        ex = roads.extras(sp, np.array([[0, 0, 0], [300, 0, 0.0]]), LON)
+        self.assertFalse([look for look, w, line in ex if look.get("layer") == "edge"])
+
+
 class GeometryTest(unittest.TestCase):
     def test_clip(self):
         pts = np.array([[-10.0, 5.0], [20.0, 5.0], [20.0, 30.0], [5.0, 30.0], [5.0, 5.0]])
@@ -1883,3 +1895,39 @@ class GravelTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RaceIdleBridgeTest(unittest.TestCase):
+    """roads._race_tunnel_reach: a bridge straight off a tube under a track, nothing under it, is the approach's
+    ground (Darlington's infield, 2026-11-07)."""
+
+    def _ranges(self, extra=(), water=None, hook=True):
+        lines = [[(0, -300), (0, 300)], [(-200, 0), (200, 0)]] + [list(e) for e in extra]
+        cls = ["raceway", "service"] + ["residential"] * len(extra)
+        f = features(lines, cls, flags=[(1, "is_tunnel", 0.45, 0.55), (1, "is_bridge", 0.55, 0.65)],
+                     ids=[f"r{i}" for i in range(len(lines))])
+        if hook:
+            w = features(water, ["stream"] * len(water)) if water else None
+            f.__dict__["_bnge_water"] = lambda: w
+        return roads.level_ranges(f, 1)
+
+    def test_bridge_over_water_stays(self):
+        got = self._ranges(water=[[(40, -50), (40, 50)]])
+        self.assertTrue(any(k == "bridge" for _a, _b, k in got), got)
+
+    def test_no_water_at_hand_stays(self):
+        got = self._ranges(hook=False)
+        self.assertTrue(any(k == "bridge" for _a, _b, k in got), got)
+
+    def test_idle_bridge_is_ground(self):
+        if not roads.RACEWAY_ON:
+            self.skipTest("raceways off")
+        got = self._ranges()
+        self.assertTrue(any(k == "tunnel" for _a, _b, k in got))
+        self.assertFalse(any(k == "bridge" for _a, _b, k in got), got)
+
+    def test_bridge_over_a_road_stays(self):
+        if not roads.RACEWAY_ON:
+            self.skipTest("raceways off")
+        got = self._ranges(extra=[[(40, -50), (40, 50)]])
+        self.assertTrue(any(k == "bridge" for _a, _b, k in got), got)

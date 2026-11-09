@@ -104,7 +104,9 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-LAYER_VERSIONS = {"roads": 8}
+# roads 9-12: raceways typed from their geometry (osm_race, racetypes.py: drag strips, speedway and short ovals, road
+# courses); cells fetched before are fetched again
+LAYER_VERSIONS = {"roads": 12}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
@@ -479,7 +481,11 @@ class MapData:
             with self._lock:
                 if getattr(self, "osmtags", None) is None:
                     self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
-            return self.osmtags.cell(key.bounds(), kind)
+            tags, ways = self.osmtags.cell(key.bounds(), kind)
+            if ways:                    # (the raceways' types: racetypes.py, a straight's ends looked up round them)
+                import racetypes
+                racetypes.classify(ways, lambda box: self.osmtags.cell(box, kind)[1])
+            return tags, ways
         except DEFERRED:
             # a prefetch the host had no room for: the cell is not built now (MapData.prefetch: False) rather than cached
             # for good without its tags (a player's start cell in Baltimore kept the roads' guesses, 2026-10-23); on
@@ -704,6 +710,16 @@ class MapData:
         with self._mem_lock:
             return dict(self._cell_stats)
 
+    def _water_hook(self, key, kind):
+        """() -> the water Features of cell key (or None): read on demand by roads._race_tunnel_reach (a bridge over
+        water stays a bridge)."""
+        def get():
+            try:
+                return self.cell(key, layers=("water",), kind=kind).layers.get("water")
+            except Exception:
+                return None
+        return get
+
     def _decoded_layer(self, key, layer, kind, frame, token=None):
         """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
         hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
@@ -728,6 +744,7 @@ class MapData:
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
+                    f.__dict__["_bnge_water"] = self._water_hook(key, kind)
                 f.__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(), sort_keys=True))
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)

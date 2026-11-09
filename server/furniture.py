@@ -88,6 +88,35 @@ POLE_OFF_M = 2.4            # m beyond the carriageway's edge
 END_CLEAR_M = 4.0           # m kept clear of a run's ends (corners, crosswalk ramps)
 CLEAR_OTHER_M = 1.5         # m kept off another road's carriageway
 G_LAMP, G_POLE = "streetlight", "pole"
+# racetracks (highway=raceway): no pole or lamp on the racing surface, its shoulder (racefurniture.CLEAR_M) or the
+# paved apron beside it (racetypes.OVAL_APRON_M, either side: the inside is not known here), nor past its ends where a
+# drag strip's launch apron lies (racetypes.DRAG_APRON_M; Daytona's banking had poles on it, 2026-11-05)
+RACE_SHOULDER_M = 4.0
+RACE_APRON_M = 12.0
+RACE_END_M = 40.0
+
+
+def race_bands(roads):
+    """[(centreline (k, 2) extended RACE_END_M past both ends, kept-clear half width)] of the raceways in roads."""
+    out = []
+    for fid, spec, pts, _ in roads:
+        if getattr(spec, "cls", None) != "raceway" or len(pts) < 2:
+            continue
+        xy = np.asarray(pts, np.float64)[:, :2]
+        a, b = xy[0] - xy[1], xy[-1] - xy[-2]
+        la, lb = max(float(np.hypot(*a)), 1e-9), max(float(np.hypot(*b)), 1e-9)
+        xy = np.vstack([xy[0] + a / la * RACE_END_M, xy, xy[-1] + b / lb * RACE_END_M])
+        out.append((xy, spec.width / 2 + RACE_SHOULDER_M + RACE_APRON_M))
+    return out
+
+
+def off_race(q, bands):
+    """Whether point q (2+,) keeps out of every race band (race_bands)."""
+    q = np.asarray(q, np.float64)[:2]
+    for xy, hw in bands:
+        if _seg_dist_min(q, xy) < hw:
+            return False
+    return True
 
 
 def _h01(*vals):
@@ -900,6 +929,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         return _h01(fid, "buried") >= buried
     clearance = clearance if clearance is not None else RoadClearance(
         [(spec.width / 2, pts) for _, spec, pts, _ in roads], decks, bounds=box)
+    bands = race_bands(roads)
     rows = []
     lit = set()
     for wk in walks:
@@ -936,7 +966,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
             for p, out in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and (not bands or off_race(q, bands)):
                     if optional:
                         k = int(round((float(_project(line, p[None, :2])[0]) - phase) / spacing))
                         if not decorated(group, p, out, k):
@@ -958,7 +988,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                     yaw = _yaw(out[0], out[1])
                     pole = [G_POLE, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                             round(yaw, 1), 1.0, 9.2, 0.0]
-                    if not clearance.clear(pole):
+                    if not clearance.clear(pole) or (bands and not off_race(q, bands)):
                         if wires is not None and len(run_poles) > 1:
                             wires.extend(_own_spans(run_poles, box))
                         run_poles = []
@@ -1044,6 +1074,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             n = np.array([-d[1], d[0]]) * side
             q = p[:2] + n * (spec.width / 2 + (POLE_OFF_M if poles else LAMP_EDGE_M))
             inside = _owns(box, q[0], q[1])
+            if bands and not off_race(q, bands):
+                if len(run) > 1 and wires is not None:
+                    wires.extend(_own_spans(run, box))
+                run = []
+                continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
                 if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link

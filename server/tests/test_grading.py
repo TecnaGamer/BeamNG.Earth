@@ -935,9 +935,11 @@ class CoarseUnderpassTest(unittest.TestCase):
 
 
 class RacewayKeepTest(unittest.TestCase):
+    @unittest.mock.patch.object(grading, "UNGRADED", {"raceway"})
+    @unittest.mock.patch.object(grading, "RACEWAY_ON", False)
     def test_track_surface_is_the_terrain(self):
-        """A road crossing a racetrack at grade: on the track (its carriageway + margin) the terrain stays as it is
-        (a banked oval's slope), off it the road is graded as usual."""
+        """BNE_RACEWAY=off: a road crossing a racetrack at grade: on the track (its carriageway + margin) the terrain
+        stays as it is (a banked oval's slope), off it the road is graded as usual."""
         f = features([[(-200, 0), (200, 0)], [(0, -100), (0, 100)]], ["raceway", "residential"])
 
         def sloped(la, lo):         # a banking: the ground rising to the north
@@ -949,6 +951,62 @@ class RacewayKeepTest(unittest.TestCase):
         out = g.apply(la, lo, base)
         self.assertAlmostEqual(float(out[0]), float(base[0]), places=6, msg="on the track: the terrain")
 
+
+
+class RacewayGradedTest(unittest.TestCase):
+    """Racetracks graded (BNE_RACEWAY, on): a smooth racing line, the elevation's banking kept across it."""
+
+    def sample(self, terrain, pts):
+        f = features([[(-300, 0), (300, 0)]], ["raceway"])
+        g = grading.Grader(FRAME, FakeMD(f), terrain)
+        la, lo, _ = FRAME.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+        return g.apply(la, lo, terrain(la, lo))
+
+    def test_banking_kept(self):
+        def banked(la, lo):         # the ground rising to the north across the track: 0.3 m per m (17 deg)
+            _e, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 10.0 + 0.3 * np.asarray(n)
+        pts = np.array([[0.0, 4.0], [0.0, -4.0], [50.0, 4.0]])
+        z = self.sample(banked, pts)
+        self.assertAlmostEqual(float(z[0] - z[1]), 0.3 * 8.0, delta=0.15, msg="leans as the ground does")
+        self.assertAlmostEqual(float(z[2]), 11.2, delta=0.15)
+
+    def test_bumps_smoothed(self):
+        def bumpy(la, lo):          # 0.5 m bumps every 8 m along the track (the DEM's facets)
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 10.0 + 0.5 * np.sin(2 * np.pi * np.asarray(e) / 8.0)
+        xs = np.arange(-100.0, 100.0, 1.0)
+        z = self.sample(bumpy, np.stack([xs, np.zeros(len(xs))], 1))
+        self.assertLess(float(np.abs(z - 10.0).max()), 0.1, "the racing line smooth, not the terrain")
+
+    def test_bank_from_edges(self):
+        step = 2.0
+        zl = 10.0 + 0.2 * np.sin(np.arange(200) * 1.7)      # noise only: level
+        b = grading.bank_from_edges(zl, np.full(200, 10.0), 5.0, step)
+        self.assertLess(float(np.abs(b).max()), 0.02)
+        b = grading.bank_from_edges(np.full(50, 30.0), np.full(50, 10.0), 5.0, step)
+        np.testing.assert_allclose(b, grading.RACEWAY_BANK_MAX, err_msg="capped")
+        b = grading.bank_from_edges(np.full(50, 12.0), np.full(50, 10.0), 5.0, step)
+        np.testing.assert_allclose(b, 0.2, atol=1e-6, err_msg="a constant banking as it is")
+
+    def test_bank_eases_in(self):
+        # a corner's banking comes in at RACEWAY_BANK_RATE at most, never overshooting (2.5 % in 10 m)
+        b = np.r_[np.zeros(20), np.full(120, 0.2), np.zeros(20)]
+        r = grading.bank_rate_limited(b, 2.0)
+        self.assertLessEqual(float(np.abs(np.diff(r)).max()), grading.RACEWAY_BANK_RATE * 2.0 + 1e-9)
+        self.assertTrue((np.abs(r) <= np.abs(b) + 1e-12).all(), "eased toward level, never more banked")
+        self.assertAlmostEqual(float(r[80]), 0.2, places=6, msg="a long corner reaches its banking")
+
+    def test_cross_sin(self):
+        a = np.array([[-50.0, 0.0], [50.0, 0.0]])
+        self.assertAlmostEqual(grading._cross_sin(a, np.array([[0.0, -20.0], [0.0, 20.0]]), np.zeros(2)), 1.0)
+        self.assertLess(grading._cross_sin(a, np.array([[-40.0, -4.0], [40.0, 4.0]]), np.zeros(2)),
+                        grading.RACE_UNDER_MIN_SIN, "a tunnel along the track is not dug")
+
+    def test_not_ungraded(self):
+        self.assertNotIn("raceway", grading.UNGRADED)
+        self.assertGreater(grading.road_rank(roads.Spec(12.0, "paved", False, "raceway")),
+                           grading.road_rank(roads.Spec(11.0, "paved", False, "motorway")))
 
 
 class NeverRaisedTest(unittest.TestCase):
@@ -1082,3 +1140,158 @@ class CoarseEaseTest(unittest.TestCase):
     def test_equal_ranks_meet_halfway(self):
         main, side = self.run_ease(100.0, 104.0, 7.0, rank_side=7)
         self.assertLess(float(np.median(side) - np.median(main)), 2.5)
+
+
+class RaceSeamTest(unittest.TestCase):
+    def test_closed_piece_meets_itself_at_its_seam(self):
+        # (Bristol's pit road loop: its conformed ends 1.1 m apart, 2026-11-07)
+        th = np.linspace(0, 2 * np.pi, 200)
+        xy = np.c_[100 * np.cos(th), 100 * np.sin(th)]
+        z, bk = grading._race_close_seam(xy, np.linspace(0.0, 1.0, 200), np.linspace(0.0, 0.1, 200))
+        self.assertAlmostEqual(z[0], z[-1])
+        self.assertAlmostEqual(bk[0], bk[-1])
+        self.assertLess(np.abs(np.diff(z)).max(), 0.03)      # eased, no step
+        # (far from the seam, untouched)
+        self.assertAlmostEqual(z[100], np.linspace(0.0, 1.0, 200)[100])
+
+    def test_seam_extension_goes_on_into_the_loop(self):
+        Spec = roads.Spec
+        th = np.linspace(0, 2 * np.pi, 120)
+        xy = np.c_[200 * np.cos(th), 100 * np.sin(th)]
+        sp = Spec(12.0, "paved", False, "raceway", False)
+        out = [[None, None]]
+        grading._Planner._race_seams([(np.zeros((120, 2)), sp)], ["osm-raceway-1"], xy, [xy[0], xy[-1]], [140.0, 140.0],
+                                   out)
+        self.assertIsNotNone(out[0][0])
+        self.assertIsNotNone(out[0][1])
+        # (from the start outward: the loop's last stretch, toward its end vertex's neighbour)
+        self.assertLess(np.hypot(*(out[0][0][1] - xy[-2])), np.hypot(*(out[0][0][1] - xy[1])))
+
+
+@unittest.mock.patch.object(grading, "RACE_NODE_ON", True)
+class RaceNodeTest(unittest.TestCase):
+    """grading._race_node_conform / _race_line_set: one surface per node where race pieces meet (2026-11-07)."""
+
+    @staticmethod
+    def _plan(xy, z, bank, half=6.0, rid=1):
+        p = grading.Plan(np.asarray(xy, float), np.asarray(z, float), half + 4.0, road_half=half)
+        p.bank = np.asarray(bank, float)
+        p.rid = rid
+        return p
+
+    def test_line_is_the_loop_not_the_spur(self):
+        th = np.linspace(0, np.pi, 60)
+        a = np.c_[300 * np.cos(th), 150 * np.sin(th)]
+        b = np.c_[300 * np.cos(th + np.pi), 150 * np.sin(th + np.pi)]
+        spur = np.c_[np.linspace(300, 300, 30), np.linspace(0, -500, 30)]      # longer than either half, no loop
+        plans = [self._plan(spur, np.zeros(30), np.zeros(30), rid=3, half=8.0),
+                 self._plan(a, np.zeros(60), np.zeros(60), rid=1), self._plan(b, np.zeros(60), np.zeros(60), rid=2)]
+        self.assertEqual(grading._race_line_set(plans), {1, 2})
+
+    @unittest.mock.patch.object(grading, "RACE_NODE_GRADE_ON", True)
+    def test_three_pieces_one_plane_at_their_node(self):
+        # (the line through the node banked 0.06 and climbing 2 %; two side pieces ending there, level, 0.3 m off)
+        x = np.linspace(-200, 200, 201)
+        line = self._plan(np.c_[x, np.zeros(201)], 0.02 * x, np.full(201, 0.06), rid=1)
+        s = np.linspace(0, 150, 76)
+        ang = (np.radians(-60), np.radians(-120))
+        done = [line]
+        outs = []
+        for k, a in enumerate(ang):
+            xy = np.c_[s * np.cos(a), s * np.sin(a)]
+            z, bk = grading._race_node_conform(xy, np.full(76, 0.3 * (k + 1)), np.zeros(76), done)
+            outs.append((xy, z, bk))
+        for xy, z, bk in outs:
+            t = xy[1] - xy[0]
+            t /= np.hypot(*t)
+            n = np.array([-t[1], t[0]])
+            G = np.array([0.02, 0.06])
+            self.assertAlmostEqual(z[0], 0.0, places=6)
+            self.assertAlmostEqual(bk[0], float(G @ n), places=6)
+            self.assertAlmostEqual((z[1] - z[0]) / np.hypot(*(xy[1] - xy[0])), float(G @ t), places=2)
+            self.assertLess(np.abs(np.diff(z, 2)).max(), 0.05)      # no step: a 4 % grade change eased over 30 m
+        # (the two side pieces' edges agree with each other at the node, 3 m across each)
+        for xy, z, bk in outs:
+            nn = grading._normals(xy)[0]
+            for o in (-3.0, 3.0):
+                P = xy[0] + nn * o
+                self.assertAlmostEqual(z[0] + bk[0] * o, 0.02 * P[0] + 0.06 * P[1], places=6)
+
+    def test_apart_pieces_left_alone(self):
+        x = np.linspace(-100, 100, 101)
+        line = self._plan(np.c_[x, np.zeros(101)], np.zeros(101), np.zeros(101))
+        xy = np.c_[np.zeros(50), np.linspace(0.0, 100, 50)]
+        z0 = np.full(50, 6.0)          # a bridge over it: more than RACE_CONFORM_MAX_M off
+        z, bk = grading._race_node_conform(xy, z0, np.zeros(50), [line])
+        self.assertTrue(np.allclose(z, z0))
+
+
+class RaceTubeFloorTest(unittest.TestCase):
+    """grading._race_in_tube / _race_portal_cap: a dug road leaves its tube's mouth at the floor (2026-11-07)."""
+
+    def test_in_tube_is_beside_the_line_not_past_its_ends(self):
+        tube = [(np.array([[0.0, 0.0], [80.0, 0.0]]), 4.0)]
+        xy = np.array([[-5.0, 0.0], [-1.0, 1.0], [10.0, 3.5], [40.0, 5.0], [79.0, -2.0], [83.0, 0.0]])
+        got = grading._race_in_tube(xy, np.array([80.0, 0.0]), tube)
+        self.assertEqual(got.tolist(), [False, False, True, False, True, False])
+        self.assertIsNone(grading._race_in_tube(xy, np.array([30.0, 0.0]), tube))
+
+    def test_climb_back_laid_from_the_portal(self):
+        # (a road out of a portal at floor 10 climbing back to a track at 18 m 40 m on: the climb at 15 % alone met
+        # the floor in a 2.3 m jump; laid from the portal at the grade it needs, 20 %, continuous)
+        s = np.arange(0.0, 61.0, 2.0)
+        xy = np.c_[s, np.zeros(len(s))]
+        z = np.full(len(s), 10.0)
+        lb0 = np.full(len(s), -np.inf)
+        lb0[20:] = 18.0                                 # (the track's band from 40 m on)
+        lb = lb0.copy()
+        for k in range(19, -1, -1):
+            lb[k] = max(lb[k], lb[k + 1] - 0.15 * 2.0)
+        lb[0] = -np.inf                                 # (RACE_PORTAL_SNAP_M)
+        z2 = np.maximum(z, lb)
+        self.assertGreater(z2[1] - 10.0, 2.0)           # (before: the jump at the mouth)
+        out = grading._race_portal_cap(z2, z, lb0, s, xy, np.array([[0.0, 0.0]]), np.array([10.0]), 0.15)
+        self.assertAlmostEqual(out[0], 10.0)
+        self.assertLessEqual(np.abs(np.diff(out)).max() / 2.0, 0.2 + 1e-9)     # 8 m in 40 m
+        self.assertAlmostEqual(out[20], 18.0)
+
+
+@unittest.mock.patch.object(grading, "RACE_NODE_ON", True)
+class RacePickPastEndTest(unittest.TestCase):
+    """grading._race_pick: past a piece's end the piece going on from it wins (2026-11-07)."""
+
+    @unittest.mock.patch.object(grading, "RACE_NODE_GRADE_ON", True)
+    def test_wider_piece_past_its_end_goes_on_at_its_grade(self):
+        # (a 9 m half-width piece descending 6 % into a node, a 6 m one going on from it at that grade: no step
+        # where the pick changes piece, 9 m on)
+        x = np.linspace(-100.0, 0.0, 51)
+        a = grading.Plan(np.c_[x, np.zeros(51)], -0.06 * x, 13.0, road_half=9.0)
+        x2 = np.linspace(0.0, 100.0, 51)
+        b = grading.Plan(np.c_[x2, np.zeros(51)], -0.06 * x2, 10.0, road_half=6.0)
+        s = np.arange(-20.0, 20.0, 0.5)
+        z = grading._race_pick(s, np.zeros(len(s)), [a, b])
+        self.assertTrue(np.isfinite(z).all())
+        self.assertLess(np.abs(np.diff(z) + 0.03).max(), 1e-6)       # 6 % all the way: 3 cm per 0.5 m
+
+
+@unittest.mock.patch.object(grading, "RACE_NODE_ON", True)
+class RaceNodeDefaultTest(unittest.TestCase):
+    def test_height_and_bank_only_by_default(self):
+        x = np.linspace(-200, 200, 201)
+        line = RaceNodeTest._plan(np.c_[x, np.zeros(201)], 0.02 * x, np.full(201, 0.06), rid=1)
+        s = np.linspace(0, 150, 76)
+        xy = np.c_[s * 0.5, -s * 0.866]
+        z0 = np.full(76, 0.3)
+        z, bk = grading._race_node_conform(xy, z0, np.zeros(76), [line])
+        self.assertAlmostEqual(z[0], 0.0, places=6)
+        n = grading._normals(xy)[0]
+        self.assertAlmostEqual(bk[0], float(np.array([0.02, 0.06]) @ n), places=6)
+        self.assertAlmostEqual(z[1] - z[0], z0[1] - z0[0], places=2)     # (its own grade kept)
+
+
+class RaceClosedGapTest(unittest.TestCase):
+    def test_loop_ending_short_of_its_seam_is_closed(self):
+        th = np.linspace(0, 2 * np.pi * (1 - 4.0 / 1300.0), 300)
+        xy = np.c_[207 * np.cos(th), 207 * np.sin(th)]           # 1.3 km round, its end 4 m short of the start
+        self.assertTrue(grading._race_closed(xy))
+        self.assertFalse(grading._race_closed(xy[:150]))         # (half of it: an arc, not a loop)

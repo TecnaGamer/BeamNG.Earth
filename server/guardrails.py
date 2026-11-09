@@ -489,6 +489,38 @@ def _road_segments(roads):
     return {key: np.concatenate(val) for key, val in cols.items()}
 
 
+FACE_REACH_M = 25.0     # m past a carriageway's edge a road still decides which way a one-sided rail faces
+
+
+def _road_side(line, rsegs):
+    """Which side of mapped rail line (k, 2) the nearest ground carriageways lie: 1 left, -1 right, 0 none or a tie,
+    by a vote of its points (each the nearest segment within its half width + FACE_REACH_M). A one-sided rail's
+    model faces left of its line, and OSM's way direction carries no side for a guard rail: Lime Rock's two, the
+    track on their right, faced the woods with their posts to the track (2026-11-03)."""
+    if rsegs is None or len(line) < 2:
+        return 0
+    a, u, ln, hw = rsegs["a"], rsegs["unit"], rsegs["len"], rsegs["half"]
+    arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+    vote = 0.0
+    for s_ in np.linspace(0.0, arc[-1], max(2, min(12, int(arc[-1] / 5.0) + 1))):
+        k = min(max(int(np.searchsorted(arc, s_, side="right") - 1), 0), len(line) - 2)
+        t = line[k + 1] - line[k]
+        tl = float(np.hypot(*t))
+        if tl < 1e-6:
+            continue
+        q = line[k] + t * ((s_ - arc[k]) / max(arc[k + 1] - arc[k], 1e-9))
+        r = q - a
+        along = np.clip((r * u).sum(1), 0.0, ln)
+        foot = a + u * along[:, None]
+        d = np.hypot(*(foot - q).T)
+        j = int(np.argmin(d - hw))
+        if d[j] - hw[j] > FACE_REACH_M:
+            continue
+        to = foot[j] - q
+        vote += np.sign(t[0] * to[1] - t[1] * to[0])
+    return int(np.sign(vote))
+
+
 def _across_road(a, b, rsegs):
     """Whether a rail module (from a to b) reaches across a ground carriageway's lanes: any of CROSS_SAMPLES points
     along it within the carriageway's half width + RAIL_CLEAR_M of a segment it is not parallel to."""
@@ -760,6 +792,8 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                 line = line[np.r_[True, seglen > 1e-4]]
                 if len(line) < 2:
                     continue
+                if rail and not two_sided and _road_side(line, rsegs) < 0:
+                    line = line[::-1]           # (the rail's face toward the road: OSM's direction says nothing)
                 arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
                 total = float(arc[-1])
                 if total < 1.0:

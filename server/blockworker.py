@@ -785,6 +785,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import gasstations
         fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads)
     mark("fuel")
+    import dragstrips
+    drag = dragstrips.tile_strips(frame, tx, ty, _s.md, elev)
     props = [] if buildings else None
     lines = [] if buildings else None
     wires = [] if buildings else None
@@ -921,6 +923,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
     guardrail_rows = guardrail_rows + _kantstolpe_rows(frame, near_roads, box, elev, country, guardrail_rows, tx, ty)
+    try:                            # (track walls: jersey barriers, racefurniture.jersey_rows)
+        import racefurniture
+        guardrail_rows = guardrail_rows + racefurniture.tile_jersey_rows(frame, box, _s.md, elev)
+    except Exception as ex:
+        log.warning("track walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     guardrail_rows = guardrail_rows + _sign_rows(frame, cell_fn, near_roads, nodes, box, elev, urban, _s.widths, left_hand,
                                                  country, tx, ty, wide)
     mark("medians")
@@ -975,6 +982,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             props.extend(fences.rows(frame, infra_fn, box, elev))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import racefurniture
+        try:
+            props.extend(racefurniture.tile_rows(frame, box, _s.md, elev))
+        except Exception as ex:
+            log.warning("racefurniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
         land_fn = lambda key: _s.md.cell(key, layers=("land_use",), kind="demand").layers.get("land_use")
         bld_fn = lambda key: _s.md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings")
@@ -1007,6 +1019,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
+    P.drag = drag
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
@@ -1030,7 +1043,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
-                              P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
+                              P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=P.drag, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
                               barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines) + (P.fuel_pads,)
@@ -1130,7 +1143,7 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
     try:
         # (roads.write_tile writes the shapes and the rows; its names are the anchor tile's: written aside, renamed)
         _, n = roadsmod.write_tile(tmpdir, vfs_dir, 0, tile, None, P.chunks, None, None, P.dmesh, P.bld, P.props,
-                                   P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
+                                   P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, drag=P.drag, rail_mesh=P.rmesh,
                                    guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                                    custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
@@ -1734,7 +1747,7 @@ def tunnel_profiles(aid, frame, elev, g=None):
         t.wet = sea.depth if sea is not None else None
         t.raw = lambda la, lo: ground(None, la, lo, _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))  # noqa: E731
         if g is not None:
-            t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only=True)    # noqa: E731
+            t.ends = lambda la, lo: g.apply(la, lo, t.raw(la, lo), gradingmod.ROAD_LIFT, roads_only="ends")    # noqa: E731
     return roadsmod.ChainView(_chain_store("tunnels", roadsmod.TunnelProfiles, elev, setup), frame)
 
 

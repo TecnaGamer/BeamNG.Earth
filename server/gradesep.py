@@ -35,7 +35,7 @@ log = logging.getLogger("earthd.gradesep")
 MODE = os.environ.get("BNE_GRADESEP", "tunnels")
 ON = MODE == "on"
 TUNNELS = MODE in ("on", "tunnels")
-VERSION = 1             # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
+VERSION = 2 if roads.RACEWAY_ON else 1   # in MapData.versions(): every cell's ranges (cell_facts) and tiles made again on a change
 DEM_ZOOM = 15
 SEP_M = 4.0             # m the upper line's ground stands above the lower one's (medians of four heights each)
 SIDE_M = 2.0            # m ... at least, on each side of each line
@@ -144,8 +144,8 @@ def _kind_half(feats, i):
         return None
     cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
     st = roads.STYLE.get(cls)
-    if st is None or roads.unbuilt(feats, i):
-        return None
+    if st is None or roads.unbuilt(feats, i) or (roads.RACEWAY_ON and cls == "raceway"):
+        return None             # (a racetrack is no crossing line: it stays on the ground, the line under it a tunnel)
     return 0, st[0] / 2.0
 
 
@@ -203,8 +203,8 @@ def _layer_rows(f):
             for i in range(n):
                 if subs[i] == "road":
                     st = roads.STYLE.get(clss[i])
-                    if st is None or unb[i]:
-                        continue
+                    if st is None or unb[i] or (roads.RACEWAY_ON and clss[i] == "raceway"):
+                        continue        # (_kind_half's racetrack rule)
                     kinds[i], halves[i] = 0, st[0] / 2.0
                 elif subs[i] == "rail" and railways.drawn(f, i) is not None:
                     kinds[i], halves[i] = 1, RAIL_HALF_M

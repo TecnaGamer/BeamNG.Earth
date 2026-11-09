@@ -300,6 +300,69 @@ def clean_ring(p):
     return p
 
 
+RING_SECTORS = 16           # pieces a ring building (a footprint with an inner ring: a stadium bowl) is drawn as
+
+
+def _star_angles(ring, c):
+    """Angles (k,) of ccw ring's vertices round c, unwrapped from the first, or None if the ring is not star-shaped
+    from c (the angles not rising once round)."""
+    d = ring - c
+    a = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+    a = np.r_[a, a[0] + 2 * np.pi]
+    return a[:-1] if (np.diff(a) > 0).all() and abs(a[-1] - a[0] - 2 * np.pi) < 1e-6 else None
+
+
+def _ray_hit(ring, c, th):
+    """The farthest point where the ray from c at angle th crosses ring's edges."""
+    u = np.array([np.cos(th), np.sin(th)])
+    a, b = ring, np.roll(ring, -1, 0)
+    e = b - a
+    den = u[0] * e[:, 1] - u[1] * e[:, 0]
+    w = a - c
+    with np.errstate(divide="ignore", invalid="ignore"):
+        t = (w[:, 0] * e[:, 1] - w[:, 1] * e[:, 0]) / den
+        s = (w[:, 0] * u[1] - w[:, 1] * u[0]) / den
+    ok = np.isfinite(t) & (t > 0) & (s >= -1e-9) & (s <= 1 + 1e-9)
+    return c + u * float(t[ok].max()) if ok.any() else None
+
+
+def ring_pieces(outer, holes, n=RING_SECTORS):
+    """A footprint with inner rings as simple pieces covering it with nothing over its (largest) hole: [outer] when
+    it has none worth one (MIN_AREA_M2). Cut in RING_SECTORS sectors round the hole's middle (the outer ring clipped
+    to each, the hole's arc cut out); [outer] when the hole is not star-shaped from its middle. Rings ccw (k, 2), as clean_ring's."""
+    hs = [h for h in (clean_ring(h) for h in holes or ()) if h is not None and _area2(h) / 2 >= MIN_AREA_M2]
+    if not hs:
+        return [outer]
+    h = max(hs, key=_area2)
+    c = h.mean(0)
+    if not _inside(outer, c):
+        return [outer]
+    ah = _star_angles(h, c)
+    if ah is None:
+        return [outer]
+    out = []
+    base = float(ah[0])
+    for k in range(n):
+        t0, t1 = base + 2 * np.pi * k / n, base + 2 * np.pi * (k + 1) / n
+        # the outer ring clipped to the sector's wedge (its apex c a vertex), the apex swapped for the hole's arc
+        w = _clip_half(outer, c, np.array([-np.sin(t0), np.cos(t0)]), True)
+        w = _clip_half(w, c, np.array([np.sin(t1), -np.cos(t1)]), True) if w is not None else None
+        if w is None:
+            continue
+        w = w[:-1]
+        j = int(np.argmin(np.hypot(*(w - c).T)))
+        p0, p1 = _ray_hit(h, c, t0), _ray_hit(h, c, t1)
+        if float(np.hypot(*(w[j] - c))) > 1e-6 or p0 is None or p1 is None:
+            return [outer]
+        off = np.mod(ah - t0, 2 * np.pi)
+        sel = np.flatnonzero((off > 1e-9) & (off < t1 - t0 - 1e-9))
+        arc = [p1] + [h[i] for i in sel[np.argsort(-off[sel])]] + [p0]
+        r = clean_ring(np.array(list(w[:j]) + arc + list(w[j + 1:])))
+        if r is not None and _area2(r) / 2 >= MIN_AREA_M2:
+            out.append(r)
+    return out or [outer]
+
+
 def triangulate(p):
     """Ear clipping of the counter-clockwise simple ring p (n, 2): (n-2, 3) indices into p (fewer if the
     ring is not simple: the rest is left out). The Rust loop (earthfast.triangulate)."""
@@ -1682,6 +1745,10 @@ ACROSS_W = 8.0              # m: a footprint at most this wide that a public roa
                             # the Dan Ryan as brick walls; a road crossing one runs only its width inside it)
 THROUGH_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified",
                    "living_street"}
+# (racetracks too, BNE_RACEWAY: a grandstand's or pavilion's footprint over a circuit's straight stood solid across it,
+# Interlagos 2026-11-03; a machine-learned car on the track was a building)
+if os.environ.get("BNE_RACEWAY", "on") != "off":
+    THROUGH_CLASSES = THROUGH_CLASSES | {"raceway"}
 
 
 def tunnel_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
@@ -1860,8 +1927,97 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
                 if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
                         or xy[:, 1].min() > size + margin:
                     continue
+                if str(cls[i]) == "raceway":
+                    xy = xy.view(RaceLine)
+                    xy.pads = _drag_pads(f, i, ll, frame, x0, y0)
+                    sp_ = roadsmod.road_specs(f, None, None)[i]
+                    xy.half = float(sp_.width) / 2.0 if sp_ is not None else None   # (racefurniture's stands)
                 out.append(xy)
     return out
+
+
+def _drag_pads(f, i, ll, frame, x0, y0):
+    """A drag strip's paved areas (racetypes.pads: the strip squared past its ends and its launch apron) as (k, 2)
+    rings relative to (x0, y0), [] for any other raceway: no building stands on them (racing surface first)."""
+    import roads as roadsmod
+    if roadsmod.race_kind(f, i) != "drag":
+        return []
+    import racetypes
+    sp = roadsmod.road_specs(f, None, None)[i]
+    if sp is None:
+        return []
+    dcol = f.attrs.get("osm_race_dir")
+    try:
+        d = int(dcol[i]) if dcol is not None and dcol[i] else 0
+    except (TypeError, ValueError):
+        d = 0
+    out = []
+    for la, lo in racetypes.pads(np.asarray(ll, np.float64)[:, :2], "drag", sp.width, d):
+        e, n = mapgeom.enu_xy(f, frame, np.c_[lo, la])
+        out.append(np.stack([e - x0, n - y0], 1))
+    return out
+
+
+def _rings_overlap(a, b):
+    """Whether polygons a and b (k, 2) overlap: a vertex of one inside the other, or their edges cross."""
+    a, b = np.asarray(a, np.float64)[:, :2], np.asarray(b, np.float64)[:, :2]
+    if (a.max(0) < b.min(0)).any() or (b.max(0) < a.min(0)).any():
+        return False
+    if any(_inside(b, p) for p in a) or any(_inside(a, p) for p in b):
+        return True
+    p, r = a, np.roll(a, -1, 0) - a
+    q, t = b, np.roll(b, -1, 0) - b
+    den = r[:, None, 0] * t[None, :, 1] - r[:, None, 1] * t[None, :, 0]
+    qp = q[None, :, :] - p[:, None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = (qp[..., 0] * t[None, :, 1] - qp[..., 1] * t[None, :, 0]) / den
+        v = (qp[..., 0] * r[:, None, 1] - qp[..., 1] * r[:, None, 0]) / den
+    return bool(((u > 0) & (u < 1) & (v > 0) & (v < 1)).any())
+
+
+def on_drag_pad(ring, race_xy):
+    """Whether a footprint ring reaches onto a drag strip's surface or apron (RaceLine.pads)."""
+    return any(_rings_overlap(ring, pd) for ln in race_xy for pd in getattr(ln, "pads", None) or ())
+
+
+RACE_HALF_M = 6.0       # m: a racetrack's half width (roads: 12 m) a machine-found footprint may not reach into
+
+
+def _ml_on_race_band(ring, race_xy):
+    """Whether a footprint reaches onto a raceway's band (racefurniture.on_band: its carriageway at each line's own
+    half width, RaceLine.half, and the shoulder)."""
+    import racefurniture
+    return bool(racefurniture.on_band(ring, race_xy))
+
+
+def _near_lines(ring, lines, d):
+    """Whether polygon ring (k, 2) comes within d m of any of the polylines lines (each sampled every 2 m)."""
+    lo, hi = ring.min(0) - d, ring.max(0) + d
+    a = np.asarray(ring, np.float64)[:, :2]
+    b = np.roll(a, -1, axis=0)
+    seg = b - a
+    ll = np.maximum((seg * seg).sum(1), 1e-12)
+    for ln in lines:
+        ln = np.asarray(ln, np.float64)[:, :2]
+        if (ln.max(0) < lo).any() or (ln.min(0) > hi).any():
+            continue
+        s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))]
+        t = np.arange(0.0, s_[-1] + 1e-9, 2.0)
+        q = np.stack([np.interp(t, s_, ln[:, 0]), np.interp(t, s_, ln[:, 1])], 1)
+        q = q[((q >= lo) & (q <= hi)).all(1)]
+        for p in q:
+            u = np.clip(((p - a) * seg).sum(1) / ll, 0.0, 1.0)
+            if float(np.hypot(*(p - (a + u[:, None] * seg)).T).min()) <= d:
+                return True
+    return False
+
+
+class RaceLine(np.ndarray):
+    """A racetrack's line among road_lines' (a footprint it runs through at all is a structure over it: a pit
+    garage, a grandstand's or a pavilion's edge, not RACE_THROUGH_M of a street's ROAD_THROUGH_M)."""
+
+
+RACE_THROUGH_M = 2.0
 
 
 PASSAGE_W = 11.0           # m: the passage a bridge's road takes through its tower (Tower Bridge: 2 lanes + walks) ...
@@ -2490,6 +2646,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     r = clean_ring(pring - np.array([x0, y0]))
                     if r is None or _area2(r) / 2 < 4.0:
                         continue
+                    if roads_xy:
+                        # (a part on a racetrack's band: grandstand seating facing it or nothing, as a whole building
+                        # is below; Interlagos' pit building, drawn as its parts, stood solid across the pit lane)
+                        rxy = [ln for ln in roads_xy if isinstance(ln, RaceLine)]
+                        if rxy:
+                            import racefurniture
+                            if racefurniture.race_stand(r, at.get("class"), rxy):
+                                continue
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
                     p_fcol = pat.get("facade_color") or at.get("facade_color")
@@ -2513,47 +2677,79 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
                     continue
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
-            ring = clean_ring(np.stack([e - x0, n - y0], 1))
-            if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
+            ring0 = clean_ring(np.stack([e - x0, n - y0], 1))
+            if ring0 is None or _area2(ring0) / 2 < MIN_AREA_M2:
                 continue
-            is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
-            if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
-                continue
-            if key is not None:
-                seen.add(key)
-            rings.append(ring)
-            mh = at.get("min_height")
-            mh = float(mh) if mh is not None and np.isfinite(mh) and mh > 0 else 0.0
-            if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= ROAD_THROUGH_M or road_across(ring, roads_xy)):
-                mh = OVER_ROAD_CLEAR_M
-                h = at.get("height")
-                if h is None or not np.isfinite(h) or h < mh + 3.0:
-                    at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
-            if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M:
-                # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
-                # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
-                # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17)
-                lift = _portal_lift(frame, ring, x0, y0, tunnels_xy, elev)
-                if lift > 0.5:
-                    mh = lift
-                    at = dict(at, portal=True)
+            # a footprint with an inner ring (a stadium bowl: Bristol's relation, 2026-11-05) is a ring building:
+            # drawn as sector pieces, nothing over its hole
+            holes_ = [np.stack(mapgeom.enu_xy(f, frame, np.asarray(h_, np.float64)), 1) - np.array([x0, y0])
+                      for h_ in parts[0][1:] if len(h_) >= 4]
+            pieces_ = ring_pieces(ring0, holes_) if holes_ else [ring0]
+            at0 = at
+            for ring in pieces_:
+                at = at0
+                is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
+                if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
+                    continue
+                any_xy = roads_xy if roads_xy else ml_roads_xy      # (the far tiles pass only their ML test's lines)
+                race_xy = [ln for ln in any_xy if isinstance(ln, RaceLine)] if any_xy else []
+                if is_ml and race_xy and (road_through(ring, race_xy) > 0.0 or _near_lines(ring, race_xy, RACE_HALF_M)
+                                          or _ml_on_race_band(ring, race_xy)):
+                    continue        # (a machine-found footprint a track runs through is a misread: Thompson's road course
+                                    # ran 15 m into one, 2026-11-03; a mapped one is lifted over the track below. On the
+                                    # track's own band, its carriageway at its drawn width and the shoulder: Spa's 18 m
+                                    # pieces, an unclassed 475 m2 one 2.6 m inside the carriageway, 6.4 m off the line
+                                    # (past RACE_HALF_M), stood 18 m tall on the track, 2026-11-07)
+                if race_xy and on_drag_pad(ring, race_xy):
+                    if key is not None:
+                        seen.add(key)
+                    continue        # (a footprint on a drag strip or its apron: the racing surface wins; Bandimere's
+                                    # 4.8 m one stood 1 m into the strip, 2026-11-04)
+                if race_xy and not is_ml:
+                    # racing surface first: no building on a raceway's carriageway + shoulder, any class; on it (a
+                    # stadium bowl round the oval, a bleacher along the straight: Atlanta's 42,000 m2 one stood over the
+                    # track, 2026-11-05) it is grandstand seating facing the track, or nothing; never a lid
+                    import racefurniture
+                    if racefurniture.race_stand(ring, at.get("class"), race_xy):
+                        if key is not None:
+                            seen.add(key)
+                        continue    # (racefurniture.py draws raked grandstand models on it, their open front to the track)
+                if key is not None:
+                    seen.add(key)
+                rings.append(ring)
+                mh = at.get("min_height")
+                mh = float(mh) if mh is not None and np.isfinite(mh) and mh > 0 else 0.0
+                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= ROAD_THROUGH_M or road_across(ring, roads_xy)
+                                               or (race_xy and road_through(ring, race_xy) >= RACE_THROUGH_M)):
+                    mh = OVER_ROAD_CLEAR_M
                     h = at.get("height")
                     if h is None or not np.isfinite(h) or h < mh + 3.0:
-                        at = dict(at, height=mh + 3.0)
-            if mh <= 0.5 and garages_xy and _covers_garage(ring, garages_xy):
-                at = dict(at, garage=True)
-            on = _on_support(ring, supports)
-            if on is not None:              # a bridge's own: no flats' windows (Tower Bridge's towers, the user 2026-10-18)
-                fm_ = str(at.get("facade_material") or "").lower()
-                at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
-            if is_ml:
-                at = dict(at, ml=True)          # (_ml_steep once its ground is known)
-            elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
-                    ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
-                at = dict(at, ship=True, ship_parts=ship_parts)
-            attrs.append(at)
-            looks.append(None)
-            mins.append(mh)
+                        at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
+                if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M:
+                    # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
+                    # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
+                    # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17)
+                    lift = _portal_lift(frame, ring, x0, y0, tunnels_xy, elev)
+                    if lift > 0.5:
+                        mh = lift
+                        at = dict(at, portal=True)
+                        h = at.get("height")
+                        if h is None or not np.isfinite(h) or h < mh + 3.0:
+                            at = dict(at, height=mh + 3.0)
+                if mh <= 0.5 and garages_xy and _covers_garage(ring, garages_xy):
+                    at = dict(at, garage=True)
+                on = _on_support(ring, supports)
+                if on is not None:              # a bridge's own: no flats' windows (Tower Bridge's towers, the user 2026-10-18)
+                    fm_ = str(at.get("facade_material") or "").lower()
+                    at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
+                if is_ml:
+                    at = dict(at, ml=True)          # (_ml_steep once its ground is known)
+                elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
+                        ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
+                    at = dict(at, ship=True, ship_parts=ship_parts)
+                attrs.append(at)
+                looks.append(None)
+                mins.append(mh)
     if not rings:
         return []
     # a quay structure alongside a moored ship: a low deck (its scanned height is the ship's flank). The ship may be

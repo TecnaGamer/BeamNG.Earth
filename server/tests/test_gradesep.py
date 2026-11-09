@@ -141,6 +141,15 @@ class UnderpassTest(unittest.TestCase):
         self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
         self.assertEqual(roads.level_ranges(f, 1), [])          # (its tunnel: ground under the bridge)
 
+    def test_a_raceway_over_a_short_tunnel_stays_on_the_ground(self):
+        # racetracks (BNE_RACEWAY): an access tunnel under the track is a tunnel, the track no bridge over it (Road
+        # America, IMS, Interlagos: thin slabs on the racing line, a 4.6 m step at one's end, 2026-11-03)
+        if not roads.RACEWAY_ON:
+            self.skipTest("BNE_RACEWAY=off")
+        f = hooked(cross(("raceway", "service"), flags=[(1, "is_tunnel", 0.45, 0.55)]), lambda e, n: np.zeros_like(e))
+        self.assertEqual(roads.level_ranges(f, 0), [])
+        self.assertEqual([k for _, _, k in roads.level_ranges(f, 1)], ["tunnel"])
+
     def test_a_long_tunnel_in_short_pieces_stays_a_tunnel(self):
         # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, no underpass
         f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(0.0, -50.0), (0.0, 0.0)], [(0.0, 0.0), (0.0, 50.0)]],

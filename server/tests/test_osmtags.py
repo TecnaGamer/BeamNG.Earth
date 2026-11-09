@@ -253,9 +253,17 @@ class RacewayTest(unittest.TestCase):
         self.assertTrue(roads.bridge_specs(both)[2] is not None, "a raceway bridge")
         self.assertEqual(len(both.parts(3)[0][0]), 3)
 
-    def test_not_graded(self):
+    def test_graded_by_the_raceway_rules(self):
         import grading
-        self.assertIn("raceway", grading.UNGRADED)
+        self.assertEqual("raceway" in grading.UNGRADED, not grading.RACEWAY_ON)
+
+    def test_covered_carried(self):
+        ways = self.ways()
+        ways[0]["covered"] = "yes"
+        rw = osmtags.raceway_features(ways)
+        self.assertIn("covered", osmtags.RACEWAY_COLUMNS)
+        got = {str(rw.ids[i]): rw.attrs["osm_covered"][i] for i in range(len(rw))}
+        self.assertEqual(got["osm-raceway-%012d" % int(ways[0]["id"])], "yes")
 
     def test_wkb_linestring(self):
         import struct

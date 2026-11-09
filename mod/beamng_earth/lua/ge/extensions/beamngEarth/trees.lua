@@ -262,6 +262,14 @@ M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
 M.CATALOG.noisewall = { { WCA .. 'objects/s_concrete_noiseblocker', 2.4 } }
 M.GROUP_MAX_M.chainlink = 800
 M.GROUP_MAX_M.noisewall = 2000
+-- racetracks (server racefurniture.py): catch fences (the chain-link panel scaled to 3.5 m), tyre stacks, and the stock
+-- Hirochi grandstand (raked seats, open front local +y) on a mapped grandstand's footprint
+M.CATALOG.catchfence = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
+M.CATALOG.tyrestack = { { WCA .. 'objects/hr_tirestack_blue', 1.0 } }
+M.CATALOG.grandstand = { { '/levels/hirochi_raceway/art/shapes/buildings/grandstand', 19.5 } }
+M.GROUP_MAX_M.catchfence = 800
+M.GROUP_MAX_M.tyrestack = 400
+M.GROUP_MAX_M.grandstand = 3000
 -- Picnic tables and grills in parks (server picnic.py): Utah's table (2 x 1.4 m, 0.85 m high) and East
 -- Coast's grill. The table's materials live with Utah's buildings.
 M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }

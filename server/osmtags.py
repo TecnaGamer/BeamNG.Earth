@@ -86,7 +86,7 @@ ONEWAY_YES = ("yes", "1", "-1", "true")
 # Racetracks (GitHub #143): Overture's transportation theme has no highway=raceway (Daytona's oval and road course, the
 # Nordschleife: nothing), so the cell's raceways come from the same Layercake file with their geometry: ways that are
 # highway=raceway, read only from the row groups whose highway column has one (raceways()).
-RACEWAY_COLUMNS = ("id", "highway", "name", "surface", "width", "lanes", "layer", "bridge", "tunnel", "oneway")
+RACEWAY_COLUMNS = ("id", "highway", "name", "surface", "width", "lanes", "layer", "bridge", "tunnel", "oneway", "covered")
 
 
 def way_id(record):
@@ -508,6 +508,12 @@ def raceway_features(ways):
                "subclass": mg.text_column([""] * n), "name": mg.text_column([w.get("name") for w in ways]),
                "src_dataset": mg.text_column(["OpenStreetMap"] * n),
                "src_record": mg.text_column([f"w{int(w['id'])}@0" for w in ways]),
+               # (covered=yes: a roof over the track, a grandstand's or a pit building's: buildings.road_lines)
+               "osm_covered": mg.text_column([str(w.get("covered") or "") or None for w in ways]),
+               # (the track's type, racetypes.classify: "drag", "oval" or none; its width and paved areas)
+               "osm_race": mg.text_column([w.get("race_kind") for w in ways]),
+               # (its driving direction along the way, OSM's oneway: "1" / "-1", none two-way: racetypes.pads)
+               "osm_race_dir": mg.text_column([str(w["race_dir"]) if w.get("race_dir") else None for w in ways]),
                "cx": np.array([float(c[:, 0].min() + c[:, 0].max()) / 2 for c in coords]),
                "cy": np.array([float(c[:, 1].min() + c[:, 1].max()) / 2 for c in coords])}
     f.rules = {"flags": mg.rule_table(flags), "level": mg.rule_table(levels, "float"),

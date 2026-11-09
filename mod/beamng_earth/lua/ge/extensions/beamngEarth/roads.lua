@@ -340,6 +340,7 @@ local function dropTile(key)
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
+  if t.drag then require('beamngEarth/dragstrips').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
@@ -617,6 +618,22 @@ function M.mapFlat(pl, flat, stride, xi, yawi)
   end
   return out
 end
+-- drag strip records (dragstrips.lua) mapped into a geotile's placement: their points only
+function M.mapDrag(pl, recs)
+  local out = {}
+  for i, r in ipairs(recs) do
+    local n = {}
+    for k, v in pairs(r) do n[k] = v end
+    n.lanes = {}
+    for j, l in ipairs(r.lanes or {}) do
+      n.lanes[j] = { stage = mapPt(pl, l.stage), finish = mapPt(pl, l.finish) }
+    end
+    if type(r['end']) == 'table' then n['end'] = mapPt(pl, r['end']) end
+    out[i] = n
+  end
+  return out
+end
+
 function M.mapStations(pl, recs)
   if type(recs) ~= 'table' then return recs end
   local dyaw = geotile.yawOf(pl)
@@ -689,6 +706,10 @@ local function geoRows(key, t, data, replacing)
   if type(data.fuel) == 'table' and data.fuel[1] then
     require('beamngEarth/gasstations').onRows(t.anchor, key, M.mapStations(pl, data.fuel))
     t.fuel = true
+  end
+  if type(data.drag) == 'table' and data.drag[1] then      -- drag strips (dragstrips.lua)
+    require('beamngEarth/dragstrips').onRows(t.anchor, key, M.mapDrag(pl, data.drag))
+    t.drag = true
   end
   if type(data.wells) == 'table' and data.wells[1] then
     local pj = require('beamngEarth/pumpjacks')
@@ -1116,6 +1137,10 @@ function M.onTile(msg, currentAnchor, a)
   if type(data.fuel) == 'table' and data.fuel[1] then      -- gas stations: pumps, refuel areas (gasstations.lua)
     require('beamngEarth/gasstations').onRows(msg.anchorId, key, data.fuel)
     tiles[key].fuel = true
+  end
+  if type(data.drag) == 'table' and data.drag[1] then      -- drag strips for the stock drag system (dragstrips.lua)
+    require('beamngEarth/dragstrips').onRows(msg.anchorId, key, data.drag)
+    tiles[key].drag = true
   end
   if type(data.wells) == 'table' and data.wells[1] then    -- oil wells' pump jacks (pumpjacks.lua)
     require('beamngEarth/pumpjacks').onRows(key, data.wells)

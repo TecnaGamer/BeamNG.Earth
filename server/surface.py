@@ -360,10 +360,41 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     if corner_verge is not None:
         v |= corner_verge
     out[v & np.isin(out, VERGE_FROM)] = VERGE
+    rp = race_pads(feats_list, urban_fn, widths)    # (a drag strip's squared ends and apron, a speedway's apron)
+    if rp:
+        out = paint_pads(out, lat, lon, rp)
     for k in ROAD_ORDER:
         out[mask(segs[k])] = ROAD_MATERIAL[k]
     if corner is not None:
         out[corner] = ROAD_MATERIAL["paved"]
+    return out
+
+
+def race_pads(feats_list, urban_fn=None, widths=None):
+    """[(lat (k,), lon (k,))] the paved areas of the racetracks of feats_list (racetypes.pads: a drag strip's squared
+    ends and launch apron, a speedway's apron inside its inner edge), each road once."""
+    import racetypes
+    out, seen = [], set()
+    for feats in feats_list or ():
+        if feats is None or len(feats) == 0 or "osm_race" not in feats.attrs:
+            continue
+        col = feats.attrs["osm_race"]
+        idx = [i for i in range(len(feats)) if isinstance(col[i], str) and col[i]]
+        if not idx:
+            continue
+        specs = roadsmod.road_specs(feats, urban_fn, widths)
+        for i in idx:
+            sp, fid = specs[i], str(feats.ids[i])
+            if sp is None or fid in seen or getattr(sp, "race", None) is None:
+                continue
+            seen.add(fid)
+            dcol = feats.attrs.get("osm_race_dir")
+            try:
+                d = int(dcol[i]) if dcol is not None and dcol[i] else 0
+            except (TypeError, ValueError):
+                d = 0
+            for ring in roadsmod.ground_parts(feats, i):
+                out.extend(racetypes.pads(ring[:, :2], sp.race, sp.width, d))
     return out
 
 
@@ -720,6 +751,9 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
         rgb = photo_corners(rgb, frame, x0, y0, size, corner_pads(frame, x0, y0, size, feats_list, urban_fn, widths))
         filled = _fill_island_photos(np.ascontiguousarray(rgb, np.uint8),
                                      _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths))
+    rp = race_pads(feats_list, urban_fn, widths)     # (racetracks' aprons and squared ends, under the roads)
+    if rp:
+        filled = np.ascontiguousarray(photo_pads(filled, frame, x0, y0, size, rp), np.uint8)
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         return filled
@@ -961,12 +995,14 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
     got = _road_segments(frame, x0, y0, size, px, px, feats, surface.urban, widths) if feats else None
     corners = corners_mask(frame, x0, y0, size, px, corner_pads(frame, x0, y0, size, feats, surface.urban, widths)) \
         if feats else None
+    rp = race_pads(feats, surface.urban, widths) if feats else []
+    race = pads_mask(frame, x0, y0, size, px, rp) if rp else None
     out = None
     if got is not None:
         colors = np.array([(255.0, 255.0, 255.0, 1.0 if k in ROAD_MASK_KINDS else 0.0) for k in PHOTO_ROAD_RGBA],
                           np.float32)
         out = fast._ef.paint_lines(np.zeros((px, px, 3), np.uint8), *got, colors)[..., 0]
-    for extra in (pads, lots, corners):
+    for extra in (pads, lots, corners, race):
         if extra is not None:
             out = extra if out is None else np.maximum(out, extra)
     return None if out is None or not out.any() else out

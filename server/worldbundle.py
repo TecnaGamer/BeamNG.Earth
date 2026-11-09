@@ -313,10 +313,14 @@ def validate_artifact(data, artifact=None):
             raise BundleError("Invalid width")
     opens = []
     for xy, spec in zip(groups["o"], meta["opens"]):
+        if isinstance(spec, dict) and "race" not in spec:
+            spec = {**spec, "race": None}       # (a bundle from before Spec.race: no racetrack type)
         if not isinstance(spec, dict) or set(spec) != set(Spec._fields):
             raise BundleError("Invalid road specification")
         for name, value in spec.items():
-            if name in ("kind", "cls"):
+            if name == "race":
+                valid = value is None or value in ("drag", "oval", "short_oval")
+            elif name in ("kind", "cls"):
                 valid = _text(value, 128)
             elif name == "surf":
                 valid = value is None or _text(value, 128)

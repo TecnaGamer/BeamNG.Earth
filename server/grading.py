@@ -259,7 +259,102 @@ UNDER_ON = os.environ.get("BNE_UNDERPASS", "on") != "off"
 # Rounded junction corners (roadcorners.py, from PR #363): the fan of asphalt between a curbless corner's arc and its
 # roads' old square corner graded at the roads' heights (Grader._make_cell)
 CORNERS_ON = os.environ.get("BNE_GRADE_CORNERS", "on") != "off"
-UNGRADED = {"raceway"}      # classes planned by nobody: the terrain is their surface (an oval's banking, GitHub #143) ...
+# Racetracks graded (2026-11-03, racetracks branch; BNE_RACEWAY=off: the terrain as their surface again). Left to the
+# raw elevation, a circuit drove as "ground quality": every facet of the DEM in the racing line (Road America 2.5 m off a
+# 25 m mean, Interlagos' sweeper tilted patch to patch). Now a raceway is a road with the longest vertical curves
+# (RACEWAY_SIGMA_M), outranking every road it meets (JUNCTION_RANK), and its banking is the elevation's own cross slope
+# across the carriageway smoothed along the line (raceway_bank): an oval's banking stays, the facets go.
+RACEWAY_ON = os.environ.get("BNE_RACEWAY", "on") != "off"
+RACE_SNAP_ON = os.environ.get("BNE_RACEWAY_SNAP", "on") != "off"   # roads on a track take its height (snap_junctions)
+RACE_CHAIN_TURN_DEG = 179.0  # a track's end goes on into another track piece at its node whatever the turn (_extensions)
+RACEWAY_SIGMA_M = 30.0      # m: profile smoothing of a racetrack (a road course: 45 flattened Spa's and Laguna Seca's crests
+                            # up to 2.1 m against the ground, twice 30's, 2026-11-05) ...
+RACEWAY_OVAL_SIGMA_M = 45.0  # ... an oval's (racetypes: Spec.race "oval"; 30 left the DEM's 50-100 m waves as 6 cm of
+                             # heave on Talladega's banking, 0.6 g at 140 mph)
+RACE_DESIGNED_ON = os.environ.get("BNE_RACE_DESIGNED", "on") != "off"   # a track's core its plan's plane (race_surface)
+RACEWAY_BANK_SIGMA_M = 25.0  # m: its cross slope smoothed along the line this much ...
+RACEWAY_OVAL_BANK_SIGMA_M = 40.0  # ... an oval's (25: 2.5 % bank jitter, Talladega)
+RACEWAY_BANK_REACH = 0.4    # of the width either side of the centre line the cross slope is read at
+RACEWAY_BANK_MAX = 0.65     # m per m (33 deg: Talladega's banking) at most
+RACEWAY_BANK_MIN = 0.01     # a smoothed cross slope under this is level (a straight's crown of DEM noise)
+RACEWAY_BANK_RATE = 0.0025  # per m: the banking changes at most this fast along the line (2.5 % in 10 m)
+# A short tunnel under a raceway (an access tunnel, a service road under the infield) dug to full headroom: its floor
+# under the track RACE_UNDER_M under the track's ground (the tube's height and a roof), flat RACE_UNDER_FLAT_M past the
+# track's edges, its joined roads rising from its ends at RACE_UNDER_GRADE (Grader._raceway_underpasses)
+RACE_EMBANK_M = float(os.environ.get("BNE_RACE_EMBANK_M", "30"))   # m beside a track's band the ground slopes to it
+RACE_EMBANK_SLOPE = 0.5        # (1 in 2: an embankment's, a cutting's)
+RACE_SHOULDER_M = 4.0          # m past a raceway's carriageway held at its graded surface (its shoulders and run-off:
+                                # the ground beside it graded down to a tunnel's open section tilted IMS's pit exit)
+RACE_PLAN_SHARE = 0.9          # of a plan's points on a raceway's carriageway: the raceway's own (Grader._is_race_plan)
+# On by default since pass 6 (2026-11-03 trackcheck on Road America, IMS, Interlagos, Watkins Glen: every tube under a
+# track 8.5 m or more, the tracks as smooth as without the digs). BNE_RACEWAY_DIG=off: the roads under at grade.
+RACE_DIG_ON = RACEWAY_ON and os.environ.get("BNE_RACEWAY_DIG", "on") != "off"
+RACE_UNDER_M = 6.8 + 1.0 + 0.7  # (roadmesh.TUNNEL_H + roads.TUNNEL_SOIL_M + the margin the DEM under the track needs)
+RACE_UNDER_FLAT_M = 6.0        # (to the portal: roads._clear_portals carries it RACE_PORTAL_MARGIN_M clear)
+RACE_UNDER_GRADE = 0.12         # (the cars' ramp when a tunnel's use is not known: race_tunnel_use)
+# A tunnel under a racetrack is sized by its use (2026-11-04, the user: the tube placed first under the fixed track, its
+# approaches laid out from each portal at the grade the use allows): (clearance m, ramp grade) for people on foot, cars
+# (service roads, tracks, untagged) and trucks (a road class that carries them, or a two-lane road). The dig is the
+# clearance (at least roads.TUNNEL_LOW_H, the lowest tube) + roads.TUNNEL_SOIL_M + RACE_UNDER_DEM_M under the track.
+RACE_USE_FOOT = (2.5, 0.20)
+RACE_USE_CAR = (3.0, 0.15)
+RACE_USE_TRUCK = (4.5, 0.08)
+RACE_FOOT_CLASSES = {"footway", "path", "steps", "cycleway", "pedestrian", "bridleway", "corridor"}
+RACE_TRUCK_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link", "secondary",
+                      "secondary_link", "tertiary", "tertiary_link"}
+RACE_TRUCK_WIDTH_M = 6.5        # m: a road this wide (two lanes) carries trucks whatever its class
+RACE_RAMP_SHARE = 0.6          # of the use's grade a dug approach is laid at (the roads joined at it and the tube's mouth
+                                # plan, blended in, steepen it: Talladega's at 15 % came out 21 %, at 11 % 19 %)
+RACE_UNDER_DEM_M = 0.7          # m the DEM under the track needs over the tube's soil
+RACE_DIG_SLACK_M = 1.0          # m more under a tube's floor than the dig's estimate of the track over it (its least DEM and
+                                # graded heights there): the finished surface (conformed, embanked) came out up to 0.99 m
+                                # under it, the vault within race_tube_depth of the track (Road America 8.15 of 9.15 m,
+                                # Darlington 8.57, Salzburgring 8.31; 19 tracks 8-9.1 m, p16 world check 2026-11-07)
+
+
+def race_tunnel_use(spec, osm_width=None):
+    """(clearance m, ramp grade, dig m under the track) of a tunnel road under a racetrack, from its class and width
+    (spec: roads.Spec; osm_width: OSM's width tag, m, or None). Pure."""
+    import roads as roadsmod
+    cls = str(getattr(spec, "cls", "") or "")
+    w = max(float(getattr(spec, "width", 0.0) or 0.0), float(osm_width or 0.0))
+    if cls in RACE_FOOT_CLASSES:
+        clear, grade = RACE_USE_FOOT
+    elif cls in RACE_TRUCK_CLASSES or w >= RACE_TRUCK_WIDTH_M:
+        clear, grade = RACE_USE_TRUCK
+    else:
+        clear, grade = RACE_USE_CAR
+    return clear, grade, max(max(clear, roadsmod.TUNNEL_LOW_H) + roadsmod.TUNNEL_SOIL_M + RACE_UNDER_DEM_M,
+                             race_tube_depth())
+
+
+RACE_COVER_PAST_M = 2.0         # m past a track's band the ground over a tube under it is the embankment's (to the portal:
+                                # roads.RACE_PORTAL_MARGIN_M - RACE_SHOULDER_M; two lattice squares, no hole on the band)
+RACE_GRID_M = 1.0               # m: the terrain block's lattice (heightmap.SQUARE) the ground over a tube is drawn on
+
+
+def race_tube_depth():
+    """m from a tube's floor up to the lowest ground over it under a track's band so that no terrain hole is cut there
+    (the owner 2026-11-05: no hole inside the band, ever; the tube fully hidden): roads.tunnel_hole_mask holes every
+    sample over the tube whose ground lies under its vault (roadmesh.TUNNEL_H, the full tube: a dig this deep is never
+    a low arch) + TUNNEL_HOLE_MARGIN; the lattice's linear interpolation between samples on the steepest banking
+    (RACEWAY_BANK_MAX over one RACE_GRID_M square); and the graded surface's departure from the DEM the dig is sized
+    from (RACE_UNDER_DEM_M). Pure."""
+    import roadmesh
+    # (+ the embankment's fall over one square past the band: a hole sample there cuts a square on the band's edge)
+    return (roadmesh.TUNNEL_H + roadsmod.TUNNEL_HOLE_MARGIN + RACEWAY_BANK_MAX * RACE_GRID_M + RACE_UNDER_DEM_M
+            + RACE_EMBANK_SLOPE * RACE_GRID_M)
+RACE_UNDER_MAX_M = 400.0        # m: tunnel parts longer than this are tunnels of their own (Talladega's turn 3 tunnel: 161 m)
+RACE_UNDER_MIN_SIN = 0.5       # a tunnel crossing under a track flatter than 30 deg is not dug (its approaches ran
+                                # along the track's edge as a 12 m cliff at Watkins Glen's Esses, 2026-11-03)
+RACE_UNDER_JOIN_M = 2.0
+RACE_UNDER_REACH_MAX_M = 200.0  # m from a dug tunnel's end its approach's lowering may spread onto the roads joined on
+RACE_PORTAL_SNAP_M = 2.0        # m round a dug tunnel's portal its floor is the dig's (_race_floor)
+RACE_UNDER_REACH_M = 40.0       # m: the tunnel road's own segment end this near its portal is where its approach joins         # m: a road ending this near a tunnel's end goes on from it
+if RACEWAY_ON:
+    CLASS_SIGMA_M["raceway"] = RACEWAY_SIGMA_M
+    JUNCTION_RANK["raceway"] = 10
+UNGRADED = set() if RACEWAY_ON else {"raceway"}      # classes planned by nobody: the terrain is their surface (an oval's banking, GitHub #143) ...
 UNGRADED_MARGIN_M = 2.0     # ... and nothing else grades their carriageway (+ this: kerbs, apron): a road crossing a
                             # track, or a tunnel's open approach under one, cut a flat trench through Daytona's banking
 # The same structural headroom as the deck solver, including the lower road's
@@ -557,7 +652,13 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
                     onto.append(bool(len(onto_xy)) and
                                 float(np.hypot(*(onto_xy - np.asarray(out, np.float64)[-1]).T).min()) <= CHAIN_JOIN_M)
                 side.append(resample(np.asarray(out, np.float64), step)[0][1:])
-        prof.append((xy, side[0][::-1], side[1], step, bank_side[0][::-1], bank_side[1], onto))
+        b0, a0 = side[0][::-1], side[1]
+        if RACEWAY_ON and spec.cls == "raceway" and not coarse and RACE_LINE_SIGMA_M > 0:
+            # (a raceway's line smoothed (race_line) before its heights are read, with the parts joined on: each
+            # cell's piece of it the same line)
+            sm = race_line(np.concatenate([b0, xy, a0]), step)
+            b0, xy, a0 = sm[:len(b0)], sm[len(b0):len(b0) + len(xy)], sm[len(b0) + len(xy):]
+        prof.append((xy, b0, a0, step, bank_side[0][::-1], bank_side[1], onto))
     pts = [np.concatenate([b, xy, a]) for xy, b, a, *_ in (p for p in prof if p is not None)]
     if not pts:
         return [None] * len(parts)
@@ -619,6 +720,18 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if ab[1]:
             bank_after = bank_after[:0]
         bank_xy = np.concatenate([bank_before, xy, bank_after])
+        if RACEWAY_ON and getattr(spec, "race", None) == "drag" and not coarse:
+            out.append(drag_plan(xy, zx[nb:nb + len(xy)], spec, ab, step))
+            continue
+        rb = raceway_bank(frame, np.concatenate([before, xy, after]), spec, elev, step)             if RACEWAY_ON and spec.cls == "raceway" and not coarse else None
+        if rb is not None:              # (its own banking, not the design-speed rule's)
+            pl = _plan(xy, zx, spec, ab, (nb, na), step)
+            b = rb[0][nb:nb + len(xy)]
+            every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+            keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
+            pl.bank = b[keep] if np.any(b != 0.0) else None
+            out.append(pl)
+            continue
         out.append(_plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
                          bank_ext=(len(bank_before), len(bank_after)),
                          banked=not (RING_LEVEL_ON and rings is not None and rings[j])))
@@ -721,12 +834,39 @@ def _point_along(line, d):
 def profile_sigma(spec):
     """m: the profile smoothing of a road of this spec."""
     if spec.kind not in roadsmod.BUILT:
-        if spec.cls in DIRT_SOFT_CLASSES:
-            return DIRT_SIGMA_M          # a main dirt road stays as smooth as it was (dirt_bumps' "main" ones too)
+        if spec.cls == "raceway" or spec.cls in DIRT_SOFT_CLASSES:
+            return DIRT_SIGMA_M          # a main dirt road stays as smooth as it was (dirt_bumps' "main" ones too);
+                                         # a dirt raceway is graded smooth (racing surface first: no worn-road bumps)
         return DIRT_SIGMA_MINOR_M        # a minor one keeps the ground's own bumps
+    if RACEWAY_ON and spec.cls == "raceway" and getattr(spec, "race", None) == "oval":
+        return RACEWAY_OVAL_SIGMA_M
     if spec.cls in MAJOR_CLASSES and not getattr(spec, "link", False):
         return max(SIGMA_M, SIGMA_MAJOR_M)
     return max(SIGMA_M, CLASS_SIGMA_M.get(spec.cls, SIGMA_M)) if not getattr(spec, "link", False) else SIGMA_M
+
+
+def drag_grade(xy, z):
+    """(n,) heights of a drag strip's samples xy (n, 2) on one straight grade: the least-squares line through its
+    ground heights z (n,) along it (a real strip is laser-levelled, no bump and no cross slope: Bandimere's rises one
+    even ~1 % over its 1.1 km). Pure."""
+    xy, z = np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64)
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    ok = np.isfinite(z)
+    if ok.sum() < 2 or s[-1] <= 0:
+        return z
+    a, b = np.polyfit(s[ok], z[ok], 1)
+    return a * s + b
+
+
+def drag_plan(xy, z, spec, abut=(False, False), step=PROFILE_STEP):
+    """The Plan of a drag strip (roads.Spec.race "drag": racetypes.py): its whole line on drag_grade, level across
+    (no bank). xy (n, 2) and z (n,) its samples and ground heights."""
+    zs = drag_grade(xy, z)
+    every = max(1, int(round(VERTEX_STEP / PROFILE_STEP)))
+    keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
+    plan = Plan(np.asarray(xy)[keep], zs[keep], spec.width / 2 + shoulder(spec), abut, road_half=spec.width / 2)
+    plan.max_wall = wall_max_h(spec)
+    return plan
 
 
 DIRT_ROUGH = float(os.environ.get("BNE_DIRT_BUMP", "1.0"))    # strength of a minor dirt road's damage (1: as below)
@@ -773,8 +913,8 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
     part's ends): a soft undulation plus discrete damage -- potholes, broken patches (a step with soft edges) and the
     odd deep pit -- placed from the road's own position, so every process builds the same ones. None for a built road
     or a main one. The sizes are metres; BNE_DIRT_BUMP scales the lot (1: as here, 0: off)."""
-    if spec.kind in roadsmod.BUILT or DIRT_ROUGH <= 0.0:
-        return None
+    if spec.kind in roadsmod.BUILT or DIRT_ROUGH <= 0.0 or spec.cls == "raceway":
+        return None             # (a dirt raceway: its racing surface is graded, never worn: racing surface first)
     if spec.cls == "track":
         scale, wave = DIRT_TRACK_SHARE, DIRT_TRACK_WAVE_SHARE
     elif spec.cls in DIRT_SOFT_CLASSES:
@@ -982,6 +1122,1020 @@ def bank(xy, spec, abut=(False, False), ext=(0, 0)):
     return b if np.any(b != 0.0) else None
 
 
+RACE_LINE_SIGMA_M = 20.0      # m: a raceway's centre line smoothed along itself at most this much (race_line) ...
+RACE_LINE_SHIFT_M = 0.7       # ... and no more than moves a bend of its radius this far (sigma^2 / 2R; an arc's shift is uniform)
+RACE_LINE_TURN_M = 50.0       # m either side its radius is read over
+
+
+def race_line(xy, step):
+    """xy (n, 2), samples step m apart along a raceway, as a smooth line: each point the Gaussian mean of its
+    neighbours along the line, sigma RACE_LINE_SIGMA_M where the bend allows it (sigma^2 / (2 R) <= RACE_LINE_SHIFT_M,
+    R the line's radius over RACE_LINE_TURN_M either side). The map draws an oval as chords, Talladega's ~38 m long:
+    the banked plane laid along those chords stood a car on the true arc 0.3 m in and out across the 0.6 banking every
+    chord, 5 cm waves at 38 m (0.5 g at 140 mph, 2026-11-05); a road course's hairpin keeps its line. The ends stay
+    (reflected odd). Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    n = len(xy)
+    if n < 5 or step <= 0:
+        return xy.copy()
+    k = max(1, int(round(RACE_LINE_TURN_M / step)))
+    hd = np.unwrap(np.arctan2(*np.gradient(xy, axis=0)[:, ::-1].T))
+    i = np.arange(n)
+    a, b = np.clip(i - k, 0, n - 1), np.clip(i + k, 0, n - 1)
+    turn = np.abs(hd[b] - hd[a]) / np.maximum((b - a) * step, step)      # rad per m
+    sig = np.minimum(RACE_LINE_SIGMA_M, np.sqrt(2.0 * RACE_LINE_SHIFT_M / np.maximum(turn, 1e-9)))
+    w = int(np.ceil(3.0 * RACE_LINE_SIGMA_M / step))
+    pad = np.r_[2 * xy[:1] - xy[w:0:-1], xy, 2 * xy[-1:] - xy[-2:-w - 2:-1]] if n > w + 1 else None
+    if pad is None:
+        return xy.copy()
+    out = np.empty_like(xy)
+    off = np.arange(-w, w + 1) * step
+    for j in range(n):
+        g = np.exp(-0.5 * (off / max(sig[j], 1e-6)) ** 2)
+        g /= g.sum()
+        out[j] = g @ pad[j:j + 2 * w + 1]
+    return out
+
+
+def raceway_bank(frame, xy, spec, elev, step):
+    """((n,) cross slope (m per m toward the left, Plan.bank's), (n,) edge mean heights) of a raceway's samples xy
+    (n, 2) from the elevation across its carriageway (RACEWAY_BANK_REACH of the width each side), smoothed along the
+    line over RACEWAY_BANK_SIGMA_M, capped at RACEWAY_BANK_MAX and level under RACEWAY_BANK_MIN; None for too few."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 3:
+        return None
+    o = max(1.0, RACEWAY_BANK_REACH * float(spec.width))
+    nrm = _normals(xy)
+    two = np.concatenate([xy + nrm * o, xy - nrm * o])
+    la, lo, _ = frame.enu_to_geodetic(two[:, 0], two[:, 1], 0.0)
+    z = np.asarray(elev(la, lo), np.float64).reshape(2, -1)
+    if not np.isfinite(z).all():
+        return None
+    b = bank_from_edges(z[0], z[1], o, step, RACEWAY_OVAL_BANK_SIGMA_M if getattr(spec, "race", None) == "oval"
+                        else RACEWAY_BANK_SIGMA_M)
+    return b, (z[0] + z[1]) / 2
+
+
+def bank_from_edges(zl, zr, half, step, sigma=None):
+    """The smoothed cross slope of raceway_bank from its left / right edge heights half m off the centre. Pure."""
+    b = (np.asarray(zl, np.float64) - np.asarray(zr, np.float64)) / (2.0 * half)
+    b = smooth_profile(b, step, RACEWAY_BANK_SIGMA_M if sigma is None else sigma) if step > 0 else b
+    b = np.clip(b, -RACEWAY_BANK_MAX, RACEWAY_BANK_MAX)
+    b = np.where(np.abs(b) < RACEWAY_BANK_MIN, 0.0, b)
+    return bank_rate_limited(b, step)
+
+
+def bank_rate_limited(b, step, rate=None):
+    """b (a cross slope per sample, step m apart) changing by at most rate per m (RACEWAY_BANK_RATE): eased in toward
+    a corner's banking and out of it (a forward and a backward pass, each giving way toward level). Pure."""
+    rate = RACEWAY_BANK_RATE if rate is None else rate
+    b = np.asarray(b, np.float64).copy()
+    d = rate * max(float(step), 1e-6)
+    for order in (range(1, len(b)), range(len(b) - 2, -1, -1)):
+        for i in order:
+            j = i - 1 if order.step == 1 else i + 1
+            if abs(b[i] - b[j]) > d:
+                # (toward the neighbour, never past level: the smaller banking wins)
+                lim = b[j] + np.sign(b[i] - b[j]) * d
+                if abs(lim) < abs(b[i]):
+                    b[i] = lim
+    return b
+
+
+RACE_SEAM_ON = os.environ.get("BNE_RACE_SEAM", "on") != "off"
+RACE_CLOSE_ON = os.environ.get("BNE_RACE_CLOSE", "on") != "off"   # a closed piece's conformed ends met (_race_close_seam)   # a loop's seam goes on into itself (_Planner._race_seams)
+RACE_CONFORM_ON = os.environ.get("BNE_RACE_CONFORM", "on") != "off"   # overlapping pieces one surface (race_conform)
+RACE_CROSS_BLEND_ON = os.environ.get("BNE_RACE_CROSS_BLEND", "off") == "on"   # blend equal pieces where they cross (off: it roughened Talladega and Spa)
+RACE_FILLET_DEG = 5.0         # deg: a track piece's corner turning more at one vertex is read along an arc (_race_fillet)
+RACE_SPIKE_DEG = 20.0         # deg: a vertex turning this much and back (its neighbour turning the other way) is a spike
+RACE_SPIKE_M = 2.0            # ... when it stands at most this far off its neighbours' chord (_race_eval_line)
+RACE_CONFORM_MAX_M = 3.0      # m: a piece further off the pavement it overlaps is apart from it (a crossover's bridge)
+RACE_CONFORM_SIGMA_M = 6.0    # m along a piece its correction to the shared pavement is smoothed over
+RACE_CONFORM_JOIN_GRADE_M = 30.0   # m back from its end a piece takes up the grade of a wider piece it goes on into
+RACE_CONFORM_TAPER_M = 80.0   # m past the shared stretch a piece eases back to its own profile
+RACE_CONFORM_JOIN_M = 20.0    # m from a piece's end meeting another's end: their join, not shared pavement
+RACE_CONFORM_LANES = 7        # samples across a piece's carriageway its correction is fitted to
+_CONFORM_CACHE = OrderedDict()
+_CONFORM_ORDER = OrderedDict()
+
+
+def _race_key(p):
+    return (id(p), len(p.xy), float(np.asarray(p.z, np.float64).sum()),
+            0.0 if p.bank is None else float(np.asarray(p.bank, np.float64).sum()))
+
+
+def _race_eval_line(xy):
+    """xy (k, 2), a track piece's centre line, as its surface is read along: each spike (a vertex turning
+    RACE_SPIKE_DEG and back, within RACE_SPIKE_M of its neighbours' chord) put back on that chord. The map's line kept
+    a vertex 1.3 m off it where a node was shared (Road America, 28 deg out and 54 back in 6 m): a lane 5 m beside it
+    on the spike's outside read the vertex's height over a wedge and jumped 0.5 m into and out of it at a 7 % grade
+    (2026-11-05). Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2].copy()
+    if len(xy) < 4:
+        return xy
+    d = np.diff(xy, axis=0)
+    hd = np.unwrap(np.arctan2(d[:, 1], d[:, 0]))
+    turn = np.degrees(np.r_[0.0, np.diff(hd), 0.0])       # at each vertex
+    done = np.zeros(len(xy), bool)
+    for i in np.argsort(-np.abs(turn)):
+        if i == 0 or i == len(xy) - 1 or abs(turn[i]) < RACE_SPIKE_DEG or done[i - 1] or done[i] or done[i + 1]:
+            continue
+        back = [t for t in (turn[i - 1], turn[i + 1]) if t * turn[i] < 0 and abs(t) >= 0.3 * abs(turn[i])]
+        if not back:
+            continue
+        a, b = xy[i - 1], xy[i + 1]
+        ab = b - a
+        ll = float(ab @ ab)
+        if ll <= 1e-9:
+            continue
+        foot = a + ab * float(np.clip((xy[i] - a) @ ab / ll, 0.0, 1.0))
+        if np.hypot(*(xy[i] - foot)) <= RACE_SPIKE_M:
+            xy[i] = foot
+            done[i] = True
+    return xy
+
+
+def _race_fillet(xy, z, bk):
+    """(xy, z, bank) of a track piece's line with each corner turning more than RACE_FILLET_DEG at one vertex laid
+    as an arc (tangent points at most 0.45 of either segment back, points every RACE_FILLET_DEG), heights and banks
+    along it interpolated by arc length. A lane beside a 28 deg vertex read the vertex's own height over the wedge
+    on its outside, 2.6 m flat at a 7 % grade: a 0.2 m dip (Road America, 2026-11-05). Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 3 or RACE_FILLET_DEG <= 0:
+        return xy, z, bk
+    s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    P, S = [xy[0]], [0.0]
+    for i in range(1, len(xy) - 1):
+        u, v = xy[i] - xy[i - 1], xy[i + 1] - xy[i]
+        lu, lv = float(np.hypot(*u)), float(np.hypot(*v))
+        if lu < 1e-6 or lv < 1e-6:
+            continue
+        u, v = u / lu, v / lv
+        th = math.atan2(u[0] * v[1] - u[1] * v[0], float(u @ v))
+        if abs(math.degrees(th)) <= RACE_FILLET_DEG:
+            P.append(xy[i])
+            S.append(s_[i])
+            continue
+        tl = 0.45 * min(lu, lv)
+        a, b = xy[i] - u * tl, xy[i] + v * tl
+        k = int(math.ceil(abs(math.degrees(th)) / RACE_FILLET_DEG))
+        # (a quadratic Bezier through the corner: tangent to both segments at a, b; arc-length-ish by its parameter)
+        for t in np.linspace(0.0, 1.0, k + 1):
+            P.append((1 - t) ** 2 * a + 2 * (1 - t) * t * xy[i] + t * t * b)
+            S.append(s_[i] - tl + 2.0 * tl * t)
+    P.append(xy[-1])
+    S.append(s_[-1])
+    P, S = np.array(P), np.array(S)
+    zz = np.interp(S, s_, np.asarray(z, np.float64))
+    bb = None if bk is None else np.interp(S, s_, np.asarray(bk, np.float64))
+    return P, zz, bb
+
+
+def _race_follow_order(plans, order):
+    """order (plan indices, the leader first) with every piece whose end lies on a same-width piece's carriageway
+    away from that one's ends put after it: the branch follows the line it leaves, whatever their lengths. A longer
+    branch starting mid-way on another piece ranked first, and the through piece was never fitted to it there: two
+    planes 0.2 m apart swapped across the lane (Spa, 2026-11-05)."""
+    pos = {j: i for i, j in enumerate(order)}
+    lines = [np.asarray(p.xy, np.float64)[:, :2] for p in plans]
+    after = []          # (follower, leader)
+    for a, pa in enumerate(plans):
+        if len(lines[a]) < 2:
+            continue
+        for b, pb in enumerate(plans):
+            if a == b or len(lines[b]) < 2 or abs(float(pa.road_half) - float(pb.road_half)) >= 0.25:
+                continue
+            L = lines[b]
+            for at in (0, -1):
+                q = lines[a][at]
+                if min(np.hypot(*(L[0] - q)), np.hypot(*(L[-1] - q))) <= RACE_CONFORM_JOIN_M:
+                    continue
+                if _seg_dist(L, q) <= float(pb.road_half):
+                    after.append((a, b))
+                    break
+    order = list(order)
+    for _ in range(len(order)):
+        moved = False
+        for a, b in after:
+            ia, ib = order.index(a), order.index(b)
+            if ia < ib and not any(x == b and y == a for x, y in after):
+                order.insert(ib, order.pop(ia))
+                moved = True
+        if not moved:
+            break
+    return order
+
+
+def _race_close_seam(xy, z, bk, reach=None):
+    """(z, bank) of a closed piece (its ends at one point) met at its seam: each end eased to the two ends' mean over
+    reach m back along it (RACE_CONFORM_TAPER_M). race_conform's corrections are smoothed and tapered from each end on
+    its own, and Bristol's pit road loop stood 1.1 m higher one side of its seam than the other (2026-11-07). Pure."""
+    reach = RACE_CONFORM_TAPER_M if reach is None else reach
+    s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(xy, np.float64)[:, :2], axis=0).T))]
+    L = float(s_[-1])
+    if L <= 2.0:
+        return z, bk
+    r = min(reach, 0.5 * L)
+    z, bk = np.asarray(z, np.float64).copy(), np.asarray(bk, np.float64).copy()
+    for a in (z, bk):
+        dm = 0.5 * (float(a[-1]) - float(a[0]))
+        if abs(dm) < 1e-6:
+            continue
+        w0 = 0.5 * (1.0 + np.cos(np.pi * np.minimum(s_ / r, 1.0)))
+        w1 = 0.5 * (1.0 + np.cos(np.pi * np.minimum((L - s_) / r, 1.0)))
+        a += dm * w0 - dm * w1
+    return z, bk
+
+
+RACE_NODE_ON = os.environ.get("BNE_RACE_NODE", "on") != "off"   # one surface per shared node (_race_node_conform)
+# (off by default: on the 11 validation tracks it cut join faults 187 -> 147 but left some racing lines rougher than
+# d99b8c3a (Interlagos maxdev 0.15 -> 0.24 m, Indianapolis' worst join step 0.149 -> 0.187 m, Nurburgring 0.739 ->
+# 0.859); the racing surface has absolute priority. BNE_RACE_NODE=on for the work in progress, 2026-11-07)
+RACE_NODE_M = 1.0             # m: a piece's end this near another piece's line meets it there (a shared node)
+RACE_NODE_GRADE_MAX = 0.08    # the largest grade change a node hands over (beyond it the pieces climb apart: a ramp)
+RACE_NODE_GRADE_ON = os.environ.get("BNE_RACE_NODE_GRADE", "off") == "on"
+RACE_NODE_ACCEPT_ON = os.environ.get("BNE_RACE_NODE_ACCEPT", "on") != "off"   # a node's correction kept only if no rougher
+RACE_NODE_LANES_ON = os.environ.get("BNE_RACE_NODE_LANES", "on") != "off"   # the acceptance read lane-wide off the pick
+RACE_NODE_GATE_ON = os.environ.get("BNE_RACE_NODE_GATE", "on") != "off"   # node conform kept per plan set only if no rougher
+RACE_LINE_ORDER_ON = os.environ.get("BNE_RACE_LINE_ORDER", "off") == "on"   # the racing line first among equal widths
+RACE_PICK_ONE_ON = os.environ.get("BNE_RACE_PICK_ONE", "off") == "on"   # overlapping pieces: the earlier one's surface
+RACE_NODE_CURVE_MIN = 2e-4    # per m: the gentlest vertical curve rate a node's hand-over is held to (radius 5 km)
+RACE_NODE_GRADE_M = 30.0      # m along a piece the grade it takes at a node eases back to its own (its height moves up
+                              # to about 0.36 x this x the grade change: over 60 m Paul Ricard's 24 % ramps moved 1.7 m
+                              # off the pieces beside them, a 0.3-0.7 m sawtooth where the pick changed piece)
+RACE_LINE_MAX_EDGES = 60      # pieces: a network larger than this has its racing line by width and length only
+
+
+def _race_line_set(plans, tol=None):
+    """{plan index}: the racing line among race plans, the longest simple loop of the network their ends make (ends
+    within tol m one node; a closed piece a loop of its own), else, where there is no loop, its longest path. A
+    network of more than RACE_LINE_MAX_EDGES pieces: empty (the order falls back to width and length). Pure."""
+    tol = RACE_NODE_M if tol is None else tol
+    lines = [np.asarray(p.xy, np.float64)[:, :2] for p in plans]
+    ln = [float(np.hypot(*np.diff(l, axis=0).T).sum()) if len(l) > 1 else 0.0 for l in lines]
+    nodes = []
+
+    def node_at(q):
+        for k, c in enumerate(nodes):
+            if np.hypot(*(c - q)) <= tol:
+                return k
+        nodes.append(np.asarray(q, np.float64))
+        return len(nodes) - 1
+
+    ends = [[node_at(l[0]), node_at(l[-1])] if len(l) >= 2 else [] for l in lines]
+    # (an end on another piece's carriageway away from its ends splits that piece there: the circuit closes through
+    # the pit straight's T at Interlagos, not end to end; trackrules.main_pieces' rule)
+    cuts = {i: [] for i in range(len(lines))}       # piece -> [(arc m, node)]
+    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(l, axis=0).T))] if len(l) > 1 else np.zeros(len(l)) for l in lines]
+    for i, l in enumerate(lines):
+        if len(l) < 2:
+            continue
+        for e_, q in zip(ends[i], (l[0], l[-1])):
+            if any(e_ in ab for j, ab in enumerate(ends) if j != i):
+                continue        # (met end to end)
+            for j, m in enumerate(lines):
+                if j == i or len(m) < 2:
+                    continue
+                a_, d_ = m[:-1], np.diff(m, axis=0)
+                ll = np.maximum((d_ * d_).sum(1), 1e-12)
+                t_ = np.clip(((q - a_) * d_).sum(1) / ll, 0.0, 1.0)
+                dist = np.hypot(*(q - (a_ + t_[:, None] * d_)).T)
+                k = int(np.argmin(dist))
+                s_at = float(arcs[j][k] + t_[k] * np.sqrt(ll[k]))
+                if dist[k] <= max(tol, float(plans[j].road_half)) and tol < s_at < arcs[j][-1] - tol:
+                    cuts[j].append((s_at, e_))
+                    break
+    edges = []          # (piece, node a, node b, length)
+    for i, ab in enumerate(ends):
+        if len(ab) != 2:
+            continue
+        pts = [(0.0, ab[0])] + sorted(cuts[i]) + [(float(arcs[i][-1]), ab[1])]
+        for (s0, n0), (s1, n1) in zip(pts[:-1], pts[1:]):
+            edges.append((i, n0, n1, s1 - s0))
+    if not edges:
+        return set()
+    # (chains through nodes only two pieces meet at made one edge each: the search runs over the junctions alone; a
+    # circuit split into 56 pieces by its ways and the cells ran the budget out on a karting loop, Interlagos)
+    E = {k: (a, b, [i], L_) for k, (i, a, b, L_) in enumerate(edges)}
+    while True:
+        deg = {}
+        for k, (a, b, _ps, _L) in E.items():
+            deg.setdefault(a, []).append(k)
+            if b != a:
+                deg.setdefault(b, []).append(k)
+        node = next((v for v, ks in deg.items() if len(ks) == 2 and all(E[k][0] != E[k][1] for k in ks)), None)
+        if node is None:
+            break
+        k1, k2 = deg[node]
+        a1, b1, p1, L1 = E.pop(k1)
+        a2, b2, p2, L2 = E.pop(k2)
+        o1 = a1 if b1 == node else b1
+        o2 = a2 if b2 == node else b2
+        E[k1] = (o1, o2, p1 + p2, L1 + L2)
+    if len(E) > RACE_LINE_MAX_EDGES:
+        return set()
+    adj = {}
+    for k, (a, b, _ps, _L) in E.items():
+        adj.setdefault(a, []).append((k, b))
+        if b != a:
+            adj.setdefault(b, []).append((k, a))
+    best = [0.0, set(), False]      # (length, edges, a loop)
+    budget = [50000]
+
+    def walk(start, at, used, seen, length):
+        budget[0] -= 1
+        if budget[0] < 0:
+            return
+        for k, nx in adj.get(at, ()):
+            if k in used:
+                continue
+            L = length + E[k][3]
+            # (the longest of loop and path: a tile's plan set may hold only part of a circuit, its line a path,
+            # beside a whole small loop; at Spa a 2-piece loop was taken for the line and the circuit's own pieces
+            # judged as side pieces, 2026-11-07)
+            if nx == start:
+                if L > best[0]:
+                    best[:] = [L, used | {k}, True]
+                continue
+            if nx in seen:
+                continue
+            if L > best[0]:
+                best[:] = [L, used | {k}, False]
+            walk(start, nx, used | {k}, seen | {nx}, L)
+
+    for n0 in adj:
+        walk(n0, n0, frozenset(), frozenset([n0]), 0.0)
+    return {i for k in best[1] for i in E[k][2]}
+
+
+def _race_line_curve(plans):
+    """Per m: the vertical curve rate the racing line's own profile uses (the 95th percentile of |z''| over its
+    pieces, at their vertices), None for too little of it. Pure."""
+    vals = []
+    for p in plans:
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        z = np.asarray(p.z, np.float64)
+        if len(xy) < 3 or len(z) != len(xy):
+            continue
+        ds = np.maximum(np.hypot(*np.diff(xy, axis=0).T), 1e-3)
+        g = np.diff(z) / ds
+        vals.append(np.abs(np.diff(g)) / (0.5 * (ds[1:] + ds[:-1])))
+    if not vals:
+        return None
+    v = np.concatenate(vals)
+    return float(np.percentile(v, 95)) if len(v) >= 5 else None
+
+
+def _race_node_conform(xy, z, bk, done, tol=None, free=None, curve=None, proto=None):
+    """(z, bank) of a race piece with each end on an earlier piece's line (a shared node: their ends, or its end on
+    the other's middle) taking that earlier piece's surface there, the first such piece in the conform order (the
+    racing line first): its height, its cross slope turned into this piece's direction across it and its grade
+    along it (at most RACE_NODE_GRADE_MAX apart), eased back along this piece (the height over RACE_CONFORM_TAPER_M,
+    the bank at the bank rate, the grade over RACE_NODE_GRADE_M; each at most half its length). Every piece
+    meeting a node so takes one plane there, the line's: where three pieces met at one node each had matched a
+    different neighbour and two of them stood 0.17 m apart (Interlagos, 2026-11-07). done: conformed Plans in
+    order. free: (k,) per vertex the share of its lanes the lane fit found no earlier pavement under (None: all):
+    the corrections scaled by it, so a stretch the lane fit laid on earlier pavement (a fork's branch along its main
+    line, a pit lane's end on the oval) stays on it; corrected again from one segment's plane past the node, a
+    branch stood off its main line and the pick between them sawtoothed 0.3-0.7 m, Paul Ricard 2026-11-07. Pure."""
+    tol = RACE_NODE_M if tol is None else tol
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 2 or not done:
+        return z, bk
+    s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    L = float(s_[-1])
+    if L <= 2.0:
+        return z, bk
+    z, bk = np.asarray(z, np.float64).copy(), np.asarray(bk, np.float64).copy()
+    closed = float(np.hypot(*(xy[0] - xy[-1]))) <= tol
+    nrm = _normals(xy)
+    fr = np.ones(len(xy)) if free is None else np.clip(np.asarray(free, np.float64), 0.0, 1.0)
+    if free is not None:
+        # (smoothed along the piece over RACE_CONFORM_SIGMA_M, as the lane fit's own corrections: no crease where the
+        # count of shared lanes changes from one vertex to the next)
+        kk = np.exp(-0.5 * ((s_[:, None] - s_[None, :]) / RACE_CONFORM_SIGMA_M) ** 2)
+        fr = (kk @ fr) / kk.sum(1)
+    for at in (0, -1):
+        p = xy[at]
+        hit = None
+        for q in done:
+            qx = np.asarray(q.xy, np.float64)[:, :2]
+            if len(qx) < 2 or q.z is None:
+                continue
+            a_, d_ = qx[:-1], np.diff(qx, axis=0)
+            ll = np.maximum((d_ * d_).sum(1), 1e-12)
+            t_ = np.clip(((p - a_) * d_).sum(1) / ll, 0.0, 1.0)
+            dist = np.hypot(*(p - (a_ + t_[:, None] * d_)).T)
+            k = int(np.argmin(dist))
+            if dist[k] <= tol:
+                hit = (q, qx, k, float(t_[k]))
+                break
+        if hit is None:
+            continue
+        q, qx, k, t = hit
+        qz = np.asarray(q.z, np.float64)
+        qb = np.zeros(len(qx)) if q.bank is None or len(q.bank) != len(qx) else np.asarray(q.bank, np.float64)
+        seg = qx[k + 1] - qx[k]
+        sl = max(float(np.hypot(*seg)), 1e-6)
+        tq = seg / sl
+        nq = np.array([-tq[1], tq[0]])
+        # (its height and bank at the foot, its grade along the segment: the plane there)
+        off = float((p - (qx[k] + t * seg)) @ nq)
+        bq = float(qb[k] + t * (qb[k + 1] - qb[k]))
+        zq = float(qz[k] + t * (qz[k + 1] - qz[k])) + bq * off
+        gq = (float(qz[k + 1]) - float(qz[k])) / sl
+        G = gq * tq + bq * nq
+        inw = xy[1] - xy[0] if at == 0 else xy[-2] - xy[-1]
+        inw = inw / max(float(np.hypot(*inw)), 1e-6)
+        d = s_ if at == 0 else L - s_
+        i1 = 1 if at == 0 else -2
+        dz = zq - float(z[at])
+        if abs(dz) > RACE_CONFORM_MAX_M:
+            continue        # (apart: a crossover's bridge over it)
+        dbk = float(G @ nrm[at]) - float(bk[at])
+        g_own = (float(z[i1]) - float(z[at])) / max(float(np.hypot(*(xy[i1] - xy[at]))), 1e-6)
+        dg = float(np.clip(float(G @ inw) - g_own, -RACE_NODE_GRADE_MAX, RACE_NODE_GRADE_MAX))
+        half = 0.5 * L if not closed else 0.25 * L
+        # (no sharper a vertical curve than the racing line's own, curve per m: the grade change over pi |dg| / (2 K)
+        # (a cosine's peak), the height's over pi sqrt(|dz| / (2 K)); over a fixed 30 m a 6.7 % grade handed into a
+        # node meeting the piece's own 8 % climb made a 0.28 m sag, Interlagos' racing line rougher than before)
+        K = RACE_NODE_CURVE_MIN if curve is None else max(float(curve), RACE_NODE_CURVE_MIN)
+        rz = min(RACE_CONFORM_TAPER_M, half)
+        rg = min(max(RACE_NODE_GRADE_M, np.pi * abs(dg) / (2.0 * K)), half)
+        rb = min(max(RACE_CONFORM_JOIN_GRADE_M, 1.6 * abs(dbk) / RACEWAY_BANK_RATE), half)
+        wz = 0.5 * (1.0 + np.cos(np.pi * np.minimum(d / rz, 1.0)))
+        wg = 0.5 * (1.0 + np.cos(np.pi * np.minimum(d / rg, 1.0)))
+        wb = 0.5 * (1.0 + np.cos(np.pi * np.minimum(d / rb, 1.0)))
+        # (height and cross slope only: a grade handed across, however eased, moved the piece off the ones beside it
+        # (Paul Ricard's ramps, a 0.3-0.8 m sawtooth) or bent it against its own climb (Interlagos' sag); the racing
+        # line came out rougher than before. RACE_NODE_GRADE=on hands it over as well)
+        if not RACE_NODE_GRADE_ON:
+            dg = 0.0
+        z1 = z + (dz * wz + dg * d * wg) * fr
+        b1 = bk + dbk * wb * fr
+        if RACE_NODE_ACCEPT_ON:
+            # (kept only where the surface through the node, the earlier piece's plane before it and this piece after,
+            # comes out no rougher than without it: against its 25 m mean, in its grade change per m, in its cross
+            # slope change per m; a correction that met the node by bending the piece made the racing line rougher
+            # than before at Interlagos, Paul Ricard, Indianapolis, 2026-11-07)
+            if proto is not None and RACE_NODE_LANES_ON:
+                # (over the whole stretch the correction changes, and the 25 m mean's reach past it: measured on
+                # 60 m alone, Paul Ricard's worst step and Road America's chord came out worse further along)
+                reach = max(rz, rb, rg) + 25.0
+                c0 = _race_node_lane_cost(xy, s_, z, bk, at, inw, done, proto, back=40.0, ahead=reach)
+                c1 = _race_node_lane_cost(xy, s_, z1, b1, at, inw, done, proto, back=40.0, ahead=reach)
+            else:
+                ln_ = G @ (-inw)
+                c0 = _race_node_cost(s_, z, bk, at, zq, ln_, float(G @ nrm[at]))
+                c1 = _race_node_cost(s_, z1, b1, at, zq, ln_, float(G @ nrm[at]))
+            if any(b_ > a_ + 1e-6 for a_, b_ in zip(c0, c1)):
+                continue
+        z, bk = z1, b1
+    return z, bk
+
+
+def _race_node_lane_cost(xy, s_, z, bk, at, inw, done, proto, back=20.0, ahead=60.0, step=1.0,
+                         lanes=(-0.9, -0.6, -0.3, 0.0, 0.3, 0.6, 0.9)):
+    """trackcheck's measures of the surface race_surface picks through a node, lane by lane across this piece
+    (proto, with heights z and bank bk) laid with the earlier pieces done: (largest height against the lane's 25 m
+    running mean m, largest grade change per m, largest cross slope change per m between the outer lanes), back m
+    before the node along the piece's direction there and ahead m along the piece. Pure."""
+    q = Plan.__new__(Plan)
+    for a in Plan.__slots__:
+        setattr(q, a, getattr(proto, a, None))
+    q.xy, q.z, q.bank = xy, z, bk
+    L = float(s_[-1])
+    d = np.arange(0.0, min(ahead, L) + 1e-9, step)
+    sv = d if at == 0 else L - d
+    C = np.stack([np.interp(sv, s_, xy[:, 0]), np.interp(sv, s_, xy[:, 1])], 1)
+    dl = np.arange(back, 0.0, -step)
+    C = np.r_[xy[at][None] - dl[:, None] * inw[None], C]
+    t = np.gradient(C, axis=0)
+    t /= np.maximum(np.hypot(*t.T), 1e-9)[:, None]
+    nv = np.stack([-t[:, 1], t[:, 0]], 1)
+    rh = float(proto.road_half)
+    Z = []
+    for f in lanes:
+        P = C + nv * f * rh
+        Z.append(_race_pick(P[:, 0], P[:, 1], list(done) + [q]))
+    Z = np.array(Z)
+    if not np.isfinite(Z).all() or Z.shape[1] < 27:
+        return (0.0, 0.0, 0.0)
+    k = 25
+    rough = 0.0
+    for zz in Z:
+        pad = k // 2
+        zpd = np.r_[2 * zz[0] - zz[pad:0:-1], zz, 2 * zz[-1] - zz[-2:-pad - 2:-1]]
+        c = np.cumsum(np.r_[0.0, zpd])
+        rough = max(rough, float(np.max(np.abs(zz - ((c[k:] - c[:-k]) / k)[:len(zz)]))))
+    g = np.diff(Z, axis=1) / step
+    dg = float(np.max(np.abs(np.diff(g, axis=1)))) / step
+    xs = (Z[-1] - Z[0]) / (2 * lanes[-1] * rh)
+    return (rough, dg, float(np.max(np.abs(np.diff(xs)))) / step)
+
+
+def _race_node_cost(s_, z, bk, at, zq, gl, bl, back=20.0, ahead=60.0, step=1.0):
+    """(roughness m, grade change per m, cross slope change per m) of the surface through a node: the earlier
+    piece's plane for back m before it (height zq, grade gl away from the node, cross slope bl), this piece's (z, bk
+    at arc s_, from its end at) for ahead m after. Pure."""
+    L = float(s_[-1])
+    d = np.arange(0.0, min(ahead, L) + 1e-9, step)
+    sv = d if at == 0 else L - d
+    zp = np.interp(sv, s_, z)
+    bp = np.interp(sv, s_, bk)
+    dl = np.arange(back, 0.0, -step)
+    zz = np.r_[zq + gl * dl, zp]
+    bb = np.r_[np.full(len(dl), bl), bp]
+    k = int(round(25.0 / step)) | 1
+    if len(zz) < k + 2:
+        return (0.0, 0.0, 0.0)
+    pad = k // 2
+    zpd = np.r_[2 * zz[0] - zz[pad:0:-1], zz, 2 * zz[-1] - zz[-2:-pad - 2:-1]]
+    c = np.cumsum(np.r_[0.0, zpd])
+    mean = (c[k:] - c[:-k]) / k
+    rough = float(np.max(np.abs(zz - mean[:len(zz)])))
+    g = np.diff(zz) / step
+    return (rough, float(np.max(np.abs(np.diff(g)))) / step, float(np.max(np.abs(np.diff(bb)))) / step)
+
+
+RACE_SEAM_MIN_LOOPS = 4.0     # loop lengths in its seam's reach: a shorter loop's seam is not extended (_race_seams)
+RACE_SEAM_GAP_M = 2 * VERTEX_STEP    # m: a race piece whose ends are this near each other is closed (its seam) ...
+RACE_SEAM_GAP_LEN = 20.0             # ... when it is this many times longer than the gap
+
+
+def _race_closed(xy):
+    """Is race piece xy (k, 2) a closed loop: its ends within 1 m, or within RACE_SEAM_GAP_M on a piece at least
+    RACE_SEAM_GAP_LEN times longer than the gap? Pure."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 4:
+        return False
+    g = float(np.hypot(*(xy[0] - xy[-1])))
+    if g <= 1.0:
+        return True
+    L = float(np.hypot(*np.diff(xy, axis=0).T).sum())
+    return g <= RACE_SEAM_GAP_M and L >= RACE_SEAM_GAP_LEN * g
+
+
+def _race_conform_one(plans, node):
+    """[(z, bank)] per plan: the race plans laid as one surface where their carriageways overlap. The dominant piece
+    first (the widest carriageway, then the longest road): each later piece, at every vertex where samples across its
+    carriageway lie on the surface of the pieces before it (race_surface's pick of them, already conformed), takes
+    the height and cross slope fitted to that surface there (least squares over the samples on it), the correction
+    smoothed along the piece over RACE_CONFORM_SIGMA_M and eased out over RACE_CONFORM_TAPER_M past the shared
+    stretch. Every piece planned its own profile and bank: a pit lane over an oval's apron, a road course over an
+    oval or another course's pavement stood 0.25-0.55 m off it where race_surface's pick changed piece (Daytona's pit
+    lanes, Spa, Road America, Laguna Seca, 2026-11-05). The dominant piece is left as it is. Points past an earlier
+    piece's end are not on it (the next piece going on from it). Pure."""
+    ln = {}
+    for p in plans:
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        ln[p.rid] = ln.get(p.rid, 0.0) + (float(np.hypot(*np.diff(xy, axis=0).T).sum()) if len(xy) > 1 else 0.0)
+    # (the widest carriageway first, among equal widths the racing line, then the longest road: at a shared node the
+    # first piece's surface wins and the pieces meeting it conform to it, _race_node_conform. The line ahead of wider
+    # pieces put a pit lane's 3-way node at Interlagos back to a 0.11 m twist, 2026-11-07)
+    line = _race_line_set(plans) if node else set()
+    curve = _race_line_curve([plans[j] for j in (line or range(len(plans)))]) if node else None
+    if node and RACE_LINE_ORDER_ON:
+        order = sorted(range(len(plans)), key=lambda j: (-round(float(plans[j].road_half) * 4) / 4, j not in line,
+                                                         -ln[plans[j].rid], j))
+    else:
+        order = sorted(range(len(plans)), key=lambda j: (-float(plans[j].road_half), -ln[plans[j].rid], j))
+    order = _race_follow_order(plans, order)
+    out = [None] * len(plans)
+    done = []
+    for j in order:
+        p = plans[j]
+        xy0 = _race_eval_line(p.xy)
+        b0 = None if p.bank is None or len(p.bank) != len(xy0) else np.asarray(p.bank, np.float64)
+        xy, z, bk = _race_fillet(xy0, np.asarray(p.z, np.float64), b0)
+        z = np.asarray(z, np.float64).copy()
+        bk = np.zeros(len(xy)) if bk is None else np.asarray(bk, np.float64).copy()
+        if len(xy) >= 2:
+            # (eased in and out at the bank's rate: a piece merged onto an oval took its banking only as far as its
+            # carriageway and stepped level past it, a 0.1 cross slope change in one vertex, 0.35 m at the lane's edge,
+            # Daytona's infield, 2026-11-05)
+            bk = bank_rate_limited(bk, float(np.median(np.hypot(*np.diff(xy, axis=0).T))))
+        free = None     # (per vertex, the share of its lanes the lane fit found no earlier pavement under)
+        if done and len(xy) >= 2:
+            # (an end on another piece's end takes its height there, eased back along it: the race snap leaves the
+            # ends alone, and Laguna Seca's climb ended 0.44 m over the wider piece it goes on into, 2026-11-05)
+            sj = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            rh0 = float(p.road_half)
+            for at in (0, -1):
+                for q in done:
+                    qx = np.asarray(q.xy, np.float64)[:, :2]
+                    for qe in (0, -1):
+                        if np.hypot(*(qx[qe] - xy[at])) <= 1.0:
+                            qz = np.asarray(q.z, np.float64)
+                            # (the surface there, whichever piece it is: a short piece's end on the oval, beside the
+                            # pit road's end, took the pit road's height, 0.4-1.2 m off the banking, Bristol 2026-11-05)
+                            zt = float(_race_pick(xy[at:at + 1, 0] if at == 0 else xy[-1:, 0],
+                                                  xy[at:at + 1, 1] if at == 0 else xy[-1:, 1], done)[0])
+                            zt = zt if np.isfinite(zt) else float(qz[qe])
+                            dz = zt - float(z[at])
+                            d_ = sj if at == 0 else sj[-1] - sj
+                            if abs(dz) <= RACE_CONFORM_MAX_M and len(qx) >= 2:
+                                # (onto a wider piece, along its own grade carried back: a 12 % climb met the level
+                                # piece it goes on into in a crest; the grade changes over RACE_CONFORM_JOIN_GRADE_M)
+                                k1 = 1 if qe == 0 else -2
+                                gq = (float(qz[k1]) - float(qz[qe])) / max(float(np.hypot(*(qx[k1] - qx[qe]))), 1e-6)
+                                if float(q.road_half) > rh0 + 0.25:
+                                    lead = zt - gq * d_
+                                    u = np.minimum(d_ / RACE_CONFORM_JOIN_GRADE_M, 1.0)
+                                    w = 0.5 * (1.0 + np.cos(np.pi * u))
+                                    z = z + (lead - z) * w
+                                    dz = zt - float(z[at])
+                                if abs(dz) > 0.005:
+                                    u = np.minimum(d_ / RACE_CONFORM_TAPER_M, 1.0)
+                                    z = z + dz * 0.5 * (1.0 + np.cos(np.pi * u))
+                            break
+                    else:
+                        continue
+                    break
+            nrm = _normals(xy)
+            rh = float(p.road_half)
+            offs = np.linspace(-rh, rh, RACE_CONFORM_LANES)
+            Q = (xy[:, None, :] + nrm[:, None, :] * offs[None, :, None]).reshape(-1, 2)
+            # (two pieces of one width meeting end to end are one road going on, snap_junctions' join: near that end
+            # the piece is not on the other's pavement; the oval's own pieces were bent to each other's ends. A
+            # narrower pit lane ending on the oval is)
+            s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+            zone = np.zeros(len(xy), bool)
+            joined = set()
+            for at in (0, -1):
+                into = xy[1 if at == 0 else -2] - xy[at]
+                for qi, q in enumerate(done):
+                    if abs(float(q.road_half) - rh) >= 0.25 or len(q.xy) < 2:
+                        continue
+                    qx = np.asarray(q.xy, np.float64)[:, :2]
+                    qe = [(0, 1), (-1, -2)][int(np.hypot(*(qx[-1] - xy[at])) < np.hypot(*(qx[0] - xy[at])))]
+                    if np.hypot(*(qx[qe[0]] - xy[at])) > 1.0:
+                        continue
+                    # (going on from it, not leaving the node the same way: a fork's branch alongside its main line
+                    # shares its pavement, Spa, 2026-11-05)
+                    if float(into @ (qx[qe[1]] - qx[qe[0]])) < 0.0:
+                        joined.add(qi)
+                        zone |= (s_ <= RACE_CONFORM_JOIN_M) if at == 0 else (s_ >= s_[-1] - RACE_CONFORM_JOIN_M)
+            # (a wider piece's surface reaches past its end over the narrower ones coming to it: a fork's lanes met
+            # the wider piece starting 5 m on 0.25 m below its banked start, Spa, 2026-11-05)
+            # (not one it goes straight on from, end to end: that join is snap_junctions', and Laguna's climb onto
+            # the wider piece it continues came out 3 cm worse)
+            wider = {id(q) for q in done if float(q.road_half) > rh + 0.25
+                     and min(np.hypot(*(np.asarray(q.xy, np.float64)[e_, :2] - xy[f_])) for e_ in (0, -1)
+                             for f_ in (0, -1)) > 1.0} or False
+            zs = _race_pick(Q[:, 0], Q[:, 1], done, ends=wider).reshape(len(xy), -1)
+            if joined and zone.any():
+                rest = [q for qi, q in enumerate(done) if qi not in joined]
+                Qz = (xy[zone][:, None, :] + nrm[zone][:, None, :] * offs[None, :, None]).reshape(-1, 2)
+                zs[zone] = (_race_pick(Qz[:, 0], Qz[:, 1], rest, ends=wider).reshape(int(zone.sum()), -1) if rest
+                            else np.nan)
+            own = z[:, None] + bk[:, None] * offs[None, :]
+            dz = zs - own
+            ok = np.isfinite(dz) & (np.abs(np.nan_to_num(dz)) <= RACE_CONFORM_MAX_M)
+            cnt = ok.sum(1)
+            have = cnt > 0
+            free = 1.0 - cnt / float(RACE_CONFORM_LANES)
+            if have.any():
+                d0 = np.zeros(len(xy))
+                d1 = np.zeros(len(xy))
+                for i in np.flatnonzero(have):
+                    o_, v_ = offs[ok[i]], dz[i, ok[i]]
+                    if len(o_) >= 2:
+                        a_, b_ = np.polyfit(o_, v_, 1)
+                        d1[i], d0[i] = a_, b_
+                    else:
+                        d0[i] = float(v_.mean() - d1[i] * o_.mean())
+                hs = s_[have]
+                # (between shared vertices interpolated, past them held, then the whole smoothed along the piece)
+                c0 = np.interp(s_, hs, d0[have])
+                c1 = np.interp(s_, hs, d1[have])
+                wt = np.interp(s_, hs, np.ones(len(hs)))
+                gap = np.minimum(np.abs(s_[:, None] - hs[None, :]).min(1) / RACE_CONFORM_TAPER_M, 1.0)
+                w = 0.5 * (1.0 + np.cos(np.pi * gap)) * wt
+                k = np.exp(-0.5 * ((s_[:, None] - s_[None, :]) / RACE_CONFORM_SIGMA_M) ** 2)
+                k /= k.sum(1, keepdims=True)
+                # (inside the shared stretch the fit itself, unsmoothed where every sample lies on it)
+                full = (cnt == RACE_CONFORM_LANES).astype(np.float64)
+                fs = k @ full
+                c0s, c1s = k @ c0, k @ c1
+                c0 = fs * c0 + (1 - fs) * c0s
+                c1 = fs * c1 + (1 - fs) * c1s
+                z = z + c0 * w
+                bk = bk + c1 * w
+        if node and done and len(xy) >= 2:
+            z, bk = _race_node_conform(xy, z, bk, done, free=free, curve=curve, proto=p)
+        # (closed: its ends together, or within RACE_SEAM_GAP_M of each other on a piece many times longer: the plan's
+        # thinning left Rustavi's 1.3 km loop ending 4 m short of its seam, so it was never closed, and its two ends,
+        # each smoothed into the other side by the seam's extension, stood 1.13 m apart, 2026-11-07)
+        if RACE_SEAM_ON and RACE_CLOSE_ON and len(xy) >= 4 and _race_closed(xy):
+            z, bk = _race_close_seam(xy, z, bk)
+        out[j] = (z, bk, xy)
+        q = Plan.__new__(Plan)
+        for a in Plan.__slots__:
+            setattr(q, a, getattr(p, a, None))
+        q.z, q.bank, q.xy = z, bk, xy
+        done.append(q)
+    _ONE_ORDER_TL.order = list(order)
+    return out
+
+
+import threading as _thr_one
+_ONE_ORDER_TL = _thr_one.local()
+
+
+def _race_set_cost(plans, zb, step=1.0, lanes=(-0.8, 0.0, 0.8)):
+    """[(roughness m, grade change per m, cross slope change per m)] per plan: trackcheck's measures of the surface
+    race_surface would pick (zb: race_conform's laid heights) along each piece, at lanes across it. Pure."""
+    tmp = []
+    for p, (z, bk, xy) in zip(plans, zb):
+        q = Plan.__new__(Plan)
+        for a in Plan.__slots__:
+            setattr(q, a, getattr(p, a, None))
+        q.z, q.bank, q.xy = z, bk, xy
+        tmp.append(q)
+    br = _race_branch_ends(tmp)
+    out = []
+    for q in tmp:
+        xy = np.asarray(q.xy, np.float64)[:, :2]
+        if len(xy) < 2:
+            out.append((0.0, 0.0, 0.0, 0.0))
+            continue
+        P, _s = resample(xy, step)
+        if len(P) < 15:
+            out.append((0.0, 0.0, 0.0, 0.0))
+            continue
+        nv = _normals(P)
+        rh = float(q.road_half)
+        Z = np.array([_race_pick((P + nv * f * rh)[:, 0], (P + nv * f * rh)[:, 1], tmp, branch=br) for f in lanes])
+        Z = np.where(np.isfinite(Z), Z, np.nanmean(Z) if np.isfinite(Z).any() else 0.0)
+        k = int(round(25.0 / step)) | 1
+        rough = 0.0
+        for zz in Z:
+            pad = k // 2
+            zpd = np.r_[2 * zz[0] - zz[pad:0:-1], zz, 2 * zz[-1] - zz[-2:-pad - 2:-1]]
+            c = np.cumsum(np.r_[0.0, zpd])
+            rough = max(rough, float(np.max(np.abs(zz - ((c[k:] - c[:-k]) / k)[:len(zz)]))))
+        g = np.diff(Z, axis=1) / step
+        dg = float(np.max(np.abs(np.diff(g, axis=1)))) / step
+        xs = (Z[-1] - Z[0]) / (2 * lanes[-1] * rh)
+        # (the step at its ends: the largest change per step within 4 m of an end beyond the lane's median grade)
+        d1 = np.diff(Z, axis=1)
+        med = np.median(d1, axis=1, keepdims=True)
+        ne = max(1, int(round(4.0 / step)))
+        endstep = float(np.max(np.abs(np.r_[(d1 - med)[:, :ne].ravel(), (d1 - med)[:, -ne:].ravel()])))
+        out.append((rough, dg, float(np.max(np.abs(np.diff(xs)))) / step, endstep))
+    return out
+
+
+RACE_GATE_STATS = {"sets": 0, "gated": 0, "on": 0, "s_off": 0.0, "s_on": 0.0, "s_cost": 0.0}
+if os.environ.get("BNE_RACE_GATE_STATS"):
+    import atexit as _ax
+    _ax.register(lambda: print("RACE_GATE_STATS", RACE_GATE_STATS, flush=True))
+
+
+def race_conform(plans):
+    """[(z, bank, xy)] per plan: the race plans laid as one surface (_race_conform_one). With RACE_NODE_GATE (the
+    default when node conform is on): laid both ways, without and with the node corrections, and the corrected one
+    kept only where no piece's surface comes out rougher by trackcheck's measures (_race_set_cost); a set with no
+    shared node is laid once. Per-node acceptance, however wide its window, let a correction that later pieces were
+    laid onto make another node worse (Paul Ricard's worst step 0.341 -> 0.47 m, 2026-11-07). Cached per set."""
+    key = tuple(_race_key(p) for p in plans)
+    hit = _CONFORM_CACHE.get(key)
+    if hit is not None:
+        _CONFORM_CACHE.move_to_end(key)
+        return hit
+    import time as _t
+    t0 = _t.perf_counter()
+    off = _race_conform_one(plans, False)
+    od_off = getattr(_ONE_ORDER_TL, 'order', None)
+    t1 = _t.perf_counter()
+    RACE_GATE_STATS["sets"] += 1
+    RACE_GATE_STATS["s_off"] += t1 - t0
+    out, od = off, od_off
+    if RACE_NODE_ON and RACE_NODE_GATE_ON and len(plans) >= 2 and _race_has_node(plans):
+        on = _race_conform_one(plans, True)
+        od_on = getattr(_ONE_ORDER_TL, 'order', None)
+        t2 = _t.perf_counter()
+        c_off, c_on = _race_set_cost(plans, off), _race_set_cost(plans, on)
+        t3 = _t.perf_counter()
+        RACE_GATE_STATS["gated"] += 1
+        RACE_GATE_STATS["s_on"] += t2 - t1
+        RACE_GATE_STATS["s_cost"] += t3 - t2
+        if _race_gate_keep(plans, c_off, c_on):
+            out, od = on, od_on
+            RACE_GATE_STATS["on"] += 1
+    elif RACE_NODE_ON and not RACE_NODE_GATE_ON:
+        out = _race_conform_one(plans, True)
+        od = getattr(_ONE_ORDER_TL, 'order', None)
+    _CONFORM_CACHE[key] = out
+    _CONFORM_ORDER[key] = list(od) if od is not None else None
+    while len(_CONFORM_CACHE) > 16:
+        _CONFORM_CACHE.popitem(last=False)
+    while len(_CONFORM_ORDER) > 16:
+        _CONFORM_ORDER.popitem(last=False)
+    return out
+
+
+RACE_GATE_STEP_M = 0.05    # m: trackcheck's join step bar (STEP_M) ...
+RACE_GATE_BUMP_M = 0.10    # ... and its bump bar (BUMP_M), a side piece may not newly pass
+
+
+def _race_gate_keep(plans, c_off, c_on):
+    """Keep the node-corrected set? The racing line (its loop, else its longest path: _race_line_set) no rougher on
+    any measure, absolutely; the side pieces (pit roads, connectors, aprons): the end steps the corrections remove more
+    than the roughness they add, and none newly over the step or bump bar. Pure."""
+    line = _race_line_set(plans) or set(range(len(plans)))
+    # (the racing line as a whole: its worst roughness, grade change, cross slope change and end step no worse; a
+    # correction that takes a 0.39 m step out of Spa's line at Speaker's Corner moves the pieces either side a little,
+    # and held piece by piece it was refused, 2026-11-07)
+    lo = [c_off[j] for j in line]
+    ln_ = [c_on[j] for j in line]
+    if lo and any(max(b[k] for b in ln_) > max(a[k] for a in lo) + 1e-4 for k in range(len(lo[0]))):
+        return False
+    removed, added = 0.0, 0.0
+    for j, (a, b) in enumerate(zip(c_off, c_on)):
+        if j in line:
+            continue
+        if (a[3] <= RACE_GATE_STEP_M < b[3] - 1e-4) or (a[0] <= RACE_GATE_BUMP_M < b[0] - 1e-4):
+            return False        # (newly over a bar)
+        removed += max(a[3] - b[3], 0.0)
+        added += max(b[0] - a[0], 0.0) + max(b[3] - a[3], 0.0)
+    return removed >= added
+
+
+def _race_has_node(plans, tol=None):
+    """Does an end of one race plan lie within RACE_NODE_M of another's line? Pure."""
+    tol = RACE_NODE_M if tol is None else tol
+    lines = [np.asarray(p.xy, np.float64)[:, :2] for p in plans]
+    for i, l in enumerate(lines):
+        if len(l) < 2:
+            continue
+        for q in (l[0], l[-1]):
+            for j, m in enumerate(lines):
+                if j != i and len(m) >= 2 and _seg_dist(m, q) <= tol:
+                    return True
+    return False
+
+
+def race_surface(e, n, plans):
+    """race_surface_one over the plans laid as one surface where they overlap (race_conform)."""
+    if not RACE_CONFORM_ON:
+        return _race_pick(e, n, plans)
+    zb = race_conform(plans)
+    tmp = []
+    for p, (z, bk, xy) in zip(plans, zb):
+        q = Plan.__new__(Plan)
+        for a in Plan.__slots__:
+            setattr(q, a, getattr(p, a, None))
+        q.z, q.bank, q.xy = z, bk, xy
+        tmp.append(q)
+    rank = None
+    if RACE_NODE_ON and RACE_PICK_ONE_ON:
+        od = _CONFORM_ORDER.get(tuple(_race_key(p) for p in plans))
+        if od is not None:
+            rank = {id(tmp[j]): r for r, j in enumerate(od)}
+    return _race_pick(e, n, tmp, blend=RACE_CROSS_BLEND_ON, branch=_race_branch_ends(tmp), rank=rank)
+
+
+def _race_branch_ends(plans):
+    """{id(plan): (first end, last end)} bools: the ends that lie on another piece's carriageway away from its ends
+    (a branch leaving it). Past such an end a piece is no carriageway of its own (_race_pick)."""
+    lines = [np.asarray(p.xy, np.float64)[:, :2] for p in plans]
+    out = {}
+    for a, p in enumerate(plans):
+        if len(lines[a]) < 2:
+            continue
+        fl = [False, False]
+        for k, at in enumerate((0, -1)):
+            q = lines[a][at]
+            for b, pb in enumerate(plans):
+                L = lines[b]
+                if b == a or len(L) < 2:
+                    continue
+                if min(np.hypot(*(L[0] - q)), np.hypot(*(L[-1] - q))) <= RACE_CONFORM_JOIN_M:
+                    continue
+                if _seg_dist(L, q) <= float(pb.road_half):
+                    fl[k] = True
+                    break
+        if any(fl):
+            out[id(p)] = tuple(fl)
+    return out
+
+
+def _race_pick(e, n, plans, ends=True, blend=False, branch=None, rank=None):
+    """(len(e),) the designed surface of the raceways' plans at points (e, n): each point on the core (Plan.half) of
+    the nearest race plan's centre line takes that plan's height at its nearest point plus its bank times the offset
+    across it (clamped to the carriageway, as grade_points' bank); nan off every core. grade_points averages every
+    segment within reach of a point, each read along its own line: on a banked curve the neighbouring segments' lines
+    lie off the point (a 4 m segment 12 m away turns 0.04 rad on a 300 m radius), and their bank times that offset
+    pulled the racing line 5-11 cm down every few vertices, Talladega's 0.6 banking a 14 cm 10 m chord (2026-11-05:
+    "smooth is not super speedway smooth"). The track's own surface is one plane across it at every point. Pure."""
+    e = np.asarray(e, np.float64)
+    n = np.asarray(n, np.float64)
+    out = np.full(len(e), np.nan)
+    best = np.full(len(e), np.inf)
+    if not len(e):
+        return out
+    order = np.argsort(e, kind="stable")
+    se = e[order]
+    per = []            # (blend) each plan's (height, distance) at the points on its carriageway
+    for p in plans:
+        if blend:
+            pz, pd = np.full(len(e), np.nan), np.full(len(e), np.inf)
+            per.append((pz, pd, float(p.road_half)))
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        if len(xy) < 2:
+            continue
+        z = np.asarray(p.z, np.float64)
+        bk = None if p.bank is None or len(p.bank) != len(xy) else np.asarray(p.bank, np.float64)
+        h, rh = float(p.half), float(p.road_half)
+        for g in range(len(xy) - 1):
+            a, b = xy[g], xy[g + 1]
+            lo, hi = np.searchsorted(se, (min(a[0], b[0]) - h, max(a[0], b[0]) + h))
+            if hi <= lo:
+                continue
+            k = order[lo:hi]
+            k = k[(n[k] >= min(a[1], b[1]) - h) & (n[k] <= max(a[1], b[1]) + h)]
+            if not len(k):
+                continue
+            d = b - a
+            ll = float(d @ d)
+            if ll <= 1e-12:
+                continue
+            qx, qy = e[k] - a[0], n[k] - a[1]
+            tr = (qx * d[0] + qy * d[1]) / ll
+            t = np.clip(tr, 0.0, 1.0)
+            dist = np.hypot(qx - t * d[0], qy - t * d[1])
+            past = ((g == 0) & (tr < 0.0)) | ((g == len(xy) - 2) & (tr > 1.0))
+            if not (ends is True or (ends and id(p) in ends)):
+                # (past the piece's own ends: not on it)
+                dist = np.where(past, np.inf, dist)
+            # (the point's piece: one whose carriageway it is on before one whose shoulder, the wider carriageway
+            # first (an oval's over the pit lane beside it), then the nearest: a pit lane's flat core laid over the
+            # banking's shoulder creased Daytona's tri-oval 0.5 m)
+            on = dist <= rh
+            bf = None if branch is None else branch.get(id(p))
+            if bf is not None:
+                # (past a branch's end on the piece it leaves: that piece's carriageway, not the branch's clamped
+                # plane; a short piece's banked end laid 1 m down across Bristol's banking, 2026-11-05)
+                on = on & ~(((g == 0) & (tr < 0.0) & bf[0]) | ((g == len(xy) - 2) & (tr > 1.0) & bf[1]))
+            score = np.where(on, 0.0, 1.0) * 1e6 - rh * 1e3 + dist
+            if rank is not None and id(p) in rank:
+                # (a point on two pieces' carriageways of one width takes the earlier one's surface, not the nearer's:
+                # two overlapping pieces a few cm to 0.7 m apart swapped from one sample to the next, a sawtooth on
+                # Paul Ricard's ramps, 2026-11-07)
+                score = np.where(on, -round(rh * 4) / 4 * 1e3 + rank[id(p)] + dist * 1e-3, score)
+            if blend:
+                mm = (dist <= rh) & (dist < pd[k])
+                if mm.any():
+                    kk, tt = k[mm], t[mm]
+                    zb = z[g] + (z[g + 1] - z[g]) * tt
+                    if bk is not None:
+                        ob = np.clip((qy[mm] * d[0] - qx[mm] * d[1]) / math.sqrt(ll), -rh, rh)
+                        zb = zb + (bk[g] + (bk[g + 1] - bk[g]) * tt) * ob
+                    pz[kk], pd[kk] = zb, dist[mm]
+            m = (dist <= h) & (score < best[k])
+            if not m.any():
+                continue
+            k, t, dist = k[m], t[m], score[m]
+            zz = z[g] + (z[g + 1] - z[g]) * t
+            if RACE_NODE_ON and RACE_NODE_GRADE_ON and past[m].any():
+                # (past the piece's end on its line: its last segment's grade carried on (at most RACE_NODE_GRADE_MAX),
+                # not its end's height held: a wider piece reaching 9 m past its end over the narrower one going on
+                # from it held its end level while that one left the node at the wider one's grade
+                # (_race_node_conform), a 0.6 m step 9 m on, Interlagos 2026-11-07. Unclipped, a 20 % ramp's end
+                # carried on 13 m sawtoothed the pieces beside it, Paul Ricard)
+                gs = float(np.clip((z[g + 1] - z[g]) / math.sqrt(ll), -RACE_NODE_GRADE_MAX, RACE_NODE_GRADE_MAX))
+                over = np.where(tr[m] > 1.0, tr[m] - 1.0, np.where(tr[m] < 0.0, tr[m], 0.0)) * math.sqrt(ll)
+                zz = zz + np.where(past[m], gs * over, 0.0)
+            if bk is not None:
+                off = np.clip((qy[m] * d[0] - qx[m] * d[1]) / math.sqrt(ll), -rh, rh)
+                zz = zz + (bk[g] + (bk[g + 1] - bk[g]) * t) * off
+            out[k] = zz
+            best[k] = dist
+    if blend and len(per) > 1:
+        # (where pieces of one width cross or share pavement, one surface: each piece's plane weighted by how far the
+        # point lies inside its carriageway (0 at its edge), not the nearer's alone; the pick between two crossing
+        # planes was a V crease along the line where they met, 0.35 m at Daytona's infield, 2026-11-05)
+        cnt = np.zeros(len(e), np.int64)
+        top = np.full(len(e), -np.inf)
+        for pz, pd, rh in per:
+            m = np.isfinite(pz)
+            cnt += m
+            top[m] = np.maximum(top[m], rh)
+        sw = np.zeros(len(e))
+        sz = np.zeros(len(e))
+        for pz, pd, rh in per:
+            m = np.isfinite(pz) & (np.abs(top - rh) < 0.25)
+            u = np.clip(1.0 - pd[m] / max(rh, 1e-6), 0.0, 1.0)
+            w = u * u * (3.0 - 2.0 * u) + 1e-9
+            sw[m] += w
+            sz[m] += w * pz[m]
+        multi = (cnt >= 2) & (sw > 0)
+        out[multi] = sz[multi] / sw[multi]
+    return out
+
+
 def road_rank(spec):
     """Higher: the road that keeps its profile at a junction (snap_junctions); a link ranks just under its class."""
     cls = spec.cls or ""
@@ -1092,12 +2246,129 @@ def snap_junctions(plans, specs):
     if not plans:
         return
     rank = np.array([road_rank(sp) for sp in specs], np.int64)
+    if RACEWAY_ON and RACE_SNAP_ON:
+        # A track's surface wins over everything lying on it: the crossings' rule (each road over a higher-ranked
+        # road's carriageway takes its height there) for the raceways whatever BNE_COARSE_EASE says. A 4 m road
+        # across Lime Rock's West Bend, planned 1.4 m over the track, stood as a ridge across the racing line
+        # (2026-11-03, "death at speed"). Among the raceways: the longer piece ranks higher (a branch's end on the
+        # main line at a fork, the same rank's continuation rule kept them 0.5 m apart); every other road ranks
+        # under them, all equal, so the rule changes nothing between them.
+        race = np.array([sp is not None and sp.cls == "raceway" for sp in specs], bool)
+        if race.any():
+            ln = np.array([float(np.hypot(*np.diff(np.asarray(q.xy)[:, :2], axis=0).T).sum()) for q in plans])
+            # (by the whole road, its carriageway's width first: a cell's short piece of an oval ranked under the
+            # pit lane beside it and took its height across its own carriageway, 10 cm humps in Talladega's banking,
+            # 2026-11-05)
+            by_rid = {}
+            for j in np.flatnonzero(race):
+                by_rid[plans[j].rid] = by_rid.get(plans[j].rid, 0.0) + ln[j]
+            ln = np.array([(by_rid.get(q.rid, ln[j]) if race[j] else ln[j]) + 1e5 * float(q.road_half)
+                           for j, q in enumerate(plans)])
+            sr = np.zeros(len(plans), np.int64)
+            ri = np.flatnonzero(race)
+            sr[ri[np.argsort(ln[ri], kind="stable")]] = np.arange(1, len(ri) + 1)
+            _merge_race_overlaps([plans[j] for j in ri[np.argsort(-ln[ri], kind="stable")]])
+            _snap_once(plans, sr, end_m=0.0, coarse=True)
     js = _Junctions(plans)
     changed = js.snap(rank)
     # (a road joining one that the hold changed meets it at its new height: snapped again)
     if _hold_junction_corridors(js, rank, changed):
         _hold_junction_corridors(js, rank, js.snap(rank))
     js.store()
+
+
+RACE_MERGE_TAPER_M = 80.0    # m a track piece eases out the height it takes on another's pavement (_merge_race_overlaps)
+
+
+def _seg_dist(line, q):
+    """Distance from point q (2,) to polyline line (k, 2). Pure."""
+    a, d = line[:-1], np.diff(line, axis=0)
+    ll = np.maximum((d * d).sum(1), 1e-12)
+    t = np.clip(((q - a) * d).sum(1) / ll, 0.0, 1.0)
+    return float(np.hypot(*(q - (a + t[:, None] * d)).T).min())
+
+
+def _merge_race_overlaps(plans):
+    """Track pieces sharing pavement on one surface, in place. plans: the raceways' Plans, the first the strongest.
+    Each piece, over every stretch on an earlier piece's carriageway, takes that piece's surface there: its height at
+    the piece's offset across it (its bank) and its bank (turned with the piece's direction), the differences
+    interpolated between those points and eased out over RACE_MERGE_TAPER_M past them. (The junctions' rule moves a
+    road at one point and eases it over 40 m: Thompson's road course sharing the oval's pavement stayed apart, and
+    Atlanta's infield pieces laid their own flat cross slope across the oval's 18 deg banking, 18.8 %/10 m twists
+    where they joined it, 2026-11-03.) Pure but for the plans."""
+    done = []
+    for p in plans:
+        xy = np.asarray(p.xy, np.float64)[:, :2]
+        z = np.asarray(p.z, np.float64)
+        bank = None if p.bank is None or len(p.bank) != len(xy) else np.asarray(p.bank, np.float64)
+        if len(xy) < 2:
+            done.append(p)
+            continue
+        s_ = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+        tang = np.gradient(xy, axis=0)
+        tang /= np.maximum(np.hypot(*tang.T), 1e-9)[:, None]
+        want = np.full(len(xy), np.nan)
+        wbank = np.full(len(xy), np.nan)
+        for q in done:
+            qxy = np.asarray(q.xy, np.float64)[:, :2]
+            qz = np.asarray(q.z, np.float64)
+            if len(qxy) < 2:
+                continue
+            qb = None if q.bank is None or len(q.bank) != len(qxy) else np.asarray(q.bank, np.float64)
+            bx = q.bbox
+            m = ((xy[:, 0] >= bx[0]) & (xy[:, 0] <= bx[2]) & (xy[:, 1] >= bx[1]) & (xy[:, 1] <= bx[3])
+                 & np.isnan(want))
+            if not m.any():
+                continue
+            a0, d = qxy[:-1], np.diff(qxy, axis=0)
+            ll = np.maximum((d * d).sum(1), 1e-12)
+            for i in np.flatnonzero(m):
+                t = np.clip(((xy[i] - a0) * d).sum(1) / ll, 0.0, 1.0)
+                foot = a0 + t[:, None] * d
+                dist = np.hypot(*(xy[i] - foot).T)
+                g = int(np.argmin(dist))
+                if dist[g] > q.half:
+                    continue        # (its shoulder too: a pit lane along an oval's edge met the banking's plane in a
+                                    # 0.5-1 m step across its lanes, Daytona's tri-oval, 2026-11-05)
+                if (g == 0 and t[g] <= 0.0) or (g == len(d) - 1 and t[g] >= 1.0):
+                    continue        # (past q's end: the next piece going on from it, not pavement shared with it; held
+                                    # at q's end height, every join at Watkins Glen and Interlagos stood as a crest)
+                u = d[g] / math.sqrt(ll[g])
+                off = float(u[0] * (xy[i, 1] - foot[g, 1]) - u[1] * (xy[i, 0] - foot[g, 0]))   # (left of q: +)
+                zq = qz[g] + (qz[g + 1] - qz[g]) * t[g]
+                bq = 0.0 if qb is None else float(qb[g] + (qb[g + 1] - qb[g]) * t[g])
+                # (race_surface's plane: banked across q's carriageway, level past it at its edge's height)
+                want[i] = zq + bq * float(np.clip(off, -q.road_half, q.road_half))
+                wbank[i] = (bq if abs(off) <= q.road_half else 0.0) * (1.0 if float(u @ tang[i]) >= 0.0 else -1.0)
+        hit = np.flatnonzero(np.isfinite(want))
+        if len(hit) and abs(want[hit] - z[hit]).max() <= JUNCTION_MAX_M:
+            gap = np.minimum(np.abs(s_[:, None] - s_[hit][None, :]).min(1) / RACE_MERGE_TAPER_M, 1.0)
+            w = 0.5 * (1.0 + np.cos(np.pi * gap))
+            p.z = z + np.interp(s_, s_[hit], want[hit] - z[hit]) * w
+            b0 = np.zeros(len(xy)) if bank is None else bank
+            nb = b0 + np.interp(s_, s_[hit], wbank[hit] - b0[hit]) * w
+            p.bank = nb if np.any(nb != 0.0) else None
+        done.append(p)
+
+
+def _snap_once(plans, rank, end_m=None, coarse=None):
+    """One pass of earthfast.snap_junctions over plans (changed in place); the plans it changed (bool array)."""
+    import fast
+    fast.require(115, "the junctions' heights")
+    n = [len(p.xy) for p in plans]
+    off = np.concatenate([[0], np.cumsum(n)]).astype(np.int64)
+    xy = np.ascontiguousarray(np.concatenate([np.asarray(p.xy, np.float64)[:, :2] for p in plans]).reshape(-1, 2))
+    z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, np.float64) for p in plans]))
+    half = np.array([p.road_half for p in plans], np.float64)
+    abut = np.array([[bool(p.abut[0]), bool(p.abut[1])] for p in plans], np.uint8).reshape(-1, 2)
+    boxes = np.ascontiguousarray(np.array([q.bbox for q in plans], np.float64).reshape(-1, 4))
+    out, changed = fast._ef.snap_junctions(xy, z, off, rank, half, abut, boxes, JUNCTION_REACH_M,
+                                           JUNCTION_END_M if end_m is None else end_m,
+                                           JUNCTION_TAPER_M, JUNCTION_MAX_M,
+                                           bool(COARSE_EASE_ON if coarse is None else coarse))
+    for j in np.flatnonzero(changed):
+        plans[j].z = out[off[j]:off[j + 1]].copy()
+    return np.asarray(changed, bool)
 
 
 class _Junctions:
@@ -1408,6 +2679,9 @@ def junction_pads(plans, specs, nodes=None):
             info.append((j, arc, sgn, avail, np.array([px_, py_]), z_n, grade, pad_class_w(specs[j]), b_n))
         if len(info) < 2 or len({plans[i[0]].rid for i in info}) < 2:
             continue
+        if RACEWAY_ON and any(specs[i[0]].cls == "raceway" for i in info):
+            continue                # (a track's own height, snap_junctions': a pad flattened Thompson's oval 1.6 m
+                                    # under it where the road course joins, a ramp over 20 m, 2026-11-03)
         if len(info) == 2 and float(info[0][4] @ info[1][4]) < -math.cos(math.radians(PAD_FACE_DEG[0])) * \
                 math.hypot(*info[0][4]) * math.hypot(*info[1][4]):
             continue                # (a road going on into its next part: its chain's)
@@ -1593,6 +2867,60 @@ def _twin_trimmed(secs):
 _UNSET = object()
 
 
+RACE_TUBE_FLOOR_ON = os.environ.get("BNE_RACE_TUBE_FLOOR", "on") != "off"   # a dug road at its tube's floor in it,
+                                    # its climb back to a track laid from the portal (_race_in_tube, _race_portal_cap)
+
+
+def _race_in_tube(xy, e, tubes):
+    """(k,) bools: the vertices xy of a road lying in the drawn tube that ends at portal e (tubes: [(line (m, 2), half
+    width to its walls)]): within the half width of its line and not past either of its ends; None for no such tube.
+    Pure."""
+    for line, hw in tubes:
+        line = np.asarray(line, np.float64)[:, :2]
+        if len(line) < 2 or min(float(np.hypot(*(line[0] - e))), float(np.hypot(*(line[-1] - e)))) > 0.05:
+            continue
+        a, d = line[:-1], np.diff(line, axis=0)
+        ll = np.maximum((d * d).sum(1), 1e-12)
+        t = np.clip(((xy[:, None, :] - a[None]) * d[None]).sum(2) / ll[None], 0.0, 1.0)
+        dist = np.hypot(*(xy[:, None, :] - (a[None] + t[..., None] * d[None])).transpose(2, 0, 1)).min(1)
+        inside = dist <= hw
+        for end, nb in ((line[0], line[1]), (line[-1], line[-2])):
+            o = end - nb
+            o = o / max(float(np.hypot(*o)), 1e-9)
+            inside &= (xy - end) @ o <= 0.0
+        return inside
+    return None
+
+
+def _race_portal_cap(z2, z, lb, arc, xy, ports, floors, g):
+    """z2 (a dug road's heights after its climb back to a track, lb the climb's anchors (the heights it climbs to,
+    -inf elsewhere), z before it) with the stretch
+    from each portal it reaches (a vertex within RACE_UNDER_FLAT_M) no higher than the portal's floor plus g times
+    the distance along it: the climb laid from the portal out, so the road leaves the tube's mouth at its floor. Where
+    the climb needs more than g to get there, the grade it needs, spread from the portal to the stretch it climbs to:
+    left at the climb's own grade outside RACE_PORTAL_SNAP_M, it rose 1-1.5 m within 2-6 m of the mouth (39 % and
+    70 % at Darlington's infield tunnels, 2026-11-07). Pure."""
+    z2 = np.asarray(z2, np.float64).copy()
+    for p, zf in zip(ports, floors):
+        d0 = np.hypot(*(xy - p).T)
+        k0 = int(np.argmin(d0))
+        if d0[k0] > RACE_UNDER_FLAT_M:
+            continue
+        dp = d0[k0] + np.abs(arc - arc[k0])
+        anchors = np.isfinite(lb) & (lb > z + 0.01)
+        need = g
+        if anchors.any():
+            need = max(g, float(np.max((lb[anchors] - zf) / np.maximum(dp[anchors], 1.0))))
+        ub = zf + need * dp
+        if need > g + 1e-9 and anchors.any():
+            # (the climb's anchors met from the portal at the grade they need: the bound between them falls at it)
+            ka = np.flatnonzero(anchors)
+            lbn = np.max(lb[ka][None, :] - need * np.abs(arc[:, None] - arc[ka][None, :]), axis=1)
+            z2 = np.maximum(z, lbn)
+        z2 = np.minimum(z2, np.maximum(ub, z))
+    return z2
+
+
 class _Planner:
     """The road plans of one planning region (geotiles.PLAN_Z), in its frame, per map cell, made once (worker threads;
     it fetches the road cells it lacks). store: the PlanStore it belongs to (its other regions, its settings)."""
@@ -1724,16 +3052,22 @@ class _Planner:
             box = self._clip_box(key)
             keeps = []
             for i in range(len(feats)):
-                if specs[i] is not None and specs[i].cls in UNGRADED:
+                race = specs[i] is not None and (specs[i].cls in UNGRADED or
+                                                 (RACEWAY_ON and specs[i].cls == "raceway"))
+                if race:                # (graded raceways too: their carriageway wins over a tunnel's ground, apply)
                     for ring in roadsmod.ground_parts(feats, i):
                         e, n, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                         keeps.append((np.stack([np.asarray(e), np.asarray(n)], axis=1),
-                                      specs[i].width / 2 + UNGRADED_MARGIN_M))
-                    continue
+                                      specs[i].width / 2 + (UNGRADED_MARGIN_M if specs[i].cls in UNGRADED
+                                                            else RACE_SHOULDER_M)))
+                    if specs[i].cls in UNGRADED:
+                        continue
                 if specs[i] is None:
                     continue
                 for ring in roadsmod.ground_parts(feats, i):     # not bridges / tunnels
-                    pieces = self._near_cell(np.asarray(ring, np.float64), box)
+                    # (a drag strip planned whole in every cell: its one straight grade the same in each, drag_plan)
+                    pieces = [np.asarray(ring, np.float64)] if getattr(specs[i], "race", None) == "drag" \
+                        else self._near_cell(np.asarray(ring, np.float64), box)
                     for r in pieces:
                         parts.append((r, specs[i]))
                         ids.append(str(feats.ids[i]))
@@ -1766,6 +3100,7 @@ class _Planner:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
                     pspecs.append(part[1])
+
                     pclip.append(cl)
                     pparts.append((fid, part[1], part[0]))
             if NEIGHBOUR_ON and plans and self._coarse(key):
@@ -1812,6 +3147,13 @@ class _Planner:
                     junction_pads([p for _f, p in plans], pspecs, pad_nodes)
                 except Exception as e:
                     log.debug("grading: junctions after the dips of %s: %s: %s", key, type(e).__name__, e)
+            # (after the junctions: snapped to a road meeting it at its portal, a dug approach climbed back to the
+            # ground there, IMS's backstretch tube 5.1 m)
+            if RACE_DIG_ON and plans:
+                try:
+                    self._raceway_underpasses(key, plans)
+                except Exception as e:      # as the data has it rather than no grading
+                    log.debug("grading: raceway underpasses of %s: %s: %s", key, type(e).__name__, e)
             if plans:
                 try:            # a pass road's widened hairpins (roads.HAIRPIN_*): its core wider round each
                     hairpin_cores(plans, pspecs, self.frame)
@@ -1861,7 +3203,8 @@ class _Planner:
                     kept.extend((fid, q) for q in pieces)
                     tplans.extend((fid, q) for q in (pieces if cl else [p]))
                 plans = kept
-            secs = self._tunnel_sections(feats, key, [p for _f, p in tplans])
+            secs = self._tunnel_sections(feats, key, [p for _f, p in tplans if not (RACE_DIG_ON and
+                                                                                   str(_f).startswith("osm-raceway-"))])
             plans.extend((fid + TUNNEL_TAG, Plan(xy, z, spec.width / 2 + shoulder(spec)))
                          for fid, spec, xy, z, k in secs if k == 0)
             plans.extend(self._mouth_plans(secs))
@@ -1959,7 +3302,80 @@ class _Planner:
             for j, i in enumerate(qs):
                 if off[j + 1] - off[j] >= 2:
                     out[i // 2][i % 2] = np.asarray(pts[off[j]:off[j + 1]])
+            # A track's end with no continuation inside CHAIN_TURN_DEG goes on into the straightest other track piece
+            # at its node whatever the turn (candidates of its own smoothing only: the raceways). Held at the raw
+            # ground there instead, Thompson's oval and the road course meeting it dived 1.6 m into one low node
+            # over 20 m, 2026-11-03.
+            rq = [i for i in qs if out[i // 2][i % 2] is None and RACEWAY_ON and parts[i // 2][1].cls == "raceway"]
+            if rq:
+                pts, off = fast._ef.chain_extensions(
+                    cxy, coff, ccls, croad,
+                    np.ascontiguousarray([q_node[i] for i in rq], f64), np.ascontiguousarray([q_dir[i] for i in rq], f64),
+                    np.array([q_class[i] for i in rq], np.int64), np.array([q_road[i] for i in rq], np.int64),
+                    np.array([q_reach[i] for i in rq], f64), float(CHAIN_JOIN_M), float(RACE_CHAIN_TURN_DEG),
+                    float(CHAIN_LOOK_M))
+                for j, i in enumerate(rq):
+                    if off[j + 1] - off[j] >= 2:
+                        out[i // 2][i % 2] = np.asarray(pts[off[j]:off[j + 1]])
+        if RACEWAY_ON and RACE_SEAM_ON:
+            self._race_seams(parts, ids, axy, q_node, q_reach, out)
         return [tuple(o) for o in out]
+
+    @staticmethod
+    def _race_seams(parts, ids, axy, q_node, q_reach, out):
+        """out with a raceway's ends that meet an end of the same road (a closed loop's seam, one part or its cells'
+        parts) going on into it there: chain_extensions only joins another road, so a loop's seam took a pit road
+        joined at the same node, or nothing, and each side of the seam was smoothed and banked apart (Bristol: 0.63 m
+        step and 0.86 m edge twist at the start / finish line, 2026-11-06)."""
+        lines, k0 = [], 0
+        for (lonlat, _sp) in parts:
+            lines.append(axy[k0:k0 + len(lonlat)])
+            k0 += len(lonlat)
+        roads_ = [road_id(f) for f in ids]
+        for i in range(2 * len(parts)):
+            pj, end = i // 2, i % 2
+            if parts[pj][1].cls != "raceway" or len(lines[pj]) < 2:
+                continue
+            node = np.asarray(q_node[i], np.float64)
+            best = None
+            for i2 in range(2 * len(parts)):
+                pj2, end2 = i2 // 2, i2 % 2
+                if i2 == i or roads_[pj2] != roads_[pj] or len(lines[pj2]) < 2:
+                    continue
+                if float(np.hypot(*(np.asarray(q_node[i2], np.float64) - node))) <= CHAIN_JOIN_M:
+                    best = (pj2, end2)
+                    break
+            if best is None:
+                continue
+            pj2, end2 = best
+            ln = lines[pj2] if end2 == 0 else lines[pj2][::-1]     # from the node into the other side
+            arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))]
+            reach = min(float(q_reach[i]), 0.5 * float(arc[-1]))
+            if reach <= PROFILE_STEP:
+                continue
+            # (not round a loop shorter than RACE_SEAM_MIN_LOOPS reaches: smoothed into itself from both ends it was
+            # smoothed nearly whole as one, its body flattened 0.5 m under the ends the junctions hold, and the piece
+            # beside it stepped onto it, Whiteland's 238 m kart loop, 2026-11-07)
+            if float(arc[-1]) < RACE_SEAM_MIN_LOOPS * float(q_reach[i]):
+                continue
+            cut = ln[arc < reach]
+            if not len(cut):
+                continue
+            # (the straightest way on, as chain_extensions picks among other roads: the loop's own other side only when
+            # it goes on straighter than what the chain found at the node; a seam where another piece ends straight
+            # on was turned into the loop's own curve and stepped against that piece, Mendips 0.05 -> 0.18 m,
+            # Ewald-Pauli-Ring 0.18 -> 0.39, 2026-11-07)
+            mine = lines[pj] if end == 0 else lines[pj][::-1]
+            go = mine[0] - _point_along(mine, CHAIN_LOOK_M)         # the way the road goes on out of this end
+            go = go / max(float(np.hypot(*go)), 1e-9)
+
+            def _dot(line):
+                d = _point_along(line, CHAIN_LOOK_M) - line[0]
+                return float(go @ (d / max(float(np.hypot(*d)), 1e-9)))
+            have = out[pj][end]
+            if have is not None and len(have) >= 2 and _dot(np.asarray(have, np.float64)) >= _dot(ln):
+                continue
+            out[pj][end] = np.vstack([cut, _point_along(ln, reach)])
 
     def _cand_arrays(self, key, cands):
         """_chain_cands(key) as the Rust kernels take them (points, offsets, sigma class, road id), made once per cell."""
@@ -2334,6 +3750,351 @@ class _Planner:
                 set_widen(np_, getattr(p, "widen", None))
                 plans[i] = (fid, np_)
 
+    def _raceway_tunnels(self, key):
+        """[(tunnel end (2,), its floor height there, the roads' ids ending at it)] round cell key: every short road
+        tunnel part crossing under a raceway (RACE_UNDER_*), from the cell's roads and its eight neighbours', so each
+        cell finds the same. Kept per cell."""
+        memo = self.__dict__.setdefault("_race_tunnels", {})
+        with self.lock:
+            got = memo.get(str(key))
+        if got is not None:
+            return got
+        keys = [mapcells.CellKey(key.z, (key.x + dx) % key.n, key.y + dy)
+                for dy in (-1, 0, 1) for dx in (-1, 0, 1) if 0 <= key.y + dy < key.n]
+        tracks, tunnels, ends = [], [], []
+        halves = {}
+        sp_half = lambda f: halves.get(f, 3.0)     # noqa: E731
+        seen = set()
+        for k in keys:
+            f = self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")
+            if f is None or not len(f):
+                continue
+            specs = roadsmod.road_specs(f, None, self.widths)
+            for i in range(len(f)):
+                sp = specs[i]
+                fid = str(f.ids[i])
+                if sp is None or fid in seen:
+                    continue
+                seen.add(fid)
+                a = f.coord_off[f.ring_off[f.part_off[i]]]
+                b = f.coord_off[f.ring_off[f.part_off[i + 1]]]
+                if b - a >= 2 and sp.cls != "raceway":     # (a track is never dug: only the roads under it)
+                    ee, nn, _ = self.frame.geodetic_to_enu(f.lonlat[[a, b - 1], 1], f.lonlat[[a, b - 1], 0], 0.0)
+                    ends.append((fid, np.array([[ee[0], nn[0]], [ee[1], nn[1]]], np.float64)))
+                if sp.cls == "raceway":
+                    for ring in roadsmod.ground_parts(f, i):
+                        ee, nn, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                        tracks.append((np.stack([np.asarray(ee), np.asarray(nn)], 1), sp.width / 2))
+                elif any(kk == "tunnel" for _a, _b, kk in roadsmod.level_ranges(f, i)):
+                    # (the drawn parts, their portals carried clear of the roads over them (roads._clear_portals); the
+                    # roads going on from them are joined at the map's own ends: matched there)
+                    drawn = roadsmod.tunnel_parts(f, i)
+                    mapped = roadsmod._parts_by_level(f, i, "tunnel")
+                    for n_, ring in enumerate(drawn):
+                        ring = np.asarray(ring, np.float64)
+                        ee, nn, _ = self.frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+                        xy = np.stack([np.asarray(ee), np.asarray(nn)], 1)
+                        mxy = xy
+                        if len(mapped) == len(drawn) and len(mapped[n_]) >= 2:
+                            mr = np.asarray(mapped[n_], np.float64)
+                            me, mn, _ = self.frame.geodetic_to_enu(mr[:, 1], mr[:, 0], 0.0)
+                            mxy = np.stack([np.asarray(me), np.asarray(mn)], 1)
+                        if len(xy) >= 2 and float(np.hypot(*np.diff(xy, axis=0).T).sum()) <= RACE_UNDER_MAX_M:
+                            ow = f.attrs["osm_width"][i] if "osm_width" in f.attrs else None
+                            try:
+                                ow = float(ow) if ow is not None else None
+                            except (TypeError, ValueError):
+                                ow = None
+                            tunnels.append((fid, xy, mxy, race_tunnel_use(sp, ow)))
+                            halves[fid] = float(sp.width) / 2
+        out = []
+        tubes = []          # (drawn line (k, 2), its half width to the wall): _race_in_tube
+        if tracks and tunnels:
+            hits = roadsmod._crossings_by([t for t, _h in tracks], [xy for _f, xy, _m, _u in tunnels])
+            for (tfid, xy, mxy, use), cr in zip(tunnels, hits):
+                if not cr:
+                    continue
+                s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+                best = None
+                for ti, _arc, pt in cr:
+                    pt = np.asarray(pt, np.float64)
+                    if _cross_sin(tracks[ti][0], xy, pt) < RACE_UNDER_MIN_SIN:
+                        continue        # (one running along the track: its dig would be a cliff beside the track)
+                    # (the lowest ground along the tunnel under any of the tracks' carriageways: a pit lane beside
+                    # the track lies lower, and the tube under it was sized from there, IMS)
+                    q, _sq = resample(xy, 2.0)
+                    inside = np.zeros(len(q), bool)
+                    for tl, th in tracks:
+                        for q0, q1 in zip(tl[:-1], tl[1:]):
+                            d = q1 - q0
+                            t = np.clip(((q - q0) @ d) / max(float(d @ d), 1e-12), 0.0, 1.0)
+                            inside |= np.hypot(*(q - (q0 + t[:, None] * d)).T) <= th + RACE_SHOULDER_M
+                    q = q[inside] if inside.any() else pt[None]
+                    # (and the tube's sides: its whole footprint under the band, roads.tunnel_hole_mask's)
+                    if len(xy) >= 2:
+                        tg = xy[-1] - xy[0]
+                        tg = tg / max(float(np.hypot(*tg)), 1e-9)
+                        import roadmesh as _rm
+                        side = np.array([-tg[1], tg[0]]) * (sp_half(tfid) + _rm.TUNNEL_SHOULDER + roadsmod.TUNNEL_HOLE_MARGIN)
+                        q = np.concatenate([q, q + side, q - side])
+                    la, lo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
+                    zc = float(np.min(np.asarray(self.elev(np.asarray(la), np.asarray(lo)), np.float64)))
+                    # (and the track's graded surface there, as its plan will lay it: smoothed along the line and
+                    # banked; 1.4 m under the DEM's least over Daytona's turn 4 tube, its roof showing, 2026-11-05)
+                    zg = self._race_graded_min(tracks[ti], pt, q)
+                    if zg is not None:
+                        zc = min(zc, zg)
+                    zf = max(zc - use[2] - RACE_DIG_SLACK_M, seatiles.SEA_E + UNDER_SEA_M)
+                    k = int(np.argmin(np.hypot(*(xy - pt).T)))
+                    sc = float(s[k])
+                    half = tracks[ti][1] + RACE_UNDER_FLAT_M
+                    for e, se, me in ((xy[0], 0.0, mxy[0]), (xy[-1], float(s[-1]), mxy[-1])):
+                        zj = zf     # (level to both portals: a tube under two tracks a lane apart rose under the
+                                    # second from the first's flat, IMS's backstretch and warm-up lane)
+                        # (matched at the drawn end, the mapped one, or the tunnel road's own ends: a tunnel range
+                        # ending 5 m before its segment does, the road on from that segment's end is the approach)
+                        at = [e, me] + [q for fid, ee in ends if fid == tfid for q in ee
+                                        if float(np.hypot(*(q - e))) <= RACE_UNDER_REACH_M]
+                        joined = [tfid] + [fid for fid, ee in ends if fid != tfid and
+                                           min(float(np.hypot(*(ee - q).T).min()) for q in at) <= RACE_UNDER_JOIN_M]
+                        out.append((e, zj, joined, use[1]))
+                    import roadmesh as _rm2
+                    tubes.append((xy, sp_half(tfid) + _rm2.TUNNEL_SHOULDER))
+        with self.lock:
+            memo[str(key)] = out
+            self.__dict__.setdefault("_race_tracks", {})[str(key)] = tracks
+            self.__dict__.setdefault("_race_tubes", {})[str(key)] = tubes
+        return out
+
+    def _race_graded_min(self, track, pt, q):
+        """The least height of the track (track: (line (k, 2), half width)) at points q (m, 2) near pt as its plan
+        lays it (plan_roads: the median and RACEWAY_SIGMA_M smoothing of the DEM along race_line, raceway_bank's
+        banking), from the DEM within three sigmas of pt along it; None for too short a stretch. An estimate of the
+        plan's (its joined pieces and junctions aside)."""
+        tl, th = track
+        reach = 3.0 * RACEWAY_SIGMA_M + 2.0 * MEDIAN_M
+        xy, _s = resample(np.asarray(tl, np.float64)[:, :2], PROFILE_STEP)
+        if len(xy) < 5:
+            return None
+        k = int(np.argmin(np.hypot(*(xy - pt).T)))
+        w = int(reach / PROFILE_STEP)
+        xy = race_line(xy[max(0, k - w):k + w + 1], PROFILE_STEP)
+        if len(xy) < 5:
+            return None
+        la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        z = np.asarray(self.elev(np.asarray(la), np.asarray(lo)), np.float64)
+        z = smooth_profile(median_profile(z, PROFILE_STEP, MEDIAN_M), PROFILE_STEP, RACEWAY_SIGMA_M)
+        o = max(1.0, RACEWAY_BANK_REACH * 2.0 * th)
+        nrm = _normals(xy)
+        two = np.concatenate([xy + nrm * o, xy - nrm * o])
+        la, lo, _ = self.frame.enu_to_geodetic(two[:, 0], two[:, 1], 0.0)
+        ze = np.asarray(self.elev(np.asarray(la), np.asarray(lo)), np.float64).reshape(2, -1)
+        if not np.isfinite(ze).all() or not np.isfinite(z).all():
+            return None
+        b = bank_from_edges(ze[0], ze[1], o, PROFILE_STEP)
+        out = np.inf
+        for p in np.asarray(q, np.float64).reshape(-1, 2):
+            j = int(np.argmin(np.hypot(*(xy - p).T)))
+            off = float(np.clip((p - xy[j]) @ nrm[j], -th, th))
+            out = min(out, z[j] + b[j] * off)
+        return float(out) if np.isfinite(out) else None
+
+    def _race_floor(self, e, n, keys):
+        """(n,) the dig's floor at points (e, n) on a raceway tunnel's portal (RACE_PORTAL_SNAP_M), +inf elsewhere; None
+        for none near."""
+        tun = [t for k in keys for t in self._raceway_tunnels(k)]
+        if not tun:
+            return None
+        out = np.full(len(e), np.inf)
+        for p, zj, _j, _g in tun:
+            near = np.hypot(e - p[0], n - p[1]) <= RACE_PORTAL_SNAP_M
+            out[near] = np.minimum(out[near], zj)
+        return out if np.isfinite(out).any() else None
+
+    def _raceway_underpasses(self, key, plans):
+        """Lower, in place, the roads joined to a short tunnel under a raceway (RACE_UNDER_*): from the tunnel's end at
+        the floor the track's headroom needs (the track's ground - RACE_UNDER_M, never under the sea's
+        surface + UNDER_SEA_M), rising at RACE_UNDER_GRADE with the distance from that end until it meets the road's
+        own profile. The tunnel's ends are graded by these plans (TunnelProfiles.ends, _tunnel_sections), so the tube
+        under the track gets its full height. (A raceway is no gradesep bridge: the line under it was drawn at grade
+        through IMS's, Interlagos' and Watkins Glen's tracks, 2026-11-03.)"""
+        tun = self._raceway_tunnels(key)
+        if not tun:
+            return
+        tracks = self.__dict__.get("_race_tracks", {}).get(str(key), [])
+        # (the roads joined to the joined roads too, as far as the climb back to grade reaches: Talladega's tunnels,
+        # 13 m under the banking, came out 40 m from the infield's next junction, a walled pit the traffic piled into,
+        # 2026-11-03)
+        lines = [np.asarray(p.xy, np.float64)[:, :2] for _f, p in plans]
+        race_set = self._race_rids([key])
+        reach_of = []
+        arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(ln, axis=0).T))] if len(ln) >= 2 else np.zeros(len(ln))
+                for ln in lines]
+        for e, zj, joined, _g in tun:
+            # (each plan's distance from the portal along the roads, per vertex: a joined road's ramp goes on from where
+            # the road before it left off; as the crow flies from the portal, a side road 80 m on along a curving
+            # approach was cut 2.5 m under its end, Navarra, 2026-11-04)
+            dist = {}
+            for n in (n for n, (fid, _p) in enumerate(plans) if any(str(fid).startswith(j) for j in joined)):
+                d0 = np.hypot(*(lines[n] - e).T)
+                k0 = int(np.argmin(d0))
+                dist[n] = np.maximum(d0[k0] + np.abs(arcs[n] - arcs[n][k0]), d0)
+            reach = RACE_UNDER_REACH_MAX_M
+            front = set(dist)
+            while front:
+                nxt = {}
+                for a in front:
+                    ends = lines[a][[0, -1]]
+                    for b, ln in enumerate(lines):
+                        if b in dist or plans[b][1].rid in race_set or len(ln) < 2:
+                            continue
+                        if float(np.hypot(*(ln - e).T).min()) > reach:
+                            continue
+                        # (joined: an end of either on the other's line)
+                        cand = None
+                        for kb in (0, len(ln) - 1):
+                            if _seg_dist(lines[a], ln[kb]) <= RACE_UNDER_JOIN_M:
+                                ka = int(np.argmin(np.hypot(*(lines[a] - ln[kb]).T)))
+                                c = float(dist[a][ka]) + np.abs(arcs[b] - arcs[b][kb])
+                                cand = c if cand is None else np.minimum(cand, c)
+                        for ka in (0, len(lines[a]) - 1):
+                            if _seg_dist(ln, ends[0 if ka == 0 else 1]) <= RACE_UNDER_JOIN_M:
+                                kb = int(np.argmin(np.hypot(*(ln - lines[a][ka]).T)))
+                                c = float(dist[a][ka]) + np.abs(arcs[b] - arcs[b][kb])
+                                cand = c if cand is None else np.minimum(cand, c)
+                        if cand is not None:
+                            cand = np.maximum(cand, np.hypot(*(ln - e).T))
+                            nxt[b] = cand if b not in nxt else np.minimum(nxt[b], cand)
+                dist.update(nxt)
+                front = set(nxt)
+            reach_of.append(dist)
+        changed = {}
+        tubes = self.__dict__.get("_race_tubes", {}).get(str(key), [])
+        for n, (fid, p) in enumerate(plans):
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            z = None
+            gmin = None
+            on_track = None
+            in_tube = np.zeros(len(xy), bool)
+            for (e, zj, joined, grade), got in zip(tun, reach_of):
+                if n not in got:
+                    continue
+                # (the road's own line where the drawn tube runs: under the track, at the tube's floor. A portal
+                # carried out of a band (roads._clear_portals) left the map's ground part running on 15 m over the
+                # tube, held to the track over it, 10 m over the floor at the portal: Darlington, 2026-11-07)
+                tin = _race_in_tube(xy, e, tubes) if RACE_TUBE_FLOOR_ON else None
+                if on_track is None:
+                    # (a piece of the road under that lies on the track itself, between two tunnel ranges: never
+                    # dug, the track over it wins: IMS's backstretch, its east half cut 6 m)
+                    on_track = np.zeros(len(xy), bool)
+                    for tl, th in tracks:
+                        for q0, q1 in zip(tl[:-1], tl[1:]):
+                            dd = q1 - q0
+                            t = np.clip(((xy - q0) @ dd) / max(float(dd @ dd), 1e-12), 0.0, 1.0)
+                            on_track |= np.hypot(*(xy - (q0 + t[:, None] * dd)).T) <= th + RACE_SHOULDER_M
+                # (along the road from its point nearest the portal: a ramp laid out from the portal, its grade the
+                # use's along the road, not as the crow flies: Talladega's curving approach climbed 22 %, 2026-11-04)
+                d = got[n]
+                want = np.where(on_track, np.inf, zj + RACE_RAMP_SHARE * grade * d)
+                if tin is not None and tin.any():
+                    want = np.where(tin, zj, want)
+                    in_tube |= tin
+                with self.lock:
+                    self.__dict__.setdefault("_dug_rids", set()).add(p.rid)
+                if (want < p.z).any():
+                    z = np.minimum(p.z if z is None else z, want)
+                    gmin = RACE_RAMP_SHARE * grade if gmin is None else min(gmin, RACE_RAMP_SHARE * grade)
+            if z is not None:
+                # (no steeper than the ramp anywhere along it: where the lowered stretch meets the road's own profile
+                # falling back off the track's embankment the two made a 21 % hump at Talladega, 2026-11-04)
+                ds = np.hypot(*np.diff(xy, axis=0).T)
+                z = np.array(z, np.float64)
+                z0 = z.copy()
+                for k in range(1, len(z)):
+                    z[k] = min(z[k], z[k - 1] + gmin * ds[k - 1])
+                for k in range(len(z) - 2, -1, -1):
+                    z[k] = min(z[k], z[k + 1] + gmin * ds[k])
+                if on_track is not None:
+                    on_track = on_track & ~in_tube
+                if on_track is not None and on_track.any():
+                    z[on_track] = z0[on_track]      # (the track over it never)
+                    # (and a road running onto the track climbs back to it at the ramp's grade before the band: cut
+                    # down to an approach's ramp up to the band's edge it stood a 3 m step there, Navarra, 2026-11-04)
+                    # (at the use's own grade: the band is fixed, the road off it is graded for itself, the owner
+                    # 2026-11-05: "work backwards from the tunnel")
+                    gu = gmin / RACE_RAMP_SHARE
+                    lb = np.where(on_track, z0, -np.inf)
+                    for k in range(1, len(z)):
+                        lb[k] = max(lb[k], lb[k - 1] - gu * ds[k - 1])
+                    for k in range(len(z) - 2, -1, -1):
+                        lb[k] = max(lb[k], lb[k + 1] - gu * ds[k])
+                    z = np.maximum(z, lb)
+                np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
+                np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.steep = getattr(p, "steep", False)
+                set_widen(np_, getattr(p, "widen", None))
+                plans[n] = (fid, np_)
+                changed[n] = gmin
+        self._race_climb_back(plans, lines, arcs, changed, [t[0] for t in tun], [t[1] for t in tun])
+
+    def _race_climb_back(self, plans, lines, arcs, changed, ports, floors=None):
+        """Raise, in place, the lowered plans (changed: index -> ramp grade) where a road they join stands higher
+        (an end of either on the other's line): each climbs back to it at its ramp grade, never within
+        RACE_UNDER_FLAT_M of a portal. Across joined roads what _raceway_underpasses does at the band within one: a
+        side road cut to one tunnel's ramp met the road it joined in a 2.5 m step, Navarra, 2026-11-05."""
+        if not changed:
+            return
+        pa = np.asarray(ports, np.float64).reshape(-1, 2)
+        for _round in range(3):
+            moved = False
+            for n, g in changed.items():
+                # (at the use's own grade, not the dug ramp's share: a junction 23 m from Daytona's turn-4 portal,
+                # its roads held at the track's level, left the climb a 33 % step there at the share, 2026-11-05)
+                g = g / RACE_RAMP_SHARE
+                fid, p = plans[n]
+                xy = lines[n]
+                if len(xy) < 2:
+                    continue
+                z = np.array(p.z, np.float64)
+                lb = np.full(len(z), -np.inf)
+                for m, (_f2, q) in enumerate(plans):
+                    if m == n or len(lines[m]) < 2:
+                        continue
+                    qz = np.asarray(q.z, np.float64)
+                    for k in (0, len(xy) - 1):          # (this one's end on the other's line)
+                        if _seg_dist(lines[m], xy[k]) <= RACE_UNDER_JOIN_M:
+                            j = int(np.argmin(np.hypot(*(lines[m] - xy[k]).T)))
+                            lb[k] = max(lb[k], float(qz[j]))
+                    for j in (0, len(lines[m]) - 1):    # (the other's end on this one's line)
+                        if _seg_dist(xy, lines[m][j]) <= RACE_UNDER_JOIN_M:
+                            k = int(np.argmin(np.hypot(*(xy - lines[m][j]).T)))
+                            lb[k] = max(lb[k], float(qz[j]))
+                if len(pa):
+                    near = np.hypot(xy[:, None, 0] - pa[None, :, 0], xy[:, None, 1] - pa[None, :, 1]).min(1)
+                    lb[near <= RACE_PORTAL_SNAP_M] = -np.inf
+                if not (lb > z + 0.01).any():
+                    continue
+                lb0 = lb.copy()         # (the climb's own anchors: the roads' heights where they join it)
+                ds = np.diff(arcs[n])
+                for k in range(1, len(z)):
+                    lb[k] = max(lb[k], lb[k - 1] - g * ds[k - 1])
+                for k in range(len(z) - 2, -1, -1):
+                    lb[k] = max(lb[k], lb[k + 1] - g * ds[k])
+                if len(pa):
+                    lb[near <= RACE_PORTAL_SNAP_M] = -np.inf
+                z2 = np.maximum(z, lb)
+                if RACE_TUBE_FLOOR_ON and floors is not None and len(pa):
+                    z2 = _race_portal_cap(z2, z, lb0, arcs[n], xy, pa, np.asarray(floors, np.float64), g)
+                if (z2 > z + 0.01).any():
+                    np_ = Plan(p.xy, z2, p.half, p.abut, p.cut, p.road_half)
+                    np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                    np_.steep = getattr(p, "steep", False)
+                    set_widen(np_, getattr(p, "widen", None))
+                    plans[n] = (fid, np_)
+                    moved = True
+            if not moved:
+                break
+
     def _lower_underpasses(self, key, plans):
         """Lower, in place, the plans that cross under a short never-raised overpass (UNDER_*), and the roads joined
         to them (underpass_offsets), only within the cell's box (each plan is trimmed to it after). Solved on every
@@ -2373,6 +4134,9 @@ class _Planner:
             for (line, _h, cls), (fid, j, sg, med) in zip(c["ground"], c["ground_ids"]):
                 if cls in UNGRADED or len(line) < 2:
                     continue
+                if RACEWAY_ON and cls == "raceway":
+                    continue        # (a track is never dipped under a deck: Thompson's oval sank 1.65 m under a
+                                    # bridge over it, a ramp across the racing line, 2026-11-03)
                 if (line.max(0) < lo).any() or (line.min(0) > hi).any():
                     continue
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
@@ -3776,6 +5540,10 @@ class _Planner:
                     g = g.copy()
                     pack = PlanPack(list(road_plans)) if pack is None else pack
                     g[[0, -1]] = grade_points(xy[[0, -1], 0], xy[[0, -1], 1], g[[0, -1]], pack)
+                if RACE_DIG_ON and key is not None:
+                    rf = self._race_floor(xy[[0, -1], 0], xy[[0, -1], 1], [key])
+                    if rf is not None:
+                        g[[0, -1]] = np.minimum(g[[0, -1]], rf)
                 floor, kinds = roadsmod.tunnel_sections(s, g)
                 kinds = roadsmod.portal_cover(kinds, g - floor, ts[i])
                 if over is None:
@@ -3920,17 +5688,25 @@ class _Planner:
         the cells are planned (a road tile asks for the same few cells' plans dozens of times: merging them cost a
         Canton tile set ~1.6 s, 2026-10-25)."""
         self._plan_missing(keys)
-        mk = (tuple(sorted(str(k) for k in keys)), bool(roads_only))
+        mk = (tuple(sorted(str(k) for k in keys)), roads_only if roads_only in ("race", "ends") else bool(roads_only))
         memo = self.__dict__.setdefault("_plan_sets", {})
         with self.lock:
             hit = memo.get(mk)
         if hit is not None:
             return hit
         got = {}
+        race_rids = self._race_rids(keys) if roads_only == "race" else None
         for key in keys:
             for fid_part, p in self._cell_plans(key):
                 if roads_only and TUNNEL_TAG in fid_part:
                     continue
+                if roads_only == "ends" and self._is_race_plan(p):
+                    continue            # (a tunnel's portals at its dug approaches, not pulled up to the track over it)
+                if roads_only == "race" and (p.rid in self.__dict__.get("_dug_rids", ()) or
+                                             (p.rid not in race_rids and not self._is_race_plan(p))):
+                    continue            # (the raceways' own alone: apply's raceway carriageways. The track has
+                                        # absolute priority over its ground, the user 2026-11-03: a service road
+                                        # across Atlanta's banking laid a flat strip through it, 18.8 %/10 m)
                 got.setdefault((fid_part, float(p.xy[0, 0]), float(p.xy[0, 1])), p)
         # in the order of their keys: grade_points' sums run in plan order, so every caller (the block, a road
         # tile, a far tile) gets the same heights at a point whatever other cells its points reached
@@ -3952,6 +5728,8 @@ class _Planner:
         2026-10-11 the user saw the tyres sink into a road mesh lifted above the physics ground).
         planned_only: graded only under the cells planned already (none planned here: the AI graph's wide window, whose
         planning held a Windows PC's road processes for minutes, 2026-10-25)."""
+        if roads_only == "ends" and not RACE_DIG_ON:
+            roads_only = True           # (TunnelProfiles.ends: the raceways' plans out only with their digs)
         lat = np.asarray(lat, np.float64)
         lon = np.asarray(lon, np.float64)
         base = np.asarray(base, np.float64)
@@ -3978,9 +5756,61 @@ class _Planner:
         e, n = np.asarray(e), np.asarray(n)
         out = grade_points(e, n, base.ravel(), pack, lift)
         race = self._on_kept(e, n)
-        if race is not None:                # (the terrain is a racetrack's surface: GitHub #143)
+        if race is not None and not RACEWAY_ON:     # (the terrain is a racetrack's surface: GitHub #143)
             out[race] = base.ravel()[race]
         keep = self._over_tunnels(e, n)
+        if race is not None and RACEWAY_ON:
+            # (a graded racetrack keeps its racing line, graded by the racetracks' plans alone: the tunnels' open
+            # sections and mouths, the ungraded ground over a tube and the roads dug under the track cut dips and
+            # tilts across Watkins Glen and IMS)
+            if not roads_only:
+                # (with the digs, the racetracks' plans alone: a road dug under the track graded its edge down. Without,
+                # every road's but the tunnels' own: the race-only set left 0.6-0.8 m steps at way joins, Interlagos)
+                _p2, pack2 = self._plan_set(keys, True)
+                if pack2 is not None:
+                    b0 = base.ravel()[race]
+                    out[race] = grade_points(e[race], n[race], b0, pack2, lift)
+                    if RACE_DIG_ON:
+                        # (the racetracks' plans alone where they reach: a road dug under the track graded its edge
+                        # down; elsewhere every road's, as above: a raceway piece the race test missed left raw ground)
+                        _p3, pack3 = self._plan_set(keys, "race")
+                        if pack3 is not None:
+                            out[race] = grade_points(e[race], n[race], b0, pack3, lift)
+                            self._race_designed(out, race, e, n, _p3, lift)
+            elif RACE_DIG_ON and roads_only != "race":
+                # (the roads' own ground too, the road tiles' and the portals' ("ends"): a tunnel's open cut graded
+                # across the band pitted Navarra's racing line 2.6 m at its portal, 2026-11-03)
+                _p3, pack3 = self._plan_set(keys, "race")
+                if pack3 is not None:
+                    out[race] = grade_points(e[race], n[race], base.ravel()[race], pack3, lift)
+                    self._race_designed(out, race, e, n, _p3, lift)
+            if keep is not None:
+                keep &= ~race
+        if RACEWAY_ON and not roads_only and RACE_EMBANK_M > 0:
+            # The ground beside a track's band slopes to it (RACE_EMBANK_SLOPE, as far as RACE_EMBANK_M): left as the
+            # other plans and the raw ground had it, Talladega's 33 deg banking stood as a sheer wall over the
+            # ground outside its band, the user 2026-11-03.
+            emb = self._race_embank(e, n, keys, lift)
+            if emb is not None:
+                idx, ez, d = emb
+                # (never over a dug tunnel's approach: its ramp is laid from the portal out whatever the ground beside
+                # the track; clamped to the 1 in 2 embankment it stood 7 m over Talladega's portal, a wall, 2026-11-04)
+                dug = self._on_dug(e[idx], n[idx], plans, keys)
+                if dug is not None:
+                    # (but over the tube's covered end, between the band and its portal: the embankment's, the tube's
+                    # roof under it; the dug road's open floor there cut the block's hole into the band's edge)
+                    dug &= d > RACE_COVER_PAST_M
+                    idx, ez, d = idx[~dug], ez[~dug], d[~dug]
+                out[idx] = np.clip(out[idx], ez - RACE_EMBANK_SLOPE * d, ez + RACE_EMBANK_SLOPE * d)
+        if roads_only == "ends" and RACE_DIG_ON:
+            # (a tunnel dug under a raceway: its portals at the dig's floor whatever road meets them at grade there, a
+            # junction beside IMS's backstretch portal pulled it 5.8 m back up)
+            rf = self._race_floor(e, n, keys)
+            if rf is not None:
+                if race is not None:
+                    rf[race] = np.inf   # (never on the track's band: a portal at its edge cut a 2.6 m pit into
+                                        # Navarra's racing line, 2026-11-03)
+                out = np.minimum(out, rf + lift)
         if keep is not None:
             # (a small change stays: a road over the tunnel lies on its own graded profile, the ground over the tunnel
             # left ungraded under it stood a few cm over the E6's lanes as patches of bare ground, GitHub #2)
@@ -4014,6 +5844,122 @@ class _Planner:
             out.append((la, lo, spec))
         return out
 
+    def _race_designed(self, out, race, e, n, plans, lift):
+        """out (in place) on the race plans' cores among the race points: their designed surface (race_surface)."""
+        if not RACE_DESIGNED_ON:
+            return
+        idx = np.flatnonzero(race)
+        rp = [p for p in plans if self._is_race_plan(p)]
+        if not len(idx) or not rp:
+            return
+        zs = race_surface(e[idx], n[idx], rp)
+        ok = np.isfinite(zs)
+        out[idx[ok]] = zs[ok] + lift
+
+    def _race_rids(self, keys):
+        """The road ids (road_id) of the raceways in cells keys (map features: whatever process planned them)."""
+        out = set()
+        for key in keys:
+            try:
+                f = self.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")
+            except Exception:
+                continue
+            if f is None or not len(f) or "class" not in f.attrs:
+                continue
+            cls = f.attrs["class"]
+            out.update(road_id(str(f.ids[i])) for i in range(len(f)) if str(cls[i]) == "raceway")
+        return out
+
+    def _is_race_plan(self, p):
+        """Whether Plan p is a raceway's: its centre line on the raceways' carriageways (keeps: shared with the cells'
+        plans, so a plan another process or region made is told the same way). A road crossing a track has a few
+        points on it, a track's own all."""
+        xy = np.asarray(p.xy, np.float64)
+        if len(xy) < 2:
+            return False
+        m = self._on_kept(xy[:, 0], xy[:, 1])
+        return m is not None and float(m.mean()) >= RACE_PLAN_SHARE
+
+    def _on_dug(self, e, n, plans, keys=(), margin=0.0):
+        """Which points (e, n) lie on a road dug to a tunnel under a raceway (_raceway_underpasses: its plan's graded
+        width), or None."""
+        dug = set(self.__dict__.get("_dug_rids", ()))
+        # (and the plans reaching a dug portal: plans read from the shared cache come without this process's
+        # _dug_rids)
+        ports = [t[0] for k in keys for t in self._raceway_tunnels(k)]
+        if ports:
+            pa = np.asarray(ports, np.float64)
+            for p in plans:
+                p = p[1] if isinstance(p, tuple) else p
+                xy = np.asarray(p.xy, np.float64)[:, :2]
+                if len(xy) and float(np.min(np.hypot(xy[:, None, 0] - pa[None, :, 0],
+                                                     xy[:, None, 1] - pa[None, :, 1]))) <= RACE_PORTAL_SNAP_M + 2.0:
+                    dug.add(getattr(p, "rid", None))
+        if not dug or not len(e):
+            return None
+        mask = np.zeros(len(e), bool)
+        P = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
+        for p in plans:
+            p = p[1] if isinstance(p, tuple) else p
+            if getattr(p, "rid", None) not in dug:
+                continue
+            xy = np.asarray(p.xy, np.float64)[:, :2]
+            hw = float(np.max(p.half)) + margin
+            lo, hi = xy.min(0) - hw, xy.max(0) + hw
+            m = np.flatnonzero(((P >= lo) & (P <= hi)).all(1) & ~mask)
+            if not len(m) or len(xy) < 2:
+                continue
+            a, d = xy[:-1], np.diff(xy, axis=0)
+            ll = np.maximum((d * d).sum(1), 1e-12)
+            for g in range(len(a)):
+                t = np.clip(((P[m] - a[g]) @ d[g]) / ll[g], 0.0, 1.0)
+                mask[m[np.hypot(*(P[m] - a[g] - t[:, None] * d[g]).T) <= hw]] = True
+        return mask if mask.any() else None
+
+    def _race_embank(self, e, n, keys, lift):
+        """(indices of points within RACE_EMBANK_M outside a track's band, the track's graded height at the band's
+        edge nearest each, their distance m from that edge) or None. The band: _on_kept's zones."""
+        with self.lock:
+            zones = [z for v in self.keeps.values() for z in v]
+        if not zones or not len(e):
+            return None
+        P = np.stack([np.asarray(e, np.float64), np.asarray(n, np.float64)], 1)
+        best = np.full(len(P), np.inf)
+        edge = np.zeros((len(P), 2))
+        inside = np.zeros(len(P), bool)
+        for xy, hw in zones:
+            xy = np.asarray(xy, np.float64)[:, :2]
+            if len(xy) < 2:
+                continue
+            lo, hi = xy.min(0) - hw - RACE_EMBANK_M, xy.max(0) + hw + RACE_EMBANK_M
+            m = np.flatnonzero(((P >= lo) & (P <= hi)).all(1))
+            if not len(m):
+                continue
+            a, d = xy[:-1], np.diff(xy, axis=0)
+            ll = np.maximum((d * d).sum(1), 1e-12)
+            Q = P[m]
+            for g in range(len(a)):
+                t = np.clip(((Q - a[g]) @ d[g]) / ll[g], 0.0, 1.0)
+                foot = a[g] + t[:, None] * d[g]
+                v = Q - foot
+                r = np.hypot(*v.T)
+                inside[m[r <= hw]] = True
+                dd = r - hw
+                upd = (dd > 0) & (dd < best[m])
+                if upd.any():
+                    k = m[upd]
+                    best[k] = dd[upd]
+                    edge[k] = foot[upd] + v[upd] / np.maximum(r[upd], 1e-9)[:, None] * (hw - 0.25)
+        idx = np.flatnonzero(~inside & (best <= RACE_EMBANK_M))
+        if not len(idx):
+            return None
+        _p3, pack = self._plan_set(keys, "race")
+        if pack is None:
+            return None
+        bz = self.elev(*self.frame.enu_to_geodetic(edge[idx, 0], edge[idx, 1], np.zeros(len(idx)))[:2])             if callable(getattr(self, "elev", None)) else np.zeros(len(idx))
+        ez = grade_points(edge[idx, 0], edge[idx, 1], np.asarray(bz, np.float64).ravel(), pack, lift)
+        return idx, ez, best[idx]
+
     def _on_kept(self, e, n):
         """Which points lie on an UNGRADED road's carriageway (+ UNGRADED_MARGIN_M), or None."""
         with self.lock:
@@ -4026,6 +5972,23 @@ class _Planner:
         ee, nn = np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64)
         for xy, hw in zones:
             fast._ef.over_tunnel(mask, ee, nn, np.ascontiguousarray(xy[:, :2], np.float64), float(hw), 0.0)
+        # (round at every vertex too: over_tunnel's band is the segments' rectangles alone, open on the outside of
+        # each bend and at a way's ends; a road dug under the track graded those wedges down, 1-4 m pits in
+        # Navarra's racing line where two raceway ways meet over its tunnel, 2026-11-03)
+        left = np.flatnonzero(~mask)
+        if len(left):
+            left = left[np.argsort(ee[left], kind="stable")]       # (by east: each vertex's disc a slice of them)
+            se = ee[left]
+            lo_e, hi_e, lo_n, hi_n = se[0], se[-1], nn[left].min(), nn[left].max()
+            for xy, hw in zones:
+                v = xy[:, :2]
+                near = ((v[:, 0] >= lo_e - hw) & (v[:, 0] <= hi_e + hw) & (v[:, 1] >= lo_n - hw) &
+                        (v[:, 1] <= hi_n + hw))
+                for vx, vy in v[near]:
+                    a, b = np.searchsorted(se, (vx - hw, vx + hw))
+                    if b > a:
+                        k = left[a:b]
+                        mask[k[(ee[k] - vx) ** 2 + (nn[k] - vy) ** 2 <= hw * hw]] = True
         return mask if mask.any() else None
 
     def _over_tunnels(self, e, n):
@@ -4144,6 +6107,16 @@ PLANNERS_KEPT = 6               # planning regions a PlanStore keeps in memory (
 MAPPED_MAX = 256                # cells' plans mapped into an anchor's world kept (Grader._cell_plans)
 
 
+def _cross_sin(a, b, p):
+    """|sin| of the angle between polylines a and b (k, 2) at their crossing point p. Pure."""
+    def dir_at(xy):
+        k = int(np.argmin(np.hypot(*(xy[:-1] - p).T) + np.hypot(*(xy[1:] - p).T)))
+        d = xy[k + 1] - xy[k]
+        return d / max(float(np.hypot(*d)), 1e-9)
+    u, v = dir_at(np.asarray(a, np.float64)[:, :2]), dir_at(np.asarray(b, np.float64)[:, :2])
+    return abs(float(u[0] * v[1] - u[1] * v[0]))
+
+
 class Grader:
     """The road plans as one anchor frame sees them (the PlanStore's, store: shared by the process's anchors; its own
     without one). Heights (apply) are the planners', in their regions' frames: the same at a place whatever the
@@ -4198,16 +6171,25 @@ class Grader:
     _keys = staticmethod(_Planner._keys)
     _over_tunnels = _Planner._over_tunnels  # (a namespace with covers and lock: tests)
     _on_kept = _Planner._on_kept
+    _race_rids = _Planner._race_rids
 
     def plans(self, lat, lon, roads_only=False):
         """The Plans touching the points' area (each road once), in this frame's world; roads_only: not the tunnels'
         (TUNNEL_TAG). In the order of the plans' own region (as _Planner._plan_set)."""
         keys = self._keys(lat, lon)
         got = {}
+        race_rids = self._race_rids(keys) if roads_only == "race" else None
         for key in keys:
             for fid_part, p in self._cell_plans(key):
                 if roads_only and TUNNEL_TAG in fid_part:
                     continue
+                if roads_only == "ends" and self._is_race_plan(p):
+                    continue            # (a tunnel's portals at its dug approaches, not pulled up to the track over it)
+                if roads_only == "race" and (p.rid in self.__dict__.get("_dug_rids", ()) or
+                                             (p.rid not in race_rids and not self._is_race_plan(p))):
+                    continue            # (the raceways' own alone: apply's raceway carriageways. The track has
+                                        # absolute priority over its ground, the user 2026-11-03: a service road
+                                        # across Atlanta's banking laid a flat strip through it, 18.8 %/10 m)
                 got.setdefault((fid_part, float(p.xy[0, 0]), float(p.xy[0, 1])), p)
         return [got[k] for k in sorted(got)]
 

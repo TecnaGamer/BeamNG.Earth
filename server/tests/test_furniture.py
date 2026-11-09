@@ -534,10 +534,6 @@ class UnderDeckTest(unittest.TestCase):
 
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class SignClearance(unittest.TestCase):
     def test_moved_off_a_wide_road_beside_the_junction(self):
         # the spot 'past the junction, right of the approach' lies on a 16 m road running beside it (Boston Street,
@@ -569,3 +565,26 @@ class StreetTreesOffBuildings(unittest.TestCase):
         out = furniture.off_buildings(rows, [house.ring + [100.0, 200.0]])
         self.assertEqual([(r[0], r[1], r[2]) for r in out],
                          [(furniture.G_STREET_TREE, 145.0, 205.0), (furniture.G_LAMP, 115.0, 215.0)])
+
+
+class RacewayPolesTest(unittest.TestCase):
+    def test_no_pole_on_a_raceway(self):
+        import furniture as fu
+
+        class Spec:
+            def __init__(self, cls, width):
+                self.cls, self.width, self.urban, self.link, self.dir = cls, width, False, False, 0
+        road = np.array([[x, 6.0, 0.0] for x in range(-300, 301, 20)], float)       # a country road beside the track
+        race = np.array([[x, 0.0, 0.0] for x in range(-300, 301, 20)], float)
+        roads = [("r", Spec("unclassified", 6.0), road, None), ("t", Spec("raceway", 18.0), race, None)]
+        rows = fu.place(roads, [], (-300, -300, 300, 300))
+        poles = [r for r in rows if r[0] in (fu.G_POLE, fu.G_POLELAMP, fu.G_LAMP)]
+        hw = 9.0 + fu.RACE_SHOULDER_M
+        for r in poles:
+            self.assertGreaterEqual(abs(r[2]), hw, r)
+        far = [("r", Spec("unclassified", 6.0), road + [0, 100, 0], None), roads[1]]
+        self.assertTrue([r for r in fu.place(far, [], (-300, -300, 300, 300)) if r[0] == fu.G_POLE])
+
+
+if __name__ == "__main__":
+    unittest.main()
