@@ -241,6 +241,49 @@ jobs:
             | jq -r --argjson keep "$DEV_KEEP" '[.[] | select(.isPrerelease and (.tagName | test("dev\\.[0-9]+$")))]
                 | sort_by(.createdAt) | reverse | .[$keep:][] | .tagName' \
             | while read -r old; do gh release delete "$old" --yes --cleanup-tag || true; done
+          # Older development builds stay downloadable from ONE release, "Development builds (archive)" (tag
+          # dev-builds; the user, 2026-11-09: "easier for players to access older versions without filling up the
+          # releases page"): each build's Windows .exe and Linux AppImage are added to it, its notes list the builds
+          # newest first with their links, and only the newest ARCH_KEEP builds' files are kept. Not a version tag:
+          # the in-game update check skips it (updates.parse). Never fails the build.
+          ARCH=dev-builds; ARCH_KEEP=60
+          (
+            set -e
+            if ! gh release view "$ARCH" >/dev/null 2>&1; then
+              echo "Older development builds." > arch.md
+              gh release create "$ARCH" --target "$GITHUB_SHA" --title "Development builds (archive)" \
+                --notes-file arch.md --prerelease --latest=false
+            fi
+            gh release upload "$ARCH" out/windows/*.exe out/linux/*.AppImage --clobber
+            # (the builds by their version, newest first; files past the newest ARCH_KEEP builds removed)
+            gh release view "$ARCH" --json assets -q '.assets[].name' \
+              | sed -nE 's/^BeamNG\.Earth-(.+)(\.exe|-x86_64\.AppImage)$/\1/p' | sort -u -V -r > arch_versions.txt
+            tail -n +$((ARCH_KEEP + 1)) arch_versions.txt | while read -r old; do
+              for f in "BeamNG.Earth-$old.exe" "BeamNG.Earth-$old-x86_64.AppImage"; do
+                gh release delete-asset "$ARCH" "$f" --yes || true
+              done
+            done
+            base="https://github.com/${{ github.repository }}/releases/download/$ARCH"
+            {
+              echo "> [!WARNING]"
+              echo "> **Development builds** from the \`dev\` branch, not thoroughly tested. For a tested version use the"
+              echo "> latest beta release. The newest is also the top \"development build\" pre-release."
+              echo
+              echo "Older development builds, newest first (the last $ARCH_KEEP are kept). Download the file for your"
+              echo "system and run it; the changes of each build are in the \`dev\` branch's history."
+              echo
+              echo "| Build | Windows | Linux |"
+              echo "|---|---|---|"
+              head -n "$ARCH_KEEP" arch_versions.txt | while read -r ver; do
+                echo "| $ver | [BeamNG.Earth-$ver.exe]($base/BeamNG.Earth-$ver.exe) | [AppImage]($base/BeamNG.Earth-$ver-x86_64.AppImage) |"
+              done
+              echo
+              echo "---"
+              echo
+              python3 tools/release_notes.py --launch-only "$v"
+            } > arch.md
+            gh release edit "$ARCH" --notes-file arch.md --prerelease --latest=false
+          ) || echo "::warning::the development builds archive was not updated"
       - name: Publish v${{ needs.check.outputs.version }}
         if: needs.check.outputs.dev != 'true'
         env:

@@ -343,7 +343,8 @@ as a GitHub **pre-release** named after the beta it follows, with a build number
 and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
 releases are the tested ones. A development build says so in game, and its update check offers the next development
 build (or the next beta, if that is newer); a beta only ever offers betas. Only the newest three development builds
-are kept on the releases page.
+are kept on the releases page as their own pre-releases; older ones (the last 60) stay downloadable from one release,
+**Development builds (archive)**, whose page lists them newest first with their Windows and Linux files.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,

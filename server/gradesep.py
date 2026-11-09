@@ -13,6 +13,7 @@ the map has no range (MapData.cell hooks a cell's roads layer: hook()). The kern
 gradesep_spans; the ground: the DEM at DEM_ZOOM, raw (not graded).
 """
 import logging
+import math
 import os
 import threading
 import weakref
@@ -451,10 +452,18 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
             parent[x] = parent[parent[x]]
             x = parent[x]
         return x
+    # (pieces touching end to end joined through a TOUCH_M grid of their ends: every piece against every other was
+    # ~0.9 CPU-s of a cold Munich road tile, 2026-11-09)
+    grid = {}
     for p in range(len(cand)):
-        d = np.hypot(ends[:, :, None, 0] - ends[p, None, None, :, 0], ends[:, :, None, 1] - ends[p, None, None, :, 1])
-        for q in np.flatnonzero((d < TOUCH_M).any(axis=(1, 2))):
-            parent[find(int(q))] = find(p)
+        for e in ends[p]:
+            gx, gy = int(math.floor(e[0] / TOUCH_M)), int(math.floor(e[1] / TOUCH_M))
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for q, f in grid.get((gx + dx, gy + dy), ()):
+                        if math.hypot(e[0] - f[0], e[1] - f[1]) < TOUCH_M:
+                            parent[find(q)] = find(p)
+            grid.setdefault((gx, gy), []).append((p, e))
     total = {}
     for p, c in enumerate(cand):
         total[find(p)] = total.get(find(p), 0.0) + lens[c]
@@ -469,6 +478,15 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
     if not cand:
         return keep
     over = np.flatnonzero((kinds == 0) | (kinds == 1))
+    if len(over):                   # (only the lines whose box meets a candidate's: the crossing kernel tries every pair)
+        st = np.asarray(lines.starts, np.int64)
+        lo = np.minimum.reduceat(lines.pts[:, :2], st[:-1]) if len(lines.pts) else np.zeros((0, 2))
+        hi = np.maximum.reduceat(lines.pts[:, :2], st[:-1]) if len(lines.pts) else np.zeros((0, 2))
+        cb = np.array([[lo[c, 0], lo[c, 1], hi[c, 0], hi[c, 1]] for c in cand], np.float64)
+        ob = np.c_[lo[over], hi[over]]
+        meet = ((ob[:, None, 0] <= cb[None, :, 2] + 1.0) & (ob[:, None, 2] >= cb[None, :, 0] - 1.0)
+                & (ob[:, None, 1] <= cb[None, :, 3] + 1.0) & (ob[:, None, 3] >= cb[None, :, 1] - 1.0)).any(axis=1)
+        over = over[meet]
     hits = _crossings(lines, over, cand) if len(over) else [[] for _ in cand]
     over = over.tolist()
     ask, at = [], []                # (DEM points, (candidate, crossings' slice, portals' slice))
