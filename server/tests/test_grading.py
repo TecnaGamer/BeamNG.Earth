@@ -1194,3 +1194,79 @@ class CoarseEaseTest(unittest.TestCase):
     def test_equal_ranks_meet_halfway(self):
         main, side = self.run_ease(100.0, 104.0, 7.0, rank_side=7)
         self.assertLess(float(np.median(side) - np.median(main)), 2.5)
+
+
+class EmbankTest(unittest.TestCase):
+    """A road through the open country rides its own low embankment (the user, 2026-11-08: "проселочные дороги в
+    полях, асфальтированные дороги в лесах/полях ... на пол метра выше от ландшафта ... если рядом дома и прочее,
+    то дорога должна быть вровень"): the profile raised EMBANK_M over open ground, the grading's transition making
+    the shoulder down to it; at grade in a village, by houses, in a wood for a dirt road, at a junction, a bridge's
+    approach and a loose end."""
+
+    def line(self, a, b):
+        xs = np.arange(a, b + 1e-9, 2.0)
+        return np.stack([xs, np.zeros(len(xs))], axis=1)
+
+    def lonlat(self, xy):
+        la, lo, _ = FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        return np.c_[np.asarray(lo), np.asarray(la)]
+
+    def cover(self, open_, tree=0.0):
+        return lambda la, lo: (np.full(np.shape(la), float(open_), np.float32),
+                               np.full(np.shape(la), float(tree), np.float32))
+
+    def plan(self, spec, cover, xy=None, ext=None, abut=None):
+        xy = self.line(0.0, 300.0) if xy is None else xy
+        return grading.plan_roads(FRAME, [(self.lonlat(xy), spec)], lambda la, lo: np.full(np.shape(la), 100.0),
+                                  abut=None if abut is None else [abut], ext=None if ext is None else [ext],
+                                  cuts=False, cover=cover)[0]
+
+    def test_the_open_country_raises_the_road_half_a_metre(self):
+        p = self.plan(roads.Spec(7.0, "paved", False, "secondary"), self.cover(1.0))
+        self.assertGreater(grading.EMBANK_M, 0.0)
+        self.assertAlmostEqual(float(np.median(p.z[10:-10])), 100.0 + grading.EMBANK_M, delta=0.02)
+        self.assertAlmostEqual(p.z[0], 100.0, delta=0.02, msg="a loose end at grade")
+        self.assertAlmostEqual(p.z[-1], 100.0, delta=0.02)
+
+    def test_the_grade_makes_the_shoulder_down_to_the_land(self):
+        p = self.plan(roads.Spec(7.0, "paved", False, "secondary"), self.cover(1.0))
+        ys = np.arange(0.0, 16.0, 1.0)
+        out = grading.grade_points(np.full(len(ys), 150.0), ys, np.full(len(ys), 100.0), [p])
+        self.assertAlmostEqual(out[0], 100.0 + grading.EMBANK_M, delta=0.03, msg="the carriageway on the bank")
+        self.assertAlmostEqual(out[-1], 100.0, delta=0.02, msg="the land beside it")
+        edge = grading.T_MIN + p.half                          # (the flat top, then the transition)
+        self.assertLess(float(np.interp(edge, ys, out)), 100.0 + grading.EMBANK_M - 0.05, "a slope, not a wall")
+
+    def test_a_village_and_the_houses_keep_it_at_grade(self):
+        p = self.plan(roads.Spec(7.0, "paved", False, "residential"), self.cover(0.0))
+        self.assertTrue(np.allclose(p.z, 100.0, atol=0.02), "built-up: at grade")
+
+    def test_a_paved_road_is_embanked_through_a_wood_a_dirt_one_is_cut_into_it(self):
+        paved = self.plan(roads.Spec(6.5, "paved", False, "tertiary"), self.cover(1.0, tree=1.0))
+        self.assertAlmostEqual(float(np.median(paved.z[10:-10])), 100.0 + grading.EMBANK_M, delta=0.02)
+        dirt = self.plan(roads.Spec(3.5, "dirt", False, "unclassified"), self.cover(1.0, tree=1.0))
+        self.assertAlmostEqual(float(np.median(dirt.z[10:-10])), 100.0, delta=0.05, msg="cut into the wood")
+        field = self.plan(roads.Spec(3.5, "dirt", False, "unclassified"), self.cover(1.0, tree=0.0))
+        self.assertAlmostEqual(float(np.median(field.z[10:-10])), 100.0 + grading.EMBANK_M, delta=0.05)
+
+    def test_a_junction_and_a_bridge_approach_come_down_to_grade(self):
+        loose = self.plan(roads.Spec(6.5, "paved", False, "tertiary"), self.cover(1.0))
+        onto = self.plan(roads.Spec(6.5, "paved", False, "tertiary"), self.cover(1.0),
+                         ext=(self.line(-100.0, -2.0), None))
+        self.assertAlmostEqual(onto.z[0], 100.0 + grading.EMBANK_M, delta=0.02,
+                               msg="the road goes on before it: no fade there")
+        self.assertAlmostEqual(onto.z[-1], 100.0, delta=0.02, msg="its loose end at grade")
+        approach = self.plan(roads.Spec(6.5, "paved", False, "tertiary"), self.cover(1.0),
+                             ext=(self.line(-100.0, -2.0), self.line(302.0, 400.0)), abut=(False, True))
+        self.assertAlmostEqual(approach.z[-1], 100.0, delta=0.05, msg="a bridge's approach at grade")
+
+    def test_a_mountain_pass_and_a_service_road_stay_at_grade(self):
+        mountain = roads.Spec(6.5, "paved", False, "tertiary", mountain=True)
+        self.assertTrue(np.allclose(self.plan(mountain, self.cover(1.0)).z, 100.0, atol=0.02))
+        service = self.plan(roads.Spec(4.0, "paved", False, "service"), self.cover(1.0))
+        self.assertTrue(np.allclose(service.z, 100.0, atol=0.02), "a driveway by its buildings")
+
+    def test_off_is_every_road_at_grade(self):
+        with unittest.mock.patch.object(grading, "EMBANK_ON", False):
+            self.assertTrue(np.allclose(self.plan(roads.Spec(7.0, "paved", False, "secondary"),
+                                                  self.cover(1.0)).z, 100.0, atol=0.02))

@@ -114,6 +114,8 @@ class _State:
                     # (one store for every anchor: the plans are the planning regions', whatever the anchor)
                     self.plan_store = gradingmod.PlanStore(
                         self.md, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.widths)
+                    if self.surface is not None:     # (the roads' embankment mask reads the same land cover)
+                        self.plan_store.surface = self.surface
                     # (its tunnels' drowned question asked of the road tiles' chain store: resolved once for both)
                     self.plan_store.tunnel_store = lambda: self.__dict__.get("chain_stores", {}).get("tunnels")
                 grader = (gradingmod.Grader(frame, self.md, self.plan_store.elev, self.widths,

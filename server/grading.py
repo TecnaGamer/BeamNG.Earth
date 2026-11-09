@@ -91,6 +91,20 @@ VERTEX_STEP = 4.0           # m between the plan's vertices (segments for the gr
                             # grading a 1 km block 0.06 -> 0.14 s)
 BUCKET = 32.0               # m, query-point buckets
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
+# A road through the open country rides its own low embankment (the user, 2026-11-08: "проселочные дороги в полях,
+# асфальтированные дороги в лесах/полях ... на пол метра выше от ландшафта, как оно часто бывает в реальности ...
+# если рядом дома и прочее, то дорога должна быть вровень"): its profile is raised EMBANK_M over the ground where the
+# land is open, and the grading's own transition (T_MIN 5 m) then makes the shoulder down to it -- 1 m over 5 m, a
+# grassy verge (the user, 2026-11-08: "давай перепад с полуметра сделаем метр": steeper than a real field lane's
+# 1:10, but the shoulder is the grading's own and widening it means a Rust change to grade_points). In a village, by
+# houses, on water, on snow and in a wood (a dirt road is cut into a wood, a paved one is embanked through it) it lies
+# at grade, as at a junction, a bridge's approach and a loose end (EMBANK_END_M).
+EMBANK_ON = os.environ.get("BNE_EMBANK", "on") != "off"
+EMBANK_M = float(os.environ.get("BNE_EMBANK_M", "1.0"))       # m its profile is raised over the open land
+EMBANK_END_M = 40.0         # m over which it comes down to grade at a junction / bridge end / loose end
+EMBANK_SAMPLE_M = 12.0      # m between the land-cover reads along the road (linear in between: the profile's own
+                            # smoothing, 12-40 m by class, rounds the rest)
+EMBANK_SKIP_CLASSES = {"service"}   # driveways, parking aisles and alleys: at grade by the buildings they serve
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
 WALL_CUT_M = 2.0            # a road cut deeper than this into the ground: a retaining wall at the core's edge
@@ -505,7 +519,7 @@ def field_heights(frame, elev, xy, r, sigma):
 
 
 def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, coarse=False, obs=None, decks=None,
-               rings=None):
+               rings=None, cover=None):
     """plan_road for many (lonlat, spec) parts with one elev call (its cost is per call); abut: per part (start, end)
     flags, the ends leading onto a bridge (fill_abutment); ext: per part (before, after), the lines (k, 2) in the frame
     from its start / end outward along the part the road goes on in (Grader._extensions), or None: their ground is in
@@ -514,7 +528,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
     part's samples (NaN where none) or None: they stand in for the DEM's (roadz.py, on coarse elevation: Grader._obs);
     decks: [(line (k, 2) in the frame, half width)] crossing over the roads, their ground read beside them
     (deck_capped; not on coarse elevation); rings: per part, True for a mapped roundabout's ring (roads.is_ring: not
-    banked, RING_LEVEL_ON). Pure given elev and obs."""
+    banked, RING_LEVEL_ON); cover(lat, lon) -> (open 0..1, tree 0..1): the land's cover, for the embankment a road
+    through the open country rides (embank_lift; None: every road at grade). Pure given elev, obs and cover."""
     if not parts:
         return []
     ll = np.concatenate([lonlat for lonlat, _ in parts])
@@ -611,6 +626,15 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if pin[1] is not None and not na and not ab[1]:
             zx = zx.copy()
             zx[-1] = pin[1]
+        if cover is not None:            # (on its own low embankment through the open country: see embank_lift)
+            b_eff = np.asarray(before, np.float64).reshape(-1, 2)[len(before) - nb:] if nb else np.zeros((0, 2))
+            a_eff = np.asarray(after, np.float64).reshape(-1, 2)[:na] if na else np.zeros((0, 2))
+            line = np.concatenate([b_eff, xy, a_eff]) if (nb or na) else xy
+            sc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))] if len(line) > 1 else np.zeros(1)
+            lift = embank_lift(frame, line, spec, step, cover,
+                               (None if nb else float(sc[nb]), None if na else float(sc[nb + len(xy) - 1])))
+            if lift is not None:
+                zx = zx + lift
         # Curvature and its runoff need the joined-road context too. Computing
         # banking on xy alone puts a partial curvature window at every map
         # segment end, even where the longitudinal profile is continuous.
@@ -907,6 +931,41 @@ def dirt_bumps(xy, spec, n, ext=(0, 0), step=PROFILE_STEP):
             out = out - np.convolve(padded, np.ones(k) / k, mode="valid")[:len(out)]
     out *= dirt_taper(s_, length)       # (nothing right at a junction, short parts too: that road sets the height)
     return out
+
+
+def _embank_taper(d):
+    """0 at an end (d m from it), 1 from EMBANK_END_M on: smooth in between."""
+    t = np.clip(np.abs(np.asarray(d, np.float64)) / max(EMBANK_END_M, 1e-6), 0.0, 1.0)
+    return t * t * (3.0 - 2.0 * t)
+
+
+def embank_lift(frame, xy, spec, step, cover, ends=(None, None)):
+    """(k,) m a road part's profile is raised (samples along xy (k, 2) in the frame, every step m: the part and the
+    extensions the profile is smoothed with), or None (at grade). It rides EMBANK_M over the land where cover(lat, lon)
+    -> (open 0..1, tree 0..1) says the country is open; a dirt road only where it is not a wood (it is cut into one),
+    a built road even there; a mountain pass road none (between its wall and its parapet). ends: m along xy at which
+    the part must be at grade (a junction, a bridge's approach, a loose end), or None where the road goes on. Pure
+    given cover."""
+    if not EMBANK_ON or EMBANK_M <= 0.0:
+        return None
+    if spec.cls in EMBANK_SKIP_CLASSES or getattr(spec, "mountain", False):
+        return None
+    xy = np.asarray(xy, np.float64)[:, :2]
+    if len(xy) < 2:
+        return None
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    k = max(1, int(round(float(EMBANK_SAMPLE_M) / max(float(step), 1e-6))))
+    idx = np.unique(np.r_[np.arange(0, len(xy), k), len(xy) - 1])
+    la, lo, _ = frame.enu_to_geodetic(xy[idx, 0], xy[idx, 1], 0.0)
+    open_, tree = cover(np.asarray(la, np.float64), np.asarray(lo, np.float64))
+    share = np.asarray(open_, np.float64)
+    if spec.kind not in roadsmod.BUILT:         # (a dirt road in a wood is cut into the ground, not embanked)
+        share = share * (1.0 - np.asarray(tree, np.float64))
+    lift = EMBANK_M * np.interp(s, s[idx], np.clip(share, 0.0, 1.0))
+    for at in ends:                             # (at grade at a junction, a bridge's approach, a loose end)
+        if at is not None:
+            lift = lift * _embank_taper(s - float(at))
+    return lift
 
 
 def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_xy=None, bank_ext=None, banked=True):
@@ -1695,7 +1754,37 @@ class _Planner:
     shared = _store_attr("shared")
     wet = _store_attr("wet")
     dem = _store_attr("dem")
+    surface = _store_attr("surface")
     del _store_attr
+
+    def _cover(self):
+        """grading.plan_roads cover: the land cover a road's embankment mask reads, or None. The store's
+        surface.Surface, else one made over the same map data -- a plan must not depend on --surface (it is cached
+        by PLANS_FORMAT, whatever read it was made with)."""
+        if not EMBANK_ON:
+            return None
+        surf = self.surface
+        if surf is None and self.md is not None and hasattr(self.md, "has"):
+            if self.store is not None:
+                with self.store.lock:
+                    surf = self.store.surface
+                    if surf is None:
+                        import surface as surfacemod
+                        surf = self.store.surface = surfacemod.Surface(self.md)
+            else:
+                surf = getattr(self, "_own_surface", None)
+                if surf is None:
+                    import surface as surfacemod
+                    surf = self._own_surface = surfacemod.Surface(self.md)
+        if surf is None:
+            return None
+
+        def cover(lat, lon):
+            if not surf.wait_cover(lat, lon):   # (a plan is made once: read the cover, not a half-fetched one)
+                import revisit
+                revisit.fault()             # (not read in time: no plan built on a guess is kept)
+            return surf.open_ground(lat, lon), surf.tree(lat, lon)
+        return cover
 
     def _foreign(self, key):
         """The planner of cell key's region when it is not this one's (None: this one plans it)."""
@@ -1831,7 +1920,8 @@ class _Planner:
             coarse = COARSE_EASE_ON and self._coarse(key)
             for fid, part, cl, p in zip(ids, parts, clipped, plan_roads(self.frame, parts, self.elev, abut, ext, pins,
                                                                          coarse=coarse, obs=self._obs(key),
-                                                                         decks=self._decks_near(key), rings=rings)):
+                                                                         decks=self._decks_near(key), rings=rings,
+                                                                         cover=self._cover())):
                 if p is not None:
                     p.rid = road_id(fid)
                     plans.append((fid, p))
@@ -2118,7 +2208,8 @@ class _Planner:
                 ext = self._extensions(parts, [asks[n][0][5] for n in jobs])
                 plans = plan_roads(self.frame, parts, self.elev, None, ext, cuts=False,
                                    coarse=COARSE_EASE_ON and self._coarse_ll(parts[0][0]),
-                                   obs=self._obs(None, parts[0][0]), decks=self._decks_ll(parts[0][0]))
+                                   obs=self._obs(None, parts[0][0]), decks=self._decks_ll(parts[0][0]),
+                                   cover=self._cover())
                 for n, (part, last, whole), p in zip(jobs, preps, plans):
                     self._strong_keep(asks[n][0], keys[n], p, last, whole)
             except Exception as e:      # one at a time, each its own failure (_stronger_z)
@@ -2178,7 +2269,7 @@ class _Planner:
             p = plan_roads(self.frame, [(part, cand[4])], self.elev, None,
                            self._extensions([(part, cand[4])], [cand[5]]), cuts=False,
                            coarse=COARSE_EASE_ON and self._coarse_ll(part), obs=self._obs(None, part),
-                           decks=self._decks_ll(part))[0]
+                           decks=self._decks_ll(part), cover=self._cover())[0]
             self._strong_keep(cand, k, p, last, whole)
         except Exception as e:      # not held rather than no grading
             log.debug("grading: pin height of %s: %s: %s", cand[5], type(e).__name__, e)
@@ -4136,6 +4227,7 @@ class PlanStore:
         self.wet = None
         self.dem = None
         self.shared = None
+        self.surface = None     # surface.Surface: the land cover the plans' roads ride their embankments over
         self.lock = threading.Lock()
         self.planners = OrderedDict()   # (rx, ry) -> _Planner, the least recently used first
 

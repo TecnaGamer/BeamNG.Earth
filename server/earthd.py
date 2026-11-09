@@ -2630,6 +2630,8 @@ class Server:
                 if getattr(self, "plan_store", None) is None:
                     self.plan_store = gradingmod.PlanStore(
                         self.mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.road_widths)
+                    if self.surface is not None:     # (the roads' embankment mask reads the same land cover)
+                        self.plan_store.surface = self.surface
                 grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
                                           store=self.plan_store)
                 grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
