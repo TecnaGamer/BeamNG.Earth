@@ -109,6 +109,10 @@ local ours = false
 local foreign = false
 local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
+-- (wall time: os.clock is the process's CPU time summed over all the game's threads, so a busy frame read several
+-- times too long; the navgraph "signals" 156 ms of a Baltimore drive, 2026-11-09, was measured that way)
+local stopwatch = require('beamngEarth/stopwatch')
+local wall = stopwatch.clock()       -- ms since load, monotonic (one clock: stopwatch.clock() makes a new one)
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
@@ -346,11 +350,11 @@ end
 -- pre: toNodes' results built ahead (buildNodes), else made here
 local function apply(b, pre, moved)
   setRules()
-  local tN = os.clock()
+  local tN = wall()
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
   else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M, M.FAST_HALO_M) end
-  stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
+  stats.nodesMs = wall() - tN         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
   if ts then pcall(ts.resetSignals) end
@@ -365,10 +369,10 @@ local function apply(b, pre, moved)
   end
   local okG, gps = pcall(require, 'beamngEarth/gps')
   local mOld = map.getMap and map.getMap()
-  local tG = os.clock()
+  local tG = wall()
   local keep = okG and gps.beforeGraph and gps.beforeGraph(mOld and mOld.nodes) or nil
-  stats.gpsMs = (os.clock() - tG) * 1000
-  local t0 = os.clock()
+  stats.gpsMs = wall() - tG
+  local t0 = wall()
   ours = true
   local ok, err = pcall(map.reset, nodes)
   ours = false
@@ -378,7 +382,7 @@ local function apply(b, pre, moved)
     log('E', 'beamngEarth', 'navgraph: map.reset: ' .. tostring(err))
     return false
   end
-  stats.resetMs = (os.clock() - t0) * 1000
+  stats.resetMs = wall() - t0
   local m = map.getMap()
   if persistent and persistent ~= m.nodes then
     table.clear(persistent)
@@ -387,9 +391,9 @@ local function apply(b, pre, moved)
   else
     persistent = m.nodes
   end
-  local tA = os.clock()
+  local tA = wall()
   if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
-  stats.gpsMs = stats.gpsMs + (os.clock() - tA) * 1000
+  stats.gpsMs = stats.gpsMs + (wall() - tA)
   be:queueAllObjectLua('mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
@@ -397,8 +401,8 @@ local function apply(b, pre, moved)
   if mr and mr.reset then pcall(mr.reset) end
   pendingSignals = ts and nodes or nil     -- next frame: a second, smaller hitch instead of one big one
   cuts = cl
-  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
-  stats.applyMs = (os.clock() - tN) * 1000
+  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, wall() - t0, nn, ne
+  stats.applyMs = wall() - tN
   stats.cuts = #cl
   return true
 end
@@ -420,16 +424,22 @@ end
 local function applySignals(nodes)
   local ts = core_trafficSignals
   if not ts then return end
-  local t1 = os.clock()
+  local t1 = wall()
   local okS, err2 = pcall(function()
     seenHeads = {}
     local data, ns = signalData(nodes)
     clearHeads(seenHeads)                   -- the heads of junctions no longer in the graph
+    local t2 = wall()
+    stats.sigDataMs = t2 - t1
     ts.setupSignals(data, false, true)
+    local t3 = wall()
+    stats.sigSetupMs = t3 - t2
     -- a vehicle holding signals reads the state-change mailbox every frame and dies on one never written
     -- ("lpack: unexpected end of buffer", in game 2026-10-14): write an empty update before handing them out
     be:sendToMailbox('trafficSignalUpdates', lpack.encodeBin({}))
     be:queueAllObjectLua(M.setSignalsLua(serialize(ts.getMapNodeSignals())))
+    local t4 = wall()
+    stats.sigSendMs = t4 - t3
     stats.junctions = ns
     -- the road tiles' static booms stand where the switchable heads are now
     local trees = require('beamngEarth/trees')
@@ -441,9 +451,12 @@ local function applySignals(nodes)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
+    local t5 = wall()
     trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
+    stats.sigTreesMs = wall() - t5
   end)
-  stats.signalsMs = (os.clock() - t1) * 1000
+  stats.signalsMs = wall() - t1
+  stats.signalsMaxMs = math.max(stats.signalsMaxMs or 0, stats.signalsMs)
   if not okS then log('W', 'beamngEarth', 'navgraph: signals: ' .. tostring(err2)) end
 end
 
@@ -807,7 +820,6 @@ function M.boxMoved(a, b)
 end
 
 local waited = 0
-local stopwatch = require('beamngEarth/stopwatch')
 
 -- The node tables an apply hands map.reset, built over several frames (toNodes in a coroutine, PREP_MS a frame; ~20 ms in
 -- one frame on a Steam Deck), for this graph and block box; nil until done.
