@@ -293,6 +293,22 @@ class RailwayTest(unittest.TestCase):
                       ["standard_gauge", "pedestrian"], subtypes=["rail", "road"])
         self.assertEqual(railways.crossing_props(FRAME, 0, 0, [f2], flat, False, None, "CZ"), [], "no node, no devices")
 
+    def test_a_short_rail_bridge_over_a_road_on_level_ground_is_a_level_crossing(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 20.0), (120.0, 180.0)]], ["standard_gauge", "primary"],
+                     subtypes=["rail", "road"], flags=[(0, "is_bridge", 160.0 / 350.0, 180.0 / 350.0)])
+        box = roads.tile_bbox(0, 0)
+        with unittest.mock.patch.object(railways, "RAW_ELEV", lambda la, lo: np.full(np.shape(la), 344.0)):
+            kinds = {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)}
+            self.assertEqual(kinds, {"ground"}, "level ground: no bridge")
+            with unittest.mock.patch.object(railways, "LEVEL_BRIDGES_ON", False):
+                self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
+
+        def valley(la, lo):        # (the road 6 m under the track's ends: a real underpass)
+            e, _n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+            return 344.0 - 6.0 * (np.abs(np.asarray(e) - 120.0) < 6.0)
+        with unittest.mock.patch.object(railways, "RAW_ELEV", valley):
+            self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
+
     def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0

@@ -3209,6 +3209,9 @@ class _Planner:
                         xs_floor.append((np.asarray(pt, f64), target, _road_fids(i, lines, [ground[g][3] for g in gids],
                                                                                 gids), sol["reach"]))
                     continue
+            if rail_span[bi] and lidar and railwaysmod.level_bridge(self.frame, spans[bi][0], lines[i], sc):
+                continue                        # (a short rail bridge over a road on level ground: no bridge, a level
+                                                # crossing; railways.parts lays it on the ground: plan 035)
             if lidar and not fixed and deck < z + UNDER_LIDAR_DECK_M:
                 continue                        # (the ends' ground is not the deck: the road keeps its own, the deck
                                                 # rises; a never-raised deck, a railway's or a motorway's, cannot)

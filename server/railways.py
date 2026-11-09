@@ -299,6 +299,7 @@ def parts(frame, cells, box, reach=REACH_M, clip=False, worn=None, gauges=None):
     if any(kind == "ground" and wear_of.get(fid) for fid, _c, kind, _xy in out):
         out = _cut_worn_at_motorways(out, wear_of, motorway_crossings(frame, cells, box, reach))
     out = _drop_stubs(out)
+    out = level_bridges(frame, cells, out, near)
     out = _span_underpasses(out, road_underpasses(frame, cells, box, reach))
     return _clip(out, near) if clip else out
 
@@ -372,6 +373,58 @@ FLAT_SEP_ON = os.environ.get("BNE_RAIL_FLAT_SEP", "0") == "1" and os.environ.get
 FLAT_SEP_M = roads.AT_GRADE_M
 FLAT_SAMPLE_M = (-12.0, -6.0, 0.0, 6.0, 12.0)  # m along the road either side of the crossing (the median)
 RAW_ELEV = None
+
+
+LEVEL_BRIDGES_ON = os.environ.get("BNE_RAIL_LEVEL_BRIDGES", "on") != "off"   # (plan 035: Nachod's "ravine")
+LEVEL_BRIDGE_MAX_M = 40.0   # m: a rail bridge this short or shorter over a road on level ground is no bridge
+
+
+def level_bridge(frame, bridge_xy, road_xy, at, elev=None):
+    """flat_rail_crossing whatever BNE_RAIL_FLAT_SEP, for short rail bridges (LEVEL_BRIDGE_MAX_M): the natural ground at
+    the bridge's ends stands less than roads.AT_GRADE_M over the road's under it. A short mapped bridge over a primary
+    road beside Nachod station on level ground (lidar: 344 m at both) dug the road 4 m down, and the bed beside it with
+    it (railroadseam): a ravine the user saw, 2026-11-09. Off lidar (no RAW_ELEV): False."""
+    if not LEVEL_BRIDGES_ON:
+        return False
+    b = np.asarray(bridge_xy, np.float64)[:, :2]
+    if len(b) < 2 or float(_arc(b)[-1]) > LEVEL_BRIDGE_MAX_M:
+        return False
+    global FLAT_SEP_ON
+    was, FLAT_SEP_ON = FLAT_SEP_ON, True
+    try:
+        return flat_rail_crossing(frame, bridge_xy, road_xy, at, elev)
+    finally:
+        FLAT_SEP_ON = was
+
+
+def level_bridges(frame, cells, rails, reach_box):
+    """rails with each short bridge part over a road on level ground (level_bridge) made a ground part: the road then
+    crosses it at grade (a level crossing) instead of being dug under it."""
+    if not LEVEL_BRIDGES_ON or RAW_ELEV is None or not any(k == "bridge" for _f, _c, k, _x in rails):
+        return rails
+    ways = [ln for ln, _hw in crossings(frame, cells, reach_box, reach=0.0)]
+    if not ways:
+        return rails
+    out = []
+    for fid, c, kind, xy in rails:
+        if kind == "bridge" and c != "tram" and float(_arc(xy)[-1]) <= LEVEL_BRIDGE_MAX_M:
+            for line in ways:
+                hits = roads._crossings([xy], [line])
+                if hits and level_bridge(frame, xy, line, float(np.clip(_seg_arc(line, hits[0][2]), 0.0, 1e9))):
+                    kind = "ground"
+                    break
+        out.append((fid, c, kind, xy))
+    return out
+
+
+def _seg_arc(line, pt):
+    """The arc (m) along line of its point nearest pt."""
+    line = np.asarray(line, np.float64)[:, :2]
+    s = _arc(line)
+    ab = np.diff(line, axis=0)
+    t = np.clip(((pt - line[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    j = int(np.argmin(np.linalg.norm(line[:-1] + t[:, None] * ab - pt, axis=1)))
+    return float(s[j] + t[j] * (s[j + 1] - s[j]))
 
 
 def flat_rail_crossing(frame, bridge_xy, road_xy, at, elev=None):
