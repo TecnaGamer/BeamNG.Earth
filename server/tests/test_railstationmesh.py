@@ -179,3 +179,84 @@ def bs_centroid(ring):
 
 def rs_skip(st):
     return set(st.claimed)
+
+
+class FootbridgeTest(unittest.TestCase):
+    def over(self, name, country="UA"):
+        st = stations_of(name)[0]
+        st.country = country
+        links = [l for l in st.links if l.kind == "over"]
+        self.assertTrue(links, name)
+        return st, links
+
+    def test_deck_clears_every_rail_head_it_crosses(self):
+        import railbridges as rb
+        for name, c in (("kozyatyn", "UA"), ("hk_hln", "CZ"), ("pardubice", "CZ"), ("passau", "DE")):
+            st, links = self.over(name, c)
+            for ln in links:
+                z = rb.deck_height(None, FLAT, st, ln)
+                self.assertAlmostEqual(z, 100.0 + rb.RAIL_TOP_M + rb.CLEAR_M + rb.DECK_D, delta=0.01)
+
+    def test_mesh_has_deck_rails_stairs_and_piers(self):
+        import busstations as bs
+        import railbridges as rb
+        st, links = self.over("kozyatyn")
+        m = bm._Mesh()
+        rb.add(m, None, FLAT, st, links[0])
+        got = m.result(BIG, (0.0, 0.0, 0.0))
+        self.assertIsNotNone(got)
+        V = got[0]
+        zdeck = 100.0 + rb.RAIL_TOP_M + rb.CLEAR_M + rb.DECK_D
+        self.assertAlmostEqual(V[:, 2].max(), zdeck + rb.HAND_H_M, delta=0.02)       # (the handrail's top)
+        self.assertLess(V[:, 2].min(), 100.0)                                         # (stairs and piers reach the ground)
+        self.assertGreater(len(m.M), 100)
+
+    def test_piers_stand_clear_of_the_tracks(self):
+        import busstations as bs
+        import railbridges as rb
+        st, links = self.over("hk_hln", "CZ")
+        for ln in links:
+            m = bm._Mesh()
+            w = rb.width_of(ln)
+            path = rb.resample(ln.xy)
+            z = rb.deck_height(None, FLAT, st, ln)
+            arcs = [a for _k, a in ln.crosses]
+            rb._piers(m, None, FLAT, st, path, z, w, max(0.0, min(arcs) - 4.0), min(float(rb._arc(path)[-1]), max(arcs) + 4.0))
+            got = m.result(BIG, (0.0, 0.0, 0.0))
+            if got is None:
+                continue
+            P = got[0][got[0][:, 2] < 100.0 + 3.0]
+            for p in P[::7]:
+                d = min(bs.dist_to_path(xy, p[:2]) for _t, xy in st.tracks)
+                self.assertGreater(d, rb.PIER_TRACK_M - 1.0)
+
+    def test_stairs_rise_to_the_deck_in_small_steps(self):
+        import railbridges as rb
+        m = bm._Mesh()
+        line = np.array([[0.0, 0.0], [12.0, 0.0]])
+        got = rb._stair(m, None, FLAT, line[0], line, 106.0, 2.0)
+        self.assertIsNotNone(got)
+        r = m.result(BIG, (0.0, 0.0, 0.0))
+        tops = np.unique(np.round(r[0][:, 2], 3))
+        tops = tops[(tops > 100.2) & (tops <= 106.0)]
+        self.assertTrue(np.all(np.diff(tops) < rb.RISE_M + 0.02))
+        self.assertAlmostEqual(float(tops.max()), 106.0 - 6.0 / int(np.ceil(6.0 / rb.RISE_M)), delta=0.01)
+
+    def test_a_short_mapped_flight_is_carried_on(self):
+        import railbridges as rb
+        m = bm._Mesh()
+        line = np.array([[0.0, 0.0], [3.0, 0.0]])
+        got = rb._stair(m, None, FLAT, line[0], line, 106.0, 2.0)
+        self.assertGreater(float(np.hypot(*(got[-1] - got[0]))), 6.0 / rb.RISE_M * rb.RUN_M - 0.5)
+
+    def test_low_deck_gets_no_stairs(self):
+        import railbridges as rb
+        m = bm._Mesh()
+        line = np.array([[0.0, 0.0], [12.0, 0.0]])
+        self.assertIsNone(rb._stair(m, None, FLAT, line[0], line, 100.2, 2.0))
+
+    def test_big_stations_bridge_is_one_shape(self):
+        st = stations_of("pardubice")[0]
+        st.country = "CZ"
+        m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
+        self.assertLess(len(m[0]), 60000)

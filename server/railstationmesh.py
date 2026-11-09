@@ -15,6 +15,7 @@ import numpy as np
 
 import busstationmesh as bm
 import busstations as bs
+import railbridges
 import railstations as rs
 
 RAIL_TOP_M = 0.58           # the rail head over the bed (railways.RAIL_TOP_M: ballast 0.3 - sleeper sink 0.08 + sleeper 0.2 + rail 0.16)
@@ -244,6 +245,15 @@ def _roofs(mesh, frame, elev, st, box, columns_only=False):
             bm.walls(mesh, mat, rep, sq, zf - 0.05, zbot)
 
 
+LINK_MARGIN_M = 40.0        # a footbridge's flights may run this far past its way's ends
+
+
+def _link_near(ln, box, margin=LINK_MARGIN_M):
+    pts = np.vstack([np.asarray(ln.xy, float)] + [np.asarray(s, float) for s in ln.steps])
+    lo, hi = pts.min(0), pts.max(0)
+    return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
+
+
 def _near(pl, box, margin=TILE_MARGIN_M):
     lo, hi = pl.ring.min(0), pl.ring.max(0)
     return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
@@ -262,6 +272,9 @@ def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
             if tactile and ref is not None:
                 _strips(mesh, ref, pl, h, frame, elev)
         _roofs(mesh, frame, elev, st, box, columns_only=collide)
+        for ln in st.links:
+            if ln.kind == "over" and _link_near(ln, box):
+                railbridges.add(mesh, frame, elev, st, ln, collide=collide)
 
 
 def mesh(frame, box, stations, elev, origin, overlap=False):
