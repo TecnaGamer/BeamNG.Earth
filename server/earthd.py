@@ -1136,6 +1136,7 @@ class Server:
         self.base_lock = threading.Lock()
         self.pads_rebuild = set()       # blocks built without gas station pads that lie on them (pads_stale)
         self.roads_rebuild = set()      # blocks built before every road cell under them was on disk (roads_refresh)
+        self.roads_need = {}            # ... and what each waits for: "roads" (its roads painted) or "landcover"
         self.pads_changed_at = 0.0      # (time.monotonic) the last new pad: Connection.pads_refresh waits a little
         self.fast = False               # the player faster than FAST_BASE_V (the latest pose): photos follow blocks
         self.base_pending = {}          # block -> the analysis regions its base photo was rendered without
@@ -3988,8 +3989,13 @@ class Server:
                 log.info("block %s built before its map cells were here (roads %s, surface %s): painted again later",
                          key, info.get("roadsComplete"), info.get("surfaceComplete"))
             self.roads_rebuild.add(key)
+            # (a block without its roads is painted again once they are here, not once the land cover is too: a cell
+            # whose land cover was slow or never came kept the roads of the block grass and dirt under their markings
+            # for good, Discord 2026-11-09, the Tomei at Kaisei; the land cover then repaints it again when it comes)
+            self.roads_need[key] = "roads" if info.get("roadsComplete") is False else "landcover"
         else:
             self.roads_rebuild.discard(key)
+            self.roads_need.pop(key, None)
         self.evict_heightmaps(fresh=key)
 
     def evict_heightmaps(self, fresh=None):
@@ -7713,7 +7719,9 @@ class Connection:
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([key[1] - half, key[1] + half]),
                                                  np.array([key[2] - half, key[2] + half]), 0.0)
         cells = mapcells.cells_for_bbox(float(np.min(la)), float(np.min(lo)), float(np.max(la)), float(np.max(lo)))
-        if not all(s.mapdata.has(k, "roads") and (s.surface is None or s.mapdata.has(k, "landcover")) for k in cells):
+        need = s.roads_need.get(key, "landcover")
+        if not all(s.mapdata.has(k, "roads") and (need == "roads" or s.surface is None or s.mapdata.has(k, "landcover"))
+                   for k in cells):
             return                          # (not here yet: asked again at the next pose)
         self.roads_busy = True
         s.roads_rebuild.discard(key)
