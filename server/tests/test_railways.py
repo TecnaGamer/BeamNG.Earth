@@ -225,21 +225,27 @@ class RailwayTest(unittest.TestCase):
 
     def test_a_dead_end_gets_a_buffer_stop_a_joint_does_not(self):
         f = features([[(40.0, 100.0), (200.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
-        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
-        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        rows = []
+        railways.tile_mesh(FRAME, 0, 0, [f], flat, furniture=rows)
+        buf = [r for r in rows if r[0] == "rrbuffer"]
+        self.assertEqual(len(buf), 2, "one at each end")
         top = 10.0 + railways.RAIL_TOP_M
-        for x in (40.0, 200.0):
-            blk = conc[(np.abs(conc[:, 0] - x) < 1.6) & (conc[:, 2] > top + 0.5)]
-            self.assertGreater(len(blk), 0, f"a buffer stop at x = {x}")
-            self.assertAlmostEqual(float(blk[:, 2].max()), top + railways.BUFFER_H, delta=0.02)
+        for r in buf:
+            self.assertAlmostEqual(r[3], top, delta=0.02, msg="at the rail heads' height")
+            self.assertEqual(r[6], railways.BUFFER_HEIGHT)
+        # the model's +Y runs into the stop: for the east end, the train comes from the west: +Y is +X, so +X is the right (south)
+        east = max(buf, key=lambda r: r[1])
+        self.assertAlmostEqual(east[1], 200.0 - railways.BUFFER_BACK_M, delta=0.6)
+        self.assertAlmostEqual(east[4], 270.0, delta=0.5)
         joined = features([[(40.0, 100.0), (120.0, 100.0)], [(120.0, 100.0), (200.0, 100.0)]], ["standard_gauge"] * 2,
                           subtypes=["rail"] * 2)
-        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [joined], flat)
-        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
-        self.assertEqual(len(conc[(np.abs(conc[:, 0] - 120.0) < 1.6) & (conc[:, 2] > top + 0.3)]), 0, "none at a joint")
+        rows = []
+        railways.tile_mesh(FRAME, 0, 0, [joined], flat, furniture=rows)
+        self.assertTrue(all(abs(r[1] - 120.0) > 10 for r in rows if r[0] == "rrbuffer"), "none at a joint")
         with unittest.mock.patch.object(railways, "STATION_FURNITURE_ON", False):
-            P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
-        self.assertNotIn(railways.CONCRETE, [mats[k] for k in np.unique(M)], "BNE_RAIL_FURNITURE=off")
+            rows = []
+            railways.tile_mesh(FRAME, 0, 0, [f], flat, furniture=rows)
+        self.assertEqual(rows, [], "BNE_RAIL_FURNITURE=off")
 
     def test_a_footway_across_the_track_gets_panels_flush_with_the_rails(self):
         track = [(-50.0, 100.0), (300.0, 100.0)]
@@ -254,6 +260,26 @@ class RailwayTest(unittest.TestCase):
         self.assertAlmostEqual(wide, railways.GAUGE_M + 2 * (railways.RAIL_HEAD + 2 * railways.WALK_PANEL_OUT_M), delta=0.05)
         far = conc[(np.abs(conc[:, 0] - 180.0) < 20.0) & (np.abs(conc[:, 2] - top) < 0.003)]
         self.assertEqual(len(far), 0, "a footway running beside the track makes none")
+        rows = []
+        railways.tile_mesh(FRAME, 0, 0, [f], flat, furniture=rows)
+        signs = sorted((r for r in rows if r[0] == "rrwalk"), key=lambda r: r[2])
+        self.assertEqual(len(signs), 2, "a warning sign at each side of the track")
+        self.assertLess(signs[0][2], 100.0 - 2.0)
+        self.assertGreater(signs[1][2], 100.0 + 2.0)
+        self.assertEqual(signs[0][6], railways.WALK_SIGN_HEIGHT)
+
+    def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0
+        f.__dict__["_rail_nodes"] = [(lon, lat, {"railway": "crossing"}), (lon + 0.0004, lat, {"railway": "level_crossing"})]
+        rows = []
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat, furniture=rows)
+        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        top = 10.0 + railways.RAIL_TOP_M - 0.012
+        panel = conc[(np.abs(conc[:, 0] - 150.0) < 2.0) & (np.abs(conc[:, 2] - top) < 0.003)]
+        self.assertGreater(len(panel), 8, "panels where OSM has a crossing node, on a track with no way to it")
+        self.assertEqual(len([r for r in rows if r[0] == "rrwalk"]), 2)
+        self.assertFalse(((conc[:, 0] > 150.0 + 40.0) & (np.abs(conc[:, 2] - top) < 0.003)).any(), "a level_crossing node is not one")
 
     def test_a_tile_past_the_vertex_budget_keeps_its_main_lines(self):
         long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]

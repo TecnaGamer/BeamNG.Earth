@@ -1186,14 +1186,17 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             wires.extend(c_wires)
         except Exception as e:
             log.debug("catenary: %s: %s", type(e).__name__, e)
+    rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
     P.rmesh, rail_decks = railways.tile_mesh(frame, tx, ty, rcells, rground,
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
                                  return_decks=True, load=cell_fn,
-                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None),
+                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None), furniture=rail_props,
                                  under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
                                         if _bridge_fps else None))
+    if rail_props:
+        props = (props or []) + rail_props
     mark("railways")
     bld = None
     garage_sound = ()

@@ -1583,9 +1583,14 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
 
 BUFFER_JOIN_M = 2.3         # m: another track's point this near an end makes it a joint or a switch, not a dead end
 BUFFER_BACK_M = 1.0         # m the buffer stop stands back from the end of its track
-BUFFER_H = 1.0              # m its top over the rail head
-BUFFER_HALF_M = 1.35        # m its half width
+BUFFER_HEIGHT = 1.8         # m: its model's vertical size (tools/build_rail_crossing_props.py)
 WALK_CLASSES = {"footway": 2.0, "path": 1.5, "cycleway": 2.5, "pedestrian": 3.0}    # class -> the way's width (m)
+WALK_NODE_W = 2.0           # m: the width of a crossing OSM only has a node for
+WALK_NODE_JOIN_M = 6.0      # m: a node this near a crossing already found is that one
+WALK_NODE_ON_M = 2.5        # m: a node this near a track's line is on it
+WALK_SIGN_BEFORE_M = 1.0    # m from the ballast's foot to a walk sign
+WALK_SIGN_OFF_M = 0.5       # m beside the way's edge
+WALK_SIGN_HEIGHT = 2.52     # m: the sign's model's vertical size
 WALK_MIN_SIN = 0.35         # a way crossing the track flatter than this (20 degrees) is left alone
 WALK_PANEL_OUT_M = 0.45     # m: half the panel outside each rail (it is 0.9 m wide)
 WALK_PANEL_GAP_M = 0.07     # m left between the middle panel and each rail (the flangeway)
@@ -1631,15 +1636,14 @@ def walk_ways(frame, cells, box, reach=60.0):
     return out
 
 
-def walk_crossing_boxes(rails, finals, ways, carriage, ex):
-    """The boxes of the footway crossings of the tracks: [(centres (1, 2), along (1, 2), across (1, 2), z0 (1,), z1 (1,)),
-    hx, hy, material kind] for each crossing of a way over a ground track (the panels between and outside the rails, flush
-    with their heads, leaving the flangeway), none where the way follows a road across (its deck is the road's). rails /
-    finals: tile_mesh's parts and their (zb) beds. ways: walk_ways; carriage: [(xy, half width)] of the true crossers."""
+def walk_crossings(rails, ways, nodes, carriage, ex):
+    """The places a person crosses a ground track: [(point (2,), arc m, track part index, track unit t, way unit f, way
+    width)]. Where a footway, path, cycleway or pedestrian way (ways: walk_ways) crosses a track at WALK_MIN_SIN or more, and
+    where OSM has a railway=crossing node on a track (nodes: [(x, y)]) with no mapped way to it: the way then is taken square
+    to the track, WALK_NODE_W wide (a crossing that leads nowhere on the map is still one). None beside a road's deck (the
+    sidewalk goes over it with the road: carriage [(xy, half width)]). Only the points inside ex. Pure."""
     out = []
-    if not ways:
-        return out
-    for (fid, cls, kind, xy), zb in zip(rails, finals):
+    for n_part, (fid, cls, kind, xy) in enumerate(rails):
         if kind != "ground" or cls == "tram" or len(xy) < 2:
             continue
         lo, hi = xy.min(0) - 8.0, xy.max(0) + 8.0
@@ -1656,31 +1660,83 @@ def walk_crossing_boxes(rails, finals, ways, carriage, ex):
                 d = np.hypot(*(way[1:] - way[:-1]).T)
                 j = int(np.argmin(np.hypot(*((way[:-1] + way[1:]) / 2 - pt).T)))
                 f = (way[j + 1] - way[j]) / max(float(d[j]), 1e-9)
-                sin = abs(t[0] * f[1] - t[1] * f[0])
-                if sin < WALK_MIN_SIN:
+                if abs(t[0] * f[1] - t[1] * f[0]) < WALK_MIN_SIN:
                     continue
                 if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
-                    continue                    # (beside a road's deck: its sidewalk, the deck is the road's)
-                z = float(np.interp(arc, s, zb)) + RAIL_TOP_M - 0.012
-                z0 = float(np.interp(arc, s, zb)) + BALLAST_H - 0.15
-                n = np.array([-t[1], t[0]])
-                half_g = GAUGE_M / 2
-                hx = min(6.0, (ww / 2) / sin + 0.2)
-                ctr = lambda off: (pt + n * off)[None, :]
-                a = t[None, :]
-                b = n[None, :]
-                out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M, "mid"))
-                for sg in (1, -1):
-                    out.append(((ctr(sg * (half_g + RAIL_HEAD + WALK_PANEL_OUT_M)), a, b, np.array([z0]), np.array([z])),
-                                hx, WALK_PANEL_OUT_M, "side"))
+                    continue
+                out.append((np.asarray(pt, np.float64), float(arc), n_part, t, f, float(ww)))
+    for x, y in nodes:
+        if not (ex[0] <= x <= ex[2] and ex[1] <= y <= ex[3]):
+            continue
+        if any(math.hypot(x - c[0][0], y - c[0][1]) < WALK_NODE_JOIN_M for c in out):
+            continue                            # (a way already crosses here)
+        best = None
+        for n_part, (fid, cls, kind, xy) in enumerate(rails):
+            if kind != "ground" or cls == "tram" or len(xy) < 2:
+                continue
+            dd = np.hypot(xy[:, 0] - x, xy[:, 1] - y)
+            k = int(np.argmin(dd))
+            if dd[k] < WALK_NODE_ON_M and (best is None or dd[k] < best[0]):
+                best = (float(dd[k]), n_part, k)
+        if best is None:
+            continue
+        _d, n_part, k = best
+        xy = rails[n_part][3]
+        s = _arc(xy)
+        t = xy[min(k + 1, len(xy) - 1)] - xy[max(k - 1, 0)]
+        t = t / max(float(np.hypot(*t)), 1e-9)
+        pt = xy[k]
+        if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
+            continue
+        out.append((np.asarray(pt, np.float64), float(s[k]), n_part, t, np.array([-t[1], t[0]]), WALK_NODE_W))
     return out
 
 
-def buffer_stop_boxes(rails, finals, worn, near):
-    """The buffer stops at the true ends of the tracks: [(centres, along, across, z0, z1), hx, hy, "block" | "beam"]: a
-    concrete block across the track BUFFER_BACK_M before its end, a steel beam on its face. A true end is the end of a
-    ground part no other part joins and that lies well inside the window's reach (a clipped end is not one); abandoned
-    lines (worn 2) and trams have none. Pure."""
+def walk_panel_boxes(crossings, finals):
+    """The boxes of footway crossings (walk_crossings): [(centres (1, 2), along (1, 2), across (1, 2), z0 (1,), z1 (1,)),
+    hx, hy] for the panels between and outside the rails, flush with their heads, with a flangeway beside each rail."""
+    out = []
+    for pt, arc, n_part, t, f, ww in crossings:
+        zb = finals[n_part]
+        sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
+        z_bed = float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)])
+        z = z_bed + RAIL_TOP_M - 0.012
+        z0 = z_bed + BALLAST_H - 0.15
+        n = np.array([-t[1], t[0]])
+        half_g = GAUGE_M / 2
+        hx = min(6.0, (ww / 2) / sin + 0.2)
+        ctr = lambda off: (pt + n * off)[None, :]
+        a, b = t[None, :], n[None, :]
+        out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M))
+        for sg in (1, -1):
+            out.append(((ctr(sg * (half_g + RAIL_HEAD + WALK_PANEL_OUT_M)), a, b, np.array([z0]), np.array([z])),
+                        hx, WALK_PANEL_OUT_M))
+    return out
+
+
+def walk_sign_rows(crossings, ground):
+    """Prop rows ([rrwalk, x, y, z, yaw, scale, height, 0]) of the warning signs at footway crossings: one at each side of the
+    track, facing the people coming, on their right, past the ballast's foot."""
+    pts = []
+    for pt, _arc, _n, t, f, ww in crossings:
+        sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
+        before = min(6.0, (BALLAST_TOP_M + BALLAST_SLOPE * BALLAST_H + WALK_SIGN_BEFORE_M) / sin)
+        for sgn in (1.0, -1.0):
+            a = -f * sgn                        # the way they walk, towards the crossing
+            side = np.array([a[1], -a[0]])      # its right
+            pts.append((pt - a * before + side * (ww / 2 + WALK_SIGN_OFF_M), side))
+    if not pts:
+        return []
+    z = np.asarray(ground(np.array([q for q, _ in pts])), np.float64).ravel()
+    return [["rrwalk", round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
+             round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, WALK_SIGN_HEIGHT, 0.0]
+            for (q, side), zz in zip(pts, z)]
+
+
+def dead_ends(rails, finals, worn, near):
+    """The true ends of the tracks: [(end point (2,), unit direction of travel into it (2,), rail head height)]. A true end
+    is the end of a ground part no other part joins and none passes within BUFFER_JOIN_M, well inside the window's reach
+    (a clipped end is not one); abandoned lines (worn 2) and trams have none. Pure."""
     if not rails:
         return []
     nodes, edges, _adj = roads._chain_graph([xy for *_x, xy in rails])
@@ -1703,15 +1759,19 @@ def buffer_stop_boxes(rails, finals, worn, near):
                    for o, (*_x, oxy) in enumerate(rails) if o != n_part and oxy is not xy):
                 continue                        # (a track starting on another one's line: a switch, not an end)
             d = xy[i] - xy[j]
-            d = d / max(float(np.hypot(*d)), 1e-9)
-            n = np.array([-d[1], d[0]])
-            at = p - d * BUFFER_BACK_M
-            z = float(zb[i]) + RAIL_TOP_M
-            z0 = float(zb[i]) + BALLAST_H - 0.2
-            out.append(((at[None, :], d[None, :], n[None, :], np.array([z0]), np.array([z + BUFFER_H])),
-                        0.3, BUFFER_HALF_M, "block"))
-            out.append((((at + d * 0.34)[None, :], d[None, :], n[None, :], np.array([z + 0.45]), np.array([z + 0.85])),
-                        0.06, BUFFER_HALF_M - 0.1, "beam"))
+            out.append((p, d / max(float(np.hypot(*d)), 1e-9), float(zb[i]) + RAIL_TOP_M))
+    return out
+
+
+def buffer_rows(ends):
+    """Prop rows ([rrbuffer, x, y, z, yaw, scale, height, 0]) of the buffer stops: the model's face towards the train, its
+    block BUFFER_BACK_M before the track's end (the model's +Y is the direction the train runs, its +X the right of it)."""
+    out = []
+    for p, d, z in ends:
+        at = p - d * BUFFER_BACK_M
+        side = np.array([d[1], -d[0]])
+        out.append(["rrbuffer", round(float(at[0]), 2), round(float(at[1]), 2), round(z, 2),
+                    round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, BUFFER_HEIGHT, 0.0])
     return out
 
 
@@ -1799,7 +1859,7 @@ def _foot_limits(xy, side, foot, others, crossers):
 
 
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
-              bed_elev=None, _drop=frozenset(), under=None):
+              bed_elev=None, _drop=frozenset(), furniture=None, under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -1935,14 +1995,25 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for i, j in _runs(~inside | sw):     # road, as the bed is flush with it; none in a switch: SWITCH_M)
                 sl = slice(i, j + 1)
                 _collider(mesh, xy[sl], u[sl], top[sl], s[sl] / 3.0, half_g, up)
-    if STATION_FURNITURE_ON:                        # (the buffer stops at the tracks' ends, the footways' panels across them)
+    rows = []                                       # (the props of the tile's furniture: appended to `furniture` once, at the end)
+    if STATION_FURNITURE_ON:        # (buffer stops at the tracks' ends, the footways' panels and signs: plan 035)
         carriage = [(ln, hw) for ln, hw, _z in crossers if ln is not None]
-        mats = {"mid": concrete, "side": concrete, "block": concrete, "beam": steel}
-        for arrs, hx, hy, kind in buffer_stop_boxes(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
-                                                                          box[2] + REACH_M, box[3] + REACH_M)) +                 walk_crossing_boxes(rails, finals, walk_ways(frame, cells, box, 60.0), carriage, ex):
-            c = arrs[0][0]
-            if ex[0] - 2 <= c[0] <= ex[2] + 2 and ex[1] - 2 <= c[1] <= ex[3] + 2:
-                small.append((arrs, hx, hy, mats[kind]))
+        nodes = []
+        for f in cells:
+            for lo, la, t in (f.__dict__.get("_rail_nodes", ()) if f is not None else ()):
+                if t.get("railway") == "crossing":
+                    nodes.append((lo, la))
+        if nodes:
+            e, n, _ = frame.geodetic_to_enu(np.array([q[1] for q in nodes]), np.array([q[0] for q in nodes]), 0.0)
+            nodes = list(zip(np.asarray(e, np.float64).tolist(), np.asarray(n, np.float64).tolist()))
+        crossings_ = walk_crossings(rails, walk_ways(frame, cells, box, 60.0), nodes, carriage, ex)
+        for arrs, hx, hy in walk_panel_boxes(crossings_, finals):
+            small.append((arrs, hx, hy, concrete))
+        if furniture is not None:
+            rows += [r for r in walk_sign_rows(crossings_, ground) if roads.box_owns(box, r[1], r[2])]
+            rows += [r for r in buffer_rows(dead_ends(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
+                                                                                 box[2] + REACH_M, box[3] + REACH_M)))
+                          if roads.box_owns(box, r[1], r[2])]
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
@@ -1960,8 +2031,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for n in rank[-min(len(rank) - 1, max(1, len(rank) // 4)):]:
                 _drop = _drop | {keep[n]}
             return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
-                             load=load, bed_elev=bed_elev, _drop=_drop, under=under)
+                             load=load, bed_elev=bed_elev, _drop=_drop, furniture=furniture, under=under)
         return (None, decks) if return_decks else None
+    if furniture is not None:
+        furniture += rows
     return (out, decks) if return_decks else out
 
 

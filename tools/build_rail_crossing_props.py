@@ -12,6 +12,9 @@ Each model stands on the ground at its origin, Z up, its face towards -Y (the tr
   bne_rr_gate(_l)     a flasher with the gate's mechanism and its arm, raised (as it stands with no train: one model
                       whatever the road's width)
   bne_rr_gate_eu(_l)  the same with the St Andrew's cross
+  bne_rr_buffer       a buffer stop at a track's end (plan 035): its face towards -Y (the train comes from -Y), its origin on
+                      the track's axis at the rail heads' height, a concrete block (its collision) with a banded beam
+  bne_rr_walk         a pedestrian crossing's warning sign (a triangle with a locomotive) on a post, its face towards -Y
 Two levels of detail and a collision mesh (the post or mast) each; materials bne_rr_* (plain colours, the boards'
 faces textured).
 """
@@ -175,8 +178,45 @@ def collision(kind):
     m = Mesh(4)
     if kind == "crossbuck":
         m.box("bne_rr_metal", (0.0, 0.06, 1.6), (0.05, 0.05, 1.6))
+    elif kind == "buffer":
+        m.box("bne_rr_metal", (0.0, 0.4, 0.1), (1.35, 0.4, 0.9))
+    elif kind == "walk":
+        m.box("bne_rr_metal", (0.0, 0.06, 1.2), (0.05, 0.05, 1.2))
     else:
         m.box("bne_rr_metal", (0.0, 0.1, 2.3), (0.1, 0.1, 2.3))
+    return m
+
+
+def buffer_stop(segs, detail=True):
+    """A buffer stop: the concrete block under the rail heads' level to 0.3 m over it, two posts and a red and white beam to
+    1 m, and (detail) the two buffers on stems. The origin is on the track's axis at the rail heads' height, the face -Y."""
+    m = Mesh(segs)
+    m.box("bne_rr_concrete", (0.0, 0.4, -0.25), (1.35, 0.4, 0.55))
+    for x in (-0.95, 0.95):
+        m.box("bne_rr_red", (x, 0.2, 0.65), (0.08, 0.08, 0.35))
+    n = 8
+    for i in range(n):
+        w = 2.4 / n
+        m.box("bne_rr_red" if i % 2 else "bne_rr_white", (-1.2 + w * (i + 0.5), 0.1, 0.84), (w / 2, 0.06, 0.12))
+    if detail:
+        for x in (-0.6, 0.6):
+            m.box("bne_rr_black", (x, -0.08, 0.4), (0.17, 0.04, 0.17))
+            m.box("bne_rr_metal", (x, 0.08, 0.4), (0.06, 0.1, 0.06))
+    return m
+
+
+WALK_SIGN_Z, WALK_SIGN_S = 2.0, 0.9      # m: the walk sign's centre over the ground, its triangle's side
+
+
+def walk_sign(segs, face, detail=True):
+    """A pedestrian crossing's warning sign: a post and an equilateral triangle, its face (texture, apex up) towards -Y."""
+    m = Mesh(segs)
+    m.cylinder("bne_rr_metal", 0.0, 0.06, 0.0, WALK_SIGN_Z + 0.3, 0.035)
+    s2, h = WALK_SIGN_S / 2, WALK_SIGN_S * math.sqrt(3) / 2
+    zc = WALK_SIGN_Z - h / 3
+    a, b, c = (-s2, -0.02, zc), (s2, -0.02, zc), (0.0, -0.02, zc + h)
+    m.face(face, [a, b, c], [(0.0, 1.0), (1.0, 1.0), (0.5, 0.0)])
+    m.face("bne_rr_metal", [(a[0], 0.0, a[2]), (c[0], 0.0, c[2]), (b[0], 0.0, b[2])])
     return m
 
 
@@ -280,6 +320,25 @@ def textures():
     eu.transpose(Image.FLIP_TOP_BOTTOM).save(os.path.join(OUT, "bne_rr_cross_eu.png"))
 
 
+def walk_texture():
+    """The walk sign's face: 512 x 512, a red-bordered triangle (white inside, apex up) with a black locomotive."""
+    W = 512
+    im = Image.new("RGB", (W, W), (236, 236, 232))
+    d = ImageDraw.Draw(im)
+    d.polygon([(2, W - 10), (W - 2, W - 10), (W // 2, 8)], fill=(190, 20, 20))
+    d.polygon([(52, W - 58), (W - 52, W - 58), (W // 2, 86)], fill=(240, 240, 236))
+    k = 255, 255, 255
+    d.rectangle((160, 330, 330, 385), fill=(15, 15, 15))                  # the boiler
+    d.rectangle((300, 290, 350, 385), fill=(15, 15, 15))                  # the cab
+    d.rectangle((312, 282, 362, 294), fill=(15, 15, 15))                  # its roof
+    d.rectangle((186, 295, 204, 335), fill=(15, 15, 15))                  # the chimney
+    d.polygon([(150, 385), (160, 345), (160, 385)], fill=(15, 15, 15))    # the cowcatcher
+    for x in (190, 230, 270, 325):
+        d.ellipse((x - 17, 372, x + 17, 406), fill=(15, 15, 15), outline=(240, 240, 236), width=3)
+    d.rectangle((140, 410, 372, 418), fill=(15, 15, 15))                  # the rails
+    im.save(os.path.join(OUT, "bne_rr_walk.png"))
+
+
 def materials():
     out = {}
     pid = lambda n: str(uuid.uuid5(uuid.NAMESPACE_URL, "beamng-earth/" + n))
@@ -287,7 +346,7 @@ def materials():
         out[k] = {"name": k, "mapTo": k, "class": "Material", "version": 1.5, "persistentId": pid(k),
                   "Stages": [{"baseColorFactor": [*col, 1.0], "metallicFactor": met, "roughnessFactor": rough},
                              {}, {}, {}]}
-    for k in ("bne_rr_crossbuck", "bne_rr_cross_eu"):
+    for k in ("bne_rr_crossbuck", "bne_rr_cross_eu", "bne_rr_walk"):
         out[k] = {"name": k, "mapTo": k, "class": "Material", "version": 1.5, "persistentId": pid(k),
                   "Stages": [{"baseColorMap": f"{TEX_DIR}/{k}.png", "metallicFactor": 0, "roughnessFactor": 0.4},
                              {}, {}, {}]}
@@ -313,5 +372,19 @@ def main():
             print(path, os.path.getsize(path), "bytes", sum(len(t) for t in lods[0][1].tri.values()), "triangles")
 
 
+def extra():
+    """Only the models added by plan 035 (the buffer stop and the walk sign) and the materials file (all of it again, from
+    the same ids): the earlier models and their textures stay as they are."""
+    walk_texture()
+    materials()
+    for name, lods, col in (("bne_rr_buffer", [(64, buffer_stop(16)), (8, buffer_stop(6, False))], collision("buffer")),
+                            ("bne_rr_walk", [(64, walk_sign(16, "bne_rr_walk")), (8, walk_sign(6, "bne_rr_walk", False))],
+                             collision("walk"))):
+        path = os.path.join(OUT, name + ".dae")
+        write_dae(path, name, lods, col)
+        print(path, os.path.getsize(path), "bytes", sum(len(t) for t in lods[0][1].tri.values()), "triangles")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    extra() if "--extra" in sys.argv else main()
