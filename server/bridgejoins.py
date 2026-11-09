@@ -129,24 +129,56 @@ class Ramp:
 def approach_crossing_mode(ramp, crossings, base_z, mapped_z):
     """Avoid placing a new deck over a crossing without conservative headroom.
 
-    Uncertain cases leave the approach untouched; this test samples the crossing
-    centerline and is deliberately not a guarantee of vehicle clearance.
+    Uncertain cases leave the approach untouched. Samples cover the mapped
+    carriageway width, but do not guarantee vehicle clearance between samples.
     """
     import grading
     if not np.isfinite(mapped_z) or abs(ramp.z[0] - mapped_z) <= 1.5:
         return "ground"
     gaps = []
     for crossing in crossings:
-        dense, _ = grading.resample(np.asarray(crossing.xy, float), 4.)
-        _, _, distance, station = nearest(ramp.xy, dense)
-        near = distance <= ramp.half + crossing.road_half + 1.
-        if near.any():
-            heights = np.asarray(base_z(dense[near]), float)
-            clearance = np.interp(station[near], ramp.s, ramp.z) - heights
-            if not np.isfinite(clearance).all():
+        dense, _ = grading.resample(np.asarray(crossing.xy, float), 2.)
+        if len(dense) < 2:
+            continue
+        # Sample the actual carriageway, not just its centre. First restrict
+        # the expensive width sampling to points close enough to the deck.
+        half = float(crossing.road_half)
+        widen = getattr(crossing, 'widen', None)
+        if not np.isfinite(half) or half < 0.:
+            return "unsafe"
+        if widen is not None:
+            widen = np.asarray(widen, float)
+            if not np.isfinite(widen).all():
                 return "unsafe"
-            gaps.extend(clearance.tolist())
-    if not gaps or max(gaps) <= 2.5:
+            half += max(0., float(np.max(widen, initial=0.)))
+        # Unreasonable mapped widths cannot be sampled reliably or cheaply.
+        if half > 100.:
+            return "unsafe"
+        _, _, distance, _ = nearest(ramp.xy, dense)
+        near = distance <= ramp.half + half + 1.
+        if not near.any():
+            continue
+        tangent = np.gradient(dense, axis=0)
+        length = np.linalg.norm(tangent, axis=1)
+        if np.any(length[near] < 1e-6):
+            return "unsafe"
+        tangent = tangent[near] / length[near, None]
+        normal = np.c_[-tangent[:, 1], tangent[:, 0]]
+        count = max(2, int(np.ceil(2. * half / 2.)) + 1)
+        offsets = np.linspace(-half, half, count)
+        sample = (dense[near, None, :] + offsets[None, :, None] * normal[:, None, :]).reshape(-1, 2)
+        _, _, distance, station = nearest(ramp.xy, sample)
+        overlap = distance <= ramp.half + 1.
+        if not overlap.any():
+            continue
+        heights = np.asarray(base_z(sample[overlap]), float)
+        clearance = np.interp(station[overlap], ramp.s, ramp.z) - heights
+        if not np.isfinite(clearance).all():
+            return "unsafe"
+        gaps.extend(clearance.tolist())
+    # An overlapping road only slightly below the approach can still be
+    # buried by grading. Only treat near-level overlaps as ordinary ground.
+    if not gaps or max(gaps) <= .5:
         return "ground"
     # The rendered deck is 0.35 m deep; leave at least six metres above
     # sampled ground. A mixed-level overlap is ambiguous, so skip the ramp.
