@@ -240,7 +240,7 @@ POLICIES = {
                                    optional=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk
-    "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
+    "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
                                            cache_ttl=DAY, miss_ttl=None, max_wait=10.0, timeout=20.0, max_attempts=1, optional=True),
     # the BeamNG.Earth server list (native/serverlist on the project's mini PC): the tab in BeamMP's server browser,
     # fetched when the player opens it or presses Refresh

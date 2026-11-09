@@ -5341,6 +5341,7 @@ class Connection:
         self.credits = creditsmod.Tracker()     # data credits: throttle, last message sent (--credits on)
         self.ground_busy = False                # a groundahead job is running (one at a time)
         self.route_dl_version = 0               # bumped by every route(): supersedes a running route_download job
+        self.route_seq = 0                      # bumped by every route() request: a route still being retried is dropped
         self.route_points = []                  # the last planned route's points ([lat, lon]: a saved route's)
         self.sea_busy = False                   # a water-tile plan is running (sea_tiles)
         self.sea_checked = None                 # (anchor id, 512 m square, monotonic, complete) of the last plan
@@ -5398,11 +5399,14 @@ class Connection:
         whole route, up to ROUTE_WHOLE_MAX_M))."""
         self.route_dl_version += 1
         version = self.route_dl_version
+        self.route_seq += 1
+        seq = self.route_seq
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
-        try:
+        try:                            # (a 429 is retried unless a newer route came: routing.plan, GitHub #1027)
             r = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                self.s.ui_pool, functools.partial(routingmod.plan, float(msg["lat0"]), float(msg["lon0"]),
+                                                  float(msg["lat1"]), float(msg["lon1"]), self.s.net,
+                                                  msg.get("bearing"), still_wanted=lambda: seq == self.route_seq))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]

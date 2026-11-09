@@ -1,10 +1,14 @@
 """routing: the GPS's whole-route planning (OSRM response handling, simplification)."""
+import json
 import sys
 import unittest
 import numpy as np
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import netfetch  # noqa: E402
 import routing  # noqa: E402
 
 
@@ -44,6 +48,78 @@ class RoutingTest(unittest.TestCase):
         self.assertTrue(u.startswith("https://routing.openstreetmap.de/"))
         self.assertNotIn("bearings", u)
         self.assertTrue(routing.url(39.28, -76.59, 38.9, -77.03, 370).endswith("&bearings=10,60;"))
+
+
+class _FakeNet:
+    """answers: bytes (a 200's body) or an exception to raise, in order."""
+
+    def __init__(self, *answers):
+        self.answers, self.calls = list(answers), 0
+
+    def get(self, url, *, kind="demand", **kw):
+        self.calls += 1
+        a = self.answers.pop(0)
+        if isinstance(a, Exception):
+            raise a
+        return SimpleNamespace(body=a)
+
+
+OSRM_OK = json.dumps({"code": "Ok", "routes": [{"distance": 10.0, "duration": 1.0, "geometry": {
+    "coordinates": [[-76.59, 39.28], [-76.60, 39.29]]}}]}).encode()
+
+
+class RateLimitRetryTest(unittest.TestCase):
+    """GitHub #1027: a 429 from OSRM dropped the whole GPS route."""
+
+    def _rl(self, retry_after=0.0):
+        return netfetch.RateLimited("routing.openstreetmap.de: HTTP 429", "u", "routing.openstreetmap.de",
+                                    retry_after=retry_after, status=429)
+
+    def test_429_is_retried_once_after_a_short_wait(self):
+        net = _FakeNet(self._rl(), OSRM_OK)
+        with mock.patch("routing.time") as t:
+            r = routing.plan(39.28, -76.59, 39.29, -76.60, net=net)
+        self.assertEqual(len(r["points"]), 2)
+        self.assertEqual(net.calls, 2)
+        t.sleep.assert_called_once_with(routing.RETRY_429_S)
+
+    def test_retry_after_is_honoured_when_short(self):
+        net = _FakeNet(self._rl(retry_after=3.0), OSRM_OK)
+        with mock.patch("routing.time") as t:
+            routing.plan(39.28, -76.59, 39.29, -76.60, net=net)
+        t.sleep.assert_called_once_with(3.0)
+
+    def test_long_retry_after_is_not_waited_for(self):
+        net = _FakeNet(self._rl(retry_after=60.0), OSRM_OK)
+        with mock.patch("routing.time") as t:
+            with self.assertRaises(netfetch.RateLimited):
+                routing.plan(39.28, -76.59, 39.29, -76.60, net=net)
+        self.assertEqual(net.calls, 1)
+        t.sleep.assert_not_called()
+
+    def test_superseded_route_is_not_retried(self):
+        net = _FakeNet(self._rl(), OSRM_OK)
+        with mock.patch("routing.time") as t:
+            with self.assertRaises(netfetch.RateLimited):
+                routing.plan(39.28, -76.59, 39.29, -76.60, net=net, still_wanted=lambda: False)
+        self.assertEqual(net.calls, 1)
+        t.sleep.assert_not_called()
+
+    def test_superseded_during_the_wait_is_not_retried(self):
+        net = _FakeNet(self._rl(), OSRM_OK)
+        wanted = iter([True, False])
+        with mock.patch("routing.time") as t:
+            with self.assertRaises(netfetch.RateLimited):
+                routing.plan(39.28, -76.59, 39.29, -76.60, net=net, still_wanted=lambda: next(wanted))
+        self.assertEqual(net.calls, 1)
+        t.sleep.assert_called_once()
+
+    def test_second_429_gives_up(self):
+        net = _FakeNet(self._rl(), self._rl())
+        with mock.patch("routing.time"):
+            with self.assertRaises(netfetch.RateLimited):
+                routing.plan(39.28, -76.59, 39.29, -76.60, net=net)
+        self.assertEqual(net.calls, 2)
 
 
 if __name__ == "__main__":

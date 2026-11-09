@@ -9,6 +9,7 @@ which draws it on the map and steers the stock route arrows along it on its loca
 """
 import json
 import math
+import time
 
 import netfetch
 
@@ -20,6 +21,8 @@ ATTRIBUTION = "Routing: OSRM (FOSSGIS), data (c) OpenStreetMap contributors (ODb
 
 
 BEARING_RANGE = 60          # degrees either side of the car's heading the start may take
+RETRY_429_S = 2.0           # a 429 without a Retry-After (GitHub #1027: the route was lost): one more try this later
+RETRY_429_MAX_S = 5.0       # a longer wait than this is not held for: the route fails, the mod steers without it
 
 
 def url(lat0, lon0, lat1, lon1, bearing=None):
@@ -118,14 +121,31 @@ def parse(data):
             "dur": float(r.get("duration") or 0)}
 
 
-def plan(lat0, lon0, lat1, lon1, net=None, bearing=None):
+def _body(net, u, still_wanted=None):
+    """The body of one demand request. A 429 (FOSSGIS's fair use: they refuse a request that follows another too
+    closely) is tried once more after RETRY_429_S, or the host's Retry-After if that is shorter than
+    RETRY_429_MAX_S, unless still_wanted() says a newer route was asked for in the meantime (GitHub #1027)."""
+    try:
+        return net.get(u, kind="demand").body
+    except netfetch.RateLimited as e:
+        wait = float(e.retry_after) if e.retry_after else RETRY_429_S     # (0.0 = no Retry-After given)
+        if wait > RETRY_429_MAX_S or (still_wanted is not None and not still_wanted()):
+            raise
+        time.sleep(wait)
+        if still_wanted is not None and not still_wanted():
+            raise
+    return net.get(u, kind="demand").body
+
+
+def plan(lat0, lon0, lat1, lon1, net=None, bearing=None, still_wanted=None):
     """The road route from (lat0, lon0) to (lat1, lon1) (blocking), starting the way bearing points if it can (else
-    without it). Raises netfetch.FetchError or ValueError."""
+    without it). still_wanted: a callable, False once a newer route superseded this one (no retry then). Raises
+    netfetch.FetchError or ValueError."""
     net = net if net is not None else netfetch.default_fetcher()
     if bearing is not None:
         try:
-            return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1, bearing), kind="demand").body.decode("utf-8")))
+            return parse(json.loads(_body(net, url(lat0, lon0, lat1, lon1, bearing), still_wanted).decode("utf-8")))
         except (ValueError, netfetch.FetchFailed) as e:   # no road that way near the start (OSRM: 400 NoSegment,
             if isinstance(e, netfetch.FetchFailed) and e.status != 400:      # a car across a field): any direction
                 raise
-    return parse(json.loads(net.get(url(lat0, lon0, lat1, lon1), kind="demand").body.decode("utf-8")))
+    return parse(json.loads(_body(net, url(lat0, lon0, lat1, lon1), still_wanted).decode("utf-8")))
