@@ -153,13 +153,14 @@ end
 | function | returns |
 |---|---|
 | `version()` | `major, minor` (1, 0) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'` |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'`, `'roofed'` |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
 | `ready()` | the world loaded round the player, no teleport under way (a rebase does not count) |
 | `pose()` | `{lat, lon, alt, heading, speed, ve, vn, vu, camera, x, y, z, anchorLat, anchorLon}` or nil |
 | `position()` | `lat, lon` or nil |
+| `inTunnel([x, y, z])` | `true` / `false` whether the car (no arguments; nil without a car) or the game position is under a roof (tunnel, arch, parking structure); nil when not known (API 1.2, `has('roofed')`) |
 | `place()` | `{street, place, region, country}` (each optional) as the status bar shows it, or nil |
 | `teleport(lat, lon, name)` | true once taken (as the map's Go), else `false, why` |
 | `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning}` or nil |

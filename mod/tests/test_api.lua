@@ -45,7 +45,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 1, 'version 1.1 (options)')
+T.check(api.version() == 1 and select(2, api.version()) == 2, 'version 1.2 (options, roofed)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -84,6 +84,36 @@ T.near(api.pose().heading, (90 - turn) % 360, 1e-6, 'facing frame east')
 -- the free camera: no heading
 setPlayer(0, 0, 0, 0, 0, 0, true)
 T.check(api.pose().camera == true and api.pose().heading == nil, 'no car: camera, no heading')
+
+-- roofed: the car's position, or game coordinates, through ambience.inTunnel
+local roofed, asked, roofErr = false, nil, false
+package.loaded['beamngEarth/ambience'] = { inTunnel = function(x, y, z)
+  asked = { x, y, z }
+  if roofErr then error('boom') end
+  return roofed
+end }
+T.check(api.has('roofed'), 'roofed feature')
+setPlayer(12, -34, 56, 0, 0, 0)
+roofed = true
+T.check(api.inTunnel() == true and asked[1] == 12 and asked[2] == -34 and asked[3] == 56, 'the car under a roof, at its position')
+roofed = false
+T.check(api.inTunnel() == false, 'the car in the open')
+T.check(api.inTunnel(1, 2, 3) == false and asked[1] == 1 and asked[3] == 3, 'game coordinates given')
+roofed = true
+T.check(api.inTunnel('1', '2', '3') == true and asked[2] == 2, 'numbers given as strings')
+T.check(api.inTunnel('a', 2, 3) == nil and api.inTunnel(1, 2) == nil, 'bad coordinates: not known')
+setPlayer(0, 0, 0, 0, 0, 0, true)
+T.check(api.inTunnel() == nil and api.inTunnel(0, 0, 0) == true, 'no car: nil; coordinates still answered')
+setPlayer(0, 0, 0, 0, 0, 0)
+roofErr = true
+T.check(api.inTunnel(0, 0, 0) == nil, 'a failing ambience: not known')
+roofErr = false
+package.loaded['beamngEarth/ambience'] = {}
+T.check(api.inTunnel(0, 0, 0) == nil, 'ambience without inTunnel: not known')
+package.loaded['beamngEarth/ambience'] = nil
+st.player = nil
+T.check(api.inTunnel() == nil, 'no player yet: not known')
+setPlayer(0, 0, 0, 0, 0, 0)
 
 -- not ready: other level, not connected, ground loading, teleport under way; a rebase is fine
 setPlayer(0, 0, 0, 0, 0, 0)

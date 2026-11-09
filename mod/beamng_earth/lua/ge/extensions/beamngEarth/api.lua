@@ -20,11 +20,14 @@
 -- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
 -- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
 -- on its Options tab; api.addonOptions(id) is { key = value } (the defaults until then), or nil before the list came.
+-- Roofed (1.2, has('roofed')): api.inTunnel() is true when the player's car is under a roof (a tunnel, an arch, a parking
+-- structure), nil without a car; api.inTunnel(x, y, z) is the same for game coordinates (as pose's x, y, z).
 -- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 1
-local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true }
+M.MAJOR, M.MINOR = 1, 2
+local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
+  roofed = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions' }
 
@@ -107,6 +110,22 @@ function M.pose()
     end
   end
   return p
+end
+
+-- Is the player's car under a roof (x, y, z omitted), or the game position x, y, z? true / false; nil when not known
+-- (no world yet, no car for the first form, ambience not loaded, bad numbers). ambience.lua's inTunnel does the work.
+function M.inTunnel(x, y, z)
+  if x == nil then
+    local p = M.pose()
+    if not p or p.camera then return nil end
+    x, y, z = p.x, p.y, p.z
+  end
+  x, y, z = tonumber(x), tonumber(y), tonumber(z)
+  local amb = mod('ambience')
+  if not (x and y and z and amb and type(amb.inTunnel) == 'function') then return nil end
+  local ok, r = pcall(amb.inTunnel, x, y, z)
+  if not ok then return nil end
+  return r == true
 end
 
 -- lat, lon of the player now (nil before the world is there).
