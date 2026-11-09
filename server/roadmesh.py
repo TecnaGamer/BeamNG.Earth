@@ -131,7 +131,7 @@ def layer_of(chunk):
     return "base"
 
 
-def _resample(pts, step, keep_vertices=False):
+def _resample(pts, step, keep_vertices=False, corner_half=0.0):
     """Points every `step` m along a polyline (k, 3), ends kept: (xy (m, 2), distance (m,), z (m,))."""
     seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
@@ -146,6 +146,19 @@ def _resample(pts, step, keep_vertices=False):
         distance = np.minimum(np.abs(t - s[np.maximum(j - 1, 0)]),
                               np.abs(t - s[np.minimum(j, len(s) - 1)]))
         t = np.unique(np.r_[t[distance > 1e-8], s])
+        if corner_half > 0 and len(pts) > 2:
+            # A fixed deck keeps its mapped height knots. Additional lattice rows closer
+            # to a corner than its offset intersection fold the inner edge backwards.
+            # Remove only those inserted rows, including the parapet's width in the reach.
+            d = np.diff(pts[:, :2], axis=0)
+            unit = d / np.maximum(seg[:, None], 1e-9)
+            cos = np.clip(np.sum(unit[:-1] * unit[1:], axis=1), -1., 1.)
+            original = np.isin(t, s)
+            keep = np.ones(len(t), bool)
+            for j in np.flatnonzero((cos < 1 - 1e-10) & (cos > -1 + 1e-8)):
+                reach = corner_half * np.sqrt((1 - cos[j]) / (1 + cos[j]))
+                keep &= original | (np.abs(t - s[j + 1]) >= reach + 1e-8)
+            t = t[keep]
     return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
             np.interp(t, s, pts[:, 2]))
 
@@ -187,7 +200,8 @@ def ribbons(chunks, keep_none=False):
         if len(p) < 2:
             continue
         if c.get("deck") and c.get("fixed"):
-            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True)
+            corner_half = float(np.max(c.get("ws", c["w"]))) / 2 + PARAPET_W
+            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True, corner_half=corner_half)
             if len(xy) < 2:
                 continue
             hw = float(c["w"]) / 2
