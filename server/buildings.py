@@ -2302,7 +2302,9 @@ ROAD_PASSAGE_DEEP_M = 2.0   # m: "deep" is this far in from the footprint's edge
 ROAD_PASSAGE_STEP_M = 3.0   # m: the road's samples for that test
 ROAD_PASSAGE_MAX_SEGS = 3   # a way of more straight stretches than this (a lot's winding aisles) is no passage ...
 ROAD_PASSAGE_MAX_PIECES = 24    # ... and a footprint that would be cut into more pieces than this stays whole
-ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal", "garage")
+ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal")
+ROAD_PASSAGE_GARAGE_M2 = 12_000.0   # a car park's own footprint (flagged garage) this small or smaller has no passages;
+                                    # a larger one is a building that holds a car park (Ulemiste keskus, 51,000 m2)
 
 
 def _simplify(p, tol=1.0):
@@ -2401,7 +2403,8 @@ def _road_passages(rings, attrs, looks, mins, lines):
         r = np.asarray(ring, np.float64)
         spans = []
         if (look is None and mh <= 0.5 and h is not None and np.isfinite(h)
-                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)):
+                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)
+                and not (at.get("garage") and abs(_area2(r)) / 2 <= ROAD_PASSAGE_GARAGE_M2)):
             lo, hi = r.min(0), r.max(0)
             near = np.flatnonzero((bx[:, 2] >= lo[0]) & (bx[:, 0] <= hi[0]) & (bx[:, 3] >= lo[1]) & (bx[:, 1] <= hi[1]))
             for li in near:
