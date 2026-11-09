@@ -11,10 +11,12 @@ those attributes, served as shards of a z10 tile (~25 km): <PAGES>/deroads/<x>/<
 
 adjust_specs (last in roads._road_specs) matches each road to the axis it runs along (within MATCH_M, the same
 direction, over MATCH_SHARE of its length) and takes from it what the map does not say itself:
-    width    the surveyed paved width, where the map has no width of its own (a mapped width or OSM width wins)
-    lanes    the surveyed lanes, where OpenStreetMap has no lanes tag (its lanes win); the width follows the
-             class's rule for that many lanes when none was surveyed
+    width    the surveyed paved width, where the map has no width of its own (a mapped width or OSM width wins);
+             not on ramps (roads' ramp width)
+    lanes    the surveyed lanes of motorways to tertiary roads, where OpenStreetMap has no lanes tag (its lanes win);
+             the width follows the class's rule for that many lanes when none was surveyed
     surface  where OpenStreetMap and Overture say nothing: paved, setts, gravel or earth
+Driveways, parking aisles and living streets (SKIP) take nothing: they run beside a street, not along its axis.
 Outside Germany, where a shard is missing, or offline: no axes, today's estimates. BNE_DE_ROADS=off turns it off.
 The sources and their licences are in CREDITS.md.
 """
@@ -44,8 +46,15 @@ CELL_M = 25.0                   # grid the axes' segments are looked up in
 WIDTH_M = (2.5, 40.0)           # a surveyed width outside this is not taken
 LANE_MIN_M = 2.4                # m per lane at least: a width narrower than its lanes need is not taken
 # build_de_roads.py's surface codes -> OpenStreetMap surface values (roads.surface_kind reads them)
-SURFACES = {1: "asphalt", 2: "concrete", 3: "sett", 4: "gravel", 5: "compacted", 6: "ground", 7: "grass_paver",
+SURFACES = {1: "asphalt", 2: "concrete", 3: "sett", 5: "compacted", 6: "ground", 7: "grass_paver",
             8: "paving_stones"}
+# (4, "Gestein, zerkleinert", is not taken: Saarland's survey gives it to stretches of Autobahn, crushed stone in the
+# asphalt rather than a gravel road)
+SKIP = {"service", "living_street", "raceway", "busway"}    # driveways, parking aisles, yards: beside a street, not it
+# Lanes only for these classes (and their width from that count where none was surveyed): the survey gives two lanes
+# to almost every town street, which drew 8 m streets with a centre line (Saarland probe, 2026-11-09)
+LANE_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary"}
+UNPAVED_CLASSES = {"track", "unclassified", "residential"}  # the only ones the survey may make gravel or earth
 DIVIDED_AXIS, CARRIAGEWAY = 1, 2      # flags: a divided road's centre axis / one of its carriageways
 
 _lock = threading.Lock()
@@ -199,7 +208,7 @@ class Axes:
         return np.column_stack([(ll[:, 0] - self.lon0) * self.kx, (ll[:, 1] - self.lat0) * self.ky])
 
     def match(self, lonlat, carriageway=None):
-        """The line index each of a road's samples runs along (-1 none) and the samples' count. carriageway: True
+        """The axis (line index, a row of attrs) each of a road's samples runs along (-1 none) and the samples' count. carriageway: True
         only a divided road's carriageways, False none of them, None any."""
         p = self.local(lonlat)
         seg = np.diff(p, axis=0)
@@ -223,7 +232,7 @@ class Axes:
                 continue
             c = np.asarray(cand)
             if carriageway is not None:
-                is_cw = (self.attrs[c, 4] & CARRIAGEWAY) > 0
+                is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
                 c = c[is_cw] if carriageway else c[~is_cw]
                 if not len(c):
                     continue
@@ -235,7 +244,7 @@ class Axes:
             dist = np.hypot(near[:, 0] - q[0], near[:, 1] - q[1])
             k = int(np.argmin(dist))
             if dist[k] <= MATCH_M:
-                got[j] = int(c[k])
+                got[j] = int(self.line[c[k]])
         return got, len(pts)
 
 
@@ -276,24 +285,23 @@ def _mode(values):
 def surveyed(ax, lonlat, oneway):
     """(width m or None, lanes or None, surface value or None) of the axis a road runs along, None where it runs
     along none. A one-way road (one carriageway of a divided road, or a one-way street) takes a carriageway's axis
-    where there is one; a two-way road never one carriageway's."""
+    where there is one; a two-way road never one carriageway's. A one-way road on any other axis takes its surface
+    alone: the map splits roads into two one-way halves the survey keeps as one axis with both halves' width and
+    sometimes fewer lanes than one half has (Saarbrücken's Mainzer Straße: one 20 m, two-lane axis, two two-lane
+    halves in the map, each drawn 20 m wide), and the open data does not say which axes are one-way streets."""
     hit, n = ax.match(lonlat, carriageway=True) if oneway else (None, 0)
+    own = True
     if not oneway or (hit >= 0).sum() < MATCH_SHARE * max(n, 1):
         hit, n = ax.match(lonlat, carriageway=False)
-        if oneway and (hit >= 0).sum() >= MATCH_SHARE * max(n, 1):
-            # (a one-way street on a two-way axis: its lanes and width are both directions' unless it is a divided
-            # road's centre axis, whose lanes and width belong to neither carriageway)
-            a = ax.attrs[hit[hit >= 0]]
-            if (a[:, 4] & DIVIDED_AXIS).any():
-                return None
+        own = not oneway
     if not n or (hit >= 0).sum() < MATCH_SHARE * n:
         return None
     a = ax.attrs[hit[hit >= 0]]
     widths = a[:, 0][a[:, 0] > 0]
     width = float(np.median(widths)) / 10.0 if len(widths) >= MATCH_SHARE * len(a) else None
     lanes = _mode(a[:, 1]) or None
-    surf = _mode(a[:, 2])
-    return width, lanes, SURFACES.get(surf)
+    surf = SURFACES.get(_mode(a[:, 2]))
+    return (width, lanes, surf) if own else (None, None, surf)
 
 
 def adjust_specs(feats, specs):
@@ -311,7 +319,7 @@ def adjust_specs(feats, specs):
     rules = feats.rules
     out = list(specs)
     for i, sp in enumerate(out):
-        if sp is None or sp.cls in ("raceway", "busway") or roads.is_ring(feats, i):
+        if sp is None or sp.cls in SKIP or roads.is_ring(feats, i):
             continue
         a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
         b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
@@ -325,13 +333,15 @@ def adjust_specs(feats, specs):
         if mapped_w is None:
             mapped_w = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
         new = sp
-        if lanes and roads._osm(feats, "lanes", i, *roads.OSM_LANES) is None and not sp.link:
+        if (lanes and sp.cls in LANE_CLASSES and not sp.link
+                and roads._osm(feats, "lanes", i, *roads.OSM_LANES) is None):
             new = new._replace(lanes=int(lanes))
         if surf and roads._map_surface_value(feats, i) is None:
             kind = roads.surface_kind(sp.cls, surf)
-            if kind != sp.kind and not (sp.urban and kind not in roads.BUILT):
+            unpaved = kind not in roads.BUILT
+            if kind != sp.kind and not (unpaved and (sp.urban or sp.cls not in UNPAVED_CLASSES)):
                 new = new._replace(kind=kind, surf=roads.surface_token(surf))
-        if mapped_w is None:
+        if mapped_w is None and not sp.link:        # (a ramp keeps roads' ramp width: the survey's is its lane alone)
             n = new.lanes or 1
             if width is not None and WIDTH_M[0] <= width <= WIDTH_M[1] and width >= LANE_MIN_M * n:
                 w = width

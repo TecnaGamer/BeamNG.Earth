@@ -99,6 +99,22 @@ class GermanRoadsTest(unittest.TestCase):
         self.assertEqual(sp.width, 6.5)
         self.assertEqual(sp.lanes, 2)
 
+    def test_axes_of_many_segments(self):
+        bent = [(-400.0, 0.0), (-200.0, 1.0), (0.0, 0.0), (200.0, 1.0), (400.0, 0.0)]
+        write_shard(self.tmp.name, [(bent, 8.0, 2, 1, 3, 0),
+                                    ([(-400.0, 60.0), (-200.0, 61.0), (0.0, 60.0), (400.0, 60.0)], 5.0, 2, 1, 5, 0),
+                                    ([(-400.0, -60.0), (0.0, -60.0), (400.0, -60.0)], 0.0, 4, 1, 2,
+                                     germanroads.DIVIDED_AXIS)])
+        f = features([[(-300.0, 0.5), (300.0, 0.5)], [(-300.0, 60.5), (300.0, 60.5)]], ["primary", "residential"])
+        a, b = self.specs(f)
+        self.assertEqual((a.width, a.lanes), (8.0, 2))
+        self.assertEqual((b.width, b.lanes), (5.0, None))     # (a town street: its width, not the survey's lanes)
+
+    def test_driveways_and_ramps(self):
+        write_shard(self.tmp.name, [(EAST, 4.0, 1, 6, 1, 0)])
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["service"])
+        self.assertEqual(self.specs(f)[0].width, roads.carriageway("service", "paved", False))
+
     def test_a_mapped_width_and_osm_lanes_win(self):
         write_shard(self.tmp.name, [(EAST, 6.5, 2, 1, 4, 0)])
         f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["secondary"], widths=[(0, 9.0)],
@@ -129,7 +145,15 @@ class GermanRoadsTest(unittest.TestCase):
     def test_a_one_way_road_on_a_divided_centre_axis_takes_nothing(self):
         write_shard(self.tmp.name, [(EAST, 14.0, 4, 1, 2, germanroads.DIVIDED_AXIS)])
         f = features([[(-300.0, 1.0), (300.0, 1.0)]], ["trunk"], oneway=[0])
-        self.assertIsNone(germanroads.surveyed(germanroads.axes_for(f), f.lonlat, True))
+        self.assertEqual(germanroads.surveyed(germanroads.axes_for(f), f.lonlat, True)[:2], (None, None))
+
+    def test_one_half_of_a_split_road_does_not_take_both_halves_width(self):
+        write_shard(self.tmp.name, [(EAST, 20.0, 2, 1, 3, 0)])       # (Mainzer Straße: 20 m, two lanes)
+        f = features([[(-300.0, 4.0), (300.0, 4.0)]], ["primary"], oneway=[0])
+        before = roads._road_specs(f, None, False)
+        with mock.patch.object(germanroads, "ON", False):
+            plain = roads._road_specs(f, None, False)[0]
+        self.assertEqual((before[0].width, before[0].lanes), (plain.width, plain.lanes))
 
     def test_track_surfaces(self):
         for surf, kind in ((6, "dirt"), (5, "gravel"), (1, "paved")):
@@ -137,6 +161,10 @@ class GermanRoadsTest(unittest.TestCase):
             write_shard(self.tmp.name, [(EAST, 0.0, 0, surf, 9, 0)])
             sp = self.specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["track"]))[0]
             self.assertEqual(sp.kind, kind, surf)
+
+    def test_a_main_road_never_turns_to_earth(self):
+        write_shard(self.tmp.name, [(EAST, 0.0, 0, 6, 3, 0)])
+        self.assertEqual(self.specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["primary"]))[0].kind, "paved")
 
     def test_a_mapped_surface_wins(self):
         write_shard(self.tmp.name, [(EAST, 0.0, 0, 6, 9, 0)])
