@@ -2918,6 +2918,7 @@ class Placement:
         self.on = any(_placement_rows(f) for f in self.cells)
         self.copies = copies_of(self.cells) if self.on else None
         self._index = None
+        self._jmemo = {}            # (id(feats), row, fid) -> joints (ring asks moves and shift: each asked them again)
 
     def _ends(self):
         """{end key: [(feats, row, end, id)]}: every road with an end where a placed one's lies, from the joint's own
@@ -2978,10 +2979,15 @@ class Placement:
         abutment inside a ground joint's taper eases with the ground (and the ground beside a deck joint); () none."""
         if not self.on:
             return ()
+        key = (id(f), i, fid)
+        got = self._jmemo.get(key)
+        if got is not None:
+            return got
         out = ()
         for deck, spec in ((False, road_specs(f, *self.args)[i]), (True, bridge_specs(f)[i])):
             if spec is not None:
                 out += self._joints(f, i, fid, spec, deck)
+        self._jmemo[key] = out
         return out
 
     def _joints(self, f, i, fid, spec, deck):
@@ -3060,10 +3066,36 @@ class Placement:
         return np.c_[np.asarray(lo, np.float64), np.asarray(la, np.float64)]
 
 
+_PLACEMENT_LRU = []             # [(key, Placement)], newest last (placement_context)
+_PLACEMENT_LRU_N = 16
+_PLACEMENT_LOCK = threading.Lock()
+
+
+def _callable_key(fn):
+    """A key for urban_fn: a bound method by its object and function (a new bound method object at every access)."""
+    if fn is None:
+        return None
+    return (id(getattr(fn, "__self__", None)), getattr(fn, "__func__", fn))
+
+
 def placement_context(cells, urban_fn=None, widths=None, left_hand=False):
     """The Placement of cells' roads with road_specs(feats, urban_fn, widths, left_hand)'s widths: one per tile (each
-    caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks)."""
-    return Placement(cells, urban_fn, widths, left_hand)
+    caller moving the roads' lines by it: road tiles, grading, the traffic AI's lanes, the signs' rows, decks). The
+    same cells and arguments get the same one back (the last _PLACEMENT_LRU_N kept: about 12 callers a tile each built
+    its own, its end index and every road's joints again, 2026-11-09); a Placement holds its cells, so their ids stay
+    theirs while it is kept."""
+    cells = list(cells or ())
+    key = (tuple((id(f), getattr(f, "_road_revision", 0)) for f in cells), _callable_key(urban_fn), id(widths),
+           bool(left_hand))         # (_road_revision: roadlanes.invalidate, lane tags joined after a first read)
+    with _PLACEMENT_LOCK:
+        for k, pl in _PLACEMENT_LRU:
+            if k == key:
+                return pl
+    pl = Placement(cells, urban_fn, widths, left_hand)
+    with _PLACEMENT_LOCK:
+        _PLACEMENT_LRU.append((key, pl))
+        del _PLACEMENT_LRU[:-_PLACEMENT_LRU_N]
+    return pl
 
 
 def _spec_json(sp):
