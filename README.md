@@ -90,8 +90,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   plates follow each country's practice as best known.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
-  road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
-  little is over them.
+  road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
+  tunnels through hills, with portals, lights and low arches where little is over them.
 - Water: the sea with real depth (cars sink), lakes, and rivers kept beside the roads.
 - Airports with graded, marked runways; racetracks (circuits, ovals and pit lanes, with their real banking);
   landmarks such as the pyramids of Giza.

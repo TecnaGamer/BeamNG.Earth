@@ -26,6 +26,7 @@ MODULES = (
     "test_portugal_imagery",
     "test_rail_crossing_assets",
     "test_native_stress",
+    "test_bridge_level_spans",
 )
 
 
