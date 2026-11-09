@@ -466,6 +466,9 @@ SEAM_RUN_MAX_M = 80.0       # ... and at most this
 SEAM_SIDE_M = 3.0           # m: a road's end this close to a pinned end meets the same abutment: it goes down from it
 SEAM_SIDE_GRADE = 0.10      # ... at this grade (a street off a freeway's bridge end), over SEAM_SIDE_RUN_M at least ...
 SEAM_SIDE_RUN_M = (12.0, 40.0)
+SEAM_MOUTH_M = 12.0         # m a street off a deck's abutment keeps the abutment's height: the junction's wedge of the deck's
+                            # level (a wider mouth than the carriageway's own) stands over the street's road no lower than this
+SEAM_MOUTH_GRADE = 0.08     # ... and goes back to its own profile at this grade
 SEAM_DECK_GRADE = 0.01      # a single span between two abutments is not tilted more than this by the ground at its ends: the
                             # rest of their difference is shared between the two approaches (_grade_match) ...
 SEAM_MATCH_MAX_M = 4.0      # ... at most this each (bad data: rather a steep deck)
@@ -3452,6 +3455,7 @@ class _Planner:
                     continue
                 d = float(np.asarray(at)[0]) - float(z[end])
                 if abs(d) < SEAM_MIN_M:
+                    pins.append((float(xy[end][0]), float(xy[end][1]), float(z[end]) + d))     # (the streets' mouths)
                     continue
                 run = float(np.clip(abs(d) / SEAM_GRADE, SEAM_RUN_MIN_M, SEAM_RUN_MAX_M))
                 a = s if end == 0 else s[-1] - s
@@ -3481,12 +3485,12 @@ class _Planner:
                 if not near:
                     continue
                 d = float(np.mean([q[2] for q in near])) - float(z[end])
-                if abs(d) < SEAM_MIN_M:
-                    continue
-                run = float(np.clip(abs(d) / SEAM_SIDE_GRADE, *SEAM_SIDE_RUN_M))
                 a = s if end == 0 else s[-1] - s
-                t = np.clip(1.0 - a / run, 0.0, 1.0)
-                out = out + d * t * t * (3.0 - 2.0 * t)
+                if abs(d) >= SEAM_MIN_M:
+                    run = float(np.clip(abs(d) / SEAM_SIDE_GRADE, *SEAM_SIDE_RUN_M))
+                    t = np.clip(1.0 - a / run, 0.0, 1.0)
+                    out = out + d * t * t * (3.0 - 2.0 * t)
+                out = self._hold_mouth(out, a)
             if np.abs(out - z).max() > 1e-6:
                 np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
@@ -3495,6 +3499,33 @@ class _Planner:
                 plans[n] = (fid, np_)
                 done = True
         return done
+
+    @staticmethod
+    def _hold_mouth(z, a):
+        """z (n,) of a street at the end of a deck, a (n,) the distance of each vertex from that end: the end's height held
+        for SEAM_MOUTH_M (the wedge of the deck's level the junction makes beside the carriageway: 48.46547 N 27.77097 E,
+        Nemiia, 2026-11-09: it stood 0.5 m over the street, as a step with a concrete edge), then back to the street's own
+        profile at SEAM_MOUTH_GRADE. A street that does not meet its own profile again inside its length is left as it was."""
+        n = len(z)
+        order = np.argsort(a, kind="stable")
+        za, aa = np.asarray(z, np.float64)[order], np.asarray(a, np.float64)[order]
+        held = aa <= SEAM_MOUTH_M
+        if n < 3 or held.sum() < 2 or held.all():
+            return z
+        out = za.copy()
+        out[held] = za[0]
+        prev, ap = za[0], max(float(aa[held][-1]), 0.0)
+        for i in np.flatnonzero(~held):
+            lim = SEAM_MOUTH_GRADE * (aa[i] - ap)
+            dz = za[i] - prev
+            if abs(dz) <= lim:
+                res = np.asarray(z, np.float64).copy()
+                res[order] = out
+                return res
+            prev += lim if dz > 0 else -lim
+            ap = aa[i]
+            out[i] = prev
+        return z
 
     def _abut_ends(self, key, pe, ok=None):
         """Which of the points pe (n, 2) (road ends; ok: those to look at) near cell key are within APPROACH_TOUCH_M

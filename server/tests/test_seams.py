@@ -112,5 +112,33 @@ class GradeMatchTest(unittest.TestCase):
             self.assertIsNone(self.planner(398.1, 401.3, cls=cls)._grade_match(np.array([0.0, 0.0])), cls)
 
 
+class HoldMouthTest(unittest.TestCase):
+    """A street off a deck's abutment keeps the abutment's height over the junction's wedge, then goes back at 8 %."""
+
+    def setUp(self):
+        self.a = np.arange(0.0, 60.1, 3.0)                  # distance from the abutment
+        self.z = 100.0 - 0.09 * np.minimum(self.a, 12.0) - 0.0 * self.a   # the street's own profile: falls 9 %, then level
+        self.z = np.where(self.a > 12.0, 100.0 - 0.09 * 12.0, self.z)
+
+    def test_held_then_back_at_grade(self):
+        z = np.array(self.z)
+        out = grading._Planner._hold_mouth(z, self.a)
+        held = self.a <= grading.SEAM_MOUTH_M
+        self.assertTrue(np.allclose(out[held], z[0]))
+        g = np.abs(np.diff(out[~held | (self.a == self.a[held][-1])])) / 3.0
+        self.assertLessEqual(g.max(), grading.SEAM_MOUTH_GRADE + 1e-9)
+        self.assertAlmostEqual(out[-1], z[-1], places=6)    # (back on its own profile)
+
+    def test_unreachable_profile_is_left(self):
+        z = np.array(self.a * -0.5 + 100.0)                 # falls 50 %: the 8 % return never meets it
+        out = grading._Planner._hold_mouth(z, self.a)
+        self.assertTrue(np.array_equal(out, z))
+
+    def test_short_street_is_left(self):
+        a = np.array([0.0, 3.0])
+        z = np.array([100.0, 99.0])
+        self.assertTrue(np.array_equal(grading._Planner._hold_mouth(z, a), z))
+
+
 if __name__ == "__main__":
     unittest.main()
