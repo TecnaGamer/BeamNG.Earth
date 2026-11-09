@@ -309,6 +309,20 @@ class RailwayTest(unittest.TestCase):
         with unittest.mock.patch.object(railways, "RAW_ELEV", valley):
             self.assertIn("bridge", {k for _f, _c, k, _xy in railways.parts(FRAME, [f], box, clip=True)})
 
+    def test_a_footway_over_a_double_track_is_one_crossing(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(-50.0, 104.5), (300.0, 104.5)], [(120.0, 60.0), (120.0, 150.0)]],
+                     ["standard_gauge", "standard_gauge", "footway"], subtypes=["rail", "rail", "road"])
+        rows = []
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat, furniture=rows)
+        signs = sorted((r for r in rows if r[0] == "rrwalk"), key=lambda r: r[2])
+        self.assertEqual(len(signs), 2, "one sign at each end of the double track, none between the tracks")
+        self.assertLess(signs[0][2], 100.0 - 2.5)
+        self.assertGreater(signs[1][2], 104.5 + 2.5)
+        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        top = 10.0 + railways.RAIL_TOP_M - 0.012
+        gap = conc[(np.abs(conc[:, 0] - 120.0) < 2.0) & (np.abs(conc[:, 1] - 102.25) < 0.5) & (np.abs(conc[:, 2] - top) < 0.01)]
+        self.assertGreater(len(gap), 0, "a panel over the gap between the tracks")
+
     def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0

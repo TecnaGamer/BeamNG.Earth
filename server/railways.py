@@ -1678,6 +1678,10 @@ WALK_NODE_ON_M = 2.5        # m: a node this near a track's line is on it
 WALK_SIGN_BEFORE_M = 1.0    # m from the ballast's foot to a walk sign
 WALK_SIGN_OFF_M = 0.5       # m beside the way's edge
 WALK_SIGN_HEIGHT = 2.52     # m: the sign's model's vertical size
+WALK_GROUP_M = 14.0         # m along a way between two tracks' crossings of one place (a double track, a yard's throat)
+WALK_SIGN_CLEAR_M = 2.6     # m a walk sign keeps from every track's axis (the ballast's foot)
+WALK_STREET_W = 6.5         # m: the panels' width where a street mapped as a pedestrian way crosses (its level crossing node)
+WALK_NODE_WAY_M = 10.0      # m from an OSM level_crossing node to its way
 WALK_MIN_SIN = 0.35         # a way crossing the track flatter than this (20 degrees) is left alone
 WALK_PANEL_OUT_M = 0.45     # m: half the panel outside each rail (it is 0.9 m wide)
 WALK_PANEL_GAP_M = 0.07     # m left between the middle panel and each rail (the flangeway)
@@ -1779,46 +1783,96 @@ def walk_crossings(rails, ways, nodes, carriage, ex):
     return out
 
 
-def walk_panel_boxes(crossings, finals):
-    """The boxes of footway crossings (walk_crossings): [(centres (1, 2), along (1, 2), across (1, 2), z0 (1,), z1 (1,)),
-    hx, hy] for the panels between and outside the rails, flush with their heads, with a flangeway beside each rail."""
+def walk_groups(crossings, rails):
+    """The crossings (walk_crossings) of one way over neighbouring tracks as one place: [[crossing, ...]] each sorted along
+    the way. Crossings of the same way (its unit f and width) within WALK_GROUP_M of each other along it are one group."""
+    groups = []
+    for c in sorted(crossings, key=lambda c: (round(float(c[4][0]), 2), round(float(c[4][1]), 2), float(c[0][0]),
+                                               float(c[0][1]))):
+        for g in groups:
+            h = g[-1]
+            if abs(float(np.dot(h[4], c[4]))) > 0.97 and abs(h[5] - c[5]) < 0.01 and \
+                    min(float(np.hypot(*(q[0] - c[0]))) for q in g) < WALK_GROUP_M:
+                g.append(c)
+                break
+        else:
+            groups.append([c])
     out = []
-    for pt, arc, n_part, t, f, ww in crossings:
-        zb = finals[n_part]
-        sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
-        z_bed = float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)])
-        z = z_bed + RAIL_TOP_M - 0.012
-        z0 = z_bed + BALLAST_H - 0.15
-        n = np.array([-t[1], t[0]])
-        half_g = GAUGE_M / 2
-        hx = min(6.0, (ww / 2) / sin + 0.2)
-        ctr = lambda off: (pt + n * off)[None, :]
-        a, b = t[None, :], n[None, :]
-        out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M))
-        for sg in (1, -1):
-            out.append(((ctr(sg * (half_g + RAIL_HEAD + WALK_PANEL_OUT_M)), a, b, np.array([z0]), np.array([z])),
-                        hx, WALK_PANEL_OUT_M))
+    for g in groups:
+        f = g[0][4]
+        out.append(sorted(g, key=lambda c: float(np.dot(c[0], f))))
     return out
 
 
-def walk_sign_rows(crossings, ground, finals=None):
-    """Prop rows ([rrwalk, x, y, z, yaw, scale, height, 0]) of the warning signs at footway crossings: one at each side of the
-    track, facing the people coming, on their right, past the ballast's foot."""
-    pts, floors = [], []
-    for pt, arc, n_part, t, f, ww in crossings:
-        sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
-        before = min(6.0, (BALLAST_TOP_M + BALLAST_SLOPE * BALLAST_H + WALK_SIGN_BEFORE_M) / sin)
-        # the ballast's side surface at the sign's distance from the track's axis (the ground read there can be an
-        # embankment's foot 4 m under the bed: Nachod's signs stood under the track)
-        floor = -np.inf
-        if finals is not None:
+def walk_panel_boxes(crossings, finals, rails=None):
+    """The boxes of footway crossings (walk_crossings): [(centres (1, 2), along (1, 2), across (1, 2), z0 (1,), z1 (1,)),
+    hx, hy] for the panels between and outside the rails, flush with their heads, with a flangeway beside each rail, and
+    between two neighbouring tracks of one crossing a panel over the gap (the ballasts' sides dipped there: a ditch across
+    the street, Nachod's Kladska 2026-11-09)."""
+    out = []
+    half_g = GAUGE_M / 2
+    edge = half_g + RAIL_HEAD + 2 * WALK_PANEL_OUT_M          # (a track's panels' outer edge from its axis)
+    for g in walk_groups(crossings, rails):
+        for pt, arc, n_part, t, f, ww in g:
             zb = finals[n_part]
-            floor = (float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)]) + BALLAST_H
-                     - max(0.0, before * sin - BALLAST_TOP_M) / BALLAST_SLOPE)
-        for sgn in (1.0, -1.0):
-            a = -f * sgn                        # the way they walk, towards the crossing
+            sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
+            z_bed = float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)])
+            z = z_bed + RAIL_TOP_M - 0.012
+            z0 = z_bed + BALLAST_H - 0.15
+            n = np.array([-t[1], t[0]])
+            hx = min(8.0, (ww / 2) / sin + 0.2)
+            ctr = lambda off: (pt + n * off)[None, :]
+            a, b = t[None, :], n[None, :]
+            out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M))
+            for sg in (1, -1):
+                out.append(((ctr(sg * (half_g + RAIL_HEAD + WALK_PANEL_OUT_M)), a, b, np.array([z0]), np.array([z])),
+                            hx, WALK_PANEL_OUT_M))
+        for c0, c1 in zip(g, g[1:]):            # (the gap between two tracks' panels, along the way)
+            f = c0[4]
+            d = float(np.dot(c1[0] - c0[0], f))
+            sin0 = max(abs(float(c0[3][0] * f[1] - c0[3][1] * f[0])), WALK_MIN_SIN)
+            sin1 = max(abs(float(c1[3][0] * f[1] - c1[3][1] * f[0])), WALK_MIN_SIN)
+            gap0, gap1 = edge / sin0, edge / sin1
+            if d - gap0 - gap1 < 0.05 or d > WALK_GROUP_M:
+                continue
+            mid = c0[0] + f * (gap0 + (d - gap0 - gap1) / 2)
+            zs = []
+            for pt, arc, n_part, _t, _f, _w in (c0, c1):
+                zb = finals[n_part]
+                zs.append(float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)]) + RAIL_TOP_M - 0.012)
+            z = (zs[0] + zs[1]) / 2
+            nf = np.array([-f[1], f[0]])
+            out.append(((mid[None, :], nf[None, :], f[None, :], np.array([min(zs) - 0.45]), np.array([z])),
+                        c0[5] / 2 + 0.2, (d - gap0 - gap1) / 2 + 0.02))
+    return out
+
+
+def walk_sign_rows(crossings, ground, finals=None, rails=None, streets=()):
+    """Prop rows ([rrwalk, x, y, z, yaw, scale, height, 0]) of the warning signs at footway crossings: one at each end of
+    a crossing of one or more neighbouring tracks (walk_groups), facing the people coming, on their right, past the outer
+    track's ballast, never on another track's bed (WALK_SIGN_CLEAR_M from every track's axis). streets: the crossing
+    points of streets mapped as pedestrian ways (an OSM level crossing node: their gates are the crossing's devices) get
+    none."""
+    pts, floors = [], []
+    lines = [xy for _f, _c, _k, xy in (rails or [])]
+    for g in walk_groups(crossings, rails):
+        if any(min(float(np.hypot(*(c[0] - q))) for c in g) < WALK_NODE_WAY_M for q in streets):
+            continue
+        for sgn, (pt, arc, n_part, t, f, ww) in ((1.0, g[0]), (-1.0, g[-1])):
+            sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
+            before = min(6.0, (BALLAST_TOP_M + BALLAST_SLOPE * BALLAST_H + WALK_SIGN_BEFORE_M) / sin)
+            floor = -np.inf
+            if finals is not None:
+                zb = finals[n_part]
+                floor = (float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)]) + BALLAST_H
+                         - max(0.0, before * sin - BALLAST_TOP_M) / BALLAST_SLOPE)
+            a = f * sgn                         # the way they walk, towards the crossing (from before its first track)
             side = np.array([a[1], -a[0]])      # its right
-            pts.append((pt - a * before + side * (ww / 2 + WALK_SIGN_OFF_M), side))
+            q = pt - a * before + side * (ww / 2 + WALK_SIGN_OFF_M)
+            if any(len(ln) >= 2 and float(np.min(np.hypot(*(roads.densify(ln, 1.0)[:, :2] - q).T))) < WALK_SIGN_CLEAR_M
+                   for ln in lines):
+                continue                        # (on a track's bed: no sign)
+            pts.append((q, side))
             floors.append(floor)
     if not pts:
         return []
@@ -2093,19 +2147,30 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     rows = []                                       # (the props of the tile's furniture: appended to `furniture` once, at the end)
     if STATION_FURNITURE_ON:        # (buffer stops at the tracks' ends, the footways' panels and signs: plan 035)
         carriage = [(ln, hw) for ln, hw, _z in crossers if ln is not None]
-        nodes = []
+        nodes, levels = [], []
         for f in cells:
             for lo, la, t in (f.__dict__.get("_rail_nodes", ()) if f is not None else ()):
-                if t.get("railway") == "crossing":
-                    nodes.append((lo, la))
-        if nodes:
-            e, n, _ = frame.geodetic_to_enu(np.array([q[1] for q in nodes]), np.array([q[0] for q in nodes]), 0.0)
-            nodes = list(zip(np.asarray(e, np.float64).tolist(), np.asarray(n, np.float64).tolist()))
-        crossings_ = walk_crossings(rails, walk_ways(frame, cells, box, 60.0), nodes, carriage, ex)
-        for arrs, hx, hy in walk_panel_boxes(crossings_, finals):
+                if t.get("railway") in ("crossing", "level_crossing"):
+                    (nodes if t.get("railway") == "crossing" else levels).append((lo, la))
+
+        def enu(q):
+            if not q:
+                return []
+            e, n, _ = frame.geodetic_to_enu(np.array([a[1] for a in q]), np.array([a[0] for a in q]), 0.0)
+            return [np.array(v) for v in zip(np.asarray(e, np.float64).tolist(), np.asarray(n, np.float64).tolist())]
+        nodes, levels = enu(nodes), enu(levels)
+        ways = []
+        for xy, w in walk_ways(frame, cells, box, 60.0):
+            if levels and any(float(np.min(np.hypot(*(roads.densify(xy, 2.0)[:, :2] - q).T))) < WALK_NODE_WAY_M
+                              for q in levels):
+                w = max(w, WALK_STREET_W)       # (a street mapped as a pedestrian way: Nachod's Kladska, gates and all)
+            ways.append((xy, w))
+        crossings_ = walk_crossings(rails, ways, [tuple(q) for q in nodes], carriage, ex)
+        for arrs, hx, hy in walk_panel_boxes(crossings_, finals, rails):
             small.append((arrs, hx, hy, concrete))
         if furniture is not None:
-            rows += [r for r in walk_sign_rows(crossings_, ground, finals) if roads.box_owns(box, r[1], r[2])]
+            rows += [r for r in walk_sign_rows(crossings_, ground, finals, rails, levels)
+                     if roads.box_owns(box, r[1], r[2])]
             rows += [r for r in buffer_rows(dead_ends(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
                                                                                  box[2] + REACH_M, box[3] + REACH_M)))
                           if roads.box_owns(box, r[1], r[2])]
