@@ -2,7 +2,7 @@
 each board says, where it stands, the boards and their gantries as one mesh; the rules and their sources are there).
 The design: docs/research/2026-11-08-german-autobahn-signs-design.md.
 
-Built in the sign tiles (signstream.py, field "autobahn") of tiles in Germany (real borders: countrybounds, behind a
+Built in the sign tiles (signstream.py, field "autobahn") of tiles in Germany (real borders: germany.contains, behind a
 lat/lon box so nobody outside it fetches the border data) whose sign shards carry the German block (tools/
 build_sign_tags.py: "de" on the exit records and the shards; older shards: nothing changes). Per junction the glue reads
 the record, finds the gore on the generated roads (exitsigns._compute_gore with the downstream carriageway), samples the
@@ -14,7 +14,6 @@ from collections import OrderedDict
 import logging
 import math
 import os
-import sys
 import threading
 import time
 
@@ -61,7 +60,6 @@ SNAP_M = 40.0
 CACHE = 256
 _cache, _lock = OrderedDict(), threading.Lock()
 _warned = -float('inf')
-_german_seen = False             # a German tile was built in this process (tracker_version)
 
 
 def _samples(frame, tx, ty):
@@ -77,20 +75,18 @@ def _in_box(la, lo):
 
 
 def german_tile(frame, tx, ty):
-    """Whether sign tile (tx, ty) touches Germany (the box first; real borders only inside it)."""
+    """Whether sign tile (tx, ty) touches Germany: germany.contains at its corners and middle (the box first, real
+    borders inside it; no border data: not Germany, today's output). The sign tiles are a session's own, so a session
+    without border data builds today's tiles and the next one the German signs."""
     if ENV == "off":
         return False
     la, lo = _samples(frame, tx, ty)
     if not _in_box(la, lo).any():
         return False
-    global _german_seen
     if ENV == "on":
-        _german_seen = True
         return True
-    import countrybounds
-    here = "DE" in countrybounds.bundled().codes_at(list(zip(la.tolist(), lo.tolist())))
-    _german_seen = _german_seen or here
-    return here
+    import germany
+    return bool(germany.contains(lo, la).any())
 
 
 def data_here(source, frame, tx, ty):
@@ -111,18 +107,6 @@ def data_here(source, frame, tx, ty):
                 return True
     return False
 
-
-
-def tracker_version(known):
-    """The sign data's build for the sign Tracker (earthd: SignTags.known()), with the border data's signature folded
-    in once a German tile was asked for: a German tile built before the border data arrived is built again. Unchanged
-    with BNE_AUTOBAHN_SIGNS=off and in every process that never asked for a German tile."""
-    if known is None or ENV == "off" or not _german_seen:
-        return known
-    cb = sys.modules.get("countrybounds")
-    if cb is None:
-        return known
-    return f"{known}|cb:{cb.signature()}"
 
 def lanes_at(edges, s, through=True):
     """The main lanes at s (metres upstream of the junction) from the block's edges: the mapped `lanes` less the lanes
@@ -488,9 +472,8 @@ def _fill(geos, frame, elev, box):
         if ENV == "on":
             de_flags = np.ones(len(P))
         else:
-            import countrybounds
-            de_flags = np.array([c == "DE" for c in countrybounds.bundled().codes_at(
-                list(zip(la.tolist(), lo.tolist())))], float)
+            import germany
+            de_flags = germany.contains(lo, la).astype(float)
     out = []
     k = 0
     for gi, g in enumerate(geos):
@@ -569,9 +552,9 @@ def build_tile(md, frame, tx, ty, elev, context, left_hand=False):
     if not recs:
         return None, []
     if ENV != "on":
-        import countrybounds
-        codes = countrybounds.bundled().codes_at([(r["lat"], r["lon"]) for r in recs])
-        recs = [r for r, c in zip(recs, codes) if c == "DE"]
+        import germany
+        inside = germany.contains([r["lon"] for r in recs], [r["lat"] for r in recs])
+        recs = [r for r, here in zip(recs, inside) if here]
     version = source.version() if hasattr(source, "version") else None
     try:
         follows = follow_ups(recs, frame)

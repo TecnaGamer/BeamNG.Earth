@@ -281,25 +281,35 @@ class PavementTest(unittest.TestCase):
             bad = [(b['board'], p) for b in boards for p in b['posts'] if inside(p)]
             self.assertEqual(bad, [])
 
-class TrackerVersionTest(unittest.TestCase):
-    """The sign Tracker's version (earthd: SignTags.known()) also changes when the border data arrives, so German
-    tiles built before it are built again; nothing changes where the border data is not in use."""
+class BorderLookupTest(unittest.TestCase):
+    """Whether a tile is German is germany.contains' answer (dev's shared border lookup: the box first, real borders
+    inside it; no border data: not Germany, today's output), asked where the tile is built (a road process); the sign
+    tiles are a session's own, so a session without border data builds today's tiles and the next one the German signs
+    (Codex review of #999: a version folded in from a worker-local flag never reached the main process's Tracker)."""
 
-    def test_folds_the_border_data_in(self):
-        with mock.patch.object(deautobahn, 'ENV', ''), mock.patch.object(countrybounds, 'signature', return_value='b:1'), \
-                mock.patch.object(deautobahn, '_german_seen', True):
-            self.assertEqual(deautobahn.tracker_version('2026-11-09'), '2026-11-09|cb:b:1')
-            self.assertIsNone(deautobahn.tracker_version(None))
+    def tile_at(self, lat, lon):
+        frame = geodesy.EnuFrame(lat, lon)
+        return frame
 
-    def test_unchanged_when_off_or_unused(self):
-        with mock.patch.object(deautobahn, 'ENV', 'off'):
-            self.assertEqual(deautobahn.tracker_version('2026-11-09'), '2026-11-09')
-        with mock.patch.object(deautobahn, 'ENV', ''), mock.patch.dict(sys.modules, {'countrybounds': None}), \
-                mock.patch.object(deautobahn, '_german_seen', True):
-            self.assertEqual(deautobahn.tracker_version('2026-11-09'), '2026-11-09')
-        # the border data in use (France, say) but never a German tile: unchanged
-        with mock.patch.object(deautobahn, 'ENV', ''), mock.patch.object(deautobahn, '_german_seen', False):
-            self.assertEqual(deautobahn.tracker_version('2026-11-09'), '2026-11-09')
+    def test_asks_germanys_lookup(self):
+        frame = self.tile_at(48.58, 7.75)                   # Strasbourg: inside the box, France by the borders
+        import germany
+        with mock.patch.object(deautobahn, 'ENV', ''), \
+                mock.patch.object(germany, 'contains', side_effect=lambda lon, lat: np.ones(np.size(lon), bool)):
+            self.assertTrue(deautobahn.german_tile(frame, 0, 0))
+        with mock.patch.object(deautobahn, 'ENV', ''), \
+                mock.patch.object(germany, 'contains', side_effect=lambda lon, lat: np.zeros(np.size(lon), bool)):
+            self.assertFalse(deautobahn.german_tile(self.tile_at(*DE), 0, 0))
+
+    def test_no_border_data_is_not_germany(self):
+        import germany
+        with mock.patch.object(deautobahn, 'ENV', ''), \
+                mock.patch.object(germany, '_index', return_value=countrybounds.Absent()):
+            self.assertFalse(deautobahn.german_tile(self.tile_at(*DE), 0, 0))
+        with mock.patch.object(deautobahn, 'ENV', 'on'), \
+                mock.patch.object(germany, '_index', return_value=countrybounds.Absent()):
+            self.assertTrue(deautobahn.german_tile(self.tile_at(*DE), 0, 0))
+
 
 if __name__ == '__main__':
     unittest.main()
