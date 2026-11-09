@@ -1,5 +1,5 @@
-"""budget.maybe_shed / pools._call: a worker over its memory ceiling (small machines) drops its registered caches
-between jobs; under it, or with the ceiling off (a desktop), nothing happens."""
+"""budget.maybe_shed / pools._call: a worker over its memory ceiling (every profile: GitHub #1026) drops its registered
+caches between jobs; under it, or with the ceiling off (BNGE_SHED_MB=0), nothing happens."""
 import os
 import sys
 import unittest
@@ -72,7 +72,10 @@ class ShedTest(unittest.TestCase):
             os.environ.pop("BNGE_SHED_MB", None)
             with mock.patch.object(budget, "_malloc_small"):
                 budget.apply(is_small=False)
-                self.assertEqual(budget.SHED_MB, 0)
+                self.assertEqual(budget.SHED_MB, budget.DESKTOP_SHED_MB)     # (GitHub #1026: a desktop has one too)
+                os.environ["BNGE_SHED_MB"] = "0"
+                budget.apply(is_small=False)
+                self.assertEqual(budget.SHED_MB, 0, "BNGE_SHED_MB=0 switches it off")
 
 
 class ClearMemoryTest(unittest.TestCase):

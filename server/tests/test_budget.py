@@ -46,6 +46,19 @@ class BudgetTest(unittest.TestCase):
         self.assertEqual(budget.road_processes(6, 16.0), 2)
         self.assertEqual(budget.road_processes(16, 8.0), 2)
 
+    def test_worker_ceiling_on_desktop_and_small(self):
+        """GitHub #1026: a desktop's workers had no memory ceiling at all (SHED_MB 0)."""
+        saved = budget.SHED_MB
+        try:
+            with mock.patch.dict(os.environ, {"BNGE_SHED_MB": ""}):
+                budget.apply(False)
+                self.assertEqual(budget.SHED_MB, budget.DESKTOP_SHED_MB)
+                self.assertGreater(budget.DESKTOP_SHED_MB, 0)
+                budget.apply(True)
+                self.assertEqual(budget.SHED_MB, budget.SMALL_SHED_MB)
+        finally:
+            budget.SHED_MB = saved
+
     def test_small_caches(self):
         self.assertFalse(budget.apply(False))
         self.assertEqual(dem.MEM_TILES, self.saved[0], "the desktop sizes stay")

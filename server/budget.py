@@ -113,7 +113,7 @@ def apply(is_small=None):
     """Set the cache sizes of this process's modules for the profile; returns whether it is the small one."""
     is_small = small() if is_small is None else is_small
     global SHED_MB
-    SHED_MB = SMALL_SHED_MB if is_small else 0
+    SHED_MB = SMALL_SHED_MB if is_small else DESKTOP_SHED_MB
     if os.environ.get("BNGE_SHED_MB"):              # (A/B: the ceiling in MB, 0 off)
         SHED_MB = int(os.environ["BNGE_SHED_MB"])
     if is_small:
@@ -157,9 +157,11 @@ _trimming = False
 # A worker process over SHED_MB (resident + swapped) after a job drops its caches (each module registers how:
 # register_shed) and gives the memory back: on a Steam Deck two Manhattan drives took a road worker to 1.6 GB and the
 # server to ~5 GB PSS with 6.7 GB of swap until the system killed the game's UI (2026-11-04); the caches' own caps
-# count entries, and the results kept on cached map features are counted nowhere. 0 = off (a desktop: apply()).
+# count entries, and the results kept on cached map features are counted nowhere. 0 = off (apply() sets it).
 SHED_MB = 0
 SMALL_SHED_MB = 1400     # (1200 on a Deck in Manhattan: two road workers dropped every ~15 s, 1206 -> 822 MB, their working set)
+DESKTOP_SHED_MB = 1500   # the same ceiling on a desktop (GitHub #1026: 17-19 workers grew to ~9 GB while the 3D map and
+                         # stock levels ran, no ceiling there); a road worker (~1-1.5 GB) is shed only when it grows past it
 SHED_MIN_S = 90.0        # a worker drops its caches at most this often (a dense city's working set comes straight back)
 _shedders = []
 shed_count = 0
