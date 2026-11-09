@@ -64,6 +64,17 @@ class CoupleTest(unittest.TestCase):
         got = rs.couple(xy, zb, self.HALF, road)
         self.assertAlmostEqual(float(got[25]), 100.0, delta=rs.SEAM_TOL_M + 1e-6)
 
+    def test_a_road_crossing_under_a_bridge_keeps_the_bed(self):
+        # a track 6 m over a road it crosses at a right angle runs on a bridge, not beside the road: the road under
+        # it must not take the approach fill down to the road (the deck then stands at the road, the embankment ends
+        # mid-span and the two sides do not meet).
+        x = np.linspace(-100.0, 100.0, 51)
+        xy = np.c_[x, np.zeros(51)]
+        zb = np.full(51, 106.0)
+        road = [(np.c_[np.zeros(11), np.linspace(-100.0, 100.0, 11)], np.full(11, 100.0), 8.6)]
+        got = rs.couple(xy, zb, self.HALF, road)
+        np.testing.assert_allclose(got, zb)
+
     def test_no_roads(self):
         zb = np.full(5, 3.0)
         self.assertIs(rs.couple(straight(5.0, 5), zb, self.HALF, []), zb)
