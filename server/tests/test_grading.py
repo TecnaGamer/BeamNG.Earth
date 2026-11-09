@@ -916,6 +916,59 @@ class UnderpassTest(unittest.TestCase):
         self.assertLess(float(np.abs(np.diff(grade)).max()), 0.01, "no kink")
         self.assertAlmostEqual(float(out[2]), 10.0, delta=0.1, msg="another road untouched")
 
+    def _split_dip(self, lines, n_deck):
+        f = features([[(-200, 0), (200, 0)]] + lines, ["residential"] + ["motorway"] * n_deck,
+                     flags=[(1 + k, "is_bridge") for k in range(n_deck)])
+        g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0]), np.array([0.0]), 0.0)
+        return float(g.apply(la, lo, np.full(1, 10.0))[0])
+
+    def test_an_overpass_mapped_in_parts_is_one_span(self):
+        """An overpass mapped as two ways end to end, or ending on the carriageways' fork (3 m stubs: the M1 near
+        Dundalk, GitHub #960): the road under dips as under one part; off, it kept its ground (the bug)."""
+        deep = 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        halves = [[(5, -20), (5, 3)], [(5, 3), (5, 20)]]
+        fork = [[(5, -20), (5, 20)], [(5, 20), (3, 23)], [(5, 20), (7, 23)]]
+        for name, lines in (("two halves", halves), ("a fork at its end", fork)):
+            with self.subTest(name):
+                self.assertAlmostEqual(self._split_dip(lines, len(lines)), deep, delta=0.3)
+                with unittest.mock.patch.object(grading, "UNDER_CHAIN_ON", False):
+                    self.assertAlmostEqual(self._split_dip(lines, len(lines)), 10.0, delta=0.1, msg="(off: no dip)")
+
+    def test_a_road_ending_short_of_the_junction_dips_with_it(self):
+        """A road whose end the map left 1.6 m short of a junction the dip lowers (Tonkin Highway at Morley Drive,
+        GitHub #915): it is one of the dip's network (UNDER_NODE_M) and goes down with the junction; at 0.5 m it kept
+        its ground, more than snap_junctions takes under the junction, a step of several metres (the bug)."""
+        f = features([[(-200, 0), (14, 0)], [(14, 0), (14, 150)], [(15.6, 0), (250, 0)], [(0, -20), (0, 20)]],
+                     ["residential", "residential", "residential", "motorway"], flags=[(3, "is_bridge")])
+        xs = np.arange(15.6, 60.0, 2.0)
+        la, lo, _ = FRAME.enu_to_geodetic(xs, np.zeros(len(xs)), 0.0)
+
+        def grade():
+            g = grading.Grader(FRAME, FakeMD(f), lambda la_, lo_: np.full(np.shape(la_), 10.0))
+            z = g.apply(la, lo, np.full(len(xs), 10.0))
+            return float(np.abs(np.diff(z) / 2.0).max()), float(z[0])
+        steep, z0 = grade()
+        self.assertLess(z0, 10.0 - 1.5, "(the case: the junction dug)")
+        self.assertLessEqual(steep, grading.UNDER_MAX_GRADE + 0.01)
+        with unittest.mock.patch.object(grading, "UNDER_NODE_M", 0.5):
+            self.assertGreater(grade()[0], 0.3, "(0.5 m: a step, the bug)")
+
+    def test_merge_span_chains(self):
+        a = np.array([[0.0, 0.0], [10.0, 0.0]])
+        b = np.array([[20.0, 0.0], [10.0, 0.0]])          # (reversed: its end meets a's end)
+        c = np.array([[20.0, 0.0], [30.0, 5.0]])
+        far = np.array([[100.0, 0.0], [120.0, 0.0]])
+        rail = np.array([[30.0, 5.0], [40.0, 5.0]])
+        out = grading._merge_span_chains([(a, False, False), (b, False, False), (c, False, False), (far, True, False),
+                                          (rail, False, True)])
+        self.assertEqual(len(out), 3, "a-b-c joined; the far part and the rail kept apart")
+        line = next(ln for ln, f, r in out if not f and not r)
+        self.assertEqual([tuple(p) for p in line], [(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 5.0)])
+        y = [(a, False, False), (np.array([[10.0, 0.0], [20.0, 2.0]]), False, False),
+             (np.array([[10.0, 0.0], [20.0, -2.0]]), False, False)]
+        self.assertEqual(len(grading._merge_span_chains(y)), 3, "a branch: nothing joined")
+
     def _dip_at(self, ground):
         f = features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)]], ["residential", "motorway"],
                      flags=[(1, "is_bridge")])
