@@ -21,10 +21,11 @@ import roads
 import signstates
 import dirsigns
 import speedsigns
+import roadsigns
 import staging
 
 log = logging.getLogger('earthd.signs')
-KINDS = ('exits', 'mileposts', 'merges', 'speeds', 'dirs')
+KINDS = ('exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns')
 WORKERS = 1                     # sign tiles in flight per connection (Tracker): a road tile waits behind one at most
 WORLD = os.environ.get("BNE_SIGNS_WORLD") == "1"
 
@@ -55,7 +56,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes, dirs_faces=None):
 
 
 def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, widths=None,
-               left_hand=False, mph=True, country=None, dirs=False):
+               left_hand=False, mph=True, country=None, dirs=False, rsigns=False):
     source = getattr(md, 'highway_signs', None)
     if source is None:
         return None
@@ -76,6 +77,7 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
     dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid) if dirs else (None, {})
+    rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
     import euguardrails
     french = False
     if euguardrails.enabled():
@@ -87,10 +89,10 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
         french = 'FR' in countrybounds.bundled().codes_at([(la, lo) for la, lo, _ in samples])
     if not (WORLD or us or french):
         # (not the US: no guide signs)
-        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds, dir_mesh), dir_faces)
+        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds, dir_mesh, rsign_mesh), dir_faces)
     exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths, french=french)
     merges = None if french else mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
-    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds, dir_mesh), dir_faces)
+    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds, dir_mesh, rsign_mesh), dir_faces)
 
 
 _warned = -float('inf')
@@ -107,6 +109,23 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face):
             _warned = now
             log.warning('Speed-limit signs unavailable; roads continue: %s: %s', type(error).__name__, error)
         return None
+
+
+def _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country):
+    """roadsigns.build_tile, or None: optional scenery never stops the other signs."""
+    global _warned_rsigns
+    try:
+        return roadsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, country)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_rsigns >= 60.:
+            _warned_rsigns = now
+            log.warning('Road signs unavailable; roads continue: %s: %s', type(error).__name__, error,
+                        exc_info=True)
+        return None
+
+
+_warned_rsigns = -float('inf')
 
 
 def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid=None):

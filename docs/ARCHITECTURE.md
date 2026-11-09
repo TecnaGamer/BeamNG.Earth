@@ -994,6 +994,7 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   state is (every face is MUTCD; `BNE_SIGNS_WORLD=1` everywhere). The mod's Highway signs switch sends
   `highway_signs` {on}: no sign tiles are built while it is off.
   `direction_signs` {on}: the sign tiles carry the direction boards (server/dirsigns.py) only while it is on (on by default since 2026-11-05).
+  `road_signs` {on}: the sign tiles carry the ordinary road signs (server/roadsigns.py, native roadsigns.rs) only while it is on and the server has BNE_ROADSIGNS=on.
 - Graphics settings (2026-10-28; settings.lua PRESETS low / medium / high / ultra / extreme): the mod sends
   `graphics` {lodScale, treeScale, buildingScale, photoPx} after every hello and on a change (core.sendGraphics):
   the far field's K times lodScale, the tree tiles' and the far buildings' / skyline's / far bridges' reach times
