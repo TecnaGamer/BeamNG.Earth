@@ -155,6 +155,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
   laid out like the stock map. Layers > **Highways** (off by default) draws the US Interstates and US routes with their
   shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
+- **3D map** (experimental): a Google Earth style view in the game itself. Fly up from your car to see the whole
+  globe with its photos, search for places, pick a spot with a click, set a GPS route or teleport there; its compass
+  needle turns with the view. The map key opens the 2D or 3D map, whichever you used last, and each has a button for
+  the other. Any camera more than about 150 miles up sees the Earth as a globe too.
+- **Altitude** HUD app (in the BeamNG.Earth layout; add it to others from the apps menu): height above sea level and
+  above the ground, and how fast you climb or fall.
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
   route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
@@ -438,11 +444,14 @@ data> --procs 4`. It needs the same BeamNG.Earth version as the players and a fe
 To see how many people play and how hard we are pushing the free map-data services we rely on, the world server
 sends a small anonymous report every 5 minutes: a random install id (created on your machine; no name, account or
 hardware id), the app version and operating system, whether the game is connected, whether it is a BeamMP session,
-and how many requests went to each data source (with their errors and rate limits). No positions or places are sent.
+and how many requests went to each data source (with their errors and rate limits). With **Performance data** ticked
+it also sends the game's frame rate and hitches, how well the world keeps up, your CPU / GPU model and settings, and
+error codes. No positions or places are sent.
 The collector looks up your country from the connection's address and does not keep the address.
 
 The public numbers (players online, peaks, history, countries with at least 5 players) are at
-<https://earth.tgforever.net/players>.
+<https://earth.tgforever.net/players>, and the performance numbers (groups of at least 5 players) at
+<https://earth.tgforever.net/performance>.
 
 **Nothing is sent until you choose.** The welcome screen asks first, with a main switch and two parts (performance
 data, network load); how the boxes start depends on your computer's time zone (nothing ticked in the EU and some
