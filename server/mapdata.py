@@ -747,6 +747,7 @@ class MapData:
                 if layer == "roads":
                     f.__dict__["_bnge_gradesep"] = gradesep.hook(self, key)
                     f.__dict__["_bnge_neighbours"] = gradesep.neighbours_hook(self, key)
+                    f.__dict__["_bnge_road_cells"] = self._road_cells
                 f.__dict__["_bnge_cell"] = (str(key), layer, json.dumps(self.versions(), sort_keys=True))
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)
@@ -763,6 +764,10 @@ class MapData:
                 cur = self._loading.get(k)
                 if cur is not None and cur[2] is token:     # (not a more urgent load that took its place)
                     del self._loading[k]
+
+    def _road_cells(self, keys):
+        """Decoded road layers for a bridge's bounded context, through the normal shared cell cache."""
+        return gradesep._neighbours(self, None, keys)
 
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""

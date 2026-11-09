@@ -379,13 +379,13 @@ CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is 
 CW_OVERLAP_STEP_M = 12.0  # m between the points two overlapping decks' clearance is held at
 
 
-def _merge_span_chains(parts):
+def _merge_span_chains(parts, sources=None):
     """parts [(line (k, 2+), fixed, rail)] with every simple chain of them joined into one line: parts of the same
     (fixed, rail) whose ends meet within UNDER_CHAIN_JOIN_M at a node no other part's end reaches. Pure."""
     f64 = np.float64
     n = len(parts)
     if n < 2:
-        return list(parts)
+        return list(parts) if sources is None else (list(parts), [list(q) for q in sources])
     ends = np.array([[np.asarray(b, f64)[0, :2], np.asarray(b, f64)[-1, :2]] for b, _f, _r in parts]).reshape(-1, 2)
     d = np.hypot(ends[:, None, 0] - ends[None, :, 0], ends[:, None, 1] - ends[None, :, 1])
     near = d < UNDER_CHAIN_JOIN_M
@@ -397,7 +397,7 @@ def _merge_span_chains(parts):
             o = int(others[0])
             if parts[e // 2][1:] == parts[o // 2][1:] and np.flatnonzero(near[o]).tolist() == [e]:
                 link[e] = o
-    out, used = [], set()
+    out, used, provenance = [], set(), []
     for start in range(n):
         if start in used:
             continue
@@ -416,6 +416,7 @@ def _merge_span_chains(parts):
         if e_in == 1:
             line = line[::-1]
         used.add(p)
+        chain_sources = list(sources[p]) if sources is not None else []
         e_out = 2 * p + (1 - e_in)
         while e_out in link:
             o = link[e_out]
@@ -427,9 +428,12 @@ def _merge_span_chains(parts):
             w = min(line.shape[1], nxt.shape[1])
             line = np.concatenate([line[:, :w], nxt[1:, :w]])
             used.add(q)
+            if sources is not None:
+                chain_sources.extend(sources[q])
             e_out = 2 * q + (1 - o % 2)
         out.append((line, parts[p][1], parts[p][2]))
-    return out
+        provenance.append(chain_sources)
+    return out if sources is None else (out, provenance)
 
 
 def _cw_level(q):
@@ -2689,44 +2693,51 @@ class _Planner:
         cla, clo = np.asarray(cla, f64), np.asarray(clo, f64)
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
-        bridges, ground, over = [], {}, []
+        bridges, ground, over, sources = [], {}, [], []
         for k in keys:
             c = self._cell_enu(k)
             if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
                 over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
                 over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
-            for line, cls in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"]))):
+            for line, cls, src in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"])),
+                                      c.get("bridge_sources", [None] * len(c["bridges"]))):
                 if cls is None:
                     continue
                 if not (UNDER_ANY_ON or cls in APPROACH_SKIP or cls.endswith("_link")):
                     continue
                 bridges.append((line, cls in APPROACH_SKIP, False))     # (a link's "<cls>_link": raised)
+                sources.append([] if src is None else [src])
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
             bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
-            for (line, _h, cls), (fid, j, sg, med) in zip(c["ground"], c["ground_ids"]):
+            sources += [[] for _ in c.get("rail_bridges", ())]
+            for (line, _h, cls), (fid, j, sg, med), src in zip(c["ground"], c["ground_ids"],
+                                                            c.get("ground_sources", [None] * len(c["ground"]))):
                 if cls in UNGRADED or len(line) < 2:
                     continue
                 if (line.max(0) < lo).any() or (line.min(0) > hi).any():
                     continue
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
                 if got is None or len(line) > len(got[0]):
-                    ground[(fid, j)] = (line, sg, med, cls)
+                    ground[(fid, j)] = (line, sg, med, cls, src)
         if not bridges or not ground:
             return
         # (single spans: neither end continues into another bridge part; deduplicated across cells)
-        uniq, seen = [], set()
-        for b, fixed, rail in bridges:
-            k2 = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1), len(b))
+        uniq, seen, unique_sources = [], set(), []
+        for (b, fixed, rail), src in zip(bridges, sources):
+            k2 = (tuple(src), fixed, rail) if src else (
+                round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1),
+                round(float(b[-1, 1]), 1), len(b), fixed, rail)
             if k2 not in seen:
                 seen.add(k2)
                 uniq.append((b, fixed, rail))
+                unique_sources.append(src)
         chained = set()
         if UNDER_CHAIN_ON:
             n0 = [len(b) for b, _f, _r in uniq]
-            uniq = _merge_span_chains(uniq)
+            uniq, unique_sources = _merge_span_chains(uniq, unique_sources)
             chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
-        spans, rail_span = [], []
+        spans, rail_span, span_sources = [], [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         stub = np.array([float(np.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
@@ -2747,6 +2758,7 @@ class _Planner:
             if rail or cw_deck or not (d < 0.75).any():
                 spans.append((b, L, fixed, rail))
                 rail_span.append(rail)
+                span_sources.append(unique_sources[n])
         if not spans:
             return
         gids = sorted(ground)
@@ -2801,13 +2813,21 @@ class _Planner:
                 # where along this road (its nearest vertex segment)
                 t = np.clip(((pt - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
                 j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
+                sc = float(s[j] + t[j] * (s[j + 1] - s[j]))
+                src = ground[gids[i]][4]
+                if src is not None and s[-1] > 0:
+                    fid, ring, a, end = src
+                    at = a + (end - a) * sc / s[-1]
+                    if any(fid == f and ring == r and lo - 1e-9 <= at <= hi + 1e-9
+                           for f, r, lo, hi in span_sources[bi]):
+                        continue                # overlapping copies of this stretch, not a road underneath itself
                 # (the deck's own clearance: its depth scales with its span, roads.deck_depth; the full-depth
                 # UNDER_CLEAR_M dug the road out under a short overpass that sits lower)
                 # (a rail deck's height is its bed: its own depth under the ballast's top, railways.DECK_D)
                 depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
                     roadsmod.deck_depth(roadsmod.geom_span([b]))
                 clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
-                cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
+                cands.append((i, sc, deck - clear))
                 decks.append((deck, fixed))
                 cand_xs.append((bi, pt))
                 cand_cw.append(None if cz is None else deck - (CW_HEADROOM_M + roadsmod.deck_depth(
@@ -3748,12 +3768,13 @@ class _Planner:
                 blv = roadsmod.bridge_levels(f, i) if bs[i] is not None else []
                 for kind, sp, ps in (("bridge", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
                                      ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
+                    sources = roadsmod.part_sources(f, i, kind) if ps else []
                     for j, ring in enumerate(ps):
                         ring = np.asarray(ring, np.float64)
                         kk = (fid, kind, j)
                         lv = float(blv[j]) if kind == "bridge" and j < len(blv) else 0.0
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):
-                            parts[kk] = (ring, sp, lv)
+                            parts[kk] = (ring, sp, lv, sources[j])
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
         # (_lower_underpasses), nothing else (no ramps, no abutments: a line's deck is never raised for a road).
         # (GitHub #311 / #345 / #364: the track lay across the road under a rail bridge)
@@ -3773,13 +3794,14 @@ class _Planner:
                         # GitHub #324)
                         rail_g += [np.asarray(r, np.float64) for r in rings if len(r) >= 2]
         bridges, ground_l, ends, end_of, bcls, ground_ids, bids, blevels, bhalf = [], [], [], [], [], [], [], [], []
+        bridge_sources, ground_sources = [], []
         items = sorted(parts.items())
         if items:               # (the frame's conversion once for every part: it is per call)
-            allr = np.concatenate([ring for _k, (ring, _sp, _lv) in items])
+            allr = np.concatenate([ring for _k, (ring, _sp, _lv, _src) in items])
             ae, an, _ = self.frame.geodetic_to_enu(allr[:, 1], allr[:, 0], 0.0)
             axy = np.stack([np.asarray(ae, np.float64), np.asarray(an, np.float64)], axis=1)
         k0 = 0
-        for (fid, kind, j), (ring, sp, lv) in items:
+        for (fid, kind, j), (ring, sp, lv, src) in items:
             line = axy[k0:k0 + len(ring)]
             k0 += len(ring)
             if kind == "bridge":
@@ -3787,6 +3809,7 @@ class _Planner:
                 ends += [line[0], line[-1]]
                 bridges.append(line)
                 bids.append(fid)
+                bridge_sources.append(src)
                 blevels.append(lv)
                 # (one half width a bridge: two merged changes each appended it, and bridge i got bridge i // 2's)
                 bhalf.append(float(getattr(sp, "width", None) or 8.0) / 2)
@@ -3795,6 +3818,7 @@ class _Planner:
             else:
                 ground_l.append((line, sp.width / 2 + shoulder(sp), sp.cls))
                 ground_ids.append((fid, j, profile_sigma(sp), MEDIAN_M if sp.kind in roadsmod.BUILT else DIRT_MEDIAN_M))
+                ground_sources.append(src)
         rail_xy, rail_gxy = [], []
         if rail or rail_g:
             allr = np.concatenate(rail + rail_g)
@@ -3815,6 +3839,7 @@ class _Planner:
                 k0 += len(ring)
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids,
+                "bridge_sources": bridge_sources, "ground_sources": ground_sources,
                 "end_of": end_of, "span_bridges": span_xy,
                 "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
 

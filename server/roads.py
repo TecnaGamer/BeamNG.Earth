@@ -484,7 +484,8 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 8      # 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 9      # 9: skew bridge ranges use bridge-local crossing roads and upper width across cell copies (#909)
+                     # 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -641,6 +642,7 @@ def _cell_ranges(feats, load_only=False):
             else:
                 lvl.append(level_ranges(feats, i, _home=False))
     except BaseException:
+        st.pop("_ranges_state", None)     # a failed context read must be retryable on this decoded layer too
         if mine:
             import xproc
             xproc.release(run_path + ".lock")
@@ -779,7 +781,6 @@ def _bridge_reach(feats, i):
     L = float(sm[-1])
     if L <= 0:
         return got
-    boxes = _feature_boxes(feats)
     out, over = [], [0.0, 0.0]
     for n, (a, b, k) in enumerate(rngs):
         if k == "bridge":
@@ -790,27 +791,32 @@ def _bridge_reach(feats, i):
             inner = (sm > lo_m) & (sm < hi_m)      # (metres: sub_polyline scales lon/lat)
             sub = np.vstack([[np.interp(lo_m, sm, m[:, 0]), np.interp(lo_m, sm, m[:, 1])], m[inner],
                              [np.interp(hi_m, sm, m[:, 0]), np.interp(hi_m, sm, m[:, 1])]])
-            pad = 1.0
-            blo = (sub.min(0) - pad) / [kx, ky] + ring[0]
-            bhi = (sub.max(0) + pad) / [kx, ky] + ring[0]
-            near = np.flatnonzero((boxes[:, 0] <= bhi[0]) & (boxes[:, 2] >= blo[0]) & (boxes[:, 1] <= bhi[1]) &
-                                  (boxes[:, 3] >= blo[1]))
             gl, gj = [], []
-            for j in near:
-                if j == i or specs[j] is None:
+            try:
+                context = _bridge_context(feats, i, sub / [kx, ky] + ring[0])
+            except BaseException:
+                memo.pop(i, None)
+                raise
+            # Lane inference also depends on the local junctions (A11: three lanes here, two in distant copies).
+            # Read the upper width from that same deterministic context, not from the caller's copy.
+            own_w = next((sp.width if sp is not None else _structure_width(other, j)
+                          for other, j, sp in context if str(other.ids[j]) == str(feats.ids[i])), up_w)
+            own_w = up_w if own_w is None else own_w
+            for other, j, sp in context:
+                if sp is None or str(other.ids[j]) == str(feats.ids[i]):
                     continue
-                for g in _raw_ground_parts(feats, j):
+                for g in _raw_ground_parts(other, j):
                     gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
-                    gj.append(j)
+                    gj.append(sp)
             lo0, hi0 = lo_m, hi_m           # (arcs along sub: from lo0; a crossing at either end of it does not count)
             for g, sc, sin in (_seg_hits(sub, gl) if gl else ()):
                 sc += lo0
                 if not lo0 < sc < hi0:
                     continue
-                j = gj[g]
+                under = gj[g]
                 sin = max(sin, SKEW_MIN_SIN)
                 cos = math.sqrt(max(0.0, 1.0 - sin * sin))
-                h = (specs[j].width / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
+                h = (under.width / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (own_w / 2) * cos / sin
                 lo_m = min(lo_m, max(a0 * L - SKEW_MAX_M, sc - h))
                 hi_m = max(hi_m, min(b0 * L + SKEW_MAX_M, sc + h))
             prev = out[-1][1] if out else 0.0   # (never into a neighbouring range; past the feature's ends: "over")
@@ -823,6 +829,51 @@ def _bridge_reach(feats, i):
         out.append((a, b, k))
     got = memo[i] = {"ranges": out, "over": over}
     return got
+
+
+def _bridge_context(feats, i, span):
+    """Crossing road rows near this bridge, identical for every copy of a long feature.
+
+    Only the ends can lengthen a span. Bound their search by the supported lower-road widths and crossing angle;
+    even a very long bridge never asks for the cells along its whole road. Standalone feature sets keep their
+    existing local context. The decoded layers are not retained here: MapData owns their memory budget.
+    """
+    span = np.asarray(span, np.float64)
+    kx = 111320.0 * max(0.01, math.cos(math.radians(float(span[:, 1].mean()))))
+    scale = np.array([kx, 111320.0])
+    lo, hi = span.min(0) - 1.0 / scale, span.max(0) + 1.0 / scale
+    read = feats.__dict__.get("_bnge_road_cells")
+    if read is None:
+        layers = [feats]
+    else:
+        import mapcells
+        s = np.r_[0.0, np.cumsum(np.hypot(*(np.diff(span, axis=0) * scale).T))]
+        # The width rule allows 40 m; even the largest supported lane count has half width below 40 m.
+        # A constant upper bound also keeps the context identical when local lane inference differs.
+        reach = (2 * OSM_WIDTH_M[1] + SKEW_MARGIN_M + SKEW_SLOPE_M) / SKEW_MIN_SIN
+        frac = min(1.0, reach / max(s[-1], 1.0))
+        keys = set()
+        for a, b in ((0.0, frac), (1.0 - frac, 1.0)):
+            end = sub_polyline(span, a, b)
+            elo, ehi = end.min(0) - 1.0 / scale, end.max(0) + 1.0 / scale
+            keys.update(mapcells.cells_for_bbox(elo[1], elo[0], ehi[1], ehi[0], max_cells=64))
+        mid = sub_polyline(span, 0.5, 0.5)[0]
+        owner = mapcells.cell_of(mid[1], mid[0])
+        layers = read(sorted(keys, key=lambda k: (k != owner, str(k))))
+    rows, seen = [], set()
+    for f in layers:
+        if f is None:
+            continue
+        specs = road_specs(f)
+        boxes = _feature_boxes(f)
+        for j, sp in enumerate(specs):
+            fid = str(f.ids[j])
+            box = boxes[j]
+            near = box[0] <= hi[0] and box[2] >= lo[0] and box[1] <= hi[1] and box[3] >= lo[1]
+            if near and (sp is not None or fid == str(feats.ids[i])) and fid not in seen:
+                seen.add(fid)
+                rows.append((f, j, sp))
+    return rows
 
 
 # A tunnel's portal moved out past a ground road crossing over the tunnel's road at it (earthfast.tunnel_reach): its
@@ -1462,6 +1513,23 @@ def bridge_levels(feats, i):
 def ground_parts(feats, i):
     """The on-ground pieces of feature i (lon/lat polylines): its rings minus the bridge / tunnel ranges."""
     return _parts_by_level(feats, i, "ground")
+
+
+def part_sources(feats, i, want):
+    """(feature id, source ring, from, to) for each ground/bridge part, in its geometry's order.
+
+    Part numbers alone are not identities: different cell copies can split a long road at different bridge ends.
+    Source intervals distinguish that overlap from a genuine crossing of two different stretches of one road.
+    """
+    rngs = level_ranges(feats, i)
+    pieces = ground_ranges(rngs) if want == "ground" else [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
+    out, ring_no = [], 0
+    for part in feats.parts(i):
+        for ring in part:
+            if len(ring) >= 2:
+                out.extend((str(feats.ids[i]), ring_no, a, b) for a, b in pieces)
+            ring_no += 1
+    return out
 
 
 def bridge_parts(feats, i):
