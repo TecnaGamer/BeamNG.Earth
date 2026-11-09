@@ -79,6 +79,11 @@ T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, 
 T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }, 31),
+  'ahead, as fast: follows')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 25, y = 0 }, 31),
+  'ahead and faster: outruns the graph, not following (GitHub #855)')
+T.check(N.stopReach(31) > 200 and N.stopReach(10) < 60 + 1, 'a dead end seen as far as the car needs to stop')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')

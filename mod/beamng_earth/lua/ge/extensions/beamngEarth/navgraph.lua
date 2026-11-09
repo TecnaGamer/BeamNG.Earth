@@ -65,6 +65,11 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 M.CUT_M = 60
 M.CUT_S = 4
 M.CUT_FRESH_M = 95
+-- ... and at least as far as the car needs to stop for it (its speed squared over 2 CUT_DECEL, CUT_STOP_M more): the
+-- AI plans to the end of the graph and brakes for the dead end long before 4 s from it; at 70 mph it braked from
+-- ~200 m and turned round across the lanes ahead of the player, every half minute on a motorway (GitHub #855 / #966)
+M.CUT_DECEL = 2.5
+M.CUT_STOP_M = 30
 M.FRESH_S = 5
 M.COOLDOWN_S = 8.0
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
@@ -213,10 +218,18 @@ M.FOLLOW_DOT = 0.7
 -- player's way: the cut it heads for is the block's edge, which moves on with the player, so it is not respawned
 -- for it (on a highway at 30 m/s a car ~200 m ahead was within the cut's reach and vanished in front of the player,
 -- GitHub #353); it still is when it leaves the box (guard's GUARD_M).
-function M.followsPlayer(p, dir, pp, pu)
+-- How far ahead a car at sp m/s sees a dead end it will brake for (CUT_DECEL, CUT_STOP_M). Pure.
+function M.stopReach(sp)
+  return (sp or 0) ^ 2 / (2 * M.CUT_DECEL) + M.CUT_STOP_M
+end
+
+-- (car_sp: a car faster than the player by FOLLOW_FASTER_MS outruns the graph growing with the player: not following)
+M.FOLLOW_FASTER_MS = 2.0
+function M.followsPlayer(p, dir, pp, pu, car_sp)
   local ps = math.sqrt(pu.x * pu.x + pu.y * pu.y)
   local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
   if ps < M.FOLLOW_MS or dl < 1e-6 then return false end
+  if car_sp and car_sp > ps + M.FOLLOW_FASTER_MS then return false end
   local ux, uy = pu.x / ps, pu.y / ps
   if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
   return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
@@ -579,9 +592,10 @@ local function guard(b, all)
         local s0 = seenAt[id]
         if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then s0 = { p.x, p.y, now } end
         seenAt[id] = { p.x, p.y, s0[3] }
-        local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
+        local reach = math.max(now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S),
+          M.stopReach(sp))
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity()) then
+        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity(), sp) then
           toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
         end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
@@ -895,6 +909,7 @@ end
 
 function M.currentGraph() return graph end      -- (tests)
 function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
+function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
 function M.onTeleport()
   respawnAll = true
