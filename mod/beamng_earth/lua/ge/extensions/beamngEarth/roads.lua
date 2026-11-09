@@ -26,6 +26,7 @@ local M = {}
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_autobahn.materials.json',   -- the German Autobahn signs (deautobahn)
   '/levels/east_coast_usa/art/road/main.materials.json',         -- ECA_road_edge_dirt (the asphalt's edge, roads.EDGE_DECAL)
   '/levels/west_coast_usa/art/decals/main.materials.json',       -- roadmarkings1 (turn arrows, markings.ARROW_MATERIAL)
   '/levels/west_coast_usa/art/shapes/roads/main.materials.json',   -- curbs, sidewalk1 (the sidewalk mesh)
