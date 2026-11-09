@@ -1302,6 +1302,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
     mesh = _with_stations(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None),
                           drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, P.drawn, xy, q), dem=_s.dem)
+    mesh = _with_rail_stations(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None),
+                               drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, P.drawn, xy, q))
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
@@ -1768,6 +1770,8 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
                              context=ctx, clip_poly=quad)
     mark("mesh")
     mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad)
+    mesh = _with_rail_stations(mesh, frame, bbox, elev, origin, getattr(_s, "md", None), quad=quad,
+                               drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q))
     mark("plazas")
     names = geo_names(tile.key, aid)
     data = {"v": roadsmod.VERSION, "key": tile.key, "anchorId": aid, "lift": round(float(lift), 3),
@@ -2061,22 +2065,63 @@ def _bay_lines(frame, tx, ty, md):
 
 
 def _station_collision(frame, box, elev, md):
-    """(mesh, boxes) of the bus stations' lean collision in the tile (busstationmesh.collision), or None."""
+    """(mesh, boxes) of the bus stations' and the railway stations' lean collision in the tile (busstationmesh.collision,
+    railstationmesh.collision), or None."""
     if md is None:
         return None
     import busstations
-    if not busstations.ON:
-        return None
+    import railstations
+    got = None
+    if busstations.ON:
+        try:
+            stations = busstations.stations_near(md, frame, box)
+            if stations:
+                import busstationmesh
+                got = busstationmesh.collision(frame, tuple(box), stations, elev, (float(box[0]), float(box[1]), 0.0))
+                got = got if got[0] is not None else None
+        except Exception:               # no colliders rather than no road tile
+            log.exception("bus station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+            got = None
+    if railstations.ON:
+        try:
+            rail = railstations.stations_near(md, frame, box)
+            if rail:
+                import plazas
+                import railstationmesh
+                rc = railstationmesh.collision(frame, tuple(box), rail, elev, (float(box[0]), float(box[1]), 0.0))
+                if rc[0] is not None:
+                    got = rc if got is None else (plazas.merge(got[0], rc[0]), list(got[1]) + list(rc[1]))
+        except Exception:
+            log.exception("rail station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+    return got
+
+
+def _with_rail_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=None):
+    """The road mesh with the railway stations near the tile built into it (railstations.py, railstationmesh.py): the
+    platforms with their kerbs and strips, the tile's own triangles only. quad as _with_plazas'."""
+    if md is None:
+        return mesh
+    import railstations
+    if not railstations.ON:
+        return mesh
     try:
-        stations = busstations.stations_near(md, frame, box)
+        stations = railstations.stations_near(md, frame, box)
         if not stations:
-            return None
+            return mesh
         import busstationmesh
-        got = busstationmesh.collision(frame, tuple(box), stations, elev, (float(box[0]), float(box[1]), 0.0))
-        return got if got[0] is not None else None
-    except Exception:                   # no colliders rather than no road tile
-        log.exception("bus station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
-        return None
+        import plazas
+        import railstationmesh
+        sm = railstationmesh.mesh(frame, tuple(box),  stations,
+                                  busstationmesh.DrawnGround(drawn_fn) if drawn_fn is not None else elev, origin,
+                                  overlap=quad is not None)
+        log.info("rail stations: %s in the tile at %s: %d triangles", [s.name or "?" for s in stations],
+                 tuple(round(float(v)) for v in box[:2]), 0 if sm is None else len(sm[1]))
+        if quad is not None:
+            sm = _clip_mesh(sm, origin, quad)
+        return plazas.merge(mesh, sm)
+    except Exception:                   # no stations rather than no road tile
+        log.exception("rail stations of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+        return mesh
 
 
 def _with_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=None, dem=None):

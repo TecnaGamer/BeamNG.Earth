@@ -130,6 +130,7 @@ class RailStation:
         self.links = []
         self.confidence = 0
         self.synth = False
+        self.country = None
 
 
 # --- geometry --------------------------------------------------------------------------------------------------
@@ -665,3 +666,106 @@ def _arc_of(xy, s, p):
         if d < best:
             best, arc = d, float(s[k]) + t * float(np.hypot(*ab))
     return arc
+
+
+# --- the stations of a road tile (the map cells through busstations' adapter), kept per process ---------------------
+
+import threading
+from collections import OrderedDict
+
+_memo = OrderedDict()
+_memo_lock = threading.Lock()
+MEMO_N = 12
+SEED_DEG = (0.006, 0.0045)      # (lon, lat) seeds this near each other (about 450 m) are read together
+GROUP_PAD_DEG = (0.0045, 0.0035)
+TILE_REACH_M = 420.0            # a station this close to a tile is made in it (its pieces that fall in the tile are kept)
+PAD_DEG = 0.005
+
+
+def _seed_points(feats):
+    """(lon, lat) of the railway_station / railway_halt features of an infrastructure layer."""
+    if feats is None or not len(feats):
+        return []
+    cls = np.asarray(feats.attrs.get("class"))
+    out = []
+    for i in np.flatnonzero((cls == "railway_station") | (cls == "railway_halt")):
+        parts = feats.parts(int(i))
+        if parts and parts[0] and len(parts[0][0]):
+            ll = np.asarray(parts[0][0], float)
+            out.append((float(ll[:, 0].mean()), float(ll[:, 1].mean())))
+    return out
+
+
+def _group(md, frame, group):
+    """[RailStation] round one group of seed points [(lon, lat)], laid out in frame; kept per process."""
+    key = (round(frame.lat0, 6), round(frame.lon0, 6), tuple(group))
+    with _memo_lock:
+        if key in _memo:
+            _memo.move_to_end(key)
+            return _memo[key]
+    import countrybounds
+    import mapcells
+    lons = np.array([g[0] for g in group])
+    lats = np.array([g[1] for g in group])
+    cells = mapcells.cells_for_points(lats, lons, pad_lat=GROUP_PAD_DEG[1], pad_lon=GROUP_PAD_DEG[0], max_cells=64)
+    layers = {name: [md.cell(k, layers=(name,), kind="demand").layers.get(name) for k in cells]
+              for name in ("infrastructure", "buildings", "roads")}
+    e, n, _ = frame.geodetic_to_enu(lats, lons, np.zeros(len(lats)))
+    centre = (float(np.mean(e)), float(np.mean(n)))
+    items = bs.items_from_layers(frame, layers, centre, REACH_M + 90.0)
+    try:
+        country = countrybounds.bundled().at(float(np.mean(lats)), float(np.mean(lons)))
+    except Exception:
+        country = None
+    found = stations(items, country)
+    for st in found:
+        st.country = country
+    with _memo_lock:
+        _memo[key] = found
+        while len(_memo) > MEMO_N:
+            _memo.popitem(last=False)
+    return found
+
+
+def stations_near(md, frame, box):
+    """The RailStations within TILE_REACH_M of the tile box (x0, y0, x1, y1) of frame, [] almost always (one pass over the
+    infrastructure cells for a railway station point). Errors cost the stations, not the tile."""
+    if not ON or md is None:
+        return []
+    import logging
+    x0, y0, x1, y1 = (float(v) for v in box)
+    try:
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+        import mapcells
+        keys = mapcells.cells_for_points(la, lo, pad_lat=PAD_DEG, pad_lon=PAD_DEG, max_cells=64)
+        seeds = sorted({(round(a, 5), round(b, 5)) for k in keys
+                        for a, b in _seed_points(md.cell(k, layers=("infrastructure",), kind="demand")
+                                                 .layers.get("infrastructure"))})
+        if not seeds:
+            return []
+        groups = []
+        for s in seeds:
+            for g in groups:
+                if abs(g[0][0] - s[0]) < SEED_DEG[0] and abs(g[0][1] - s[1]) < SEED_DEG[1]:
+                    g.append(s)
+                    break
+            else:
+                groups.append([s])
+        found = []
+        for g in groups:
+            found += _group(md, frame, tuple(g))
+    except Exception as ex:
+        logging.getLogger("earthd.railstations").warning("rail stations of the tile at %s: %s: %s",
+                                                         tuple(round(float(v)) for v in box[:2]), type(ex).__name__, ex)
+        return []
+    out, seen = [], set()
+    for st in found:
+        fid = tuple(np.round(st.hub, 1))
+        if fid in seen:
+            continue
+        seen.add(fid)
+        pts = np.vstack([p.ring for p in st.platforms] + [np.asarray([st.hub])])
+        lo_, hi_ = pts.min(0), pts.max(0)
+        if lo_[0] - TILE_REACH_M <= x1 and hi_[0] + TILE_REACH_M >= x0 and lo_[1] - TILE_REACH_M <= y1 and hi_[1] + TILE_REACH_M >= y0:
+            out.append(st)
+    return out
