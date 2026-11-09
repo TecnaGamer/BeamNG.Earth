@@ -59,6 +59,7 @@ mod mdhtml;
 mod roadlanes;
 mod waytags;
 mod underdeck;
+mod railseam;
 mod classgrid;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5598,6 +5599,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
-    m.add("VERSION", 171)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
+    m.add("VERSION", 172)?;
     Ok(())
 }
