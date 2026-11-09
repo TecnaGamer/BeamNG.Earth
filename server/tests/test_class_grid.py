@@ -27,7 +27,7 @@ def values(n, ix, iy):
 
 class ClassGridTest(unittest.TestCase):
     def setUp(self):
-        fast.require(172, "class grid tests")
+        fast.require(171, "class grid tests")
 
     def cache(self, size=64*4096):
         return fast._ef.ClassGridCache(size)
@@ -153,7 +153,7 @@ class StableMapData:
 
 class BlockConsumerTest(unittest.TestCase):
     def setUp(self):
-        fast.require(172, "block class tests")
+        fast.require(171, "block class tests")
         self.frame = geodesy.EnuFrame(49., 7.)
         self.n = 256
         la, lo, _ = self.frame.enu_to_geodetic(np.array([-1024.,1024.]), np.array([-1024.,1024.]), 0.)
