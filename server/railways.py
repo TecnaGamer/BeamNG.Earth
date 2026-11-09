@@ -162,7 +162,24 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     return out
 
 
-def grade_plans(frame, cells, box, elev):
+def _beds(frame, rails, ground, underpasses, load=None, elev=None):
+    """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
+    grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
+    where not, for a tram and for a point no node has."""
+    import railprofile
+    new = None
+    if railprofile.ENABLED and load is not None and elev is not None and rails:
+        akey = ("beds", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
+        new = railprofile.beds(frame, akey, load, elev, rails)
+    if new is None or any(np.isnan(z).any() for z in new):
+        old = profile(rails, ground, underpasses)
+        if new is None:
+            return old
+        return [(np.where(np.isfinite(z), z, zb), zg) for z, (zb, zg) in zip(new, old)]
+    return [(z, np.asarray(ground(xy), np.float64)) for z, (_f, _c, _k, xy) in zip(new, rails)]
+
+
+def grade_plans(frame, cells, box, elev, load=None):
     """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
     the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
     embankments filled). tile_mesh then finds the ground at its bed. Pure given elev."""
@@ -194,7 +211,7 @@ def grade_plans(frame, cells, box, elev):
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
-    prof = profile(rails, ground, tunnels)
+    prof = _beds(frame, rails, ground, tunnels, (), load, elev)
     if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
     for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
@@ -1497,7 +1514,8 @@ def _foot_limits(xy, side, foot, others, crossers):
     return np.maximum(lim, BALLAST_TOP_M + 0.01)
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, under=None):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
+              bed_elev=None, under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -1507,7 +1525,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     furniture (fences.py) to stand on: the profile is already made here, no second pass. under(xy (k, 2)) -> mask: the
     points a 3dmr model bridge stands over (buildings.bridge_footprints'): a railway's or a walkway's bridge mostly
     under one is not drawn (the model carries it: Perth's Narrows and Mount Henry bridges' rail decks, the Elizabeth
-    Quay footbridge, GitHub #1071); the track's profile still runs over it."""
+    Quay footbridge, GitHub #1071); the track's profile still runs over it.
+    load (a roads layer by cell key) and bed_elev (the grader's DEM): the beds from railprofile's lattice, the same in
+    every tile (railprofile.py)."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tunnels = road_underpasses(frame, cells, box)
@@ -1524,7 +1544,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         walk = [w for w in walk if not np.asarray(under(w[1]), bool).mean() >= 0.5]
     if not rails and not walk:
         return (None, []) if return_decks else None
-    prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails)) if rails else []
+    prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
+            if rails else [])
     carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
                for _f, _c, kind, xy in rails]
     decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),

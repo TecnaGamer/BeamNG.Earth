@@ -2245,7 +2245,9 @@ class _Planner:
                               for k in railways.cells_near(self.frame, own)]
                     beside = [(np.asarray(q.xy, np.float64)[:, :2], np.asarray(q.z, np.float64), q.half)
                               for _f, q in plans[:len(pspecs)] if SEAMS_ON and TUNNEL_TAG not in _f]
-                    for fid, xy, z in railways.grade_plans(self.frame, rcells, own, self.elev):
+                    for fid, xy, z in railways.grade_plans(
+                            self.frame, rcells, own, self.elev,
+                            load=lambda k: self.md.cell(k, layers=("roads",), kind="demand").layers.get("roads")):
                         if beside:      # (the bed beside a road: where the ground between has room for its slope)
                             import railroadseam
                             z = railroadseam.couple(xy, z, railways.GRADE_HALF_M, beside)

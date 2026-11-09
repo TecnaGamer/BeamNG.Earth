@@ -1190,7 +1190,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
-                                 return_decks=True,
+                                 return_decks=True, load=cell_fn,
+                                 bed_elev=getattr(getattr(_s, "plan_store", None), "elev", None),
                                  under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
                                         if _bridge_fps else None))
     mark("railways")
