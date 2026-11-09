@@ -60,15 +60,17 @@ def _named_init(name, init, *initargs):
 
 def _call(fn, args, kwargs):
     """A job in the worker, then its memory ceiling (budget.maybe_shed: on a small machine a worker over it drops its
-    caches between jobs)."""
-    try:
-        return fn(*args, **kwargs)
-    finally:
+    caches between jobs); never during an idle shed (budget.JOB_LOCK), whose clock it starts again."""
+    import budget
+    with budget.job_lock():
         try:
-            import budget
-            budget.maybe_shed()
-        except Exception:
-            pass
+            return fn(*args, **kwargs)
+        finally:
+            try:
+                budget.job_ended()
+                budget.maybe_shed()
+            except Exception:
+                pass
 
 
 def _shedding(submit):
