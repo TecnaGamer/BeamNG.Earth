@@ -2327,8 +2327,9 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
     got = memo.get(k)
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
+        import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
-            (photosurface.TAG,) if photosurface.ON else ())
+            (photosurface.TAG,) if photosurface.ON else ()) + ((germanroads.VERSION,) if germanroads.ON else ())
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
         # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
@@ -3393,7 +3394,9 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
             w = carriageway(sp.cls, sp.kind, False, width, sp.oneway, sp.lanes, link=sp.link)
             out[j] = sp._replace(urban=False, width=_dual_width(sp._replace(urban=False), w, sp.median, feats, j))
     import franceroads
-    return franceroads.adjust_specs(feats, _mountain_roads(feats, _osm_sidewalks(feats, _rural_connectors(feats, out))))
+    import germanroads          # (Germany's surveyed widths, lanes and surfaces where the map has none)
+    return franceroads.adjust_specs(feats, germanroads.adjust_specs(
+        feats, _mountain_roads(feats, _osm_sidewalks(feats, _rural_connectors(feats, out)))))
 
 
 # Mountain pass roads (the user, 2026-10-31: the Stelvio Pass; its aerial: 6.1 m of asphalt between edge lines, no
