@@ -131,6 +131,18 @@ class KernelTest(unittest.TestCase):
         self.assertIn("advance500", kinds)
         self.assertFalse(any(k.startswith("countdown") for k in kinds))
 
+    def test_boards_keep_off_decks(self):
+        """A deck from 1050 to 1075 m over the announcement's 1065 m: the board moves to its end, and the sample it
+        stands at is off the deck too (1080 m, not 1070 m: the two are equally near; Codex review of #999)."""
+        raw, row, rows, _ = junction()
+        p, t, uv, mi, boards = call([(raw, row, rows, np.array([[1050.0, 1075.0]]))])
+        got = [json.loads(b) for b in boards]
+        ann = [b for b in got if b["board"] == "announce"]
+        self.assertEqual(len(ann), 1)
+        for b in got:
+            if b["board"] not in ("gore", "fork"):
+                self.assertFalse(1050.0 < -b["at"][0] < 1075.0, (b["board"], b["at"]))
+
     def test_materials_fixed_set(self):
         _, _, _, mi, _ = call([junction(), junction(0.0, 300.0, jid=-21)])
         self.assertTrue(set(np.unique(mi).tolist()) <= set(range(len(deautobahnfont.MATERIALS))))

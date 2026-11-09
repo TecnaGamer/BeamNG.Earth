@@ -197,6 +197,10 @@ pub fn autobahn_signs<'py>(py: Python<'py>, raw: Vec<String>, junctions: PyReado
                         if i < p0 as i64 || i >= p1 as i64 { continue; }
                         let i = i as usize;
                         if pr[[i, pc("de")]] < 0.5 { continue; }
+                        // the sample itself off the decks and tunnels too (the station is; its nearest sample and the
+                        // posts' search may not be)
+                        let si = pr[[i, pc("s")]];
+                        if skip_j.iter().any(|&(a, b)| si > a.min(b) && si < a.max(b)) { continue; }
                         let q = |name: &str| pr[[i, pc(name)]];
                         let g = Geo { x: q("x"), y: q("y"), dx: q("dx"), dy: q("dy"), edge_l: q("edge_l"),
                                       edge_r: q("edge_r"), opp_edge: q("opp_edge"), lanes: q("lanes"),
