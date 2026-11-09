@@ -1714,20 +1714,28 @@ def walk_panel_boxes(crossings, finals):
     return out
 
 
-def walk_sign_rows(crossings, ground):
+def walk_sign_rows(crossings, ground, finals=None):
     """Prop rows ([rrwalk, x, y, z, yaw, scale, height, 0]) of the warning signs at footway crossings: one at each side of the
     track, facing the people coming, on their right, past the ballast's foot."""
-    pts = []
-    for pt, _arc, _n, t, f, ww in crossings:
+    pts, floors = [], []
+    for pt, arc, n_part, t, f, ww in crossings:
         sin = max(abs(float(t[0] * f[1] - t[1] * f[0])), WALK_MIN_SIN)
         before = min(6.0, (BALLAST_TOP_M + BALLAST_SLOPE * BALLAST_H + WALK_SIGN_BEFORE_M) / sin)
+        # the ballast's side surface at the sign's distance from the track's axis (the ground read there can be an
+        # embankment's foot 4 m under the bed: Nachod's signs stood under the track)
+        floor = -np.inf
+        if finals is not None:
+            zb = finals[n_part]
+            floor = (float(zb[min(int(round(arc / STEP_M)), len(zb) - 1)]) + BALLAST_H
+                     - max(0.0, before * sin - BALLAST_TOP_M) / BALLAST_SLOPE)
         for sgn in (1.0, -1.0):
             a = -f * sgn                        # the way they walk, towards the crossing
             side = np.array([a[1], -a[0]])      # its right
             pts.append((pt - a * before + side * (ww / 2 + WALK_SIGN_OFF_M), side))
+            floors.append(floor)
     if not pts:
         return []
-    z = np.asarray(ground(np.array([q for q, _ in pts])), np.float64).ravel()
+    z = np.maximum(np.asarray(ground(np.array([q for q, _ in pts])), np.float64).ravel(), np.asarray(floors))
     return [["rrwalk", round(float(q[0]), 2), round(float(q[1]), 2), round(float(zz), 2),
              round(math.degrees(math.atan2(side[1], side[0])) % 360.0, 1), 1.0, WALK_SIGN_HEIGHT, 0.0]
             for (q, side), zz in zip(pts, z)]
@@ -2010,7 +2018,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         for arrs, hx, hy in walk_panel_boxes(crossings_, finals):
             small.append((arrs, hx, hy, concrete))
         if furniture is not None:
-            rows += [r for r in walk_sign_rows(crossings_, ground) if roads.box_owns(box, r[1], r[2])]
+            rows += [r for r in walk_sign_rows(crossings_, ground, finals) if roads.box_owns(box, r[1], r[2])]
             rows += [r for r in buffer_rows(dead_ends(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
                                                                                  box[2] + REACH_M, box[3] + REACH_M)))
                           if roads.box_owns(box, r[1], r[2])]

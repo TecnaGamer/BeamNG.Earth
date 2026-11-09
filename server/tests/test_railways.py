@@ -268,6 +268,17 @@ class RailwayTest(unittest.TestCase):
         self.assertGreater(signs[1][2], 100.0 + 2.0)
         self.assertEqual(signs[0][6], railways.WALK_SIGN_HEIGHT)
 
+    def test_walk_signs_stand_on_the_ballast_not_under_an_embankment(self):
+        track = [(-50.0, 100.0), (300.0, 100.0)]
+        f = features([track, [(120.0, 60.0), (120.0, 140.0)]], ["standard_gauge", "footway"], subtypes=["rail", "road"])
+        low = lambda xy: np.where(np.abs(xy[:, 1] - 100.0) < 2.0, 10.0, 5.0)     # the land 5 m under the track's bed
+        rows = []
+        railways.tile_mesh(FRAME, 0, 0, [f], low, furniture=rows)
+        signs = [r for r in rows if r[0] == "rrwalk"]
+        self.assertEqual(len(signs), 2)
+        for r in signs:
+            self.assertGreater(r[3], 10.0 + railways.BALLAST_H - 1.5, "on the ballast's slope, not on the land 5 m under it")
+
     def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0
