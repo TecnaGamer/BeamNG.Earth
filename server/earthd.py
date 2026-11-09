@@ -1546,18 +1546,37 @@ class Server:
         rate = min(self.delete_max_rate, len(self.delete_queue) / DELETE_DRAIN_S)
         return min(self.delete_interval, 1.0 / rate) if rate > 0 else self.delete_interval
 
-    def _delete_one(self):
+    def _delete_pick(self):
+        """The next queued delete as a call doing the file work (None: the file stays). The decision is the event loop's
+        (the tile caches); the file work need not be: _remove alone held the loop 2.8 and 5.0 s after a teleport
+        (2026-11-09, os.remove under a busy disk), every game message waiting."""
         path, ck = self.delete_queue.popleft()
         # an evicted tile built again since (same file name) keeps its new file; ck callable: kept while it says so
+        # (asked again in the worker right before the file goes: a delete held up by a slow disk must not take the file
+        # of a tile built again meanwhile under the same name; the checks are membership reads)
         if callable(ck):
             if ck():
-                return
-            self._remove(path)
-        elif ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
-            if os.path.isdir(path):     # a released session's folder, queued after its files
-                shutil.rmtree(path, ignore_errors=True)
-            else:
-                self._remove(path)
+                return None
+
+            def work():
+                if not ck():
+                    self._remove(path)
+            return work
+        if ck is None or (ck not in self.tiles and ck not in self.tile_inflight):
+            def work():
+                if ck is not None and (ck in self.tiles or ck in self.tile_inflight):
+                    return
+                if os.path.isdir(path):     # a released session's folder, queued after its files
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    self._remove(path)
+            return work
+        return None
+
+    def _delete_one(self):
+        work = self._delete_pick()
+        if work is not None:
+            work()
 
     def geo_held(self, kind, k):
         """Does some connection's tracker of kind (GEO_TRACKERS) have geotile k (gx, gy) sent or building?"""
@@ -1656,10 +1675,24 @@ class Server:
             return
         self._deleting = True
         due = [loop.time() + self.delete_gap()]
+        if getattr(self, "_delete_pool", None) is None:
+            # (one thread: the deletes stay in order and paced, off the event loop)
+            self._delete_pool = ThreadPoolExecutor(1, thread_name_prefix="delete")
 
         def step():
-            if self.delete_queue:
-                self._delete_one()
+            work = self._delete_pick() if self.delete_queue else None
+            if work is None:
+                after()
+                return
+            try:
+                fut = loop.run_in_executor(self._delete_pool, work)
+            except RuntimeError:            # (the pool shut down: at exit)
+                work()
+                after()
+                return
+            fut.add_done_callback(lambda _f: after())
+
+        def after():
             if self.delete_queue:
                 # a gap after the last one was due, not after it ran: Windows' loop wakes up to ~16 ms late at every
                 # timer (a 25 ms gap took 33, 40 files/s became 30); behind by more than a gap (a stall): afresh,
