@@ -7658,7 +7658,9 @@ def _deck_pack(decks):
 def _off_wall_tops(chunks, walls):
     """chunks with the ground roads' surfaces and lines cut away over the retaining walls' tops (a path on the bank
     above a cutting lay on the lattice's low strip under the top, in patches through it, Munich's McGraw-Graben).
-    Decks, tunnels and filled polygons are left as they are."""
+    Decks, tunnels, filled polygons and the other bridge surfaces (a deck's sidewalks and lines: "fixed" at its heights,
+    with its "fid") are left as they are: a plan-only test cut the Juri overpass's sidewalks and edge lines where the
+    walls of the cutting under it pass, dark gaps in the strips (BNE_WALL_FIXED=off: as before)."""
     if not walls:
         return chunks
     blockers = []
@@ -7671,7 +7673,8 @@ def _off_wall_tops(chunks, walls):
     out = []
     for c in chunks:
         n = c.get("n")
-        if c.get("deck") or c.get("tunnel") or c.get("poly") is not None or not n or len(n) < 2:
+        if (c.get("deck") or c.get("tunnel") or c.get("poly") is not None or not n or len(n) < 2
+                or (WALL_TOP_FIXED and c.get("fixed") and c.get("fid") is not None)):
             out.append(c)
             continue
         pts = np.asarray(n, np.float64)
@@ -7689,6 +7692,7 @@ def _off_wall_tops(chunks, walls):
 
 
 WALL_TOP_EDGE_M = 0.3   # a road surface goes this far onto a wall's top at most (_off_wall_tops)
+WALL_TOP_FIXED = os.environ.get("BNE_WALL_FIXED", "on") != "off"
 
 
 def _taper(xy, run):
@@ -8426,6 +8430,13 @@ PAD_WALL_DROP_M = 1.0
 PAD_RIM_STEP_M = 1.0
 
 
+# A bridge's abutment (its only deck at the joint, ending on the ground: ABUT_GROUND_M) has solid ground under the joint:
+# the pad squares up the approach roads' meeting with it and takes just the deck's end of it (PAD_ABUT_REACH_M). Reaching
+# PAD_REACH_M along the deck it took the parapets off 14 m of it at each end, a gap with a sloped end section either side
+# of it (the Juri overpass over Tallinna ringtee: 29 m of the 57 m deck had parapets; BNE_PAD_ABUT=off: as before).
+PAD_ABUT_ON = os.environ.get("BNE_PAD_ABUT", "on") != "off"
+PAD_ABUT_REACH_M = 0.5
+
 PAD_FORK_MARGIN_M = 0.45    # m: a fork's pad past its carriageways (roadmesh.PARAPET_W: the decks' own slab edges)
 PAD_FORK_OPEN_M = 0.1       # ... its rim open only where a carriageway crosses it (PAD_OPEN_M is past its sides)
 PAD_FORK_COS = 0.85         # two parts leaving a joint this close in direction run on side by side (a fork) ...
@@ -8500,6 +8511,24 @@ def _pad_height_groups(parts):
     return [[parts[i] for i in sorted(group)] for group in groups]
 
 
+def _abutment_end(part, ground_fn):
+    """part (line from the joint (k, 2), z, half width) of the only deck at a joint, cut to PAD_ABUT_REACH_M when its end
+    lies on the ground (within ABUT_GROUND_M of ground_fn there): its abutment, else unchanged. Pure given ground_fn."""
+    line, z, half = part
+    try:
+        gz = float(np.asarray(ground_fn(line[:1]), np.float64)[0])
+    except Exception:
+        return part
+    if not np.isfinite(gz) or z[0] - gz > ABUT_GROUND_M:
+        return part
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
+    if s[-1] <= PAD_ABUT_REACH_M:
+        return part
+    keep = s < PAD_ABUT_REACH_M
+    cut = np.array([np.interp(PAD_ABUT_REACH_M, s, line[:, 0]), np.interp(PAD_ABUT_REACH_M, s, line[:, 1])])
+    return (np.vstack([line[keep], cut]), np.r_[z[keep], np.interp(PAD_ABUT_REACH_M, s, z)], half)
+
+
 def deck_pads(decks, ground_roads, box, ground_fn, own=True):
     """[(ring (k, 3), centre (3,), walls [(pts (m, 3), out (m, 2))])] of the junction pads of the joints of decks
     [(fid, spec, xy (k, 2), z (k,))] (the bridge parts round tile box, as bridges.parts gives them) whose joint the box
@@ -8524,6 +8553,10 @@ def deck_pads(decks, ground_roads, box, ground_fn, own=True):
                 nodes.append(xy[at].copy())
             line, zz = (xy, z) if at == 0 else (xy[::-1], z[::-1])
             inc.setdefault(nd, []).append((line, zz, spec.width / 2))
+    if PAD_ABUT_ON:
+        for incident in inc.values():
+            if len(incident) == 1:
+                incident[0] = _abutment_end(incident[0], ground_fn)
     out = []
     gl = [(np.asarray(pts, np.float64)[:, :2], spec.width / 2) for _fid, spec, pts, _ in ground_roads
           if spec is not None and len(pts) >= 2]
