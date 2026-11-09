@@ -124,6 +124,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+- Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
+  corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
+  gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
+  ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
 - Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls

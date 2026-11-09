@@ -69,6 +69,7 @@ import netfetch
 import overture
 import rangeread
 import revisit
+import roadsmooth
 import staging
 import xproc
 
@@ -336,11 +337,14 @@ class MapData:
     def versions(self):
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
-        return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
-                "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
-                "lanes": lanes.known() if lanes is not None else None,
-                "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        v = {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
+             "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
+             "lanes": lanes.known() if lanes is not None else None,
+             "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
+             "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
+            v["roadsmooth"] = roadsmooth.VERSION
+        return v
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
@@ -736,6 +740,8 @@ class MapData:
                     f = f.localize(frame)
                 self._rails(key, layer, f)
                 self._lanes(key, layer, f)
+                if layer == "roads":
+                    f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                 if layer == "roads":
