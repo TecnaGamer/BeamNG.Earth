@@ -36,13 +36,15 @@ removed; uncovered approach sections remain. Node heights and widths interpolate
 together at these cuts. Elevated generated railway segments are also suppressed
 inside model bridge footprints. Ground tracks below overpasses remain intact.
 This assumes the imported bridge already supplies any elevated railway it covers.
+For models identified as pedestrian bridges, covered, aligned procedural footbridge
+sections are also removed; uncovered ends and crossing paths are retained.
 
 Deck tracing starts with each sample's highest open floor, so low pier caps do not
 interrupt the road surface above them. After road-height alignment, vertices at
 the model's lowest footing tier extend down to 0.5 m below local terrain, by at most
 50 m. This retains triangle counts, textures and UVs, but stretches those faces;
 models with multiple foundation tiers may still need authored foundation edits.
-Feature version 31 invalidates previous baked models and cached bridge footprints.
+Feature version 34 invalidates previous baked models and cached bridge footprints.
 
 For bridges with an explicitly named `Asphalt` surface, motor-road entrances grade the connected ground road to the imported deck's
 actual edge and slope, using one cubic Hermite profile for both terrain and retained
@@ -52,8 +54,13 @@ the fixed reference for model placement, preventing terrain/placement feedback.
 The abutment fill blends over up to 12 m of the retained connector's last section;
 terrain beyond that short embankment is unchanged. Lower crossing roads and tracks
 are protected with smooth shoulder transitions. Profiles
-are shared between anchor views and apply only with 3DMR enabled. Terrain noise
-outside these local approach corridors is unchanged.
+are shared between anchor views and apply only with 3DMR enabled. Where a road
+approach must pass above a lower road, the importer can generate an elevated deck
+using the same profile, leaving the lower terrain unchanged. The candidate skips an
+approach when sampled crossing headroom is insufficient or uncertain; this sampling
+is not a full clearance guarantee. An existing mapped
+end already overlapping the model at the same height does not need a new profile.
+Terrain noise outside these local approach corridors is unchanged.
 
 Generic exposed floors are insufficient evidence for reshaping terrain: existing imports
 without an identified asphalt surface retain native approach grading. Road skins and
@@ -64,8 +71,8 @@ buried by a separately graded terrain block.
 On recognised bridges, a material named `Asphalt` (case-insensitive) uses the same
 `bne_bridge_asphalt` material as generated bridges, with the game's terrain asphalt
 maps. Other materials, including timber and markings, retain their authored appearance.
-Exposed downward-wound asphalt sheets are turned upward; closed slab undersides are
-retained. Neither operation adds triangles. This is an explicit material-name convention,
+Exposed downward-wound asphalt and timber floor sheets are turned upward; closed slab
+undersides are retained. Neither operation adds triangles. This is an explicit material-name convention,
 not colour-based detection of arbitrary uploaded surfaces.
 
 Mount Henry (53) and Narrows (54) have position overrides matching the geographic

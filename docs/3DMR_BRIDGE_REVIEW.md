@@ -1,25 +1,23 @@
-# 3DMR bridge comparison: BeamNG.Earth 1.9
+# 3DMR bridge visual checks
 
-These matched views use BeamNG.drive 0.40.5, fixed daytime lighting and the same published 3DMR models. The left side is BeamNG.Earth `v1.9.0-beta` (`6c14976`); the right is that release with the bridge changes applied (`5e762311`). The current PR also includes a later merge of the development branch, tested separately. The two sides use the same geographic camera positions, targets and field of view.
+The images compare the released BeamNG.Earth v1.9.0-beta with a backport of this candidate to that release. Both runs used the same published 3DMR model revisions, fixed daylight and matching camera positions. The right-hand image is a release-based test of the candidate, rather than the development branch itself.
 
-## Mount Henry Bridge (3DMR 53)
+## Elizabeth Quay Bridge
 
-![Mount Henry: 1.9 and 1.9 with this PR](images/3dmr-bridges/mount-henry-19-comparison.jpg)
+The candidate removes the duplicate generated footbridge along the imported walkway and corrects the timber deck's visible face.
 
-The modeled bridge is visible in place of the elevated generated deck. The modeled road ends and surrounding generated approaches still meet abruptly, and the railway connection is imperfect.
+![Elizabeth Quay comparison](images/3dmr-bridges/elizabeth-quay-19-comparison.jpg)
 
-## Narrows Bridge (3DMR 54)
+## Mount Henry Bridge
 
-![Narrows: 1.9 and 1.9 with this PR](images/3dmr-bridges/narrows-19-comparison.jpg)
+The modelled bridge replaces the generated bridge, but the railway approach still does not join its track.
 
-The imported bridge is visible in place of the generated deck. The bank beside the lower road is also present in 1.9 and remains after this change. The distant building with a missing texture is a separate existing model issue.
+![Mount Henry comparison](images/3dmr-bridges/mount-henry-19-comparison.jpg)
 
-## Elizabeth Quay Bridge (3DMR 55)
+## Narrows Bridge
 
-![Elizabeth Quay: 1.9 and 1.9 with this PR](images/3dmr-bridges/elizabeth-quay-19-comparison.jpg)
+The model replaces the generated bridge, but its end structure still obstructs the lower road and the approach remains rough.
 
-The footbridge is raised above the water, but a generated walkway remains visible below it and its connections to the shore need further review.
+![Narrows comparison](images/3dmr-bridges/narrows-19-comparison.jpg)
 
-## Validation limits
-
-The view comparison uses the public models and does not include local model edits. Photographs do not establish collision quality or vehicle handling. The release and PR snapshots were each also captured at Dragon Bridge (3DMR 22); the comparison is limited to the locations and views tested.
+Dragon Bridge in Da Nang was also checked as a control. These locations do not establish worldwide correctness. Visual checks do not establish continuous vehicle handling, collision coverage, surveyed elevation or clearance across the full width of an underpass. The crossing-clearance check is conservative and can leave an approach unchanged. Railway connections, the Narrows obstruction, further in-game driving and collision checks, and CI remain outstanding. Keep the PR in draft.
