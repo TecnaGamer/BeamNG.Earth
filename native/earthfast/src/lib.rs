@@ -34,6 +34,7 @@ mod islands;
 mod ribbons;
 mod groundpaint;
 mod medians;
+mod deautobahn;
 mod speedsigns;
 mod dirsigns;
 mod dirsigns_face;
@@ -5505,6 +5506,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
@@ -5572,6 +5575,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
-    m.add("VERSION", 170)?;
+    m.add("VERSION", 171)?;
     Ok(())
 }

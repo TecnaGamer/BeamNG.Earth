@@ -581,7 +581,7 @@ pub(crate) struct Mesh {
 }
 
 impl Mesh {
-    fn world(&self, q: [f64; 3]) -> [f64; 3] {
+    pub(crate) fn world(&self, q: [f64; 3]) -> [f64; 3] {
         [self.centre[0] + q[0] * self.face[0] + q[1] * self.right[0],
          self.centre[1] + q[0] * self.face[1] + q[1] * self.right[1],
          self.centre[2] + q[2]]
@@ -600,7 +600,7 @@ impl Mesh {
         self.mi.push(m);
     }
 
-    fn tri(&mut self, q: [[f64; 3]; 3], m: i64) {
+    pub(crate) fn tri(&mut self, q: [[f64; 3]; 3], m: i64) {
         let i = self.p.len() as i64;
         for v in q.iter() {
             let w = self.world(*v);
@@ -633,7 +633,7 @@ impl Mesh {
     }
 
     /// The ring between two outlines of as many points (counter-clockwise as the driver sees them) at depth x.
-    fn ring(&mut self, outer: &[[f64; 2]], inner: &[[f64; 2]], x: f64, m: i64) {
+    pub(crate) fn ring(&mut self, outer: &[[f64; 2]], inner: &[[f64; 2]], x: f64, m: i64) {
         let n = outer.len();
         let uv = [[0.0, 0.0]; 4];
         for i in 0..n {
@@ -644,7 +644,7 @@ impl Mesh {
     }
 
     /// A convex outline filled (facing the driver, or away with back).
-    fn fill(&mut self, poly: &[[f64; 2]], x: f64, m: i64, back: bool) {
+    pub(crate) fn fill(&mut self, poly: &[[f64; 2]], x: f64, m: i64, back: bool) {
         for i in 1..poly.len() - 1 {
             let (a, b, c) = (poly[0], poly[i], poly[i + 1]);
             if back {
