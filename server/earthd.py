@@ -2649,7 +2649,8 @@ class Server:
             _baked_entries, _baked_radii = [], []
             if _custom and self.out_dir and self.vfs_dir:
                 _baked_entries, _baked_radii, _boxes = buildingsmod.custom_models(
-                    anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends)
+                    anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends,
+                    items=items, origin=(x0, y0))
                 custom_entries = _baked_entries
             bld, _ = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None,
                                             items, entries=_baked_entries, radii=_baked_radii)
