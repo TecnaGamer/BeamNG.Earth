@@ -122,6 +122,18 @@ class InsideGermanyTest(unittest.TestCase):
         self.assertEqual(rest, plain[0]["d"])
         self.assertEqual([b.get("de") for b in bodies.values()], [1])
 
+    def test_trunk_exit_gets_no_block(self):
+        """Autobahnen only: an exit off a Bundesstrasse mapped as trunk (Regensburg's GVZ / Hafen exits) keeps the plain
+        record, no German block (Codex review of #999)."""
+        main, links, junctions, places = neutraubling(DE)
+        main = [(w, r, {**t, "highway": "trunk"}) for w, r, t in main]
+        links = [(w, r, {**t, "highway": "trunk_link"}) for w, r, t in links]
+        records, bodies = build((main, links, junctions, places))
+        plain, plain_bodies = build((main, links, junctions, places), german=False)
+        self.assertEqual(len(records), 1)
+        self.assertNotIn("de", records[0]["d"])
+        self.assertEqual(bodies, plain_bodies)
+
     def test_long_walk_is_separate(self):
         records, _ = build(neutraubling(DE))
         plain, _ = build(neutraubling(DE), german=False)

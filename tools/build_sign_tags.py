@@ -388,9 +388,10 @@ def _german(found, key, main, links, junctions, places, boxes, link_boxes, de_ta
 
 
 def _german_block(e, g, junctions):
-    """{"de", "de_approach", "de_ramp"} of one exit's extras, or None (its link or first step is not in the graph)."""
+    """{"de", "de_approach", "de_ramp"} of one exit's extras, or None (its link or first step is not in the graph, or it
+    leaves a trunk: Autobahnen only, a Bundesstrasse's exits keep their plain record)."""
     coords, chain = g.coords, g.links.get(e["ramp_id"])
-    if chain is None:
+    if chain is None or g.tags.get(e["main_id"], {}).get("highway") != "motorway":
         return None
     nid = chain[0]
     behind = tuple(e["approach"][-2])
