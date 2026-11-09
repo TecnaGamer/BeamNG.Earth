@@ -88,11 +88,11 @@ fn count_obj(py: Python<'_>, v: &Bound<'_, PyAny>, minimum: f64) -> PyResult<Opt
     if v.is_none() {
         return Ok(None);
     }
-    if let Ok(f) = v.downcast::<PyFloat>() {
+    if let Ok(f) = v.cast::<PyFloat>() {
         return Ok(count_f(f.value(), minimum));
     }
     match py.get_type::<PyFloat>().call1((v,)) {
-        Ok(f) => Ok(count_f(f.downcast::<PyFloat>()?.value(), minimum)),
+        Ok(f) => Ok(count_f(f.cast::<PyFloat>()?.value(), minimum)),
         Err(e) if e.is_instance_of::<PyTypeError>(py) || e.is_instance_of::<PyValueError>(py) => Ok(None),
         Err(e) => Err(e),
     }
@@ -109,7 +109,7 @@ impl<'py> Col<'py> {
     fn new(c: Option<Bound<'py, PyAny>>) -> Col<'py> {
         match c {
             None => Col::Missing,
-            Some(c) => match c.downcast::<PyArray1<f64>>() {
+            Some(c) => match c.cast::<PyArray1<f64>>() {
                 Ok(a) => Col::F64(a.readonly().as_array().to_vec()),
                 Err(_) => Col::Seq(c),
             },

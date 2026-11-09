@@ -123,7 +123,7 @@ pub fn night_lights<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lat: n
         return Err(pyo3::exceptions::PyValueError::new_err("rgb (h, w, 3), lat (h,), lon (w,)"));
     }
     let flat: Vec<u8> = a.iter().copied().collect();
-    let out = py.allow_threads(|| lights(&flat, &la, &lo, sun_lat, sun_lon));
+    let out = py.detach(|| lights(&flat, &la, &lo, sun_lat, sun_lon));
     let out = numpy::ndarray::Array3::from_shape_vec((h, w, 3), out)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(PyArray3::from_owned_array(py, out))
@@ -138,7 +138,7 @@ pub fn cloud_layer<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>)
         return Err(pyo3::exceptions::PyValueError::new_err("rgb must be (h, w, 3)"));
     }
     let flat: Vec<u8> = a.iter().copied().collect();
-    let (col, op) = py.allow_threads(|| layer(&flat));
+    let (col, op) = py.detach(|| layer(&flat));
     let col = numpy::ndarray::Array3::from_shape_vec((h, w, 3), col)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     let op = numpy::ndarray::Array2::from_shape_vec((h, w), op)

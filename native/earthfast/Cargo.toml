@@ -10,8 +10,8 @@ name = "earthfast"
 crate-type = ["cdylib"]
 
 [dependencies]
-pyo3 = { version = "0.25", features = ["extension-module", "abi3-py310"] }
-numpy = "0.25"
+pyo3 = { version = "0.30", features = ["extension-module", "abi3-py310"] }
+numpy = "0.30"
 # GPU compute (gpu.rs): the per-pixel image work moved off the CPU when a GPU is there (Vulkan / DX12 / Metal)
 wgpu = { version = "25", default-features = false, features = ["wgsl", "vulkan", "dx12", "metal"] }
 pollster = "0.4"
@@ -49,4 +49,4 @@ codegen-units = 16
 incremental = true
 
 [target.'cfg(windows)'.dependencies]
-pyo3 = { version = "0.25", features = ["generate-import-lib"] }   # links python3.dll without a Python install (cross builds)
+pyo3 = { version = "0.30", features = ["generate-import-lib"] }   # links python3.dll without a Python install (cross builds)
