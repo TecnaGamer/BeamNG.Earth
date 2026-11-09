@@ -11426,7 +11426,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import railways
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"rail_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), railways.render_mesh(rail_mesh))
         data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         col = railways.collision_mesh(rail_mesh)
         if col is not None:         # the lean physics-only mesh (the mod then only draws "rail"): its bed and decks

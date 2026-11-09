@@ -658,5 +658,29 @@
     ],
     "groundType": "GRASS",
     "translucent": false
+  },
+  "bne_rail_collider": {
+    "name": "bne_rail_collider",
+    "mapTo": "bne_rail_collider",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "01993bde-36b1-597a-96c6-6740241338a1",
+    "Stages": [
+      {
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.55,
+        "baseColorFactor": [
+          0.27,
+          0.19,
+          0.14,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "groundType": "METAL",
+    "translucent": false
   }
 }

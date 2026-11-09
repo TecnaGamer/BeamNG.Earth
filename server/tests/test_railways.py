@@ -88,7 +88,7 @@ class RailwayTest(unittest.TestCase):
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat, "fi")
         self.assertIsNotNone(mesh)
         P, T, UV, mats, M = mesh
-        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL, railways.SLEEPER])
+        self.assertEqual(mats, [railways.BALLAST, railways.CONCRETE, railways.STEEL, railways.COLLIDER, railways.SLEEPER])
         self.assertLess(len(P), railways.VERTS_MAX)
         self.assertEqual(int(T.max()) + 1, len(P))
         steel = P[np.unique(T[M == 2])]
@@ -97,31 +97,36 @@ class RailwayTest(unittest.TestCase):
         heads = np.unique(np.round(steel[:, 1] + 0.0, 2))      # (the tile's origin at y 0)
         gap = heads.max() - heads.min() - 2 * railways.RAIL_HEAD    # between the rails' inner faces
         self.assertAlmostEqual(gap, railways.FI_GAUGE_M, delta=0.011, msg="Finnish broad gauge")
-        n_sleepers = (M == 3).sum() // 10
+        n_sleepers = (M == mats.index(railways.SLEEPER)).sum() // 10
         self.assertGreater(n_sleepers, 256 / railways.SLEEPER_EVERY * 0.95)
         self.assertGreaterEqual(P[:, 0].min(), -roads.OVERLAP - railways.STEP_M - 3.0)
 
     def test_lean_collider_without_the_sleepers(self):
-        # (PR #41) the collider is the bed alone: most of the track's triangles are its rails and sleepers
+        # (PR #41) the collider is the bed alone; BNE_RAIL_COLLIDE=on adds the rails' own boxes (plan 035)
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         P, T, UV, mats, M = mesh
+        ball, coll = mats.index(railways.BALLAST), mats.index(railways.COLLIDER)
         self.assertFalse(railways.RAIL_COLLIDE, "the rails collide only with BNE_RAIL_COLLIDE=on (2.7x the collider)")
         with unittest.mock.patch.object(railways, "RAIL_COLLIDE", True):
             cP, cT, cUV, cmats, cM = railways.collision_mesh(mesh)
-            sleepers_left = railways.collision_mesh((P, T[M == 3], UV, mats, M[M == 3]))
-        # BNE_RAIL_COLLIDE=on: the bed and the rails (GitHub #821: a car on train wheels rides them), not the sleepers
-        self.assertEqual({mats[k] for k in np.unique(cM)}, {railways.BALLAST, railways.STEEL})
-        solid = np.isin(M, [mats.index(railways.BALLAST), mats.index(railways.STEEL)])
-        np.testing.assert_array_equal(cT, T[solid])
-        self.assertLess(len(cT), 0.4 * len(T), "the sleepers were most of it")
+            sleepers_left = railways.collision_mesh((P, T[M == mats.index(railways.SLEEPER)], UV, mats,
+                                                     M[M == mats.index(railways.SLEEPER)]))
+        # BNE_RAIL_COLLIDE=on: the bed and the rails' boxes (GitHub #821, #845), not the drawn rails and the sleepers
+        self.assertEqual({mats[k] for k in np.unique(cM)}, {railways.BALLAST, railways.COLLIDER})
+        np.testing.assert_array_equal(cT, T[np.isin(M, [ball, coll])])
         self.assertIs(cP, P)
         self.assertIsNone(railways.collision_mesh(None))
         self.assertIsNone(sleepers_left, "nothing left: no collider")
         with unittest.mock.patch.object(railways, "RAIL_COLLIDE", False):     # the default: PR #41's
             lean = railways.collision_mesh(mesh)
-            np.testing.assert_array_equal(lean[1], T[M == mats.index(railways.BALLAST)])
+            np.testing.assert_array_equal(lean[1], T[M == ball])
             self.assertIsNone(railways.collision_mesh((P, T[M == 2], UV, mats, M[M == 2])))
+        # the drawn mesh has no boxes
+        drawn = railways.render_mesh(mesh)
+        self.assertEqual(len(drawn[1]), int((M != coll).sum()))
+        self.assertNotIn(coll, set(np.asarray(drawn[4]).tolist()))
+        self.assertIs(railways.render_mesh(None), None)
         with tempfile.TemporaryDirectory() as tmp:      # written by the road tile beside the drawn track
             path, _n = roads.write_tile(tmp, "/v", 1, 0, 0, [], rail_mesh=mesh)
             import json
@@ -131,6 +136,33 @@ class RailwayTest(unittest.TestCase):
             self.assertTrue(os.path.getsize(os.path.join(tmp, "railcol_1_0_0.cdae"))
                             < 0.5 * os.path.getsize(os.path.join(tmp, "rail_1_0_0.cdae")))
         self.assertEqual(roads.shape_files(1, 0, 0)["railcol"], "railcol_1_0_0.cdae")
+
+    def test_rail_collider_boxes_hold_the_gauge_and_are_thick(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        v = P[np.unique(T[M == mats.index(railways.COLLIDER)])]
+        y = np.sort(v[:, 1])
+        cl = [y[0]]
+        for q in y[1:]:
+            if q - cl[-1] > 0.05:
+                cl.append(q)
+        self.assertEqual(len(cl), 4, "an outer and an inner face a side")
+        self.assertAlmostEqual(cl[2] - cl[1], railways.GAUGE_M, delta=0.01, msg="the inner faces are the gauge apart")
+        self.assertAlmostEqual(cl[1] - cl[0], railways.COLLIDER_W, delta=0.01)
+        self.assertAlmostEqual(cl[3] - cl[2], railways.COLLIDER_W, delta=0.01)
+        self.assertGreaterEqual(float(v[:, 2].max() - v[:, 2].min()), 0.30, "at least 30 cm tall")
+
+    def test_a_tile_past_the_vertex_budget_keeps_its_main_lines(self):
+        long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]
+        short = [[(100.0, 120.0 + 2.0 * k), (130.0, 120.0 + 2.0 * k)] for k in range(8)]
+        f = features(long + short, ["standard_gauge"] * 16, subtypes=["rail"] * 16)
+        with unittest.mock.patch.object(railways, "VERTS_MAX", 25000):
+            got = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        self.assertIsNotNone(got, "not the whole tile's track gone")
+        self.assertLessEqual(len(got[0]), 25000)
+        steel = got[0][np.unique(got[1][np.asarray(got[4]) == got[3].index(railways.STEEL)])]
+        self.assertGreater(float(steel[:, 0].max() - steel[:, 0].min()), 250.0, "the long lines stay")
+        self.assertLess(float(((steel[:, 0] > 100) & (steel[:, 0] < 130)).sum()), 8 * 4 * 60, "the shortest were left out")
 
     def test_roads_and_trams_are_not_tracks(self):
         f = features([[(0.0, 50.0), (200.0, 50.0)], [(0.0, 80.0), (200.0, 80.0)]], ["residential", "tram"],

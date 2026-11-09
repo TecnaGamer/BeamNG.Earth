@@ -67,6 +67,9 @@ BALLAST = "bne_rail_ballast"
 FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbridges.py)
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
 SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_concrete stood out near-white, 2026-10-25)
+COLLIDER = "bne_rail_collider"    # a rail's physics-only box (never drawn): the inner face a flange rides along, tile_mesh
+COLLIDER_W = 0.30           # m the box reaches out from the rail's inner face (BeamNG wants colliders 30 cm thick)
+COLLIDER_DOWN = 0.10        # m the box reaches under the ballast top
 STEEL = "bne_rail_steel"            # rust-brown rails
 # per wear (wear()): a disused line's ballast weedy, an abandoned one's grown over, their rails and sleepers older, and
 # a share of an abandoned line's sleepers gone (SLEEPERS_GONE)
@@ -1520,7 +1523,7 @@ def _foot_limits(xy, side, foot, others, crossers):
 
 
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, load=None,
-              bed_elev=None, under=None):
+              bed_elev=None, _drop=frozenset(), under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
@@ -1551,6 +1554,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         return (None, []) if return_decks else None
     prof = (_beds(frame, rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails), load, bed_elev)
             if rails else [])
+    keep = [n for n in range(len(rails)) if n not in _drop]
+    if _drop:                                       # (a retry past the vertex budget: the tracks of lowest rank left out)
+        rails, prof = [rails[n] for n in keep], [prof[n] for n in keep]
     carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
                for _f, _c, kind, xy in rails]
     decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
@@ -1638,7 +1644,15 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 mesh.strip(np.c_[a, st + RAIL_H], np.c_[b, st + RAIL_H], 0.0, 0.02, v, steel_w, up)
                 mesh.strip(np.c_[a, st], np.c_[a, st + RAIL_H], 0.0, 0.05, v, steel_w, out_l)
                 mesh.strip(np.c_[b, st], np.c_[b, st + RAIL_H], 0.0, 0.05, v, steel_w, -out_l)
-            if cls != "tram":
+            if cls != "tram":       # (the rails' physics: one box a side, its inner face exactly the gauge, 38 cm tall, 30 cm thick)
+                coll = mesh.mat(COLLIDER)
+                zt, zl = st + RAIL_H, t - COLLIDER_DOWN
+                gin = half_g - RAIL_HEAD / 2
+                for sg in (1, -1):
+                    ci, co = p + uu * sg * gin, p + uu * sg * (gin + COLLIDER_W)
+                    mesh.strip(np.c_[ci, zt], np.c_[co, zt], 0.0, 0.02, v, coll, up)
+                    mesh.strip(np.c_[ci, zl], np.c_[ci, zt], 0.0, 0.05, v, coll, -sg * out_l)
+                    mesh.strip(np.c_[co, zl], np.c_[co, zt], 0.0, 0.05, v, coll, sg * out_l)
                 sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
                 if sp is not None:
                     small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
@@ -1652,6 +1666,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
         mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], mi)
     out = mesh.result()
     if out is not None and len(out[0]) > VERTS_MAX:     # (the ballast and rails alone past it: a rail yard)
+        # not the whole tile's track gone: the tracks of lowest rank (worn ones, then the shortest in the tile) are left
+        # out, a quarter more at each retry, a yard's sidings before its main lines
+        rank = sorted(range(len(rails)), key=lambda n: (worn.get(rails[n][0], 0), -float(_arc(rails[n][3])[-1])))
+        if len(rank) > 1:                           # (unworn and longest first: the last of the rank go)
+            for n in rank[-min(len(rank) - 1, max(1, len(rank) // 4)):]:
+                _drop = _drop | {keep[n]}
+            return tile_mesh(frame, tx, ty, cells, ground, sign_style, far_ground, return_decks=return_decks,
+                             load=load, bed_elev=bed_elev, _drop=_drop, under=under)
         return (None, decks) if return_decks else None
     return (out, decks) if return_decks else out
 
@@ -1671,15 +1693,29 @@ RENDER_ONLY_LEAN = frozenset(STEEL_WORN + SLEEPER_WORN)
 
 
 def collision_mesh(mesh):
-    """tile_mesh's mesh without the sleepers (RENDER_ONLY; the rails too with BNE_RAIL_COLLIDE=off: RENDER_ONLY_LEAN):
-    the ballast, the rails, the decks and the piers, as (positions, tris, uvs, materials, tri material) for a
-    collision-only shape (the vertices are the full mesh's: cdae drops the unused ones), or None if nothing is left."""
+    """tile_mesh's mesh for a collision-only shape (the vertices are the full mesh's: cdae drops the unused ones), or None:
+    the ballast, the decks and the piers, the sleepers never (RENDER_ONLY), the rails' drawn geometry never either; with
+    BNE_RAIL_COLLIDE=on the rails' own boxes (COLLIDER: the inner face at exactly the gauge, thick outside)."""
     if mesh is None:
         return None
     P, T, UV, mats, M = mesh
     M = np.asarray(M)
-    drawn = RENDER_ONLY if RAIL_COLLIDE else RENDER_ONLY_LEAN
-    keep = ~np.isin(M, [k for k, m in enumerate(mats) if m in drawn])
+    gone = set(RENDER_ONLY_LEAN)
+    if not RAIL_COLLIDE:
+        gone.add(COLLIDER)
+    keep = ~np.isin(M, [k for k, m in enumerate(mats) if m in gone])
     if not keep.any():
         return None
     return P, np.asarray(T)[keep], UV, mats, M[keep]
+
+
+def render_mesh(mesh):
+    """tile_mesh's mesh without the physics-only boxes (COLLIDER), for the drawn shape."""
+    if mesh is None or COLLIDER not in mesh[3]:
+        return mesh
+    P, T, UV, mats, M = mesh[:5]
+    M = np.asarray(M)
+    keep = M != mats.index(COLLIDER)
+    if not keep.any():
+        return None
+    return (P, np.asarray(T)[keep], UV, mats, M[keep]) + tuple(mesh[5:])
