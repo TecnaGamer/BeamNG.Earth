@@ -311,10 +311,11 @@ class ChainStoreTest(unittest.TestCase):
         st = cs.store_at(LAT, LON)
         other = cs.store((st.region[0] + 1, st.region[1]))         # (a neighbouring region's store)
         ring = f.lonlat
-        todo = [(("cross", 0), f, 0)]
+        k = roads.part_keys(f, 0, "bridge")[0]          # (its part's key)
+        todo = [(("cross", k), f, 0)]
         mine = other.parts_todo(todo)
         self.assertEqual(len(mine), 1)
-        self.assertIn(("cross", 0), st.done, "solved by the chain's own store")
+        self.assertIn(("cross", k), st.done, "solved by the chain's own store")
         z_own = a.parts([f], (-100, -100, 100, 100))[0][3]
         z_other = geotiles.world_map(other.frame, FRAME, np.c_[mine[0][2], mine[0][3]])[:, 2]
         np.testing.assert_allclose(z_other, z_own, atol=1e-6)
