@@ -465,6 +465,7 @@ UNDER_RUN_ON = os.environ.get("BNE_UNDERPASS_RUN", "on") != "off"
 # Orte (#967). Parts joined at a node where only they meet (no branch), the same road or rail kind, are one line here.
 UNDER_CHAIN_ON = os.environ.get("BNE_UNDERPASS_CHAIN", "on") != "off"
 UNDER_CHAIN_JOIN_M = 0.75
+UNDER_COVER_M = 0.75       # m: a bridge piece within this of a longer one's line all along is a copy of part of it
 UNDER_CHAIN_MAX_M = UNDER_MAX_BRIDGE_M   # m: such a chain spans this at most (Orte's two parts, 194 m: their dip, 8 m
                             # deep, ran into the trunk's next structure as a 3 m step in 12 m; left as it was)
 UNDER_STUB_M = 2 * APPROACH_MIN_CROSS_M     # m: a part this short (the carriageways' fork a deck ends on, 3 m stubs on the
@@ -2718,7 +2719,16 @@ class _Planner:
                     ground[(fid, j)] = (line, sg, med, cls)
         if not bridges or not ground:
             return
-        # (single spans: neither end continues into another bridge part; deduplicated across cells)
+        # (single spans: neither end continues into another bridge part; deduplicated across cells, a piece lying
+        # along a longer one of its kind dropped: a deck clipped at one cell's box beside the whole deck from the
+        # next, joined at their shared end into a chain doubling back over its own carriageway, #1020)
+        if len(bridges) > 1:
+            import fast
+            fast.require(175, "lines_covered")
+            bl = [np.ascontiguousarray(np.asarray(b, f64)[:, :2]) for b, _f, _r in bridges]
+            cov = fast._ef.lines_covered(np.concatenate(bl), np.r_[0, np.cumsum([len(b) for b in bl])].astype(
+                np.int64), np.array([2 * int(f) + int(r) for _b, f, r in bridges], np.int64), UNDER_COVER_M)
+            bridges = [t for t, c in zip(bridges, cov) if not c]
         uniq, seen = [], set()
         for b, fixed, rail in bridges:
             k2 = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1), len(b))
@@ -3753,10 +3763,11 @@ class _Planner:
                 blv = roadsmod.bridge_levels(f, i) if bs[i] is not None else []
                 for kind, sp, ps in (("bridge", bs[i], roadsmod.bridge_parts(f, i) if bs[i] is not None else ()),
                                      ("ground", rs[i], roadsmod.ground_parts(f, i) if rs[i] is not None else ())):
-                    for j, ring in enumerate(ps):
+                    # (keyed as in every cell's copy: roads.part_keys; a long road's copies number them differently)
+                    for n, (j, ring) in enumerate(roadsmod.keyed(roadsmod.part_keys(f, i, kind) if ps else None, ps)):
                         ring = placement.ring(self.frame, f, i, np.asarray(ring, np.float64), sp, fid)
                         kk = (fid, kind, j)
-                        lv = float(blv[j]) if kind == "bridge" and j < len(blv) else 0.0
+                        lv = float(blv[n]) if kind == "bridge" and n < len(blv) else 0.0
                         if len(ring) >= 2 and (kk not in parts or len(ring) > len(parts[kk][0])):
                             parts[kk] = (ring, sp, lv)
         # the rail bridges (railways.DRAWN lines' bridge pieces): the roads under them dip as under a road overpass
@@ -4245,7 +4256,7 @@ class _Planner:
             return 0.0
 
     def _longest(self, fid, j, ring, key):
-        """Part j of tunnel fid as the cells at its ends have it, the longest (a part comes clipped differently in
+        """Part j (its roads.part_keys key) of tunnel fid as the cells at its ends have it, the longest (a part comes clipped differently in
         the cells around: graded as the 30 m piece, 97th Street's 45 m arch got an open road graded in it; the
         same rule as roads.BridgeProfiles._load, 2026-10-17)."""
         best = ring
@@ -4263,9 +4274,9 @@ class _Planner:
             if fid not in ids:
                 continue
             i = ids.index(fid)
-            parts = roadsmod.tunnel_parts(f, i)
-            if j < len(parts) and len(parts[j]) > len(best):
-                best = parts[j]
+            got = dict(roadsmod._keyed(roadsmod.TunnelProfiles.keys_of, roadsmod.tunnel_parts, f, i)).get(j)
+            if got is not None and len(got) > len(best):
+                best = got
         return best
 
     def _chains_for(self):
@@ -4349,7 +4360,7 @@ class _Planner:
         for i in range(len(feats)):
             if ts[i] is None:
                 continue
-            for j, ring in enumerate(roadsmod.tunnel_parts(feats, i)):
+            for j, ring in roadsmod._keyed(roadsmod.TunnelProfiles.keys_of, roadsmod.tunnel_parts, feats, i):
                 ring = self._longest(str(feats.ids[i]), j, ring, key)
                 ll = np.asarray(ring, np.float64)
                 if len(ll) < 2:

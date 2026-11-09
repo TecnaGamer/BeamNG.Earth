@@ -484,7 +484,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 12     # 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 13     # 13: a grade separation's bridge spans a skew crossing (the bridged road's half width over the tangent added: a track at 45 deg under the A4 at Glaireuse cut a trench through its carriageway past a square deck, GitHub #1020), its fractions and every bridge/tunnel reach's in sub_polyline's metric (gradesep._metric, _ring_kx: on a 15 km road the deck stood 8.7 m off its crossing); 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -756,6 +756,13 @@ def _structure_width(feats, i):
     return carriageway(cls, kind, False, rule_w, ow, lanes, link=roadlanes.is_link(feats, i))
 
 
+def _ring_kx(ring):
+    """m per degree of longitude along lon/lat polyline ring as sub_polyline measures it (at its mean latitude): its
+    level ranges' fractions. At its first point instead, a 15 km motorway's crossing came 8.7 m along from where its
+    deck was cut (the A4 at Glaireuse, #1020)."""
+    return 111320.0 * math.cos(math.radians(float(np.mean(np.asarray(ring, np.float64)[:, 1]))))
+
+
 def _bridge_reach(feats, i):
     """Bridge feature i's ranges lengthened over the ground roads crossing under them (SKEW_*), and how far past each
     end of the feature they would reach: {"ranges": [...], "over": [m past its start, m past its end]} (_skew_decks
@@ -773,7 +780,7 @@ def _bridge_reach(feats, i):
     if up_w is None or not rings or not any(k == "bridge" for _, _, k in rngs):
         return got
     ring = rings[0]
-    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    kx, ky = _ring_kx(ring), 111320.0
     m = (ring - ring[0]) * [kx, ky]
     sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
     L = float(sm[-1])
@@ -849,7 +856,7 @@ def _tunnel_reach(feats, i, rngs):
     if specs[i] is None or not rings:
         return rngs
     ring = rings[0]
-    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    kx, ky = _ring_kx(ring), 111320.0
     m = (ring - ring[0]) * [kx, ky]
     sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
     L = float(sm[-1])
@@ -975,7 +982,7 @@ def _skew_decks(feats, i, rngs):
     if not rings:
         return rngs
     ring = rings[0]
-    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    kx, ky = _ring_kx(ring), 111320.0
     tol = 0.75
     add = []
     L = None
@@ -1054,7 +1061,7 @@ def _portal_decks(feats, i, rngs):
     if not rings or len(rngs) < 2:
         return rngs
     ring = rings[0][:, :2]
-    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    kx, ky = _ring_kx(ring), 111320.0
     L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
     if L <= 0:
         return rngs
@@ -1101,7 +1108,7 @@ def _deck_gaps(feats, i, rngs):
     if not rings:
         return rngs
     ring = rings[0][:, :2]
-    kx, ky = 111320.0 * math.cos(math.radians(float(ring[0, 1]))), 111320.0
+    kx, ky = _ring_kx(ring), 111320.0
     m = (ring - ring[0]) * [kx, ky]
     L = float(np.hypot(*np.diff(m, axis=0).T).sum())
     if L <= 0:
@@ -1569,6 +1576,56 @@ def _parts_by_level_new(feats, i, want, rngs=None):
                 if len(r) >= 2:
                     out.append(r)
     return out
+
+
+def _part_keys_new(feats, i, want):
+    """A key per _parts_by_level_new(feats, i, want) piece, in its order, the same in every map cell's copy of the
+    feature: its ring's number and its range's start (in millionths). A long road's copies have different range lists
+    (gradesep spans found by the cells around each), so a piece's number among them is not: the deck stores took one
+    copy's part 5 for another's (the A4's deck over a track at Glaireuse never built, one 4.4 km away twice, #1020)."""
+    rngs = level_ranges(feats, i)
+    if want == "ground":
+        pieces = ground_ranges(rngs)
+    elif want == "bridge":
+        pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
+    else:
+        pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
+    out, n = [], 0
+    for part in feats.parts(i):
+        for ring in part:
+            if len(ring) < 2:
+                continue
+            for a, b in pieces:
+                r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+                if len(r) >= 2:
+                    out.append(n * PART_KEY_RING + int(round(a * 1e6)))
+            n += 1
+    return out
+
+
+PART_KEY_RING = 10_000_000      # (a part key's ring number, above its start's millionths)
+
+
+def keyed(keys, parts):
+    """[(key, ring)] of a feature's parts and their part_keys, or their numbers if those do not line up."""
+    parts = list(parts)
+    if keys is None or len(keys) != len(parts) or len(set(keys)) != len(keys):
+        keys = list(range(len(parts)))
+    return list(zip(keys, parts))
+
+
+def _keyed(keys_of, parts_of, feats, i):
+    """keyed() of feature i's parts as a store has them (keys_of None: their numbers)."""
+    return keyed(keys_of(feats, i) if keys_of is not None else None, parts_of(feats, i))
+
+
+def part_keys(feats, i, want):
+    """_part_keys_new remembered on feats (bridge_parts' and tunnel_parts' keys: want "bridge" or "tunnel")."""
+    memo = feats.__dict__.setdefault("_part_keys", {})
+    got = memo.get((i, want))
+    if got is None:
+        got = memo[(i, want)] = _part_keys_new(feats, i, want)
+    return list(got)
 
 
 def _bridge_level_spans(feats, i, rngs=None):
@@ -6526,6 +6583,7 @@ class BridgeProfiles:
 
     specs_of = staticmethod(lambda feats: bridge_specs(feats))
     parts_of = staticmethod(lambda feats, i: bridge_parts(feats, i))
+    keys_of = staticmethod(lambda feats, i: part_keys(feats, i, "bridge"))
     levels_of = staticmethod(lambda feats, i: bridge_levels(feats, i))
 
     def _load(self, key, pool, ground):
@@ -6561,11 +6619,11 @@ class BridgeProfiles:
                 if bs[i] is not None:
                     lvls = self.levels_of(feats, i)
                     best = {}
-                    for j, ring in enumerate(self.parts_of(feats, i)):
-                        if (fid, j) in best and len(ring) <= best[(fid, j)][4]:
+                    for j, (pk, ring) in enumerate(_keyed(self.keys_of, self.parts_of, feats, i)):
+                        if (fid, pk) in best and len(ring) <= best[(fid, pk)][4]:
                             continue
                         e, n = mapgeom.enu_xy(feats, self.frame, ring)
-                        best[(fid, j)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
+                        best[(fid, pk)] = (bs[i], densify(_dedupe(np.stack([e, n], axis=1)), DECK_STEP),
                                           float(np.mean(ring[:, 0])), lvls[j] if j < len(lvls) else 1.0, len(ring),
                                           str(names[i]) if names is not None else "")     # (roadz: name matching)
                     parts.extend(best.items())
@@ -6916,7 +6974,7 @@ class BridgeProfiles:
                 if bs[i] is None:
                     continue
                 fid = str(feats.ids[i])
-                for j, ring in enumerate(self.parts_of(feats, i)):
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
                     if (fid, j) in queued:          # a feature in several of the cells: once (2026-10-17: every
                         continue                    # part came once per cell it is in, decks made 2-3 times over)
                     e, n = mapgeom.enu_xy(feats, self.frame, ring)
@@ -6937,7 +6995,7 @@ class BridgeProfiles:
             with self.lock:
                 got = self.done.get(key)
             if got is None and not solved_only:
-                ring = self.parts_of(feats, i)[key[1]]
+                ring = dict(_keyed(self.keys_of, self.parts_of, feats, i))[key[1]]
                 got = self._chain_of(key, [(float(p[1]), float(p[0])) for p in (ring[0], ring[-1])])
             if got is not None:
                 spec, xy, z, lon = got
@@ -7162,6 +7220,7 @@ class TunnelProfiles(BridgeProfiles):
     threads."""
     specs_of = staticmethod(lambda feats: tunnel_specs(feats))
     parts_of = staticmethod(lambda feats, i: tunnel_parts(feats, i))
+    keys_of = staticmethod(lambda feats, i: part_keys(feats, i, "tunnel"))
     levels_of = staticmethod(lambda feats, i: [-1.0] * len(tunnel_parts(feats, i)))
     END_JOINS = False
 
@@ -7717,6 +7776,7 @@ class ChainView:
         self._mapped = {}           # (store region, pid, id(xy)) -> (xy ref, mapped part)
         self._piers = {}            # store region -> (version, mapped piers, mapped beams)
         self.specs_of, self.parts_of = cs.cls.specs_of, cs.cls.parts_of
+        self.keys_of = getattr(cs.cls, "keys_of", None)
 
     mapper = staticmethod(lambda src, dst: _Mapper(src, dst))
 
@@ -7738,7 +7798,7 @@ class ChainView:
                 if bs[i] is None:
                     continue
                 fid = str(feats.ids[i])
-                for j, ring in enumerate(self.parts_of(feats, i)):
+                for j, ring in _keyed(self.keys_of, self.parts_of, feats, i):
                     if (fid, j) in queued:
                         continue
                     e, n = mapgeom.enu_xy(feats, self.frame, ring)

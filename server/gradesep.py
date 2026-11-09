@@ -256,6 +256,48 @@ def _layer_rows(f):
     return got
 
 
+def _metric(f, frame, i):
+    """Feature i's one ring's arcs (sub_polyline's metric: the level ranges' fractions, lon scaled by the cosine of its
+    mean latitude; and the frame's), or None for no single ring of 2 points or more. The gradesep kernels measure along
+    the frame's east/north; the ranges they read and give are sub_polyline's: on a 15 km motorway the two put one point
+    8.7 m apart, its deck off the road under it (the A4 at Glaireuse, #1020)."""
+    po, ro, co = f.part_off, f.ring_off, f.coord_off
+    rings = [(int(co[r]), int(co[r + 1])) for p in range(int(po[i]), int(po[i + 1]))
+             for r in range(int(ro[p]), int(ro[p + 1])) if int(co[r + 1]) - int(co[r]) >= 2]
+    if len(rings) != 1:
+        return None
+    a, b = rings[0]
+    ll = np.asarray(f.lonlat[a:b, :2], np.float64)
+    xy = f.xy_in(frame)[a:b]
+    c = math.cos(math.radians(float(np.mean(ll[:, 1]))))
+    ss = np.r_[0.0, np.cumsum(np.hypot(np.diff(ll[:, 0]) * c, np.diff(ll[:, 1])))]
+    se = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    if ss[-1] <= 0 or se[-1] <= 0:
+        return None
+    return ss / ss[-1], se / se[-1]
+
+
+def _to_frame(f, frame, r):
+    """Layer rows r (_layer_rows) with their pieces' fractions in the frame's metric (_metric), kept per frame."""
+    memo = f.__dict__.setdefault("_gs_frame_pab", {})
+    key = (frame.lat0, frame.lon0)
+    got = memo.get(key)
+    if got is None:
+        pa, pb = r[4].copy(), r[5].copy()
+        inner = np.flatnonzero(((pa > 0.0) & (pa < 1.0)) | ((pb > 0.0) & (pb < 1.0)))
+        if len(inner):
+            poff = r[2]
+            for i in np.unique(np.searchsorted(poff, inner, side="right") - 1).tolist():
+                m = _metric(f, frame, i)
+                if m is not None:
+                    q = slice(int(poff[i]), int(poff[i + 1]))
+                    pa[q], pb[q] = np.interp(pa[q], m[0], m[1]), np.interp(pb[q], m[0], m[1])
+        if len(memo) >= 4:
+            memo.clear()
+        got = memo[key] = (pa, pb)
+    return got
+
+
 def _layer_ids(f):
     """(the layer's ids as a numpy str array, True when they ascend strictly), kept on the decoded layer."""
     got = f.__dict__.get("_gs_ids")
@@ -330,9 +372,10 @@ def _spans(md, key, feats):
     # the lines: the rows' ground pieces in the frame (earthfast.gradesep_gather_rows, the layers as they are)
     fast.require(169, "gradesep_gather_rows")
     lr = [_layer_rows(f) for f in lays]
+    fpab = [_to_frame(f, frame, r) for f, r in zip(lays, lr)]
     pts, starts, groups, kinds, oa, ob, halves, de = fast._ef.gradesep_gather_rows(
         [(f.xy_in(frame), np.ascontiguousarray(f.coord_off, np.int64), np.ascontiguousarray(f.ring_off, np.int64),
-          np.ascontiguousarray(f.part_off, np.int64), r[2], r[3], r[4], r[5], r[1]) for f, r in zip(lays, lr)],
+          np.ascontiguousarray(f.part_off, np.int64), r[2], r[3], ab[0], ab[1], r[1]) for f, r, ab in zip(lays, lr, fpab)],
         row_layer, row)
     oi = _owners(feats, row_layer, row, fids)[groups]                   # (each line's row in the cell's own layer, -1: none)
     if (kinds == 3).any():
@@ -357,8 +400,15 @@ def _spans(md, key, feats):
         cand, smp = cand[one], smp.reshape(-1, 8, 2)[one].reshape(-1, 2)
     oi_l, oa_l, ob_l = oi.tolist(), oa.tolist(), ob.tolist()
     out, why = {}, []                   # (why: (row, from, to, how) for probes, feats._gradesep_why)
+    metric = {}
+
+    def back(i, x):                     # (a fraction in the frame's metric as the level ranges measure it: _metric)
+        if i not in metric:
+            metric[i] = _metric(feats, frame, i)
+        m = metric[i]
+        return x if m is None or x <= 0.0 or x >= 1.0 else float(np.interp(x, m[1], m[0]))
     for ln in np.flatnonzero((kinds == 3) & (oi >= 0)).tolist():   # the underpasses: ground under the road bridging them
-        i, a, b = oi_l[ln], oa_l[ln], ob_l[ln]
+        i, a, b = oi_l[ln], back(oi_l[ln], oa_l[ln]), back(oi_l[ln], ob_l[ln])
         out.setdefault(i, []).append((round(a, 6), round(b, 6), "ground"))
         why.append((i, round(a, 6), round(b, 6), 3))
     if not len(cand):
@@ -381,8 +431,8 @@ def _spans(md, key, feats):
         L = float(np.hypot(*np.diff(pts[starts[ln]:starts[ln + 1]], axis=0).T).sum())
         if i < 0 or L <= 0 or s1 - s0 <= 0:
             continue
-        fa = round(a + (b - a) * float(s0) / L, 6)
-        fbb = round(a + (b - a) * float(s1) / L, 6)
+        fa = round(back(i, a + (b - a) * float(s0) / L), 6)
+        fbb = round(back(i, a + (b - a) * float(s1) / L), 6)
         out.setdefault(i, []).append((fa, fbb, "bridge"))
         why.append((i, fa, fbb, int(how)))
     return _merged(feats, out, why)

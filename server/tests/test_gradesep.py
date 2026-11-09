@@ -143,6 +143,38 @@ class UnderpassTest(unittest.TestCase):
         self.assertEqual([k for _, _, k in roads.level_ranges(f, 0)], ["bridge"])
         self.assertEqual(roads.level_ranges(f, 1), [])          # (its tunnel: ground under the bridge)
 
+    def test_a_skew_crossing_s_bridge_spans_the_road_under_it_across_its_whole_width(self):
+        # a track at 45 deg under a motorway (the A4 at Glaireuse, #1020): the track's band slides along the motorway by
+        # the motorway's half width across its carriageway; a deck square to the track left its edges in the cut
+        # (the track mapped as a tunnel all along, 71 m: no ground part of it for roads._bridge_reach to lengthen over)
+        f = hooked(features([[(-200.0, 0.0), (200.0, 0.0)], [(-25.0, -25.0), (25.0, 25.0)]],
+                            ["motorway", "track"], flags=[(1, "is_tunnel")]),
+                   lambda e, n: np.zeros_like(e))
+        skew, roads.SKEW_ON = roads.SKEW_ON, False     # (the span's own length: no roads._bridge_reach on top)
+        try:
+            got = roads.level_ranges(f, 0)
+        finally:
+            roads.SKEW_ON = skew
+        self.assertEqual([k for _, _, k in got], ["bridge"])
+        up, lo = roads.STYLE["motorway"][0] / 2.0, roads.STYLE["track"][0] / 2.0     # (gradesep's halves)
+        want = 2 * ((lo + gradesep.CLEAR_M) * 2 ** 0.5 + up)      # (over sin 45, and the half width over tan 45)
+        self.assertAlmostEqual((got[0][1] - got[0][0]) * 400.0, want, delta=0.5)
+
+    def test_a_long_road_s_bridge_stands_over_the_crossing(self):
+        # a motorway's 15 km feature (Overture's): its level ranges are fractions in sub_polyline's metric, the kernels
+        # measure in the cell's frame; read as one in the other the A4's deck at Glaireuse stood 8.7 m off the track
+        # under it (#1020)
+        f = hooked(features([[(-9000.0, -9000.0), (0.0, -3000.0), (0.0, 6000.0)], [(-25.0, -25.0), (25.0, 25.0)]],
+                            ["motorway", "track"], flags=[(1, "is_tunnel")]),
+                   lambda e, n: np.zeros_like(e))
+        got = roads.level_ranges(f, 0)
+        self.assertEqual([k for _, _, k in got], ["bridge"])
+        ring = np.asarray(f.parts(0)[0][0], np.float64)
+        ends = roads.sub_polyline(ring, got[0][0], got[0][1])[[0, -1]]
+        _, n, _ = FRAME.geodetic_to_enu(ends[:, 1], ends[:, 0], 0.0)
+        _, n0, _ = FRAME.geodetic_to_enu(np.array([LAT]), np.array([LON]), 0.0)
+        self.assertLess(abs(float(np.mean(n)) - float(n0[0])), 0.5)
+
     def test_a_long_tunnel_in_short_pieces_stays_a_tunnel(self):
         # two 50 m tunnel pieces joined end to end (Overture splits a tunnel at its nodes): 100 m, with 6 m of ground
         # over it where the road crosses (more than roads.TUNNEL_OPEN_COVER): no underpass

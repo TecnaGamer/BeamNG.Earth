@@ -5390,6 +5390,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
     m.add_function(wrap_pyfunction!(shore::shore_steps, m)?)?;
     m.add_function(wrap_pyfunction!(shore::carve_segments, m)?)?;
     m.add_function(wrap_pyfunction!(vegmask::mask_polys, m)?)?;
@@ -5603,6 +5604,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
-    m.add("VERSION", 174)?;
+    m.add("VERSION", 175)?;
     Ok(())
 }
