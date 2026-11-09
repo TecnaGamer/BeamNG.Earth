@@ -246,6 +246,37 @@ class PerfTest(unittest.TestCase):
         (fp, n), = counts.items()
         self.assertEqual((n, codes[fp]), (2, {"OSError:24": 1, "OSError:28": 1}))
 
+    def test_codes_carry_where_it_was_raised(self):
+        """The server module and line an exception was raised at ride with its code (never a path or a value): the far
+        tiles' errors are all logged at one line whichever cache file was damaged (2026-11-09). A worker process's
+        exception carries its traceback as text (_RemoteTraceback)."""
+        import concurrent.futures.process as cfp
+        import json as _json
+        import perfstats
+        h = perfstats.ErrorPrints()
+        log = logging.getLogger("perfwhere")
+        log.addHandler(h)
+        try:
+            try:
+                _json.loads("{")            # (raised in the standard library only: no server frame)
+            except ValueError:
+                log.exception("plain")
+            remote = ValueError("bad")
+            remote.__cause__ = cfp._RemoteTraceback(
+                'Traceback (most recent call last):\n  File "/x/BeamNG.Earth/server/blockworker.py", line 900, in far_tile\n'
+                '  File "C:\\Users\\someone\\app\\server\\colormatch.py", line 1001, in _load\nzipfile.BadZipFile: ...')
+            try:
+                raise remote
+            except ValueError:
+                log.exception("far tile failed")
+        finally:
+            log.removeHandler(h)
+        _counts, codes = h.take()
+        got = {c for cs in codes.values() for c in cs}
+        self.assertIn("JSONDecodeError", got, "no server frame: the plain code")
+        self.assertIn("ValueError-colormatch-1001", got, "the innermost server frame of the worker's traceback")
+        self.assertFalse(any("someone" in c or "Users" in c for c in got), "never a path")
+
     @mock.patch.object(telemetry, "PERF_UPLOAD", "dev")
     def test_only_under_the_switch(self):
         sent = []
