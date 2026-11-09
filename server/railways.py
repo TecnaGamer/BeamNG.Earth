@@ -42,6 +42,8 @@ REACH_M = 200.0             # m around a tile the lines are taken: the smoothing
 BALLAST_H = 0.3             # m of ballast over the bed line
 BALLAST_TOP_M = 1.8         # m: half the ballast's top width
 BALLAST_SLOPE = 1.5         # m out per m down on its sides
+RAIL_FOOT_CLEAR_M = 1.0      # m between a fill's foot and another track's deck/ballast edge
+ROAD_FOOT_CLEAR_M = 0.5      # m between a fill's foot and a road's carriageway edge
 BALLAST_FOOT_M = 0.4        # m its sides reach under the ground at their foot
 FOOT_MAX_M = 6.0            # m out at most (the grading fills a tall ramp's embankment; 15 fanned out, 2026-10-25)
 SLEEPER_EVERY = 0.6         # m between sleepers
@@ -1431,6 +1433,38 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
+def _foot_limits(xy, side, foot, others, crossers):
+    """Per vertex: the ballast foot's width, clipped at a road's carriageway edge or another track's deck so a fill's
+    side is a wall there, not a slope over the road/track (the wide double-track embankment's foot ran over the road
+    under it and the line beside it: a hollow overhang the player could drive into)."""
+    p = np.asarray(xy, np.float64)[:, :2]
+    sd = np.asarray(side, np.float64)
+    lim = np.asarray(foot, np.float64).copy()
+
+    def clip(line, extra):
+        line = np.asarray(line, np.float64)[:, :2]
+        if len(line) < 2:
+            return
+        a, b = line[:-1], line[1:]
+        ab = b - a
+        ab2 = np.maximum((ab * ab).sum(1), 1e-9)
+        t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / ab2[None], 0.0, 1.0)
+        q = a[None] + t[:, :, None] * ab[None]
+        d = np.hypot(q[:, :, 0] - p[:, None, 0], q[:, :, 1] - p[:, None, 1])
+        k = np.argmin(d, axis=1)
+        near = d[np.arange(len(p)), k]
+        on = ((q[np.arange(len(p)), k] - p) * sd).sum(1) > 0.0
+        edge = near - extra
+        ok = on & (edge > 0.0) & (edge < lim)
+        lim[ok] = edge[ok]
+
+    for line, half, _z in crossers:
+        clip(line, float(half) + ROAD_FOOT_CLEAR_M)
+    for _fid, line in others:
+        clip(line, DECK_HALF_M + RAIL_FOOT_CLEAR_M)
+    return np.maximum(lim, BALLAST_TOP_M + 0.01)
+
+
 def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
@@ -1499,6 +1533,15 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                     zs = zs.copy()
                     zs[far] = np.asarray(ground(xy[far] + sg * u[far] * foot[far, None]), np.float64)
                 feet.append((foot, zs))
+            # a fill's foot stops at a road's edge or another track's deck: a wall there, not a slope over them
+            others = [(f2, xy2) for f2, _c2, _k2, xy2 in rails if f2 != fid]
+            for k, sg in enumerate((1, -1)):
+                foot, zs = feet[k]
+                lim = _foot_limits(xy, sg * u, foot, others, crossers)
+                if np.any(lim < foot):
+                    foot = lim
+                    zs = np.asarray(ground(xy + sg * u * foot[:, None]), np.float64)
+                    feet[k] = (foot, zs)
         else:
             cut = ~inside
         for i, j in _runs(cut):
