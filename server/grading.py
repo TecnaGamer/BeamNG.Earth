@@ -36,6 +36,7 @@ from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
+import bumps
 import mapcells
 import railways as railwaysmod
 import roads as roadsmod
@@ -816,9 +817,12 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if ab[1]:
             bank_after = bank_after[:0]
         bank_xy = np.concatenate([bank_before, xy, bank_after])
-        out.append(_plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
-                         bank_ext=(len(bank_before), len(bank_after)),
-                         banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse))
+        p = _plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
+                  bank_ext=(len(bank_before), len(bank_after)),
+                  banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse)
+        # (road roughness, PR #639 by subformatdnb: off unless BNE_BUMPS > 0; cached plans keep whatever they were
+        # planned with, so a change takes effect on places planned after it)
+        out.append(bumps.apply(frame, p, spec, ab) if bumps.SCALE > 0 else p)
     if SHARP_ON and cuts:           # (cuts False: the profile alone, Grader._stronger_z)
         _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT else None
                           for p, (_ll, sp) in zip(out, parts)], elev)
@@ -5254,6 +5258,17 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     # Street's bridge over I-95 in Springfield VA, split 2 m from where the motorway passes under, GitHub #138)
     rail = np.arange(len(cr)) >= nr
     under = ((arcs >= APPROACH_MIN_CROSS_M) | joined[0]) & ((arcs <= s[-1] - APPROACH_MIN_CROSS_M) | joined[1]) | rail
+    # a road crossing a deck within roads.AT_GRADE_REACH_M of a free abutment that the deck cannot get
+    # roads.AT_GRADE_M over is a junction at grade, the rule roads.deck_profile_once and deck_curve already
+    # have: the deck leaves that road's height there, so it asks no clearance under it. A track meeting a
+    # deck's mapped end (a node the two ways share) came under an end skewed onto its junction, and the
+    # approach fill rose the road 8 m over its own ground to clear it
+    dend = np.minimum(arcs, s[-1] - arcs)
+    free_end = np.where(dend == arcs, not joined[0], not joined[1])
+    ends_z = np.asarray(z_at(np.array([line[0], line[-1]], np.float64)), np.float64).reshape(-1)
+    junction = (~rail) & free_end & (dend <= roadsmod.AT_GRADE_REACH_M) & \
+        (float(np.min(ends_z)) + roadsmod.DECK_MAX_GRADE * dend < zu + roadsmod.AT_GRADE_M)
+    under &= ~junction
     zu, arcs, rail = zu[under], arcs[under], rail[under]
     pts = np.array([c[2] for c in cr], np.float64)[under].reshape(-1, 2)
     # (the crossings under the rest of its chain, by their distance from the abutment: Overture splits a bridge where

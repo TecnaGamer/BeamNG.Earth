@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 171 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 173 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -200,6 +200,16 @@ def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
     return _ef.lane_parts(codes, np.ascontiguousarray(feature, np.int64), np.ascontiguousarray(start, np.float64),
                           np.ascontiguousarray(end, np.float64), np.ascontiguousarray(ids, np.int64),
                           np.ascontiguousarray(idx, np.int32), tags, ask)
+
+
+def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move, grade):
+    """railroadseam.couple's native work (railseam.rs): the moved bed heights (n,), or None when nothing moved. The
+    roads flattened: their points rxy (m, 2), heights rz (m,), road r = rows off[r]:off[r + 1], half widths rh."""
+    require(172, "rail_seam_couple")
+    return _ef.rail_seam_couple(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(z, np.float64), float(half),
+                                np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
+                                np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),
+                                float(slope), float(tol), float(max_move), float(grade))
 
 
 def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):

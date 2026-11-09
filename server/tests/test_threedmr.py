@@ -1110,11 +1110,13 @@ class ModelPositionTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as d,
             mock.patch("threedmr.model_info", return_value=info),
+            mock.patch("threedmr.osm_polygon_position", return_value=None),
         ):
-            lat, lon, corrected = threedmr.model_position(99, d)
+            lat, lon, corrected, source = threedmr.model_position(99, d)
         self.assertAlmostEqual(lat, 16.05716901)
         self.assertAlmostEqual(lon, 108.2318281)
         self.assertFalse(corrected)
+        self.assertEqual(source, "api")
 
     def test_far_desc_overrides_the_api_point(self):
         # id 22's own real numbers (api point ~26 km from desc's osmgo.org link), reused here on a plain id
@@ -1127,12 +1129,14 @@ class ModelPositionTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as d,
             mock.patch("threedmr.model_info", return_value=info),
+            mock.patch("threedmr.osm_polygon_position", return_value=None),
         ):
             with self.assertLogs(threedmr.log, level="WARNING") as cm:
-                lat, lon, corrected = threedmr.model_position(99, d)
+                lat, lon, corrected, source = threedmr.model_position(99, d)
         self.assertAlmostEqual(lat, 16.05716901)
         self.assertAlmostEqual(lon, 108.2318281)
         self.assertTrue(corrected)
+        self.assertEqual(source, "desc")
         self.assertTrue(any("desc coords" in m for m in cm.output))
 
 
@@ -1145,10 +1149,11 @@ class PositionOverrideTest(unittest.TestCase):
         with mock.patch(
             "threedmr.model_info", side_effect=AssertionError("should not be called")
         ):
-            lat, lon, corrected = threedmr.model_position(22, "/nonexistent")
+            lat, lon, corrected, source = threedmr.model_position(22, "/nonexistent")
         self.assertAlmostEqual(lat, 16.06120)
         self.assertAlmostEqual(lon, 108.22790)
         self.assertTrue(corrected)
+        self.assertEqual(source, "override")
 
     def test_position_override_known_id(self):
         self.assertEqual(threedmr.position_override(22), (16.06120, 108.22790, 0.0))
@@ -1941,8 +1946,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_27(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 27)
+    def test_version_is_28(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 28)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (

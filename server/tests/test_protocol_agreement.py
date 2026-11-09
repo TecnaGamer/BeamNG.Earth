@@ -191,7 +191,8 @@ MOD_TO_SERVER = {
     "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
-              "download": F(str, OPT)},  # the "Download along route" setting: off / ahead / route (route_download)
+              "download": F(str, OPT),   # the "Download along route" setting: off / ahead / route (route_download)
+              "via": F(list, OPT)},      # [[lat, lon], ...] waypoints on the way (routing.MAX_VIA; GitHub #935)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
     # the 3D map's labels by zoom (map3d.lua; maplabels.py)
     "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
@@ -249,7 +250,8 @@ SERVER_TO_MOD = {
     "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
               "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
-                      "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
+                      "elev": F((list, dict), OPT),   # OSRM; elev: the map's profile (routing.resample, dem.sample)
+                      "legs": F(list, OPT)},          # with via: [[dist_m, dur_s], ...] per leg
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
     # the blocks built already round the player (follow.preferReady takes one instead of its own target)
     "terrain_ready_set": {"anchorId": F(int), "centres": F(list)},  # routeahead.py: the route's corridor

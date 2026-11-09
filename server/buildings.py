@@ -2302,7 +2302,9 @@ ROAD_PASSAGE_DEEP_M = 2.0   # m: "deep" is this far in from the footprint's edge
 ROAD_PASSAGE_STEP_M = 3.0   # m: the road's samples for that test
 ROAD_PASSAGE_MAX_SEGS = 3   # a way of more straight stretches than this (a lot's winding aisles) is no passage ...
 ROAD_PASSAGE_MAX_PIECES = 24    # ... and a footprint that would be cut into more pieces than this stays whole
-ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal", "garage")
+ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal")
+ROAD_PASSAGE_GARAGE_M2 = 12_000.0   # a car park's own footprint (flagged garage) this small or smaller has no passages;
+                                    # a larger one is a building that holds a car park (Ulemiste keskus, 51,000 m2)
 
 
 def _simplify(p, tol=1.0):
@@ -2401,7 +2403,8 @@ def _road_passages(rings, attrs, looks, mins, lines):
         r = np.asarray(ring, np.float64)
         spans = []
         if (look is None and mh <= 0.5 and h is not None and np.isfinite(h)
-                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)):
+                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)
+                and not (at.get("garage") and abs(_area2(r)) / 2 <= ROAD_PASSAGE_GARAGE_M2)):
             lo, hi = r.min(0), r.max(0)
             near = np.flatnonzero((bx[:, 2] >= lo[0]) & (bx[:, 0] <= hi[0]) & (bx[:, 3] >= lo[1]) & (bx[:, 1] <= hi[1]))
             for li in near:
@@ -3599,6 +3602,58 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     return rows
 
 
+FOOTPRINT_GATE_M = 40.0   # (was 150 in PR #854: a statue or tower in a park was moved onto a building that far off)  # _nearest_building_footprint: a candidate footprint farther than this from a
+# model's own api point is not considered its building at all - the map's own data for a tile a model landed
+# in by a wide, SEARCH_CORRECT_R_M-radius hit (far outside this) is not trusted that loosely either.
+FOOTPRINT_SIZE_MIN = 0.4  # ... nor is one smaller than this fraction of the model's own major side (a garden
+FOOTPRINT_SIZE_MAX = 3.0  # shed next to a cathedral) or bigger than this one (a city block round a kiosk)
+FOOTPRINT_SIZE_TIE_FRAC = 0.2  # two candidates within this fraction of each other's own major side are "the
+# same size" as far as _nearest_building_footprint is concerned - too close to call apart by size alone, and
+# the map's own footprints carry no name this far downstream (tile_buildings drops it) to break the tie with
+
+
+def _ring_major_m(ring):
+    """A footprint ring's own major horizontal side, metres - the same measure _custom_tile_entries already
+    takes of a model's bbox (max(dx, dy)), so the two are comparable."""
+    xs, ys = ring[:, 0], ring[:, 1]
+    return float(max(xs.max() - xs.min(), ys.max() - ys.min()))
+
+
+def _nearest_building_footprint(items, x0, y0, px, py, model_major_m):
+    """The map's own building footprint (items: road_tile_items' tile_buildings result, rings relative to
+    (x0, y0)) closest to (px, py) - a 3dmr.eu model's own, uncorrected api point - among those plausibly ITS
+    building: within FOOTPRINT_GATE_M and sized within [FOOTPRINT_SIZE_MIN, FOOTPRINT_SIZE_MAX] of the
+    model's own major side (model_major_m). threedmr model_position's level 3 (called from _custom_tile_
+    entries only for a model whose own source is "api" - no override/fix/tagged-OSM-way/desc correction
+    already placed it more precisely): a mapper's upload pin regularly sits tens of metres from the real
+    building (probe/position_audit.json), closer to the map's own footprint than to nothing.
+
+    Returns the footprint's own centre (x, y) in the same frame as (px, py), or None - the api point is kept
+    - when nothing passes both gates, or the closest match's own size is within FOOTPRINT_SIZE_TIE_FRAC of
+    another, equally plausible candidate's: which of the two is the model's own building would be a guess,
+    and a user's report of a model "jumping" to the wrong one of two near-identical row houses is worse than
+    leaving it at its mapper's own (merely imprecise) point - "сомневаешься - не двигай" (owner review)."""
+    cands = []
+    for it in items:
+        spec = it[0]
+        major = _ring_major_m(spec.ring)
+        if not (model_major_m * FOOTPRINT_SIZE_MIN <= major <= model_major_m * FOOTPRINT_SIZE_MAX):
+            continue
+        c = spec.ring.mean(0) + (x0, y0)
+        dist = math.hypot(c[0] - px, c[1] - py)
+        if dist > FOOTPRINT_GATE_M:
+            continue
+        cands.append((dist, major, float(c[0]), float(c[1])))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: t[0])
+    best = cands[0]
+    for other in cands[1:]:
+        if abs(other[1] - best[1]) <= FOOTPRINT_SIZE_TIE_FRAC * max(other[1], best[1]):
+            return None
+    return best[2], best[3]
+
+
 def _suppress_under_models(items, radii, x0, y0):
     """items (tile_buildings', rings relative to (x0, y0)) with every footprint whose centre falls inside one
     of radii's circles dropped: a baked 3dmr.eu model (_custom_tile_entries' radii, [(id, cx, cy, radius)]
@@ -3726,7 +3781,7 @@ def _centred(pos):
     return P
 
 
-def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None):
+def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items=None, origin=None):
     """custom's (tile_buildings') 3dmr.eu models fetched, plus any local (no-3dmr-base, a "local" key -
     road_tile_items') models loaded straight off disk (threedmr.load_local_model, no fetch_model/osm_yaw),
     baked into out_dir and registered in the mod's materials (one per distinct source material a model uses
@@ -3740,6 +3795,15 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     - the real mesh's own footprint is not known until it is downloaded and decoded, so the radius can only
     be had here (a user's report at Baghdad's Al-Shaheed Monument, model 24: two procedural "sector"
     stubs of its domes' lower tiers stayed and poked through the real mesh once it loaded).
+
+    items, origin ((x0, y0), items' own rings relative to it - road_tile_items'/road_tile's): threedmr model_
+    position's level 3, _nearest_building_footprint, run here (not in model_position - the map's own tile
+    data is not that function's to read) right after a model's own mesh bbox is known and before the radius
+    above, so suppression centres on the adjusted spot too. Only for a model whose custom entry's own
+    "source" (road_tile_items') is "api" - no override/threedmr_position_fixes.json/tagged-OSM-way/desc
+    correction already placed it more precisely - and never a "local" one (the player's own point, not a
+    3dmr.eu upload to second-guess). Skipped entirely (items/origin not given, or BNGE_3DMR_NO_REPOSITION
+    set) the way level 2 already is: the model stays at its own custom["xy"].
 
     A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M - told apart
     from a monument's or a building's) carries the road itself (FV=24, a user's report: no stub under it, driven on, no
@@ -3795,6 +3859,23 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             if max(dx, dy) > MODEL_MAX_M:
                 log.warning("3dmr model %s: %.0f x %.0f m, wider than %.0f m: not placed", cid, dx, dy, MODEL_MAX_M)
                 continue
+            if (
+                items is not None
+                and origin is not None
+                and "local" not in c
+                and c.get("source") == "api"
+                and not os.environ.get(threedmr.NO_REPOSITION_ENV)
+            ):
+                fp = _nearest_building_footprint(
+                    items, origin[0], origin[1], c["xy"][0], c["xy"][1], max(dx, dy)
+                )
+                if fp is not None:
+                    log.info(
+                        "3dmr model %s: positioned by the nearest map building footprint "
+                        "(api point was %.1f,%.1f)",
+                        cid, c["xy"][0], c["xy"][1],
+                    )
+                    c = dict(c, xy=fp)
             is_bridge = _is_bridge(pos) and "local" not in c
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
@@ -3923,14 +4004,18 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     return entries, radii, []
 
 
-def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None):
+def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items=None, origin=None):
     """(entries, radii) of custom's 3dmr.eu / local models, baked into out_dir (_custom_tile_entries);
     ([], []) without custom footprints or out_dir/vfs_dir. Exposed on its own so a caller that needs
     entries/radii before the road mesh is built can bake the models once here and hand this same
-    (entries, radii) to road_tile() below, rather than road_tile() baking them a second time."""
+    (entries, radii) to road_tile() below, rather than road_tile() baking them a second time. items, origin:
+    _custom_tile_entries' own nearest-footprint level - the caller's own tile_buildings result and its tile
+    origin (x0, y0), when it has them (road_tile_items' "items", roads.tile_bbox(tx, ty)[:2])."""
     if not (custom and out_dir and vfs_dir):
         return [], [], []
-    return _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=road_ends)
+    return _custom_tile_entries(
+        frame, custom, ground, out_dir, vfs_dir, road_ends=road_ends, items=items, origin=origin
+    )
 
 
 def road_tile_items(
@@ -4015,14 +4100,15 @@ def road_tile_items(
         for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
             mid = int(mid)
             try:
-                mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)
+                mlat, mlon, _corrected, source = threedmr.model_position(mid, cache_dir)
                 mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
             except Exception:
                 log.warning("3dmr model %s: info failed", mid, exc_info=True)
                 continue
             if x0 <= mx < x1 and y0 <= my < y1:
                 custom.append(
-                    {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon)}
+                    {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon),
+                     "source": source}
                 )
         for entry in threedmr.local_models(cache_dir):
             mlat, mlon = float(entry["lat"]), float(entry["lon"])
@@ -4034,6 +4120,7 @@ def road_tile_items(
                         "xy": (float(mx), float(my)),
                         "latlon": (mlat, mlon),
                         "local": entry,
+                        "source": "local",
                     }
                 )
     return items, custom
@@ -4088,7 +4175,7 @@ def bridge_footprints(frame, tx, ty, cache_dir):
     for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
         mid = int(mid)
         try:
-            mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)
+            mlat, mlon, _corrected, _source = threedmr.model_position(mid, cache_dir)
             mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
             mx, my = float(mx), float(my)
             if math.hypot(mx - cx, my - cy) > reach:
@@ -4252,7 +4339,7 @@ def road_tile(
         )
     if entries is None and radii is None:
         entries, radii, _boxes = custom_models(
-            frame, custom, ground, out_dir, vfs_dir
+            frame, custom, ground, out_dir, vfs_dir, items=items, origin=(x0, y0)
         )
     if radii:
         items = _suppress_under_models(items, radii, x0, y0)

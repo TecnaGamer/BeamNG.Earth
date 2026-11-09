@@ -9,6 +9,7 @@ perfclean.rs, through fast.py): what the mod sends is rebuilt from the allowed s
 changed mod can put a position, a path or free text into a report.
 """
 import logging
+import re
 import os
 import threading
 import time
@@ -35,6 +36,51 @@ CORE_STEPS = (0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16)
 FINGERPRINTS = 24               # distinct error fingerprints a report carries
 
 
+_SRC_FRAME = re.compile(r'File "[^"]*[/\\]([A-Za-z_][A-Za-z0-9_]*)\.py", line (\d+)')
+
+
+def raised_at(exc):
+    """'<module>-<line>' of the innermost frame of the server's own code an exception was raised in, or "": only a
+    module name and a line number, never a path or a value. An exception from a worker process carries its traceback as
+    text (concurrent.futures' _RemoteTraceback, its __cause__); the far tiles' 1.1 M BadZipFile in a week were all
+    logged at one line of earthd, whichever cache file was damaged (2026-11-09)."""
+    if exc is None:
+        return ""
+    try:
+        cause = getattr(exc, "__cause__", None)
+        text = getattr(cause, "tb", None)
+        if isinstance(text, str):
+            frames = _SRC_FRAME.findall(text)
+        else:
+            frames = []
+            tb = getattr(exc, "__traceback__", None)
+            while tb is not None:
+                frames.append((os.path.basename(tb.tb_frame.f_code.co_filename)[:-3], str(tb.tb_lineno)))
+                tb = tb.tb_next
+        own = [(m, n) for m, n in frames if m in _OWN_MODULES()]
+        if not own:
+            return ""
+        m, n = own[-1]
+        return f"{m[:14]}-{n}"
+    except Exception:
+        return ""
+
+
+def _OWN_MODULES():
+    """The server's own module names (the .py files beside this one), once."""
+    global _own
+    if _own is None:
+        here = os.path.dirname(os.path.abspath(__file__))
+        try:
+            _own = frozenset(f[:-3] for f in os.listdir(here) if f.endswith(".py"))
+        except OSError:
+            _own = frozenset()
+    return _own
+
+
+_own = None
+
+
 class ErrorPrints(logging.Handler):
     """Counts the server's errors by fingerprint (fast.perf_fingerprint of the exception's type and the logging call's
     module and line: never the message, a path or a value) and, per fingerprint, the error's code: an OSError's
@@ -55,6 +101,9 @@ class ErrorPrints(logging.Handler):
             key = fast.perf_fingerprint(kind, record.module, record.lineno)
             num = getattr(exc, "winerror", None) or getattr(exc, "errno", None)
             code = f"{kind[:24]}:{num}" if isinstance(num, int) else kind[:24]
+            where = raised_at(exc)
+            if where:       # (the module and line it was raised at: a far tile's error is logged in one place for all)
+                code = (code + "-" + where)[:40]
             with self._lock:
                 if key in self.counts or len(self.counts) < FINGERPRINTS:
                     self.counts[key] = self.counts.get(key, 0) + 1

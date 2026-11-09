@@ -1552,18 +1552,26 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
 # of a track's triangles (Tehachapi Loop, 16 tiles: 118.8k of 135.0k), all colliding, and a collision rebuild's cost
 # grows with every colliding triangle loaded. A car on the track now drives on the ballast's top (the railheads stand
 # 0.28 m over it); at a level crossing the track is flush with the road, which the car drives on either way.
-RENDER_ONLY = frozenset(STEEL_WORN + SLEEPER_WORN)
+# The rails collide again (GitHub #821: a car on train wheels, or a train, rode the railheads until that collider; it fell
+# onto the ballast): their heads' top and sides are ~1/5 of a track's triangles, the sleepers ~3/5 of them stay drawn
+# only. BNE_RAIL_COLLIDE=off: the bed alone, as from PR #41.
+# (opt-in: the rails in the collider make a track's about 2.7x the triangles (rails + sleepers were 118.8k of 135k), and
+# collision rebuilds cost frame time on rail-heavy tiles; for riding the rails (GitHub #821) BNE_RAIL_COLLIDE=on)
+RAIL_COLLIDE = os.environ.get("BNE_RAIL_COLLIDE", "off") == "on"
+RENDER_ONLY = frozenset(SLEEPER_WORN)
+RENDER_ONLY_LEAN = frozenset(STEEL_WORN + SLEEPER_WORN)
 
 
 def collision_mesh(mesh):
-    """tile_mesh's mesh without the rails and sleepers (RENDER_ONLY): the ballast, the decks and the piers, as
-    (positions, tris, uvs, materials, tri material) for a collision-only shape (the vertices are the full mesh's:
-    cdae drops the unused ones), or None if nothing is left. Pure."""
+    """tile_mesh's mesh without the sleepers (RENDER_ONLY; the rails too with BNE_RAIL_COLLIDE=off: RENDER_ONLY_LEAN):
+    the ballast, the rails, the decks and the piers, as (positions, tris, uvs, materials, tri material) for a
+    collision-only shape (the vertices are the full mesh's: cdae drops the unused ones), or None if nothing is left."""
     if mesh is None:
         return None
     P, T, UV, mats, M = mesh
     M = np.asarray(M)
-    keep = ~np.isin(M, [k for k, m in enumerate(mats) if m in RENDER_ONLY])
+    drawn = RENDER_ONLY if RAIL_COLLIDE else RENDER_ONLY_LEAN
+    keep = ~np.isin(M, [k for k, m in enumerate(mats) if m in drawn])
     if not keep.any():
         return None
     return P, np.asarray(T)[keep], UV, mats, M[keep]

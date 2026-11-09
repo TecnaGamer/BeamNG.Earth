@@ -701,7 +701,7 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
 
         def model_position(mid, cache_dir, iface=None, timeout=30.0):
-            return (float(mlat), float(mlon), False)
+            return (float(mlat), float(mlon), False, "api")
 
         ground = lambda la, lo: np.zeros(np.shape(la))
         with mock.patch("threedmr.region_ids", return_value=[24]), \
@@ -763,7 +763,7 @@ class OverRoadTest(unittest.TestCase):
         mlat, mlon, _ = self.f.enu_to_geodetic(mx, my, 0.0)
         ground = lambda la, lo: np.zeros(np.shape(la))
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True, "desc")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
             x, y = custom[0]["xy"]
@@ -771,11 +771,13 @@ class OverRoadTest(unittest.TestCase):
             self.assertAlmostEqual(y, my, places=4)
             self.assertAlmostEqual(custom[0]["latlon"][0], float(mlat))
             self.assertAlmostEqual(custom[0]["latlon"][1], float(mlon))
+            self.assertEqual(custom[0]["source"], "desc")
 
     def test_geosearch_falls_back_to_the_wide_corrected_search(self):
         # id 22 (Dragon Bridge, Da Nang): its api point sits ~26 km from the real bridge, outside any tile's
         # own small search_ids radius, so the first (tile-radius) search never finds it at all - only the
-        # second, threedmr.SEARCH_CORRECT_R_M-radius one does, and only because model_position corrects it
+        # region's own search, reaching threedmr.SEARCH_CORRECT_R_M past its corners, does, and only because
+        # model_position corrects it
         b = Feats(["H"], [self.ll(100, 100, 12, 10)], **{"class": ["house"], "height": [6.0]})
 
         class MD:
@@ -788,7 +790,7 @@ class OverRoadTest(unittest.TestCase):
 
         # (the region's search reaches SEARCH_CORRECT_R_M past its corners: id 22 is in it, placed where corrected)
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), True, "desc")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1)
             self.assertEqual(custom[0]["id"], 22)
@@ -813,7 +815,7 @@ class OverRoadTest(unittest.TestCase):
         # is not in this tile)
         flat, flon, _ = self.f.enu_to_geodetic(20000.0, 0.0, 0.0)
         with mock.patch("threedmr.region_ids", return_value=[22]), \
-             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False)):
+             mock.patch("threedmr.model_position", return_value=(float(flat), float(flon), False, "api")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(custom, [], "a region model far from the tile is not this tile's")
 
@@ -835,7 +837,7 @@ class OverRoadTest(unittest.TestCase):
             return [24]
 
         with mock.patch("threedmr.region_ids", side_effect=region_ids), \
-             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False)):
+             mock.patch("threedmr.model_position", return_value=(float(mlat), float(mlon), False, "api")):
             _items, custom = bld.road_tile_items(self.f, 0, 0, MD(), ground, cache_dir="/tmp/whatever")
             self.assertEqual(len(custom), 1, "added once")
             self.assertEqual(len(seen_ranges), 1, "one region search")
@@ -1938,6 +1940,18 @@ class RoadPassageTest(unittest.TestCase):
         """The aisles of a lot wind about; a footprint they would cut to pieces is left as it is."""
         road = [[30, 30], [60, 30], [60, 40], [90, 40], [90, 50], [60, 50], [60, 60], [100, 60]]
         self.assertEqual(len(self.items(road)), 1)
+
+    def test_a_building_that_holds_a_car_park_still_gets_its_passage(self):
+        """Ulemiste keskus holds a multi-storey car park, so its footprint is flagged a garage: a 51,000 m2 building
+        is not a car park (its way was left whole). A car park's own, small footprint still has none."""
+        garage = np.array([[100.0, 40.0], [140.0, 40.0], [140.0, 70.0], [100.0, 70.0], [100.0, 40.0]])
+        road = np.array([[0.0, 90.0], [256.0, 90.0]])
+
+        def run(w, d):
+            b = Feats(["B"], [self.ll(20, 20, w, d)], **{"class": ["retail"], "height": [10.0]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], self.ground, passage_xy=[road], garages_xy=[garage])
+        self.assertGreater(len(run(220, 120)), 1, "a big building holding a car park: a passage")
+        self.assertEqual(len(run(100, 100)), 1, "a car park's own footprint: whole")
 
     def test_the_switch_gives_the_old_wall(self):
         with unittest.mock.patch.object(bld, "ROAD_PASSAGE_ON", False):

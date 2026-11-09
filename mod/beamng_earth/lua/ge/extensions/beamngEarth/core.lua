@@ -1135,7 +1135,7 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
-    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
@@ -3143,10 +3143,10 @@ function M.requestGeocode(id, q, lat, lon, full)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload') })
   return true
 end
 function M.takeRoute(id)

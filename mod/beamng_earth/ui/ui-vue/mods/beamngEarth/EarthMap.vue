@@ -595,7 +595,7 @@ const weatherBadge = computed(() => {
   // (in the game's unit, as the GPS distances: gps.lua's metric, Options > Display)
   const metric = !!w.metric
   const temp = w.tempC == null ? null : (metric ? `${Math.round(w.tempC)}°C` : `${Math.round(w.tempC * 9 / 5 + 32)}°F`)
-  return { icon: w.code != null ? mm.weatherIcon(w.code) : "", localTime: w.localTime || "", temp }
+  return { icon: w.code != null ? mm.weatherIcon(w.code, !!w.night) : "", localTime: w.localTime || "", temp }
 })
 
 const creditsFull = ref(false)          // the credits' whole text (else two lines)

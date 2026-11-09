@@ -36,6 +36,7 @@ mod islands;
 mod ribbons;
 mod groundpaint;
 mod medians;
+mod deautobahn;
 mod speedsigns;
 mod roadsigns;
 mod townsigns_de;
@@ -59,6 +60,7 @@ mod mdhtml;
 mod roadlanes;
 mod waytags;
 mod underdeck;
+mod railseam;
 mod classgrid;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5519,6 +5521,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
@@ -5598,6 +5602,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
-    m.add("VERSION", 171)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
+    m.add("VERSION", 173)?;
     Ok(())
 }

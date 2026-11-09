@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from unittest import mock
 
 import numpy as np
@@ -100,20 +101,27 @@ class RailwayTest(unittest.TestCase):
         self.assertGreater(n_sleepers, 256 / railways.SLEEPER_EVERY * 0.95)
         self.assertGreaterEqual(P[:, 0].min(), -roads.OVERLAP - railways.STEP_M - 3.0)
 
-    def test_lean_collider_without_rails_and_sleepers(self):
+    def test_lean_collider_without_the_sleepers(self):
         # (PR #41) the collider is the bed alone: most of the track's triangles are its rails and sleepers
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         P, T, UV, mats, M = mesh
-        cP, cT, cUV, cmats, cM = railways.collision_mesh(mesh)
-        self.assertTrue({mats[k] for k in np.unique(cM)} <= {railways.BALLAST, railways.CONCRETE})
-        self.assertEqual(len(cT), int(np.isin(M, [mats.index(railways.BALLAST)]).sum()))
-        self.assertLess(len(cT), 0.3 * len(T), "rails and sleepers were most of it")
-        np.testing.assert_array_equal(cT, T[M == mats.index(railways.BALLAST)])
+        self.assertFalse(railways.RAIL_COLLIDE, "the rails collide only with BNE_RAIL_COLLIDE=on (2.7x the collider)")
+        with unittest.mock.patch.object(railways, "RAIL_COLLIDE", True):
+            cP, cT, cUV, cmats, cM = railways.collision_mesh(mesh)
+            sleepers_left = railways.collision_mesh((P, T[M == 3], UV, mats, M[M == 3]))
+        # BNE_RAIL_COLLIDE=on: the bed and the rails (GitHub #821: a car on train wheels rides them), not the sleepers
+        self.assertEqual({mats[k] for k in np.unique(cM)}, {railways.BALLAST, railways.STEEL})
+        solid = np.isin(M, [mats.index(railways.BALLAST), mats.index(railways.STEEL)])
+        np.testing.assert_array_equal(cT, T[solid])
+        self.assertLess(len(cT), 0.4 * len(T), "the sleepers were most of it")
         self.assertIs(cP, P)
         self.assertIsNone(railways.collision_mesh(None))
-        rails_only = (P, T[M == 2], UV, mats, M[M == 2])
-        self.assertIsNone(railways.collision_mesh(rails_only), "nothing left: no collider")
+        self.assertIsNone(sleepers_left, "nothing left: no collider")
+        with unittest.mock.patch.object(railways, "RAIL_COLLIDE", False):     # the default: PR #41's
+            lean = railways.collision_mesh(mesh)
+            np.testing.assert_array_equal(lean[1], T[M == mats.index(railways.BALLAST)])
+            self.assertIsNone(railways.collision_mesh((P, T[M == 2], UV, mats, M[M == 2])))
         with tempfile.TemporaryDirectory() as tmp:      # written by the road tile beside the drawn track
             path, _n = roads.write_tile(tmp, "/v", 1, 0, 0, [], rail_mesh=mesh)
             import json

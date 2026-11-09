@@ -56,16 +56,20 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 27  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 28  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
-# deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
-# and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
+# deck, the one-sided materials) or a tile with a model bridge is built differently round it (28: model_position's
+# new order - a tagged OSM way's own centroid, then buildings._custom_tile_entries' nearest-footprint level - can
+# move a model that used to sit at its stale api point)
 # The settings page's "3D models from 3dmr.eu" switch (cpupin.apply_player_settings sets BNE_3DMR=off when it is off;
 # a BNE_ variable, so revisit.code_key keeps what was built with and without the models apart): off, search_ids
 # finds no model (the player's own local models stay)
 ENABLE_ENV = "BNE_3DMR"
 NO_YAW_ENV = "BNGE_3DMR_NO_YAW"  # set: skip osm_yaw's OSM lookup entirely, model placed as downloaded
 # (a fallback if OSM is unreachable from a session)
+NO_REPOSITION_ENV = "BNGE_3DMR_NO_REPOSITION"  # set: skip model_position's OSM-polygon level and buildings.
+# _custom_tile_entries' nearest-footprint level - a model sits at its POSITION_OVERRIDES/threedmr_position_fixes.json
+# entry if it has one, else its own api point, exactly as before this feature (owner debugging switch)
 MOD_MATERIALS_REL = (
     "mods",
     "unpacked",
@@ -437,6 +441,10 @@ SEARCH_CORRECT_R_M = 40000.0
 # model's mesh is already oriented west-east as downloaded - nothing to rotate.
 POSITION_OVERRIDES = {
     22: (16.06120, 108.22790, 0.0),
+    # id 24 (Al-Shaheed Monument, Baghdad): the api point sits ~20 m south-west of the island's own centre
+    # (probe/position_audit.json's own OSM way 1089391780 centroid, 33.3434416,44.4461248, is itself 6.6 m off
+    # that true centre) - the owner's own measured centre of the monument island, not the tagged way's centroid.
+    24: (33.343561, 44.446220, 0.0),
 }
 
 
@@ -444,6 +452,41 @@ def position_override(model_id):
     """A POSITION_OVERRIDES entry for model_id as (lat, lon, yaw_deg), or None - model_position's first
     check, ahead of its usual api/desc logic, and _custom_tile_entries' own check ahead of osm_yaw."""
     return POSITION_OVERRIDES.get(model_id)
+
+
+# Offline backstop (probe/position_audit.json, OSM-measured): a few more models whose own 3dmr.eu api point
+# sits tens to ~110 m from their real OSM way, collected by the owner's own audit run rather than at model_
+# position's usual level 2 (osm_polygon_position) - so the fix still applies with no network at all (a
+# session without internet, or one where OSM's own API is unreachable). Checked right after POSITION_OVERRIDES,
+# still ahead of any network call. id 24 is already in POSITION_OVERRIDES above (level 1, reached first) -
+# kept here too as a documented backstop in case that entry is ever removed on its own.
+_POSITION_FIXES_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "threedmr_position_fixes.json"
+)
+_position_fixes_cache = None
+
+
+def _position_fixes():
+    """{model_id: (lat, lon)} of _POSITION_FIXES_PATH, loaded once per process and cached - the file itself
+    never changes while a server runs. {} (not a crash) if it is missing or malformed: this table is a
+    backstop, not a required file."""
+    global _position_fixes_cache
+    if _position_fixes_cache is None:
+        try:
+            with open(_POSITION_FIXES_PATH) as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
+        _position_fixes_cache = {
+            int(k): (float(v["lat"]), float(v["lon"])) for k, v in raw.items()
+        }
+    return _position_fixes_cache
+
+
+def position_fix(model_id):
+    """A threedmr_position_fixes.json entry for model_id as (lat, lon), or None - model_position's second
+    check (after POSITION_OVERRIDES, still no network)."""
+    return _position_fixes().get(model_id)
 
 
 def desc_position(info):
@@ -469,19 +512,41 @@ def _latlon_dist_m(lat1, lon1, lat2, lon2):
     return math.hypot(de, dn)
 
 
-def model_position(model_id, cache_dir, iface=None, timeout=30.0):
-    """(lat, lon, corrected) of a model: a POSITION_OVERRIDES entry if model_id has one (no network - the
-    model's own api AND desc data are both wrong, so neither is worth even fetching); else its own api/info
-    point, unless its desc's own osmgo.org link (desc_position) disagrees with it by more than
-    POSITION_CORRECT_M metres - in which case the desc's coordinates are trusted instead (corrected True,
-    logged). Guards against a model's api point going stale after the mapper's own write-up moves on without
-    the api point ever being updated to match."""
+def model_position(model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(lat, lon, corrected, source) of a model, in order: POSITION_OVERRIDES (source "override", level 1, no
+    network - the model's own api AND desc data are both wrong, so neither is worth even fetching); else
+    threedmr_position_fixes.json (source "fix", level 1.5, still no network - an offline backstop of a few
+    more models audited the same way level 2 would find them, for a session with no OSM access at all); else
+    the OSM way tagged 3dmr=<model_id> around the model's own api point (source "osm", level 2 -
+    osm_polygon_position: probe/position_audit.json found 8 of 3dmr.eu's own models 10-109 m from this
+    surveyed tag); else its desc's own osmgo.org link if it disagrees with the api point by more than
+    POSITION_CORRECT_M metres (source "desc", level 3 - guards against a model's api point going stale after
+    the mapper's own write-up moves on without the api point ever being updated to match); else the api point
+    itself (source "api", corrected False, level 4).
+
+    This moves the OSM tag ahead of desc (the pre-existing correction): a surveyed building outranks either
+    of the model's own two self-reported points, api or desc, not just the staler of the two. BNGE_3DMR_NO_
+    REPOSITION skips level 2 only (osm_polygon_position checks it itself) - override/fix predate any network
+    lookup and stay on; buildings._custom_tile_entries' own nearest-footprint level (level "3" in the owner's
+    own numbering, between osm and desc/api here) checks the same switch before it runs."""
     override = position_override(model_id)
     if override is not None:
         olat, olon, _oyaw = override
-        return olat, olon, True
+        return olat, olon, True, "override"
+    fix = position_fix(model_id)
+    if fix is not None:
+        flat, flon = fix
+        return flat, flon, True, "fix"
     info = model_info(model_id, cache_dir, iface=iface, timeout=timeout)
     lat, lon = float(info["lat"]), float(info["lon"])
+    poly = osm_polygon_position(lat, lon, model_id, cache_dir, iface=iface, timeout=timeout, offline=offline)
+    if poly is not None:
+        plat, plon = poly
+        log.info(
+            "3dmr model %s: positioned by its tagged OSM way (api point was %.5f,%.5f)",
+            model_id, lat, lon,
+        )
+        return plat, plon, True, "osm"
     desc_ll = desc_position(info)
     if desc_ll is not None:
         dlat, dlon = desc_ll
@@ -497,8 +562,8 @@ def model_position(model_id, cache_dir, iface=None, timeout=30.0):
                 lat,
                 lon,
             )
-            return dlat, dlon, True
-    return lat, lon, False
+            return dlat, dlon, True, "desc"
+    return lat, lon, False, "api"
 
 
 _near_memo = {}  # (cache folder, info file name) -> (lat, lon) of its model (credited_near)
@@ -524,7 +589,7 @@ def credited_near(lat, lon, range_m, cache_dir):
             try:
                 with open(os.path.join(d, name)) as f:
                     json.load(f)            # (a whole file: model_position below reads it, never fetches)
-                mlat, mlon, _corrected = model_position(int(name[5:-5]), cache_dir)
+                mlat, mlon, _corrected, _source = model_position(int(name[5:-5]), cache_dir, offline=True)
             except Exception:
                 continue
             ll = _near_memo[(d, name)] = (float(mlat), float(mlon))
@@ -642,26 +707,32 @@ def _yaw_from_angles(a_osm, a_model):
 
 
 def _osm_building_ring(lat, lon, model_id, iface, timeout):
-    """The local-metre ring (n, 2), origin (lat, lon), of the OSM way nearest a 3dmr.eu model's own mapped
-    position: preferably one tagged 3dmr=<model_id> (a mapper's own cross-reference - the only way to tell
-    which of several nearby buildings is the model's, and why this goes straight to the OSM API rather than
-    Overpass (no index on an arbitrary tag, and prone to timeouts over a VPN) or Nominatim (does not index
-    3dmr tags at all)), else the nearest building=* way inside a small bbox (OSM_BBOX_DEG) around it. None if
-    the map call fails, or no such way is found."""
+    """(ring, tagged) - the local-metre ring (n, 2), origin (lat, lon), of the OSM way nearest a 3dmr.eu
+    model's own mapped position, and whether it is the exact one: preferably the single way tagged
+    3dmr=<model_id> (a mapper's own cross-reference - the only way to tell which of several nearby buildings
+    is the model's, and why this goes straight to the OSM API rather than Overpass (no index on an arbitrary
+    tag, and prone to timeouts over a VPN) or Nominatim (does not index 3dmr tags at all)), tagged True; else
+    the nearest building=* way (or, when more than one way happens to carry the tag - id 35's own data, 5
+    different buildings all tagged 3dmr=35, apparently copy-pasted across a city block import - the nearest
+    of THOSE instead, still untagged) inside a small bbox (OSM_BBOX_DEG) around it, tagged False - good
+    enough for osm_yaw's own rotation (any nearby building is oriented about the same way as the real one),
+    but never trusted for osm_polygon_position's placement (the wrong neighbour, tagged or not, would
+    silently relocate the model, not just mis-rotate it). (None, False) if the map call fails, or no such way
+    is found at all."""
     d = OSM_BBOX_DEG
     url = f"{OSM_MAP_URL}?bbox={lon - d:.6f},{lat - d:.6f},{lon + d:.6f},{lat + d:.6f}"
     data = _fetch_retry(url, iface, timeout, what=f"osm map (model {model_id})")
     if not data:
-        return None
+        return None, False
     try:
         root = ET.fromstring(data)
     except ET.ParseError:
-        return None
+        return None, False
     nodes = {
         n.get("id"): (float(n.get("lat")), float(n.get("lon")))
         for n in root.findall("node")
     }
-    tagged, nearest, nearest_d = None, None, None
+    tagged_candidates, nearest, nearest_d = [], None, None
     for w in root.findall("way"):
         pts = [
             nodes[r] for r in (nd.get("ref") for nd in w.findall("nd")) if r in nodes
@@ -669,28 +740,146 @@ def _osm_building_ring(lat, lon, model_id, iface, timeout):
         if len(pts) < 4:
             continue
         tags = {t.get("k"): t.get("v") for t in w.findall("tag")}
-        if tags.get(TAG_KEY) == str(model_id):
-            tagged = pts
-            break
-        if "building" in tags:
+        is_tag_match = tags.get(TAG_KEY) == str(model_id)
+        if is_tag_match:
+            tagged_candidates.append(pts)
+        if is_tag_match or "building" in tags:
             clat = sum(p[0] for p in pts) / len(pts)
             clon = sum(p[1] for p in pts) / len(pts)
             dist = math.hypot(clat - lat, clon - lon)
             if nearest_d is None or dist < nearest_d:
                 nearest, nearest_d = pts, dist
-    ring = tagged or nearest
+    if len(tagged_candidates) > 1:
+        log.info(
+            "3dmr model %s: %d ways tagged 3dmr=%s - ambiguous, not used for position",
+            model_id, len(tagged_candidates), model_id,
+        )
+    is_tagged = len(tagged_candidates) == 1
+    ring = tagged_candidates[0] if is_tagged else nearest
     if ring is None:
-        return None
+        return None, False
     if (
         len(ring) > 1 and ring[0] == ring[-1]
     ):  # a closed way repeats its first node: drop the duplicate
         ring = ring[:-1]
     if len(ring) < 4:
-        return None
+        return None, False
     coslat = math.cos(math.radians(lat))
     e = [(rlon - lon) * 111320.0 * coslat for _rlat, rlon in ring]
     n = [(rlat - lat) * 111132.0 for rlat, _rlon in ring]
-    return np.array(list(zip(e, n)), np.float64)
+    return np.array(list(zip(e, n)), np.float64), is_tagged
+
+
+def _ring_cache_path(cache_dir, lat, lon):
+    cache = os.path.join(cache_dir, "threedmr_cache")
+    rlat, rlon = round(float(lat), 4), round(float(lon), 4)
+    return cache, os.path.join(cache, f"yaw_{rlat}_{rlon}.json")
+
+
+_osm_down_until = 0.0      # time.time() before which a failed OSM /map fetch is not tried again (_osm_ring_cached)
+OSM_RETRY_S = 3600.0
+
+
+def _osm_ring_cached(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(ring_xy or None, tagged) for (lat, lon, model_id): _osm_building_ring's own OSM /map fetch, cached
+    forever (including a "no ring" miss) under its own "ring"/"tagged" fields in the SAME yaw_<lat>_<lon>.json
+    file osm_yaw keeps its "yaw" answer in and osm_polygon_position its "pos" - between all three, a model's
+    OSM lookup at a given (lat, lon) costs at most one network request, however many of them ask for it."""
+    cache, path = _ring_cache_path(cache_dir, lat, lon)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if "ring" in data:
+        ring = data["ring"]
+        return (np.asarray(ring, np.float64) if ring is not None else None), bool(
+            data.get("tagged", False)
+        )
+    # offline: the cache only (credits.feature_ids asks from the server's event loop every second: a request there
+    # held every game message); and a failed fetch is not kept as "no ring" for good, only not asked again for a while
+    global _osm_down_until
+    if offline or time.time() < _osm_down_until:
+        return None, False
+    try:
+        ring_xy, tagged = _osm_building_ring(lat, lon, model_id, iface, timeout)
+    except (urllib.error.URLError, OSError) as e:
+        log.info("3dmr model %s: OSM fetch failed (%s); asked again in %.0f min", model_id, e, OSM_RETRY_S / 60)
+        _osm_down_until = time.time() + OSM_RETRY_S
+        return None, False
+    data["ring"] = ring_xy.tolist() if ring_xy is not None else None
+    data["tagged"] = tagged
+    os.makedirs(cache, exist_ok=True)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    staging.replace(tmp, path)
+    return ring_xy, tagged
+
+
+def _seed_ring_cache(cache_dir, lat, lon, ring_xy, tagged):
+    """Copies an already-fetched ring into the cache file for a SECOND (lat, lon) key - osm_polygon_position's
+    own use, once it has turned a tagged ring into a corrected position: a later osm_yaw call for the same
+    model, centred on that corrected position (not the api point the ring was originally fetched around),
+    would otherwise round to a different cache file and re-fetch the same ring over the network. A no-op if
+    that key already has a ring cached (e.g. the two points round to the same key)."""
+    _cache, path = _ring_cache_path(cache_dir, lat, lon)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if "ring" in data:
+        return
+    data["ring"] = ring_xy.tolist() if ring_xy is not None else None
+    data["tagged"] = tagged
+    cache = os.path.dirname(path)
+    os.makedirs(cache, exist_ok=True)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    staging.replace(tmp, path)
+
+
+OSM_POLYGON_GATE_M = 500.0  # a tagged OSM way's centroid farther than this from the model's own api point is
+# not trusted as this model's own building (osm_polygon_position) - in practice always comfortably inside
+# this (OSM_BBOX_DEG's own search box cannot turn up a tagged way farther than ~300 m out to begin with), but
+# a centroid that somehow comes back implausibly far is logged and left at the usual desc/api fallback
+# rather than silently moving the model there.
+
+
+def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(lat, lon) of the OSM way tagged 3dmr=<model_id> around a model's own api point (lat, lon here), its
+    ring's centroid - model_position's level 2, ahead of its desc/api fallback: probe/position_audit.json
+    found 8 of 3dmr.eu's own models placed by their own api point 10-109 m from this surveyed tag (Baghdad's
+    Al-Shaheed Monument, id 24, 7 m - now in POSITION_OVERRIDES instead, measured more precisely by hand).
+    None with BNGE_3DMR_NO_REPOSITION set, the OSM fetch failing, no way carrying the exact tag (_osm_
+    building_ring's own looser "nearest building" fallback is good enough for osm_yaw's rotation but not
+    trusted here - the wrong neighbouring building would silently relocate the model), or a centroid farther
+    than OSM_POLYGON_GATE_M from (lat, lon) (logged as a warning: not this model's own way after all).
+
+    Shares its OSM /map fetch and cache file with osm_yaw (_osm_ring_cached, keyed on (lat, lon) - the
+    model's api point here) and seeds that same ring under its own corrected answer's key too (_seed_ring_
+    cache), so a later osm_yaw call centred on THIS function's own (lat, lon) result also hits the cache."""
+    if os.environ.get(NO_REPOSITION_ENV):
+        return None
+    ring_xy, tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout, offline=offline)
+    if ring_xy is None or not tagged or len(ring_xy) < 3:
+        return None
+    ce, cn = float(ring_xy[:, 0].mean()), float(ring_xy[:, 1].mean())
+    dist = math.hypot(ce, cn)
+    if dist > OSM_POLYGON_GATE_M:
+        log.warning(
+            "3dmr model %s: tagged OSM way centroid is %.0f m from the api point - not trusted, ignored",
+            model_id,
+            dist,
+        )
+        return None
+    coslat = math.cos(math.radians(lat))
+    clat = lat + cn / 111132.0
+    clon = lon + ce / (111320.0 * coslat)
+    _seed_ring_cache(cache_dir, clat, clon, ring_xy, tagged)
+    return clat, clon
 
 
 def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
@@ -701,27 +890,24 @@ def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
     is not reachable from a session), the OSM lookup fails or finds no way, or either side has fewer than 4
     points to measure an edge direction from; logged, never raises (a tile must still build without this).
 
-    Cached forever per rounded (lat, lon) under <cache_dir>/threedmr_cache/yaw_<lat>_<lon>.json, including a
-    0.0 ("no footprint") result - an OSM building's own footprint does not change day to day, so a repeat
+    Cached forever per rounded (lat, lon) under <cache_dir>/threedmr_cache/yaw_<lat>_<lon>.json's own "yaw"
+    field (_osm_ring_cached keeps the ring itself, shared with osm_polygon_position, in the same file), including
+    a 0.0 ("no footprint") result - an OSM building's own footprint does not change day to day, so a repeat
     visit to the same model is not worth another network round trip either way. BNGE_3DMR_NO_YAW is checked
     ahead of the cache: the override must not depend on what an earlier, network-reachable run wrote
     there."""
     if os.environ.get(NO_YAW_ENV):
         return 0.0
-    cache = os.path.join(cache_dir, "threedmr_cache")
-    rlat, rlon = round(float(lat), 4), round(float(lon), 4)
-    path = os.path.join(cache, f"yaw_{rlat}_{rlon}.json")
+    _cache, path = _ring_cache_path(cache_dir, lat, lon)
     try:
         with open(path) as f:
-            return float(json.load(f)["yaw"])
-    except (OSError, ValueError, KeyError):
-        pass
+            cached = json.load(f)
+        if "yaw" in cached:
+            return float(cached["yaw"])
+    except (OSError, ValueError):
+        cached = {}
 
-    try:
-        ring_xy = _osm_building_ring(lat, lon, model_id, iface, timeout)
-    except (urllib.error.URLError, OSError) as e:
-        log.info("3dmr model %s: OSM fetch failed (%s), yaw 0", model_id, e)
-        ring_xy = None
+    ring_xy, _tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout)
 
     yaw = 0.0
     points_xy = np.asarray(points_xy, np.float64)
@@ -735,10 +921,17 @@ def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
     else:
         log.info("3dmr model %s: no OSM footprint, yaw 0", model_id)
 
+    cache = os.path.dirname(path)
+    try:
+        with open(path) as f:
+            cached = json.load(f)
+    except (OSError, ValueError):
+        cached = {}
+    cached["yaw"] = yaw
     os.makedirs(cache, exist_ok=True)
     tmp = staging.tmp_for(path)
     with open(tmp, "w") as f:
-        json.dump({"yaw": yaw}, f)
+        json.dump(cached, f)
     staging.replace(tmp, path)
     return yaw
 

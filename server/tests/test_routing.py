@@ -38,6 +38,28 @@ class RoutingTest(unittest.TestCase):
         self.assertEqual(routing.resample([(39.0, -76.0)]), [(39.0, -76.0, 0.0)])
         self.assertEqual(routing.resample([]), [])
 
+    def test_url_through_waypoints(self):
+        # GitHub #935: the waypoints as OSRM's intermediate coordinates, in order; a bearing only for the start
+        u = routing.url(39.28, -76.59, 38.9, -77.03, 370, via=[(39.1, -76.8), (39.0, -76.9)])
+        self.assertIn("/driving/-76.590000,39.280000;-76.800000,39.100000;-76.900000,39.000000;-77.030000,38.900000?",
+                      u)
+        self.assertTrue(u.endswith("&bearings=10,60;;;"))
+        too_many = [(39.0, -76.0)] * (routing.MAX_VIA + 5)
+        self.assertEqual(routing.url(39.28, -76.59, 38.9, -77.03, via=too_many).count(";"), routing.MAX_VIA + 1)
+
+    def test_via_points_keeps_the_valid_ones(self):
+        self.assertEqual(routing.via_points([[1, 2], ["x", 3], [91, 0], [3.5, -4]]), [(1.0, 2.0), (3.5, -4.0)])
+        self.assertEqual(routing.via_points(None), [])
+        self.assertEqual(len(routing.via_points([[1, 1]] * 50)), routing.MAX_VIA)
+
+    def test_parse_legs(self):
+        data = {"code": "Ok", "routes": [{"distance": 3000, "duration": 200,
+                                          "geometry": {"coordinates": [[-76.0, 39.0], [-76.01, 39.01], [-76.02, 39.0]]},
+                                          "legs": [{"distance": 1000, "duration": 70}, {"distance": 2000, "duration": 130}]}]}
+        self.assertEqual(routing.parse(data)["legs"], [[1000.0, 70.0], [2000.0, 130.0]])
+        data["routes"][0]["legs"] = [{"distance": 3000, "duration": 200}]
+        self.assertNotIn("legs", routing.parse(data))
+
     def test_url(self):
         u = routing.url(39.28, -76.59, 38.9, -77.03)
         self.assertIn("-76.590000,39.280000;-77.030000,38.900000", u)

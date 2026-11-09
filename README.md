@@ -77,6 +77,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
   OpenStreetMap (rebuilt weekly). Settings > World > Highway signs turns them off.
+- Autobahn signs in Germany: the German chain at every exit, Kreuz and Dreieck, with the sign text as mapped in
+  OpenStreetMap (rebuilt weekly). The 2000 / 1000 m announcement board with the junction's number and name, the 1000 /
+  500 m advance boards with the destinations over their lanes, the A, B and E plates and pictograms, the 300 / 200 /
+  100 m countdown boards, the direction sign at the exit and "Ausfahrt" in the gore. Overhead on carriageways with
+  more than two lanes and at every Kreuz and Dreieck (gantries and cantilevers), beside the road on two lanes; boards
+  move closer where junctions follow closely. Settings > World > Highway signs switches them too (the environment
+  variable BNE_AUTOBAHN_SIGNS=off turns them off alone).
 - Speed-limit signs everywhere, showing the limit the traffic drives (the mapped one, else the road class's default):
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
@@ -91,7 +98,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
   OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
-  or yellow advance board beside the road before junctions of major roads, with each way's road numbers (national
+  or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
+  Autobahn signs above), with each way's road numbers (national
   and European), the places it leads to, and their distances; Ukraine, Czechia, Poland and Germany for now. Cities
   and towns are written in the local language with their English name under it, villages in the local language
   only. The boards are drawn from the road network and Overture's places and route numbers, so they are a good
@@ -519,6 +527,7 @@ The repository contains only code; all map data is downloaded at runtime and cac
 - Oil wells and refineries: OpenStreetMap contributors (ODbL; the bundled `oil_wells.npz` and `refineries.npz`).
 - Highway signs: OpenStreetMap contributors (ODbL; exit and overhead destinations and mile references, rebuilt
   weekly from the planet by the BeamNG.Earth-data repo); lettering: the Roadgeek 2014 font (MIT, Sammi De Guzman);
+  German Autobahn signs: the DINish font (SIL OFL 1.1) and the RWB/RWBA pictograms (public domain);
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
   (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).

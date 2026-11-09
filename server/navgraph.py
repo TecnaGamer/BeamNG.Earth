@@ -952,13 +952,42 @@ TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: 
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
 
 
+def short_ids(graph):
+    """The graph with every node name (an Overture id and its suffix, 38-46 characters, e.g.
+    "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_7555d") replaced by "n" + 12 hex characters of its hash: the same node
+    keeps the same short name in every graph (gps.lua and the traffic follow node names from one graph to the next).
+    The names were most of the file (a Times Square graph: 577 KB, 3,163 nodes named again in 3,353 edges and the
+    signals), and the game decodes the file at every rebuild (every REBUILD_M): its Lua garbage, 2026-11-09. In the
+    nodes' keys, the edges' first two fields, the signals' junction "j" and each approach's first field."""
+    import hashlib
+    memo = {}
+
+    def sid(name):
+        v = memo.get(name)
+        if v is None:
+            v = memo[name] = "n" + hashlib.blake2b(str(name).encode("utf-8"), digest_size=6).hexdigest()
+        return v
+    out = dict(graph)
+    out["nodes"] = {sid(k): v for k, v in graph.get("nodes", {}).items()}
+    out["edges"] = [[sid(e[0]), sid(e[1])] + list(e[2:]) for e in graph.get("edges", ())]
+    if graph.get("signals"):
+        out["signals"] = [dict(sg, j=sid(sg["j"]), app=[[sid(a[0])] + list(a[1:]) for a in sg.get("app", ())])
+                          for sg in graph["signals"]]
+    return out
+
+
+SHORT_IDS = True
+
+
 def write(out_dir, vfs_dir, aid, serial, graph):
-    """The graph as navgraph_<aid>_<serial>.json in the session folder; returns its vfs path."""
+    """The graph as navgraph_<aid>_<serial>.json in the session folder (short_ids); returns its vfs path."""
     import json
     import os
     name = f"navgraph_{aid}_{serial}.json"
     path = os.path.join(out_dir, name)
     tmp = staging.tmp_for(path)
+    if SHORT_IDS:
+        graph = short_ids(graph)
     with open(tmp, "w") as f:
         f.write(json.dumps(graph, separators=(",", ":")))    # the C encoder (json.dump streams in Python)
     staging.replace(tmp, path)

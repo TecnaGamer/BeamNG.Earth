@@ -103,6 +103,24 @@ class WorldPropsTest(unittest.TestCase):
         self.assertAlmostEqual(self.by(other, "celltower")[0][1], 300.0, delta=1.0)
         self.assertEqual(len(self.by(rows, "celltower")), 1)
 
+    def test_water_towers_at_their_mapped_height(self):
+        # GitHub #887: a 45 m town tower is the model scaled to 45 m (its feet still on the ground), a tag's height
+        # counts too, and an implausible one is held to WATER_SCALE
+        infra = feats("infrastructure", [
+            ("w1", (100.0, 120.0), {"class": "water_tower", "height": 45.0}),
+            ("w2", (130.0, 120.0), {"class": "water_tower", "tags": json.dumps({"height": "15 m"})}),
+            ("w3", (160.0, 120.0), {"class": "water_tower", "height": 400.0}),
+            ("w4", (190.0, 120.0), {"class": "water_tower"}),
+        ], mg.POINT)
+        md = FakeMD({"infrastructure": infra})
+        rows, _ = wp.tile_props(FRAME, 0, 0, md, elev)
+        water = sorted(self.by(rows, "watertower"), key=lambda r: r[1])
+        self.assertEqual(len(water), 4)
+        s = [45.0 / wp.WATER_H, 15.0 / wp.WATER_H, wp.WATER_SCALE[1], 1.0]
+        for r, k in zip(water, s):
+            self.assertAlmostEqual(r[6], wp.WATER_H * k, places=1)
+            self.assertAlmostEqual(r[3], 5.0 + wp.WATER_LIFT * k, places=1)
+
     def test_containers_line_up_and_stay_out_of_buildings(self):
         rows, _ = self.rows()
         boxes = self.by(rows, "container")

@@ -32,6 +32,27 @@ def graph(lines, classes, connectors=(), oneway=(), speeds=(), subclass=(), cent
     return navgraph.build(FRAME, [f], flat, centre, window=window)
 
 
+class ShortIdsTest(unittest.TestCase):
+    """navgraph.short_ids: one short stable name per node in the nodes, edges and signals (the game decodes the file at
+    every rebuild; the long names were most of it), the same name in every graph."""
+
+    def test_names_short_stable_and_consistent(self):
+        a, b = "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_6831d", "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_7555d"
+        g = {"nodes": {a: [0, 0, 0, 3], b: [10, 0, 0, 3]}, "edges": [[a, b, 1, 1, 0, 13.4, 1.0, 3.0]],
+             "signals": [{"j": b, "kind": "stop", "app": [[a, 1.0, 2.0, 0.0, 1.0, 0.0, 0]]}], "lines": [[0, 0, 1, 1, 1]],
+             "rules": {"rightHandDrive": True}}
+        s = navgraph.short_ids(g)
+        na, nb = navgraph.short_ids({"nodes": {a: [0, 0, 0, 1]}})["nodes"].popitem()[0], None
+        self.assertEqual(set(s["nodes"]), {s["edges"][0][0], s["edges"][0][1]})
+        self.assertEqual(s["edges"][0][0], na, "the same node: the same short name in another graph")
+        self.assertEqual(s["signals"][0]["j"], s["edges"][0][1])
+        self.assertEqual(s["signals"][0]["app"][0][0], s["edges"][0][0])
+        self.assertEqual(s["edges"][0][2:], g["edges"][0][2:])
+        self.assertEqual((s["lines"], s["rules"]), (g["lines"], g["rules"]))
+        self.assertTrue(all(len(k) == 13 for k in s["nodes"]))
+        self.assertIn(a, g["nodes"], "the input is not changed")
+
+
 class GraphTest(unittest.TestCase):
     def test_junction_shares_the_connector(self):
         g = graph([[(0, 0), (100, 0)], [(100, 0), (100, 100)]], ["residential", "residential"],

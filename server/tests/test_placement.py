@@ -426,7 +426,7 @@ class ConsumersTest(unittest.TestCase):
 
     def test_plans_format_bumped(self):
         import plancache
-        self.assertEqual(plancache.PLANS_FORMAT, 25)
+        self.assertEqual(plancache.PLANS_FORMAT, 26)
 
 
 if __name__ == "__main__":

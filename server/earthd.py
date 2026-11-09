@@ -2630,6 +2630,11 @@ class Server:
         dmesh = roadmeshmod.deck(chunks, (x0, y0, 0.0), _piers, ctx, _beams,
                                  ground=cover, parapets=parapets,
                                  low_parapet_decks=low_parapet_decks, pads=pads)
+        import fences
+        try:                        # the mapped stone walls (GitHub #938), in the retaining walls' stone
+            rwalls = rwalls + fences.stone_walls(anchor.frame, infra_fn, box, elev, roads=near_roads)
+        except Exception as ex:
+            log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         import railways
         rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
@@ -2649,7 +2654,8 @@ class Server:
             _baked_entries, _baked_radii = [], []
             if _custom and self.out_dir and self.vfs_dir:
                 _baked_entries, _baked_radii, _boxes = buildingsmod.custom_models(
-                    anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends)
+                    anchor.frame, _custom, elev, self.out_dir, self.vfs_dir, road_ends=_bridge_ends,
+                    items=items, origin=(x0, y0))
                 custom_entries = _baked_entries
             bld, _ = buildingsmod.road_tile(anchor.frame, tx, ty, self.mapdata, elev, None, None,
                                             items, entries=_baked_entries, radii=_baked_radii)
@@ -2662,7 +2668,8 @@ class Server:
             import fences
             try:
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[
-                    {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks))
+                    {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks,
+                    roads=near_roads))
             except Exception as ex:
                 log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import picnic
@@ -5501,8 +5508,9 @@ class Connection:
         files.request(want)
 
     async def route(self, msg):
-        """{"id", "lat0", "lon0", "lat1", "lon1", "download"?} -> route_result {"id", "points": [[lat, lon]...], "dist",
-        "dur", "elev": [[dist_m, elev_m], ...]?, "error"?}. Also (re)starts this route's corridor prefetch
+        """{"id", "lat0", "lon0", "lat1", "lon1", "via"?, "download"?} -> route_result {"id", "points": [[lat, lon]...],
+        "dist", "dur", "legs": [[dist_m, dur_s], ...]?, "elev": [[dist_m, elev_m], ...]?, "error"?} (via: [[lat, lon],
+        ...] the route passes through in order, routing.MAX_VIA at most; legs: with via, each leg's). Also (re)starts this route's corridor prefetch
         (route_download, routeahead.py; download: "off", "ahead" (ROUTE_AHEAD_MAX_M, the default) or "route" (the
         whole route, up to ROUTE_WHOLE_MAX_M))."""
         self.route_dl_version += 1
@@ -5511,7 +5519,7 @@ class Connection:
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]

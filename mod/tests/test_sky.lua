@@ -237,5 +237,14 @@ check(math.abs(sky.serverHours({ hours = 23, speed = 60, epoch = 1000 }, 1000 + 
 check(sky.setServerClock({ hours = 21, speed = 0 }) ~= nil and sky.serverClock().hours == 21, 'server clock set')
 check(sky.setServerClock(nil) == nil and sky.serverClock() == nil, 'cleared: the real clock again')
 
+-- the sun's elevation (GitHub #874: the map's badge shows the moon at night). Paris on the June solstice: about
+-- 64.5 degrees up at 14:00 CEST (its solar noon ~13:50), well under the horizon at local midnight; Sydney's winter
+-- noon about 32.7 degrees; the Grand Canyon at 21:20 MDT in October is night
+check(near(sky.sunElevationDeg(2026, 6, 21, 14, 2, 48.8566, 2.3522), 64.5, 1.0), 'Paris solstice afternoon ~64.5 deg')
+check(sky.sunElevationDeg(2026, 6, 21, 0, 2, 48.8566, 2.3522) < -10, 'Paris midnight: the sun well down')
+check(near(sky.sunElevationDeg(2026, 6, 21, 12, 10, -33.8688, 151.2093), 32.7, 1.0), 'Sydney winter noon ~32.7 deg')
+check(sky.sunElevationDeg(2026, 10, 9, 21 + 20 / 60, -6, 36.1047, -111.8257) < sky.NIGHT_ELEV_DEG, 'Grand Canyon 21:20: night')
+check(sky.sunElevationDeg(2026, 10, 9, 12, -6, 36.1047, -111.8257) > 30, 'Grand Canyon noon: day')
+
 print(string.format('test_sky: %d passed, %d failed', pass, fail))
 os.exit(fail == 0 and 0 or 1)

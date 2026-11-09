@@ -69,3 +69,14 @@ console.log("mapmath fallback ok:", fb.length, "stand-ins for", tiles.length, "t
   console.log("mapmath search list ok")
 }
 
+
+// the weather badge's icon by night (GitHub #874): a clear sky is the moon, not the sun; rain stays rain
+{
+  assert.strictEqual(mm.weatherIcon(0), "☀️")
+  assert.strictEqual(mm.weatherIcon(0, true), "🌙")
+  assert.strictEqual(mm.weatherIcon(1, true), "🌙")
+  assert.strictEqual(mm.weatherIcon(2, true), "☁️")
+  assert.strictEqual(mm.weatherIcon(2, false), "🌤️")
+  assert.strictEqual(mm.weatherIcon(61, true), mm.weatherIcon(61))
+  console.log("mapmath night icon ok")
+}

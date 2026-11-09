@@ -85,7 +85,7 @@ M.SCHEMA = {
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
-  -- signstream.py, from cody196's PR #363); needs Roads
+  -- signstream.py, from cody196's PR #363), and the German Autobahn signs (server deautobahn.py); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
   -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
@@ -844,9 +844,14 @@ local function localWeatherBadge()
   local okW, weather = pcall(require, 'beamngEarth/weather')
   local m = okW and weather.current and weather.current()
   if not (sst and sst.localTime) and not m then return nil end
+  -- night: the game's sun under the horizon (its own clock: Real or Manual), else the weather message's isDay
+  local night = nil
+  if sst and sst.sunElev then night = sst.sunElev < sky.NIGHT_ELEV_DEG
+  elseif m and m.isDay ~= nil then night = not m.isDay end
   return {
     localTime = sst and sst.localTime or nil,
     code = m and m.code or nil,
+    night = night,
     tempC = m and (m.tempC or m.slTempC) or nil,
     metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's °C or °F)
   }
