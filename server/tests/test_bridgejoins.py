@@ -101,11 +101,25 @@ class EntranceTest(unittest.TestCase):
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 2.), 'unsafe')
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [far], base, 2.), 'ground')
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 5.), 'ground')
-        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), 4.), 2.), 'ground')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), 5.), 2.), 'ground')
+        # A small but substantial overlap still creates a mound if graded as ground.
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), 3.), 2.), 'unsafe')
         r.z += 8.
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 2.), 'elevated')
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.where(xy[:, 1] > 0., 7., 0.), 2.), 'unsafe')
         self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), np.nan), 2.), 'unsafe')
+
+    def test_crossing_clearance_checks_full_road_width(self):
+        r = self.ramp()
+        r.z += 8.
+        lower = grading.Plan(np.array([[10., -30.], [10., 30.]]), np.zeros(2), 3.)
+        # The centerline has generous headroom, but a raised edge does not.
+        raised_edge = lambda xy: np.where(xy[:, 0] > 12., 9., 0.)
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], raised_edge, 2.), 'unsafe')
+        # Hairpin widening is part of the drivable width too.
+        narrower = grading.Plan(np.array([[10., -30.], [10., 30.]]), np.zeros(2), 1.)
+        narrower.widen = np.array([2., 2.])
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [narrower], raised_edge, 2.), 'unsafe')
 
     def test_elevated_approach_preserves_lower_terrain_and_produces_deck(self):
         import roads
