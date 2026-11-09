@@ -656,6 +656,24 @@ class OverRoadTest(unittest.TestCase):
         self.assertEqual(house.min_h, 0.0)
         self.assertAlmostEqual(bld.road_through(over.ring, [street - 0]), 80.0, delta=2.5)
 
+    def test_a_footprint_mapped_over_the_ground_is_lifted_over_a_road_at_its_edge(self):
+        # Noranda Station over Tonkin Highway (Perth, GitHub #914): OSM layer 1, no min_height, one carriageway runs
+        # 6 m through its corner; at ground level it stood across the lanes. Mapped over the ground, LEVEL_THROUGH_M of
+        # road in it lifts it; the same footprint without a level, or a road outside it, stays on the ground
+        ring = self.ll(10, 10, 80, 60)
+        corner = np.array([[0.0, 68.0], [16.0, 68.0]])            # 6 m inside it, by its (10, 70) corner
+        ground = lambda la, lo: np.zeros(np.shape(la))
+        self.assertLess(bld.road_through(np.array([[10, 10], [90, 10], [90, 70], [10, 70], [10, 10]], float),
+                                         [corner]), bld.ROAD_THROUGH_M)
+
+        def min_h(level, roads):
+            b = Feats(["N"], [ring], **{"class": ["train_station"], "height": [8.0], "level": [level]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], ground, roads_xy=roads)[0][0].min_h
+        self.assertEqual(min_h(1.0, [corner]), bld.OVER_ROAD_CLEAR_M)
+        self.assertEqual(min_h(1.0, [corner - [3.0, 0.0]]), 0.0, "a road clipping it by under LEVEL_THROUGH_M: mapping slack")
+        self.assertEqual(min_h(np.nan, [corner]), 0.0, "no level: a road at its edge is no road through it")
+        self.assertEqual(min_h(1.0, [np.array([[0.0, 200.0], [256.0, 200.0]])]), 0.0, "no road in it")
+
     def test_a_huge_footprint_with_streets_in_it_is_a_site_left_out(self):
         # OSM's 1.35 km2 "Blueberry Commons" by I-94 (Huntley MT, 2026-11-05): a planned development tagged building,
         # its streets inside, lifted over them as a 15 m wall over the prairie. A footprint over SITE_M2 that public
