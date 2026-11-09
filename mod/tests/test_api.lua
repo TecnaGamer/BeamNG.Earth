@@ -46,7 +46,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 2, 'version 1.2 (gpsRoute)')
+T.check(api.version() == 1 and select(2, api.version()) == 3, 'version 1.3 (inTunnel, weather)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -164,5 +164,26 @@ T.check(api.addonOptions('x').port == 1 and api.addonOptions('y') == nil, 'addon
 api._event('addonOptions', { id = 'x', values = { port = 2 } })
 T.check(hooks[#hooks][1] == 'onBeamNGEarthAddonOptions' and hooks[#hooks][2].values.port == 2, 'options hook')
 package.loaded['beamngEarth/addons'] = nil
+
+-- 1.3: under a roof (ambience.inTunnel's rule, the player 1 m over its position) and the weather now
+T.check(api.has('inTunnel') and api.has('weather') and select(2, api.version()) >= 3, 'inTunnel / weather: has()')
+local asked = nil
+package.loaded['beamngEarth/ambience'] = { inTunnel = function(x, y, z) asked = { x, y, z } return x > 100 end }
+st.player = { lat = 45.0, lon = 7.0, x = 150, y = 2, z = 10 }
+T.check(api.inTunnel() == true and asked[3] == 11, 'inTunnel: the player, 1 m up')
+T.check(api.inTunnel(5, 6, 7) == false and asked[1] == 5, 'inTunnel: any point')
+st.player = nil
+T.check(api.inTunnel() == nil, 'inTunnel: nil before the world')
+package.loaded['beamngEarth/ambience'] = { inTunnel = function() error('boom') end }
+T.check(api.inTunnel(1, 2, 3) == nil, 'inTunnel: an error is nil')
+package.loaded['beamngEarth/ambience'] = nil
+local report = nil
+package.loaded['beamngEarth/weather'] = { rainNow = 0.4, snowNow = 0, current = function() return report end }
+T.check(api.weather() == nil, 'weather: nil before the first report')
+report = { code = 63, slTempC = 12, visM = 8000, rainMmH = 2.5, snowCmH = 0, wind = { ms = 6, gustMs = 10 } }
+local w = api.weather()
+T.check(w and w.rain == 0.4 and w.code == 63 and w.windMs == 6 and w.gustMs == 10 and w.visibilityM == 8000
+  and w.rainMmH == 2.5 and w.tempC == 12, 'weather: the report and the rain now')
+package.loaded['beamngEarth/weather'] = nil
 
 T.done('test_api')

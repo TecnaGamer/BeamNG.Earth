@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 2) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2) |
+| `version()` | `major, minor` (1, 3) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -165,6 +165,8 @@ end
 | `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning, waypoints, legs}` or nil |
 | `gpsSetRoute(points)` | 1.2: the GPS through waypoints, `points` `{{lat, lon, name?}, ...}`, the last one the destination, at most 11; one route through them all, each waypoint passed in order (within 40 m). `gps().waypoints` is the ones still ahead, `gps().legs` the planned route's `{dist m, dur s}` per leg. True, or `false, why` |
 | `notify(text, seconds)` | a short message on screen |
+| `inTunnel()`, `inTunnel(x, y, z)` | 1.3: the player (1 m over its position), or a point in game coordinates, under a roof: a tunnel, a covered arch, a parking structure (the rule the tunnel sound uses). `true` / `false`, nil before the world is there |
+| `weather()` | 1.3: `{rain, snow, code, tempC, windMs, gustMs, visibilityM, rainMmH, snowCmH}`: `rain` / `snow` 0..1 as hard as it falls where the camera is (none above the cloud base), `code` the WMO weather code, the rest from the latest report (nil where not known); nil before the first report |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 `pose()`: lat / lon in WGS84 degrees; `alt` m over the WGS84 ellipsoid; `heading` degrees clockwise from true north

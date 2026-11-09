@@ -24,9 +24,9 @@
 -- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 2
+M.MAJOR, M.MINOR = 1, 3
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
-  gpsRoute = true }
+  gpsRoute = true, inTunnel = true, weather = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached' }
@@ -110,6 +110,38 @@ function M.pose()
     end
   end
   return p
+end
+
+-- Is the player (or x, y, z in game coordinates) under a roof: a tunnel, a covered arch, a parking structure (1.3,
+-- has('inTunnel'); GitHub #1028: an add-on's automatic headlights)? true / false; nil before the world is there. The
+-- rule the tunnel sound uses (ambience.inTunnel); the player's point is 1 m over its position (a car's cabin).
+function M.inTunnel(x, y, z)
+  local amb = mod('ambience')
+  if not (amb and type(amb.inTunnel) == 'function') then return nil end
+  if x == nil then
+    local st = state()
+    local pl = st and st.player
+    if not (pl and pl.x and pl.y and pl.z) then return nil end
+    x, y, z = pl.x, pl.y, pl.z + 1
+  end
+  local ok, r = pcall(amb.inTunnel, x, y, z)
+  if not ok then return nil end
+  return r == true
+end
+
+-- The weather the world shows now (1.3, has('weather')): { rain = 0..1, snow = 0..1 (how hard it falls where the
+-- camera is: none above the cloud base), code (WMO weather code), tempC (at sea level), windMs, gustMs, visibilityM,
+-- rainMmH, snowCmH }, fields nil where not known; nil when there is no weather yet (before the first report, or the
+-- weather off).
+function M.weather()
+  local w = mod('weather')
+  if not w then return nil end
+  local m = type(w.current) == 'function' and w.current() or nil
+  if type(m) ~= 'table' then return nil end
+  local wind = type(m.wind) == 'table' and m.wind or {}
+  return { rain = tonumber(w.rainNow) or 0, snow = tonumber(w.snowNow) or 0, code = tonumber(m.code),
+    tempC = tonumber(m.slTempC), windMs = tonumber(wind.ms), gustMs = tonumber(wind.gustMs),
+    visibilityM = tonumber(m.visM), rainMmH = tonumber(m.rainMmH), snowCmH = tonumber(m.snowCmH) }
 end
 
 -- lat, lon of the player now (nil before the world is there).
