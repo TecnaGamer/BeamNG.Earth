@@ -451,9 +451,16 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
                 return hit[1]
             return get
 
+        def dense(fid, spec, pts):          # (a moved main sampled where its shift changes)
+            if not placement.on:
+                return pts
+            f, i = copies[fid][0]
+            return placement.dense(f, i, pts, spec, fid)
+
         def geometry(fid, spec, pts):
             # Evaluate the same descriptors as build_tile; do not substitute the
             # older lane-transition or pavement generators for 1.8's versions.
+            pts = dense(fid, spec, pts)
             lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             ls = roads.joint_desc(copies[fid], lambda f: roads.lane_shifts(f, urban, widths, left_hand))
@@ -468,6 +475,7 @@ def ground(frame, cells, urban=None, widths=None, left_hand=False):
         def pavement(fid, spec, pts):
             # On the ground only the markings shift; the native width taper
             # also changes asphalt. A bridge shifts its whole deck instead.
+            pts = dense(fid, spec, pts)
             lat, lon, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.)
             tp = roads.joint_desc(copies[fid], lambda f: roads.road_tapers(f, urban, widths, left_hand))
             w = roads.taper_widths(spec.width, tp, lon, lat) if tp else spec.width

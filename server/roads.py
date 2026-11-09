@@ -2592,9 +2592,10 @@ def lane_shifts(feats, urban_fn=None, widths=None, left_hand=False):
                 got.setdefault(int(r[0]), []).append((float(r[1]), float(r[2]), float(r[3]), float(r[4])))
             for i, t in got.items():
                 out[i] = tuple(t)
-            for i in got:                       # (a placed carriageway: its placement says where its lanes are)
-                if is_placed(feats, i, specs[i] or bridge[i]):
-                    out[i] = ()
+            for i in got:                       # (a placed end: its placement says where its lanes are there)
+                sp = specs[i] or bridge[i]
+                if is_placed(feats, i, sp):
+                    out[i] = tuple(r for r in out[i] if not _end_shift(feats, i, sp, _nearest_end(feats, i, r[0], r[1])))
     memo[k] = out
     return out
 
@@ -2658,25 +2659,78 @@ def placement_full(tags, spec):
     return float(np.clip(d, -cap, cap))
 
 
-def _part_shift(t, spec):
+PLACEMENT_SAMPLE_M = 5.0            # m at most between the points a moved line is sampled at (a sparse line's transitions)
+
+
+def _against(feats, i, t):
+    """Whether feature i's way (a lane-tag part's tags t) is oneway=-1: its own tag, else the way's osm_oneway (the
+    single-way fallback, lane_tags, carries no oneway)."""
+    v = (t or {}).get("oneway")
+    if v is None:
+        col = feats.attrs.get("osm_oneway")
+        v = col[i] if col is not None else ""
+    return str(v).strip() == "-1"
+
+
+def _part_shift(feats, i, t, spec):
     """placement_full of a lane-tag part's tags t, to the right of the feature's geometry (m): the spec's one-way
-    direction, against it where the way says oneway=-1."""
+    direction, against it where the way says oneway=-1 (_against)."""
     d = placement_full(t, spec)
     if d:
-        against = str((t or {}).get("oneway", "")).strip() == "-1"
-        d *= (spec.dir or 1) * (-1.0 if against else 1.0)
+        d *= (spec.dir or 1) * (-1.0 if _against(feats, i, t) else 1.0)
     return d
 
 
 def _end_shift(feats, i, spec, e):
     """Feature i's placement shift at its end e (0: its start, 1: its end; its first / last lane-tag part's), m left of
-    its geometry (offset_polyline's sign); 0.0 unplaced."""
-    if spec is None:
+    its geometry (offset_polyline's sign); 0.0 unplaced or in a tunnel there (a tunnel stays on its line)."""
+    if spec is None or _tunnel_end(feats, i, e):
         return 0.0
     parts = sorted(lane_tag_parts(feats, i), key=lambda p: (float(p[0]), float(p[1])))
     if not parts:
         return 0.0
-    return -_part_shift((parts[-1] if e else parts[0])[3], spec)
+    return -_part_shift(feats, i, (parts[-1] if e else parts[0])[3], spec)
+
+
+def _nearest_end(feats, i, lon, lat):
+    """0 or 1: which end of feature i's line (lon, lat) is nearer."""
+    line = np.asarray(feats.parts(i)[0][0], np.float64)
+    mx = 111320.0 * math.cos(math.radians(float(lat)))
+    d = [math.hypot((p[0] - lon) * mx, (p[1] - lat) * 110540.0) for p in (line[0], line[-1])]
+    return 0 if d[0] <= d[1] else 1
+
+
+def _tunnel_end(feats, i, e):
+    """Whether feature i's end e is in a tunnel (a tunnel range reaching it)."""
+    return any(kind == "tunnel" and (a0 <= 1e-3 if e == 0 else b0 >= 1 - 1e-3) for a0, b0, kind in level_ranges(feats, i))
+
+
+def _densify(xy, step=PLACEMENT_SAMPLE_M):
+    """xy (k, d) with points put in so no segment is over step m in its first two columns (a straight line stays one)."""
+    xy = np.asarray(xy, np.float64)
+    if len(xy) < 2:
+        return xy
+    seg = np.hypot(*np.diff(xy[:, :2], axis=0).T)
+    k = np.maximum(1, np.ceil(seg / step).astype(int))
+    if (k == 1).all():
+        return xy
+    out = [xy[:1]]
+    for a, b, n in zip(xy[:-1], xy[1:], k):
+        t = (np.arange(1, n + 1) / n)[:, None]
+        out.append(a + (b - a) * t)
+    return np.concatenate(out)
+
+
+def _with_tunnels(full, tunnels):
+    """full [(a, b, shift)] with each tunnel range (a, b) cut out and put in at no shift, fixed: [(a, b, d, fixed)]."""
+    out = []
+    for a, b, d in full:
+        pieces = [(a, b)]
+        for t0, t1 in tunnels:
+            pieces = [q for p0, p1 in pieces for q in ((p0, min(p1, t0)), (max(p0, t1), p1)) if q[1] - q[0] > 1e-9]
+        out += [(p0, p1, d, False) for p0, p1 in pieces]
+    out += [(t0, t1, 0.0, True) for t0, t1 in tunnels]
+    return sorted(out)
 
 
 def placement_shift(feats, i, lon, lat, spec, joints=()):
@@ -2688,8 +2742,11 @@ def placement_shift(feats, i, lon, lat, spec, joints=()):
     parts = lane_tag_parts(feats, i)
     if spec is None:
         return None
-    full = sorted((float(a), float(b), _part_shift(t, spec)) for a, b, _wid, t in parts or ())
+    full = sorted((float(a), float(b), _part_shift(feats, i, t, spec)) for a, b, _wid, t in parts or ())
     placed = any(d for _, _, d in full)
+    # (a tunnel stays on its line: no shift in it, the ground eased to it on its own side)
+    tunnels = [(float(a0), float(b0)) for a0, b0, kind in level_ranges(feats, i) if kind == "tunnel"] if placed else []
+    full = _with_tunnels(full, tunnels) if tunnels else [(a, b, d, False) for a, b, d in full]
     joints = [j for j in joints or () if j[2] > 0 and abs(j[3]) > 1e-9]
     if not placed and not joints:
         return None
@@ -2714,13 +2771,14 @@ def placement_shift(feats, i, lon, lat, spec, joints=()):
             s = cum[k] + t[np.arange(len(p)), k] * seg_len[k]
             frac = s / total
             # (a point outside every part: the nearest part's; parts need not cover the whole feature)
-            shift = np.array([min(full, key=lambda r: max(r[0] - f, f - r[1], 0.0))[2] for f in frac])
-            for (a0, b0, d0), (a1, b1, d1) in zip(full[:-1], full[1:]):
+            shift = np.array([min(full, key=lambda r: (max(r[0] - f, f - r[1], 0.0), not r[3]))[2] for f in frac])
+            for (a0, b0, d0, f0), (a1, b1, d1, f1) in zip(full[:-1], full[1:]):
                 if abs(d1 - d0) < 1e-9:
                     continue
                 ease = float(np.clip(PLACEMENT_EASE_M_PER_M * abs(d1 - d0), *PLACEMENT_EASE_M))
-                left = min(ease / 2, PLACEMENT_EASE_SHARE * (b0 - a0) * total)
-                right = min(ease / 2, PLACEMENT_EASE_SHARE * (b1 - a1) * total)
+                # (each side half the easing; beside a tunnel the ground side all of it)
+                left = 0.0 if f0 else min(ease if f1 else ease / 2, PLACEMENT_EASE_SHARE * (b0 - a0) * total)
+                right = 0.0 if f1 else min(ease if f0 else ease / 2, PLACEMENT_EASE_SHARE * (b1 - a1) * total)
                 at = b0 * total
                 zone = (s > at - left) & (s < at + right)
                 if zone.any() and left + right > 0:
@@ -2824,11 +2882,11 @@ class Placement:
                     rows = _end_index(f)[0].get(k)
                     if not rows:
                         continue
-                    specs, bspecs = road_specs(f, *self.args), bridge_specs(f)
+                    specs, bspecs, tspecs = road_specs(f, *self.args), bridge_specs(f), tunnel_specs(f)
                     cid = f.__dict__.get("_bnge_cell")
                     for j, e in rows:
-                        if specs[j] is None and bspecs[j] is None:
-                            continue            # (not a road the taper kernel counts)
+                        if specs[j] is None and bspecs[j] is None and tspecs[j] is None:
+                            continue            # (not a road: a tunnel's end counts, it stands)
                         r = (f, j, e, str(f.ids[j]))
                         if cid is not None and str(cid[0]) == cell:
                             own.append(r)
@@ -2848,12 +2906,14 @@ class Placement:
             return None
         g, j, ej, _ = others[0]
         other_deck = _deck_end(g, j, ej)
-        if deck and not other_deck:
+        other_tunnel = _tunnel_end(g, j, ej)
+        if deck and not other_deck and not other_tunnel:
             return None
         other_spec = bridge_specs(g)[j] if other_deck else road_specs(g, *self.args)[j]
         dx = _end_shift(f, i, spec, e)
-        dy = _end_shift(g, j, other_spec, ej) * (1.0 if e != ej else -1.0)    # (end to end: its left is ours)
-        alone = other_deck and not deck
+        # (end to end: its left is ours; a tunnel's end shifts by none, it stands, and ours runs to it)
+        dy = _end_shift(g, j, other_spec, ej) * (1.0 if e != ej else -1.0)
+        alone = (other_deck and not deck) or other_tunnel
         return ((dy if alone else 0.5 * (dx + dy)) - dx, alone)
 
     def joints(self, f, i, fid):
@@ -2874,7 +2934,7 @@ class Placement:
         index = self._ends()
         if ends is None or not any(k in index for k in ends) or ends[0] == ends[1]:
             return ()
-        mine = [e for e in (0, 1) if ends[e] in index and _deck_end(f, i, e) == deck]
+        mine = [e for e in (0, 1) if ends[e] in index and _deck_end(f, i, e) == deck and not _tunnel_end(f, i, e)]
         if not mine:
             return ()
         out, done = [], set()
@@ -2915,17 +2975,31 @@ class Placement:
         fid = str(f.ids[i]) if fid is None else str(fid)
         return placement_shift(f, i, lon, lat, spec, self.joints(f, i, fid))
 
+    def moves(self, f, i, spec, fid=None):
+        """Whether anything moves feature i (a placed part or a joint's delta): its lines are then sampled densely."""
+        if not self.on or spec is None:
+            return False
+        fid = str(f.ids[i]) if fid is None else str(fid)
+        return bool(self.joints(f, i, fid)) or is_placed(f, i, spec)
+
+    def dense(self, f, i, xy, spec, fid=None):
+        """xy (k, d: metres) with points every PLACEMENT_SAMPLE_M where something moves feature i (its shift changes
+        between a sparse line's vertices: a joint's taper, a part's easing), else xy itself."""
+        return _densify(xy) if self.moves(f, i, spec, fid) else np.asarray(xy, np.float64)
+
     def ring(self, frame, f, i, ring, spec, fid=None):
         """ring (lon / lat (k, 2), a piece of feature i; spec: the piece's, its bridge spec on its deck) moved by its
-        shift, in frame's metres; ring itself where nothing moves it."""
+        shift, in frame's metres, sampled every PLACEMENT_SAMPLE_M (dense); ring itself where nothing moves it."""
         ring = np.asarray(ring, np.float64)
-        if not self.on or len(ring) < 2:
-            return ring
-        sh = self.shift(f, i, ring[:, 0], ring[:, 1], spec, fid)
-        if sh is None or not np.any(np.abs(sh) > 1e-9):
+        if not self.on or len(ring) < 2 or not self.moves(f, i, spec, fid):
             return ring
         e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
-        moved = offset_polyline(np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64), np.zeros(len(ring))], sh)
+        xy = _densify(np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)])
+        la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+        sh = self.shift(f, i, np.asarray(lo, np.float64), np.asarray(la, np.float64), spec, fid)
+        if sh is None or not np.any(np.abs(sh) > 1e-9):
+            return ring
+        moved = offset_polyline(np.c_[xy, np.zeros(len(xy))], sh)
         la, lo, _ = frame.enu_to_geodetic(moved[:, 0], moved[:, 1], 0.0)
         return np.c_[np.asarray(lo, np.float64), np.asarray(la, np.float64)]
 

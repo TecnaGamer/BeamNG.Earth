@@ -429,5 +429,90 @@ class ConsumersTest(unittest.TestCase):
         self.assertEqual(plancache.PLANS_FORMAT, 26)
 
 
+def line_y(ring, x):
+    """y (frame metres) of a lon / lat ring at x."""
+    e, n, _ = FRAME.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+    order = np.argsort(e)
+    return float(np.interp(x, np.asarray(e)[order], np.asarray(n)[order]))
+
+
+def east(pieces, flags=()):
+    """Eastbound features [(id, x0, x1, lane-tag parts [(a, b, tags)], vertices)] along y = -6.7."""
+    lines = [[(x, -6.7) for x in np.linspace(x0, x1, k)] for _fid, x0, x1, _parts, k in pieces]
+    f = features(lines, ["motorway"] * len(pieces), ids=[p[0] for p in pieces], flags=list(flags))
+    f.rules["oneway"] = rules([(k, 1.0) for k in range(len(pieces))], "float")
+    f.attrs["osm_lanes"] = np.array([float(max(int((t or {}).get("lanes", 2)) for _a, _b, t in parts))
+                                     for _f, _x0, _x1, parts, _k in pieces])
+    f.attrs[railtags.LANE_PARTS] = [[(a, b, fid, t) for a, b, t in parts] for fid, _x0, _x1, parts, _k in pieces]
+    return f
+
+
+TWO = {"lanes": "2", "oneway": "yes"}
+THREE = {"lanes": "3", "oneway": "yes"}
+
+
+class ReviewTest(unittest.TestCase):
+    """Codex's review of #1014 (2026-11-09)."""
+
+    def test_sparse_vertices_sampled(self):
+        """A 2-lane piece of two vertices 350 m apart meeting the placed piece: moved only within its taper (its
+        middle where it was, not on a diagonal), and a placed stretch inside a 2-vertex feature is not lost."""
+        f = east([("eA", -500.0, -150.0, [(0.0, 1.0, TWO)], 2), ("eB", -150.0, 150.0, [(0.0, 1.0, PLACED)], 31)])
+        place = roads.placement_context([f])
+        ring = place.ring(FRAME, f, 0, roads.ground_parts(f, 0)[0], roads.road_specs(f)[0], "eA")
+        self.assertAlmostEqual(line_y(ring, -325.0), -6.7, delta=0.05)
+        self.assertAlmostEqual(line_y(ring, -150.0), -7.7, delta=0.05)
+        g = east([("eM", 0.0, 400.0, [(0.0, 0.3, THREE), (0.3, 0.7, PLACED), (0.7, 1.0, THREE)], 2)])
+        ring = roads.placement_context([g]).ring(FRAME, g, 0, roads.ground_parts(g, 0)[0], roads.road_specs(g)[0])
+        self.assertAlmostEqual(line_y(ring, 200.0), -8.7, delta=0.05)
+        self.assertAlmostEqual(line_y(ring, 20.0), -6.7, delta=0.05)
+
+    def test_placement_rows_follow_lane_enrichment(self):
+        """A cell read before its lane shard joined, then enriched (railtags' join calls roadlanes.invalidate): the
+        placement is seen."""
+        import roadlanes
+        f = east([("eB", -150.0, 150.0, [(0.0, 1.0, THREE)], 31)])
+        self.assertFalse(roads.placement_context([f]).on)
+        f.attrs[railtags.LANE_PARTS] = [[(0.0, 1.0, "eB", dict(PLACED))]]
+        roadlanes.invalidate(f)
+        self.assertTrue(roads.placement_context([f]).on)
+
+    def test_oneway_minus_one_from_the_way_without_lane_parts(self):
+        """A single-way feature (no LANE_PARTS: lane_tags' columns, which carry no oneway) whose way is oneway=-1, the
+        Overture geometry along the way, travel against it: the shift goes to the right of the way (= of the
+        geometry), as with LANE_PARTS."""
+        f, xs, lon, lat = feature(parts=None)
+        f.attrs[railtags.lane_attr("placement")] = np.array(["right_of:1"], object)
+        f.attrs["osm_oneway"] = np.array(["-1"], object)
+        sh = roads.placement_shift(f, 0, lon, lat, spec(d=-1))
+        np.testing.assert_allclose(sh, -2.0, atol=1e-9)
+
+    def test_lane_shifts_kept_where_the_part_is_unplaced(self):
+        """The exit at the 3-lane piece's end, only its first 30 % placed: the joint's part is unplaced, so its lane
+        shifts stay (the placement does not reach there)."""
+        f = carriageways(placed=False, ramp=True)[0]
+        ids = [str(v) for v in f.ids]
+        k = ids.index("eB")
+        f.attrs[railtags.LANE_PARTS][k] = [(0.0, 0.3, "eB", dict(PLACED)), (0.3, 1.0, "eB", dict(THREE))]
+        self.assertTrue(roads.lane_shifts(f)[k])
+
+    def test_tunnel_stands(self):
+        """A placed piece with a tunnel inside (0.4..0.6) and one going on into a tunnel feature: the tunnel stays on
+        its line, the ground runs to it at each portal; past the easing the full shift."""
+        f = east([("eB", -150.0, 150.0, [(0.0, 1.0, PLACED)], 61), ("eT", 150.0, 250.0, [(0.0, 1.0, PLACED)], 21)],
+                 flags=[(0, "is_tunnel", 0.4, 0.6), (1, "is_tunnel", 0.0, 1.0)])
+        place = roads.placement_context([f])
+        sp = roads.road_specs(f)[0]
+        rings = [np.asarray(r) for r in roads.ground_parts(f, 0)]
+        self.assertEqual(len(rings), 2)
+        for ring, end in ((rings[0], -1), (rings[1], 0), (rings[1], -1)):
+            sh = place.shift(f, 0, [ring[end, 0]], [ring[end, 1]], sp, "eB")
+            self.assertAlmostEqual(float(sh[0]), 0.0, delta=0.05, msg=(end, ring[end]))
+        lon0, lat0 = rings[0][0]
+        self.assertAlmostEqual(float(place.shift(f, 0, [lon0], [lat0], sp, "eB")[0]), -2.0, delta=0.05)
+        mid = f.parts(0)[0][0][30]                      # (x = 0, inside the tunnel: the AI's line there too)
+        self.assertAlmostEqual(float(place.shift(f, 0, [mid[0]], [mid[1]], sp, "eB")[0]), 0.0, delta=0.05)
+
+
 if __name__ == "__main__":
     unittest.main()
