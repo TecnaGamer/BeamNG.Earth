@@ -61,10 +61,10 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 13     # 13: a road in the open country rides a 1 m embankment (at grade in a village, by houses, at a
-                      # junction, on a bridge's approach and in a wood for a dirt road); 12: forest tracks and minor
-                      # dirt roads worn in runs (humps, calmer stretches between); 11: pass roads with two lanes
-                      # bridge ends on embankments (#694), the ground under decks (#698), junction corridors (#682)
+PLANS_FORMAT = 14     # 14: worn dirt tuned (a forest track is the reference lane 2.25x over, its humps half as tall,
+                      # its deep pit a quarter as deep and 800-2000 m off, a main dirt road leaning half as much);
+                      # 13: a road in the open country rides a 1 m embankment; 12: forest tracks and minor dirt roads
+                      # worn in runs (humps, calmer stretches between); 11: pass roads with two lanes
 
 
 def plans_format():
