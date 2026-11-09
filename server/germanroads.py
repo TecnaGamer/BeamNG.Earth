@@ -17,6 +17,9 @@ direction, over MATCH_SHARE of its length) and takes from it what the map does n
              the width follows the class's rule for that many lanes when none was surveyed
     surface  where OpenStreetMap and Overture say nothing: paved, setts, gravel or earth
 Driveways, parking aisles and living streets (SKIP) take nothing: they run beside a street, not along its axis.
+A divided road's two one-way halves on one two-way axis (a town avenue the survey keeps as one) take half its width
+each. Decks and tunnels (roads._bridge_specs) take the same as the road on the ground, so a bridge is as wide as its
+approaches.
 Outside Germany, where a shard is missing, or offline: no axes, today's estimates. BNE_DE_ROADS=off turns it off.
 The sources and their licences are in CREDITS.md.
 """
@@ -39,6 +42,8 @@ BOX = (47.2, 5.8, 55.1, 15.1)   # south, west, north, east: Germany, so nowhere 
 RETRY_S = 3600                  # unreachable: asked again after this long
 MISS_TTL_S = 7 * 86400          # a shard the site did not have (404) asked again after this
 MATCH_M = 7.0                   # m from a road's line to the axis: the axes' own +-3 m and the map's
+PAIRED_SLACK_M = 3.0            # m past half a divided road's median its halves still find its single axis
+REACH_MAX_M = 15.0              # m at most a road's samples look for an axis
 MATCH_DEG = 25.0                # degrees at most between the road's and the axis' direction
 MATCH_SHARE = 0.6               # share of a road's samples that must find its axis
 SAMPLE_M = 10.0                 # m between a road's samples
@@ -166,7 +171,7 @@ def _fetched(x, y):
 class Axes:
     """The axes of some shards in local metres round (lat0, lon0), their segments in a grid."""
 
-    def __init__(self, shards, lat0, lon0):
+    def __init__(self, shards, lat0, lon0, half=None):
         self.lat0, self.lon0 = lat0, lon0
         self.kx, self.ky = 111320.0 * math.cos(math.radians(lat0)), 110540.0
         seg_a, seg_b, line, attrs = [], [], [], []
@@ -189,16 +194,31 @@ class Axes:
             return
         self.a, self.b = np.concatenate(seg_a), np.concatenate(seg_b)
         self.line, self.attrs = np.concatenate(line), np.concatenate(attrs)
+        if half is not None:            # (only the segments near the roads asked about: a shard is ~25 km across)
+            hx, hy = half
+            m = REACH_MAX_M
+            near = ((np.maximum(self.a[:, 0], self.b[:, 0]) >= -hx - m) & (np.minimum(self.a[:, 0], self.b[:, 0]) <= hx + m)
+                    & (np.maximum(self.a[:, 1], self.b[:, 1]) >= -hy - m) & (np.minimum(self.a[:, 1], self.b[:, 1]) <= hy + m))
+            self.a, self.b, self.line = self.a[near], self.b[near], self.line[near]
+            if not len(self.a):
+                return
         d = self.b - self.a
         self.len = np.hypot(d[:, 0], d[:, 1])
         self.dir = d / np.maximum(self.len, 1e-9)[:, None]
-        lo = np.floor(np.minimum(self.a, self.b) / CELL_M - MATCH_M / CELL_M).astype(np.int64)
-        hi = np.floor(np.maximum(self.a, self.b) / CELL_M + MATCH_M / CELL_M).astype(np.int64)
-        self.grid = {}
-        for s in range(len(self.a)):
-            for gx in range(lo[s, 0], hi[s, 0] + 1):
-                for gy in range(lo[s, 1], hi[s, 1] + 1):
-                    self.grid.setdefault((gx, gy), []).append(s)
+        lo = np.floor(np.minimum(self.a, self.b) / CELL_M - REACH_MAX_M / CELL_M).astype(np.int64)
+        hi = np.floor(np.maximum(self.a, self.b) / CELL_M + REACH_MAX_M / CELL_M).astype(np.int64)
+        nx, ny = hi[:, 0] - lo[:, 0] + 1, hi[:, 1] - lo[:, 1] + 1
+        cnt = nx * ny
+        sid = np.repeat(np.arange(len(self.a)), cnt)
+        k = np.arange(int(cnt.sum())) - np.repeat(np.cumsum(cnt) - cnt, cnt)
+        gx = lo[sid, 0] + k // ny[sid]
+        gy = lo[sid, 1] + k % ny[sid]
+        order = np.lexsort((gy, gx))
+        gx, gy, sid = gx[order], gy[order], sid[order]
+        cut = np.flatnonzero((np.diff(gx) != 0) | (np.diff(gy) != 0)) + 1
+        starts = np.concatenate([[0], cut])
+        ends = np.concatenate([cut, [len(sid)]])
+        self.grid = {(int(gx[a]), int(gy[a])): sid[a:b] for a, b in zip(starts, ends)} if len(sid) else {}
 
     def __bool__(self):
         return len(self.a) > 0
@@ -207,44 +227,43 @@ class Axes:
         ll = np.asarray(lonlat, np.float64)
         return np.column_stack([(ll[:, 0] - self.lon0) * self.kx, (ll[:, 1] - self.lat0) * self.ky])
 
-    def match(self, lonlat, carriageway=None):
-        """The axis (line index, a row of attrs) each of a road's samples runs along (-1 none) and the samples' count. carriageway: True
-        only a divided road's carriageways, False none of them, None any."""
+    def match(self, lonlat, carriageway=None, reach=MATCH_M):
+        """The axis (line index, a row of attrs) each of a road's samples runs along (-1 none) and the samples' count.
+        carriageway: True only a divided road's carriageways, False none of them, None any. All samples at once
+        against the segments in their grid cells (one per sample was ~4x the specs' own time in Berlin)."""
         p = self.local(lonlat)
         seg = np.diff(p, axis=0)
         L = np.hypot(seg[:, 0], seg[:, 1])
-        pts, dirs = [], []
-        for k in range(len(seg)):
-            if L[k] <= 0:
-                continue
-            n = max(1, int(L[k] // SAMPLE_M))
-            t = (np.arange(n) + 0.5) / n
-            pts.append(p[k] + t[:, None] * seg[k])
-            dirs.append(np.repeat((seg[k] / L[k])[None], n, axis=0))
-        if not pts:
+        keep = L > 0
+        if not keep.any():
             return np.zeros(0, np.int64), 0
-        pts, dirs = np.concatenate(pts), np.concatenate(dirs)
-        cos_max = math.cos(math.radians(MATCH_DEG))
+        seg, L, p0 = seg[keep], L[keep], p[:-1][keep]
+        n = np.maximum(1, (L // SAMPLE_M).astype(np.int64))
+        k = np.repeat(np.arange(len(seg)), n)
+        t = (np.arange(int(n.sum())) - np.repeat(np.cumsum(n) - n, n) + 0.5) / np.repeat(n, n)
+        pts = p0[k] + t[:, None] * seg[k]
+        dirs = seg[k] / L[k][:, None]
         got = np.full(len(pts), -1, np.int64)
-        for j, (q, u) in enumerate(zip(pts, dirs)):
-            cand = self.grid.get((int(math.floor(q[0] / CELL_M)), int(math.floor(q[1] / CELL_M))))
-            if not cand:
-                continue
-            c = np.asarray(cand)
-            if carriageway is not None:
-                is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
-                c = c[is_cw] if carriageway else c[~is_cw]
-                if not len(c):
-                    continue
-            c = c[np.abs(self.dir[c] @ u) >= cos_max]
+        cells = np.floor(pts / CELL_M).astype(np.int64)
+        parts = [self.grid.get(key) for key in set(map(tuple, cells.tolist()))]
+        parts = [q for q in parts if q is not None]
+        if not parts:
+            return got, len(pts)
+        c = np.unique(np.concatenate(parts))
+        if carriageway is not None:
+            is_cw = (self.attrs[self.line[c], 4] & CARRIAGEWAY) > 0
+            c = c[is_cw] if carriageway else c[~is_cw]
             if not len(c):
-                continue
-            t = np.clip(np.einsum("ij,ij->i", q - self.a[c], self.dir[c]), 0.0, self.len[c])
-            near = self.a[c] + t[:, None] * self.dir[c]
-            dist = np.hypot(near[:, 0] - q[0], near[:, 1] - q[1])
-            k = int(np.argmin(dist))
-            if dist[k] <= MATCH_M:
-                got[j] = int(self.line[c[k]])
+                return got, len(pts)
+        a, d, ln = self.a[c], self.dir[c], self.len[c]
+        rel = pts[:, None, :] - a[None, :, :]                       # (samples, candidates, 2)
+        along = np.clip(np.einsum("sck,ck->sc", rel, d), 0.0, ln[None, :])
+        off = rel - along[:, :, None] * d[None, :, :]
+        dist = np.hypot(off[:, :, 0], off[:, :, 1])
+        dist[np.abs(dirs @ d.T) < math.cos(math.radians(MATCH_DEG))] = np.inf
+        best = np.argmin(dist, axis=1)
+        ok = dist[np.arange(len(pts)), best] <= reach
+        got[ok] = self.line[c[best[ok]]]
         return got, len(pts)
 
 
@@ -270,7 +289,9 @@ def axes_for(feats):
         return False
     if not got:
         return None
-    ax = Axes(got, (s + n) / 2.0, (w + e) / 2.0)
+    lat0, lon0 = (s + n) / 2.0, (w + e) / 2.0
+    half = ((e - w) / 2.0 * 111320.0 * math.cos(math.radians(lat0)), (n - s) / 2.0 * 110540.0)
+    ax = Axes(got, lat0, lon0, half)
     return ax if ax else None
 
 
@@ -282,9 +303,11 @@ def _mode(values):
     return int(u[np.argmax(c)])
 
 
-def surveyed(ax, lonlat, oneway):
+def surveyed(ax, lonlat, oneway, paired=None):
     """(width m or None, lanes or None, surface value or None) of the axis a road runs along, None where it runs
-    along none. A one-way road (one carriageway of a divided road, or a one-way street) takes a carriageway's axis
+    along none. paired: the median (m, centre to centre) of a road that is one of a divided road's two one-way halves
+    (roads.dual_carriageways): on a single two-way axis, found within half that and PAIRED_SLACK_M, it takes half the
+    axis' paved width, the medians being unpaved. A one-way road (one carriageway of a divided road, or a one-way street) takes a carriageway's axis
     where there is one; a two-way road never one carriageway's. A one-way road on any other axis takes its surface
     alone: the map splits roads into two one-way halves the survey keeps as one axis with both halves' width and
     sometimes fewer lanes than one half has (Saarbrücken's Mainzer Straße: one 20 m, two-lane axis, two two-lane
@@ -292,7 +315,8 @@ def surveyed(ax, lonlat, oneway):
     hit, n = ax.match(lonlat, carriageway=True) if oneway else (None, 0)
     own = True
     if not oneway or (hit >= 0).sum() < MATCH_SHARE * max(n, 1):
-        hit, n = ax.match(lonlat, carriageway=False)
+        reach = max(MATCH_M, min(REACH_MAX_M, paired / 2.0 + PAIRED_SLACK_M)) if oneway and paired else MATCH_M
+        hit, n = ax.match(lonlat, carriageway=False, reach=reach)
         own = not oneway
     if not n or (hit >= 0).sum() < MATCH_SHARE * n:
         return None
@@ -301,7 +325,11 @@ def surveyed(ax, lonlat, oneway):
     width = float(np.median(widths)) / 10.0 if len(widths) >= MATCH_SHARE * len(a) else None
     lanes = _mode(a[:, 1]) or None
     surf = SURFACES.get(_mode(a[:, 2]))
-    return (width, lanes, surf) if own else (None, None, surf)
+    if own:
+        return width, lanes, surf
+    if paired and width is not None and not (a[:, 4] & DIVIDED_AXIS).any():
+        return width / 2.0, None, surf
+    return None, None, surf
 
 
 def adjust_specs(feats, specs):
@@ -325,7 +353,7 @@ def adjust_specs(feats, specs):
         b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
         if b - a < 2:
             continue
-        got = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway))
+        got = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
         if got is None:
             continue
         width, lanes, surf = got

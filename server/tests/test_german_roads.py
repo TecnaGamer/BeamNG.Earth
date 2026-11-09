@@ -28,15 +28,17 @@ def ll(e, n):
 
 
 def rules(entries, kind="text"):
+    """RuleTable from [(feature, value[, start, end]), ...] (default: covering whole features)."""
     if not entries:
         return mapgeom.RuleTable(np.zeros(0, np.int32), np.zeros(0, "<U8"), np.zeros(0, np.float32),
                                  np.zeros(0, np.float32))
     return mapgeom.RuleTable(np.array([e[0] for e in entries], np.int32),
                              np.array([e[1] for e in entries], np.float32 if kind == "float" else "<U32"),
-                             np.zeros(len(entries), np.float32), np.ones(len(entries), np.float32))
+                             np.array([e[2] if len(e) > 2 else 0.0 for e in entries], np.float32),
+                             np.array([e[3] if len(e) > 3 else 1.0 for e in entries], np.float32))
 
 
-def features(lines, classes, oneway=(), widths=(), osm=None):
+def features(lines, classes, oneway=(), widths=(), osm=None, levels=(), names=None):
     coords, part_off, ring_off, coord_off = [], [0], [0], [0]
     for ln in lines:
         coords += [ll(e, n) for e, n in ln]
@@ -45,13 +47,15 @@ def features(lines, classes, oneway=(), widths=(), osm=None):
         part_off.append(len(ring_off) - 1)
     n = len(lines)
     attrs = {"class": np.array(classes), "subtype": np.array(["road"] * n)}
+    if names is not None:
+        attrs["name"] = np.array(names, dtype=object)
     for k, v in (osm or {}).items():
         attrs[k] = np.array(v, dtype=object)
     return mapgeom.Features(
         layer="roads", ids=np.array([f"id{i:03d}" for i in range(n)]), kind=np.full(n, mapgeom.LINE, np.uint8),
         part_off=np.array(part_off, np.int64), ring_off=np.array(ring_off, np.int64),
         coord_off=np.array(coord_off, np.int64), lonlat=np.array(coords, np.float64), attrs=attrs,
-        rules={"surface": rules([]), "width": rules(list(widths), "float"), "level": rules([], "float"),
+        rules={"surface": rules([]), "width": rules(list(widths), "float"), "level": rules(list(levels), "float"),
                "flags": rules([]), "oneway": rules([(i, "1") for i in oneway])})
 
 
@@ -161,6 +165,22 @@ class GermanRoadsTest(unittest.TestCase):
             write_shard(self.tmp.name, [(EAST, 0.0, 0, surf, 9, 0)])
             sp = self.specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["track"]))[0]
             self.assertEqual(sp.kind, kind, surf)
+
+    def test_a_bridge_is_as_wide_as_its_road(self):
+        write_shard(self.tmp.name, [(EAST, 6.5, 2, 1, 4, 0)])
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["secondary"], levels=[(0, 1.0, 0.4, 0.6)])
+        self.assertEqual(roads.road_specs(f)[0].width, 6.5)
+        self.assertEqual(roads.bridge_specs(f)[0].width, 6.5)
+
+    def test_the_halves_of_a_town_avenue_take_half_its_width(self):
+        write_shard(self.tmp.name, [(EAST, 20.0, 2, 1, 3, 0)])       # (Mainzer Straße: one 20 m axis)
+        f = features([[(-300.0, 8.0), (300.0, 8.0)], [(300.0, -8.0), (-300.0, -8.0)]], ["primary", "primary"],
+                     oneway=[0, 1], names=["Mainzer Straße", "Mainzer Straße"])
+        a, b = roads._road_specs(f, None, False)
+        self.assertTrue(a.median and b.median)
+        for sp in (a, b):
+            self.assertLessEqual(sp.width, 10.0)
+            self.assertAlmostEqual(sp.width, roads.dual_cap(sp.median, 10.0), places=6)
 
     def test_a_main_road_never_turns_to_earth(self):
         write_shard(self.tmp.name, [(EAST, 0.0, 0, 6, 3, 0)])

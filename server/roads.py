@@ -3718,6 +3718,12 @@ def _bridge_specs(feats, want="bridge"):
                         surf=surface_token(surf), link=link, dir=(-1 if float(ov) < 0 else 1) if ov is not None else 0))
         free[i] = ow or rule_w is not None
     out = _swedish_specs(feats, out, widths_only=True)      # (first: a divided road's deck is capped from its width)
+    import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m Kreisstraße's
+    surveyed = germanroads.adjust_specs(feats, out)     # bridge stayed at its class's 8 m, stepping at both ends)
+    for i, (sp, de) in enumerate(zip(out, surveyed)):
+        if sp is not None and de is not None and de != sp:
+            free[i] = free[i] or de.width != sp.width
+            out[i] = de
     for i, sp in enumerate(out):
         g = ground[i] if ground is not None and sp is not None else None
         if g is not None and g.median:
@@ -3726,6 +3732,8 @@ def _bridge_specs(feats, want="bridge"):
             # the user 2026-10-31: "bridge widths dont always match the road widths")
             w = sp.width if free[i] else carriageway(sp.cls, sp.kind, False, None, True, sp.lanes, link=sp.link)
             out[i] = sp._replace(oneway=True, dir=g.dir, median=g.median, width=dual_cap(g.median, w))
+    if any(sp is not None and sp.median for sp in out):
+        out = germanroads.adjust_specs(feats, out)      # (a divided road's deck halves: half its surveyed width)
     return out
 
 
