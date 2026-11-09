@@ -93,14 +93,30 @@ def of_stations(stations):
     return Keepout(rings)
 
 
+def of_rail_stations(stations):
+    """A Keepout of the railway stations' platforms and roofs (the tracks' own ground is the railway mesh's)."""
+    rings = []
+    for st in stations:
+        rings += [np.asarray(p.ring, float) for p in st.platforms if len(p.ring) >= 3]
+        rings += [np.asarray(r, float) for _i, r in st.roofs if len(r) >= 3]
+    return Keepout(rings)
+
+
 def keepout(md, frame, box):
-    """The Keepout of the stations near frame's box (x0, y0, x1, y1); empty (falsy) when there is none or the feature is
-    off. Errors cost the keepout, never the tile."""
-    if md is None or not bs.ON:
-        return Keepout()
-    try:
-        return of_stations(bs.stations_near(md, frame, box))
-    except Exception:
-        import logging
-        logging.getLogger(__name__).exception("bus station keepout")
-        return Keepout()
+    """The Keepout of the stations (bus and railway) near frame's box (x0, y0, x1, y1); empty (falsy) when there is none or
+    the features are off. Errors cost the keepout, never the tile."""
+    import logging
+    rings = []
+    if md is not None and bs.ON:
+        try:
+            rings += of_stations(bs.stations_near(md, frame, box)).rings
+        except Exception:
+            logging.getLogger(__name__).exception("bus station keepout")
+    if md is not None:
+        try:
+            import railstations
+            if railstations.ON:
+                rings += of_rail_stations(railstations.stations_near(md, frame, box)).rings
+        except Exception:
+            logging.getLogger(__name__).exception("rail station keepout")
+    return Keepout(rings)

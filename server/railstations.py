@@ -131,6 +131,7 @@ class RailStation:
         self.confidence = 0
         self.synth = False
         self.country = None
+        self.claimed = set()            # ids of buildings-layer roofs the station draws itself (tile_skip)
 
 
 # --- geometry --------------------------------------------------------------------------------------------------
@@ -605,6 +606,7 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
                 pl.roofs.append(it["id"])
                 if not any(r[0] == it["id"] for r in st.roofs):
                     st.roofs.append((it["id"], ring))
+                    st.claimed.add(it["id"])
 
     st.links = _links(near, st.tracks, plats, st.hub)
 
@@ -769,3 +771,12 @@ def stations_near(md, frame, box):
         if lo_[0] - TILE_REACH_M <= x1 and hi_[0] + TILE_REACH_M >= x0 and lo_[1] - TILE_REACH_M <= y1 and hi_[1] + TILE_REACH_M >= y0:
             out.append(st)
     return out
+
+
+def tile_skip(frame, tx, ty, md):
+    """Ids of the buildings-layer roofs that the railway stations near road tile (tx, ty) draw themselves (buildings.
+    tile_buildings' skip, as busstations.tile_skip)."""
+    if not ON:
+        return frozenset()
+    import roads
+    return frozenset().union(*(st.claimed for st in stations_near(md, frame, roads.tile_bbox(tx, ty))))

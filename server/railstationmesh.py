@@ -182,13 +182,76 @@ def _strips(mesh, ref, pl, height, frame, elev):
             mesh.add(LINE[0], P, UV, T)
 
 
+def surface(frame, elev, st, pl):
+    """xy (k, 2) -> z (k,): the top of the platform pl (the same heights its slab is made with)."""
+    h = platform_height(pl, st.country, len(st.platforms))
+    ref = reference(frame, elev, pl)
+    fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
+    return lambda xy: top_z(ref, np.asarray(xy, float).reshape(-1, 2), fb) + h
+
+
+ROOF_H_M = 4.2              # a roof's underside over the platform: a platform canopy
+ROOF_THICK_M = 0.30
+ROOF_STEP_M = 12.0          # the roof's faces and walls are cut to this: every road tile has its share of them
+ROOF_VERTS_MAX = 30000
+COLUMN_TRACK_M = 0.9        # a column stands this far in from the platform's track edge at least
+STEEL = bm.STEEL
+
+
+def _roof_columns(st, ring, plats, surf):
+    """[(x, y)] the columns of a roof: bm._column_points, only on a platform it covers and off the track edge."""
+    edge = rs.norm(st.country)[0]
+    out = []
+    for p in bm._column_points(ring):
+        if not any(bs.contains(pl.ring, p) for pl in plats):
+            continue
+        if min(bs.dist_to_path(xy, p) for _t, xy in st.tracks) < edge + COLUMN_TRACK_M:
+            continue
+        out.append(p)
+    return out
+
+
+def _roofs(mesh, frame, elev, st, box, columns_only=False):
+    """The roofs over the platforms (RailStation.roofs): a flat slab ROOF_H_M over the platform's top, open on columns that
+    stand on the platform (a grid and along the edge, bm._column_points)."""
+    placed = []
+    for rid, ring in st.roofs:
+        ring = bm._ccw(ring)
+        lo, hi = ring.min(0), ring.max(0)
+        if hi[0] < box[0] - 15 or lo[0] > box[2] + 15 or hi[1] < box[1] - 15 or lo[1] > box[3] + 15:
+            continue
+        plats = [pl for pl in st.platforms if rid in pl.roofs]
+        if not plats:
+            continue
+        surfs = [surface(frame, elev, st, pl) for pl in plats]
+        probe = np.vstack((ring, bs.centroid(ring)[None]))
+        zs = np.concatenate([f(probe) for f in surfs])
+        ztop = float(np.median(zs)) + ROOF_H_M + ROOF_THICK_M              # (one height for the whole roof: every tile alike)
+        zbot = ztop - ROOF_THICK_M
+        step = ROOF_STEP_M
+        mat, rep = STEEL
+        if not columns_only:                # (the lean collider has the columns only)
+            bm._face(mesh, mat, rep, ring, lambda P, z=ztop: np.full(len(P), z), step=step)
+            bm._face(mesh, mat, rep, ring, lambda P, z=zbot: np.full(len(P), z), up=False, step=step)
+            bm.walls(mesh, mat, rep, bm._densify(ring, step), zbot, ztop)
+        pts = [q for q in _roof_columns(st, ring, plats, surfs) if all(float(np.hypot(*(q - o))) >= 1.5 for o in placed)]
+        placed += pts
+        for q in pts:
+            zf = float(np.median([f(np.asarray(q)[None])[0] for f in surfs]))
+            half = bm.COLUMN_M / 2
+            sq = np.array([[q[0] - half, q[1] - half], [q[0] + half, q[1] - half],
+                           [q[0] + half, q[1] + half], [q[0] - half, q[1] + half]])
+            bm.walls(mesh, mat, rep, sq, zf - 0.05, zbot)
+
+
 def _near(pl, box, margin=TILE_MARGIN_M):
     lo, hi = pl.ring.min(0), pl.ring.max(0)
     return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
 
 
-def build(frame, box, stations, elev, mesh, tactile=True):
-    """The platforms of stations that reach the tile box into mesh (a busstationmesh._Mesh)."""
+def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
+    """The platforms (and, drawn, the roofs) of stations that reach the tile box into mesh (a busstationmesh._Mesh);
+    collide: for the lean collider, the slabs and the roofs' columns."""
     for st in stations:
         for pl in st.platforms:
             if not _near(pl, box) or len(pl.ring) < 3:
@@ -198,6 +261,7 @@ def build(frame, box, stations, elev, mesh, tactile=True):
             _slab(mesh, frame, elev, ref, pl.ring, h)
             if tactile and ref is not None:
                 _strips(mesh, ref, pl, h, frame, elev)
+        _roofs(mesh, frame, elev, st, box, columns_only=collide)
 
 
 def mesh(frame, box, stations, elev, origin, overlap=False):
@@ -211,7 +275,7 @@ def collision(frame, box, stations, elev, origin):
     """(mesh, boxes) the platforms' lean collision of the tile box: the slabs' tops and kerb walls, as busstationmesh's, and
     their 20 m boxes [x0, y0, z0, x1, y1, z1] (frame metres); (None, []) without any."""
     m = bm._Mesh()
-    build(frame, box, stations, elev, m, tactile=False)
+    build(frame, box, stations, elev, m, tactile=False, collide=True)
     got = m.result(box, origin)
     if got is None:
         return None, []

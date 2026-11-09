@@ -930,6 +930,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import busstations
         import busyard
         skip = frozenset(skip) | busstations.tile_skip(frame, tx, ty, _s.md)
+        import railstations
+        skip = skip | railstations.tile_skip(frame, tx, ty, _s.md)      # (and the railway stations' roofs over platforms)
         busyard.tile_pads(frame, tx, ty, _s.md, fuel_pads)      # ... and their yards painted in (earthd keeps them)
     mark("fuel")
     props = [] if buildings else None
@@ -1251,6 +1253,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                           poleprofiles.lamp_country_selector(pole_profile, frame), props))    # benches, bins, lamps at the bus stations
         except Exception as ex:
             log.warning("bus station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        try:
+            import railstationprops
+            props.extend(railstationprops.rows(frame, _s.md, box, elev, poleprofiles.lamp_country_selector(pole_profile, frame)))
+        except Exception as ex:
+            log.warning("rail station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import industry
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))

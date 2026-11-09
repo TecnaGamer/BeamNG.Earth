@@ -2501,6 +2501,8 @@ class Server:
             import busstations
             import busyard
             skip = frozenset(skip) | busstations.tile_skip(anchor.frame, tx, ty, self.mapdata)
+            import railstations
+            skip = skip | railstations.tile_skip(anchor.frame, tx, ty, self.mapdata)
             busyard.tile_pads(anchor.frame, tx, ty, self.mapdata, fuel_pads)      # ... and their yards are painted in
         self.keep_fuel_pads(fuel_pads)
         props = [] if self.buildings else None
@@ -2779,6 +2781,12 @@ class Server:
                     Server.pole_profile(self, anchor), anchor.frame), props))   # benches, bins, lamps at bus stations
             except Exception as ex:
                 log.warning("bus station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            try:
+                import railstationprops
+                props.extend(railstationprops.rows(anchor.frame, self.mapdata, box, elev, poleprofiles.lamp_country_selector(
+                    Server.pole_profile(self, anchor), anchor.frame)))
+            except Exception as ex:
+                log.warning("rail station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
