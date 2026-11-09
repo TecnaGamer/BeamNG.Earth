@@ -41,12 +41,15 @@ def fixture():
                     flags=[(2, "is_bridge", 0.45, 0.6)])
 
 
-def plans_heights():
-    g = grading.Grader(FRAME, FakeMD(fixture()), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
+def plans_heights(source=None):
+    source = fixture() if source is None else source
+    g = grading.Grader(FRAME, FakeMD(source), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
                        + 0.0 * np.asarray(la))
     e, n = np.meshgrid(np.linspace(-380, 380, 77), np.linspace(-380, 380, 77))
     la, lo, _ = FRAME.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
-    return np.asarray(g.apply(la, lo, 10.0 + 0.01 * e.ravel()), np.float64)
+    # At slope 0.01, the x=200 grid column sits exactly at WALL_CUT_M below the base. Last-bit differences in the
+    # nominally 10 m plans then choose a wall or a slope (0.21 m apart on Windows). Keep the golden off that cutoff.
+    return np.asarray(g.apply(la, lo, 10.0 + 0.0101 * e.ravel()), np.float64)
 
 
 def pack_heights(z):
@@ -115,6 +118,16 @@ class FormatTest(unittest.TestCase):
         moved = z.copy()
         moved[len(z) // 2] += 0.01
         self.assertIn("1 of", heights_differ(moved, want) or "", "one height 1 cm off: changed")
+
+    def test_plans_golden_survives_coordinate_roundoff(self):
+        with open(GOLDEN) as fh:
+            want = unpack_heights(json.load(fh)["plans"]["heights"])
+        for axis, direction in ((0, np.inf), (0, -np.inf), (1, np.inf), (1, -np.inf)):
+            with self.subTest(axis=axis, direction=direction):
+                f = fixture()
+                f.lonlat[:, axis] = np.nextafter(f.lonlat[:, axis], direction)
+                self.assertIsNone(heights_differ(plans_heights(f), want),
+                                  "one-ULP coordinate noise must not switch the golden fixture's wall classification")
 
     def test_facts_format(self):
         self.check("facts", roads.FACTS_FORMAT, facts_digest())

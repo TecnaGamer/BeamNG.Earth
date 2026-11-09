@@ -36,8 +36,18 @@ The final server command was `BNGE_SKIP_DRIVE=1 BNE_CACHE_DIR=/tmp/issue909-cach
 
 ## Integration with current dev
 
-Merged upstream `0dc7b4bb` into the PR branch. The only textual conflicts were the two cache-format declarations: upstream's #1008 and this PR had independently used facts 9 / plans 25. The combined tree retains both changes, uses facts 10 / plans 26, and regenerates the fixture through `BNGE_UPDATE_GOLDEN=1`. Its facts digest and sampled plan heights match upstream's fixture exactly; the version numbers advance to invalidate earlier cached A11 results.
+Merged upstream `0dc7b4bb` into the PR branch. The only textual conflicts were the two cache-format declarations: upstream's #1008 and this PR had independently used facts 9 / plans 25. The combined tree retains both changes, uses facts 10 / plans 26, and regenerates the fixture through `BNGE_UPDATE_GOLDEN=1`. At integration time its facts digest and sampled plan heights matched upstream's fixture exactly; the version numbers advance to invalidate earlier cached A11 results.
 
 All 482 tests in the 16 affected modules pass: `test_bridge_ranges test_grading test_deckjoins test_underpass_profiles test_bridgeprofile test_bridge_level_spans test_bake_formats test_gradesep test_roads test_tunnels test_railtags test_regionaldata test_fences test_plancache test_mapdata test_roadz`. The actual A11 source/profile probe also retains the measurements in the table above.
 
 The earlier GitHub Actions run on PR head `f2f428ad` failed to import `zstandard` in `test_germany` on both Python 3.12 runners. Its Windows `test_bake_formats` also reported two of 5,929 heights differing by up to 0.2121 m; Linux passed that test. These CI results are separate from the cache-declaration conflicts. The Windows difference was not reproduced locally, so local checks do not establish a passing Windows result.
+
+## CI repairs
+
+The Python 3.12 CI dependency list omitted `zstandard`, needed when `test_germany` imports the regional-data builder. An isolated Python 3.12 environment with CI's original dependency list reproduced the import failure; adding this test dependency makes the tests run successfully.
+
+The Windows plan-fixture mismatch was subsequently reproduced locally by moving source coordinates by one floating-point step. Two sampled heights moved by the same 0.2121 m as in CI; other directions moved one point by 0.3703 m. The test's original base slope put the x=200 m column exactly 2 m above nominally 10 m road plans, at `WALL_CUT_M`. Last-bit differences in those plans switched the wall classification. The golden fixture now uses a 0.0101 base slope, away from that cutoff, with the same 5,929 samples and 1 mm comparison tolerance. A new test checks both coordinate axes in both nextafter directions against the golden; it failed before the fixture correction.
+
+The golden was regenerated for the deliberately changed test input. Production grading and cache formats remain unchanged. The focused Python 3.14 run passes 157 tests; Python 3.12 passes all 29 Germany and bake-format tests.
+
+The complete `tools/quality_gate.py` run also passes in the isolated Python 3.12 environment: all 56 server modules, Lua tests, Node map-math tests, 12 Rust serverlist tests, and mod/BeamMP packaging.

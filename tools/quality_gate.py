@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Bounded foundation regression gate. Uses synthetic data, not a gameplay benchmark.
 
-Run after installing server/requirements.txt, lupa and scipy and building tools/build_native.py.
+Run after installing server/requirements.txt, lupa, scipy and zstandard (Python <3.14), and building tools/build_native.py.
 The existing full server suite remains available through tools/run_tests.py.
 """
 import argparse
