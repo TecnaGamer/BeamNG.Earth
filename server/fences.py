@@ -1,8 +1,8 @@
 """Mapped chain-link fences and noise walls (Overture infrastructure lines).
 
 OpenStreetMap's barrier=fence with fence_type=chain_link, and barrier=wall with wall=noise_barrier (or
-barrier=noise_barrier), kept on the feature's class and in source_tags. Other fences and walls are left
-out. Straight stock panels along the line: West Coast USA's chain-link panel (s_chainlink_old, 2.04 m,
+barrier=noise_barrier), kept on the feature's class and in source_tags; stone walls (wall=dry_stone ...) as
+stone meshes (stone_walls). Other fences and walls are left out. Straight stock panels along the line: West Coast USA's chain-link panel (s_chainlink_old, 2.04 m,
 origin at its forward end) and its concrete noise blocker (s_concrete_noiseblocker, 4 m along local +y,
 origin at one end). A panel is kept when its centre is in the tile, so a line split across tiles is not
 drawn twice.
@@ -10,6 +10,7 @@ drawn twice.
 import json
 import logging
 import math
+import os
 
 import numpy as np
 
@@ -388,6 +389,164 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
         height = CHAIN_H if group == G_CHAIN else WALL_H
         out.append([group, round(px, 2), round(py, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360.0,
                     1.0, height, 0.0])
+    return out
+
+
+# Mapped stone walls (GitHub #938: the field walls along Ireland's and Britain's country roads). OSM's barrier=wall with
+# wall=dry_stone (or another stone wall type, or material=stone and no wall=), drawn as a stone solid along the mapped
+# line: STONE_THICK_M thick, its own height= tag within STONE_H_RANGE else STONE_H_M over the ground, its foot
+# STONE_FOOT_M into it (the ground between the line's points is not flat). The retaining walls' mesh draws it
+# (roadmesh._retaining_walls, a parapet: stone on both faces down to its foot). Left out: a wall on a bridge (its
+# bridge / layer tags or Overture's level), and the metres of it within STONE_ROAD_GAP_M of a ground road's edge (a
+# wall mapped to the road's centre line at a gate or a junction would block it). BNE_STONE_WALLS=off: none.
+STONE_ON = os.environ.get("BNE_STONE_WALLS", "on") != "off"
+STONE_TYPES = {"dry_stone", "drystone", "dry_stone_wall", "stone", "field_stone", "fieldstone", "flint", "rubble",
+               "stone_wall"}
+STONE_MATERIALS = {"stone", "dry_stone", "granite", "limestone", "sandstone", "slate", "flint"}
+STONE_H_M = 1.1
+STONE_H_RANGE = (0.4, 2.5)
+STONE_THICK_M = 0.5         # (roadmesh.WALL_COPING_M: all of its top is stone, no strip of soil)
+STONE_FOOT_M = 0.3
+STONE_STEP_M = 1.0
+STONE_ROAD_GAP_M = 0.6
+
+
+def stone_height(feats, i):
+    """The height (m) of mapped stone wall i, or None when it is not one (STONE_TYPES / STONE_MATERIALS)."""
+    classes = feats.attrs.get("class")
+    cls = str(classes[i]).strip().lower() if classes is not None else ""
+    tags = _tags(feats, i)
+    if tags.get("barrier", cls) != "wall" and cls != "wall":
+        return None
+    wall = tags.get("wall", "")
+    if not (wall in STONE_TYPES or (not wall and tags.get("material", "") in STONE_MATERIALS)):
+        return None
+    try:                            # Overture's height, else the OSM tag
+        h = float(np.asarray(feats.attrs.get("height"))[i])
+    except (TypeError, ValueError, IndexError):
+        h = float("nan")
+    if not h == h:
+        try:
+            h = float(tags.get("height", "").replace("m", "").strip())
+        except ValueError:
+            h = float("nan")
+    return h if STONE_H_RANGE[0] <= h <= STONE_H_RANGE[1] else STONE_H_M
+
+
+def _resample(line, step):
+    """Points every ~step m along a polyline, its own end points kept."""
+    seg = np.hypot(*np.diff(line, axis=0).T)
+    arc = np.concatenate(([0.0], np.cumsum(seg)))
+    if arc[-1] < 1e-6:
+        return line[:1]
+    n = max(int(math.ceil(arc[-1] / step)), 1)
+    s = np.linspace(0.0, arc[-1], n + 1)
+    return np.column_stack((np.interp(s, arc, line[:, 0]), np.interp(s, arc, line[:, 1])))
+
+
+def _near_road(xy, roads):
+    """(n,) bool: the points within a ground road's half width + STONE_ROAD_GAP_M of its centre line."""
+    hit = np.zeros(len(xy), bool)
+    lo, hi = xy.min(0), xy.max(0)
+    for _fid, spec, pts, *_r in roads:
+        line = np.asarray(pts, np.float64)[:, :2]
+        if len(line) < 2:
+            continue
+        reach = float(getattr(spec, "width", 0.0) or 0.0) / 2 + STONE_ROAD_GAP_M
+        if (line.min(0) > hi + reach).any() or (line.max(0) < lo - reach).any():
+            continue
+        a, d = line[:-1], np.diff(line, axis=0)
+        dd = np.maximum((d * d).sum(1), 1e-12)
+        t = np.clip(((xy[:, None, :] - a[None]) * d[None]).sum(2) / dd[None], 0.0, 1.0)
+        foot = a[None] + t[..., None] * d[None]
+        dist = np.hypot(foot[..., 0] - xy[:, None, 0], foot[..., 1] - xy[:, None, 1]).min(1)
+        hit |= dist < reach
+    return hit
+
+
+def stone_walls(frame, infra_fn, box, elev, roads=()):
+    """The mapped stone walls in box (x0, y0, x1, y1) as roads.retaining_walls' wall dicts (base, top, foot, toward,
+    thick, back_top, parapet), for roadmesh.tunnel's stone: each mapped line's pieces whose segments' middles are in
+    the box (a wall split across tiles meets at the edge, not drawn twice), cut where a ground road (roads: build_tile's
+    roads_out, (fid, spec, pts, ...)) runs. elev(lat, lon) -> the ground's height."""
+    if infra_fn is None or not STONE_ON:
+        return []
+    x0, y0, x1, y1 = map(float, box)
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
+    except (ValueError, OverflowError):
+        return []
+    runs, seen = [], set()
+    for key in keys:
+        try:
+            feats = infra_fn(key)
+        except Exception as ex:
+            log.debug("stone walls: infrastructure cell %s unavailable: %s", key, ex)
+            continue
+        if feats is None or not len(feats) or feats.attrs.get("class") is None and feats.attrs.get("tags") is None:
+            continue
+        boxes = feats.boxes(frame)
+        for i in range(len(feats)):
+            fid = str(feats.ids[i])
+            if fid in seen or int(feats.kind[i]) not in (mapgeom.LINE, mapgeom.POLYGON):
+                continue
+            b = boxes[i]
+            if b[2] < x0 - BBOX_PAD_M or b[0] > x1 + BBOX_PAD_M or b[3] < y0 - BBOX_PAD_M or b[1] > y1 + BBOX_PAD_M:
+                continue
+            h = stone_height(feats, i)
+            if h is None:
+                continue
+            seen.add(fid)
+            if _deck_level_hint(feats, i):
+                continue
+            try:
+                lv = float(np.asarray(feats.attrs.get("level"))[i])
+            except (TypeError, ValueError, IndexError):
+                lv = 0.0
+            if lv > 0:
+                continue
+            for part in feats.parts(i):
+                if not part or len(part[0]) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
+                xy = _resample(np.column_stack((e, n)), STONE_STEP_M)
+                if len(xy) < 2:
+                    continue
+                mid = (xy[:-1] + xy[1:]) / 2
+                keep = (mid[:, 0] >= x0) & (mid[:, 0] < x1) & (mid[:, 1] >= y0) & (mid[:, 1] < y1)
+                if not keep.any():
+                    continue
+                if roads:
+                    blocked = _near_road(xy, roads)
+                    keep &= ~(blocked[:-1] | blocked[1:])
+                j = 0
+                while j < len(keep):            # each run of kept segments is a piece
+                    if not keep[j]:
+                        j += 1
+                        continue
+                    k = j
+                    while k < len(keep) and keep[k]:
+                        k += 1
+                    runs.append((xy[j:k + 1], h))
+                    j = k
+    if not runs:
+        return []
+    allxy = np.concatenate([r for r, _h in runs])
+    lat, lon, _ = frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], np.zeros(len(allxy)))
+    _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    z = np.asarray(z, np.float64)
+    out, k = [], 0
+    for xy, h in runs:
+        zz = z[k:k + len(xy)]
+        k += len(xy)
+        d = np.gradient(xy, axis=0)
+        d /= np.maximum(np.hypot(*d.T), 1e-9)[:, None]
+        nl = np.column_stack((-d[:, 1], d[:, 0]))
+        top = zz + h
+        out.append({"base": xy + nl * (STONE_THICK_M / 2), "toward": nl, "top": top, "back_top": top.copy(),
+                    "foot": zz - STONE_FOOT_M, "thick": np.full(len(xy), STONE_THICK_M), "parapet": True,
+                    "concrete": False, "mountain": False, "rock": False})
     return out
 
 
