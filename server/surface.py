@@ -2203,7 +2203,7 @@ class Surface:
         lon = np.asarray(lon, np.float64)
         if lat.size == 0:
             return np.zeros(np.shape(lat), np.float32)
-        xm = lon * M_PER_DEG * np.cos(np.radians(lat))
+        xm = lon * M_PER_DEG * dnp.cos(np.radians(lat))
         ym = lat * M_PER_DEG
         fx = xm / FOREST_CELL_M
         fy = ym / FOREST_CELL_M
@@ -2222,7 +2222,7 @@ class Surface:
         # (the lattice's own nodes read back to lat / lon by the same projection: a pure function of the world)
         la = np.broadcast_to((jj * FOREST_CELL_M / M_PER_DEG)[:, None], (len(jj), len(ii)))
         lo = np.broadcast_to((ii * FOREST_CELL_M)[None, :] /
-                             np.maximum(M_PER_DEG * np.cos(np.radians(la)), 1e-6), (len(jj), len(ii)))
+                             np.maximum(M_PER_DEG * dnp.cos(np.radians(la)), 1e-6), (len(jj), len(ii)))
         vals = self._forest_at(la, lo)
         ci = i0 - imin
         cj = j0 - jmin
@@ -2268,7 +2268,7 @@ class Surface:
         shape = lat.shape
         lat, lon = lat.ravel(), lon.ravel()
         d = EMBANK_MARGIN_M / M_PER_DEG
-        dl = d / np.maximum(np.cos(np.radians(lat)), 1e-6)
+        dl = d / np.maximum(dnp.cos(np.radians(lat)), 1e-6)
         cls, _complete = self.classes(np.concatenate([lat, lat + d, lat - d, lat, lat]),
                                       np.concatenate([lon, lon, lon, lon + dl, lon - dl]))
         cls = cls.reshape(5, -1)

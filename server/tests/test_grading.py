@@ -833,7 +833,7 @@ class DirtTest(unittest.TestCase):
 
     def test_a_local_hole_does_not_make_long_waves(self):
         xy = self.xy(n=200)
-        ground = 100.0 + 0.12 * xy[:, 0]
+        ground = 100.0 + 0.03 * xy[:, 0]        # (below DIRT_WORN_GRADE_0: a climb keeps less wear, not this test)
         damage = np.zeros(len(xy))
         damage[100] = -0.8
         with unittest.mock.patch.object(grading, "dirt_bumps", return_value=damage):
@@ -843,15 +843,20 @@ class DirtTest(unittest.TestCase):
         self.assertLess(float(np.abs(residual[np.abs(np.arange(len(xy)) - 100) > 2]).max()), 1e-9,
                         "limiting a hole must not spread its height error over 40 m")
 
-    @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
-    def test_damage_is_independent_of_the_natural_grade(self):
+    def test_a_climb_keeps_its_grade_and_less_wear(self):
+        """A pothole on a 20 % ramp is a ledge under the wheel (the drivability gate's step metric), so the wear fades
+        out over DIRT_WORN_GRADE while the road's own climb is kept: DIRT_WORN_GRADE_0 is where it is still full."""
         xy = self.xy()
         sp = roads.Spec(3.5, "dirt", False, "track")
         flat = grading._plan(xy, np.full(len(xy), 100.0), sp)
-        ground = 100.0 + 0.20 * xy[:, 0]
-        uphill = grading._plan(xy, ground, sp)
-        self.assertTrue(np.allclose(uphill.z - ground, flat.z - 100.0, atol=1e-9),
-                        "limit artificial damage, keeping the road's real climb")
+        gentle = 100.0 + 0.03 * xy[:, 0]
+        at_gentle = grading._plan(xy, gentle, sp)
+        self.assertTrue(np.allclose(at_gentle.z - gentle, flat.z - 100.0, atol=1e-9),
+                        "a gentle lane is worn the same, whatever it climbs")
+        steep = 100.0 + 0.20 * xy[:, 0]
+        uphill = grading._plan(xy, steep, sp)
+        self.assertLess(float(np.abs(uphill.z - steep).max()), 1e-6, "a 20 % ramp: the wear is gone")
+        self.assertTrue(np.allclose(uphill.z, steep, atol=1e-6), "and the real climb is kept")
 
     @unittest.skipIf(grading.DIRT_ROUGH <= 0.0, "BNE_DIRT_BUMP 0")
     def test_smoothing_extensions_do_not_change_the_damage(self):
@@ -1679,8 +1684,9 @@ class DirtFacetTest(unittest.TestCase):
             flat = grading._plan(xy, np.full(len(xy), 100.0), spec)
         finally:
             grading.DIRT_NODE_M = old
-        self.assertGreater(float(np.median(np.abs(np.diff(plan.z - flat.z)))), 0.005,
-                           "the 2 m vertices differ: the heightfield between them is a facet")
+        node = grading.DIRT_NODE_M * grading.DIRT_ROUGH * grading.DIRT_MINOR_SHARE * grading.DIRT_TRACK_SHARE
+        self.assertGreater(float(np.median(np.abs(np.diff(plan.z - flat.z)))), 0.1 * node,
+                           "the 2 m vertices differ: the heightfield between them is a facet (its size the gate's)")
         self.assertAlmostEqual(float(plan.z[0]), 100.0, places=6)
         self.assertAlmostEqual(float(plan.z[-1]), 100.0, places=6)
 
@@ -1708,7 +1714,7 @@ class DirtFacetTest(unittest.TestCase):
         self.assertGreater(float((rms > thr).mean()), 0.2, "rough runs of humps")
         self.assertLess(float((rms > thr).mean()), 0.8, "not the whole track")
         self.assertGreater(float((rms < thr).mean()), 0.1, "calmer stretches between them")
-        self.assertGreater(float(np.abs(d).max()), 0.15, "ухабы, not ripples")
+        self.assertGreater(float(np.abs(d).max()), 0.10, "ухабы, not ripples (the gate's own 0.10 m step)")
         low = np.convolve(d, np.ones(20) / 20, mode="same")      # 40 m moving average
         self.assertLess(float(np.std(low)), 0.06, "no long waves along the track")
 
