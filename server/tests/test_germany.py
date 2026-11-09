@@ -322,7 +322,7 @@ class EvictedTest(unittest.TestCase):
             f0 = revisit.faults()
             with self.assertLogs("germany", "WARNING") as logs:
                 self.assertEqual(germany.contains(KONSTANZ[1], KONSTANZ[0]).tolist(), [False])    # (another band)
-            self.assertIn("No such file or directory", "\n".join(logs.output))
+            self.assertIn("(os error 2)", "\n".join(logs.output))     # (ENOENT; its text is the platform's)
             self.assertGreater(revisit.faults(), f0)
             self.assertTrue(germany.signature().endswith(germany.ABSENT), "(its RETRY_S: keys say no borders)")
             self.assertEqual(germany.contains(KONSTANZ[1], KONSTANZ[0]).tolist(), [False])
