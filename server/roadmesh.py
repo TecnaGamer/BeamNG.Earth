@@ -2171,7 +2171,7 @@ def tunnel(chunks, origin, walls=()):
 def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=None, side_mat=2):
     """A low arch's stone top over its mouth (LOW_CAP_M back from the portal face at row `at`, side either way of
     the centre, `top` over the floor): its top, its sides down to the floor's level (outside the tube's walls) and
-    its back down to just over the vault (th), seen from both sides. Appended to P, T, UV, M; returns the new vertex count."""
+    its back down to just over the vault (th), each face one-sided, facing out. Appended to P, T, UV, M; returns the new vertex count."""
     nb = 1 if at == 0 else k - 2
     t = mid[nb] - mid[at]
     t = t / max(float(np.hypot(*t)), 1e-9)              # into the tube
@@ -2188,13 +2188,19 @@ def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=No
              np.array([corners[3], corners[2], over[2], over[3]]),     # its back, toward the soil over the vault
              np.array([corners[0], corners[3], foot[3], foot[0]]),     # its sides
              np.array([corners[1], corners[2], foot[2], foot[1]])]
+    # each face one-sided, facing out of the block (up, back into the soil, sideways): the top drawn both ways was two
+    # coincident triangles facing opposite ways, its collision pulled a car driving over it down into the block
+    # (the I-280 underpass at Millbrae, 2026-11-09; buildings.py: a 3dmr bridge's two-sided lattice caught the car too)
+    looks = [np.array([0.0, 0.0, 1.0]), np.r_[t, 0.0], np.r_[ua, 0.0], np.r_[-ua, 0.0]]
     for qi, q in enumerate(quads):
         P.append(q - origin)
         w = float(np.hypot(*(q[1, :2] - q[0, :2]))) or float(abs(q[1, 2] - q[0, 2]))
         h = float(np.hypot(*(q[2, :2] - q[1, :2]))) + float(abs(q[2, 2] - q[1, 2]))
         UV.append(np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float64) / (SOIL_UV_M if qi == 0 else STONE_UV_M))
         tri = np.array([[nv, nv + 1, nv + 2], [nv, nv + 2, nv + 3]], np.int64)
-        T.append(np.concatenate([tri, tri[:, ::-1]]))
+        e = q - q[0]
+        nrm = np.cross(e[1], e[2]) + np.cross(e[2], e[3])
+        T.append(tri if float(nrm @ looks[qi]) >= 0.0 else tri[:, ::-1])
         M.append(4 if qi == 0 else side_mat)            # its top grass, its sides stone (concrete: side_mat 0)
         nv += 4
     return nv
