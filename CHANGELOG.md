@@ -52,6 +52,9 @@ Works with BeamNG.drive 0.40.5.
 > visit to each place. Later visits are fast again.
 
 ### New
+- **Adaptive traffic density and driver profiles**: local road density and settlement proximity set a gradually adjusted
+  traffic population; AI drivers get varied speed targets, with faster profiles preferring the passing-side freeway lane
+  for the local driving side.
 - **3D map** (experimental): a Google Earth style map in the game view. Fly up from your car to see the whole earth,
   search for places, pick a spot with a click, set a GPS route or drive there. The 2D map stays; the map key opens
   the one you used last, and each has a button for the other.
@@ -147,18 +150,6 @@ Works with BeamNG.drive 0.40.5.
   ground photos on first visits.
 
 ## 1.8.2 beta (2026-11-05)
-
-### In development
-- **Adaptive traffic population and driver profiles**: traffic counts follow nearby settlements and local road density,
-  adjust progressively, and traffic drivers use varied speed targets based on mapped speed limits.
-- **Freeway lane preferences**: newly respawned traffic chooses a lane based on its speed profile and the local driving
-  side (faster lanes are left in right-hand traffic and right in left-hand traffic).
-
-### In development
-- **Adaptive traffic and AI profiles** (PR #728, ProxyFirewall202): traffic population follows settlement proximity and
-  local road density, adjusts progressively, and gives traffic drivers varied speed targets based on mapped limits.
-- **Highway traffic lanes**: traffic drivers use speed-aware lane preferences on multi-lane freeways, following the
-  local driving side.
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
 > develop the mod.** For help, that includes multiplayer:

@@ -454,7 +454,9 @@ class JunctionTest(unittest.TestCase):
     def test_sweden_has_give_way_in_the_country_too(self):
         rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
         rs = [(fid, spec._replace(urban=False), pts, lon) for fid, spec, pts, lon in rs]
-        self.assertEqual(furniture.junction_props(rs, (0, 0, 256, 256)), [], "elsewhere: no signs in the country")
+        generic = furniture.junction_props(rs, (0, 0, 256, 256))
+        self.assertEqual([r[0] for r in generic], [furniture.G_STOP],
+                         "outside Sweden the lower-priority residential approach gets a stop control")
         self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256), country="SE")], [furniture.G_B1])
 
     def test_sweden_a_lesser_main_road_gives_way_too(self):

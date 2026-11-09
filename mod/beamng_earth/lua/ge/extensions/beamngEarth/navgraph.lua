@@ -926,7 +926,7 @@ function M.selectTrafficRoadSpeed(edges, nodes, x, y, headingX, headingY)
   local bestScore, bestSpeed, bestClass, bestDistance, bestAlignment, bestEdge = math.huge
   for _, edge in ipairs(edges) do
     local a, b = nodes[edge[1]], nodes[edge[2]]
-    local speed = tonumber(edge[9])
+    local speed = tonumber(edge[10])
     if a and b and speed and speed > 0 then
       local dx, dy = b[1] - a[1], b[2] - a[2]
       local length2 = dx * dx + dy * dy
@@ -943,7 +943,7 @@ function M.selectTrafficRoadSpeed(edges, nodes, x, y, headingX, headingY)
             local score = d2 + error * error * 1600
             if score < bestScore then
               bestScore, bestSpeed, bestClass, bestDistance, bestAlignment, bestEdge =
-                score, speed, edge[10], math.sqrt(d2), alignment, edge
+                score, speed, edge[11], math.sqrt(d2), alignment, edge
             end
           end
         end
@@ -1068,7 +1068,7 @@ local function nearestTrafficSpeed(obj)
 end
 
 local function freewayLaneShift(obj, edge, alignment, profile)
-  if not edge or not profile or (edge[10] ~= 'motorway' and edge[11] ~= true) then return nil end
+  if not edge or not profile or (edge[11] ~= 'motorway' and edge[12] ~= true) then return nil end
   local out, back = tonumber(edge[4]) or 0, tonumber(edge[5]) or 0
   local along = alignment >= 0
   local count = edge[3] == 1 and out or (along and out or back)

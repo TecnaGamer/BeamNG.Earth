@@ -589,6 +589,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
             if not put:
                 continue
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
+        here = _controlled_here(arms, signals)
         if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
             continue
         if not (_owns(box, p[0], p[1])):

@@ -345,7 +345,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     junctions inside it as the road tiles decide them (_de_context: their context of these cells, the cells'
     road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way)."""
     cx, cy = centre
-    nodes, edges, edge_fids, seen = {}, [], [], set()
+    nodes, edges, edge_fids, edge_traffic_meta, seen = {}, [], [], {}, set()
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
@@ -578,8 +578,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
                 divided = trafficmod.is_divided_road(spec.cls, getattr(spec, "median", 0.0),
                                                      getattr(spec, "link", False), spec.oneway)
-                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2),
-                              round(float(legal), 2), str(spec.cls), bool(divided), bool(getattr(spec, "urban", False))])
+                edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
+                edge_traffic_meta[id(edges[-1])] = (round(float(legal), 2), str(spec.cls), bool(divided),
+                                                    bool(getattr(spec, "urban", False)))
                 edge_fids.append(fid)
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
@@ -698,6 +699,11 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             uniq.append(e)
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
+    # Preserve the optional ninth field for a narrowed tunnel exit radius. Append speed and road metadata after it.
+    for edge in uniq:
+        if len(edge) == 8:
+            edge.append(edge[7])
+        edge.extend(edge_traffic_meta.get(id(edge), (round(float(edge[5]), 2), "unknown", False, False)))
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
     global _TRAFFIC_GEO_WARNED, _TRAFFIC_CALC_WARNED
     try:

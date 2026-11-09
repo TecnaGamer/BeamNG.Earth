@@ -33,6 +33,9 @@ Traffic vehicles receive a shuffled 20-profile speed deck (15 slightly above the
 faster). The selected target uses appended legal-speed metadata from the road that best matches the vehicle's heading;
 a perpendicular junction road cannot replace the limit of the road the vehicle follows. The vehicle receives explicit
 car avoidance and speed-limit mode. Periodic updates reapply the target only when the mapped legal speed changes.
+On multi-lane freeways, newly spawned or respawned traffic also makes a one-time lane adjustment from its speed profile:
+the faster side is left in right-hand traffic and right in left-hand traffic. Other vehicles' collision avoidance remains
+with BeamNG's native AI.
 
 Fresh spawns and native pool respawns wait until the traffic record leaves its reset stage and reaches fade-in/active,
 then allow a short delay for BeamNG's AI refresh to finish. A guarded one-shot spawn-speed impulse is skipped if the

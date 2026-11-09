@@ -59,10 +59,11 @@ class GraphTest(unittest.TestCase):
                   connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)], speeds=[(0, 90.0)])
         self.assertTrue(g["edges"])
         for edge in g["edges"]:
-            self.assertEqual(len(edge), 12)
-            self.assertEqual(edge[9], "primary")
-            self.assertAlmostEqual(edge[8], 25.0, places=2)
-            self.assertLessEqual(edge[5], edge[8])
+            self.assertEqual(len(edge), 13)
+            self.assertEqual(edge[10], "primary")
+            self.assertAlmostEqual(edge[8], edge[7], places=2)
+            self.assertAlmostEqual(edge[9], 25.0, places=2)
+            self.assertLessEqual(edge[5], edge[9])
         self.assertEqual(g["trafficProfile"]["sampleRadiusM"], 750)
         self.assertIn("target", g["trafficProfile"])
 

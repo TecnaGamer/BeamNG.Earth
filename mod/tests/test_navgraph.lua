@@ -136,8 +136,8 @@ T.check(N.laneForSpeedTarget(3, 15, true) == 2 and N.laneForSpeedTarget(3, 0, tr
 T.check(N.laneForSpeedTarget(1, 15, false) == 0 and N.laneForSpeedTarget(3, 7.5, false) == 1,
   'lane profile handles single-lane roads and intermediate speeds')
 local speedNodes = { a = { -20, 2 }, b = { 20, 2 }, c = { 0, -20 }, d = { 0, 20 } }
-local speedEdges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, 25, 'primary' },
-  { 'c', 'd', 0, 1, 1, 10, 1, 4, 10, 'residential' } }
+local speedEdges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, 4, 25, 'primary', true },
+  { 'c', 'd', 0, 1, 1, 10, 1, 4, 4, 10, 'residential', false } }
 local chosenSpeed, chosenClass = N.selectTrafficRoadSpeed(speedEdges, speedNodes, 0, 0, 1, 0)
 T.check(chosenSpeed == 25 and chosenClass == 'primary', 'speed selection follows the heading-aligned road')
 T.check(N.trafficSpawnReady({ state = 'fadeIn' }) and not N.trafficSpawnReady({ state = 'reset' })
