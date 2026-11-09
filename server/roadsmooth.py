@@ -23,7 +23,7 @@ import numpy as np
 
 import fast
 
-VERSION = 2                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
+VERSION = 3                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
 ON = os.environ.get("BNE_ROAD_SMOOTH", "off") == "on"       # off unless asked: it changes every road
 # roads.simplify's RDP tolerance while on: its own 0.25 m put a vertex back every ~16-20 m of a R 130 m arc, turning
 # 5-7 degrees, the corners again (the user, 2026-11-08, near Korostivtsi: "still corners"; on three cells the visible
@@ -35,6 +35,10 @@ SIMPLIFY_M = 0.03
 RADIUS_M = {"motorway": 300.0, "trunk": 250.0, "primary": 150.0, "secondary": 100.0, "tertiary": 50.0,
             "unclassified": 30.0, "residential": 25.0, "unknown": 25.0, "track": 15.0, "living_street": 12.0,
             "service": 12.0}
+# a railway's bend (plan 035: a train's flange panels strike a rail at every corner of the mapped polyline; the sharpest in
+# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=off leaves the rails as mapped.
+RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "on") not in ("off", "0", "false")
+RAIL_RADIUS_M = {"standard_gauge": 250.0, "narrow_gauge": 80.0, "light_rail": 80.0}
 LINK_RADIUS_M = 50.0            # a ramp / connector road (subclass "link") bends tighter than its class
 MIN_DEFLECT_DEG = 0.5           # a vertex turning less than this is left alone
 MAX_DEFLECT_DEG = 150.0         # ... and one turning more is a hairpin's tip or a doubling back: left alone
@@ -60,6 +64,8 @@ def smooth_line(xy, radius):
 def _radius(feats, i, rules):
     """The arc radius of road feature i, or None for a feature that is not smoothed."""
     sub = feats.attrs.get("subtype")
+    if sub is not None and str(sub[i]) == "rail":
+        return RAIL_RADIUS_M.get(str(feats.attrs["class"][i])) if RAIL_ON and "class" in feats.attrs else None
     if sub is not None and str(sub[i]) != "road":
         return None
     cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"

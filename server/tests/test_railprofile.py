@@ -13,6 +13,11 @@ import roads  # noqa: E402
 from test_roads import FRAME, features  # noqa: E402
 
 
+def hill_xy(xy):
+    la, lo, _ = FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+    return hill(la, lo)
+
+
 def hill(la, lo):
     """A DEM: a gentle slope with a ridge (the line follows it)."""
     x, y, _ = FRAME.geodetic_to_enu(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0)
@@ -36,7 +41,7 @@ class RailProfileTest(unittest.TestCase):
 
     def beds(self, tx):
         rails = railways.parts(FRAME, [self.f], roads.tile_bbox(tx, 0), clip=True)
-        got = railprofile.beds(FRAME, "t", self.load, hill, rails)
+        got = railprofile.beds(FRAME, "t", self.load, hill_xy, rails)
         return {(fid, kind, round(float(x), 2), round(float(y), 2)): float(z)
                 for (fid, _c, kind, xy), zs in zip(rails, got) for (x, y), z in zip(xy, zs)}
 
@@ -61,8 +66,19 @@ class RailProfileTest(unittest.TestCase):
         step = np.abs(np.diff(zs[order]) / np.maximum(np.diff(xs[order]), 1e-9))
         self.assertLess(float(step.max()), 0.1, "no step along the line: grade stays small (0.1 = 10 %)")
 
+    def test_smoothing_levels_a_bump_but_pins_the_ends_and_limits_the_cut(self):
+        xy = np.c_[np.arange(0.0, 400.0, 2.0), np.zeros(200)]
+        zb = 10.0 + np.where(np.abs(xy[:, 0] - 200.0) < 6.0, 2.0, 0.0)          # a 12 m, 2 m high spike
+        z = railprofile.smooth(xy, zb)
+        self.assertLess(float(z.max()), 10.0 + 0.5, "the spike is levelled to a bump under half a metre")
+        self.assertEqual(float(z[0]), float(zb[0]))
+        self.assertEqual(float(z[-1]), float(zb[-1]))
+        self.assertLessEqual(float(np.abs(z - zb).max()), railprofile.MAX_CUT_M + 1e-9)
+        ramp = 10.0 + 0.01 * xy[:, 0]
+        np.testing.assert_allclose(railprofile.smooth(xy, ramp), ramp, atol=1e-6, err_msg="a straight grade stays")
+
     def test_a_tram_is_left_to_the_window_profile(self):
-        got = railprofile.beds(FRAME, "t", self.load, hill, [("t", "tram", "ground", np.array([[0.0, 0.0], [2.0, 0.0]]))])
+        got = railprofile.beds(FRAME, "t", self.load, hill_xy, [("t", "tram", "ground", np.array([[0.0, 0.0], [2.0, 0.0]]))])
         self.assertTrue(np.isnan(got[0]).all())
 
 

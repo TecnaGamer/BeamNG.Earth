@@ -162,15 +162,20 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     return out
 
 
-def _beds(frame, rails, ground, underpasses, load=None, elev=None):
+def _beds(frame, rails, ground, underpasses, load=None, elev=None, raw=None):
     """railways.profile of rails, its beds from railprofile's lattice of node profiles (the same bed in every tile and
     grading cell: plan 035) where load (key -> roads layer) and elev (the grader's DEM) are given; railways.profile's own
-    where not, for a tram and for a point no node has."""
+    where not, for a tram and for a point no node has. raw: ground(xy) -> the DEM's heights as they are (the grader's,
+    which does not read the frame's curvature); without it the nodes read elev in the frame (point_ground: the mesh's)."""
     import railprofile
     new = None
-    if railprofile.ENABLED and load is not None and elev is not None and rails:
-        akey = ("beds", round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7))
-        new = railprofile.beds(frame, akey, load, elev, rails)
+    if railprofile.ENABLED and load is not None and (elev is not None or raw is not None) and rails:
+        lat0, lon0 = round(float(getattr(frame, "lat0", 0.0)), 7), round(float(getattr(frame, "lon0", 0.0)), 7)
+        if raw is None:
+            new = railprofile.beds(frame, ("beds", lat0, lon0), load,
+                                   point_ground(frame, elev, ("nodes", lat0, lon0)), rails)
+        else:
+            new = railprofile.beds(frame, ("beds-dem", lat0, lon0), load, raw, rails)
     if new is None or any(np.isnan(z).any() for z in new):
         old = profile(rails, ground, underpasses)
         if new is None:
@@ -211,7 +216,7 @@ def grade_plans(frame, cells, box, elev, load=None):
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
-    prof = _beds(frame, rails, ground, tunnels, (), load, elev)
+    prof = _beds(frame, rails, ground, tunnels, (), load, elev, raw=ground)
     if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
     for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):

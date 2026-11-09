@@ -247,6 +247,29 @@ class SmoothFeaturesTest(unittest.TestCase):
         np.testing.assert_array_equal(f.lonlat[co[0]], before[0])
         np.testing.assert_array_equal(f.lonlat[co[1] - 1], before[2])
 
+    def test_a_railway_bend_is_rounded_with_its_class_radius(self):
+        bend = [(0.0, 0.0), (400.0, 0.0), (400.0, 400.0)]
+        f = _features(self.frame, [bend, bend, bend], ["standard_gauge", "subway", "tram"])
+        f.attrs["subtype"] = np.array(["rail"] * 3)
+        before = f.lonlat.copy()
+        roadsmooth.smooth(f, self.frame)
+        co = f.coord_off
+        n = np.diff(co)
+        self.assertGreater(n[0], 6, "a standard-gauge line's corner is an arc")
+        self.assertEqual(n[1], 3, "a subway is left")
+        self.assertEqual(n[2], 3, "a tram stays draped in rails.py as mapped")
+        arc = f.en[co[0]:co[1]]
+        self.assertLess(float(_turn_deg(arc).max()), 8.0, "no corner left in the line")
+        np.testing.assert_array_equal(f.lonlat[co[0]], before[0])
+        np.testing.assert_array_equal(f.lonlat[co[1] - 1], before[2])
+        was = roadsmooth.RAIL_ON
+        self.addCleanup(setattr, roadsmooth, "RAIL_ON", was)
+        roadsmooth.RAIL_ON = False
+        g = _features(self.frame, [bend], ["standard_gauge"])
+        g.attrs["subtype"] = np.array(["rail"])
+        roadsmooth.smooth(g, self.frame)
+        self.assertEqual(len(g.en), 3, "BNE_RAIL_CURVES=off")
+
     def test_rule_fractions_follow_the_line(self):
         bend = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0)]
         # a bridge from 0.9 of the line (160 m up the second piece, past the arc's end at 150 m) to its end

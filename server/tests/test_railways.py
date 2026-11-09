@@ -491,10 +491,13 @@ class RailwayTest(unittest.TestCase):
             raw = ridge(la, lo)
             got = g.apply(la, lo, raw)
             rails = railways.parts(FRAME, [f], (-60, -10, 60, 10))
-            (zb, _), = railways.profile(rails, lambda xy: ridge(*FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)[:2]))
+            import railprofile      # (the bed is railprofile's: smoothed over the ridge, the cut at most MAX_CUT_M)
+            railprofile._NODES.clear()
+            (zb,) = railprofile.beds(FRAME, "ridge", lambda k: f, lambda xy: ridge(*FRAME.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)[:2]), rails)
             want = np.interp(e, rails[0][3][:, 0], zb)
             self.assertLess(np.abs(got - want).max(), 0.1, f"the ground at {off} m off the line is at its bed")
-            self.assertLess(abs(float(got[12]) - float(raw[12])), 0.3, "over the ridge as it is (the real elevation)")
+            self.assertLess(abs(float(got[12]) - float(raw[12])), railprofile.MAX_CUT_M + 0.3,
+                            "over the ridge as it is, cut by the smoothing at most")
         self.assertLess(railways.FOOT_MAX_M, 10.0)
 
     def test_written_with_the_tile(self):
