@@ -418,11 +418,11 @@ assert cache.store((14, 4000, 6000), [], [], [], [], persist=True)
         import blockworker
         dem = SimpleNamespace(sample=lambda la, lo, zoom: np.zeros(np.shape(la)))
         server = SimpleNamespace(grading=True, grader_lock=threading.Lock(), mapdata=FakeMD(None),
-                                 dem=dem, road_widths=None, cache_dir=str(self.root), sea=None)
+                                 dem=dem, road_widths=None, cache_dir=str(self.root), sea=None, surface=None)
         anchor = SimpleNamespace(grader=None, frame=FRAME)
         worker = blockworker._State.__new__(blockworker._State)
         worker.__dict__.update(lock=threading.Lock(), chunks={}, graders={}, grading=True,
-                               md=FakeMD(None), dem=dem, widths=None, cache_dir=str(self.root))
+                               md=FakeMD(None), dem=dem, widths=None, cache_dir=str(self.root), surface=None)
         with mock.patch.object(plancache, "for_grader", side_effect=wb.BundleError("mismatch")):
             for _ in range(2):
                 with self.assertRaises(wb.BundleError):
