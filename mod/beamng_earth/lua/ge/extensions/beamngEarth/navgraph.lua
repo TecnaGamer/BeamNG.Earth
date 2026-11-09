@@ -772,15 +772,92 @@ function M.takeChoice(o)
   return M.choice
 end
 
+-- The traffic cars of the region the player is in (the user, 2026-11-09: "the normal maps have this already"): a stock
+-- level names its region in info.json (northAmerica, europe, asiaPacific) and the game's traffic picks the vehicles
+-- of that region with Options > Gameplay > Traffic's smart selections on (gameplay/traffic/trafficUtils
+-- getBaseGroupParams). Ours spans the Earth: the region of the road rules' country (server navgraph.road_rules),
+-- the same filters as the game's own group (its simple vehicles too); nil (the game's own group) elsewhere, without
+-- smart selections, or when the group cannot be made.
+M.REGIONS = {
+  northAmerica = { 'US', 'CA', 'MX', 'PR' },
+  europe = { 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU',
+    'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'NO', 'CH', 'IS', 'LI', 'MC', 'SM', 'AD', 'AL', 'BA',
+    'ME', 'MK', 'RS', 'XK', 'MD', 'UA', 'BY', 'FO', 'GI', 'IM', 'JE', 'GG' },
+  asiaPacific = { 'JP', 'KR', 'TW', 'HK', 'MO', 'SG', 'MY', 'TH', 'ID', 'PH', 'AU', 'NZ' },
+}
+M.COUNTRY_NAMES = { US = 'United States', DE = 'Germany', IT = 'Italy', FR = 'France', JP = 'Japan' }   -- (countryRef)
+M.GROUP_SIZE = 40       -- vehicles drawn for the traffic's pool
+local regionOfCountry = {}
+for region, list in pairs(M.REGIONS) do for _, cc in ipairs(list) do regionOfCountry[cc] = region end end
+
+function M.regionOf(cc)
+  return type(cc) == 'string' and regionOfCountry[string.upper(cc)] or nil
+end
+
+function M.regionalGroupParams(cc, getSetting)
+  local region = M.regionOf(cc)
+  if not region or not getSetting or not getSetting('trafficSmartSelections') then return nil end
+  local params = { filters = { Type = { car = 1, truck = 0.6 }, Region = { [region] = 1, default = 1 } },
+    country = M.COUNTRY_NAMES[string.upper(cc)] or 'default', maxYear = 0, minPop = 50, allConfigs = true,
+    allMods = getSetting('trafficAllowMods') and true or false, modelPopPower = 1, configPopPower = 1 }
+  if getSetting('trafficSimpleVehicles') then
+    -- (the simple traffic models' configs carry their region too: US, EU and Japanese-market bodies; the game's
+    -- own simple group, createTrafficGroup's: prop traffic only, every config)
+    params.filters.Type = { proptraffic = 1 }
+    params.minPop = 0
+  else
+    params.filters['Config Type'] = { Police = 0, other = 1 }
+    if params.allMods then params.filters.Type.automation = 1; params.minPop = 0 end
+  end
+  return params, region
+end
+
+local function regionalGroup()
+  local st = rawget(_G, 'settings')
+  local cc = graph and graph.rules and graph.rules.country
+  local params, region = M.regionalGroupParams(cc, st and st.getValue and function(k) return st.getValue(k) end)
+  M.trafficRegionKey = region or 'none'
+  M.trafficRegion = nil
+  if not params then return nil end
+  if not core_multiSpawn and extensions and extensions.load then pcall(extensions.load, 'core_multiSpawn') end
+  if not (core_multiSpawn and core_multiSpawn.createGroup) then return nil end
+  local ok, g = pcall(core_multiSpawn.createGroup, M.GROUP_SIZE, params)
+  if not ok or type(g) ~= 'table' or not g[1] then return nil end
+  M.trafficRegion = region
+  log('I', 'beamngEarth', string.format('traffic: %s vehicles (%s)', region, tostring(cc)))
+  return g
+end
+
+local function setupTraffic(gt, c)
+  local okG, group = pcall(regionalGroup)
+  local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
+    { police = c.police, vehGroup = okG and group or nil })
+  if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+end
+
 local function startTraffic()
   started = true
   M.restoreChoice()       -- freeroam's own spawn time has passed
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
-  if gt and gt.getState() ~= 'on' then
-    local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
-  end
+  if gt and gt.getState() ~= 'on' then setupTraffic(gt, c) end
+end
+
+-- The traffic set up again with the new place's vehicles when a graph of another region comes (a teleport from
+-- the US to Germany kept the American cars): once per region change, the stock group outside the regions.
+M.REGION_CHECK_S = 2.0
+local regionCheckAt = 0
+local function checkRegion(t)
+  if t < regionCheckAt or not started or not M.trafficRegionKey then return end
+  regionCheckAt = t + M.REGION_CHECK_S
+  local want = M.regionOf(graph and graph.rules and graph.rules.country) or 'none'
+  if want == M.trafficRegionKey then return end
+  local c = M.choice
+  local gt = c and c.traffic and trafficSystem() or nil
+  if not gt or gt.getState() ~= 'on' then return end
+  log('I', 'beamngEarth', string.format('traffic: region %s -> %s, set up again', M.trafficRegionKey, want))
+  setupTraffic(gt, c)
+  M.trafficRegionKey = want         -- (once a change, whatever the setup did)
 end
 
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
@@ -817,6 +894,7 @@ function M.transform(xf, anchorId)
 end
 
 function M.currentGraph() return graph end      -- (tests)
+function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
 
 function M.onTeleport()
   respawnAll = true
@@ -1005,6 +1083,10 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  do
+    local ok, err = pcall(checkRegion, t0)
+    if not ok then log('W', 'beamngEarth', 'navgraph region: ' .. tostring(err)) end
+  end
   if applied then
     local ok, err = pcall(launchRespawned, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end

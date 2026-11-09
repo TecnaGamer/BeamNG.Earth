@@ -178,4 +178,27 @@ do
   jsonDecode, readFile = jd, rf
 end
 
+-- regional traffic vehicles: the road rules' country -> the stock levels' region, the game's own filters; none
+-- elsewhere or without smart selections (the game's own group then)
+do
+  T.check(N.regionOf('US') == 'northAmerica' and N.regionOf('de') == 'europe' and N.regionOf('JP') == 'asiaPacific'
+    and N.regionOf('BR') == nil and N.regionOf(nil) == nil, 'regions by country')
+  local set = { trafficSmartSelections = true, trafficSimpleVehicles = false, trafficAllowMods = false }
+  local get = function(k) return set[k] end
+  local p, region = N.regionalGroupParams('DE', get)
+  T.check(region == 'europe' and p.filters.Region.europe == 1 and p.filters.Region.default == 1
+    and p.filters['Config Type'].Police == 0 and p.country == 'Germany' and p.minPop == 50, 'europe group params')
+  T.check(N.regionalGroupParams('NL', get).country == 'default', 'a country the game has no name for: default')
+  T.check(N.regionalGroupParams('BR', get) == nil, 'no region: the game\'s own group')
+  set.trafficSmartSelections = false
+  T.check(N.regionalGroupParams('US', get) == nil, 'smart selections off: the game\'s own group')
+  set.trafficSmartSelections, set.trafficSimpleVehicles = true, true
+  local ps, rs = N.regionalGroupParams('US', get)
+  T.check(rs == 'northAmerica' and ps.filters.Type.proptraffic == 1 and ps.filters.Type.car == nil
+    and ps.filters.Region.northAmerica == 1 and ps.minPop == 0 and ps.allConfigs, 'simple vehicles: of the region too')
+  set.trafficSimpleVehicles, set.trafficAllowMods = false, true
+  local pm = N.regionalGroupParams('US', get)
+  T.check(pm.allMods and pm.filters.Type.automation == 1 and pm.minPop == 0, 'mods allowed: as the game')
+end
+
 T.done('test_navgraph')
