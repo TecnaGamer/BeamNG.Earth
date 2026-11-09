@@ -357,6 +357,21 @@ class ElsewhereTest(unittest.TestCase):
         self.assertEqual(roads._level_ranges(home, 0), [(0.6, 0.62, "bridge")])
         self.assertEqual(roads._gradesep_elsewhere(other, 0), [], "not its home: it takes the home copy's")
 
+    def test_copies_far_from_home_take_their_neighbours_spans(self):
+        # GitHub #1020 (the A4 at Glaireuse): a 15 km motorway's copies far from its home cell (its first point) each
+        # took only their own cell's spans; one had the bridge over a track's underpass and the next did not
+        lon0, lon1 = KEY.bounds()[0], KEY.bounds()[2]
+        w_edge, e_edge = (lon0 - LON) * roads_m_lon(), (lon1 - LON) * roads_m_lon()
+        line = [[(w_edge - 300.0, 0.0), (e_edge + 300.0, 0.0)]]   # (starts in the cell west of KEY: its home)
+        east = mapcells.CellKey(KEY.z, KEY.x + 1, KEY.y)
+        mid, other = features(line, ["motorway"], ids=["a4"]), features(line, ["motorway"], ids=["a4"])
+        mid.__dict__.update(_bnge_cell=(str(KEY), "roads", ()), _bnge_neighbours=lambda: [other],
+                            _bnge_gradesep=lambda f: {})
+        other.__dict__.update(_bnge_cell=(str(east), "roads", ()), _bnge_neighbours=lambda: [mid],
+                              _bnge_gradesep=lambda f: {0: [(0.7, 0.71, "bridge")]})
+        self.assertEqual(roads._gradesep_elsewhere(mid, 0), [(0.7, 0.71, "bridge")])
+        self.assertEqual(roads._level_ranges(mid, 0), [(0.7, 0.71, "bridge")])
+
     def test_nothing_found_elsewhere_changes_nothing(self):
         home, _other = self.copies({})
         self.assertEqual(roads._level_ranges(home, 0), [])

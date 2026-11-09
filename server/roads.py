@@ -484,7 +484,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 11     # 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 12     # 12: a long road's copy far from its home takes the grade separations its neighbour cells found too (_home_far: the A4 at Glaireuse, GitHub #1020); 11: an underpass in a cutting the DEM shows (gradesep._underpasses: a longer road tunnel with the ground over it under TUNNEL_OPEN_COVER, SEP_M under the line over it either side: Highway 3 at Hameenlinna, GitHub #1009) bridged by the roads over it; 10: a short ground gap between a tunnel's portal and a bridge of the same road made bridge (_portal_decks: CA-1's northbound Tom Lantos bore, a 22 % drop onto its bridge); 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1357,6 +1357,23 @@ def _cell_bounds(feats):
     return got
 
 
+def _home_far(feats, near_hook, home):
+    """Is feature home cell `home` none of feats' cell's neighbours (its home copy not at hand, home_copy None)? A
+    long road's copies far from its home (the first point of a 15 km motorway) each took only the spans their own cell
+    found: the A4 at Glaireuse (GitHub #1020), one copy had the bridge over a track's underpass and the next cell's did
+    not, a trench across the motorway; such copies take their neighbours' spans too (adjacent copies then agree near a
+    crossing). Remembered per layer."""
+    memo = feats.__dict__.setdefault("_home_far", {})
+    got = memo.get(home)
+    if got is None:
+        try:
+            cells = {f.__dict__["_bnge_cell"][0] for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")}
+        except Exception:
+            return False
+        got = memo[home] = home not in cells
+    return got
+
+
 def _gradesep_elsewhere(feats, i):
     """The grade separations (gradesep) the other cells feature i crosses found for it, when this cell is its home
     (home_copy: every copy of it takes its ranges from here). A cell finds those of the crossings in it, and in the
@@ -1368,14 +1385,17 @@ def _gradesep_elsewhere(feats, i):
     and _home_cell per feature were 2.4 of its 3.2 own CPU-s in a cold Queens tile, 2026-11-09.)"""
     me = feats.__dict__.get("_bnge_cell")
     near_hook = feats.__dict__.get("_bnge_neighbours")
-    if me is None or near_hook is None or _home_cells(feats)[i] != me[0]:
+    if me is None or near_hook is None:
         return []
+    home = _home_cells(feats)[i]
     lon0, lat0, lon1, lat1 = (float(v) for v in _feature_boxes(feats)[i])
     if not np.isfinite([lon0, lat0, lon1, lat1]).all():
         return []
     cb = _cell_bounds(feats)
     if cb is not None and cb[0] <= lon0 and lon1 <= cb[2] and cb[1] <= lat0 and lat1 <= cb[3]:
         return []                       # (it stays in this cell)
+    if home != me[0] and not _home_far(feats, near_hook, home):
+        return []                       # (its home copy is at hand: level_ranges takes that one's)
     import revisit
     try:
         near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
