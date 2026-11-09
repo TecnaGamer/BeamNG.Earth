@@ -2723,15 +2723,24 @@ class _Planner:
         if not bridges or not ground:
             return
         # (single spans: neither end continues into another bridge part; deduplicated across cells)
-        uniq, seen, unique_sources = [], set(), []
+        uniq, seen, unique_sources, by_source = [], set(), [], {}
         for (b, fixed, rail), src in zip(bridges, sources):
-            k2 = (tuple(src), fixed, rail) if src else (
-                round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1),
-                round(float(b[-1, 1]), 1), len(b), fixed, rail)
-            if k2 not in seen:
+            if src:
+                fid, ring, a, end = src[0]
+                copies = by_source.setdefault((fid, ring, fixed, rail), [])
+                # Smoothing in the cells' local frames perturbs normalized endpoints around 1e-15. Exact tuples
+                # leave coincident copies that the chain/single-span tests mistake for separate joined bridges.
+                if any(abs(a - x) <= 1e-9 and abs(end - y) <= 1e-9 for x, y in copies):
+                    continue
+                copies.append((a, end))
+            else:
+                k2 = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1),
+                      round(float(b[-1, 1]), 1), len(b), fixed, rail)
+                if k2 in seen:
+                    continue
                 seen.add(k2)
-                uniq.append((b, fixed, rail))
-                unique_sources.append(src)
+            uniq.append((b, fixed, rail))
+            unique_sources.append(src)
         chained = set()
         if UNDER_CHAIN_ON:
             n0 = [len(b) for b, _f, _r in uniq]

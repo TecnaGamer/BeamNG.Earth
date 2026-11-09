@@ -766,9 +766,31 @@ def _bridge_reach(feats, i):
     got = memo.get(i)
     if got is not None:
         return got
+    # A context read can block while another worker asks for the same decoded layer. Only a completed answer may
+    # enter the shared memo: a provisional raw range would be cached permanently by bridge_parts on that worker.
+    with _FACTS_LOCK:
+        lock = feats.__dict__.setdefault("_bridge_reach_locks", {}).setdefault(i, threading.RLock())
+    with lock:
+        got = memo.get(i)
+        if got is not None:
+            return got
+        pending = feats.__dict__.setdefault("_bridge_reach_pending", set())
+        if i in pending:
+            # Same-thread width/rule discovery may recurse; this private fallback is never published to other workers.
+            return {"ranges": raw_level_ranges(feats, i), "over": [0.0, 0.0]}
+        pending.add(i)
+        try:
+            got = _bridge_reach_calc(feats, i)
+        finally:
+            pending.remove(i)
+        memo[i] = got
+        return got
+
+
+def _bridge_reach_calc(feats, i):
+    """One complete skew-extension answer, before publication by _bridge_reach."""
     rngs = raw_level_ranges(feats, i)
     got = {"ranges": rngs, "over": [0.0, 0.0]}
-    memo[i] = got
     specs = road_specs(feats)
     up_w = specs[i].width if specs[i] is not None else _structure_width(feats, i)
     rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
@@ -792,11 +814,7 @@ def _bridge_reach(feats, i):
             sub = np.vstack([[np.interp(lo_m, sm, m[:, 0]), np.interp(lo_m, sm, m[:, 1])], m[inner],
                              [np.interp(hi_m, sm, m[:, 0]), np.interp(hi_m, sm, m[:, 1])]])
             gl, gj = [], []
-            try:
-                context = _bridge_context(feats, i, sub / [kx, ky] + ring[0])
-            except BaseException:
-                memo.pop(i, None)
-                raise
+            context = _bridge_context(feats, i, sub / [kx, ky] + ring[0])
             # Lane inference also depends on the local junctions (A11: three lanes here, two in distant copies).
             # Read the upper width from that same deterministic context, not from the caller's copy.
             own_w = next((sp.width if sp is not None else _structure_width(other, j)
@@ -827,8 +845,7 @@ def _bridge_reach(feats, i):
                 over[1] = max(over[1], hi_m - L)
             a, b = max(lo_m / L, prev, 0.0), min(hi_m / L, nxt, 1.0)
         out.append((a, b, k))
-    got = memo[i] = {"ranges": out, "over": over}
-    return got
+    return {"ranges": out, "over": over}
 
 
 def _bridge_context(feats, i, span):

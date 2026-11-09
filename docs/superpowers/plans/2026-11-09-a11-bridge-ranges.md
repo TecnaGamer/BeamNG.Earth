@@ -31,9 +31,9 @@
 
 **Interfaces:** road layers provide `_bnge_road_cells(keys)`; roads resolves bridge crossing features from bounded cells, deduplicated by feature ID.
 
-- [ ] Add offline long-feature/cell-boundary regression tests; run and confirm failure.
-- [ ] Implement bounded context selection, preserving standalone feature fixtures and faulting unavailable context.
-- [ ] Verify consistent deck/ground ranges, several spans, load order and context recovery.
+- [x] Add offline long-feature/cell-boundary regression tests; run and confirm failure.
+- [x] Implement bounded context selection, preserving standalone feature fixtures and faulting unavailable context.
+- [x] Verify consistent deck/ground ranges, several spans, load order and context recovery.
 
 ### Task 2: Source identity in underpass grading
 
@@ -41,15 +41,15 @@
 
 **Interfaces:** ENU cell parts carry `(fid, ring, start, end)` provenance; span-chain merging preserves provenance when requested.
 
-- [ ] Add failing self-overlap regression and genuine self-crossing/chain controls.
-- [ ] Retain provenance through collection and reject candidates inside their own bridge's source interval.
-- [ ] Run grading, bridge ranges, deck joins, local levels, and underpass regressions.
+- [x] Add failing self-overlap regression and genuine self-crossing/chain controls.
+- [x] Retain provenance through collection and reject candidates inside their own bridge's source interval.
+- [x] Run grading, bridge ranges, deck joins, local levels, and underpass regressions.
 
 ### Task 3: Cache formats, real-data validation and review
 
-**Files:** server/roads.py, server/plancache.py, server/tests/fixtures/bake_formats.json as required by repository checks.
+**Files:** server/roads.py, server/plancache.py, server/tests/golden/bake_formats.json.
 
-- [ ] Bump affected cache formats and update format fixture through the repository's existing workflow.
-- [ ] Probe the saved A11 data: no artificial 7.5 m dip; approaches continuous; lower road retains clearance; compare neighboring cells.
+- [x] Bump affected cache formats and update format fixture through the repository's existing workflow.
+- [x] Probe the saved A11 data: no artificial 7.5 m dip; approaches continuous; lower road retains clearance; compare neighboring cells.
 - [ ] Run the server suite and required repository checks, recording any baseline/environment failures.
 - [ ] Obtain one independent review, address material findings with regression tests, and leave the completed branch in its worktree.

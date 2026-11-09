@@ -3,6 +3,8 @@ import sys
 import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
+from concurrent.futures import ThreadPoolExecutor, TimeoutError
+from threading import Event
 from pathlib import Path
 
 import numpy as np
@@ -100,9 +102,41 @@ class BridgeContextTest(unittest.TestCase):
         spans = roads.level_ranges(sparse, 0)
         self.assertGreater((spans[0][1] - spans[0][0]) * 10000, 22.0)
 
+    def test_concurrent_deck_read_never_caches_provisional_ranges(self):
+        _full, sparse, _calls = self.copies()
+        read = sparse.__dict__["_bnge_road_cells"]
+        entered, release, second_started = Event(), Event(), Event()
+        def paused(keys):
+            entered.set()
+            if not release.wait(5):
+                raise TimeoutError("context read was not released")
+            return read(keys)
+        def second_read():
+            second_started.set()
+            return roads.bridge_parts(sparse, 0)
+        sparse.__dict__["_bnge_road_cells"] = paused
+        with ThreadPoolExecutor(2) as pool:
+            first = pool.submit(roads.level_ranges, sparse, 0)
+            try:
+                self.assertTrue(entered.wait(5))
+                second = pool.submit(second_read)
+                self.assertTrue(second_started.wait(5))
+                try:
+                    second.result(timeout=.1)
+                except TimeoutError:
+                    pass                 # a complete range may legitimately wait for its context
+            finally:
+                release.set()
+            first.result(timeout=5)
+            second.result(timeout=5)
+        deck = roads.bridge_parts(sparse, 0)[0]
+        ground = roads.ground_parts(sparse, 0)
+        np.testing.assert_allclose(ground[0][-1], deck[0], atol=1e-12)
+        np.testing.assert_allclose(ground[1][0], deck[-1], atol=1e-12)
+
 
 class UnderpassSourceTest(unittest.TestCase):
-    def lower(self, source=("road", 0, 0.0, 0.8), chained=False):
+    def lower(self, source=("road", 0, 0.0, 0.8), chained=False, noisy_sources=False):
         # A stale cell copy has ground overlapping the extended bridge. Its curved source intersects the deck chord.
         ground = np.array([[-300., 0.], [-5., 1.], [0., 0.], [5., -1.], [300., 0.]])
         bridges = [np.array([[-20., 0.], [20., 0.]])]
@@ -118,7 +152,16 @@ class UnderpassSourceTest(unittest.TestCase):
                     end_of=[j for j in range(len(bridges)) for _ in range(2)])
         planner = grading._Planner(FRAME, None, lambda la, lo: np.full(np.shape(la), 50.))
         plans = [(source[0], grading.Plan(ground, np.full(len(ground), 50.), 7.))]
-        with patch.object(planner, "_cell_enu", return_value=data):
+        copies = {}
+        def cell(key):
+            if not noisy_sources:
+                return data
+            if str(key) not in copies:
+                noise = (len(copies) + 1) * 5e-15
+                copies[str(key)] = {**data, 'bridge_sources':
+                    [(fid, ring, a + noise, b + noise) for fid, ring, a, b in origins]}
+            return copies[str(key)]
+        with patch.object(planner, "_cell_enu", side_effect=cell):
             planner._lower_underpasses(mapcells.cell_of(LAT, LON), plans)
         return plans[0][1].z
 
@@ -133,6 +176,9 @@ class UnderpassSourceTest(unittest.TestCase):
 
     def test_a_different_road_still_passes_under(self):
         self.assertLess(float(self.lower(source=("lower", 0, 0.0, 0.8)).min()), 45.)
+
+    def test_reprojected_copies_do_not_hide_a_real_underpass(self):
+        self.assertLess(float(self.lower(source=("lower", 0, 0.0, 0.8), noisy_sources=True).min()), 45.)
 
     def test_legacy_cell_provider_cannot_lower_its_own_abutment(self):
         # Exercise provenance construction too, with a provider lacking MapData's new shared-context hook.
