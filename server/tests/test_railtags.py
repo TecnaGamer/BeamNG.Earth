@@ -251,6 +251,188 @@ def lane_attrs_equal(a, b):
     return True
 
 
+class RuleTagsTest(unittest.TestCase):
+    """The German road rules (priority_road, zone:maxspeed: the shard's "rules", apart from its "ways") and sign
+    nodes of a lane shard."""
+
+    def _join(self, shard, src_ways=None, lt_out=None, from_side=False):
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 0.0), (5.0, 5.0)]], ["primary", "residential"],
+                     subtypes=["road", "road"])
+        f.attrs["src_record"] = np.array(["w21@3", "w22@1"])
+        if src_ways:
+            f.rules["src_ways"] = mapgeom.rule_table(src_ways)
+        lo, la = (float(v) for v in f.lonlat[0])
+        key = mapcells.cell_of(la, lo)
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        if callable(shard):
+            shard = shard(lo, la)
+        files = {"lanes/manifest.json": json.dumps({"built": "2026-10-30T03:00:00Z"}).encode()}
+        if shard is not None:               # (None: no shard there, a 404)
+            files[f"lanes/{sx}/{sy}.json.gz"] = gzip.compress(json.dumps(shard).encode())
+        with tempfile.TemporaryDirectory() as d:
+            lt = railtags.LaneTags(d, _Fetcher(files))
+            lt.join(f, key)
+            if from_side:       # (the next process: the shard's decoded form beside it, the shard itself gone)
+                side = glob.glob(os.path.join(d, "pagesdata", "lanes", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+                self.assertEqual(len(side), 1)
+                os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+                for c in railtags.RULE_COLUMNS:
+                    f.attrs.pop(railtags.lane_attr(c))
+                lt = railtags.LaneTags(d, _Fetcher({"lanes/manifest.json": files["lanes/manifest.json"]}))
+                lt.join(f, key)
+            if lt_out is not None:
+                lt_out.append(lt.shard(sx, sy))
+        return f
+
+    def test_rule_tags_join(self):
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]},
+                                              "zone:maxspeed": {"DE:30": [21], "DE:20": [22]}}})
+        self.assertEqual(list(f.attrs["osm_priority_road"]), ["designated", None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), ["DE:30", "DE:20"])
+
+    def test_rules_compact_on_load(self):
+        got = []
+        self._join({"ways": {}, "rules": {"priority_road": {"designated": [21, 9], "end": [25]},
+                                          "zone:maxspeed": {"DE:30": [21, "x", None]}, "junk": [1]}}, lt_out=got)
+        rules = got[0]["rules"]
+        self.assertIsInstance(rules, railtags.Rules)
+        ids, idx, values = rules.keys["priority_road"]
+        self.assertEqual((ids.dtype, ids.tolist(), [values[i] for i in idx]),
+                         (np.dtype(np.int64), [21, 25, 30], ["designated", "end", "designated"]))
+        self.assertEqual(rules.keys["zone:maxspeed"][0].tolist(), [],
+                         "a list with an entry that is not a number dropped whole")
+        self.assertNotIn("junk", rules.keys)
+        self.assertEqual(rules.get_many("priority_road", ["30", "31", None, "25"]), ["designated", None, None, "end"])
+        self.assertEqual(rules.get_many("zone:maxspeed", []), [])
+
+    def test_rules_from_the_side_file(self):
+        got = []
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]}, "zone:maxspeed": {"DE:20": [22]}}},
+                       lt_out=got, from_side=True)
+        self.assertIsInstance(got[0]["rules"], railtags.Rules, "made Rules as from the shard")
+        self.assertEqual(list(f.attrs["osm_priority_road"]), ["designated", None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), [None, "DE:20"])
+
+    def test_rules_delta_coded(self):
+        r = railtags.Rules({"priority_road": {"designated": [100, 5, 125]}})
+        self.assertEqual(r.get_many("priority_road", ["100", "105", "230", "101"]),
+                         ["designated", "designated", "designated", None])
+        r = railtags.Rules({"priority_road": {"designated": [100, "x", 5], "end": [], "yes_unposted": 7,
+                                              "x": [True, 3]}})
+        self.assertEqual(r.get_many("priority_road", ["100", "105", "5", "3"]), [None] * 4)
+        self.assertEqual(r.keys["priority_road"][0].dtype, np.dtype(np.int64))
+
+    def test_sign_nodes_in_the_cell_only(self):
+        f = self._join(lambda lo, la: {"ways": {}, "nodes": [[1, lo, la, {"traffic_sign": "DE:205"}],
+                                                              [2, lo + 0.1, la + 0.1, {"traffic_sign": "DE:206"}]]})
+        got = railtags.sign_nodes(f)
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0][2], {"traffic_sign": "DE:205"})
+
+    def test_join_without_a_cell(self):
+        """join(feats, None) (test_roadlanes' mocked shard): the lane tags, and no sign nodes (none to bound)."""
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["primary"], subtypes=["road"])
+        f.attrs["src_record"] = np.array(["w21@3"])
+        lt = railtags.LaneTags.__new__(railtags.LaneTags)
+        lt.of_cell = lambda _key: {"ways": {"21": {"lanes:forward": "2"}}, "rules": {"priority_road": {"end": [21]}},
+                                   "nodes": [[1, 0.0, 0.0, {"traffic_sign": "DE:205"}]]}
+        lt.join(f, None)
+        self.assertEqual(f.attrs["osm_lanes_forward"][0], "2")
+        self.assertEqual(f.attrs["osm_priority_road"][0], "end")
+        self.assertEqual(railtags.sign_nodes(f), [])
+
+    def test_old_shard_without_nodes_or_rules(self):
+        f = self._join({"ways": {"21": {"lanes:forward": "2"}}})
+        self.assertEqual(list(f.attrs["osm_lanes_forward"]), ["2", None], "the lane tags still joined")
+        self.assertEqual(roads.lane_tags(f, 0), {"lanes:forward": "2"})
+        self.assertEqual(list(f.attrs["osm_priority_road"]), [None, None])
+        self.assertEqual(list(f.attrs["osm_zone_maxspeed"]), [None, None])
+        self.assertEqual(railtags.sign_nodes(f), [])
+
+    def test_rule_only_way_stays_out_of_lane_tags(self):
+        f = self._join({"ways": {}, "rules": {"priority_road": {"designated": [21]}}}, [(0, "w21@3", [0.0, 1.0])])
+        self.assertIsNone(roads.lane_tags(f, 0))
+        self.assertEqual([t for _a, _b, _w, t in roads.lane_tag_parts(f, 0)], [None])
+        self.assertEqual(f.attrs["osm_priority_road"][0], "designated")
+
+    def test_lane_parts_without_rule_keys(self):
+        f = self._join({"ways": {"21": {"lanes:forward": "2"}},
+                        "rules": {"priority_road": {"designated": [21]}, "zone:maxspeed": {"DE:30": [21]}}},
+                       [(0, "w21@3", [0.0, 1.0])])
+        self.assertEqual(f.attrs[railtags.LANE_PARTS][0], [(0.0, 1.0, "21", {"lanes:forward": "2"})])
+        self.assertEqual(roads.lane_tags(f, 0), {"lanes:forward": "2"})
+        self.assertEqual(f.attrs["osm_priority_road"][0], "designated")
+        self.assertEqual(f.attrs["osm_zone_maxspeed"][0], "DE:30")
+
+    def test_ways_reader_same_with_and_without_rules(self):
+        """What a reader of the shard's "ways" alone gets (the lane columns, LANE_PARTS: what today's server reads
+        and its markings take) is the same with the new "rules" and "nodes" as without; a shard of rules only is
+        read like no shard at all."""
+        ways = {"21": {"lanes:forward": "1", "lanes:backward": "1", "highway": "primary"}}
+        rules = {"priority_road": {"designated": [21, 78]}, "zone:maxspeed": {"DE:30": [22]}}
+        src = [(0, "w21@3", [0.0, 0.5]), (0, "w99@1", [0.5, 1.0]), (1, "w22@1", [0.0, 1.0])]
+
+        def seen(shard):
+            f = self._join(shard, src)
+            return ({c: list(f.attrs[railtags.lane_attr(c)]) for c in railtags.LANE_COLUMNS},
+                    list(f.attrs[railtags.LANE_PARTS]), [roads.lane_tags(f, i) for i in range(2)],
+                    [roads.lane_tag_parts(f, i) for i in range(2)])
+
+        old = seen({"ways": ways, "nodes": []})
+        self.assertEqual(seen({"ways": ways, "nodes": [[1, 0.0, 0.0, {"traffic_sign": "DE:205"}]], "rules": rules}),
+                         old)
+        self.assertEqual(old[3][0][1], (0.5, 1.0, "99", None), "the rule-only way: no lane tags")
+        self.assertEqual(seen({"ways": {}, "nodes": [], "rules": rules}), seen(None))
+
+
+class SignNodesTest(unittest.TestCase):
+    """The lane shards' German sign nodes (tools/build_lane_tags.py: the Ortstafeln) kept per cell by LaneTags.join
+    for railtags.sign_nodes; the shard builder's records of them."""
+
+    def joined(self, shard):
+        f = features([[(0.0, 100.0), (250.0, 100.0)]], ["tertiary"], subtypes=["road"])
+        f.attrs["src_record"] = np.array(["w21@1"])
+        lo, la = f.lonlat[0]
+        key = mapcells.cell_of(float(la), float(lo))
+        sx, sy = key.x >> (key.z - 7), key.y >> (key.z - 7)
+        fetch = _Fetcher({"lanes/manifest.json": json.dumps({"built": "2026-11-07T03:00:00Z"}).encode(),
+                          f"lanes/{sx}/{sy}.json.gz": gzip.compress(json.dumps(shard(key)).encode())})
+        with tempfile.TemporaryDirectory() as d:
+            railtags.LaneTags(d, fetch).join(f, key)
+        return f
+
+    def test_sign_nodes_in_the_cell_only(self):
+        def shard(key):
+            lon0, lat0, lon1, lat1 = key.bounds()
+            mid = ((lon0 + lon1) / 2, (lat0 + lat1) / 2)
+            return {"ways": {}, "nodes": [[1, mid[0], mid[1], {"traffic_sign": "city_limit", "name": "Sarching"}],
+                                          [2, lon1 + 0.05, lat1, {"traffic_sign": "city_limit", "name": "Far"}]]}
+        got = railtags.sign_nodes(self.joined(shard))
+        self.assertEqual([t["name"] for _lo, _la, t in got], ["Sarching"])
+
+    def test_old_shard_without_nodes(self):
+        self.assertEqual(railtags.sign_nodes(self.joined(lambda key: {"ways": {}})), [])
+
+    def test_the_builders_records(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
+            __file__)))), "tools"))
+        try:
+            import build_lane_tags as b
+        except ImportError as e:            # (pyosmium: the data repo's Action has it)
+            self.skipTest(f"build_lane_tags: {e}")
+        self.assertEqual(b.sign_records({"traffic_sign": "city_limit", "name": "Sarching"}),
+                         [{"traffic_sign": "city_limit", "name": "Sarching"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:310,DE:311", "direction": "forward", "name": "A / B"}),
+                         [{"traffic_sign": "DE:310,DE:311", "name": "A / B", "direction": "forward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "310"}), [{"traffic_sign": "DE:310"}])
+        self.assertEqual(b.sign_records({"traffic_sign:backward": "city_limit"}),
+                         [{"traffic_sign": "city_limit", "direction": "backward"}])
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:274[50]"}), [], "not a town sign")
+        self.assertEqual(b.sign_records({"traffic_sign": "DE:3100"}), [], "not 310")
+        self.assertTrue(b.in_box(12.2, 49.0))
+        self.assertFalse(b.in_box(2.35, 48.85), "Paris: outside Germany's box")
+
+
 class WaysTest(unittest.TestCase):
     """A shard's ways kept compact (railtags.Ways): the same lookups as the dict, the distinct tag sets once."""
 

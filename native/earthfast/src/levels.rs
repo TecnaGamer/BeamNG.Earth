@@ -7,6 +7,69 @@
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+/// Preserve the local level along an already classified bridge. Merged Overture features can carry
+/// several levels: promoting the whole feature to their maximum loses deck-over-deck ordering (#866).
+#[pyfunction]
+pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, f64>, ends: PyReadonlyArray1<'py, f64>, values: Vec<String>, min_part: f64)
+    -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>)> {
+    let ranges = ranges.as_array();
+    let starts = starts.as_array();
+    let ends = ends.as_array();
+    if ranges.ncols() != 2 || starts.len() != ends.len() || starts.len() != values.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("bridge level rule shapes differ"));
+    }
+    let rules: Vec<(f64, f64, f64)> = values.iter().enumerate().filter_map(|(i, v)| {
+        let level = v.parse::<f64>().ok()?;
+        let (a, b) = (starts[i], ends[i]);
+        (a.is_finite() && b.is_finite() && b > a && level.is_finite())
+            .then_some((a, b, level.max(1.0)))
+    }).collect();
+    let mut result = Vec::new();
+    for range in ranges.rows() {
+        let (a, b) = (range[0], range[1]);
+        if !a.is_finite() || !b.is_finite() || b - a <= min_part { continue; }
+        let mut cuts = vec![a, b];
+        for &(s, e, _) in &rules {
+            if s > a && s < b { cuts.push(s); }
+            if e > a && e < b { cuts.push(e); }
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup_by(|x, y| (*x - *y).abs() <= 1e-9);
+        let mut spans: Vec<(f64, f64, f64)> = Vec::new();
+        for pair in cuts.windows(2) {
+            let mid = (pair[0] + pair[1]) / 2.0;
+            let level = rules.iter().filter(|&&(s, e, _)| s <= mid && e >= mid)
+                .map(|r| r.2).fold(1.0, f64::max);
+            if let Some(last) = spans.last_mut() {
+                if last.2 == level { last.1 = pair[1]; continue; }
+            }
+            spans.push((pair[0], pair[1], level));
+        }
+        // Do not create tiny bridge parts (nor holes): absorb them into the adjacent retained span.
+        let mut i = 0;
+        while spans.len() > 1 && i < spans.len() {
+            if spans[i].1 - spans[i].0 <= min_part {
+                if i == 0 { spans[1].0 = spans[0].0; } else { spans[i - 1].1 = spans[i].1; }
+                spans.remove(i);
+            } else { i += 1; }
+        }
+        for span in spans {
+            if let Some(last) = result.last_mut() {
+                let last: &mut (f64, f64, f64) = last;
+                if (last.1 - span.0).abs() <= 1e-9 && last.2 == span.2 {
+                    last.1 = span.1; continue;
+                }
+            }
+            result.push(span);
+        }
+    }
+    let xy: Vec<f64> = result.iter().flat_map(|r| [r.0, r.1]).collect();
+    let levels: Vec<f64> = result.iter().map(|r| r.2).collect();
+    Ok((numpy::ndarray::Array2::from_shape_vec((result.len(), 2), xy).unwrap().into_pyarray(py),
+        levels.into_pyarray(py)))
+}
+
 const BRIDGE: i8 = 1;
 const TUNNEL: i8 = 2;
 
@@ -84,8 +147,8 @@ fn feature_length(ll: &numpy::ndarray::ArrayView2<f64>, co: &[i64], ro: &[i64], 
     total
 }
 
-fn one(flags: &mut Vec<R>, level: &mut Vec<R>, length: &mut dyn FnMut() -> f64, passage_m: f64,
-       tunnel_gap_m: f64) -> Vec<R> {
+fn one(flags: &mut Vec<R>, level: &mut Vec<R>, ways: &[(f64, f64)], length: &mut dyn FnMut() -> f64,
+       passage_m: f64) -> Vec<R> {
     flags.sort_by(cmp_r);
     level.sort_by(cmp_r);
     let mut out: Vec<R> = flags.clone();
@@ -141,11 +204,13 @@ fn one(flags: &mut Vec<R>, level: &mut Vec<R>, length: &mut dyn FnMut() -> f64, 
         merged = joined;
     }
     if merged.iter().filter(|r| r.2 == TUNNEL).count() > 1 {
-        let l = length();
+
+        // Two tunnel ranges are really one tunnel when one source way runes over the whole gap between them.
         let mut joined: Vec<R> = Vec::with_capacity(merged.len());
         for &(a, b, k) in &merged {
             if let Some(last) = joined.last_mut() {
-                if k == TUNNEL && last.2 == TUNNEL && (a - last.1) * l < tunnel_gap_m {
+                if k == TUNNEL && last.2 == TUNNEL
+                    && (ways.is_empty() || ways.iter().any(|&(s, e)| s < last.1 - 1e-6 && e > a + 1e-6)) {
                     *last = (last.0, b, TUNNEL);
                     continue;
                 }
@@ -158,18 +223,30 @@ fn one(flags: &mut Vec<R>, level: &mut Vec<R>, length: &mut dyn FnMut() -> f64, 
 }
 
 /// roads.tag_level_ranges for features 0..n: flag rows (feature, start, end, kind) and level rows likewise (kind 0:
-/// none; the rows with end <= start or kind 0 are left out here), the layer's lonlat (k, >= 2) and offsets for the
-/// lengths. Returns (off (n + 1,), ranges (m, 2), kinds (m,)): feature i's ranges are rows off[i]..off[i + 1].
+/// none; the rows with end <= start or kind 0 are left out here), the source way rows (feature, start, end: one per
+/// way; a feature without rows is one way, its tunnel ranges all one tunnel), the
+/// layer's lonlat (k, >= 2) and offsets for the lengths. Returns (off (n + 1,), ranges (m, 2), kinds (m,)): feature
+/// i's ranges are rows off[i]..off[i + 1].
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 pub fn tag_level_ranges<'py>(py: Python<'py>, n: usize, f_feat: PyReadonlyArray1<'py, i64>,
                              f_start: PyReadonlyArray1<'py, f64>, f_end: PyReadonlyArray1<'py, f64>,
                              f_kind: PyReadonlyArray1<'py, i8>, l_feat: PyReadonlyArray1<'py, i64>,
                              l_start: PyReadonlyArray1<'py, f64>, l_end: PyReadonlyArray1<'py, f64>,
-                             l_kind: PyReadonlyArray1<'py, i8>, lonlat: PyReadonlyArray2<'py, f64>,
+                             l_kind: PyReadonlyArray1<'py, i8>, w_feat: PyReadonlyArray1<'py, i64>,
+                             w_start: PyReadonlyArray1<'py, f64>, w_end: PyReadonlyArray1<'py, f64>,
+                             lonlat: PyReadonlyArray2<'py, f64>,
                              coord_off: PyReadonlyArray1<'py, i64>, ring_off: PyReadonlyArray1<'py, i64>,
-                             part_off: PyReadonlyArray1<'py, i64>, passage_m: f64, tunnel_gap_m: f64)
+                             part_off: PyReadonlyArray1<'py, i64>, passage_m: f64)
                              -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i8>>) {
+    let mut ways: Vec<Vec<(f64, f64)>> = vec![Vec::new(); n];
+    let (feat, st, en) = (w_feat.as_array(), w_start.as_array(), w_end.as_array());
+    for j in 0..feat.len() {
+        let i = feat[j];
+        if i >= 0 && (i as usize) < n && en[j] > st[j] {
+            ways[i as usize].push((st[j], en[j]));
+        }
+    }
     let ll = lonlat.as_array();
     let co: Vec<i64> = coord_off.as_array().to_vec();
     let ro: Vec<i64> = ring_off.as_array().to_vec();
@@ -194,7 +271,7 @@ pub fn tag_level_ranges<'py>(py: Python<'py>, n: usize, f_feat: PyReadonlyArray1
         if !fl[i].is_empty() || !lv[i].is_empty() {
             let mut cached: Option<f64> = None;
             let mut length = || *cached.get_or_insert_with(|| feature_length(&ll, &co, &ro, &po, i));
-            let got = one(&mut fl[i], &mut lv[i], &mut length, passage_m, tunnel_gap_m);
+            let got = one(&mut fl[i], &mut lv[i], &ways[i], &mut length, passage_m);
             for (a, b, k) in got {
                 flat.push(a);
                 flat.push(b);

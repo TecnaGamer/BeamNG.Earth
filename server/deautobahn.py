@@ -29,7 +29,7 @@ import deautobahnfont
 
 log = logging.getLogger('earthd.deautobahn')
 
-KERNEL = 171                     # earthfast VERSION with autobahn_signs / autobahn_columns
+KERNEL = 172                     # earthfast VERSION with autobahn_signs / autobahn_columns
 
 # the kernel's input columns (agreement pinned by test_deautobahn_kernel.test_columns_agree)
 RAW_FIELDS = (

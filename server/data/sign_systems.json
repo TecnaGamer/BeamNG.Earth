@@ -1,0 +1,30 @@
+{
+  "_": "How the roles of sign_roles.json look and stand, by country (task 017). rules: the kernel's rule numbers (roadsigns.rs) to roles. params: the rules' thresholds (the kernel's N_PARAMS order), a country may override any in its own `params`; warn_m is the distance of a warning before its hazard in the country (CZ rural 100-250 m [TP 65 8.3.1]; UA, PL, DE not read: [Н]). The numbers' sources and what is unverified: docs/research/2026-11-06-road-signs.md, section 3.4 (not read in a primary text: UA heights and lateral offsets, taken from the neighbours). lateral: m from the carriageway's edge to the sign [town, country]; mount: m from the road to the lower edge [town, country]; sizes: m wide by shape [town, country, major road]; order: the groups from the top of a pole down; a group not in it stands alone (DE: a warning stands alone, VwV-StVO Nr. 35a). max_on_pole: most signs on a pole. pole: join_m is how near signs facing the same way share a pole, gap_m the space between two on one pole. roles: the country's own sign for a role of `rules` (a local bus stop sign); off: roles never placed in the country (UA: OpenStreetMap living_street is mostly a yard road there, 150 of them in 26 km2 round Vinnytsia, and a yard has no sign: doubt is no sign).",
+  "sizes": {
+    "default": {"circle": [0.6, 0.75, 0.9], "square": [0.6, 0.75, 0.9], "tri_up": [0.75, 0.9, 1.25], "tri_down": [0.75, 0.9, 1.25],
+                "octagon": [0.6, 0.75, 0.9], "diamond": [0.6, 0.75, 0.9], "rect": [0.8, 1.0, 1.2]}
+  },
+  "countries": {
+    "UA": {"atlas": "vienna_w", "lateral": [0.5, 1.2], "mount": [2.0, 1.5], "gap_m": [25, 50], "max_on_pole": 3,
+           "off": ["info.living_street", "info.living_street_end"],
+           "order": ["priority", "warning", "mandatory", "prohibition", "information"]},
+    "CZ": {"atlas": "vienna_w", "lateral": [0.5, 1.2], "mount": [2.2, 1.5], "gap_m": [10, 20], "max_on_pole": 3,
+           "roles": {"info.bus_stop": "info.bus_stop_cz"},
+           "order": ["warning", "priority", "information", "prohibition", "mandatory"]},
+    "PL": {"atlas": "vienna_y", "lateral": [0.5, 1.0], "mount": [2.2, 2.0], "gap_m": [10, 20], "max_on_pole": 3,
+           "order": ["priority", "warning", "prohibition", "mandatory", "information"]},
+    "DE": {"atlas": "vienna_w", "lateral": [0.5, 1.5], "mount": [2.0, 2.0], "gap_m": [10, 20], "max_on_pole": 3,
+           "roles": {"info.bus_stop": "info.bus_stop_de"},
+           "order": ["priority", "prohibition", "mandatory", "information"]}
+  },
+  "rules": ["reg.no_entry", "info.dead_end", "info.crossing_right", "warn.curve_right", "warn.curve_left",
+            "warn.double_right", "warn.double_left", "warn.roundabout", "mand.roundabout", "warn.signals",
+            "info.motorway", "info.motorway_end", "info.living_street", "info.living_street_end", "info.oneway",
+            "warn.narrow_both", "warn.chevron_right", "warn.chevron_left", "warn.side_right", "warn.side_left",
+            "prio.give_way", "prio.stop", "info.tunnel", "info.pedestrian_zone", "mand.bicycle", "info.bus_stop",
+            "info.parking"],
+  "pole": {"join_m": 12, "gap_m": 0.1},
+  "params": {"warn_m": 150, "curve_turn_deg": 55, "curve_window_m": 60, "curve_min_rank": 3, "double_gap_m": 100,
+             "motorway_end_m": 150, "living_min_m": 40, "min_before_m": 50, "chevron_turn_deg": 70, "chevron_window_m": 40,
+             "narrow_ratio": 0.8}
+}

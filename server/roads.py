@@ -37,6 +37,7 @@ import mapcells
 import mapgeom
 import photosurface
 import roadmesh
+import roadsmooth
 import staging
 
 log = logging.getLogger("earthd.roads")
@@ -483,7 +484,7 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 7      # 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 8      # 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -1293,9 +1294,12 @@ def tag_level_ranges(feats, i):
     segment, flags bridge / tunnel (through a tower) / bridge / tunnel / bridge: merged, tunnel winning, the whole
     bridge was a tunnel, under water for most of it, and left out, 2026-10-18); overlapping ranges merged (a tunnel
     wins over a bridge), touching ones of the same kind joined; a tunnel shorter than PASSAGE_M between two bridge
-    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges closer than
-    TUNNEL_GAP_M are one tunnel (Overture splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry
-    Tunnel's segment). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
+    ranges is a passage through a bridge's tower (the bridge goes on); a segment's tunnel ranges with one source way
+    (the "src_ways" rule) running over the gap between them are one tunnel (OpenStreetMap tags a whole way: the gap is
+    Overture's, which splits a tunnel's range: 0.08-0.09, 0.10-0.13, 0.14-0.69 of the Fort McHenry Tunnel's segment);
+    a gap that is a way of its own is open ground (152 of 152 gaps round Brussels, 2026-11-08: the track between its
+    underpasses under the R0 and its ramps at Strombeek-Bever, joined by gap length alone (under 30 m), was graded as
+    an open cut through the R0's lanes). Every feature of the layer at once (earthfast.tag_level_ranges), kept on feats."""
     got = feats.__dict__.get("_tag_ranges")
     if got is None:
         got = feats.__dict__["_tag_ranges"] = _tag_ranges_all(feats)
@@ -1332,21 +1336,29 @@ def _tag_ranges_list(feats):
     return got
 
 
+def _src_way_rows(t):
+    """(feature, start, end) arrays of the "src_ways" rule table: one row per source way of a segment of several."""
+    if t is None or len(t.feature) == 0:
+        return (np.zeros(0, np.int64), np.zeros(0), np.zeros(0))
+    return (np.ascontiguousarray(t.feature, np.int64), np.ascontiguousarray(t.start, np.float64),
+            np.ascontiguousarray(t.end, np.float64))
+
+
 def _tag_ranges_all(feats):
     import fast
-    fast.require(142, "tag_level_ranges")
+    fast.require(169, "tag_level_ranges")
     ll = np.asarray(feats.lonlat, np.float64)
     off, rng, kinds = fast._ef.tag_level_ranges(
         len(feats), *_tag_rule_rows(feats.rules.get("flags"), "flags"),
-        *_tag_rule_rows(feats.rules.get("level"), "level"), np.ascontiguousarray(ll),
+        *_tag_rule_rows(feats.rules.get("level"), "level"), *_src_way_rows(feats.rules.get("src_ways")),
+        np.ascontiguousarray(ll),
         np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
-        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M, TUNNEL_GAP_M)
+        np.ascontiguousarray(feats.part_off, np.int64), PASSAGE_M)
     rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
     return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[i], ol[i + 1])] for i in range(len(feats))]
 
 
 PASSAGE_M = 40.0        # m: a tunnel range this short between two bridge ranges is a passage through a tower
-TUNNEL_GAP_M = 30.0     # m: tunnel ranges of a segment this close together are one tunnel
 
 
 def _feature_length_m(feats, i):
@@ -1404,6 +1416,8 @@ def _parts_by_level_new(feats, i, want, rngs=None):
     rngs = level_ranges(feats, i) if rngs is None else rngs
     if want == "ground":
         pieces = ground_ranges(rngs)
+    elif want == "bridge":
+        pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
     else:
         pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
     out = []
@@ -1418,23 +1432,29 @@ def _parts_by_level_new(feats, i, want, rngs=None):
     return out
 
 
-def bridge_levels(feats, i):
-    """The level of each of bridge_parts(feats, i) (same order): the highest level rule overlapping its
-    range, 1 for a bridge flagged without one. Overture's levels order stacked roads. Pure."""
+def _bridge_level_spans(feats, i, rngs=None):
+    """(start, end, level) of each bridge part, split at mapped local level transitions in Rust."""
+    import fast
+    rngs = level_ranges(feats, i) if rngs is None else rngs
+    memo = feats.__dict__.setdefault("_bridge_level_spans", {})
+    key = (i, tuple(map(tuple, rngs)))
+    if key in memo:
+        return memo[key]
     t = feats.rules.get("level")
-    lv = []
-    for a, b, k in level_ranges(feats, i):
-        if k != "bridge" or b - a <= MIN_PART:
-            continue
-        best = 1.0
-        if t is not None and len(t.feature):
-            for j in t.rows(i):
-                if t.end[j] > a and t.start[j] < b:
-                    try:
-                        best = max(best, float(t.value[j]))
-                    except (TypeError, ValueError):
-                        pass
-        lv.append(best)
+    rows = list(t.rows(i)) if t is not None and len(t.feature) else []
+    fast.require(171, "local bridge levels")
+    spans, lv = fast._ef.bridge_level_spans(
+        np.asarray([(a, b) for a, b, k in rngs if k == "bridge"], np.float64).reshape(-1, 2),
+        np.asarray([t.start[j] for j in rows], np.float64), np.asarray([t.end[j] for j in rows], np.float64),
+        [str(t.value[j]) for j in rows], MIN_PART)
+    got = [(float(a), float(b), float(v)) for (a, b), v in zip(spans, lv)]
+    memo[key] = got
+    return got
+
+
+def bridge_levels(feats, i):
+    """The local level of each bridge_parts(feats, i), in the same ring/part order."""
+    lv = [v for _, _, v in _bridge_level_spans(feats, i)]
     rings = sum(1 for part in feats.parts(i) for ring in part if len(ring) >= 2)
     return lv * rings
 
@@ -2096,17 +2116,20 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
         # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
         mk = None if cid is None else (cid, "specs", extra) if urban_fn is None else \
             (cid, "specs_urban", extra, id(getattr(urban_fn, "__self__", urban_fn)), getattr(urban_fn, "__name__", ""))
-        if mk is not None:      # (_FACTS_MEM: made in this process before, for another copy of the layer)
-            with _FACTS_LOCK:
+        towns = None            # (road_towns': the land cover's town per feature, made with the specs, kept with them)
+        tk = ("towns", urban_fn, bool(left_hand))
+        if mk is not None:      # (_FACTS_MEM: made in this process before, for another copy of the layer; the specs
+            with _FACTS_LOCK:   # and their towns one entry (specs, towns), so they are kept and trimmed together)
                 mem = _FACTS_MEM.get(mk)
-            if mem is not None and len(mem) == len(feats):
-                got = mem
+            if mem is not None and len(mem[0]) == len(feats):
+                got, towns = mem
         if got is None and urban_fn is None:    # (the land cover's are the server's own: not shared, cell_facts)
             got = _specs_from(_facts_load(feats, "specs", extra), len(feats))
         if got is None:
             import revisit
             f0 = revisit.thread_faults()
-            got = (_road_specs(feats, urban_fn, left_hand) if widths is None else
+            towns = [] if widths is None and urban_fn is not None else None
+            got = (_road_specs(feats, urban_fn, left_hand, towns) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
             got = _marking_specs(feats, got)
             clean = revisit.thread_faults() == f0
@@ -2116,12 +2139,31 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
             if clean:
                 if mk is not None:
                     with _FACTS_LOCK:
-                        _FACTS_MEM[mk] = list(got)
+                        _FACTS_MEM[mk] = (list(got), towns)
                         while len(_FACTS_MEM) > FACTS_MEM_KEPT:
                             _FACTS_MEM.popitem(last=False)
         if keep:
             got = memo.setdefault(k, got)
+            if towns is not None and len(towns) == len(feats):
+                memo.setdefault(tk, towns)
     return got
+
+
+def road_towns(feats, urban_fn=None, left_hand=False):
+    """Per feature: whether the land cover puts the road in town, road_specs' urban as its town test made it before
+    the drawing's overrides (a mapped ring's way, a divided primary built up on one side only, a rural connector; and
+    build_tile's rings and short ring approaches): the German junction signs' town test (designs.context). urban_fn
+    None: none in town (rural everywhere, as road_specs). Made, remembered and trimmed with the specs (road_specs, one
+    _FACTS_MEM entry), so known wherever they are; None only where the specs could not be kept (made while a download
+    failed: designs.in_town then reads spec.urban, and revisit.fault keeps no build made then)."""
+    if urban_fn is None:
+        return [False] * len(feats)
+    tk = ("towns", urban_fn, bool(left_hand))
+    got = feats.__dict__.get("_road_specs", {}).get(tk)
+    if got is None:
+        road_specs(feats, urban_fn, None, left_hand)
+        got = feats.__dict__.get("_road_specs", {}).get(tk)
+    return None if got is None else list(got)
 
 
 # Lane tapers (the user, 2026-10-31: "the bridge geometry as lanes merge and split is rough"; bridgewidth.py: 54 of
@@ -2613,7 +2655,9 @@ def _urban_samples(lonlat):
     return np.column_stack([np.interp(stations, distance, ll[:, axis]) for axis in (0, 1)])
 
 
-def _road_specs(feats, urban_fn, left_hand):
+def _road_specs(feats, urban_fn, left_hand, towns=None):
+    """road_specs' making; towns: a list that gets each feature's town by the land cover before the overrides below
+    (road_towns)."""
     out = []
     rules = feats.rules
     ask = []                                    # (index in out, cls, kind, samples, oneway, direction, lanes, surface, link, mapped width)
@@ -2682,6 +2726,8 @@ def _road_specs(feats, urban_fn, left_hand):
                 kind = "gravel"
             out[j] = Spec(carriageway(cls, kind, urban, rule_w, ow, lanes, link=link), kind, urban, cls, ow, 2.5, *dk, lanes=lanes,
                           surf=token, link=link)
+    if towns is not None:
+        towns[:] = [sp is not None and sp.urban for sp in out]
     out = _swedish_specs(feats, out)
     out = _rings(feats, out)
     out = dual_carriageways(feats, out, left_hand)
@@ -5204,11 +5250,14 @@ def clip_polyline(pts, x0, y0, x1, y1):
     return [out[starts[i]:starts[i + 1]].copy() for i in range(len(starts) - 1)]
 
 
-def simplify(pts, tol=SIMPLIFY_M, ztol=None):
+def simplify(pts, tol=None, ztol=None):
     """Ramer-Douglas-Peucker on the xy of a polyline (k, D). ztol (D >= 3): a point is also kept where its height is
     more than this off the line between the kept ones (a deck drawn at its own heights: on xy alone a straight bridge
     kept its two ends in a tile and lost its rise between, 2.5 m below the abutment it met; a car drove into the
-    ground, Baltimore's Lombard Street 2026-10-20). Pure."""
+    ground, Baltimore's Lombard Street 2026-10-20). tol: SIMPLIFY_M, or roadsmooth's while the bends are rounded
+    (0.25 m made its arcs corners again). Pure."""
+    if tol is None:
+        tol = roadsmooth.SIMPLIFY_M if roadsmooth.ON else SIMPLIFY_M
     if len(pts) < 3:
         return pts
     keep = np.zeros(len(pts), bool)
@@ -8985,7 +9034,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                walls=None, deck_context=None, ground=None, terrain_paint=True, cover_out=None, walk_cuts=(),
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
-               sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None):
+               sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=()):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -9006,7 +9055,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     furniture.place for the street trees, hydrants, benches and bins on these sidewalks. towns(roads, box,
     left_hand, rings) -> prop rows: the town entry and exit signs among props (townentry.Towns.maker; BNE_TOWNSIGNS;
     rings: the roundabout rings' ids, which have none). mapped_poles: furniture.place's (the mapped utility poles'
-    points: no guessed ones along them). Pure given its inputs (sorted by feature id)."""
+    points: no guessed ones along them). de_on: Germany's junction signs (designs.context of these
+    cells, de_routes their road_routes layers for the ref ranks, road_towns' town, the map's stop and give-way signs:
+    nodes' priority and the cells' lane shard sign nodes, railtags.sign_nodes) and their paint (designs.junction_paint
+    in place of the US crosswalks and stop lines, one designs.decide per junction for both), and the line style by
+    Germany's border (markings.style of germany.effective_country at the tile's middle).
+    Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
     import furniture
@@ -9174,12 +9228,32 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         if props is not None:                   # a rural cut: rock-face pieces instead (cliff_rows)
             props.extend(cliff_rows([w for w in tile_walls if w["rock"]], roads))
         chunks = _off_wall_tops(chunks, [w for w in tile_walls if not w["rock"]])
+    de_ctx = de_ctl = None                      # Germany's junctions (de_on): the tile's roads read once
+    line_country = country                      # (designs.context), the line style by its border (markings.style)
+    priority = None if nodes is None else nodes["priority"]     # (the map's stop and give-way points)
+    if de_on:
+        import designs
+        if designs.near(frame, own_box):
+            import germany
+            line_country = germany.effective_country(
+                country, bool(germany.de_at(frame, (x0 + x1) / 2, (y0 + y1) / 2)[0]))
+            if walks is not None:
+                de_towns, by_cell = {}, {}      # (not towns: build_tile's town entry signs, PR #597)
+                for fid, (f, i, _sp) in seen.items():
+                    if id(f) not in by_cell:
+                        by_cell[id(f)] = road_towns(f, urban_fn, left_hand)
+                    if by_cell[id(f)] is not None:
+                        de_towns[fid] = by_cell[id(f)][i]
+                import railtags                 # (the map's own 205 / 206: the lane shards' sign nodes, the cells';
+                                                # de_signs: build_tile's signs are PR #505's sign meshes)
+                de_signs = [s for f in cells if f is not None for s in railtags.sign_nodes(f)]
+                de_ctx = designs.context(frame, cells, de_routes, priority, de_signs, towns=de_towns)
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
         junctions.find(roads, has_sidewalks, None)
-    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares
+    teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares;
+                                                # Germany's Wartelinie (markings.wait_lines)
     zebras = []                                 # ... and its crossings, which a road's lines stop at (secrossings.place)
     crosswalk_look = junctions.CROSSWALK
-    priority = None if nodes is None else nodes["priority"]
     trams = []                                  # ... and what no raised sidewalk or median runs over (rails.tram_lines)
     rail_cuts = []                              # ... nor over a railway crossing the road at grade (GitHub #579)
     if walks is not None:
@@ -9201,6 +9275,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         m14, gone = _gw.give_way_lines(furniture.give_way_arms(roads, signals, country, priority), crosswalks, left_hand)
         teeth = teeth + m14
         crosswalks = [cw for j, cw in enumerate(crosswalks) if j not in gone] + stops
+    elif de_ctx is not None:
+        # Germany: each junction's paint as its signs (one decision, designs.decide, shared with furniture.place): the
+        # Wartelinie at 205, the Haltlinie at 206, the map's zebras only, the kerb ramps kept, signals as today
+        reach = (max(near[0], wexact[0] - NEAR_M), max(near[1], wexact[1] - NEAR_M), min(near[2], wexact[2] + NEAR_M),
+                 min(near[3], wexact[3] + NEAR_M))  # (the junctions whose paint can be in the tile)
+        de_ctl = designs.decide(roads, de_ctx, reach, signals, country, priority)
+        crosswalks, jlines, jramps, teeth, zebras = designs.junction_paint(
+            de_ctl, roads, de_ctx, crosswalks, jlines, jramps, nodes, signals, left_hand)
     # (no curb extensions: they were on every town street with parking, after Fells Point's, and most streets have none:
     # the corners stuck out into the road in Tustin's suburbs, GitHub #208)
     # small road loops (roundabouts, turnaround loops): no sidewalks facing their inside, a curbed island instead
@@ -9248,11 +9330,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     chunks.append({"m": fill_look["m"], "w": 0.0, "tl": fill_look["tl"], "p": fill_look["p"],
                                    "poly": [[round(float(v), 3) for v in q] for q in fill], "n": []})
         import markings as _mk
-        ladder = _mk.style(country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
+        ladder = _mk.style(line_country, float(np.mean([r[3] for r in roads])) if roads else None).ladder
         for cw in crosswalks:                   # crosswalks and stop lines
             mid = 0.5 * (cw["a"] + cw["b"])
             if skin_own(mid[0], mid[1]) and cw.get("paint", True):
-                look = junctions.STOP_LINE if cw.get("stop") else crosswalk_look
+                look = junctions.STOP_LINE if cw.get("stop") else cw.get("look", crosswalk_look)
                 ab = np.array([cw["a"], cw["b"]])
                 chunks.append(_chunk(look, cw["w"], ab))
                 if ladder and not cw.get("stop"):
@@ -9300,7 +9382,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     # where both roads have them; corner_cuts end those road sides' straight edge lines and decals at the tangents
     import roadcorners
     corner_chunks, corner_cuts = roadcorners.tile(
-        roads, box, not ROADS_IN_GROUND, country, left_hand,
+        roads, box, not ROADS_IN_GROUND, line_country, left_hand,
         rings={fid for fid, (f, i, sp) in seen.items() if is_ring(f, i)}, no_decal=lot_aisles, exact=wexact)
     chunks.extend(corner_chunks)
     import rampmerges, roadmarkings
@@ -9327,8 +9409,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if ls:
                 sla, slo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
                 sh = shift_at(ls, slo, sla)
-        ex = extras(spec, pts, lon, left_hand, country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws, sh, defer_dashes=True) \
-            if fid not in jinternal or fid in whole else []    # inside a junction: none
+        ex = extras(spec, pts, lon, left_hand, line_country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws,
+                    sh, defer_dashes=True) if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
         if not ex:
@@ -9497,6 +9579,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
                                      defer_gore=detailed_signs, mapped_poles=mapped_poles,
                                      obstacles=railxing.rail_obstacles(frame, cells, own_box) if railxing.ENABLED else (),
+                                     de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if signs is not None and props is not None:
@@ -9646,8 +9729,14 @@ class Tracker:
         self.fails = {}         # tile -> builds failed in a row (TILE_FAILS_WARN)
         self.started = {}       # tile -> monotonic time its build started (TILE_STUCK_S)
         self.stuck_said = set()
+        self.closed = False
 
     def close(self):
+        """No more tiles from this tracker: a build still running (the pool's shutdown cancels only the queued ones)
+        is not sent when it ends (_built), as signstream.Tracker's. Its replacement (earthd: the gas stations' and the
+        town signs' switches, roads_reset) sends the tile built anew; this one's, built before the switch, had come
+        after it and stayed (Codex on PR #892)."""
+        self.closed = True
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -9728,7 +9817,7 @@ class Tracker:
             self.retry = {k: t for k, t in self.retry.items() if t > now}
 
     def _built(self, conn, aid, key, fut):
-        if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
+        if self.closed or aid != self.aid:  # (an old anchor's: the same key may be in flight for the new one)
             return
         self.building.discard(key)
         self.futs.pop(key, None)
@@ -9834,8 +9923,11 @@ class GeoTracker:
         self.empty = set()      # (anchor tiles' interface: progress)
         self.stats = {"content": 0, "skins": 0, "exact": 0, "exact_base": 0, "anchors": 0,
                       "content_cpu": 0.0, "skin_cpu": 0.0}
+        self.closed = False
 
     def close(self):
+        """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
+        self.closed = True
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -10028,7 +10120,7 @@ class GeoTracker:
             self.building.discard(key)
             self.futs.pop(key, None)
             self.started.pop(key, None)
-        if fut.cancelled():
+        if self.closed or fut.cancelled():
             return
         try:
             res = fut.result()

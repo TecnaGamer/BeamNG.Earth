@@ -88,6 +88,15 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
+- Road signs (off unless the server has `BNE_ROADSIGNS=on`; Settings > World > Road signs): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
+  signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
+  no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
+  limit ends.
+- Town entry and exit signs (off by default for now; Settings > World > Town signs; from fuxau's contribution): each
+  country's own sign where a road enters a town's built-up land, the exit sign on its back. In Germany the yellow
+  Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
+  Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
+  OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
   or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
   Autobahn signs above), with each way's road numbers (national
@@ -96,10 +105,21 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   only. The boards are drawn from the road network and Overture's places and route numbers, so they are a good
   guess of a real board, not a copy: the distances are the straight ones scaled to a road's, and the colours and
   plates follow each country's practice as best known.
+  In a town, a board stands only at an interchange, a way out or a fork of numbered routes: a small board with the local
+  name, hung on a lamp or utility pole that stands there, else on a stand of its own.
+- Opt-in (`BNE_REGIONAL_POLES=poles`): each European country's own utility poles, and steel or concrete street lamps
+  with a bracket arm instead of the stock American post.
+- German junction signs (off by default for now; Settings > World > German junction signs): Germany's right of way as its
+  signs show it: Zeichen 306 / 307 along priority roads, 301 at single junctions, 205 where a road gives way and the
+  map's 206 stops, with the 1002 plate where the priority road bends; no signs at right before left in residential
+  streets, and 274.1 / 274.2 where a mapped 30 zone begins and ends. The Wartelinie at a 205, the Haltlinie at a stop
+  and zebras only where mapped replace the US stop signs and crosswalks, and traffic gives way and stops by the same
+  decision. Germany is found by its real border. The signs are worked out from the map (road classes and numbers,
+  mapped priority roads, zones and stop and give-way points), so they are a good guess, not a copy of the real ones.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
-  road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
-  little is over them.
+  road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
+  tunnels through hills, with portals, lights and low arches where little is over them.
 - Water: the sea with real depth (cars sink), lakes, and rivers kept beside the roads.
 - Airports with graded, marked runways; racetracks (circuits, ovals and pit lanes, with their real banking);
   landmarks such as the pyramids of Giza.
@@ -130,6 +150,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
+  `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
+  and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+- Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
+  corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
+  gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
+  ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
 - Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
@@ -245,6 +271,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
   textures) when it can, so the server needs less of your CPU; without a usable one the CPU does it as before.
 - Offline play from the download cache (with a size cap and "clear cache").
+- Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
+  data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
@@ -446,6 +474,9 @@ little CPU. From the source, `python3 tools/package.py --beammp` builds the same
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
 checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
+[beammp/README.md](beammp/README.md#docker)).
 
 **Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
 the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
@@ -500,6 +531,13 @@ The repository contains only code; all map data is downloaded at runtime and cac
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
   (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).
+- German junction signs: the faces of Zeichen 205, 206, 301, 306, 307, 274.1, 274.2 and Zusatzzeichen 1002 after the
+  Verkehrszeichenkatalog and the VwV-StVO (BMDV / BASt; amtliche Werke, § 5 UrhG); lettering: D-DIN (SIL OFL 1.1,
+  Datto); priority roads, 30 zones and junction sign nodes: OpenStreetMap contributors (ODbL; rebuilt weekly from the
+  planet by the BeamNG.Earth-data repo).
+- Town signs: towns and villages from Overture Maps (divisions), Germany's mapped town signs from OpenStreetMap
+  contributors (ODbL, rebuilt weekly), its Städte and Märkte from the Statistisches Bundesamt (Destatis,
+  Gemeindeverzeichnis); German lettering: D-DIN (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).

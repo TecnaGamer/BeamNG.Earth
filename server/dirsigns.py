@@ -32,7 +32,7 @@ import staging
 log = logging.getLogger("earthd.dirsigns")
 
 ON = os.environ.get("BNE_DIRSIGNS", "off") == "on"
-KERNEL = 141                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
+KERNEL = 163                    # earthfast VERSION with dirsign_place / dirsign_face / dirsign_mesh
 DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PLACES_FILE = os.path.join(DATA, "places_2026-10-21.0.json.gz")
 PLACES_SHA256 = "aea8360e2b1a5dc51c1b54700b355aa0dfb7e699fee5853f6a3ae0f0e223b989"
@@ -142,14 +142,15 @@ def km_text(metres, factor, rounding):
 
 
 def _arrays(rows, box, margin, table, routes_of):
-    """dirsign_place's road arrays of the speed-signs' rows ({fid: (line, pts, meta, cons, limits, skips)}) near box."""
+    """dirsign_place's road arrays of the speed-signs' rows ({fid: (line, pts, meta, cons, limits, skips, zone)}:
+    speedsigns._cell_rows'; their zone column unread) near box."""
     x0, y0, x1, y1 = box
     ll, xy, off, meta = [], [], [0], []
     con_at, con_id, con_off = [], [], [0]
     rt_id, rt_from, rt_to, rt_off = [], [], [], [0]
     skip, skip_off = [], [0]
     ids = {}
-    for fid, (line, pts, m, cons, _limits, skips) in sorted(rows.items()):
+    for fid, (line, pts, m, cons, _limits, skips, *_) in sorted(rows.items()):
         if (pts[:, 0].max() < x0 - margin or pts[:, 0].min() > x1 + margin or
                 pts[:, 1].max() < y0 - margin or pts[:, 1].min() > y1 + margin):
             continue
@@ -212,7 +213,12 @@ def best_plates(marks):
     return (own + [m for m in marks if m[1] == "e"])[:MAX_PLATES]
 
 
-def _row_content(style, row, table, pl, factor, rounding, show_en):
+def is_town(board):
+    """Is a dirsign_place row a town board (urban approach, size class 0)."""
+    return board[6] > 0.5 and board[7] < 0.5
+
+
+def _row_content(style, row, table, pl, factor, rounding, show_en, plates=True):
     """(turn, [(plate index, text)], [(local, English, km)]) of one kernel row, or None (nothing to say)."""
     turn = int(row[0])
     marks = []
@@ -222,7 +228,7 @@ def _row_content(style, row, table, pl, factor, rounding, show_en):
             hit = plate_for(style, network, ref)
             if hit is not None:
                 marks.append((hit[0], hit[1], ref))
-    marks = best_plates(sorted(set(marks)))
+    marks = best_plates(sorted(set(marks))) if plates else []     # (a town board has no road number plates)
     dests = []
     for idx_col, d_col in ((5, 6), (7, 8)):
         i = int(row[idx_col])
@@ -300,7 +306,8 @@ def steps_back(boards, rows, frame):
         out[i] = c == "DE"
     return out
 
-def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True, *, autobahn=False):
+def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True, aid=None, *,
+               autobahn=False):
     """(mesh, faces) of road tile (tx, ty)'s direction boards: the mesh as signstream.write_tile takes it
     (vertices, triangles, uv, materials, material per triangle) and {material: vfs path of its picture}; (None, {})
     where there is none. autobahn: the tile has the German Autobahn signs (signstream), so the boards on its German
@@ -335,6 +342,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     if not len(boards):
         return None, {}
     face_cfg = st["face"]
+    town_cfg = {**face_cfg, **st.get("face_town", {})}
     factor, rounding = st["placement"]["detour_factor"], st["distance_round"]
     kinds = ("urban", "road", "freeway")
     keep, signs, faces, materials, mats_of = [], [], {}, [METAL], {}
@@ -349,7 +357,9 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         style = st["countries"].get(cc)
         if style is None:
             continue
-        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en) for r in mine) if c]
+        town = is_town(b)       # (a small board: the local name only, no plates, on a pole or a stand of its own)
+        content = [c for c in (_row_content(style, r, table, pl, factor, rounding, show_en and not town, not town)
+                               for r in mine) if c]
         if not content:
             continue
         plate_keys = sorted({k for _, marks, _ in content for _, k, _ in marks})
@@ -357,7 +367,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
         if len(faces) >= MAX_FACES:
             break
         kind = kinds[int(b[7])]
-        name, tex, w, h = _face(out_dir, vfs_dir, style, plate_keys, kind, flat, face_cfg)
+        name, tex, w, h = _face(out_dir, vfs_dir, style, plate_keys, kind, flat, town_cfg if town else face_cfg)
         if name not in mats_of:
             mats_of[name] = len(materials)
             materials.append(name)
@@ -370,8 +380,25 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     hz = np.asarray(elev(la, lo), np.float64).ravel()
     z = np.asarray(frame.geodetic_to_enu(la, lo, hz)[2], np.float64).ravel()
     n = len(keep)
+    import citysigns
+    poles = None
+    if any(is_town(k[0]) for k in keep):
+        parts = [citysigns.geo_poles_near(out_dir, frame, box)]
+        if aid is not None:
+            parts.append(citysigns.poles_near(out_dir, aid, tx, ty))
+        poles = citysigns._sorted([p for p in parts if len(p)])
+    side = -1.0 if left_hand else 1.0
     for i, (b, mat, w, h) in enumerate(keep):
-        signs.append([b[0], b[1], z[i], z[n + i], b[2], b[3], w, h, mat, st["placement"]["mount_m"]])
+        x, y, zg, zr, mount, mode = b[0], b[1], z[i], z[n + i], st["placement"]["mount_m"], -1.0
+        if is_town(b):
+            # a town board hangs on the nearest pole of the roadside (its ground is the pole's own), else stands alone
+            jx, jy, _ = frame.geodetic_to_enu(b[9], b[8], 0.0)
+            hit = citysigns.pick(poles, b, (float(jx), float(jy)), left_hand)
+            mount, mode = st["placement"]["town_mount_m"], 1.0
+            if hit is not None:
+                x, y, zg = hit
+                zr, mode = zg, 0.0
+        signs.append([x, y, zg, zr, b[2], b[3], w, h, mat, mount, mode, side])
     p, t, uv, mi = fast._ef.dirsign_mesh(np.ascontiguousarray(signs, np.float64), [float(box[0]), float(box[1]), 0.0])
     if not len(t):
         return None, {}

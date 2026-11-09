@@ -16,9 +16,11 @@ mod traffic;
 mod dsm;
 mod vegmask;
 mod roadgeom;
+mod roadsmooth;
 mod shore;
 mod photofill;
 mod ambience;
+mod gradeguard;
 mod power;
 mod underpass;
 mod coarseease;
@@ -36,6 +38,8 @@ mod groundpaint;
 mod medians;
 mod deautobahn;
 mod speedsigns;
+mod roadsigns;
+mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -49,12 +53,14 @@ mod fartex;
 mod farglobal;
 mod dirtsteps;
 mod gridinterp;
+mod dejunction;
 mod streetlabels;
 mod perfclean;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
 mod underdeck;
+mod classgrid;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -1561,22 +1567,25 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
                         target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
                     }
-                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
-                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
-                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
-                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
-                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
+                    // m past a bridge abutment's end (abut_d: how far along the road it lies from this segment): over
+                    // the deck
+                    let mut past = 0.0f64;
+                    if abut[s] != 0 && l2 > 1e-12 {
                         let len = l2.sqrt();
                         let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
                         let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
-                        let mut beyond = 0.0f64;
                         if da.is_finite() {
-                            beyond = beyond.max(-along - da);
+                            past = past.max(-along - da);
                         }
                         if db.is_finite() {
-                            beyond = beyond.max(along - len - db);
+                            past = past.max(along - len - db);
                         }
-                        target -= beyond * abut_under;
+                    }
+                    // there falling away at abut_under, not held at the end's height (the core's round end reached
+                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
+                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
+                    if abut_under > 0.0 {
+                        target -= past * abut_under;
                     }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
@@ -1592,7 +1601,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
                         // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
                         let cr = if steep[s] != 0 { h[s] } else { rh[s] };
-                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                        // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an
+                        // approach's carriageway reached over the railway under a short bridge, and the track's bed
+                        // gave way to it there; GitHub #909)
+                        let car = past <= yield_ramp.max(1e-6);
+                        if car && (d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan())) {
                             cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
@@ -5365,6 +5378,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
@@ -5508,6 +5522,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
     m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_general, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
@@ -5560,6 +5579,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::bridge_level_spans, m)?)?;
+    m.add_class::<classgrid::ClassGridCache>()?;
+    m.add_class::<classgrid::ClassGridPlan>()?;
+    m.add_function(wrap_pyfunction!(classgrid::class_grid_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
@@ -5575,6 +5598,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
-    m.add("VERSION", 171)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
+    m.add("VERSION", 172)?;
     Ok(())
 }

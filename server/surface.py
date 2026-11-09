@@ -24,6 +24,7 @@ import os
 import struct
 import threading
 import time
+import weakref
 from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
@@ -1695,6 +1696,38 @@ class Surface:
             out[inside] = r.sample(lon[inside], lat[inside])
         out[np.abs(lat) > mapcells.MAX_LAT] = POLAR_CLASS
         return out, complete
+
+    def block_classes(self, frame, cx, cy, lat, lon):
+        """Raw classes on a physics block's exact lattice, with bounded native reuse of overlapping chunks.
+
+        MapData's decoded layers are immutable. Weak identity tokens invalidate cached classes when a layer is
+        replaced or reloaded, without pinning its data. Incomplete inputs are never retained; overrides stay live.
+        Arbitrary-point consumers still use classes(). This is cache marshalling, not a second sampler/cache.
+        """
+        fast.require(171, "physics-block land-cover reuse")
+        lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+        bounds = fast._ef.class_grid_bounds(lat, lon, WARP_OCTAVES)
+        if bounds is None:
+            return self.classes(lat, lon)
+        sources, snapshots = [], []
+        for key in mapcells.cells_for_bbox(*bounds):
+            # Check only; an unused halo cell must not trigger a download or an incomplete-input fault.
+            if not self.md.has(key, "landcover"):
+                return self.classes(lat, lon)
+            raster = self._cached(key)
+            snapshots.append(raster)  # pin only during this call, never for the cache's lifetime
+            sources.append((str(key), None if raster is None else weakref.ref(raster)))
+        cache = getattr(self, "_class_grid", None)
+        if cache is None:
+            cache = self._class_grid = fast._ef.ClassGridCache(8 * 1024 * 1024)
+        n = lat.shape[0]
+        if lat.shape != (n, n) or lon.shape != lat.shape:
+            raise ValueError("block_classes needs matching square grids")
+        plan, missing = cache.lookup((frame.lat0, frame.lon0, frame.h0, heightmap.SQUARE), WARP_OCTAVES,
+                                     heightmap.lattice_index(cx, n), heightmap.lattice_index(cy, n), n, sources)
+        values, complete = (self.classes(lat.ravel()[missing], lon.ravel()[missing]) if len(missing)
+                            else (np.empty(0, np.uint8), True))
+        return cache.finish(plan, np.ascontiguousarray(values, np.uint8), complete), complete
 
     def _is_queued(self, key):
         with self._lock:
