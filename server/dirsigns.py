@@ -1,5 +1,5 @@
 """Direction signs before junctions (the user, 2026-11-02: advance direction boards with the road numbers, the places
-ahead in the local language and in English for the cities, and their distances; opt-in, BNE_DIRSIGNS=on or the settings
+ahead in the local language and in English for the cities, and their distances; on by default, BNE_DIRSIGNS=on or the settings
 page's Direction signs).
 
 The glue of the native kernels earthfast.dirsign_place (where the boards stand, which way each arm of the junction
@@ -264,10 +264,47 @@ def _face(out_dir, vfs_dir, style, plate_keys, kind, content, face):
     return name, f"{vfs_dir}/{name}.dds", w_m, h_m
 
 
-def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True):
+
+def steps_back(boards, rows, frame):
+    """Which boards step back for the German Autobahn signs (deautobahn.py builds the motorway's own there): those whose
+    road point (b[4:6]) lies on a motorway, not a link, in Germany (real borders). The kernel's freeway kind also
+    covers rural one-way trunks: their boards stay, as Autobahn-like Bundesstrassen get no German Autobahn signs yet."""
+    out = np.zeros(len(boards), bool)
+    if not len(boards):
+        return out
+    motorway = speedsigns.RANK["motorway"]
+    lines = [(np.asarray(r[1], np.float64)[:, :2], r[2]) for r in rows.values() if len(r[1]) >= 2]
+    cand = []
+    for i, b in enumerate(boards):
+        q = np.asarray(b[4:6], np.float64)
+        best, meta = np.inf, None
+        for xy, m in lines:
+            ab = np.diff(xy, axis=0)
+            t = np.clip(((q - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+            d = float(np.linalg.norm(xy[:-1] + t[:, None] * ab - q, axis=1).min())
+            if d < best:
+                best, meta = d, m
+        if meta is not None and best <= 5.0 and int(meta[2]) == motorway and not meta[4]:
+            cand.append(i)
+    if not cand:
+        return out
+    import deautobahn
+    if deautobahn.ENV == "on":
+        out[cand] = True
+        return out
+    import countrybounds
+    pts = np.asarray(boards, np.float64)[cand][:, 0:2]
+    la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+    codes = countrybounds.bundled().codes_at(list(zip(np.atleast_1d(la).tolist(), np.atleast_1d(lo).tolist())))
+    for i, c in zip(cand, codes):
+        out[i] = c == "DE"
+    return out
+
+def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, show_en=True, *, autobahn=False):
     """(mesh, faces) of road tile (tx, ty)'s direction boards: the mesh as signstream.write_tile takes it
     (vertices, triangles, uv, materials, material per triangle) and {material: vfs path of its picture}; (None, {})
-    where there is none."""
+    where there is none. autobahn: the tile has the German Autobahn signs (signstream), so the boards on its German
+    motorways step back (steps_back)."""
     fast.require(KERNEL, "direction signs")
     _set_fonts()
     st = styles()
@@ -301,8 +338,9 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
     factor, rounding = st["placement"]["detour_factor"], st["distance_round"]
     kinds = ("urban", "road", "freeway")
     keep, signs, faces, materials, mats_of = [], [], {}, [METAL], {}
-    for b in boards:
-        if exitsigns._on_deck(b[0:2], decks, 1.5):
+    back = steps_back(boards, rows, frame) if autobahn else np.zeros(len(boards), bool)
+    for b, gone in zip(boards, back):
+        if gone or exitsigns._on_deck(b[0:2], decks, 1.5):
             continue
         first, n = int(b[10]), int(b[11])
         mine = krows[first:first + n]
