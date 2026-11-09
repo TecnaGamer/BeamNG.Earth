@@ -30,7 +30,9 @@ Works with BeamNG.drive 0.40.5.
   (feet, miles past 10 miles up). It's hidden by default: add it from the apps menu, under BeamNG.Earth.
 - **Add-ons page** (Settings > Add-ons): install, update, turn off and remove community add-ons, including ones you
   add from GitHub (paste owner/name or a link). The page names the author and asks before the first install. Add-ons
-  can use a new modding API (position, place names, teleport, GPS, notifications). See docs/ADDONS.md.
+  can use a new modding API (position, place names, teleport, GPS, notifications). See docs/ADDONS.md. The first
+  listed add-on is MadMerick01's Worldwide Trucking Career: Dangerous Contracts, and the list now updates online, so
+  new add-ons can appear without a BeamNG.Earth update.
 - **Anonymous statistics, your choice first**: a welcome page now asks every player what to share before anything is
   sent: anonymous usage statistics, performance data and network load, each with its own switch (the boxes start from
   your region's privacy rules). Nothing is sent until you choose. Performance data (frame rate, hitches, how well the world keeps up; no place or name) is sent by releases too now, only if you tick it. What is collected and why: TELEMETRY.md. Public
