@@ -2862,7 +2862,10 @@ def _placement_rows(feats):
         rows = set()
         parts = feats.attrs.get(railtags.LANE_PARTS)
         for i, ps in enumerate(parts if parts is not None else ()):
-            if ps and any(t and t.get("placement") for _a, _b, _w, t in ps):
+            if isinstance(ps, (list, tuple)) and any(isinstance(p, (list, tuple)) and len(p) == 4 and p[3]
+                                                     and p[3].get("placement") for p in ps):
+                # (a list of (a, b, w, tags) parts; text where a saved copy turned the column into strings: the
+                # interchange replays' fixtures)
                 rows.add(i)
         col = feats.attrs.get(railtags.lane_attr("placement"))
         if col is not None:
