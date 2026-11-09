@@ -159,7 +159,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   globe with its photos, search for places, pick a spot with a click, set a GPS route or teleport there; its compass
   needle turns with the view. The map key opens the 2D or 3D map, whichever you used last, and each has a button for
   the other. Any camera more than about 150 miles up sees the Earth as a globe too.
-- **Altitude** HUD app (in the BeamNG.Earth layout; add it to others from the apps menu): height above sea level and
+- **Altitude** HUD app (hidden by default; add it from the apps menu, under BeamNG.Earth): height above sea level and
   above the ground, and how fast you climb or fall.
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
