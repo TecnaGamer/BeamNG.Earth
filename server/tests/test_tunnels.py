@@ -479,3 +479,41 @@ class Underwater(unittest.TestCase):
         w = np.zeros(50, bool)
         w[40:] = True
         self.assertEqual(roads.wet_run_inside(xy, w), 0.0)              # at an end: a portal on a bank
+
+
+class SplitRanges(unittest.TestCase):
+    """roads.tag_level_ranges joins a segment's tunnel ranges only where one source way runs on
+    through the gap (2026-11-08, Potaarde under the R0 at Strombeek-Bever: three underpasses of a track, 24 m and 8 m
+    of open track between them, merged into one 157 m tunnel and graded as an open cut through the R0's lanes)."""
+
+    def feats(self, src_ways, tunnels=((0.0, 0.15), (0.25, 0.5), (0.55, 0.8))):
+        from test_roads import features, rules
+        # 200 m east-west; by default tunnel ranges 0-0.15, 0.25-0.5 and 0.55-0.8 (gaps of 20 m and 10 m)
+        f = features([[(-100, 0), (100, 0)]], ["track"], flags=[(0, "is_tunnel", a, b) for a, b in tunnels])
+        if src_ways is not None:
+            f.rules["src_ways"] = rules([(0, v, a, b) for v, a, b in src_ways])
+        return f
+
+    def ranges(self, f):
+        return [(round(a, 3), round(b, 3), k) for a, b, k in roads.tag_level_ranges(f, 0)]
+
+    def test_gaps_that_are_ways_of_their_own_stay_open(self):
+        f = self.feats([("w1@9", 0.0, 0.15), ("w2@8", 0.15, 0.25), ("w3@9", 0.25, 0.5), ("w4@8", 0.5, 0.55),
+                        ("w5@10", 0.55, 0.8), ("w6@10", 0.8, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.15, "tunnel"), (0.25, 0.5, "tunnel"), (0.55, 0.8, "tunnel")])
+
+    def test_a_split_inside_one_way_is_one_tunnel(self):
+        # (the Fort McHenry Tunnel: one OSM way per bore, its Overture range split inside it)
+        f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.9), ("w9@3", 0.9, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.8, "tunnel")])
+
+    def test_only_the_gap_inside_a_way_is_joined(self):
+        f = self.feats([("w1@1", 0.0, 0.15), ("w2@1", 0.15, 0.25), ("w3@1", 0.25, 0.9), ("w4@1", 0.9, 1.0)])
+        self.assertEqual(self.ranges(f), [(0.0, 0.15, "tunnel"), (0.25, 0.8, "tunnel")])
+
+    def test_a_segment_of_one_way_joins_all_its_gaps(self):
+        self.assertEqual(self.ranges(self.feats(None)), [(0.0, 0.8, "tunnel")])
+
+    def test_a_long_gap_inside_one_way_is_joined_too(self):
+        f = self.feats([("w7@3", 0.0, 0.05), ("w8@12", 0.05, 0.6), ("w9@3", 0.6, 1.0)], tunnels=((0.0, 0.1), (0.3, 0.5)))
+        self.assertEqual(self.ranges(f), [(0.0, 0.5, "tunnel")])         # (40 m: the way's tag covers it all)
