@@ -2030,9 +2030,11 @@ class RoadLines(list):
         self.half = []
 
 
-def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
+
+def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=()):
     """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through), a
-    RoadLines (their drawn half-widths in .half)."""
+    RoadLines (their drawn half-widths in .half). classes: the road classes taken; skip_sub: the OSM subclasses left
+    out (a car park's aisles)."""
     import roads as roadsmod
     out = RoadLines()
     for f in road_layers:
@@ -2041,12 +2043,13 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
         cls = f.attrs.get("class")
         if cls is None:
             continue
+        sub = f.attrs.get("subclass") if skip_sub else None
         bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
         specs = None
         for i in near.tolist():
-            if str(cls[i]) not in THROUGH_CLASSES:
+            if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
             if specs is None:
                 specs = roadsmod.road_specs(f)      # (remembered on the layer: the road tiles ask for them anyway)
@@ -2235,6 +2238,152 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
                 R.append(piece), A.append(dict(at, height=(cut - low) if own else cut)), L.append(look), M.append(low)
         if top > cut + 1.0:
             R.append(ring), A.append(dict(at, height=(top - cut) if own else top)), L.append(look), M.append(cut)
+    return R, A, L, M
+
+
+ROAD_PASSAGE_ON = os.environ.get("BNE_ROAD_PASSAGE", "on") != "off"
+ROAD_PASSAGE_CLASSES = {"service"}      # (the through classes are lifted over instead, ROAD_THROUGH_M)
+ROAD_PASSAGE_SKIP = ("parking_aisle", "driveway", "drive-through")      # (inside a car park or a lot: no passage)
+ROAD_PASSAGE_W = 7.0        # m: the way cut through a footprint for a mapped road inside it (a lane and its margins)
+ROAD_PASSAGE_H = 4.5        # m: its clear height; the building goes on over it where it is taller
+ROAD_PASSAGE_RUN_M = 8.0    # m of road at least this deep inside a footprint make a passage (less: the outline's slop)
+ROAD_PASSAGE_DEEP_M = 2.0   # m: "deep" is this far in from the footprint's edge
+ROAD_PASSAGE_STEP_M = 3.0   # m: the road's samples for that test
+ROAD_PASSAGE_MAX_SEGS = 3   # a way of more straight stretches than this (a lot's winding aisles) is no passage ...
+ROAD_PASSAGE_MAX_PIECES = 24    # ... and a footprint that would be cut into more pieces than this stays whole
+ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal", "garage")
+
+
+def _simplify(p, tol=1.0):
+    """The polyline p (k, 2) without the points within tol m of the line between the kept ones (Douglas-Peucker)."""
+    keep = np.zeros(len(p), bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(p) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b <= a + 1:
+            continue
+        d = p[b] - p[a]
+        n = float(np.hypot(*d))
+        q = p[a + 1:b] - p[a]
+        dist = np.abs(q[:, 0] * d[1] - q[:, 1] * d[0]) / n if n > 1e-9 else np.hypot(*q.T)
+        k = int(np.argmax(dist))
+        if dist[k] > tol:
+            keep[a + 1 + k] = True
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    return p[keep]
+
+
+def _edge_dist(pts, ring):
+    """Distance (m) of each of the points (k, 2) to the closed ring's edges."""
+    a, b = ring[:-1], ring[1:]
+    ab = b - a
+    den = np.maximum((ab * ab).sum(1), 1e-12)
+    out = np.full(len(pts), np.inf)
+    for j, q in enumerate(pts):
+        t = np.clip(((q - a) * ab).sum(1) / den, 0.0, 1.0)
+        out[j] = float(np.hypot(*(a + t[:, None] * ab - q).T).min())
+    return out
+
+
+def road_spans(ring, line):
+    """The stretches of the polyline (k, 2) that lie deep inside the footprint ring (ROAD_PASSAGE_DEEP_M in from its
+    edge) for at least ROAD_PASSAGE_RUN_M, each with a stride of road past either end: [polyline (j, 2)]. A road
+    crossing the outline's edge or running along it, a few metres off the mapped line, has none."""
+    from polygon import Path
+    seg = np.hypot(*np.diff(line, axis=0).T)
+    arc = np.r_[0.0, np.cumsum(seg)]
+    if arc[-1] < ROAD_PASSAGE_RUN_M:
+        return []
+    t = np.unique(np.r_[np.arange(0.0, arc[-1], ROAD_PASSAGE_STEP_M), arc[-1]])
+    p = np.stack([np.interp(t, arc, line[:, 0]), np.interp(t, arc, line[:, 1])], 1)
+    deep = Path(ring).contains_points(p)
+    if not deep.any():
+        return []
+    deep &= _edge_dist(p, ring) >= ROAD_PASSAGE_DEEP_M
+    out, k = [], 0
+    while k < len(deep):
+        if not deep[k]:
+            k += 1
+            continue
+        j = k
+        while j < len(deep) and deep[j]:
+            j += 1
+        if t[j - 1] - t[k] >= ROAD_PASSAGE_RUN_M:
+            lo, hi = max(k - 2, 0), min(j + 1, len(p))          # (a stride more each end: out through the wall)
+            sp = _simplify(p[lo:hi])
+            if len(sp) - 1 <= ROAD_PASSAGE_MAX_SEGS:
+                out.append(sp)
+        k = j
+    return out
+
+
+def _cut_quad(ring, quad):
+    """(the parts of ring outside the convex quad (4, 2), counter-clockwise; the part inside it or None)."""
+    rest, outs = ring, []
+    for j in range(4):
+        v0, v1 = quad[j], quad[(j + 1) % 4]
+        d = v1 - v0
+        inw = np.array([-d[1], d[0]]) / max(float(np.hypot(*d)), 1e-9)
+        o = _clip_half(rest, v0, -inw, True)
+        if o is not None:
+            outs.append(o)
+        rest = _clip_half(rest, v0, inw, True)
+        if rest is None:
+            return outs, None
+    return outs, rest
+
+
+def _road_passages(rings, attrs, looks, mins, lines):
+    """A road mapped inside a footprint with no tunnel or bridge tag (a mall's service roads through its covered way,
+    Ulemiste keskus: the road runs in under the building at the back and comes out of its far side) is a passage, not
+    a wall: the footprint is cut round the road's way, ROAD_PASSAGE_W wide, solid from the ground up beside it and
+    from ROAD_PASSAGE_H over the road (lintels) where the building is taller, open where it is not. Only
+    ground-level buildings with a height of their own; lines: the roads (road_lines, ROAD_PASSAGE_CLASSES, not a car
+    park's aisles). Pure."""
+    if not lines:
+        return rings, attrs, looks, mins
+    bx = line_boxes(lines)
+    R, A, L, M = [], [], [], []
+    for ring, at, look, mh in zip(rings, attrs, looks, mins):
+        h = at.get("height")
+        r = np.asarray(ring, np.float64)
+        spans = []
+        if (look is None and mh <= 0.5 and h is not None and np.isfinite(h)
+                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)):
+            lo, hi = r.min(0), r.max(0)
+            near = np.flatnonzero((bx[:, 2] >= lo[0]) & (bx[:, 0] <= hi[0]) & (bx[:, 3] >= lo[1]) & (bx[:, 1] <= hi[1]))
+            for li in near:
+                spans += road_spans(r, np.asarray(lines[li], np.float64)[:, :2])
+        if not spans:
+            R.append(ring), A.append(at), L.append(look), M.append(mh)
+            continue
+        solid, lintels = [r], []
+        for sp in spans:
+            for a, b in zip(sp[:-1], sp[1:]):
+                d = b - a
+                n = float(np.hypot(*d))
+                if n < 0.5:
+                    continue
+                u = d / n
+                w = np.array([-u[1], u[0]]) * ROAD_PASSAGE_W / 2
+                a_, b_ = a - u * 0.5, b + u * 0.5               # (half a metre over each end: no sliver at a bend)
+                quad = np.array([a_ - w, b_ - w, b_ + w, a_ + w])
+                nxt = []
+                for piece in solid:
+                    outs, inside = _cut_quad(piece, quad)
+                    nxt += outs
+                    if inside is not None:
+                        lintels.append(inside)
+                solid = nxt
+        if len(solid) + len(lintels) > ROAD_PASSAGE_MAX_PIECES:
+            R.append(ring), A.append(at), L.append(look), M.append(mh)
+            continue
+        for piece in solid:
+            R.append(piece), A.append(at), L.append(look), M.append(mh)
+        if float(h) > ROAD_PASSAGE_H + 1.0:
+            for piece in lintels:
+                R.append(piece), A.append(at), L.append(look), M.append(ROAD_PASSAGE_H)
     return R, A, L, M
 
 
@@ -2661,7 +2810,8 @@ def _outline_under_parts(at, bparts):
 @profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=()):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
+                   passage_xy=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2891,6 +3041,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             z = float(np.asarray(elev(np.array([float(la)]), np.array([float(lo)])), np.float64)[0])
             return float(frame.geodetic_to_enu(float(la), float(lo), z)[2])       # (the decks' frame up)
         rings, attrs, looks, mins = _passages(rings, attrs, looks, mins, bridges_xy, decks, ground_at)
+    if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
+        rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)
     shared = _shared_walls(rings)
     cover = sum(_area2(r) / 2 for r, mh in zip(rings, mins) if mh <= 0.5) / ((x1 - x0) * (y1 - y0))
     town, dense = cover < TOWN_COVERAGE, cover > BRICK_WALK_COVERAGE
@@ -3769,6 +3921,8 @@ def road_tile_items(
         part_layers=[c.layers.get("building_parts") for c in cds],
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                              classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         garages_xy=garage_rings(
