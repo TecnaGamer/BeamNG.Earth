@@ -5590,6 +5590,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
+    m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add("VERSION", 171)?;
     Ok(())
 }
