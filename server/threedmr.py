@@ -512,7 +512,7 @@ def _latlon_dist_m(lat1, lon1, lat2, lon2):
     return math.hypot(de, dn)
 
 
-def model_position(model_id, cache_dir, iface=None, timeout=30.0):
+def model_position(model_id, cache_dir, iface=None, timeout=30.0, offline=False):
     """(lat, lon, corrected, source) of a model, in order: POSITION_OVERRIDES (source "override", level 1, no
     network - the model's own api AND desc data are both wrong, so neither is worth even fetching); else
     threedmr_position_fixes.json (source "fix", level 1.5, still no network - an offline backstop of a few
@@ -539,7 +539,7 @@ def model_position(model_id, cache_dir, iface=None, timeout=30.0):
         return flat, flon, True, "fix"
     info = model_info(model_id, cache_dir, iface=iface, timeout=timeout)
     lat, lon = float(info["lat"]), float(info["lon"])
-    poly = osm_polygon_position(lat, lon, model_id, cache_dir, iface=iface, timeout=timeout)
+    poly = osm_polygon_position(lat, lon, model_id, cache_dir, iface=iface, timeout=timeout, offline=offline)
     if poly is not None:
         plat, plon = poly
         log.info(
@@ -589,7 +589,7 @@ def credited_near(lat, lon, range_m, cache_dir):
             try:
                 with open(os.path.join(d, name)) as f:
                     json.load(f)            # (a whole file: model_position below reads it, never fetches)
-                mlat, mlon, _corrected, _source = model_position(int(name[5:-5]), cache_dir)
+                mlat, mlon, _corrected, _source = model_position(int(name[5:-5]), cache_dir, offline=True)
             except Exception:
                 continue
             ll = _near_memo[(d, name)] = (float(mlat), float(mlon))
@@ -776,7 +776,11 @@ def _ring_cache_path(cache_dir, lat, lon):
     return cache, os.path.join(cache, f"yaw_{rlat}_{rlon}.json")
 
 
-def _osm_ring_cached(lat, lon, model_id, cache_dir, iface=None, timeout=30.0):
+_osm_down_until = 0.0      # time.time() before which a failed OSM /map fetch is not tried again (_osm_ring_cached)
+OSM_RETRY_S = 3600.0
+
+
+def _osm_ring_cached(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
     """(ring_xy or None, tagged) for (lat, lon, model_id): _osm_building_ring's own OSM /map fetch, cached
     forever (including a "no ring" miss) under its own "ring"/"tagged" fields in the SAME yaw_<lat>_<lon>.json
     file osm_yaw keeps its "yaw" answer in and osm_polygon_position its "pos" - between all three, a model's
@@ -792,11 +796,17 @@ def _osm_ring_cached(lat, lon, model_id, cache_dir, iface=None, timeout=30.0):
         return (np.asarray(ring, np.float64) if ring is not None else None), bool(
             data.get("tagged", False)
         )
+    # offline: the cache only (credits.feature_ids asks from the server's event loop every second: a request there
+    # held every game message); and a failed fetch is not kept as "no ring" for good, only not asked again for a while
+    global _osm_down_until
+    if offline or time.time() < _osm_down_until:
+        return None, False
     try:
         ring_xy, tagged = _osm_building_ring(lat, lon, model_id, iface, timeout)
     except (urllib.error.URLError, OSError) as e:
-        log.info("3dmr model %s: OSM fetch failed (%s)", model_id, e)
-        ring_xy, tagged = None, False
+        log.info("3dmr model %s: OSM fetch failed (%s); asked again in %.0f min", model_id, e, OSM_RETRY_S / 60)
+        _osm_down_until = time.time() + OSM_RETRY_S
+        return None, False
     data["ring"] = ring_xy.tolist() if ring_xy is not None else None
     data["tagged"] = tagged
     os.makedirs(cache, exist_ok=True)
@@ -838,7 +848,7 @@ OSM_POLYGON_GATE_M = 500.0  # a tagged OSM way's centroid farther than this from
 # rather than silently moving the model there.
 
 
-def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0):
+def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
     """(lat, lon) of the OSM way tagged 3dmr=<model_id> around a model's own api point (lat, lon here), its
     ring's centroid - model_position's level 2, ahead of its desc/api fallback: probe/position_audit.json
     found 8 of 3dmr.eu's own models placed by their own api point 10-109 m from this surveyed tag (Baghdad's
@@ -853,7 +863,7 @@ def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0
     cache), so a later osm_yaw call centred on THIS function's own (lat, lon) result also hits the cache."""
     if os.environ.get(NO_REPOSITION_ENV):
         return None
-    ring_xy, tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout)
+    ring_xy, tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout, offline=offline)
     if ring_xy is None or not tagged or len(ring_xy) < 3:
         return None
     ce, cn = float(ring_xy[:, 0].mean()), float(ring_xy[:, 1].mean())

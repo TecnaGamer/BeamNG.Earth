@@ -43,6 +43,26 @@ def _osm_square_xml(model_id, half_diag_e, half_diag_n, lat0=0.0, lon0=0.0, tag=
     ).encode()
 
 
+class CreditedNearNeverFetchesTest(unittest.TestCase):
+    """credits.feature_ids asks credited_near from the server's event loop every second: it must never reach the
+    network, even for a cached model whose OSM ring isn't cached yet (PR #854 review)."""
+
+    def test_no_request_from_credited_near(self):
+        import json
+        with tempfile.TemporaryDirectory() as d:
+            c = os.path.join(d, "threedmr_cache")
+            os.makedirs(c)
+            with open(os.path.join(c, "info_123456.json"), "w") as f:
+                json.dump({"id": 123456, "lat": 48.0, "lon": 11.0, "title": "t", "tags": {}}, f)
+            boom = mock.Mock(side_effect=AssertionError("a request from the event loop"))
+            with mock.patch.object(threedmr, "enabled", return_value=True), \
+                    mock.patch.object(threedmr, "_osm_building_ring", boom), \
+                    mock.patch.object(threedmr, "_fetch_retry", boom), \
+                    mock.patch.dict(threedmr._near_memo, {}, clear=True):
+                self.assertTrue(threedmr.credited_near(48.0, 11.0, 100.0, d))
+            boom.assert_not_called()
+
+
 class ModelPositionOrderTest(unittest.TestCase):
     """model_position's own level order: override > threedmr_position_fixes.json > tagged OSM way > desc >
     api point - each level checked ahead of the next only kicking in when the one before it has nothing."""

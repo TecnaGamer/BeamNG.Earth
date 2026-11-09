@@ -3599,7 +3599,7 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     return rows
 
 
-FOOTPRINT_GATE_M = 150.0  # _nearest_building_footprint: a candidate footprint farther than this from a
+FOOTPRINT_GATE_M = 40.0   # (was 150 in PR #854: a statue or tower in a park was moved onto a building that far off)  # _nearest_building_footprint: a candidate footprint farther than this from a
 # model's own api point is not considered its building at all - the map's own data for a tile a model landed
 # in by a wide, SEARCH_CORRECT_R_M-radius hit (far outside this) is not trusted that loosely either.
 FOOTPRINT_SIZE_MIN = 0.4  # ... nor is one smaller than this fraction of the model's own major side (a garden
