@@ -21,6 +21,7 @@ import numpy as np
 
 import footbridges
 import mapgeom
+import railxing
 import roads
 
 # the ballasted classes drawn (Overture's rail classes); ground trams stay in rails.py,
@@ -67,6 +68,8 @@ SLEEPER = "bne_rail_sleeper"        # weathered concrete sleepers (bne_bridge_co
 STEEL = "bne_rail_steel"            # rust-brown rails
 # per wear (wear()): a disused line's ballast weedy, an abandoned one's grown over, their rails and sleepers older, and
 # a share of an abandoned line's sleepers gone (SLEEPERS_GONE)
+BALLAST_STONE = "bne_rail_ballast_stone"    # crushed granite (BNE_RAIL_XING; tools/ingest_rail_textures.py): a track in use
+BALLAST_TILE_M = 0.8        # m one tile of it covers (stones of 5-10 cm); the stock gravel's 3 m
 BALLAST_WORN = (BALLAST, "bne_rail_ballast_weedy", "bne_rail_ballast_grown")
 STEEL_WORN = (STEEL, "bne_rail_steel_old", "bne_rail_steel_old")
 SLEEPER_WORN = (SLEEPER, "bne_rail_sleeper_old", "bne_rail_sleeper_old")
@@ -134,6 +137,29 @@ def cells_near(frame, box, reach=REACH_M):
     return mapcells.cells_for_bbox(float(np.min(lat)), float(np.min(lon)), float(np.max(lat)), float(np.max(lon)))
 
 
+def _flushed(frame, cells, box, rails, prof, ground, tunnels):
+    """prof (profile's [(bed, ground)] per part) with the ground parts' beds brought flush with the roads they cross at
+    grade (_flush, as tile_mesh does when it builds the track), for the grader's plans: the terrain is then graded to the
+    bed the mesh really has, not to the smoothed ground under a bed that tile_mesh lowers to a road's level (the ballast
+    and sleepers sank under the terrain by the road, Kalynivka 2026-11-05)."""
+    cr = crossings(frame, cells, box, reach=GRADE_REACH_M) + list(tunnels)
+    if not cr:
+        return prof
+    zc = np.asarray(ground(np.concatenate([ln for ln, _ in cr])), np.float64)
+    crossers, k = [], 0
+    for line, hw in cr:
+        crossers.append((line, hw, zc[k:k + len(line)]))
+        k += len(line)
+    out = []
+    for (_fid, _c, kind, xy), (zb, zg) in zip(rails, prof):
+        if kind == "ground":
+            blk = _blocked(xy, zb, crossers)
+            if blk.any():
+                zb = _flush(_arc(xy), zb, blk, np.asarray(ground(xy[blk]), np.float64))
+        out.append((zb, zg))
+    return out
+
+
 def grade_plans(frame, cells, box, elev):
     """[(fid, xy (k, 2), z (k,))]: the bed line of each on-ground rail part near box, in elev's heights (elev(lat, lon):
     the grader's DEM), for grading.Grader to lay the ground to (the cutting's walls back from the track, the ramps'
@@ -166,7 +192,10 @@ def grade_plans(frame, cells, box, elev):
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
-    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, profile(rails, ground, tunnels)):
+    prof = profile(rails, ground, tunnels)
+    if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
+        prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
+    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
         if kind != "ground" or fid in ungraded:
             continue
         if _box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()),
@@ -929,11 +958,16 @@ def profile(rails, ground, underpasses=()):
             if got is not None and got[0] > level.get(node, (-np.inf, 0.0))[0]:
                 level[node] = got
     zb = []
-    for (_, _, kind, _), zg, (a, b, s) in zip(rails, zgs, edges):
+    shared = {}                                 # (a double track's beds are smoothed from one profile: railxing.py)
+    if railxing.ENABLED:
+        gi = [n for n, (_, _, kind, _) in enumerate(rails) if kind == "ground"]
+        if len(gi) > 1:
+            shared = dict(zip(gi, railxing.corridor_ground([rails[n][3] for n in gi], [zgs[n] for n in gi])))
+    for n, ((_, _, kind, _), zg, (a, b, s)) in enumerate(zip(rails, zgs, edges)):
         if kind != "ground":
             zb.append(zg.copy())
             continue
-        lifted = zg
+        lifted = shared.get(n, zg)
         for node, dist in ((a, s), (b, s[-1] - s)):     # (the track on at that level up to the bridge, not down the
             if node in level:                           # slope under it: lifted before the bed's smoothing)
                 lv, reach = level[node]
@@ -1166,16 +1200,17 @@ def _sited(pr, crossers, ground):
     return c, along, across, np.minimum(z0, zg - PIER_FOOT_M), z1
 
 
-def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat):
+def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat, tile=3.0):
     up = np.array([0.0, 0.0, 1.0])
+    v = v * 3.0 / tile                  # (v: arc / 3 m)
     out_l = np.c_[uu, np.zeros(len(p))]
     L = np.c_[p + uu * BALLAST_TOP_M, t]
     R = np.c_[p - uu * BALLAST_TOP_M, t]
     Lf = np.c_[p + uu * foot_l[:, None], np.minimum(zl, t) - BALLAST_FOOT_M]
     Rf = np.c_[p - uu * foot_r[:, None], np.minimum(zr, t) - BALLAST_FOOT_M]
-    mesh.strip(L, R, 0.0, 2 * BALLAST_TOP_M / 3.0, v, mat, up)
-    mesh.strip(L, Lf, 0.0, 0.8, v, mat, out_l + up)
-    mesh.strip(R, Rf, 0.0, 0.8, v, mat, -out_l + up)
+    mesh.strip(L, R, 0.0, 2 * BALLAST_TOP_M / tile, v, mat, up)
+    mesh.strip(L, Lf, 0.0, 0.8 * 3.0 / tile, v, mat, out_l + up)
+    mesh.strip(R, Rf, 0.0, 0.8 * 3.0 / tile, v, mat, -out_l + up)
 
 
 def _deck(mesh, p, uu, t, v, ballast, concrete):
@@ -1265,7 +1300,7 @@ AMERICAS_LON = -30.0            # west of this the crossbuck (the Americas), els
 CROSSING_DATA_ONLY = {"light_rail"}
 
 
-def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None):
+def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, country=None):
     """Prop rows ([group, x, y, z, yaw, scale, height, 0]) of the level crossings in road tile (tx, ty): where a drawn
     line's ground part crosses a road's (cells: the road layers around the tile; ground(xy (n, 2)) -> z). kits: an
     optional fn(xy (2,), road class) -> "gate" / "flash" / "cross" / None from crossing data (the FRA's inventory in
@@ -1296,6 +1331,13 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None):
     if not roads:
         return []
     americas = float(frame.lon0 if hasattr(frame, "lon0") else 0.0) < AMERICAS_LON
+    if railxing.ENABLED:        # (a crossing of several tracks is one: railxing.py, BNE_RAIL_XING)
+        usage = {str(f.ids[i]): str(u) for f in cells if f is not None and len(f)
+                 for u, i in ((f.attrs.get("osm_usage", [None] * len(f))[i], i) for i in range(len(f))) if u}
+        return railxing.crossing_rows(box, rails, roads, ground, worn=worn, usage=usage,
+                                      nodes=railxing.node_lookup(frame, cells), fra=kits, country=country,
+                                      lon=float(frame.lon0 if hasattr(frame, "lon0") else 0.0), left_hand=left_hand,
+                                      owns=lambda x, y: roadsmod.box_owns(box, x, y))
     osm_kit = _osm_kits(frame, cells)
     rows, done = [], set()
     for (rfid, sp, line), crs in zip(roads, roadsmod._crossings_by([xy for _f, xy, _c in rails],
@@ -1464,7 +1506,11 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             p, uu, t, v = xy[sl], u[sl], top[sl], s[sl] / 3.0
             if kind == "ground":
                 (fl, zl), (fr, zr) = feet
-                _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
+                if railxing.ENABLED and w == 0:         # (a track in use: crushed stone, its own scale)
+                    _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], mesh.mat(BALLAST_STONE),
+                                 BALLAST_TILE_M)
+                else:
+                    _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
             else:
                 if cls == "tram":
                     _tram_deck(mesh, p, uu, t, v, concrete)

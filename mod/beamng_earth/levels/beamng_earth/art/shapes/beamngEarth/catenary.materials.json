@@ -1,0 +1,92 @@
+{
+  "bne_cat_concrete": {
+    "name": "bne_cat_concrete",
+    "mapTo": "bne_cat_concrete",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6d31c3a5-7878-5b9b-8abe-91d63e8dce2c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.61,
+          0.58,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.9
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_cat_galv": {
+    "name": "bne_cat_galv",
+    "mapTo": "bne_cat_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "79e4eda1-73df-5115-ad24-10eac5d53320",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.8,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_cat_insulator": {
+    "name": "bne_cat_insulator",
+    "mapTo": "bne_cat_insulator",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "00131e92-b9fd-5b01-8549-a36a927d2e81",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.03,
+          0.03,
+          0.035,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_cat_plate": {
+    "name": "bne_cat_plate",
+    "mapTo": "bne_cat_plate",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f8ca06f1-98c8-5bdb-98ff-386e2778aeaa",
+    "Stages": [
+      {
+        "metallicFactor": 0.0,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_plate_r.data.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

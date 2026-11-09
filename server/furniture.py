@@ -930,7 +930,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
-          sign_obstacles=None, defer_gore=False):
+          sign_obstacles=None, defer_gore=False, obstacles=()):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -957,6 +957,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         return _h01(fid, "buried") >= buried
     clearance = clearance if clearance is not None else RoadClearance(
         [(spec.width / 2, pts) for _, spec, pts, _ in roads], decks, bounds=box)
+    import fast
+    bed = fast.Others(list(obstacles)) if obstacles else None
+
+    def on_bed(q):              # is q on (or by) an obstacle's ground?
+        return bed is not None and not bed.clear(np.array([q[0], q[1]]), None, CLEAR_OTHER_M)
     rows = []
     lit = set()
     for wk in walks:
@@ -993,7 +998,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
             for p, out in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
-                if _owns(box, q[0], q[1]):
+                if _owns(box, q[0], q[1]) and not on_bed(q):
                     if optional:
                         k = int(round((float(_project(line, p[None, :2])[0]) - phase) / spacing))
                         if not decorated(group, p, out, k):
@@ -1015,6 +1020,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 ph = _h01(fid, "tphase") * TOWN_POLE_SPACING
                 for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
+                    if on_bed(q):
+                        continue
                     yaw = _yaw(out[0], out[1])
                     pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
                     pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
@@ -1106,6 +1113,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             n = np.array([-d[1], d[0]]) * side
             q = p[:2] + n * (spec.width / 2 + (POLE_OFF_M if poles else LAMP_EDGE_M))
             inside = _owns(box, q[0], q[1])
+            if on_bed(q):
+                if len(run) > 1 and wires is not None:
+                    wires.extend(_own_spans(run, box))
+                run = []
+                continue
             if not poles:                   # buried lines: lamp posts, their arms over the road
                 if inside:
                     h = (HIGHWAY_LAMP_H["na" if _na(region) else None] if highway and not spec.link

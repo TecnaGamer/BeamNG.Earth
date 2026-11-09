@@ -2076,6 +2076,57 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THRO
     return out
 
 
+RAIL_BED_CLEAR_M = 3.2     # m from a track's axis a footprint may not reach (the ballast's foot ~2.3 m): BNE_RAIL_XING; a hut
+                           # stood with its wall on the ballast and the rails ran into it (Kalynivka, 2026-11-05)
+
+
+def rail_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
+    """Polylines (k, 2) relative to (x0, y0) of the railway tracks on the ground near the tile (railways.drawn's, the
+    ground pieces); none unless BNE_RAIL_XING is on."""
+    import railxing
+    if not railxing.ENABLED:
+        return []
+    import railways
+    import roads as roadsmod
+    out = []
+    for f in road_layers:
+        if f is None or len(f.kind) == 0 or "subtype" not in f.attrs:
+            continue
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
+                              & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
+        for i in near.tolist():
+            got = railways.drawn(f, i)
+            if got is None or got[0] == "tram":
+                continue
+            for ll in roadsmod.ground_parts(f, i):
+                if len(ll) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, np.asarray(ll, np.float64))
+                out.append(np.stack([e - x0, n - y0], 1))
+    return out
+
+
+def on_rail_bed(ring, rails_xy, step=1.0):
+    """Whether footprint ring (k, 2) reaches RAIL_BED_CLEAR_M of a track: its outline sampled every step m, and its
+    centre."""
+    if not rails_xy:
+        return False
+    pts = [ring.mean(0)[None]]
+    for a, b in zip(ring, np.roll(ring, -1, axis=0)):
+        n = max(1, int(np.ceil(float(np.hypot(*(b - a))) / step)))
+        pts.append(a + (b - a) * (np.arange(n) / n)[:, None])
+    allp = np.vstack(pts)
+    for ln in rails_xy:
+        a, b = ln[:-1], ln[1:]
+        d = b - a
+        t = np.clip(((allp[:, None, :] - a[None]) * d[None]).sum(2) / np.maximum((d * d).sum(1), 1e-12)[None], 0.0, 1.0)
+        q = a[None] + t[:, :, None] * d[None]
+        if float(np.hypot(*(q - allp[:, None, :]).transpose(2, 0, 1)).min()) <= RAIL_BED_CLEAR_M:
+            return True
+    return False
+
+
 PASSAGE_W = 11.0           # m: the passage a bridge's road takes through its tower (Tower Bridge: 2 lanes + walks) ...
 PASSAGE_H = 7.0            # ... this high over the tower's mapped bottom (its deck: the part starts at the road), ...
 PASSAGE_CLEAR = 6.5        # m: the way over a deck through a building (with the decks' heights)
@@ -2811,7 +2862,7 @@ def _outline_under_parts(at, bparts):
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
-                   passage_xy=None):
+                   passage_xy=None, rails_xy=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2948,6 +2999,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
+                continue
+            if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
             is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
@@ -3923,6 +3976,7 @@ def road_tile_items(
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
                               classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
+        rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         garages_xy=garage_rings(
@@ -4253,6 +4307,7 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,

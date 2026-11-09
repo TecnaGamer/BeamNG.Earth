@@ -61,7 +61,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
-  and tram tracks (street track where trams run on the road).
+  and tram tracks (street track where trams run on the road). Opt-in (set `BNE_RAIL_XING=1`): a level crossing as
+  one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
+  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
+  (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
