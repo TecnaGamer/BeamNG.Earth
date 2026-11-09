@@ -67,6 +67,26 @@ class FootbridgeTest(unittest.TestCase):
         with unittest.mock.patch.object(railways, "FOOTBRIDGES_ON", False):
             self.assertIsNone(railways.tile_mesh(FRAME, 0, 0, [bridge()], valley))
 
+    def test_model_suppresses_only_the_covered_matching_walkway(self):
+        xy = np.c_[np.arange(100., 161., 2.), np.full(31, 128.)]
+        fp = {'ax': 0, 'u0': 110., 'du': 2., 'cols': [[-3., 3.]] * 21, 'pedestrian': True}
+        model = [(fp, (0., 128.), 55)]
+        hit = footbridges.model_cover(xy, model)
+        self.assertTrue(hit[10:20].all())
+        self.assertFalse(hit[:4].any())
+        self.assertFalse(hit[-4:].any())
+        crossing = np.c_[np.full(31, 130.), np.arange(98., 159., 2.)]
+        self.assertFalse(footbridges.model_cover(crossing, model).any())
+        self.assertFalse(footbridges.model_cover(xy, []).any())
+        self.assertFalse(footbridges.model_cover(xy, [({**fp, 'pedestrian': False}, (0., 128.), 1)]).any())
+        mesh = railways._Mesh((0., 0., 0.))
+        footbridges.add(mesh, [('id', xy, 3.)], valley, [], (0., 0., 256., 256.),
+                        mesh.mat(railways.CONCRETE), [], model_bridges=model)
+        positions = mesh.result()[0]
+        self.assertTrue((positions[:, 0] < 110.).any())
+        self.assertTrue((positions[:, 0] > 150.).any())
+        self.assertFalse(((positions[:, 0] > 114.) & (positions[:, 0] < 146.)).any())
+
     def test_deck_rule(self):
         xy = np.c_[np.arange(0.0, 41.0, 2.0), np.zeros(21)]
         self.assertIsNotNone(footbridges.deck(xy, valley(xy + [110.0, 0.0]), []))

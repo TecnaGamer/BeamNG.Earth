@@ -1941,12 +1941,57 @@ class RotateBeforeCenterTest(unittest.TestCase):
         self.assertAlmostEqual(cy, 0.0, places=3)
 
 
+class FootprintCacheRaceTest(unittest.TestCase):
+    def test_held_cache_file_is_retried(self):
+        import staging
+        with tempfile.TemporaryDirectory() as directory:
+            replace = staging.replace
+            calls = []
+            def held_once(tmp, path):
+                calls.append(path)
+                if len(calls) == 1:
+                    raise PermissionError('temporarily held')
+                return replace(tmp, path)
+            with mock.patch.object(staging, 'REPLACE_WAITS', (0.,)), \
+                 mock.patch.object(staging, 'replace', side_effect=held_once):
+                result = threedmr.bridge_footprint(17, directory, lambda: (None, None, False))
+            self.assertEqual(result, {'bridge': False})
+            self.assertEqual(len(calls), 2)
+            cached = threedmr.bridge_footprint(17, directory, lambda: self.fail('cache not read'))
+            self.assertEqual(cached, result)
+
+
+class TimberFloorWindingTest(unittest.TestCase):
+    def test_exposed_timber_faces_up_but_closed_underside_stays_down(self):
+        p = np.array([[0.,0.,1.],[1.,0.,1.],[1.,1.,1.],[0.,1.,1.],
+                      [0.,0.,0.],[1.,0.,0.],[1.,1.,0.],[0.,1.,0.]])
+        t = np.array([[0,2,1],[0,3,2],[4,6,5],[4,7,6]])
+        normals = np.tile([0.,0.,-1.], (8,1))
+        tex = [(None,None,None,False,.5,True,'Jarrah timber')]
+        fixed, fixed_n, count = threedmr.bridge_timber_top(p,t,np.zeros(4,int),tex,normals)
+        z = np.cross(p[fixed[:,1]]-p[fixed[:,0]],p[fixed[:,2]]-p[fixed[:,0]])[:,2]
+        self.assertEqual(count, 2)
+        self.assertTrue(np.all(z[:2] > 0))
+        self.assertTrue(np.all(z[2:] < 0))
+        self.assertTrue(np.all(fixed_n[:4,2] > 0))
+        self.assertTrue(np.all(fixed_n[4:,2] < 0))
+        np.testing.assert_array_equal(normals[:,2], -np.ones(8))
+
+    def test_non_timber_material_is_untouched(self):
+        p = np.array([[0.,0.,1.],[1.,0.,1.],[0.,1.,1.]])
+        t = np.array([[0,2,1]])
+        tex = [(None,None,None,False,.5,True,'Painted steel')]
+        got, _, count = threedmr.bridge_timber_top(p,t,np.zeros(1,int),tex,None)
+        self.assertEqual(count, 0)
+        np.testing.assert_array_equal(got,t)
+
+
 class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_31(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 31)
+    def test_version_is_34(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 34)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (

@@ -83,6 +83,54 @@ class EntranceTest(unittest.TestCase):
         native=np.zeros(2)
         np.testing.assert_allclose(r.fit(xy,np.full(2,2.),terrain=True,native=native),native)
 
+    def test_already_connected_overhang_preserves_native_grading(self):
+        surf = {'ax': 0, 'u0': -100., 'du': 2., 'v0': -10., 'dv': 1., 'z': np.full((101, 21), 5.)}
+        xy = np.array([[-80., 0.], [80., 0.]])
+        a = grading.Plan(np.array([[-80., 0.], [-220., 0.]]), np.full(2, 5.), 5., abut=(True, False))
+        b = grading.Plan(np.array([[80., 0.], [220., 0.]]), np.full(2, 5.), 5., abut=(True, False))
+        a.rid, b.rid = 1, 2
+        ramps = bridgejoins.make_ramps(surf, [('x', SimpleNamespace(width=10.), xy, np.full(2, 5.), None)],
+                                       [a, b], lambda xy: np.full(len(xy), 5.))
+        self.assertEqual(ramps, [])
+
+    def test_crossing_deck_requires_conservative_clearance(self):
+        r = self.ramp()
+        lower = grading.Plan(np.array([[10., -30.], [10., 30.]]), np.zeros(2), 3.)
+        far = grading.Plan(np.array([[10., 50.], [10., 80.]]), np.zeros(2), 3.)
+        base = lambda xy: np.zeros(len(xy))
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 2.), 'unsafe')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [far], base, 2.), 'ground')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 5.), 'ground')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), 4.), 2.), 'ground')
+        r.z += 8.
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], base, 2.), 'elevated')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.where(xy[:, 1] > 0., 7., 0.), 2.), 'unsafe')
+        self.assertEqual(bridgejoins.approach_crossing_mode(r, [lower], lambda xy: np.full(len(xy), np.nan), 2.), 'unsafe')
+
+    def test_elevated_approach_preserves_lower_terrain_and_produces_deck(self):
+        import roads
+        r = self.ramp()
+        r.elevated = True
+        r.spec = roads.Spec(10., 'paved', False, 'motorway', oneway=True, lanes=3)
+        r.fid, r.lon = 'road', 115.
+        xy = np.array([[10., 0.], [20., 0.]])
+        np.testing.assert_array_equal(r.fit(xy, np.zeros(2), terrain=True), np.zeros(2))
+        class Frame:
+            def enu_to_geodetic(self, x, y, z): return x, y, z
+            def geodetic_to_enu(self, x, y, z): return x, y, z
+        f = Frame()
+        c = bridgejoins.Context(None, None, None)
+        with mock.patch.object(c, 'near', return_value=[(f, [r])]):
+            chunks = c.approach_chunks(f, (0., -20., 40., 20.))
+            deck = [ch for ch in chunks if ch.get('deck')]
+            self.assertEqual(len(deck), 1)
+            self.assertTrue(deck[0]['fixed'])
+            self.assertEqual(deck[0]['w'], 10.)
+            self.assertAlmostEqual(deck[0]['n'][0][2], r.z[0], places=3)
+            self.assertTrue(all(0. <= pt[0] <= 40. for pt in deck[0]['n']))
+            r.elevated = False
+            self.assertEqual(c.approach_chunks(f, (0., -20., 40., 20.)), [])
+
     def test_actual_model_edge_joins_a_connected_carriageway(self):
         surf = {'ax': 0, 'u0': -100., 'du': 2., 'v0': -10., 'dv': 1., 'z': np.full((101, 21), 5.)}
         xy = np.array([[-80., 0.], [80., 0.]])
