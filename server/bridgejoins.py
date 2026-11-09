@@ -77,6 +77,8 @@ class Ramp:
             out[near] = self.fit(xy[near], z[near], terrain, lift, core_only,
                                  None if native is None else np.asarray(native)[near])
             return out
+        if terrain and getattr(self, "elevated", False):
+            return z.copy()
         if terrain:
             out = z.copy() if core_only else grading.grade_points(xy[:, 0], xy[:, 1], z, self.pack, lift)
             _, _, d, s = nearest(self.xy, xy)
@@ -124,6 +126,33 @@ class Ramp:
         return out
 
 
+def approach_crossing_mode(ramp, crossings, base_z, mapped_z):
+    """Avoid placing a new deck over a crossing without conservative headroom.
+
+    Uncertain cases leave the approach untouched; this test samples the crossing
+    centerline and is deliberately not a guarantee of vehicle clearance.
+    """
+    import grading
+    if not np.isfinite(mapped_z) or abs(ramp.z[0] - mapped_z) <= 1.5:
+        return "ground"
+    gaps = []
+    for crossing in crossings:
+        dense, _ = grading.resample(np.asarray(crossing.xy, float), 4.)
+        _, _, distance, station = nearest(ramp.xy, dense)
+        near = distance <= ramp.half + crossing.road_half + 1.
+        if near.any():
+            heights = np.asarray(base_z(dense[near]), float)
+            clearance = np.interp(station[near], ramp.s, ramp.z) - heights
+            if not np.isfinite(clearance).all():
+                return "unsafe"
+            gaps.extend(clearance.tolist())
+    if not gaps or max(gaps) <= 2.5:
+        return "ground"
+    # The rendered deck is 0.35 m deep; leave at least six metres above
+    # sampled ground. A mixed-level overlap is ambiguous, so skip the ramp.
+    return "elevated" if min(gaps) >= 6.35 else "unsafe"
+
+
 def make_ramps(surf, parts, plans, base_z):
     """Match each motor carriageway to its actual model edge and connected ground-road plan."""
     import threedmr
@@ -162,6 +191,13 @@ def make_ramps(surf, parts, plans, base_z):
             edge = trace[edge_index]
             # Use the traced cross-section at this carriageway, not the median of both road decks/railway.
             h0 = surface_height(surf, [edge])[0]
+            mapped_z = float(part_z[0 if end == 0 else -1])
+            overhang = float((edge - p) @ direction)
+            # If the model already reaches beyond the mapped abutment at essentially
+            # the same elevation, keep the native ground-road grade. A long model-led
+            # terrain ramp here can create a bump on nearby lower carriageways.
+            if overhang >= 1. and np.isfinite(h0) and abs(h0 - mapped_z) <= .35:
+                continue
             ds = np.arange(6., 39., 4.)
             hh = surface_height(surf, edge - ds[:, None]*direction)
             ok = np.isfinite(hh)
@@ -242,6 +278,12 @@ def make_ramps(surf, parts, plans, base_z):
                 if cosine < .8 or pl.road_half < spec.width*.25:
                     protected.append(pl)
             ramp = Ramp(route, h0, slope0, base_z, spec.width/2., mapped_start, protected, (xy, part_z))
+            mode = approach_crossing_mode(ramp, protected, base_z, mapped_z)
+            if mode == "unsafe":
+                log.warning('model approach overlaps a crossing without verified clearance; leaving it unchanged')
+                continue
+            ramp.elevated = mode == "elevated"
+            ramp.spec, ramp.fid, ramp.lon = spec, _fid, _lon
             ramps.append(ramp)
     return ramps
 
@@ -371,6 +413,33 @@ class Context:
                 for ramp in ramps:
                     out = ramp.fit(xy, out, terrain=True, lift=height_offset, core_only=True,native=native)
         return out.reshape(shape)
+
+    def approach_chunks(self, frame, box, left_hand=False, country=None):
+        """Create deck chunks for approaches that must cross above another road."""
+        import roads, roadmarkings
+        cx, cy = (box[0]+box[2])/2, (box[1]+box[3])/2
+        lat, lon, _ = frame.enu_to_geodetic(cx, cy, 0.)
+        chunks = []
+        for model_frame, ramps in self.near(np.array([lat]), np.array([lon])):
+            for ramp in ramps:
+                if not ramp.elevated:
+                    continue
+                la, lo, _ = model_frame.enu_to_geodetic(ramp.xy[:,0], ramp.xy[:,1], np.zeros(len(ramp.xy)))
+                e, n, _ = frame.geodetic_to_enu(la, lo, np.zeros(len(la)))
+                z = ramp.z.copy()
+                # Sink the distant end slightly into the native pavement.
+                z -= .15*np.clip((ramp.s-(ramp.s[-1]-12.))/12., 0., 1.)
+                pts = np.c_[e,n,z]
+                lines = [({**roads._deck_look(ramp.spec), 'deck': True}, ramp.spec.width, pts)]
+                lines.extend((look,w,line) for look,w,line in roads.extras(ramp.spec,pts,ramp.lon,left_hand=left_hand,country=country)
+                             if look['m'] not in (roads.SIDEWALK['m'],roads.GUTTER['m'],roads.EDGE_DECAL['m']))
+                for look,w,line in lines:
+                    for piece in roads.clip_polyline(line,*box):
+                        if len(piece)<2: continue
+                        c=roads._chunk(look,w,piece); c['fixed']=True; c['fid']=str(ramp.fid)+'_model_approach'
+                        if look.get('deck'): c['deck']=True; c['dd']=.35
+                        chunks.append(c)
+        return roadmarkings.paint(chunks)
 
     def nodes(self, frame, nodes):
         a = np.asarray(nodes, float).copy()

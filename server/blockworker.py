@@ -1035,6 +1035,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         _n0 = len(chunks)
         chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks, getattr(g, 'model_joins', None), frame)
         ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx, getattr(g, 'model_joins', None), frame)
+        if getattr(g, "model_joins", None) is not None:
+            chunks += g.model_joins.approach_chunks(frame, box, left_hand=left_hand, country=country)
         if props is not None:
             props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
         log.info("3dmr: %d procedural bridge chunk(s) left out under model bridge(s) %s", _n0 - len(chunks),

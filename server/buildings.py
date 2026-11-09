@@ -3699,6 +3699,9 @@ def _model_mesh(c, cache_dir):
         if flipped:
             nrm = None
             log.info("3dmr model %s: corrected %d downward asphalt top triangle(s)", cid, flipped)
+        tris, nrm, flipped_timber = threedmr.bridge_timber_top(pos, tris, tri_materials, textures, nrm)
+        if flipped_timber:
+            log.info("3dmr model %s: corrected %d downward timber floor triangle(s)", cid, flipped_timber)
     latlon = c.get("latlon")
     if latlon is not None and len(pos):
         zmin, zmax = float(pos[:, 2].min()), float(pos[:, 2].max())
@@ -4173,7 +4176,12 @@ def bridge_footprints(frame, tx, ty, cache_dir):
             revisit.fault()
             continue
         if fp.get("bridge"):
-            out.append((fp, (mx, my), mid))
+            info = _bridge_info(c, cache_dir) or {}
+            categories = {str(x).strip().casefold() for x in (info.get("categories") or ())}
+            tags = info.get("tags") if isinstance(info.get("tags"), dict) else {}
+            foot_model = bool(categories & {"foot bridge", "footbridge", "pedestrian bridge"}) or str(
+                tags.get("highway", "")).casefold() in {"footway", "path", "pedestrian", "cycleway"}
+            out.append(({**fp, "pedestrian": foot_model}, (mx, my), mid))
     return out
 
 

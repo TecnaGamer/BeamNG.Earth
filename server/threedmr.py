@@ -56,7 +56,7 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 31  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 34  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
 # deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
 # and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
@@ -1515,9 +1515,11 @@ def bridge_footprint(model_id, cache_dir, mesh):
     called only when not cached). Every tile near the model reads the same answer (no race with the tile that
     bakes it, which is what the old bridge_boxes.json had: a neighbour built first kept its stub)."""
     path = os.path.join(cache_dir, "threedmr_cache", f"bridge_{model_id}_v{FEATURE_VERSION}.json")
-    try:
-        with open(path) as f:
+    def read_cached():
+        with open(path, encoding="utf-8") as f:
             return json.load(f)
+    try:
+        return staging.read_held(read_cached)
     except (OSError, ValueError):
         pass
     pos, tris, is_bridge = mesh()
@@ -1530,7 +1532,7 @@ def bridge_footprint(model_id, cache_dir, mesh):
     tmp = staging.tmp_for(path)
     with open(tmp, "w") as f:
         json.dump(fp, f)
-    staging.replace(tmp, path)
+    staging.replace_cached(tmp, path)
     return fp
 
 
@@ -1887,6 +1889,49 @@ def bridge_asphalt_top(positions, tris, tri_materials, textures):
     T = T.copy()
     T[flip] = T[flip][:, [0, 2, 1]]
     return T, int(flip.sum())
+
+
+def bridge_timber_top(positions, tris, tri_materials, textures, normals):
+    """Face exposed timber bridge floors upward without changing closed slab undersides."""
+    slots = [i for i, t in enumerate(textures) if len(t) > 6 and
+             any(word in str(t[6]).strip().casefold() for word in ('timber', 'wood'))]
+    T = np.asarray(tris, np.int64)
+    if not slots or not len(T):
+        return T, normals, 0
+    P = np.asarray(positions, np.float64)
+    selected = np.isin(tri_materials, slots)
+    used = np.unique(T[selected])
+    if not len(used):
+        return T, normals, 0
+    q = np.round(P[used, :2]*1000.).astype(np.int64)
+    _, inverse = np.unique(q, axis=0, return_inverse=True)
+    zmax = np.full(int(inverse.max())+1, -np.inf)
+    np.maximum.at(zmax, inverse, P[used, 2])
+    top = np.zeros(len(P), bool)
+    top[used] = P[used, 2] >= zmax[inverse]-.002
+    face = np.cross(P[T[:, 1]]-P[T[:, 0]], P[T[:, 2]]-P[T[:, 0]])
+    flat = face[:, 2] / np.maximum(np.linalg.norm(face, axis=1), 1e-12) < -.9
+    flip = selected & flat & top[T].all(1)
+    if not flip.any():
+        return T, normals, 0
+    changed = np.unique(T[flip])
+    shared = np.intersect1d(changed, np.unique(T[~flip]), assume_unique=True)
+    T = T.copy()
+    T[flip] = T[flip][:, [0, 2, 1]]
+    if normals is not None:
+        normals = np.asarray(normals, np.float64).copy()
+        exclusive = np.setdiff1d(changed, shared, assume_unique=True)
+        down = exclusive[normals[exclusive, 2] < 0]
+        normals[down] *= -1.
+        if len(shared):
+            face = np.cross(P[T[:, 1]]-P[T[:, 0]], P[T[:, 2]]-P[T[:, 0]])
+            summed = np.zeros_like(P)
+            for k in range(3):
+                np.add.at(summed, T[:, k], face)
+            length = np.linalg.norm(summed[shared], axis=1)
+            ok = length > 1e-12
+            normals[shared[ok]] = summed[shared[ok]] / length[ok, None]
+    return T, normals, int(flip.sum())
 
 
 # --- writing the shape, texture and material --------------------------------------------

@@ -128,7 +128,33 @@ def deck(xy, zg, crossers):
     return z
 
 
-def add(mesh, bridges, ground, crossers, ex, concrete, small):
+def model_cover(xy, model_bridges):
+    """Covered samples of a matching modeled footbridge, preserving unrelated crossing paths."""
+    import threedmr
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    covered = np.zeros(len(xy), dtype=bool)
+    if len(xy) < 2:
+        return covered
+    direction = xy[-1] - xy[0]
+    length = float(np.linalg.norm(direction))
+    if length < 1.:
+        return covered
+    for fp, centre, _mid in model_bridges or ():
+        # The footprint does not carry a vertical clearance. Only suppress a path
+        # that substantially follows the model; preserve transverse crossings.
+        if not fp.get('pedestrian') or abs(direction[fp['ax']]) / length < .7:
+            continue
+        hit = threedmr.under_footprint(fp, centre, xy, margin=0.)
+        if hit.sum() < 2:
+            continue
+        ds = np.linalg.norm(np.diff(xy, axis=0), axis=1)
+        overlap = float(ds[hit[:-1] & hit[1:]].sum())
+        if overlap >= min(12., length * .45):
+            covered |= hit
+    return covered
+
+
+def add(mesh, bridges, ground, crossers, ex, concrete, small, model_bridges=None):
     """The decks of bridges (parts') into railways' _Mesh mesh: the slab and its parapets over the points within ex (the
     tile's box with its overlap), the piers into small (railways.tile_mesh draws them with the sleepers, as room
     allows). ground(xy (n, 2)) -> z (one call for all of them)."""
@@ -152,7 +178,8 @@ def add(mesh, bridges, ground, crossers, ex, concrete, small):
         u = railways._left(xy)
         s = railways._arc(xy)
         half = w / 2.0
-        for i, j in railways._runs(~inside):
+        covered = model_cover(xy, model_bridges)
+        for i, j in railways._runs(~inside | covered):
             sl = slice(i, j + 1)
             p, uu, t, v = xy[sl], u[sl], z[sl], s[sl] / 3.0
             out_l = np.c_[uu, np.zeros(len(p))]

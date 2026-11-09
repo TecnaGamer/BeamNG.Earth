@@ -1540,7 +1540,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                 sp = _sleepers(s, xy, u, top, i, j, SLEEPERS_GONE[w])
                 if sp is not None:
                     small.append((sp, SLEEPER_W / 2, SLEEPER_L / 2, mesh.mat(SLEEPER_WORN[w])))
-    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
+    footbridges.add(mesh, walk, ground, crossers, ex, concrete, small, model_bridges=model_bridges)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
         room = (VERTS_MAX - mesh.nv) // 8

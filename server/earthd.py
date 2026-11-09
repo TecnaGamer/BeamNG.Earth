@@ -2562,6 +2562,9 @@ class Server:
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
             chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks, getattr(g, 'model_joins', None), anchor.frame)
             ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx, getattr(g, 'model_joins', None), anchor.frame)
+            if getattr(g, "model_joins", None) is not None:
+                chunks += g.model_joins.approach_chunks(anchor.frame, box, left_hand=self.left_hand(anchor),
+                                                         country=self.country(anchor))
             if props is not None:
                 props[:] = buildingsmod.bridge_stub_props(_bridge_fps, props)
 
