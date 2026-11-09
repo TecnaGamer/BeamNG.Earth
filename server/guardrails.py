@@ -556,7 +556,7 @@ def _along_road(a, b, rsegs):
     k = int(tied[np.argmin(np.abs(lateral[tied]))])
     unit = rsegs["unit"][k]
     other = aligned & (np.arange(len(dots)) != k)
-    median = False
+    median, gap = False, None
     if other.any():
         a2, u2, l2 = rsegs["a"][other], rsegs["unit"][other], rsegs["len"][other]
         t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
@@ -567,20 +567,47 @@ def _along_road(a, b, rsegs):
             t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
             n1 = rsegs["a"][k] + t1 * unit
             median = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+            if median:
+                # (the gap between the two carriageways' edges, from this one's line toward the other: its middle,
+                # or the middle of their overlap; a mapped median barrier inside either goes there, _shift_to_edge)
+                v2 = n2[j] - n1
+                sep = abs(float(v2[0] * unit[1] - v2[1] * unit[0]))
+                h1, h2 = float(rsegs["half"][k]), float(rsegs["half"][other][j])
+                gap = (h1, sep - h2, d2[j])
     return {"dot": float(dots[k]), "lat": float(lateral[k]), "half": float(rsegs["half"][k]),
             "origin": np.asarray(rsegs["a"][k], np.float64), "unit": np.asarray(unit, np.float64),
-            "median": median}
+            "median": median, "gap": gap}
 
 
 def _shift_to_edge(a, b, road):
-    """Move both ends of a side rail out to its carriageway edge. A centre barrier, a median, and a rail
-    already outside the edge stay where they were mapped."""
-    if road is None or road["median"]:
+    """Move both ends of a side rail out to its carriageway edge. A centre barrier, and a rail already outside the
+    edge stay where they were mapped; a median barrier too, unless it stands on either carriageway's lanes: then
+    it goes to the middle of the gap between their edges (the S7 at Gdansk: a mapped median's jersey barrier
+    1.2-1.6 m into the left lane, GitHub #1025)."""
+    if road is None:
         return a, b
+    if road["median"]:
+        return _to_gap(a, b, road["gap"], road["lat"], road["origin"], road["unit"])
     if abs(road["lat"]) <= LANE_CENTER_M or abs(road["lat"]) >= road["half"] - 0.05:
         return a, b
     target = math.copysign(road["half"] + RAIL_CLEAR_M, road["lat"])
-    origin, unit = road["origin"], road["unit"]
+    return _moved(a, b, target, road["origin"], road["unit"])
+
+
+def _to_gap(a, b, gap, lat, origin, unit):
+    """A median barrier (a, b) on either carriageway's lanes moved to the middle of the gap between their edges, or of
+    their overlap (gap: (this one's half width, the other's edge from this one's line, the barrier's distance past the
+    other's edge); lat: its signed offset from this one's line). One between them already stays."""
+    if gap is None:
+        return a, b
+    e1, e2, d_other = gap
+    if abs(lat) >= e1 - 0.05 and d_other >= -0.05:
+        return a, b
+    return _moved(a, b, math.copysign(0.5 * (e1 + e2), lat), origin, unit)
+
+
+def _moved(a, b, target, origin, unit):
+    """(a, b) moved across the line (origin, unit) to the signed offset target."""
     right = np.array([unit[1], -unit[0]], np.float64)
 
     def move(p):
@@ -620,7 +647,9 @@ def _relate(mid, segs, direction=None):
     deck = int(segs["idx"][k])
     dot = 1.0 if tangent is None else float(abs(segs["unit"][k] @ tangent))
     rel = {"past": float(past[k]), "lat": float(abs(lateral[k])), "half": float(segs["half"][k]),
-           "deck": deck, "median": False, "dot": dot}
+           "deck": deck, "median": False, "dot": dot, "gap": None,
+           "slat": float(lateral[k]), "origin": np.asarray(segs["a"][k], np.float64),
+           "unit": np.asarray(segs["unit"][k], np.float64)}
     other = (segs["idx"] != deck) & aligned
     if other.any():
         a2, u2, l2 = segs["a"][other], segs["unit"][other], segs["len"][other]
@@ -632,6 +661,11 @@ def _relate(mid, segs, direction=None):
             t1 = float(np.clip(along[k], 0.0, segs["len"][k]))
             n1 = segs["a"][k] + t1 * segs["unit"][k]
             rel["median"] = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+            if rel["median"]:               # (the gap between the decks' edges: _to_gap)
+                v2 = n2[j] - n1
+                u = segs["unit"][k]
+                sep = abs(float(v2[0] * u[1] - v2[1] * u[0]))
+                rel["gap"] = (float(segs["half"][k]), sep - float(segs["half"][other][j]), float(d2[j]))
     return rel
 
 
@@ -979,6 +1013,9 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                                 mode = "join"
                     if mode == "ground":
                         source_a, source_b = _shift_to_edge(source_a, source_b, road)
+                    elif mode == "median":                 # (off either deck's lanes, #1025)
+                        source_a, source_b = _to_gap(source_a, source_b, rel["gap"], rel["slat"], rel["origin"],
+                                                     rel["unit"])
                     if mode not in ("deck", "median") and _across_road(source_a, source_b, rsegs):
                         continue                               # across a road's lanes: no real rail stands there
                     # The span of a bridge is a deck, not a ground road, so a rail that cuts across it

@@ -265,33 +265,39 @@ class MedianGapTest(unittest.TestCase):
 
     def test_side_by_side_decks_have_their_gap(self):
         a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 10.0, 4.0, "b")
-        (gl, gr, _, _), _ = roadmesh._median_gaps([a, b])
+        (gl, gr, _, _, _, _), _ = roadmesh._median_gaps([a, b])
         np.testing.assert_allclose(gl[2:-2], 2.0)
         self.assertFalse(gr.any())
 
     def test_deck_going_on_is_no_median(self):
         a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(40, 80, 0.0, 4.0, "b")
-        for gl, gr, _, _ in roadmesh._median_gaps([a, b]):
+        for gl, gr, _, _, _, _ in roadmesh._median_gaps([a, b]):
             self.assertFalse(gl.any() or gr.any())
 
     def test_wider_deck_behind_a_merge_is_no_median(self):
         # two narrower decks ending side by side where a wider one goes on: its edges see their ends behind
         on = self.ribbon(0, 40, 0.0, 8.4, "on")
         left, right = self.ribbon(-40, 0, 4.4, 4.0, "l"), self.ribbon(-40, 0, -2.6, 5.8, "r")
-        (gl, gr, _, _), _, _ = roadmesh._median_gaps([on, left, right])
+        (gl, gr, _, _, _, _), _, _ = roadmesh._median_gaps([on, left, right])
         self.assertFalse(gl.any() or gr.any(), (gl, gr))
 
     def test_edge_over_another_deck_is_no_median(self):
         a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 6.0, 4.0, "b")    # overlapping by 2 m
-        for gl, gr, _, _ in roadmesh._median_gaps([a, b]):
+        for gl, gr, _, _, _, _ in roadmesh._median_gaps([a, b]):
             self.assertFalse(gl.any() or gr.any())
 
     def test_opposite_traffic_over_each_other_keeps_its_median(self):
         a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 7.0, 4.0, "b")    # overlapping by 1 m
         a[1]["tdir"], b[1]["tdir"] = 1, -1
-        (gl, _, ol, _), (_, gr, _, orr) = roadmesh._median_gaps([a, b])
+        (gl, _, ol, _, vl, _), (_, gr, _, orr, _, vr) = roadmesh._median_gaps([a, b])
         self.assertTrue(gl[2:-2].all() and ol[2:-2].all(), "a's left edge: the median toward b's traffic")
         self.assertTrue(gr[2:-2].all() and orr[2:-2].all())
+        # (their edges over each other's slab: the barrier in the middle of the 1 m overlap, 0.5 m within each edge,
+        # not at a's edge 1 m on b's lanes; GitHub #1025)
+        self.assertTrue(vl[2:-2].all() and vr[2:-2].all())
+        ext, _cov = roadmesh._opposite(gl, ol, *roadmesh._noses(gl), vl)
+        np.testing.assert_allclose(ext[2:-2], -0.5, atol=0.05)
+        self.assertTrue((roadmesh._reach(roadmesh.PARAPET_W, ext)[2:-2] < 0).all())
 
 
 class ParapetCoverTest(unittest.TestCase):
@@ -697,8 +703,8 @@ class BridgeProfilesTest(unittest.TestCase):
         gaps = roadmesh._median_gaps([rb1, rb2])
         self.assertEqual(len(gaps), 2)
         # rb1 right edge faces rb2 left edge (gap ~ 1.0m <= MEDIAN_BARRIER_M)
-        gl1, gr1, opp_l1, opp_r1 = gaps[0]
-        gl2, gr2, opp_l2, opp_r2 = gaps[1]
+        gl1, gr1, opp_l1, opp_r1, _, _ = gaps[0]
+        gl2, gr2, opp_l2, opp_r2, _, _ = gaps[1]
         self.assertTrue((gr1 > 0).any(), "deck 1 right median detected")
         self.assertTrue((gl2 > 0).any(), "deck 2 left median detected")
 

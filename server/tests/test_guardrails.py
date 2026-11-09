@@ -271,6 +271,17 @@ class GuardrailForestTest(unittest.TestCase):
             self.assertAlmostEqual(row[2], 0.0, delta=0.05)
             self.assertAlmostEqual(row[3], 20.0, delta=0.05)
 
+    def test_a_median_on_a_deck_s_lanes_goes_to_the_gap_between_the_decks(self):
+        """GitHub #1025: the S7's viaducts, a median barrier mapped where a drawn deck reaches over it, 1 m on its lanes:
+        moved to the middle of the gap between the decks' edges (y -2..2: 0), at deck height."""
+        decks = [{"n": [[0.0, -6.0, 20.0], [100.0, -6.0, 20.0]], "w": 8.0},
+                 {"n": [[0.0, 6.0, 20.0], [100.0, 6.0, 20.0]], "w": 8.0}]
+        rows = self.rows_for([[10.0, -3.0], [90.0, -3.0]], 12.0, decks)
+        self.assertTrue(rows)
+        for row in rows:
+            self.assertAlmostEqual(row[2], 0.0, delta=0.05)
+            self.assertAlmostEqual(row[3], 20.0, delta=0.05)
+
     def test_rail_hanging_beside_the_deck_is_dropped_but_a_fill_rail_stays(self):
         decks, parapets = self.deck_fixture()
         # 2.5 m past the edge with the ground 8 m under the deck: the bridge's own rail, mapped off the edge.
@@ -511,6 +522,22 @@ class GuardrailForestTest(unittest.TestCase):
                 self.assertTrue(beside)
                 for row in beside:
                     self.assertAlmostEqual(row[2], 8.0, delta=0.05)
+
+    def test_a_median_barrier_on_a_lane_goes_to_the_gap_between_the_carriageways(self):
+        """GitHub #1025 (the S7 at Gdansk): a jersey barrier mapped on the median line, the drawn carriageways reaching
+        over it, stood 1.2-1.6 m into a lane. It goes to the middle of the gap between their edges; one already in
+        the gap stays where it was mapped."""
+        # two 12 m carriageways 15 m apart: edges at y=6 and y=9, the gap's middle y=7.5
+        roads_ = [self.road([[0.0, 0.0], [100.0, 0.0]], width=12.0),
+                  self.road([[0.0, 15.0], [100.0, 15.0]], width=12.0)]
+        on_lane = self._on_road("jersey_barrier", [[10.0, 5.0], [90.0, 5.0]], roads_)
+        self.assertTrue(on_lane)
+        for row in on_lane:
+            self.assertAlmostEqual(row[2], 7.5, delta=0.05)
+        in_gap = self._on_road("jersey_barrier", [[10.0, 8.2], [90.0, 8.2]], roads_)
+        self.assertTrue(in_gap)
+        for row in in_gap:
+            self.assertAlmostEqual(row[2], 8.2, delta=0.05)
 
     def test_a_skewed_lower_road_rail_stays_on_the_ground(self):
         """A lower road 23° off a deck still clears the deck's parallel test (Drie Merenweg under the
