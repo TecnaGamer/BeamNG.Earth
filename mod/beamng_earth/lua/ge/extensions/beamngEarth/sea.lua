@@ -4,7 +4,6 @@
 -- under the sea. A WaterBlock's surface is at its position (the engine caps its volume at the box's
 -- centre), its volume DEPTH_M / 2 below.
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 local waterguard = require('beamngEarth/waterguard')
 M.GUARD_VERSION = 1
 
@@ -475,7 +474,7 @@ function M.update(anchorId, player)
       M.nudges = M.nudges + 1
     end
   end
-  cullRivers(wallnow())
+  cullRivers(os.clock())
 end
 
 -- Origin rebase (core.lua finishRebase): the water moves into the new frame now instead of going until the server's

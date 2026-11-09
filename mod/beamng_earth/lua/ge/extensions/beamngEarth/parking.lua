@@ -11,7 +11,6 @@
 -- A new anchor clears them all (another frame); after a teleport the cars are scattered onto the new spots
 -- once there are enough near the player (a rebase moves every vehicle with the world: nothing to do).
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 local stopwatch = require('beamngEarth/stopwatch')
 
 M.REBUILD_S = 2.0
@@ -41,7 +40,7 @@ local spots = {}        -- tile key -> { anchor, rows }
 local objs = {}         -- position key -> parking spot object (current anchor)
 local anchorId = nil
 local dirty = false
-local lastBuild = -math.huge   -- wallnow() of the last rebuild
+local lastBuild = -math.huge   -- os.clock() of the last rebuild
 local sites = nil
 local box = nil          -- the block's ground box {x0, y0, x1, y1} the sites were built for
 local lastGuard = -math.huge
@@ -243,7 +242,7 @@ local function hookSetup()
   local orig = gp.setupVehicles
   gp.setupVehicles = function(...)
     if M.enabled and lastPlayer and next(spots) and (dirty or not sites) then
-      lastBuild, dirty = wallnow(), false
+      lastBuild, dirty = os.clock(), false
       local ok, err = pcall(rebuild, lastPlayer)
       if not ok then log('W', 'beamngEarth', 'parking: ' .. tostring(err)) end
     end
@@ -269,8 +268,8 @@ function M.update(aid, player, blk, gov)
     box = { blk[1], blk[2], blk[3], blk[4] }
     dirty = true
   end
-  if player and wallnow() - lastGuard >= M.GUARD_S then
-    lastGuard = wallnow()
+  if player and os.clock() - lastGuard >= M.GUARD_S then
+    lastGuard = os.clock()
     local okG, errG = pcall(guard, player)
     if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(errG)) end
   end
@@ -282,7 +281,7 @@ function M.update(aid, player, blk, gov)
   -- stock setupVehicles) rebuilds them first (hookSetup)
   local gpOn = gameplay_parking and gameplay_parking.getState and gameplay_parking.getState()
   local off = not gpOn and (started or not require('beamngEarth/navgraph').choice.parked)
-  local t = wallnow()
+  local t = os.clock()
   if t - lastBuild < (off and M.REBUILD_OFF_S or M.REBUILD_S) then return end
   if gov and gov.roomFor and waited < M.REBUILD_WAIT_FRAMES and not gov:roomFor(M.REBUILD_ROOM_MS) then
     waited = waited + 1

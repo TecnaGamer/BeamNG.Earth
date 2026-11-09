@@ -14,7 +14,6 @@
 -- Not the player's car (PLAYER = false): the autodrive's AI drives a given path (gps.lua, ai.driveUsingPath), whose plan
 -- the shift is not clamped to the carriageway in: in the same test it ran 10 m left of its lane into the median.
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.enabled = true
 M.PLAYER = false
@@ -33,9 +32,9 @@ M.PAST_M = 15
 M.COOLDOWN_S = 8
 M.GIVE_UP_S = 25
 
-local held = {}         -- car id -> wallnow() it started being held
+local held = {}         -- car id -> os.clock() it started being held
 local passing = {}      -- car id -> { lead, at }: passing it
-local lastPass = {}     -- car id -> wallnow() of its last pass
+local lastPass = {}     -- car id -> os.clock() of its last pass
 local lastScan = -math.huge
 local stats = { passes = 0 }
 

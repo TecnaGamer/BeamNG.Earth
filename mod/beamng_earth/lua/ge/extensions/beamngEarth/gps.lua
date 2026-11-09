@@ -9,7 +9,6 @@
 -- destination through the graph node nearest it. Arrived (M.arrived: at the planned route's end, else within ARRIVE_M):
 -- cleared.
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.CHECK_S = 1.0
 M.ARRIVE_M = 40         -- this close (horizontally): arrived
@@ -81,7 +80,7 @@ local stuckTries = 0     -- AUTO_NOPROGRESS_S spells in a row without progress
 local recoverAhead       -- (below)
 local paused = false    -- the AI holds the car (world server away)
 local vehGraph = {}     -- vehicle id -> the game's map buildSerial when its mapmgr last took the graph
-local pathWait = nil    -- wallnow() since a path waits for the car to have the graph it was planned on
+local pathWait = nil    -- os.clock() since a path waits for the car to have the graph it was planned on
 local targetS = nil     -- the route distance of the arrows' target
 local downloadProgress = nil   -- { total, done, active } | nil: the route's corridor prefetch (server routeahead.py)
 
@@ -224,7 +223,7 @@ local function requestRoute(player)
   local d = veh and veh.getDirectionVector and veh:getDirectionVector()
   local b = d and M.compass(d.x, d.y)
   if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b) then
-    pendingId, lastRequest = nextId, wallnow()
+    pendingId, lastRequest = nextId, os.clock()
   end
 end
 
@@ -474,7 +473,7 @@ function M.trace(kind, ids, nodes, p)
     local n = nodes and nodes[ids[i]]
     parts[i] = n and string.format('%s(%.0f,%.0f)', tostring(ids[i]), n.pos.x, n.pos.y) or tostring(ids[i]) .. '(?)'
   end
-  log('I', 'beamngEarth', string.format('gps %s at (%.0f,%.0f) t=%.1f: %d nodes %s', kind, p.x, p.y, wallnow(), #ids,
+  log('I', 'beamngEarth', string.format('gps %s at (%.0f,%.0f) t=%.1f: %d nodes %s', kind, p.x, p.y, os.clock(), #ids,
     table.concat(parts, ' ')))
 end
 
@@ -500,7 +499,7 @@ local function driveArrowsPath(gm, nodes)
   local veh = playerVeh()
   if not veh or not gm.routePlanner then return end
   if not M.vehicleHasGraph(veh) then
-    local now = wallnow()
+    local now = os.clock()
     if not pathWait then
       pathWait = now
       veh:queueLuaCommand('mapmgr.requestMap()')     -- (answered only when its copy is out of date)
@@ -724,7 +723,7 @@ end
 -- Every frame (anchor: the current geodesy anchor; player: {x, y, lat, lon}): the route kept to the destination.
 function M.update(anchor, player)
   if not dest or not anchor or not player then return end
-  local now = wallnow()
+  local now = os.clock()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
   -- the planned route: asked once (and on re-routes), taken when it arrives

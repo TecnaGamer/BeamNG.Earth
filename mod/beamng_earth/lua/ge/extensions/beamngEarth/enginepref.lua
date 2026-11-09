@@ -7,7 +7,6 @@
 -- 'game'. (TSStatic forceDetail is a no-op in 0.39: this is the engine's only knob.) Checked every CHECK_S: the game's
 -- graphics settings put theirs back when the player applies them.
 local M = {}
-local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.PREF = '$pref::TS::detailAdjust'
 M.LEVELS = { low = 0.75, normal = 1.0, high = 1.5, ultra = 2.0, extreme = 3.0 }
@@ -30,7 +29,7 @@ end
 
 -- Our value in our level (every CHECK_S, and at once after setLevel); the player's elsewhere.
 function M.update(inOurLevel, force)
-  local t = wallnow()
+  local t = os.clock()
   if not force and t - lastCheck < M.CHECK_S then return end
   lastCheck = t
   local want = M.valueFor(M.level)
