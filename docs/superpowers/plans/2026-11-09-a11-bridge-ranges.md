@@ -51,5 +51,7 @@
 
 - [x] Bump affected cache formats and update format fixture through the repository's existing workflow.
 - [x] Probe the saved A11 data: no artificial 7.5 m dip; approaches continuous; lower road retains clearance; compare neighboring cells.
-- [ ] Run the server suite and required repository checks, recording any baseline/environment failures.
-- [ ] Obtain one independent review, address material findings with regression tests, and leave the completed branch in its worktree.
+- [x] Run the server suite and required repository checks, recording any baseline/environment failures.
+- [x] Obtain one independent review, address material findings with regression tests, and leave the completed branch in its worktree.
+
+Validation results and baseline failures: [A11 bridge range report](../../research/2026-11-09-a11-bridge-ranges.md).
