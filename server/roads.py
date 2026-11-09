@@ -484,8 +484,8 @@ def _facts_load(feats, kind, extra):
 # (bakepack.py), in place of the code hash; the plans' key holds it too (plancache.plans_format). Bump it whenever a
 # change makes other facts (level ranges, specs, lane flow, grade separations or their inputs' rules), or players keep
 # the old ones; tests/test_bake_formats.py fails until it is bumped.
-FACTS_FORMAT = 9      # 9: skew bridge ranges use bridge-local crossing roads and upper width across cell copies (#909)
-                     # 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
+FACTS_FORMAT = 10     # 10: skew bridge ranges use bridge-local crossing roads and upper width across cell copies (#909, #1013)
+                      # 9: underpasses: a tunnel's portal kept where its own approach road joins it (_tunnel_reach, the I-280 underpass at Millbrae), a road's home cell takes the grade separations every cell it crosses found for it (_gradesep_elsewhere: CA-1's bridge over Wilder Tunnel); 8: bridge parts retain mapped local level transitions (PR #873), a segment's tunnel ranges joined only over a gap inside one source way (PR #927, was: any gap under 30 m); 7: PR #843 (restored highway shoulders, regional merge marking profiles: Spec.state); 6: busways (PR #836) and walkway spans (PR #842) in the cells; 5: PR #505's Spec.france (French road scenery flag); 4: pass roads with a mapped or default two-lane count stay mountain roads (the Stelvio); 3: PR #471 lane counts (validated highway counts, two-lane highway default) and #686 (Swedish dual carriageways, 2.75 m lanes); 2: OSM's own surface first, "unpaved" on car roads gravel, regional gravel for untagged minor roads
 
 
 def _facts_baked(feats, kind, extra):
@@ -927,17 +927,30 @@ def _tunnel_reach(feats, i, rngs):
     pad = (TUNNEL_PORTAL_REACH_M + TUNNEL_PORTAL_GROW_M + 1.0) / np.array([kx, ky])
     boxes = _feature_boxes(feats)
     near = np.zeros(len(boxes), bool)
+    ports = []                      # (the portals in m from ring[0])
     for n in tun:                   # (the roads near the portals only)
         for f in rngs[n][:2]:
-            p = (np.array([np.interp(f * L, sm, m[:, 0]), np.interp(f * L, sm, m[:, 1])]) / [kx, ky]) + ring[0]
+            pm = np.array([np.interp(f * L, sm, m[:, 0]), np.interp(f * L, sm, m[:, 1])])
+            ports.append(pm)
+            p = pm / [kx, ky] + ring[0]
             near |= ((boxes[:, 0] <= p[0] + pad[0]) & (boxes[:, 2] >= p[0] - pad[0]) & (boxes[:, 1] <= p[1] + pad[1]) &
                      (boxes[:, 3] >= p[1] - pad[1]))
+    ports = np.asarray(ports, np.float64).reshape(-1, 2)
     gl, hw = [], []
     for j in np.flatnonzero(near):
         if j == i or specs[j] is None:
             continue
         for g in _raw_ground_parts(feats, j):
-            gl.append((np.asarray(g, np.float64)[:, :2] - ring[0]) * [kx, ky])
+            g = (np.asarray(g, np.float64)[:, :2] - ring[0]) * [kx, ky]
+            # a road ending at a portal is the tunnel road's own approach going on (a junction there), neither a road
+            # crossing over the portal nor one running alongside it: the kernel's shrink took it for the latter and
+            # moved the portal of an underpass under I-280 (37.6002, -122.4240) 5 m in, up onto the embankment; with
+            # the cover over its floor line under TUNNEL_OPEN_COVER the underpass was graded as an open road, a trench
+            # up to 3.5 m deep across both carriageways (2026-11-09)
+            if len(ports) and np.min(np.hypot(*(ports[:, None, :] - g[[0, -1]][None, :, :]).transpose(2, 0, 1))) \
+                    < TUNNEL_PORTAL_END_M:
+                continue
+            gl.append(g)
             hw.append(specs[j].width / 2)
     if not gl:
         return rngs
@@ -1321,7 +1334,8 @@ def _level_ranges(feats, i):
     roads and its neighbours'), where no range of the map's is, and its underpasses' tunnel ranges made ground."""
     out = tag_level_ranges(feats, i)
     hook = feats.__dict__.get("_bnge_gradesep")
-    extra = hook(feats).get(i) if hook is not None else None
+    extra = list(hook(feats).get(i) or ()) if hook is not None else []
+    extra += _gradesep_elsewhere(feats, i)
     if not extra:
         return out
     for a, b, _k in (r for r in extra if r[2] == "ground"):       # (an underpass: its tunnel range is ground)
@@ -1354,6 +1368,51 @@ def _level_ranges(feats, i):
         else:
             merged.append((a, b, k))
     return merged
+
+
+def _gradesep_elsewhere(feats, i):
+    """The grade separations (gradesep) the other cells feature i crosses found for it, when this cell is its home
+    (home_copy: every copy of it takes its ranges from here). A cell finds those of the crossings in it, and in the
+    default mode (gradesep.TUNNELS) one with no short tunnel of its own looks for none: CA-1's 952 m segment by Wilder
+    Tunnel (36.9621, -122.0845) is at home in the cell east of the tunnel's, which never found the bridge over it,
+    while the tunnel's cell made the tunnel ground; the path under the highway was graded through its embankment, a
+    trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell."""
+    me = feats.__dict__.get("_bnge_cell")
+    near_hook = feats.__dict__.get("_bnge_neighbours")
+    if me is None or near_hook is None or _home_cell(feats, i) != me[0]:
+        return []
+    import mapcells
+    lon0, lat0, lon1, lat1 = (float(v) for v in _feature_boxes(feats)[i])
+    if not np.isfinite([lon0, lat0, lon1, lat1]).all():
+        return []
+    try:
+        cells = {str(k) for k in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)} - {me[0]}
+    except ValueError:                  # (a feature over thousands of cells: its neighbours' all the same)
+        cells = None
+    if cells is not None and not cells:
+        return []
+    import revisit
+    try:
+        near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
+    except Exception as e:              # (not kept: made again with them)
+        log.debug("gradesep elsewhere: neighbours: %s: %s", type(e).__name__, e)
+        revisit.fault()
+        return []
+    fid = feats.ids[i]
+    out = []
+    for other in near:
+        if cells is not None and other.__dict__["_bnge_cell"][0] not in cells:
+            continue
+        hook = other.__dict__.get("_bnge_gradesep")
+        if hook is None:
+            continue
+        pos = other.__dict__.get("_id_pos")
+        if pos is None:
+            pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
+        j = pos.get(fid)
+        if j is not None:
+            out.extend(hook(other).get(j) or ())
+    return out
 
 
 def tag_level_ranges(feats, i):
