@@ -1302,27 +1302,37 @@ def _level_ranges(feats, i):
     return merged
 
 
+def _cell_bounds(feats):
+    """(lon0, lat0, lon1, lat1) of the cell feats belong to (its _bnge_cell), kept on it; None without one."""
+    got = feats.__dict__.get("_bnge_cell_bounds")
+    if got is None:
+        me = feats.__dict__.get("_bnge_cell")
+        if me is None:
+            return None
+        import mapcells
+        got = feats.__dict__["_bnge_cell_bounds"] = mapcells.CellKey(*(int(v) for v in str(me[0]).split("/"))).bounds()
+    return got
+
+
 def _gradesep_elsewhere(feats, i):
     """The grade separations (gradesep) the other cells feature i crosses found for it, when this cell is its home
     (home_copy: every copy of it takes its ranges from here). A cell finds those of the crossings in it, and in the
     default mode (gradesep.TUNNELS) one with no short tunnel of its own looks for none: CA-1's 952 m segment by Wilder
     Tunnel (36.9621, -122.0845) is at home in the cell east of the tunnel's, which never found the bridge over it,
     while the tunnel's cell made the tunnel ground; the path under the highway was graded through its embankment, a
-    trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell."""
+    trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell. (The cells it crosses are
+    the neighbours whose bounds its box overlaps, and every feature's home cell is made at once: mapcells.cells_for_bbox
+    and _home_cell per feature were 2.4 of its 3.2 own CPU-s in a cold Queens tile, 2026-11-09.)"""
     me = feats.__dict__.get("_bnge_cell")
     near_hook = feats.__dict__.get("_bnge_neighbours")
-    if me is None or near_hook is None or _home_cell(feats, i) != me[0]:
+    if me is None or near_hook is None or _home_cells(feats)[i] != me[0]:
         return []
-    import mapcells
     lon0, lat0, lon1, lat1 = (float(v) for v in _feature_boxes(feats)[i])
     if not np.isfinite([lon0, lat0, lon1, lat1]).all():
         return []
-    try:
-        cells = {str(k) for k in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)} - {me[0]}
-    except ValueError:                  # (a feature over thousands of cells: its neighbours' all the same)
-        cells = None
-    if cells is not None and not cells:
-        return []
+    cb = _cell_bounds(feats)
+    if cb is not None and cb[0] <= lon0 and lon1 <= cb[2] and cb[1] <= lat0 and lat1 <= cb[3]:
+        return []                       # (it stays in this cell)
     import revisit
     try:
         near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
@@ -1333,8 +1343,11 @@ def _gradesep_elsewhere(feats, i):
     fid = feats.ids[i]
     out = []
     for other in near:
-        if cells is not None and other.__dict__["_bnge_cell"][0] not in cells:
+        if other.__dict__["_bnge_cell"][0] == me[0]:
             continue
+        ob = _cell_bounds(other)
+        if ob is not None and (lon1 < ob[0] or lon0 > ob[2] or lat1 < ob[1] or lat0 > ob[3]):
+            continue                    # (it does not reach that cell)
         hook = other.__dict__.get("_bnge_gradesep")
         if hook is None:
             continue
