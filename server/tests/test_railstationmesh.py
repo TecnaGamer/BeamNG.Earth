@@ -18,6 +18,14 @@ BIG = (-2000.0, -2000.0, 2000.0, 2000.0)
 FLAT = bm.DrawnGround(lambda xy: np.full(len(xy), 100.0))
 
 
+def no_links(st):
+    """The station without its footbridges / underpasses (the platforms alone)."""
+    import copy
+    st = copy.copy(st)
+    st.links = []
+    return st
+
+
 def tops(m, mat_name):
     V, T, UV, mats, idx = m
     k = mats.index(mat_name)
@@ -27,7 +35,7 @@ def tops(m, mat_name):
 class PlatformMeshTest(unittest.TestCase):
     def test_top_stands_the_norm_over_the_rail_head(self):
         for name, country in (("vinnytsia", "UA"), ("hk_hln", "CZ"), ("passau", "DE")):
-            st = stations_of(name)[0]
+            st = no_links(stations_of(name)[0])
             st.country = country
             m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
             self.assertIsNotNone(m, name)
@@ -85,7 +93,7 @@ class PlatformMeshTest(unittest.TestCase):
         self.assertEqual(n, len(whole[1]))
 
     def test_collision_boxes_cover_the_slabs(self):
-        st = stations_of("hk_hln")[0]
+        st = no_links(stations_of("hk_hln")[0])
         st.country = "CZ"
         got, boxes = rm.collision(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
         self.assertIsNotNone(got)
@@ -102,7 +110,10 @@ class PlatformMeshTest(unittest.TestCase):
         t = time.time()
         m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
         self.assertLess(time.time() - t, 25.0)
-        self.assertLess(len(m[0]), 60000)             # (one shape's indices)
+        for x in range(-1000, 1000, 250):             # (a road tile's share: one shape's 16-bit indices)
+            for y in range(-1000, 1000, 250):
+                q = rm.mesh(None, (x, y, x + 250, y + 250), [st], FLAT, (0.0, 0.0, 0.0))
+                self.assertLess(0 if q is None else len(q[0]), 60000)
 
 
 def bs_dist(xy, p):
