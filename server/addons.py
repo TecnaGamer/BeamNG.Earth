@@ -9,7 +9,7 @@ from its author's GitHub releases. Per entry: id, name, author, repo, kind, summ
 the release file), and for kind "beamng-mod" the mod's zip name in the game's mods folder (modFile), older names it
 replaces (oldFiles) and its UI apps (uiApps, a hint for the player). trust: "latest" (any release of the author's) or
 "reviewed" (only the files listed in reviewed [{tag, sha256}]); a reviewed file shows a badge either way. A copy on
-the BeamNG.Earth-data Pages site (REGISTRY_URL, off until it exists) can replace the bundled one without a release.
+the BeamNG.Earth-data repo (REGISTRY_URL) replaces the bundled one without a release.
 
 GitHub (api.github.com, 60 requests an hour per address without a token): an add-on's releases (RELEASES_N, one
 request) when the page lists the add-ons, its README (one more) when the player opens it; each kept on disk
@@ -71,7 +71,11 @@ import netfetch
 log = logging.getLogger("addons")
 
 REGISTRY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "addons.json")
-REGISTRY_URL = ""           # the BeamNG.Earth-data Pages copy, once it is published there ("" = the bundled one only)
+# the online copy (the user, 2026-11-09, after cancelling the 1.9.0 build to add an add-on: add-ons added and removed
+# without a release): a plain file in the BeamNG.Earth-data repo (its Pages site is rebuilt only by the weekly data
+# workflow), read through raw.githubusercontent.com (netfetch keeps it up to 6 h, GitHubCache TTL_S on top); the
+# bundled list when it can't be read ("" = the bundled one only)
+REGISTRY_URL = "https://raw.githubusercontent.com/TecnaGamer/BeamNG.Earth-data/main/addons.json"
 REGISTRY_FORMAT = 1
 KINDS = ("beamng-mod", "companion", "link")
 API = "https://api.github.com/repos/"
@@ -643,11 +647,13 @@ class Addons:
             return
         try:
             body, _, _ = self.github.get(REGISTRY_URL, accept="application/json", fresh=fresh)
-            got = parse_registry(json.loads(body))
+            doc = json.loads(body)
+            got = parse_registry(doc)
         except (AddonError, ValueError) as e:
             log.info("add-ons: the registry on %s: %s; the bundled one stays", REGISTRY_URL, e)
             return
-        if got:
+        # (an empty list is an answer: every add-on taken off; entries that are all invalid are not, a newer format's)
+        if got or not doc["addons"]:
             self.bundled = got
 
     def cards(self, fresh=False):

@@ -36,8 +36,11 @@ addons.lua (the mod)  --- addons_list / addon_detail / addon_install / addon_app
 ### The registry
 
 `server/data/addons.json`, bundled with the app (format 1). Only its repos can be installed: there is no "paste any
-URL". `addons.REGISTRY_URL` can point at a copy on the BeamNG.Earth-data Pages site, which then replaces the bundled
-one when it is valid (off until that copy exists). Per add-on:
+URL". Since 1.9.0 the list players see is the online copy, `addons.json` in the BeamNG.Earth-data repo
+(`addons.REGISTRY_URL`, read through raw.githubusercontent.com), so add-ons are added and taken off without a release;
+an edit there reaches players within a few hours. The bundled list stands in when the online one can't be read or has
+no valid entry (an empty `addons` list takes every add-on off). Treat an edit there like a release: only repos whose
+authors agreed and whose files were checked. Per add-on:
 
 | field | meaning |
 |---|---|
@@ -240,7 +243,7 @@ server.
   the checks.
 - Phase 0 (API v1): `beamngEarth_api` and the companion feed implemented with tests; the proposals above to send.
 - Phase 3: companions (Live GPS) started and stopped from the page once it ships a packaged program; `link` add-ons.
-- Phase 4: `beamng-earth-addon.json` manifests in the add-ons' repos; the registry on the BeamNG.Earth-data Pages site.
+- Phase 4: `beamng-earth-addon.json` manifests in the add-ons' repos; the registry online in the BeamNG.Earth-data repo (done in 1.9.0).
 
 ## Changes apply without restarting the game
 

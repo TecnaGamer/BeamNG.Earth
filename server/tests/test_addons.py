@@ -111,8 +111,15 @@ def md(text, base, fold=False):
     return fast.md_html(text, base, fold)
 
 
+REAL_REGISTRY_URL = addons.REGISTRY_URL      # (Base turns it off for every test)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        # (no online list unless a test sets one: REGISTRY_URL points at the real data repo)
+        p = mock.patch.object(addons, "REGISTRY_URL", "")
+        p.start()
+        self.addCleanup(p.stop)
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get("BNGE_TEST_TMP") or None)
         self.user = os.path.join(self.tmp.name, "user")
         self.cache = os.path.join(self.tmp.name, "cache")
@@ -385,6 +392,23 @@ class RegistryUrlTest(Base):
         b = self.make({r"pages\.example": [(200, {}, b"{broken", 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
         with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
             self.assertEqual([c["id"] for c in b.cards()], ["some-mod"], "a broken copy: the bundled one stays")
+
+    def test_an_empty_online_list_takes_every_addon_off(self):
+        empty = {"format": 1, "addons": []}
+        a = self.make({r"pages\.example": [(200, {}, json.dumps(empty).encode(), 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
+        with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
+            self.assertEqual(a.cards(), [], "an empty list is an answer")
+
+    def test_all_invalid_entries_keep_the_bundled_list(self):
+        bad = {"format": 1, "addons": [{"id": "x", "futureField": True}]}
+        a = self.make({r"pages\.example": [(200, {}, json.dumps(bad).encode(), 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
+        with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
+            self.assertEqual([c["id"] for c in a.cards()], ["some-mod"], "nothing valid in it: the bundled one stays")
+
+    def test_the_online_copy_is_on_an_allowed_host(self):
+        import urllib.parse
+        host = urllib.parse.urlparse(REAL_REGISTRY_URL).hostname
+        self.assertIn(host, nf.POLICIES, "netfetch has a policy for the online list's host")
 
 
 class NetfetchNotModifiedTest(unittest.TestCase):
