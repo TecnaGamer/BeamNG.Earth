@@ -106,6 +106,7 @@ import urgency as urgencymod  # noqa: E402
 import placepreview as placepreviewmod  # noqa: E402
 import placenames as placenamesmod  # noqa: E402
 import maplabels as maplabelsmod  # noqa: E402
+import places as placesmod  # noqa: E402
 import runtimeprofiler
 import streamleases
 import pools as poolsmod  # noqa: E402
@@ -362,6 +363,9 @@ PLACE_PREVIEWS_MAX = 100     # place pictures made per request (a long list: the
 # the status bar's place names of a region not on disk yet (where(), placenames.py): fetched as a background job,
 # asked again this often while Overture's hosts are busy with the world's downloads, this many times at most
 WHERE_PLACE_RETRY_S, WHERE_PLACE_TRIES = 5.0, 60
+# the modding API's places (Connection.places): incomplete requests waiting for their cells at a time, and how long
+# each waits (tries x WHERE_PLACE_RETRY_S: 2 min, then its last answer says it is still incomplete)
+PLACES_FOLLOWUPS, PLACES_TRIES = 4, 24
 
 HM_CACHE = 16               # heightmaps kept beyond the protected ones (6 before 2026-10-30: a fast player's prefetched
                             # chain (PREFETCH_CHAIN) was evicted before the mod asked for it and built again)
@@ -1057,6 +1061,9 @@ class Server:
         self.search_pool = ThreadPoolExecutor(4, thread_name_prefix="map-search")
         # the status bar's place names (placenames.py): a thread of their own, a region's first fetch takes seconds
         self.place_pool = ThreadPoolExecutor(1, thread_name_prefix="place-names")
+        # the modding API's places (places.py): their own thread, so an add-on asking often never holds up the status
+        # bar's names or the 3D map's labels on place_pool
+        self.api_pool = ThreadPoolExecutor(1, thread_name_prefix="api-places")
         self._place_names_lock = threading.Lock()
         # (a thread per helper slot too: a far thread waits for its tile's builder, here or on a helper)
         self.cache_dir = cache_dir
@@ -6015,6 +6022,102 @@ class Connection:
             if not complete:
                 await asyncio.sleep(WHERE_PLACE_RETRY_S)
 
+    def _place_rows(self, req, fetch):
+        """places.py's rows for an API request (worker thread): (places keyed, buildings, complete). Without fetch only
+        the cells on disk; complete is False when some were missing (fetch=True then asks for them as background jobs,
+        as _map_label_rows does)."""
+        md = self.s.mapdata
+        lat, lon = req["lat"], req["lon"]
+        complete = True
+        layers = (("places", req["radius"]),)
+        if req["buildings"]:
+            layers += (("buildings", min(req["radius"], placesmod.BUILDINGS_RADIUS_MAX_M)),)
+        got = {}
+        for layer, r in layers:
+            cells = []
+            for k in placesmod.near_cells(lat, lon, r):
+                if md.has(k, layer) or fetch:
+                    try:
+                        cells.append(md.cell(k, layers=(layer,), kind="background").layers.get(layer))
+                    except mapdatamod.DEFERRED:
+                        complete = False
+                else:
+                    complete = False
+            got[layer] = cells
+        keyed = placesmod.place_rows(got["places"], lat, lon, req["radius"], placesmod.matcher(req["categories"]),
+                                     req["min_conf"])
+        blds = placesmod.building_rows(got["buildings"], lat, lon, req["radius"]) if req["buildings"] else None
+        return keyed, blds, complete
+
+    async def places(self, msg):
+        """The modding API's places {"id", "lat", "lon", "radius", "categories", "limit", "cursor", "buildings",
+        "minConfidence"} -> places_result {"id", "places", "buildings", "complete", "pending", "next", "error"}
+        (places.py; api.places in the mod). The cells on disk answer at once; when some are missing they are fetched
+        as background jobs (never ahead of the world's own downloads) and one more answer follows once they came
+        (or after PLACES_TRIES, still incomplete); "pending" says whether another answer is still to come. Its own
+        count of follow-ups, never _map_labels_seq (an add-on's request must not cancel the map's labels, nor the
+        other way round), and no request cancels another's (two add-ons may ask at once); at most PLACES_FOLLOWUPS
+        at a time, past them an incomplete answer is the last."""
+        rid = msg.get("id")
+        req, why = placesmod.request(msg)
+        if req is None:
+            self.send({"type": "places_result", "id": rid, "places": [], "complete": False, "pending": False,
+                       "error": why})
+            return
+        if self.s.mapdata is None:
+            self.send({"type": "places_result", "id": rid, "places": [], "complete": False, "pending": False,
+                       "error": "no map data (BeamNG.Earth's roads are off)"})
+            return
+        loop = asyncio.get_running_loop()
+        pool = self.s.api_pool
+
+        def answer(keyed, blds, complete, pending, error=None):
+            rows, nxt = placesmod.page(keyed, req["cursor"], req["limit"])
+            out = {"type": "places_result", "id": rid, "places": rows, "complete": complete, "pending": pending}
+            if blds is not None:
+                out["buildings"] = blds
+            if nxt is not None:
+                out["next"] = nxt
+            if error:
+                out["error"] = error
+            self.send(out)
+
+        try:
+            keyed, blds, complete = await loop.run_in_executor(pool, self._place_rows, req, False)
+        except Exception as e:
+            log.info("places: %s: %s", type(e).__name__, e)
+            self.send({"type": "places_result", "id": rid, "places": [], "complete": False, "pending": False,
+                       "error": f"{type(e).__name__}"})
+            return
+        busy = getattr(self, "_places_followups", 0)
+        follow = not complete and busy < PLACES_FOLLOWUPS
+        answer(keyed, blds, complete, follow)
+        if not follow:
+            return
+        self._places_followups = busy + 1
+        try:
+            for attempt in range(PLACES_TRIES):
+                last = attempt == PLACES_TRIES - 1
+                try:
+                    keyed, blds, complete = await loop.run_in_executor(pool, self._place_rows, req, True)
+                except mapdatamod.DEFERRED:
+                    if last:
+                        answer(keyed, blds, False, False)
+                        return
+                    await asyncio.sleep(WHERE_PLACE_RETRY_S)
+                    continue
+                except Exception as e:
+                    (log.debug if isinstance(e, netfetch.FetchError) else log.info)("places: %s: %s",
+                                                                                    type(e).__name__, e)
+                    answer(keyed, blds, False, False, type(e).__name__)
+                    return
+                if complete or last:
+                    answer(keyed, blds, complete, False)
+                    return
+                await asyncio.sleep(WHERE_PLACE_RETRY_S)
+        finally:
+            self._places_followups = getattr(self, "_places_followups", 1) - 1
+
     async def _where_place_later(self, out, lat, lon, seq):
         """where()'s place parts for a region not on disk yet: fetched as a background job (netfetch "background":
         never ahead of the world's own downloads), asked again every WHERE_PLACE_RETRY_S while Overture's hosts are
@@ -6574,6 +6677,8 @@ class Connection:
             self.spawn(self.where(msg))
         elif kind == "map_labels":              # the 3D map's labels, every kind by zoom (maplabels.py)
             self.spawn(self.map_labels(msg))
+        elif kind == "places":                  # the modding API's places round a point (places.py; api.places)
+            self.spawn(self.places(msg))
         elif kind == "map_focus":               # the 3D map flying: where the view will end (map3d.flyHint)
             self.on_map_focus(msg)
         elif kind == "random_place":            # the level select's "Random location" (randomplace.py)
