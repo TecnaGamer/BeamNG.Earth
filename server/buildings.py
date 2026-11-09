@@ -2131,6 +2131,12 @@ PASSAGE_W = 11.0           # m: the passage a bridge's road takes through its to
 PASSAGE_H = 7.0            # ... this high over the tower's mapped bottom (its deck: the part starts at the road), ...
 PASSAGE_CLEAR = 6.5        # m: the way over a deck through a building (with the decks' heights)
 PASSAGE_BOTTOM_M = 20.0    # ... in a structure whose bottom is this low (not its high walkways or tops)
+PASSAGE_UNDER_M = 0.2      # m: a part whose top is this far under the deck is under it (whole); up to 1 m over it was
+                           # too (the Golden Gate's roadway slab mapped in its north tower, 73-74.65 m, stood ~1 m over the
+                           # deck across all six lanes, GitHub #1032)
+PASSAGE_MARGIN_M = 1.5     # m: with the decks' widths the way is every deck through the footprint and this either side
+                           # (its parapets and walks): the Golden Gate Bridge's six lanes, ~20 m, kept a strut of its
+                           # north tower over their outer lanes through PASSAGE_W (GitHub #1032)
 
 
 def _clip_half(ring, p0, nrm, keep_ge):
@@ -2268,12 +2274,37 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
                     best = (d, a + t * ab, ab / max(float(np.hypot(*ab)), 1e-9), zd)
         _, p0, u, zd = best
         nrm = np.array([-u[1], u[0]])
+        lo_w, hi_w = -PASSAGE_W / 2, PASSAGE_W / 2
+        if decks:                       # (as wide as every deck through it at about this height, PASSAGE_MARGIN_M more)
+            a_, b_ = np.inf, -np.inf
+            for k, ln in enumerate(lines):
+                w_ = float(decks[k][2]) if len(decks[k]) > 2 else None
+                if w_ is None or road_through(ring, [ln]) < 3.0:
+                    continue
+                d_ = np.diff(ln, axis=0)
+                t_ = np.clip(((c - ln[:-1]) * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
+                q_ = ln[:-1] + t_[:, None] * d_
+                j_ = int(np.argmin(np.hypot(*(q_ - c).T)))
+                dir_ = d_[j_] / max(float(np.hypot(*d_[j_])), 1e-9)
+                if abs(float(dir_ @ u)) < 0.9:
+                    continue
+                if zd is not None:
+                    z_ = decks[k][1]
+                    if abs(float(z_[j_] + t_[j_] * (z_[j_ + 1] - z_[j_])) - zd) > 3.0:
+                        continue
+                off = float((q_[j_] - p0) @ nrm)
+                a_, b_ = min(a_, off - w_ / 2), max(b_, off + w_ / 2)
+            if np.isfinite(a_):
+                lo_w, hi_w = min(lo_w, a_ - PASSAGE_MARGIN_M), max(hi_w, b_ + PASSAGE_MARGIN_M)
         h = at.get("height")
         own = look is not None          # (a building's part carries its own height over its bottom, a building its top)
         top = (mh + float(h) if own else float(h)) if h is not None and np.isfinite(h) else mh + PASSAGE_H + 3.0
         if zd is not None and ground_at is not None and np.isfinite(zd):
-            dh = zd - float(ground_at(c))           # the deck's height over the building's ground
-            if top <= dh + 1.0 or mh >= dh + PASSAGE_CLEAR:
+            # the deck's height over the ground the part is drawn on: its footprint's highest (base_z; at its centre,
+            # the Golden Gate's north tower slab, its footprint up the shore, was drawn ~2 m higher than that took,
+            # over the deck, GitHub #1032)
+            dh = zd - float(ground_at(ring))
+            if top <= dh - PASSAGE_UNDER_M or mh >= dh + PASSAGE_CLEAR:
                 R.append(ring), A.append(at), L.append(look), M.append(mh)
                 continue                            # under the deck, or over its way
             low, cut = max(mh, dh - 1.5), dh + PASSAGE_CLEAR
@@ -2282,8 +2313,8 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
         cut = min(cut, top)
         if low > mh + 0.5:                          # solid under the deck
             R.append(ring), A.append(dict(at, height=(low - mh) if own else low)), L.append(look), M.append(mh)
-        for sgn in (1, -1):
-            piece = _clip_half(ring, p0 + nrm * sgn * PASSAGE_W / 2, nrm * sgn, True)
+        for sgn, edge in ((1, hi_w), (-1, lo_w)):
+            piece = _clip_half(ring, p0 + nrm * edge, nrm * sgn, True)
             piece = clean_ring(piece) if piece is not None else None    # (closed rings: roofs half triangulated)
             if piece is not None and cut > low + 0.5:
                 R.append(piece), A.append(dict(at, height=(cut - low) if own else cut)), L.append(look), M.append(low)
@@ -3107,10 +3138,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if not rings:
                     return []
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
-        def ground_at(c):
-            la, lo, _ = frame.enu_to_geodetic(float(c[0]) + x0, float(c[1]) + y0, 0.0)
-            z = float(np.asarray(elev(np.array([float(la)]), np.array([float(lo)])), np.float64)[0])
-            return float(frame.geodetic_to_enu(float(la), float(lo), z)[2])       # (the decks' frame up)
+        def ground_at(r):               # (a footprint's highest ground, base_z's: a point's, given one)
+            r = np.atleast_2d(np.asarray(r, np.float64))[:, :2]
+            la, lo, _ = frame.enu_to_geodetic(r[:, 0] + x0, r[:, 1] + y0, np.zeros(len(r)))
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            z = np.asarray(elev(la, lo), np.float64)
+            return float(np.nanmax(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64)))   # (the decks' frame up)
         rings, attrs, looks, mins = _passages(rings, attrs, looks, mins, bridges_xy, decks, ground_at)
     if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
         rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)

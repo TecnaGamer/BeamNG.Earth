@@ -1193,6 +1193,29 @@ class BridgePassageTest(unittest.TestCase):
         R3, *_ = bld._passages([ring], [{"bridge_masonry": "stone", "height": 10.0}], ["k"], [47.0], road)
         self.assertEqual(len(R3), 1)
 
+    def test_a_wide_deck_s_passage_is_as_wide_as_the_deck(self):
+        """GitHub #1032: the Golden Gate Bridge's north tower, a strut mapped 73-75 m over its base 4 m over the six-lane
+        deck: through an 11 m passage its two halves stood over the outer lanes. With the deck's width the way is the
+        whole deck and PASSAGE_MARGIN_M either side."""
+        ring = np.array([[-20, -12], [20, -12], [20, 12], [-20, 12], [-20, -12]], float)
+        road = [np.array([[0.0, -50.0], [0.0, 50.0]])]
+        deck = [(road[0], np.array([70.0, 70.0]), 22.0)]
+        R, A, L, M = bld._passages([ring], [{"height": 1.7}], ["k"], [73.0], road, deck, lambda c: 0.0)
+        sides = [r for r in R if np.abs(r[:, 0]).min() > 1.0]
+        self.assertEqual(len(sides), 2)
+        for r in sides:
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 11.0 + bld.PASSAGE_MARGIN_M - 1e-6)
+        # a slab at the deck's own level poking up to 0.6 m over it (the Golden Gate's roadway in its tower): cut too
+        R3, A3, L3, M3 = bld._passages([ring], [{"height": 1.6}], ["k"], [69.0], road, deck, lambda c: 0.0)
+        self.assertGreater(len(R3), 1)
+        self.assertFalse(any(np.abs(r[:, 0]).min() < 11.0 for r, m in zip(R3, M3) if m < 70.6 and len(R3) > 1
+                             and np.abs(r[:, 0]).max() > 11.0 and np.abs(r[:, 0]).min() < 1.0))
+        # two carriageways side by side: one way over both
+        deck2 = [(road[0] + [-6.0, 0.0], np.array([70.0, 70.0]), 10.0), (road[0] + [6.0, 0.0], np.array([70.0, 70.0]), 10.0)]
+        R2, *_ = bld._passages([ring], [{"height": 1.7}], ["k"], [73.0], [d[0] for d in deck2], deck2, lambda c: 0.0)
+        for r in [r for r in R2 if np.abs(r[:, 0]).min() > 1.0]:
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 11.0 + bld.PASSAGE_MARGIN_M - 1e-6)
+
     def test_ground_pieces(self):
         import geodesy
         f = geodesy.EnuFrame(37.41, -122.21)
