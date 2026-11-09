@@ -26,4 +26,18 @@ end
 -- Returns a function giving the ms elapsed since new() was called.
 M.new = M.clock
 
+-- Seconds on a wall clock, for intervals and deadlines (what the mod used os.clock() for). On Linux os.clock() is the
+-- process's CPU time summed over all of the game's threads, so in a busy game it ran several times faster than real
+-- time: guards, waits and frame budgets ran out early (Windows' C library returns wall time, so only Linux and the
+-- Steam Deck saw it). In the game: one shared hptimer clock; plain luajit (tests): os.clock(), so tests that set
+-- os.clock still drive it.
+local wallMs = nil
+function M.now()
+  if wallMs == nil then
+    wallMs = rawget(_G, 'hptimer') and M.clock() or false
+  end
+  if wallMs then return wallMs() / 1000 end
+  return os.clock()
+end
+
 return M

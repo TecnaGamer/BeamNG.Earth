@@ -5597,6 +5597,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add("VERSION", 171)?;
     Ok(())
 }

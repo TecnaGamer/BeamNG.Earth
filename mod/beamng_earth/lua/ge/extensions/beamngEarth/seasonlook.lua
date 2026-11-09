@@ -5,6 +5,7 @@
 -- (the same curve as season.py: ~Oct 27 at 40 N). The materials are the stock maps' too: their original factors
 -- come back when our level ends (M.restore).
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.CHECK_S = 5           -- leaf materials load with the first tree of their shape: looked for this often
 -- species: the leaf materials (v1.5 baseColorFactor), the old-style merged billboards (diffuseColor) and the tint at
@@ -131,7 +132,7 @@ end
 -- Every frame in our level (lat: the anchor's latitude): the leaf materials tinted to the season, checked every CHECK_S.
 function M.update(inOurLevel, lat)
   if not inOurLevel or not scenetree then return end
-  local now = os.clock()
+  local now = wallnow()
   if now - lastCheck < M.CHECK_S then return end
   lastCheck = now
   local doy = tonumber(os.date('*t').yday)

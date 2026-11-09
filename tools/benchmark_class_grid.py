@@ -36,7 +36,7 @@ def main():
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
     if args.pairs < 3: ap.error("at least three alternating pairs")
-    fast.require(172, "class grid benchmark")
+    fast.require(171, "class grid benchmark")
     if args.cpus:
         import cpupin
         cpupin.pin_self({int(c) for c in args.cpus.split(",")})
