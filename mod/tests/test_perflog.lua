@@ -48,5 +48,12 @@ T.check(#m >= 1 and m[1]:find('^perf minute %d+ fps, 1%% low') and m[1]:find('3 
 T.check(P.cause(1600, { mod = {}, engine = { FPSLimiter = 13 } }) == P.UNMEASURED,
   'a 1.6 s frame with 13 ms measured: not blamed on that part')
 T.check(P.cause(300, { mod = { terrainCommit = 280 }, engine = {} }) == 'terrainCommit 280', 'a part that explains it: named')
+T.check(P.cause(200, { mod = { far = 60, roads = 5 }, engine = { Lua = 150, Render = 20 } }) == 'Lua:far 150',
+  'the engine\'s Lua led by one of our parts: Lua:<part>')
+T.check(P.cause(200, { mod = { far = 10, roads = 5 }, engine = { Lua = 150 } }) == 'Lua:other 150',
+  'the engine\'s Lua with little of ours in it: Lua:other')
+T.check(P.cause(200, { mod = { far = 30, roads = 25, trees = 20 }, engine = { Lua = 150 } }) == 'Lua 150',
+  'ours spread over several parts: Lua')
+T.check(P.cause(200, { mod = {}, engine = { Render = 150 } }) == 'Render 150', 'other engine parts unchanged')
 T.check(#P.frame(0 / 0, now, ctx) == 0 and #P.frame(-1, now, ctx) == 0, 'bad frame times ignored')
 T.done('test_perflog')
