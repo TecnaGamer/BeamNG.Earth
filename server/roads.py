@@ -1580,30 +1580,52 @@ def _parts_by_level_new(feats, i, want, rngs=None):
 
 def _part_keys_new(feats, i, want):
     """A key per _parts_by_level_new(feats, i, want) piece, in its order, the same in every map cell's copy of the
-    feature: its ring's number and its range's start (in millionths). A long road's copies have different range lists
-    (gradesep spans found by the cells around each), so a piece's number among them is not: the deck stores took one
-    copy's part 5 for another's (the A4's deck over a track at Glaireuse never built, one 4.4 km away twice, #1020)."""
+    feature: its ring's number, the start of the range as the map has it (raw_level_ranges, its pieces of that kind)
+    that it overlaps most, and its number among the pieces on that one. A long road's copies have different range
+    lists (gradesep spans found by the cells around each), so a piece's number among them is not: the deck stores took
+    one copy's part 5 for another's (the A4's deck over a track at Glaireuse never built, one 4.4 km away twice,
+    #1020); nor are its final ends (_skew_decks lengthens a deck over the roads each copy's cell has crossing under it:
+    one A11 deck 15-44 m in eight copies, PR #1013), so a copy's longer deck and a shorter one share the key and the
+    stores keep one. A piece over no such range (the lidar's elevated stretch) keys by its own start."""
     rngs = level_ranges(feats, i)
+    raw = raw_level_ranges(feats, i)
     if want == "ground":
-        pieces = ground_ranges(rngs)
+        pieces, rawp = ground_ranges(rngs), ground_ranges(raw)
     elif want == "bridge":
         pieces = [(a, b) for a, b, _ in _bridge_level_spans(feats, i, rngs)]
+        rawp = [(a, b) for a, b, k in raw if k == want]
     else:
         pieces = [(a, b) for a, b, k in rngs if k == want and b - a > MIN_PART]
-    out, n = [], 0
+        rawp = [(a, b) for a, b, k in raw if k == want]
+    bases = []
+    for a, b in pieces:
+        best, at = 0.0, None
+        for ra, rb in rawp:
+            o = min(b, rb) - max(a, ra)
+            if o > best:
+                best, at = o, ra
+        bases.append(int(round(at * 1e6)) if at is not None else PART_KEY_OWN + int(round(a * 1e6)))
+    keys, seen = [], {}
+    for base in bases:
+        n = seen.get(base, 0)
+        seen[base] = n + 1
+        keys.append(base * PART_KEY_SUB + min(n, PART_KEY_SUB - 1))
+    out, r = [], 0
     for part in feats.parts(i):
         for ring in part:
             if len(ring) < 2:
                 continue
-            for a, b in pieces:
-                r = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
-                if len(r) >= 2:
-                    out.append(n * PART_KEY_RING + int(round(a * 1e6)))
-            n += 1
+            for (a, b), k in zip(pieces, keys):
+                rr = ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b)
+                if len(rr) >= 2:
+                    out.append(r * PART_KEY_RING + k)
+            r += 1
     return out
 
 
-PART_KEY_RING = 10_000_000      # (a part key's ring number, above its start's millionths)
+PART_KEY_OWN = 2_000_000        # (a part key: base over this, the piece's own start; under it, its raw range's start ...
+PART_KEY_SUB = 16               # ... times this, plus its number on that range ...
+PART_KEY_RING = 100_000_000     # ... and its ring's number times this)
 
 
 def keyed(keys, parts):
