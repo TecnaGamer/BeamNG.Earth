@@ -126,6 +126,19 @@ function M.teleport() w.teleports = w.teleports + 1 end
 
 local function r(v, q) return math.floor(v / q + 0.5) * q end
 
+-- How long the game has run with the mod (now: core's clock, seconds since it loaded) at a window's end, as a coarse
+-- band: its lower edge in minutes, 0 / 30 / 60 / 120 / 240 (the user, 2026-11-09: many players play for hours; the
+-- reports said nothing of how a long session runs)
+M.AGE_MIN = { 30, 60, 120, 240 }
+function M.ageBand(now)
+  local m, low = (tonumber(now) or 0) / 60, 0
+  for _, edge in ipairs(M.AGE_MIN) do
+    if m < edge then return low end
+    low = edge
+  end
+  return low
+end
+
 -- The window's summary when WINDOW_S has passed (and a new window starts), else nil. drops: perflog.takeDrops (called
 -- only then: { n, s, low }).
 function M.take(now, drops)
@@ -133,7 +146,7 @@ function M.take(now, drops)
   if now - w.t0 < M.WINDOW_S then return nil end
   if type(drops) == 'function' then drops = drops() end
   local out = { v = M.VERSION, s = r(now - w.t0, 1), fh = w.fh, hit = w.hit, hitLoad = w.hitLoad, causes = w.causes,
-    teleports = w.teleports, blocks = w.blocks, mapOpen = r(w.mapOpen, 5) }
+    teleports = w.teleports, blocks = w.blocks, mapOpen = r(w.mapOpen, 5), age = M.ageBand(now) }
   local bands = {}
   for k, b in pairs(w.bands) do bands[k] = { s = r(b.s, 5), fh = b.fh } end
   out.bands = bands

@@ -71,7 +71,12 @@ pub struct WindowIn {
     scene: Option<HashMap<String, f64>>,
     held: Option<HeldIn>,
     drops: Option<DropsIn>,
+    age: Option<f64>,
 }
+
+/// The session-length bands (perfsummary.lua's ageBand: the band's lower edge in minutes) and their group names
+/// "age:<name>"; any other number counts in none.
+pub const AGES: [(f64, &str); 5] = [(0.0, "u30"), (30.0, "u60"), (60.0, "u120"), (120.0, "u240"), (240.0, "o240")];
 
 #[derive(Deserialize, Default)]
 pub struct SetupIn {
@@ -473,6 +478,9 @@ impl Perf {
             let main_scene = a.scene.iter().max_by(|x, y| x.1.total_cmp(y.1)).map(|(k, _)| k.clone());
             for g in &base { touch(f, g, &a); }
             if let Some(sc) = main_scene { touch(f, &format!("scene:{sc}"), &a); }
+            if let Some((_, age)) = w.age.and_then(|m| AGES.iter().find(|(lo, _)| *lo == m)) {
+                touch(f, &format!("age:{age}"), &a);
+            }
         }
         if let Some(s) = &p.server {
             let a = Agg { catchups: s.catchups.filter(|x| x.is_finite()).unwrap_or(0.0).clamp(0.0, 1000.0) as u64,
@@ -621,7 +629,7 @@ mod tests {
             "v": 1, "s": 300, "fh": [0, 0, 0, fps60, 0, 0, 0, 1, 0, 0], "hit": [1, 1, 0, 0], "hitLoad": [1, 0, 0, 0],
             "bands": {"s60": {"s": 300, "fh": [0, 0, 0, fps60, 0, 0, 0, 1, 0, 0]}}, "scene": {"urban": 250, "town": 50},
             "held": {"edge": 15}, "blocks": [3, 1, 0, 0, 0, 0, 0, 0], "causes": {"terrainCommit": 1, "bad key!": 4},
-            "lat": 39.2})).unwrap();
+            "lat": 39.2, "age": if with_setup { 60 } else { 45 }})).unwrap();
         let setup: Option<SetupIn> = if with_setup {
             Some(serde_json::from_value(serde_json::json!({"gpu": gpu, "cpu": "AMD Ryzen 5 3600", "ramGB": 32, "res": "1440p",
                 "modSettings": {"quality": "high"}})).unwrap())
@@ -654,6 +662,9 @@ mod tests {
         assert_eq!(gpus[0]["name"], "NVIDIA GeForce RTX 3060");
         assert_eq!(v["groups"]["preset"][0]["name"], "high");
         assert_eq!(v["groups"]["scene"][0]["name"], "urban");
+        let ages = v["groups"]["age"].as_array().unwrap();     // (a band it does not know: no group)
+        assert_eq!(ages.len(), 1);
+        assert_eq!(ages[0]["name"], "u120");
         let causes = v["all"]["topCauses"].as_array().unwrap();
         assert!(causes.iter().all(|c| c[0] != "bad key!"));
         let e = p.errors(u + 600);
