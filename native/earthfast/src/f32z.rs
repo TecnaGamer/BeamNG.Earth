@@ -45,14 +45,14 @@ pub fn unpack(data: &[u8]) -> Result<Vec<f32>, String> {
 #[pyo3(signature = (a, level = 1))]
 pub fn f32_pack<'py>(py: Python<'py>, a: PyReadonlyArray1<'py, f32>, level: i32) -> PyResult<Bound<'py, PyBytes>> {
     let v = a.as_slice().map_err(|e| PyValueError::new_err(format!("{e}")))?.to_vec();
-    let out = py.allow_threads(|| pack(&v, level)).map_err(PyValueError::new_err)?;
+    let out = py.detach(|| pack(&v, level)).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &out))
 }
 
 /// dem.py: a packed raster back (flattened float32).
 #[pyfunction]
 pub fn f32_unpack<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyArray1<f32>>> {
-    let v = py.allow_threads(|| unpack(data)).map_err(PyValueError::new_err)?;
+    let v = py.detach(|| unpack(data)).map_err(PyValueError::new_err)?;
     Ok(PyArray1::from_vec(py, v))
 }
 

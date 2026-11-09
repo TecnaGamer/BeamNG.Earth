@@ -374,7 +374,7 @@ pub fn render(text: &str, base: &str, fold: bool, max_out: usize) -> (String, Ve
 #[pyfunction]
 #[pyo3(signature = (text, base, fold_details = false, max_out = 262144))]
 pub fn md_html(py: Python<'_>, text: &str, base: &str, fold_details: bool, max_out: usize) -> (String, Vec<String>) {
-    py.allow_threads(|| render(text, base, fold_details, max_out))
+    py.detach(|| render(text, base, fold_details, max_out))
 }
 
 #[cfg(test)]

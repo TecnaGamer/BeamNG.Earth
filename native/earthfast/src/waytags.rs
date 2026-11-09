@@ -113,7 +113,7 @@ pub fn lane_parts<'py>(py: Python<'py>, codes: PyReadonlyArray2<'py, u32>, featu
         for (j, v) in codes.row(k).iter().enumerate() {
             row[j] = *v;
         }
-        let (wid, tag): (PyObject, PyObject) = match parse(&row) {
+        let (wid, tag): (Py<PyAny>, Py<PyAny>) = match parse(&row) {
             Way::None => (py.None(), PyDict::new(py).into_any().unbind()),
             Way::Ask => {
                 let got = ask.call1((k,))?;

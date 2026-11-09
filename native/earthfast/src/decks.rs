@@ -17,7 +17,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
     let (q, qoff, pts, poff, widths) = (q.as_array(), qoff.as_array(), pts.as_array(), poff.as_array(),
                                         widths.as_array());
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         // each part's box
         let mut bb = vec![[0.0f64; 4]; n];
@@ -160,7 +160,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
                                              params.as_array());
     let (join_m, snap_m, min_cos, ground_m, min_len) = (params[0], params[1], params[2], params[3], params[4]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let ne = 2 * n;
         let mut pos = vec![[f64::NAN; 2]; ne];
         let mut dir = vec![[0.0f64; 2]; ne];
@@ -375,7 +375,7 @@ pub fn deck_end_on<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, poff: 
                                                     level.as_array(), ground.as_array(), params.as_array());
     let (join_m, ground_m, margin_m) = (params[0], params[1], params[2]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         let p = |v: usize| [pts[[v, 0]], pts[[v, 1]]];
         let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);

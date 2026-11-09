@@ -42,14 +42,14 @@ fn number(v: &Bound<'_, PyAny>) -> Option<f64> {
     None
 }
 
-fn clean<'py>(py: Python<'py>, v: &Bound<'py, PyAny>, depth: usize, strings: bool) -> PyResult<Option<PyObject>> {
+fn clean<'py>(py: Python<'py>, v: &Bound<'py, PyAny>, depth: usize, strings: bool) -> PyResult<Option<Py<PyAny>>> {
     if v.is_instance_of::<PyBool>() {
         return Ok(Some(v.clone().unbind()));
     }
     if v.is_instance_of::<PyInt>() || v.is_instance_of::<PyFloat>() {
         return Ok(number(v).map(|_| v.clone().unbind()));
     }
-    if let Ok(s) = v.downcast::<PyString>() {
+    if let Ok(s) = v.cast::<PyString>() {
         if !strings {
             return Ok(None);
         }
@@ -59,7 +59,7 @@ fn clean<'py>(py: Python<'py>, v: &Bound<'py, PyAny>, depth: usize, strings: boo
     if depth >= MAX_DEPTH {
         return Ok(None);
     }
-    if let Ok(list) = v.downcast::<PyList>() {
+    if let Ok(list) = v.cast::<PyList>() {
         let out = PyList::empty(py);
         for x in list.iter().take(MAX_LIST) {
             if number(&x).is_some() {
@@ -68,10 +68,10 @@ fn clean<'py>(py: Python<'py>, v: &Bound<'py, PyAny>, depth: usize, strings: boo
         }
         return Ok(Some(out.into_any().unbind()));
     }
-    if let Ok(d) = v.downcast::<PyDict>() {
+    if let Ok(d) = v.cast::<PyDict>() {
         let out = PyDict::new(py);
         for (k, x) in d.iter().take(MAX_ITEMS) {
-            let Ok(ks) = k.downcast::<PyString>() else { continue };
+            let Ok(ks) = k.cast::<PyString>() else { continue };
             let key = ks.to_str()?;
             if !plain_name(key) {
                 continue;
@@ -91,19 +91,19 @@ fn clean<'py>(py: Python<'py>, v: &Bound<'py, PyAny>, depth: usize, strings: boo
 #[pyfunction]
 #[pyo3(signature = (v, strings=false, allowed=None))]
 pub fn perf_clean(py: Python<'_>, v: &Bound<'_, PyAny>, strings: bool, allowed: Option<&Bound<'_, PyDict>>)
-    -> PyResult<Option<PyObject>> {
+    -> PyResult<Option<Py<PyAny>>> {
     let Some(allowed) = allowed else { return clean(py, v, 0, strings) };
-    let Ok(d) = v.downcast::<PyDict>() else { return Ok(None) };
+    let Ok(d) = v.cast::<PyDict>() else { return Ok(None) };
     let out = PyDict::new(py);
     for (k, x) in d.iter().take(MAX_ITEMS) {
-        let Ok(ks) = k.downcast::<PyString>() else { continue };
+        let Ok(ks) = k.cast::<PyString>() else { continue };
         let key = ks.to_str()?;
         let Some(rule) = allowed.get_item(key)? else { continue };
-        let x = if let Ok(names) = rule.downcast::<PyList>() {
-            let Ok(sub) = x.downcast::<PyDict>() else { continue };
+        let x = if let Ok(names) = rule.cast::<PyList>() {
+            let Ok(sub) = x.cast::<PyDict>() else { continue };
             let kept = PyDict::new(py);
             for n in names.iter() {
-                if let Ok(ns) = n.downcast::<PyString>() {
+                if let Ok(ns) = n.cast::<PyString>() {
                     if let Some(val) = sub.get_item(ns)? {
                         kept.set_item(ns, val)?;
                     }
@@ -198,7 +198,7 @@ fn tree(_root: u32) -> Option<(f64, f64)> {
 /// (CPU seconds, resident MB) of process root and every process under it, or None (not Linux, or /proc unreadable).
 #[pyfunction]
 pub fn proc_tree(py: Python<'_>, root: u32) -> Option<(f64, f64)> {
-    py.allow_threads(|| tree(root))
+    py.detach(|| tree(root))
 }
 
 #[cfg(test)]

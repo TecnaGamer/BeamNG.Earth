@@ -376,7 +376,7 @@ pub fn median_modules<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, z: 
     let sa = style.as_array();
     let style_v: Vec<[f64; 6]> = (0..sa.nrows())
         .map(|i| [sa[[i, 0]], sa[[i, 1]], sa[[i, 2]], sa[[i, 3]], sa[[i, 4]], sa[[i, 5]]]).collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         modules(&pts_v, &z_v, &off_v, &half_v, &flags_v, &keys_v, &allow_v, mapped_v, style_v, &params, bx)
     });
     let k = out.len() / 11;
