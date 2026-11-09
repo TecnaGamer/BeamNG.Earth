@@ -274,6 +274,9 @@ ROUTE_AHEAD_MAX_M = 20000.0      # --route-prefetch-km * 1000 (15-25 km is sane;
 # the GPS's "Download along route" setting (the user, 2026-10-29: "options on pre downloading/generating along a gps
 # route"): the route message's "download": off, ahead (ROUTE_AHEAD_MAX_M) or the whole route (at most this far)
 ROUTE_DOWNLOAD_MODES = ("off", "ahead", "route")
+ROUTE_429_TRIES = 3              # a route answered 429 (routing.openstreetmap.de's fair use) is asked again while it is
+ROUTE_429_WAIT_S = 3.0           # the latest destination, after the host's Retry-After or this x the try ...
+ROUTE_429_MAX_WAIT_S = 20.0      # ... at most this
 ROUTE_WHOLE_MAX_M = 500000.0
 ROUTE_IMG_TRIES = 5               # a route download's ground-photo tile the limiter deferred: asked this often
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
@@ -5522,13 +5525,26 @@ class Connection:
         self.route_dl_version += 1
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
-        try:
-            r = await asyncio.get_running_loop().run_in_executor(
-                self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
-            out.update(r)
-        except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
-            out["error"] = f"{type(e).__name__}: {e}"[:200]
+        for attempt in range(ROUTE_429_TRIES):
+            try:
+                r = await asyncio.get_running_loop().run_in_executor(
+                    self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
+                    float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
+                out.update(r)
+                out.pop("error", None)
+                break
+            except Exception as e:      # offline, no route, rate limited: the mod falls back to steering
+                out["error"] = f"{type(e).__name__}: {e}"[:200]
+                if not isinstance(e, netfetch.RateLimited) or attempt + 1 >= ROUTE_429_TRIES:
+                    break
+                # (rate limited: the latest destination asked again after the host's wait; a destination changed
+                # twice in 2 s got a 429 and no route until it was set again, GitHub #1027)
+                wait = getattr(e, "retry_after", None) or ROUTE_429_WAIT_S * (attempt + 1)
+                log.info("route %s: rate limited, again in %.0f s", msg.get("id"), wait)
+                await asyncio.sleep(min(float(wait), ROUTE_429_MAX_WAIT_S))
+                if version != self.route_dl_version:
+                    log.info("route %s: superseded while waiting", msg.get("id"))
+                    return              # (a newer destination's request answers)
         if "error" not in out and self.s.dem is not None and out["points"]:
             try:                        # the map's elevation profile: a nice-to-have, the route works without it
                 out["elev"] = await asyncio.get_running_loop().run_in_executor(
