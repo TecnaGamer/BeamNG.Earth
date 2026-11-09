@@ -1555,7 +1555,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
 # The rails collide again (GitHub #821: a car on train wheels, or a train, rode the railheads until that collider; it fell
 # onto the ballast): their heads' top and sides are ~1/5 of a track's triangles, the sleepers ~3/5 of them stay drawn
 # only. BNE_RAIL_COLLIDE=off: the bed alone, as from PR #41.
-RAIL_COLLIDE = os.environ.get("BNE_RAIL_COLLIDE", "on") != "off"
+# (opt-in: the rails in the collider make a track's about 2.7x the triangles (rails + sleepers were 118.8k of 135k), and
+# collision rebuilds cost frame time on rail-heavy tiles; for riding the rails (GitHub #821) BNE_RAIL_COLLIDE=on)
+RAIL_COLLIDE = os.environ.get("BNE_RAIL_COLLIDE", "off") == "on"
 RENDER_ONLY = frozenset(SLEEPER_WORN)
 RENDER_ONLY_LEAN = frozenset(STEEL_WORN + SLEEPER_WORN)
 

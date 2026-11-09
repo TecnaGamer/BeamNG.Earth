@@ -106,17 +106,19 @@ class RailwayTest(unittest.TestCase):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         mesh = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         P, T, UV, mats, M = mesh
-        cP, cT, cUV, cmats, cM = railways.collision_mesh(mesh)
-        # the bed and the rails (GitHub #821: a car on train wheels rides them), not the sleepers
+        self.assertFalse(railways.RAIL_COLLIDE, "the rails collide only with BNE_RAIL_COLLIDE=on (2.7x the collider)")
+        with unittest.mock.patch.object(railways, "RAIL_COLLIDE", True):
+            cP, cT, cUV, cmats, cM = railways.collision_mesh(mesh)
+            sleepers_left = railways.collision_mesh((P, T[M == 3], UV, mats, M[M == 3]))
+        # BNE_RAIL_COLLIDE=on: the bed and the rails (GitHub #821: a car on train wheels rides them), not the sleepers
         self.assertEqual({mats[k] for k in np.unique(cM)}, {railways.BALLAST, railways.STEEL})
         solid = np.isin(M, [mats.index(railways.BALLAST), mats.index(railways.STEEL)])
         np.testing.assert_array_equal(cT, T[solid])
         self.assertLess(len(cT), 0.4 * len(T), "the sleepers were most of it")
         self.assertIs(cP, P)
         self.assertIsNone(railways.collision_mesh(None))
-        sleepers_only = (P, T[M == 3], UV, mats, M[M == 3])
-        self.assertIsNone(railways.collision_mesh(sleepers_only), "nothing left: no collider")
-        with unittest.mock.patch.object(railways, "RAIL_COLLIDE", False):     # BNE_RAIL_COLLIDE=off: PR #41's
+        self.assertIsNone(sleepers_left, "nothing left: no collider")
+        with unittest.mock.patch.object(railways, "RAIL_COLLIDE", False):     # the default: PR #41's
             lean = railways.collision_mesh(mesh)
             np.testing.assert_array_equal(lean[1], T[M == mats.index(railways.BALLAST)])
             self.assertIsNone(railways.collision_mesh((P, T[M == 2], UV, mats, M[M == 2])))
