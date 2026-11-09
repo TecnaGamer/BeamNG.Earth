@@ -5,6 +5,7 @@
 -- blur is 0, the near blur and every other DOF setting the player's own; the player's settings are never
 -- written, and leaving the level (or M.restore) puts the stock parameters back (dof.lua updateDOFSettings).
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.FAR_BLUR = 0          -- the far blur in our level (the stock preset: 0.25)
 local applied = false
@@ -39,7 +40,7 @@ M.CHECK_S = 2
 local lastCheck = -math.huge
 function M.update(inOurLevel)
   if not inOurLevel then return end
-  local t = os.clock()
+  local t = wallnow()
   if t - lastCheck < M.CHECK_S then return end
   lastCheck = t
   local dof = dofObject()

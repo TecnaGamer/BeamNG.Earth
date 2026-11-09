@@ -9,6 +9,7 @@
 -- the server streams for the camera (the mod's pose messages carry the camera: eye height, horizon).
 
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.CAMERA = 'earthGlobe'
 M.START_DIST = 1800            -- m from the car when the orbit starts
@@ -248,7 +249,7 @@ function M.driveHere(lat, lon, name)
   if not stg or not stg.uiMapTeleport then return {ok = false, error = 'BeamNG.Earth not loaded'} end
   local r = stg.uiMapTeleport(lat, lon, name or '')
   if r and r.ok then
-    drive = {at = os.clock(), stage = 'loading'}
+    drive = {at = wallnow(), stage = 'loading'}
     r.pending = true
   end
   return r
@@ -261,7 +262,7 @@ local function driveStep()
   if not active then drive = nil return end
   local core = rawget(_G, 'beamngEarth_core')
   local st = core and core._state and core._state()
-  local now = os.clock()
+  local now = wallnow()
   if drive.stage == 'loading' then
     local ready = st and not st.pending and core.groundReady and core.groundReady()
     if ready then
@@ -381,9 +382,9 @@ local uiRoute, uiFrom, uiAt = nil, nil, -1e9    -- the screen last switched to, 
 function M.onUiChangedState(toState)
   if active and not transitioning and toState ~= M.ROUTE and type(toState) == 'string'
       and toState:sub(1, 4) ~= 'menu' and toState ~= 'loading' then
-    reshowAt = os.clock() + 0.25
+    reshowAt = wallnow() + 0.25
   end
-  if type(toState) == 'string' and toState ~= uiRoute then uiRoute, uiFrom, uiAt = toState, uiRoute, os.clock() end
+  if type(toState) == 'string' and toState ~= uiRoute then uiRoute, uiFrom, uiAt = toState, uiRoute, wallnow() end
 end
 
 -- Esc: the game's back (ui/menuManager navigationBack) takes our screen to its backTarget 'play' and says so with
@@ -393,13 +394,13 @@ end
 function M.onMenuToggled(show)
   if show or not active or transitioning then return end
   -- (on our screen still, or just left it for 'play': the back's own switch may be reported before this hook)
-  local fromOurs = uiRoute == M.ROUTE or (uiRoute == 'play' and uiFrom == M.ROUTE and os.clock() - uiAt < 1.0)
+  local fromOurs = uiRoute == M.ROUTE or (uiRoute == 'play' and uiFrom == M.ROUTE and wallnow() - uiAt < 1.0)
   if not fromOurs then return end
   reshowAt = nil
   M.exit()
 end
 local function reshow()
-  if reshowAt and os.clock() >= reshowAt then
+  if reshowAt and wallnow() >= reshowAt then
     reshowAt = nil
     if active and not transitioning then
       local stg = rawget(_G, 'beamngEarth_settings')
@@ -601,7 +602,7 @@ function M.drawLabels(pos, rot, fov)
   if not g or not s or not s.lat or not a then return end
   local ox, oy, oz = 0, 0, -6371000
   if a.ecefToEnu then ox, oy, oz = a:ecefToEnu(0, 0, 0) end
-  local t = os.clock()
+  local t = wallnow()
   local dt = labels.drawAt and math.min(0.1, t - labels.drawAt) or 0.016
   labels.drawAt = t
   local q = quat(rot)

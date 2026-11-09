@@ -23,6 +23,7 @@ local stopwatch = require('beamngEarth/stopwatch')
 local sea = require('beamngEarth/sea')
 
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
@@ -297,7 +298,7 @@ function M.slotsHeld(sess)
   return out
 end
 
-local function now() return os.clock() * 1000 end
+local function now() return wallnow() * 1000 end
 
 -- Main-thread cost of each kind of unit (n, total ms, worst ms) since the level loaded: road chunks, deletes, each
 -- mesh kind of a road tile (road, walk, bld, bldcol, deck ...), far building tiles, collision reloads. status().units

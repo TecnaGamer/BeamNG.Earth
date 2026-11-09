@@ -17,6 +17,7 @@
 local geodesy = require('beamngEarth/geodesy')
 
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 -- A remote car whose position lands farther than this from our origin is not placed: our world is not there, and
 -- thousands of km out the game's physics go non-finite and the game deletes the car (BeamMP then draws its
@@ -57,8 +58,8 @@ end
 M.SETTLE_S = 1.5
 M.JUMP_M = 2000
 M.JUMP_WINDOW_S = 2
-local settleUntil = {}                   -- [playerId] = os.clock() until which its packets are dropped
-local lastAt = {}                        -- [serverVehicleString] = os.clock() of its latest packet let through
+local settleUntil = {}                   -- [playerId] = wallnow() until which its packets are dropped
+local lastAt = {}                        -- [serverVehicleString] = wallnow() of its latest packet let through
 M.clock = os.clock                       -- (tests)
 
 -- mpsession.lua: player pid's anchor, from the plugin's bngeAnchors.
@@ -127,7 +128,7 @@ M.NOTE_S = 10
 local noted = {}
 local function note(sid, kind, text)
   local k = tostring(sid) .. ':' .. kind
-  local now = os.clock()
+  local now = wallnow()
   if noted[k] and now - noted[k] < M.NOTE_S then return end
   noted[k] = now
   log('I', 'beamngEarth', text)

@@ -23,6 +23,7 @@
 -- UI and the Lua extensions does not matter). Without the page the window stays as before.
 
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 local rebase = require('beamngEarth/rebase')
 local ui = require('beamngEarth/ui')
@@ -800,7 +801,7 @@ function M.mapTiles(list)
     end
   end
   local sig = table.concat(keys, ',')
-  local now = os.clock()
+  local now = wallnow()
   if sig ~= mapSent or (#missing > 0 and (not mapSentAt or now - mapSentAt > M.MAP_ASK_S)) then
     local core = ext('beamngEarth_core')
     if core and core.requestMapTiles and core.requestMapTiles(missing) then
@@ -840,7 +841,7 @@ end
 
 local mapPolledAt = nil    -- when the map last asked for its state (MAP_LOST_S)
 function M.uiMapState()
-  mapPolledAt = os.clock()
+  mapPolledAt = wallnow()
   local core = ext('beamngEarth_core')
   local st = core and core._state and core._state() or nil
   local pl = st and st.player
@@ -1027,7 +1028,7 @@ function M.mapControls(on)
   local filter = rawget(_G, 'core_input_actionFilter')
   if on and not mapCtl and bm then
     mapCtl = { bm = bm }
-    mapPolledAt = os.clock()
+    mapPolledAt = wallnow()
     for _, f in ipairs({ 'camMoveController', 'camMoveKey', 'zoomInOut', 'controllerZoom', 'zoom', 'onControllerSelect',
         'onChangeUiFilter' }) do mapCtl[f] = bm[f] end
     bm.camMoveController = function(upDown, v) mapInput(upDown and 'move_ud' or 'move_lr', v) end
@@ -1184,7 +1185,7 @@ function M.serverPrivacy(region, consent)
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
   if M.privacyNeeded() and not M._privacyAsked and level == M.LEVEL_ID and not welcomeAt then
     M._privacyAsked = true
-    welcomeAt = os.clock() + M.WELCOME_DELAY_S
+    welcomeAt = wallnow() + M.WELCOME_DELAY_S
   end
 end
 function M.privacyNeeded() return (values.telemetryChoice or 0) < M.telemetryConsent end
@@ -1236,8 +1237,8 @@ M.MAP_MENU_CHECK_S = 0.25
 local menuCheckAt = 0
 local function keepMapMenuActions()
   local b = rawget(_G, 'core_input_bindings')
-  if not (b and b.getMenuActionStates and b.setMenuActionsEnabled) or os.clock() < menuCheckAt then return end
-  menuCheckAt = os.clock() + M.MAP_MENU_CHECK_S
+  if not (b and b.getMenuActionStates and b.setMenuActionsEnabled) or wallnow() < menuCheckAt then return end
+  menuCheckAt = wallnow() + M.MAP_MENU_CHECK_S
   local states = b.getMenuActionStates() or {}
   for name in pairs(M.MAP_MENU_ACTIONS) do
     if states[name] == false then pcall(b.setMenuActionsEnabled, M.MAP_MENU_ACTIONS) return end
@@ -1254,8 +1255,8 @@ end
 
 function M.onUpdate()
   if mapOpen then keepMapMenuActions() end
-  if mapCtl and mapPolledAt and os.clock() - mapPolledAt > M.MAP_LOST_S then
-    releaseMap(string.format('the map has not asked for %.0f s', os.clock() - mapPolledAt))
+  if mapCtl and mapPolledAt and wallnow() - mapPolledAt > M.MAP_LOST_S then
+    releaseMap(string.format('the map has not asked for %.0f s', wallnow() - mapPolledAt))
   end
   if feedbackQ then
     feedbackQ.frames = feedbackQ.frames - 1
@@ -1265,7 +1266,7 @@ function M.onUpdate()
       if rep then if what == 'report' then rep.note() else rep.profiler() end end
     end
   end
-  if welcomeAt and os.clock() >= welcomeAt then
+  if welcomeAt and wallnow() >= welcomeAt then
     welcomeAt = nil
     if not M.welcomeSuppressed then M.showWelcome() end
   end
@@ -1278,7 +1279,7 @@ function M.onClientPostStartMission()
   M.applyAll()
   local level = rawget(_G, 'getCurrentLevelIdentifier') and getCurrentLevelIdentifier()
   if level == M.LEVEL_ID and ((values.welcomeSeen or 0) < M.WELCOME_VERSION or M.privacyNeeded()) then
-    welcomeAt = os.clock() + M.WELCOME_DELAY_S       -- (and until the telemetry choice is made: before playing)
+    welcomeAt = wallnow() + M.WELCOME_DELAY_S       -- (and until the telemetry choice is made: before playing)
     M._privacyAsked = M.privacyNeeded() or nil
   end
 end

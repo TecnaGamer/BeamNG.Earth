@@ -1470,7 +1470,7 @@ end
 -- The screen's height in pixels (GFXDevice.getVideoMode, looked up every 2 s): the server's screen-space LOD.
 local screenH, screenAt = nil, -math.huge
 local function screenHeight()
-  local t = os.clock()
+  local t = require('beamngEarth/stopwatch').now()
   if t - screenAt > 2 then
     screenAt = t
     local ok, vm = pcall(function() return GFXDevice.getVideoMode() end)

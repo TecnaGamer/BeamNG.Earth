@@ -2,6 +2,7 @@
 -- BeamNavigator calls ui_uinavi.requestVehicleDashboardMap with the screen's actual material tag;
 -- that is the supported registration point, so this works without per-vehicle JBeam mappings.
 local M = {}
+local wallnow = require('beamngEarth/stopwatch').now   -- (wall seconds: os.clock() is CPU time on Linux)
 
 M.DASHBOARD_URI = 'local://local/vehicles/common/beamng_earth_dashboard.html'
 M.ZOOM_CITY, M.ZOOM_ROAD, M.ZOOM_HIGHWAY = 17, 16, 15
@@ -96,7 +97,7 @@ local function restoreScreen(rec)
   end
   target:queueJSUITexture(rec.tag, 'window.beamngEarthDashboard&&window.beamngEarthDashboard.restore()')
   rec.applied, rec.restoring = false, true
-  rec.restoreAt = os.clock() + M.RESTORE_RELOAD_S
+  rec.restoreAt = wallnow() + M.RESTORE_RELOAD_S
   rec.sentTiles, rec.lastViewAt = false, 0
 end
 
@@ -404,11 +405,11 @@ local function forgetAsked(id)
 end
 function M.onUpdate()
   installNavigationHook()
-  if enabled then askScreens(os.clock()) end
+  if enabled then askScreens(wallnow()) end
   -- (no navigation screen registered, as in most cars: nothing to do, not even the context; else the context at most
   -- every VIEW_INTERVAL_S: it copies the credits and builds the attribution text)
   if not next(screens) then return end
-  local now = os.clock()
+  local now = wallnow()
   local restored = processRestores(now)
   if now - ctxAt >= M.VIEW_INTERVAL_S then ctxAt, ctxCached = now, coreContext() end
   local ctx = ctxCached
