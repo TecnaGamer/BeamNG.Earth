@@ -23,7 +23,7 @@ pub(crate) const JUNCTION_COLS: &[&str] = &["id", "side", "gore_s", "ref_s", "pr
     "fork_x", "fork_y", "fork_z", "fork_dx", "fork_dy", "b0_dx", "b0_dy", "b1_dx", "b1_dy",
     "gore_x", "gore_y", "gore_z", "gore_dx", "gore_dy", "follow"];
 pub(crate) const PROFILE_COLS: &[&str] = &["s", "x", "y", "dx", "dy", "edge_l", "edge_r", "opp_edge", "lanes",
-    "ground_l", "ground_r", "road_z_max", "de"];
+    "ground_l", "ground_r", "road_z_max", "de", "through"];
 pub(crate) const MAX_VERTICES: usize = 60_000;   // per written shape (16-bit indices)
 
 fn col(cols: &[&str], name: &str) -> usize {
@@ -161,7 +161,12 @@ pub fn autobahn_signs<'py>(py: Python<'py>, raw: Vec<String>, junctions: PyReado
         let Some(c) = content(&r, kind, side) else { continue };
         let (p0, p1) = (poff[j] as usize, poff[j + 1] as usize);
         let s_vals: Vec<f64> = (p0..p1).map(|i| pr[[i, pc("s")]]).collect();
-        let lanes: Vec<f64> = (p0..p1).map(|i| pr[[i, pc("lanes")]]).collect();
+        // the mounting counts the through lanes (an exit lane is not one); the layout (Geo.lanes) the lanes as drawn.
+        // A missing or zero through count: the drawn one
+        let lanes: Vec<f64> = (p0..p1).map(|i| {
+            let t = pr[[i, pc("through")]];
+            if t.is_finite() && t > 0.0 { t } else { pr[[i, pc("lanes")]] }
+        }).collect();
         let skip_j: Vec<(f64, f64)> = (soff[j] as usize..soff[j + 1] as usize).map(|i| (sk[[i, 0]], sk[[i, 1]])).collect();
         let (ref_s, gore_s, prev) = (v("ref_s"), v("gore_s"), v("prev_exit_s"));
         if !(ref_s.is_finite() && gore_s.is_finite()) { continue; }

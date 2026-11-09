@@ -47,7 +47,7 @@ JUNCTION_COLS = ("id", "side", "gore_s", "ref_s", "prev_exit_s", "fork_s", "othe
                  "fork_x", "fork_y", "fork_z", "fork_dx", "fork_dy", "b0_dx", "b0_dy", "b1_dx", "b1_dy",
                  "gore_x", "gore_y", "gore_z", "gore_dx", "gore_dy", "follow")
 PROFILE_COLS = ("s", "x", "y", "dx", "dy", "edge_l", "edge_r", "opp_edge", "lanes", "ground_l", "ground_r",
-                "road_z_max", "de")
+                "road_z_max", "de", "through")
 
 ENV = os.environ.get("BNE_AUTOBAHN_SIGNS", "").strip().lower()
 BOX = (5.8, 47.2, 15.1, 55.1)    # lon0, lat0, lon1, lat1: Germany's box, checked before any border lookup
@@ -124,9 +124,10 @@ def tracker_version(known):
         return known
     return f"{known}|cb:{cb.signature()}"
 
-def lanes_at(edges, s):
+def lanes_at(edges, s, through=True):
     """The main lanes at s (metres upstream of the junction) from the block's edges: the mapped `lanes` less the lanes
-    turn:lanes marks as leaving only (an exit lane is not counted); None when not mapped there."""
+    turn:lanes marks as leaving only (an exit lane is not counted: the mounting's count); through=False: the mapped
+    `lanes` as the road is drawn, the exit lane included (the layout's count); None when not mapped there."""
     for _wid, s0, s1, tags in edges:
         if s0 - 1e-6 <= s <= s1 + 1e-6:
             try:
@@ -137,7 +138,7 @@ def lanes_at(edges, s):
                 return None
             n = int(min(max(round(v), 1), 8))          # (mapped data: an absurd count saturates)
             turns = [t for t in str(tags.get("turn:lanes", "")).split("|")] if tags.get("turn:lanes") else []
-            if len(turns) == n:
+            if through and len(turns) == n:
                 n -= sum(1 for t in turns if ("right" in t or "left" in t) and "through" not in t and "none" not in t
                          and t)
             return min(max(1, n), 8)
@@ -361,10 +362,13 @@ def _junction(rec, frame, context, left_hand):
         if ok.any():
             best_d[ok], at[ok], fid[ok] = dist[ok], pt[ok], ri
             edge[ok] = _half_width(line, width, k, t, right)[ok]
-    lanes = np.array([lanes_at(de.get("edges") or [], v) or 0 for v in s], float)
+    # the lanes as drawn (the layout: the exit lane is pavement too) and the through lanes (the mounting)
+    lanes = np.array([lanes_at(de.get("edges") or [], v, through=False) or 0 for v in s], float)
+    through = np.array([lanes_at(de.get("edges") or [], v) or 0 for v in s], float)
     miss = ~np.isfinite(edge)
     edge[miss] = (np.where(lanes[miss] > 0, lanes[miss], 3) * 4.0 + 6.0) / 2
     lanes = np.where(lanes > 0, lanes, np.clip(np.round((2 * edge - 6.0) / 4.0), 1, 8))
+    through = np.where(through > 0, through, lanes)
     opp = np.full(n, np.nan)
     blocks = [[] for _ in range(n)]
     polys = [exitsigns._outline(line, width) for _, _, line, width in rows_l]
@@ -390,7 +394,7 @@ def _junction(rec, frame, context, left_hand):
                 if b >= -BLOCK_LATERAL_M and a <= BLOCK_LATERAL_M:
                     blocks[i].append((float(a), float(b)))
     rows = np.column_stack([s, at[:, 0], at[:, 1], travel[:, 0], travel[:, 1], -edge, edge, opp, lanes,
-                            np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan), np.zeros(n)])
+                            np.full(n, np.nan), np.full(n, np.nan), np.full(n, np.nan), np.zeros(n), through])
     jcols = {c: np.nan for c in JUNCTION_COLS}
     prev = de.get("prev_exit_s")
     jcols.update(id=float(rec["id"]), side=float(d.get("side", 1)), gore_s=-nose_s, ref_s=REFERENCE_M - nose_s,

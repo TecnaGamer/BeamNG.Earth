@@ -185,6 +185,26 @@ class GlueRobustnessTest(unittest.TestCase):
         for v, want in (("1e12", 8), ("inf", None), ("-4", 1), ("3", 3), ("x", None)):
             self.assertEqual(deautobahn.lanes_at([[1, 0.0, 100.0, {"lanes": v}]], 50.0), want, v)
 
+    def test_layout_gets_the_drawn_lanes(self):
+        """lanes=3 with turn:lanes=none|none|slight_right: the layout spreads the boards over the 3 lanes the road is
+        drawn with (the exit lane included), the mounting counts the 2 through lanes (Codex review of #999: the
+        through arrows sat over the exit lane)."""
+        lat, lon = DE
+        frame = geodesy.EnuFrame(lat, lon)
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.multiple(test_roads, LAT=lat, LON=lon, M_LON=111320. * np.cos(np.radians(lat))), \
+                mock.patch.object(test_highway_signs, 'FRAME', frame), mock.patch.object(deautobahn, 'ENV', ''):
+            md = test_highway_signs.fixture(d)
+            rec = german_record(md, frame)
+            md.highway_signs = highwaysigns.Source(md, tags=GermanTags([rec]))
+            self.addCleanup(md.highway_signs.close)
+            got = deautobahn._junction(rec, frame, md.highway_signs.context(None, None), False)
+            rows = got["rows"]
+            col = deautobahn.PROFILE_COLS.index
+            on = rows[:, col("s")] < 1900.0
+            self.assertTrue((rows[on, col("lanes")] == 3).all(), rows[on, col("lanes")][:5])
+            self.assertTrue((rows[on, col("through")] == 2).all(), rows[on, col("through")][:5])
+
     def test_one_bad_junction_does_not_blank_the_tile(self):
         lat, lon = DE
         frame = geodesy.EnuFrame(lat, lon)
