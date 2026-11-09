@@ -151,7 +151,9 @@ def _flushed(frame, cells, box, rails, prof, ground, tunnels):
     grade (_flush, as tile_mesh does when it builds the track), for the grader's plans: the terrain is then graded to the
     bed the mesh really has, not to the smoothed ground under a bed that tile_mesh lowers to a road's level (the ballast
     and sleepers sank under the terrain by the road, Kalynivka 2026-11-05)."""
-    cr = crossings(frame, cells, box, reach=GRADE_REACH_M) + list(tunnels)
+    all_cr = crossings(frame, cells, box, reach=GRADE_REACH_M)
+    cr = (true_crossers([xy for _f, c, kind, xy in rails if kind == "ground" and c != "tram"], all_cr)
+          if TRUE_CROSSERS_ON else all_cr) + list(tunnels)
     if not cr:
         return prof
     zc = np.asarray(ground(np.concatenate([ln for ln, _ in cr])), np.float64)
@@ -1579,6 +1581,140 @@ def _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground):
     return out
 
 
+BUFFER_JOIN_M = 2.3         # m: another track's point this near an end makes it a joint or a switch, not a dead end
+BUFFER_BACK_M = 1.0         # m the buffer stop stands back from the end of its track
+BUFFER_H = 1.0              # m its top over the rail head
+BUFFER_HALF_M = 1.35        # m its half width
+WALK_CLASSES = {"footway": 2.0, "path": 1.5, "cycleway": 2.5, "pedestrian": 3.0}    # class -> the way's width (m)
+WALK_MIN_SIN = 0.35         # a way crossing the track flatter than this (20 degrees) is left alone
+WALK_PANEL_OUT_M = 0.45     # m: half the panel outside each rail (it is 0.9 m wide)
+WALK_PANEL_GAP_M = 0.07     # m left between the middle panel and each rail (the flangeway)
+STATION_FURNITURE_ON = os.environ.get("BNE_RAIL_FURNITURE", "on") != "off"       # buffer stops at the ends of tracks, footway crossings over them
+TRUE_CROSSERS_ON = os.environ.get("BNE_RAIL_TRUE_CROSSINGS", "on") != "off"   # a road that only ends at a track or runs beside it cuts nothing
+
+
+def true_crossers(rail_lines, cr):
+    """cr ([(xy, half width)]) without the roads that only touch the track or run beside it (a service road ending at the
+    rail, a street along it): a carriageway cuts the track where its centre line crosses the track's. rail_lines: the
+    track parts' xy. Pure."""
+    if not cr or not rail_lines:
+        return cr
+    out = []
+    for line, hw in cr:
+        if len(line) < 2:
+            continue
+        if roads._crossings(rail_lines, [line]):
+            out.append((line, hw))
+    return out
+
+
+def walk_ways(frame, cells, box, reach=60.0):
+    """[(xy (k, 2), width)]: the footways, paths, cycleways and pedestrian ways on the ground near box (the ways a person
+    walks across a track by). Pure."""
+    near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
+    seen, out = set(), []
+    for feats in cells:
+        if feats is None or len(feats) == 0 or "subtype" not in feats.attrs or "class" not in feats.attrs:
+            continue
+        sub, cls = feats.attrs["subtype"], feats.attrs["class"]
+        fb = feats.boxes(frame)
+        for i in range(len(feats)):
+            w = WALK_CLASSES.get(str(cls[i])) if str(sub[i]) == "road" else None
+            fid = str(feats.ids[i])
+            if w is None or fid in seen or not _box_hit(fb[i], near):
+                continue
+            seen.add(fid)
+            for ring in roads.ground_parts(feats, i):
+                e, n = mapgeom.enu_xy(feats, frame, ring)
+                if len(e) >= 2:
+                    out.append((np.c_[e, n], w))
+    return out
+
+
+def walk_crossing_boxes(rails, finals, ways, carriage, ex):
+    """The boxes of the footway crossings of the tracks: [(centres (1, 2), along (1, 2), across (1, 2), z0 (1,), z1 (1,)),
+    hx, hy, material kind] for each crossing of a way over a ground track (the panels between and outside the rails, flush
+    with their heads, leaving the flangeway), none where the way follows a road across (its deck is the road's). rails /
+    finals: tile_mesh's parts and their (zb) beds. ways: walk_ways; carriage: [(xy, half width)] of the true crossers."""
+    out = []
+    if not ways:
+        return out
+    for (fid, cls, kind, xy), zb in zip(rails, finals):
+        if kind != "ground" or cls == "tram" or len(xy) < 2:
+            continue
+        lo, hi = xy.min(0) - 8.0, xy.max(0) + 8.0
+        s = _arc(xy)
+        for way, ww in ways:
+            if (way.max(0) < lo).any() or (way.min(0) > hi).any():
+                continue
+            for _pi, arc, pt in roads._crossings([xy], [way]):
+                if not (ex[0] <= pt[0] <= ex[2] and ex[1] <= pt[1] <= ex[3]):
+                    continue
+                k = int(np.clip(np.searchsorted(s, arc), 1, len(xy) - 1))
+                t = xy[k] - xy[k - 1]
+                t = t / max(float(np.hypot(*t)), 1e-9)
+                d = np.hypot(*(way[1:] - way[:-1]).T)
+                j = int(np.argmin(np.hypot(*((way[:-1] + way[1:]) / 2 - pt).T)))
+                f = (way[j + 1] - way[j]) / max(float(d[j]), 1e-9)
+                sin = abs(t[0] * f[1] - t[1] * f[0])
+                if sin < WALK_MIN_SIN:
+                    continue
+                if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
+                    continue                    # (beside a road's deck: its sidewalk, the deck is the road's)
+                z = float(np.interp(arc, s, zb)) + RAIL_TOP_M - 0.012
+                z0 = float(np.interp(arc, s, zb)) + BALLAST_H - 0.15
+                n = np.array([-t[1], t[0]])
+                half_g = GAUGE_M / 2
+                hx = min(6.0, (ww / 2) / sin + 0.2)
+                ctr = lambda off: (pt + n * off)[None, :]
+                a = t[None, :]
+                b = n[None, :]
+                out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M, "mid"))
+                for sg in (1, -1):
+                    out.append(((ctr(sg * (half_g + RAIL_HEAD + WALK_PANEL_OUT_M)), a, b, np.array([z0]), np.array([z])),
+                                hx, WALK_PANEL_OUT_M, "side"))
+    return out
+
+
+def buffer_stop_boxes(rails, finals, worn, near):
+    """The buffer stops at the true ends of the tracks: [(centres, along, across, z0, z1), hx, hy, "block" | "beam"]: a
+    concrete block across the track BUFFER_BACK_M before its end, a steel beam on its face. A true end is the end of a
+    ground part no other part joins and that lies well inside the window's reach (a clipped end is not one); abandoned
+    lines (worn 2) and trams have none. Pure."""
+    if not rails:
+        return []
+    nodes, edges, _adj = roads._chain_graph([xy for *_x, xy in rails])
+    deg = np.zeros(len(nodes), np.int64)
+    for a, b, _s in edges:
+        deg[a] += 1
+        deg[b] += 1
+    inner = (near[0] + 3 * STEP_M, near[1] + 3 * STEP_M, near[2] - 3 * STEP_M, near[3] - 3 * STEP_M)
+    out = []
+    for n_part, ((fid, cls, kind, xy), zb, (a, b, _s)) in enumerate(zip(rails, finals, edges)):
+        if kind != "ground" or cls == "tram" or worn.get(fid, 0) >= 2 or a == b or len(xy) < 4:
+            continue
+        for node, i, j in ((a, 0, 2), (b, len(xy) - 1, len(xy) - 3)):
+            if deg[node] != 1:
+                continue
+            p = xy[i]
+            if not (inner[0] <= p[0] <= inner[2] and inner[1] <= p[1] <= inner[3]):
+                continue
+            if any(float(np.min(np.hypot(*(oxy - p).T))) < BUFFER_JOIN_M
+                   for o, (*_x, oxy) in enumerate(rails) if o != n_part and oxy is not xy):
+                continue                        # (a track starting on another one's line: a switch, not an end)
+            d = xy[i] - xy[j]
+            d = d / max(float(np.hypot(*d)), 1e-9)
+            n = np.array([-d[1], d[0]])
+            at = p - d * BUFFER_BACK_M
+            z = float(zb[i]) + RAIL_TOP_M
+            z0 = float(zb[i]) + BALLAST_H - 0.2
+            out.append(((at[None, :], d[None, :], n[None, :], np.array([z0]), np.array([z + BUFFER_H])),
+                        0.3, BUFFER_HALF_M, "block"))
+            out.append((((at + d * 0.34)[None, :], d[None, :], n[None, :], np.array([z + 0.45]), np.array([z + 0.85])),
+                        0.06, BUFFER_HALF_M - 0.1, "beam"))
+    return out
+
+
 SWITCH_M = 1.7              # m: a track point this near another track's line, crossing it at SWITCH_MIN_SIN or more, is a
 SWITCH_MIN_SIN = 0.087      # switch or a crossing: no collider box there (the flange of the through track would strike the side
                             # track's rail; a real switch's blades and frog leave the gap)
@@ -1703,7 +1839,9 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
               for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
              if return_decks else [])
-    cr = crossings(frame, cells, box, reach=50.0) + tunnels
+    ground_lines = [xy for _f, c, kind, xy in rails if kind == "ground" and c != "tram"]
+    all_cr = crossings(frame, cells, box, reach=50.0)
+    cr = (true_crossers(ground_lines, all_cr) if TRUE_CROSSERS_ON else all_cr) + tunnels
     crossers = []
     if cr:                                          # (one ground call for all of them: its cost is per call)
         zc = np.asarray(ground(np.concatenate([ln for ln, _ in cr])), np.float64)
@@ -1716,7 +1854,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     ballast, concrete, steel = mesh.mat(BALLAST), mesh.mat(CONCRETE), mesh.mat(STEEL)
     up = np.array([0.0, 0.0, 1.0])
     small = []                                      # sleepers and piers: drawn last, as room allows
-    for (fid, cls, kind, xy), (zb, zg), sw, gone in zip(rails, prof, switch, carried):
+    finals = [z for z, _g in prof]                  # (each part's bed, flush with the roads it crosses: below)
+    for n_part, ((fid, cls, kind, xy), (zb, zg), sw, gone) in enumerate(zip(rails, prof, switch, carried)):
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
                  (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
         if gone or not inside.any():
@@ -1732,6 +1871,7 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             if blk.any():           # (its rails flush with the road at a level crossing)
                 zb = _flush(s, zb, blk, np.asarray(ground(xy[blk]), np.float64))
                 top = zb + BALLAST_H
+                finals[n_part] = zb
             cut = blk | ~inside
             # the ballast's sides to the ground beside: wider where the bed stands high (a ramp's embankment)
             near = BALLAST_TOP_M + BALLAST_SLOPE * (BALLAST_H + BALLAST_FOOT_M)
@@ -1795,6 +1935,14 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
             for i, j in _runs(~inside | sw):     # road, as the bed is flush with it; none in a switch: SWITCH_M)
                 sl = slice(i, j + 1)
                 _collider(mesh, xy[sl], u[sl], top[sl], s[sl] / 3.0, half_g, up)
+    if STATION_FURNITURE_ON:                        # (the buffer stops at the tracks' ends, the footways' panels across them)
+        carriage = [(ln, hw) for ln, hw, _z in crossers if ln is not None]
+        mats = {"mid": concrete, "side": concrete, "block": concrete, "beam": steel}
+        for arrs, hx, hy, kind in buffer_stop_boxes(rails, finals, worn, (box[0] - REACH_M, box[1] - REACH_M,
+                                                                          box[2] + REACH_M, box[3] + REACH_M)) +                 walk_crossing_boxes(rails, finals, walk_ways(frame, cells, box, 60.0), carriage, ex):
+            c = arrs[0][0]
+            if ex[0] - 2 <= c[0] <= ex[2] + 2 and ex[1] - 2 <= c[1] <= ex[3] + 2:
+                small.append((arrs, hx, hy, mats[kind]))
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:

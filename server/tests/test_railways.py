@@ -211,6 +211,50 @@ class RailwayTest(unittest.TestCase):
         self.assertTrue(mask.any(), "a hole at a portal")
         self.assertFalse(mask[:, :20].any(), "none on open ground")
 
+    def test_a_road_that_only_ends_at_the_track_does_not_cut_it(self):
+        track = [(-50.0, 100.0), (300.0, 100.0)]
+        hw = 1.75
+        t_end = features([track, [(120.0, 20.0), (120.0, 99.0)]], ["standard_gauge", "service"], subtypes=["rail", "road"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [t_end], flat)
+        ball = P[np.unique(T[np.asarray(M) == mats.index(railways.BALLAST)])]
+        self.assertTrue(((ball[:, 0] > 120 - hw) & (ball[:, 0] < 120 + hw)).any(), "the ballast runs on past a road's end")
+        cross = features([track, [(120.0, 20.0), (120.0, 180.0)]], ["standard_gauge", "service"], subtypes=["rail", "road"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [cross], flat)
+        ball = P[np.unique(T[np.asarray(M) == mats.index(railways.BALLAST)])]
+        self.assertFalse(((ball[:, 0] > 120 - hw) & (ball[:, 0] < 120 + hw)).any(), "a road across does cut it")
+
+    def test_a_dead_end_gets_a_buffer_stop_a_joint_does_not(self):
+        f = features([[(40.0, 100.0), (200.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        top = 10.0 + railways.RAIL_TOP_M
+        for x in (40.0, 200.0):
+            blk = conc[(np.abs(conc[:, 0] - x) < 1.6) & (conc[:, 2] > top + 0.5)]
+            self.assertGreater(len(blk), 0, f"a buffer stop at x = {x}")
+            self.assertAlmostEqual(float(blk[:, 2].max()), top + railways.BUFFER_H, delta=0.02)
+        joined = features([[(40.0, 100.0), (120.0, 100.0)], [(120.0, 100.0), (200.0, 100.0)]], ["standard_gauge"] * 2,
+                          subtypes=["rail"] * 2)
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [joined], flat)
+        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        self.assertEqual(len(conc[(np.abs(conc[:, 0] - 120.0) < 1.6) & (conc[:, 2] > top + 0.3)]), 0, "none at a joint")
+        with unittest.mock.patch.object(railways, "STATION_FURNITURE_ON", False):
+            P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        self.assertNotIn(railways.CONCRETE, [mats[k] for k in np.unique(M)], "BNE_RAIL_FURNITURE=off")
+
+    def test_a_footway_across_the_track_gets_panels_flush_with_the_rails(self):
+        track = [(-50.0, 100.0), (300.0, 100.0)]
+        f = features([track, [(120.0, 60.0), (120.0, 140.0)], [(60.0, 90.0), (200.0, 90.5)]],
+                     ["standard_gauge", "footway", "footway"], subtypes=["rail", "road", "road"])
+        P, T, UV, mats, M = railways.tile_mesh(FRAME, 0, 0, [f], flat)
+        conc = P[np.unique(T[np.asarray(M) == mats.index(railways.CONCRETE)])]
+        top = 10.0 + railways.RAIL_TOP_M - 0.012
+        panel = conc[(np.abs(conc[:, 0] - 120.0) < 2.5) & (np.abs(conc[:, 2] - top) < 0.003)]
+        self.assertGreater(len(panel), 8, "panels at the footway's crossing")
+        wide = float(panel[:, 1].max() - panel[:, 1].min())
+        self.assertAlmostEqual(wide, railways.GAUGE_M + 2 * (railways.RAIL_HEAD + 2 * railways.WALK_PANEL_OUT_M), delta=0.05)
+        far = conc[(np.abs(conc[:, 0] - 180.0) < 20.0) & (np.abs(conc[:, 2] - top) < 0.003)]
+        self.assertEqual(len(far), 0, "a footway running beside the track makes none")
+
     def test_a_tile_past_the_vertex_budget_keeps_its_main_lines(self):
         long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]
         short = [[(100.0, 120.0 + 2.0 * k), (130.0, 120.0 + 2.0 * k)] for k in range(8)]
