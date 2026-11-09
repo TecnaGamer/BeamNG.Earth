@@ -396,7 +396,7 @@ class LaneTags(Shards):
         - OSM's lane tags from the shard's "ways": attrs lane_attr(k) for k in LANE_COLUMNS, and LANE_PARTS;
         - Germany's road rules from its "rules" (tools/build_lane_tags.py): attrs osm_priority_road (designated /
           end / yes_unposted) and osm_zone_maxspeed (DE:30 / DE:20 / DE:10), lane_attr(k) for k in RULE_COLUMNS;
-        - its German junction sign nodes in the cell, for sign_nodes(feats).
+        - its German sign nodes in the cell (junction signs and the mapped Ortstafeln), for sign_nodes(feats).
         Nothing when the shard cannot be had; a shard without "rules" or "nodes" (an older build) joins none of them.
         The way ids are parsed and found in the shard natively (fast.way_tag_rows, fast.lane_parts), each distinct tag
         set's columns made once and the parts share the shard's tag sets (LANE_PARTS): a regex, a numpy search and a

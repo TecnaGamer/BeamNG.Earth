@@ -23,6 +23,10 @@ import roads
 import signroads
 
 KERNEL = 98                     # earthfast VERSION with speed_sign_place / speed_sign_mesh
+GENERAL_KERNEL = 171            # ... with speed_sign_general and speed_sign_place's kind, limit before and rank
+# m ahead of a speed-limit sign a German town makes a 50 its Ortstafel's (general: the mapped Ortstafel may stand
+# up to MAPPED_REACH_M before the estimate's town)
+GENERAL_AHEAD_M = (100.0, 200.0, 300.0)
 RANK = {"motorway": 7, "trunk": 6, "primary": 5, "secondary": 4, "tertiary": 3, "unclassified": 2, "residential": 1}
 MARGIN_M = 900.0                # the roads this far round a tile: its junctions and the nearby signs that thin it out
 REPEAT_M = (1609.344, 3218.688)  # a reminder about every mile in town and every two out of it (PR #363's 2 miles)
@@ -202,14 +206,15 @@ def _tile_rows(frame, box, context, left_hand, mph, face, margin=MARGIN_M):
 
 
 def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
-    """The speed-limit signs of box (x0, y0, x1, y1): (k, 9) [x, y, travel x, travel y, value, size class, road x,
-    road y, urban] (speed_sign_place's)."""
+    """The speed-limit signs of box (x0, y0, x1, y1): (k, 12) [x, y, travel x, travel y, value, size class, road x,
+    road y, urban, kind (0 a change, 1 a merge, 2 past a junction, 3 a reminder), a change's limit before it (0 not
+    known), the road's rank] (speed_sign_place's)."""
     fast.require(KERNEL, "speed-limit signs")
     x0, y0, x1, y1 = box
     rows = _tile_rows(frame, box, context, left_hand, mph, face)
     arrays = _arrays(rows, box)
     if arrays is None:
-        return np.zeros((0, 9))
+        return np.zeros((0, 12))
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = _outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
     return fast._ef.speed_sign_place(*arrays, poly, poly_off, [float(v) for v in box], _kernel_style(face),
@@ -292,12 +297,30 @@ def sweden_mesh(table, origin):
     return np.vstack(P), np.vstack(T), np.vstack(UV), MATERIALS_C31, np.concatenate(M)
 
 
-def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False):
+def general(signs, towns):
+    """Which signs (place's rows) to keep where Germany's general limits are not posted (earthfast
+    speed_sign_general: no 50 in or before a town, no 100 out of town but where a lower limit ends; with the town
+    signs on, whose Ortstafeln start and end the 50); towns: townentry.Towns.town_state's."""
+    fast.require(GENERAL_KERNEL, "Germany's general speed limits")
+    xy, travel = signs[:, 0:2], signs[:, 2:4]
+    here = np.asarray(towns(xy), bool).reshape(-1, 2)
+    ahead = np.zeros(len(signs), bool)
+    for d in GENERAL_AHEAD_M:
+        ahead |= np.asarray(towns(xy + travel * d), bool).reshape(-1, 2)[:, 0]
+    town = np.ascontiguousarray(np.c_[here[:, 0], ahead, here[:, 1]])
+    return np.asarray(fast._ef.speed_sign_general(np.ascontiguousarray(signs, np.float64), town), bool)
+
+
+def build_tile(frame, tx, ty, elev, context, decks=(), left_hand=False, mph=True, face=STYLE_VIENNA, de_on=False,
+               towns=None):
     """The mesh (signstream.write_tile's) of road tile (tx, ty)'s speed-limit signs, or None (none). de_on (the German
     junction signs, designs.enabled's): near Germany its zone signs too, in one mesh, and not the 274s they replace
-    (dezones.tile); otherwise today's."""
+    (dezones.tile); otherwise today's. towns: the town signs' towns (townentry.Towns.town_state) when they are on:
+    Germany's general limits are then not posted (general)."""
     box = roads.tile_bbox(tx, ty)
     signs = place(frame, box, context, left_hand, mph, face)
+    if towns is not None and len(signs) and not mph:
+        signs = signs[general(signs, towns)]
     extra = None
     if de_on:                   # (Germany's zone signs: dezones.py)
         import dezones

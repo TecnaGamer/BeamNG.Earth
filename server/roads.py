@@ -9729,8 +9729,14 @@ class Tracker:
         self.fails = {}         # tile -> builds failed in a row (TILE_FAILS_WARN)
         self.started = {}       # tile -> monotonic time its build started (TILE_STUCK_S)
         self.stuck_said = set()
+        self.closed = False
 
     def close(self):
+        """No more tiles from this tracker: a build still running (the pool's shutdown cancels only the queued ones)
+        is not sent when it ends (_built), as signstream.Tracker's. Its replacement (earthd: the gas stations' and the
+        town signs' switches, roads_reset) sends the tile built anew; this one's, built before the switch, had come
+        after it and stayed (Codex on PR #892)."""
+        self.closed = True
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -9811,7 +9817,7 @@ class Tracker:
             self.retry = {k: t for k, t in self.retry.items() if t > now}
 
     def _built(self, conn, aid, key, fut):
-        if aid != self.aid:                 # (an old anchor's: the same key may be in flight for the new one)
+        if self.closed or aid != self.aid:  # (an old anchor's: the same key may be in flight for the new one)
             return
         self.building.discard(key)
         self.futs.pop(key, None)
@@ -9917,8 +9923,11 @@ class GeoTracker:
         self.empty = set()      # (anchor tiles' interface: progress)
         self.stats = {"content": 0, "skins": 0, "exact": 0, "exact_base": 0, "anchors": 0,
                       "content_cpu": 0.0, "skin_cpu": 0.0}
+        self.closed = False
 
     def close(self):
+        """No more tiles from this tracker (Tracker.close: a running build's result is not sent)."""
+        self.closed = True
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
 
@@ -10111,7 +10120,7 @@ class GeoTracker:
             self.building.discard(key)
             self.futs.pop(key, None)
             self.started.pop(key, None)
-        if fut.cancelled():
+        if self.closed or fut.cancelled():
             return
         try:
             res = fut.result()

@@ -937,6 +937,28 @@ class TrackerTest(unittest.TestCase):
         self.assertEqual(keys, want)
         self.assertEqual(len(built), len(want), "each tile built once")
 
+    def test_a_build_ending_after_close_is_not_sent(self):
+        """A switch that rebuilds the road tiles (town signs, gas stations: earthd replaces the tracker) closes the
+        old tracker: a build of it still running then is not sent when it ends, so it cannot come after the new
+        tracker's tile of the same key and stay (Codex on PR #892)."""
+        import concurrent.futures
+
+        def done(res):
+            f = concurrent.futures.Future()
+            f.set_result(res)
+            return f
+        conn = FakeConn()
+        tr = roads.Tracker()
+        tr.aid = 1
+        tr.close()
+        tr._built(conn, 1, (0, 0), done(("/p/1_0_0", 1)))
+        geo = roads.GeoTracker()
+        geo.aid = 1
+        geo.close()
+        geo._built(conn, 1, (0, 0), done({"content": ("/x/rg.json", 1, {"h": 0.0}, []), "skin": ("/x/rs.json", {}),
+                                          "exact": {}, "time": {}}), True, True, {})
+        self.assertEqual(conn.sent, [])
+
     def test_stuck_build_said_once(self):
         """A road tile whose build never ends (a stuck worker: "roads & buildings 0/36" with an empty log, GitHub #241)
         is logged once it has run TILE_STUCK_S."""

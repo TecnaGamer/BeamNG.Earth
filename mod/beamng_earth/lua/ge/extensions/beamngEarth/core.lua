@@ -1155,6 +1155,14 @@ local function onMessage(msg)
       M.germanJunctionSigns = v == true
       net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
     end
+    -- the town signs' switch (settings townSigns, off by default for now: opt-in until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('townSigns')
+      if v == nil then v = M.townSigns end
+      M.townSigns = v == true
+      net.send({ type = 'town_signs', on = M.townSigns })
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -3342,6 +3350,15 @@ function M.setGermanJunctionSigns(on)
   if M.germanJunctionSigns == on then return end
   M.germanJunctionSigns = on
   net.send({ type = 'german_junctions', on = on })
+end
+
+-- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
+-- (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setTownSigns(on)
+  on = on == true
+  if M.townSigns == on then return end
+  M.townSigns = on
+  net.send({ type = 'town_signs', on = on })
 end
 
 M.onUpdate = onUpdate

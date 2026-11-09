@@ -15,8 +15,10 @@ Shards: <OUT_DIR>/<x>/<y>.json.gz per z7 tile (build_rail_tags.SHARD_ZOOM), and 
   the raw values are never written, the shards' size matters on a Steam Deck), only around Germany (GERMANY_BOX: a
   way with a node in it). Each id list sorted and delta-coded (the first id, then each minus the one before: 100,
   105, 230 is [100, 5, 125]). Left out where a shard has none.
-- "nodes": [[id, lon, lat, {"traffic_sign", "direction", "traffic_sign:direction"}]]: the nodes with a German
-  junction sign (SIGN_BASES, sign_records), only inside GERMANY_BOX; the direction keys only where known.
+- "nodes": [[id, lon, lat, {"traffic_sign", "name", "direction", "traffic_sign:direction"}]]: the nodes with a German
+  junction sign (SIGN_BASES) or a mapped town sign (Ortstafeln: TOWN_CODES, for the town signs, server/townentry.py;
+  sign_records), only inside GERMANY_BOX; the name (town signs only) and the direction keys only where mapped. Each
+  reader keeps the codes it knows (designs.mapped_rows, townentry.Towns.mapped_nodes).
 Outside the box a shard holds what the tool wrote before the road rules; only a shard a rule way touches that also
 reaches inside the box differs (a way across the box's edge, with a node inside, can add a rules-only shard in the
 tile next door).
@@ -63,11 +65,14 @@ GERMANY_BOX = (5.81, 47.22, 15.10, 55.11)
 # Vorfahrt, 306 / 307 Vorfahrtstraße begin / end, 274.1 / 274.2 Tempo-30-Zone begin / end)
 SIGN_BASES = ("205", "206", "301", "306", "307", "274.1", "274.2")
 SIGN_CODES = tuple("DE:" + b for b in SIGN_BASES)
+# the town signs (Ortstafel, Zeichen 310 / 311): OpenStreetMap's city_limit, and the VzKat's numbers as some map them
+TOWN_CODES = ("city_limit", "DE:310", "DE:311")
 # a node's sign keys: traffic_sign, and the two that also say which way the sign faces
 SIGN_KEYS = ("traffic_sign", "traffic_sign:forward", "traffic_sign:backward")
 # a junction sign's code: "DE:" or not (mappers leave it out: 205), and any variant after its number (DE:274.1:30,
 # DE:274.1[30], DE:274.1-20: a zone's limit)
 _SIGN = re.compile(r"^(?:DE:)?(?:" + "|".join(re.escape(b) for b in SIGN_BASES) + r")(?=$|[\[\-:])")
+_TOWN = re.compile(r"^(?:city_limit|(?:DE:)?31[01])(?=$|[\[\-:])")
 _PLATE = re.compile(r"^(?:DE:)?1002-[\w.]+$")           # a Zusatzzeichen 1002-xx plate (1002-12: "right turn")
 _ZONE_TYPE = re.compile(r"^DE:zone:?(30|20|10)$")
 # what the first pass asks pyosmium for, a way and a node each only their own keys (an object with none never reaches
@@ -113,25 +118,29 @@ def rule_tags(tags):
 
 
 def sign_code(code):
-    """A traffic_sign code as the shards keep it, None if it is not a junction sign (SIGN_BASES): with "DE:" where
-    the mapper left it out (205 -> DE:205), and with its variant (DE:274.1:30, DE:274.1[30], DE:274.1-20: the zone's
-    limit, for the reader to parse)."""
-    if not _SIGN.match(code):
-        return None
-    return code if code.startswith("DE:") else "DE:" + code
+    """A traffic_sign code as the shards keep it, None if it is neither a junction sign (SIGN_BASES) nor a town sign
+    (TOWN_CODES): a junction sign with "DE:" where the mapper left it out (205 -> DE:205), and with its variant
+    (DE:274.1:30, DE:274.1[30], DE:274.1-20: the zone's limit, for the reader to parse); a town sign's city_limit as it
+    is, its number with "DE:" where the mapper left it out (310 -> DE:310)."""
+    if _SIGN.match(code):
+        return code if code.startswith("DE:") else "DE:" + code
+    if _TOWN.match(code):
+        return code if code.startswith(("DE:", "city_limit")) else "DE:" + code
+    return None
 
 
 def sign_node(tags, key="traffic_sign"):
-    """{"traffic_sign": the junction signs of tags[key] (sign_code, and the 1002-* plates after one) joined by ",",
-    + which way they face} of a node, None when key holds none. Which way: for traffic_sign, its direction /
-    traffic_sign:direction as mapped; for traffic_sign:forward / :backward, the mapped direction, else the key's own
-    (forward / backward)."""
-    kept, on = [], False
+    """{"traffic_sign": the junction signs of tags[key] (sign_code, and the 1002-* plates after one) and its town
+    signs joined by ",", the node's name where it holds a town sign, + which way they face} of a node, None when key
+    holds none. Which way: for traffic_sign, its direction / traffic_sign:direction as mapped; for
+    traffic_sign:forward / :backward, the mapped direction, else the key's own (forward / backward)."""
+    kept, on, town = [], False, False
     for c in _codes(tags.get(key, "")):
         s = sign_code(c)
         if s is not None:
             kept.append(s)
-            on = True
+            on = _SIGN.match(c) is not None         # (a plate follows a junction sign only)
+            town = town or not on
         elif on and _PLATE.match(c):
             kept.append(c)
         else:
@@ -139,6 +148,8 @@ def sign_node(tags, key="traffic_sign"):
     if not kept:
         return None
     out = {"traffic_sign": ",".join(kept)}
+    if town and tags.get("name"):
+        out["name"] = tags["name"]
     if key == "traffic_sign":
         for k in ("direction", "traffic_sign:direction"):
             if k in tags:
@@ -149,8 +160,8 @@ def sign_node(tags, key="traffic_sign"):
 
 
 def sign_records(tags):
-    """[sign_node] of a node's SIGN_KEYS that hold a junction sign: a node with signs on two of them (both ways)
-    writes one record for each."""
+    """[sign_node] of a node's SIGN_KEYS that hold a junction or a town sign: a node with signs on two of them (both
+    ways) writes one record for each."""
     return [s for s in (sign_node(tags, k) for k in SIGN_KEYS) if s is not None]
 
 
@@ -217,7 +228,7 @@ def main():
     a = ap.parse_args()
     t0 = time.time()
     ways, rules, nodes = first_pass(a.planet)
-    print(f"pass 1: {len(ways):,} ways, {len(rules):,} with road rules, {len(nodes):,} sign nodes, "
+    print(f"pass 1: {len(ways):,} ways, {len(rules):,} with road rules, {len(nodes):,} sign nodes (junction and town signs), "
           f"{time.time() - t0:.0f} s", flush=True)
     refs = [r for _i, _t, r in ways] + [r for _i, _t, r in rules]
     ids = np.unique(np.concatenate(refs)) if refs else np.zeros(0, np.int64)
