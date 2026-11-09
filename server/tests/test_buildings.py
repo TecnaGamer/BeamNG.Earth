@@ -1941,6 +1941,18 @@ class RoadPassageTest(unittest.TestCase):
         road = [[30, 30], [60, 30], [60, 40], [90, 40], [90, 50], [60, 50], [60, 60], [100, 60]]
         self.assertEqual(len(self.items(road)), 1)
 
+    def test_a_building_that_holds_a_car_park_still_gets_its_passage(self):
+        """Ulemiste keskus holds a multi-storey car park, so its footprint is flagged a garage: a 51,000 m2 building
+        is not a car park (its way was left whole). A car park's own, small footprint still has none."""
+        garage = np.array([[100.0, 40.0], [140.0, 40.0], [140.0, 70.0], [100.0, 70.0], [100.0, 40.0]])
+        road = np.array([[0.0, 90.0], [256.0, 90.0]])
+
+        def run(w, d):
+            b = Feats(["B"], [self.ll(20, 20, w, d)], **{"class": ["retail"], "height": [10.0]})
+            return bld.tile_buildings(self.f, 0, 0, 256, 256, [b], self.ground, passage_xy=[road], garages_xy=[garage])
+        self.assertGreater(len(run(220, 120)), 1, "a big building holding a car park: a passage")
+        self.assertEqual(len(run(100, 100)), 1, "a car park's own footprint: whole")
+
     def test_the_switch_gives_the_old_wall(self):
         with unittest.mock.patch.object(bld, "ROAD_PASSAGE_ON", False):
             self.assertEqual(len(self.items([[0.0, 50.0], [256.0, 50.0]])), 1)
