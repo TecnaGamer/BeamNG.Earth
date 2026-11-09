@@ -48,7 +48,7 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -799,6 +799,10 @@ function M.onGeoTile(msg, currentAnchor, a)
   if not frame then lastError = 'road geotile without a frame: ' .. tostring(msg.key); return false end
   local t = { anchor = currentAnchor, geo = true, gkey = msg.key, frame = frame, h = h, objs = {}, queued = 0,
     colliders = {}, slots = {}, at = now(), colWant = {}, parts = {}, exactShape = {}, exactOf = {} }
+  -- (its buildings and their footprint share, server blockworker: the scene complexity, M.scene)
+  if type(data.scene) == 'table' and type(data.scene[1]) == 'number' then
+    t.sceneN, t.sceneCover = data.scene[1], tonumber(data.scene[2]) or 0
+  end
   local cols = type(data.colliders) == 'table' and data.colliders or {}
   local pivots, np = 0, 0
   for _, what in ipairs(M.CONTENT_WHATS) do
@@ -1101,7 +1105,7 @@ function M.onTile(msg, currentAnchor, a)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail',
-      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }) do
+      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1613,7 +1617,7 @@ M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
 local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'railcol',
-  'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1770,11 +1774,14 @@ end
 function M.update(gov, currentAnchor, player, view, a)
   -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
   -- that asynchronous rebuild before restoring deep water over its old bore.
-  local keepWater = {}
-  for _, r in ipairs(waterReleases) do
-    if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+  if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
+    local keepWater = {}
+    for _, r in ipairs(waterReleases) do
+      if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+    end
+    waterReleases = keepWater
   end
-  waterReleases, waterReloads = keepWater, reloads
+  waterReloads = reloads
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
@@ -2260,6 +2267,9 @@ function M.ahead(x, y, hx, hy, dist)
         e.road = t.road ~= nil or (t.queued or 0) <= 0
         e.bld = t.bld ~= nil                    -- (a tile without buildings never has one)
         e.walk = t.walk ~= nil
+        for _, q in ipairs(walkQ) do              -- (a sidewalk / kerb import still queued: the walk lead)
+          if q.key == tkey then e.walkWait = true; break end
+        end
         local want, made, solid = 0, 0, 0
         for what in pairs(t.colWant or {}) do
           want = want + 1
@@ -2280,6 +2290,13 @@ function M.ahead(x, y, hx, hy, dist)
             end
           end
         end
+      end
+      -- the tree tile there (trees.lua, geotiles only): not arrived or still being placed (the tree lead)
+      if M.geo then
+        local T = package.loaded['beamngEarth/trees']
+        local all = T and T.debugTiles and T.debugTiles()
+        local tt = type(all) == 'table' and all['g:' .. tostring(sq)] or nil
+        e.trees = tt ~= nil and not tt.pending
       end
       out[#out + 1] = e
     end
@@ -2442,6 +2459,25 @@ function M.status()
     urgentWalks = M.urgentWalks or 0, quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog,
     geo = M.geo or false, geoStats = M.geoStats, farGeo = M.farGeo or false, farGeoTiles = ngf,
     farGeoShown = ngShown }
+end
+
+-- The scene round the car for the anonymous performance reports (perfsummary.lua): the loaded road tiles (those within
+-- the send distance) with their buildings and mean footprint share. No place: counts only.
+-- (tiles built before their counts were sent have none: the known ones' total scaled to all; none known: nil)
+function M.scene()
+  local n, known, nb, cover = 0, 0, 0, 0
+  for _, t in pairs(tiles) do
+    if t.geo and not t.orphan then
+      n = n + 1
+      if t.sceneN then
+        known = known + 1
+        nb = nb + t.sceneN
+        cover = cover + (t.sceneCover or 0)
+      end
+    end
+  end
+  if known == 0 then return { tiles = n } end
+  return { tiles = n, buildings = math.floor(nb * n / known + 0.5), cover = cover / known }
 end
 
 local okSweep, swept = pcall(M.sweep)

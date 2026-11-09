@@ -88,7 +88,7 @@ pub fn fill_bits<'py>(py: Python<'py>, h: usize, w: usize, xy: PyReadonlyArray2<
     let ro = ring_off.as_slice()?.to_vec();
     let po = part_off.as_slice()?.to_vec();
     let pb = part_bits.as_slice()?.to_vec();
-    let v = py.allow_threads(|| fill(h, w, &pts, &ro, &po, &pb));
+    let v = py.detach(|| fill(h, w, &pts, &ro, &po, &pb));
     let arr = numpy::ndarray::Array2::from_shape_vec((h, w), v)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(PyArray2::from_owned_array(py, arr))

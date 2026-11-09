@@ -33,7 +33,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
 M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
-  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
+  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
@@ -88,7 +88,7 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
-  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  rrgate_eu_l = true, rrgate_l = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_turboburger = true }
 
@@ -193,6 +193,9 @@ M.CATALOG = {
   bin = { { '/art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round', 1.1 }, { WCA .. 'objects/garbage_bin_a', 1.1 } },
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
+  -- the local lamp posts of Europe and its neighbours (server citylamps.py; tools/build_city_lamps.py)
+  eu_lamp_steel = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_steel', 9.0 } },
+  eu_lamp_concrete = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_concrete', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- optional French demo (server poleprofiles.py): original mesh, three LODs, one lean collision hull
   pole_concrete_recessed = { { '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/bne_pole_concrete_recessed', 8.5 } },
@@ -227,6 +230,12 @@ M.CATALOG = {
   rrflash = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher', 4.7 } }, rrflash_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher_eu', 4.7 } },
   rrgate = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate', 8.25 } }, rrgate_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_l', 8.25 } },
   rrgate_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu', 8.25 } }, rrgate_eu_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu_l', 8.25 } },
+  -- railway catenary mast with its cantilever (server catenary.py; tools/blender/build_catenary.py); its +x toward the track
+  catmast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_mast', 9.0 } },
+  catmast_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_steel', 9.3 } },
+  -- a rigid portal's posts (the girder between them is the tile's wire mesh: server catenary.portal_wires)
+  catpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_su', 10.4 } },
+  catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
@@ -271,6 +280,36 @@ for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500
 end
+-- Germany's junction signs (server designs.py GROUPS and HEIGHTS, tools/build_median_props.py's DE_SIGNS): each
+-- mesh is its sign at its true size (Größe 1 to 3, some over a 1002 plate, a roundabout's 205 over its 215), so rows
+-- carry these heights and draw at 1:1. Few items a tile: one spelling each (ONE_SPELLING), shown out to 300 m.
+local DE_SIGNS = { de_z205_g1 = 2.519, de_z205 = 2.742, de_z205_g3 = 3.038, de_z206_g1 = 2.9, de_z206 = 2.9,
+  de_z206_g3 = 3.05, de_z301_g1 = 2.519, de_z301 = 2.742, de_z301_g3 = 3.038, de_z306_g1 = 2.571, de_z306 = 2.816,
+  de_z306_g3 = 3.142, de_z307_g1 = 2.571, de_z307 = 2.816, de_z307_g3 = 3.142, de_z205_p0_g1 = 2.989,
+  de_z205_p0 = 3.392, de_z205_p0_g3 = 3.838, de_z205_p1_g1 = 2.989, de_z205_p1 = 3.392, de_z205_p1_g3 = 3.838,
+  de_z205_p2_g1 = 2.989, de_z205_p2 = 3.392, de_z205_p2_g3 = 3.838, de_z205_p3_g1 = 2.989, de_z205_p3 = 3.392,
+  de_z205_p3_g3 = 3.838, de_z205_p4_g1 = 2.989, de_z205_p4 = 3.392, de_z205_p4_g3 = 3.838, de_z205_p5_g1 = 2.989,
+  de_z205_p5 = 3.392, de_z205_p5_g3 = 3.838, de_z205_p6_g1 = 2.989, de_z205_p6 = 3.392, de_z205_p6_g3 = 3.838,
+  de_z205_p7_g1 = 2.989, de_z205_p7 = 3.392, de_z205_p7_g3 = 3.838, de_z205_p8_g1 = 2.989, de_z205_p8 = 3.392,
+  de_z205_p8_g3 = 3.838, de_z205_p9_g1 = 2.989, de_z205_p9 = 3.392, de_z205_p9_g3 = 3.838, de_z206_p0_g1 = 3.55,
+  de_z206_p0 = 3.55, de_z206_p0_g3 = 3.85, de_z206_p1_g1 = 3.55, de_z206_p1 = 3.55, de_z206_p1_g3 = 3.85,
+  de_z206_p2_g1 = 3.55, de_z206_p2 = 3.55, de_z206_p2_g3 = 3.85, de_z206_p3_g1 = 3.55, de_z206_p3 = 3.55,
+  de_z206_p3_g3 = 3.85, de_z206_p4_g1 = 3.55, de_z206_p4 = 3.55, de_z206_p4_g3 = 3.85, de_z206_p5_g1 = 3.55,
+  de_z206_p5 = 3.55, de_z206_p5_g3 = 3.85, de_z206_p6_g1 = 3.55, de_z206_p6 = 3.55, de_z206_p6_g3 = 3.85,
+  de_z206_p7_g1 = 3.55, de_z206_p7 = 3.55, de_z206_p7_g3 = 3.85, de_z206_p8_g1 = 3.55, de_z206_p8 = 3.55,
+  de_z206_p8_g3 = 3.85, de_z206_p9_g1 = 3.55, de_z206_p9 = 3.55, de_z206_p9_g3 = 3.85, de_z306_p0_g1 = 3.041,
+  de_z306_p0 = 3.466, de_z306_p0_g3 = 3.942, de_z306_p1_g1 = 3.041, de_z306_p1 = 3.466, de_z306_p1_g3 = 3.942,
+  de_z306_p2_g1 = 3.041, de_z306_p2 = 3.466, de_z306_p2_g3 = 3.942, de_z306_p3_g1 = 3.041, de_z306_p3 = 3.466,
+  de_z306_p3_g3 = 3.942, de_z306_p4_g1 = 3.041, de_z306_p4 = 3.466, de_z306_p4_g3 = 3.942, de_z306_p5_g1 = 3.041,
+  de_z306_p5 = 3.466, de_z306_p5_g3 = 3.942, de_z306_p6_g1 = 3.041, de_z306_p6 = 3.466, de_z306_p6_g3 = 3.942,
+  de_z306_p7_g1 = 3.041, de_z306_p7 = 3.466, de_z306_p7_g3 = 3.942, de_z306_p8_g1 = 3.041, de_z306_p8 = 3.466,
+  de_z306_p8_g3 = 3.942, de_z306_p9_g1 = 3.041, de_z306_p9 = 3.466, de_z306_p9_g3 = 3.942,
+  de_z205_z215_g1 = 3.169, de_z205_z215 = 3.392, de_z205_z215_g3 = 3.838 }
+for g, h in pairs(DE_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
+  M.GROUP_MAX_M[g] = 300
+  M.ONE_SPELLING[g] = true
+end
 -- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
 -- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
 M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
@@ -308,7 +347,7 @@ M.GROUP_MAX_M.golfflag = 400
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -342,6 +381,7 @@ local MATERIALS = {
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',
+  '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
@@ -640,13 +680,23 @@ local newTable = (function()
   local ok, f = pcall(require, 'table.new')
   return ok and f or function() return {} end
 end)()
+-- The flat arrays as LuaJIT FFI doubles where there is FFI: the same 8 bytes a number, but the garbage collector does
+-- not walk them. As Lua tables the trees' tiles were ~59 MB of the game's ~220 MB Lua heap (Fells Point at speed,
+-- 2026-11-07: LuaGC frames of 183 ms), every number of them looked at on each collection cycle.
+local newDoubles = (function()
+  local ok, ffi = pcall(require, 'ffi')
+  if not ok or type(ffi) ~= 'table' or type(ffi.new) ~= 'function' then return nil end
+  local okT = pcall(ffi.new, 'double[?]', 1)
+  return okT and function(n) return ffi.new('double[?]', n + 1) end or nil     -- (+1: indexed from 1 as the tables)
+end)()
+M.FFI = newDoubles ~= nil
 
--- Pure: rows packed into a flat array (STRIDE numbers a row). A missing yaw, scale, height or rank is 0, 1, 10, 0 (as
--- the rows were read); a row that is not a table or has no position is never shown (HIDDEN).
+-- Pure: rows packed into a flat array (STRIDE numbers a row) and the number of rows. A missing yaw, scale, height or
+-- rank is 0, 1, 10, 0 (as the rows were read); a row that is not a table or has no position is never shown (HIDDEN).
 function M.flatten(rows, stride)
   local n, s = type(rows) == 'table' and #rows or 0, math.floor(tonumber(stride) or M.STRIDE)
   if s < M.STRIDE then s = M.STRIDE end
-  local f = newTable(n * s, 0)
+  local f = newDoubles and newDoubles(n * s) or newTable(n * s, 0)
   for i = 1, n do
     local r, b = rows[i], (i - 1) * s
     if type(r) ~= 'table' or not (r[F_X] and r[F_Y] and r[F_Z]) then r = HIDDEN end
@@ -657,7 +707,21 @@ function M.flatten(rows, stride)
       for j = M.STRIDE + 1, s do f[b + j] = type(r[j]) == 'number' and r[j] or 0 end
     end
   end
-  return f
+  return f, n
+end
+
+-- Pure: a flat array the server sent (hello.vegFlat: a decoded JSON array) as the tiles keep them (FFI doubles where
+-- there is FFI) and its number of rows. A non-number is 0.
+function M.packFlat(flat, stride)
+  local len = type(flat) == 'table' and #flat or 0
+  local n = math.floor(len / stride)
+  if not newDoubles then return flat, n end
+  local f = newDoubles(n * stride)
+  for i = 1, n * stride do
+    local v = flat[i]
+    f[i] = type(v) == 'number' and v or 0
+  end
+  return f, n
 end
 
 -- Pure: the variant v's spelling of a shape path (0: itself).
@@ -766,6 +830,12 @@ end
 -- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
 M.NEW_SHAPES_PER_FRAME = 1
 local touched, touchedItems, newShapes = {}, 0, 0
+local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
+  { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 } }     -- the last two passes' (M.frameWork)
+local workMade, workRemoved = 0, 0
+-- The last two passes' work ([1] the last): items made / removed, shapes touched and their items in the level, shapes
+-- new this session, Forests made.
+function M.frameWork() return frameWork end
 local newShapeCap = math.huge
 local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
@@ -780,12 +850,12 @@ local function allow(shape)
 end
 
 -- A tile's items as a flat array (STRIDE numbers each, or more: stride), shown from the next update on.
-local function addTile(anchorId, tileKey, flat, stride, groups, geo)
+local function addTile(anchorId, tileKey, flat, stride, groups, geo, count)
   local key = geo and ('g:' .. tostring(tileKey)) or (anchorId .. ':' .. tostring(tileKey))
   local old = tiles[key]
   local tx, ty = tostring(tileKey):match('(%-?%d+)_(%-?%d+)$')
   -- (the shape cache is the items': every message brings items of its own)
-  local t = { anchor = anchorId, f = flat, s = stride, n = math.floor(#flat / stride),
+  local t = { anchor = anchorId, f = flat, s = stride, n = count or math.floor(#flat / stride),
     groups = type(groups) == 'table' and groups or nil,
     made = old and old.made or {}, solid = old and old.solid or {}, near = old and old.near,
     shapes = {}, scales = {},
@@ -842,9 +912,11 @@ function M.onTile(msg, currentAnchor, anchorObj)
   end
   if ok and type(data) == 'table' and type(data.flat) == 'table' and stride and stride >= M.STRIDE
       and stride == math.floor(stride) then
-    addTile(msg.anchorId, msg.key, data.flat, stride, data.groups, geo)
+    local flat, count = M.packFlat(data.flat, stride)
+    addTile(msg.anchorId, msg.key, flat, stride, data.groups, geo, count)
   elseif ok and type(data) == 'table' and type(data.items) == 'table' then
-    addTile(msg.anchorId, msg.key, M.flatten(data.items, M.STRIDE), M.STRIDE, data.groups, geo)
+    local flat, count = M.flatten(data.items, M.STRIDE)
+    addTile(msg.anchorId, msg.key, flat, M.STRIDE, data.groups, geo, count)
   else
     M.errors = M.errors + 1
     return
@@ -871,7 +943,8 @@ end
 function M.onRows(anchorId, tileKey, rows, groups, stride)
   stride = math.floor(tonumber(stride) or M.STRIDE)
   if stride < M.STRIDE then stride = M.STRIDE end
-  addTile(anchorId, tileKey, M.flatten(rows, stride), stride, groups)
+  local flat, count = M.flatten(rows, stride)
+  addTile(anchorId, tileKey, flat, stride, groups, nil, count)
 end
 
 -- Rows of a road geotile (roads.lua: its street furniture 'p<key>', guard rails 'g<key>'), in the tile's frame
@@ -882,7 +955,8 @@ function M.onGeoRows(tileKey, gkey, rows, groups, stride, frame, pivot, a)
   stride = math.floor(tonumber(stride) or M.STRIDE)
   if stride < M.STRIDE then stride = M.STRIDE end
   local geo = { frame = frame, pivot = pivot or 0, pl = geoPlacement(frame, a, pivot or 0) }
-  addTile(nil, tileKey, M.flatten(rows, stride), stride, groups, geo)
+  local flat, count = M.flatten(rows, stride)
+  addTile(nil, tileKey, flat, stride, groups, geo, count)
   local t = tiles['g:' .. tostring(tileKey)]
   t.key, t.anchorObj = gkey, a
   M.placeGeo(t)
@@ -1155,6 +1229,15 @@ function M.update(anchorId, player, view, frameMs)
     clock = stopwatch.new() } or nil
   local budget = M.PER_FRAME * M.EVERY_N
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
+  -- the previous pass's work, for a hitch's context (core.perfContext: the engine's tick pays for a pass's Forest
+  -- changes, 0.5 us an item of every shape touched; a repeatable 136-612 ms tick beside a Manhattan park, 2026-11-08)
+  local w = frameWork[2]
+  frameWork[2], frameWork[1] = frameWork[1], w
+  local nTouched = 0
+  for _ in pairs(touched) do nTouched = nTouched + 1 end
+  w.made, w.removed, w.shapes, w.items, w.new, w.forests = M.made - workMade, M.removed - workRemoved, nTouched,
+    touchedItems, newShapes, newForests
+  workMade, workRemoved = M.made, M.removed
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0

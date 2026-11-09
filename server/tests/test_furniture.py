@@ -224,6 +224,18 @@ class PoleTest(unittest.TestCase):
         m = furniture.wire_mesh(wires, (0, 0, 0))
         self.assertEqual(len(m[1]) % 4, 0)
 
+    def test_poles_keep_off_a_railway_bed(self):
+        """A track crossing the road right at a pole: that pole is gone (a pole stood between two tracks, Kalynivka)."""
+        free = [x for x in furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256)) if x[0] == furniture.G_POLE]
+        x0 = free[len(free) // 2][1]
+        track = ("rail:a", 2.6, np.array([[x0 + 1.0, 0.0, 0.0], [x0 + 1.0, 100.0, 0.0]]))
+        kept = [x for x in furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256), obstacles=[track])
+                if x[0] == furniture.G_POLE]
+        reach = 2.6 + furniture.CLEAR_OTHER_M
+        self.assertTrue(any(abs(x[1] - x0 - 1.0) < reach for x in free))
+        self.assertFalse(any(abs(x[1] - x0 - 1.0) < reach for x in kept))
+        self.assertEqual(len(kept), len(free) - sum(abs(x[1] - x0 - 1.0) < reach for x in free), "only those by the track")
+
     def test_town_street_without_sidewalk_is_lit(self):
         """A town street with no sidewalk run: lamps from its edge (the user, 2026-10-27: lamps only near the
         camera; most streets had none), on its poles where the lines run overhead, on posts where buried; a main
@@ -292,6 +304,7 @@ class PoleTest(unittest.TestCase):
         self.assertEqual(furniture.buried_share("nl"), 1.0)
         self.assertEqual(furniture.buried_share("US"), 0.0)
         self.assertEqual(furniture.buried_share(None), 0.0)
+        self.assertEqual(furniture.buried_share("ch"), 0.86)   # GitHub #911: rural Switzerland mostly cabled
         rows = furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256), wires=[], buried=1.0)
         self.assertNotIn(furniture.G_POLE, [x[0] for x in rows])
         roads_ = [road(f"r{k}", "tertiary", False) for k in range(200)]
@@ -569,3 +582,31 @@ class StreetTreesOffBuildings(unittest.TestCase):
         out = furniture.off_buildings(rows, [house.ring + [100.0, 200.0]])
         self.assertEqual([(r[0], r[1], r[2]) for r in out],
                          [(furniture.G_STREET_TREE, 145.0, 205.0), (furniture.G_LAMP, 115.0, 215.0)])
+
+
+class MappedPolesTest(unittest.TestCase):
+    """A road with mapped utility poles along it (mappedpoles.road_points) guesses none of its own; the others keep
+    theirs."""
+
+    def test_a_road_with_mapped_poles_along_it_guesses_none(self):
+        r = road("c", "tertiary", False)
+        alone = [x for x in furniture.place([r], [], (0, 0, 256, 256)) if x[0] == furniture.G_POLE]
+        self.assertGreater(len(alone), 0)
+        along = np.array([[30., 50. + 4. + 6.], [70., 50. + 4. + 6.]])
+        wires = []
+        rows = furniture.place([r], [], (0, 0, 256, 256), wires=wires, mapped_poles=along)
+        self.assertNotIn(furniture.G_POLE, [x[0] for x in rows])
+        self.assertEqual(wires, [])
+
+    def test_one_pole_or_poles_away_from_the_road_change_nothing(self):
+        r = road("c", "tertiary", False)
+        base = furniture.place([r], [], (0, 0, 256, 256))
+        for pts in ([[30., 56.]], [[30., 50. + 4. + furniture.MAPPED_ALONG_M + 5.], [70., 80.]], np.empty((0, 2))):
+            self.assertEqual(furniture.place([r], [], (0, 0, 256, 256), mapped_poles=np.array(pts)), base)
+
+    def test_a_town_street_with_mapped_poles_is_lit_from_posts(self):
+        r = road("d", "residential", True)
+        rows = furniture.place([r], [], (0, 0, 256, 256), mapped_poles=np.array([[20., 58.], [60., 58.]]))
+        groups = [x[0] for x in rows]
+        self.assertNotIn(furniture.G_POLE, groups)
+        self.assertIn(furniture.G_LAMP, groups)

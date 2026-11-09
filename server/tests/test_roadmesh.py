@@ -347,6 +347,32 @@ if __name__ == "__main__":
 
 
 class BridgeTest(unittest.TestCase):
+    def test_fixed_deck_inserted_rows_do_not_fold_at_corners(self):
+        # Unequal arm lengths put the regular resampling lattice close to each mapped turn.
+        pts = np.array([[0., 0., 10.], [19.7, 0., 12.], [23.7, 16., 14.], [43.7, 16., 16.]])
+        cross = lambda a, b: a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]
+        for width in (1.2, 2.5, 6.):
+            with self.subTest(width=width):
+                c = chunk("road_asphalt_2lane", width, pts)
+                c.update(deck=True, fixed=True)
+                left, right, _, _, _, _ = roadmesh.ribbons([c])[0]
+                a = cross(right[:-1] - left[:-1], left[1:] - left[:-1])
+                b = cross(right[:-1] - left[1:], right[1:] - left[1:])
+                self.assertGreaterEqual(min(a.min(), b.min()), -1e-8)
+                xy, _, z = roadmesh._resample(pts, roadmesh.DRAPE_STEP, keep_vertices=True,
+                                               corner_half=width / 2 + roadmesh.PARAPET_W)
+                for knot in pts:
+                    j = np.argmin(np.linalg.norm(xy - knot[:2], axis=1))
+                    np.testing.assert_allclose(xy[j], knot[:2], atol=1e-10)
+                    self.assertAlmostEqual(z[j], knot[2], places=10)
+
+    def test_straight_deck_sampling_is_unchanged(self):
+        pts = np.array([[0., 0., 10.], [10.3, 0., 12.], [30., 0., 11.]])
+        old = roadmesh._resample(pts, roadmesh.DRAPE_STEP, keep_vertices=True)
+        new = roadmesh._resample(pts, roadmesh.DRAPE_STEP, keep_vertices=True, corner_half=2.)
+        for a, b in zip(old, new):
+            np.testing.assert_array_equal(a, b)
+
     def test_deck_heights_straight_between_abutments(self):
         import roads
         parts = [np.array([[0.0, 0], [60, 0], [100, 0]]), np.array([[100.0, 0], [200, 0]])]
@@ -537,7 +563,11 @@ class DeckRulesTest(unittest.TestCase):
 
     def test_water_clearance(self):
         import roads
-        self.assertEqual(roads.water_clear(10.0), roads.WATER_CLEAR_MIN)
+        self.assertEqual(roads.water_clear(10.0), roads.WATER_SMALL_MIN, "a stream: the road's own level")
+        self.assertLess(roads.water_clear(17.0), 1.0)
+        self.assertLess(roads.water_clear(25.0), roads.water_clear(35.0))
+        self.assertLessEqual(roads.water_clear(39.9), roads.water_clear(40.0) + 1e-6, "no step into the full rule")
+        self.assertAlmostEqual(roads.water_clear(40.0), 6.0)
         self.assertAlmostEqual(roads.water_clear(250.0), 37.5)
         self.assertEqual(roads.water_clear(5000.0), roads.WATER_CAUSEWAY_CLEAR, "a causeway")
 

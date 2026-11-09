@@ -85,6 +85,37 @@ class SelectionTest(unittest.TestCase):
                                      pp.geographic_profile(mode))
 
 
+class CountryPolesTest(unittest.TestCase):
+    """Mode "poles": the country's own poles only, no signs, stops or French kit."""
+
+    def test_europe_and_its_neighbours_get_their_poles_the_rest_stock(self):
+        for country in ("DE", "UA", "PL", "CZ", "FR", "TR"):
+            self.assertEqual(pp.profile_for(country, "poles"), pp.EU_KIT + ":" + country, country)
+        for country in ("US", "CA", "JP", None, "", "ZZ"):
+            self.assertIsNone(pp.profile_for(country, "poles"), country)
+
+    def test_a_countrys_poles_are_from_its_kit_and_stable_per_road(self):
+        import europeinfra
+        ids = [str(i) for i in range(300)]
+        styles = {fid: pp.choose(pp.profile_for("UA", "poles"), fid) for fid in ids}
+        self.assertEqual(styles, {fid: pp.choose(pp.profile_for("UA", "poles"), fid) for fid in reversed(ids)})
+        self.assertEqual({s.group for s in styles.values()},
+                         {"eu_pole_" + f for f in europeinfra.KITS["UA"].poles if not f.startswith("fr_")})
+
+    def test_no_kit_and_no_foreign_data_in_the_token(self):
+        profile = pp.geographic_profile("poles")
+        self.assertEqual(profile[1], "poles")
+        self.assertNotIn(pp.FR_KIT, profile[2])
+        self.assertFalse(pp.kit_enabled(profile))
+        self.assertNotEqual(profile, pp.geographic_profile("europe"))
+
+    def test_the_server_default_is_off(self):
+        # (the parser is built inside main(): the option's text is what is checked)
+        src = (Path(__file__).resolve().parents[1] / "earthd.py").read_text(encoding="utf-8")
+        i = src.index('"--regional-poles"')
+        self.assertIn('default=os.environ.get("BNE_REGIONAL_POLES", "off")', src[i:i + 400])
+
+
 class PlacementTest(unittest.TestCase):
     def test_fr_all_replaces_a_demo_stock_road_in_both_placement_paths(self):
         for urban, sidewalks in ((False, False), (True, False), (True, True)):
@@ -205,7 +236,8 @@ class PipelineTest(unittest.TestCase):
         def revisit(kind, key, aid, tx, ty, out, vfs, name, build, extra, result, where=None):
             keys.append(key)
             return build()
-        def build(*args):
+        def build(*args, **kwargs):         # (kwargs: the German junction signs' de_junctions and the town signs'
+            # towns_on, by name)
             forwarded.append(args[-1])
             return ("/temp/result", 0, [])
         with mock.patch.object(blockworker, "_s", SimpleNamespace(md=None)), \

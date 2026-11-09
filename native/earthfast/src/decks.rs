@@ -4,6 +4,9 @@
 use numpy::{IntoPyArray, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+const BESIDE_BLOCK: usize = 16;         // segments per box (deck_beside)
+const BESIDE_PRUNE_M: f64 = 1e-6;       // m past reach a box must lie to be left out: far over the rounding
+
 /// Pairs (i, j), i < j, of parts whose samples q (part i's rows qoff[i]..qoff[i + 1]: its line every few m) come within
 /// (widths[i] + widths[j]) / 2 + touch of part j's line (pts rows poff[j]..poff[j + 1]) at 2 or more samples. Parts
 /// with fewer than 2 vertices are left out, as are pairs whose boxes are farther apart. The numpy version's sums.
@@ -14,7 +17,7 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
     let (q, qoff, pts, poff, widths) = (q.as_array(), qoff.as_array(), pts.as_array(), poff.as_array(),
                                         widths.as_array());
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         // each part's box
         let mut bb = vec![[0.0f64; 4]; n];
@@ -31,6 +34,28 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                 bb[k] = r;
             }
         }
+        // each part's segments in boxes of BESIDE_BLOCK (a projection lies in its segment's box, to rounding; a NaN
+        // vertex is in no box, and min() passed over its segments' NaN distances)
+        let (mut bfirst, mut bx) = (Vec::with_capacity(n + 1), Vec::new());
+        for k in 0..n {
+            bfirst.push(bx.len());
+            let (a, b) = span(k);
+            let ns = (b - a).saturating_sub(1);
+            let mut s0 = 0;
+            while s0 < ns {
+                let s1 = (s0 + BESIDE_BLOCK).min(ns);
+                let mut r = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+                for v in a + s0..=a + s1 {
+                    r[0] = r[0].min(pts[[v, 0]]);
+                    r[1] = r[1].min(pts[[v, 1]]);
+                    r[2] = r[2].max(pts[[v, 0]]);
+                    r[3] = r[3].max(pts[[v, 1]]);
+                }
+                bx.push(r);
+                s0 = s1;
+            }
+        }
+        bfirst.push(bx.len());
         let mut out: Vec<i64> = Vec::new();
         for i in 0..n {
             let (ia, ib) = span(i);
@@ -52,12 +77,25 @@ pub fn deck_beside<'py>(py: Python<'py>, q: PyReadonlyArray2<'py, f64>, qoff: Py
                 for s in qa..qb {
                     let (qx, qy) = (q[[s, 0]], q[[s, 1]]);
                     let mut d = f64::INFINITY;
-                    for v in ja..jb - 1 {
-                        let (px, py_) = (pts[[v, 0]], pts[[v, 1]]);
-                        let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
-                        let l2 = (abx * abx + aby * aby).max(1e-12);
-                        let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
-                        d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                    // (only whether d < reach counts: a box of BESIDE_BLOCK segments farther than reach + BESIDE_PRUNE_M
+                    // is left out, as is the rest once one segment is near enough; 2026-11-08, the same pairs)
+                    'blocks: for (b, r) in bx[bfirst[j]..bfirst[j + 1]].iter().enumerate() {
+                        let gx = (r[0] - qx).max(qx - r[2]).max(0.0);
+                        let gy = (r[1] - qy).max(qy - r[3]).max(0.0);
+                        if gx.hypot(gy) > reach + BESIDE_PRUNE_M {
+                            continue;
+                        }
+                        let v0 = ja + b * BESIDE_BLOCK;
+                        for v in v0..(v0 + BESIDE_BLOCK).min(jb - 1) {
+                            let (px, py_) = (pts[[v, 0]], pts[[v, 1]]);
+                            let (abx, aby) = (pts[[v + 1, 0]] - px, pts[[v + 1, 1]] - py_);
+                            let l2 = (abx * abx + aby * aby).max(1e-12);
+                            let t = (((qx - px) * abx + (qy - py_) * aby) / l2).clamp(0.0, 1.0);
+                            d = d.min((qx - (px + t * abx)).hypot(qy - (py_ + t * aby)));
+                        }
+                        if d < reach {
+                            break 'blocks;
+                        }
                     }
                     if d < reach {
                         hits += 1;
@@ -122,7 +160,7 @@ pub fn deck_end_joins<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, pof
                                              params.as_array());
     let (join_m, snap_m, min_cos, ground_m, min_len) = (params[0], params[1], params[2], params[3], params[4]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let ne = 2 * n;
         let mut pos = vec![[f64::NAN; 2]; ne];
         let mut dir = vec![[0.0f64; 2]; ne];
@@ -337,7 +375,7 @@ pub fn deck_end_on<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, poff: 
                                                     level.as_array(), ground.as_array(), params.as_array());
     let (join_m, ground_m, margin_m) = (params[0], params[1], params[2]);
     let n = poff.len().saturating_sub(1);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let span = |k: usize| (poff[k] as usize, poff[k + 1] as usize);
         let p = |v: usize| [pts[[v, 0]], pts[[v, 1]]];
         let d = |a: [f64; 2], b: [f64; 2]| (a[0] - b[0]).hypot(a[1] - b[1]);
@@ -627,4 +665,107 @@ pub fn deck_tents<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, z: PyRead
     // (numpy's maximum: a when a >= b or a is NaN, else b)
     let out: Vec<f64> = f.iter().zip(&b).map(|(&x, &y)| if x >= y || x.is_nan() { x } else { y }).collect();
     out.into_pyarray(py)
+}
+
+/// roads._first_ring_ends: (n, 4) per feature its first ring's first and last coordinates (lon0, lat0, lon1, lat1),
+/// NaN without a part or with a first ring of fewer than 2 coordinates.
+#[pyfunction]
+pub fn first_ring_ends<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, coord_off: PyReadonlyArray1<'py, i64>,
+                            ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>)
+                            -> Bound<'py, PyArray2<f64>> {
+    let (ll, co, ro, po) = (lonlat.as_array(), coord_off.as_array(), ring_off.as_array(), part_off.as_array());
+    let n = po.len().saturating_sub(1);
+    let mut out = vec![f64::NAN; 4 * n];
+    for i in 0..n {
+        if po[i + 1] <= po[i] {
+            continue;
+        }
+        let r = ro[po[i] as usize] as usize;
+        let (a, b) = (co[r], co[r + 1]);
+        if b - a >= 2 {
+            let (a, b) = (a as usize, b as usize - 1);
+            out[4 * i..4 * i + 4].copy_from_slice(&[ll[[a, 0]], ll[[a, 1]], ll[[b, 0]], ll[[b, 1]]]);
+        }
+    }
+    numpy::ndarray::Array2::from_shape_vec((n, 4), out).expect("ends").into_pyarray(py)
+}
+
+/// roads._deck_gaps' look round feature i of a layer, in lon / lat (2026-11-08: a numpy pass over the whole layer per
+/// road near a bridge, ~3/4 of _deck_gaps on a Midtown tile). ring (k, 2): i's line; ends (n, 4): each feature's
+/// first ring's ends (first_ring_ends); boxes (n, 4): their lon / lat boxes (lon0, lat0, lon1, lat1); spec (n,): 1 for
+/// a road with a spec; kx, ky: m per degree. Returns (hits (4,): for ring's first and its last point the (feature,
+/// end 0 / 1) of the one other feature's end within join_m m of it, -1 / -1 for none or for more than one; others
+/// (m, 2): the ends of the other roads with a spec whose boxes come within pad_m m of ring's box (by feature, then
+/// end), in m from ring's first point). numpy's numbers: np.hypot's distance, np.min / np.max's box.
+#[pyfunction]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, ends: PyReadonlyArray2<'py, f64>,
+                            boxes: PyReadonlyArray2<'py, f64>, spec: PyReadonlyArray1<'py, u8>, i: i64, kx: f64,
+                            ky: f64, join_m: f64, pad_m: f64) -> (Vec<i64>, Bound<'py, PyArray2<f64>>) {
+    let (ring, ends, boxes, spec) = (ring.as_array(), ends.as_array(), boxes.as_array(), spec.as_array());
+    let n = ends.nrows();
+    let k = ring.nrows();
+    let mut hits = vec![-1i64; 4];
+    if k == 0 {
+        return (hits, numpy::ndarray::Array2::<f64>::zeros((0, 2)).into_pyarray(py));
+    }
+    for (e, p) in [ring[[0, 0]], ring[[0, 1]], ring[[k - 1, 0]], ring[[k - 1, 1]]].chunks(2).enumerate() {
+        let mut found: Option<(usize, usize)> = None;
+        let mut count = 0;
+        'all: for j in 0..n {
+            if j as i64 == i {
+                continue;
+            }
+            for end in 0..2 {
+                let a = (ends[[j, 2 * end]] - p[0]) * kx;
+                let b = (ends[[j, 2 * end + 1]] - p[1]) * ky;
+                // (np.hypot's d < join_m; hypot is never under the larger of |a| and |b|: a cheap test first)
+                if a.abs() >= join_m || b.abs() >= join_m {
+                    continue;
+                }
+                if a.hypot(b) < join_m {
+                    count += 1;
+                    found = Some((j, end));
+                    if count > 1 {
+                        break 'all;
+                    }
+                }
+            }
+        }
+        if count == 1 {
+            let (j, end) = found.expect("hit");
+            hits[2 * e] = j as i64;
+            hits[2 * e + 1] = end as i64;
+        }
+    }
+    // ring's box (np.min / np.max: NaN if any is) grown by pad_m
+    let (mut lo, mut hi) = ([ring[[0, 0]], ring[[0, 1]]], [ring[[0, 0]], ring[[0, 1]]]);
+    for v in 1..k {
+        for c in 0..2 {
+            let x = ring[[v, c]];
+            lo[c] = if lo[c].is_nan() || x.is_nan() { f64::NAN } else if x < lo[c] { x } else { lo[c] };
+            hi[c] = if hi[c].is_nan() || x.is_nan() { f64::NAN } else if x > hi[c] { x } else { hi[c] };
+        }
+    }
+    let pad = [pad_m / kx, pad_m / ky];
+    let (lo, hi) = ([lo[0] - pad[0], lo[1] - pad[1]], [hi[0] + pad[0], hi[1] + pad[1]]);
+    let (r0x, r0y) = (ring[[0, 0]], ring[[0, 1]]);
+    let mut others: Vec<f64> = Vec::new();
+    for j in 0..n {
+        if !(boxes[[j, 0]] <= hi[0] && boxes[[j, 2]] >= lo[0] && boxes[[j, 1]] <= hi[1] && boxes[[j, 3]] >= lo[1]) {
+            continue;
+        }
+        if j as i64 == i || spec[j] == 0 {
+            continue;
+        }
+        for end in 0..2 {
+            let (x, y) = (ends[[j, 2 * end]], ends[[j, 2 * end + 1]]);
+            if x.is_finite() && y.is_finite() {
+                others.push((x - r0x) * kx);
+                others.push((y - r0y) * ky);
+            }
+        }
+    }
+    let m = others.len() / 2;
+    (hits, numpy::ndarray::Array2::from_shape_vec((m, 2), others).expect("others").into_pyarray(py))
 }

@@ -297,6 +297,9 @@ class ServerSurfaceTest(unittest.TestCase):
             lat = np.asarray(lat)
             return np.where(lat > LAT, 30, 40).astype(np.uint8), True
 
+        def block_classes(self, frame, cx, cy, lat, lon):
+            return self.classes(lat, lon)
+
         def roads(self, lat, lon):
             return [], True
 

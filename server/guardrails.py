@@ -6,6 +6,7 @@ for every road tile. medians.py adds the median barriers where none is mapped, i
 """
 import hashlib
 import json
+import os
 
 import geotiles
 import logging
@@ -432,6 +433,9 @@ JOIN_LATERAL_M = 2.5            # m: only rails this near the bridge rail's line
 JOIN_MAX_GRADE = 0.08           # the deck's grade carried on past its end (while the ground takes over)
 JOIN_AXIS_TOL_M = 2.0           # m: the road's height beyond the end (ground on the deck's axis) is trusted this near the deck's own
 END_JOIN_SKIP_M = 2.5           # a deck end this near another deck's end is a joint, not an end
+GAP_CLOSE_ON = os.environ.get("BNE_RAIL_GAP", "on") != "off"
+GAP_CLOSE_M = 10.0              # m: a mapped approach rail that stops this far (or less) short of a deck's end is run on to it
+GAP_LATERAL_M = 3.5             # m: ... when its end stands this near (or less) the bridge rail's line
 
 
 def _deck_segments(decks):
@@ -720,6 +724,42 @@ def _join_module(sa, sb, ends, direction=None):
     return out
 
 
+def _close_gap_to_deck(line, ends):
+    """(line, run on at its start, run on at its end): a mapped approach rail (line (k, 2)) that ends short of a deck,
+    run on to the bridge rail's line at the deck's end.
+    OpenStreetMap's approach rails end a few metres before the bridge, where the real ones meet its parapet, so the
+    modules stopped there and the bridge's own rail began further on, on a line up to 2 m inside theirs (Jüri's overpass
+    over Tallinna ringtee: 7 m of nothing between them). Only an end that points at the deck (within PARAPET_PARALLEL_DOT
+    of its axis), stands GAP_CLOSE_M or less short of the end and GAP_LATERAL_M or less from the bridge rail's line
+    gets the point; the modules then lie along it, and _join_module draws them onto the deck's height. Pure."""
+    if ends is None or not GAP_CLOSE_ON or len(line) < 2:
+        return line, False, False
+    line = np.asarray(line, np.float64)
+    out, closed = line, [False, False]
+    for at_start in (True, False):
+        p, q = (line[0], line[1]) if at_start else (line[-1], line[-2])
+        v = p - q
+        vl = float(np.hypot(*v))
+        if vl < 1e-6:
+            continue
+        v = v / vl
+        d = p[None, :] - ends["e"]
+        s = np.sum(d * ends["t"], axis=1)
+        lat = np.sum(d * ends["n"], axis=1)
+        sign = np.where(lat >= 0.0, 1.0, -1.0)
+        target = sign * (ends["half"] + BRIDGE_EDGE_OFFSET_M)
+        ok = ((s > 0.5) & (s <= GAP_CLOSE_M) & (np.abs(lat) >= ends["half"])
+              & (np.abs(lat - target) <= GAP_LATERAL_M) & (-(ends["t"] @ v) >= PARAPET_PARALLEL_DOT))
+        if not ok.any():
+            continue
+        k = int(np.flatnonzero(ok)[np.argmin(s[ok])])
+        meet = ends["e"][k] + ends["n"][k] * target[k]
+        out = np.vstack((meet[None, :], out)) if at_start else np.vstack((out, meet[None, :]))
+        line = out
+        closed[0 if at_start else 1] = True
+    return out, closed[0], closed[1]
+
+
 def _drop_doubles(rows, reference, dist=0.9, dot=0.8, dz=1.5):
     """Rows of `rows` that do not lie on a row of `reference` (same place, same direction, same height)."""
     if not reference:
@@ -842,6 +882,9 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                 line = line[np.r_[True, seglen > 1e-4]]
                 if len(line) < 2:
                     continue
+                closed_a = closed_b = False         # (an end run on to a deck: it joins the bridge's rail, no cap)
+                if rail and deck_hint is not False:
+                    line, closed_a, closed_b = _close_gap_to_deck(line, ends)
                 arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line, axis=0).T))]
                 total = float(arc[-1])
                 if total < 1.0:
@@ -897,11 +940,11 @@ def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bri
                 # cable barrier ends with its last module.)
                 if not rail:
                     pass
-                elif geotiles.box_owns(exact, first_a[0], first_a[1]):
+                elif not closed_a and geotiles.box_owns(exact, first_a[0], first_a[1]):
                     candidates.append((1, first_a, first_a, first_b, first_rank, False))
                     if two_sided:
                         candidates.append((4, first_a, first_a, first_b, first_rank, True))
-                if rail and geotiles.box_owns(exact, last_b[0], last_b[1]):
+                if rail and not closed_b and geotiles.box_owns(exact, last_b[0], last_b[1]):
                     candidates.append((2, last_b, last_a, last_b, last_rank, False))
                     if two_sided:
                         candidates.append((5, last_b, last_a, last_b, last_rank, True))

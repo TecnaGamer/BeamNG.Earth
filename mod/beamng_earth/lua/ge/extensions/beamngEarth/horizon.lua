@@ -38,6 +38,7 @@ M.ATMO_LIFT_SHARE = 0.6
 M.ATMO_HEADROOM_KM = 100
 M.ATMO_STEP_KM = 100
 M.ATMO_MAX_KM = 600
+M.atmoOverrideKm = nil        -- (the 3D map high up: the shell at its top once, globe.lua, not in 100 km steps)
 
 -- Pure: the visibleDistance (m) to set for a far-field radius (m), given the current value and the
 -- minimum; nil to keep the current one (within the hysteresis, or no usable radius).
@@ -61,10 +62,18 @@ end
 
 local saved = nil -- { id, radius, thickness }: the sky object and its atmoPlanetRadius / atmoThickness before applySky
 
+-- The game's sky shader patched (the launcher's skypatch.py writes it, and this flag, into the installed mod): the
+-- haze from above the atmosphere is right, so the shell stays as it is at any height (the 3D map from orbit)
+M.skyPatched = (function()
+  local ok, flag = pcall(require, 'beamngEarth/skypatch_flag')
+  return ok and flag == true
+end)()
+
 -- Pure: the atmosphere's thickness (km) for a camera camKm km above sea level, the level's base (ATMO_*).
 function M.thicknessFor(camKm, base)
   base = tonumber(base) or M.ATMO_THICK_KM
   camKm = tonumber(camKm)
+  if M.skyPatched then return base end
   if not camKm or camKm <= M.ATMO_LIFT_SHARE * base then return base end
   local want = math.ceil((camKm + M.ATMO_HEADROOM_KM) / M.ATMO_STEP_KM) * M.ATMO_STEP_KM
   return math.max(base, math.min(M.ATMO_MAX_KM, want))
@@ -86,7 +95,7 @@ function M.applySky()
   if tonumber(s.atmoPlanetRadius) ~= M.PLANET_RADIUS_KM then s.atmoPlanetRadius = M.PLANET_RADIUS_KM end
   local cam = rawget(_G, 'core_camera')
   local p = cam and cam.getPosition and cam.getPosition()
-  local want = M.thicknessFor(p and p.z / 1000, saved.thickness or M.ATMO_THICK_KM)
+  local want = M.atmoOverrideKm or M.thicknessFor(p and p.z / 1000, saved.thickness or M.ATMO_THICK_KM)
   if tonumber(s.atmoThickness) ~= want then s.atmoThickness = want end
   return true
 end

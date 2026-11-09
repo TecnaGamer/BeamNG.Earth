@@ -160,14 +160,14 @@ pub fn is_packed(data: &[u8]) -> Result<bool, String> {
 #[pyfunction]
 #[pyo3(signature = (data, level = LEVEL))]
 pub fn cdae_pack<'py>(py: Python<'py>, data: &[u8], level: i32) -> PyResult<Bound<'py, PyBytes>> {
-    let out = py.allow_threads(|| packed(data, level)).map_err(PyValueError::new_err)?;
+    let out = py.detach(|| packed(data, level)).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &out))
 }
 
 /// cdae.py: a shape file with a plain body (one compressed or not).
 #[pyfunction]
 pub fn cdae_unpack<'py>(py: Python<'py>, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
-    let out = py.allow_threads(|| plain(data).map(|c| c.into_owned())).map_err(PyValueError::new_err)?;
+    let out = py.detach(|| plain(data).map(|c| c.into_owned())).map_err(PyValueError::new_err)?;
     Ok(PyBytes::new(py, &out))
 }
 

@@ -29,7 +29,7 @@ not a new feature or fresh engine validation in this contribution.
 | Integrated voice server | Not bundled or implemented. |
 | Redis | Deferred; single-host prepared artifact distribution does not need Redis. |
 | Server-side prefetching | Prepared bundles can be served before driving. Live aggregate-player predictive scheduling not implemented. |
-| Docker/automated deployment | Full deployment stack not implemented. Existing native release automation retained and expanded. |
+| Docker/automated deployment | Each release publishes the BeamMP server (Linux host bundle) as a container image, `ghcr.io/tecnagamer/beamng.earth-server` (docker/Dockerfile); the player app is not containerized. |
 | Inherited bug fixes | Reproduced fixes integrated with regression coverage; see foundation audit. |
 | Automated testing | Windows/Linux quality workflow; local Python/Lua/Node/Rust suites and package validation. Archived fork results document prior checks; the current PR's checks establish its build status. |
 | Multiplayer stress testing | Not performed against actual BeamMP clients. |

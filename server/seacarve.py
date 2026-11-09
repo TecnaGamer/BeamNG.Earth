@@ -468,13 +468,14 @@ class SeaCarver:
             except (OSError, ValueError) as e:      # (a damaged file: the npz, or a build, again)
                 log.debug("sea: %s: %s", raw, e)
         if p and os.path.exists(p):
-            with np.load(p, allow_pickle=False) as f:
-                if not f["any"]:
-                    return None, True
-                r = (f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
-                     f["outline"].astype(bool))
-            self._second_use(x, y, raw, r)
-            return r, True
+            # (a damaged file, empty or cut short after a crash: removed and built again, staging.read_npz)
+            got = staging.read_npz(p, lambda f: ((f["depth"].astype(np.float32) / 100.0, f["level"].astype(np.float32),
+                                                  f["outline"].astype(bool)) if f["any"] else None,), "sea cell")
+            if got is not None:
+                r = got[0]
+                if r is not None:       # (outside the read: its raw copy failing to write is no damaged cell file)
+                    self._second_use(x, y, raw, r)
+                return r, True
         r = self._build(x, y, with_bathy)
         complete = r is None or r[3]
         if r is not None:

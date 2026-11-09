@@ -7,6 +7,122 @@ use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2}
 use pyo3::prelude::*;
 use std::collections::HashSet;
 
+#[derive(Clone, Copy)]
+struct RoadSegment {
+    a: [f64; 2],
+    d: [f64; 2],
+    half: f64,
+    length2: f64,
+    last: bool,
+}
+
+impl RoadSegment {
+    fn t(&self, p: [f64; 2]) -> f64 {
+        (((p[0] - self.a[0]) * self.d[0] + (p[1] - self.a[1]) * self.d[1]) / self.length2).clamp(0.0, 1.0)
+    }
+}
+
+fn road_margin(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> f64 {
+    let mut best = f64::INFINITY;
+    for s in roads {
+        let t = s.t(p);
+        let x = (p[0] - s.a[0]) - t * s.d[0];
+        let y = (p[1] - s.a[1]) - t * s.d[1];
+        best = best.min((x.hypot(y) - s.half) - clear);
+    }
+    best
+}
+
+/// First try directly away from the closest carriageway edge, as powerlines._off_roads did.
+/// Ordered segments preserve both the first nearest segment and the first road on a tie.
+fn road_candidate(p: [f64; 2], roads: &[RoadSegment], clear: f64) -> [f64; 2] {
+    let mut best = f64::INFINITY;
+    let mut out = p;
+    let mut nearest = f64::INFINITY;
+    let mut near_foot = p;
+    let mut near_direction = [0.0, 0.0];
+    for s in roads {
+        let t = s.t(p);
+        let foot = [s.a[0] + t * s.d[0], s.a[1] + t * s.d[1]];
+        let away = [p[0] - foot[0], p[1] - foot[1]];
+        let distance = away[0].hypot(away[1]);
+        if distance < nearest {
+            nearest = distance;
+            near_foot = foot;
+            near_direction = s.d;
+        }
+        if s.last {
+            if nearest - s.half < best {
+                best = nearest - s.half;
+                let direction = if nearest > 1e-6 {
+                    [(p[0] - near_foot[0]) / nearest, (p[1] - near_foot[1]) / nearest]
+                } else {
+                    let norm = near_direction[0].hypot(near_direction[1]).max(1e-9);
+                    [-near_direction[1] / norm, near_direction[0] / norm]
+                };
+                out = [near_foot[0] + direction[0] * (s.half + clear),
+                       near_foot[1] + direction[1] * (s.half + clear)];
+            }
+            nearest = f64::INFINITY;
+        }
+    }
+    out
+}
+
+/// Move one tower/pole off all nearby roads in one native call. roads: (n, 5), ax/ay/dx/dy/half-width;
+/// ends: exclusive segment end of each road (each road has one half-width); around: (k, 2), the caller's
+/// ordered search offsets, retained exactly (including its trig rounding).
+/// Avoid point-by-segment NumPy matrices and stop at the first acceptable candidate. Most points need no search.
+#[pyfunction]
+pub fn power_off_roads(py: Python<'_>, roads: PyReadonlyArray2<'_, f64>, ends: PyReadonlyArray1<'_, i64>, x: f64, y: f64,
+                       around: PyReadonlyArray2<'_, f64>, clear: f64) -> PyResult<(f64, f64)> {
+    let (r, a) = (roads.as_array(), around.as_array());
+    if r.ncols() != 5 || a.ncols() != 2 || !x.is_finite() || !y.is_finite() || !clear.is_finite()
+        || r.iter().chain(a.iter()).any(|v| !v.is_finite()) {
+        return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads expects finite roads (n, 5), offsets (k, 2), point and clearance"));
+    }
+    let ends = ends.as_array();
+    let mut previous = 0;
+    let mut segments = Vec::with_capacity(r.nrows());
+    for &end in ends {
+        if end <= previous || end as usize > r.nrows() {
+            return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads road ends must increase and cover the segments"));
+        }
+        let half = r[[previous as usize, 4]];
+        for i in previous as usize..end as usize {
+            let s = r.row(i);
+            if s[4] != half {
+                return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads requires one half-width per road"));
+            }
+            segments.push(RoadSegment { a: [s[0], s[1]], d: [s[2], s[3]], half,
+                length2: (s[2] * s[2] + s[3] * s[3]).max(1e-12), last: i + 1 == end as usize });
+        }
+        previous = end;
+    }
+    if previous as usize != r.nrows() {
+        return Err(pyo3::exceptions::PyValueError::new_err("power_off_roads road ends must cover the segments"));
+    }
+    let p = [x, y];
+    if road_margin(p, &segments, clear) >= 0.0 { return Ok((x, y)); }
+    let first = road_candidate(p, &segments, clear);
+    let first_margin = road_margin(first, &segments, clear);
+    if first_margin >= -1e-6 { return Ok((first[0], first[1])); }
+    // Only the search can be substantial: ordinary unchanged points and straight moves retain the GIL.
+    let work = segments.len().saturating_mul(a.nrows()).saturating_mul(20);
+    let best = crate::release(py, work, || {
+        let mut best = first;
+        let mut margin = first_margin;
+        for delta in a.rows() {
+            let candidate = [p[0] + delta[0], p[1] + delta[1]];
+            let value = road_margin(candidate, &segments, clear);
+            if value >= -1e-6 { return candidate; }
+            if value > margin { best = candidate; margin = value; }
+        }
+        best
+    });
+    Ok((best[0], best[1]))
+}
+
 /// The towers, line ends and conductors of lines given as their vertices (n, 3) (x, y in the anchor frame, z the
 /// ground) with offsets (m + 1) and stop (n,): the vertex lies in a substation. Consecutive vertices closer than
 /// min_span merged. A tower at every vertex not in a substation, turned along the line (the bisector of its two spans;

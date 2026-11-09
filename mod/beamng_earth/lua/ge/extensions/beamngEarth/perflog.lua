@@ -23,6 +23,13 @@ M.HITCH_GAP_S = 2           -- hitch lines at most this often (the ones between 
 M.ENGINE_EVERY = 5          -- the engine's breakdown sampled every this many frames for the window means
 
 local w, base, frames, sumMin, hitchesMin, worstMin, lastHitchAt, skipped, drop, summaryAt
+-- the drops since takeDrops (the anonymous performance summary, perfsummary.lua): how many, their seconds, the lowest
+local drops = { n = 0, s = 0, low = nil }
+function M.takeDrops()
+  local d = drops
+  drops = { n = 0, s = 0, low = nil }
+  return d
+end
 
 function M.reset()
   w = { t0 = nil, n = 0, ms = 0, worst = {}, mod = {}, eng = {}, engN = 0, k = 0 }
@@ -144,11 +151,14 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
         if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
         out[#out + 1] = line
         drop = { since = w.t0, low = fps }
+        drops.n = drops.n + 1
       elseif drop then
         drop.low = math.min(drop.low, fps)
         if fps >= M.BACK_SHARE * usual then
           out[#out + 1] = string.format('perf back to %.0f fps after %ds (lowest %.0f) %s', fps, r0(now - drop.since),
             drop.low, where(ctx and ctx() or {}))
+          drops.s = drops.s + (now - drop.since)
+          drops.low = math.min(drops.low or math.huge, drop.low)
           drop = nil
         end
       end

@@ -12,6 +12,44 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import build_host
 
 
+class FetchRetryTest(unittest.TestCase):
+    """A release download is tried again after a server error (GitHub's 504s failed the 1.9.0 build twice), not after a
+    4xx or a refused redirect."""
+
+    def _once(self, seq):
+        it = iter(seq)
+
+        def once(url):
+            x = next(it)
+            if isinstance(x, Exception):
+                raise x
+            return x
+        return once
+
+    def test_server_errors_tried_again(self):
+        import urllib.error
+        e504 = urllib.error.HTTPError("u", 504, "Gateway Time-out", {}, io.BytesIO())
+        slept = []
+        with mock.patch.object(build_host, "_fetch_once", self._once([e504, e504, b"ok"])):
+            self.assertEqual(build_host.fetch("u", sleep=slept.append), b"ok")
+        self.assertEqual(slept, [build_host.FETCH_WAIT_S, build_host.FETCH_WAIT_S * 2])
+
+    def test_client_errors_and_refusals_not_tried_again(self):
+        import urllib.error
+        e404 = urllib.error.HTTPError("u", 404, "Not Found", {}, io.BytesIO())
+        with mock.patch.object(build_host, "_fetch_once", self._once([e404])), self.assertRaises(urllib.error.HTTPError):
+            build_host.fetch("u", sleep=lambda s: None)
+        with mock.patch.object(build_host, "_fetch_once", self._once([ValueError("Refused insecure download redirect")])), \
+                self.assertRaises(ValueError):
+            build_host.fetch("u", sleep=lambda s: None)
+
+    def test_gives_up_after_its_tries(self):
+        import urllib.error
+        e504 = urllib.error.HTTPError("u", 504, "Gateway Time-out", {}, io.BytesIO())
+        with mock.patch.object(build_host, "_fetch_once", self._once([e504] * 3)), self.assertRaises(urllib.error.HTTPError):
+            build_host.fetch("u", tries=3, sleep=lambda s: None)
+
+
 class HostPackageTest(unittest.TestCase):
     def test_wrong_binary_is_rejected_before_packaging(self):
         with tempfile.TemporaryDirectory() as d:

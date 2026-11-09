@@ -21,6 +21,7 @@ import os
 import shutil
 import threading
 import time
+import zipfile
 
 import numpy as np
 
@@ -65,7 +66,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 17     # 17: PR #843 (restored highway and ramp shoulder widths); 16: walkway bridge spans cap the road under them (PR #842) and OSM busways graded (PR #836); 15: continuous subsea tunnel profiles and their approaches (PR #822, #792); 14: past an abutment end the ground falls away under a still-climbing deck (ABUT_UNDER_GRADE)
+PLANS_FORMAT = 24     # 24: a segment's tunnel ranges joined only where one source way spans the gap (PR #927); a rail bed's band past its ballast gives way to an approach's carriageway, no claim past an abutment end (PR #920, #909); bridge pieces keep their mapped local levels across merged interchange roads (PR #873, #866); 23: bridge seams without steps: a deck end meets its road, a street off an abutment held level, a single span shared between its approaches, a stream crossed at the road's level, a track beside a road with room for the ground between (grading._pin_cw_ends, _hold_mouth, _grade_match, railroadseam.py, roads.water_clear); 22: overpasses mapped in parts are one span and road ends within 2 m one dip node (#973, #983; still the same release as 21); 21: one bump for the 2026-11-08 PR batch: abandoned railways not graded (#953, #706), dirt roads on the coarse global elevation smoothed over DIRT_SIGMA_COARSE_M (#951, #835), rail viaduct decks' heights capped (#949), worn railway lines cut at motorways (#946, #918); 18: cutting probes located through grading.enu_to_ll_dense (heights moved < 0.1 mm); 17: PR #843 (restored highway and ramp shoulder widths); 16: walkway bridge spans cap the road under them (PR #842) and OSM busways graded (PR #836); 15: continuous subsea tunnel profiles and their approaches (PR #822, #792); 14: past an abutment end the ground falls away under a still-climbing deck (ABUT_UNDER_GRADE)
                       # 13: centimetre-scale dirt wear and bounded edge displacement from random banking
                       # 12: dirt roads toned down (#783, #784; dev); PR #811's own 12: bounded, local dirt damage, independent of real
                       #     grades and DEM extensions
@@ -77,7 +78,10 @@ def plans_format():
     """The plans' revisit key format: PLANS_FORMAT and the road facts' (roads.FACTS_FORMAT: the plans are made from
     them), "<plans>.<facts>"."""
     import roads
-    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}"
+    import grading
+    # (the grade guard, off by default, makes other plans: its own key, so that the two never mix and nobody else's
+    # plans are thrown away)
+    return f"{PLANS_FORMAT}.{roads.FACTS_FORMAT}" + (".gg1" if grading.GUARD_ON else "")
 
 
 FRAMES = "r10"          # the plans' frames: their planning regions' (geotiles.PLAN_Z), not an anchor's
@@ -135,7 +139,7 @@ class PlanCache:
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
                 lists["w"] = _split(f, "w") if "w_n" in f.files else []
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
             return None
         plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
         for m, xy, z in zip(meta["plans"], lists["p"], lists["z"]):
@@ -331,7 +335,7 @@ class PlanCache:
             with np.load(self._region_path(tag, home), allow_pickle=False) as f:
                 meta = json.loads(bytes(f["meta"]).decode("utf-8"))
                 lines, cx, cz = _split(f, "l"), _split(f, "x"), _split(f, "q")
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
             return None
         parts, prof = [], {}
         for m, ln in zip(meta["parts"], lines):

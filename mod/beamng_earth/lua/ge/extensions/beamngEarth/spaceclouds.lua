@@ -127,6 +127,8 @@ function M.update(dt, anchor, anchorId, send)
   local p = cam and cam.getPosition and cam.getPosition()
   if not p or not anchor then return end
   shown = M.shownAt(p.z, shown)
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then shown = false end      -- (no clouds over the 3D map)
   if shell and shell.obj then
     local hide = not shown or shell.anchorId ~= anchorId
     if shell.hidden ~= hide then

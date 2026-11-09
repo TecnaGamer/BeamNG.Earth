@@ -9,6 +9,7 @@ Overture's classes and flags, as before. Data (c) OpenStreetMap contributors, OD
 """
 import gzip
 import json
+import zipfile
 import logging
 import os
 import re
@@ -17,6 +18,7 @@ import time
 
 import numpy as np
 
+import fast
 import netfetch
 import signshards
 
@@ -30,8 +32,11 @@ RETRY_S = 3600                  # unreachable: asked again after this long
 COLUMNS = ("railway", "gauge", "electrified", "service", "usage")
 
 
+_WAY_ID = re.compile(r"^w(\d+)")
+
+
 def way_id(record):
-    m = re.match(r"^w(\d+)", record or "")
+    m = _WAY_ID.match(record or "")
     return m.group(1) if m else None
 
 
@@ -63,15 +68,31 @@ class Ways:
             return ways
         return Ways(ways)
 
-    def get(self, key, default=None):
+    def row(self, key):
+        """The index into tags of way id key's tag set, or -1."""
         try:
             k = int(key)
         except (TypeError, ValueError):
-            return default
+            return -1
         i = int(np.searchsorted(self.ids, k))
         if i < len(self.ids) and self.ids[i] == k:
-            return self.tags[self.idx[i]]
-        return default
+            return int(self.idx[i])
+        return -1
+
+    def get(self, key, default=None):
+        r = self.row(key)
+        return self.tags[r] if r >= 0 else default
+
+    def rows_of(self, codes, records):
+        """Per Overture source record ("w<id>@<version>": records, codes their fast.ucs4) the index into tags of its
+        way's tag set (way_id's), or -1 (no way id, not in the shard). One native call (fast.way_tag_rows: a regex and
+        a numpy search per record were most of LaneTags.join, 2026-11-08); what it leaves to way_id is decided here."""
+        rows = fast.way_tag_rows(codes, self.ids, self.idx)
+        for a in np.flatnonzero(rows == -2).tolist():
+            w = way_id(str(records[a])) or ""
+            k = np.array([int(w) if w.isdigit() else -1], np.int64)[0]     # (get_many's: past int64 raises)
+            rows[a] = self.row(int(k)) if k >= 0 else -1
+        return rows
 
     def get_many(self, keys):
         """[tags or None] of each key (one search for all)."""
@@ -87,6 +108,43 @@ class Ways:
 
     def __bool__(self):
         return len(self.ids) > 0
+
+
+class Rules:
+    """A lane shard's "rules" ({key: {value: [way ids]}}, tools/build_lane_tags.py: Germany's road rules) kept
+    compact, as Ways: per key the way ids sorted (int64) and each one's value an index into the key's values; never a
+    dict per way. A value's id list is delta-coded (the first id, then each minus the one before: [100, 5, 125] is
+    100, 105, 230) and decoded with a cumulative sum. A malformed entry (not a dict, not a list, a list with an
+    entry that is not an int: dropped whole, a delta list cannot be partly trusted) is left out."""
+
+    def __init__(self, rules):
+        self.keys = {}
+        for k, by in rules.items():
+            if not isinstance(by, dict):
+                continue
+            values, ids, idx = [], [], []
+            for v, got in by.items():
+                ok = got if isinstance(got, list) and all(isinstance(i, int) and not isinstance(i, bool)
+                                                           for i in got) else []
+                if ok:
+                    ok = np.cumsum(np.array(ok, np.int64)).tolist()
+                    ids.extend(ok)
+                    idx.extend([len(values)] * len(ok))
+                    values.append(v)
+            ids = np.array(ids, np.int64)
+            o = np.argsort(ids, kind="stable")
+            self.keys[k] = (ids[o], np.array(idx, np.int32)[o], values)
+
+    def get_many(self, key, ids):
+        """[key's value or None] of each way id (strings as railtags.way_id gives them, or None)."""
+        got = self.keys.get(key)
+        ks = np.array([int(k) if isinstance(k, str) and k.isdigit() else -1 for k in ids], np.int64)
+        if got is None or not len(got[0]) or not len(ks):
+            return [None] * len(ks)
+        at, idx, values = got
+        i = np.minimum(np.searchsorted(at, ks), len(at) - 1)
+        hit = at[i] == ks
+        return [values[idx[j]] if h else None for j, h in zip(i.tolist(), hit.tolist())]
 
 
 class Shards:
@@ -162,6 +220,12 @@ class Shards:
             self.built, self.checked = built, now
         return built
 
+    def clear_memory(self):
+        """Drop the decoded shards kept in memory (budget.maybe_shed through MapData.clear_memory; ~20 MB a zoom-7
+        shard, never let go otherwise); they load again from disk when asked."""
+        with self.lock:
+            self.shards.clear()
+
     def shard(self, x, y):
         """The shard of z7 tile (x, y) (a dict), {} none there, None unreachable."""
         built = self.version()
@@ -174,6 +238,15 @@ class Shards:
         d = os.path.join(self.dir, re.sub(r"[^0-9A-Za-z]+", "_", built)) if self.dir else None
         path = os.path.join(d, f"{x}_{y}.json.gz") if d else None
         got = None
+        side = path[:-len(".json.gz")] + IDX_SUFFIX if path else None
+        if side and os.path.exists(side):
+            got = _load_idx(side)
+            if got is not None:
+                if isinstance(got.get("rules"), dict):
+                    got["rules"] = Rules(got["rules"])
+                with self.lock:
+                    self.shards[(x, y)] = got
+                return got
         if path and os.path.exists(path):
             try:
                 with gzip.open(path, "rt", encoding="utf-8") as fh:
@@ -196,6 +269,10 @@ class Shards:
                 os.replace(path + ".part", path)
         if isinstance(got, dict) and isinstance(got.get("ways"), dict):
             got["ways"] = Ways.of(got["ways"])
+            if side and isinstance(got["ways"], Ways):
+                _save_idx(side, got)        # (its "rules" still the shard's JSON: made Rules below, and on reading it)
+        if isinstance(got, dict) and isinstance(got.get("rules"), dict):
+            got["rules"] = Rules(got["rules"])        # (the lane shards' road rules)
         with self.lock:
             self.shards[(x, y)] = got
         return got
@@ -241,15 +318,60 @@ class RailTags(Shards):
 
 LANES_ON = os.environ.get("BNE_LANETAGS", "on") != "off"
 # OpenStreetMap's lane-level road tags (tools/build_lane_tags.py), attrs osm_<key with ':' as '_'>: the road markings'
-# lane-by-lane data (markings.py)
+# lane-by-lane data (markings.py). bus:lanes:forward, bus:lanes:backward and psv:lanes join only if the shard has them.
 LANE_COLUMNS = ("lanes", "turn:lanes", "turn:lanes:forward", "turn:lanes:backward", "turn:lanes:both_ways", "change:lanes",
                 "change:lanes:forward", "change:lanes:backward", "placement", "placement:forward", "placement:backward",
                 "lanes:forward", "lanes:backward", "lanes:both_ways", "overtaking", "overtaking:forward",
-                "overtaking:backward", "divider", "lane_markings", "bus:lanes", "busway", "hov:lanes",
+                "overtaking:backward", "divider", "lane_markings", "bus:lanes", "bus:lanes:forward",
+                "bus:lanes:backward", "psv:lanes", "busway", "hov:lanes",
                 "junction")     # (roundabout rings: roads._rings, attrs osm_junction)
 
 
-LANE_PARTS = "osm_lane_parts"   # per road feature of several ways: [(start, end, way id, its tags)], else None
+# Germany's road rules (tools/build_lane_tags.py: the lane shards' "rules", never in their "ways"), attrs lane_attr(k):
+# kept apart from LANE_COLUMNS, which the markings read as lane data (roads.lane_tags, LANE_PARTS)
+RULE_COLUMNS = ("priority_road", "zone:maxspeed")
+
+
+# per road feature of several ways: [(start, end, way id, its tags)], else None. The tags are the shard's own (Ways'
+# shared tag sets, {} for a way without): read them, do not change them (roads.lane_tag_parts' readers: roads.way_lines,
+# roads.extras / markings / franceroads.paint (copies before changing), motesfri; no copy per part, 2026-11-08)
+LANE_PARTS = "osm_lane_parts"
+
+
+# A shard's decoded form beside it (<x>_<y>.idx.npz): the Ways' arrays, its distinct tag sets and the rest of the shard
+# as compact JSON. Every server process read the big shards again (gzip, JSON, the way index: ~0.5 s each, rail and
+# lanes 1-2 s per process and place, 2026-11-07); this ~0.05 s. Same build folder, so as fresh as the shard.
+IDX_SUFFIX = ".idx.npz"
+
+
+def _save_idx(path, shard):
+    w = shard["ways"]
+    rest = {k: v for k, v in shard.items() if k != "ways"}
+    try:
+        with open(path + ".part", "wb") as fh:
+            np.savez(fh, ids=w.ids, idx=w.idx,
+                     tags=np.frombuffer(json.dumps(w.tags, separators=(",", ":")).encode("utf-8"), np.uint8),
+                     rest=np.frombuffer(json.dumps(rest, separators=(",", ":")).encode("utf-8"), np.uint8))
+        os.replace(path + ".part", path)
+    except OSError as e:
+        log.debug("%s: %s", path, e)
+
+
+def _load_idx(path):
+    """The shard of a _save_idx file, or None (unreadable: the shard itself is read)."""
+    try:
+        with np.load(path, allow_pickle=False) as z:
+            w = Ways.__new__(Ways)
+            w.ids, w.idx = z["ids"].astype(np.int64, copy=False), z["idx"].astype(np.int32, copy=False)
+            w.tags = json.loads(z["tags"].tobytes().decode("utf-8"))
+            got = json.loads(z["rest"].tobytes().decode("utf-8"))
+    except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as e:    # (EOFError: empty, BadZipFile: cut short)
+        log.debug("%s: %s", path, e)
+        return None
+    if not isinstance(got, dict) or not isinstance(w.tags, list) or len(w.ids) != len(w.idx):
+        return None
+    got["ways"] = w
+    return got
 
 
 def _tags_of(ways, keys):
@@ -270,12 +392,21 @@ class LaneTags(Shards):
         super().__init__(cache_dir, fetcher, "lanes")
 
     def join(self, feats, key):
-        """Add OSM's lane tags (attrs lane_attr(k) for k in LANE_COLUMNS, None where absent) to cell key's road
-        segments, in place, joined by way id. Nothing when the shard cannot be had."""
+        """Add to cell key's road segments, in place, joined by way id (None where absent):
+        - OSM's lane tags from the shard's "ways": attrs lane_attr(k) for k in LANE_COLUMNS, and LANE_PARTS;
+        - Germany's road rules from its "rules" (tools/build_lane_tags.py): attrs osm_priority_road (designated /
+          end / yes_unposted) and osm_zone_maxspeed (DE:30 / DE:20 / DE:10), lane_attr(k) for k in RULE_COLUMNS;
+        - its German sign nodes in the cell (junction signs and the mapped Ortstafeln), for sign_nodes(feats).
+        Nothing when the shard cannot be had; a shard without "rules" or "nodes" (an older build) joins none of them.
+        The way ids are parsed and found in the shard natively (fast.way_tag_rows, fast.lane_parts), each distinct tag
+        set's columns made once and the parts share the shard's tag sets (LANE_PARTS): a regex, a numpy search and a
+        tag copy per road and per way part and a rule-table slice per road were ~14 % of a dense Manhattan road tile
+        (2026-11-08). A shard whose ids are not plain numbers (Ways.of left it a dict) is read by way_id and the dict."""
         sub = feats.attrs.get("subtype")
         if sub is None or not len(feats):
             return
-        road = np.flatnonzero(np.asarray(sub).astype(str) == "road")
+        sub = np.asarray(sub)
+        road = np.flatnonzero((sub if sub.dtype.kind == "U" else sub.astype(str)) == "road")
         if not len(road):
             return
         sh = self.of_cell(key)
@@ -283,26 +414,100 @@ class LaneTags(Shards):
             return
         ways = sh.get("ways", {})
         rec = feats.attrs.get("src_record")
-        cols = {c: np.full(len(feats), None, object) for c in LANE_COLUMNS}
+        n = len(feats)
+        cols = {c: np.empty(n, object) for c in LANE_COLUMNS}     # (all None)
         if rec is not None and ways:
-            for i, t in zip(road, _tags_of(ways, [way_id(str(rec[i])) or "" for i in road])):
-                if t:
-                    for c in LANE_COLUMNS:
-                        if c in t:
-                            cols[c][i] = t[c]
+            if isinstance(ways, Ways):          # (each distinct tag set once: the rows of its roads)
+                recs = rec[road] if isinstance(rec, np.ndarray) else [str(rec[i]) for i in road]
+                k = ways.rows_of(fast.ucs4(recs), recs)
+                hit = np.flatnonzero(k >= 0)
+                u, inv = np.unique(k[hit], return_inverse=True)
+                ts = [ways.tags[j] for j in u.tolist()]
+                rows = road[hit]
+            else:
+                ts, rows, inv, seen = [], [], [], {}
+                for i, t in zip(road.tolist(), _tags_of(ways, [way_id(str(rec[i])) or "" for i in road])):
+                    if t is not None:
+                        j = seen.get(id(t))
+                        if j is None:
+                            j = seen[id(t)] = len(ts)
+                            ts.append(t)
+                        rows.append(i)
+                        inv.append(j)
+                rows, inv = np.asarray(rows, np.int64), np.asarray(inv, np.int64)
+            keep = np.array([bool(t) for t in ts], bool)
+            if keep.any():
+                m = keep[inv]
+                rows, inv = rows[m], inv[m]
+                for c in LANE_COLUMNS:
+                    vals = [t[c] if c in t else None for t in ts]
+                    if all(v is None for v in vals):
+                        continue
+                    tab = np.empty(len(ts), object)
+                    for j, v in enumerate(vals):
+                        tab[j] = v
+                    cols[c][rows] = tab[inv]
         for c in LANE_COLUMNS:
             feats.attrs[lane_attr(c)] = cols[c]
+        # (the road rules of the way covering most of a feature, as the columns above: kept apart from them and from
+        # LANE_PARTS, which the markings read as lane data)
+        rules = sh.get("rules")
+        if isinstance(rules, dict):
+            rules = Rules(rules)            # (a shard not read through Shards.shard)
+        ids = [way_id(str(rec[i])) for i in road] if rec is not None and isinstance(rules, Rules) else []
+        for c in RULE_COLUMNS:
+            col = np.full(len(feats), None, object)
+            for i, v in zip(road, rules.get_many(c, ids) if ids else ()):
+                col[i] = v
+            feats.attrs[lane_attr(c)] = col
         # (the columns above hold the way covering most of a feature; a feature of several ways keeps each one's tags)
         table = feats.rules.get("src_ways")
-        parts = np.full(len(feats), None, object)
+        parts = np.empty(n, object)
         if table is not None and len(table):
-            for i in road:
-                rows = table.for_feature(int(i))
-                if rows:
-                    parts[i] = [(a, b, way_id(r), dict(ways.get(way_id(r)) or {})) for r, a, b in rows]
+            f = np.asarray(table.feature, np.int64)
+            is_road = np.zeros(n, bool)
+            is_road[road] = True
+            sel = np.flatnonzero((f >= 0) & (f < n))
+            sel = sel[is_road[f[sel]]]
+            if len(sel):
+                sel = sel[np.argsort(f[sel], kind="stable")]       # (by feature, each one's rows ascending)
+                vals = table.value[sel]
+                if isinstance(ways, Ways):
+
+                    def ask(k):             # (the records the kernel leaves to way_id)
+                        w = way_id(vals[k:k + 1].tolist()[0])
+                        r = ways.row(w) if w is not None else -1
+                        return w, ways.tags[r] if r >= 0 else {}
+                    at, lists = fast.lane_parts(fast.ucs4(vals), f[sel], table.start[sel].astype(np.float64),
+                                                table.end[sel].astype(np.float64), ways.ids, ways.idx, ways.tags, ask)
+                    for i, got in zip(at.tolist(), lists):
+                        parts[i] = got
+                else:
+                    cur, at = None, -1
+                    for i, r, a, b in zip(f[sel].tolist(), vals.tolist(), table.start[sel].tolist(),
+                                          table.end[sel].tolist()):
+                        if i != at:
+                            at = i
+                            cur = parts[i] = []
+                        w = way_id(r)
+                        cur.append((a, b, w, ways.get(w) or {}))
         feats.attrs[LANE_PARTS] = parts
+        # (the shard's German sign nodes in the cell: [(lon, lat, tags)], as RailTags' _rail_nodes; none without a
+        # cell to bound them)
+        nodes, found = sh.get("nodes") or (), []
+        if nodes and key is not None:
+            lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+            pad = 0.002
+            found = [(lo, la, t) for _id, lo, la, t in nodes
+                     if lon0 - pad <= lo <= lon1 + pad and lat0 - pad <= la <= lat1 + pad]
+        feats.__dict__["_sign_nodes"] = found
         import roadlanes
         roadlanes.invalidate(feats)
+
+
+def sign_nodes(feats):
+    """The German sign nodes LaneTags.join found in feats' cell: [(lon, lat, tags)], [] when none."""
+    return feats.__dict__.get("_sign_nodes", [])
 
 
 SIGNS_ON = os.environ.get("BNE_SIGNTAGS", "on") != "off"
