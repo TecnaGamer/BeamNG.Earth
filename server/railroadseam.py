@@ -9,7 +9,9 @@ couple() takes the bed to where the room is enough: per vertex, every road withi
 its own +- (room / SEAM_SLOPE + SEAM_TOL_M), the room being the distance between the road's band and the bed's; the bed is
 moved into the strictest. The moves are then spread along the track at the track's own grade, so no step is made
 further on, and more where the road runs on beside it. A track crossing a road at grade has no room at all there: its bed
-is the road's, which is the flush crossing (railways._flush) already, kept. Pure given its inputs."""
+is the road's, which is the flush crossing (railways._flush) already, kept. A road the track crosses on a bridge (SEAM_CROSS_M
+or more of height at a crossing angle) is not beside it: it is left alone, or the approach fill was taken down to the
+road under the deck. Pure given its inputs."""
 import numpy as np
 
 SEAM_SLOPE = 3.0        # m of room a metre of height difference needs between two flat bands (the grader's SLOPE_RUN is 2)
@@ -17,6 +19,8 @@ SEAM_TOL_M = 0.10       # m of difference allowed with no room at all
 REACH_M = 40.0          # m from the bed line a road is looked at
 MAX_MOVE_M = 6.0        # m the bed is moved at most (bad data: rather a step than a mountain)
 SPREAD_GRADE = 0.02     # the track's own grade, at which a move is run out along it (railways.GRADE)
+SEAM_CROSS_COS = 0.7071067811865476  # 45 deg: a road this far from parallel at the bed crosses it
+SEAM_CROSS_M = 2.0      # m of height between the bed and such a road: it crosses on a bridge, not beside it
 
 
 def couple(xy, z, half, roads):

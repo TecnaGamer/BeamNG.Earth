@@ -7,16 +7,30 @@
 use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
+const CROSS_COS: f64 = 0.7071067811865476; // 45 deg: a road this far from parallel at the bed crosses it
+const CROSS_M: f64 = 2.0;                  // m of height between the bed and such a road: it crosses on a bridge
+
 /// (lo, hi) per vertex of xy: the heights the bed may have beside the roads (-inf / inf where none is near).
 /// Roads: their points rxy[off[r]..off[r+1]], heights rz, half widths rh (roads under two points are skipped).
 #[allow(clippy::too_many_arguments)]
-pub fn bounds(xy: &[[f64; 2]], half: f64, rxy: &[[f64; 2]], rz: &[f64], off: &[i64], rh: &[f64],
+pub fn bounds(xy: &[[f64; 2]], z: &[f64], half: f64, rxy: &[[f64; 2]], rz: &[f64], off: &[i64], rh: &[f64],
               reach: f64, slope: f64, tol: f64) -> (Vec<f64>, Vec<f64>) {
     let n = xy.len();
     let mut lo = vec![f64::NEG_INFINITY; n];
     let mut hi = vec![f64::INFINITY; n];
     if n == 0 {
         return (lo, hi);
+    }
+    // the track's own direction at each vertex: a road it crosses on a bridge is not one it runs along
+    let mut td = vec![[0.0f64, 0.0]; n];
+    for i in 0..n {
+        let a = xy[i.saturating_sub(1)];
+        let b = xy[(i + 1).min(n - 1)];
+        let d = [b[0] - a[0], b[1] - a[1]];
+        let len = d[0].hypot(d[1]);
+        if len > 1e-9 {
+            td[i] = [d[0] / len, d[1] / len];
+        }
     }
     let (mut xmin, mut xmax) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
     for p in xy {
@@ -76,6 +90,17 @@ pub fn bounds(xy: &[[f64; 2]], half: f64, rxy: &[[f64; 2]], rz: &[f64], off: &[i
                 continue;
             }
             let zr = zs[k] + (zs[k + 1] - zs[k]) * tk;
+            // a road the track crosses on a bridge (a grade separation) is not one beside it: the fill of an
+            // approach cannot be taken to the road under it (the deck then fell to the road and the embankment
+            // ended mid-span). At grade (within CROSS_M) the flush crossing still takes the road's height.
+            let ab = [pts[k + 1][0] - pts[k][0], pts[k + 1][1] - pts[k][1]];
+            let l = ab[0].hypot(ab[1]);
+            if (zr - z[i]).abs() > CROSS_M && l > 1e-9 {
+                let cross = (td[i][0] * ab[0] / l + td[i][1] * ab[1] / l).abs();
+                if cross < CROSS_COS {
+                    continue;
+                }
+            }
             let room = (best - rh[r] - half).max(0.0);
             let allow = room / slope + tol;
             lo[i] = lo[i].max(zr - allow);
@@ -125,7 +150,7 @@ pub fn rail_seam_couple<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z:
         return Ok(None);
     }
     let out = py.detach(|| {
-        let (lo, hi) = bounds(&pts, half, &rpts, &rzv, &offv, &rhv, reach, slope, tol);
+        let (lo, hi) = bounds(&pts, &zv, half, &rpts, &rzv, &offv, &rhv, reach, slope, tol);
         let both: Vec<bool> = (0..n).map(|i| lo[i].is_finite() && hi[i].is_finite()).collect();
         if !both.iter().any(|&b| b) {
             return None;
