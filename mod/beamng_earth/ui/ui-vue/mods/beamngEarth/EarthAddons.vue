@@ -218,6 +218,7 @@ import {
   open, back, refresh, install, cancelConsent, manage, onTextClick, openRepo, openDownload,
   stateLine, size, day, progressText, start, stop, lines, adding, addRepo, forget, saveOptions,
 } from "./earthAddonsStore.js"
+import { typing } from "./earthSettingsStore.js"
 
 const tab = ref("readme")
 const removeAsk = ref("")
@@ -247,7 +248,6 @@ const latestDownloads = computed(() => {
 onMounted(start)
 onUnmounted(stop)
 // (the game keeps the keyboard unless an input says it is being typed in: as EarthMap's and EarthMap3d's inputs)
-function typing(on) { engineLua(`if setCEFTyping then setCEFTyping(${on ? "true" : "false"}) end`) }
 onUnmounted(() => typing(false))
 </script>
 
