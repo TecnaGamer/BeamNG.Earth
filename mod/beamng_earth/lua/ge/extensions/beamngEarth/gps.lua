@@ -201,10 +201,11 @@ function M.routePosition(xs, ys, cum, px, py, vx, vy, sPrev, i0, i1)
   return bi, bt, bd
 end
 
+local lineKey = nil      -- (setLineArrows: the route-line arrows' key; nil while the planner's arrows are up)
 local function clearArrows()
   local gm = rawget(_G, 'core_groundMarkers')
   if gm and gm.setPath then pcall(gm.setPath, nil) end
-  routedTo = nil
+  routedTo, lineKey = nil, nil
 end
 
 local function core() return rawget(_G, 'beamngEarth_core') end
@@ -650,6 +651,52 @@ function M.afterGraph(keep, newNodes, moved)
   M.graphKeeps = (M.graphKeeps or 0) + 1
 end
 
+-- At speed the arrows come straight from the planned route's line (LINE_*), not the game's planner on our AI graph:
+-- the graph is clipped to the terrain block and lags behind a fast car, so the planner found no road ahead (the
+-- arrows pointed at the destination across the land) or re-planned on a stale graph, and they stopped following
+-- for a while (the user, 2026-11-09: "if your going fast enough the gps routing can go crazy or stop updating"). The
+-- path is a dense line along the route (heights from the ground below), set again every LINE_REBUILD_M; the planner
+-- only trims it as the car passes. Also used whenever none of the route ahead is on the local graph. Not with
+-- autodrive (the AI drives the graph's path).
+M.LINE_MPS = 25         -- (56 mph)
+M.LINE_M = 1500         -- m of route ahead
+M.LINE_STEP_M = 15
+M.LINE_REBUILD_M = 120
+local function setLineArrows(e, s0, z0)
+  local gm = rawget(_G, 'core_groundMarkers')
+  if not gm or not gm.setPath or not gm.routePlanner then return false end
+  local key = 'L' .. tostring(route and route.version) .. ':' .. math.floor(s0 / M.LINE_REBUILD_M)
+  if key == lineKey and gm.endWP then return true end
+  local pts = M.routeSlice(e, s0, s0 + M.LINE_M, M.LINE_STEP_M)
+  if #pts < 2 then return false end
+  local ray = rawget(_G, 'castRayStatic')
+  local z, path = z0 or 0, {}
+  for j = 1, #pts do
+    local x, y = pts[j][1], pts[j][2]
+    if ray then
+      local ok, d = pcall(ray, vec3(x, y, z + 60), vec3(0, 0, -1), 200)
+      if ok and d and d < 200 then z = z + 60 - d end
+    end
+    path[j] = vec3(x, y, z)
+  end
+  if not gm.endWP or not lineKey then         -- (the markers' state set up once, to a near point: cheap to plan)
+    if not pcall(gm.setPath, path[2], { clearPathOnReachingTarget = false }) then return false end
+  end
+  local rp = gm.routePlanner
+  if rp.clear then pcall(rp.clear, rp) end
+  rp.path = rp.path or {}
+  for j = 1, #path do rp.path[j] = { pos = path[j] } end
+  for j = #rp.path, #path + 1, -1 do rp.path[j] = nil end
+  if rp.calcDistance then pcall(rp.calcDistance, rp) end
+  local total = e.cum[#e.x]
+  M.addRest(rp, total - math.min(s0 + M.LINE_M, total))
+  gm.endWP = { path[#path] }
+  if gm.sendToApp then pcall(gm.sendToApp) end        -- (the minimap's and the navigation app's route line)
+  lineKey, routedTo = key, nil
+  M.lineSets = (M.lineSets or 0) + 1
+  return true
+end
+
 local arrowsSerial = nil
 -- target: a vec3, or a list of them (waypoints along the route, then the target)
 local function setArrows(key, target, tail, nodes)
@@ -863,7 +910,11 @@ function M.update(anchor, player)
     end
     if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
     if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
+    local hereS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
+    if not auto and speed >= M.LINE_MPS and setLineArrows(e, hereS, player.z) then return end
     local tg = nodes and routeTarget(e, nodes, i, t)
+    if not tg and not auto and setLineArrows(e, hereS, player.z) then return end
+    lineKey = nil                       -- (back on the planner's arrows: set again by setArrows)
     if tg then
       -- set again only when the target moved on by a good stretch (each setPath re-plans the arrows)
       -- only forward (the farthest point on the graph flickered between two 150 m steps, every second a new path
@@ -889,6 +940,7 @@ end
 -- The level ended: the arrows went with it (the destination and its route stay for the next level start).
 function M.reset()
   routedTo, info, lastCheck, enu, progress, progressS = nil, nil, -math.huge, nil, 1, nil
+  lineKey = nil
 end
 
 return M
