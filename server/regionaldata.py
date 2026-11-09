@@ -44,6 +44,33 @@ def _base():
     return f"{railtags.PAGES}/{NAME}"
 
 
+def _write(path, body):
+    """body to path whole: a temporary file of this process and thread's own, renamed over it. Several fetching the
+    same file at once (the road processes' first tiles in Germany on a cold cache) each write a whole one; a shared
+    temporary name had one's rename fail and another read a part of it. A rename refused with path there (Windows:
+    another process holds it open) keeps that copy, another fetch's of the same bytes; a write that fails (a full disk)
+    leaves no temporary file behind."""
+    tmp = f"{path}.{os.getpid()}-{threading.get_ident()}.part"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(body)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    try:
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        if not os.path.exists(path):
+            raise
+
+
 def _dir():
     return os.path.join(_state["cache"], "pagesdata", NAME) if _state["cache"] else None
 
@@ -69,9 +96,7 @@ def manifest():
             d = _dir()
             if d:
                 os.makedirs(d, exist_ok=True)
-                with open(os.path.join(d, "manifest.json.part"), "wb") as fh:
-                    fh.write(body)
-                os.replace(os.path.join(d, "manifest.json.part"), os.path.join(d, "manifest.json"))
+                _write(os.path.join(d, "manifest.json"), body)
         except Exception as e:      # (offline, not published yet: the last one pinned on disk, else none)
             log.info("regional data manifest: %s: %s", type(e).__name__, e)
             d = _dir()
@@ -119,9 +144,7 @@ def _fetch(rel):
         log.info("regional data %s: %s: %s", rel, type(e).__name__, e)
         return None
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path + ".part", "wb") as fh:
-        fh.write(body)
-    os.replace(path + ".part", path)
+    _write(path, body)
     return body
 
 

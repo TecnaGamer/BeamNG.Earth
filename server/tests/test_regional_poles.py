@@ -236,7 +236,8 @@ class PipelineTest(unittest.TestCase):
         def revisit(kind, key, aid, tx, ty, out, vfs, name, build, extra, result, where=None):
             keys.append(key)
             return build()
-        def build(*args):
+        def build(*args, **kwargs):         # (kwargs: the German junction signs' de_junctions and the town signs'
+            # towns_on, by name)
             forwarded.append(args[-1])
             return ("/temp/result", 0, [])
         with mock.patch.object(blockworker, "_s", SimpleNamespace(md=None)), \

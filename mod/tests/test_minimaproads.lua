@@ -11,6 +11,10 @@ local g = { anchor = 1,
 local idx = R.build(g, 128)
 T.check(idx.count == 3, 'one link per pair of nodes, none to a missing node: ' .. idx.count)
 T.check(R.class(0.95) == 1 and R.class(0.5) == 2 and R.class(0.1) == 3 and R.class(nil) == 1, 'stock colour classes')
+-- (the road colour from 0.85: Germany's give-way steps, navgraph.DE_YIELD_STEP, take a tertiary's 0.9 to 0.88, still
+-- a road; no drivability class lies in 0.85 .. 0.9)
+T.check(R.class(1) == 1 and R.class(0.9) == 1 and R.class(0.88) == 1 and R.class(0.85) == 1 and R.class(0.84) == 2
+  and R.class(0.8) == 2 and R.class(0.26) == 2 and R.class(0.25) == 3, 'the boundaries: 0.85 and 0.25')
 -- (by cell: the links of the cells the square meets, each once; the canvas clips the rest)
 local q = R.query(idx, 0, 0, 60)
 T.check(#q == 2 and idx.links[q[1]] == 0 and idx.links[q[1] + 2] == 50, 'near the origin: a-b, and b-c in the same cell')

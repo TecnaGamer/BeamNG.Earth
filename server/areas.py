@@ -424,7 +424,8 @@ class Areas:
         return out
 
     def _present(self, step, done_imgs=None):
-        """Is a step's data on disk already (no network)?"""
+        """Is a step's data on disk already (no network; but a world tile near Germany, with its junction signs on,
+        fetches Germany's border data once: geo_prebuilt's key names it, earthd.Server.geo_content_key)?"""
         kind = step[0]
         if kind == "cell":
             import mapcells
@@ -445,7 +446,8 @@ class Areas:
 
     def plan(self, s, w, n, e, mode=DEFAULT_MODE):
         """The confirm box's estimate of a new area: {ok, km2, items, missing, downloadBytes, diskBytes, seconds, days,
-        hosts [[host, requests, days]], excluded [source names], worldTiles, worldMissing, error?}. No network."""
+        hosts [[host, requests, days]], excluded [source names], worldTiles, worldMissing, error?}. No network, but a
+        box near Germany, with its junction signs on, fetches Germany's border data once (_present's world tiles)."""
         try:
             box = check_box(s, w, n, e)
             mode = check_mode(mode, self.s)

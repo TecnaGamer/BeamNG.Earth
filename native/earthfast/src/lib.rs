@@ -38,6 +38,7 @@ mod groundpaint;
 mod medians;
 mod speedsigns;
 mod roadsigns;
+mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -51,6 +52,7 @@ mod fartex;
 mod farglobal;
 mod dirtsteps;
 mod gridinterp;
+mod dejunction;
 mod streetlabels;
 mod perfclean;
 mod mdhtml;
@@ -5519,6 +5521,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_general, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
@@ -5590,6 +5595,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add("VERSION", 171)?;
     Ok(())
