@@ -1,5 +1,6 @@
 """Mapped chain-link fences and noise walls (fences.py)."""
 import json
+import math
 import os
 import sys
 import unittest
@@ -202,6 +203,49 @@ class PlaceTest(unittest.TestCase):
                           lambda la, lo: np.full(np.shape(la), 5.0), decks=self.DECK)
         self.assertTrue(low)
         self.assertTrue(all(abs(r[3] - 5.0) < 0.05 for r in low), sorted(r[3] for r in low))
+
+    def test_a_noise_wall_stands_off_the_carriageway_edge(self):
+        # A wall is laid along the carriageway it runs along with its face WALL_EDGE_M beyond the painted edge,
+        # not on the mapped line (that follows the real deck's outer edge, a shoulder further out).
+        wall = self.line("wall", {"wall": "noise_barrier"}, [[10.0, 9.0], [90.0, 9.0]])
+        spec = type("S", (), {"width": 14.0})()
+        road = [("road", spec, np.array([[0.0, 0.0, 5.0], [100.0, 0.0, 5.0]]), None)]
+        got = fences.rows(self.frame, lambda key: wall, (0.0, 0.0, 100.0, 100.0),
+                          lambda la, lo: np.full(np.shape(la), 5.0), roads=road)
+        self.assertTrue(got)
+        for r in got:
+            a = math.radians(r[4])
+            cy = r[2] + 1.25 * math.sin(a) + 2.0 * math.cos(a)
+            cx = r[1] + 1.25 * math.cos(a) - 2.0 * math.sin(a)
+            self.assertAlmostEqual(cy, 7.0 + fences.WALL_EDGE_M + fences.WALL_ACROSS, delta=0.05)
+            self.assertTrue(10.0 - 0.1 <= cx <= 90.0 + 0.1)       # (along the road, unmoved)
+            self.assertAlmostEqual(r[4], 270.0, delta=0.5)      # (flat face south, toward the road)
+
+    def test_a_noise_wall_is_never_drawn_across_the_carriageway(self):
+        # A way mapped across a road (a data error) put its panels over the asphalt; those panels are left out.
+        wall = self.line("wall", {"wall": "noise_barrier"}, [[50.0, -30.0], [50.0, 30.0]])
+        spec = type("S", (), {"width": 14.0})()
+        road = [("road", spec, np.array([[0.0, 0.0, 5.0], [100.0, 0.0, 5.0]]), None)]
+        got = fences.rows(self.frame, lambda key: wall, (0.0, 0.0, 100.0, 100.0),
+                          lambda la, lo: np.full(np.shape(la), 5.0), roads=road)
+        self.assertTrue(got)                    # (the panels away from the carriageway stay)
+        for r in got:
+            a = math.radians(r[4])
+            cy = r[2] + 1.25 * math.sin(a) + 2.0 * math.cos(a)
+            self.assertGreaterEqual(abs(cy), 7.0 - 1e-6, "a panel over the carriageway")
+
+    def test_a_wall_on_a_bridge_ignores_the_road_under_it(self):
+        # A rail viaduct's wall crosses a road below: the road is nearer in XY, but at another level, and must
+        # not take the wall (it stood on the road below, or turned across it).
+        wall = self.line("wall", {"wall": "noise_barrier", "layer": "2"}, [[10.0, 14.0], [90.0, 14.0]])
+        deck = [{"n": np.array([[0.0, 20.0, 13.0], [100.0, 20.0, 13.0]]), "w": 8.0}]
+        spec = type("S", (), {"width": 7.0})()
+        under = [("road", spec, np.array([[0.0, 14.0, 5.0], [100.0, 14.0, 5.0]]), None)]
+        got = fences.rows(self.frame, lambda key: wall, (0.0, 0.0, 100.0, 100.0),
+                          lambda la, lo: np.full(np.shape(la), 5.0), decks=deck, roads=under)
+        self.assertTrue(got)
+        self.assertTrue(all(abs(r[4] - 90.0) < 0.5 for r in got), [r[4] for r in got])
+        self.assertTrue(all(abs(r[3] - 13.0) < 0.05 for r in got), [r[3] for r in got])
 
     def test_a_panel_past_the_tile_is_left_out(self):
         feats = self.line("fence", {"fence_type": "chain_link"}, [[-30.0, 10.0], [40.0, 10.0]])
