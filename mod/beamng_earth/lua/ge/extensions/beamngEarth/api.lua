@@ -13,6 +13,7 @@
 --   onBeamNGEarthWorldReady(info)     the world around the player is loaded (after the level loads, a teleport)
 --   onBeamNGEarthTeleported(info)     a teleport finished: info.lat / lon where the player is now
 --   onBeamNGEarthRouteArrived(info)   the GPS destination reached: info.lat / lon / name
+--   onBeamNGEarthWaypointReached(info) a GPS waypoint passed (1.2, has('gpsRoute')): info.lat / lon / name / left
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
 -- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions'), which returns a handle for
 -- api.off(handle).
@@ -23,10 +24,12 @@
 -- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself.
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 1
-local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true }
+M.MAJOR, M.MINOR = 1, 2
+local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
+  gpsRoute = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
-  routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions' }
+  routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
+  waypointReached = 'onBeamNGEarthWaypointReached' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -152,17 +155,28 @@ function M.gpsSet(lat, lon, name)
   return gps.setDestination(lat, lon, type(name) == 'string' and name or nil) == true
 end
 
+-- The GPS through waypoints (1.2, has('gpsRoute'); GitHub #935): points { { lat, lon, name? }... }, the last the
+-- destination, at most 11 (10 waypoints), planned as one route. True, or false and why.
+function M.gpsSetRoute(points)
+  local gps = mod('gps')
+  if not gps or not gps.setRoute then return false, 'BeamNG.Earth is not loaded' end
+  return gps.setRoute(points)
+end
+
 function M.gpsClear()
   local gps = mod('gps')
   if gps then gps.clear() end
 end
 
--- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning }, or nil without one.
+-- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning, waypoints, legs }, or
+-- nil without one (waypoints: those still ahead, { { lat, lon, name }... }; legs: the planned route's { { dist m,
+-- dur s }... } from the start through each waypoint, with waypoints only).
 function M.gps()
   local gps = mod('gps')
   local s = gps and gps.status and gps.status()
   if type(s) ~= 'table' then return nil end
-  return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true }
+  return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true,
+           waypoints = s.waypoints or {}, legs = s.legs }
 end
 
 -- A short message on the screen (the game's own messages), seconds (default 5).

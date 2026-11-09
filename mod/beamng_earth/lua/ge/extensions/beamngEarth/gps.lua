@@ -8,7 +8,14 @@
 -- than OFF_ROUTE_M plans it again from where the player is. Without a planned route (offline): steered toward the
 -- destination through the graph node nearest it. Arrived (M.arrived: at the planned route's end, else within ARRIVE_M):
 -- cleared.
+-- Waypoints (M.setRoute, GitHub #935 / #886: a charging stop on the way, a route with several stops): the places the
+-- route passes through before the destination, planned in one request (the server's routing.py, OSRM's intermediate
+-- coordinates; at most MAX_VIA). Each is reached within ARRIVE_M of it, in order: a message, the API's
+-- waypointReached event, and the re-routes from then on leave it out. The destination is not arrived at while a
+-- waypoint is still ahead (a round trip ends where it starts).
 local M = {}
+
+M.MAX_VIA = 10          -- (server routing.MAX_VIA)
 
 M.CHECK_S = 1.0
 M.ARRIVE_M = 40         -- this close (horizontally): arrived
@@ -58,6 +65,7 @@ M.AUTO_AGGRESSION = 0.3
 M.AUTO_DAMAGE = 20000
 
 local dest = nil        -- { lat, lon, name }
+local vias = {}         -- { { lat, lon, name }... } the waypoints still ahead, in order (M.setRoute)
 local route = nil       -- { points = {{lat, lon}...}, dist, dur, version } | false (no route: steering) | nil (none yet)
 local routeVersion = 0
 local routeError = nil
@@ -222,7 +230,12 @@ local function requestRoute(player)
   local veh = playerVeh()
   local d = veh and veh.getDirectionVector and veh:getDirectionVector()
   local b = d and M.compass(d.x, d.y)
-  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b) then
+  local via = nil
+  if #vias > 0 then
+    via = {}
+    for k, w in ipairs(vias) do via[k] = { w.lat, w.lon } end
+  end
+  if c.requestRoute(nextId, player.lat, player.lon, dest.lat, dest.lon, b, via) then
     pendingId, lastRequest = nextId, os.clock()
   end
 end
@@ -231,6 +244,7 @@ function M.setDestination(lat, lon, name)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
+  vias = {}
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
   leastRemaining, routeFails = nil, 0
   routedTo, lastCheck, lastRequest = nil, -math.huge, -math.huge     -- plan and route at the next update
@@ -238,8 +252,41 @@ function M.setDestination(lat, lon, name)
   return true
 end
 
+-- Pure: a list of places ({ lat, lon, name? } or { lat, lon }) as waypoints and the destination: the valid ones, in
+-- order, the last the destination; nil and why when none, or more than MAX_VIA + 1.
+function M.routeStops(points)
+  if type(points) ~= 'table' then return nil, 'no points' end
+  local out = {}
+  for _, p in ipairs(points) do
+    local lat, lon = tonumber(type(p) == 'table' and (p.lat or p[1])), tonumber(type(p) == 'table' and (p.lon or p[2]))
+    if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then return nil, 'bad coordinates' end
+    out[#out + 1] = { lat = lat, lon = lon, name = type(p.name) == 'string' and p.name or (type(p[3]) == 'string' and p[3]) or nil }
+  end
+  if #out == 0 then return nil, 'no points' end
+  if #out > M.MAX_VIA + 1 then return nil, 'at most ' .. (M.MAX_VIA + 1) .. ' points' end
+  return out
+end
+
+-- The GPS through waypoints: points as M.routeStops takes them, the last the destination. True, or false and why.
+function M.setRoute(points)
+  local stops, why = M.routeStops(points)
+  if not stops then return false, why end
+  local last = table.remove(stops)
+  if not M.setDestination(last.lat, last.lon, last.name) then return false, 'bad coordinates' end
+  vias = stops
+  return true
+end
+
+-- The waypoints still ahead: { { lat, lon, name }... } (a copy).
+function M.waypoints()
+  local out = {}
+  for k, w in ipairs(vias) do out[k] = { lat = w.lat, lon = w.lon, name = w.name } end
+  return out
+end
+
 function M.clear()
   if auto then M.setAutodrive(false) end
+  vias = {}
   dest, route, routeError, pendingId, enu, info = nil, nil, nil, nil, nil, nil
   downloadProgress = nil
   clearArrows()
@@ -265,13 +312,15 @@ function M.status()
            remaining = info and info.remaining, eta = info and info.eta, routeVersion = route and route.version or 0,
            progress = progress, planning = pendingId ~= nil, routeError = routeError, pendingId = pendingId,
            autodrive = auto, autoNodes = autoPath and #autoPath or nil, off = info and info.off, arrows = routedTo,
-           routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries }
+           routeDownload = downloadProgress, replans = M.noProgressReplans, recoveries = M.autoRecoveries,
+           waypoints = #vias > 0 and M.waypoints() or nil, legs = route and route.legs or nil }
 end
 
 -- The planned route for the map: { version, points = {{lat, lon}...}, dist, dur, elev = {{distM, elevM}...} } or nil.
 function M.route()
   if not route then return nil end
-  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev }
+  return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev,
+           legs = route.legs }
 end
 
 local function toEnu(anchor)
@@ -734,7 +783,7 @@ function M.update(anchor, player)
       pendingId = nil
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
-        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev }
+        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev, legs = r.legs }
         routeError, enu, routedTo, leastRemaining, routeFails = nil, nil, nil, nil, 0
       else
         routeError = r.error or 'no route'
@@ -748,17 +797,30 @@ function M.update(anchor, player)
     requestRoute(player)
   end
 
+  -- the next waypoint reached: passed on (the route through it stays; re-routes leave it out from now on)
+  while vias[1] do
+    local wx, wy = anchor:geodeticToEnu(vias[1].lat, vias[1].lon, 0)
+    if math.sqrt((wx - player.x) ^ 2 + (wy - player.y) ^ 2) >= M.ARRIVE_M then break end
+    local w = table.remove(vias, 1)
+    if ui_message then pcall(ui_message, 'Waypoint: ' .. (w.name or 'reached'), 5, 'beamngEarthGps') end
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._event then
+      pcall(api._event, 'waypointReached', { lat = w.lat, lon = w.lon, name = w.name, left = #vias })
+    end
+  end
   local tx, ty = anchor:geodeticToEnu(dest.lat, dest.lon, 0)
   local dx, dy = tx - player.x, ty - player.y
   local dist = math.sqrt(dx * dx + dy * dy)
   info = { dist = dist, bearing = M.bearing(player.x, player.y, tx, ty), remaining = dist }
+  local ahead = #vias > 0             -- (a waypoint still ahead: not arrived, steered toward it without a route)
+  if ahead then tx, ty = anchor:geodeticToEnu(vias[1].lat, vias[1].lon, 0) end
   local function arrive()
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
     local api = rawget(_G, 'beamngEarth_api')      -- (the modding API's event: other mods' jobs end here)
     if api and api._event then pcall(api._event, 'routeArrived', { lat = dest.lat, lon = dest.lon, name = dest.name }) end
     M.clear()
   end
-  if not route and dist < M.ARRIVE_M then arrive() return end
+  if not route and not ahead and dist < M.ARRIVE_M then arrive() return end
   local m = rawget(_G, 'map') and map.getMap and map.getMap()
   local nodes = m and m.nodes
   autoKeep(nodes, now)
@@ -777,7 +839,7 @@ function M.update(anchor, player)
     local remaining = e.cum[n] - (e.cum[i] + t * (e.cum[i + 1] - e.cum[i]))
     info.remaining = remaining + off
     info.off = off
-    if M.arrived(dist, remaining, off) then arrive() return end
+    if not ahead and M.arrived(dist, remaining, off) then arrive() return end
     local speed = math.sqrt(vx * vx + vy * vy)
     local back
     back, leastRemaining = M.backtracking(leastRemaining, info.remaining, speed)

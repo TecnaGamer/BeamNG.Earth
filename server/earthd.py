@@ -5502,8 +5502,9 @@ class Connection:
         files.request(want)
 
     async def route(self, msg):
-        """{"id", "lat0", "lon0", "lat1", "lon1", "download"?} -> route_result {"id", "points": [[lat, lon]...], "dist",
-        "dur", "elev": [[dist_m, elev_m], ...]?, "error"?}. Also (re)starts this route's corridor prefetch
+        """{"id", "lat0", "lon0", "lat1", "lon1", "via"?, "download"?} -> route_result {"id", "points": [[lat, lon]...],
+        "dist", "dur", "legs": [[dist_m, dur_s], ...]?, "elev": [[dist_m, elev_m], ...]?, "error"?} (via: [[lat, lon],
+        ...] the route passes through in order, routing.MAX_VIA at most; legs: with via, each leg's). Also (re)starts this route's corridor prefetch
         (route_download, routeahead.py; download: "off", "ahead" (ROUTE_AHEAD_MAX_M, the default) or "route" (the
         whole route, up to ROUTE_WHOLE_MAX_M))."""
         self.route_dl_version += 1
@@ -5512,7 +5513,7 @@ class Connection:
         try:
             r = await asyncio.get_running_loop().run_in_executor(
                 self.s.ui_pool, routingmod.plan, float(msg["lat0"]), float(msg["lon0"]), float(msg["lat1"]),
-                float(msg["lon1"]), self.s.net, msg.get("bearing"))
+                float(msg["lon1"]), self.s.net, msg.get("bearing"), routingmod.via_points(msg.get("via")))
             out.update(r)
         except Exception as e:          # offline, no route, rate limited: the mod falls back to steering
             out["error"] = f"{type(e).__name__}: {e}"[:200]

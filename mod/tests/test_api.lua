@@ -23,6 +23,7 @@ package.loaded['beamngEarth/places'] = {
 local dest = nil
 package.loaded['beamngEarth/gps'] = {
   setDestination = function(lat, lon, name) dest = { lat = lat, lon = lon, name = name } return true end,
+  setRoute = function(points) dest = { lat = points[#points].lat, lon = points[#points].lon, name = 'route' } return true end,
   clear = function() dest = nil end,
   status = function() return dest and { lat = dest.lat, lon = dest.lon, name = dest.name, remaining = 1200, eta = 90 } end,
 }
@@ -45,7 +46,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 1, 'version 1.1 (options)')
+T.check(api.version() == 1 and select(2, api.version()) == 2, 'version 1.2 (gpsRoute)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -114,6 +115,8 @@ local ok, why = api.teleport('x', 8)
 T.check(not ok and why, 'teleport refused with why')
 T.check(api.gpsSet(46.5, 8.0, 'Depot') and api.gps().name == 'Depot' and api.gps().remaining == 1200, 'GPS set, read')
 T.check(not api.gpsSet(91, 0), 'GPS: bad coordinates refused')
+T.check(api.has('gpsRoute') and api.gpsSetRoute({ { lat = 46.6, lon = 8.1 }, { lat = 46.7, lon = 8.2 } })
+  and api.gps().lat == 46.7 and #api.gps().waypoints == 0, 'GPS route through a waypoint (gps.setRoute)')
 api.gpsClear()
 T.check(api.gps() == nil, 'GPS cleared')
 T.check(api.notify('Load delivered', 3) and messages[1][1] == 'Load delivered', 'notify')
@@ -152,6 +155,8 @@ api._event('teleported', { lat = 1, lon = 2 })
 T.check(#got == 1, 'off: no more calls')
 api._event('routeArrived', { lat = 3, lon = 4, name = 'Depot' })
 T.check(hooks[#hooks][1] == 'onBeamNGEarthRouteArrived' and hooks[#hooks][2].name == 'Depot', 'route arrived hook')
+api._event('waypointReached', { lat = 3, lon = 4, name = 'Charger', left = 1 })
+T.check(hooks[#hooks][1] == 'onBeamNGEarthWaypointReached' and hooks[#hooks][2].left == 1, 'waypoint reached hook')
 
 T.check(api.has('options') and select(2, api.version()) >= 1, 'options: has() and minor version 1')
 package.loaded['beamngEarth/addons'] = { optionValues = function(id) return id == 'x' and { port = 1 } or nil end }

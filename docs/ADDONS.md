@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 0) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'` |
+| `version()` | `major, minor` (1, 2) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -162,7 +162,8 @@ end
 | `position()` | `lat, lon` or nil |
 | `place()` | `{street, place, region, country}` (each optional) as the status bar shows it, or nil |
 | `teleport(lat, lon, name)` | true once taken (as the map's Go), else `false, why` |
-| `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning}` or nil |
+| `gpsSet(lat, lon, name)`, `gpsClear()`, `gps()` | the GPS destination: `gps()` is `{lat, lon, name, remaining, eta, planning, waypoints, legs}` or nil |
+| `gpsSetRoute(points)` | 1.2: the GPS through waypoints, `points` `{{lat, lon, name?}, ...}`, the last one the destination, at most 11; one route through them all, each waypoint passed in order (within 40 m). `gps().waypoints` is the ones still ahead, `gps().legs` the planned route's `{dist m, dur s}` per leg. True, or `false, why` |
 | `notify(text, seconds)` | a short message on screen |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
@@ -179,6 +180,7 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthWorldReady` | `worldReady` | `{lat, lon}`: after the level loads and after each teleport |
 | `onBeamNGEarthTeleported` | `teleported` | `{lat, lon}`: a teleport finished, the player is set down |
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
+| `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and
