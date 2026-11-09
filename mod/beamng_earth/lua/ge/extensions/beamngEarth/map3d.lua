@@ -698,35 +698,99 @@ local function flyStep(g, dt)
 end
 
 -- ---- the GPS route on the 3D map (the 2D map's line, drawn in the world: settings.uiGpsRoute)
-local route = {version = nil, pts = nil, world = nil, anchor = nil, check = 0}
+-- The line's heights (the user, 2026-11-08: "the gps line isn't fully drawn in the 3d map"): every point at sea level
+-- unless the game's own ground was loaded under it when the line was made, so over land above the sea the far terrain
+-- covered it everywhere but round the car. Now: the route's elevation profile (gps elev, the server's DEM along it) for
+-- every point, the loaded ground within ROUTE_NEAR_M of the anchor (looked up again every ROUTE_GROUND_S: blocks load
+-- after the line is made), and lifted by ROUTE_LIFT of the camera's distance (the far terrain is a coarse mesh of the
+-- same ground: from high up, a few metres over it was under its triangles between the points).
+M.ROUTE_NEAR_M = 4000
+M.ROUTE_GROUND_S = 4
+M.ROUTE_LIFT = 0.004          -- of the camera's distance, at least ROUTE_LIFT_MIN m
+M.ROUTE_LIFT_MIN = 3
+
+-- Pure: each route point's height (m) from the profile {{dist m, elev m}...} by its distance along the points
+-- {{lat, lon}...} (great circle); nil where there is no profile.
+function M.routeHeights(pts, elev)
+  local out = {}
+  if type(elev) ~= 'table' or #elev == 0 then return out end
+  local ed, ez = {}, {}
+  for i, e in ipairs(elev) do ed[i], ez[i] = tonumber(e[1] or e['1']) or 0, tonumber(e[2] or e['2']) or 0 end
+  local s, k, pla, plo = 0, 1, nil, nil
+  for i, p in ipairs(pts) do
+    local la, lo = tonumber(p[1] or p['1']), tonumber(p[2] or p['2'])
+    if la and lo then
+      if pla then
+        local r = math.pi / 180
+        local dla, dlo = (la - pla) * r, (lo - plo) * r
+        local h = math.sin(dla / 2) ^ 2 + math.cos(pla * r) * math.cos(la * r) * math.sin(dlo / 2) ^ 2
+        s = s + 2 * 6371008.8 * math.asin(math.min(1, math.sqrt(h)))
+      end
+      pla, plo = la, lo
+      while k < #ed and ed[k + 1] < s do k = k + 1 end
+      if #ed == 1 or s <= ed[1] then out[i] = ez[1]
+      elseif k >= #ed then out[i] = ez[#ez]
+      else
+        local span = ed[k + 1] - ed[k]
+        local f = span > 0 and math.max(0, math.min(1, (s - ed[k]) / span)) or 0
+        out[i] = ez[k] + f * (ez[k + 1] - ez[k])
+      end
+    end
+  end
+  return out
+end
+
+local route = {version = nil, pts = nil, elev = nil, base = nil, world = nil, anchor = nil, check = 0,
+  ground = 0, lift = nil}
 local routeColor = nil
+local function routeWorld(a, lift)
+  -- (base: each point's frame position at its profile height, made once per route and anchor)
+  if route.base == nil or route.anchor ~= a then
+    route.base, route.anchor = {}, a
+    local hs = M.routeHeights(route.pts, route.elev)
+    for i, p in ipairs(route.pts) do
+      local la, lo = tonumber(p[1] or p['1']), tonumber(p[2] or p['2'])
+      if la and lo then
+        local x, y, z = a:geodeticToEnu(la, lo, hs[i] or 0)
+        route.base[#route.base + 1] = {x, y, z, x * x + y * y < M.ROUTE_NEAR_M ^ 2}
+      end
+    end
+  end
+  route.world = {}
+  for i, b in ipairs(route.base) do
+    local z = b[3]
+    if b[4] and be then                 -- (near the anchor: the game's ground, where it is loaded)
+      local gz = be:getSurfaceHeightBelow(vec3(b[1], b[2], z + 2000))
+      if gz and gz == gz and gz > z - 600 and gz < z + 2000 then z = gz end
+    end
+    route.world[i] = vec3(b[1], b[2], z + lift)
+  end
+end
+
 local function drawRoute(a, dt)
   route.check = route.check - dt
+  route.ground = route.ground - dt
   if route.check <= 0 then
     route.check = 1
     local stg = rawget(_G, 'beamngEarth_settings')
     local r = stg and stg.uiGpsRoute and stg.uiGpsRoute() or nil
-    if not r or not r.points then route.version, route.pts, route.world = nil, nil, nil
-    elseif r.version ~= route.version then
-      route.version, route.pts, route.world = r.version, r.points, nil
+    if not r or not r.points then route.version, route.pts, route.base, route.world = nil, nil, nil, nil
+    elseif r.version ~= route.version or (r.elev ~= nil and route.elev == nil) then
+      route.version, route.pts, route.elev, route.base, route.world = r.version, r.points, r.elev, nil, nil
     end
   end
   if not route.pts then return end
-  if route.world == nil or route.anchor ~= a then
-    route.world, route.anchor = {}, a
-    for _, p in ipairs(route.pts) do
-      local la, lo = tonumber(p[1] or p['1']), tonumber(p[2] or p['2'])
-      if la and lo then
-        local x, y, z = a:geodeticToEnu(la, lo, 0)
-        local gz = be and be:getSurfaceHeightBelow(vec3(x, y, z + 9000))
-        if gz and gz == gz and gz > z - 600 and gz < z + 9000 then z = gz end
-        route.world[#route.world + 1] = vec3(x, y, z + 3)
-      end
-    end
+  local g = core_camera.getGlobalCameras()[M.CAMERA]
+  local dist = g and g.dist or 1000
+  -- (the lift in steps of a third: the line is made again only when the camera's height changes that much)
+  local lift = math.max(M.ROUTE_LIFT_MIN, M.ROUTE_LIFT * dist)
+  lift = M.ROUTE_LIFT_MIN * 1.33 ^ math.ceil(math.log(lift / M.ROUTE_LIFT_MIN) / math.log(1.33))
+  if route.world == nil or route.anchor ~= a or route.lift ~= lift or route.ground <= 0 then
+    route.lift, route.ground = lift, M.ROUTE_GROUND_S
+    routeWorld(a, lift)
   end
   routeColor = routeColor or ColorF(0.16, 0.55, 1, 0.95)
-  local g = core_camera.getGlobalCameras()[M.CAMERA]
-  local w = math.max(3, math.min(40, (g and g.dist or 1000) * 0.0015))      -- (px-ish: wider from higher up)
+  local w = math.max(3, math.min(40, dist * 0.0015))      -- (px-ish: wider from higher up)
   for i = 2, #route.world do
     debugDrawer:drawLineInstance(route.world[i - 1], route.world[i], w, routeColor)
   end
