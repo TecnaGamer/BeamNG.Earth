@@ -15,7 +15,7 @@ import numpy as np
 
 import mapcells
 import mapgeom
-from guardrails import _deck_level_hint, _surface_info
+from guardrails import DECK_AUTO_SNAP_TOLERANCE_M, _deck_level_hint, _surface_info
 
 log = logging.getLogger("earthd.fences")
 
@@ -176,15 +176,17 @@ def rows(frame, infra_fn, box, elev, decks=()):
                 if lv == lv:
                     hint = True if lv > 0 else (False if lv < 0 else None)
             length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
-            for part in feats.parts(i):
+            for pi, part in enumerate(feats.parts(i)):
                 if not part or len(part[0]) < 2:
                     continue
                 e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
                 for centre, tangent in _centres(np.column_stack((e, n)), length):
-                    if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1):
-                        continue
                     px, py, yaw = _place(group, centre, tangent)
-                    pending.append((group, px, py, yaw, float(centre[0]), float(centre[1]), hint))
+                    # (a panel is kept when its centre is in the tile; the part's panels outside it are still
+                    # made, for the bridge-continuity test below, and only not drawn)
+                    keep = x0 <= centre[0] < x1 and y0 <= centre[1] < y1
+                    pending.append((group, px, py, yaw, float(centre[0]), float(centre[1]), hint, fid, pi,
+                                    keep))
     if not pending:
         return []
     xy = np.array([[p[1], p[2]] for p in pending], np.float64)
@@ -202,8 +204,40 @@ def rows(frame, infra_fn, box, elev, decks=()):
                 edge[edge] = _in_outlines(outlines, mid[edge])
             surf, on = np.where(edge, wide, surf), on | edge
         z = np.where(on, surf, z)
+        # A wall running onto a bridge keeps to its deck: a stretch of its panels that would stand on the
+        # ground under the deck, with the panels on both sides of that stretch at the deck's height, is on
+        # the bridge (OSM often leaves layer / bridge off a noise wall along one: the wall broke into the
+        # road under the bridge mid-span, 7.5 m down). A wall really under a bridge has no such panels.
+        groups = {}
+        for i, p in enumerate(pending):
+            if p[6] is None:            # (its own tags/level say nothing about the bridge)
+                groups.setdefault((p[7], p[8]), []).append(i)
+        for idx in groups.values():
+            if len(idx) < 3:
+                continue
+            idx = np.asarray(idx, np.int64)     # (in the order the part's panels were made: along the line)
+            near_deck = np.isfinite(wide[idx])
+            at_deck = near_deck & (np.abs(wide[idx] - ground[idx]) <= DECK_AUTO_SNAP_TOLERANCE_M)
+            off_deck = near_deck & ~at_deck
+            i0 = 0
+            while i0 < len(idx):
+                if not off_deck[i0]:
+                    i0 += 1
+                    continue
+                i1 = i0
+                while i1 + 1 < len(idx) and off_deck[i1 + 1]:
+                    i1 += 1
+                # (an end of the part: the panels on that side stop there, no bridge to run onto)
+                before = at_deck[i0 - 1] if i0 > 0 else None
+                after = at_deck[i1 + 1] if i1 + 1 < len(idx) else None
+                if (before is None or before) and (after is None or after) and (before or after):
+                    z[idx[i0:i1 + 1]] = wide[idx[i0:i1 + 1]]
+                i0 = i1 + 1
     out = []
-    for (group, px, py, yaw, _cx, _cy, _hint), zz in zip(pending, z):
+    for p, zz in zip(pending, z):
+        if not p[9]:
+            continue
+        group, px, py, yaw = p[0], p[1], p[2], p[3]
         lift = CHAIN_LIFT if group == G_CHAIN else 0.0
         height = CHAIN_H if group == G_CHAIN else WALL_H
         out.append([group, round(px, 2), round(py, 2), round(float(zz) + lift, 2), round(yaw, 1) % 360.0,

@@ -184,6 +184,24 @@ class PlaceTest(unittest.TestCase):
             got = self.stelling_rows(level, outline, tags)
             self.assertTrue(got)
             self.assertTrue(all(abs(self.base(r) - 5.0) < 0.02 for r in got), (level, outline, tags))
+    def test_an_untagged_wall_keeps_its_panels_over_an_underpass(self):
+        # (OSM often leaves layer / bridge off a noise wall running along a bridge. Under the bridge the
+        # ground is the road below, and the wall broke into it mid-span; between stretches standing at the
+        # deck's height a wall keeps to the deck it runs onto)
+        feats = self.line("wall", {"wall": "noise_barrier"}, [[5.0, 20.0], [95.0, 20.0]])
+
+        def ground(la, lo):
+            e, n, _ = self.frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return np.where(np.abs(e - 50.0) < 20.0, 5.0, 13.0)
+
+        got = fences.rows(self.frame, lambda key: feats, (0.0, 0.0, 100.0, 100.0), ground, decks=self.DECK)
+        self.assertTrue(got)
+        self.assertTrue(all(abs(r[3] - 13.0) < 0.05 for r in got), sorted(r[3] for r in got))
+        # (a wall really under the bridge, standing on the ground the whole way, is left there)
+        low = fences.rows(self.frame, lambda key: feats, (0.0, 0.0, 100.0, 100.0),
+                          lambda la, lo: np.full(np.shape(la), 5.0), decks=self.DECK)
+        self.assertTrue(low)
+        self.assertTrue(all(abs(r[3] - 5.0) < 0.05 for r in low), sorted(r[3] for r in low))
 
     def test_a_panel_past_the_tile_is_left_out(self):
         feats = self.line("fence", {"fence_type": "chain_link"}, [[-30.0, 10.0], [40.0, 10.0]])
