@@ -264,7 +264,7 @@ def textures():
         f = _font(150)
         l, t, r, b = d.textbbox((0, 0), word, font=f)
         d.text(((W - (r - l)) / 2 - l, y0 + (H // 2 - (b - t)) / 2 - t), word, font=f, fill=(15, 15, 15))
-    us.transpose(Image.FLIP_TOP_BOTTOM).save(os.path.join(OUT, "bne_rr_crossbuck.png"))
+    us.save(os.path.join(OUT, "bne_rr_crossbuck.png"))     # (not flipped: the sign read upside down in game, GitHub #699)
     eu = Image.new("RGB", (W, H), (236, 236, 232))
     d = ImageDraw.Draw(eu)
     for k in range(2):                       # white with a red border (the Vienna Convention's A,28a)
