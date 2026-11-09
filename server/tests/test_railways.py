@@ -279,6 +279,20 @@ class RailwayTest(unittest.TestCase):
         for r in signs:
             self.assertGreater(r[3], 10.0 + railways.BALLAST_H - 1.5, "on the ballast's slope, not on the land 5 m under it")
 
+    def test_a_pedestrian_way_with_a_level_crossing_node_gets_the_crossing_devices(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 40.0), (120.0, 160.0)]],
+                     ["standard_gauge", "pedestrian"], subtypes=["rail", "road"])
+        lon, lat = FRAME.lon0 + 120.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0
+        f.__dict__["_rail_nodes"] = [(lon, lat, {"railway": "level_crossing", "crossing:barrier": "full"})]
+        rows = railways.crossing_props(FRAME, 0, 0, [f], flat, False, None, "CZ")
+        self.assertEqual(len(rows), 2, "a kit at each approach")
+        self.assertTrue(all(r[0].startswith("rrgate") for r in rows), "gates, from the node's barrier tag")
+        self.assertTrue(all(abs(r[1] - 120.0) < 8.0 for r in rows))
+        self.assertTrue(rows[0][2] < 100.0 < rows[1][2] or rows[1][2] < 100.0 < rows[0][2], "one each side of the track")
+        f2 = features([[(-50.0, 100.0), (300.0, 100.0)], [(120.0, 40.0), (120.0, 160.0)]],
+                      ["standard_gauge", "pedestrian"], subtypes=["rail", "road"])
+        self.assertEqual(railways.crossing_props(FRAME, 0, 0, [f2], flat, False, None, "CZ"), [], "no node, no devices")
+
     def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0

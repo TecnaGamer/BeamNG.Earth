@@ -1478,6 +1478,7 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 if len(e) >= 2:
                     roads.append((fid, sp, np.c_[e, n]))
+    roads += _node_ways(frame, cells, near, roads)
     if not roads:
         return []
     americas = float(frame.lon0 if hasattr(frame, "lon0") else 0.0) < AMERICAS_LON
@@ -1511,6 +1512,39 @@ def crossing_props(frame, tx, ty, cells, ground, left_hand=False, kits=None, cou
                 kit = "cross"
             rows += _crossing_rows(pt, line, rxy, sp, kit, americas, left_hand, ground)
     return rows
+
+
+NODE_WAY_M = 10.0           # m: a footway, path or pedestrian way passing this near an OSM level crossing node is its road
+NODE_WAY_MIN_W = 4.0        # m: the least width the devices are set for there (a street mapped as a pedestrian way)
+
+
+def _node_ways(frame, cells, near, roads_):
+    """[(fid, spec, xy)] of the footways, paths, cycleways and pedestrian ways that an OSM level crossing node
+    (railway=level_crossing) lies on, as roads for crossing_props: Nachod's Kladska, a street with gates and lights, is
+    mapped there as a pedestrian way (no road profile, so no devices at all), and the node says it is a level crossing. None
+    where a road with a profile already passes within NODE_WAY_M of the node. Pure."""
+    import types
+    nodes = []
+    for f in cells:
+        for lo, la, t in (f.__dict__.get("_rail_nodes", ()) if f is not None else ()):
+            if t.get("railway") == "level_crossing":
+                nodes.append((lo, la))
+    if not nodes:
+        return []
+    e, n, _ = frame.geodetic_to_enu(np.array([q[1] for q in nodes]), np.array([q[0] for q in nodes]), 0.0)
+    pts = np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)]
+    pts = pts[(pts[:, 0] >= near[0]) & (pts[:, 0] <= near[2]) & (pts[:, 1] >= near[1]) & (pts[:, 1] <= near[3])]
+    if not len(pts):
+        return []
+    served = [p for p in pts if not any(float(np.min(np.hypot(*(roads.densify(ln, 2.0)[:, :2] - p).T))) < NODE_WAY_M
+                                        for _f, _s, ln in roads_)]
+    out = []
+    for xy, w in walk_ways(frame, cells, (near[0] + 60, near[1] + 60, near[2] - 60, near[3] - 60), 60.0):
+        dense = roads.densify(xy, 2.0)                  # (a way's few vertices: the distance is to its line)
+        if any(float(np.min(np.hypot(*(dense[:, :2] - p).T))) < NODE_WAY_M for p in served):
+            out.append(("node-way", types.SimpleNamespace(width=max(w, NODE_WAY_MIN_W), cls="service", oneway=False, dir=None),
+                        xy))
+    return out
 
 
 OSM_KIT_M = 15.0        # m between a crossing and OSM's level crossing node it takes the devices of
