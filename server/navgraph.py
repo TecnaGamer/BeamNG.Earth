@@ -11,6 +11,7 @@ are in the anchor frame, z the ground (elev); the mod clips the graph to the ter
 Pure given the map cells and elev; deterministic.
 """
 import math
+import os
 import re
 
 import numpy as np
@@ -944,7 +945,7 @@ def part_fid(pid):
 # The AI through built tunnels: off until their portals fit the roads leading in (Fort Pitt Tunnel, 2026-11-05: the
 # approach carriageways, shoulders and all, are wider than the tube openings and lead into the pier between the twin
 # tubes; an AI car hit it at 38-56 mph three times). Off, every tunnel stretch is the minimap's line only, as before.
-AI_TUNNELS = False
+AI_TUNNELS = os.environ.get("BNE_AI_TUNNELS", "off") == "on"     # (off by default; on for the Fort Pitt drive tests)
 TUNNEL_AI_WALL_M = 2.5     # m the AI's road half width in a tunnel stays inside the tube's walls (a car's half width + room)
 TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: a one-lane one (3.4 m, the Park Avenue
                             # Tunnel's south portal in Manhattan) was entered at an angle off the wider approach and the

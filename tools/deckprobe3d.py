@@ -28,6 +28,7 @@ ap.add_argument("--server", default=os.path.join(os.path.dirname(os.path.dirname
 ap.add_argument("--cache", default=os.path.expanduser("~/.cache/beamng-earth"))
 ap.add_argument("--json")
 ap.add_argument("--min-len", type=float, default=20.0)
+ap.add_argument("--dump", help="print each station (arc, ours, real) of the decks/tunnels whose id starts with this")
 args = ap.parse_args()
 sys.path.insert(0, args.server)
 
@@ -39,7 +40,7 @@ import roadz                            # noqa: E402
 import grading as gradingmod            # noqa: E402
 
 lat, lon, R = args.lat, args.lon, args.r
-blockworker.init(args.cache, False, True, True, True, False, multiprocessing.Queue(1), logging.ERROR, True, True)
+blockworker.init(args.cache, False, True, True, True, False, multiprocessing.Queue(1), logging.DEBUG if os.environ.get("DP_DEBUG") else logging.ERROR, True, True)
 s = blockworker._s
 g, _ = s.anchor(1, lat, lon)
 frame = geodesy.EnuFrame(lat, lon)
@@ -78,7 +79,7 @@ for tx, ty in roads.tiles_near(0.0, 0.0, R):
     for level, prof in ((1, bridges), (-1, tunnels)):
         for fid, spec, xy, z, _ in prof.parts(feats, roads.tile_bbox(tx, ty)):
             xy = np.asarray(xy, np.float64)[:, :2]
-            if np.hypot(*xy.T).min() > R or (level < 0 and str(fid) in tunnels.open):
+            if np.hypot(*xy.T).min() > R or (level < 0 and str(fid) in (getattr(tunnels, "open", None) or ())):
                 continue
             decks[(str(fid), round(xy[0, 0]), round(xy[0, 1]))] = (xy, np.asarray(z, np.float64), spec, level)
     for f in feats:
@@ -125,6 +126,14 @@ for (fid, *_), (xy, z, spec, level) in sorted(decks.items()):
                 zre = float(np.interp(a, arc[ok], zr[ok])) if ok.sum() >= 2 else np.nan
                 cl.append((round(zre - zg, 2), round(float(np.interp(a, arc, z)) - zg, 2), ground[gi][1]))
         row["clear"] = sorted(cl)[:4]
+    if args.dump and fid.startswith(args.dump):
+        zr_ = np.full(len(xy), np.nan)
+        if real is not None:
+            ok_ = np.isfinite(real)
+            zr_[ok_] = up(xy[ok_], real[ok_])
+        print(f"{row['fid']} level {level}: from {ll(xy[0])} to {ll(xy[-1])}")
+        for a_, zo_, zm_ in zip(arc, z, zr_):
+            print(f"   {a_:7.1f}  ours {zo_:7.2f}  real {zm_:7.2f}")
     rows.append(row)
 
 meas_rows = [r for r in rows if "err" in r]

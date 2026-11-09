@@ -1216,6 +1216,24 @@ class BridgePassageTest(unittest.TestCase):
         for r in [r for r in R2 if np.abs(r[:, 0]).min() > 1.0]:
             self.assertGreaterEqual(np.abs(r[:, 0]).min(), 11.0 + bld.PASSAGE_MARGIN_M - 1e-6)
 
+    def test_a_tunnel_through_a_portal_building_gets_its_way(self):
+        """Fort Pitt Tunnel's east portal building (2026-11-09): on the hill over the mouth, from its lowest ground (a
+        portal building's base) up past the tube's floor, it closed the tunnel 20 m before the bridge. With the tube's
+        floor as a deck: solid under the floor, the sides of a way over it. Measured from its highest ground (another
+        building's base) the floor was under it and it stayed whole."""
+        ring = np.array([[-10, -15], [10, -15], [10, 15], [-10, 15], [-10, -15]], float)
+        road = [np.array([[0.0, -60.0], [0.0, 60.0]])]
+        tube = [(road[0], np.array([244.0, 244.0]), 11.0)]
+        ground = lambda c, lowest=False: 200.0 if lowest else 260.0      # (a hillside: 60 m across the footprint)
+        R, A, L, M = bld._passages([ring], [{"height": 50.0, "portal": True}], [None], [2.0], road, tube, ground)
+        self.assertGreater(len(R), 1)
+        self.assertIn(44.0 - 1.5, M)                    # the way's sides from just under the floor
+        for r, m in zip(R, M):
+            if m >= 42.0:                               # nothing over the floor across the tube
+                self.assertGreaterEqual(np.abs(r[:, 0]).min(), 5.5 + bld.PASSAGE_MARGIN_M - 1e-6)
+        R2, *_ = bld._passages([ring], [{"height": 50.0}], [None], [2.0], road, tube, ground)
+        self.assertEqual(len(R2), 1)                    # (not a portal building: on its highest ground, over the tube)
+
     def test_ground_pieces(self):
         import geodesy
         f = geodesy.EnuFrame(37.41, -122.21)

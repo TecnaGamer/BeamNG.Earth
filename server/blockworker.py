@@ -924,7 +924,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             wrows = []
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
-        items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev, decks=_tile_decks(bridges, cells, tx, ty),
+        items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
+                                                      decks=_tile_decks(bridges, cells, tx, ty) + _tile_decks(tunnels, cells, tx, ty),
                                                       skip=skip, cache_dir=cache_dir)
         _bridge_fps = buildingsmod.bridge_footprints(frame, tx, ty, cache_dir)
         if any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
@@ -1927,7 +1928,11 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
 
 def _tile_decks(bridges, cells, tx, ty):
     """[(xy (k, 2), z (k,), width m)] of the bridge decks over road tile (tx, ty) (the buildings they run through get a
-    way, the ones standing on them their floor on the deck: buildings.road_tile_items), [] without bridge profiles."""
+    way, the ones standing on them their floor on the deck: buildings.road_tile_items), [] without bridge profiles.
+    Also the tunnels' floors (tunnel profiles for bridges): a building the tube runs through at its floor's height
+    gets the same way (Fort Pitt Tunnel's east portal building, standing on the hill over the mouth, closed the
+    tube 20 m before the bridge: its floor was lifted over the ground at the mouth, ~50 m under the road, 2026-11-09);
+    one on the hill over the tube stays whole (buildings._passages: over the way)."""
     if bridges is None:
         return []
     import roads as roadsmod

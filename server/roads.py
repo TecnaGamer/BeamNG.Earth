@@ -5202,6 +5202,10 @@ TUNNEL_ROAD_REACH_M = 15.0
 PORTAL_SHALLOW_COVER_M = 1.5    # m: a major road's open end run with at least this much ground over its floor is covered
 
 
+PORTAL_AIR_M = 2.0          # m: an open run at a tunnel's end with its ground this far under the floor is over a drop ...
+PORTAL_AIR_RUN_M = 20.0     # ... and this long at most: the tube goes on to whatever the road goes on to (portal_cover)
+
+
 def portal_cover(kinds, cover, spec, s=None):
     """kinds with a major road's (CONCRETE_WALL_CLASSES) open run at either end of its tunnel covered (a low arch, in
     concrete: roadmesh) where the median ground over its floor is PORTAL_SHALLOW_COVER_M or more: the map's portal is a
@@ -5210,10 +5214,16 @@ def portal_cover(kinds, cover, spec, s=None):
     Park's transverses). A run shorter than SECTION_MIN_M (s: the samples' arc) is the section it leads into instead:
     a 4 m low arch before CA-1's northbound Tom Lantos tube had a 5 m tube's portal face, the 6.8 m tube's terrain hole
     right behind it open above that face, a notch of sky in the hill over the mouth (2026-11-09). The meshes
-    (TunnelProfiles) and the grading both."""
+    (TunnelProfiles) and the grading both.
+    Any road's open run at an end shorter than SECTION_MIN_M (tunnel_sections merges such runs only between sections), or
+    over a drop (its median ground PORTAL_AIR_M or more under the floor, no longer than PORTAL_AIR_RUN_M), is the
+    section it leads into too: a mouth in a cliff face opening onto a bridge (Fort Pitt Tunnel's east portal: the map's
+    tube reaches the bridge, but its last 6 m, where the cliff falls from 3 m over the floor to 3 m under it, were an
+    open road drawn on that ground, a 2.7 m deep hole the AI's cars crashed into, 2026-11-09)."""
     kinds = np.array(kinds, np.int64)
-    if spec is None or spec.cls not in CONCRETE_WALL_CLASSES or not (kinds > 0).any():
+    if not (kinds > 0).any():
         return kinds
+    major = spec is not None and spec.cls in CONCRETE_WALL_CLASSES
     cover = np.asarray(cover, np.float64)
     n = len(kinds)
     for rng in (range(n), range(n - 1, -1, -1)):
@@ -5223,9 +5233,14 @@ def portal_cover(kinds, cover, spec, s=None):
                 nxt = q
                 break
             run.append(q)
-        if run and len(run) < n and np.isfinite(cover[run]).any() and \
-                float(np.nanmedian(cover[run])) >= PORTAL_SHALLOW_COVER_M:
-            short = s is not None and nxt is not None and abs(float(s[nxt]) - float(s[run[0]])) < SECTION_MIN_M
+        if not run or len(run) >= n or not np.isfinite(cover[run]).any():
+            continue
+        med = float(np.nanmedian(cover[run]))
+        span = abs(float(s[nxt]) - float(s[run[0]])) if s is not None and nxt is not None else None
+        if span is not None and (span < SECTION_MIN_M or (med <= -PORTAL_AIR_M and span <= PORTAL_AIR_RUN_M)):
+            kinds[run] = kinds[nxt]
+        elif major and med >= PORTAL_SHALLOW_COVER_M:
+            short = span is not None and span < SECTION_MIN_M
             kinds[run] = kinds[nxt] if short else 1
     return kinds
 

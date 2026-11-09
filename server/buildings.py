@@ -2303,7 +2303,7 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
             # the deck's height over the ground the part is drawn on: its footprint's highest (base_z; at its centre,
             # the Golden Gate's north tower slab, its footprint up the shore, was drawn ~2 m higher than that took,
             # over the deck, GitHub #1032)
-            dh = zd - float(ground_at(ring))
+            dh = zd - float(ground_at(ring, True) if at.get("portal") else ground_at(ring))
             if top <= dh - PASSAGE_UNDER_M or mh >= dh + PASSAGE_CLEAR:
                 R.append(ring), A.append(at), L.append(look), M.append(mh)
                 continue                            # under the deck, or over its way
@@ -3138,12 +3138,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if not rings:
                     return []
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
-        def ground_at(r):               # (a footprint's highest ground, base_z's: a point's, given one)
+        def ground_at(r, lowest=False):  # (a footprint's highest ground, base_z's (its lowest for a portal building))
             r = np.atleast_2d(np.asarray(r, np.float64))[:, :2]
             la, lo, _ = frame.enu_to_geodetic(r[:, 0] + x0, r[:, 1] + y0, np.zeros(len(r)))
             la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-            z = np.asarray(elev(la, lo), np.float64)
-            return float(np.nanmax(np.asarray(frame.geodetic_to_enu(la, lo, z)[2], np.float64)))   # (the decks' frame up)
+            z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+            return float(np.nanmin(z) if lowest else np.nanmax(z))     # (the decks' frame up)
         rings, attrs, looks, mins = _passages(rings, attrs, looks, mins, bridges_xy, decks, ground_at)
     if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
         rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)
