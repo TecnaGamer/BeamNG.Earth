@@ -215,7 +215,7 @@ class RailwayTest(unittest.TestCase):
         long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]
         short = [[(100.0, 120.0 + 2.0 * k), (130.0, 120.0 + 2.0 * k)] for k in range(8)]
         f = features(long + short, ["standard_gauge"] * 16, subtypes=["rail"] * 16)
-        with unittest.mock.patch.object(railways, "VERTS_MAX", 25000):
+        with unittest.mock.patch.object(railways, "TILE_VERTS_MAX", 25000):
             got = railways.tile_mesh(FRAME, 0, 0, [f], flat)
         self.assertIsNotNone(got, "not the whole tile's track gone")
         self.assertLessEqual(len(got[0]), 25000)
@@ -815,3 +815,47 @@ class CoarseUnderpassTest(unittest.TestCase):
             self.assertEqual(railways.coarse_underpasses(frame, [], (0, 0, 10, 10), []), [])   # no rail bridge
         finally:
             railways.COARSE_AT = saved
+
+
+class SplitMeshTest(unittest.TestCase):
+    """A tile's track past the engine's 16-bit indices is cut into shapes, none of its triangles lost."""
+
+    @staticmethod
+    def _mesh(n_quads):
+        # n_quads separate quads (4 vertices, 2 triangles each), each in its own material slot k % 3
+        P = np.zeros((4 * n_quads, 3))
+        T = np.zeros((2 * n_quads, 3), np.int64)
+        for q in range(n_quads):
+            P[4 * q:4 * q + 4] = [[q, 0, 0], [q + 1, 0, 0], [q + 1, 1, 0], [q, 1, 0]]
+            T[2 * q] = [4 * q, 4 * q + 1, 4 * q + 2]
+            T[2 * q + 1] = [4 * q, 4 * q + 2, 4 * q + 3]
+        return P, T, np.zeros((len(P), 2)), ["a", "b", "c"], np.arange(2 * n_quads) % 3
+
+    def test_small_mesh_unchanged(self):
+        m = self._mesh(10)
+        self.assertEqual(railways.split_mesh(m), [m])
+        self.assertEqual(railways.split_mesh(None), [])
+
+    def test_cut_under_the_limit_keeping_every_triangle(self):
+        m = self._mesh(5000)                                    # 20000 vertices
+        parts = railways.split_mesh(m, limit=6000, parts_max=10)
+        self.assertGreater(len(parts), 1)
+        self.assertTrue(all(len(p[0]) <= 6000 for p in parts))
+        self.assertEqual(sum(len(p[1]) for p in parts), len(m[1]))
+        # the same triangles, in the same order, with the same corners and materials
+        got = np.concatenate([p[0][p[1]] for p in parts])
+        want = m[0][m[1]]
+        np.testing.assert_array_equal(got, want)
+        np.testing.assert_array_equal(np.concatenate([p[4] for p in parts]), m[4])
+        for p in parts:
+            self.assertEqual(int(p[1].max()), len(p[0]) - 1)    # no unused vertex left in a part
+
+    def test_parts_max(self):
+        m = self._mesh(5000)
+        self.assertEqual(len(railways.split_mesh(m, limit=6000, parts_max=2)), 2)
+
+    def test_shape_names(self):
+        names = roads.shape_files(1, 2, 3)
+        for k in range(2, roads.RAIL_PARTS_MAX + 1):
+            self.assertEqual(names[f"rail{k}"], f"rail_1_2_3_{k}.cdae")
+            self.assertEqual(names[f"railcol{k}"], f"railcol_1_2_3_{k}.cdae")

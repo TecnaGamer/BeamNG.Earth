@@ -10931,6 +10931,7 @@ TILE_RETRY_S = 3.0              # s before a road tile whose build failed is bui
 TILE_STUCK_S = 90.0             # s a road tile's build may take before the log says it may be stuck
 TILE_FAILS_WARN = 5             # a tile's builds failed in a row before an expected kind of failure is logged as a warning
 _FAILS_SEEN = set()             # the kinds of road tile failures logged in full (Tracker._built)
+RAIL_PARTS_MAX = 3              # track meshes per road tile ("rail", "rail2", "rail3", and "railcol".."railcol3": the mod's list)
 BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2".."bld4": the mod's list)
 
 
@@ -11318,6 +11319,9 @@ def shape_files(aid, tx, ty):
            "barrier": f"barrier_{aid}_{tx}_{ty}.cdae", "buscol": f"buscol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
+    for k in range(2, RAIL_PARTS_MAX + 1):
+        out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
+        out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
     return out
 
 
@@ -11441,15 +11445,19 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import cdae
         import railways
         x0, y0, _, _ = tile_bbox(tx, ty)
-        shape = f"rail_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), railways.render_mesh(rail_mesh))
-        data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        for k, part in enumerate(railways.split_mesh(railways.render_mesh(rail_mesh), parts_max=RAIL_PARTS_MAX)):
+            what = "rail" if k == 0 else f"rail{k + 1}"
+            shape = shape_files(aid, tx, ty)[what]
+            roadmesh.write(os.path.join(out_dir, shape), part)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         col = railways.collision_mesh(rail_mesh)
-        if col is not None:         # the lean physics-only mesh (the mod then only draws "rail"): its bed and decks
-            shape = f"railcol_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), col[0], col[1], uvs=col[2], material=col[3],
-                       tri_materials=col[4], collision_only=True)
-            data["railcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        for k, part in enumerate(railways.split_mesh(col, parts_max=RAIL_PARTS_MAX)):
+            # the lean physics-only meshes (the mod then only draws "rail"): the bed and decks
+            what = "railcol" if k == 0 else f"railcol{k + 1}"
+            shape = shape_files(aid, tx, ty)[what]
+            cdae.write(os.path.join(out_dir, shape), part[0], part[1], uvs=part[2], material=part[3],
+                       tri_materials=part[4], collision_only=True)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if signs:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"signs_{aid}_{tx}_{ty}.cdae"

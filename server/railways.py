@@ -62,7 +62,11 @@ PIER_FOOT_M = 2.0           # m a pier reaches into the ground
 CROSSING_PAD_M = 0.5        # m past a crossing road's edge the track stops (rails.py's street track runs across the road
                             # from 0.3 m inside its edge: 1.5 left ~1.8 m of bare ground either side)
 CROSSING_DZ = 1.5           # m: a road this far over or under the bed passes it by (no level crossing)
-VERTS_MAX = 60000           # under the engine's 16-bit indices (sleepers are dropped first past it)
+VERTS_MAX = 60000           # under the engine's 16-bit indices: one shape's vertices (split_mesh cuts a bigger tile mesh)
+PARTS_MAX = 3               # shapes a tile's track is cut into ("rail", "rail2", "rail3": roads.RAIL_PARTS_MAX, the mod's list)
+TILE_VERTS_MAX = 150000     # a tile's whole track (past it the tracks of lowest rank are left out; cut into PARTS_MAX
+                            # shapes of at most VERTS_MAX: the packing wastes up to ~6000 of each)
+SPLIT_CHUNK_TRIS = 2000     # triangles taken into a shape at a time
 BALLAST = "bne_rail_ballast"
 FOOTBRIDGES_ON = os.environ.get("BNE_FOOTBRIDGES", "on") != "off"     # (footbridges.py)
 CONCRETE = "bne_bridge_concrete"    # (roadmesh.DECK_SIDE: the decks and piers)
@@ -1794,13 +1798,13 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     footbridges.add(mesh, walk, ground, crossers, ex, concrete, small)
     small.sort(key=lambda e: -e[2])                 # (the piers first: a deck needs them more than its sleepers)
     for (c, along, across, z0, z1), hx, hy, mi in small:
-        room = (VERTS_MAX - mesh.nv) // 8
+        room = (TILE_VERTS_MAX - mesh.nv) // 8
         if room <= 0:
             break
         n = min(room, len(c))
         mesh.boxes(c[:n], along[:n], across[:n], hx, hy, z0[:n], z1[:n], mi)
     out = mesh.result()
-    if out is not None and len(out[0]) > VERTS_MAX:     # (the ballast and rails alone past it: a rail yard)
+    if out is not None and len(out[0]) > TILE_VERTS_MAX:    # (the ballast and rails alone past it: a big rail yard)
         # not the whole tile's track gone: the tracks of lowest rank (worn ones, then the shortest in the tile) are left
         # out, a quarter more at each retry, a yard's sidings before its main lines
         rank = sorted(range(len(rails)), key=lambda n: (worn.get(rails[n][0], 0), -float(_arc(rails[n][3])[-1])))
@@ -1825,6 +1829,40 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
 RAIL_COLLIDE = os.environ.get("BNE_RAIL_COLLIDE", "off") == "on"
 RENDER_ONLY = frozenset(SLEEPER_WORN)
 RENDER_ONLY_LEAN = frozenset(STEEL_WORN + SLEEPER_WORN)
+
+
+def split_mesh(mesh, limit=VERTS_MAX, parts_max=PARTS_MAX):
+    """[mesh, ...]: tile_mesh's mesh (or collision_mesh's, render_mesh's) cut into meshes of at most `limit` vertices each
+    (the engine's 16-bit indices), triangles kept in their order so a track's pieces stay together. One mesh, as it is,
+    when it fits. At most parts_max (the mod's list: the triangles past them are left out, which tile_mesh's TILE_VERTS_MAX
+    keeps from happening)."""
+    if mesh is None:
+        return []
+    P, T, UV, mats, M = mesh[:5]
+    if len(P) <= limit:
+        return [mesh]
+    T, M = np.asarray(T), np.asarray(M)
+    groups, cur, seen, n = [], [], np.zeros(len(P), bool), 0
+    for a in range(0, len(T), SPLIT_CHUNK_TRIS):
+        idx = np.arange(a, min(a + SPLIT_CHUNK_TRIS, len(T)))
+        vs = np.unique(T[idx].ravel())
+        new = int((~seen[vs]).sum())
+        if cur and n + new > limit:
+            groups.append(cur)
+            cur, seen, n = [], np.zeros(len(P), bool), 0
+            new = len(vs)
+        cur.append(idx)
+        seen[vs] = True
+        n += new
+    if cur:
+        groups.append(cur)
+    out = []
+    for g in groups[:parts_max]:
+        ti = np.concatenate(g)
+        used = np.unique(T[ti].ravel())
+        remap = np.searchsorted(used, T[ti])
+        out.append((np.asarray(P)[used], remap, np.asarray(UV)[used], mats, M[ti]) + tuple(mesh[5:]))
+    return out
 
 
 def collision_mesh(mesh):
