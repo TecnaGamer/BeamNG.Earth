@@ -88,6 +88,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   only. The boards are drawn from the road network and Overture's places and route numbers, so they are a good
   guess of a real board, not a copy: the distances are the straight ones scaled to a road's, and the colours and
   plates follow each country's practice as best known.
+  In a town, a board stands only at an interchange, a way out or a fork of numbered routes: a small board with the local
+  name, hung on a lamp or utility pole that stands there, else on a stand of its own.
+- Opt-in (`BNE_REGIONAL_POLES=poles`): each European country's own utility poles, and steel or concrete street lamps
+  with a bracket arm instead of the stock American post.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
   road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;

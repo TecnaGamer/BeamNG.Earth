@@ -623,7 +623,7 @@ impl Mesh {
     }
 
     /// A round pole (octagonal) of radius r at depth x0 from z0 to z1.
-    fn pole(&mut self, x0: f64, r: f64, z0: f64, z1: f64, m: i64) {
+    pub(crate) fn pole(&mut self, x0: f64, r: f64, z0: f64, z1: f64, m: i64) {
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for k in 0..8 {
             let (a, b) = (k as f64 * std::f64::consts::TAU / 8.0, (k + 1) as f64 * std::f64::consts::TAU / 8.0);
