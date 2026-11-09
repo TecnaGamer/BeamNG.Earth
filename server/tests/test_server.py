@@ -210,7 +210,9 @@ class ServerHarness(unittest.TestCase):
                     keys.add("slotSerial")
                 if self.layout.format >= 4:             # M1: the texture size (the mod's unit kind)
                     keys.add("tex")
-                    self.assertEqual(m["tex"], self.server.tex_size(m["level"]))    # M1h: 256/128 px from L8
+                    # M1h: 256/128 px from L8; flying high (or the 3D map) as fine as on the screen, never finer
+                    self.assertIn(m["tex"], {self.server.tex_size(m["level"]),
+                                             *range(earthd.MAP_TEX_MIN_PX, self.server.tex_size(m["level"]))})
                 self.assertTrue(self.server.matslots.owns((aid, m["key"]), m["material"]), m)     # its pooled name
                 self.assertEqual(m["texture"], f"/temp/beamngEarth/{self.server.sid}/far_{aid}_{m['key']}.dds")
                 self.assertIs(m["detail"], True)
@@ -790,7 +792,12 @@ class MeshServerTest(ServerHarness):
             t0 = time.monotonic()
             while conn.focus != (float(x), 10.0) and time.monotonic() - t0 < 10:   # pose handled
                 time.sleep(0.005)
-            if set(conn.desired) == far.keys(aid):
+            # focus changes before selection, which can release the GIL. Observe the result on its owner loop,
+            # after the pose handler, rather than mistaking the old set for a quiet step mid-selection.
+            async def selected():
+                return set(conn.desired)
+            desired = asyncio.run_coroutine_threadsafe(selected(), self.loop).result(10)
+            if desired == far.keys(aid):
                 # a step inside the hysteresis band changes nothing (64 cells: 60 m is under half the
                 # exact tile), so no far_done follows; nothing may be streamed either
                 seen = c.drain(0.3)
@@ -985,7 +992,10 @@ class MeshServer64HorizonTest(ServerHarness):
         l10 = [m for m in seen if m["type"] == "far_tile" and m["level"] == ff.HORIZON_MAX_LEVEL]
         self.assertTrue(l10)
         self.assertTrue(all(m["tex"] == 128 for m in l10))
-        self.assertTrue(all(m["tex"] == 256 for m in seen if m["type"] == "far_tile" and m["level"] in (8, 9)))
+        # (flying this high the finer levels' photos go by their size on the screen: never over their level's 256 px,
+        # never under MAP_TEX_MIN_PX; 128 px off the screen, as straight down under a level camera)
+        fine = [m["tex"] for m in seen if m["type"] == "far_tile" and m["level"] in (8, 9)]
+        self.assertTrue(all(earthd.MAP_TEX_MIN_PX <= t <= 256 for t in fine), sorted(set(fine)))
         self.check_tile_msgs(seen, aid)
         self.check_swaps(seen, aid)
         print(f"  at 10 km: radius {conn.radius / 1000:.0f} km, {len(want)} tiles", file=sys.stderr)

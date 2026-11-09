@@ -804,7 +804,9 @@ class DriveBase(unittest.TestCase):
                 # the tile's cell (i, j) is far-lattice square (gx0 / FAR_ST + i, gy0 / FAR_ST + j): same split when
                 # those are even
                 if d64 > 1e-9 or d32 > 1e-3 or gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST) or not tris_ok:
-                    stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0)))
+                    # (with the block's own height step: one that did not fit the anchor's takes the next coarser one,
+                    # heightmap.block_params, and its far tiles then differ by up to half that step; drive-test-l2-flake)
+                    stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0), "block q 1/%g" % (65536 / blk[4])))
             # the visible surface between vertices against the engine's bilinear collision (E7):
             # random points in the current-anchor exact tile under the player
             cur = [i for i in under if i.aid == st["anchor"] and i.level == ex and i.loaded]

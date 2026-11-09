@@ -13,7 +13,7 @@ import { lua } from "@/bridge"
 const TAB_ID = "beamngEarth"
 const MOD_ROOT = "/ui/ui-vue/mods/beamngEarth"
 const MAP_SOURCE = "beamngEarth.routes"
-function mapRoutes(EarthMap, EarthWelcome, EarthSettings) {
+function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
   return [
   {
     // the full settings page (the user, 2026-10-28: "a whole separate page like how BeamMP's settings page is"):
@@ -47,6 +47,18 @@ function mapRoutes(EarthMap, EarthWelcome, EarthSettings) {
     meta: {
       luaRoute: {
         title: "BeamNG.Earth map",
+        backTarget: "play",
+      },
+    },
+  },
+  {
+    // the 3D map screen (map3d.lua: transparent over the game, the orbit camera behind it)
+    path: "/beamng-earth-map3d",
+    name: "beamngEarthMap3d",
+    component: EarthMap3d,
+    meta: {
+      luaRoute: {
+        title: "BeamNG.Earth 3D map",
         backTarget: "play",
       },
     },
@@ -88,7 +100,7 @@ async function registerMapRoute() {
     if (!window.bngRoutes || !lua.extensions.ui_router_routeManager) return
     // imported here, not at the top: a map that fails to compile must not cost the settings button
     const routes = mapRoutes((await import("./EarthMap.vue")).default, (await import("./EarthWelcome.vue")).default,
-                             (await import("./EarthSettings.vue")).default)
+                             (await import("./EarthSettings.vue")).default, (await import("./EarthMap3d.vue")).default)
     window.bngRoutes.add([{ path: MAP_SOURCE, routes }])
     const result = await lua.extensions.ui_router_routeManager.registerModRoutes(MAP_SOURCE, toLuaRoutes(routes))
     if (!result?.success) {

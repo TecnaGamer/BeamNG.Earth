@@ -90,9 +90,13 @@ def F(types, *flags):
 MOD_TO_SERVER = {
     # sessions: the session folders whose files the mod's objects still use (farfield.heldSessions; a
     # restarted server keeps an earlier run's folder named here, docs/ROADMAP.md "Robustness" 3)
-    "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "sessions": F((list, dict), OPT),
+    "hello": {"protocol": F(int), "format": F(int), "modVersion": F(str), "release": F(str, OPT),
+              "sessions": F((list, dict), OPT),
+              "waterguard": F(int, OPT),  # required for world generation when the server enables water
               # a reconnect: the pooled far-tile slots [[slot, serial], ...] the mod's objects hold for that session
               "slotSession": F(str, OPT), "slotsHeld": F((list, dict), OPT),
+              "streamLease": F(int, OPT), "leaseId": F(str, OPT), "leaseSession": F(str, OPT),
+              "held": F((list, dict), OPT),
               # the mod reads a vegetation tile as one flat array (veg_tile's data: {groups, stride, flat}; trees.lua)
               "vegFlat": F(bool, OPT),
               # the mod places geotiles itself (geotile.lua's zoom: 17): the server sends their content once, kept
@@ -123,6 +127,8 @@ MOD_TO_SERVER = {
     "pose": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "z": F(NUM), "vx": F(NUM), "vy": F(NUM), "lat": F(NUM),
              "lon": F(NUM), "speed": F(NUM), "cam": F(dict, OPT),
              "follow": F(bool, OPT),        # false: the altitude rule holds the block (no prefetch)
+             "view": F(bool, OPT),          # true: the 3D map's view frame (earthd Conn.map_view)
+             "map": F(bool, OPT),           # true: the 3D map open (earthd Conn.map_open)
              # previous anchors whose tile objects the mod still has (an empty Lua table may encode as {})
              "held": F((list, dict), OPT),
              # the session folders in use, as in hello: an earlier run's one no longer named is released
@@ -140,9 +146,15 @@ MOD_TO_SERVER = {
     "app_path": {"what": F(str, OPT), "pick": F(bool, OPT), "path": F(str, OPT)},
     # the ground's collision patch under another vehicle's collision island off the block (terrainpatch.lua / .py)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "x0": F(NUM), "y0": F(NUM), "x1": F(NUM), "y1": F(NUM)},
+    # 2026-11-06: the camera far above the clouds: the cloud shell round the point under it (spaceclouds.lua / .py)
+    "space_clouds_req": {"anchorId": F(int), "lat": F(NUM), "lon": F(NUM), "alt": F(NUM),
+                         "sunAz": F(NUM, OPT), "sunEl": F(NUM, OPT)},     # (the game sky's sun seen from there)
     # the performance log (perflog.lua; additive): lines for the server's log (hitches, drops, minutes, the machine)
     "runtime_profiler": {"enabled": F(bool), "mode": F(str, OPT), "probe": F(int, OPT)},
     "perf_log": {"lines": F((list, dict))},
+    # the anonymous performance data (perfsummary.lua, perfstats.py; additive): the setup once a connection, 5-minute windows
+    "perf_setup": {"setup": F(dict)},
+    "perf_summary": {"summary": F(dict)},
     # BeamMP shared generation (peerwork.py, mpsession.lua): our world server serves our group; the players on our
     # anchor ({id, host, port, code, weight} each). (Commented out 2026-10-27: shared world building is off.)
     # "share": {"port": F(int, OPT)},       # (the BeamMP server's sharing port, its plugin's bngeConfig)
@@ -169,12 +181,18 @@ MOD_TO_SERVER = {
     "area_plan": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
                   "route": F(str, OPT), "half": F(NUM, OPT), "mode": F(str, OPT)},
     "area_add": {"id": F(int), "s": F(NUM, OPT), "w": F(NUM, OPT), "n": F(NUM, OPT), "e": F(NUM, OPT),
-                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT)},
-    "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},
+                 "route": F(str, OPT), "half": F(NUM, OPT), "name": F(str, OPT), "mode": F(str, OPT),
+                 "fast": F(bool, OPT)},       # (fast: areas.py fast mode, the game paused while it runs)
+    "area_cmd": {"id": F(int), "area": F(str), "op": F(str)},     # op: pause, resume, delete, fast, slow
     "route": {"id": F(int), "lat0": F(NUM), "lon0": F(NUM), "lat1": F(NUM), "lon1": F(NUM),
               "bearing": F(NUM, OPT),    # the GPS (routing.py); bearing: the car's heading, the route starts that way
               "download": F(str, OPT)},  # the "Download along route" setting: off / ahead / route (route_download)
     "where": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "online": F(bool)},   # the status bar (geocode.py)
+    # the 3D map's labels by zoom (map3d.lua; maplabels.py)
+    "map_labels": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "zoom": F(NUM), "radius": F(NUM)},
+    # the 3D map flying: where the view will end (map3d.flyHint; earthd on_map_focus)
+    "map_focus": {"anchorId": F(int), "x": F(NUM), "y": F(NUM), "eye": F(NUM), "seconds": F(NUM)},
+    "globe_req": {"anchorId": F(int)},     # the 3D map's whole-earth globe for an anchor (globe.lua / globe.py)
     "server_list": {},                  # the BeamNG.Earth servers for the tab in BeamMP's browser (serverlist.lua)
     # BeamMP shared world generation v2 (mpsession.lua <-> mpshare.py): our share code asked once a session, the
     # plugin's messages and groups passed through untouched
@@ -184,6 +202,17 @@ MOD_TO_SERVER = {
     # the update notice's button: the server opens the releases page (updates.open_page; additive)
     "open_page": {"url": F(str)},
     "update_now": {},                   # the update notice's "Update now" (selfupdate.py)
+    # the Add-ons page (addons.lua <-> addons.py; additive): the list, one add-on's page, Install / Update (consent: the
+    # player agreed to its notice; mp: a BeamMP session, refused), and the mod's answer after the game's mod manager
+    # took the file or enabled / disabled / removed the mod
+    "addons_list": {"refresh": F(bool, OPT)},
+    "addon_detail": {"id": F(str), "refresh": F(bool, OPT)},
+    "addon_install": {"id": F(str), "consent": F(bool), "mp": F(bool, OPT)},
+    "addon_applied": {"id": F(str), "op": F(str), "ok": F(bool), "error": F(str, OPT)},
+    "addon_run": {"id": F(str), "op": F(str)},     # a program beside the game: start / stop / uninstall / autostart
+    "addon_add": {"repo": F(str)},                  # Add from GitHub: the pasted repository
+    "addon_forget": {"id": F(str)},                 # an add-on the player added, taken off the list
+    "addon_options": {"id": F(str), "values": F(dict)},     # its Options tab saved
     # the level select's "Random location" (randomplace.py; additive)
     "random_place": {"id": F(int)},
     # the level select's place pictures (placepreview.py; additive): [{key, lat, lon}]
@@ -212,7 +241,8 @@ SERVER_TO_MOD = {
                          "worldMissing": F(int, OPT), "error": F(str, OPT)},
     # the saved areas [{id, name, s, w, n, e, state, done, total, msg, mode, route?}] after hello, a change and while one downloads
     # (at most every areas.STATUS_S); result: the answer to an area_add / area_cmd
-    "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT)},
+    "areas": {"areas": F(list), "pinnedBytes": F(int, OPT), "result": F(dict, OPT),
+              "fast": F(str, OPT)},        # (the area running fast, "" none: the mod pauses the game meanwhile)
     "route_result": {"id": F(int), "points": F(list), "dist": F(NUM), "dur": F(NUM), "error": F(str, OPT),
                       "elev": F((list, dict), OPT)},  # OSRM; elev: the map's profile (routing.resample, dem.sample)
     "route_download": {"total": F(int), "done": F(int), "active": F(bool)},
@@ -222,14 +252,28 @@ SERVER_TO_MOD = {
                "dev": F(bool, OPT)},        # (a development build's check: whether the newer one is one too)
     "update_status": {"state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT),
                       "version": F(str, OPT)},      # the "Update now" download (selfupdate.py)
+    # the Add-ons page (addons.py): the cards; one add-on's README and changelog as safe HTML (fast.md_html); a
+    # download's progress; the checked file for the game's mod manager (addons.lua hands it over)
+    "addons": {"addons": F(list), "error": F(str, OPT)},
+    "addon_detail": {"id": F(str), "card": F(dict, OPT), "readme": F(str), "readmeLinks": F(list), "releases": F(list),
+                     "error": F(str)},
+    "addon_status": {"id": F(str), "state": F(str), "text": F(str), "done": F(int, OPT), "total": F(int, OPT)},
+    "addon_added": {"ok": F(bool), "id": F(str, OPT), "error": F(str, OPT)},     # Add from GitHub's answer
+    "addon_apply": {"id": F(str), "op": F(str), "file": F(str), "tmp": F(str), "old": F(list), "tag": F(str),
+                    "active": F(bool), "uiApps": F(list), "code": F(dict), "oldCode": F(dict, OPT)},
     "where_result": {"id": F(int), "street": F(str), "place": F(str, OPT), "region": F(str, OPT),
                      "country": F(str, OPT)},   # the status bar's location
+    "map_labels_result": {"id": F(int), "rows": F(list)},   # the 3D map's labels: maplabels.py rows
+    "globe": {"anchorId": F(int), "shape": F(str), "texture": F(str), "material": F(str),  # the 3D map's globe
+              "miniShape": F(str), "miniScale": F(NUM)},                     # ... and its small copy (far out)
     "random_place_result": {"id": F(int), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "name": F(str, OPT)},
     "place_previews_ready": {"keys": F(list)},
     "map_tiles_ready": {"tiles": F(list)},  # [z, x, y, ok, layer] each: written to <user>/temp/beamngEarth/maptiles
     "runtime_profiler_pong": {"probe": F(int)},
     "runtime_profiler": {"profile": F(dict)},
-    "hello": {"runtimeProfiler": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+    "hello": {"runtimeProfiler": F(int, OPT), "waterguard": F(int, OPT), "protocol": F(int), "format": F(int), "serverVersion": F(str), "appVersion": F(str), "sessionId": F(str),
+              "privacyRegion": F(str), "telemetryConsent": F(int),     # the welcome page's telemetry defaults
+              "streamLease": F(int, OPT), "leaseId": F(str, OPT),
               "farFormat": F(str), "material": F(str),
               "nearVisual": F(str), "attribution": F(str),          # protocol 4
               "cells": F(int, OPT),             # v1.4 M1: cells per tile edge, FORMAT 4 only
@@ -260,7 +304,8 @@ SERVER_TO_MOD = {
                      "provisional": F(bool, OPT),          # 2026-10-22: a teleport's ungraded first block
                      "px": F(NUM, NULL, OPT), "py": F(NUM, NULL, OPT),     # the prepare_anchor's spot, echoed
                      "fuelShapes": F(list, OPT)},          # 2026-10-23: the region's gas station shapes (--gas-stations)
-    "anchor_error": {"requestId": F(int, NULL), "error": F(str)},
+    "anchor_progress": {"requestId": F(int, NULL), "stage": F(str), "elapsed": F(NUM)},
+    "anchor_error": {"requestId": F(int, NULL), "error": F(str), "stage": F(str, OPT)},
     # "share": {"port": F(int, NULL), "code": F(str), "weight": F(NUM, OPT)},   # our group service (shared world
     # building, commented out 2026-10-27)
     "terrain_ready": {"requestId": F(int), "anchorId": F(int), **TERRAIN},
@@ -355,6 +400,13 @@ SERVER_TO_MOD = {
     # ... its answer: the patch's shape and centre, or an error (the mod asks again later)
     "terrain_patch": {"anchorId": F(int), "key": F(str), "parts": F(list, OPT),     # [{path, x, y}]: small meshes
                       "tris": F(int, OPT), "error": F(str, OPT)},
+    # ... its answer: the shell's shape, colour and opacity DDS (game paths), the material's name, where it is round
+    # a teleport's spot in a tunnel: its floor, after anchor_ready (core.floorCheck: down onto it once the tube collides)
+    "tunnel_floor": {"anchorId": F(int), "floorZ": F(NUM), "x": F(NUM), "y": F(NUM)},
+    "space_clouds": {"anchorId": F(int), "shape": F(str), "color": F(str), "opacity": F(str), "material": F(str),
+                     "lat": F(NUM), "lon": F(NUM), "radius": F(NUM),
+                     # ... and the night side's city lights over the ground (none: none could be had)
+                     "lightsShape": F(str, OPT), "lights": F(str, OPT), "lightsMaterial": F(str, OPT)},
     "app_paths": {"cacheDir": F(str), "cacheNext": F(str), "beammp": F(str), "result": F(dict, OPT)},
     "cache": {"v": F(int), "usedBytes": F(int), "capBytes": F(int), "files": F(int), "ready": F(bool),
               "managed": F(bool), "clearedBytes": F(int, OPT),
@@ -364,11 +416,15 @@ WEATHER_NESTED = {"cover": {"total", "low", "mid", "high"}, "wind": {"ms", "from
                   "aloft": {"ms", "fromDeg"}}
 # message types the plain session cannot produce (each has its own session test below)
 EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs map data (roads tests)
+                       "space_clouds",                               # the clouds from space: NASA GIBS (test_spaceclouds)
+                       "tunnel_floor",                               # a tunnel at the spot: needs map data
                        "roads_skin", "roads_exact",                  # road geotiles (test_roadgeo)
                        "terrain_refresh",                            # a provisional first block: --grading (map data)
                        "runtime_profiler", "runtime_profiler_pong",  # opt-in feed/probe (test_runtimeprofiler_server)
                        "update_status",                              # the player's "Update now" (test_selfupdate)
                        "where_result",                               # the status bar: asked by the mod while driving
+                       "map_labels_result",                          # the 3D map's labels: asked in map mode
+                       "globe",                                      # the 3D map's globe: needs EOX tiles
                        "random_place_result", "place_previews_ready",  # the level select: map data / imagery
                                                                      # (test_randomplace)
                        "block_base",                                 # a lazy imagery source (test_detail)
@@ -383,6 +439,8 @@ EXERCISED_ELSEWHERE = {"far_retex", "roads_tile", "roads_drop",   # roads: needs
                        "traffic_far_tile", "traffic_far_drop",        # major roads beyond the detailed stream
                        "map_tiles_ready",                            # only when the world map asks (map_tiles)
                        "update",                                     # only when GitHub has a newer version (online)
+                       "addons", "addon_detail", "addon_status",     # the Add-ons page: only when it asks (online;
+                       "addon_apply", "addon_added",                 # test_addons, test_addons.lua)
                        "geocode_result", "route_result",             # only when the map / GPS asks
                        "cache_map_result",                           # only when the map's cache view asks
                        "area_plan_result", "areas",                  # saved areas: a Server with a Cache (test_areas)
@@ -440,11 +498,12 @@ def top_keys(table):
 
 def mod_sends():
     """{type: (keys, nested)} of every net.send({...}) in core.lua, places.lua (the level select's pictures) and
-    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua (core hands it
-    net.send)."""
+    mpsession.lua (require('beamngEarth/net').send), and every send({...}) in terrainpatch.lua and spaceclouds.lua
+    (core hands them net.send)."""
     out = {}
-    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua"), r"net(?:'\))?\.send\(\{"),
-                           (("terrainpatch.lua",), r"\bsend\(\{"),
+    for names, pattern in ((("core.lua", "places.lua", "mpsession.lua", "serverlist.lua", "trafficvisuals.lua", "map3d.lua",
+                              "addons.lua"), r"net(?:'\))?\.send\(\{"),
+                           (("terrainpatch.lua", "spaceclouds.lua", "globe.lua"), r"\bsend\(\{"),
                            (("profiler.lua",), r"\b(?:send|lastSend)\(\{")):
         text = code_only("\n".join((LUA / n).read_text(encoding="utf-8") for n in names), "--")
         for m in re.finditer(pattern, text):
@@ -458,7 +517,8 @@ def mod_sends():
 def mod_reads():
     """Fields the mod reads from server messages: msg.X / p.msg.X / tr.X (terrain) in its Lua."""
     out = set()
-    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua"):
+    for name in ("core.lua", "farfield.lua", "lattice.lua", "weather.lua", "credits.lua", "roads.lua", "mpsession.lua",
+                 "addons.lua"):
         text = code_only((LUA / name).read_text(encoding="utf-8"), "--")
         out |= set(re.findall(r"\bmsg\.(\w+)", text))
         out |= {"terrain." + f for f in re.findall(r"\btr\.(\w+)", text)}

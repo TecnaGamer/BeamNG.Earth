@@ -11,6 +11,14 @@ of the time. A refused request (Deferred: the host's spare tokens are gone) wait
 share used up (BudgetExceeded) waits for the next UTC day ("waiting for tomorrow"); a failed one is skipped and the
 area gets another pass later.
 
+Fast mode (Tann2019, 2026-11-05: "instead of an hour for the route i want it to be done in minutes, use all my cores,
+pause the game physics"): one area at a time may run fast (area_add's "fast", area_cmd "fast" / "slow"): the mod pauses
+the game's physics while the 'areas' message names it, so live play needs nothing and every gate above goes: no wait
+for idle pools or a duty cycle, a refused request asked again after FAST_DEFER_S, the steps of a phase FAST_THREADS at
+a time (each host still at its own netfetch caps, the predownload share of its day included), the world phase on a
+pool of road processes of its own over every core (Server.fast_precache: its processes and the full priority split).
+It ends when the area is done, waits (a host's day used up, offline) or is paused, deleted or set slow.
+
 Store: <cache>/areas/areas.json (the list; atomic writes) and <cache>/areas/<id>.done (the imagery squares done, one
 line each; appended). The plan of an area is a pure function of its box and the server's settings: a resume walks it
 again and skips what is on disk.
@@ -64,13 +72,19 @@ DEFER_WAIT_S = 3.0          # a refused request (no spare tokens) is tried again
 DEFER_TRIES = 20            # ... this often, then skipped
 BUDGET_RETRY_S = 900.0      # a host's daily share used up: looked at again after this
 OFFLINE_RETRY_S = 300.0
-PASS_RETRY_S = 1800.0       # a pass with failed items: another pass after this
+PASS_RETRY_S = 1800.0       # a pass with failed items: another pass after this ...
+# ... at most this many passes in a row: then the items still failing count as unavailable and the area is done
+# (GitHub #917: a tile no host has failed every pass, so the area stood at 99 % all night, retried every half hour)
+MAX_FAILED_PASSES = 3
 STATUS_S = 2.0              # the 'areas' message at most this often while one runs
 PIN_EVERY_S = 600.0         # the pinned bytes counted again after this (and after an area is added or removed)
 # the estimate's rough numbers
 MAPDATA_DL_BYTES = 6e6      # downloaded per new cell, all its layers (Overture's row groups are ~9.5 MB; neighbours
                             # share them)
 REQUEST_S = 0.35            # one request at a time
+FAST_THREADS = 24           # fast mode: a data phase's steps at once (each host still at its netfetch max_conc)
+FAST_DEFER_S = 0.25         # ... a refused request (its host's slots or tokens taken) asked again after this
+FAST_DEFER_TRIES = 240      # ... this often (a minute), then skipped
 CELL_S = 3.0                # a cell's layers built from the downloads
 RAW_PER_CELL = 1.2e6        # the sources' blocks kept on disk per new cell (mapdata/raw: range reads, ~30 cells
                             # measured 2026-10-28)
@@ -83,6 +97,11 @@ WORLD_TILE_S = 2.0          # ... and its build in a road process (rough)
 MAX_WORLD_KM2 = 400.0       # (155 square miles, ~4,300 road geotiles, ~3.4 GB) a "world" area at most
 SIZES = {"dem": 110e3, "img": 25e3, "cell": 120e3}      # bytes on disk (a cell: one layer's file) when the cache
                                                         # knows no better
+
+
+def unavailable_msg(n):
+    """The done area's note when n of its items could not be downloaded (MAX_FAILED_PASSES)."""
+    return f"{n} items unavailable (no server had them in {MAX_FAILED_PASSES} tries): Resume tries again"
 
 
 def area_layers():
@@ -203,6 +222,21 @@ def pinned_world(cache_dir):
     return out
 
 
+def world_fuel_steps(geo_tiles):
+    """The OpenStreetMap fuel cells the world phase's geotiles read (gasstations.station_cells, earthd.osm_fuel_cells'
+    geo rule), in geotile order. A world build reads them from the cache only and is not kept while one is missing
+    (gasstations.tile_sites faults), so the area fetches them before its geotiles (GitHub #917: the plan never
+    fetched them, so every geotile with a station was thrown away)."""
+    import gasstations
+    import geotiles
+    out = {}
+    for gx, gy in geo_tiles:
+        frame = geotiles.frame(gx, gy)
+        for k in gasstations.station_cells(frame, geotiles.geobox(gx, gy), None):
+            out[(int(k[0]), int(k[1]), int(k[2]))] = True
+    return [("fuel", z, x, y) for z, x, y in out]
+
+
 def plan_steps(tiles, hm_zooms, img_zoom, layers):
     """The download plan of an area (tiles(z, ring) -> its [(x, y)] at zoom z with ring more round them: box_tiles,
     route_tiles), in order: ("cell", z, x, y, layer) for the map data cells (with CELL_RING), ("dem", z, x, y) at the
@@ -239,11 +273,13 @@ class Areas:
         self.s = server
         self.notify = notify or (lambda: None)
         self.lock = threading.RLock()
+        self.world_lock = threading.RLock()     # (the .world lists' writes)
         self.areas = []                 # dicts (the store's fields + the runtime's)
         self.next_id = 1
         self.wake = threading.Event()
         self.closed = False
         self.current = None             # the area id the thread works on
+        self.fast_id = None             # the area running fast (fast mode, above), or None
         self.pinned_bytes = None
         self.pin_at = -1e18
         self.sent_at = 0.0
@@ -274,7 +310,9 @@ class Areas:
                                    "created": float(a.get("created", 0)), "paused": bool(a.get("paused")),
                                    "complete": bool(a.get("complete")), "total": int(a.get("total", 0)),
                                    "diskBytes": int(a.get("diskBytes", 0)), "done": 0, "state": "queued", "msg": "",
-                                   "retry_at": 0.0, "mode": a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE})
+                                   "retry_at": 0.0, "mode": a.get("mode") if a.get("mode") in MODES else DEFAULT_MODE,
+                                   "failedPasses": int(a.get("failedPasses", 0)),
+                                   "unavailable": int(a.get("unavailable", 0))})
             except (KeyError, TypeError, ValueError):
                 continue
         self.next_id = max([int(doc.get("next", 1))] + [int(a["id"][1:]) + 1 for a in self.areas
@@ -282,11 +320,14 @@ class Areas:
         for a in self.areas:
             a["state"] = "paused" if a["paused"] else "done" if a["complete"] else "queued"
             a["done"] = a["total"] if a["complete"] else 0
+            if a["complete"] and a["unavailable"]:
+                a["msg"] = unavailable_msg(a["unavailable"])
 
     def _save(self):
         doc = {"v": STORE_VERSION, "next": self.next_id,
                "areas": [{k: a[k] for k in ("id", "name", "s", "w", "n", "e", "created", "paused", "complete", "total",
-                                            "diskBytes", "mode", "route") if k != "route" or a[k] is not None}
+                                            "diskBytes", "mode", "route", "failedPasses", "unavailable")
+                          if k in a and (k != "route" or a[k] is not None)}
                          for a in self.areas]}
         try:
             os.makedirs(self.dir, exist_ok=True)
@@ -307,11 +348,12 @@ class Areas:
     def _write_world(self, aid, keys):
         """The area's pre-built road geotiles' revisit keys (pinned_world), the whole list at once (atomic)."""
         try:
-            p = self._world_path(aid)
-            tmp = f"{p}.{os.getpid()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                f.write("".join(k + "\n" for k in keys))
-            os.replace(tmp, p)
+            with self.world_lock:       # (fast mode: its geotiles' threads write it too)
+                p = self._world_path(aid)
+                tmp = f"{p}.{os.getpid()}.tmp"
+                with open(tmp, "w", encoding="utf-8") as f:
+                    f.write("".join(k + "\n" for k in list(keys)))
+                os.replace(tmp, p)
         except OSError as e:
             log.warning("areas: %s world list not saved: %s", aid, e)
 
@@ -366,7 +408,12 @@ class Areas:
             prov = roadz.PROVIDER
             lidar = [("lidar", CELL_Z, x, y) for x, y in tiles(CELL_Z, CELL_RING)
                      if prov is not None and prov.lidar_wanted((CELL_Z, x, y))]
-            return lidar + [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
+            geo = [("geo", WORLD_Z, x, y) for x, y in tiles(WORLD_Z, 0)]
+            md = self.s.mapdata
+            fuel = (world_fuel_steps((st[2], st[3]) for st in geo)
+                    if md is not None and getattr(self.s, "gas_stations", False)
+                    and hasattr(md, "osm_fuel_cached") else [])
+            return lidar + fuel + geo
         raise ValueError(f"unknown area phase {phase!r}")
 
     def steps(self, box, mode=DEFAULT_MODE, route=None):
@@ -388,6 +435,12 @@ class Areas:
             return self.s.geo_prebuilt(step[2], step[3]) is not None
         if kind == "lidar":
             return roadz.PROVIDER is None or roadz.PROVIDER.lidar_on_disk(step[1:4])
+        if kind == "fuel":
+            cached = getattr(self.s.mapdata, "osm_fuel_cached", None)
+            if cached is None:
+                return True
+            import mapcells
+            return cached(mapcells.CellKey(step[1], step[2], step[3])) is not None
         return done_imgs is not None and img_key(step) in done_imgs
 
     def plan(self, s, w, n, e, mode=DEFAULT_MODE):
@@ -422,7 +475,7 @@ class Areas:
         im = self.s.imagery
         sizes = self._sizes()
         req = {}
-        missing = {"cell": set(), "layer": 0, "dem": 0, "img": 0}
+        missing = {"cell": set(), "layer": 0, "dem": 0, "img": 0, "fuel": 0}
         dl = disk = 0.0
         for st in steps:
             if st[0] == "cell":
@@ -434,6 +487,11 @@ class Areas:
                     missing["dem"] += 1
                     req["tiles.mapterhorn.com"] = req.get("tiles.mapterhorn.com", 0) + 1
                     dl += sizes["dem"]
+            elif st[0] == "fuel":       # (OpenStreetMap's fuel stations: a few range reads a cell, ~25 KB)
+                if not self._present(st):
+                    missing["fuel"] += 1
+                    req["data.openstreetmap.us"] = req.get("data.openstreetmap.us", 0) + 3
+                    dl += 25e3
         cells = len(missing["cell"])
         if cells:
             req["overturemaps-us-west-2.s3.us-west-2.amazonaws.com"] = cells * 4     # (a few range reads a cell)
@@ -469,7 +527,7 @@ class Areas:
             hosts.append([host, int(r), round(d, 2)])
         seconds = n_req * REQUEST_S + cells * CELL_S + geo_missing * WORLD_TILE_S
         return {"ok": True, "km2": round(km2, 2), "items": len(steps),
-                "missing": missing["layer"] + missing["dem"] + missing["img"],
+                "missing": missing["layer"] + missing["dem"] + missing["img"] + missing["fuel"],
                 "downloadBytes": int(dl), "diskBytes": int(disk), "seconds": int(seconds), "days": round(days, 2),
                 "hosts": hosts, "excluded": sorted(excluded), "worldTiles": len(geo), "worldMissing": geo_missing}
 
@@ -497,24 +555,31 @@ class Areas:
         return out
 
     # --- the list ---------------------------------------------------------------------------------
-    def add(self, s, w, n, e, name="", mode=DEFAULT_MODE):
-        """A new saved area (its download starts in the background). (True, area id) or (False, why)."""
+    def add(self, s, w, n, e, name="", mode=DEFAULT_MODE, fast=False):
+        """A new saved area (its download starts in the background; fast: in fast mode). (True, area id) or (False,
+        why)."""
         try:
             box = check_box(s, w, n, e)
             mode = check_mode(mode, self.s)
         except ValueError as err:
             return False, str(err)
-        return self._add(box, None, self.plan(*box, mode=mode), name, mode)
+        return self._fast_after(self._add(box, None, self.plan(*box, mode=mode), name, mode), fast)
 
-    def add_route(self, lats, lons, half, name="", mode=DEFAULT_MODE):
-        """A new saved route (its corridor: half m each side). (True, area id) or (False, why)."""
+    def add_route(self, lats, lons, half, name="", mode=DEFAULT_MODE, fast=False):
+        """A new saved route (its corridor: half m each side; fast: in fast mode). (True, area id) or (False, why)."""
         try:
             lats, lons, half = check_route(lats, lons, half)
             mode = check_mode(mode, self.s)
         except ValueError as err:
             return False, str(err)
         route = {"lat": lats, "lon": lons, "half": half}
-        return self._add(route_bounds(route), route, self.plan_route(lats, lons, half, mode), name, mode)
+        return self._fast_after(self._add(route_bounds(route), route, self.plan_route(lats, lons, half, mode), name,
+                                          mode), fast)
+
+    def _fast_after(self, res, fast):
+        if fast and res[0]:
+            self.command(res[1], "fast")
+        return res
 
     def _add(self, box, route, est, name, mode=DEFAULT_MODE):
         if not est.get("ok"):
@@ -545,12 +610,21 @@ class Areas:
         """pause / resume / delete an area (delete: it stops, its data stays in the cache, unpinned). True if done."""
         with self.lock:
             a = next((x for x in self.areas if x["id"] == aid), None)
-            if a is None or op not in ("pause", "resume", "delete"):
+            if a is None or op not in ("pause", "resume", "delete", "fast", "slow"):
                 return False
-            if op == "pause":
+            if op == "fast":
+                if a["complete"]:
+                    return False
+                self.fast_id = aid
+                a["paused"], a["retry_at"], a["state"], a["msg"] = False, 0.0, "queued", ""
+            elif op == "slow":
+                if self.fast_id == aid:
+                    self.fast_id = None
+            elif op == "pause":
                 a["paused"], a["state"], a["msg"] = True, "paused", ""
             elif op == "resume":
                 a["paused"], a["complete"], a["retry_at"], a["state"], a["msg"] = False, False, 0.0, "queued", ""
+                a["failedPasses"], a["unavailable"] = 0, 0      # (asked again: the unavailable items get new tries)
             else:
                 self.areas.remove(a)
                 for p in (self._done_path(aid), self._world_path(aid)):
@@ -558,12 +632,37 @@ class Areas:
                         os.remove(p)
                     except OSError:
                         pass
+            if op in ("pause", "delete") and self.fast_id == aid:
+                self.fast_id = None
             self._save()
         if op == "delete":
             self.pin_at = -1e18
+        self._fast_server()
         self.wake.set()
         self._changed(force=True)
         return True
+
+    def is_fast(self, a):
+        return self.fast_id is not None and a is not None and a["id"] == self.fast_id
+
+    def _fast_server(self):
+        """The server's side of fast mode (its own road processes, every core) on while an area runs fast."""
+        hook = getattr(self.s, "fast_precache", None)
+        if hook is not None:
+            try:
+                hook(self.fast_id is not None)
+            except Exception:
+                log.exception("areas: fast mode's server side")
+
+    def _fast_end(self, a, why):
+        """An area that ran fast stopped (done, waiting, paused): fast mode ends."""
+        with self.lock:
+            if not self.is_fast(a):
+                return
+            self.fast_id = None
+        log.info("areas: %s fast mode ends (%s)", a["id"], why)
+        self._fast_server()
+        self._changed(force=True)
 
     def message(self):
         """The 'areas' message's fields."""
@@ -573,6 +672,7 @@ class Areas:
                              for a in self.areas]}
         if self.pinned_bytes is not None:
             out["pinnedBytes"] = int(self.pinned_bytes)
+        out["fast"] = self.fast_id or ""
         return out
 
     @staticmethod
@@ -648,7 +748,8 @@ class Areas:
     def _next(self):
         now = time.monotonic()
         with self.lock:
-            for a in self.areas:
+            fast = [a for a in self.areas if self.is_fast(a)]
+            for a in fast + self.areas:
                 if not a["paused"] and not a["complete"] and a["retry_at"] <= now:
                     return a
         return None
@@ -676,6 +777,8 @@ class Areas:
     def _gate(self, a):
         """Wait until the download may go on (False: the area was paused / deleted, or the server closes)."""
         while self._alive(a):
+            if self.is_fast(a):         # (the game is paused: no live play to wait for)
+                return True
             pacer.hold()
             busy = getattr(self.s, "live_busy", None)
             if busy is not None and busy():
@@ -685,8 +788,11 @@ class Areas:
             return True
         return False
 
-    def _pace(self, t0):
-        """After a step: sleep so that the downloads run at most DUTY_DRIVE of the time while the player drives."""
+    def _pace(self, t0, a=None):
+        """After a step: sleep so that the downloads run at most DUTY_DRIVE of the time while the player drives (not in
+        fast mode)."""
+        if self.is_fast(a):
+            return
         driving = getattr(self.s, "driving", None)
         if driving is not None and driving():
             spent = time.monotonic() - t0
@@ -722,31 +828,86 @@ class Areas:
             a["state"] = "running"
         self._changed(force=True)
         self.current = a["id"]
+        t_pass = time.monotonic()
+        fast = self.is_fast(a)
         try:
-            for st in todo:
-                if not self._gate(a):
+            if fast:
+                failed = self._run_fast(a, todo)
+                if failed is None:
+                    self._fast_end(a, "waiting" if self._alive(a) else "stopped")
                     return
-                ok = self._step(a, st)
-                if ok is None:          # waiting (budget / offline): this pass ends
-                    return
-                if ok:
-                    a["done"] += 1
-                else:
-                    failed += 1
-                self._changed()
+            else:
+                for st in todo:
+                    if not self._gate(a):
+                        return
+                    ok = self._step(a, st)
+                    if ok is None:          # waiting (budget / offline): this pass ends
+                        return
+                    if ok:
+                        a["done"] += 1
+                    else:
+                        failed += 1
+                    self._changed()
         finally:
             self.current = None
             if a.get("_world") is not None and any(st[0] == "geo" for st in steps):
                 self._write_world(a["id"], a["_world"])
+        log.info("areas: %s pass: %d steps in %.0f s (%d failed)%s", a["id"], len(todo), time.monotonic() - t_pass,
+                 failed, " fast" if fast else "")
+        self._fast_end(a, "done" if not failed else f"{failed} failed")
         with self.lock:
-            if failed:
+            a["failedPasses"] = a.get("failedPasses", 0) + 1 if failed else 0
+            if failed and a["failedPasses"] < MAX_FAILED_PASSES:
                 a["state"], a["msg"] = "queued", f"{failed} items failed: tried again later"
                 a["retry_at"] = time.monotonic() + PASS_RETRY_S
             else:
-                a["complete"], a["state"], a["msg"], a["done"] = True, "done", "", a["total"]
+                a["unavailable"] = failed
+                a["complete"], a["state"], a["done"] = True, "done", a["total"]
+                a["msg"] = unavailable_msg(failed) if failed else ""
+                if failed:
+                    log.info("areas: %s done with %d items unavailable after %d passes", a["id"], failed,
+                             a["failedPasses"])
             self._save()
         self.pin_at = -1e18
         self._changed(force=True)
+
+    def _run_fast(self, a, todo):
+        """Fast mode's walk over the steps not on disk: each phase's steps (downloads, the road heights' lidar, then
+        the world's geotiles: each needs the one before on disk) at once on threads (FAST_THREADS; the geotiles twice
+        as many as the road processes building them). The number failed, or None when the pass stops (waiting,
+        paused, set slow)."""
+        from concurrent.futures import ThreadPoolExecutor
+        groups = [[st for st in todo if st[0] not in ("lidar", "geo")], [st for st in todo if st[0] == "lidar"],
+                  [st for st in todo if st[0] == "geo"]]
+        failed = 0
+        stop = threading.Event()
+
+        def one(st):
+            if stop.is_set() or not self._alive(a) or not self.is_fast(a):
+                stop.set()
+                return None
+            ok = self._step(a, st)
+            if ok is None:
+                stop.set()
+            elif ok:
+                with self.lock:
+                    a["done"] += 1
+                self._changed()
+            return ok
+
+        for group in groups:
+            if not group:
+                continue
+            width = FAST_THREADS
+            if group[0][0] == "geo":
+                pool = getattr(self.s, "fast_pool", None) or getattr(self.s, "road_pool", None)
+                width = max(2, 2 * int(getattr(pool, "workers", 2) or 2))
+            with ThreadPoolExecutor(min(width, len(group)), thread_name_prefix="areas-fast") as ex:
+                results = list(ex.map(one, group))
+            if stop.is_set() or any(r is None for r in results):
+                return None
+            failed += sum(1 for r in results if r is False)
+        return failed
 
     def _wait(self, a, msg, seconds):
         with self.lock:
@@ -755,11 +916,11 @@ class Areas:
 
     def _step(self, a, st):
         """One plan step's downloads: True done, False failed (skipped this pass), None the pass waits."""
-        for _ in range(DEFER_TRIES):
+        for _ in range(FAST_DEFER_TRIES if self.is_fast(a) else DEFER_TRIES):
             t0 = time.monotonic()
             try:
                 self._fetch(a, st)
-                self._pace(t0)
+                self._pace(t0, a)
                 return True
             except Exception as e:
                 # (imagery wraps the request's error in an ImageryError: the netfetch one is its context)
@@ -772,14 +933,17 @@ class Areas:
                                   "is used up", BUDGET_RETRY_S)
                     return None
                 if isinstance(err, (netfetch.Deferred, netfetch.RateLimited)) or getattr(e, "deferred", False):
-                    self.wake.wait(DEFER_WAIT_S)        # (no spare tokens now: live play has them)
-                    self.wake.clear()
+                    if self.is_fast(a):
+                        time.sleep(FAST_DEFER_S)        # (the host's slots taken by this area's own other steps)
+                    else:
+                        self.wake.wait(DEFER_WAIT_S)    # (no spare tokens now: live play has them)
+                        self.wake.clear()
                     if not self._gate(a):
                         return False
                     continue
                 # a host down, a bad answer: skipped, the next pass tries again
                 log.debug("areas: %s %s: %s: %s", a["id"], st, type(e).__name__, e)
-                self._pace(t0)
+                self._pace(t0, a)
                 return False
         return False
 
@@ -789,14 +953,22 @@ class Areas:
             k = self.s.prebuild_geo(st[2], st[3])
             if k is None:
                 raise RuntimeError("geotile content not complete")     # (a failed item: the next pass tries again)
-            world = a.setdefault("_world", [])
-            world.append(k)
-            if len(world) % 25 == 0:
+            with self.world_lock:
+                world = a.setdefault("_world", [])
+                world.append(k)
+                write = len(world) % 25 == 0
+            if write:
                 self._write_world(a["id"], world)
             return
         if kind == "lidar":
             if roadz.PROVIDER is not None and roadz.PROVIDER.lines("lidar", st[1:4]) is None:
                 raise RuntimeError("road height lidar not had")         # (the next pass tries again)
+            return
+        if kind == "fuel":
+            fetch = getattr(self.s.mapdata, "osm_fuel_fetch", None)
+            if fetch is not None:
+                import mapcells
+                fetch(mapcells.CellKey(st[1], st[2], st[3]), kind="predownload")
             return
         if kind == "cell":
             import mapcells
@@ -820,7 +992,7 @@ class Areas:
                             raise netfetch.Deferred("area paused")
                         t0 = time.monotonic()
                         got = im.raw(*k, kind="predownload") is not None or got
-                        self._pace(t0)
+                        self._pace(t0, a)
                     if got:
                         break
             self._mark_done(a["id"], img_key(st))

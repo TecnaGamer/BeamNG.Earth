@@ -55,6 +55,9 @@ local shape, sc = trees.pick('conifer', 20.0, 0.3)
 T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m conifer: a large fir near its size')
 shape, sc = trees.pick('rock', 0.6, 0.1)
 T.check(shape:find('rock') ~= nil and math.abs(sc - 0.6 / select(2, unpack({ shape, 0.6 })) * 1) < 2, 'a rock')
+shape, sc = trees.pick('pole_concrete_recessed', 8.5, 0)
+T.check(shape:find('/regional_poles/bne_pole_concrete_recessed', 1, true) ~= nil and sc == 1,
+        'regional pole: its own model at the authored height, not a fallback tree')
 
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
@@ -285,12 +288,21 @@ T.check(trees.tileThreshold(0, { f = {}, s = trees.STRIDE, n = 0 }) == 1.0, 'no 
 
 -- rows packed flat: STRIDE numbers a row in the server's order, the readers' defaults, a broken row never shown
 do
-  local f = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
-  T.check(trees.STRIDE == 8 and #f == 32, 'flatten: 8 numbers a row')
-  T.check(table.concat(f, ',', 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
-  T.check(table.concat(f, ',', 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
+  -- (an FFI double array where there is FFI: read through these, not # or table.concat)
+  local function span(f, i, j)
+    local out = {}
+    for k = i, j do out[#out + 1] = string.format('%g', f[k]) end
+    return table.concat(out, ',')
+  end
+  local f, n = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
+  T.check(trees.STRIDE == 8 and n == 4, 'flatten: 8 numbers a row, the row count')
+  T.check(span(f, 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
+  T.check(span(f, 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
   T.check(f[24] == 2 and f[32] == 2, 'flatten: a row that is no table or has no position is never shown')
-  T.check(#trees.flatten(nil) == 0, 'flatten: no rows')
+  T.check(select(2, trees.flatten(nil)) == 0, 'flatten: no rows')
+  T.check(trees.FFI == (type(f) == 'cdata'), 'flatten: FFI doubles where there is FFI (the collector does not walk them)')
+  local p, pn = trees.packFlat({ 1, 2, 3, 4, 5, 6, 7, 8, 9, 'x' }, 8)
+  T.check(pn == 1 and p[1] == 1 and p[8] == 8, 'packFlat: whole rows only')
 end
 
 -- a server that knows the mod reads flat tiles (hello.vegFlat) sends { groups, stride, flat }: kept as decoded (no copy,
@@ -324,10 +336,10 @@ do
   local kept = false
   for i = 1, 20 do
     local name, v = debug.getupvalue(trees.status, i)
-    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].f == sent.flat end
+    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].n == 50 and v['8:0_0'].f[1] == sent.flat[1] end
   end
   T.check(count() == 50 and made() == fromRows, 'flat: the same items as the rows')
-  T.check(kept, 'flat: the decoded array itself is the tile\'s (no copy)')
+  T.check(kept, 'flat: the decoded array\'s rows are the tile\'s (packed as the collector does not walk them)')
   trees.clear()
   trees.onTile({ anchorId = 8, key = '0_0', path = '/t/wide', n = 50 }, 8)
   trees.update(8, { x = 50, y = 50 })
@@ -520,6 +532,28 @@ do
   T.check((trees.skipped or 0) == s0 + 2 and count() == 200, 'a new tile: a pass at once')
   trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
+end
+do -- roadside delineators stay traversable, even in the solid near-car pool
+  trees.clear()
+  files['/t/balises'] = '{ groups = { "fr_j1", "fr_j3", "fr_j6" }, items = { {0, 20, 20, 0, 0, 1, 1.3, 0}, {1, 30, 20, 0, 0, 1, 1.3, 0}, {2, 40, 20, 0, 0, 1, 1.05, 0} } }'
+  trees.onTile({ anchorId = 14, key = '0_0', path = '/t/balises', n = 3 }, 14)
+  for _ = 1, 4 do trees.update(14, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: visible but never solid near the car')
+  trees.update(14, { x = 30, y = 650 })
+  trees.update(14, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: a revisit never enables collisions')
+end
+do -- country-specific delineators use the same non-solid pools on revisit
+  trees.clear()
+  files['/t/eubalises'] = '{ groups = { "eu_marker_de", "eu_marker_pl", "eu_marker_gb" }, items = { {0, 20, 20, 0, 0, 1, 1.15, 0}, {1, 30, 20, 0, 0, 1, 1.15, 0}, {2, 40, 20, 0, 0, 1, 1.15, 0} } }'
+  trees.onTile({ anchorId = 15, key = '0_0', path = '/t/eubalises', n = 3 }, 15)
+  for _ = 1, 4 do trees.update(15, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'European delineators are visible and never collidable')
+  trees.update(15, { x = 30, y = 650 })
+  trees.update(15, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'European delineator revisit remains non-solid')
+  T.check(trees.CATALOG.stop_arret[1][1]:match('stop_arret$') ~= nil, 'Quebec uses the accented ARRET asset')
+  T.check(trees.CATALOG.stop_dur[1][1]:match('stop_dur$') ~= nil, 'Turkey uses the DUR asset')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
 -- world; a rebase moves its Forest at once, then it is made again at the new placement (far too: the engine draws

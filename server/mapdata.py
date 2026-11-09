@@ -104,18 +104,20 @@ VERSION = 2                     # pipeline version: bump when what a cell's laye
 # route's relation came first in its sources: no way id, so none of OpenStreetMap's lanes, width, maxspeed or lane tags);
 # the "src_ways" rule holds each way's range on a segment of several (overture.way_sources)
 # (and PR #471's validated highway lane counts, current-way geometry evidence; merged before roads 8 was released)
-# roads 9-12: raceways typed from their geometry (osm_race, racetypes.py: drag strips, speedway and short ovals, road
-# courses); cells fetched before are fetched again
-LAYER_VERSIONS = {"roads": 12}
+# roads 9: OpenStreetMap's busways appended (osmtags.busway_features). Overture emits none, as with raceways.
+# roads 9-12 (racetracks branch): raceways typed from their geometry (osm_race, racetypes.py: drag strips, speedway and
+# short ovals, road courses). 13: both. Cells fetched before are fetched again
+LAYER_VERSIONS = {"roads": 13}
 # (LidarBC's measured canopy heights, maprasters.bc_canopy, are opt-in: BNE_BC_CANOPY=1 fills cells built after it;
 # no canopy version bump, which would fetch every player's canopy cells again)
                                 # (2: clipped polygon pieces `own`ed by their cell, exact cell edges,
                                 # the exact no-area test of clipped rings)
 VECTOR_LAYERS = ("roads", "connectors", "buildings", "water", "land_use", "infrastructure", "building_parts", "places",
-                 "road_routes")
+                 "road_routes", "town_areas", "town_points", "hoods")
 RASTER_LAYERS = ("landcover", "canopy")
-OPTIONAL_LAYERS = ("building_parts", "places", "road_routes")   # built only when asked for by name (buildings.py,
-                                                                    # gasstations.py, dirsigns.py)
+OPTIONAL_LAYERS = ("building_parts", "places", "road_routes", "town_areas", "town_points",
+                   "hoods")   # built only when asked for by name (buildings.py,
+                                                                    # gasstations.py, dirsigns.py, townentry.py)
 LAYERS = tuple(x for x in VECTOR_LAYERS if x not in OPTIONAL_LAYERS) + RASTER_LAYERS
 ALL_LAYERS = VECTOR_LAYERS + RASTER_LAYERS
 DEFAULT_CACHE = os.path.expanduser("~/.cache/beamng-earth")
@@ -269,9 +271,14 @@ class MapData:
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
         self.billboard_osm = billboardsource.Source()
+        # the per-cell sources a road tile's props read without waiting (cells(keys, wait=False)): side_prefetch starts
+        # their reads at the tile's build start, so they are mostly there when the props ask at its end
+        self.side_sources = [self.picnic_osm]
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        import regionaldata
+        regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
         import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
         roadz.install(cache_dir, self.fetcher, self)
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
@@ -472,8 +479,8 @@ class MapData:
             return self._osm_ex
 
     def _osm_cell(self, key, kind):
-        """(tags, raceways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
-        keep their width guesses)."""
+        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
+        keep their width guesses). Extra ways are the raceways and busways Overture does not emit."""
         import osmtags
         if self.fetcher is None:
             return {}, []
@@ -554,13 +561,17 @@ class MapData:
 
     @staticmethod
     def _osm(feats, got, geometry=None):
-        """The roads with the cell's OpenStreetMap tags joined in and its raceways appended (Overture has none,
-        GitHub #143)."""
+        """The roads with the cell's OpenStreetMap tags joined in and its raceways and busways appended (Overture has
+        neither, GitHub #143). Busway ids sort before raceway ids, and both sort after an Overture id."""
         import mapgeom
         import osmtags
         tags, ways = got
-        if ways:
-            feats = mapgeom.concat(feats, osmtags.raceway_features(ways))
+        # Busways first: "osm-busway-..." sorts before "osm-raceway-...", which mapgeom.concat requires.
+        # A way with no highway tag is a raceway, as every extra way was before busways existed.
+        for cls, build in (("busway", osmtags.busway_features), ("raceway", osmtags.raceway_features)):
+            picked = [w for w in ways if str(w.get("highway") or "raceway") == cls]
+            if picked:
+                feats = mapgeom.concat(feats, build(picked))
         osmtags.join(feats, tags, geometry)
         import oneway_joins
         oneway_joins.apply(feats)
@@ -843,6 +854,9 @@ class MapData:
         with self._mem_lock:
             self._mem.clear()
             self._mem_bytes = 0
+        for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
+            if tags is not None:
+                tags.clear_memory()
 
     def _remember(self, k, entry):
         """Keep a decoded layer for the next cell() of it (at most MEM_MB in all, least recently used out)."""
@@ -893,6 +907,14 @@ class MapData:
         for k, key, layer in todo:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
+
+    def side_prefetch(self, keys):
+        """The side_sources' background reads of these cells (a road tile's own) started now, without waiting."""
+        for src in self.side_sources:
+            try:
+                src.prefetch(keys)
+            except Exception as e:      # (the props' own read later says why)
+                log.debug("mapdata side prefetch %s: %s: %s", type(src).__name__, type(e).__name__, e)
 
     def predownload(self, key, layer):
         """A saved area's cell layer (areas.py): built from its sources at netfetch "predownload" and stored, unless it

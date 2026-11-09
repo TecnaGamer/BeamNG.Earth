@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeamNG.Earth players</title>
+<style>
+:root { --bg:#f6f7f9; --card:#fff; --fg:#1b1f24; --mut:#5c6670; --line:#d9dee4; --a:#2f7de1; --b:#20a36b; --hi:#fff4c2; --sel:#e8f0fc; }
+@media (prefers-color-scheme: dark) { :root { --bg:#111418; --card:#1a1f25; --fg:#e8ecf0; --mut:#98a3ad; --line:#2c333b; --a:#5aa0ff; --b:#3ccf8e; --hi:#4a3f12; --sel:#1d2c42; } }
+* { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif }
+main { max-width:980px; margin:0 auto; padding:24px 16px 48px }
+h1 { font-size:22px; margin:0 0 4px } .sub { color:var(--mut); margin:0 0 20px }
+.live { display:inline-flex; align-items:center; gap:6px; font-size:13px; color:var(--mut) }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--b); animation:pulse 2s infinite }
+.dot.off { background:var(--mut); animation:none }
+@keyframes pulse { 0%{opacity:1} 50%{opacity:.35} 100%{opacity:1} }
+.tiles { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:16px }
+.tile, .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px }
+.tile .n { font-size:30px; font-weight:650; font-variant-numeric:tabular-nums; border-radius:6px; transition:background .8s }
+.tile .n.flash { background:var(--hi); transition:none } .tile .l { color:var(--mut); font-size:13px }
+.card { margin-bottom:16px } .card h2 { font-size:15px; margin:0 0 10px; display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap }
+.ranges { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px }
+.ranges button { font:inherit; font-size:13px; padding:4px 10px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg); cursor:pointer }
+.ranges button.on { background:var(--sel); border-color:var(--a) }
+.custom { display:none; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:10px; font-size:13px }
+.custom.show { display:flex }
+.custom input { font:inherit; font-size:13px; padding:3px 6px; border:1px solid var(--line); border-radius:6px; background:var(--card); color:var(--fg) }
+.custom button { font:inherit; font-size:13px; padding:4px 12px; border:1px solid var(--a); border-radius:6px; background:var(--a); color:#fff; cursor:pointer }
+.wrap { position:relative } svg { width:100%; height:260px; display:block; touch-action:none }
+.ax { stroke:var(--line) } .lab { fill:var(--mut); font-size:11px } .cross { stroke:var(--mut); stroke-dasharray:3 3 }
+.tip { position:absolute; pointer-events:none; background:var(--card); border:1px solid var(--line); border-radius:6px; padding:6px 8px;
+  font-size:12px; white-space:nowrap; display:none; box-shadow:0 2px 8px rgba(0,0,0,.15) }
+.legend { display:flex; flex-wrap:wrap; gap:16px; color:var(--mut); font-size:13px; margin-top:6px }
+.sw { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:-1px }
+.note { color:var(--mut); font-size:12px; margin-top:4px }
+table { width:100%; border-collapse:collapse } td { padding:5px 0; border-bottom:1px solid var(--line) } td.r { text-align:right; font-variant-numeric:tabular-nums }
+.foot { color:var(--mut); font-size:12px }
+</style>
+</head>
+<body>
+<main>
+<h1>BeamNG.Earth players</h1>
+<p class="sub">Live counts from BeamNG.Earth apps that send anonymous usage reports. <a href="players/advanced" id="adv">Advanced statistics</a> ·
+  <a href="performance" id="perfLink">Performance</a> ·
+  <span class="live"><span class="dot off" id="dot"></span><span id="upd">connecting</span></span></p>
+<div class="tiles">
+  <div class="tile"><div class="n" id="online">-</div><div class="l">online now</div></div>
+  <div class="tile"><div class="n" id="playing">-</div><div class="l">in the game now</div></div>
+  <div class="tile"><div class="n" id="peak24">-</div><div class="l">24 h peak</div></div>
+  <div class="tile"><div class="n" id="peakall">-</div><div class="l">all-time peak</div></div>
+</div>
+<div class="card">
+  <h2><span>Players over time</span><span class="note" id="rangeLabel"></span></h2>
+  <div class="ranges" id="ranges">
+    <button data-r="1h">1 hour</button><button data-r="6h">6 hours</button><button data-r="24h">24 hours</button>
+    <button data-r="7d">7 days</button><button data-r="30d">30 days</button><button data-r="1y">1 year</button>
+    <button data-r="all">All time</button><button data-r="custom">Custom</button>
+  </div>
+  <div class="custom" id="custom">
+    <label>From <input type="datetime-local" id="from"></label>
+    <label>To <input type="datetime-local" id="to"></label>
+    <button id="apply">Show</button>
+  </div>
+  <div class="wrap"><svg id="chart"></svg><div class="tip" id="tip"></div></div>
+  <div class="legend"><span><span class="sw" style="background:var(--a)"></span>online</span>
+    <span><span class="sw" style="background:var(--b)"></span>in the game</span></div>
+  <div class="note" id="res"></div>
+</div>
+<div class="card"><h2>Where players are now</h2><table id="cc"></table>
+  <p class="foot">A country is listed once it has at least 5 players online; smaller counts are grouped as "other".</p></div>
+<p class="foot">Anonymous: each report carries a random install id, the app version and system, whether the game is
+connected, and how many requests went to each map-data source. No names, accounts, positions or IP addresses are kept;
+the country is looked up from the address and the address is discarded. Players choose what to send on BeamNG.Earth's
+welcome screen and can change it in its settings (Interface: Anonymous usage statistics) or turn it off with
+<code>BNE_TELEMETRY=off</code>.</p>
+</main>
+<script>
+const base = location.pathname.replace(/players\/?$/, "");
+const fmt = n => Number(n).toLocaleString();
+const PRESETS = { "1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "1y": 365 * 86400,
+  "all": 20 * 365 * 86400 };
+// "all": from the first statistics on (the range's dataSince, learnt from the first answer)
+let range = { kind: "24h" }, data = null, timer = null, since = null;
+
+// --- live numbers -------------------------------------------------------------------------------------------------
+function setN(el, v) { const s = fmt(v); if (el.textContent !== s) { if (el.textContent !== "-") { el.classList.add("flash");
+  setTimeout(() => el.classList.remove("flash"), 50); } el.textContent = s; } }
+async function live() {
+  try {
+    const s = await (await fetch(base + "stats/now", { cache: "no-store" })).json();
+    setN(online, s.online); setN(playing, s.playing); setN(peak24, s.peak24h); setN(peakall, s.peakAll);
+    cc.innerHTML = s.countries.length ? s.countries.map(([c, n]) => {
+      let name = c; try { if (c.length == 2) name = new Intl.DisplayNames([], { type: "region" }).of(c); } catch (e) {}
+      return `<tr><td>${name}</td><td class="r">${fmt(n)}</td></tr>`; }).join("") : "<tr><td>No players online</td></tr>";
+    dot.classList.remove("off"); upd.textContent = "live, " + new Date().toLocaleTimeString();
+  } catch (e) { dot.classList.add("off"); upd.textContent = "reconnecting"; }
+}
+
+// --- the range ----------------------------------------------------------------------------------------------------
+function bounds() {
+  const now = Math.floor(Date.now() / 1000);
+  if (range.kind === "custom") return [range.from, Math.min(range.to, now)];
+  if (range.kind === "all" && since) return [Math.min(since, now - 3600), now];
+  return [now - (PRESETS[range.kind] || 86400), now];
+}
+function toLocalInput(t) { const d = new Date(t * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); }
+function saveUrl() {
+  const p = new URLSearchParams();
+  if (range.kind === "custom") { p.set("from", range.from); p.set("to", range.to); } else p.set("range", range.kind);
+  history.replaceState(null, "", location.pathname + "?" + p);
+}
+function select(kind) {
+  range = kind === "custom" ? { kind, from: bounds()[0], to: bounds()[1] } : { kind };
+  for (const b of ranges.children) b.classList.toggle("on", b.dataset.r === kind);
+  custom.classList.toggle("show", kind === "custom");
+  if (kind === "custom") { from.value = toLocalInput(range.from); to.value = toLocalInput(range.to); }
+  saveUrl(); loadRange();
+}
+async function loadRange() {
+  clearTimeout(timer);
+  const [a, b] = bounds();
+  try {
+    const r = await fetch(`${base}stats/range?from=${a}&to=${b}`, { cache: "no-store" });
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.status);
+    if (range.kind === "all" && data.dataSince && since !== data.dataSince) { since = data.dataSince; return loadRange(); }
+    draw();
+    const step = data.step, unit = step >= 86400 ? `${step / 86400} day` : step >= 3600 ? `${step / 3600} hour` : `${step / 60} min`;
+    res.textContent = `Each point is the highest count in ${unit}${parseFloat(unit) > 1 ? "s" : ""}.` +
+      (data.dataSince && data.dataSince > a ? ` Statistics start ${new Date(data.dataSince * 1000).toLocaleDateString()}.` : "");
+  } catch (e) { res.textContent = "Could not load this range."; }
+  const span = b - a, liveEnd = range.kind !== "custom" || range.to >= Date.now() / 1000 - 90;
+  if (liveEnd) timer = setTimeout(loadRange, span <= 86400 ? 30000 : 300000);    // (a range ending now keeps up)
+}
+
+// --- the chart ----------------------------------------------------------------------------------------------------
+const css = () => getComputedStyle(document.documentElement);
+let geo = null;
+function draw() {
+  const svg = chart, W = svg.clientWidth || 900, H = 260, L = 40, B = 24, T = 10, R = 10;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const [a, b] = bounds(), pts = data ? data.points : [];
+  rangeLabel.textContent = `${new Date(a * 1000).toLocaleString()} – ${new Date(b * 1000).toLocaleString()}`;
+  const max = Math.max(1, ...pts.map(p => Math.max(p[1], p[2])));
+  const nice = max <= 5 ? max : Math.ceil(max / 4) * 4;
+  const x = t => L + (t - a) / Math.max(1, b - a) * (W - L - R), y = v => T + (1 - v / nice) * (H - T - B);
+  let g = "";
+  const yt = Math.min(4, nice);
+  for (let k = 0; k <= yt; k++) { const v = Math.round(nice * k / yt), yy = y(v);
+    g += `<line class="ax" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/><text class="lab" x="${L - 6}" y="${yy + 4}" text-anchor="end">${v}</text>`; }
+  const span = b - a, tf = span <= 2 * 86400 ? { hour: "2-digit", minute: "2-digit" } :
+    span <= 120 * 86400 ? { month: "short", day: "numeric" } : { year: "numeric", month: "short" };
+  const nx = Math.max(2, Math.min(6, Math.floor((W - L - R) / 110)));
+  for (let k = 0; k <= nx; k++) { const t = a + span * k / nx;
+    g += `<text class="lab" x="${x(t)}" y="${H - 6}" text-anchor="${k == 0 ? "start" : k == nx ? "end" : "middle"}">${new Date(t * 1000).toLocaleString([], tf)}</text>`; }
+  if (!pts.length) g += `<text class="lab" x="${(W + L) / 2}" y="${H / 2}" text-anchor="middle">No data in this range</text>`;
+  const c = css(), cols = [c.getPropertyValue("--a"), c.getPropertyValue("--b")];
+  for (const i of [1, 2]) {
+    if (!pts.length) break;
+    const d = pts.map((p, k) => `${k ? "L" : "M"}${x(p[0]).toFixed(1)},${y(p[i]).toFixed(1)}`).join("");
+    g += `<path d="${d}" fill="none" stroke="${cols[i - 1]}" stroke-width="2" stroke-linejoin="round"/>`;
+    if (pts.length <= 60) g += pts.map(p => `<circle cx="${x(p[0]).toFixed(1)}" cy="${y(p[i]).toFixed(1)}" r="2.5" fill="${cols[i - 1]}"/>`).join("");
+  }
+  g += `<line class="cross" id="cross" x1="0" x2="0" y1="${T}" y2="${H - B}" style="display:none"/>`;
+  svg.innerHTML = g; geo = { x, a, b, L, W, R, pts };
+}
+function hover(ev) {
+  if (!geo || !geo.pts.length) return;
+  const r = chart.getBoundingClientRect(), px = (ev.clientX - r.left) * (geo.W / r.width);
+  const t = geo.a + (px - geo.L) / (geo.W - geo.L - geo.R) * (geo.b - geo.a);
+  let best = geo.pts[0];
+  for (const p of geo.pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+  const cx = geo.x(best[0]), cross = document.getElementById("cross");
+  cross.setAttribute("x1", cx); cross.setAttribute("x2", cx); cross.style.display = "";
+  const when = new Date(best[0] * 1000).toLocaleString([], data.step >= 86400 ? { year: "numeric", month: "short", day: "numeric" } : {
+    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  tip.innerHTML = `<b>${when}</b><br>online ${fmt(best[1])}<br>in the game ${fmt(best[2])}`;
+  tip.style.display = "block";
+  const left = cx / geo.W * r.width;
+  tip.style.left = Math.min(r.width - tip.offsetWidth - 4, Math.max(4, left + 10)) + "px"; tip.style.top = "8px";
+}
+chart.addEventListener("pointermove", hover);
+chart.addEventListener("pointerleave", () => { tip.style.display = "none"; const c = document.getElementById("cross"); if (c) c.style.display = "none"; });
+addEventListener("resize", () => data && draw());
+
+// --- controls -----------------------------------------------------------------------------------------------------
+ranges.addEventListener("click", e => { const k = e.target.dataset && e.target.dataset.r; if (k) select(k); });
+apply.onclick = () => {
+  const f = Math.floor(new Date(from.value).getTime() / 1000), t = Math.floor(new Date(to.value).getTime() / 1000);
+  if (!(f < t)) { res.textContent = "Pick a From before the To."; return; }
+  range = { kind: "custom", from: f, to: t }; saveUrl(); loadRange();
+};
+(() => {      // the range in the address (a shared link opens the same view)
+  const p = new URLSearchParams(location.search);
+  if (p.get("from")) { const f = +p.get("from"), t = +(p.get("to") || Date.now() / 1000);
+    if (f < t) { range = { kind: "custom", from: f, to: t }; for (const b of ranges.children) b.classList.toggle("on", b.dataset.r === "custom");
+      custom.classList.add("show"); from.value = toLocalInput(f); to.value = toLocalInput(t); loadRange(); return; } }
+  const r = p.get("range") === "10y" ? "all" : p.get("range");      // (old links: "10 years" became "All time")
+  select(PRESETS[r] ? r : "24h");
+})();
+adv.href = base + "players/advanced";
+perfLink.href = base + "performance";
+live(); setInterval(live, 10000);
+</script>
+</body>
+</html>

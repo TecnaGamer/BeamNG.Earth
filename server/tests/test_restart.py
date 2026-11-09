@@ -83,7 +83,9 @@ class _Conn:
 
 class SessionAdoptionTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # (Windows: a file the server's trash thread is deleting stays "delete pending" for a moment, and the temporary
+        # folder's own delete then got "Access is denied": the release workflow's Windows tests failed now and then)
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.root = self.tmp.name
         self.stale = make_session(self.root, "20260101-000000-aaaa", earthd.SESSION_STALE_S + 600)
@@ -96,6 +98,8 @@ class SessionAdoptionTest(unittest.TestCase):
         self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
         self.addCleanup(self.s.tile_pool.shutdown)
         self.addCleanup(self.s.hm_pool.shutdown)
+        # (its trash thread deletes the stale session moved there: finished before the temporary folder goes)
+        self.addCleanup(lambda: self.s.trash_thread is not None and self.s.trash_thread.join(30))
 
     def conn(self):
         c = _Conn()

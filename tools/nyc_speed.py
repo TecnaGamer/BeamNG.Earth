@@ -85,20 +85,22 @@ if not (s and v and s.anchor) then return 'none' end
 local p, u = v:getPosition(), v:getVelocity()
 local b, tp = s.block or {}, s.terrainPending
 local sp = math.sqrt(u.x ^ 2 + u.y ^ 2)
-local arr, road = nil, nil
+local arr, road, walk, tree = nil, nil, nil, nil
 if sp > 5 then
   local ok, list = pcall(require('beamngEarth/roads').ahead, p.x, p.y, u.x / sp, u.y / sp, AHEAD_PROBE_M)
   if ok and list then
     for _, e in ipairs(list) do
       if not arr and not e.arrived then arr = e.d end
       if not road and not (e.arrived and e.road) then road = e.d end
+      if not walk and (not e.arrived or e.walkWait) then walk = e.d end
+      if not tree and e.trees == false then tree = e.d end
     end
   end
 end
 return jsonEncode({ t = os.clock(), x = p.x, y = p.y, mph = sp * 2.237, guard = s.guard and s.guard.mode,
   holds = s.guard and s.guard.holds, bx = b.cx, by = b.cy, px = tp and tp.cx, py = tp and tp.cy,
   pready = tp and tp.ready and true or false, pask = tp and tp.sentAt and (s.clock - tp.sentAt) or nil,
-  arrived = arr, roadLead = road })
+  arrived = arr, roadLead = road, walkLead = walk, treeLead = tree })
 """
 # how far ahead the road tiles are looked for (BNGE_AHEAD_PROBE_M; road lead past it reads as no gap)
 AHEAD_PROBE_M = int(os.environ.get("BNGE_AHEAD_PROBE_M", "1500"))
@@ -110,19 +112,33 @@ def lua(code, timeout=30):
 
 
 def gps_path(start, end):
-    """The GPS's road route start -> end as [(lat, lon)], corners rounded (the car must be at start)."""
-    lua(f"require('beamngEarth/gps').setDestination({end[0]}, {end[1]}, 'nyc_speed') return 1")
-    t0 = time.monotonic()
-    while time.monotonic() - t0 < ROUTE_WAIT_S:
-        time.sleep(2)
-        r = lua("local r = require('beamngEarth/gps').route() return r and jsonEncode(r.points) or ''")
-        if r:
-            pts = [(float(p[0]), float(p[1])) for p in json.loads(r)]
-            if len(pts) >= 2:
-                break
-    else:
-        raise SystemExit("no GPS route")
-    lua("require('beamngEarth/gps').clear() return 1")
+    """The GPS's road route start -> end as [(lat, lon)], corners rounded (the car must be at start).
+    BNGE_ROUTE_CACHE=<folder>: the route's points kept there and used again (A/B runs drive the same route, and an
+    older build whose GPS asked a public router that answered RateLimited still drives: 2026-11-08 bisect)."""
+    cache = os.environ.get("BNGE_ROUTE_CACHE")
+    cfile = (os.path.join(cache, "route_%.4f_%.4f_%.4f_%.4f.json" % (start[0], start[1], end[0], end[1]))
+             if cache else None)
+    pts = None
+    if cfile and os.path.exists(cfile):
+        with open(cfile) as f:
+            pts = [tuple(p) for p in json.load(f)]
+    if pts is None:
+        lua(f"require('beamngEarth/gps').setDestination({end[0]}, {end[1]}, 'nyc_speed') return 1")
+        t0 = time.monotonic()
+        while time.monotonic() - t0 < ROUTE_WAIT_S:
+            time.sleep(2)
+            r = lua("local r = require('beamngEarth/gps').route() return r and jsonEncode(r.points) or ''")
+            if r:
+                pts = [(float(p[0]), float(p[1])) for p in json.loads(r)]
+                if len(pts) >= 2:
+                    break
+        else:
+            raise SystemExit("no GPS route")
+        lua("require('beamngEarth/gps').clear() return 1")
+        if cfile:
+            os.makedirs(cache, exist_ok=True)
+            with open(cfile, "w") as f:
+                json.dump(pts, f)
     lat0 = pts[0][0]
     kx = 111320.0 * math.cos(math.radians(lat0))
     xy = [((lo - pts[0][1]) * kx, (la - lat0) * 110540.0) for la, lo in pts]
@@ -272,6 +288,8 @@ def summarize(rows, lines, drive):
         return round(a[min(len(a) - 1, int(p * len(a)))], 2) if a else None
     # (every tile within the probe in: its whole length, not left out, which read the lead low)
     lead = [r["arrived"] if r.get("arrived") is not None else AHEAD_PROBE_M for r in moving]
+    wlead = [r["walkLead"] if r.get("walkLead") is not None else AHEAD_PROBE_M for r in moving]
+    tlead = [r["treeLead"] if r.get("treeLead") is not None else AHEAD_PROBE_M for r in moving]
     geo = {}                    # slow road / trees geotiles (earthd ROAD_GEO_SLOW_S): build time and queue
     for l in lines:
         m = re.search(r"(road|trees) geotile \S+ in ([\d.]+) s \(queue ([\d.]+)[);]", l)
@@ -287,6 +305,9 @@ def summarize(rows, lines, drive):
         "stages_p90_s": {k: pct(v, 0.9) for k, v in stages.items()},
         "catchup_boosts": boosts,
         "road_lead_m": {"p10": pct(lead, 0.1), "median": pct(lead, 0.5), "zero_polls": sum(1 for x in lead if x == 0)},
+        # (how far ahead the sidewalks / kerbs and the trees are placed: the first spot ahead still waiting for them)
+        "walk_lead_m": {"p10": pct(wlead, 0.1), "median": pct(wlead, 0.5)},
+        "tree_lead_m": {"p10": pct(tlead, 0.1), "median": pct(tlead, 0.5)},
         "slow_geotiles": {k: {"n": len(v), "s_median": pct([a for a, _ in v], 0.5), "s_max": max(a for a, _ in v),
                               "queue_median": pct([q for _, q in v], 0.5), "queue_max": max(q for _, q in v)}
                           for k, v in geo.items()},
@@ -388,7 +409,8 @@ def main():
         b = s["blocks"]
         print(f"{label}: guard {s['guard_share'] * 100:.0f}% of moving polls ({s['guard_polls']}), holds {s['holds']}; "
               f"blocks {b['n']} (provisional {b['provisional']}) ready median {b['ready_ms_median']} ms p90 "
-              f"{b['ready_ms_p90']} max {b['ready_ms_max']}; road lead p10 {s['road_lead_m']['p10']} m; "
+              f"{b['ready_ms_p90']} max {b['ready_ms_max']}; road lead p10 {s['road_lead_m']['p10']} m, walk {s['walk_lead_m']['p10']}, "
+              f"trees {s['tree_lead_m']['p10']}; "
               f"fps {(s.get('drive') or {}).get('fpsMean')}, drove {(s.get('drive') or {}).get('km')} km "
               f"({(s.get('drive') or {}).get('reason')})", flush=True)
     with open(os.path.join(a.out, "runs.json"), "w") as f:

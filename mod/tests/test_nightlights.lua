@@ -2,7 +2,7 @@
 -- the nearest within reach, moved by a rebase, gone with their tile; day / night from the stock environment.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
-dofile(dir .. '/stubs.lua')
+local S = dofile(dir .. '/stubs.lua')
 os.clockhp = function() return 0 end
 
 local nl = require('beamngEarth/nightlights')
@@ -27,4 +27,26 @@ core_environment = { getLightState = function() return { isNight = true } end }
 T.check(nl.isNight() == true, 'night from the stock environment')
 core_environment = nil
 T.check(nl.isNight() == nil, 'no environment (the menu): unknown')
+-- Mixed profiles survive a shared pool slot being reused.
+nl.reset()
+local clock = 100
+os.clockhp = function() return clock end
+core_camera = { getPosition = function() return vec3(0,0,0) end, getForward = function() return vec3(1,0,0) end }
+core_environment = { getLightState = function() return { isNight = true } end }
+nl.LIGHTS_MAX = 1
+nl.onRows('warm', { {0, 4, 0, 4.67, 0} }, {'fr_lantern_light'})
+T.check(nl.nearest(0,0,30,1)[1][5] == true, 'warm lantern profile retained')
+nl.update()
+local light
+for _, o in pairs(S.objects) do if o.class == 'SpotLight' then light = o end end
+T.check(light and light.fields.color == nl.LANTERN.color and light.fields.range == '20', 'lantern yellow and short range')
+local id = light and light.id
+nl.dropKey('warm')
+nl.onRows('stock', { {0, 5, 0, 8, 0} }, {'lamplens'})
+clock = clock + 1; nl.update()
+T.check(light and light.id == id and light.fields.color == nl.LIGHT.color and light.fields.range == '36', 'same pool slot restores stock profile')
+core_environment.getLightState = function() return { isNight = false } end
+clock = clock + 2; nl.update()
+T.check(light and light.fields.isEnabled == 'false' and nl.status().errors == 0, 'day disables without errors')
+nl.reset()
 T.done('test_nightlights')

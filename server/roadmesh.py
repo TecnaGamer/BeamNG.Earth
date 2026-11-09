@@ -201,7 +201,7 @@ def ribbons(chunks, keep_none=False):
         pts.append(p[:, :3])
         half.append(float(c["w"]) / 2)
     if batch:
-        fast.require(90, "ribbon_edges")
+        fast.require(155, "ribbon_edges")
         off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
         L, R, S, Z, o = fast._ef.ribbon_edges(np.ascontiguousarray(np.concatenate(pts)), off,
                                              np.asarray(half, np.float64), float(DRAPE_STEP))
@@ -1019,11 +1019,14 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
             # (a raceway's surface on its own graded plane: no step cap. Its banking (Daytona's 31 deg, 0.85 m along a
             # square's diagonal) passes FOLLOW_STEP_M in every square, and the cap sank the asphalt to each square's
             # lowest corner + FOLLOW_MAX_UP: a sawtooth of steps across the banking with the terrain showing through)
+            # Independent 2 cm approximations can bury paint lifted only 1 cm.
+            # A shared 2 mm tolerance keeps the combined error below that gap.
+            tol = .002 if "line_bne_fr_white" in mats else None
             dri = np.flatnonzero(dr)
             rw = RW[dri]
             if rw.any():
-                pa = follow_ground(P[:, :2], UV, T[dri[~rw]], grid, i0, j0)
-                pb = follow_ground(P[:, :2], UV, T[dri[rw]], grid, i0, j0, step_m=float("inf"))
+                pa = follow_ground(P[:, :2], UV, T[dri[~rw]], grid, i0, j0, tol=tol)
+                pb = follow_ground(P[:, :2], UV, T[dri[rw]], grid, i0, j0, step_m=float("inf"), tol=tol)
                 fP = np.concatenate([pa[0], pb[0]])
                 fUV = np.concatenate([pa[1], pb[1]])
                 fT = np.concatenate([pa[2], pb[2] + len(pa[0])]).astype(np.int64)
@@ -1031,7 +1034,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 order = np.argsort(src_, kind="stable")     # (in the triangles' order, as one call made them)
                 fT, src = fT[order].reshape(-1, 3), src_[order]
             else:
-                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0)
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0, tol=tol)
             if len(fT):
                 lifts = TL[dr][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)

@@ -111,6 +111,23 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(got[0][0], ([], [], [], []))
         self.assertEqual(other.stats["waited"], 1)
 
+    def test_long_wait_logged_with_its_holder(self):
+        """A wait for another process's plans past LONG_WAIT_S is logged with the cell and that process (a road tile
+        "may be stuck": whose plans it waited for)."""
+        c = plancache.PlanCache(self.dir, "s")
+        c.claim(KEY)
+        other = plancache.PlanCache(self.dir, "s")
+        got = []
+        with mock.patch.object(plancache, "LONG_WAIT_S", 0.2), self.assertLogs("earthd.plancache", "WARNING") as cm:
+            t = threading.Thread(target=lambda: got.append(other.claim(KEY)))
+            t.start()
+            time.sleep(0.4)
+            c.store(KEY, [], [], [], [])
+            c.release(KEY)
+            t.join(5)
+        self.assertIn(str(os.getpid()), cm.output[0])
+        self.assertIn("they came", cm.output[0])
+
     def test_does_not_wait_behind_a_less_favoured_planner(self):
         c = plancache.PlanCache(self.dir, "s")
         with mock.patch.object(xproc, "PRIORITY", 5):
