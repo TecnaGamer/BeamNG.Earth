@@ -1,0 +1,11 @@
+# docker/Dockerfile needs only what tools/build_host.py packages
+*
+!VERSION
+!LICENSE
+!CREDITS.md
+!tools/package.py
+!tools/build_host.py
+!mod/beamng_earth
+!beammp
+!docker/entrypoint.sh
+**/__pycache__
