@@ -194,4 +194,48 @@ do
   T.check(not G.retryRoute(false, 50, 3) and G.retryRoute(false, 60, 3), 'three in a row: after 60 s')
   T.check(G.retryRoute(false, 240, 20), 'never longer than 4 min')
 end
+-- GitHub #935 / #886: a route through waypoints, planned in one request, each passed in order
+do
+  local stops, why = G.routeStops({ { lat = 1, lon = 2, name = 'A' }, { 3, 4 }, { lat = 5, lon = 6, name = 'B' } })
+  T.check(stops and #stops == 3 and stops[1].name == 'A' and stops[2].lat == 3 and stops[3].name == 'B',
+    'stops from tables and pairs, in order')
+  T.check(G.routeStops({}) == nil and G.routeStops(nil) == nil, 'none: refused')
+  stops, why = G.routeStops({ { lat = 1, lon = 2 }, { lat = 99, lon = 0 } })
+  T.check(stops == nil and why == 'bad coordinates', 'a bad stop refuses the list')
+  local many = {}
+  for k = 1, G.MAX_VIA + 2 do many[k] = { lat = k, lon = k } end
+  T.check(G.routeStops(many) == nil, 'more than MAX_VIA waypoints: refused')
+
+  local sent = {}
+  local savedCore, savedGet, savedApi = rawget(_G, 'beamngEarth_core'), rawget(_G, 'getPlayerVehicle'), rawget(_G, 'beamngEarth_api')
+  local events = {}
+  beamngEarth_api = { _event = function(e, info) events[#events + 1] = { e, info } end }
+  beamngEarth_core = { requestRoute = function(id, la0, lo0, la1, lo1, b, via) sent[#sent + 1] = { la1 = la1, via = via }
+    return true end, takeRoute = function() return nil end }
+  getPlayerVehicle = function() return nil end
+  G.clear()
+  T.check(G.setRoute({ { lat = 1, lon = 0, name = 'Charger' }, { lat = 2, lon = 0, name = 'Stop 2' },
+    { lat = 0, lon = 0.0001, name = 'Home' } }), 'route set')
+  T.check(G.status().name == 'Home' and #G.status().waypoints == 2, 'the last is the destination, two waypoints')
+  -- (a flat test anchor: a degree is 1 km)
+  local anchor = { geodeticToEnu = function(_, lat, lon) return lon * 1000, lat * 1000, 0 end }
+  G.update(anchor, { x = 0, y = 0, lat = 0, lon = 0 })
+  T.check(#sent == 1 and sent[1].la1 == 0 and #sent[1].via == 2 and sent[1].via[1][1] == 1 and sent[1].via[2][1] == 2,
+    'one request, the waypoints in order')
+  T.check(G.status() ~= nil, 'at the start, the destination 0 m off: not arrived while waypoints are ahead')
+  G.reset()
+  G.update(anchor, { x = 0, y = 1012, lat = 1.012, lon = 0 })
+  T.check(#G.status().waypoints == 1 and G.status().waypoints[1].name == 'Stop 2', 'the first waypoint passed')
+  T.check(events[1] and events[1][1] == 'waypointReached' and events[1][2].name == 'Charger' and events[1][2].left == 1,
+    'the waypointReached event')
+  G.reset()
+  G.update(anchor, { x = 0, y = 2000, lat = 2, lon = 0 })
+  T.check(G.status().waypoints == nil, 'the second passed: none left')
+  G.reset()
+  G.update(anchor, { x = 0, y = 0, lat = 0, lon = 0 })
+  T.check(G.status() == nil and events[#events][1] == 'routeArrived', 'back home: arrived')
+  T.check(G.setDestination(1, 1, 'plain') and G.status().waypoints == nil, 'a plain destination drops the waypoints')
+  G.clear()
+  beamngEarth_core, getPlayerVehicle, beamngEarth_api = savedCore, savedGet, savedApi
+end
 T.done('test_gps')

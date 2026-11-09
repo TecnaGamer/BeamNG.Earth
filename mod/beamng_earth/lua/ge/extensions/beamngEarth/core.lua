@@ -3143,10 +3143,10 @@ function M.requestGeocode(id, q, lat, lon, full)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload') })
   return true
 end
 function M.takeRoute(id)
