@@ -36,6 +36,7 @@ from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
+import bumps
 import mapcells
 import railways as railwaysmod
 import roads as roadsmod
@@ -816,9 +817,12 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         if ab[1]:
             bank_after = bank_after[:0]
         bank_xy = np.concatenate([bank_before, xy, bank_after])
-        out.append(_plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
-                         bank_ext=(len(bank_before), len(bank_after)),
-                         banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse))
+        p = _plan(xy, zx, spec, ab, (nb, na), step, bank_xy=bank_xy,
+                  bank_ext=(len(bank_before), len(bank_after)),
+                  banked=not (RING_LEVEL_ON and rings is not None and rings[j]), coarse=coarse)
+        # (road roughness, PR #639 by subformatdnb: off unless BNE_BUMPS > 0; cached plans keep whatever they were
+        # planned with, so a change takes effect on places planned after it)
+        out.append(bumps.apply(frame, p, spec, ab) if bumps.SCALE > 0 else p)
     if SHARP_ON and cuts:           # (cuts False: the profile alone, Grader._stronger_z)
         _add_cuts(frame, [p if p is not None and sp.kind in roadsmod.BUILT else None
                           for p, (_ll, sp) in zip(out, parts)], elev)
