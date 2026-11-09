@@ -128,13 +128,15 @@ def _rail(mesh, line, z, w, ends=(True, True)):
                 _post(mesh, p, float(np.interp(at, s, z)), float(np.interp(at, s, z)) + HAND_H_M)
 
 
-def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False):
-    """A flight from the deck's end down to the ground: boxes of RISE_M / RUN_M from the end `top_xy` along the polyline
-    `dirs` (points, the first at the deck), the last tread at the ground. Returns the flight's path or None."""
+def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False, z_end=None, fill_to=None):
+    """A flight of RISE_M / RUN_M steps along the polyline `dirs` (points; the first at height z_top, the deck's end or a
+    tunnel's), the last tread at z_end (default: the ground there). Down from a deck or up from a tunnel's floor alike.
+    fill_to: the boxes go down to it (a pit's stair is solid to the floor), else to 0.3 m under the lower of the tread and
+    the ground. Returns the flight's path or None."""
     pts = np.asarray(dirs, float)
-    g_end = float(bm.ground(frame, elev, pts[-1:])[0])
+    g_end = float(bm.ground(frame, elev, pts[-1:])[0]) if z_end is None else float(z_end)
     for _ in range(3):
-        H = z_top - g_end
+        H = abs(z_top - g_end)
         if H < STAIR_MIN_H_M:
             return None
         n = min(STAIR_MAX, int(math.ceil(H / RISE_M)))
@@ -145,23 +147,23 @@ def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False):
             dl = float(np.hypot(*d))
             if dl > 1e-6:
                 pts = np.vstack((pts, pts[-1] + d / dl * (need - s[-1])))
+                if z_end is not None:
+                    break
                 g_new = float(bm.ground(frame, elev, pts[-1:])[0])
                 if abs(g_new - g_end) < 0.1:
                     break
                 g_end = g_new
                 continue
         break
-    n = min(STAIR_MAX, int(math.ceil((z_top - g_end) / RISE_M)))
+    rise = g_end - z_top
+    n = min(STAIR_MAX, int(math.ceil(abs(rise) / RISE_M)))
     s = _arc(pts)
     tread = s[-1] / n
     line = resample(pts, tread / 2.0)
     sl = _arc(line)
-    t, nrm = _normals(line)
     for i in range(n):
         a, b = i * tread, (i + 1) * tread
-        mid = (a + b) / 2.0
-        za = z_top - (i + 1) * (z_top - g_end) / n                   # the tread's height: the step i down from the deck
-        ia = np.searchsorted(sl, a)
+        za = z_top + (i + 1) * rise / n                              # the tread's height: the step i away from the start
         pa = np.array([np.interp(a, sl, line[:, 0]), np.interp(a, sl, line[:, 1])])
         pb = np.array([np.interp(b, sl, line[:, 0]), np.interp(b, sl, line[:, 1])])
         pm = (pa + pb) / 2.0
@@ -173,7 +175,7 @@ def _stair(mesh, frame, elev, top_xy, dirs, z_top, w, collide=False):
         nn = np.array([-u[1], u[0]])
         rect = np.array([pa - nn * w / 2, pb - nn * w / 2, pb + nn * w / 2, pa + nn * w / 2])
         zg = float(bm.ground(frame, elev, pm[None])[0])
-        z0 = min(zg, za) - 0.3
+        z0 = (min(zg, za) - 0.3) if fill_to is None else min(fill_to, za - 0.3)
         bm.walls(mesh, CONCRETE[0], CONCRETE[1], rect, z0, za)
         bm.top_face(mesh, CONCRETE[0], CONCRETE[1], rect, za)
     return pts

@@ -2202,6 +2202,10 @@ def _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g=None):
     except Exception:                   # no holes rather than no block
         log.exception("tunnel holes of block (%s, %s)", cx, cy)
         return idx
+    import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
+    under = railunderpass.holes(_s.md, frame, keep, cx, cy, heightmap.SQUARE, elev)
+    if under is not None:
+        holes = under if holes is None else (holes | under)
     if holes is None or not holes.any():
         return idx
     idx = np.zeros(holes.shape, np.uint8) if idx is None else idx

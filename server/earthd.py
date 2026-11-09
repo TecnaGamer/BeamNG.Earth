@@ -3566,6 +3566,10 @@ class Server:
         except Exception:
             log.exception("tunnel holes of block (%s, %s)", cx, cy)
             return idx
+        import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
+        under = railunderpass.holes(self.mapdata, anchor.frame, keep, cx, cy, heightmap.SQUARE, elev)
+        if under is not None:
+            holes = under if holes is None else (holes | under)
         if holes is None or not holes.any():
             return idx
         idx = np.zeros(holes.shape, np.uint8) if idx is None else idx

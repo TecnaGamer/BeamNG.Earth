@@ -271,3 +271,132 @@ class FootbridgeTest(unittest.TestCase):
         st.country = "CZ"
         m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
         self.assertLess(len(m[0]), 60000)
+
+
+class UnderpassTest(unittest.TestCase):
+    def under(self, name, country="UA"):
+        st = stations_of(name)[0]
+        st.country = country
+        links = [l for l in st.links if l.kind == "under"]
+        self.assertTrue(links, name)
+        return st, links
+
+    def test_levels_floor_under_the_lowest_bed(self):
+        import railunderpass as ru
+        for name, c in (("vinnytsia", "UA"), ("hk_hln", "CZ"), ("pardubice", "CZ"), ("kyiv_pas", "UA")):
+            st, links = self.under(name, c)
+            zf, lid = ru.levels(None, FLAT, st, links[0])
+            self.assertAlmostEqual(lid, 100.0 - ru.SINK_M, delta=1e-6)
+            self.assertAlmostEqual(lid - zf, ru.CEIL_D + ru.CLEAR_M, delta=1e-6)
+
+    def test_passage_floor_walls_ceiling_lights_and_pits(self):
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        m = bm._Mesh()
+        ru.add(m, None, FLAT, st, links[0])
+        got = m.result(BIG, (0.0, 0.0, 0.0))
+        V = got[0]
+        zf, lid = ru.levels(None, FLAT, st, links[0])
+        self.assertAlmostEqual(V[:, 2].min(), zf - 0.3, delta=0.35)                  # (the pits' stairs are solid to the floor)
+        self.assertGreater(V[:, 2].max(), 100.0 + 0.9)                               # (the handrail over the ground)
+        self.assertIn(ru.LIGHT[0], got[3])
+        zs = np.unique(np.round(V[:, 2], 2))
+        self.assertIn(round(zf, 2), zs)
+        self.assertIn(round(lid, 2), zs)
+
+    def test_stairs_rise_from_the_floor_to_the_ground(self):
+        import railbridges as rb
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        zf, _lid = ru.levels(None, FLAT, st, links[0])
+        m = bm._Mesh()
+        fl = next(iter(ru.flights(links[0], rb.resample(links[0].xy)).values()))
+        ru._pit(m, None, FLAT, fl, zf, ru.width_of(links[0]), False)
+        V = m.result(BIG, (0.0, 0.0, 0.0))[0]
+        tops = np.unique(np.round(V[:, 2], 3))
+        steps = tops[(tops > zf + 0.05) & (tops < 100.0 - 0.01)]
+        self.assertTrue(len(steps) > 5)
+        self.assertTrue(np.all(np.diff(steps) < rb.RISE_M + 0.03))
+        self.assertTrue(np.any(np.abs(V[:, 2] - (100.0 + ru.RIM_LIFT_M)) < 1e-3))     # (the paved rim at the ground)
+
+    def test_faces_look_the_right_way(self):
+        """The rim faces up, the pit's walls and the passage's walls face in, the floor up and the ceiling down."""
+        import railbridges as rb
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        ln = links[0]
+        zf, lid = ru.levels(None, FLAT, st, ln)
+        m = bm._Mesh()
+        ru.add(m, None, FLAT, st, ln, collide=True)
+        V, T, UV, mats, idx = m.result(BIG, (0.0, 0.0, 0.0))
+        tri = V[T]
+        nrm = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+        nrm /= np.maximum(np.linalg.norm(nrm, axis=1), 1e-12)[:, None]
+        zc = tri[:, :, 2].mean(1)
+        flat = np.abs(nrm[:, 2]) > 0.99
+        floor = flat & (np.abs(zc - zf) < 1e-3)
+        ceiling = flat & (np.abs(zc - (lid - ru.CEIL_D)) < 1e-3)
+        rim = flat & (np.abs(zc - (100.0 + ru.RIM_LIFT_M)) < 1e-3)
+        self.assertTrue(floor.any() and ceiling.any() and rim.any())
+        self.assertTrue((nrm[floor, 2] > 0).all())
+        self.assertTrue((nrm[ceiling, 2] < 0).all())
+        self.assertTrue((nrm[rim, 2] > 0).all())
+        # the passage's walls (tall vertical faces between the floor and the ceiling) face the path's axis
+        path = rb.resample(ln.xy)
+        wall = (~flat) & (np.abs(tri[:, :, 2].min(1) - zf) < 0.01) & (np.abs(tri[:, :, 2].max(1) - (lid - ru.CEIL_D)) < 0.01)             & (np.abs(nrm[:, 2]) < 0.01)                   # (exactly floor to ceiling: the passage's, not a stair's side)
+        self.assertTrue(wall.any())
+        import busstations as bs
+        axes = [path] + [rb.resample(fl, 1.0) for fl in ru.flights(ln, path).values()]
+        for i in np.flatnonzero(wall)[::7]:
+            c = tri[i].mean(0)[:2]
+            d0 = min(bs.dist_to_path(a, c) for a in axes)
+            d1 = min(bs.dist_to_path(a, c + nrm[i, :2] * 0.3) for a in axes)
+            self.assertLess(d1, d0 + 1e-6)                # (a step along the normal gets nearer to an axis: the faces look in)
+
+    def test_holes_cut_the_footprint_only(self):
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        parts = ru.hole_parts(None, FLAT, st, links[0])
+        self.assertGreaterEqual(len(parts), 2)
+        n, sq, cx, cy = 600, 1.0, 0.0, 0.0
+        u = np.full((n, n), 100.0)                       # (flat ground 3.2 m over the floor: between the floor and the vault)
+        mask = ru.hole_mask(parts, u, cx, cy, sq)
+        self.assertTrue(mask.any())
+        x0 = cx - n * sq / 2
+        iy, ix = np.nonzero(mask)
+        pts = np.c_[x0 + ix * sq, x0 + iy * sq]
+        import busstations as bs
+        for p in pts[::25]:
+            d = min(bs.dist_to_path(xy, p) for xy, _z, _hw in parts)
+            self.assertLess(d, parts[0][2] + 3.0)
+        # the passage's middle is a hole
+        path = parts[0][0]
+        mid = path[len(path) // 2]
+        k = np.argmin(np.hypot(pts[:, 0] - mid[0], pts[:, 1] - mid[1]))
+        self.assertLess(float(np.hypot(*(pts[k] - mid))), 1.5)
+
+    def test_no_hole_where_the_ground_is_far_under_the_floor(self):
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        parts = ru.hole_parts(None, FLAT, st, links[0])
+        u = np.full((600, 600), 80.0)                    # (a valley under the passage: nothing to cut)
+        self.assertFalse(ru.hole_mask(parts, u, 0.0, 0.0, 1.0).any())
+
+    def test_no_underpass_no_holes(self):
+        import railunderpass as ru
+        self.assertIsNone(ru.holes(None, None, {}, 0, 0, 1.0, FLAT))
+        self.assertEqual(ru.hole_parts(None, FLAT, stations_of("kalynivka")[0], rs.Link("under", np.zeros((1, 2)), [], -1.0, [])), [])
+
+    def test_collider_has_no_lights_and_no_rails(self):
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        m = bm._Mesh()
+        ru.add(m, None, FLAT, st, links[0], collide=True)
+        got = m.result(BIG, (0.0, 0.0, 0.0))
+        self.assertNotIn(ru.LIGHT[0], got[3])
+        self.assertNotIn(rb_steel(), got[3])
+
+
+def rb_steel():
+    import railbridges as rb
+    return rb.STEEL[0]

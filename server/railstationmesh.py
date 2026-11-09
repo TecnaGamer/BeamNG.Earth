@@ -16,6 +16,7 @@ import numpy as np
 import busstationmesh as bm
 import busstations as bs
 import railbridges
+import railunderpass
 import railstations as rs
 
 RAIL_TOP_M = 0.58           # the rail head over the bed (railways.RAIL_TOP_M: ballast 0.3 - sleeper sink 0.08 + sleeper 0.2 + rail 0.16)
@@ -275,6 +276,8 @@ def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
         for ln in st.links:
             if ln.kind == "over" and _link_near(ln, box):
                 railbridges.add(mesh, frame, elev, st, ln, collide=collide)
+            elif ln.kind == "under" and _link_near(ln, box):
+                railunderpass.add(mesh, frame, elev, st, ln, collide=collide)
 
 
 def mesh(frame, box, stations, elev, origin, overlap=False):
