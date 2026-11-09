@@ -589,4 +589,13 @@ do
   T.check(W.setPreset(nil) == false and W.preset() == nil, 'cleared')
 end
 
+-- high above the ground (2026-11-06): the fog fades out with the camera's height, the clouds go far above them
+do
+  local W = require('beamngEarth/weather')
+  T.check(W.fogAltitudeShare(0) == 1 and W.fogAltitudeShare(W.FOG_FADE_FROM_M) == 1, 'fog: all of it low down')
+  T.check(math.abs(W.fogAltitudeShare((W.FOG_FADE_FROM_M + W.FOG_FADE_TO_M) / 2) - 0.5) < 1e-9, 'fog: half way up, half')
+  T.check(W.fogAltitudeShare(100000) == 0 and W.fogAltitudeShare(nil) == 1, 'fog: none from 100 km; no camera, all')
+  T.check(not W.cloudsHiddenAt(5000, false) and W.cloudsHiddenAt(15000, false), 'clouds: hidden far above them')
+  T.check(W.cloudsHiddenAt(11000, true) and not W.cloudsHiddenAt(9000, true), 'clouds: shown again lower (hysteresis)')
+end
 T.done('test_weather')

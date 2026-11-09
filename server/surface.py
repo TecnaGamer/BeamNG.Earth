@@ -29,6 +29,7 @@ from runtimeprofiler import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw
 
+import beaches
 import fast
 import mapgeom
 import heightmap
@@ -129,6 +130,9 @@ def classify(classes, u, square, lat=None, lon=None):
             sub = idx[urban]
             sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
             idx[urban] = sub
+    sand = beaches.sand_grid(classes, square)      # a beach's grassland pixels: bare sand, no grass (GitHub #578)
+    if sand.any():
+        idx = np.where(sand, np.uint8(LOOSE), idx)
     u = np.asarray(u, np.float64)
     if min(u.shape) < 2:            # no slope from a single row / column
         return idx.astype(np.uint8)
@@ -1578,6 +1582,27 @@ class Surface:
                 log.debug("surface: roads of %s: %s: %s", key, type(e).__name__, e)
                 complete = False
         return out, complete
+
+    def road_routes(self, lat, lon):
+        """{segment id: routes_txt} of the road_routes layers (Overture's route numbers, overture "road_routes":
+        "network|ref|from|to;...") of the cached cells around the point, for the status bar's road (an Interstate has
+        a number, often no name). Never waits: missing cells are fetched in the background."""
+        out = {}
+        for key in mapcells.cells_for_points(np.asarray([lat], np.float64), np.asarray([lon], np.float64)):
+            if not self.md.has(key, "road_routes"):
+                self._queue(key, ("road_routes",))
+                continue
+            try:
+                layer = self.md.cell(key, layers=("road_routes",), kind="background").layers.get("road_routes")
+            except Exception as e:      # an unreadable cache file: no numbers this time
+                log.debug("surface: road routes of %s: %s: %s", key, type(e).__name__, e)
+                continue
+            if layer is None or not len(layer) or layer.attrs.get("routes_txt") is None:
+                continue
+            txt = layer.attrs["routes_txt"]
+            for i, fid in enumerate(layer.ids):
+                out.setdefault(str(fid), str(txt[i]))
+        return out
 
     def add_fuel_pads(self, items):
         """Keep gas station forecourt pads [(station id, [(lat (k,), lon (k,))])]: the road tiles' own

@@ -70,6 +70,33 @@ def total_gb():
     return None
 
 
+def free_gb():
+    """The RAM free for new work now, in GB (Linux MemAvailable, Windows ullAvailPhys; None if unknown)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024 / 1e9
+    except (OSError, ValueError, IndexError):
+        pass
+    try:                                    # Windows
+        import ctypes
+
+        class MS(ctypes.Structure):
+            _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                        ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                        ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                        ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                        ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+        m = MS()
+        m.dwLength = ctypes.sizeof(MS)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(m)):
+            return m.ullAvailPhys / 1e9
+    except Exception:
+        pass
+    return None
+
+
 def small(gb=None):
     """Is this a small machine (the small profile)? BNGE_BUDGET=small / desktop overrides."""
     force = os.environ.get("BNGE_BUDGET", "").lower()

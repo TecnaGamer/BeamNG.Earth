@@ -754,6 +754,8 @@ function M.update(anchor, player)
   info = { dist = dist, bearing = M.bearing(player.x, player.y, tx, ty), remaining = dist }
   local function arrive()
     if ui_message then pcall(ui_message, 'Arrived: ' .. (dest.name or 'destination'), 5, 'beamngEarthGps') end
+    local api = rawget(_G, 'beamngEarth_api')      -- (the modding API's event: other mods' jobs end here)
+    if api and api._event then pcall(api._event, 'routeArrived', { lat = dest.lat, lon = dest.lon, name = dest.name }) end
     M.clear()
   end
   if not route and dist < M.ARRIVE_M then arrive() return end

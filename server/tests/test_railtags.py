@@ -1,4 +1,5 @@
 """railtags.py: the weekly rail shards joined to Overture's rail segments by OSM way id."""
+import glob
 import gzip
 import json
 import os
@@ -51,6 +52,15 @@ class RailTagsTest(unittest.TestCase):
             self.assertEqual(len(f._rail_nodes), 1, "the cell's nodes only")
             n = len(fetch.asked)
             railtags.RailTags(d, fetch).join(f, key)        # (from disk: the manifest's day and the shard)
+            self.assertEqual(len(fetch.asked), n)
+            # (the shard's decoded form beside it, read by the next process instead of the shard: the same tags)
+            side = glob.glob(os.path.join(d, "pagesdata", "rail", "*", f"{sx}_{sy}{railtags.IDX_SUFFIX}"))
+            self.assertEqual(len(side), 1)
+            os.remove(side[0][:-len(railtags.IDX_SUFFIX)] + ".json.gz")
+            f.attrs.pop("osm_railway")
+            railtags.RailTags(d, fetch).join(f, key)
+            self.assertEqual(list(f.attrs["osm_railway"]), ["proposed", "rail", None])
+            self.assertEqual(len(f._rail_nodes), 1)
             self.assertEqual(len(fetch.asked), n)
 
     def test_no_shard_no_tags(self):
@@ -140,6 +150,106 @@ class LaneTagsTest(unittest.TestCase):
         self.assertEqual(got[1][3]["lanes:forward"], "2")
         self.assertIsNone(got[2][3], "a way without lane tags, not its neighbour's")
         self.assertEqual(roads.lane_tag_parts(f, 1), [(0.0, 1.0, "33", None)], "one way: the whole segment")
+
+    def test_the_same_as_before_on_odd_records(self):
+        """The native way id search (fast.way_tag_rows / lane_parts) against the join as it was (lane_join_ref), on
+        records the regex reads its own way: Unicode digits after ASCII ones, too many digits for int64, no "w", a
+        bare "w", leading zeros, a feature's ways out of order in the rule table, rows of rail and of no feature,
+        object columns, and a shard of plain-dict ways (ids that are not numbers) and none at all."""
+        ar = chr(0x663)                 # (ARABIC-INDIC DIGIT THREE: a \\d of the regex)
+        ok = ["w21@3", "w22@1", "w0021@2", "w21" + ar + "@1", "x21@1", "w", "", "w" + ar + "21", "w99@1", "w5@1", "w21"]
+        for recs in (ok, ok + ["w" + "9" * 25 + "@1"]):     # (the second: the join stops, as it did, past int64)
+            n = len(recs)
+            lines = [[(0.0, 10.0 * i), (250.0, 10.0 * i)] for i in range(n)]
+            subs = ["road"] * n
+            subs[8] = "rail"
+            rows = []
+            for i in range(n):
+                rows += [(i, recs[(i + 1) % n], [0.5, 1.0]), (i, recs[i], [0.0, 0.5])]
+            rows += [(n + 3, "w21@1", None), (-1, "w21@1", None)]
+            shard = {"ways": {"21": {"lanes:forward": "2", "lanes": "3"}, "22": {"turn:lanes": "left|through"},
+                              "213": {"lane_markings": "no"}, "5": {}, "99": {"overtaking": "no"}}}
+            for ways in (railtags.Ways.of(dict(shard["ways"])), {"w" + k: v for k, v in shard["ways"].items()},
+                         shard["ways"], {}):
+                for obj in (False, True):
+                    f = features(lines, ["primary"] * n, subtypes=subs)
+                    f.attrs["src_record"] = np.array(recs, object if obj else None)
+                    f.rules["src_ways"] = mapgeom.rule_table(rows)
+                    lt = railtags.LaneTags(None, None)
+                    lt.of_cell = lambda key, w=ways: {"ways": w}
+                    try:
+                        lane_join_ref(lt, f, None)
+                        err = None
+                    except OverflowError as e:
+                        err = e
+                    want = {k: f.attrs.pop(k) for k in list(f.attrs) if k.startswith("osm_")}
+                    if err is not None:
+                        self.assertRaises(OverflowError, lt.join, f, None)
+                        continue
+                    lt.join(f, None)
+                    got = {k: f.attrs[k] for k in f.attrs if k.startswith("osm_")}
+                    self.assertTrue(lane_attrs_equal(want, got) and lane_attrs_equal(got, want), (type(ways), obj))
+                    if recs is ok and isinstance(ways, railtags.Ways):
+                        self.assertEqual(roads.lane_tag_parts(f, 3)[1][2], "21" + ar, "the regex's Unicode digits")
+                        self.assertEqual(f.attrs["osm_lane_markings"][3], "no")
+
+
+def lane_join_ref(lane_tags, feats, key):
+    """LaneTags.join as it was before 2026-11-08 (a lookup per road and per way part): the oracle the new one must
+    equal, column for column and part for part."""
+    import re
+    way_id = lambda record: (lambda m: m.group(1) if m else None)(re.match(r"^w(\d+)", record or ""))  # noqa: E731
+    sub = feats.attrs.get("subtype")
+    if sub is None or not len(feats):
+        return
+    road = np.flatnonzero(np.asarray(sub).astype(str) == "road")
+    if not len(road):
+        return
+    sh = lane_tags.of_cell(key)
+    if sh is None:
+        return
+    ways = sh.get("ways", {})
+    rec = feats.attrs.get("src_record")
+    cols = {c: np.full(len(feats), None, object) for c in railtags.LANE_COLUMNS}
+    if rec is not None and ways:
+        for i, t in zip(road, railtags._tags_of(ways, [way_id(str(rec[i])) or "" for i in road])):
+            if t:
+                for c in railtags.LANE_COLUMNS:
+                    if c in t:
+                        cols[c][i] = t[c]
+    for c in railtags.LANE_COLUMNS:
+        feats.attrs[railtags.lane_attr(c)] = cols[c]
+    table = feats.rules.get("src_ways")
+    parts = np.full(len(feats), None, object)
+    if table is not None and len(table):
+        for i in road:
+            rows = table.for_feature(int(i))
+            if rows:
+                parts[i] = [(a, b, way_id(r), dict(ways.get(way_id(r)) or {})) for r, a, b in rows]
+    feats.attrs[railtags.LANE_PARTS] = parts
+    import roadlanes
+    roadlanes.invalidate(feats)
+
+
+def lane_attrs_equal(a, b):
+    """Are two joins' lane attrs (dicts of the attr columns) the same, value for value and type for type?"""
+    keys = [railtags.lane_attr(c) for c in railtags.LANE_COLUMNS] + [railtags.LANE_PARTS]
+    for k in keys:
+        x, y = a.get(k), b.get(k)
+        if (x is None) != (y is None):
+            return False
+        if x is None:
+            continue
+        if x.dtype != y.dtype or x.shape != y.shape:
+            return False
+        for u, v in zip(x.tolist(), y.tolist()):
+            if type(u) is not type(v) or u != v:
+                return False
+            if isinstance(u, list) and any(type(p) is not type(q) or len(p) != len(q)
+                                            or any(type(e) is not type(g) for e, g in zip(p, q)) for p, q in zip(u, v)):
+                return False
+    return True
+
 
 class WaysTest(unittest.TestCase):
     """A shard's ways kept compact (railtags.Ways): the same lookups as the dict, the distinct tag sets once."""

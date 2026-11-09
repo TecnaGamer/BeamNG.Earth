@@ -49,6 +49,7 @@ import logging
 import math
 import os
 import ioprofiler
+import shutil
 import threading
 import time
 
@@ -74,6 +75,13 @@ PROTECT_S = 3600.0          # used by this server within an hour: never evicted 
 EVICT_S = 180.0             # at most one eviction pass per 3 minutes
 SAVE_S = 600.0              # index saved at most every 10 minutes (and on close)
 TICK_S = 30.0               # the background thread's check interval
+# The disk the cache is on keeps this much free whatever the cap (a cap, or "unlimited", larger than the disk's free
+# space filled players' disks: the first week's telemetry had ~19k "No space left on device" errors (OSError 28),
+# most at the far tiles): 5 % of the disk, at least DISK_RESERVE_MIN and at most DISK_RESERVE_MAX
+DISK_RESERVE_SHARE = 0.05
+DISK_RESERVE_MIN = 2 * 1e9
+DISK_RESERVE_MAX = 10 * 1e9
+DISK_MARGIN = 1e9           # ... and a disk short of it is cut back this much further (not a file at a time)
 LIFETIMES = {}              # path prefix ("imagery/xyz/") -> max age after download (s); none today
 MSG_VERSION = 1
 READ_WAITS = (0.02, 0.05, 0.1, 0.25)   # s between the tries of a read held up on Windows (NoCache.read)
@@ -148,6 +156,8 @@ class Cache(NoCache):
         self._entries = {}          # "dem/mapterhorn/12/1/2.webp" -> [bytes or None (not known yet), last use s]
         self._used = 0              # bytes of the entries with a known size
         self._cap = None            # bytes, 0 = unlimited (set below)
+        self.disk_usage = shutil.disk_usage     # (tests: a stand-in)
+        self._disk_warned = False
         self._dirty = False
         self.ready = False          # the start-up walk is done
         self._ready_ev = threading.Event()
@@ -572,13 +582,36 @@ class Cache(NoCache):
         return m
 
     # --- the background thread -------------------------------------------------------------------
+    def disk_short(self):
+        """Bytes the cache's disk is short of its free-space reserve (DISK_RESERVE_*), 0 when it has it (or when the
+        disk cannot be asked)."""
+        try:
+            du = self.disk_usage(self.root)
+        except OSError:
+            return 0
+        reserve = min(DISK_RESERVE_MAX, max(DISK_RESERVE_MIN, du.total * DISK_RESERVE_SHARE))
+        return int(max(0, reserve - du.free))
+
     def tick(self):
-        """One check: evict when over the cap (at most every EVICT_S), save the index (every SAVE_S)."""
+        """One check: evict when over the cap or when the disk runs short of its free reserve (at most every EVICT_S),
+        save the index (every SAVE_S)."""
         if not self.ready:
             return
         now = self.now()
         cap = self._cap
-        if cap and self._used > cap and (self._last_evict is None or now - self._last_evict >= EVICT_S):
+        due = self._last_evict is None or now - self._last_evict >= EVICT_S
+        short = self.disk_short() if self.managed else 0
+        if short and due:
+            target = max(0, self._used - short - int(DISK_MARGIN))
+            if self._used > target:
+                if not self._disk_warned:
+                    log.warning("cache: the disk has %s free, under its reserve: the cache is cut back to %s (the "
+                                "cap is %s)", _gb(self.disk_usage(self.root).free), _gb(target),
+                                _gb(cap) if cap else "unlimited")
+                    self._disk_warned = True
+                self.evict(target=target)
+                due = False
+        if cap and self._used > cap and due:
             self.evict()
         if now - self._last_save >= SAVE_S:
             self.save()

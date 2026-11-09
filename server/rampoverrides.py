@@ -19,10 +19,12 @@ def lane_counts(feats):
     oneway = feats.rules.get('oneway')
     out = {}
     west, south, east, north = KY_I65_EXIT76_BOUNDS
-    for i in range(n):
-        if (str(records[i]).partition('@')[0] != f'w{KY_I65_EXIT76_WAY}'
-                and ways[i] != KY_I65_EXIT76_WAY):
-            continue
+    if not n:
+        return out
+    # the source way's features at once (a per-feature loop over every road of every layer was ~0.6 ms a layer)
+    rec, key = np.asarray(records).astype(str), f'w{KY_I65_EXIT76_WAY}'
+    near = (rec == key) | np.char.startswith(rec, key + '@') | (np.asarray(ways) == KY_I65_EXIT76_WAY)
+    for i in np.flatnonzero(near).tolist():
         if classes[i] != 'motorway' or oneway is None or not len(oneway.rows(i)):
             continue
         if subclasses[i] != 'link' and not (subclass is not None and

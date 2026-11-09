@@ -83,9 +83,9 @@ NAME_MATCH_M = 25.0     # m a segment's middle may lie outside the bbox of the s
 ONEWAY_YES = ("yes", "1", "-1", "true")
 
 
-# Racetracks (GitHub #143): Overture's transportation theme has no highway=raceway (Daytona's oval and road course, the
-# Nordschleife: nothing), so the cell's raceways come from the same Layercake file with their geometry: ways that are
-# highway=raceway, read only from the row groups whose highway column has one (raceways()).
+# Racetracks (GitHub #143) and bus-only carriageways: Overture's transportation theme has no highway=raceway (Daytona's
+# oval and road course, the Nordschleife: nothing) and no highway=busway (the Dutch Zuidtangent). Both come from the
+# same Layercake file with their geometry, read only from the row groups that contain one.
 RACEWAY_COLUMNS = ("id", "highway", "name", "surface", "width", "lanes", "layer", "bridge", "tunnel", "oneway")
 
 
@@ -162,8 +162,8 @@ class OsmTags:
 
     def cell(self, bounds, kind="demand"):
         """({way id: {column: value}} of the OSM highways whose bbox touches bounds (lon0, lat0, lon1, lat1), [the
-        highway=raceway ways among them: {"id", "coords" (k, 2) lon/lat, tags...}]): one pass for both. A version that
-        changed under the reads is dropped and the cell asked once more on the new one."""
+        highway=raceway and highway=busway ways among them: {"id", "coords" (k, 2) lon/lat, tags...}]): one pass for
+        both. A version that changed under the reads is dropped and the cell asked once more on the new one."""
         for attempt in (0, 1):
             etag, remote = self.version(kind)
             try:
@@ -204,16 +204,16 @@ class OsmTags:
                 m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
                                    & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
                 for r in _rows(t, m):
-                    if r[3 + lanes] is None or r[3 + hw] is None:
+                    if r[_ROW_VAL + lanes] is None or r[_ROW_VAL + hw] is None:
                         continue
                     if need is not None:
-                        x0, y0, x1, y1 = (r[3 + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
+                        x0, y0, x1, y1 = (r[_ROW_VAL + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
                         dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
                         dy = GEOMETRY_MARGIN_M / 110574.0
                         if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
                                    for a0, b0, a1, b1 in need):
                             continue
-                    lane_rows.append(r[2])
+                    lane_rows.append(r[_ROW_FRN])
             if not lane_rows or not any('geometry' in groups[rg]['cols'] for rg in cand):
                 return out
             hit = sorted({rg for r in lane_rows for rg in cand
@@ -323,7 +323,7 @@ class OsmTags:
         def load():
             try:
                 with np.load(path, allow_pickle=False) as f:
-                    if "lane_hw_ok" not in f.files:     # (decoded before PR #471's columns: decoded again)
+                    if "lane_hw_ok" not in f.files or "bus" not in f.files:  # (decoded before busways: decoded again)
                         return None
                     return {c: f[c] for c in f.files}
             except (OSError, ValueError, KeyError):
@@ -368,18 +368,18 @@ class OsmTags:
         want = {c for c in g["cols"] if c in USED or c == "highway"}
         rd._fetch({PATH: remote}, {PATH: [r for c, rs in g["cols"].items() if c in want for r in rs]}, kind)
         cols = ", ".join(f"{expr} AS \"{name}\"" for name, expr in COLUMNS.items())
-        # only the ways with a tag the roads use (and the raceways): join() treats a way without one as one not
-        # here, and building a dict per way of every highway in the cell was most of this thread's CPU
+        # only the ways with a tag the roads use (and the raceways and busways): join() treats a way without one as
+        # one not here, and building a dict per way of every highway in the cell was most of this thread's CPU
         # (osmtags, 14 CPU-s of a Deck's teleport, 2026-10-23)
         some = " OR ".join([f"{c} IS NOT NULL" for c in sorted(USED - {"id", "bbox"})]
                            + [f"highway IN ({', '.join(repr(v) for v in UNBUILT)})"])
-        got = con.execute(f"""SELECT id, highway = 'raceway', file_row_number, {cols}
+        got = con.execute(f"""SELECT id, highway = 'raceway', highway = 'busway', file_row_number, {cols}
             FROM read_parquet({uri}, file_row_number = true)
             WHERE file_row_number BETWEEN {g['first']} AND {g['first'] + g['n'] - 1}
-            AND (highway = 'raceway' OR {some})""").fetchall()
+            AND (highway = 'raceway' OR highway = 'busway' OR {some})""").fetchall()
         t = {"id": np.array([r[0] for r in got], np.int64), "race": np.array([bool(r[1]) for r in got], bool),
-             "frn": np.array([r[2] for r in got], np.int64)}
-        for j, name in enumerate(COLUMNS, 3):
+             "bus": np.array([bool(r[2]) for r in got], bool), "frn": np.array([r[3] for r in got], np.int64)}
+        for j, name in enumerate(COLUMNS, 4):
             vals = [r[j] for r in got]
             if name in TEXT_COLUMNS:          # (one UTF-8 blob and offsets: fixed-width strings took ~20 MB)
                 enc = [b"" if v is None else str(v).encode("utf-8") for v in vals]
@@ -415,10 +415,10 @@ class OsmTags:
                 m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
                                    & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
                 rows.extend(_rows(t, m))
-            race = [r[2] for r in rows if r[1]]
+            extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
             got = []
-            if race:            # (rare: the raceways' own columns and geometry, of their row groups only)
-                hit = sorted({rg for r in race for rg in cand
+            if extra:           # (rare: the raceways' and busways' own columns and geometry, of their row groups only)
+                hit = sorted({rg for r in extra for rg in cand
                               if groups[rg]["first"] <= r < groups[rg]["first"] + groups[rg]["n"]})
                 rd._fetch(files, {PATH: [r for rg in hit for c in RACEWAY_COLUMNS + ("geometry",)
                                          for r in groups[rg]["cols"].get(c, [])]}, kind)
@@ -427,7 +427,7 @@ class OsmTags:
                 except Exception:
                     pass
                 rcols = ", ".join(f'"{c}"' for c in RACEWAY_COLUMNS)
-                rows_in = ", ".join(str(int(r)) for r in race)
+                rows_in = ", ".join(str(int(r)) for r in extra)
                 got = con.execute(f"""SELECT {rcols}, geometry FROM read_parquet({uri}, file_row_number = true)
                     WHERE file_row_number IN ({rows_in})""").fetchall()
         except Exception:
@@ -438,7 +438,7 @@ class OsmTags:
         finally:
             con.close()
         names = list(COLUMNS)
-        tags = {int(r[0]): {k: v for k, v in zip(names, r[3:]) if v is not None} for r in rows}
+        tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
         ways = []
         for row in got:
             coords = _linestring(bytes(row[-1]))
@@ -449,8 +449,12 @@ class OsmTags:
             ways.append(d)
         return tags, ways
 
+_ROW_FRN = 3    # _rows: (id, raceway, busway, file row, COLUMNS...)
+_ROW_VAL = 4
+
+
 def _rows(t, idx):
-    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, file row, COLUMNS' values (None: missing))."""
+    """Rows idx of a decoded row group (OsmTags._table) as (id, raceway, busway, file row, COLUMNS' values)."""
     names = list(COLUMNS)
     out = []
     for i in idx:
@@ -462,7 +466,7 @@ def _rows(t, idx):
             else:
                 v = float(t[c][i])
                 vals.append(None if v != v else (int(v) if c in INT_COLUMNS else v))
-        out.append((int(t["id"][i]), bool(t["race"][i]), int(t["frn"][i]), *vals))
+        out.append((int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals))
     return out
 
 
@@ -473,11 +477,23 @@ def raceway_features(ways):
     """The raceways (raceways()) as road Features: class "raceway", ids "osm-raceway-<way id>" (after every Overture
     GERS id: mapgeom.concat appends them), OSM's surface / width / lanes / layer / bridge / tunnel as Overture's rules
     and the osm_* columns."""
+    return _appended_features(ways, "raceway")
+
+
+def busway_features(ways):
+    """The busways as road Features: class "busway", ids "osm-busway-<way id>" (these sort before osm-raceway ids, and
+    both after an Overture id, so mapgeom.concat keeps the cell ascending). Seven metres unless a width is mapped.
+    OSM's surface / width / lanes / layer / bridge / tunnel / oneway become Overture's rules."""
+    return _appended_features(ways, "busway", default_width=7.0, oneway=True)
+
+
+def _appended_features(ways, cls, default_width=None, oneway=False):
+    """OSM ways Overture does not emit, as road Features of class cls and ids "osm-<cls>-<way id>"."""
     import mapgeom as mg
     ways = sorted(ways, key=lambda w: int(w["id"]))
     if not ways:
         return mg.empty("roads")
-    coords, coord_off, flags, levels, surfaces, widths = [], [0], [], [], [], []
+    coords, coord_off, flags, levels, surfaces, widths, oneways = [], [0], [], [], [], [], []
     for i, w in enumerate(ways):
         c = np.asarray(w["coords"], np.float64)
         coords.append(c)
@@ -496,15 +512,19 @@ def raceway_features(ways):
         surfaces.append((i, "paved" if sf in RACEWAY_PAVED else sf, None))
         try:
             wd = float(re.match(r"^\s*([0-9]+(?:\.[0-9]+)?)", str(w.get("width") or "")).group(1))
-            widths.append((i, wd, None))
         except (AttributeError, ValueError):
-            pass
+            wd = default_width
+        if wd is not None:
+            widths.append((i, wd, None))
+        ow = str(w.get("oneway") or "").lower()
+        if oneway and ow in ONEWAY_YES:
+            oneways.append((i, -1.0 if ow == "-1" else 1.0, None))
     n = len(ways)
     lonlat = np.concatenate(coords)
-    f = mg.Features("roads", mg.text_column([f"osm-raceway-{int(w['id']):012d}" for w in ways]),
+    f = mg.Features("roads", mg.text_column([f"osm-{cls}-{int(w['id']):012d}" for w in ways]),
                     np.full(n, mg.LINE, np.uint8), np.arange(n + 1, dtype=np.int64), np.arange(n + 1, dtype=np.int64),
                     np.array(coord_off, np.int64), lonlat)
-    f.attrs = {"class": mg.text_column(["raceway"] * n), "subtype": mg.text_column(["road"] * n),
+    f.attrs = {"class": mg.text_column([cls] * n), "subtype": mg.text_column(["road"] * n),
                "subclass": mg.text_column([""] * n), "name": mg.text_column([w.get("name") for w in ways]),
                "src_dataset": mg.text_column(["OpenStreetMap"] * n),
                "src_record": mg.text_column([f"w{int(w['id'])}@0" for w in ways]),
@@ -512,6 +532,8 @@ def raceway_features(ways):
                "cy": np.array([float(c[:, 1].min() + c[:, 1].max()) / 2 for c in coords])}
     f.rules = {"flags": mg.rule_table(flags), "level": mg.rule_table(levels, "float"),
                "surface": mg.rule_table(surfaces), "width": mg.rule_table(widths, "float")}
+    if oneway:
+        f.rules["oneway"] = mg.rule_table(oneways, "float")
     f.clipped = np.zeros(n, bool)
     return f
 
