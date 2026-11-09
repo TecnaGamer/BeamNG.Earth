@@ -2143,7 +2143,7 @@ def _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g=None):
         holes = roadsmod.block_tunnel_holes(
             tunnel_profiles(aid, frame, elev, g),
             lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"),
-            frame, keep, cx, cy, heightmap.SQUARE)
+            frame, keep, cx, cy, heightmap.SQUARE, rail_parts=_rail_tunnel_parts(frame))
     except Exception:                   # no holes rather than no block
         log.exception("tunnel holes of block (%s, %s)", cx, cy)
         return idx
@@ -2153,6 +2153,16 @@ def _tunnel_holes(aid, frame, elev, keep, cx, cy, idx, info, g=None):
     idx[holes] = heightmap.TER_HOLE
     info["tunnelHoles"] = int(holes.sum())
     return idx
+
+
+def _rail_tunnel_parts(frame):
+    """box -> the railway tunnels' floors near it (railways.tunnel_hole_parts), or None unless BNE_RAIL_TUNNELS."""
+    import railways
+    store = getattr(_s, "plan_store", None)
+    if not railways.TUNNELS_ON or store is None:
+        return None
+    load = lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
+    return lambda box: railways.tunnel_hole_parts(frame, load, store.elev, box)
 
 
 def tunnel_profiles(aid, frame, elev, g=None):

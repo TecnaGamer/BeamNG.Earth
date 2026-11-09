@@ -8226,9 +8226,10 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
         return z
 
 
-def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
+def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts=None):
     """tunnel_hole_mask for a terrain block being built (heightmap.generate's keep: lat, lon, u), its tunnels from
-    the map cells under it (cell_fn(key) -> roads Features) through the anchor's TunnelProfiles."""
+    the map cells under it (cell_fn(key) -> roads Features) through the anchor's TunnelProfiles. rail_parts: box ->
+    railways.tunnel_hole_parts, the railway tunnels' portals cut as well (BNE_RAIL_TUNNELS)."""
     lat, lon, u = keep["lat"], keep["lon"], keep["u"]
     keys = mapcells.cells_for_points(lat, lon)
     cells = []
@@ -8239,17 +8240,32 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
             log.debug("tunnel holes: cell %s: %s: %s", k, type(e).__name__, e)
             cells.append(None)
     half = u.shape[0] * square / 2
+    box = (cx - half, cy - half, cx + half, cy + half)
+    rail = []
+    if rail_parts is not None:
+        try:
+            rail = rail_parts(box)
+        except Exception as e:      # no railway tunnels' holes rather than no block
+            log.warning("rail tunnel holes: %s: %s", type(e).__name__, e)
     try:
-        parts = tunnels.parts(cells, (cx - half, cy - half, cx + half, cy + half))
+        parts = tunnels.parts(cells, box)
     except Exception as e:          # a chain's other cells not at hand (offline): no holes this time
         (log.debug if isinstance(e, OSError) else log.warning)("tunnel holes: %s: %s", type(e).__name__, e)
+        parts = []
+        if not rail:
+            return None
+    if not parts and not rail:
         return None
-    if not parts:
-        return None
-    mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
-                            getattr(tunnels, "mouths", None))
-    if mask is not None and mask.any():
-        mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    mask = None
+    if parts:
+        mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
+                                getattr(tunnels, "mouths", None))
+        if mask is not None and mask.any():
+            mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    if rail:
+        import railways
+        rm = railways.tunnel_hole_mask(rail, u, cx, cy, square)
+        mask = rm if mask is None else (mask | rm)
     return mask
 
 

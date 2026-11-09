@@ -3546,7 +3546,11 @@ class Server:
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
         try:
             self.tunnels_of(anchor, elev, g)
-            holes = roadsmod.block_tunnel_holes(anchor.tunnels, cell_fn, anchor.frame, keep, cx, cy, heightmap.SQUARE)
+            import railways
+            holes = roadsmod.block_tunnel_holes(
+                anchor.tunnels, cell_fn, anchor.frame, keep, cx, cy, heightmap.SQUARE,
+                rail_parts=((lambda box: railways.tunnel_hole_parts(anchor.frame, cell_fn, self.plan_store.elev, box))
+                            if railways.TUNNELS_ON and getattr(self, "plan_store", None) is not None else None))
         except Exception:
             log.exception("tunnel holes of block (%s, %s)", cx, cy)
             return idx

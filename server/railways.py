@@ -593,6 +593,13 @@ def _drop_stubs(rails):
 WEAR_FLAGS = (("is_abandoned", 2), ("is_disused", 1))    # a line's wear: 1 out of use, 2 abandoned (drawn worn: the
 # user, 2026-10-27, "id still like abandond lines to show. perhapse with some grass on them or sumilate wear")
 UNBUILT_FLAGS = ("is_under_construction",)              # not drawn (no track yet), as OSM's proposed lines
+TUNNELS_ON = os.environ.get("BNE_RAIL_TUNNELS", "off") not in ("off", "0", "false", "")   # (plan 035: unproven in the game)
+TUNNEL_HALF_M = 3.9         # m: half the rail tunnel's inner width
+TUNNEL_WALL_H = 1.6         # m its walls stand straight over the ballast top before the vault springs
+TUNNEL_RISE_M = 4.4         # m the vault rises over the springing (a half ellipse: the tube is 6 m over the ballast)
+TUNNEL_FLOOR_M = 0.3        # m the tube's walls go under the ballast top
+TUNNEL_SECTION_N = 14       # points of the vault
+PORTAL_REACH_M = 1.3        # m a portal's face reaches round the opening
 SHORT_TUNNEL_M = 60.0       # m: a "tunnel" this short is the line passing under a road bridge (OSM tags those
                             # tunnel too): track there (the track stopped either side of an overpass, 2026-10-25)
 
@@ -660,8 +667,8 @@ def osm_gauge(feats, i):
 
 
 def _pieces(feats, i):
-    """[("ground" | "bridge", [lon/lat polylines])] of feature i: its level ranges with the short tunnels
-    (SHORT_TUNNEL_M) on the ground and the long ones left out."""
+    """[("ground" | "bridge" | "tunnel", [lon/lat polylines])] of feature i: its level ranges with the short tunnels
+    (SHORT_TUNNEL_M) on the ground and the long ones left out (BNE_RAIL_TUNNELS: a part of their own, kind "tunnel")."""
     rngs = roads.level_ranges(feats, i)
     if not rngs:
         return [("ground", roads.ground_parts(feats, i))]
@@ -674,12 +681,13 @@ def _pieces(feats, i):
         at = max(at, b)
     if 1.0 - at > roads.MIN_PART:
         ground.append((at, 1.0))
-    out = {"ground": [], "bridge": []}
+    out = {"ground": [], "bridge": [], "tunnel": []}
     for part in feats.parts(i):
         for ring in part:
             if len(ring) < 2:
                 continue
-            for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"])):
+            for kind, spans in (("ground", ground), ("bridge", [(a, b) for a, b, k in off if k == "bridge"]),
+                                ("tunnel", [(a, b) for a, b, k in off if k == "tunnel"] if TUNNELS_ON else [])):
                 for a, b in spans:
                     if b - a > roads.MIN_PART:
                         r = ring if (a, b) == (0.0, 1.0) else roads.sub_polyline(ring, a, b)
@@ -1035,6 +1043,13 @@ def profile(rails, ground, underpasses=()):
             ends.setdefault(b, []).append(zb[n][-1])
     seeds = {}                                  # node -> the deck's height at it
     for n, ((_, cls, kind, xy), (a, b, _)) in enumerate(zip(rails, edges)):
+        if kind == "tunnel":                    # (straight between its portals' beds, whatever the hill above it)
+            g = zgs[n]
+            sx = _arc(xy)
+            za = float(np.mean(ends[a])) if a in ends else float(g[0])
+            zb_ = float(np.mean(ends[b])) if b in ends else float(g[-1])
+            zb[n] = za + (zb_ - za) * sx / max(float(sx[-1]), 1e-9)
+            continue
         if kind != "bridge":
             continue
         g = zgs[n]
@@ -1270,6 +1285,76 @@ def _ballast_bed(mesh, p, uu, t, v, foot_l, foot_r, zl, zr, mat, tile=3.0):
     mesh.strip(L, R, 0.0, 2 * BALLAST_TOP_M / tile, v, mat, up)
     mesh.strip(L, Lf, 0.0, 0.8 * 3.0 / tile, v, mat, out_l + up)
     mesh.strip(R, Rf, 0.0, 0.8 * 3.0 / tile, v, mat, -out_l + up)
+
+
+def _vault():
+    """The rail tunnel's section: [(x across from the axis, z over the ballast top)] from the floor on the left wall up,
+    over the vault and down the right wall, as one line."""
+    th = np.linspace(np.pi, 0.0, TUNNEL_SECTION_N)
+    arch = [(TUNNEL_HALF_M * math.cos(a), TUNNEL_WALL_H + TUNNEL_RISE_M * math.sin(a)) for a in th]
+    return [(-TUNNEL_HALF_M, -TUNNEL_FLOOR_M)] + arch + [(TUNNEL_HALF_M, -TUNNEL_FLOOR_M)]
+
+
+def _tunnel(mesh, p, uu, t, v, ballast, concrete, start, end):
+    """A rail tunnel's run (points p, left unit uu, ballast top t, arc v): flat ballast between the walls and the tube round
+    it, faced inwards, concrete; start / end: the run's end is a portal (a face round the opening, seen from outside)."""
+    k = len(p)
+    sec = _vault()
+    flat = np.full(k, TUNNEL_HALF_M - 0.3)
+    _ballast_bed(mesh, p, uu, t, v, flat, flat, t - BALLAST_H - TUNNEL_FLOOR_M, t - BALLAST_H - TUNNEL_FLOOR_M, ballast)
+    rows = [np.c_[p + uu * x, t + z] for x, z in sec]
+    for m in range(len(sec) - 1):
+        mid = (np.asarray(sec[m]) + np.asarray(sec[m + 1])) / 2
+        inward = np.c_[-uu * mid[0], np.full(k, 2.0 - mid[1])]
+        mesh.strip(rows[m], rows[m + 1], 0.0, 0.3, v, concrete, inward)
+    d = np.gradient(p, axis=0)
+    d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
+    for at, going, on in ((0, -1.0, start), (-1, 1.0, end)):
+        if not on:
+            continue
+        inner = np.array([np.r_[p[at] + uu[at] * x, t[at] + z] for x, z in sec])
+        outer = np.array([np.r_[p[at] + uu[at] * (x + math.copysign(PORTAL_REACH_M, x) * (abs(x) > 0.1)),
+                                t[at] + z + (PORTAL_REACH_M if z > -TUNNEL_FLOOR_M + 0.01 else 0.0)] for x, z in sec])
+        out_dir = np.r_[d[at] * going, 0.0]
+        mesh.strip(inner, outer, 0.0, 0.3, np.zeros(len(sec)), concrete, out_dir)
+        mesh.strip(outer, inner, 0.0, 0.3, np.zeros(len(sec)), concrete, -out_dir)
+
+
+def tunnel_hole_parts(frame, load, elev, box):
+    """[(fid, xy (k, 2), floor z (k,))] of the rail tunnels near box (in the frame's heights, the beds of tile_mesh: the
+    same lattice), for the terrain's portal holes (tunnel_hole_mask); [] unless BNE_RAIL_TUNNELS. Pure given its inputs."""
+    if not TUNNELS_ON:
+        return []
+    cells = [load(k) for k in cells_near(frame, box, 60.0)]
+    rails = parts(frame, cells, box, reach=60.0, clip=True)
+    if not any(kind == "tunnel" for _f, _c, kind, _xy in rails):
+        return []
+    ground = point_ground(frame, elev, ("holes", round(float(frame.lat0), 7), round(float(frame.lon0), 7)))
+    out = []
+    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, _beds(frame, rails, ground, [], (), load, elev)):
+        if kind == "tunnel" and len(xy) >= 2:
+            out.append((str(fid), xy, np.asarray(zb, np.float64) + BALLAST_H - TUNNEL_FLOOR_M))
+    return out
+
+
+def tunnel_hole_mask(parts_, u, cx, cy, square):
+    """Where the terrain block (heights u [iy, ix], as roads.tunnel_hole_mask) must be a hole for the rail tunnels' portals."""
+    import fast
+    import roads as roadsmod
+    n = u.shape[0]
+    half = n * square / 2
+    mask = np.zeros(u.shape, bool)
+    if not parts_:
+        return mask
+    fast.require(88, "tunnel_holes")
+    u = np.ascontiguousarray(u, np.float64)
+    th = TUNNEL_WALL_H + TUNNEL_RISE_M + TUNNEL_FLOOR_M
+    for _fid, xy, z in parts_:
+        fast._ef.tunnel_holes(mask, u, float(cx - half), float(cy - half), float(square), np.ascontiguousarray(xy, np.float64),
+                              np.ascontiguousarray(z, np.float64), float(TUNNEL_HALF_M + 0.4), float(th), False, True, True,
+                              float(roadsmod.TUNNEL_HOLE_MARGIN), float(roadsmod.LOW_HOLE_M + roadsmod.LOW_HOLE_STEP),
+                              float(roadsmod.ARCH_SIDE_M + 1.0), True)
+    return mask
 
 
 def _deck(mesh, p, uu, t, v, ballast, concrete):
@@ -1677,6 +1762,8 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
                                  BALLAST_TILE_M)
                 else:
                     _ballast_bed(mesh, p, uu, t, v, fl[sl], fr[sl], zl[sl], zr[sl], ballast_w)
+            elif kind == "tunnel":
+                _tunnel(mesh, p, uu, t, v, ballast_w, concrete, i == 0, j == len(xy) - 1)
             else:
                 if cls == "tram":
                     _tram_deck(mesh, p, uu, t, v, concrete)

@@ -168,6 +168,49 @@ class RailwayTest(unittest.TestCase):
         self.assertFalse(near.any(), "no box in the switch")
         self.assertTrue(((c[:, 0] > 200) & (np.abs(c[:, 1] - 100.0) < 2.0)).any(), "the through track goes on")
 
+    def test_a_rail_tunnel_is_a_tube_over_a_flat_bed_with_portals(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"],
+                     flags=[(0, "is_tunnel", 0.3, 0.7)])
+        hill = lambda xy: 10.0 + 12.0 * np.exp(-((xy[:, 0] - 125.0) / 60.0) ** 2)      # a hill over the tunnel
+        with unittest.mock.patch.object(railways, "TUNNELS_ON", False):
+            off = railways.tile_mesh(FRAME, 0, 0, [f], hill)
+        with unittest.mock.patch.object(railways, "TUNNELS_ON", True):
+            on = railways.tile_mesh(FRAME, 0, 0, [f], hill)
+        self.assertIsNotNone(on)
+        P, T, UV, mats, M = on
+        conc = P[np.unique(T[M == mats.index(railways.CONCRETE)])]
+        self.assertGreater(len(conc), 100, "a tube of concrete")
+        inside = conc[(conc[:, 0] > 60) & (conc[:, 0] < 190)]
+        self.assertGreater(float(inside[:, 2].max() - inside[:, 2].min()), 5.5, "6 m tall over the floor")
+        self.assertLess(float(np.abs(inside[:, 1] - np.median(inside[:, 1])).max()), 6.0)
+        steel = P[np.unique(T[M == mats.index(railways.STEEL)])]
+        under = steel[(steel[:, 0] > 80) & (steel[:, 0] < 170)]
+        self.assertTrue(len(under), "rails inside the tunnel")
+        self.assertLess(float(under[:, 2].max()), 10.0 + 12.0 * 0.4, "the bed runs straight between the portals, not over the hill")
+        self.assertTrue((M == mats.index(railways.CONCRETE)).sum() > ((np.asarray(off[4]) == off[3].index(railways.CONCRETE)).sum() if off else 0))
+
+    def test_rail_tunnel_holes_cut_the_hillside_at_the_portals(self):
+        f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"],
+                     flags=[(0, "is_tunnel", 0.3, 0.7)])
+        elev = lambda la, lo: 10.0 + 12.0 * np.exp(-(((np.asarray(lo) - FRAME.lon0) * 111320.0 * math.cos(math.radians(FRAME.lat0)) - 125.0) / 60.0) ** 2)
+        box = roads.tile_bbox(0, 0)
+        with unittest.mock.patch.object(railways, "TUNNELS_ON", False):
+            self.assertEqual(railways.tunnel_hole_parts(FRAME, lambda k: f, elev, box), [])
+        with unittest.mock.patch.object(railways, "TUNNELS_ON", True),                 unittest.mock.patch.object(railways, "cells_near", lambda *a, **k: [0]):
+            got = railways.tunnel_hole_parts(FRAME, lambda k: f, elev, box)
+        self.assertEqual(len(got), 1)
+        fid, xy, z = got[0]
+        self.assertAlmostEqual(float(z[0] - z[-1]), 0.0, delta=0.5, msg="a level floor between level portals")
+        n, sq = 256, 1.0
+        u = np.full((n, n), 10.0)
+        iy, ix = np.mgrid[0:n, 0:n]
+        x, y = ix * sq - n * sq / 2 + 128.0, iy * sq - n * sq / 2 + 128.0
+        u = 10.0 + 12.0 * np.exp(-((x - 125.0) / 60.0) ** 2)
+        mask = railways.tunnel_hole_mask(got, u, 128.0, 128.0, sq)
+        self.assertEqual(mask.shape, u.shape)
+        self.assertTrue(mask.any(), "a hole at a portal")
+        self.assertFalse(mask[:, :20].any(), "none on open ground")
+
     def test_a_tile_past_the_vertex_budget_keeps_its_main_lines(self):
         long = [[(-50.0, 20.0 + 6.0 * k), (300.0, 20.0 + 6.0 * k)] for k in range(8)]
         short = [[(100.0, 120.0 + 2.0 * k), (130.0, 120.0 + 2.0 * k)] for k in range(8)]
