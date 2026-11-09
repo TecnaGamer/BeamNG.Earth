@@ -204,6 +204,8 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
                                     keep, float(tangent[0]), float(tangent[1])))
     if not pending:
         return []
+    near = np.zeros(len(pending), bool)     # (set below: walls laid along a carriageway)
+    pz = np.zeros(len(pending))             # (that carriageway's own height there)
     if roads or decks:
         # A noise wall is laid along the carriageway it runs along, WALL_EDGE_M beyond its painted edge, with
         # its flat face (the stock model's local +x) toward it. The mapped line follows the real deck's outer
@@ -243,6 +245,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
             row = np.arange(len(pending))
             ang = np.radians([p[3] for p in pending])
             wt = np.stack([-np.sin(ang), np.cos(ang)], axis=1)      # (wall tangent, local +y)
+            par_min = math.cos(math.radians(WALL_FIT_MAX_DEG))
             inside = _in_outlines(outlines, mid) if outlines else None   # (a wall on a mapped bridge's plan)
             # The wall's own level. One tagged on a bridge stands on its deck, not on the ground under it: a
             # carriageway at another level (a road passing under a rail viaduct) is not the one it runs along.
@@ -271,6 +274,36 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
                     dz[take] = zq[take]
                 on = np.array([p[6] is True for p in pending], bool) & np.isfinite(dd) & (dd <= WALL_FIT_REACH_M)
                 ref = np.where(on, dz, ref)
+            # An untagged wall's level is the road it runs along too: the ground beside it can be a bridge's
+            # approach fill, higher than the road the wall stands next to (the wall climbed it at the abutments).
+            untagged = np.array([p[0] == G_WALL and p[6] is None for p in pending], bool)
+            if untagged.any():
+                rd = np.full(len(pending), np.inf)
+                rz = np.zeros(len(pending))
+                for line, _half, is_deck in fits:
+                    if is_deck:
+                        continue
+                    xy = line[:, :2]
+                    a, b = xy[:-1], xy[1:]
+                    d = b - a
+                    l2 = np.maximum((d * d).sum(1), 1e-12)
+                    v = mid[:, None, :] - a[None, :, :]
+                    t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
+                    q = a[None, :, :] + t[:, :, None] * d[None, :, :]
+                    dm = np.hypot(q[:, :, 0] - mid[:, None, 0], q[:, :, 1] - mid[:, None, 1])
+                    k = np.argmin(dm, axis=1)
+                    dm = dm[row, k]
+                    seg = d[k]
+                    seg = seg / np.maximum(np.hypot(seg[:, 0], seg[:, 1]), 1e-12)[:, None]
+                    if line.shape[1] >= 3:
+                        zq = line[k, 2] + t[row, k] * (line[k + 1, 2] - line[k, 2])
+                    else:
+                        zq = ref
+                    along = np.abs((wt * seg).sum(1))
+                    take = (dm < rd) & (along >= par_min) & (dm <= WALL_FIT_REACH_M)
+                    rd[take] = dm[take]
+                    rz[take] = zq[take]
+                ref = np.where(untagged & np.isfinite(rd), rz, ref)
             fd = np.full(len(pending), np.inf)      # (nearest carriageway of any direction, at its level)
             fv = np.zeros((len(pending), 2))
             ft = np.zeros((len(pending), 2))
@@ -279,7 +312,6 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
             pv = np.zeros((len(pending), 2))
             pt = np.zeros((len(pending), 2))
             ph = np.zeros(len(pending))
-            par_min = math.cos(math.radians(WALL_FIT_MAX_DEG))
             for line, half, is_deck in fits:
                 xy = line[:, :2]
                 a, b = xy[:-1], xy[1:]
@@ -317,6 +349,7 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
                     pv[take] = q[take, k[take]] - mid[take]
                     pt[take] = seg[take]
                     ph[take] = half
+                    pz[take] = zq[take]
             near = walls & np.isfinite(pd) & (pd <= WALL_FIT_REACH_M)
             across = walls & np.isfinite(fd) & (fd <= WALL_FIT_REACH_M) & (fd <= fh + 1.0) \
                 & (np.abs((wt * ft).sum(1)) < math.cos(math.radians(WALL_ACROSS_DEG)))
@@ -350,6 +383,11 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
                 edge[edge] = _in_outlines(outlines, mid[edge])
             surf, on = np.where(edge, wide, surf), on | edge
         z = np.where(on, surf, z)
+        if walls.any():
+            # A wall laid along a carriageway follows that carriageway's own height: the ground beside it can be a
+            # bridge's approach fill, and the wall climbed it to the deck's height at the abutments (two end panels
+            # stood at the deck where a wall crossed under the Galgenbergstraße bridge).
+            z = np.where(near, pz, z)
         # A wall running onto a bridge keeps to its deck: a stretch of its panels that would stand on the
         # ground under the deck, with the panels on both sides of that stretch at the deck's height, is on
         # the bridge (OSM often leaves layer / bridge off a noise wall along one: the wall broke into the
