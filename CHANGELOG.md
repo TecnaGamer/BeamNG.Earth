@@ -2,6 +2,16 @@
 
 What changed in each release of BeamNG.Earth, newest first.
 
+## Unreleased
+
+### New
+- **Racetracks** (OpenStreetMap `highway=raceway`): the racing line is graded as a track, with smooth banking taken
+  from the ground, one surface where track pieces overlap, closed loops that meet at their seam, and speedway ovals,
+  short ovals and road courses told apart from their shape. Tunnels under a track are dug without disturbing the
+  surface above. Track walls are drawn as jersey barriers, with catch fences and tyre stacks where corners need them;
+  no buildings, poles or traffic on the track. Mapped grandstands are off by default (`BNE_RACE_STANDS=on`).
+- **Drag strips** run by the game's own drag racing system, staged at the end the roads come to.
+
 ## 1.8.2 beta (2026-11-05)
 
 > **Join the TGForever Discord, [discord.gg/tgf](https://discord.gg/tgf), to chat, get help, report bugs or help
