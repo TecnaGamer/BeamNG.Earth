@@ -1157,6 +1157,78 @@ class BridgePassageTest(unittest.TestCase):
         R3, *_ = bld._passages([ring], [{"bridge_masonry": "stone", "height": 10.0}], ["k"], [47.0], road)
         self.assertEqual(len(R3), 1)
 
+    def test_ground_pieces(self):
+        import geodesy
+        f = geodesy.EnuFrame(37.41, -122.21)
+
+        def elev_of(fn):        # ground by the point's east (m) in f
+            def elev(la, lo):
+                e = f.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)[0]
+                return fn(np.asarray(e, np.float64))
+            return elev
+        gallery = np.array([[0, 0], [1000, 0], [1000, 11], [0, 11], [0, 0]], float)
+        trench = elev_of(lambda e: np.where(np.abs(e - 500) < 40, 89.6, 99.7))
+        pieces, drop = bld.ground_pieces(f, gallery, 0.0, 0.0, trench)
+        self.assertAlmostEqual(drop, 10.1, places=3)       # (the slope its mapped height spans)
+        self.assertGreater(len(pieces), 2)
+        self.assertAlmostEqual(sum(bld._area2(r) / 2 for r in pieces), 11000.0, delta=1.0)    # the whole of it, no overlap
+        for r in pieces:            # at most PIECE_LEN_M long
+            self.assertLessEqual(float(np.ptp(r[:, 0])), bld.PIECE_LEN_M + 1.0 + 1e-6)
+        # the same cuts whichever tile asks (its rings relative to another corner) and however its outline is drawn
+        cuts = sorted(round(float(r[:, 0].max()), 6) for r in pieces)
+        shifted, _ = bld.ground_pieces(f, gallery - [512.0, 256.0], 512.0, 256.0, trench)
+        self.assertEqual(sorted(round(float(r[:, 0].max()) + 512.0, 6) for r in shifted), cuts)
+        redrawn = np.roll(gallery[:-1], 2, axis=0)      # (clean_ring's: counter-clockwise, no closing point)
+        flipped, _ = bld.ground_pieces(f, redrawn, 0.0, 0.0, trench)
+        self.assertEqual(sorted(round(float(r[:, 0].max()), 6) for r in flipped), cuts)
+        # longer than a road tile: in pieces on flat ground too (its far ends are other tiles')
+        self.assertGreater(len(bld.ground_pieces(f, gallery, 0.0, 0.0, elev_of(lambda e: 0.002 * e))[0]), 2)
+        # left whole: shorter than a tile on flat ground, short, or wide
+        mid = np.array([[0, 0], [200, 0], [200, 11], [0, 11], [0, 0]], float)
+        self.assertEqual(bld.ground_pieces(f, mid, 0.0, 0.0, elev_of(lambda e: 0.002 * e)), ([mid], 0.0))
+        short = np.array([[0, 0], [80, 0], [80, 11], [0, 11], [0, 0]], float)
+        self.assertEqual(len(bld.ground_pieces(f, short, 0.0, 0.0, elev_of(lambda e: 0.5 * e))[0]), 1)
+        wide = np.array([[0, 0], [1000, 0], [1000, 60], [0, 60], [0, 0]], float)
+        self.assertEqual(len(bld.ground_pieces(f, wide, 0.0, 0.0, trench)[0]), 1)
+
+    def test_long_building_on_a_grade_keeps_its_height_over_its_ground(self):
+        # the SLAC Klystron Gallery: 18.3 m mapped (lowest ground to top) over a steady grade along it; in pieces, each
+        # on its own ground, its height is what is left of that over the grade (~3 m), not 18.3 m over every piece
+        import geodesy
+        import mapgeom
+        f = geodesy.EnuFrame(37.41, -122.21)
+        e = np.array([-372.0, 628.0, 628.0, -372.0, -372.0]); n = np.array([120.0, 120.0, 131.0, 131.0, 120.0])
+        la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+        cell = mapgeom.Features(layer="buildings", ids=np.array(["w162058026"]), kind=np.full(1, mapgeom.POLYGON, np.uint8),
+                                part_off=np.arange(2, dtype=np.int64), ring_off=np.arange(2, dtype=np.int64),
+                                coord_off=np.array([0, 5], np.int64), lonlat=np.stack([lo, la], 1).astype(np.float64),
+                                attrs={"height": np.array([18.3])})
+
+        def elev(lat, lon):         # 102.6 m at the west end, 0.5 % down to the east (the linac's grade)
+            ee = f.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.0)[0]
+            return 100.74 - 0.015 * (np.asarray(ee, np.float64) + 372.0) + 1.86
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [cell], elev)
+        self.assertGreater(len(items), 2)
+        for spec, gmin, gmax in items:
+            self.assertAlmostEqual(spec.height, 18.3 - 15.0, delta=0.1)
+            self.assertLessEqual(gmax - gmin, 0.015 * bld.PIECE_LEN_M + 0.2)
+        # every tile it crosses draws the pieces whose centre is its own (the one by I-280 collidable there, its
+        # centre's tile 1.1 km off): each piece once, all of it
+        area, n = 0.0, 0
+        for tx in range(-2, 3):
+            got = bld.tile_buildings(f, 256.0 * tx, 0.0, 256.0 * (tx + 1), 256.0, [cell], elev)
+            for spec, _g0, _g1 in got:
+                c = spec.ring.mean(0)
+                self.assertFalse(np.allclose(spec.ring[0], spec.ring[-1]), "a clean ring, not closed")
+                # its whole roof: a closed ring triangulated to half of it (a hole the car's front dropped into)
+                self.assertAlmostEqual(sum(bld._area2(spec.ring[list(t)]) / 2 for t in bld.triangulate(spec.ring)),
+                                       bld._area2(spec.ring) / 2, delta=0.01)
+                self.assertTrue(0 <= c[0] < 256 and 0 <= c[1] < 256, (tx, c))
+                area += bld._area2(spec.ring) / 2
+            n += len(got)
+        self.assertGreaterEqual(n, 1000 / bld.PIECE_LEN_M)
+        self.assertAlmostEqual(area, 1000.0 * 11.0, delta=2.0)
+
 
 class MachineLearnedFootprintTest(unittest.TestCase):
     """Microsoft's machine-learned footprints on a road bridge or on water are its deck or a boat (Tower Bridge's
