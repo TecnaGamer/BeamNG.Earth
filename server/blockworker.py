@@ -443,7 +443,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()
-        classes, complete = _s.surface.classes(keep["lat"], keep["lon"])
+        classes, complete = _s.surface.block_classes(frame, cx, cy, keep["lat"], keep["lon"])
+        stages["classes"] = time.perf_counter() - t1  # subset of landcover, including overlap-cache work
         idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
         if _s.sea is not None and not provisional:  # under water: the bed (no grass growing through the surface)
             idx[_s.sea.depth(keep["lat"], keep["lon"]) > WATER_BED_M] = surfacemod.MUD
