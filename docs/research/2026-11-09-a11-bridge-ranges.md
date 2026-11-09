@@ -51,3 +51,5 @@ The Windows plan-fixture mismatch was subsequently reproduced locally by moving 
 The golden was regenerated for the deliberately changed test input. Production grading and cache formats remain unchanged. The focused Python 3.14 run passes 157 tests; Python 3.12 passes all 29 Germany and bake-format tests.
 
 The complete `tools/quality_gate.py` run also passes in the isolated Python 3.12 environment: all 56 server modules, Lua tests, Node map-math tests, 12 Rust serverlist tests, and mod/BeamMP packaging.
+
+GitHub Actions on `36b54f09` passed Ubuntu's complete gate and Windows' seven bake-format tests. With the Germany module now importable, Windows exposed an additional test portability issue: its cache-eviction test asserted Linux's exact missing-file error text. That assertion was removed; the test still requires a warning, false lookups during backoff, a build-cache fault, no downloads during backoff, and a successful re-fetch afterwards.
