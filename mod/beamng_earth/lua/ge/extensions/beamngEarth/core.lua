@@ -2679,6 +2679,11 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    do                              -- (traffic over the limit as the country drives: speeding.lua)
+      local ok, err = pcall(require('beamngEarth/speeding').update, dtReal, navgraph.currentGraph())
+      if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
+    end
+    t = mark('speeding', t)
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do
