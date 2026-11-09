@@ -10,7 +10,7 @@ The candidate removes the duplicate generated footbridge along the imported walk
 
 ## Mount Henry Bridge
 
-The modelled bridge replaces the generated bridge, but the railway approach still does not join its track.
+The modelled bridge replaces the generated bridge, but a solid modelled end blocks part of the road approach and the railway does not join its track.
 
 ![Mount Henry comparison](images/3dmr-bridges/mount-henry-19-comparison.jpg)
 
@@ -20,4 +20,4 @@ The model replaces the generated bridge, but its end structure still obstructs t
 
 ![Narrows comparison](images/3dmr-bridges/narrows-19-comparison.jpg)
 
-Dragon Bridge in Da Nang was also checked as a control. These locations do not establish worldwide correctness. Visual checks do not establish continuous vehicle handling, collision coverage, surveyed elevation or clearance across the full width of an underpass. The crossing-clearance check is conservative and can leave an approach unchanged. Railway connections, the Narrows obstruction, further in-game driving and collision checks, and CI remain outstanding. Keep the PR in draft.
+Dragon Bridge in Da Nang was also checked as a control. These locations do not establish worldwide correctness. Visual checks do not establish continuous vehicle handling, collision coverage, surveyed elevation or clearance across the full width of an underpass. The crossing-clearance check samples across the mapped road width, is conservative and can leave an approach unchanged; it cannot guarantee clearance between samples. The Mount Henry road and railway obstructions, Narrows obstruction, further in-game driving and collision checks, and CI remain outstanding. Keep the PR in draft.

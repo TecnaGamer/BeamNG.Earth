@@ -57,8 +57,9 @@ are protected with smooth shoulder transitions. Profiles
 are shared between anchor views and apply only with 3DMR enabled. Where a road
 approach must pass above a lower road, the importer can generate an elevated deck
 using the same profile, leaving the lower terrain unchanged. The candidate skips an
-approach when sampled crossing headroom is insufficient or uncertain; this sampling
-is not a full clearance guarantee. An existing mapped
+approach when sampled crossing headroom is insufficient or uncertain. Samples cover
+the mapped crossing width at intervals; they cannot guarantee clearance between
+samples or where the source road width or elevation is inaccurate. An existing mapped
 end already overlapping the model at the same height does not need a new profile.
 Terrain noise outside these local approach corridors is unchanged.
 
