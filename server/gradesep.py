@@ -57,6 +57,9 @@ TURN_COS = 0.7          # a span goes on onto a joined line turning less than ~4
 SHORT_ROAD_TUNNEL_M = 80.0  # m: a road's tunnel this short crossed by a ground line ...
 UNDERPASS_COVER_M = 12.0    # ... with less ground over it than this (over its approaches PORTAL_OUT_M past its portals)
 PORTAL_OUT_M = 10.0         # is an underpass: ground under the line over it, which gets the bridge (_underpasses)
+CUT_SIDE_M = (15.0, 25.0, 35.0, 45.0)  # m along the line over a longer one's crossing where its ground is read either
+                            # side: a cutting (SEP_M over the crossing's ground somewhere on both) makes it an underpass
+                            # (a dual carriageway's cutting is 40 m wide and more: Highway 3 at Hameenlinna)
 NEAR_M = 60.0           # m round the cell's own lines that neighbours' lines are taken from
 RAIL_HALF_M = 2.5       # m: a track's half width (its ballast)
 
@@ -427,9 +430,10 @@ def _crossings(lines, over, cand):
 
 
 def _underpasses(md, frame, pts, starts, kinds, groups):
-    """keep per line (pts rows starts[n]..starts[n + 1]; kinds, groups arrays): False for a road's short tunnel
-    (kind 3) that is no underpass: none of the other ground lines crosses over it away from their ends, or the ground
-    there stands UNDERPASS_COVER_M or more over the ground PORTAL_OUT_M past its portals (a short tunnel through a hill with a road over it). OSM maps an underpass as the
+    """keep per line (pts rows starts[n]..starts[n + 1]; kinds, groups arrays): False for a road's tunnel (kind 3)
+    that is no underpass: none of the other ground lines crosses over it away from their ends, or the ground there
+    stands UNDERPASS_COVER_M or more (roads.TUNNEL_OPEN_COVER for a tunnel of SHORT_ROAD_TUNNEL_M or longer) over the
+    ground PORTAL_OUT_M past its portals (a short tunnel through a hill with a road over it). OSM maps an underpass as the
     lower road's tunnel under a road on the ground; built as a tunnel, its vault and soil stood over the motorway on
     top (the A7 at Brackel and at Schuby, GitHub #228 / #243)."""
     keep = np.ones(len(kinds), bool)
@@ -454,10 +458,14 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
     total = {}
     for p, c in enumerate(cand):
         total[find(p)] = total.get(find(p), 0.0) + lens[c]
-    for p, c in enumerate(cand):
-        if total[find(p)] >= SHORT_ROAD_TUNNEL_M:
-            keep[c] = False
-    cand = [c for c in cand if keep[c]]
+    # a longer one is an underpass only with the ground over it so low that it would be opened anyway
+    # (roads.TUNNEL_OPEN_COVER: a road in the open under a road the map draws on the ground): Highway 3 under Paasikiventie
+    # and the Goodman centre in Hameenlinna (GitHub #1009), tunnel pieces over 80 m in all in a cutting the DEM shows
+    # open under the bridges; opened with no bridge over it, the crossing roads were graded down into the cutting
+    # (and only in a cutting the DEM shows: the ground of the line over it SEP_M higher either side of the crossing; a
+    # covered tunnel on a flat or coarse DEM is no underpass, or every street over it got a humped bridge)
+    long = {c for p, c in enumerate(cand) if total[find(p)] >= SHORT_ROAD_TUNNEL_M}
+    cover = {c: (roads.TUNNEL_OPEN_COVER if c in long else UNDERPASS_COVER_M) for c in cand}
     if not cand:
         return keep
     over = np.flatnonzero((kinds == 0) | (kinds == 1))
@@ -465,12 +473,13 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
     over = over.tolist()
     ask, at = [], []                # (DEM points, (candidate, crossings' slice, portals' slice))
     for c, cr in zip(cand, hits):
-        pts = []
+        pts, owners = [], []
         for pi, _arc, pt in cr:
             o = over[pi]
             ends = (lines[o][0], lines[o][-1])
             if groups[o] != groups[c] and min(np.hypot(*(e - pt)) for e in ends) >= END_M:
                 pts.append(np.asarray(pt, np.float64))
+                owners.append(o)
         if not pts:
             keep[c] = False
             continue
@@ -479,15 +488,27 @@ def _underpasses(md, frame, pts, starts, kinds, groups):
         u1 = xy[-1] - xy[-2]
         portals = [xy[0] + PORTAL_OUT_M * u0 / max(np.hypot(*u0), 1e-9),
                    xy[-1] + PORTAL_OUT_M * u1 / max(np.hypot(*u1), 1e-9)]
-        at.append((c, len(ask), len(ask) + len(pts)))
-        ask += pts + portals
+        sides = []
+        if c in long:               # (the line over it, CUT_SIDE_M either way along it from each crossing)
+            for pt, o in zip(pts, owners):
+                ol = lines[o]
+                k = int(np.argmin(np.hypot(*(0.5 * (ol[:-1] + ol[1:]) - pt).T))) if len(ol) > 1 else 0
+                t = ol[min(k + 1, len(ol) - 1)] - ol[k]
+                t = t / max(float(np.hypot(*t)), 1e-9)
+                sides += [pt + d * t for d in CUT_SIDE_M] + [pt - d * t for d in CUT_SIDE_M]
+        at.append((c, len(ask), len(ask) + len(pts), len(sides)))
+        ask += pts + portals + sides
     if ask:
         P = np.asarray(ask, np.float64)
         la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], 0.0)
         z = np.asarray(_dem(md).sample(np.asarray(la), np.asarray(lo), DEM_ZOOM), np.float64)
-        for c, i0, i1 in at:
-            if not (np.nanmax(z[i0:i1]) - np.nanmin(z[i1:i1 + 2]) < UNDERPASS_COVER_M):
+        for c, i0, i1, ns in at:
+            if not (np.nanmax(z[i0:i1]) - np.nanmin(z[i1:i1 + 2]) < cover[c]):
                 keep[c] = False
+            elif ns:                # (a longer one: in a cutting at one of its crossings at least)
+                zs = z[i1 + 2:i1 + 2 + ns].reshape(-1, 2, len(CUT_SIDE_M))     # (crossing, side, distance)
+                if not (np.nanmin(np.nanmax(zs, axis=2), axis=1) - z[i0:i1] >= SEP_M).any():
+                    keep[c] = False
     return keep
 
 
