@@ -1,39 +1,25 @@
-# 3DMR bridge visual checks
+# 3DMR bridge comparison: BeamNG.Earth 1.9
 
-Captured in BeamNG.drive 0.40.5 with fixed daytime lighting and matching geographic camera plans. The upstream baseline is dev commit `0f0f38a349a2b166641b9ff1f637b7a1febc3903`. FV31 is the importer source from local commit `520dbe407f8d176b6af4248c7dbc152f79666872`, reproduced in this branch. Original public GLBs are retained in the importer comparisons.
+These matched views use BeamNG.drive 0.40.5, fixed daytime lighting and the same published 3DMR models. The left side is BeamNG.Earth `v1.9.0-beta` (`6c14976`); the right is that release with the bridge changes applied (`5e762311`). The current PR also includes a later merge of the development branch, tested separately. The two sides use the same geographic camera positions, targets and field of view.
 
-## Importer comparisons
+## Mount Henry Bridge (3DMR 53)
 
-### Narrows Bridge (3DMR 54)
+![Mount Henry: 1.9 and 1.9 with this PR](images/3dmr-bridges/mount-henry-19-comparison.jpg)
 
-Left: upstream dev. Right: FV31 with the original public model. The duplicate generated upper bridge is removed and the imported deck aligns with the approaches. The long raised banks alongside the lower road and railway are already visible upstream; they remain unresolved. Width/rail seams and abrupt transitions remain visible.
+The modeled bridge is visible in place of the elevated generated deck. The modeled road ends and surrounding generated approaches still meet abruptly, and the railway connection is imperfect.
 
-![Narrows upstream versus FV31](images/3dmr-bridges/narrows-upstream-vs-fv31.jpg)
+## Narrows Bridge (3DMR 54)
 
-### Mount Henry Bridge (3DMR 53)
+![Narrows: 1.9 and 1.9 with this PR](images/3dmr-bridges/narrows-19-comparison.jpg)
 
-Left: upstream dev. Right: FV31 with the original public model. The duplicate generated bridge is removed; this overview does not establish smooth approaches or complete collision.
+The imported bridge is visible in place of the generated deck. The bank beside the lower road is also present in 1.9 and remains after this change. The distant building with a missing texture is a separate existing model issue.
 
-![Mount Henry upstream versus FV31](images/3dmr-bridges/henry-upstream-vs-fv31.jpg)
+## Elizabeth Quay Bridge (3DMR 55)
 
-### Dragon Bridge (3DMR 22): correction of an earlier patch regression
+![Elizabeth Quay: 1.9 and 1.9 with this PR](images/3dmr-bridges/elizabeth-quay-19-comparison.jpg)
 
-This pair is **FV30 versus FV31**, not upstream versus this PR. The green/patchy road surface introduced by the earlier patch is removed. Fresh road-skin workers reconstruct the grading context, and generic floors without an explicitly identified Asphalt surface retain native terrain grading. Both locations completed all eight views in this correction run.
+The footbridge is raised above the water, but a generated walkway remains visible below it and its connections to the shore need further review.
 
-![Dragon Bridge FV30 versus FV31](images/3dmr-bridges/dragon-fv30-vs-fv31.jpg)
+## Validation limits
 
-## Separate model-author experiments
-
-The following pairs use **the same FV31 importer on both sides**: original public model on the left and a local model with 15 m approach continuations on the right. They are not evidence of another importer change. Model files are not included in this PR or uploaded to 3DMR. The terrain and abrupt joins remain; extending the deck alone is not a complete transition fix.
-
-![Narrows local continuation experiment](images/3dmr-bridges/narrows-model-continuations.jpg)
-
-![Mount Henry local continuation experiment](images/3dmr-bridges/henry-model-continuations.jpg)
-
-After these game captures, closed concrete infill was added below both ends of both local continuation models. It was inspected in Blender and adds 72 triangles to Narrows and 140 to Mount Henry. **These photographs predate that infill; it has not yet been validated in-game.** Main spans and lower shared paths remain open.
-
-## Scope and limitations
-
-The focused catalogue pass covered Mount Henry, Narrows, Elizabeth Quay, Dragon Bridge, Dalal Bridge, Brookfield Place and Omar Ali Saifuddin Mosque. It is not a whole-catalogue compatibility claim. Brookfield Place's existing NO TEXTURE facade remains. Elizabeth Quay is raised out of the water, but shoreline connections still need review. The photographs cannot establish end-to-end vehicle handling or complete barrier collision. Keep this PR draft pending CI and driving review.
-
-Code validation for FV31: 11 Python integration modules, 534 tests collected, 531 passed and 3 optional checks skipped; normal and BeamMP packaging passed. The photo recorder is a separate local test helper and does not modify terrain or physics.
+The view comparison uses the public models and does not include local model edits. Photographs do not establish collision quality or vehicle handling. The release and PR snapshots were each also captured at Dragon Bridge (3DMR 22); the comparison is limited to the locations and views tested.
