@@ -328,6 +328,9 @@ running other code are left out, and anything a helper fails on is built on your
 network you trust: the connection is not encrypted.
 
 ### Developer setup
+Rail-crossing props can be regenerated with `python3 tools/build_rail_crossing_props.py`;
+their lettering uses the bundled DejaVu Sans Bold font on every platform.
+
 `python3 install.py` also works from a checkout (mod copy, `.venv`, then `python3 start.py`); by hand:
 1. Python 3.10+ with the packages in `server/requirements.txt`. The server needs its Rust module: the checkout
    carries it built for Linux x86-64 (`server/earthfast.abi3.so`) and Windows (`server/earthfast.pyd`); after

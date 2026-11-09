@@ -24,6 +24,7 @@ MODULES = (
     "test_worldbundle", "test_world_cache", "test_peerwork",
     "test_host_package", "test_carriageway_solver",
     "test_portugal_imagery",
+    "test_rail_crossing_assets",
 )
 
 
