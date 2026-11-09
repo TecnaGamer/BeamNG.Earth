@@ -205,11 +205,41 @@ function M.setRealUtcOffset(hours, lat, lon)
   if changed and mode == 'real' then timer = RESYNC_S end
 end
 
+-- Pure: the sun's elevation (degrees above the horizon, refraction left out) at local date y-mo-d, localHours
+-- (0-24) in a zone utcOffset hours from UTC, at lat / lon (NOAA's low-precision formulas: within ~1 degree, enough to
+-- tell day from night). The game's own clock goes in (status() below), so the map's badge shows the night in the
+-- Manual sky mode too, not only on the real clock (GitHub #874: a sun icon at night under a clear sky).
+function M.sunElevationDeg(y, mo, d, localHours, utcOffset, lat, lon)
+  local rad = math.pi / 180
+  local utc = (tonumber(localHours) or 0) - (tonumber(utcOffset) or 0)
+  -- the day of the year (1 Jan = 1), the UTC hours carried into it (no os.time: the game's clock, not the machine's)
+  y, mo, d = tonumber(y) or 2000, tonumber(mo) or 1, tonumber(d) or 1
+  local leap = (y % 4 == 0 and y % 100 ~= 0) or y % 400 == 0
+  local before = { 0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334 }
+  local doy = (before[mo] or 0) + d + ((leap and mo > 2) and 1 or 0) + utc / 24
+  local g = 2 * math.pi / (leap and 366 or 365) * (doy - 1)
+  local eqt = 229.18 * (0.000075 + 0.001868 * math.cos(g) - 0.032077 * math.sin(g)
+    - 0.014615 * math.cos(2 * g) - 0.040849 * math.sin(2 * g))
+  local decl = 0.006918 - 0.399912 * math.cos(g) + 0.070257 * math.sin(g) - 0.006758 * math.cos(2 * g)
+    + 0.000907 * math.sin(2 * g) - 0.002697 * math.cos(3 * g) + 0.00148 * math.sin(3 * g)
+  local solarMin = utc * 60 + eqt + 4 * (tonumber(lon) or 0)       -- true solar time, minutes
+  local ha = (solarMin / 4 - 180) * rad
+  local phi = (tonumber(lat) or 0) * rad
+  local s = math.sin(phi) * math.sin(decl) + math.cos(phi) * math.cos(decl) * math.cos(ha)
+  return math.asin(math.max(-1, math.min(1, s))) / rad
+end
+M.NIGHT_ELEV_DEG = -0.833   -- the sun's centre this far under the horizon: its top edge has set (refraction included)
+
 function M.status()
   local tod = getTod()
   if not tod then return { mode = mode, pending = pending, switched = switched } end
   local h = ((tonumber(tod.time) or 0) + 0.5) % 1.0 * 24
+  local sunElev = nil
+  if tod.year and tod.month and tod.day and tod.latitude and tod.longitude then
+    sunElev = M.sunElevationDeg(tod.year, tod.month, tod.day, h, tod.utcOffset, tod.latitude, tod.longitude)
+  end
   return {
+    sunElev = sunElev,
     mode = mode, pending = pending, switched = switched, inOurLevel = inOurLevel,
     grace = math.max(0, graceUntil - clock), mission = mission, lat = tod.latitude, lon = tod.longitude,
     date = string.format('%04d-%02d-%02d', tod.year or 0, tod.month or 0, tod.day or 0),
