@@ -625,6 +625,40 @@ class PartsTest(unittest.TestCase):
         self.assertEqual(len(items), 1, "the part alone")
         self.assertEqual(len(self._items((60, 60, 21, 22), height=1.0)), 1, "(an outline mapped as a base: its part)")
 
+    def _dome(self, num_floors, part_rect=(-6, -6, 12, 12)):
+        """A 60 x 40 m building, height 54 to its lantern, with a dome part mapped without a height."""
+        import geodesy
+        f = geodesy.EnuFrame(38.9787, -76.491)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        b = Feats(["B"], [ll(-30, -20, 60, 40)], **{"class": ["civic"], "height": [54.0], "has_parts": [1.0],
+                                                     "num_floors": [num_floors], "min_height": [np.nan]})
+        parts = Feats(["p1"], [ll(*part_rect)], building_id=["B"], height=[np.nan], min_height=[np.nan],
+                      num_floors=[np.nan], min_floor=[np.nan], roof_shape=["dome"])
+        return bld.tile_buildings(f, -256, -256, 256, 256, [b], lambda la, lo: np.zeros(np.shape(la)),
+                                  part_layers=[parts])
+
+    def test_parts_without_heights_rise_from_a_body_of_its_levels(self):
+        """The Maryland State House (OSM w50319294): height 54.31 m, 3 levels, and its dome's parts mapped without
+        heights. Drawn as its outline at full height it was a 54 m block; the dome goes up to the building's height,
+        the outline stays at its levels."""
+        items = self._dome(3.0)
+        by_area = sorted(items, key=lambda it: abs(bld._area2(it[0].ring)))
+        dome, body = by_area[0][0], by_area[-1][0]
+        self.assertEqual(len(items), 2, "the dome and the body")
+        self.assertGreater(dome.height + (dome.min_h or 0.0), 45.0, "(its walls; its roof on them up to 54)")
+        self.assertLessEqual(dome.height + (dome.min_h or 0.0), 54.0)
+        self.assertLess(body.height + (body.min_h or 0.0), 12.0)
+        self.assertAlmostEqual(abs(bld._area2(body.ring)) / 2, 2400.0, delta=30.0)
+
+    def test_parts_without_heights_and_no_levels_keep_the_outline(self):
+        """Without levels there is no body height to go by: the outline at the building's height, as before."""
+        items = self._dome(np.nan)
+        self.assertEqual([round(s.height + (s.min_h or 0.0)) for s, _, _ in items], [54])
+
 
 class OverRoadTest(unittest.TestCase):
     def setUp(self):
