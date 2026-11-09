@@ -273,6 +273,11 @@ def _lay(frame, md, elev, subs, lines, group, h, arms, clear_m, wire_r, box, pro
         ll = np.concatenate([r for _, r in lines])
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
         e, n = _off_roads(frame, md, np.asarray(e, np.float64), np.asarray(n, np.float64), ll, clear_m)
+        import busstationkeep
+        keep = busstationkeep.keepout(md, frame, (x0 - 200.0, y0 - 200.0, x1 + 200.0, y1 + 200.0))
+        if keep:                                # (a bus station's ground: no pole on its platforms or in its yard)
+            xy = keep.push_out(np.column_stack((e, n)))
+            e, n = xy[:, 0], xy[:, 1]
         la2, lo2, _ = frame.enu_to_geodetic(e, n, np.zeros(len(e)))
         la2, lo2 = np.asarray(la2, np.float64), np.asarray(lo2, np.float64)
         _, _, z = frame.geodetic_to_enu(la2, lo2, np.asarray(elev(la2, lo2), np.float64))

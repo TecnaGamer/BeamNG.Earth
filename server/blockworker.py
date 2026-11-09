@@ -83,6 +83,8 @@ class _State:
             self.surface.gas_pads = bool(gas_stations)
             if self.airports is not None:   # ... and the runways (GitHub #337)
                 self.surface.extra_pads = self.airports.runway_pads
+            import busstations              # ... and the bus stations' yards (task 020: the jobs bring them)
+            self.surface.bus_pads = busstations.ON          # (the road tiles keep the yards' pads)
         self.graders = {}           # anchor id -> grading.Grader
         self.chunks = {}            # anchor id -> heightmap.ChunkCache
         self.bridges = {}           # (unused since the chain stores: _chain_store)
@@ -320,6 +322,19 @@ def plan_ahead(g, frame, cx, cy, half):
     t.start()
     return t
 
+def _level_yards_of(holder, z, la, lo):
+    """z with the bus stations' yards levelled (busyard.YardGrader: the pads the road tiles kept, no map reads here);
+    holder: the worker's state or earthd.Server (its surface and DEM)."""
+    surf = getattr(holder, "surface", None)
+    if surf is None or not getattr(surf, "bus_pads", False):
+        return z
+    grader = getattr(holder, "bus_grader", None)
+    if grader is None:
+        import busyard
+        grader = holder.bus_grader = busyard.YardGrader(holder.dem, surf.bus_pad_items)
+    return grader.apply(la, lo, z)
+
+
 def ground(frame, la, lo, z):
     """The DEM heights z at (la, lo) shaped before the road grading: runways graded in (--airports on),
     the sea floor carved in (--sea on), and the land off the roads roughened (grading.terrain_bumps)."""
@@ -327,6 +342,7 @@ def ground(frame, la, lo, z):
     z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
+    z = _level_yards_of(_s, z, la, lo)
     if _s.sea is not None:
         z = _s.sea.carve(la, lo, z)
     return z
@@ -408,7 +424,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         t2 = time.perf_counter()
         if provisional:
             part_s["dem"] += t2 - t1
-            return _s.airports.apply(la, lo, z) if _s.airports is not None else z
+            return _level_yards_of(_s, _s.airports.apply(la, lo, z) if _s.airports is not None else z, la, lo)
         z = ground(frame, la, lo, z)
         part_s["dem"] += t2 - t1
         part_s["sea"] += time.perf_counter() - t2
@@ -898,6 +914,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     if gas_stations:                    # pumps and refuel areas; their canopy outlines left out of the buildings
         import gasstations
         fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads)
+    if buildings:                       # bus stations draw their own roofs: the sheds the map data makes of them are left out
+        import busstations
+        import busyard
+        skip = frozenset(skip) | busstations.tile_skip(frame, tx, ty, _s.md)
+        busyard.tile_pads(frame, tx, ty, _s.md, fuel_pads)      # ... and their yards painted in (earthd keeps them)
     mark("fuel")
     props = [] if buildings else None
     lines = [] if buildings else None
@@ -1004,11 +1025,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         if fuel:
             import gasstations
             park = gasstations.clear_park(park, fuel)
+        if park is not None:
+            import busstationpark
+            park = park + busstationpark.rows(frame, _s.md, box, elev)
         buildingsmod.brick_walks(walks, items, centre[0], centre[1], side)
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
     mark("doors_park")
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks)
+    chunks += _bay_lines(frame, tx, ty, _s.md)
     mark("markings")
     if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
         _n0 = len(chunks)
@@ -1155,12 +1180,20 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                      (lambda keys: osm.cells(keys, wait=False)) if osm is not None else None, bld_fn))
         except Exception as ex:
             log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import busfurniture
         import shelters
-        try:
-            props.extend(shelters.rows(frame, infra_fn, box, elev, near_roads, lambda k: _s.md.cell(
-                k, layers=("roads",), kind="demand").layers.get("roads")))
+        try:                            # (not under a bus station's roof, nor in its bays: it has its own)
+            props.extend(busfurniture.clear_of_stations(shelters.rows(frame, infra_fn, box, elev, near_roads, lambda k: _s.md.cell(
+                                                            k, layers=("roads",), kind="demand").layers.get("roads")),
+                                                        frame, _s.md, box))
         except Exception as ex:
             log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        try:
+            props[:] = busfurniture.drop_stock_lamps(props, frame, _s.md, box, wires)     # (the station lights its own ground)
+            props.extend(busfurniture.rows(frame, _s.md, box, elev,
+                                          poleprofiles.lamp_country_selector(pole_profile, frame), props))    # benches, bins, lamps at the bus stations
+        except Exception as ex:
+            log.warning("bus station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import industry
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
@@ -1182,6 +1215,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
+    P.bus_col = _station_collision(frame, box, elev, getattr(_s, "md", None)) if buildings else None
     P.turbines = turbine_rows
     P.scene = _scene
     return P
@@ -1203,12 +1237,15 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                              context=P.ctx)
     mark("mesh")
     mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
+    mesh = _with_stations(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None),
+                          drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, P.drawn, xy, q), dem=_s.dem)
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
-                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces) + (P.fuel_pads,)
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces,
+                              bus_col=P.bus_col) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1220,7 +1257,7 @@ GEO_FRAMES_KEPT = 64        # geotile frames' grading views kept per process (_f
 GEO_INPUTS_KEPT = 96        # geotiles' skin inputs kept in memory per process (_skin_inputs)
 EXACT_TOL_COL_M = 0.03      # m a colliding part placed rigidly may be off before it gets its exact variant ...
 EXACT_TOL_M = 0.10          # ... and a render-only part
-GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier")    # parts the car hits ("bld*" too without a bldcol)
+GEO_COLLIDING = ("bldcol", "deck", "tunnel", "railcol", "rail", "barrier", "buscol")    # parts the car hits ("bld*" too without a bldcol)
 _geo_lock = threading.Lock()
 _geo_graders = {}           # (lat0, lon0) -> grading.Grader view of a geotile's frame
 _geo_inputs = {}            # geotile key -> (its session file's _file_sig, its skin inputs), the most recently used last
@@ -1312,7 +1349,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    signs=getattr(P, "signs", None), custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
-                                   turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None))
+                                   turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None),
+                                   bus_col=getattr(P, "bus_col", None))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1922,6 +1960,71 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
         return plazas.merge(mesh, pm)
     except Exception:                   # no plazas rather than no road tile
         log.exception("plazas of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+        return mesh
+
+
+def _bay_lines(frame, tx, ty, md):
+    """The bus stations' bay outlines of road tile (tx, ty) as road mesh line chunks (busstationmesh.line_chunks)."""
+    import busstations
+    if md is None or not busstations.ON:
+        return []
+    try:
+        import busstationmesh
+        import roads as roadsmod
+        box = roadsmod.tile_bbox(tx, ty)
+        found = busstations.stations_near(md, frame, box)
+        return (busstationmesh.line_chunks(found, box) + busstationmesh.lane_chunks(found, box)
+                + busstationmesh.crossing_chunks(found, box) + busstationmesh.edge_chunks(found, box)
+                + busstationmesh.zigzag_chunks(found, box))
+    except Exception:                   # no lines rather than no road tile
+        log.exception("bus station bay lines of the tile (%s, %s)", tx, ty)
+        return []
+
+
+def _station_collision(frame, box, elev, md):
+    """(mesh, boxes) of the bus stations' lean collision in the tile (busstationmesh.collision), or None."""
+    if md is None:
+        return None
+    import busstations
+    if not busstations.ON:
+        return None
+    try:
+        stations = busstations.stations_near(md, frame, box)
+        if not stations:
+            return None
+        import busstationmesh
+        got = busstationmesh.collision(frame, tuple(box), stations, elev, (float(box[0]), float(box[1]), 0.0))
+        return got if got[0] is not None else None
+    except Exception:                   # no colliders rather than no road tile
+        log.exception("bus station collision of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+        return None
+
+
+def _with_stations(mesh, frame, box, elev, origin, md, quad=None, drawn_fn=None, dem=None):
+    """The road mesh with the bus stations near the tile built into it (busstations.py, busstationmesh.py): the
+    platforms, walking zones, open roofs and bay marks, the tile's own triangles only. quad as _with_plazas'. No station: the mesh as it was."""
+    if md is None:
+        return mesh
+    import busstations
+    if not busstations.ON:
+        return mesh
+    try:
+        stations = busstations.stations_near(md, frame, box)
+        if not stations:
+            return mesh
+        import busstationmesh
+        import plazas
+        # on the ground as the road surfaces lie on it (drawn_fn: xy -> z), else the physics ground
+        sm = busstationmesh.mesh(frame, tuple(box), stations,
+                                 busstationmesh.DrawnGround(drawn_fn) if drawn_fn is not None else elev, origin, dem,
+                                 overlap=quad is not None)
+        log.info("bus stations: %s in the tile at %s: %d triangles", [s.name or s.fid for s in stations],
+                 tuple(round(float(v)) for v in box[:2]), 0 if sm is None else len(sm[1]))
+        if quad is not None:
+            sm = _clip_mesh(sm, origin, quad)
+        return plazas.merge(mesh, sm)
+    except Exception:                   # no stations rather than no road tile
+        log.exception("bus stations of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
         return mesh
 
 
