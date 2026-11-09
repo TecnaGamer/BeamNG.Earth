@@ -200,10 +200,35 @@ function M.zoom(notches)
   g.dist = math.max(g.DIST_MIN or 15, math.min(g.DIST_MAX or 600000, g.dist * math.exp((tonumber(notches) or 0) * 0.15)))
 end
 
-function M.setHeading(h)
+-- smooth: turned there over TURN_S, the short way round, easing out (the compass's "face north": the user, 2026-11-08:
+-- "quick and smoothly rotate to north instead of snapping"); the player turning the view meanwhile takes over
+M.TURN_S = 0.4
+local turn = nil            -- {from, d, t, last}: the turn under way (turnStep)
+
+function M.setHeading(h, smooth)
   local g = globe()
-  if g then g.heading = tonumber(h) or 0 end
+  if not g then return end
+  h = tonumber(h) or 0
+  local d = (h - g.heading + math.pi) % (2 * math.pi) - math.pi      -- (the short way: -pi .. pi)
+  if not smooth or math.abs(d) < 1e-4 then
+    turn = nil
+    g.heading = h
+    return
+  end
+  turn = {from = g.heading, d = d, t = 0, last = g.heading}
 end
+
+-- a frame of the turn (onUpdate; g: the globe camera, or any table with .heading)
+function M.turnStep(g, dt)
+  if not turn then return end
+  if math.abs(g.heading - turn.last) > 1e-6 then turn = nil return end    -- (the player turned it meanwhile)
+  turn.t = turn.t + (dt or 0)
+  local k = math.min(1, turn.t / M.TURN_S)
+  g.heading = turn.from + turn.d * (1 - (1 - k) ^ 3)
+  turn.last = g.heading
+  if k >= 1 then turn = nil end
+end
+function M.turning() return turn ~= nil end
 
 -- "Drive here": the car teleported to the place in the middle of the view first, the map staying open over it while
 -- its ground loads, then the camera flown down to the car and handed over (the user, 2026-11-07: "first teleport the
@@ -878,6 +903,7 @@ function M.onUpdate(dtReal)
   if not g then return end
   local s = M.state()
   flyStep(g, dtReal or 0.016)
+  M.turnStep(g, dtReal or 0.016)
   driveStep()
   do
     local core = rawget(_G, 'beamngEarth_core')

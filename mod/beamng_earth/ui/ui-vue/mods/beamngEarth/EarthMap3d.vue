@@ -416,7 +416,7 @@ function keyStep() {
 }
 
 function zoom(n) { engineLua(`beamngEarth_map3d.zoom(${n})`) }
-function north() { engineLua("beamngEarth_map3d.setHeading(0)") }
+function north() { engineLua("beamngEarth_map3d.setHeading(0, true)") }   // (turned smoothly, the short way)
 function back() { engineLua("beamngEarth_map3d.exit()") }
 function to2d() { engineLua("beamngEarth_map3d.to2d()") }
 
