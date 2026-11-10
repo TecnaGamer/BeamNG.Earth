@@ -745,6 +745,19 @@ its forecourt's edge. One plain asphalt pad per site (the gas stations' pad stor
 records go with the station records (`fuel`), with `"energy": ["electricEnergy"]`: the mod hands that to the stock
 POI (the charge prompt, the bolt icon). They come and go with the gas stations; OSM's with `BNGE_OSM_FUEL`.
 
+### Station finder (`server/stationindex.py`; the user, 2026-11-09: "making a new layer on the map that you can enable, one for gas stations and one for ev's to make them easier to find")
+
+The world map's "Gas stations" and "EV chargers" layers, its Nearest button, the radial menu's "Nearest station" and the
+low fuel prompt (the mod's `finder.lua`) ask `stations {id, lat, lon, r_km, kinds, mode}` and get `stations_result {id,
+items: [{lat, lon, name, brand, kind, km}], partial, error?}`: up to 50 stations of the kinds asked (`fuel`, `ev`)
+within `r_km` (at most 25), nearest first. The index keeps each map cell's stations in a small JSON file under
+`<cache>/mapdata/raw/stationindex/`, built from the lists the road tiles lay out (Overture's places and OpenStreetMap's
+fuel and charging stations, merged as the layouts merge them). Mode `map` reads only the cells whose places data is on
+disk already (no download for a map view, up to 16 new cells a call, `partial` for more); mode `near` searches rings of
+cells outward from the car and may download up to 4 cells a call until a station is nearer than the next ring could hold.
+Every road tile reports which of the stations it owns it laid out (`gasstations.tile_sites(..., tried=)`): a listing
+the world built nothing for leaves the answers, and comes back if a later build lays it out.
+
 ### Town signs (`server/townsigns.py`; `BNE_TOWNSIGNS=on`, off by default)
 
 Each country's own town entry and exit signs where a paved road enters a town's built-up land. The towns are
@@ -796,7 +809,7 @@ determinism, queries, the download / weekly refresh / last-good-copy store behin
 the CLI), the grading on synthetic DEMs (limits, data ends, steep / relaxed / coarse, crossings, no steps,
 footprint, determinism, `heightmap.grid_u` with the graded sampler) and the markings (classes, stripe counts,
 designators, on the pavement, no overlaps, mirrored ends, displaced thresholds, closed runways).
-`test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
+`test_stationindex.py` the station finder: a cell's stations, the map's cached cells, Nearest's rings, the road tiles' reports and the `stations` message. `test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
 tests. `test_farfield.py` selection, hysteresis, swap groups, err/sink/skirt and the shipped mod
 assets. `test_mesh.py` mesh mode: selection down to L-2 with the min-level radii (no gaps/overlaps on
 64 m cells), the 25 % hysteresis at 150/400 m, L-2 vertices == terrain PNG heights (float64 and the

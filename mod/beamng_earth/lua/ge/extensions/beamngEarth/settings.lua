@@ -77,6 +77,8 @@ M.SCHEMA = {
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
+  -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
+  lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -154,7 +156,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -900,6 +902,26 @@ end
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
+end
+
+-- The station finder's map layers (finder.lua, server stationindex.py): ask (lat, lon, rKm, kinds {'fuel', 'ev'}, mode
+-- 'map' | 'near' -> { id } or { error }) and poll (id -> nil while waiting, else { items = {{lat, lon, name, brand,
+-- kind, km}...}, partial, error }); Nearest for the car (the GPS set to it, a message saying where).
+function M.uiStations(lat, lon, rKm, kinds, mode)
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  local id, err = f.send(tonumber(lat), tonumber(lon), tonumber(rKm), kinds, mode == 'near' and 'near' or 'map')
+  return id and { id = id } or { error = err }
+end
+function M.uiStationsResult(id)
+  local f = ext('beamngEarth_finder')
+  return f and f.take(tonumber(id)) or nil
+end
+function M.uiNearest()
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  f.nearest()
+  return { ok = true }
 end
 
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else
