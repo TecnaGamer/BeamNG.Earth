@@ -23,6 +23,7 @@ import numpy as np
 import fast
 import landmarks
 import mapgeom
+import nycmassing
 import ships
 import staging
 import francehouses
@@ -3805,7 +3806,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
-                   industrial=None, parts_min_top=None):
+                   industrial=None, parts_min_top=None, nyc=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3818,8 +3819,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
     canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites). min_size (min height m, min
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
-    any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out."""
+    any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out.
+    nyc: nycmassing.Fetch, New York's measured massing: a building without parts of its own that matches a record
+    takes the record's parts (its setbacks), drawn as the map's parts are."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
+    nyc_idx = nyc.index() if nyc is not None else None
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
     for f in layers:
@@ -3838,6 +3842,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 near_ |= (np.hypot(bb_[:, 2] - bb_[:, 0], bb_[:, 3] - bb_[:, 1]) >= SPLIT_MIN_L) \
                     & (bb_[:, 2] >= x0 - pm) & (bb_[:, 0] < x1 + pm) & (bb_[:, 3] >= y0 - pm) & (bb_[:, 1] < y1 + pm)
             rows = np.flatnonzero(near_).tolist()
+        # (New York's measured massing: the rows whose outline takes a record, nycmassing.Records)
+        nyc_rows = nyc_idx.match_layer(f, frame, rows) if nyc_idx is not None and isinstance(f, mapgeom.Features) \
+            else None
         for i in rows:
             if a.get("is_underground") is not None and bool(a["is_underground"][i]):
                 continue
@@ -3859,7 +3866,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             edge = not (x0 <= cx < x1 and y0 <= cy < y1) if own is None else not own.owns(cx, cy)
             if edge and (min_size is not None or float(np.hypot(np.ptp(e), np.ptp(n))) < SPLIT_MIN_L
                          or (a.get("src_record") is not None and landmarks.of(a["src_record"][i]) is not None)
-                         or (key is not None and parts_of.get(str(key)))):
+                         or (key is not None and parts_of.get(str(key)))
+                         or (nyc_rows and i in nyc_rows and nycmassing.takes(a, i))):
                 continue                # (its centre's tile's: only a long one's pieces may be this tile's)
             if min_size is not None:
                 h_ = a["height"][i] if a.get("height") is not None else None
@@ -3892,6 +3900,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 continue                # a mapped area, not a building (the Golden Gate toll plaza's 0.01 m footprint
                                         # drew a slab with a rim round the booths, 2026-10-21)
             bparts = parts_of.get(str(key)) if key is not None else None
+            nyc_group = None
+            if not bparts and nyc_rows and i in nyc_rows and nycmassing.takes(a, i):
+                # (no parts of its own: New York's measured setbacks, a band per roof level; the 2014 model has the
+                # water tanks and bulkheads too: drawn as parts, the building takes no procedural tank)
+                bparts = nyc_idx.parts(nyc_rows[i]) or None
+                nyc_group = ("nyc", key if key is not None else (id(f), i))
             ship_parts = None
             if bparts and "src_dataset" in a and str(a["src_dataset"][i]) == "OpenStreetMap":
                 # a ship mapped with parts (the Iowa's turrets, the Queen Mary's funnels): the hull, its parts on deck
@@ -3961,6 +3975,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                                   "bridge_masonry": str(at.get("facade_material") or "").lower()
                                   if _on_support(r, supports) is not None and str(at.get("facade_material") or "")
                                   .lower() not in STEEL_MATERIALS else None})
+                    if nyc_group is not None:
+                        attrs[-1]["_photo_group"] = nyc_group
                     looks.append(look)
                     mins.append(pmh)
                 if key is not None:
@@ -4120,10 +4136,19 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         house_res = house_land.at_many(np.add.reduceat(la_all, starts) / cnt, np.add.reduceat(lo_all, starts) / cnt) \
             if len(la_all) else np.zeros(len(rings), bool)
     # (the roofs' colours in the tile's cached aerial photo, RoofPhoto: all at once)
-    roof_rgb = photo.colours([np.asarray(r, np.float64)[:, :2] + [x0, y0] for r in rings]) \
+    # (a measured massing's bands share the colour of the building's first, its lowest: the bands are stacked, each
+    # ring over the whole of the ones above it, and sampling each cost the photo's pass twice the pixels, 2026-11-10)
+    first_of = {}
+    pick = [k_ for k_, at in enumerate(attrs) if at.get("_photo_group") is None
+            or first_of.setdefault(at["_photo_group"], k_) == k_]
+    roof_rgb = photo.colours([np.asarray(rings[k_], np.float64)[:, :2] + [x0, y0] for k_ in pick]) \
         if photo is not None and len(rings) else None
-    if roof_rgb is not None and len(roof_rgb) != len(rings):
+    if roof_rgb is not None and len(roof_rgb) != len(pick):
         roof_rgb = None
+    if roof_rgb is not None and len(pick) != len(rings):
+        at_ = {k_: j_ for j_, k_ in enumerate(pick)}
+        roof_rgb = roof_rgb[[at_[k_ if at.get("_photo_group") is None else first_of[at["_photo_group"]]]
+                             for k_, at in enumerate(attrs)]]
     # (the Netherlands' measured roofs, threedbag.Fetch: the tile's squares, asked for as the tile started)
     bag_match = bag3d.index() if bag3d is not None else None
     # (the mapped tanks, tank_rings: a building over one takes its class; the rest drawn after the loop)
@@ -5071,6 +5096,7 @@ def road_tile_items(
     photo = RoofPhotoFuture(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))
     import threedbag
     bag3d = threedbag.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (the Dutch roofs, likewise)
+    nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks, likewise)
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
     keys = roads.cells_of_tile(frame, tx, ty, margin=0.0)
     measured_wait(md, keys)
@@ -5095,6 +5121,7 @@ def road_tile_items(
         roofs=measured_roofs(md, frame, x0, y0, x1, y1),
         photo=photo,
         bag3d=bag3d,
+        nyc=nyc,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
@@ -5440,10 +5467,11 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     x0, y0, x1, y1 = box
     own = box if hasattr(box, "owns") else None
     keys, layers = far_needs(frame, tile, ty)
+    nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks)
     measured_wait(md, keys)
     cds = [md.cell(k, layers=layers, kind="demand") for k in keys]
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
-                           part_layers=[c.layers.get("building_parts") for c in cds],
+                           part_layers=[c.layers.get("building_parts") for c in cds], nyc=nyc,
                            house_land_layers=[c.layers.get("land_use") for c in cds],
                            roofs=measured_roofs(md, frame, x0, y0, x1, y1),
                            west_town=district_town(frame, tile, ty, md),

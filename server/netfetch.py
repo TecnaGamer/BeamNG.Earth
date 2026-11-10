@@ -354,7 +354,8 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "data.3dbag.nl": "the Netherlands' measured roof shapes and heights (3DBAG); predicted meanwhile",
-    "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
+    "tecnagamer.github.io": "railway details, US railroad crossing equipment, lane markings and New York's "
+                            "building setbacks; estimated meanwhile",
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",

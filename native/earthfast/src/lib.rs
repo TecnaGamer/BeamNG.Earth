@@ -67,6 +67,7 @@ mod railseam;
 mod classgrid;
 mod frontage;
 mod bdtopo;
+mod nycmassing;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5815,6 +5816,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 184: building_walls' vary / win_cells (wall_cells: the night windows' cells, PR #916 reworked)
     // 185: levelrules (LevelLayer: rules / near / lidar_lines, level_extras: roads.level_ranges' rules per
     // layer; deck_gaps_round, seg_hits, ends_near and tunnel_reach folded into them)
-    m.add("VERSION", 185)?;
+    m.add_function(wrap_pyfunction!(nycmassing::nyc_massing_match, m)?)?;
+    // 186: nycmassing::nyc_massing_match (New York's measured massing, server/nycmassing.py: the 2014 3-D Building
+    // Model's records joined to the map's footprints)
+    m.add("VERSION", 186)?;
     Ok(())
 }
