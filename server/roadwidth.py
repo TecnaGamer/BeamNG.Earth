@@ -172,6 +172,24 @@ def measure_row(centreline, walls):
     return fn(np.ascontiguousarray(np.asarray(centreline, np.float64)[:, :2]), *k, BUCKET,
               STEP, END_SKIP, REACH, MIN_SAMPLES, WALLED, AGREE)
 
+
+def verge_frontage(centreline, walls, width):
+    """Shares of each side with façades within 4, 9.5 and 14.5 m of the road edge."""
+    import furniture
+
+    length = furniture._arclen(centreline)[-1]
+    if length <= 1. or not len(walls.keys):
+        return np.zeros((2, 3))
+    n = min(31, max(3, int(length / 5.) + 1))
+    edge = min(4., .12 * length)
+    points, tangent = furniture._at(centreline, np.linspace(edge, length - edge, n))
+    normal = np.column_stack((-tangent[:, 1], tangent[:, 0]))
+    half = width / 2.
+    hits = walls.rays(np.tile(points, (2, 1)), np.concatenate([normal, -normal]), half + 14.5)
+    gaps = hits.reshape(2, n, 1) - half
+    return np.mean((gaps >= .20) & (gaps <= np.array([4., 9.5, 14.5])), axis=1)
+
+
 def split(row):
     """(carriageway m, sidewalk m) of a right-of-way, or None when the carriageway would be implausible."""
     walk = min(WALK_MAX, max(WALK_MIN, WALK_SHARE * row))
@@ -430,3 +448,12 @@ class RoadWidths:
                 self.memo.clear()
             self.memo.setdefault(fid, res)
             return self.memo[fid]
+
+    def frontage(self, lonlat, width):
+        """Side-specific frontage, within a village street's normal range."""
+        scale = np.array([111320. * np.cos(np.radians(lonlat[len(lonlat) // 2, 1])), 111320.])
+        if np.linalg.norm(np.ptp(lonlat, axis=0) * scale) > 1300.:
+            return None
+        frame, walls = self._near_walls(lonlat)
+        xy = frame.geodetic_to_enu(lonlat[:, 1], lonlat[:, 0], 0.)[:2]
+        return verge_frontage(np.column_stack(xy), walls, width)

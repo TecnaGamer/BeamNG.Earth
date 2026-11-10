@@ -127,7 +127,7 @@ class PlanCache:
     def load(self, key):
         """(plans, keeps, covers, opens) of cell key from the cache, or None."""
         from grading import Plan, set_widen
-        from roads import Spec
+        from roads import spec_from_json
         try:
             src = self._path(key)
             if not os.path.exists(src):
@@ -154,8 +154,10 @@ class PlanCache:
             plans.append((m["fid"], pl))
         keeps = list(zip(lists["k"], meta["keeps"]))
         covers = list(zip(lists["v"], meta["covers"]))
-        opens = [(xy, Spec(**{**sp, "sides": tuple(sp["sides"]) if sp.get("sides") is not None else None}))
-                 for xy, sp in zip(lists["o"], meta["opens"])]   # (JSON gave sides back as a list)
+        try:
+            opens = [(xy, spec_from_json(sp)) for xy, sp in zip(lists["o"], meta["opens"])]
+        except (TypeError, ValueError, KeyError):
+            return None
         with self._lock:
             self.stats["read"] += 1
         return plans, keeps, covers, opens
@@ -224,14 +226,15 @@ class PlanCache:
     def store(self, key, plans, keeps, covers, opens, persist=False):
         """Write cell key's plans for the run's other processes; persist: also into the revisit cache (complete plans:
         nothing they read failed or was missing, Grader._plan_cell)."""
+        from roads import _spec_json
+
         meta = {"plans": [{"fid": fid, "half": p.half, "abut": list(p.abut), "road_half": p.road_half,
                            "rid": int(p.rid), "max_wall": float(p.max_wall), "cut": p.cut is not None,
                            "bank": getattr(p, "bank", None) is not None, "steep": bool(getattr(p, "steep", False)),
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
-                "opens": [{k: (v.item() if hasattr(v, "item") else v) for k, v in sp._asdict().items()}
-                          for _xy, sp in opens]}
+                "opens": [_spec_json(sp) for _xy, sp in opens]}
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
         try:
             _pack(arrays, "p", [p.xy for _f, p in plans])

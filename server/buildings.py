@@ -3429,7 +3429,7 @@ DRIVEWAY_W = 3.2            # m
 DRIVEWAY = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 19}     # a road tile chunk's look (roads.LOOK)
 
 
-def doors(items, lines, x0, y0, drives=None):
+def doors(items, lines, x0, y0, drives=None, infer_fences=True):
     """Prop rows (trees.lua rows, group "door") of a front door per house: on the wall whose middle is
     nearest a road and faces it, a row house's to one side, others' in the middle. lines: [(centreline
     (k, 2) in the anchor frame, half width[, class, urban])]. A building close to an urban main street gets
@@ -3537,7 +3537,7 @@ def doors(items, lines, x0, y0, drives=None):
                 pts = [p0 + (p1 - p0) * (j / (n - 1)) for j in range(n)]
                 drives.append({"m": DRIVEWAY["m"], "w": DRIVEWAY_W, "tl": DRIVEWAY["tl"], "p": DRIVEWAY["p"],
                                "n": [[round(float(pp[0]), 3), round(float(pp[1]), 3), 0.0] for pp in pts]})
-        if spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
+        if infer_fences and spec.roof != "flat" and not narrow and _hash01(spec.seed, "fence") < FENCE_SHARE:
             rows.extend(_front_fence(spec, a, d, Le, f, A[kseg], D[kseg], L2[kseg], SHALF[kseg], gmin,
                                      drives is not None and spec.wall and Le >= 7.0, (A, B, SHALF)))
         p = a + d * (Le * f) + out * DOOR_OUT_M

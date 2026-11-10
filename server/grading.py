@@ -1137,10 +1137,10 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     vstep = DIRT_VERTEX_STEP if minor_dirt else VERTEX_STEP
     every = max(1, int(round(vstep / PROFILE_STEP)))
     keep = np.r_[np.arange(0, len(xy) - 1, every), len(xy) - 1]
-    # the carriageway as a city street would have it (never from the land cover), or the measured one
-    # (a mountain pass road its own: no town on a pass, roads._mountain_roads)
+    # Where a street-edge profile is known, grade its actual carriageway.
+    # Legacy streets still allow enough flat ground for their urban width.
     width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
-        if built and not getattr(spec, "mountain", False) else spec.width
+        if built and not getattr(spec, "mountain", False) and getattr(spec, "street", None) is None else spec.width
     if spec.median:             # a divided road's carriageway: never over the other one
         width = max(spec.width, roadsmod.dual_cap(spec.median, width))
     plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
@@ -1864,12 +1864,15 @@ def set_widen(p, widen):
 
 
 def shoulder(spec):
-    """m of flat ground beyond the carriageway edge, each side. Like the core width, never from the land
-    cover: a road class that gets sidewalks in towns keeps a sidewalk-wide verge everywhere."""
+    """Metres of flat ground beyond the carriageway edge, on each side."""
     if spec.kind not in roadsmod.BUILT:
         return 0.0
     if getattr(spec, "mountain", False):        # (a pass road between its wall and its parapet: roads._mountain_roads)
         return MOUNTAIN_SHOULDER_M
+    street = getattr(spec, "street", None)
+    if street is not None:
+        attached = [w.width + SIDEWALK_MARGIN_M for _, w in street.walks() if w.setback == 0.]
+        return max(attached, default=SHOULDER_M)
     if spec.cls in roadsmod.SIDEWALK_CLASSES or (spec.cls == "trunk" and (not spec.oneway
                                                                           or roadsmod._arterial(spec))):
         return spec.walk + SIDEWALK_MARGIN_M

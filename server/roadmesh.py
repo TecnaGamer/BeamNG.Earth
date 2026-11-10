@@ -23,8 +23,12 @@ import numpy as np
 import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
-LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01}   # m above the physics ground (lifted under roads
-                                                        # by grading.ROAD_LIFT over the visible ground)
+# Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
+LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03}
+FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
+FRONTAGE_REPEAT_M = 5.
+FRONTAGE_TERRAIN_REPEAT_M = 4.
+FRONTAGE_TEXEL_M = .2
 
 # Dirt and gravel strips (from PR #455 by AnthonyGraceffa; roads.DIRT_STRIPS): BeamNG's continuous rutted road strips
 # (roads.DIRT_LOOK, our copies in dirtroad.materials.json) over the ground photo's tint, fading into the ground.
@@ -830,6 +834,123 @@ def _shared(P, UV, T):
     return P[first], UV[first], inv.reshape(-1)[T]
 
 
+def _frontage_mask(polys, box):
+    """Rasterize the union so the apron feathers only at its exposed edges."""
+    from PIL import Image, ImageFilter
+    import fast
+
+    texel = FRONTAGE_TEXEL_M
+    bounds = np.asarray(box).reshape(2, 2)
+    lo = np.floor((bounds[0] - 1.5) / texel) * texel
+    hi = bounds[1] + 1.5
+    cols, rows = np.ceil((hi - lo) / texel).astype(int)
+    rings = []
+    for poly in polys:
+        p = (np.asarray(poly)[:, :2] - lo) / texel
+        if np.all(p.max(axis=0) > 0) and np.all(p.min(axis=0) < [cols, rows]):
+            rings.append(tuple(np.ascontiguousarray(v) for v in p.T))
+    fast.require(140, "pad coverage")
+    cover = fast._ef.pad_cover(int(rows), int(cols), rings)
+    if cover is None:
+        return None
+    mask = Image.fromarray(np.asarray(cover, np.uint8) * 63).filter(ImageFilter.GaussianBlur(1.15))
+    return lo, np.asarray(mask, dtype=np.float32) / 252.
+
+
+def _frontage_weight(xy, mask):
+    if mask is None:
+        return np.ones(len(xy))
+    lo, val = mask
+    texel = FRONTAGE_TEXEL_M
+    p = (xy - lo) / texel - .5
+    i, j = np.floor(p).astype(int).T
+    h, w = val.shape
+    inside = (i >= 0) & (j >= 0) & (i < w - 1) & (j < h - 1)
+    i, j = i.clip(0, w - 2), j.clip(0, h - 2)
+    x, y = (p - np.c_[i, j]).T
+    a = (1 - x) * val[j, i] + x * val[j, i + 1]
+    b = (1 - x) * val[j + 1, i] + x * val[j + 1, i + 1]
+    return np.where(inside, np.clip(((1 - y) * a + y * b - .50) / .40, 0., 1.), 1.)
+
+
+def _frontage_mesh(poly, fan, mask):
+    """Insert an inner row only at a pavement boundary. Keep the broad interior light."""
+    from buildings import _area2
+
+    step = np.roll(poly, -1, axis=0) - poly
+    distance = np.hypot(*step.T)
+    good = distance > 1e-6
+    if not good.all():
+        return poly, fan
+    samples = [np.arange(n) / n for n in np.maximum(1, np.ceil(distance / 1.4).astype(int))]
+    full_edge = np.concatenate([a + t[:, None] * d for a, d, t in zip(poly, step, samples)])
+    weight = _frontage_weight(full_edge, mask)
+    if np.all(weight >= .99):
+        return poly, fan
+    # Pull both ends of each edge inwards far enough to put a vertex behind the fade.
+    centre = poly.mean(axis=0)
+    normal = np.c_[-step[:, 1], step[:, 0]] * (1 if _area2(poly) > 0 else -1) / distance[:, None]
+    clearance = np.sum((centre - poly) * normal, axis=1)
+    share = np.minimum(.8, .45 / np.maximum(clearance, .02))
+    inner = poly + (centre - poly) * np.maximum(share, np.roll(share, 1))[:, None]
+    ends = np.r_[0, np.cumsum([len(t) for t in samples])]
+    outer, inset = [], []
+    for i, t in enumerate(samples):
+        j = (i + 1) % len(poly)
+        if np.all(weight[ends[i]:ends[i + 1]] >= .99) and weight[ends[j]] >= .99:
+            t = t[:1]
+        outer.extend(poly[i] + t[:, None] * step[i])
+        inset.extend(inner[i] + t[:, None] * (inner[j] - inner[i]))
+    k = len(outer)
+    i = np.arange(k)
+    j = (i + 1) % k
+    tri = np.concatenate((np.c_[i, j, j + k], np.c_[i, j + k, i + k], np.c_[i + k, j + k, np.full(k, 2 * k)]))
+    return np.vstack((outer, inset, centre)), tri
+
+
+def _refine_frontage(P, T, UV, M, RI, material, mask, repeat):
+    """Refine the fade only after draping, interpolating on the existing terrain triangles."""
+    indexes = np.flatnonzero(M == material)
+    xy = P[T[indexes], :2]
+    side = np.roll(xy, -1, axis=1) - xy
+    span = np.hypot(side[:, :, 0], side[:, :, 1]).max(axis=1)
+    weights = _frontage_weight(xy.reshape(-1, 2), mask).reshape(-1, 3)
+    large = span > 1.6
+    mids = xy[large] + .5 * side[large]
+    on_edge = _frontage_weight(mids.reshape(-1, 2), mask).reshape(-1, 3).min(axis=1) < .995
+    large[large] = on_edge | (weights[large].min(axis=1) < .995)
+    # Tiny triangles already follow the border. A broad flat polygon with
+    # boundary-only vertices needs an inner row to keep its centre solid.
+    thin = (span > .65) & (weights.max(axis=1) <= .02)
+    candidates = indexes[large | thin]
+    if not len(candidates):
+        return P, T, UV, M, RI
+    keep = np.ones(len(T), bool)
+    xyz, tris, uvs = [P], [], [UV]
+    n = len(P)
+    fan = np.array([[0, 1, 2]])
+    for j in candidates:
+        pts = P[T[j]]
+        edge = pts[1:] - pts[0]
+        determinant = edge[0, 0] * edge[1, 1] - edge[0, 1] * edge[1, 0]
+        if abs(determinant) < 1e-7:
+            continue
+        vertices, tri = _frontage_mesh(pts[:, :2], fan, mask)
+        if len(vertices) == 3:
+            continue
+        gradient = np.linalg.solve(edge[:, :2], edge[:, 2])
+        xyz.append(np.c_[vertices, pts[0, 2] + (vertices - pts[0, :2]) @ gradient])
+        uvs.append(vertices / repeat)
+        tris.append(tri + n)
+        n += len(vertices)
+        keep[j] = False
+    if not tris:
+        return P, T, UV, M, RI
+    added = np.concatenate(tris)
+    return (np.concatenate(xyz), np.concatenate((T[keep], added)), np.concatenate(uvs),
+            np.r_[M[keep], np.full(len(added), material)], np.r_[RI[keep], np.full(len(added), -1)])
+
+
 @profile_step('Road mesh generation')
 def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None, drawn=None, context=(),
           clip_poly=None):
@@ -913,7 +1034,12 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     if not rb and not polys:
         return None
     draped = [r for r in rb if r[5] is None]
-    pv = [np.asarray(c["poly"], np.float64)[:, :2] for c in polys]
+    pv, fans = [], []
+    for c in polys:
+        p = np.asarray(c["poly"], np.float64)[:, :2]
+        fan = np.array([(0, j, j + 1) for j in range(1, len(p) - 1)], dtype=np.int64).reshape(-1, 3)
+        pv.append(p)
+        fans.append(fan)
     if draped or pv:
         edges = np.concatenate([np.concatenate([l, r]) for l, r, _, _, _, _ in draped] + pv)
         la, lo, _ = frame.enu_to_geodetic(edges[:, 0], edges[:, 1], 0.0)
@@ -985,17 +1111,21 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         rpar.append((fu, float(c.get("tl") or 10.0), tu, float(slen) if slen else np.nan,
                      float(bool(ends[0])), float(bool(ends[1]))))
         nverts += len(P[-1])
-    for c in polys:                             # filled polygons (corner asphalt): a fan from vertex 0
-        pq = np.asarray(c["poly"], np.float64)
+    # Match the asphalt tile scale of the visible terrain or of satmat's mesh layer.
+    asphalt_repeat = FRONTAGE_TERRAIN_REPEAT_M if lift > 0 else FRONTAGE_REPEAT_M
+    for c, pq, fan in zip(polys, pv, fans):     # filled polygons (corner asphalt): a fan from vertex 0
         k = len(pq)
         z = u[k0:k0 + k] + LIFT[layer_of(c)] + lift
         k0 += k
         if c["m"] not in mats:
             mats.append(c["m"])
         P.append(np.c_[pq[:, :2], z])
-        UV.append(np.asarray(c["uvq"], np.float64) if c.get("uvq") is not None else       # (a decal sheet's cell:
-                  np.c_[pq[:, 0] / 8.0, pq[:, 1] / float(c.get("tl") or 10.0)])          # markings.arrow_quad)
-        fan = np.array([(nverts, nverts + a, nverts + a + 1) for a in range(1, k - 1)])
+        if c["m"] == FRONTAGE_ASPHALT:
+            UV.append(pq / asphalt_repeat)
+        else:
+            UV.append(np.asarray(c["uvq"], np.float64) if c.get("uvq") is not None else   # markings.arrow_quad
+                      np.c_[pq[:, 0] / float(c.get("u_m") or 8.0), pq[:, 1] / float(c.get("tl") or 10.0)])
+        fan = fan + nverts
         pts = np.c_[pq[:, :2], z]
         nrm = np.cross(pts[fan[:, 1] - nverts] - pts[fan[:, 0] - nverts], pts[fan[:, 2] - nverts] - pts[fan[:, 0] - nverts])
         flip = nrm[:, 2] < 0
@@ -1027,39 +1157,66 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         dr = np.isfinite(TL)
         if dr.any():
             grid, i0, j0 = _height_grid(frame, drawn or elev, P[:, :2], q, tris=T[dr])
-            # Independent 2 cm approximations can bury paint lifted only 1 cm.
-            # A shared 2 mm tolerance keeps the combined error below that gap.
-            tol = .002 if "line_bne_fr_white" in mats else None
-            fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[dr], grid, i0, j0, tol=tol)
-            if len(fT):
-                lifts = TL[dr][src]
+            # Keep paint on the road and the paved frontage over the road's gravel shoulder.
+            # Tighten only the frontage where the road can use its usual tolerance.
+            front = TL == LIFT["frontage"] + lift
+            if "line_bne_fr_white" in mats:
+                asphalt = M == mats.index(FRONTAGE_ASPHALT) if FRONTAGE_ASPHALT in mats else np.zeros(len(M), bool)
+                batches = [(dr & ~asphalt, .002), (asphalt, .004)]
+            else:
+                batches = [(dr & ~front, None), (front, .004)]
+            points, uvs, tris, materials, ribbons = [P], [UV], [T[~dr]], [M[~dr]], [RI[~dr]]
+            n0 = len(P)
+            for mask, tol in batches:
+                if not mask.any():
+                    continue
+                fP, fUV, fT, src = follow_ground(P[:, :2], UV, T[mask], grid, i0, j0, tol=tol)
+                lifts = TL[mask][src]
                 vl = np.zeros(len(fP))              # (a cut piece's points are its fan's: one lift each, set once)
                 for kk in range(3):
                     vl[fT[:, kk]] = lifts
                 fP[:, 2] += vl
-                n0 = len(P)
-                P = np.concatenate([P, fP])
-                UV = np.concatenate([UV, fUV])
-                T = np.concatenate([T[~dr], fT + n0])
-                M = np.concatenate([M[~dr], M[dr][src]])
-                RI = np.concatenate([RI[~dr], RI[dr][src]])
-            else:
-                T, M, RI = T[~dr], M[~dr], RI[~dr]
+                points.append(fP)
+                uvs.append(fUV)
+                tris.append(fT + n0)
+                materials.append(M[mask][src])
+                ribbons.append(RI[mask][src])
+                n0 += len(fP)
+            P, UV, T, M, RI = (np.concatenate(parts) for parts in (points, uvs, tris, materials, ribbons))
             if not len(T):
                 return None
+    asphalt = FRONTAGE_ASPHALT in mats and np.any(M == mats.index(FRONTAGE_ASPHALT))
+    dirt = any(m.startswith(FADE_PREFIX) for m in mats)
+    if asphalt:
+        mi = mats.index(FRONTAGE_ASPHALT)
+        bounds = clip
+        if bounds is None:
+            xy = P[T[M == mi], :2].reshape(-1, 2)
+            bounds = np.r_[xy.min(axis=0), xy.max(axis=0)]
+        frontage_mask = _frontage_mask((c["poly"] for c in polys if c.get("frontage")), bounds)
+        P, T, UV, M, RI = _refine_frontage(P, T, UV, M, RI, mi, frontage_mask, asphalt_repeat)
+    if follow or asphalt:
         P, UV, T = _shared(P, UV, T)
     out = (P - np.asarray(origin, np.float64), T, UV, mats, M)
-    if not any(m.startswith(FADE_PREFIX) for m in mats):
+    if not asphalt and not dirt:
         return out
     # a strip in the mesh: the fade uv for every point (a sixth element: write, plazas.merge), and the strips' materials
     # first, so the markings and anything else translucent in the mesh draw over them (one primitive per material, in
     # the list's order)
     vr = np.full(len(P), -1, np.int64)
     vr[T.ravel()] = np.repeat(RI, 3)
-    order = sorted(range(len(mats)), key=lambda j: (not mats[j].startswith(FADE_PREFIX), j))
+    fade = _fade_uv(UV, vr, rpar)
+    if asphalt:
+        used = np.unique(T[M == mats.index(FRONTAGE_ASPHALT)])
+        weight = _frontage_weight(P[used, :2], frontage_mask)
+        blend = weight ** 2 * (3 - 2 * weight)
+        out[0][used, 2] -= (LIFT["frontage"] + lift - .001) * (1 - blend)
+        fade[used] = np.c_[.001 + .499 * weight, np.full(len(used), .5)]
+    order = sorted(range(len(mats)), key=lambda j: (not (mats[j].startswith(FADE_PREFIX)
+                                                        or mats[j] == FRONTAGE_ASPHALT), j))
     remap = np.empty(len(mats), np.int64)
     remap[order] = np.arange(len(mats))
-    return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], _fade_uv(UV, vr, rpar)
+    return out[0], T, UV, [mats[j] for j in order], remap[np.asarray(M, np.int64)], fade
 
 
 def _quads(base, k, row_a, row_b):

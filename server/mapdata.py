@@ -335,6 +335,8 @@ class MapData:
             log.debug("lanetags join %s: %s: %s", key, type(e).__name__, e)
 
     def versions(self):
+        import europewalks
+
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
         v = {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
@@ -344,6 +346,8 @@ class MapData:
              "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
+        if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
+            v["street_edges"] = europewalks.VERSION
         return v
 
     def bundle_versions(self):

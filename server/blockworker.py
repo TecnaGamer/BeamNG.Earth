@@ -378,10 +378,9 @@ def veg_geo_many(aid, lat, lon, zoom, tiles, out_dir, vfs_dir, flat=False):
     return out
 
 def _take_pads(fuel_pads):
-    """The server's gas station pads for this job's area (earthd.Server.block_fuel_pads) as this process's Surface's:
-    only these (none when the server's gas stations are switched off)."""
+    """Use only this job's fuel and frontage pads from earthd.Server.block_fuel_pads."""
     if getattr(_s, "surface", None) is not None and hasattr(_s.surface, "clear_fuel_pads"):
-        _s.surface.clear_fuel_pads()
+        _s.surface.clear_fuel_pads(all_road_pads=True)
         _s.surface.add_fuel_pads(fuel_pads or ())
 
 
@@ -454,6 +453,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         lots = _s.surface.lots(keep["lat"], keep["lon"]) if hasattr(_s.surface, "lots") else None
         if lots:                        # farmland under the carriageways (a field does not cover the asphalt)
             idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+            idx = surfacemod.paint_grass(idx, keep["lat"], keep["lon"], lots)  # (PR #505's mapped lawns, Europe on)
             idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
         if road_feats:
             before = idx
@@ -479,8 +479,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
                     log.warning("block (%s, %s, %s): %d points of drawn roads in it (%d of them with ground parts) from "
                                 "%d cells, none painted", aid, cx, cy, over, n_ground, len(road_feats))
         idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
-        if hasattr(_s.surface, "fuel_pads"):    # gas station forecourts (--gas-stations on)
-            idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"], _s.surface.fuel_pads(keep["lat"], keep["lon"]))
+        if hasattr(_s.surface, "paint_ground_pads"):
+            idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
         info["layers"] = surfacemod.write_masks(idx[::-1], out_dir, name[:-4])
         info["surfaceComplete"] = complete and roads_complete
@@ -667,6 +667,14 @@ def _stack_watch(what):
     return stackdump.watch(STACK_DUMP_S, f"{what} still building after {STACK_DUMP_S:.0f} s")
 
 
+def _radar_key():
+    """PR #505's French speed cameras in the road tiles' revisit keys: their catalogue's digest while they are on
+    (BNE_FR_ROADS), nothing otherwise (the keys of every tile built without them unchanged)."""
+    import radars
+    sig = radars.signature()
+    return () if sig is None else (sig,)
+
+
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
                        gas_stations, buried, lamp_region, country=None, pole_profile=None, de_junctions=False, towns_on=False):
     import revisit
@@ -679,7 +687,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    bool(towns_on), bool(de_junctions), *de)     # (the German junction parts last)
+                    *_radar_key(), bool(towns_on), bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on),
@@ -863,6 +871,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     import roadmesh as roadmeshmod
     import roads as roadsmod
     import poleprofiles
+    import streetfront
     tx, ty = (tile, None) if hasattr(tile, "box") else tile
     P = _Parts()
     # everything the tile will ask for, fetched at once (one after another, a fresh place's first tile took ~1 min)
@@ -911,6 +920,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
     _bridge_ends = {}
     box = roadsmod.tile_bbox(tx, ty)
+    frontage_country = streetfront.country_at_tile(frame, box) if buildings else None
+    if frontage_country == "FR" and signs is None:
+        signs = []
     side = roadsmod.tile_side(tx, ty)
     if buildings:
         import buildings as buildingsmod
@@ -961,6 +973,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     clearance = [] if buildings else None      # (build_tile's RoadClearance, PR #629: the powerlines' too)
     roadside_jobs = []                  # sign placement after the rendered barriers and driveways
     drives = []
+    mapped_drives = [] if frontage_country else None
     import euguardrails
     sign_obstacles=None
     if buildings and euguardrails.enabled():
@@ -980,6 +993,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  terrain_paint=getattr(_s, "surface", None) is not None, cover_out=cover, marks=marks,
                                  roads_out=near_roads, skin_margin=skin_margin, walks_raw=walks_raw,
                                  pole_profile=pole_profile, signs=signs, roadside_jobs=roadside_jobs,
+                                 driveways_out=mapped_drives,
                                  signals=furniture.signals_for(_s.md, frame, near_cells), nodes=nodes,
                                  development=developmentmod.for_tile(_s.md, frame, tx, ty),
                                  clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes,
@@ -995,13 +1009,26 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("airports")
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
-        props[:] = furniture.off_buildings(props, buildingsmod.near_rings(frame, tx, ty, _s.md, skip=skip))     # (no street tree in a house)
-        props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
+        frontage_walks = walks if walks_raw is None else walks_raw
+        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
+        rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
+        props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
+        props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
         props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
         drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
         chunks += drives
         park = parkingmod.clear_of(park, props, drives)
-        park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park)
+        park = parkingmod.tile_lot_spots(frame, tx, ty, _s.md, elev, items, park, separate_bays=bool(frontage_country))
+        front_grass = [] if _s.surface is not None else None
+        paving, spots = streetfront.finish(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
+                                           mapped_drives, drives, lambda x, y: roadmeshmod.drawn_ground(
+                                               frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
+                                           redrape=walks_raw is None, props=props, grass=front_grass)
+        chunks += paving
+        if frontage_country and front_grass is not None:
+            key = tx.key if hasattr(tx, "key") else f"{frame.lat0:.8f}:{frame.lon0:.8f}:{tx}:{ty}"
+            fuel_pads.extend(streetfront.pad_items(frame, box, key, paving, front_grass))
+        park += spots
         if fuel:
             import gasstations
             park = gasstations.clear_park(park, fuel)
@@ -1009,7 +1036,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
     mark("doors_park")
-    chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks)
+    chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks, separate_bays=bool(frontage_country))
     mark("markings")
     if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
         _n0 = len(chunks)
@@ -1144,7 +1171,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         try:
             props.extend(fences.rows(frame, infra_fn, box, elev, decks=[{"n": np.column_stack((xy, z)), "w": spec.width}
                                                                         for _f, spec, xy, z, _l in deck_parts] + rail_decks,
-                                     roads=near_roads))
+                                     roads=near_roads, french=frontage_country == "FR"))
         except Exception as ex:
             log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import picnic
@@ -1177,6 +1204,10 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 props = (props or []) + flag_rows
         except Exception as ex:
             log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+    import radars                   # (PR #505's French speed cameras: BNE_FR_ROADS)
+    radar_props, P.speed_traps = radars.tile_rows(frame, box, _s.md, elev, _s.widths, urban)
+    if radar_props:
+        props = (props or []) + radar_props
     P.signs = signs
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
@@ -1209,7 +1240,9 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
-                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces) + (P.fuel_pads,)
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces,
+                              walk_ground=lambda x, y: roadmeshmod.drawn_ground(frame, P.drawn, np.c_[x, y], q),
+                              speed_traps=P.speed_traps) + (P.fuel_pads,)
     mark("write")
     return out
 
@@ -1313,7 +1346,8 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
                                    signs=getattr(P, "signs", None), custom_entries=getattr(P, "custom_entries", None), wells=P.wells,
                                    decals=False, barrier_mesh=getattr(P, "barrier_mesh", None),
                                    barrier_chunks=getattr(P, "barrier_chunks", ()),
-                                   turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None))
+                                   turbines=getattr(P, "turbines", ()), towns=getattr(P, "town_faces", None),
+                                   speed_traps=getattr(P, "speed_traps", ()))
         with open(os.path.join(tmpdir, f"roads_0_{tile}_None.json"), encoding="utf-8") as f:
             data = json.loads(f.read())
         files = roadsmod.shape_files(0, tile, None)
@@ -1385,8 +1419,8 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
         de = designs.cache_parts(True, tile.frame, designs.tile_reach(tile.box, GEO_SKIN_MARGIN_M))
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
-                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), bool(towns_on),
-                       bool(de_junctions), *de)     # (the German junction parts last)
+                       pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
+                       bool(towns_on), bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,
@@ -1681,24 +1715,14 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
                           for c in chunks if not c.get("tube_only")]
     walks = _map_walks(tile.frame, frame, inputs.get("walks") or []) if sidewalks else []
     if walks:
-        roadsmod.drape_walks(frame, elev, walks,
-                             lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q))
+        def walk_ground(x, y):
+            return roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q)
+
+        roadsmod.drape_walks(frame, elev, walks, walk_ground)
         mark("drape")
-        b = sidewalksmod.Builder(origin, collision=True)
+        b = sidewalksmod.Builder(origin, collision=True, ground=walk_ground)
         for wk in walks:
-            if "disc" in wk:
-                d = wk["disc"]
-                b.add_disc(d["ring"], d["apex"], d["mat"], d["h"], d["dome"])
-                continue
-            if "corner" in wk:
-                c = wk["corner"]
-                b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()), europe=wk.get("europe", False))
-                continue
-            ww = wk.get("w", roadsmod.SIDEWALK["w"])
-            curb, outv = sidewalksmod.run_geometry(wk["pts"], wk["side"], ww)
-            b.add_run(curb, outv, ww, h=wk.get("h", sidewalksmod.CURB_H), caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalksmod.BRICK if wk.get("brick") else 1, europe=wk.get("europe", False),
-                      mat=int(wk.get("mat", 0)))
+            b.add_walk(wk, roadsmod.SIDEWALK["w"])
         mark("walks")
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()
@@ -2494,8 +2518,8 @@ def base_photo(lat, lon, x0, y0, size, px, tex, buildings, rock_zoom, path, cach
     rgb = surfacemod.enlarge(rgb, out_px or px)
     if roadsmod.ROADS_IN_GROUND:          # (earthd.Server.write_base)
         try:
-            import surface as surfacemod
-            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths)
+            rgb = surfacemod.paint_square(rgb, frame, x0, y0, size, getattr(_s, "surface", None), _s.widths,
+                                          pending=pending)
         except Exception as e:      # the photo stays as it is
             log.info("base photo: roads: %s", e)
     try:            # (earthd.Server.write_base)

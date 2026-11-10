@@ -180,6 +180,48 @@ class FollowTest(unittest.TestCase):
                                            q=1 / 32)
         self.assertGreater(len(T), 0)
 
+    def test_paved_frontage_covers_the_gravel_edge_on_uneven_ground(self):
+        from roads import EDGE_DECAL
+        from streetfront import _paving
+
+        apron = _paving(np.array([[0., 3.], [30., 3.], [30., 8.], [0., 8.]]), "concrete")
+        gravel = {**EDGE_DECAL, "n": [[0., 3.3, 0.], [30., 3.3, 0.]]}
+        P, T, _, mats, M = roadmesh.build(FRAME, [gravel, apron], self.bumpy(), (0., 0., 0.),
+                                         .025, follow=True, q=1 / 32)
+        xy = np.c_[np.linspace(.1, 29.9, 80), np.linspace(3.01, 4.09, 80)]
+
+        def height(material):
+            a, b, c = P[T[M == mats.index(material)]].transpose(1, 0, 2)
+            e, f = b - a, c - a
+            dx, dy = (xy[:, None, :] - a[None, :, :2]).transpose(2, 0, 1)
+            det = e[:, 0] * f[:, 1] - e[:, 1] * f[:, 0]
+            s = (dx * f[:, 1] - dy * f[:, 0]) / det
+            t = (dy * e[:, 0] - dx * e[:, 1]) / det
+            inside = (s >= -1e-7) & (t >= -1e-7) & (s + t <= 1. + 1e-7)
+            self.assertTrue(inside.any(axis=1).all())
+            return np.max(np.where(inside, a[:, 2] + s * e[:, 2] + t * f[:, 2], -np.inf), axis=1)
+
+        self.assertGreater(float((height(apron["m"]) - height(gravel["m"])).min()), .002)
+
+    def test_asphalt_blends_at_the_boundary_but_not_at_the_internal_join(self):
+        from streetfront import _paving
+
+        def flat(la, lo):
+            return np.zeros_like(la)
+
+        chunks = [_paving(np.array([[a, 2.], [b, 2.], [b, 8.], [a, 8.]]), "road_asphalt")
+                  for a, b in [(0., 6.), (6., 12.)]]
+        P, T, _, mats, M, opacity = roadmesh.build(FRAME, chunks, flat, (0., 0., 0.), .025, follow=True, q=1 / 32)
+        self.assertEqual(mats, [roadmesh.FRONTAGE_ASPHALT])
+        used = np.unique(T[M == 0])
+        at_border = used[np.isclose(P[used, 1], 2.)]
+        join = used[np.isclose(P[used, 0], 6.) & (P[used, 1] > 3.) & (P[used, 1] < 7.)]
+        self.assertTrue(len(at_border) and len(join))
+        self.assertLess(float(opacity[at_border, 0].max()), .05)
+        self.assertLess(float(np.abs(P[at_border, 2]).max()), .005)
+        self.assertGreater(float(opacity[join, 0].min()), .49)
+        self.assertGreater(float(P[join, 2].min()), .04)
+
     def test_on_the_ground_everywhere(self):
         elev = self.bumpy()
         chunks = [chunk("road_asphalt_2lane", 9.0, [(3.3, 1.7, 0), (61.9, 40.2, 0), (90.0, 20.0, 0)])]

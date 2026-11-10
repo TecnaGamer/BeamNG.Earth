@@ -62,6 +62,7 @@ mod waytags;
 mod underdeck;
 mod railseam;
 mod classgrid;
+mod frontage;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -5604,6 +5605,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
-    m.add("VERSION", 175)?;
+    m.add_class::<frontage::FrontageCoverage>()?;
+    // 176: frontage::FrontageCoverage (PR #505's paved frontages and European sidewalks: frontage_geometry.Coverage)
+    m.add("VERSION", 176)?;
     Ok(())
 }

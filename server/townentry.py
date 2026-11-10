@@ -103,6 +103,10 @@ SIGN_CLASSES = {"primary", "secondary", "tertiary", "unclassified", "residential
 MAIN_CLASSES = {"primary"}
 MAIN_SIGNS = {"CH", "LI", "IE"}            # (Ireland's: green on a national road, white on the others)
 G_ENTRY, G_EXIT = "townentry", "townexit"
+# Countries whose signs, with PR #505's regional kit on, are the kit's own boards (signmesh.Mesh.town: the measured
+# EB10 / EB20 proportions of townlayout and its Typoroute L1 lettering, the author's model) at the places these
+# signs are put (roads.build_tile: the rows Towns.maker hands back in meshed), not this module's face textures
+KIT_BOARDS = {"FR", "MC"}
 M_PER_DEG = 111320.0
 AGGLO_CELL_M = 20.0             # m, the agglomeration grid's step (the land cover's pixels are 10 m)
 AGGLO_MARGIN_M = 400.0          # m around a commune its grid reaches (a town across the boundary is one area)
@@ -2986,8 +2990,10 @@ class Towns:
 
     def maker(self, frame, keys, out_dir, vfs_dir, faces):
         """roads.build_tile's towns: (roads, box, left_hand, rings) -> the tile's sign rows (prop rows of their faces'
-        groups), each new face written and named in faces (the tile's "townsigns": write_tile's towns)."""
-        def rows(roads, box, left_hand, rings=()):
+        groups), each new face written and named in faces (the tile's "townsigns": write_tile's towns). meshed (a
+        list; the regional kit's boards, KIT_BOARDS): those countries' town_signs rows go there whole instead, with no
+        face written for them."""
+        def rows(roads, box, left_hand, rings=(), meshed=None):
             try:
                 communes = self.communes(frame, keys)
             except Exception as e:      # (no signs rather than no tile)
@@ -3005,6 +3011,9 @@ class Towns:
             out = []
             for r in town_signs(roads, communes, frame, box, left_hand, rings, mapped,
                                 self._urban_fn([True]) if mapped else None):
+                if meshed is not None and r[10] in KIT_BOARDS:
+                    meshed.append(r)
+                    continue
                 nxt, km = "", 0
                 if r[0] == G_EXIT and r[10] in NEXT_PLACE:
                     try:

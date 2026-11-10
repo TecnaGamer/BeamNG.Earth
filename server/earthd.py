@@ -2507,6 +2507,10 @@ class Server:
             de_routes = blockworker._de_routes(self.mapdata, roadsmod.cells_of_tile(anchor.frame, tx, ty, reach))
         if props is not None:                       # (the props' side sources, read while the tile is built)
             self.mapdata.side_prefetch(roadsmod.cells_of_tile(anchor.frame, tx, ty))
+        import streetfront
+        frontage_country = streetfront.country_at_tile(anchor.frame, box) if items is not None else None
+        if frontage_country == "FR" and signs is None:
+            signs = []
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")  # noqa: E731
 
         def drawn(la, lo):      # the block's ground: raised over the low arches as the terrain is (_make_heightmap_here)
@@ -2523,6 +2527,7 @@ class Server:
         clearance = [] if self.buildings else None     # (build_tile's RoadClearance, PR #629: the powerlines' too)
         roadside_jobs = []
         drives = []
+        mapped_drives = [] if frontage_country else None
         import euguardrails
         sign_obstacles=None
         if self.buildings and euguardrails.enabled():
@@ -2549,6 +2554,7 @@ class Server:
                                                                                   self.anchor_q(anchor)),
                                      terrain_paint=self.surface is not None, cover_out=cover, marks=marks,
                                      roads_out=near_roads, roadside_jobs=roadside_jobs, signals=furnituremod.signals_for(self.mapdata, anchor.frame, nkeys),
+                                     driveways_out=mapped_drives,
                                      nodes=sign_nodes, clearance_out=clearance,
                                      development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns,
                                      de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
@@ -2559,17 +2565,31 @@ class Server:
         x0, y0, _, _ = roadsmod.tile_bbox(tx, ty)
         if items is not None:           # front doors and shopfronts, driveways into the road mesh
             # (no street tree in a house: its own or the next tile's)
-            rings = buildingsmod.near_rings(anchor.frame, tx, ty, self.mapdata, skip=skip)
+            margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
+            rings = buildingsmod.near_rings(anchor.frame, tx, ty, self.mapdata, margin=margin, skip=skip)
             props[:] = furnituremod.off_buildings(props, rings)
-            props.extend(buildingsmod.doors(items, lines, x0, y0, drives))
+            props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
             props.extend(buildingsmod.toll_booth_rows(items, x0, y0))
             drives.extend(buildingsmod.garage_drives(items, lines, x0, y0))
             chunks += drives
             park = parkingmod.clear_of(park, props, drives)
-            park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park)
+            park = parkingmod.tile_lot_spots(anchor.frame, tx, ty, self.mapdata, elev, items, park,
+                                             separate_bays=bool(frontage_country))
+            front_grass = [] if self.surface is not None else None
+            paving, spots = streetfront.finish(anchor.frame, tx, ty, self.mapdata, walks, rings, items, near_roads,
+                                               mapped_drives, drives, lambda x, y: roadmeshmod.drawn_ground(
+                                                   anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
+                                               frontage_country, self.left_hand(anchor), redrape=True, props=props,
+                                               grass=front_grass)
+            chunks += paving
+            if frontage_country and front_grass is not None:
+                key = f"{anchor.frame.lat0:.8f}:{anchor.frame.lon0:.8f}:{tx}:{ty}"
+                self.keep_fuel_pads(streetfront.pad_items(anchor.frame, box, key, paving, front_grass))
+            park += spots
             park = gasstationsmod.clear_park(park, fuel)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
-        chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks)
+        chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks,
+                                             separate_bays=bool(frontage_country))
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
             chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
             ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
@@ -2680,7 +2700,7 @@ class Server:
             try:
                 props.extend(fences.rows(anchor.frame, infra_fn, box, elev, decks=[
                     {"n": np.column_stack((xy, z)), "w": spec.width} for _f, spec, xy, z, _l in deck_parts] + rail_decks,
-                    roads=near_roads))
+                    roads=near_roads, french=frontage_country == "FR"))
             except Exception as ex:
                 log.warning("fences: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import picnic
@@ -2713,12 +2733,19 @@ class Server:
                     props = (props or []) + flag_rows
             except Exception as ex:
                 log.warning("golf: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        import radars
+        radar_props, speed_traps = radars.tile_rows(anchor.frame, box, self.mapdata, elev, self.road_widths, urban)
+        if radar_props:
+            props = (props or []) + radar_props
         return roadsmod.write_tile(self.out_dir, self.vfs_dir, aid, tx, ty, chunks, walks if self.sidewalks else None,
                                    mesh, dmesh, bld, props, wires, park, tunnel_mesh=tmesh, fuel=fuel,
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings),
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
-                                   turbines=turbine_rows, towns=town_faces)
+                                   turbines=turbine_rows, towns=town_faces,
+                                   walk_ground=lambda x, y: roadmeshmod.drawn_ground(
+                                       anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
+                                   speed_traps=speed_traps)
 
     def set_dej(self, on):
         """The settings page's German junction signs switch (message german_junctions): True when it changed (the road
@@ -2921,8 +2948,7 @@ class Server:
                     roads.again(again)
 
     def keep_fuel_pads(self, pads):
-        """A road tile's gas station pads kept for the ground's painters (surface.Surface.add_fuel_pads); the blocks
-        a new station's pad lies on get their photo rendered again (pads_stale)."""
+        """Keep the road tile's pads and refresh the material layers of the affected blocks."""
         if pads and self.surface is not None and hasattr(self.surface, "add_fuel_pads"):
             new = self.surface.add_fuel_pads(pads)
             if new:
@@ -2944,10 +2970,13 @@ class Server:
             if anchor is None:
                 continue
             _, cx, cy = key
-            if items is None or any(self._ring_meets(anchor, ring, cx - h, cy - h, cx + h, cy + h)
-                                    for _, rings in items for ring in rings):
+            affected = None if items is None else [
+                sid for sid, rings in items
+                if any(self._ring_meets(anchor, ring, cx - h, cy - h, cx + h, cy + h) for ring in rings)]
+            if affected is None or affected:
                 self.pads_rebuild.add(key)
-                if self.near_visual == "detail":
+                if self.near_visual == "detail" and (affected is None or any(
+                        not sid.startswith(surfacemod.FRONTAGE_PAD_PREFIX) for sid in affected)):
                     self.base_stale.add(key)
 
     @staticmethod
@@ -2958,12 +2987,12 @@ class Server:
         return bool(e.max() >= x0 and e.min() <= x1 and n.max() >= y0 and n.min() <= y1)
 
     def block_fuel_pads(self, anchor, cx, cy, size):
-        """The kept gas station pads around a block (its square and a margin) for its process's job: [(id, rings)]."""
-        if self.surface is None or not getattr(self.surface, "gas_pads", False):
+        """Fuel and frontage footprints around a block, for the worker's material layers."""
+        if self.surface is None or not hasattr(self.surface, "frontage_pad_items"):
             return []
         h = size / 2 + 64.0
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([cx - h, cx + h]), np.array([cy - h, cy + h]), np.zeros(2))
-        return self.surface.fuel_pad_items(np.asarray(la), np.asarray(lo))
+        return self.surface.fuel_pad_items(la, lo) + self.surface.frontage_pad_items(la, lo)
 
     def ground_z_at(self, anchor, e, n):
         """The ground's height (the frame's up) at (e, n) of anchor's frame, from the elevation data (not graded: the
@@ -3175,7 +3204,7 @@ class Server:
                 pfut = self.hm_proc[key] = pool.submit(
                     blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
-                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block))
+                    fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
                 try:
                     info = pfut.result()
                 finally:
@@ -3357,15 +3386,15 @@ class Server:
             lots = (self.surface.lots(keep["lat"], keep["lon"]) if hasattr(self.surface, "lots") else None)
             if lots:                    # farmland under the carriageways (a field does not cover the asphalt)
                 idx = surfacemod.paint_fields(idx, keep["lat"], keep["lon"], lots)
+                idx = surfacemod.paint_grass(idx, keep["lat"], keep["lon"], lots)  # (PR #505's mapped lawns)
                 idx = surfacemod.paint_golf(idx, keep["lat"], keep["lon"], lots)   # (golf over it: courses win)
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
                                              blockworker._open_tunnels(g, keep))
             idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
-            if hasattr(self.surface, "fuel_pads"):      # gas station forecourts (--gas-stations on)
-                idx = surfacemod.paint_pads(idx, keep["lat"], keep["lon"],
-                                            self.surface.fuel_pads(keep["lat"], keep["lon"]))
+            if hasattr(self.surface, "paint_ground_pads"):
+                idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
             stages["roadPaint"] = time.perf_counter() - t1
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
@@ -3537,7 +3566,7 @@ class Server:
         again once they are here."""
         key = (anchor.id, cx, cy)
         self.base_pending[key] = frozenset(pending)
-        if self.base_ready(anchor, cx, cy):
+        if surfacemod.PHOTO_ROADS_PENDING not in pending and self.base_ready(anchor, cx, cy):
             self.base_stale.discard(key)
         else:
             self.base_stale.add(key)
@@ -3902,7 +3931,8 @@ class Server:
         stamps.append(("buildings", time.perf_counter()))
         if roadsmod.ROADS_IN_GROUND and not quick:      # the carriageways in the ground (surface.photo_roads)
             try:
-                rgb = surfacemod.paint_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths)
+                rgb = surfacemod.paint_square(rgb, anchor.frame, x0, y0, size, self.surface, self.road_widths,
+                                              pending=pending)
             except Exception as e:      # the photo stays as it is
                 log.info("base photo %s: roads: %s", (anchor.id, cx, cy), e)
         stamps.append(("roads", time.perf_counter()))
@@ -3959,10 +3989,16 @@ class Server:
         """Rendering the block's base photo again would not change it: every lazy imagery tile is here and
         the regions it was rendered without (base_pending) are done."""
         size = self.layout.block * heightmap.SQUARE
-        if not self.imagery.lazy_ready(anchor.frame, cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M, size,
-                                       BASE_RENDER_PX):
+        x0, y0 = cx - size / 2 - BASE_SHIFT_M, cy - size / 2 - BASE_SHIFT_M
+        if not self.imagery.lazy_ready(anchor.frame, x0, y0, size, BASE_RENDER_PX):
             return False
-        return all(self._region_status(rk) is not None for rk in self.base_pending.get((anchor.id, cx, cy), ()))
+        pending = self.base_pending.get((anchor.id, cx, cy), ())
+        road_data = surfacemod.PHOTO_ROADS_PENDING
+        if road_data in pending and self.mapdata is not None:
+            la, lo = surfacemod._square_pts(anchor.frame, x0, y0, size)
+            if not all(self.mapdata.has(k, "roads") for k in mapcells.cells_for_points(la, lo)):
+                return False
+        return all(rk == road_data or self._region_status(rk) is not None for rk in pending)
 
     def terrain_cached(self, key):
         return key in self.hm or key in self.hm_inflight
