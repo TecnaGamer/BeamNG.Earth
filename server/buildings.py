@@ -1750,6 +1750,30 @@ def ridge_frame(ring, roof, orientation, direction):
     return across, hi
 
 
+# A chimney on a pitched-roof house (the user, 2026-11-10: "more features" and "smarter procedural generation"): most
+# houses with a pitched roof in the temperate world have one (OSM2World draws them too), a short brick-coloured stack
+# beside the ridge; CHIMNEY_SHARE of them by the seed, a house's own facade colour, not on sheds, barns or blocks.
+CHIMNEY_SHARE = 0.55
+CHIMNEY_HALF_M = (0.3, 0.45)        # m half size (by the seed)
+CHIMNEY_OVER_M = 0.9                # m over the ridge
+CHIMNEY_MAX_M2 = 400.0              # footprints larger than this (blocks, halls): none
+
+
+def _chimney(m, spec, c, u, ridge_half, hw, zr, mat):
+    """A chimney stack on the ridge line of a gabled / hipped box roof (centre c, ridge along u, ridge_half m each side
+    of c along it, the house half hw m wide, the ridge at zr), for a house that has one by its seed."""
+    if spec.cls in SHED_CLASSES or spec.cls in BARN_CLASSES or (spec.floors or 1) > 3 or ridge_half < 1.2 \
+            or hw < 2.0 or 4.0 * (ridge_half + hw) * hw > CHIMNEY_MAX_M2 \
+            or _hash01(spec.seed, "chimney") >= CHIMNEY_SHARE:
+        return
+    half = CHIMNEY_HALF_M[0] + (CHIMNEY_HALF_M[1] - CHIMNEY_HALF_M[0]) * _hash01(spec.seed, "chimney size")
+    along = (2.0 * _hash01(spec.seed, "chimney at") - 1.0) * 0.7 * (ridge_half - half)
+    side = (0.6 if _hash01(spec.seed, "chimney side") < 0.5 else -0.6) * min(1.0, 0.25 * hw)
+    v = np.array([-u[1], u[0]])
+    centre = np.asarray(c, np.float64) + u * along + v * side
+    _box(m, centre, u, half, half, zr - 1.2, zr + CHIMNEY_OVER_M, mat)
+
+
 def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
     if spec.roof in DOME_ROOFS:
@@ -1884,6 +1908,8 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         for sgn in (-1, 1):
             end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (tw, top), (-tw, top)])
         return
+    if spec.roof in ("gabled", "hipped") and not lite:
+        _chimney(m, spec, c, u, hl2 if spec.roof == "gabled" else max(hl2 - hw2, 0.0), hw, zr, mat_idx[spec.facade])
     if spec.roof == "gabled":
         r = hl2
         m.quad(at(-hl2, -hw2, ze), at(hl2, -hw2, ze), at(r, 0, zr), at(-r, 0, zr),

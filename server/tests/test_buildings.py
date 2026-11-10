@@ -2352,3 +2352,29 @@ class TankTest(unittest.TestCase):
         self.assertNotEqual(bld.plan(square, {"class": "storage_tank"}).cls, "tank")
         self.assertNotEqual(bld.plan(self.ring(), {"class": "storage_tank", "roof_shape": "flat"}).cls, "tank",
                             "a mapped roof shape: as mapped")
+
+
+class ChimneyTest(unittest.TestCase):
+    """Pitched-roof houses: CHIMNEY_SHARE of them have a stack over the ridge; never sheds or barns."""
+
+    def test_some_houses_have_one(self):
+        ring = np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float)
+        over, n = 0, 0
+        for k in range(60):
+            sp = bld.plan(ring + k * 0.37, {"class": "house", "roof_shape": "gabled", "height": 7.0,
+                                            "roof_height": 2.5})
+            if sp.roof != "gabled":
+                continue
+            n += 1
+            P = np.asarray(bld.build([(sp, 0.0, 0.0)])[0])
+            ridge = 7.0 + 0.1           # (the ridge 7 m up, the eave's overhang aside)
+            over += P[:, 2].max() > ridge + 0.5
+        self.assertGreater(n, 40)
+        self.assertTrue(0.35 * n < over < 0.75 * n, f"{over} of {n} with a chimney")
+
+    def test_not_on_a_barn(self):
+        ring = np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float)
+        for k in range(20):
+            sp = bld.plan(ring + k * 0.37, {"class": "barn", "roof_shape": "gabled", "height": 7.0, "roof_height": 2.5})
+            P = np.asarray(bld.build([(sp, 0.0, 0.0)])[0])
+            self.assertLessEqual(P[:, 2].max(), 7.0 + 0.5)
