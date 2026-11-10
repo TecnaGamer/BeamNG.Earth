@@ -245,5 +245,16 @@ class SparseTwinTest(unittest.TestCase):
         self.assertTrue(lo < -6.0 and hi > 26.0, (lo, hi))
 
 
+class OwnRecordTest(unittest.TestCase):
+    """A record belongs to a tagged bridge only near its outline: the Brooklyn Bridge's record, 0.8 km from the
+    Manhattan Bridge's outline, was taken for the Manhattan Bridge's (half its 1.9 km length from its centre)."""
+
+    def test_near_sites(self):
+        import numpy as np
+        outline = [np.array([[0.0, 0.0], [600.0, 0.0], [600.0, 30.0], [0.0, 30.0]])]
+        self.assertTrue(bt._near_sites(np.array([300.0, 250.0]), [outline]))
+        self.assertFalse(bt._near_sites(np.array([300.0, 800.0]), [outline]))
+
+
 if __name__ == "__main__":
     unittest.main()

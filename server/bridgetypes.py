@@ -387,7 +387,7 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
             # bound its trusses: the record's circle does (the river spans: truss_members keeps them to the water)
             info["outline"] = rings + [_circle(frame, found[0][1])]
         out.append(info)
-        osm_sites.append((np.concatenate(rings).mean(0), max(float(info["length"]), 300.0)))
+        osm_sites.append(rings)
     chain_paint = (osm_colour(frame, parts, infra) if infra else None) or "grey"
     db = _load()
     seen, nbi_sites = set(used), []
@@ -398,8 +398,7 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
         seen.add(i)
         e, n, _ = frame.geodetic_to_enu(np.array([float(db["lat"][i])]), np.array([float(db["lon"][i])]), 0.0)
         c = np.array([float(e[0]), float(n[0])])
-        if any(_in_rings(o, c[None])[0] for o in taken) or \
-                any(float(np.hypot(*(c - oc))) < oL / 2 for oc, oL in osm_sites):
+        if any(_in_rings(o, c[None])[0] for o in taken) or _near_sites(c, osm_sites):
             continue                        # (a tagged bridge's own record)
         L = float(db["length"][i])
         if any(t == t2 and float(np.hypot(*(c - c2))) < max(L, L2) / 2 for t2, c2, L2 in nbi_sites):
@@ -411,8 +410,7 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
         out.append({**record(i), "src": "nbi", "paint": chain_paint,
                     "outline": np.c_[c[0] + r * np.cos(ang), c[1] + r * np.sin(ang)]})
     for d, i, c in wdm:                     # Wikidata's typed bridges the map and the inventory did not give
-        if i in wd_used or any(_in_rings(o, c[None])[0] for o in taken) or \
-                any(float(np.hypot(*(c - oc))) < oL / 2 for oc, oL in osm_sites) or \
+        if i in wd_used or any(_in_rings(o, c[None])[0] for o in taken) or _near_sites(c, osm_sites) or \
                 any(float(np.hypot(*(c - c2))) < max(L2 / 2, 150.0) for _, c2, L2 in nbi_sites):
             continue
         wd_used.add(i)
@@ -442,6 +440,22 @@ def chain_structures(frame, parts, wet_fn=None, infra=()):
 
 MOVABLE_TYPES = (NBI_LIFT, NBI_BASCULE, NBI_SWING)
 LENS_TAGS = ("lenticular", "lens", "pauli")       # OSM bridge:truss / truss:type values of a lens truss
+
+
+OWN_RECORD_M = 300.0    # m: a record this near a tagged bridge's outline is that bridge's (its point is rough: Golden
+                        # Gate's lies 140 m off its deck). Was: within half the bridge's length of the outline's centre,
+                        # which took the Brooklyn Bridge's record for the Manhattan Bridge's (0.8 km apart, 1.9 km long):
+                        # the Brooklyn Bridge was a plain deck between its towers (the user, 2026-11-10)
+
+
+def _near_sites(c, sites):
+    """Is point c (2,) within OWN_RECORD_M of any of the tagged bridges' outlines (each a list of rings)?"""
+    for rings in sites:
+        for ring in rings:
+            r = np.asarray(ring, np.float64)[:, :2]
+            if len(r) >= 2 and _seg_dist(c, np.vstack([r, r[:1]])) <= OWN_RECORD_M:
+                return True
+    return False
 
 
 def resolve_type(code, nbi_t, tags=None):
