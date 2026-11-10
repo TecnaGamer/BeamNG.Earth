@@ -76,6 +76,11 @@ SHOP = "bne_bld_shop"
 OFFICE = "bne_bld_office"
 ROOF_FLAT = "bne_bld_roof_flat"
 ROOF_SLATE = "bne_bld_roof_slate"
+# clay roof tiles (Italy's barrel tiles, the stock assets/materials/tileable/roofing/t_italy_bld_roof_tiles: the asset
+# survey 2026-11-10): the clay roofs of the regional styles and of roof:material=roof_tiles, which were the slate texture
+# tinted orange. Its repeat is ROOF_TILES_UV_M (about four tiles across), not the other roofs' ROOF_UV_M
+ROOF_TILES = "bne_bld_roof_tiles"
+ROOF_TILES_UV_M = 1.2
 ROOF_SHINGLE = "bne_bld_roof_shingle"
 SIDING = "bne_bld_siding"
 FACADE = "bne_bld_facade"    # the plaster window sheet, tinted per building by vertex colour
@@ -103,7 +108,7 @@ LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosse
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE,)
+             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -126,6 +131,8 @@ ROOF_TINTS = {               # per roof material: the colours a building's roof 
     ROOF_SHINGLE: ((0.75, 0.72, 0.70), (0.55, 0.50, 0.48), (0.70, 0.56, 0.48), (0.62, 0.66, 0.72),
                    (0.95, 0.52, 0.36), (0.78, 0.40, 0.30), (0.42, 0.43, 0.46), (0.36, 0.42, 0.52)),
     ROOF_METAL: ((0.85, 0.86, 0.88), (0.55, 0.57, 0.60), (0.45, 0.58, 0.48), (0.62, 0.30, 0.26), (0.40, 0.42, 0.48)),
+    # the texture is terracotta already: as it is, weathered paler / darker, a redder brown
+    ROOF_TILES: ((1.0, 1.0, 1.0), (1.0, 0.95, 0.9), (0.86, 0.84, 0.82), (0.92, 0.82, 0.76), (0.75, 0.72, 0.70)),
 }
 WALL_TINTS = {               # houses with plain walls and laid-over windows: their colours (hashed)
     SIDING: ((0.96, 0.95, 0.92), (0.90, 0.86, 0.76), (0.78, 0.84, 0.90), (0.95, 0.92, 0.74), (0.78, 0.84, 0.74),
@@ -249,7 +256,7 @@ ROOF_PHOTO_PX = 512                 # the tile's photo (0.6 m per pixel over a 2
 ROOF_PHOTO_STEP = 0.02              # tints rounded to this (fewer distinct looks)
 ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate": (0.359, 0.361, 0.388),
                  "bne_bld_roof_shingle": (0.585, 0.577, 0.571), "bne_bld_roof_metal": (0.64, 0.64, 0.64),
-                 "bne_bld_panel": (0.815, 0.815, 0.815)}
+                 "bne_bld_panel": (0.815, 0.815, 0.815), "bne_bld_roof_tiles": (0.625, 0.465, 0.361)}
 # a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
 # asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
 ROOF_BRIGHT_MAT = "bne_bld_panel"
@@ -605,7 +612,7 @@ class Style:
 
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
-_CLAY = (ROOF_SLATE, (4, 5, 6))
+_CLAY = (ROOF_TILES, (0, 1, 2, 3, 4))
 _DARK = (ROOF_SLATE, (7, 8, 9))
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -1163,7 +1170,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     elif rmat == "copper":
         roof_mat = custom_look(ROOF_METAL, COLOR_NAMES["copper"])
     elif rmat in ("tile", "tiles", "roof_tiles", "clay", "terracotta"):
-        roof_mat = f"{ROOF_SLATE}|{4 + int(_hash01(seed, 'roof') * 3)}"
+        roof_mat = f"{ROOF_TILES}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_TILES]))}"
     elif rmat in ("slate", "stone"):
         roof_mat = f"{ROOF_SLATE}|{int(_hash01(seed, 'roof') * 4)}"
     elif rmat in ("shingle", "shingles", "wood"):
@@ -1191,7 +1198,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     rc = parse_color(attrs.get("roof_color"))
     if rc is not None:
         base_rmat = roof_mat.split("|")[0]
-        roof_mat = custom_look(base_rmat, rc)
+        if base_rmat == ROOF_TILES:         # (terracotta already: the mapped colour over the texture's mean)
+            roof_mat = custom_look(base_rmat, photo_tint(ROOF_TILES, rc))
+        else:
+            roof_mat = custom_look(base_rmat, rc)
     elif attrs.get("_roof_photo") is not None and not rmat:
         # (the roof's colour in the aerial photo, RoofPhoto: a mapped colour or material wins)
         base_rmat = roof_mat.split("|")[0]
@@ -1303,9 +1313,12 @@ class Mesh:
         self.n += len(pts3)
 
     def arrays(self):
-        return (np.array(self.P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2),
-                np.array(self.T, np.int64).reshape(-1, 3), np.array(self.M, np.int64),
-                np.array(self.C, np.uint8).reshape(-1, 4))
+        P, UV = np.array(self.P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2)
+        T, M = np.array(self.T, np.int64).reshape(-1, 3), np.array(self.M, np.int64)
+        tiles = M == _TILES_MI
+        if tiles.any():             # (the roof tiles' own repeat: every roof's UVs are made at ROOF_UV_M)
+            UV[np.unique(T[tiles])] *= ROOF_UV_M / ROOF_TILES_UV_M
+        return P, UV, T, M, np.array(self.C, np.uint8).reshape(-1, 4)
 
 
 # A sash window cut from the plaster sheet (band 2, bay 0, its sill included): u, v ranges (Collada v up)
@@ -1370,6 +1383,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
 # same; on 40 m lots 163k -> 185k near. (A numpy pass for it doubled the walls' build time.)
 WIN_CELLS = [(53 / 1024, 154 / 1024), (459 / 1024, 562 / 1024), (663 / 1024, 764 / 1024)]  # the sash band's good bays
 _FACADE_MI = MATERIALS.index(FACADE)
+_TILES_MI = MATERIALS.index(ROOF_TILES)
 _SHEET_MI = (_FACADE_MI, MATERIALS.index(OFFICE))  # (the plaster sheet's band 0, BAND_TALL, has bays of uneven width:
                                                    # a floor shifted by a bay would cut its windows; left as it was)
 
@@ -5998,7 +6012,8 @@ MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.6
             "bne_bld_siding": (0.822, 0.822, 0.822), "bne_bld_stucco": (0.795, 0.795, 0.795),
             "bne_bld_roof_metal": (0.642, 0.642, 0.642), "bne_bld_panel": (0.815, 0.815, 0.814),
             "bne_bld_metalwall": (0.841, 0.841, 0.841), "bne_bld_stone": (0.83, 0.818, 0.803),
-            "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513)}
+            "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513),
+            "bne_bld_roof_tiles": (0.625, 0.465, 0.361)}
 SKY_UV = (0.5, 0.5)
 # the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")

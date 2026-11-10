@@ -90,7 +90,7 @@ class RegionStyleTest(unittest.TestCase):
         med = self.houses(40.42, -3.70)
         for h in med:
             if h.roof != "flat":
-                self.assertIn(int(h.roof_mat.split("|")[1]), (4, 5, 6), "clay tile roofs")
+                self.assertTrue(h.roof_mat.startswith(bld.ROOF_TILES + "|"), "clay tile roofs")
         self.assertTrue(any(h.roof == "flat" for h in med))
         lat = self.houses(19.43, -99.13)
         self.assertGreater(sum(h.roof == "flat" for h in lat), 0.5 * len(lat))
@@ -2102,6 +2102,17 @@ class RealTagsTest(unittest.TestCase):
         self.assertGreater(rgba2[1], 200)
         self.assertLess(rgba2[2], 90)
 
+    def test_roof_tiles_own_repeat(self):
+        """Clay roof tiles repeat every ROOF_TILES_UV_M (about four tiles across), the other roofs every ROOF_UV_M."""
+        m = bld.Mesh()
+        looks = bld._Looks(0.5)
+        quad = ((0, 0, 0), (6, 0, 0), (6, 6, 0), (0, 6, 0)), ((0, 0), (1, 0), (1, 1), (0, 1))
+        m.quad(*quad[0], *quad[1], looks[f"{bld.ROOF_TILES}|0"])
+        m.quad(*quad[0], *quad[1], looks[f"{bld.ROOF_SLATE}|0"])
+        _P, UV, _T, M, _C = m.arrays()
+        self.assertAlmostEqual(float(UV[:4].max()), bld.ROOF_UV_M / bld.ROOF_TILES_UV_M)
+        self.assertAlmostEqual(float(UV[4:].max()), 1.0)
+
     def test_roof_material_and_color(self):
         # Metal roof
         sm = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "metal"}, 0, 39.2, -76.6)
@@ -2116,9 +2127,7 @@ class RealTagsTest(unittest.TestCase):
 
         # Tile roof
         st = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "tile"}, 0, 39.2, -76.6)
-        self.assertTrue(str(st.roof_mat).startswith(bld.ROOF_SLATE))
-        k = int(st.roof_mat.split("|")[1])
-        self.assertGreaterEqual(k, 4)
+        self.assertTrue(str(st.roof_mat).startswith(bld.ROOF_TILES), "clay tiles, not tinted slate")
 
         # Slate roof
         ss = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "slate"}, 0, 39.2, -76.6)

@@ -768,5 +768,31 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_bld_roof_tiles": {
+    "name": "bne_bld_roof_tiles",
+    "mapTo": "bne_bld_roof_tiles",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "e262ffa8-bf1b-5b40-8890-3db06155a64b",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_b.color.png",
+        "normalMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/roofing/t_italy_bld_roof_tiles/t_italy_bld_roof_tiles_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }
