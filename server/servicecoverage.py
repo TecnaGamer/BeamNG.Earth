@@ -41,7 +41,7 @@ class Source:
             path = self.directory/'manifest.json'
             try:
                 stat = path.stat()
-                stamp = stat.st_mtime_ns, stat.st_size
+                stamp = stat.st_mtime_ns, stat.st_size, stat.st_ino, stat.st_ctime_ns
                 if stamp != self.stamp:
                     data = json.loads(path.read_text(encoding='utf-8'))
                     if data.get('format') != 1 or data.get('cell_degrees') != CELL or not isinstance(data.get('cells'), dict):

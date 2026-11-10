@@ -74,3 +74,9 @@ The national dataset's final cell/exit counts are not known until the build fini
 - `.gitignore`: excludes generated national cells and existing build outputs.
 
 No BeamNG process, existing road/bridge generator, terrain feature, sign material, or active cache was modified by the build job.
+
+## 1.9.1 refresh compatibility
+
+Manifest and bundled-index change detection includes file identity and creation/change time as well as size and modification time. Atomically replacing a manifest with the same length and modification timestamp therefore refreshes the requested region on Windows. A regression explicitly holds those two values constant while replacing a completed cell with an empty one. Publication outside requested regions still avoids unnecessary sign refreshes.
+
+This PR update does not start or resume the nationwide bulk builder and does not claim that national coverage is complete. Service and legacy shield revisions both participate in the existing sign-stream revision key.

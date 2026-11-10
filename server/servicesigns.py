@@ -63,7 +63,7 @@ class Source:
         with self.lock:
             try:
                 stat = self.path.stat()
-                stamp = stat.st_mtime_ns, stat.st_size, POLICY.stat().st_mtime_ns
+                stamp = stat.st_mtime_ns, stat.st_size, stat.st_ino, stat.st_ctime_ns, POLICY.stat().st_mtime_ns
             except FileNotFoundError:
                 stamp = None
             if stamp != self.stamp:

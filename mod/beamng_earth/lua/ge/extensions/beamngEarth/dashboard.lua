@@ -345,8 +345,66 @@ function M.setEnabled(on)
 end
 
 local ctxAt, ctxCached = -1e9, nil
+
+-- The player's car asked once to register its navigation screens again (askScreens). A navigator asks for its map
+-- only once, at the car's spawn (beamNavigator.init, the gauges' navigationData); a request that missed our hook, or a
+-- registration dropped meanwhile, left the stock map for good: grid lines on a blank screen, our level has no stock
+-- map (the user, 2026-11-08: "the sat nav on cars with a screen is blank"; registered again by hand it showed the
+-- photo map at once). Asked ASK_AFTER_S after the car became the player's, again after a respawn or replacement.
+M.ASK_AFTER_S, M.ASK_RETRY_S = 1.5, 5.0
+local ask = { id = nil, at = nil, done = {} }   -- the car waited for, when to ask it; done[id]: asked already
+M.VEHICLE_ASK = [[
+local id = obj:getID()
+local function req(tag, initmap)
+  if type(tag) == 'string' and tag ~= '' then
+    obj:queueGameEngineLua(string.format('extensions.ui_uinavi.requestVehicleDashboardMap(%q, %s, %d)', tag,
+      initmap and string.format('%q', initmap) or 'nil', id))
+  end
+end
+for _, c in pairs(v and v.data and v.data.controller or {}) do
+  if type(c) == 'table' then
+    if c.fileName == 'beamNavigator' then req(c.screenMaterialName or '@screen_gps', nil) end
+    if type(c.customModules) == 'table' then
+      for _, m in pairs(c.customModules) do
+        if type(m) == 'table' and m.moduleName == 'navigationData' then req(c.materialName, 'initMap') end
+      end
+    end
+  end
+end]]
+
+local function hasScreen(id)
+  local prefix = tostring(id) .. '\0'
+  for key in pairs(screens) do
+    if key:sub(1, #prefix) == prefix then return true end
+  end
+  return false
+end
+
+-- once per car: its navigators' requests made again through our hook (registerScreen), when it has none registered
+local function askScreens(now)
+  local id = playerVehicleId()
+  if not id or ask.done[id] then return end
+  if ask.id ~= id then ask.id, ask.at = id, now + M.ASK_AFTER_S return end
+  if now < ask.at then return end
+  if hasScreen(id) then ask.done[id] = true return end
+  local ctx = coreContext()
+  if not (enabled and ctx and ctx.active == true) then ask.at = now + M.ASK_RETRY_S return end
+  local target = vehicleFor(id)
+  if not target or type(target.queueLuaCommand) ~= 'function' then ask.at = now + M.ASK_RETRY_S return end
+  target:queueLuaCommand(M.VEHICLE_ASK)
+  ask.done[id] = true
+  M.asked = (M.asked or 0) + 1        -- (diagnostics)
+end
+
+local function forgetAsked(id)
+  id = tonumber(id)
+  if id == nil then return end
+  ask.done[id] = nil
+  if ask.id == id then ask.id = nil end
+end
 function M.onUpdate()
   installNavigationHook()
+  if enabled then askScreens(os.clock()) end
   -- (no navigation screen registered, as in most cars: nothing to do, not even the context; else the context at most
   -- every VIEW_INTERVAL_S: it copies the credits and builds the attribution text)
   if not next(screens) then return end
@@ -370,6 +428,7 @@ end
 
 function M.onClientStartMission()
   readSetting()
+  ask.id, ask.done = nil, {}
   local ctx = coreContext()
   active = shouldDisplay(ctx)
   if active then activateScreens() end
@@ -402,8 +461,9 @@ local function dropScreens(id)
   end
   if currentVehicle == id then lastTilesSignature = nil end
 end
-M.onVehicleReplaced = dropScreens
-M.onVehicleDestroyed = dropScreens
+function M.onVehicleReplaced(id) dropScreens(id) forgetAsked(id) end
+function M.onVehicleDestroyed(id) dropScreens(id) forgetAsked(id) end
+M.onVehicleSpawned = forgetAsked     -- (a new car with the id of an old one asks again)
 
 function M.onExtensionLoaded()
   readSetting()

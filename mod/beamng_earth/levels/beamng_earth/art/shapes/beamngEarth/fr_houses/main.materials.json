@@ -1,0 +1,288 @@
+{
+  "bne_fr_house_brick": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/brick.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_brick",
+    "name": "bne_fr_house_brick",
+    "persistentId": "cf6b24a9-1e4d-5b62-bf67-9c65b3da6846",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_canal": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/canal.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_canal",
+    "name": "bne_fr_house_canal",
+    "persistentId": "2bfc1502-3676-5190-8aa1-38ce8d48182e",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_glass": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.23,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_glass",
+    "name": "bne_fr_house_glass",
+    "persistentId": "5a68e560-d345-54e3-b87c-698beb1174b9",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_glass_lit": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
+        "emissiveMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/glass.emissive.png",
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.23,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_glass_lit",
+    "name": "bne_fr_house_glass_lit",
+    "persistentId": "c7c79185-e7b8-5ad6-9700-80d79ae79f4c",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_metal": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.55,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_metal",
+    "name": "bne_fr_house_metal",
+    "persistentId": "aeca2bb9-2c8c-56fa-a562-712cc749eb58",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_roller": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/roller.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_roller",
+    "name": "bne_fr_house_roller",
+    "persistentId": "af9f64d9-ce5f-58c0-9c59-360fc0ae4b3b",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_slate": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/slate.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_slate",
+    "name": "bne_fr_house_slate",
+    "persistentId": "d4da86c1-f410-5ce4-9977-d8624e869576",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_stone": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stone.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_stone",
+    "name": "bne_fr_house_stone",
+    "persistentId": "c3d2fd2d-77c0-5ebf-b593-8fda0d396102",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_stucco": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/stucco.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_stucco",
+    "name": "bne_fr_house_stucco",
+    "persistentId": "8ec16750-9efd-50fc-8f29-65c42e955565",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_tile": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/tile.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_tile",
+    "name": "bne_fr_house_tile",
+    "persistentId": "fdb7f843-e023-5724-b8c4-c3634ab15639",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_trim": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0.05,
+        "roughnessFactor": 0.55,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_trim",
+    "name": "bne_fr_house_trim",
+    "persistentId": "3050a835-fb40-5780-9c3c-c5822b193b3a",
+    "translucent": false,
+    "version": 1.5
+  },
+  "bne_fr_house_wood": {
+    "Stages": [
+      {
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.color.png",
+        "metallicFactor": 0,
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/wood.normal.png",
+        "roughnessFactor": 0.88,
+        "vertColor": true
+      }
+    ],
+    "class": "Material",
+    "doubleSided": false,
+    "mapTo": "bne_fr_house_wood",
+    "name": "bne_fr_house_wood",
+    "persistentId": "77d2388a-8c03-5760-bd00-7f2bab34ca40",
+    "translucent": false,
+    "version": 1.5
+  }
+}

@@ -287,32 +287,50 @@ export function visibleLines(lines, boxes, clat, clon, z, w, h, max = 3000, norm
   const s = TILE * Math.pow(2, z), c = project(clat, clon, z)
   for (let i = 0; i < lines.length && out.length < max; i++) {
     if (!boxMeets(boxes[i], v)) continue
-    const pts = []
+    // a line's first point in the world copy nearest the view's centre, every next one beside the one before (each
+    // point wrapped on its own put a line crossing the copies' seam half in one copy, half in the next: a stroke across
+    // the whole map when zoomed far out, the user 2026-11-08), and the line again in every other copy on screen
+    const xs = [], ys = []
+    let prev = null
     if (norm) {
       const n = norm[i]
       for (let j = 0; j < n.length; j += 2) {
         let dx = n[j] * s - c.x                 // = toScreen's, operation for operation
         if (dx > s / 2) dx -= s
         if (dx < -s / 2) dx += s
-        pts.push((w / 2 + dx).toFixed(1) + "," + (h / 2 + (n[j + 1] * s - c.y)).toFixed(1))
+        if (prev !== null) dx += Math.round((prev - dx) / s) * s
+        prev = dx
+        xs.push(w / 2 + dx); ys.push(h / 2 + (n[j + 1] * s - c.y))
       }
     } else {
       const l = lines[i]
       for (let j = 0; j < l.length; j += 2) {
         const p = toScreen(l[j + 1], l[j], clat, clon, z, w, h)
-        pts.push(p.x.toFixed(1) + "," + p.y.toFixed(1))
+        let x = p.x
+        if (prev !== null) x += Math.round((prev - x) / s) * s
+        prev = x
+        xs.push(x); ys.push(p.y)
       }
     }
-    out.push(pts.join(" "))
+    if (!xs.length) continue
+    let x0 = Infinity, x1 = -Infinity
+    for (const x of xs) { if (x < x0) x0 = x; if (x > x1) x1 = x }
+    for (let k = Math.ceil(-x1 / s); k * s + x0 <= w && out.length < max; k++) {   // each copy meeting [0, w]
+      const off = k * s
+      const pts = []
+      for (let j = 0; j < xs.length; j++) pts.push((xs[j] + off).toFixed(1) + "," + ys[j].toFixed(1))
+      out.push(pts.join(" "))
+    }
   }
   return out
 }
 
 // Labels for the view: points [name, lon, lat, minZoom] in priority order, shown from their minZoom (and below
 // maxZoom), none overlapping another (a box of ~charW px per letter, lineH px high), at most max.
-// opts.norm: the points from normPoints (the same labels, faster).
+// opts.norm: the points from normPoints (the same labels, faster). opts.pad: px of clear space kept round each label
+// (the Highways layer's shields: one every so far along a road, not a row of them).
 export function visibleLabels(points, clat, clon, z, w, h, opts = {}) {
-  const { maxZoom = 99, max = 120, charW = 7, lineH = 16, norm = null } = opts
+  const { maxZoom = 99, max = 120, charW = 7, lineH = 16, norm = null, pad = 0 } = opts
   const out = []
   if (z >= maxZoom) return out
   const v = viewBox(clat, clon, z, w, h, 0)
@@ -333,12 +351,28 @@ export function visibleLabels(points, clat, clon, z, w, h, opts = {}) {
       s = toScreen(p[2], p[1], clat, clon, z, w, h)
     }
     const bw = p[0].length * charW + 8
-    const box = [s.x - bw / 2, s.y - lineH, s.x + bw / 2, s.y + 4]
+    const box = [s.x - bw / 2 - pad, s.y - lineH - pad, s.x + bw / 2 + pad, s.y + 4 + pad]
     if (taken.some(t => box[0] < t[2] && box[2] > t[0] && box[1] < t[3] && box[3] > t[1])) continue
     taken.push(box)
     out.push({ name: p[0], x: s.x, y: s.y, rank: p[4] })
   }
   return out
+}
+
+// The Highways layer's route shields (maphighways.js), as SVG paths round (0, 0), about 22 px high and wider for
+// more digits: kind "I" the Interstate shield (`body` blue, `top` the red band over it), "US" the white US route
+// shield (`top` empty). { body, top, w }.
+export function shieldPath(kind, digits) {
+  const W = digits >= 3 ? 28 : 22, h = W / 2
+  const f = n => n.toFixed(1)
+  if (kind === "I") {
+    const crown = `M${f(-h)},-8 Q${f(-h / 2)},-12 0,-9.5 Q${f(h / 2)},-12 ${f(h)},-8`
+    return { w: W, body: `${crown} Q${f(h + 1)},4 0,11 Q${f(-h - 1)},4 ${f(-h)},-8 Z`,
+             top: `${crown} L${f(h + 0.3)},-3.5 L${f(-h - 0.3)},-3.5 Z` }
+  }
+  return { w: W, top: "",
+           body: `M${f(-h)},-10 L${f(h)},-10 Q${f(h + 1)},-1 ${f(h - 3)},4 Q${f(h / 2)},9 0,11 ` +
+                 `Q${f(-h / 2)},9 ${f(-h + 3)},4 Q${f(-h - 1)},-1 ${f(-h)},-10 Z` }
 }
 
 // The zoom a populated place's name shows from (Natural Earth scalerank 0 .. 8; capitals a little earlier).

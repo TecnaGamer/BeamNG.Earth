@@ -189,6 +189,25 @@ class GroundGapTest(unittest.TestCase):
         f = _feats(self.lines, [0, 2])
         self.assertEqual(roads.level_ranges(f, 1), [])
 
+    def test_as_the_python_it_was(self):
+        """_deck_gaps' answers are exactly those of the Python before its look round moved to earthfast
+        (tests/gradesep_reference.py)."""
+        import gradesep_reference
+        roadz.PROVIDER = None
+        for f in [_feats(self.lines, [0, 2]), _feats([[(0, -300), (0, -50)], [(0, -50), (0, 50)], [(0, 50), (0, 300)]],
+                                                     [0, 2]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0), (80, 0)], "residential")]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0.3), (80, 0)], "residential"),
+                                                    ([(0, -0.2), (-60, 0)], "residential")]),
+                  _feats([[(0, -300), (0, -20)], [(0.4, -20), (0, 20)], [(0, 20), (0, 300)]], [0, 2]),
+                  features([[(0, -300), (0, 300)]] + CROSS, ["motorway", "residential", "residential"],
+                           flags=[(0, "is_bridge", 0.0, 280 / 600), (0, "is_bridge", 320 / 600, 1.0)])]:
+            for i in range(len(f)):
+                rngs = roads._skew_decks(f, i, roads.raw_level_ranges(f, i))
+                with self.subTest(n=len(f), i=i):
+                    self.assertEqual(repr(roads._deck_gaps(f, i, list(rngs))),
+                                     repr(gradesep_reference.deck_gaps(f, i, list(rngs))))
+
 
 
 @unittest.skipUnless(NATIVE, "earthfast 105")

@@ -128,6 +128,35 @@ def read_held(read):
     return read()
 
 
+DAMAGED_NPZ = (OSError, ValueError, EOFError, KeyError)     # (and zipfile.BadZipFile: read_npz)
+
+
+def read_npz(path, read, what="cache file"):
+    """read(f) of the npz cache file at path (f: np.load's NpzFile), or None when the file is damaged: empty
+    (EOFError), cut short (zipfile.BadZipFile), zeroed (ValueError) or missing a member (KeyError), as a crash or power
+    loss after its write leaves it. The damaged file is removed so the caller builds it again: unread, it failed every
+    ask for good (telemetry 2026-11-08: the far tiles' EOFError, 313k times in a week from three dev builds, BadZipFile
+    beside it). Opened with its own handle, closed whatever np.load raises (numpy left a damaged file's open, and
+    Windows cannot remove an open file)."""
+    import zipfile
+    import numpy as np
+    try:
+        with open(path, "rb") as fh, np.load(fh, allow_pickle=False) as f:
+            return read(f)
+    except FileNotFoundError:
+        return None
+    except PermissionError as e:        # (Windows: held by another process, a virus scanner: whole, so kept; built anew)
+        log.debug("%s %s: %s", what, path, e)
+        return None
+    except DAMAGED_NPZ + (zipfile.BadZipFile,) as e:
+        log.warning("%s %s damaged (%s: %s): built again", what, path, type(e).__name__, e)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+        return None
+
+
 def replace_cached(tmp, path):
     """replace(tmp, path) for a cache file whose content is the same whoever writes it (a download, a decoded or built
     copy of one). On Windows a file another thread or process has open, or memory-mapped, cannot be replaced

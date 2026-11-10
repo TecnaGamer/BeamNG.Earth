@@ -133,11 +133,17 @@ def _lot_rows(hw):
     return out
 
 
-def lot_spots(rings, box, z_at, blockers=()):
+LOT_ROAD_CLEAR_M = 5.0      # a lot stall whose centre is this close to a public road's centre line is on its lanes: left
+                            # out (a parking polygon drawn over a road: parked cars spawned across an Interstate's
+                            # lanes, Tann2019 on I-94 / I-90 in Montana, 2026-11-05)
+
+
+def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
     """Rows [x, y, z, heading, 1] of the stalls of parking lots (rings: (k, 2) arrays in the anchor frame)
     whose centres are in the tile box: rows along each lot's long side, every stall wholly inside the lot and
-    its centre in none of the blockers (building footprints: a garage's ground floor). z_at(x, y) -> the
-    ground (arrays). Deterministic."""
+    its centre in none of the blockers (building footprints: a garage's ground floor) nor within LOT_ROAD_CLEAR_M of
+    a public road (roads_xy: buildings.road_lines in the anchor frame). z_at(x, y) -> the ground (arrays).
+    Deterministic."""
     import buildings
     x0, y0, x1, y1 = box
     cand = []
@@ -174,6 +180,17 @@ def lot_spots(rings, box, z_at, blockers=()):
         b = np.asarray(b, np.float64)
         if len(b) >= 3:
             keep &= ~Path(b).contains_points(pts)
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln in roads_xy if len(ln) >= 2]
+    if lines and keep.any():        # (one Rust pass for every stall against every road segment: earthfast's grid)
+        import fast
+        fast.require(0, "points_near_segments")
+        a = np.concatenate([ln[:-1] for ln in lines])
+        b = np.concatenate([ln[1:] for ln in lines])
+        idx = np.flatnonzero(keep)
+        near = np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(pts[idx], np.float64),
+                                                        np.ascontiguousarray(a), np.ascontiguousarray(b),
+                                                        np.full(len(a), LOT_ROAD_CLEAR_M)), bool)
+        keep[idx[near]] = False
     cand = [cnd for cnd, k in zip(cand, keep) if k][:LOT_MAX_PER_TILE]
     if not cand:
         return []
@@ -224,10 +241,16 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     existing = list(existing or [])
     box = roads.tile_bbox(tx, ty)
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ())]
+    roads_xy = []
     try:
-        feats = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+        cells = [md.cell(k, layers=("infrastructure", "roads"), kind="demand")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
-        rings = lot_rings(frame, feats)
+        rings = lot_rings(frame, [c.layers.get("infrastructure") for c in cells])
+        if rings:
+            import buildings
+            roads_xy = [ln + np.array(box[:2]) for ln in
+                        buildings.road_lines(frame, [c.layers.get("roads") for c in cells], box[0], box[1],
+                                                size=max(box[2] - box[0], box[3] - box[1]))]
     except Exception:
         rings = []
     paths = [Path(np.asarray(b, np.float64)) for b in blockers + rings if len(b) >= 3]
@@ -243,7 +266,7 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     def z_at(x, y):                 # the anchor frame's up, as the ground drawn (the Earth's curve: raw heights stood a
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)    # spot ~6 m up 10 km from the anchor, 18 m at 15 km)
         return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
-    return existing + lot_spots(rings, box, z_at, blockers)
+    return existing + lot_spots(rings, box, z_at, blockers, roads_xy)
 
 
 AISLE_END_M = 6.0           # stalls kept this far from an aisle's ends (its junctions)

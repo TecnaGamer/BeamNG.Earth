@@ -117,6 +117,45 @@ class RevisitTest(unittest.TestCase):
         self.assertTrue(revisit.sig_current("", cur))
         self.assertEqual(revisit.sig(b=1, a=2), revisit.sig(a=2, b=1))
 
+    def test_sidecar_descriptor_is_closed_on_success_and_write_error(self):
+        from unittest import mock
+        real_open = os.open
+        opened = []
+
+        def record_open(*args, **kwargs):
+            fd = real_open(*args, **kwargs)
+            opened.append(fd)
+            return fd
+
+        with tempfile.TemporaryDirectory() as d:
+            wh = revisit.where(39.28, -76.56, 39.28, -76.56, 39.29, -76.55, "")
+            with mock.patch.object(revisit.os, "open", side_effect=record_open):
+                revisit._note(d, "roads", "first", wh)
+                self.assertEqual(len(opened), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[-1])
+                with mock.patch.object(revisit.os, "write", side_effect=OSError("disk write failed")):
+                    revisit._note(d, "roads", "failed", wh)
+                self.assertEqual(len(opened), 2)
+                with self.assertRaises(OSError):
+                    os.fstat(opened[-1])
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0]), encoding="utf-8") as f:
+                self.assertEqual([revisit.parse_where(line)[3] for line in f], ["first"])
+
+    def test_concurrent_sidecar_appends_keep_every_row(self):
+        from concurrent.futures import ThreadPoolExecutor
+        with tempfile.TemporaryDirectory() as d:
+            wh = revisit.where(39.28, -76.56, 39.28, -76.56, 39.29, -76.55, "")
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                list(pool.map(lambda i: revisit._note(d, "roads", str(i), wh), range(100)))
+            wd = os.path.join(d, revisit.SUBDIR, revisit.WHERE_DIR)
+            with open(os.path.join(wd, os.listdir(wd)[0]), encoding="utf-8") as f:
+                rows = [revisit.parse_where(line) for line in f]
+            self.assertEqual(len(rows), 100)
+            self.assertTrue(all(r is not None for r in rows))
+            self.assertEqual({r[3] for r in rows}, {str(i) for i in range(100)})
+
     def test_sidecar_reopens_after_cache_directory_is_replaced(self):
         wh = revisit.where(39, -76, 39, -76, 40, -75, "")
         with tempfile.TemporaryDirectory() as d:

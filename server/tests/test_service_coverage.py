@@ -1,6 +1,7 @@
 import gzip
 import hashlib
 import json
+import os
 from pathlib import Path
 import sqlite3
 import sys
@@ -54,7 +55,12 @@ class CoverageTest(unittest.TestCase):
             self.assertEqual(len(source.query(*box)),1)
             self.assertEqual(source.query(*box)[0]['service_exit']['label']['ref'],'2')
             old=source.version()
+            manifest=directory/'manifest.json'
+            previous=manifest.stat()
             publish(directory,[])
+            # Same-sized atomic replacements can retain the same Windows mtime.
+            os.utime(manifest,ns=(previous.st_atime_ns,previous.st_mtime_ns))
+            self.assertEqual(manifest.stat().st_size,previous.st_size)
             self.assertNotEqual(old,source.version())
             self.assertEqual(source.query(*box),[])
 

@@ -1,8 +1,10 @@
 # Interstate exit service signs: completion report
 
-Implemented November 8, 2026. The user subsequently confirmed the Wyoming sample works in-game. A [national coverage pipeline](service-signs-us.md) is now configured and building; nationwide coverage remains incomplete and unverified. No running server was restarted and no active cache was cleared.
+Updated for **BeamNG.Earth 1.9.1-beta** against upstream `main` at `e1c72abf`. Retains French sign rendering, cached route shields/repeaters, current pole-profile arguments, and detail-mode gating for wind turbines. Service boards merge with the existing green-sign and route-marker meshes; optional service failures preserve the other signs.
 
-## 1–2. Reused and new assets
+Implemented November 8, 2026. The user subsequently confirmed the Wyoming sample works in-game. A [national coverage pipeline](service-signs-us.md) is available; nationwide coverage remains incomplete and unverified. No running server was restarted and no active cache was cleared.
+
+## 1Ã¢â‚¬â€œ2. Reused and new assets
 
 Reuses `exitsigns.Mesh`, rounded sign contours, metal posts, terrain sampling, `bne_exit_blue`, white/metal materials, and the existing licensed Roadgeek/guide glyph atlases. No existing font or sign assets were changed. New assets are procedural general-service/business-panel geometry, a policy file and an inferred Wyoming association index. No third-party logo artwork was added.
 
@@ -28,7 +30,7 @@ A business must be on a ground-level local-road node or contain a local-road ver
 
 Evidence includes actual OSM name/brand, OSM ID/URL, routed metres, access node and route way IDs. Missing road or POI connections cause omissions. Incorrect/missing OSM restrictions or category tags remain a limitation.
 
-## 5–6. General and specific signs
+## 5Ã¢â‚¬â€œ6. General and specific signs
 
 General blue boards show an exit number and only categories having qualified businesses. Specific boards show a category, exit number and actual business names. They support up to six panels in two rows and two or three columns, measured/wrapped text, duplicate-name suppression and deterministic selection. Names that cannot fit in three lines at a minimum 0.20 m cap height are omitted from specific panels; their qualifying general category can remain. Names are neither invented nor truncated into a different business identity.
 
@@ -85,7 +87,7 @@ Updated `server/highwaysigns.py` for source/version/mesh integration and `server
 
 Service geometry merges into the existing `exits` mesh and `roads_tile` stream, inheriting visibility, distance rendering, bounded workers, retirement, rebase and unloading. No Lua/protocol extension, separate stream, road rebuild or physics change is needed. Graph searches occur only in the offline builder.
 
-Runtime loads a compact index with geographic buckets, reuses cached road contexts and shared font textures, and includes index/policy hashes in sign refreshes. Pose-side local-file checks are throttled to five seconds. On this workstation, the final 132,826-byte/17-record sample performed 1,000 warm local queries in about 79 ms, roughly 0.08 ms/query. A deterministic 34,458-element rebuild took approximately 2–3 seconds. These are isolated measurements, not in-game FPS results. Nationwide deployment should partition regional indexes and use buffered regional inputs instead of loading a planet graph into this sample builder.
+Runtime loads a compact index with geographic buckets, reuses cached road contexts and shared font textures, and includes index/policy hashes in sign refreshes. Pose-side local-file checks are throttled to five seconds. On this workstation, the final 132,826-byte/17-record sample performed 1,000 warm local queries in about 79 ms, roughly 0.08 ms/query. A deterministic 34,458-element rebuild took approximately 2Ã¢â‚¬â€œ3 seconds. These are isolated measurements, not in-game FPS results. Nationwide deployment should partition regional indexes and use buffered regional inputs instead of loading a planet graph into this sample builder.
 
 ## 12. Refresh instructions and limitations
 
@@ -103,3 +105,11 @@ The fetch writes only the isolated probe file. The builder atomically replaces i
 The running server was not restarted or modified in memory; code takes effect on the next normal launch of this updated source. Once loaded, replacing the index or editing policy is detected within about five seconds and ordinary sign jobs refresh visible tiles. No destructive cache purge is needed. Smaller runtime distance limits filter existing associations; larger limits or access-rule changes require rebuilding the offline index to recover additional businesses.
 
 Coverage is a Cheyenne/Laramie sample, not statewide/nationwide. Conservative explicit-access matching omits many standalone POIs, especially food; incorrect OSM tags can still misclassify facilities. Conservative base/restriction handling omits some valid routes. No verified program-participation dataset or licensed logo collection is supplied. Distant readability, terrain contact, unrepresented props and actual streaming behavior still require user verification in BeamNG.
+
+## 1.9.1 update validation
+
+The updated branch ran **1,139 Python tests across 65 modules: 1,112 passed, 24 skipped, two environment errors, and one pre-existing assertion failure**. Windows denies symlink creation in the two unchanged cache tests (`WinError 1314`). The unchanged font-atlas regeneration assertion also fails on upstream files under this local Pillow/FreeType environment. Optional real-cache geometry tests use `BNGE_ROADGEO_REAL=0`, as in the foundation gate.
+
+The final focused run passed all **46 service-sign/coverage/world-prop/highway-sign tests**. All **103 Lua modules** passed, including **176 tree/night-light assertions**. JavaScript map-math checks, OSM tag inventory, Python compilation, whitespace checks, and source/BeamMP package builds passed. The offline Laramie audit still orients all 20 sampled lamp arms toward roads. No new in-game rendering or FPS claim is made.
+
+New regressions cover combined service/legacy sign revisions, same-size/same-mtime manifest replacement, bounded nearest-light selection, zero-light work suppression, and lantern/ordinary/high-mast pool compatibility. The foundation gate includes the service-sign, coverage, and world-prop suites. Existing PR screenshots are retained.

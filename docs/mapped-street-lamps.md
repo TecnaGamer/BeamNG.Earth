@@ -1,5 +1,7 @@
 # Mapped street-lamp assets and lighting
 
+Updated against upstream `main` at `e1c72abf` for **BeamNG.Earth 1.9.1-beta**. Existing French lanterns retain their lighting profile alongside ordinary and high-mast lights.
+
 Mapped OSM `highway=street_lamp` nodes now use these stock assets globally wherever infrastructure data is available:
 
 | `lamp_mount` | Stock asset | Authored scale reference |
@@ -14,7 +16,7 @@ Mapped poles now emit the same lens/glow rows used by the existing night-light s
 
 Both the thread fallback and road worker enable mapped lamps globally. Existing regional fallback spacing is retained for unmapped roads. No server restart or cache purge was performed. The new client groups/night-light profile and server code must both be loaded to see the change; in-game appearance and nighttime brightness still need user verification.
 
-Validation on the focused upstream-based PR tree: 10 world-prop tests, 39 furniture tests, 108 road tests, 6 blockworker tests, 13 highway-sign tests, 14 service-sign tests, 6 national-coverage tests, and 155 Lua assertions across the tree/night-light modules pass. Checks cover asset selection, authored scale, terrain-relative light heights, both double-arm heads, tile ownership, inactive-node exclusion, day/night switching, light-profile restoration, both sides of a road, curved segments, footpath exclusion, layer matching, median orientation and mapped-lamp preference over guessed placement.
+Earlier validation on the focused upstream-based PR tree: 10 world-prop tests, 39 furniture tests, 108 road tests, 6 blockworker tests, 13 highway-sign tests, 14 service-sign tests, 6 national-coverage tests, and 155 Lua assertions across the tree/night-light modules pass. Checks cover asset selection, authored scale, terrain-relative light heights, both double-arm heads, tile ownership, inactive-node exclusion, day/night switching, light-profile restoration, both sides of a road, curved segments, footpath exclusion, layer matching, median orientation and mapped-lamp preference over guessed placement.
 
 ## Laramie exit 310 orientation check
 
@@ -27,3 +29,9 @@ The road-based audit now finds inward-facing arms for all 20 nodes. Reproduce wi
 ```
 
 This is an offline geometry check, not an in-game screenshot or a guarantee that an authored arm reaches across every mapped shoulder. Pole positions remain at their mapped coordinates. The running server was not restarted and no active caches were cleared. Normal source-code cache revision changes handle rebuilt tiles on the next launch; the user has verified the Laramie result in-game; other locations have not been individually verified.
+
+## 1.9.1 selection efficiency
+
+Nearest-light selection retains only the requested spotlight-pool count in a max heap. It scans the existing lens/provider positions, allocates at most the pool count in candidate records, and sorts only that retained set. Radius and view-cone filtering, nearest-first ordering, quality limits, shared-pool reuse, and daytime disabling remain in place. A zero-light request skips candidate/provider work.
+
+A synthetic LuaJIT 2.1 test selecting 128 lights from 20,000 lenses reduced median selection time from **11.891 ms to 1.689 ms** over seven samples. This excludes engine lighting/rendering costs and is not an FPS benchmark. Regressions cover dense-area nearest ordering, bounded candidate sorting, zero-light requests, and reuse of the same pool slot for lantern, ordinary, and high-mast profiles.

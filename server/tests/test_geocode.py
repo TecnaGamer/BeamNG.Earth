@@ -326,6 +326,45 @@ class StreetTest(unittest.TestCase):
         self.assertTrue([u for u in net.urls if "nominatim" in u and "bounded=1" in u])
 
 
+class StatusBarRoadTest(unittest.TestCase):
+    """2026-11-05 (Tann2019): on I-94 near Huntley MT the status bar never named the road: the Interstate has a number
+    (Overture road_routes "us:i|94"), no name."""
+
+    @staticmethod
+    def roads(rows):
+        """A roads layer of rows (id, class, name, [(lon, lat), ...]), the fields nearest_street reads."""
+        import numpy as np
+        pts = [np.asarray(r[3], np.float64) for r in rows]
+        off = np.r_[0, np.cumsum([len(p) for p in pts])]
+        n = len(rows)
+        return types.SimpleNamespace(kind=np.zeros(n), ids=np.array([r[0] for r in rows]),
+                                     attrs={"class": np.array([r[1] for r in rows]),
+                                            "name": np.array([r[2] for r in rows], dtype=object)},
+                                     part_off=np.arange(n + 1), ring_off=np.arange(n + 1), coord_off=off,
+                                     lonlat=np.concatenate(pts))
+
+    def test_route_labels(self):
+        self.assertEqual(geocode.route_label("us:i", "94"), "I-94")
+        self.assertEqual(geocode.route_label("US:US", "212"), "US 212")
+        self.assertEqual(geocode.route_label("us:mt", "3"), "MT 3")
+        self.assertEqual(geocode.route_label("e-road", "E 45"), "E 45")
+        self.assertEqual(geocode.road_route("us:us|212|0.0|1.0;us:i|94|0.0|1.0"), "I-94")
+        self.assertEqual(geocode.road_route(""), "")
+
+    def test_an_interstate_without_a_name_is_called_by_its_number(self):
+        lat, lon = 45.87295, -108.33252
+        f = self.roads([("mw", "motorway", None, [(lon - 0.01, lat), (lon + 0.01, lat)]),
+                        ("st", "residential", "Main Street", [(lon - 0.01, lat + 0.0003), (lon + 0.01, lat + 0.0003)])])
+        self.assertEqual(geocode.nearest_street([f], lat, lon), "Main Street", "no numbers: the named street")
+        self.assertEqual(geocode.nearest_street([f], lat, lon, routes={"mw": "us:i|94|0.0|1.0"}), "I-94")
+        named = self.roads([("mw", "motorway", "Purple Heart Trail", [(lon - 0.01, lat), (lon + 0.01, lat)]),
+                            ("lo", "primary", "Old Highway 10", [(lon - 0.01, lat + 0.0001), (lon + 0.01, lat + 0.0001)])])
+        routes = {"mw": "us:i|94|0.0|1.0", "lo": "us:mt|312|0.0|1.0"}
+        self.assertEqual(geocode.nearest_street([named], lat, lon, routes=routes), "I-94", "a motorway: its number")
+        self.assertEqual(geocode.nearest_street([named], lat + 0.0001, lon, routes=routes), "Old Highway 10",
+                         "other roads: their name")
+
+
 class LandmarkTest(unittest.TestCase):
     def test_a_landmark_beats_a_like_address(self):
         house = {"name": "Pennsylvania Avenue 1600", "detail": "Bremerton, Washington", "kind": "house", "lat": 47.5,

@@ -192,6 +192,23 @@ class ServiceSignsTest(unittest.TestCase):
                 self.assertIsNotNone(fallback)
                 self.assertGreater(len(mesh[0]),len(fallback[0]))
 
+    def test_service_and_legacy_revisions_both_refresh_the_existing_sign_stream(self):
+        import highwaysigns
+        from types import SimpleNamespace
+        tags=SimpleNamespace(version=lambda:'weekly',known=lambda:'weekly')
+        with tempfile.TemporaryDirectory() as tmp:
+            source=highwaysigns.Source(SimpleNamespace(cache_dir=tmp,fetcher=None),tags=tags)
+            with patch.object(source.shields,'version') as legacy, \
+                 patch.object(source.services,'version') as services, \
+                 patch.object(source.services,'known') as known:
+                revisions=[]
+                for old,new in ((None,None),('legacy-1',None),('legacy-1','service-1'),('legacy-1','service-2')):
+                    legacy.return_value=old; services.return_value=new; known.return_value=new
+                    revisions.append(source.version())
+                    self.assertEqual(source.known(),revisions[-1])
+                self.assertEqual(revisions[0],'weekly')
+                self.assertEqual(len(set(revisions)),4)
+
     def test_placement_ownership_clearance_mesh_and_orientation(self):
         rows, obj = fixture()
         extra = copy.deepcopy(obj['exit'])
