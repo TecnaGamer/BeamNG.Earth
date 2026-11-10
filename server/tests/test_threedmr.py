@@ -1946,8 +1946,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_28(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 28)
+    def test_version_is_29(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 29)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -2264,6 +2264,81 @@ class BridgeDeckTest(unittest.TestCase):
         P = got["P"]
         base = self.P[:, 2] - threedmr._support_z(self.P[:, 2]) - 0.2
         np.testing.assert_allclose(P[:, 2] - base, -2.0 + 0.01 * (P[:, 0] + 100.0), atol=1e-9)
+
+
+def _rotated(P, deg):
+    a = np.radians(deg)
+    R = np.array([[np.cos(a), -np.sin(a), 0.0], [np.sin(a), np.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    return P @ R.T
+
+
+class RotatedBridgeDeckTest(unittest.TestCase):
+    """A model bridge at an angle to both axes (GitHub #1071: Perth's Mount Henry Bridge, 28 deg off its model's y)
+    is traced along its own direction ("ang"): the same deck, footprint, lean and slab as the bridge along x."""
+
+    DEG = 30.0
+
+    def setUp(self):
+        P, self.T = _bridge_mesh()
+        self.P = _rotated(P, self.DEG)
+        self.surf = threedmr.bridge_deck_surface(self.P, self.T)
+        self.fr = threedmr.frame_of(self.surf)
+
+    def rot(self, pts):
+        pts = np.asarray(pts, np.float64)
+        return _rotated(np.c_[pts[:, :2], np.zeros(len(pts))], self.DEG)[:, :2]
+
+    def _z(self, x, y):
+        (u,), (v,) = threedmr.to_uv(self.fr, self.rot([[x, y]]))
+        s = self.surf
+        return s["z"][int(round((u - s["u0"]) / s["du"])), int(round((v - s["v0"]) / s["dv"]))]
+
+    def test_oriented_extent(self):
+        length, width, ang = threedmr.oriented_extent(self.P[:, :2])
+        self.assertAlmostEqual(length, 212.0, delta=0.5)        # (with the plinths)
+        self.assertAlmostEqual(width, 20.0, delta=0.5)
+        self.assertAlmostEqual(np.degrees(ang) % 180.0, self.DEG, delta=0.5)
+
+    def test_traced_along_its_direction(self):
+        self.assertIn("ang", self.surf)
+        self.assertAlmostEqual(self._z(0.0, -6.0), 15.0, delta=0.15)
+        self.assertAlmostEqual(self._z(0.0, 0.0), 15.6, delta=0.15)
+        self.assertAlmostEqual(self._z(-60.0, 6.0), 5.0 + 10.0 * (1 - 0.36), delta=0.15)
+        self.assertLess(np.nanmax(self.surf["z"]), 16.0)
+        self.assertGreater(np.nanmin(self.surf["z"]), 4.5)
+
+    def test_near_an_axis_it_is_traced_as_before(self):
+        P, T = _bridge_mesh()
+        for deg, ax in ((3.0, 0), (88.0, 1)):
+            surf = threedmr.bridge_deck_surface(_rotated(P, deg), T)
+            self.assertEqual((surf["ax"], surf.get("ang")), (ax, None))
+        self.assertNotIn("ang", threedmr.bridge_footprint_of(threedmr.bridge_deck_surface(P, T)))
+
+    def test_footprint_tilt_and_slab(self):
+        fp = dict(threedmr.bridge_footprint_of(self.surf), bridge=True)
+        c = np.array([1000.0, 2000.0])
+        pts = c + self.rot([[0.0, 0.0], [90.0, 9.0], [0.0, 15.0], [120.0, 0.0]])
+        self.assertEqual(threedmr.under_footprint(fp, tuple(c), pts).tolist(), [True, True, False, False])
+        ends = [tuple(p) + (z,) for p, z in zip(self.rot([[-90.0, -5.0], [-90.0, 5.0], [90.0, -5.0], [90.0, 5.0]]),
+                                                (1.0, 1.0, 3.0, 3.0))]
+        tilt = threedmr.bridge_tilt(self.surf, lambda x, y: 0.0, 22, road_ends=ends)
+        for (x, y), want in ((self.rot([[-90.0, 0.0]])[0], 1.0), (self.rot([[90.0, 0.0]])[0], 3.0)):
+            (u,), _ = threedmr.to_uv(self.fr, [[x, y]])
+            level = threedmr._deck_level_at(self.surf, u)[1] + threedmr.tilt_dz(tilt, [[x, y]])[0]
+            self.assertAlmostEqual(level, want + threedmr.BRIDGE_END_EPS_M, delta=0.35)
+        with tempfile.TemporaryDirectory() as d:
+            got = threedmr.write_bridge_deck(d, 22, self.surf, tilt)
+        u, v = threedmr.to_uv(self.fr, got["verts"][:, :2])
+        self.assertAlmostEqual(np.ptp(u), 180.0 + 2 * threedmr.BRIDGE_APRON_M, delta=2 * threedmr.BRIDGE_CELL_U_M)
+        self.assertLess(np.ptp(v), 21.0, "the slab lies along the bridge, not across the axes")
+
+    def test_a_tagged_bridge_is_one_by_its_own_extent(self):
+        import buildings
+        self.assertFalse(buildings._is_bridge(self.P), "on the axes it is 183 x 117 m")
+        for tags in ({"man_made": "bridge"}, {"building": "bridge"}, {"bridge": "yes", "highway": "cycleway"}):
+            self.assertTrue(buildings._is_bridge(self.P, tags), tags)
+        for tags in ({"building": "yes"}, {"bridge": "no"}, None):
+            self.assertFalse(buildings._is_bridge(self.P, tags), tags)
 
 
 class DownloadTlsTest(unittest.TestCase):

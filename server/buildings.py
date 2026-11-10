@@ -4793,11 +4793,37 @@ def _model_mesh(c, cache_dir):
     return pos, uvs, tris, nrm, textures, tri_materials
 
 
-def _is_bridge(pos):
-    """A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M)."""
+def _is_bridge(pos, tags=None):
+    """A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M); one tagged as a
+    bridge (tags: its 3dmr.eu record's, bridge_tagged) also by its extent along its own direction
+    (threedmr.oriented_extent: Perth's Mount Henry Bridge, at 28 deg to the axes, is 345 x 635 m on them)."""
     dx = float(pos[:, 0].max() - pos[:, 0].min()) if len(pos) else 0.0
     dy = float(pos[:, 1].max() - pos[:, 1].min()) if len(pos) else 0.0
-    return (dx > BRIDGE_ASPECT * dy or dy > BRIDGE_ASPECT * dx) and max(dx, dy) > BRIDGE_MIN_SPAN_M
+    if (dx > BRIDGE_ASPECT * dy or dy > BRIDGE_ASPECT * dx) and max(dx, dy) > BRIDGE_MIN_SPAN_M:
+        return True
+    if not bridge_tagged(tags) or len(pos) < 3:
+        return False
+    import threedmr
+    length, width, _ang = threedmr.oriented_extent(np.asarray(pos)[:, :2])
+    return length > BRIDGE_ASPECT * width and length > BRIDGE_MIN_SPAN_M
+
+
+def bridge_tagged(tags):
+    """Do a 3dmr.eu model's tags (its record's "tags") say it is a bridge (man_made / building=bridge, bridge=*)?"""
+    if not isinstance(tags, dict):
+        return False
+    b = str(tags.get("bridge") or "").lower()
+    return (str(tags.get("man_made") or "") == "bridge" or str(tags.get("building") or "") == "bridge"
+            or (b not in ("", "no")))
+
+
+def _model_tags(model_id, cache_dir):
+    """A 3dmr.eu model's record's tags (threedmr.model_info, cached), {} when not to be had."""
+    import threedmr
+    try:
+        return (threedmr.model_info(int(model_id), cache_dir) or {}).get("tags") or {}
+    except Exception:
+        return {}
 
 
 def _centred(pos):
@@ -4903,7 +4929,7 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                         cid, c["xy"][0], c["xy"][1],
                     )
                     c = dict(c, xy=fp)
-            is_bridge = _is_bridge(pos) and "local" not in c
+            is_bridge = "local" not in c and _is_bridge(pos, _model_tags(cid, cache_dir))
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
             )
@@ -5221,7 +5247,7 @@ def bridge_footprints(frame, tx, ty, cache_dir):
 
             def mesh(_c=c):
                 pos, _uvs, tris, _nrm, _tex, _tm = _model_mesh(_c, cache_dir)
-                return _centred(pos), tris, _is_bridge(pos)
+                return _centred(pos), tris, _is_bridge(pos, _model_tags(mid, cache_dir))
 
             fp = threedmr.bridge_footprint(mid, cache_dir, mesh)
         except threedmr.UnsupportedModelError:
@@ -5284,9 +5310,9 @@ def bridge_road_ends(fps, bridges, cells):
             continue
         u0, u1 = fp["u0"] + fp["du"] * cols[0][0], fp["u0"] + fp["du"] * cols[-1][0]
         v0, v1 = min(c[0] for _i, c in cols), max(c[1] for _i, c in cols)
-        lo = (u0, v0) if fp["ax"] == 0 else (v0, u0)
-        hi = (u1, v1) if fp["ax"] == 0 else (v1, u1)
-        box = (centre[0] + lo[0], centre[1] + lo[1], centre[0] + hi[0], centre[1] + hi[1])
+        cx_, cy_ = threedmr.from_uv(threedmr.frame_of(fp), np.array([u0, u0, u1, u1]), np.array([v0, v1, v0, v1]))
+        box = (centre[0] + float(np.min(cx_)), centre[1] + float(np.min(cy_)),
+               centre[0] + float(np.max(cx_)), centre[1] + float(np.max(cy_)))
         ends = []
         for _fid, _spec, xy, z, _lon in bridges.parts(cells, box):
             xy = np.asarray(xy, np.float64)[:, :2]

@@ -56,11 +56,13 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 28  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 29  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
 # deck, the one-sided materials) or a tile with a model bridge is built differently round it (28: model_position's
 # new order - a tagged OSM way's own centroid, then buildings._custom_tile_entries' nearest-footprint level - can
-# move a model that used to sit at its stale api point)
+# move a model that used to sit at its stale api point; 29: a model bridge at an angle to both axes is traced along
+# its own direction, bridge_deck_surface's "ang", and a bridge tagged so is one by its oriented extent: Perth's Mount
+# Henry Bridge, 345 x 635 m on the axes, 690 x 42 m along itself, was no bridge, GitHub #1071)
 # The settings page's "3D models from 3dmr.eu" switch (cpupin.apply_player_settings sets BNE_3DMR=off when it is off;
 # a BNE_ variable, so revisit.code_key keeps what was built with and without the models apart): off, search_ids
 # finds no model (the player's own local models stay)
@@ -1398,6 +1400,79 @@ BRIDGE_SLAB_M = 0.5  # m thick, the collision slab (closed: its top faces up wha
 BRIDGE_SLAB_VERTS_MAX = 60000  # Torque's 16-bit index buffer: coarser across the bridge over this
 BRIDGE_REACH_M = 2000.0  # m from a tile a bridge model's centre may stand and its deck still reach into it
 BRIDGE_FOOT_MARGIN_M = 2.0  # m past the deck's own sides a procedural bridge part still counts as under it
+# A bridge this far off both axes (its oriented extent's direction, oriented_extent) is traced along its own direction
+# ("ang": u = x cos + y sin, v = -x sin + y cos); nearer an axis it is traced along that axis as before ("ax")
+BRIDGE_AXIS_TOL_DEG = 5.0
+
+
+def _hull(xy):
+    """The convex hull (k, 2) of points xy (n, 2), counter-clockwise (monotone chain)."""
+    p = np.unique(np.round(np.asarray(xy, np.float64).reshape(-1, 2), 3), axis=0)
+    if len(p) < 3:
+        return p
+
+    def half(pts):
+        out = []
+        for q in pts:
+            while len(out) >= 2 and ((out[-1][0] - out[-2][0]) * (q[1] - out[-2][1])
+                                     - (out[-1][1] - out[-2][1]) * (q[0] - out[-2][0])) <= 0:
+                out.pop()
+            out.append(q)
+        return out
+    lo, up = half(p), half(p[::-1])
+    return np.array(lo[:-1] + up[:-1])
+
+
+def oriented_extent(xy):
+    """(length, width, angle in radians of the length) of the smallest rectangle round points xy (n, 2) (one side on a
+    hull edge); (0, 0, 0) for fewer than three distinct points."""
+    h = _hull(xy)
+    if len(h) < 3:
+        return 0.0, 0.0, 0.0
+    best = None
+    for i in range(len(h)):
+        e = h[(i + 1) % len(h)] - h[i]
+        a = math.atan2(float(e[1]), float(e[0]))
+        c, s_ = math.cos(a), math.sin(a)
+        u, v = h[:, 0] * c + h[:, 1] * s_, -h[:, 0] * s_ + h[:, 1] * c
+        lu, lv = float(np.ptp(u)), float(np.ptp(v))
+        if best is None or lu * lv < best[0]:
+            best = (lu * lv, max(lu, lv), min(lu, lv), a if lu >= lv else a + math.pi / 2)
+    return best[1], best[2], best[3]
+
+
+def _deck_frame(P):
+    """(ax, ang) a bridge mesh P (n, 3) is traced in: (0 or 1, None) along the axis it is within BRIDGE_AXIS_TOL_DEG
+    of (the longer one of its bbox, as always), else (0, its oriented extent's angle)."""
+    ang = oriented_extent(P[:, :2])[2]
+    off = math.degrees(ang) % 90.0
+    if min(off, 90.0 - off) <= BRIDGE_AXIS_TOL_DEG:
+        return (0 if np.ptp(P[:, 0]) >= np.ptp(P[:, 1]) else 1), None
+    return 0, float(ang)
+
+
+def frame_of(d):
+    """(ax, ang) of a deck surface, footprint or tilt record (bridge_deck_surface, bridge_footprint_of)."""
+    return int(d["ax"]), (None if d.get("ang") is None else float(d["ang"]))
+
+
+def to_uv(fr, xy):
+    """(u, v) arrays of points xy (k, 2) in deck frame fr ((ax, ang): along the bridge, across it)."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    ax, ang = fr
+    if ang is None:
+        return xy[:, ax], xy[:, 1 - ax]
+    c, s = math.cos(ang), math.sin(ang)
+    return xy[:, 0] * c + xy[:, 1] * s, -xy[:, 0] * s + xy[:, 1] * c
+
+
+def from_uv(fr, u, v):
+    """(x, y) of deck-frame coordinates (u, v) (arrays or numbers): to_uv's inverse."""
+    ax, ang = fr
+    if ang is None:
+        return (u, v) if ax == 0 else (v, u)
+    c, s = math.cos(ang), math.sin(ang)
+    return u * c - v * s, u * s + v * c
 
 
 def _column_floors(A, B, C, upf, u, vs):
@@ -1447,7 +1522,7 @@ def _nan_filter(Z, size, how):
 
 def bridge_deck_surface(positions, tris):
     """The top of a bridge model's own road deck, sampled on a grid in positions' own frame: {"ax" (0: the bridge
-    runs along x, 1: along y), "u0", "du", "v0", "dv", "z" (nu, nv) heights, NaN off the deck}; None when the mesh
+    runs along x, 1: along y; "ang" too for one at an angle: _deck_frame, to_uv), "u0", "du", "v0", "dv", "z" (nu, nv) heights, NaN off the deck}; None when the mesh
     has no deck to drive on. Per column across the bridge its deck level is the median of the floors open above
     (BRIDGE_HEADROOM_M: the deck's top, not its slab's lower skin, not the dragon's back); per sample the highest
     floor within BRIDGE_TIER_BELOW_M / BRIDGE_TIER_ABOVE_M of it (a raised median stays, an arch's top does not);
@@ -1458,12 +1533,13 @@ def bridge_deck_surface(positions, tris):
     T = np.asarray(tris, np.int64).reshape(-1, 3)
     if not len(P) or not len(T):
         return None
-    ax = 0 if np.ptp(P[:, 0]) >= np.ptp(P[:, 1]) else 1
-    Q = np.c_[P[:, ax], P[:, 1 - ax], P[:, 2]]
+    ax, ang = _deck_frame(P)
+    u_, v_ = to_uv((ax, ang), P[:, :2])     # (a rotation when ang: a floor's normal keeps its sign)
+    Q = np.c_[u_, v_, P[:, 2]]
     A, B, C = Q[T[:, 0]], Q[T[:, 1]], Q[T[:, 2]]
     n = np.cross(B - A, C - A)
     nz = n[:, 2] / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
-    if ax == 1:             # (u, v) = (y, x) mirrors the plane: a floor's normal still points up in z
+    if ax == 1 and ang is None:     # (u, v) = (y, x) mirrors the plane: a floor's normal still points up in z
         nz = -nz
     keep = np.abs(nz) > 0.05            # (walls: no height of their own seen from above)
     A, B, C, nz = A[keep], B[keep], C[keep], nz[keep]
@@ -1526,7 +1602,10 @@ def bridge_deck_surface(positions, tris):
     Z[~cols] = np.nan
     if not cols.any():
         return None
-    return {"ax": ax, "u0": u0, "du": du, "v0": v0, "dv": dv, "z": Z}
+    out = {"ax": ax, "u0": u0, "du": du, "v0": v0, "dv": dv, "z": Z}
+    if ang is not None:
+        out["ang"] = ang
+    return out
 
 
 def _deck_ends(surf):
@@ -1551,17 +1630,18 @@ def _deck_level_at(surf, u):
 
 
 def bridge_tilt(surf, ground_at, model_id=None, road_ends=None):
-    """(ax, u_a, dz_a, slope, (u_a, u_b)): the lean (dz = dz_a + slope (u - u_a), u the coordinate along the bridge,
+    """(ax, u_a, dz_a, slope, (u_a, u_b), ang): the lean (dz = dz_a + slope (u - u_a), u the coordinate along the bridge,
     ax its axis) that lands the deck (bridge_deck_surface) BRIDGE_END_EPS_M over the road at both ends, and the span
     (u_a, u_b) the road runs on the deck. road_ends: the mapped bridge's own ends [(x, y, z)] in the surface's frame
     (the procedural bridge left out under the model: where the road network leaves the bridge, at the ground road's
     height - the model may reach past them, id 22 by ~37 m a side over the riverside streets, and is buried there);
     without them the deck's own ends onto ground_at(x, y). No lean (zeros) when an end is BRIDGE_TILT_MAX_M or more
     off."""
-    ax = surf["ax"]
+    fr = frame_of(surf)
+    ax, ang = fr
     if road_ends:
         e = np.asarray(road_ends, np.float64).reshape(-1, 3)
-        u = e[:, ax]
+        u = to_uv(fr, e[:, :2])[0]
         sides = []
         for pick in (u <= u.min() + 10.0, u >= u.max() - 10.0):
             sides.append((float(np.median(u[pick])), float(np.median(e[pick, 2]))))
@@ -1572,7 +1652,7 @@ def bridge_tilt(surf, ground_at, model_id=None, road_ends=None):
         (ua, va, za), (ub, vb, zb) = _deck_ends(surf)
 
         def g(u, v):
-            x, y = (u, v) if ax == 0 else (v, u)
+            x, y = from_uv(fr, u, v)
             return float(ground_at(x, y))
         ga, gb = g(ua, va), g(ub, vb)
         what = "the ground roads"
@@ -1580,11 +1660,11 @@ def bridge_tilt(surf, ground_at, model_id=None, road_ends=None):
     db = gb + BRIDGE_END_EPS_M - zb
     if max(abs(da), abs(db)) >= BRIDGE_TILT_MAX_M or ub <= ua:
         log.warning("3dmr model %s: deck %.1f / %.1f m off %s: not leaned", model_id, da, db, what)
-        return ax, ua, 0.0, 0.0, (ua, ub)
+        return ax, ua, 0.0, 0.0, (ua, ub), ang
     slope = (db - da) / (ub - ua)
     log.info("3dmr model %s: deck at u %.1f / %.1f (z %.2f / %.2f) leaned onto %s (%+.2f / %+.2f m)",
              model_id, ua, ub, za, zb, what, da, db)
-    return ax, ua, da, slope, (ua, ub)
+    return ax, ua, da, slope, (ua, ub), ang
 
 
 def tilt_dz(tilt, xy):
@@ -1592,7 +1672,8 @@ def tilt_dz(tilt, xy):
     if tilt is None:
         return np.zeros(len(xy))
     ax, ua, da, slope = tilt[:4]
-    return da + slope * (np.asarray(xy, np.float64)[:, ax] - ua)
+    ang = tilt[5] if len(tilt) > 5 else None
+    return da + slope * (to_uv((ax, ang), xy)[0] - ua)
 
 
 def write_bridge_deck(out_dir, model_id, surf, tilt=None):
@@ -1627,7 +1708,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
     dv = surf["dv"] * stride
     nv = Z.shape[1]
     U, V = np.meshgrid(u0 + du * np.arange(nu), surf["v0"] + dv * np.arange(nv), indexing="ij")
-    X, Y = (U, V) if ax == 0 else (V, U)
+    X, Y = from_uv(frame_of(surf), U, V)
     ok = np.isfinite(Z)
     Zt = np.where(ok, Z, 0.0) + tilt_dz(tilt, np.c_[X.ravel(), Y.ravel()]).reshape(Z.shape)
     idx = -np.ones(Z.shape, np.int64)
@@ -1679,7 +1760,10 @@ def bridge_footprint_of(surf):
         js = np.nonzero(np.isfinite(Z[i]))[0]
         cols.append([round(surf["v0"] + surf["dv"] * float(js.min()), 2),
                      round(surf["v0"] + surf["dv"] * float(js.max()), 2)] if len(js) else None)
-    return {"ax": int(surf["ax"]), "u0": round(float(surf["u0"]), 3), "du": float(surf["du"]), "cols": cols}
+    out = {"ax": int(surf["ax"]), "u0": round(float(surf["u0"]), 3), "du": float(surf["du"]), "cols": cols}
+    if surf.get("ang") is not None:
+        out["ang"] = round(float(surf["ang"]), 6)
+    return out
 
 
 def bridge_footprint(model_id, cache_dir, mesh):
@@ -1712,9 +1796,8 @@ def under_footprint(fp, centre, xy, margin=BRIDGE_FOOT_MARGIN_M):
     """Mask (k,) of points xy (k, 2) (a tile's frame) under bridge footprint fp whose model stands at centre (x, y)
     of the same frame."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
-    ax = fp["ax"]
     loc = xy - np.asarray(centre, np.float64)
-    u, v = loc[:, ax], loc[:, 1 - ax]
+    u, v = to_uv(frame_of(fp), loc)
     i = np.rint((u - fp["u0"]) / fp["du"]).astype(np.int64)
     cols = fp["cols"]
     out = np.zeros(len(xy), bool)
