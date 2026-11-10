@@ -1011,7 +1011,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
         frontage_walks = walks if walks_raw is None else walks_raw
-        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
+        city = frontage_country is None and streetfront.CITY_ON      # (city_frontage: a city's sidewalks to the walls)
+        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else streetfront.CITY_FRONT_M + 2. if city else 2.
         rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
         props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
@@ -1026,6 +1027,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                                frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
                                            redrape=walks_raw is None, props=props, grass=front_grass)
         chunks += paving
+        if city:
+            try:
+                chunks += streetfront.city_frontage(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
+                                                    drives, _cover >= streetfront.CITY_DENSE_COVER)
+            except Exception as ex:         # (the sidewalks as they are)
+                log.warning("city frontage: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         if frontage_country and front_grass is not None:
             key = tx.key if hasattr(tx, "key") else f"{frame.lat0:.8f}:{frame.lon0:.8f}:{tx}:{ty}"
             fuel_pads.extend(streetfront.pad_items(frame, box, key, paving, front_grass))

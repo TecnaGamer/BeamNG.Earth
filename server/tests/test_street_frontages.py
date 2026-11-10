@@ -192,3 +192,38 @@ class FrenchBoundaryTest(unittest.TestCase):
         self.assertGreaterEqual(len(rows), 8)
         self.assertEqual({row[0] for row in rows}, {fences.G_HEDGE})
         self.assertTrue(all(1.6 <= row[6] <= 2. for row in rows))
+
+
+class CityFrontageTest(unittest.TestCase):
+    """Outside Europe's details a city's sidewalk runs to the buildings' faces (city_frontage), houses keep lawns."""
+
+    WALK = {"pts": np.array([[-8., 4.25, 0.], [33., 4.25, 0.]]), "side": 1, "w": 2.5}     # (curb 3.0, back 5.5)
+
+    def test_any_sidewalk_paves_to_a_city_wall_in_concrete(self):
+        shop = rectangle(0., 8., 24., 18.)
+        args = (FRAME, [dict(self.WALK)], [shop], [], STREETS, [], BOX)
+        kw = dict(shops=[shop], residential=False, any_surface=True, fill=streetfront.CITY_FILL,
+                  limit_m=streetfront.CITY_FRONT_M)
+        paved = streetfront.chunks(*args, **kw)
+        self.assertTrue(paved)
+        self.assertEqual({c["m"] for c in paved}, {sidewalks.MATERIALS[sidewalks.EU_SLAB["concrete"]]})
+        ys = [y for c in paved for _, y in c["poly"]]
+        self.assertAlmostEqual(max(ys), 8. - .07, places=2)
+        self.assertGreater(min(ys), 5.)
+        self.assertFalse(streetfront.chunks(*args, **dict(kw, any_surface=False)), "a plain sidewalk: Europe's only")
+        far = rectangle(0., 14., 24., 24.)
+        self.assertFalse(streetfront.chunks(FRAME, [dict(self.WALK)], [far], [], STREETS, [], BOX,
+                                            **dict(kw, shops=[far])), "8.5 m back: a setback, not a sidewalk")
+
+    def test_city_buildings_and_houses(self):
+        from types import SimpleNamespace as NS
+        ring = rectangle(0., 0., 10., 10.)[:-1]
+        def spec(cls, floors, shop=False):
+            return (NS(ring=ring, cls=cls, floors=floors, shop=shop, deck=None, min_h=0., outline=None), None, None)
+        with patch("buildings.drawn_ring", lambda s: s.ring):
+            pick = lambda items, dense: len(streetfront.city_targets(items, np.zeros(2), dense))
+            self.assertEqual(pick([spec("retail", 1), spec("", 4), spec("", 1, shop=True)], False), 3)
+            self.assertEqual(pick([spec("house", 2), spec("", 2), spec("detached", 1)], False), 0)
+            self.assertEqual(pick([spec("", 3)], True), 1)
+            self.assertEqual(pick([spec("terrace", 2), spec("", 2)], True), 0, "row houses of two floors: their yards")
+            self.assertEqual(pick([spec("shed", 1), spec("greenhouse", 1)], True), 0)

@@ -454,13 +454,16 @@ def _back_edge(walk, carriageways):
 
 
 def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=(), barriers=(),
-           extend=True, residential=True, areas=None, photo=None, grass=None, bays=()):
-    """Give the developed part of the street a continuous surface from the curb to the frontage."""
+           extend=True, residential=True, areas=None, photo=None, grass=None, bays=(), any_surface=False,
+           fill="road_asphalt", limit_m=None):
+    """Give the developed part of the street a continuous surface from the curb to the frontage. any_surface: every
+    sidewalk (city_frontage's, outside Europe's details), not only the European slabs; fill: the inferred paving's
+    surface; limit_m: the most frontage depth (BUILT_FRONT_M / MAX_GAP_M by extend)."""
     import europewalks
     import roads
     import sidewalks
 
-    candidates = [w for w in walks if w.get("surface") in sidewalks.EU_SLAB
+    candidates = [w for w in walks if (any_surface or w.get("surface") in sidewalks.EU_SLAB)
                   and (not w.get("detached") or w.get("mapped")) and not w.get("median")]
     paved, green, explicit, retail, *_ = _areas(frame, lots, box) if areas is None else areas
     targets = (list(buildings) if residential else list(shops)) + paved
@@ -493,7 +496,7 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
         back, normal = _back_edge(walk, carriageways)
         if back is None:
             continue
-        limit = BUILT_FRONT_M if extend else MAX_GAP_M
+        limit = limit_m if limit_m is not None else BUILT_FRONT_M if extend else MAX_GAP_M
         if walk.get("road_edge"):
             limit = min(limit, 15.)
         dist = walls.rays(back, normal, limit)
@@ -528,13 +531,76 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
                 if len(lawns):
                     grass.extend(lawns[photo.strip_share(lawns, photo.green) >= .58])
             end = boundary
-        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else "road_asphalt"
+        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else fill
         start = back - .035 * normal
         for run in np.split(i, np.flatnonzero(np.diff(i) != 1) + 1):
             at = slice(run[0], run[-1] + 2)
             for strip in _band(start[at], end[at]):
                 result.extend(_paving(part, style) for part in coverage.claim(strip))
     return result
+
+
+# Outside Europe's street details (country_at_tile None): a city's sidewalks run to the buildings' faces. Downtown
+# Baltimore (39.290 -76.615, the aerial 2026-11-10) is concrete and brick from the curb to the walls, plazas too; the
+# drawn sidewalk (2.5 m, or roadwidth's share of a walled street) left terrain grass between it and the building (the
+# user, 2026-11-10: "sidewalks should extend up to most city buildings"). The gap behind a sidewalk is paved up to a
+# city building within CITY_FRONT_M (chunks: stopped by mapped green, barriers, other streets, the aerial's lawns where
+# a regional photo is cached). City buildings: shops, CITY_CLASSES, CITY_FLOORS storeys or more; in a dense tile
+# (CITY_DENSE_COVER of it built) any building but a house in its yard. Houses keep their lawns.
+CITY_ON = os.environ.get("BNE_CITY_FRONTAGE", "on") != "off"
+CITY_FRONT_M = 6.0
+CITY_FLOORS = 3
+CITY_DENSE_COVER = 0.25
+CITY_FILL = "concrete"
+CITY_CLASSES = COMMERCIAL | {"commercial", "retail", "office", "hotel", "civic", "public", "government", "bank",
+                             "apartments", "college", "university", "hospital", "train_station", "transportation",
+                             "church", "cathedral", "mixed_use", "parking", "warehouse"}
+
+
+def city_targets(items, origin, dense):
+    """The drawn rings (tile frame + origin) of the city buildings of a road tile's items (city_frontage)."""
+    import buildings
+    from francehouses import HOUSE_CLASSES, UNTYPED
+
+    out = []
+    for spec, *_ in items:
+        if getattr(spec, "deck", None) or (spec.min_h or 0.) > .5 or spec.cls in buildings.SHED_CLASSES \
+                or spec.cls in ("tank", "greenhouse", "pyramid", "bridge_part"):
+            continue
+        cls = spec.cls or ""
+        floors = spec.floors or 0
+        house = cls in HOUSE_CLASSES or (cls in UNTYPED and floors <= 2 and not spec.shop)
+        if spec.shop or cls in CITY_CLASSES or floors >= CITY_FLOORS or (dense and not house):
+            out.append(buildings.drawn_ring(spec) + origin)
+    return out
+
+
+def city_frontage(frame, tx, ty, md, walks, rings, items, carriageways, drives, dense):
+    """The paving between a city's sidewalks and its buildings' faces outside Europe's details ([] off / none)."""
+    import logging
+    import roads
+
+    if not CITY_ON or not items or not walks:
+        return []
+    box = roads.tile_bbox(tx, ty)
+    targets = city_targets(items, np.array(box[:2]), dense)
+    if not targets:
+        return []
+    try:
+        features = [layer for key in roads.cells_of_tile(frame, tx, ty, CITY_FRONT_M + 2.)
+                    for layer in md.cell(key, layers=("land_use", "infrastructure", "water"), kind="demand").layers.values()]
+    except (OSError, RuntimeError, ValueError) as exc:
+        logging.getLogger("earthd.roads").debug("city frontage data unavailable: %s", exc)
+        return []
+    margin = CITY_FRONT_M + 2.
+    near = (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+    cache_dir = getattr(md, "cache_dir", None)
+    photo = cached_photo(frame, box, cache_dir) if cache_dir else None
+    areas = _areas(frame, features, near)
+    barriers = barrier_lines(frame, features, near)
+    return chunks(frame, walks, rings, features, carriageways, drives, near, shops=targets, barriers=barriers,
+                  extend=True, residential=False, areas=areas, photo=photo, any_surface=True, fill=CITY_FILL,
+                  limit_m=CITY_FRONT_M)
 
 
 def country_at_tile(frame, box):
