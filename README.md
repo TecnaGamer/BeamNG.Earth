@@ -41,11 +41,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   machinery and power plants, and rain you can hear.
 - Pump jacks at oil wells (OpenStreetMap), animated, with their sounds.
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
-- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations.
+- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
+  (on wooden poles where the line's voltage is low or its mapped supports are poles).
 - The satellite map on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
-  and lit highways in towns and their ramps.
+  and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
+  post their mount names (high masts, straight masts, double arms), their arms toward the road
+  (`BNE_MAPPED_LAMPS=off` leaves them out).
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
   porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
