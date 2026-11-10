@@ -806,6 +806,51 @@ class PartsTest(unittest.TestCase):
         self.assertEqual([round(s.height + (s.min_h or 0.0)) for s, _, _ in items], [54])
 
 
+class TurbineBaseTest(unittest.TestCase):
+    """GitHub #1085: at Gangelt (50.8950 N 6.1406 E) a wind turbine's base, mapped as a building 10 m square 3 m from
+    the turbine's node, stood 107 m tall round its tower."""
+
+    def _items(self, turbines, x=-5.0, size=10.0):
+        import geodesy
+        import windturbines
+        f = geodesy.EnuFrame(50.895, 6.1406)
+
+        def ll(x, y, w, d):
+            e = np.array([x, x + w, x + w, x, x]); n = np.array([y, y, y + d, y + d, y])
+            la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+            return np.stack([lo, la], 1)
+        b = Feats(["base", "farm"], [ll(x, -5.0, size, size), ll(60.0, 60.0, 20.0, 12.0)],
+                  **{"class": ["", "farm"], "height": [107.6, 6.0]})
+        pts = []
+        for e, n, tags in turbines:
+            la, lo, _ = f.enu_to_geodetic(np.array([e]), np.array([n]), 0.0)
+            pts.append(windturbines.Turbine("osm:node:%d" % len(pts), float(la[0]), float(lo[0]), tags, 1))
+        with mock.patch.object(windturbines, "near", lambda *a: pts):
+            items = bld.tile_buildings(f, -128, -128, 128, 128, [b], lambda la, lo: np.zeros(np.shape(la)))
+        return sorted("tall" if s.height > 50 else "farm" for s, _, _ in items)
+
+    def test_a_base_round_a_turbine_left_out(self):
+        big = {"height:hub": "100", "rotor:diameter": "92"}
+        self.assertEqual(self._items([(0.0, 3.0, big)]), ["farm"])
+        self.assertEqual(self._items([]), ["farm", "tall"])                 # (no turbine: both drawn)
+
+    def test_a_small_turbine_or_a_big_building_keeps_its_building(self):
+        # (a rooftop turbine is no tower, and a hall 40 m square holding a turbine's node is a real building)
+        self.assertEqual(self._items([(0.0, 0.0, {"rotor:diameter": "3"})]), ["farm", "tall"])
+        self.assertEqual(self._items([(0.0, 0.0, {})], x=-20.0, size=40.0), ["farm", "tall"])
+
+    def test_a_building_beside_a_turbine_stays(self):
+        self.assertEqual(self._items([(30.0, 30.0, {})]), ["farm", "tall"])
+
+    def test_no_index_draws_every_building(self):
+        import windturbines
+
+        def broken(*a):
+            raise OSError("no index")
+        with mock.patch.object(windturbines, "near", broken):
+            self.assertEqual(len(bld._turbine_points(__import__("geodesy").EnuFrame(50.895, 6.14), 0, 0, 256, 256)), 0)
+
+
 class OverRoadTest(unittest.TestCase):
     def setUp(self):
         import geodesy

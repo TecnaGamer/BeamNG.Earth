@@ -3485,6 +3485,52 @@ def road_across(ring, lines, max_w=ACROSS_W):
     return False
 
 
+# A wind turbine's base is often mapped as a building of its own (building=yes round the tower, its centre a few m from
+# the turbine's node), and drawn as one it stood inside the turbine's tower at its own or a guessed height (two at
+# Gangelt, 50.8916 N 6.1410 E, GitHub #1085). A small footprint (TURBINE_BASE_MAX_M2) holding a drawn turbine
+# (windturbines.near, not windturbines.small), or with its centre within TURBINE_BASE_M of one, is left out.
+TURBINE_BASE_MAX_M2 = 700.0
+TURBINE_BASE_M = 12.0
+TURBINE_BASE_PAD_M = 40.0       # m round the tile the turbines are looked for
+
+
+def _turbine_points(frame, x0, y0, x1, y1):
+    """(n, 2) anchor-frame points of the mapped wind turbines drawn round the tile [x0, x1) x [y0, y1) (none when the
+    index is missing or fails)."""
+    try:
+        import windturbines
+        p = TURBINE_BASE_PAD_M
+        e = np.array([x0 - p, x1 + p, x0 - p, x1 + p], np.float64)
+        n = np.array([y0 - p, y0 - p, y1 + p, y1 + p], np.float64)
+        la, lo, _ = frame.enu_to_geodetic(e, n, 0.0)
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        got = [t for t in windturbines.near(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
+               if not windturbines.small(t.tags)]
+        if not got:
+            return np.zeros((0, 2))
+        te, tn, _ = frame.geodetic_to_enu(np.array([t.lat for t in got], np.float64),
+                                          np.array([t.lon for t in got], np.float64), 0.0)
+        return np.c_[np.asarray(te, np.float64), np.asarray(tn, np.float64)]
+    except Exception as ex:             # (no index: every building drawn, as before)
+        import logging
+        logging.getLogger("earthd.buildings").debug("wind turbines: %s: %s", type(ex).__name__, ex)
+        return np.zeros((0, 2))
+
+
+def _turbine_base(e, n, cx, cy, turbines):
+    """Is the footprint (closed ring e, n in the anchor frame, centre cx, cy) a wind turbine's base: small, round one of
+    turbines (n, 2) or with its centre near one?"""
+    d = np.hypot(turbines[:, 0] - cx, turbines[:, 1] - cy)
+    k = int(np.argmin(d))
+    reach = float(np.hypot(np.ptp(e), np.ptp(n)))
+    if d[k] > max(TURBINE_BASE_M, reach):
+        return False
+    area = abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2
+    if area > TURBINE_BASE_MAX_M2:
+        return False
+    return bool(d[k] <= TURBINE_BASE_M or _inside(np.stack([e, n], 1), turbines[k]))
+
+
 CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulative sums: within ~1e-5 m of the exact mean)
 
 
@@ -3720,6 +3766,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
     any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
+    turbines = _turbine_points(frame, x0, y0, x1, y1)
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
     for f in layers:
@@ -3761,6 +3808,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                          or (a.get("src_record") is not None and landmarks.of(a["src_record"][i]) is not None)
                          or (key is not None and parts_of.get(str(key)))):
                 continue                # (its centre's tile's: only a long one's pieces may be this tile's)
+            if len(turbines) and _turbine_base(e, n, cx, cy, turbines):
+                continue                # (a wind turbine's base, mapped as a building: the turbine is drawn there)
             if min_size is not None:
                 h_ = a["height"][i] if a.get("height") is not None else None
                 if h_ is None or not np.isfinite(h_):
