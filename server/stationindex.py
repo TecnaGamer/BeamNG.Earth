@@ -16,6 +16,7 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 
 import mapcells
@@ -84,7 +85,10 @@ class StationIndex:
     def __init__(self, root, md):
         import mapdata
         self.md = md
-        self.dir = os.path.join(root, f"v{INDEX_VERSION}-{getattr(mapdata, 'OSM_POI_VERSION', 0)}")
+        # the rules, the Overture release the places come from and the OSM cells' version: a newer release (the project
+        # moving on, mapdata.MapData.release) builds every cell's list again (Codex on #1056)
+        release = re.sub(r"[^0-9A-Za-z._-]", "_", str(getattr(md, "release", "") or "none"))
+        self.dir = os.path.join(root, f"v{INDEX_VERSION}-{release}-{getattr(mapdata, 'OSM_POI_VERSION', 0)}")
         self._mem = {}
         self._lock = threading.Lock()
         # a cell file's read-modify-write (mark, _build's merge): road tiles report from several worker threads, and
@@ -123,11 +127,22 @@ class StationIndex:
             json.dump(e, f, separators=(",", ":"))
         os.replace(tmp, p)
 
+    def _osm_pending(self, key):
+        """Whether the cell's OpenStreetMap stations are not fetched yet (mapdata.MapData.osm_fuel_cached None)."""
+        f = getattr(self.md, "osm_fuel_cached", None)
+        return f is not None and f(key) is None
+
+    def _needs(self, key, e):
+        """Whether the cell's list is to be built (again): never built, or built while its OpenStreetMap stations were
+        still being fetched and they are there now (Codex on #1056: not a complete Overture-only list for good)."""
+        return e.get("items") is None or (bool(e.get("osm_pending")) and not self._osm_pending(key))
+
     def _build(self, key):
+        pending = self._osm_pending(key)        # (before the read: rows that come meanwhile are read next time)
         items = cell_items(self.md, key)
         with self._wlock:               # (a mark that came meanwhile is kept)
             e = dict(self._entry(key))
-            e["items"] = items
+            e["items"], e["osm_pending"] = items, pending
             self._save(key, e)
             self._remember(key, e)
         return e
@@ -199,14 +214,15 @@ class StationIndex:
     def _map(self, lat, lon, r_km, kinds):
         out, built, partial = [], 0, False
         for key in self._cells_by_distance(lat, lon, r_km):
-            if self._entry(key).get("items") is None:
-                if not self.md.has(key, "places"):
+            e = self._entry(key)
+            if self._needs(key, e):
+                if e.get("items") is None and not self.md.has(key, "places"):
                     continue
                 if built >= MAP_BUILD_MAX:
                     partial = True
-                    continue
-                self._safe_build(key)
-                built += 1
+                else:
+                    self._safe_build(key)
+                    built += 1
             self._take(key, kinds, out)
         return out, partial
 
@@ -232,7 +248,7 @@ class StationIndex:
                     if max(abs(dx), abs(dy)) != r or not (0 <= c.y + dy < n):
                         continue
                     key = mapcells.CellKey(c.z, (c.x + dx) % n, c.y + dy)
-                    if self._entry(key).get("items") is None:
+                    if self._needs(key, self._entry(key)):
                         if not self.md.has(key, "places"):
                             if fetched >= NEAR_FETCH_MAX:
                                 return out, True

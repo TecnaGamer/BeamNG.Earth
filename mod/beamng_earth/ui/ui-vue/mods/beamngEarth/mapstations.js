@@ -39,3 +39,20 @@ export function radiusKm(view, w, h) {
   const mPerPx = (40075016.686 * Math.cos((view.lat * Math.PI) / 180)) / (TILE * Math.pow(2, view.z))
   return Math.min(R_KM_MAX, (Math.hypot(w, h) / 2) * mPerPx / 1000)
 }
+
+// The right-click "Nearest station from here": ask(cb) until an answer is not partial or limitMs has passed, then
+// done(answer). A newer search (state.gen) cancels an older one's pending retry and drops its answers (Codex on #1056:
+// an older retry fired after a newer search started, cancelled its polling and routed to the older point's station).
+export function nearSearch(state, ask, done, { limitMs = 20000, retryMs = 500, now = Date.now, later = setTimeout,
+  cancel = clearTimeout } = {}) {
+  const gen = ++state.gen
+  cancel(state.retry)
+  state.retry = null
+  const started = now()
+  const go = () => ask(res => {
+    if (gen !== state.gen) return
+    if (res && res.partial && now() - started < limitMs) { state.retry = later(go, retryMs); return }
+    done(res)
+  })
+  go()
+}

@@ -53,7 +53,8 @@ class FakeCell:
 class CellMD:
     """Map data by cell: places rows per cell, cached (has) or not; OSM rows per cell."""
 
-    def __init__(self, places=None, cached=None, osm_rows=None):
+    def __init__(self, places=None, cached=None, osm_rows=None, release="2026-10-22.0"):
+        self.release = release
         self.places = places or {}
         self.cached = set(self.places) if cached is None else set(cached)
         self.osm = osm_rows or {}
@@ -69,7 +70,7 @@ class CellMD:
         return FakeCell({"places": feats("places", rows, mg.POINT) if rows else None})
 
     def osm_fuel_cached(self, key):
-        return self.osm.get(key, [])
+        return self.osm.get(key, [])            # (None: not fetched yet, as mapdata.MapData.osm_fuel_cached)
 
 
 class IndexCase(unittest.TestCase):
@@ -241,6 +242,25 @@ class MarkTest(IndexCase):
         md = CellMD({A: [place("a", la, lo)]})
         self.index(md).mark([("fuel", la, lo, False)])
         self.assertEqual(self.index(md).query(la, lo, 5.0, ["fuel"], "map")[0], [])
+
+    def test_osm_fetched_later_refreshes(self):
+        # (Codex on #1056) a cell indexed while its OpenStreetMap stations were still being fetched: built again once
+        # they are there, not kept as a complete Overture-only list
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo)]}, osm_rows={A: None})
+        idx = self.index(md)
+        self.assertEqual(len(idx.query(la, lo, 5.0, ["fuel", "ev"], "map")[0]), 1)
+        md.osm[A] = [osm(9, la + 0.004, lo, "charging_station", "Ionna")]
+        items = idx.query(la, lo, 5.0, ["fuel", "ev"], "map")[0]
+        self.assertEqual(sorted(i["kind"] for i in items), ["ev", "fuel"])
+
+    def test_new_overture_release_rebuilds(self):
+        # (Codex on #1056) the project moving to a newer Overture release: the cells' lists built again from it
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo)]})
+        self.assertEqual(len(self.index(md).query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
+        md2 = CellMD({A: [place("a", la, lo), place("b", la + 0.004, lo)]}, release="2026-11-19.0")
+        self.assertEqual(len(self.index(md2).query(la, lo, 5.0, ["fuel"], "map")[0]), 2)
 
     def test_stale_version_ignored(self):
         la, lo = centre(A)

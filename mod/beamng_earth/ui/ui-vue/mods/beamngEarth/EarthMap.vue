@@ -1244,8 +1244,8 @@ function askMapStations() {
 watch([view, w, h], () => scheduleStations(STATION_ASK_MS))
 watch([fuelOn, evOn], () => scheduleStations(0), { immediate: true })
 onUnmounted(() => {
-  mapSlot.seq++; nearSlot.seq++
-  clearTimeout(stationTimer); clearTimeout(mapSlot.timer); clearTimeout(nearSlot.timer)
+  mapSlot.seq++; nearSlot.seq++; nearSearchState.gen++
+  clearTimeout(stationTimer); clearTimeout(mapSlot.timer); clearTimeout(nearSlot.timer); clearTimeout(nearSearchState.retry)
 })
 const stationMarkers = computed(() => {
   const v = view.value
@@ -1261,21 +1261,19 @@ function nearestStation() {
   })
 }
 // The right-click "Nearest station from here": the kinds whose layer is on (both when none is), rings outward
+const nearSearchState = { gen: 0, retry: null }        // (a newer right-click search cancels an older one's retry)
 function ctxNearest() {
   if (!ctx.value) return
   const c = ctx.value
   closeCtx()
   const kinds = stationKinds().length ? stationKinds() : ["fuel", "ev"]
   showToast("Finding the nearest station...")
-  const started = Date.now()
-  const go = () => askStations(nearSlot, c.lat, c.lon, ms.R_KM_MAX, kinds, "near", res => {
+  ms.nearSearch(nearSearchState, cb => askStations(nearSlot, c.lat, c.lon, ms.R_KM_MAX, kinds, "near", cb), res => {
     const best = res && toArray(res.items)[0]
-    if (res && res.partial && Date.now() - started < NEAR_FROM_HERE_MS) { setTimeout(go, 500); return }
     if (!best) { showToast(res && res.error ? res.error : "No station within " + ms.R_KM_MAX + " km"); return }
     setGps(best.lat, best.lon, best.name || ms.NAMES[best.kind])
     scheduleStations(0)
-  })
-  go()
+  }, { limitMs: NEAR_FROM_HERE_MS })
 }
 
 // the bumpers: off -> each view in turn -> off

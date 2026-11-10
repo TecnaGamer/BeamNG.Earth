@@ -36,4 +36,29 @@ assert.equal(ms.ICON.fuel, "⛽")
 assert.equal(ms.ICON.ev, "⚡")
 assert.equal(ms.NAMES.fuel, "Gas station")
 assert.equal(ms.NAMES.ev, "EV charger")
+// the right-click search: a newer one cancels an older one's pending retry (Codex on #1056: A's retry fired after B
+// started, cancelled B's polling and routed to A's station)
+{
+  const timers = []
+  const opts = { now: () => 0, later: (f) => { timers.push(f); return timers.length }, cancel: (id) => { if (id) timers[id - 1] = null } }
+  const state = { gen: 0, retry: null }
+  const asked = [], done = []
+  let answerA = null
+  ms.nearSearch(state, cb => { asked.push("A"); answerA = cb }, r => done.push(["A", r]), opts)
+  answerA({ items: [], partial: true })              // A partial: a retry waits
+  assert.equal(timers.filter(Boolean).length, 1)
+  let answerB = null
+  ms.nearSearch(state, cb => { asked.push("B"); answerB = cb }, r => done.push(["B", r]), opts)
+  for (const f of timers.splice(0)) if (f) f()       // any retry still pending fires now
+  answerB({ items: [{ name: "B" }], partial: false })
+  assert.deepEqual(asked, ["A", "B"], "A's retry never asked again")
+  assert.deepEqual(done.map(d => d[0]), ["B"], "only B's answer routes")
+  // a partial answer is asked again until done
+  const t2 = [], st = { gen: 0, retry: null }, seen = []
+  let n = 0
+  ms.nearSearch(st, cb => { n++; cb({ items: [], partial: n < 3 }) }, r => seen.push(r), { ...opts, later: f => { t2.push(f); return 0 } })
+  while (t2.length) t2.shift()()
+  assert.equal(n, 3)
+  assert.equal(seen.length, 1)
+}
 console.log("mapstations ok")
