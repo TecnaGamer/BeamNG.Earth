@@ -16,9 +16,13 @@ direction, over MATCH_SHARE of its length) and takes from it what the map does n
     lanes    the surveyed lanes of motorways to tertiary roads, where OpenStreetMap has no lanes tag (its lanes win);
              the width follows the class's rule for that many lanes when none was surveyed
     surface  where OpenStreetMap and Overture say nothing: paved, setts, gravel or earth
-The surveyed width is the whole carriageway: a town street keeps its curbside parking inside it only where its lanes
-still fit beside it (_fit_parking), and it stands over the width measured between the buildings
-(roads._measured_widths, which then gives the sidewalks only). Checked on 2,300 roads in five cities (GitHub #1079).
+FLOOR_ONLY: in towns the survey measures the width that is driven, between the cars parked at the curbs (Berlin, on
+the aerial in game, 2026-11-10: 8 and 9 m surveyed, 11-12 m from curb to curb with a row of cars on each side), and
+half of a single axis is no measure of one half of a divided road (Saarbrücken: a 5 m axis gave its two 7 m halves
+2.5 m each). There a surveyed width only widens a road drawn narrower, never narrows one, and the width measured
+between the buildings (roads._measured_widths) stays above it. Out of town (no parking) it is the width drawn; where
+it is, parking stays only where the lanes still fit beside it (_fit_parking). Checked on 2,300 roads in five cities
+and on the aerials in game (GitHub #1079).
 Driveways, parking aisles and living streets (SKIP) take nothing: they run beside a street, not along its axis.
 A divided road's two one-way halves on one two-way axis (a town avenue the survey keeps as one) take half its width
 each. Decks and tunnels (roads._bridge_specs) take the same as the road on the ground, so a bridge is as wide as its
@@ -39,7 +43,7 @@ import numpy as np
 log = logging.getLogger("earthd.germanroads")
 
 ON = os.environ.get("BNE_DE_ROADS", "on").lower() not in ("off", "0", "false")
-VERSION = "de-roads-v2"     # (v2: parking only where it fits, the survey over the buildings' width)
+VERSION = "de-roads-v3"     # (v2: parking only where it fits, the survey over the buildings' width)
 ZOOM = 10
 BOX = (47.2, 5.8, 55.1, 15.1)   # south, west, north, east: Germany, so nowhere else asks for a shard
 RETRY_S = 3600                  # unreachable: asked again after this long
@@ -309,8 +313,8 @@ def _mode(values):
 
 
 def surveyed(ax, lonlat, oneway, paired=None):
-    """(width m or None, lanes or None, surface value or None) of the axis a road runs along, None where it runs
-    along none. paired: the median (m, centre to centre) of a road that is one of a divided road's two one-way halves
+    """(width m or None, lanes or None, surface value or None, halved) of the axis a road runs along, None where it
+    runs along none; halved: the width is half a single axis' (paired, below). paired: the median (m, centre to centre) of a road that is one of a divided road's two one-way halves
     (roads.dual_carriageways): on a single two-way axis, found within half that and PAIRED_SLACK_M, it takes half the
     axis' paved width, the medians being unpaved. A one-way road (one carriageway of a divided road, or a one-way street) takes a carriageway's axis
     where there is one; a two-way road never one carriageway's. A one-way road on any other axis takes its surface
@@ -331,10 +335,10 @@ def surveyed(ax, lonlat, oneway, paired=None):
     lanes = _mode(a[:, 1]) or None
     surf = SURFACES.get(_mode(a[:, 2]))
     if own:
-        return width, lanes, surf
+        return width, lanes, surf, False
     if paired and width is not None and not (a[:, 4] & DIVIDED_AXIS).any():
-        return width / 2.0, None, surf
-    return None, None, surf
+        return width / 2.0, None, surf, True
+    return None, None, surf, False
 
 
 def adjust_specs(feats, specs):
@@ -361,7 +365,7 @@ def adjust_specs(feats, specs):
         got = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
         if got is None:
             continue
-        width, lanes, surf = got
+        width, lanes, surf, halved = got
         mapped_w = roads._rule_value(rules.get("width"), i)
         if mapped_w is None:
             mapped_w = roads._osm(feats, "width", i, *roads.OSM_WIDTH_M)
@@ -385,6 +389,9 @@ def adjust_specs(feats, specs):
             if w is not None:
                 if new.median:
                     w = roads.dual_cap(new.median, w)
+                if (sp.urban or halved) and w <= sp.width:
+                    w = None                        # (a lower bound there: FLOOR_ONLY in the module docstring)
+            if w is not None:
                 new = new._replace(width=float(w))
                 new = _fit_parking(new)
         out[i] = new
@@ -406,8 +413,8 @@ def _fit_parking(sp):
 
 
 def surveyed_width(feats, i, sp):
-    """The surveyed width adjust_specs gave road i (its spec sp), None where it gave none (no axis, a mapped width,
-    a ramp): roads._measured_widths keeps it over the width measured between the buildings."""
+    """The surveyed width of road i (its spec sp), None where there is none (no axis, a mapped width, a ramp):
+    roads._measured_widths keeps the width measured between the buildings above it (FLOOR_ONLY)."""
     if not ON or sp is None or sp.link or sp.cls in SKIP:
         return None
     memo = feats.__dict__.setdefault("_de_widths", {})

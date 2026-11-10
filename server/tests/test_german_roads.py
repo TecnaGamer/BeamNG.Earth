@@ -193,19 +193,40 @@ class GermanRoadsTest(unittest.TestCase):
         street = roads.Spec(9.0, "paved", True, "residential", False)        # (one shared lane between parked cars)
         self.assertTrue(germanroads._fit_parking(street).parking)
 
-    def test_the_survey_stands_over_the_width_between_the_buildings(self):
-        write_shard(self.tmp.name, [(EAST, 10.0, 0, 1, 7, 0)])                # (a Berlin street: 10 m)
-        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"])
-        town = lambda la, lo: np.ones(len(np.atleast_1d(la)), bool)
-        sp = roads._road_specs(f, town, False)[0]
-        self.assertEqual(sp.width, 10.0)
-        got = roads._measured_widths(f, [sp], lambda fid, ll: (17.0, 2.5))[0]
-        self.assertEqual(got.width, 10.0)
+    def test_in_town_the_survey_is_a_lower_bound(self):
+        town = lambda la, lo: np.ones(len(np.atleast_1d(la)), bool)   # noqa: E731
+        write_shard(self.tmp.name, [(EAST, 8.0, 0, 1, 7, 0)])                 # (Berlin: 8 m driven between parked cars)
+        today = roads._road_specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"]), town, False)[0]
         germanroads._state["shards"].clear()
-        f2 = features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"])
         with mock.patch.object(germanroads, "ON", False):
-            sp2 = roads._road_specs(f2, town, False)[0]
-            self.assertEqual(roads._measured_widths(f2, [sp2], lambda fid, ll: (17.0, 2.5))[0].width, 17.0)
+            off = roads._road_specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"]), town, False)[0]
+        self.assertGreater(off.width, 8.0)
+        self.assertEqual(today.width, off.width)                              # (never narrowed in town)
+        germanroads._state["shards"].clear()
+        write_shard(self.tmp.name, [(EAST, 16.0, 0, 1, 7, 0)])
+        wide = roads._road_specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"]), town, False)[0]
+        self.assertGreaterEqual(wide.width, 16.0 - 1e-6)                      # (widened)
+
+    def test_the_buildings_width_stays_above_the_survey(self):
+        write_shard(self.tmp.name, [(EAST, 10.0, 0, 1, 7, 0)])
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["residential"])
+        town = lambda la, lo: np.ones(len(np.atleast_1d(la)), bool)   # noqa: E731
+        sp = roads._road_specs(f, town, False)[0]
+        self.assertEqual(roads._measured_widths(f, [sp], lambda fid, ll: (17.0, 2.5))[0].width, 17.0)
+        self.assertEqual(roads._measured_widths(f, [sp], lambda fid, ll: (7.0, 2.5))[0].width, 10.0)
+
+    def test_half_of_a_narrow_single_axis_does_not_narrow_the_halves(self):
+        write_shard(self.tmp.name, [(EAST, 5.0, 2, 1, 5, 0)])        # (Saarbrücken: one 5 m axis, halves 7 m real)
+        f = features([[(-300.0, 8.0), (300.0, 8.0)], [(300.0, -8.0), (-300.0, -8.0)]], ["secondary", "secondary"],
+                     oneway=[0, 1], names=["X", "X"])
+        a, b = roads._road_specs(f, None, False)
+        with mock.patch.object(germanroads, "ON", False):
+            germanroads._state["shards"].clear()
+            f2 = features([[(-300.0, 8.0), (300.0, 8.0)], [(300.0, -8.0), (-300.0, -8.0)]], ["secondary", "secondary"],
+                          oneway=[0, 1], names=["X", "X"])
+            a0, b0 = roads._road_specs(f2, None, False)
+        self.assertEqual((a.width, b.width), (a0.width, b0.width))
+        self.assertGreater(a.width, 2.5)
 
     def test_a_main_road_never_turns_to_earth(self):
         write_shard(self.tmp.name, [(EAST, 0.0, 0, 6, 3, 0)])
