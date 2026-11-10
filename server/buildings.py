@@ -372,6 +372,26 @@ def circularity(ring):
     return float(4.0 * math.pi * (abs(_area2(r)) / 2.0) / max(per * per, 1e-9))
 
 
+# A building's era where its construction year is known (3DBAG's oorspronkelijkbouwjaar; OSM's start_date where read):
+# old masonry before 1930 (more brick, tall sash windows, never a glass office), the post-war estates' precast
+# concrete panels (1950-1990, four floors and up, ERA_PANEL_SHARE of them), and new offices more often glass (from
+# 2000). The research's "era decides facade, windows and roof" (docs/research/2026-11-10-buildings/osm-3d-tags.md).
+ERA_BRICK = {"old": 1.6, "postwar": 0.8, "new": 0.6}
+ERA_GLASS = {"old": 0.0, "new": 1.8}
+ERA_PANEL_SHARE = 0.6
+
+
+def era(year):
+    """"old" (before 1930), "postwar" (1950-1989), "new" (2000 on), or None (not known, or between)."""
+    try:
+        y = int(year)
+    except (TypeError, ValueError):
+        return None
+    if y < 1000 or y > 2100:
+        return None
+    return "old" if y < 1930 else "postwar" if 1950 <= y < 1990 else "new" if y >= 2000 else None
+
+
 def custom_look(mat, rgb):
     """A look key in LOOKS for material mat with RGB tuple in [0, 1]."""
     key = f"{mat}|c_{rgb[0]:.3f}_{rgb[1]:.3f}_{rgb[2]:.3f}"
@@ -404,6 +424,7 @@ class _Looks:
 BAND_TALL = (0, 3)          # m_highrise_plaster: tall windows on plaster (3 bays of uneven width)
 BAND_PANEL = (1, 4)         # square windows on panels
 BAND_SASH = (2, 5, (0, 2, 3))   # sash windows on plaster (bays 1 and 4 are black "open" windows: skipped)
+ERA_BAND = {"old": BAND_SASH, "postwar": BAND_PANEL, "new": BAND_TALL}   # (era(): a plastered building's windows)
 BAND_BRICK = (3, 5)         # sash windows on red brick
 BAND_OFFICE = (0, 5)        # m_highrise_metal: curtain wall
 BAND_OFFICE2 = (1, 4)
@@ -914,11 +935,17 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         # part on a glass tower, each part decided by its own height)
         bh = attrs.get("building_height")
         snf = max(nf, int(bh / FLOOR_M)) if bh is not None and np.isfinite(bh) else nf
-        modern = cls in ("office", "commercial", "hotel") and u_glass < MIDRISE_GLASS_OFFICE
+        # (the building's era where its construction year is known, era(): 3DBAG's, OSM's start_date)
+        ep = era(attrs.get("_year"))
+        modern = cls in ("office", "commercial", "hotel") and u_glass < MIDRISE_GLASS_OFFICE * ERA_GLASS.get(ep, 1.0)
         tall = snf >= GLASS_FLOORS[1] or (snf >= GLASS_FLOORS[0] and (modern or u_glass < OLD_TOWER_GLASS)) \
             or (snf >= 7 and modern)
-        if snf >= 7 and not tall and not industrial:
-            if _hash01(seed, "brick") < brick_share(lat, lon) * 1.2:
+        if ep == "postwar" and snf >= 4 and not tall and not industrial and not shop \
+                and _hash01(seed, "era panel") < ERA_PANEL_SHARE:
+            # (the post-war estates' precast concrete slabs, their windows in ribbons)
+            facade, band = f"{PANEL}|{int(_hash01(seed, 'panel tint') * len(WALL_TINTS[PANEL]))}", BAND_PANEL
+        elif snf >= 7 and not tall and not industrial:
+            if _hash01(seed, "brick") < brick_share(lat, lon) * 1.2 * ERA_BRICK.get(ep, 1.0):
                 facade, band = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK
             else:
                 facade = FACADE_TINTS[int(seed * 7919) % len(FACADE_TINTS)]
@@ -930,7 +957,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         else:
             u_brick = _hash01(seed, "brick")
             detached = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not row and neighbours == 0
-            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0)
+            brick = u_brick < brick_share(lat, lon) * (1.15 if row else 0.35 if detached else 1.0) * ERA_BRICK.get(ep, 1.0)
             if brick:
                 band = BAND_BRICK
                 facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
@@ -938,7 +965,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 facade = FACADE_TINTS[int(seed * 7919) % len(FACADE_TINTS)]
                 if (row or cls in HOUSE_CLASSES) and _hash01(seed, "paint") < style.paint:
                     facade = PAINT_TINTS[int(_hash01(seed, "pc") * len(PAINT_TINTS))]
-                if row or cls in HOUSE_CLASSES or roof != "flat":
+                if ep in ERA_BAND:
+                    band = ERA_BAND[ep]
+                elif row or cls in HOUSE_CLASSES or roof != "flat":
                     band = BAND_SASH if seed < 0.7 else BAND_PANEL
                 else:
                     band = (BAND_SASH, BAND_TALL, BAND_PANEL)[int(seed * 104729) % 3]

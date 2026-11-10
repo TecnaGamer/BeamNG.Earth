@@ -2404,3 +2404,26 @@ class TankInfraTest(unittest.TestCase):
         self.assertEqual(bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev,
                                          [(ring + [300.0, 0.0], {"class": "storage_tank"})], set()), [],
                          "another tile's")
+
+
+class EraTest(unittest.TestCase):
+    """A known construction year (3DBAG's, OSM's start_date) biases the facade: old brick, post-war panels."""
+
+    def share(self, year, test):
+        ring = np.array([[0, 0], [40, 0], [40, 14], [0, 14]], float)
+        n = 0
+        for k in range(150):
+            sp = bld.plan(ring + k * 0.31, {"class": "apartments", "num_floors": 6, "_year": year}, 1, 52.37, 4.89)
+            n += test(str(sp.facade))
+        return n / 150.0
+
+    def test_eras(self):
+        self.assertEqual(bld.era(1890), "old")
+        self.assertEqual(bld.era(1972), "postwar")
+        self.assertEqual(bld.era("2015"), "new")
+        self.assertIsNone(bld.era(1940))
+        self.assertIsNone(bld.era(None))
+        brick = lambda f: "brick" in f
+        self.assertGreater(self.share(1890, brick), self.share(None, brick) + 0.1, "old: more brick")
+        self.assertGreater(self.share(1970, lambda f: f.startswith(bld.PANEL)), 0.4, "post-war: panel slabs")
+        self.assertEqual(self.share(None, lambda f: f.startswith(bld.PANEL)), 0.0)

@@ -372,6 +372,8 @@ def apply(at, rec):
             out["roof_direction"] = rec["roof_direction"]
         if rec["roof_shape"] != "flat" and not _known(out.get("roof_height")) and rec.get("roof_height"):
             out["roof_height"] = rec["roof_height"]
+    if rec.get("year") and not out.get("_year"):
+        out["_year"] = rec["year"]      # (its era: buildings.era)
     out["_3dbag"] = True
     return out
 
