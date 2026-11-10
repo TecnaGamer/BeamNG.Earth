@@ -3,14 +3,17 @@
 -- the pose (lat / lon / alt / heading from true north / speed / east-north-up velocity) from core's player and anchor,
 -- also off the origin where the frame's north turns; the place names; teleport / GPS through places.lua and gps.lua;
 -- notify; the events as game hooks and listeners (worldReady after loading, teleported after a teleport only,
--- routeArrived from gps.lua), a failing listener contained.
+-- routeArrived from gps.lua), a failing listener contained; places / buildings (1.4): the request sent, each answer
+-- to its own callback (a pending one kept for the next), paging, a timeout heard once.
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 dofile(dir .. '/stubs.lua')
 local geodesy = require('beamngEarth/geodesy')
 
 local connected = true
-package.loaded['beamngEarth/net'] = { isConnected = function() return connected end, send = function() end }
+local sent = {}
+package.loaded['beamngEarth/net'] = { isConnected = function() return connected end,
+  send = function(m) sent[#sent + 1] = m end }
 local where = nil
 package.loaded['beamngEarth/statusbar'] = { location = function() return where end }
 local went = {}
@@ -46,7 +49,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 3, 'version 1.3 (inTunnel, weather)')
+T.check(api.version() == 1 and select(2, api.version()) == 4, 'version 1.4 (places, buildings)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -185,5 +188,54 @@ local w = api.weather()
 T.check(w and w.rain == 0.4 and w.code == 63 and w.windMs == 6 and w.gustMs == 10 and w.visibilityM == 8000
   and w.rainMmH == 2.5 and w.tempC == 12, 'weather: the report and the rain now')
 package.loaded['beamngEarth/weather'] = nil
+
+-- 1.4: places and buildings round a point (the app's places_result, server places.py)
+api._reset()
+sent = {}
+T.check(api.has('places') and api.has('buildings') and select(2, api.version()) >= 4, 'places / buildings: has()')
+local answers = {}
+local id = api.places(39.2847, -76.5925, { radius = 2000, categories = { 'gas_station', 'group:food', 7 }, limit = 20 },
+  function(r) answers[#answers + 1] = r end)
+local q = sent[#sent]
+T.check(id and q.type == 'places' and q.id == id and q.radius == 2000 and q.limit == 20 and q.buildings == false,
+  'places: the request sent')
+T.check(#q.categories == 2 and q.categories[2] == 'group:food', 'places: only string categories sent')
+api._onPlaces({ id = id, places = { { id = 'p1', name = 'Joe\'s', category = 'restaurant', lat = 39.28, lon = -76.59,
+  confidence = 0.9, open = 'open' } }, complete = false, pending = true, next = '120.00|p1' })
+T.check(#answers == 1 and answers[1].places[1].name == "Joe's" and answers[1].pending and not answers[1].complete
+  and answers[1].next == '120.00|p1', 'places: the first answer, more to come')
+api._onPlaces({ id = id + 100, places = {}, complete = true })
+T.check(#answers == 1, 'places: another request\'s answer not ours')
+api._onPlaces({ id = id, places = {}, complete = true, pending = false })
+T.check(#answers == 2 and answers[2].complete and answers[2].next == nil, 'places: the last answer')
+api._onPlaces({ id = id, places = {}, complete = true, pending = false })
+T.check(#answers == 2, 'places: nothing after the last answer')
+local page2 = api.places(39.2847, -76.5925, { cursor = '120.00|p1' }, function() end)
+T.check(page2 and sent[#sent].cursor == '120.00|p1' and sent[#sent].categories == nil, 'places: the next page by cursor')
+api.places(1, 2, { categories = {} }, function() end)
+T.check(sent[#sent].categories == nil, 'places: no categories: none sent (every kind)')
+local bl = nil
+T.check(api.buildings(39.2847, -76.5925, function(r) bl = r end) and sent[#sent].buildings == true,
+  'buildings: opts may be left out; buildings asked')
+api._onPlaces({ id = sent[#sent].id, places = {}, complete = true, buildings = { { id = 'b1', lat = 39.28, lon = -76.59,
+  height = 12, outline = { { 39.28, -76.59 }, { 39.281, -76.59 }, { 39.281, -76.591 } } } } })
+T.check(bl and bl.buildings[1].height == 12 and #bl.buildings[1].outline == 3, 'buildings: footprints in the result')
+local n0, why = api.places(91, 0, {}, print)
+T.check(n0 == nil and why == 'bad coordinates', 'places: bad coordinates refused')
+T.check(api.places(1, 2, {}) == nil, 'places: no callback refused')
+connected = false
+local n1, why1 = api.places(1, 2, {}, print)
+T.check(n1 == nil and why1 and why1:find('not connected'), 'places: not connected')
+connected = true
+-- a request never answered is heard once, timed out; a failing callback contained
+local late = {}
+api.places(1, 2, {}, function(r) late[#late + 1] = r error('a broken callback') end)
+st.player = nil
+api.onUpdate(api.PLACES_TIMEOUT_S - 1)
+T.check(#late == 0, 'places: not timed out yet')
+api.onUpdate(2)
+T.check(#late == 1 and late[1].error == 'timed out' and late[1].pending == false, 'places: timed out once')
+api.onUpdate(api.PLACES_TIMEOUT_S * 2)
+T.check(#late == 1, 'places: only once')
 
 T.done('test_api')

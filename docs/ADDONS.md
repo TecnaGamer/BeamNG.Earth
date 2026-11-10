@@ -152,8 +152,8 @@ end
 
 | function | returns |
 |---|---|
-| `version()` | `major, minor` (1, 3) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3) |
+| `version()` | `major, minor` (1, 4) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -167,6 +167,8 @@ end
 | `notify(text, seconds)` | a short message on screen |
 | `inTunnel()`, `inTunnel(x, y, z)` | 1.3: the player (1 m over its position), or a point in game coordinates, under a roof: a tunnel, a covered arch, a parking structure (the rule the tunnel sound uses). `true` / `false`, nil before the world is there |
 | `weather()` | 1.3: `{rain, snow, code, tempC, windMs, gustMs, visibilityM, rainMmH, snowCmH}`: `rain` / `snow` 0..1 as hard as it falls where the camera is (none above the cloud base), `code` the WMO weather code, the rest from the latest report (nil where not known); nil before the first report |
+| `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
+| `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
 `pose()`: lat / lon in WGS84 degrees; `alt` m over the WGS84 ellipsoid; `heading` degrees clockwise from true north
@@ -183,6 +185,49 @@ Events, as game hooks (any extension defining the function gets it) and as `api.
 | `onBeamNGEarthTeleported` | `teleported` | `{lat, lon}`: a teleport finished, the player is set down |
 | `onBeamNGEarthRouteArrived` | `routeArrived` | `{lat, lon, name}`: the GPS destination reached |
 | `onBeamNGEarthWaypointReached` | `waypointReached` | `{lat, lon, name, left}`: a GPS waypoint passed (1.2), `left` still ahead |
+
+### Places (1.4)
+
+For add-ons that need real places: a career's jobs at real businesses, a mission's pick-up and drop-off. The app
+answers from the map cells it has (the places the 3D map's labels come from, every kind of them, not only the map's
+icon groups); nothing is downloaded ahead of the world for it.
+
+```lua
+if api.has('places') then
+  api.places(lat, lon, { radius = 2000, categories = { 'gas_station', 'car_*', 'group:food' } }, function(r)
+    for _, p in ipairs(r.places) do print(p.name, p.category, p.lat, p.lon, p.open) end
+    if r.next and not r.pending then --[[ the next page: opts.cursor = r.next ]] end
+  end)
+end
+```
+
+`opts` (all optional):
+
+| field | |
+|---|---|
+| `radius` | metres, default 1000, at most 3000 |
+| `categories` | Overture `basic_category` values (`'gas_station'`, `'car_dealer'`), prefixes ending in `*` (`'car_*'`), or the 3D map's icon groups (`'group:food'`, `food` / `shop` / `lodging` / `culture` / `park` / `transit` / `education` / `health` / `fuel`); none: every kind. A place's taxonomy value counts as well as its category |
+| `limit` | rows a page, default 50, at most 200 |
+| `cursor` | a result's `next`: the following page |
+| `minConfidence` | 0..1: only places Overture is at least this sure of (the 3D map shows 0.75 and up) |
+| `buildings` | true: the footprints too (as `buildings()`) |
+
+The callback gets a result for each answer: `{places, buildings, complete, pending, next, error}`.
+
+- `places`: `{id, name, category, lat, lon, confidence, open}` each, nearest first; named places only. `id` is
+  Overture's GERS id; `open` is Overture's `operating_status`
+  (`'open'`, `'temporarily_closed'`, `'permanently_closed'`, `''` not known); `confidence` 0..1 or nil.
+- `buildings` (asked only): `{id, lat, lon, height, levels, name, class, outline}` each, nearest first, within 500 m
+  and at most 100; `height` m and `levels` nil where not mapped; `outline` the footprint's outer ring
+  `{{lat, lon}, ...}` (closed, at most 200 points).
+- `complete`: every map cell round the point was read. The first answer comes at once from the cells on disk; when
+  some were missing, the app fetches them in the background and answers once more (`pending` true until then, at
+  most about 2 minutes). The second answer is the asked page built again over every cell, the first answer's rows
+  included: replace them with it rather than appending.
+- `next`: the next page's cursor, nil on the last. Pages follow the order (distance, id), so asking for the next
+  page after more cells came neither repeats nor skips a row of the pages before (a nearer place come since is not
+  in them).
+- `error`: why there are none (`'bad coordinates'`, no map data, `'timed out'`: no answer in 150 s).
 
 Next for v1.x (proposals): `session` events (BeamMP join / leave), the player's own settings that matter to
 add-ons (units), an add-on panel inside the Add-ons page, and road information at the player (the road's name and
