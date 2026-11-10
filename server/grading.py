@@ -259,6 +259,12 @@ JR_CAPS = os.environ.get("BNE_JR_CAPS", "on") != "off"      # (its parts apart, 
 JR_TWIN = os.environ.get("BNE_JR_TWIN", "on") != "off"      # a twin standing as high, the junction's roads raised)
 JR_RAISE = os.environ.get("BNE_JR_RAISE", "on") != "off"
 JR_BESIDE = os.environ.get("BNE_JR_BESIDE", "on") != "off"
+# (GitHub #1077: no junction raise at a freeway's own deck, nor for a lift only an elevation model holding the deck over
+# the road under asks: _end_lift_raw)
+JR_OWN_CLASS = os.environ.get("BNE_JR_OWN_CLASS", "on") != "off"
+JR_TRUSTED = os.environ.get("BNE_JR_TRUSTED", "on") != "off"
+JR_TRUSTED_HALF_M = 4.0     # m: a deck's half width where its cell has none (the road under is read past it)
+JR_UNDER_ON_M = 1.5         # m: a crossing point this near a ground road's line is that road's (_Planner._under_trusted)
 JUNCTION_UNDER_CLASSES = {"motorway", "trunk"}     # ... over a road of these classes (a freeway overpass)
 JUNCTION_MIN_LIFT = 3.0     # m: an inferred abutment lift this big (or more) raises its junction with it ...
 JUNCTION_STUB_M = 60.0      # an approach this short (abutment to junction) carries its ramp on through the junction
@@ -374,6 +380,9 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
+# ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
+# elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
+LIFT_UNDER_BESIDE = os.environ.get("BNE_LIFT_UNDER_BESIDE", "on") != "off"
 # A walkway bridge is not a road, so it never becomes a deck. The elevation still has it: a footbridge across a
 # motorway cut is a ridge of ground in the carriageway (a catwalk over I-87 at Lake George, GitHub #802). Its span
 # caps the road under it the same way a road deck does, and nothing else (no ramp, no abutment).
@@ -2871,6 +2880,33 @@ class _Planner:
         with self.lock:
             return (round(float(xy[0]) * 2), round(float(xy[1]) * 2)) in self.__dict__.get("_jr_ok", set())
 
+    @staticmethod
+    def _under_trusted(ground, half, z_at):
+        """under_z for bridge_lifts: at each crossing point (n, 2) on one of the ground road lines (within
+        JR_UNDER_ON_M of it), the lower of the elevation there and that road's own ground beside the deck
+        (crossings.trusted_under: past half + its gap, either way along the road); z_at elsewhere (a track). An
+        elevation model that holds the deck, or lidar's fill under it, reads the deck's height over the road under."""
+        lines = [np.asarray(ln, np.float64)[:, :2] for ln in ground if len(ln) >= 2]
+
+        def under_z(p):
+            p = np.asarray(p, np.float64).reshape(-1, 2)
+            z = np.asarray(z_at(p), np.float64).reshape(-1).copy()
+            for k, q in enumerate(p):
+                best, bl = JR_UNDER_ON_M, None
+                for ln in lines:
+                    if (ln.min(0) > q + best).any() or (ln.max(0) < q - best).any():
+                        continue
+                    d = _seg_dist(ln, q)
+                    if d <= best:
+                        best, bl = d, ln
+                if bl is None:
+                    continue
+                t = _xs.trusted_under(q, _xs.dir_at(bl, q), half, z_at)
+                if t is not None and np.isfinite(t):
+                    z[k] = min(z[k], float(t))
+            return z
+        return under_z
+
     def _roads_beside(self, xy, e, lift):
         """[(line, half width)] of the ground roads near the road line xy (k, 2) within its ramp's fill reach (SLOPE_RUN x
         lift and the widest road), but its junction's arms (an end within JUNCTION_ZONE_M of e) and itself."""
@@ -4537,6 +4573,28 @@ class _Planner:
                 jr_here = self._crosses_freeway(bridge, cs)
             else:
                 jr_here = over is None
+        if jr_here and JR_OWN_CLASS:
+            # (nor a freeway's own deck: it is never raised (_never_raised), so neither is a junction at its approach's
+            # end. Its abutment's lift is asked (the roads under it dip instead), and the links at the gore 30-60 m
+            # past it were raised as that junction's roads, 5-7 m over the motorway they leave: the A-7 at La Ballabona,
+            # Spain, GitHub #1077)
+            bi = hc["end_of"][int(hit[0])]
+            jr_here = (hc.get("bridge_cls") or [None] * len(hc["bridges"]))[bi] not in APPROACH_SKIP
+        if jr_here and JR_TRUSTED:
+            # (and only for a lift the road under it asks from its own ground beside the deck (crossings.trusted_under),
+            # not from an elevation model that holds the deck itself, or its lidar fill, over the road: Spain's has
+            # the A-334's roundabout decks 7 m over the motorway in a cut, which asked 8.5 m where 1.5 m clears it, and
+            # the roundabout, its links and the roads round them rose 8 m for 400 m, GitHub #1077. The lift itself is
+            # left as the rules give it: the decks' caps keep it down as before)
+            bi = hc["end_of"][int(hit[0])]
+            half_b = float((hc.get("bridge_half") or [JR_TRUSTED_HALF_M] * len(hc["bridges"]))[bi])
+            lt = [lf for end, lf in bridge_lifts(bridge, bridges, ground, z_at, chain, rails,
+                                                 under_z=self._under_trusted(ground, half_b, z_at))
+                  if np.hypot(*(end - xy)) <= APPROACH_TOUCH_M]
+            jr_here = bool(lt) and float(lt[0]) >= JUNCTION_MIN_LIFT
+            if not jr_here:
+                log.debug("grading: no junction raise at %s: the road under asks %s m from its own ground", xy,
+                          round(float(lt[0]), 1) if lt else 0)
         if jr_here:
             with self.lock:
                 self.__dict__.setdefault("_jr_ok", set()).add((round(float(xy[0]) * 2), round(float(xy[1]) * 2)))
@@ -4574,7 +4632,13 @@ class _Planner:
             others = kept
 
         best = None
-        for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails):
+        # (the road under's ground read beside the deck, as its own plan reads it: not on the coarse models, UNDER_DECK_ON)
+        bhalf = None
+        if LIFT_UNDER_BESIDE and UNDER_DECK_ON and not self._coarse(home):
+            bi = hc["end_of"][int(hit[0])]
+            hs = hc.get("bridge_half") or ()
+            bhalf = float(hs[bi]) if bi < len(hs) and hs[bi] > 0 else 4.0
+        for end, lift in bridge_lifts(bridge, bridges, ground, z_at, chain, rails, half=bhalf):
             if np.hypot(*(end - xy)) <= APPROACH_TOUCH_M:
                 best = lift
                 break
@@ -5635,14 +5699,47 @@ def bridge_chain_ends_free(line, all_bridges, xy):
     return True
 
 
-def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=()):
+def ground_under_deck(deck, half, crossings, z_at):
+    """m: the ground of each road crossing under a deck (deck (k, 2), half width half), read as the road's own plan reads
+    it (deck_capped): at most the straight line between its ground UNDER_DECK_SIDE_M past the deck's sides, along the
+    road's line there. crossings: [(point xy (2,), the road's line (m, 2))]. An elevation that keeps the deck (a lidar
+    model's or a national one's) has the deck's own height on the crossing itself: read there, the A-334's motorway
+    stood 7 m over its cut under the overpasses at Albox and the abutments were raised 8 m to clear it, the links
+    lifted with them along the mainline (GitHub #1077). Never higher than the crossing's own ground. Pure given z_at."""
+    deck = np.asarray(deck, np.float64)[:, :2]
+    if not crossings:
+        return np.zeros(0)
+    reach = UNDER_DECK_MAX_M + UNDER_DECK_SIDE_M + 2 * PROFILE_STEP
+    offs = np.arange(-reach, reach + 1e-6, PROFILE_STEP)
+    mid = int(np.argmin(np.abs(offs)))
+    rows = []
+    for pt, gl in crossings:
+        gl = np.asarray(gl, np.float64)[:, :2]
+        a, b = gl[:-1], gl[1:]
+        ab = b - a
+        t = np.clip(((pt - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+        k = int(np.argmin(np.hypot(*(a + t[:, None] * ab - pt).T)))
+        tan = ab[k] / max(float(np.hypot(*ab[k])), 1e-9)
+        rows.append(np.asarray(pt, np.float64)[None] + offs[:, None] * tan[None])  # (straight along the road there)
+    pts = np.concatenate(rows)
+    z = np.asarray(z_at(pts), np.float64).reshape(len(crossings), len(offs))
+    out = np.empty(len(crossings))
+    for i, r in enumerate(rows):
+        out[i] = float(np.asarray(deck_capped(r, z[i], [(deck, half)]), np.float64)[mid])
+    return np.minimum(out, z[:, mid])
+
+
+def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(), under_z=None, half=None):
     """[(end xy (2,), lift m)] of a bridge part (line (k, 2) ENU m): at each of its ends that no other bridge part
     continues from (an abutment), how far the ground there must be raised for the deck to clear every road crossing
     under it (roads.DECK_ROAD_CLEAR + APPROACH_MARGIN_M over the road, full height within APPROACH_FLAT_M of the end,
     then falling at roads.DECK_GRADE), within [APPROACH_MIN_LIFT, APPROACH_MAX_LIFT]. Roads crossing within
     APPROACH_MIN_CROSS_M of either end meet it at grade and do not count; railways (rail_lines) always count (a track
     never meets a road deck at grade: the deck ended 3 m past one at Vitebsk, GitHub #324). z_at(xy (n, 2)) -> ground
-    m. Pure given z_at."""
+    m; under_z(xy (n, 2)) -> m, when given: the heights of the roads under at their crossings instead of z_at there
+    (_Planner._under_trusted). half: the deck's half width, the road under's ground then read beside the deck
+    (ground_under_deck) where under_z is not given; None: on the crossing itself. Pure given z_at and under_z."""
+    zu_at = z_at if under_z is None else under_z
     line = np.asarray(line, np.float64)[:, :2]
     if len(line) < 2:
         return []
@@ -5652,13 +5749,18 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     # whole deck ~4.5 m low over BR-343 at Teresina, GitHub #306)
     if s[-1] < 2 * APPROACH_MIN_CROSS_M and not chain:
         return []
-    cr = roadsmod._crossings([line], ground_lines)
+    ground_lines = list(ground_lines)
+    by = roadsmod._crossings_by([line], ground_lines) if half is not None and under_z is None else None
+    cr = [c for g in by for c in g] if by is not None else roadsmod._crossings([line], ground_lines)
     nr = len(cr)
     if rail_lines:
         cr = cr + roadsmod._crossings([line], list(rail_lines))
     if not cr and not chain:
         return []
-    zu = z_at(np.array([c[2] for c in cr], np.float64).reshape(-1, 2)) if cr else np.zeros(0)
+    zu = zu_at(np.array([c[2] for c in cr], np.float64).reshape(-1, 2)) if cr else np.zeros(0)
+    if by is not None and nr:
+        zu = np.asarray(zu, np.float64).copy()
+        zu[:nr] = ground_under_deck(line, half, [(c[2], ground_lines[g]) for g, cs in enumerate(by) for c in cs], z_at)
     arcs = np.array([c[1] for c in cr], np.float64)
 
     def joined_at(end, own=None):
@@ -5693,20 +5795,30 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     # (a road meeting a part's free end is a junction at grade there, as for the line itself: the trunk's own next
     # carriageway at the far abutment of its chain counted as a road under it and raised a residential bridge joined
     # to the chain 9.7 m, the trunk deck climbing 10 m in 20 m to it, US-24 near Buena Vista CO, 2026-10-27)
-    more = []
+    more, more_z = [], []
     for part in (chain or ()):
         part = np.asarray(part, np.float64)[:, :2]
         sp = float(np.hypot(*np.diff(part, axis=0).T).sum())
         pj = (joined_at(part[0], part), joined_at(part[-1], part))
-        for c in roadsmod._crossings([part], list(ground_lines)):
-            a = float(c[1])
-            if (a >= APPROACH_MIN_CROSS_M or pj[0]) and (a <= sp - APPROACH_MIN_CROSS_M or pj[1]):
-                more.append(np.asarray(c[2], np.float64))
-        for c in roadsmod._crossings([part], list(rail_lines)) if rail_lines else ():
-            more.append(np.asarray(c[2], np.float64))
+        if by is not None:
+            got = [(c, ground_lines[g]) for g, cs in enumerate(roadsmod._crossings_by([part], ground_lines)) for c in cs]
+        else:
+            got = [(c, None) for c in roadsmod._crossings([part], ground_lines)]
+        got = [(c, gl) for c, gl in got if (float(c[1]) >= APPROACH_MIN_CROSS_M or pj[0])
+               and (float(c[1]) <= sp - APPROACH_MIN_CROSS_M or pj[1])]
+        if by is not None and got:
+            zg = ground_under_deck(part, half, [(c[2], gl) for c, gl in got], z_at)
+        else:
+            zg = zu_at(np.array([c[2] for c, _gl in got], np.float64).reshape(-1, 2)) if got else np.zeros(0)
+        more += [np.asarray(c[2], np.float64) for c, _gl in got]
+        more_z += [float(v) for v in np.asarray(zg, np.float64).reshape(-1)]
+        rl = roadsmod._crossings([part], list(rail_lines)) if rail_lines else ()
+        if rl:
+            more += [np.asarray(c[2], np.float64) for c in rl]
+            more_z += [float(v) for v in np.asarray(zu_at(np.array([c[2] for c in rl], np.float64)), np.float64).reshape(-1)]
     if more:
         mp = np.array(more, np.float64)
-        zu = np.r_[zu, z_at(mp)]
+        zu = np.r_[zu, np.asarray(more_z, np.float64)]
         pts = np.r_[pts, mp]
         rail = np.r_[rail, np.zeros(len(mp), bool)]
     if not len(zu):

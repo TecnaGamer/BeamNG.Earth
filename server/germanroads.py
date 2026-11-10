@@ -418,8 +418,30 @@ def gave_lanes(feats, i, sp):
     two surveyed lanes alone)."""
     if not ON or sp is None or not sp.lanes or sp.cls not in LANE_CLASSES or sp.link:
         return False
+    return _map_lanes(feats, i, sp.cls) is None
+
+
+def _map_lanes(feats, i, cls):
+    """Road i's lane count from the map alone, as roads gives it without the survey: a correction (rampoverrides),
+    OpenStreetMap's own count, PR #471's validated ones, the one-way roads joined to it (lane_flow), else two lanes per
+    motorway / trunk way, one on a one-way ramp; None otherwise. (roads' own lane count is in the spec kernels now.)"""
+    import roadlanes
     import roads
-    return roads._lane_count(feats, i, sp.cls) is None
+    over = roads._lane_overrides(feats).get(i)
+    if over is not None:
+        return over
+    lanes = roads._osm(feats, "lanes", i, *roads.OSM_LANES)
+    if lanes is not None:
+        return int(lanes)
+    lanes = roadlanes.generated_counts(feats)[i]
+    if lanes is None and (cls not in roadlanes.HIGHWAYS or roads._ramp_junction(feats)[i]):
+        lanes = roads.lane_flow(feats)[i]
+    if lanes is None and not roads.is_ring(feats, i):
+        if roadlanes.is_link(feats, i):
+            return 1 if roads._rule_value(feats.rules.get("oneway"), i) is not None else 2
+        if cls in roadlanes.HIGHWAYS:
+            return 2
+    return lanes
 
 
 def surveyed_width(feats, i, sp):

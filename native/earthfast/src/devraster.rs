@@ -1,11 +1,9 @@
 //! Polygon parts filled into a bit raster (server development.py: the street-development context of PR #670).
 //!
-//! fill_bits(h, w, xy, ring_off, part_off, part_bits) -> (h, w) u8: every part (its first ring the outline, the
-//! others its holes) filled even-odd, sampled at pixel centres (col + 0.5, row + 0.5 in xy's pixel units), its
-//! bits ORed in where it is filled. A hole only cuts its own part (another building inside a courtyard stays).
+//! fill(h, w, xy, ring_off, part_off, part_bits) -> (h, w) u8 (devctx.rs's DevContext): every part (its first ring
+//! the outline, the others its holes) filled even-odd, sampled at pixel centres (col + 0.5, row + 0.5 in xy's pixel
+//! units), its bits ORed in where it is filled. A hole only cuts its own part (another building inside a courtyard stays).
 //! One call per road tile instead of a Pillow image per part and channel in Python.
-use numpy::{PyArray2, PyReadonlyArray1, PyReadonlyArray2};
-use pyo3::prelude::*;
 
 pub fn fill(h: usize, w: usize, xy: &[[f64; 2]], ring_off: &[i64], part_off: &[i64], part_bits: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; h * w];
@@ -74,24 +72,6 @@ pub fn fill(h: usize, w: usize, xy: &[[f64; 2]], ring_off: &[i64], part_off: &[i
         }
     }
     out
-}
-
-#[pyfunction]
-pub fn fill_bits<'py>(py: Python<'py>, h: usize, w: usize, xy: PyReadonlyArray2<'py, f64>,
-                      ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>,
-                      part_bits: PyReadonlyArray1<'py, u8>) -> PyResult<Bound<'py, PyArray2<u8>>> {
-    let a = xy.as_array();
-    if a.ncols() != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err("xy must be (k, 2)"));
-    }
-    let pts: Vec<[f64; 2]> = a.rows().into_iter().map(|r| [r[0], r[1]]).collect();
-    let ro = ring_off.as_slice()?.to_vec();
-    let po = part_off.as_slice()?.to_vec();
-    let pb = part_bits.as_slice()?.to_vec();
-    let v = py.detach(|| fill(h, w, &pts, &ro, &po, &pb));
-    let arr = numpy::ndarray::Array2::from_shape_vec((h, w), v)
-        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
-    Ok(PyArray2::from_owned_array(py, arr))
 }
 
 #[cfg(test)]

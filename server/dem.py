@@ -17,8 +17,8 @@ keeps the raw tiles and AWS (tests, comparisons).
 
 Requests go through a netfetch.Fetcher (rate limit, retries, circuit breaker per host). When
 Mapterhorn cannot be asked (circuit open, rate limited, failing) the same tile comes from AWS
-(failover); if AWS fails too, DemUnavailable. 404s are remembered as <y>.404 markers that expire
-after the host's miss_ttl (Mapterhorn 90 days: it adds lidar areas; AWS never).
+(failover); if AWS fails too, DemUnavailable. 404s are remembered in the tile column's miss index (missindex.py)
+and expire after the host's miss_ttl (Mapterhorn 90 days: it adds lidar areas; AWS never).
 """
 from runtimeprofiler import step as profile_step
 import contextlib
@@ -26,6 +26,7 @@ import io
 import json
 import logging
 import math
+import missindex
 import os
 import threading
 import time
@@ -511,8 +512,7 @@ class Dem:
         try:
             data = self.fetcher.get(url, kind=kind).body
         except netfetch.NotFound:
-            open(miss, "wb").close()        # (re)written: its mtime starts the marker's TTL
-            self.disk.wrote(miss, 0)
+            missindex.record(miss, self.disk)   # (again: its time starts the miss TTL)
             self._count(src["name"] + ":404")
             return None
         except netfetch.FetchError:
@@ -523,14 +523,12 @@ class Dem:
             f.write(data)
         staging.replace_cached(tmp, path)
         self.disk.wrote(path, len(data))
-        if os.path.exists(miss):            # an expired marker: the host has data there now
-            os.remove(miss)
-            self.disk.forget(miss)
+        missindex.clear(miss, self.disk)    # an expired miss: the host has data there now
         self._count(src["name"] + ":net")
         return data
 
     def _ahead(self, keys):
-        """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a .404 marker); one request
+        """Start the raw Mapterhorn downloads of keys at once (on disk afterwards, or a remembered 404); one request
         per tile however many ask. Returns their futures (result: the bytes or None; errors are left for the caller's
         own _download to meet)."""
         futs = []
@@ -592,7 +590,7 @@ class Dem:
         routeahead.py's progress count: no tile fetch (the file list is read once per session)."""
         if os.path.exists(self._path(MAPTERHORN, z, x, y)):
             return True
-        if os.path.exists(os.path.join(self.cache_dir, MAPTERHORN["name"], str(z), str(x), f"{y}.404")):
+        if missindex.known(os.path.join(self.cache_dir, MAPTERHORN["name"], str(z), str(x), f"{y}.404")):
             return True
         return z > GLOBAL_ZOOM and not self._listed(z, x, y)
 

@@ -151,6 +151,16 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
+- Measured buildings in France: each building's height to the eaves and roof rise, storeys, wall and roof materials
+  (stone, brick, render; tiles, slate, zinc) and use (houses, shops, sheds, churches) come from IGN BD TOPO and are
+  joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
+  buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
+  beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
+- Measured massing in New York City: the setbacks, wedding-cake towers and crowns of the city's 3-D Building Model
+  (NYC Open Data, 2014) as building parts on the map's outlines, downloaded per map cell from BeamNG.Earth's data site
+  (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
+- Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
+  air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
@@ -355,6 +365,10 @@ downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your
 your system's folder window, or type or paste a folder and press **Use**. Or start the app once with `--cache-dir PATH`
 (e.g. a shortcut to `BeamNG.Earth-<version>.exe --cache-dir "D:\BeamNG.Earth cache"`). It is used from the next start
 and remembered; `default` goes back. Move the old cache folder there first to keep what is already downloaded.
+
+**Deleting the whole map cache:** start the app once with `--clear-cache`. Its folders are moved aside at once and
+deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
+keeps the area around you.
 
 **BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
 where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;

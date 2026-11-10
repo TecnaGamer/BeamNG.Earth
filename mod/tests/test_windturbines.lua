@@ -4,8 +4,8 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 local wt = require('beamngEarth/windturbines')
-local collided, warnings = 0, 0
-wt.onCollide = function() collided = collided + 1 end
+local collided, collideAt, warnings = 0, nil, 0
+wt.onCollide = function(x, y) collided = collided + 1; collideAt = { x, y } end
 log = function(level) if level == 'W' then warnings = warnings + 1 end end
 
 local function row(id, x, y, z, yaw, scale)
@@ -50,6 +50,7 @@ T.check(tower.fields.collisionType == 'Collision Mesh' and rotor.fields.collisio
   'stock collision meshes, not visible triangle collision')
 T.check(not tower.hidden and tower.fields.isRenderEnabled ~= 'false', 'tower is rendered despite stock prefab legacy field')
 T.check(collided == 1, 'assembly requests one batched collision rebuild')
+T.check(collideAt[1] == 10 and collideAt[2] == 20, 'the rebuild asked with the turbine\'s base (roads.lua gates far spots)')
 
 local towerId, rotorId = tower.id, rotor.id
 wt.onRows('old:0_0', { r })

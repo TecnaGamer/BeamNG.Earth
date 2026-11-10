@@ -192,3 +192,37 @@ class FrenchBoundaryTest(unittest.TestCase):
         self.assertGreaterEqual(len(rows), 8)
         self.assertEqual({row[0] for row in rows}, {fences.G_HEDGE})
         self.assertTrue(all(1.6 <= row[6] <= 2. for row in rows))
+
+
+class CityFrontageTest(unittest.TestCase):
+    """Outside Europe's details a city's sidewalk runs to the buildings' faces (city_frontage), houses keep lawns."""
+
+    WALK = {"pts": np.array([[-8., 4.25, 0.], [33., 4.25, 0.]]), "side": 1, "w": 2.5}     # (curb 3.0, back 5.5)
+
+    def test_the_sidewalk_itself_is_widened_to_the_walls(self):
+        walk = dict(self.WALK, pts=np.array([[x, 4.25, 0.] for x in np.arange(-8., 33.5, 1.5)]))
+        shops = [rectangle(-8., 8., 10., 18.), rectangle(10., 9., 33., 18.)]      # (fronts 2.5 and 3.5 m back)
+        walks = [walk]
+        self.assertEqual(streetfront.widen_city_walks(walks, shops, shops, [], [], STREETS), 1)
+        curb, back = streetfront._walk_outline(walks[0])
+        self.assertAlmostEqual(float(np.median(curb[:, 1])), 3.0, places=2, msg="the curb stays")
+        self.assertGreaterEqual(float(np.median(back[:, 1])), 8.5, "the slab's back at (or in) the walls")
+        self.assertGreater(walks[0]["w"], 5.0)
+        lawn = [dict(self.WALK, pts=walk["pts"].copy(), w=2.5)]
+        green = rectangle(-8., 6.5, 33., 7.5)
+        streetfront.widen_city_walks(lawn, shops, shops, [green], [], STREETS)
+        self.assertLess(lawn[0]["w"], 2.5 + 1.01, "a mapped lawn in front: no further than it")
+        self.assertEqual(streetfront.widen_city_walks([dict(self.WALK)], [], [], [], [], STREETS), 0)
+
+    def test_city_buildings_and_houses(self):
+        from types import SimpleNamespace as NS
+        ring = rectangle(0., 0., 10., 10.)[:-1]
+        def spec(cls, floors, shop=False):
+            return (NS(ring=ring, cls=cls, floors=floors, shop=shop, deck=None, min_h=0., outline=None), None, None)
+        with patch("buildings.drawn_ring", lambda s: s.ring):
+            pick = lambda items, dense: len(streetfront.city_targets(items, np.zeros(2), dense))
+            self.assertEqual(pick([spec("retail", 1), spec("", 4), spec("", 1, shop=True)], False), 3)
+            self.assertEqual(pick([spec("house", 2), spec("", 2), spec("detached", 1)], False), 0)
+            self.assertEqual(pick([spec("", 3)], True), 1)
+            self.assertEqual(pick([spec("terrace", 2), spec("", 2)], True), 0, "row houses of two floors: their yards")
+            self.assertEqual(pick([spec("shed", 1), spec("greenhouse", 1)], True), 0)

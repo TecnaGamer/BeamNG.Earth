@@ -16,7 +16,7 @@ while a later source remains, counts as missing, so the chain falls back per sou
 Samples no source covers (404 everywhere) get FALLBACK_RGB; beyond +-85.05 deg (all ice) POLAR_RGB.
 
 Caching: raw tiles on disk under <cache>/<source>/<z>/<x>/<y>.jpg (whatever format the server
-sent), 404s remembered as <y>.404 markers (as dem.py does; they expire after the host's miss_ttl,
+sent), 404s remembered in a column's miss index (missindex.py, as dem.py does; they expire after the host's miss_ttl,
 90 days), decoded tiles in an in-memory LRU. Downloads run on a small pool (FETCH_WORKERS <= 6)
 through a netfetch.Fetcher: the host's rate limit, concurrency cap, retries and circuit breaker
 (keyed by host, so eox2023 and eox2016 share one), one persistent HTTPS connection per thread and
@@ -43,6 +43,7 @@ import hashlib
 import io
 import logging
 import math
+import missindex
 import os
 import struct
 import threading
@@ -612,9 +613,7 @@ class Imagery:
         try:
             r = self.fetcher.get(url, kind=kind)
         except netfetch.NotFound:               # outside the source's coverage
-            os.makedirs(os.path.dirname(miss), exist_ok=True)
-            open(miss, "wb").close()            # (re)written: its mtime starts the marker's TTL
-            self.disk.wrote(miss, 0)
+            missindex.record(miss, self.disk)   # (again: its time starts the miss TTL)
             self._count(src.name + ":404")
             return None
         except netfetch.FetchError as e:
@@ -633,9 +632,7 @@ class Imagery:
             f.write(data)
         staging.replace_cached(tmp, path)
         self.disk.wrote(path, len(data))
-        if os.path.exists(miss):                # an expired marker: the source has data there now
-            os.remove(miss)
-            self.disk.forget(miss)
+        missindex.clear(miss, self.disk)        # an expired miss: the source has data there now
         self._count(src.name + ":net")
         return data
 
@@ -659,11 +656,8 @@ class Imagery:
             try:
                 r = self.fetcher.get(url, kind=kind)
             except netfetch.NotFound:           # no pack there (open sea, outside it): every tile of it a miss
-                for i in range((1 << src.pack) ** 2):
-                    _, mm = self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))
-                    os.makedirs(os.path.dirname(mm), exist_ok=True)
-                    open(mm, "wb").close()
-                    self.disk.wrote(mm, 0)
+                missindex.record([self._paths(src, *tilepackmod.tile_at(pz, px, py, src.pack, i))[1]
+                                  for i in range((1 << src.pack) ** 2)], self.disk)
                 self._count(src.name + ":404")
                 return None
             except netfetch.FetchError as e:
@@ -680,15 +674,15 @@ class Imagery:
                 self.fetch_ms.append(r.elapsed * 1000)
                 del self.fetch_ms[:-2000]
             out = None
+            misses = []
             for i in range((1 << k) ** 2):
                 tz, tx, ty = tilepackmod.tile_at(pz, px, py, k, i)
                 tp, mm = self._paths(src, tz, tx, ty)
                 b = tiles.get(i)
-                os.makedirs(os.path.dirname(tp), exist_ok=True)
                 if b is None:
-                    open(mm, "wb").close()
-                    self.disk.wrote(mm, 0)
+                    misses.append(mm)
                     continue
+                os.makedirs(os.path.dirname(tp), exist_ok=True)
                 tmp = f"{tp}.{threading.get_ident()}.tmp"
                 with open(tmp, "wb") as f:
                     f.write(b)
@@ -696,6 +690,8 @@ class Imagery:
                 self.disk.wrote(tp, len(b))
                 if (tx, ty) == (x, y):
                     out = b
+            if misses:
+                missindex.record(misses, self.disk)
             self._count(src.name + ":net")
             return out
 
@@ -722,9 +718,7 @@ class Imagery:
             try:
                 r = self.fetcher.get(url, kind=kind)
             except netfetch.NotFound:
-                os.makedirs(os.path.dirname(miss), exist_ok=True)
-                open(miss, "wb").close()
-                self.disk.wrote(miss, 0)
+                missindex.record(miss, self.disk)
                 self._count(src.name + ":404")
                 return None
             except netfetch.FetchError as e:
@@ -766,9 +760,7 @@ class Imagery:
             self._count(src.name + (":deferred" if deferred else ":error"))
             raise ImageryError(f"imagery render failed: {src.name} {z}/{x}/{y}: {e}", deferred) from None
         if rgb is None:
-            os.makedirs(os.path.dirname(miss), exist_ok=True)
-            open(miss, "wb").close()
-            self.disk.wrote(miss, 0)
+            missindex.record(miss, self.disk)
             self._count(src.name + ":404")
             return None
         rgb = np.where(ok[..., None], rgb, 0).astype(np.uint8)          # (the export's black: outside the photos)
@@ -778,9 +770,10 @@ class Imagery:
 
     def _split_export(self, src, z, x, y, a):
         """An export parent's image a ((TILE << export)² RGB) written as its children's tiles; tile (x, y)'s bytes, or
-        None when it is outside the data (a miss marker written)."""
+        None when it is outside the data (a miss remembered: missindex)."""
         k = src.export
         out = None
+        misses = []
         for j in range(1 << k):
             for i in range(1 << k):
                 cx, cy = ((x >> k) << k) + i, ((y >> k) << k) + j
@@ -789,10 +782,12 @@ class Imagery:
                 if (child.max(axis=2) <= NODATA_MAX).mean() > NODATA_SHARE or (
                         src.nodata == "white" and (child.min(axis=2) >= NODATA_WHITE_MIN).mean() > NODATA_WHITE_SHARE):
                     # outside the flights (the image is black there): missing, the next source fills it
-                    os.makedirs(os.path.dirname(cmiss), exist_ok=True)
-                    open(cmiss, "wb").close()
-                    self.disk.wrote(cmiss, 0)
+                    misses.append(cmiss)
                     continue
+                if misses and i == j == (1 << k) - 1:
+                    # (the last child goes in last: _warm_done reads it as the whole parent done)
+                    missindex.record(misses, self.disk)
+                    misses = []
                 buf = io.BytesIO()
                 Image.fromarray(child).save(buf, "JPEG", quality=92)
                 b = buf.getvalue()
@@ -804,6 +799,8 @@ class Imagery:
                 self.disk.wrote(cpath, len(b))
                 if (cx, cy) == (x, y):
                     out = b
+        if misses:
+            missindex.record(misses, self.disk)
         return out
 
     def raw(self, src, z, x, y, kind="demand"):
@@ -848,7 +845,7 @@ class Imagery:
                     got = self.tiles([probe], kind="predownload").get(probe)
                     if not self._covered(got):
                         continue
-                elif os.path.exists(self._paths(*probe)[1]):
+                elif missindex.known(self._paths(*probe)[1]):
                     continue
             yield src, keys
 
@@ -857,9 +854,9 @@ class Imagery:
         return self._on_disk(key)
 
     def on_disk_or_missing(self, key):
-        """A source tile is on disk or known to be missing there (its .404 marker)."""
+        """A source tile is on disk or known to be missing there (a remembered 404: missindex)."""
         jpg, miss = self._paths(*key)
-        return os.path.exists(jpg) or os.path.exists(miss)
+        return os.path.exists(jpg) or missindex.known(miss)
 
     def _on_disk(self, key):
         src, z, x, y = key
@@ -1313,7 +1310,7 @@ class Imagery:
             if s.lazy and s.export == src.export and os.path.exists(self._paths(s, z, x | last, y | last)[0]):
                 return True
         path, miss = self._paths(src, z, x | last, y | last)
-        if os.path.exists(path) or os.path.exists(miss):
+        if os.path.exists(path) or missindex.known(miss):
             return True
         with self._lock:
             return self._probe_status(key) == "outside"
@@ -1344,7 +1341,7 @@ class Imagery:
                     path, miss = self._paths(src, z, tx, ty)
                     if os.path.exists(path):
                         break
-                    if os.path.exists(miss):
+                    if missindex.known(miss):
                         continue
                     with self._lock:
                         if self._probe_status((src, z, tx, ty)) == "outside":

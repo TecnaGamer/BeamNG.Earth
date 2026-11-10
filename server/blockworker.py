@@ -669,10 +669,12 @@ def _stack_watch(what):
 
 def _radar_key():
     """PR #505's French speed cameras in the road tiles' revisit keys: their catalogue's digest while they are on
-    (BNE_FR_ROADS), nothing otherwise (the keys of every tile built without them unchanged)."""
+    (BNE_FR_ROADS), and the drop side's estimated rails' version while they are on (BNE_DROP_RAILS); nothing otherwise
+    (the keys of every tile built without them unchanged)."""
     import radars
     sig = radars.signature()
-    return () if sig is None else (sig,)
+    import droprails
+    return (() if sig is None else (sig,)) + droprails.key()
 
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -927,6 +929,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     side = roadsmod.tile_side(tx, ty)
     if buildings:
         import buildings as buildingsmod
+        import nyctanks
+        # (New York's measured rooftop tanks, asked for on a thread while the buildings are put together)
+        _tanks = nyctanks.Fetch(frame, box[0], box[1], box[2], box[3], cache_dir) if props is not None else None
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
@@ -940,14 +945,21 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
                                                       decks=_tile_decks(bridges, cells, tx, ty) + _tile_decks(tunnels, cells, tx, ty),
                                                       skip=skip, cache_dir=cache_dir)
-        _bridge_fps = buildingsmod.bridge_footprints(frame, tx, ty, cache_dir)
+        _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
+            frame, tx, ty, cache_dir,
+            cell_fn=lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
+        _custom = buildingsmod.place_bridge_models(_custom, _bridge_fps)
         if any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
             try:            # (the tile that bakes the model: where the mapped bridge meets the roads)
-                _bridge_ends = buildingsmod.bridge_road_ends(_bridge_fps, bridges, cells)
+                _bridge_ends = buildingsmod.bridge_road_ends(
+                    _bridge_fps, bridges, cells, frame,
+                    lambda x, y: elev(*frame.enu_to_geodetic(x, y, np.zeros(len(x)))[:2]))
             except Exception as ex:
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
+        if props is not None:       # (New York's rooftop water tanks: the stock model, Forest rows; measured: nyctanks)
+            props.extend(nyctanks.tile_rows(_tanks, frame, items, box[0], box[1]))
         _cover = buildingsmod.coverage(items, side)
         town = _cover < buildingsmod.POLES_COVERAGE
         # (the tile's buildings and their footprint share: the mod's scene complexity for anonymous performance
@@ -1011,7 +1023,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     x0, y0, _, _ = box
     if items is not None:               # front doors and shopfronts, driveways into the road mesh
         frontage_walks = walks if walks_raw is None else walks_raw
-        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else 2.
+        city = frontage_country is None and streetfront.CITY_ON      # (city_frontage: a city's sidewalks to the walls)
+        margin = streetfront.BUILT_FRONT_M + 2. if frontage_country else streetfront.CITY_FRONT_M + 2. if city else 2.
         rings = buildingsmod.near_rings(frame, tx, ty, _s.md, margin=margin, skip=skip)
         props[:] = furniture.off_buildings(props, rings)     # (no street tree in a house)
         props.extend(buildingsmod.doors(items, lines, x0, y0, drives, infer_fences=frontage_country != "FR"))
@@ -1026,6 +1039,14 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                                frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
                                            redrape=walks_raw is None, props=props, grass=front_grass)
         chunks += paving
+        if city:        # (the sidewalks widened to the city's buildings: their slabs, raised, with collision)
+            try:
+                streetfront.city_frontage(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
+                                          _cover >= streetfront.CITY_DENSE_COVER,
+                                          z_at=lambda x, y: roadmeshmod.drawn_ground(frame, drawn, np.c_[x, y], q),
+                                          redrape=walks_raw is None)
+            except Exception as ex:         # (the sidewalks as they are)
+                log.warning("city frontage: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         if frontage_country and front_grass is not None:
             key = tx.key if hasattr(tx, "key") else f"{frame.lat0:.8f}:{frame.lon0:.8f}:{tx}:{ty}"
             fuel_pads.extend(streetfront.pad_items(frame, box, key, paving, front_grass))
@@ -1088,6 +1109,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts, barrier_chunks)
+    guardrail_rows = guardrail_rows + _drop_rows(frame, near_roads, box, elev, guardrail_rows, tx, ty, guardrail_decks)
     wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
@@ -1143,7 +1165,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
-                                 return_decks=True)
+                                 return_decks=True,
+                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                        if _bridge_fps else None))
     mark("railways")
     bld = None
     garage_sound = ()
@@ -1878,6 +1902,20 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return []
 
 
+def _drop_rows(frame, near_roads, box, elev, mapped, tx, ty, decks=()):
+    """The estimated rails on a drop's side of a rural road (droprails.tile_rows, BNE_DROP_RAILS), [] if off or they
+    fail (logged)."""
+    import droprails
+    if not droprails.enabled():
+        return []
+    try:
+        import euguardrails
+        return euguardrails.localize(frame, droprails.tile_rows(frame, near_roads, box, elev, mapped, decks))
+    except Exception as ex:
+        log.warning("drop rails: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
 def _kantstolpe_rows(frame, near_roads, box, elev, country, mapped, tx, ty):
     """Sweden's roadside posts' Forest rows of a road tile (kantstolpar.tile_rows), [] if they fail (logged)."""
     import kantstolpar
@@ -2164,7 +2202,10 @@ def _far_cells_ready(tag, keys, layers):
     behind the slowest cell of a first visit (2026-11-07). Past FAR_CELLS_WAIT_S it is built anyway (its cell()
     calls fetch what is still missing, or fail as before)."""
     need = [(k, layer) for k in keys for layer in layers if not _s.md.has(k, layer)]
-    if not need:
+    # (France's measured buildings, bdtopo: their downloads started with the cells', the tile asked again until they
+    # are here like the cells themselves; a failed one is not waited for: built without, a revisit fault)
+    fr = "buildings" in layers and getattr(_s.md, "bdtopo", None) is not None and bool(_s.md.bdtopo.prefetch(keys))
+    if not need and not fr:
         _far_cells_miss.pop(tag, None)
         return True
     first = _far_cells_miss.setdefault(tag, time.monotonic())
@@ -2173,7 +2214,8 @@ def _far_cells_ready(tag, keys, layers):
         return True
     if len(_far_cells_miss) > 4096:
         _far_cells_miss.clear()
-    _s.md.warm(need, kind="demand")
+    if need:
+        _s.md.warm(need, kind="demand")
     return False
 
 

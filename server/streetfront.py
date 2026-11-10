@@ -537,6 +537,121 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
     return result
 
 
+# Outside Europe's street details (country_at_tile None): a city's sidewalks run to the buildings' faces. Downtown
+# Baltimore (39.290 -76.615, the aerial 2026-11-10) is concrete and brick from the curb to the walls; the drawn sidewalk
+# (2.5 m, or roadwidth's share of a walled street) left terrain grass between it and the building (the user,
+# 2026-11-10: "sidewalks should extend up to most city buildings"). A first try painted the gap at the ground's level
+# ("you just paint a sidewalk texture over the gap instead of actually filling it in"): the sidewalk itself is widened
+# instead, its slab (raised, its collision) carried out to the building line, the curb where it was (as widen_walks
+# does in Europe). A run is widened where city buildings (city_targets) stand behind CITY_HIT of it within
+# CITY_FRONT_M, to CITY_PCT of their distances: the slab's back meets most of the block's walls and runs on inside
+# the nearer ones (the user: "its fine if the sidewalks clip into the building a bit. no one will notice from the
+# outside"); never across a street, mapped green or a barrier; CITY_WALK_MAX m wide at most. Houses keep their lawns.
+CITY_ON = os.environ.get("BNE_CITY_FRONTAGE", "on") != "off"
+CITY_FRONT_M = 6.0
+CITY_FLOORS = 3
+CITY_DENSE_COVER = 0.25
+CITY_HIT = 0.6
+CITY_PCT = 70
+CITY_MIN_EXTRA_M = 0.5
+CITY_WALK_MAX = 8.0
+CITY_CLASSES = COMMERCIAL | {"commercial", "retail", "office", "hotel", "civic", "public", "government", "bank",
+                             "apartments", "college", "university", "hospital", "train_station", "transportation",
+                             "church", "cathedral", "mixed_use", "parking", "warehouse"}
+
+
+def city_targets(items, origin, dense):
+    """The drawn rings (tile frame + origin) of the city buildings of a road tile's items (city_frontage)."""
+    import buildings
+    from francehouses import HOUSE_CLASSES, UNTYPED
+
+    out = []
+    for spec, *_ in items:
+        if getattr(spec, "deck", None) or (spec.min_h or 0.) > .5 or spec.cls in buildings.SHED_CLASSES \
+                or spec.cls in ("tank", "greenhouse", "pyramid", "bridge_part"):
+            continue
+        cls = spec.cls or ""
+        floors = spec.floors or 0
+        house = cls in HOUSE_CLASSES or (cls in UNTYPED and floors <= 2 and not spec.shop)
+        if spec.shop or cls in CITY_CLASSES or floors >= CITY_FLOORS or (dense and not house):
+            out.append(buildings.drawn_ring(spec) + origin)
+    return out
+
+
+def widen_city_walks(walks, targets, rings, excluded, barriers, carriageways):
+    """Widen the sidewalk runs out to the city buildings behind them (in place; see CITY_ON). The number widened."""
+    import roads
+    import sidewalks
+
+    if not targets:
+        return 0
+    frontage = _walls(targets)
+    block = _walls(list(excluded), barriers)
+    road_blocks = roads._blocker_segments([(line[:, :2], spec.width / 2) for _, spec, line, _ in carriageways])
+    n = 0
+    for walk in walks:
+        if ("pts" not in walk or walk.get("detached") or walk.get("median") or walk.get("mapped")
+                or walk.get("bay_shifted") or walk["w"] >= CITY_WALK_MAX):
+            continue
+        line = roads.densify(np.asarray(walk["pts"], np.float64), 1.5)
+        if np.linalg.norm(np.diff(line[:, :2], axis=0), axis=1).sum() < 8.:
+            continue
+        width = walk["w"]
+        curb, out = sidewalks.run_geometry(line, walk["side"], width)
+        back = curb[:, :2] + out * width
+        norm = out / np.maximum(1e-9, np.linalg.norm(out, axis=1))[:, None]
+        reach = frontage.rays(back, norm, CITY_FRONT_M)
+        hit = np.isfinite(reach) & (reach >= .18)
+        if hit.mean() < CITY_HIT:
+            continue
+        extra = float(np.floor(np.percentile(reach[hit], CITY_PCT) * 4.) / 4.)
+        stop = block.rays(back, norm, CITY_FRONT_M)          # (green, barriers: never past them)
+        if np.isfinite(stop).any():
+            extra = min(extra, float(np.nanmin(stop)) - .1)
+        extra = min(extra, CITY_WALK_MAX - width)
+        if extra < CITY_MIN_EXTRA_M:
+            continue
+        end = back + extra * out
+        quads = np.stack((back[:-1], back[1:], end[1:], end[:-1]), axis=1)
+        if _road_overlap(quads, road_blocks).any():
+            continue
+        line[:, :2] += out * (extra / 2)
+        walk["pts"], walk["w"] = line, width + extra
+        walk["city_widened"] = round(extra, 2)
+        n += 1
+    return n
+
+
+def city_frontage(frame, tx, ty, md, walks, rings, items, carriageways, dense, z_at=None, redrape=False):
+    """Widen a city tile's sidewalks to its buildings outside Europe's details (widen_city_walks); the number."""
+    import logging
+    import roads
+    import sidewalks
+
+    if not CITY_ON or not items or not walks:
+        return 0
+    box = roads.tile_bbox(tx, ty)
+    targets = city_targets(items, np.array(box[:2]), dense)
+    if not targets:
+        return 0
+    try:
+        features = [layer for key in roads.cells_of_tile(frame, tx, ty, CITY_FRONT_M + 2.)
+                    for layer in md.cell(key, layers=("land_use", "infrastructure", "water"), kind="demand").layers.values()]
+    except (OSError, RuntimeError, ValueError) as exc:
+        logging.getLogger("earthd.roads").debug("city frontage data unavailable: %s", exc)
+        return 0
+    margin = CITY_FRONT_M + 2.
+    near = (box[0] - margin, box[1] - margin, box[2] + margin, box[3] + margin)
+    areas = _areas(frame, features, near)
+    barriers = barrier_lines(frame, features, near)
+    n = widen_city_walks(walks, targets, rings, areas[1], barriers, carriageways)
+    if n:
+        walks[:] = sidewalks.clear_overlaps(walks)
+        if redrape:
+            roads.drape_walks(frame, None, walks, z_at)
+    return n
+
+
 def country_at_tile(frame, box):
     import europewalks
     if not europewalks.enabled():

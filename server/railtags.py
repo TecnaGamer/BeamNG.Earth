@@ -31,7 +31,7 @@ MANIFEST_TTL_S = 24 * 3600      # the build in use is checked again after this l
 RETRY_S = 3600                  # unreachable: asked again after this long
 SHARD_RETRY_S = 600             # a shard that could not be had: asked again after this long (not by every tile meanwhile)
 FETCH_WAIT_S = 90.0             # s a caller waits for another thread's manifest fetch (then goes on without the data)
-COLUMNS = ("railway", "gauge", "electrified", "service", "usage")
+COLUMNS = ("railway", "gauge", "electrified", "service", "usage", "highway")    # (highway: a rail trail, railways.drawn)
 
 
 _WAY_ID = re.compile(r"^w(\d+)")

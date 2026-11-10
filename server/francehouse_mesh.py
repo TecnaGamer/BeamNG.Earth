@@ -14,6 +14,8 @@ def model_box(ring):
 
 
 _UV4 = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+LIT_SHARE = .3              # of the windows lit at night
+LIT_GLASS_CELLS = 8         # the lit glass map's cells (tools/build_french_houses.py GLASS_LIT)
 
 
 def face(m, pts, material, outward, uv=None):
@@ -33,13 +35,14 @@ def face(m, pts, material, outward, uv=None):
             m.tri(p[0], p[j], p[j + 1], uv[0], uv[j], uv[j + 1], material)
 
 
-def panel(m, a, d, out, s0, s1, z0, z1, material, offset=.025, tile=2.4):
+def panel(m, a, d, out, s0, s1, z0, z1, material, offset=.025, tile=2.4, uv=None):
+    """uv: one point for all its corners (a lit window's cell of the glass map), else tiled along the wall."""
     ax, ay, dx, dy, ox, oy = float(a[0]), float(a[1]), float(d[0]), float(d[1]), float(out[0]), float(out[1])
     px, py = ax + dx * s0 + ox * offset, ay + dy * s0 + oy * offset
     qx, qy = ax + dx * s1 + ox * offset, ay + dy * s1 + oy * offset
     face(m, [(px, py, z0), (qx, qy, z0), (qx, qy, z1), (px, py, z1)],
-         material, (ox, oy, 0.), [(s0 / tile, 0.), (s1 / tile, 0.),
-                                  (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
+         material, (ox, oy, 0.), [uv] * 4 if uv is not None else
+         [(s0 / tile, 0.), (s1 / tile, 0.), (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
 
 
 def box(m, c, u, hx, hy, z0, z1, material):
@@ -79,10 +82,14 @@ def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
 def window(m, a, d, out, s, bottom, width, height, mats, style, seed, lite=False, attic=False):
     import buildings as b
     trim = mats[style["trim"]]
-    dark = mats[b.custom_look("bne_fr_house_glass_lit" if b._hash01(seed, round(s, 4), "lit") < .3 else "bne_fr_house_glass", (.31, .38, .40))]
+    lit = b._hash01(seed, round(s, 4), "lit")
+    dark = mats[b.custom_look("bne_fr_house_glass_lit" if lit < LIT_SHARE else "bne_fr_house_glass", (.31, .38, .40))]
+    # (a lit one: one cell of the lit glass's map, from the same hash: each lit window its own level and hour to go
+    # dark, tools/build_french_houses.py GLASS_LIT; in UVs, one material)
+    cell = ((int(lit / LIT_SHARE * LIT_GLASS_CELLS) + .5) / LIT_GLASS_CELLS, .5) if lit < LIT_SHARE else None
     # Whole frames behind inset panes: no alpha masks or stretched facade sheets.
     panel(m, a, d, out, s - width / 2 - .07, s + width / 2 + .07, bottom - .06, bottom + height + .07, trim, .035)
-    panel(m, a, d, out, s - width / 2, s + width / 2, bottom, bottom + height, dark, .05)
+    panel(m, a, d, out, s - width / 2, s + width / 2, bottom, bottom + height, dark, .05, uv=cell)
     if lite:
         if not style["roller"]:
             for sign in (-1, 1):

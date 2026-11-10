@@ -59,7 +59,7 @@ class RevisitTest(unittest.TestCase):
                 b_feats = cell()            # (another process: its own decoded cell)
                 from unittest import mock
                 with mock.patch.object(roads, "_road_specs", side_effect=AssertionError("made again")), \
-                        mock.patch.object(roads, "_level_ranges", side_effect=AssertionError("made again")):
+                        mock.patch.object(roads, "_level_ranges_many", side_effect=AssertionError("made again")):
                     self.assertEqual(roads.road_specs(b_feats), a)
                     self.assertEqual([roads.level_ranges(b_feats, i) for i in range(2)], ra)
                 self.assertEqual(b_feats.__dict__["_road_specs"][(None, None, False)], a)

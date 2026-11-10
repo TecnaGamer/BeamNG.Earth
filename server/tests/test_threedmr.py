@@ -1946,8 +1946,8 @@ class FeatureVersionTest(unittest.TestCase):
     """FEATURE_VERSION in the roads revisit-cache key: a tile built before 3dmr geo-search existed must not
     come back from the cache without it running."""
 
-    def test_version_is_28(self):
-        self.assertEqual(threedmr.FEATURE_VERSION, 28)
+    def test_version_is_29(self):
+        self.assertEqual(threedmr.FEATURE_VERSION, 29)
 
     def test_revisit_key_changes_with_feature_version(self):
         base = (
@@ -2137,6 +2137,24 @@ class LocalModelsTest(unittest.TestCase):
             self.assertEqual(threedmr.local_models(d), [])
 
 
+class TrimImageTest(unittest.TestCase):
+    """GitHub #1072: the GLB's bufferView padding after a PNG's IEND (1-3 bytes) made the game draw NO TEXTURE."""
+
+    def test_trailing_padding_trimmed(self):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+        png = buf.getvalue()
+        self.assertEqual(threedmr._trim_image(png + b"\x00\x00\x00"), png)
+        self.assertEqual(threedmr._trim_image(png), png)
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "JPEG")
+        jpg = buf.getvalue()
+        self.assertEqual(threedmr._trim_image(jpg + b"\x00\x00"), jpg)
+        self.assertEqual(threedmr._trim_image(b"not an image"), b"not an image")
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -2264,6 +2282,125 @@ class BridgeDeckTest(unittest.TestCase):
         P = got["P"]
         base = self.P[:, 2] - threedmr._support_z(self.P[:, 2]) - 0.2
         np.testing.assert_allclose(P[:, 2] - base, -2.0 + 0.01 * (P[:, 0] + 100.0), atol=1e-9)
+
+
+def _turned(P, deg):
+    """P (n, 3) turned deg about z."""
+    a = math.radians(deg)
+    R = np.array([[math.cos(a), -math.sin(a), 0.0], [math.sin(a), math.cos(a), 0.0], [0.0, 0.0, 1.0]])
+    return np.asarray(P, np.float64) @ R.T
+
+
+def _pier_bridge_mesh(length=360.0, width=40.0, deck=10.0, cap=4.0, every=70.0):
+    """A deck drawn as Perth's Narrows Bridge is (3dmr id 54, GitHub #1071): its road surface one-sided (no lower
+    skin), over pier caps every `every` m (6 m along, the deck's width across, `cap` m up) and the riverbed at 0 under
+    them: under a deck with no underside a pier's cap is a floor open above too."""
+    P, T = [], []
+
+    def quad(a, b, c, d):
+        n = len(P)
+        P.extend([a, b, c, d])
+        T.extend([[n, n + 1, n + 2], [n, n + 2, n + 3]])          # facing up
+    h = width / 2
+    xs = np.linspace(-length / 2, length / 2, 91)
+    for x0, x1 in zip(xs[:-1], xs[1:]):
+        quad([x0, -h, deck], [x1, -h, deck], [x1, h, deck], [x0, h, deck])
+    for x in np.arange(-every * 2, every * 2 + 1, every):
+        quad([x - 3, -h, cap], [x + 3, -h, cap], [x + 3, h, cap], [x - 3, h, cap])
+        quad([x - 6, -h - 5, 0.0], [x + 6, -h - 5, 0.0], [x + 6, h + 5, 0.0], [x - 6, h + 5, 0.0])
+    return np.array(P, np.float64), np.array(T, np.int64)
+
+
+class TurnedModelBridgeTest(unittest.TestCase):
+    """GitHub #1071 (Perth): a model bridge's deck is traced along its own axis (deck_axis: Mount Henry Bridge, id 53,
+    runs at ~28 degrees to its model's frame) and past its pier caps (Narrows Bridge, id 54: the deck ended on its
+    first pier caps, 44 m from its middle, and nothing round it was left out); its footprint and lean follow."""
+
+    def test_deck_axis_of_a_turned_deck(self):
+        P = np.array([[x, y, 0.0] for x in (-300.0, 300.0) for y in (-20.0, 20.0)])
+        for deg in (0.0, 28.0, -63.0, 90.0):
+            ang, major, minor = threedmr.deck_axis(_turned(P, deg)[:, :2])
+            d = (math.degrees(ang) - deg + 90.0) % 180.0 - 90.0
+            self.assertLess(abs(d), 1.01, deg)
+            self.assertAlmostEqual(major, 600.0, delta=6.0)
+            self.assertAlmostEqual(minor, 40.0, delta=12.0)
+            self.assertTrue(-math.pi / 2 < ang <= math.pi / 2 + 1e-9)
+
+    def test_turned_bridge_traced_along_its_axis(self):
+        P, T = _bridge_mesh()
+        surf = threedmr.bridge_deck_surface(_turned(P, 28.0), T)
+        self.assertAlmostEqual(math.degrees(surf["ang"]), 28.0, delta=1.01)
+        Z = surf["z"]
+        rows = np.nonzero(np.isfinite(Z).any(1))[0]
+        us = surf["u0"] + surf["du"] * rows
+        self.assertLess(us.min(), -95.0)
+        self.assertGreater(us.max(), 95.0, "the whole deck, end to end along its own axis")
+        self.assertLess(np.nanmax(Z), 16.0, "the dragon's back is no floor")
+        self.assertGreater(np.nanmin(Z), 4.5, "nor the slab's lower skin or a plinth")
+        u, v = threedmr.deck_uv(surf, _turned(np.array([[0.0, -6.0, 0.0]]), 28.0)[:, :2])
+        i, j = int(round((u[0] - surf["u0"]) / surf["du"])), int(round((v[0] - surf["v0"]) / surf["dv"]))
+        self.assertAlmostEqual(Z[i, j], 15.0, delta=0.3, msg="the lane in the middle")
+
+    def test_turned_footprint_and_lean(self):
+        P, T = _bridge_mesh()
+        surf = threedmr.bridge_deck_surface(_turned(P, 28.0), T)
+        fp = threedmr.bridge_footprint_of(surf)
+        fp = json.loads(json.dumps(fp))         # (as the cache keeps it)
+        pts = _turned(np.array([[90.0, 0.0, 0.0], [-90.0, 8.0, 0.0], [0.0, 16.0, 0.0], [120.0, 0.0, 0.0]]), 28.0)
+        got = threedmr.under_footprint(fp, (500.0, -40.0), pts[:, :2] + [500.0, -40.0])
+        self.assertEqual(got.tolist(), [True, True, False, False])
+        ends = _turned(np.array([[-90.0, -5.0, 1.0], [-90.0, 5.0, 1.0], [90.0, -5.0, 3.0], [90.0, 5.0, 3.0]]), 28.0)
+        ends[:, 2] = [1.0, 1.0, 3.0, 3.0]
+        tilt = threedmr.bridge_tilt(surf, lambda x, y: 0.0, 53, road_ends=ends.tolist())
+        for (x, y, z) in ends:
+            u = threedmr.deck_uv(surf, [[x, y]])[0][0]
+            level = threedmr._deck_level_at(surf, u)[1] + threedmr.tilt_dz(tilt, [[x, y]])[0]
+            self.assertAlmostEqual(level, z + threedmr.BRIDGE_END_EPS_M, delta=0.35)
+        with tempfile.TemporaryDirectory() as d:
+            got = threedmr.write_bridge_deck(d, 53, surf, tilt)
+        for (x, y, z) in got["ends"]:
+            u = threedmr.deck_uv(surf, [[x, y]])[0][0]
+            self.assertAlmostEqual(abs(u), 90.0, delta=threedmr.BRIDGE_CELL_U_M, msg="the slab runs along the bridge")
+
+    def test_lifted_onto_high_mapped_ends(self):
+        """Bedded on a river's bed (or a model with no piers drawn: on the valley floor), the deck is lifted onto its
+        mapped bridge's ends however far (BRIDGE_RAISE_MAX_M); ends that part by BRIDGE_TILT_MAX_M are no lean."""
+        P, T = _bridge_mesh()
+        surf = threedmr.bridge_deck_surface(P, T)
+        za = threedmr._deck_level_at(surf, -90.0)[1]
+        ends = [(-90.0, 0.0, za + 40.0), (90.0, 0.0, za + 41.0)]
+        tilt = threedmr.bridge_tilt(surf, lambda x, y: 0.0, 22, road_ends=ends)
+        self.assertAlmostEqual(threedmr.tilt_dz(tilt, [[-90.0, 0.0]])[0], 40.0 + threedmr.BRIDGE_END_EPS_M, delta=0.3)
+        tilt = threedmr.bridge_tilt(surf, lambda x, y: 0.0, 22, road_ends=[(-90.0, 0.0, za), (90.0, 0.0, za + 30.0)])
+        self.assertEqual(tilt[2:4], (0.0, 0.0))
+        tilt = threedmr.bridge_tilt(surf, lambda x, y: za + 40.0, 22)
+        self.assertEqual(tilt[2:4], (0.0, 0.0), "the ground at the deck's own ends: a high footbridge, no lean")
+
+    def test_pier_caps_do_not_end_the_deck(self):
+        P, T = _pier_bridge_mesh()
+        surf = threedmr.bridge_deck_surface(_turned(P, 81.0), T)
+        Z = surf["z"]
+        rows = np.nonzero(np.isfinite(Z).any(1))[0]
+        us = surf["u0"] + surf["du"] * rows
+        self.assertLess(us.min(), -175.0)
+        self.assertGreater(us.max(), 175.0, "the deck runs on over its piers")
+        self.assertAlmostEqual(float(np.nanmin(Z)), 10.0, delta=0.05, msg="the deck's top, not a pier cap")
+        self.assertAlmostEqual(float(np.nanmax(Z)), 10.0, delta=0.05)
+
+    def test_a_record_that_says_bridge(self):
+        self.assertTrue(threedmr.info_says_bridge({"tags": {"man_made": "bridge"}}))
+        self.assertTrue(threedmr.info_says_bridge({"tags": {"building": "bridge"}}))
+        self.assertTrue(threedmr.info_says_bridge({"tags": {"bridge": "yes", "highway": "cycleway"}}))
+        self.assertTrue(threedmr.info_says_bridge({"tags": {}, "categories": ["Foot Bridge"]}))
+        self.assertFalse(threedmr.info_says_bridge({"tags": {"bridge": "no", "building": "tower"},
+                                                    "categories": ["tall"]}))
+        self.assertFalse(threedmr.info_says_bridge(None))
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(threedmr.cached_info(55, d))
+            os.makedirs(os.path.join(d, "threedmr_cache"))
+            with open(os.path.join(d, "threedmr_cache", "info_55.json"), "w") as f:
+                json.dump({"id": 55, "tags": {"bridge": "yes"}}, f)
+            self.assertEqual(threedmr.cached_info(55, d)["id"], 55)
 
 
 class DownloadTlsTest(unittest.TestCase):

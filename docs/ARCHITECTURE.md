@@ -701,10 +701,11 @@ over to AWS, a 400 wrote a permanent `.404` marker, and the User-Agent lived in 
   Retry-After pauses the host give up at once and fail over (they used to sleep out the pause and
   then all fire); `HttpsTransport` re-sends only on a reused keep-alive connection (a fresh one that
   timed out was tried twice, outside the bucket, doubling every timeout).
-- **Markers**: 404/410 only (a 400 is an error); `.404` files keep their format (empty, mtime = when)
-  and expire after the host's `miss_ttl` (90 days; AWS never), but count as valid while the host
-  cannot be asked, so an expired marker never turns a "no data" into an error. Existing caches work
-  as they are.
+- **Markers**: 404/410 only (a 400 is an error); a 404 is a line "<y> <unix s>" in its tile column's
+  `_misses` file (server/missindex.py, since GitHub #1081: the per-tile empty `.404` files were 28 % of a
+  cache's files), and expires after the host's `miss_ttl` (90 days; AWS never), but counts as valid while
+  the host cannot be asked, so an expired marker never turns a "no data" into an error. Old `.404` files
+  still count and are moved into the indexes by the cache's start-up walk.
 - **Offline / degraded**: `--offline` makes every request raise `Offline` (disk hits only, no weather
   fetch, no EGM2008 download); `Fetcher.offline` is also true when every imagery and DEM host is open.
   `Server.net_note()` → every `status` text gets " | Offline - using cached data" or " | Degraded:

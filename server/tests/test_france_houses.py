@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "server"), str(ROOT / "tools"), str(Path(__file__).parent)]
 import buildings as b
 import cdae
+import francehouse_mesh as fm
 import francehouses as fr
 import geodesy
 import house_regions
@@ -196,6 +197,27 @@ class HouseTest(unittest.TestCase):
         np.testing.assert_array_equal(a[3], c[3])
         np.testing.assert_array_equal(a[5], c[5])
 
+    def test_lit_windows_each_one_cell_of_one_material(self):
+        """Each lit window one cell of the lit glass's map (its own level and hour to go dark, GLASS_LIT), one lit
+        material (S-moreo's PR #916 had three)."""
+        lit, cells = None, set()
+        for i in range(12):
+            P, UV, T, M, mats, C = b.build([(self.plan(seed_id=str(i)), 0., 0.)])
+            names = {mats[k] for k in set(M.tolist())}
+            self.assertFalse({n for n in names if n.startswith("bne_fr_house_glass_lit_")}, names)
+            if "bne_fr_house_glass_lit" not in names:
+                continue
+            lit = mats.index("bne_fr_house_glass_lit")
+            for tri in T[M == lit]:
+                uv = UV[tri]
+                self.assertTrue(np.allclose(uv, uv[0]), uv)            # (a point: the cell's own level)
+                k = uv[0, 0] * fm.LIT_GLASS_CELLS - .5
+                self.assertAlmostEqual(k, round(k), 6)
+                cells.add(round(k))
+        self.assertIsNotNone(lit)
+        self.assertGreater(len(cells), 2, cells)
+        self.assertEqual(len(assets.GLASS_LIT), fm.LIT_GLASS_CELLS)
+
     def test_pickled_looks_keep_their_colours_without_process_dictionary(self):
         s = pickle.loads(pickle.dumps(self.plan()))
         expected = b.build([(s, 0., 0.)])[5]
@@ -282,14 +304,24 @@ class HouseTest(unittest.TestCase):
             s = b.plan(ring, dict(attrs, _fr_residential=True), lat=float(lat), lon=float(lon))
             self.assertEqual(s.fr_house is not None, cls == "yes")
 
-    def test_non_french_tiles_do_not_request_residential_land(self):
-        calls = []
+    def test_non_french_tiles_do_not_infer_french_houses(self):
+        # (land use is read everywhere now, already in the road tile's layers: industrial land, buildings.industrial_rings;
+        # the French house inference stays France's: no residential land handed to tile_buildings elsewhere)
+        seen = []
+        orig = b.tile_buildings
+        def spy(*a, **k):
+            seen.append(list(k.get("house_land_layers", ())))
+            return orig(*a, **k)
         class MD:
             def cell(self, key, layers=(), kind="demand"):
-                calls.append(layers)
                 return SimpleNamespace(layers={})
-        self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(), lambda la, lo: np.zeros(np.shape(la))), ([], []))
-        self.assertFalse(any("land_use" in ls for ls in calls))
+        b.tile_buildings = spy
+        try:
+            self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(),
+                                               lambda la, lo: np.zeros(np.shape(la))), ([], []))
+        finally:
+            b.tile_buildings = orig
+        self.assertTrue(all(not ls for ls in seen))
 
     def test_mesh_builder_accepts_an_iterator_without_losing_buildings(self):
         item = (self.plan(), 0., 0.)

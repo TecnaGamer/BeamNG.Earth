@@ -408,6 +408,74 @@ T.check(#statics() == 2 and roads.status().tiles == 2, 'covered: the ghost goes,
 roads.onDrop({ anchorId = 3, key = '0_0' }); roads.onDrop({ anchorId = 3, key = '0_-1' })
 roads.update(gov, 3)
 
+-- a ghost dropped far from the car counts as deletesDirty (its stale collision harms nobody out there: the lazy
+-- RELOAD_DELETES_S rebuild picks it up), and a rebase itself still rebuilds at once (the island moved)
+do
+  gov.allow, gov.tries = nil, 0
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  local waitS = roads.GHOST_FAR_WAIT_S
+  roads.GHOST_FAR_WAIT_S = 0
+  local car2 = { pos = vec3(100, 100, 0.5) }
+  function car2:getPosition() return self.pos end
+  getPlayerVehicle = function() return car2 end
+  files['/t/gw.json'] = '{ chunks = { }, walk = { shape = "/t/walks_ghost.cdae", pos = { 0, 0, 0 } } }'
+  roads.onTile({ anchorId = 3, key = '0_0', path = '/t/gw.json', n = 0 }, 3)
+  roads.update(gov, 3)
+  T.check(#statics() == 1, 'sidewalk made near the car')
+  local r0 = S.calls.reloadCollision
+  roads.transform(shift, geo)
+  roads.update(gov, 4, { x = 100, y = 100 })
+  T.check(S.calls.reloadCollision == r0 + 1, 'a rebase rebuilds at once (the island moved)')
+  r0 = S.calls.reloadCollision
+  -- the car leaves; the ghost goes far behind it (GHOST_FAR_M): no prompt rebuild for a far drop
+  car2.pos = vec3(5000, 5000, 0.5)
+  roads.update(gov, 4, { x = 5000, y = 5000 })
+  roads.update(gov, 4, { x = 5000, y = 5000 })
+  roads.update(gov, 4, { x = 5000, y = 5000 })
+  T.check(roads.status().tiles == 0 and #statics() == 0, 'the far ghost dropped')
+  T.check(S.calls.reloadCollision == r0, 'a ghost dropped far from the car: no prompt rebuild')
+  local deletesS = roads.RELOAD_DELETES_S
+  roads.RELOAD_DELETES_S = 0
+  roads.update(gov, 4, { x = 5000, y = 5000 })
+  T.check(S.calls.reloadCollision == r0 + 1, 'its stale collision goes with the lazy deletes rebuild')
+  roads.RELOAD_DELETES_S = deletesS
+  roads.GHOST_FAR_WAIT_S = waitS
+  getPlayerVehicle = nil
+end
+
+-- another module's colliders (markCollisionDirty, wired to the gas stations', pump jacks' and wind turbines'
+-- onCollide): with the spot's position the prompt flag only near an island; a far spot waits and promotes when the
+-- player arrives; without a position: prompt, as before
+do
+  gov.allow, gov.tries = nil, 0
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  local car3 = { pos = vec3(0, 0, 0.5) }
+  function car3:getPosition() return self.pos end
+  getPlayerVehicle = function() return car3 end
+  roads.update(gov, 4)
+  local r0 = S.calls.reloadCollision
+  roads.markCollisionDirty(8962, 0)             -- a pump jack spawned ~9 km out, by its square's west edge
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0, 'a far spot: no prompt rebuild')
+  roads.markCollisionDirty(9215, 200)           -- the same square (8960..9216) churns again, at its far corner
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0, 'the far spot churning: still none')
+  -- the square promotes by its own geometry (centre 9088, 128 + the tile margins: ~758 m reach), never by whichever
+  -- spot was marked last: from 8400, 0 the centre is ~700 m away, the far-corner spot ~839 m
+  car3.pos = vec3(8400, 0, 0.5)
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0 + 1, 'the player arrives: the deferred square rebuilds once, by its geometry')
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0 + 1, 'and is done')
+  roads.markCollisionDirty(8405, 5)
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0 + 2, 'a near spot marks at once')
+  roads.markCollisionDirty()
+  roads.update(gov, 4)
+  T.check(S.calls.reloadCollision == r0 + 3, 'no position: prompt, as before')
+  getPlayerVehicle = nil
+end
+
 -- a Lua reload: the new module state deletes the objects the old one left
 roads.onTile({ anchorId = 2, key = '0_0', path = '/t/a.json', n = 2 }, 2)
 roads.update(gov, 2)

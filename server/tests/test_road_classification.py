@@ -18,6 +18,15 @@ import surface
 from test_roads import FRAME, features
 
 
+def _beside(ll, d):
+    """The points d m left and right of each vertex of a lon/lat line (the old vertex rule's, for comparison)."""
+    m = np.array([111320.0 * np.cos(np.radians(ll[:, 1].mean())), 110540.0])
+    t = np.gradient(ll * m, axis=0)
+    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    off = np.stack([-t[:, 1], t[:, 0]], axis=1) * d / m
+    return ll + off, ll - off
+
+
 class UrbanSamplingTest(unittest.TestCase):
     def cover_with_isolated_endpoint_sites(self, lat, lon):
         east, north, _ = FRAME.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.)
@@ -114,7 +123,7 @@ class ActualHorseCreekTest(unittest.TestCase):
         f, s = self.load_fixture("horse_creek_urban.npz")
         try:
             ll = f.lonlat
-            left, right = roads._beside(ll, [len(ll)], roads.URBAN_BESIDE_M)
+            left, right = _beside(ll, roads.URBAN_BESIDE_M)
             original = np.concatenate([ll, left, right])
             votes = s.urban(original[:, 1], original[:, 0])
             n = len(ll)

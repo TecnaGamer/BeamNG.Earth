@@ -28,7 +28,7 @@ MODULES = (
     "test_native_stress",
     "test_bridge_level_spans",
     "test_host_package", "test_container",
-    "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata",
+    "test_designs", "test_de_signs", "test_germany", "test_lane_rules", "test_regionaldata", "test_bdtopo",
 )
 
 
