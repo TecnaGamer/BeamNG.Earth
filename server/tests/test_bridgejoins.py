@@ -196,3 +196,14 @@ class FreshSkinWorkerTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class CurrentModelPositionTest(unittest.TestCase):
+    def test_near_accepts_upstream_four_value_position(self):
+        ctx = bridgejoins.Context(None, "/models", None)
+        marker = object()
+        with mock.patch("threedmr.region_ids", return_value=[53]), \
+             mock.patch("threedmr.model_position", return_value=(-32., 115., True, "override")), \
+             mock.patch.object(ctx, "_load", return_value=marker) as load:
+            self.assertEqual(ctx.near(np.array([-32.]), np.array([115.])), [marker])
+        load.assert_called_once_with(53, -32., 115.)
