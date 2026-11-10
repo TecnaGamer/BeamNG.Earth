@@ -188,18 +188,63 @@ def top_z(ref, xy, fallback):
     return out
 
 
+BAND_M = 4.0                # the top is cut into bands this long across the platform's axis (small triangles)
+
+
+def _clip_half(poly, u, c, keep_ge):
+    """Sutherland-Hodgman: the part of the polygon (k, 2) where poly @ u >= c (keep_ge) or <= c."""
+    out = []
+    n = len(poly)
+    if n == 0:
+        return poly
+    v = poly @ u - c
+    if not keep_ge:
+        v = -v
+    for i in range(n):
+        a, b = poly[i], poly[(i + 1) % n]
+        va, vb = v[i], v[(i + 1) % n]
+        if va >= 0:
+            out.append(a)
+        if (va >= 0) != (vb >= 0):
+            t = va / (va - vb)
+            out.append(a + (b - a) * t)
+    return np.asarray(out) if out else np.zeros((0, 2))
+
+
+def bands(ring, step=BAND_M):
+    """[polygon (k, 2)] the ring cut by lines across its long axis every `step` m (counter-clockwise pieces): each piece is
+    small, so its ear-clipped triangles are too, and the top follows the track's profile between them (one ear-clipped
+    ring made slivers the length of the platform: facets and waves across it)."""
+    ring = bm._ccw(ring)
+    import buildings
+    try:
+        _c, u, _hl, _hw = buildings.oriented_box(ring)
+        u = np.asarray(u, float)
+    except Exception:
+        u = np.array([1.0, 0.0])
+    t = ring @ u
+    out = []
+    lo = np.floor(t.min() / step) * step
+    for c0 in np.arange(lo, t.max(), step):
+        piece = _clip_half(_clip_half(ring, u, c0, True), u, c0 + step, False)
+        if len(piece) >= 3 and abs(bm._signed(piece)) > 0.05:
+            out.append(piece)
+    return out
+
+
 def _slab(mesh, frame, elev, ref, ring, height):
-    """The slab of a platform: its top over the ring's points (every bm.SLAB_STEP_M) at the reference height + height, so
-    that it runs straight between the two edges of an island and follows each of them along; the kerb wall from below the
-    ground to the top. (Not subdivided: the ear-clipped fan of thin triangles became 400 000 points a platform.)"""
+    """The slab of a platform: its top in bands across the platform (bands), every point at the reference height + height
+    (the same function along the cut lines on both sides: no cracks); the kerb wall from below the ground to the top."""
     dense = bm._densify(ring, bm.SLAB_STEP_M)
-    T = bm._triangulate(dense)
-    if not len(T):
-        return None
     fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
-    zt = top_z(ref, dense, fb) + height
-    mesh.add(TOP[0], np.column_stack((dense, zt)), dense / TOP[1], T)
+    for piece in bands(dense):
+        T = bm._triangulate(piece)
+        if not len(T):
+            continue
+        zt = top_z(ref, piece, fb) + height
+        mesh.add(TOP[0], np.column_stack((piece, zt)), piece / TOP[1], T)
     zd = bm.ground(frame, elev, dense)
+    zt = top_z(ref, dense, fb) + height
     bm.walls(mesh, KERB[0], KERB[1], dense, np.minimum(zd, zt - 0.3) - bm.SLAB_FOOT_M, zt)
     return dense, zt
 

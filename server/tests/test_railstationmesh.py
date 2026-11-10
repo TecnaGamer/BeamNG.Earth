@@ -274,8 +274,10 @@ class FootbridgeTest(unittest.TestCase):
     def test_big_stations_bridge_is_one_shape(self):
         st = stations_of("pardubice")[0]
         st.country = "CZ"
-        m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
-        self.assertLess(len(m[0]), 60000)
+        for x in range(-1000, 1000, 250):             # (a road tile's share: one shape's 16-bit indices)
+            for y in range(-1000, 1000, 250):
+                q = rm.mesh(None, (x, y, x + 250, y + 250), [st], FLAT, (0.0, 0.0, 0.0))
+                self.assertLess(0 if q is None else len(q[0]), 60000)
 
 
 class UnderpassTest(unittest.TestCase):
@@ -560,3 +562,34 @@ class IslandFlatTest(unittest.TestCase):
         d = bm._densify(pl.ring, 2.0)
         z = rm.top_z(ref, d, lambda xy: xy[:, 0] * 0)
         self.assertLess(float(np.ptp(z)), 0.05)                                # (a flat ground: a flat platform)
+
+
+class BandTest(unittest.TestCase):
+    def test_bands_cover_the_platform_with_small_pieces(self):
+        import busstations as bs
+        for name in ("vinnytsia", "kozyatyn", "kyiv_pas"):
+            st = stations_of(name)[0]
+            for pl in st.platforms:
+                ps = rm.bands(bm._densify(pl.ring, 2.0))
+                self.assertAlmostEqual(sum(bs.area(p) for p in ps), bs.area(pl.ring), delta=0.02 * bs.area(pl.ring) + 1.0)
+                for p in ps:
+                    T = bm._triangulate(p)
+                    if len(T):
+                        e = np.hypot(*(p[T[:, 0]] - p[T[:, 1]]).T).max()
+                        self.assertLess(float(e), 60.0)        # (no sliver across the whole platform)
+
+    def test_top_follows_a_grade_with_no_facets(self):
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        slope = bm.DrawnGround(lambda xy: 100.0 + 0.02 * xy[:, 1])
+        pl = max(st.platforms, key=lambda p: len(p.ring))
+        ref = rm.reference(None, slope, pl)
+        m = bm._Mesh()
+        rm._slab(m, None, slope, ref, pl.ring, 1.1)
+        V, T, UV, mats, idx = m.result(BIG, (0.0, 0.0, 0.0))
+        top = np.asarray(idx) == list(mats).index(rs.PAVERS)
+        tri = V[T[top]]
+        c = tri.mean(1)
+        # the centre of every top triangle lies on the track's profile there (a facet would sag between far vertices)
+        want = rm.top_z(ref, c[:, :2], lambda xy: xy[:, 0] * 0) + 1.1
+        self.assertLess(float(np.abs(c[:, 2] - want).max()), 0.08)    # (a sliver over 200 m of a 2 % grade sagged metres)
