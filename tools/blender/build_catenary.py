@@ -46,6 +46,8 @@ MATS = {
     "galv": mat("bne_cat_galv", (0.62, 0.64, 0.65), 0.85, 0.45),
     "insulator": mat("bne_cat_insulator", (0.03, 0.03, 0.035), 0.0, 0.3),   # black: composite / glazed holders
     "plate": mat("bne_cat_plate", (0.9, 0.85, 0.1), 0.0, 0.5),
+    "paint": mat("bne_cat_paint", (0.44, 0.48, 0.45), 0.3, 0.7),          # 4: the EU masts' painted steel
+    "foundation": mat("bne_cat_foundation", (0.54, 0.53, 0.5), 0.0, 0.95),   # 5: the cast foundation blocks
 }
 
 
@@ -152,7 +154,7 @@ def mast_details(bm, ts, x_face, z_top, attach_r):
 def build(seg, detail):
     bm = bmesh.new()
     # the mast: foot collar (concrete foundation) and the tapered pole
-    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
+    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 5)
     frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, H)), R0, R1, seg, 0, uv_len=1.1)
     ts = max(5, seg // 2)
     # the cantilever: the horizontal tube, the registration arm (thinner), the inclined tie
@@ -234,9 +236,9 @@ def build_steel(seg, detail):
     """A steel H-beam mast (0.30 x 0.20 section, 9.3 m, a base plate with bolts) with the cantilever."""
     bm = bmesh.new()
     ts = max(5, seg // 2)
-    box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)    # the foundation's head
+    box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 5)    # the foundation's head
     box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)                       # the base plate
-    ibeam(bm, 0.38, 9.3, 1)
+    ibeam(bm, 0.38, 9.3, 4)
     if detail:
         for sx in (-1, 1):
             for sy in (-1, 1):
@@ -251,15 +253,15 @@ def build_post(kind, seg, detail):
     """A portal's post: concrete (kind "su": the tapered mast, 10.4 m) or steel (an I-beam), with a top seat for the truss."""
     bm = bmesh.new()
     if kind == "su":
-        frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
+        frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 5)
         frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, 10.4)), 0.19, 0.12, seg, 0, uv_len=1.1)
         if detail:
             joint_rings(bm, seg)
         box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
     else:
-        box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)
+        box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 5)
         box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)
-        ibeam(bm, 0.38, 10.4, 1, depth=0.36, width=0.24)
+        ibeam(bm, 0.38, 10.4, 4, depth=0.36, width=0.24)
         box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
     if detail:
         plate(bm, Vector((0.0, 0.20 if kind == "su" else 0.13, 2.2)), Vector((0, 1, 0)), 0.30, 3)
@@ -278,7 +280,7 @@ def make(name, bm, parent):
     ob = new_object(name, parent)
     bm.to_mesh(ob.data)
     bm.free()
-    for k in ("concrete", "galv", "insulator", "plate"):
+    for k in ("concrete", "galv", "insulator", "plate", "paint", "foundation"):
         ob.data.materials.append(MATS[k])
     return ob
 
