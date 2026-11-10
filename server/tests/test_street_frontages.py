@@ -199,23 +199,20 @@ class CityFrontageTest(unittest.TestCase):
 
     WALK = {"pts": np.array([[-8., 4.25, 0.], [33., 4.25, 0.]]), "side": 1, "w": 2.5}     # (curb 3.0, back 5.5)
 
-    def test_any_sidewalk_paves_to_a_city_wall_in_concrete(self):
-        shop = rectangle(0., 8., 24., 18.)
-        args = (FRAME, [dict(self.WALK)], [shop], [], STREETS, [], BOX)
-        kw = dict(shops=[shop], residential=False, any_surface=True, fill=streetfront.CITY_FILL,
-                  limit_m=streetfront.CITY_FRONT_M)
-        paved = streetfront.chunks(*args, **kw)
-        self.assertTrue(paved)
-        self.assertEqual({c["m"] for c in paved}, {sidewalks.MATERIALS[sidewalks.EU_SLAB["concrete"]]})
-        ys = [y for c in paved for _, y in c["poly"]]
-        self.assertAlmostEqual(max(ys), 8. - .07, places=2)
-        self.assertGreater(min(ys), 5.)
-        self.assertFalse(streetfront.chunks(*args, **dict(kw, any_surface=False)), "a plain sidewalk: Europe's only")
-        brick = streetfront.chunks(FRAME, [dict(self.WALK, brick=True)], [shop], [], STREETS, [], BOX, **kw)
-        self.assertEqual({c["m"] for c in brick}, {sidewalks.MATERIALS[sidewalks.BRICK]}, "brick to the wall")
-        far = rectangle(0., 14., 24., 24.)
-        self.assertFalse(streetfront.chunks(FRAME, [dict(self.WALK)], [far], [], STREETS, [], BOX,
-                                            **dict(kw, shops=[far])), "8.5 m back: a setback, not a sidewalk")
+    def test_the_sidewalk_itself_is_widened_to_the_walls(self):
+        walk = dict(self.WALK, pts=np.array([[x, 4.25, 0.] for x in np.arange(-8., 33.5, 1.5)]))
+        shops = [rectangle(-8., 8., 10., 18.), rectangle(10., 9., 33., 18.)]      # (fronts 2.5 and 3.5 m back)
+        walks = [walk]
+        self.assertEqual(streetfront.widen_city_walks(walks, shops, shops, [], [], STREETS), 1)
+        curb, back = streetfront._walk_outline(walks[0])
+        self.assertAlmostEqual(float(np.median(curb[:, 1])), 3.0, places=2, msg="the curb stays")
+        self.assertGreaterEqual(float(np.median(back[:, 1])), 8.5, "the slab's back at (or in) the walls")
+        self.assertGreater(walks[0]["w"], 5.0)
+        lawn = [dict(self.WALK, pts=walk["pts"].copy(), w=2.5)]
+        green = rectangle(-8., 6.5, 33., 7.5)
+        streetfront.widen_city_walks(lawn, shops, shops, [green], [], STREETS)
+        self.assertLess(lawn[0]["w"], 2.5 + 1.01, "a mapped lawn in front: no further than it")
+        self.assertEqual(streetfront.widen_city_walks([dict(self.WALK)], [], [], [], [], STREETS), 0)
 
     def test_city_buildings_and_houses(self):
         from types import SimpleNamespace as NS
