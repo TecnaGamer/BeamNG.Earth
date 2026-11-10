@@ -79,6 +79,16 @@ class WorldPropsTest(unittest.TestCase):
         self.assertEqual(sorted((r[1], r[2]) for r in posts if r[2] < 100), [(100., 55.5), (160., 45.)],
                          "the mapped road: its two own mapped lamps (the one off the tile left to its owner)")
         self.assertTrue([r for r in posts if r[2] > 150], "the unmapped road keeps its guessed lamps")
+        plain = furniture.place([mapped, unmapped], walks, (0, 0, 256, 256))
+        self.assertEqual([r for r in rows if r[0] == furniture.G_POLE], [r for r in plain if r[0] == furniture.G_POLE],
+                         "its utility poles stay where they were")
+        self.assertFalse([r for r in rows if r[0] == furniture.G_POLELAMP and r[2] < 100], "without their lamps")
+        # a town street without sidewalks: its lamps on its utility poles; mapped lamps: the poles alone
+        lamps2 = [lamp, ["streetlight", 160., 45., 0., 90., 1., 9., 0.]]
+        edge, edge_plain = (furniture.place([mapped], [], (0, 0, 256, 256), mapped_lamps=m) for m in (lamps2, None))
+        self.assertTrue([r for r in edge_plain if r[0] == furniture.G_POLELAMP])
+        self.assertEqual([r for r in edge if r[0] == furniture.G_POLE], [r for r in edge_plain if r[0] == furniture.G_POLE])
+        self.assertFalse([r for r in edge if r[0] == furniture.G_POLELAMP])
         self.assertEqual(len([r for r in rows if r[0] == furniture.G_LENS and r[2] < 100]), 2)
         self.assertEqual(furniture.place([mapped], walks[:2], (0, 0, 256, 256), mapped_lamps=None),
                          furniture.place([mapped], walks[:2], (0, 0, 256, 256)))
