@@ -31,6 +31,7 @@
 "title": "BeamNG.Earth: performance profiler (30 s)",
 "desc": "Records 30 s of frame times while you drive, then opens the report window for a performance issue (Ctrl+Shift+Y)."
 },
+"beamngEarth_nearestStation": {"cat":"gameplay", "order": 98, "ctx": "tlua", "onDown": "if beamngEarth_finder then beamngEarth_finder.nearest() end", "title": "BeamNG.Earth: route to the nearest station", "desc": "Sets the GPS to the nearest gas station, or the nearest EV charger for an electric car (Ctrl+Shift+Q). The low fuel prompt names this key."},
 "beamngEarth_mapToggle": {"cat":"gameplay", "order": 99, "ctx": "tlua", "onDown": "if beamngEarth_settings then beamngEarth_settings.toggleMap() end", "title": "BeamNG.Earth: world map", "desc": "Opens the BeamNG.Earth world map (where you are, saved places, click to teleport), or closes it. In our level the game's map key (M) and the pause menu's Map open it; unbound by default (bind a key here if you like)."},
 "beamngEarth_map3dToggle": {"cat":"gameplay", "order": 100, "ctx": "tlua", "onDown": "if beamngEarth_map3d then beamngEarth_map3d.toggle() end", "title": "BeamNG.Earth: 3D map", "desc": "Flies the camera up from the car into the 3D map (move with WASD or the left stick, turn and tilt with the mouse or the right stick, zoom with the wheel), or back down to the car. Unbound by default; the map key opens it when Settings > Interface > Map style is 3D."}
 }
