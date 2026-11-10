@@ -2857,6 +2857,61 @@ def tank_rings(frame, infra_layers, x0, y0, margin=0.0, size=256.0):
     return out
 
 
+# A wind turbine's base mapped as a building (Herzogenrath's R90004, a 10 m round building=yes round the tower: a
+# building stood in the turbine, GitHub #1085): a footprint of at most TURBINE_BASE_M2 round a turbine the world draws
+# (windturbines.keep's rules, by its mapped size) is left out. An unsized turbine's only when the footprint is round
+# (TURBINE_BASE_ROUND: a rooftop unit's house stays).
+TURBINE_BASE_ON = os.environ.get("BNE_TURBINE_BASE", "on") != "off"
+TURBINE_BASE_M2 = 400.0
+TURBINE_BASE_ROUND = 0.8
+TURBINE_REACH_M = 30.0      # (the turbines looked up round the tile)
+
+
+def turbine_points(frame, x0, y0, x1, y1):
+    """[(x, y, sized)] of the mapped turbines drawn at full size in (and TURBINE_REACH_M round) the box, anchor frame
+    (windturbines.near; not the small ones)."""
+    if not TURBINE_BASE_ON:
+        return []
+    try:
+        import geotiles
+        import windturbines
+        m = TURBINE_REACH_M
+        la, lo, _ = geotiles.world_to_geodetic(frame, [[x0 - m, y0 - m, 0], [x1 + m, y0 - m, 0],
+                                                      [x0 - m, y1 + m, 0], [x1 + m, y1 + m, 0]])
+        lo = frame.lon0 + (np.asarray(lo) - frame.lon0 + 180) % 360 - 180
+        ts = [t for t in windturbines.near(float(np.min(la)), float((np.min(lo) + 180) % 360 - 180),
+                                           float(np.max(la)), float((np.max(lo) + 180) % 360 - 180))
+              if not windturbines.small(t.tags)]
+        if not ts:
+            return []
+        x, y, _ = geotiles.geodetic_to_world(frame, np.array([t.lat for t in ts]), np.array([t.lon for t in ts]), 0.0)
+        return [(float(a), float(b), windturbines.sized(t.tags)) for a, b, t in zip(x, y, ts)]
+    except Exception as ex:     # (no index: no turbines, the buildings as before)
+        import logging
+        logging.getLogger("earthd.buildings").debug("turbine bases: %s: %s", type(ex).__name__, ex)
+        return []
+
+
+def turbine_base(e, n, turbines):
+    """Is the footprint (e, n: its closed outer ring, anchor frame) a drawn turbine's base (TURBINE_BASE_*)?"""
+    if not turbines:
+        return False
+    ring = np.stack([e, n], 1)
+    area = abs(_area2(ring[:-1])) / 2.0
+    if area > TURBINE_BASE_M2:
+        return False
+    path = None
+    for x, y, sized in turbines:
+        if not (e.min() <= x <= e.max() and n.min() <= y <= n.max()):
+            continue
+        if path is None:
+            from polygon import Path
+            path = Path(ring)
+        if path.contains_points(np.array([[x, y]]))[0] and (sized or circularity(ring[:-1]) >= TURBINE_BASE_ROUND):
+            return True
+    return False
+
+
 def _on_support(ring, supports):
     """The paint of the bridge support (support_rings) holding the footprint's centre, else None."""
     if not supports:
@@ -3821,6 +3876,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     seen = set()
+    turbines = None                             # (turbine_points, looked up at the first building)
     rings, attrs, looks, mins = [], [], [], []
     for f in layers:
         if f is None or len(f.kind) == 0:
@@ -3868,6 +3924,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     h_ = float(fl_) * 3.2 if fl_ is not None and np.isfinite(fl_) else 0.0
                 if h_ < min_size[0] and abs(float(np.dot(e[:-1], n[1:]) - np.dot(e[1:], n[:-1]))) / 2 < min_size[1]:
                     continue
+            if turbines is None:
+                turbines = turbine_points(frame, x0, y0, x1, y1)
+            if turbines and turbine_base(e, n, turbines):
+                continue                # (a turbine's base: TURBINE_BASE_M2)
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color", "roof_orientation",
