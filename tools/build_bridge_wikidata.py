@@ -48,7 +48,13 @@ QUERY = """SELECT ?item ?c ?span ?len ?col WHERE {{
   OPTIONAL {{ ?item p:P2787/psn:P2787/wikibase:quantityAmount ?span . }}
   OPTIONAL {{ ?item p:P2043/psn:P2043/wikibase:quantityAmount ?len . }}
   OPTIONAL {{ ?item wdt:P462 ?ci . ?ci rdfs:label ?col . FILTER(lang(?col) = "en") }}
+  OPTIONAL {{ ?item wdt:P186 ?mat . }}
 }}"""
+# A cantilever bridge is a steel truss only where Wikidata says it is steel or iron (P186): Norway's, most of Europe's
+# and Asia's are concrete box girders built out from their piers (GitHub #1066: Andoybrua, concrete, drawn as a 750 m
+# through truss); the US ones come from the NBI first. CANTILEVER and STEEL_MATS: the class and the materials.
+CANTILEVER = "Q1429218"
+STEEL_MATS = {"Q11427", "Q677", "Q1048771", "Q2493636", "Q11426"}     # steel, iron, wrought iron, cast iron, ...
 PAINT_NAMES = list(bt.PAINTS)       # the paint column: an index into these, 255 without a colour (P462)
 
 
@@ -76,10 +82,17 @@ def point(wkt):
 
 def main():
     items = {}
-    for rank, (cls, code) in enumerate(CLASSES):
+    for rank, (cls, code0) in enumerate(CLASSES):
         rows = query(cls)
+        steel = set()
+        if cls == CANTILEVER:
+            steel = {b["item"]["value"].rsplit("/", 1)[-1] for b in rows
+                     if "mat" in b and b["mat"]["value"].rsplit("/", 1)[-1] in STEEL_MATS}
         n = 0
         for b in rows:
+            code = code0
+            if cls == CANTILEVER and b["item"]["value"].rsplit("/", 1)[-1] not in steel:
+                code = bt.PLAIN
             q = b["item"]["value"].rsplit("/", 1)[-1]
             p = point(b["c"]["value"])
             if p is None:

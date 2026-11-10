@@ -28,6 +28,7 @@ ap.add_argument("--server", default=os.path.join(os.path.dirname(os.path.dirname
 ap.add_argument("--cache", default=os.path.expanduser("~/.cache/beamng-earth"))
 ap.add_argument("--json")
 ap.add_argument("--min-len", type=float, default=20.0)
+ap.add_argument("--dump", help="print each station (arc, ours, real) of the decks/tunnels whose id starts with this")
 args = ap.parse_args()
 sys.path.insert(0, args.server)
 
@@ -39,7 +40,37 @@ import roadz                            # noqa: E402
 import grading as gradingmod            # noqa: E402
 
 lat, lon, R = args.lat, args.lon, args.r
-blockworker.init(args.cache, False, True, True, True, False, multiprocessing.Queue(1), logging.ERROR, True, True)
+if os.environ.get("DP_CAPS"):          # (debug: which roads cap the approach ramps)
+    _aa = gradingmod.approach_add
+
+    def _logged(xy, at_end, lift, half, others=(), side_run=None, grade=None):
+        out = _aa(xy, at_end, lift, half, others, side_run, grade)
+        if lift > 3.0:
+            e = np.asarray(xy, np.float64)[-1 if at_end else 0, :2]
+            caps = []
+            for line, oh in others:
+                ln = np.asarray(line, np.float64)[:, :2]
+                if len(ln) >= 2:
+                    d = float(roads._seg_dist(e[None], ln[:-1], ln[1:]).min())
+                    caps.append((round(d, 1), round(float(oh), 1), round(max(0.0, (d - half - oh - gradingmod.APPROACH_GAP_M) / (side_run or gradingmod.SLOPE_RUN)), 2)))
+            caps.sort(key=lambda c: c[2])
+            print("approach_add lift %.1f at %s: raised %s; tightest caps (dist, half, cap) %s" % (lift, np.round(e, 1), None if out is None else round(float(out.max()), 2), caps[:4]))
+            P = np.asarray(xy, np.float64)[:, :2]
+            L = float(np.hypot(*np.diff(P, axis=0).T).sum())
+            bind = []
+            for line, oh in others:
+                ln = np.asarray(line, np.float64)[:, :2]
+                if len(ln) < 2:
+                    continue
+                dv = roads._seg_dist(P, ln[:-1], ln[1:]).min(1)
+                cv = np.maximum(0.0, (dv - half - oh - gradingmod.APPROACH_GAP_M) / (side_run or gradingmod.SLOPE_RUN))
+                j = int(np.argmin(cv))
+                bind.append((round(float(cv[j]), 2), j, round(float(dv[j]), 1), round(float(oh), 1), np.round(ln[0], 0).tolist(), np.round(ln[-1], 0).tolist()))
+            bind.sort()
+            print("   plan %d vertices, %.0f m, ends %s %s; binding (cap, vertex, dist, half, road ends): %s" % (len(P), L, np.round(P[0], 0).tolist(), np.round(P[-1], 0).tolist(), bind[:3]))
+        return out
+    gradingmod.approach_add = _logged
+blockworker.init(args.cache, False, True, True, True, False, multiprocessing.Queue(1), logging.DEBUG if os.environ.get("DP_DEBUG") else logging.ERROR, True, True)
 s = blockworker._s
 g, _ = s.anchor(1, lat, lon)
 frame = geodesy.EnuFrame(lat, lon)
@@ -78,7 +109,7 @@ for tx, ty in roads.tiles_near(0.0, 0.0, R):
     for level, prof in ((1, bridges), (-1, tunnels)):
         for fid, spec, xy, z, _ in prof.parts(feats, roads.tile_bbox(tx, ty)):
             xy = np.asarray(xy, np.float64)[:, :2]
-            if np.hypot(*xy.T).min() > R or (level < 0 and str(fid) in tunnels.open):
+            if np.hypot(*xy.T).min() > R or (level < 0 and str(fid) in (getattr(tunnels, "open", None) or ())):
                 continue
             decks[(str(fid), round(xy[0, 0]), round(xy[0, 1]))] = (xy, np.asarray(z, np.float64), spec, level)
     for f in feats:
@@ -125,6 +156,19 @@ for (fid, *_), (xy, z, spec, level) in sorted(decks.items()):
                 zre = float(np.interp(a, arc[ok], zr[ok])) if ok.sum() >= 2 else np.nan
                 cl.append((round(zre - zg, 2), round(float(np.interp(a, arc, z)) - zg, 2), ground[gi][1]))
         row["clear"] = sorted(cl)[:4]
+    if args.dump is not None and fid.startswith(args.dump) and real is None:
+        for gi, cr in enumerate(roads._crossings_by([xy], [gl for _f, _c, gl in ground])):
+            for _pi, a, pt in cr:
+                zg = float(ground_up(np.asarray([pt], np.float64))[0])
+                print(f"   crossing {ground[gi][1]} at {a:.1f} m: ours {float(np.interp(a, arc, z)) - zg:.2f} m over it")
+    if args.dump is not None and fid.startswith(args.dump):
+        zr_ = np.full(len(xy), np.nan)
+        if real is not None:
+            ok_ = np.isfinite(real)
+            zr_[ok_] = up(xy[ok_], real[ok_])
+        print(f"{row['fid']} level {level}: from {ll(xy[0])} to {ll(xy[-1])}")
+        for a_, zo_, zm_ in zip(arc, z, zr_):
+            print(f"   {a_:7.1f}  ours {zo_:7.2f}  real {zm_:7.2f}")
     rows.append(row)
 
 meas_rows = [r for r in rows if "err" in r]

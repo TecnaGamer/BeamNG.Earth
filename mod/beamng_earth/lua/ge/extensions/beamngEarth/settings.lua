@@ -31,7 +31,7 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 1
+M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -77,6 +77,8 @@ M.SCHEMA = {
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
+  -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
+  lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -93,7 +95,10 @@ M.SCHEMA = {
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
   -- the town entry and exit signs where a road enters a town's built-up land, each country's own (server townentry.py;
   -- the message town_signs; BNE_TOWNSIGNS=on / off forces it)
-  townSigns = { kind = 'bool', default = false, label = 'Town signs' },
+  townSigns = { kind = 'bool', default = true, label = 'Town signs' },
+  -- the traffic's amount by the place (navgraph.lua M.ADAPTIVE, server traffic.py; PR #728 / #773, ProxyFirewall202):
+  -- more cars in cities, fewer in the country, never more than the player's own amount
+  adaptiveTraffic = { kind = 'bool', default = false, label = 'Adaptive traffic amount' },
   -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
   -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
@@ -154,7 +159,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'adaptiveTraffic', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -276,6 +281,9 @@ function M.load(path)
       end
     end
     M.fillNewKnobs(data)
+    -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
+    -- old default, not as a choice; once saved as version 2 the player's own setting stands)
+    if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
@@ -515,6 +523,7 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setTownSigns then core.setTownSigns(v) end
   end,
+  adaptiveTraffic = function(v) require('beamngEarth/navgraph').setAdaptive(v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -900,6 +909,26 @@ end
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
+end
+
+-- The station finder's map layers (finder.lua, server stationindex.py): ask (lat, lon, rKm, kinds {'fuel', 'ev'}, mode
+-- 'map' | 'near' -> { id } or { error }) and poll (id -> nil while waiting, else { items = {{lat, lon, name, brand,
+-- kind, km}...}, partial, error }); Nearest for the car (the GPS set to it, a message saying where).
+function M.uiStations(lat, lon, rKm, kinds, mode)
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  local id, err = f.send(tonumber(lat), tonumber(lon), tonumber(rKm), kinds, mode == 'near' and 'near' or 'map')
+  return id and { id = id } or { error = err }
+end
+function M.uiStationsResult(id)
+  local f = ext('beamngEarth_finder')
+  return f and f.take(tonumber(id)) or nil
+end
+function M.uiNearest()
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  f.nearest()
+  return { ok = true }
 end
 
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else

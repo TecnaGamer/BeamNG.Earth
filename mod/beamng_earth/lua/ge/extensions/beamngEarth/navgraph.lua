@@ -65,6 +65,11 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 M.CUT_M = 60
 M.CUT_S = 4
 M.CUT_FRESH_M = 95
+-- ... and at least as far as the car needs to stop for it (its speed squared over 2 CUT_DECEL, CUT_STOP_M more): the
+-- AI plans to the end of the graph and brakes for the dead end long before 4 s from it; at 70 mph it braked from
+-- ~200 m and turned round across the lanes ahead of the player, every half minute on a motorway (GitHub #855 / #966)
+M.CUT_DECEL = 2.5
+M.CUT_STOP_M = 30
 M.FRESH_S = 5
 M.COOLDOWN_S = 8.0
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
@@ -196,7 +201,8 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[9] or e[8] }     -- (e[9]: a road narrowing to a tunnel's portal)
+          inRadius = e[8], outRadius = e[9] or e[8],      -- (e[9]: a road narrowing to a tunnel's portal)
+          posted = e[10] }      -- (the posted limit where speedLimit is not it, negative: the class's default; api)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -213,10 +219,18 @@ M.FOLLOW_DOT = 0.7
 -- player's way: the cut it heads for is the block's edge, which moves on with the player, so it is not respawned
 -- for it (on a highway at 30 m/s a car ~200 m ahead was within the cut's reach and vanished in front of the player,
 -- GitHub #353); it still is when it leaves the box (guard's GUARD_M).
-function M.followsPlayer(p, dir, pp, pu)
+-- How far ahead a car at sp m/s sees a dead end it will brake for (CUT_DECEL, CUT_STOP_M). Pure.
+function M.stopReach(sp)
+  return (sp or 0) ^ 2 / (2 * M.CUT_DECEL) + M.CUT_STOP_M
+end
+
+-- (car_sp: a car faster than the player by FOLLOW_FASTER_MS outruns the graph growing with the player: not following)
+M.FOLLOW_FASTER_MS = 2.0
+function M.followsPlayer(p, dir, pp, pu, car_sp)
   local ps = math.sqrt(pu.x * pu.x + pu.y * pu.y)
   local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
   if ps < M.FOLLOW_MS or dl < 1e-6 then return false end
+  if car_sp and car_sp > ps + M.FOLLOW_FASTER_MS then return false end
   local ux, uy = pu.x / ps, pu.y / ps
   if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
   return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
@@ -238,7 +252,9 @@ function M.onMessage(msg, currentAnchor)
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
-            lines = type(g.lines) == 'table' and g.lines or nil }      -- (tunnel stretches: the minimap's, minimaproads)
+            lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
+            trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
+            mph = g.mph }       -- (the country's speed signs: api.speedLimit)
   dirty = true
   return true
 end
@@ -579,9 +595,10 @@ local function guard(b, all)
         local s0 = seenAt[id]
         if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then s0 = { p.x, p.y, now } end
         seenAt[id] = { p.x, p.y, s0[3] }
-        local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
+        local reach = math.max(now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S),
+          M.stopReach(sp))
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity()) then
+        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity(), sp) then
           toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
         end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
@@ -772,20 +789,194 @@ function M.takeChoice(o)
   return M.choice
 end
 
+-- The traffic cars of the region the player is in (the user, 2026-11-09: "the normal maps have this already"): a stock
+-- level names its region in info.json (northAmerica, europe, asiaPacific) and the game's traffic picks the vehicles
+-- of that region with Options > Gameplay > Traffic's smart selections on (gameplay/traffic/trafficUtils
+-- getBaseGroupParams). Ours spans the Earth: the region of the road rules' country (server navgraph.road_rules),
+-- the same filters as the game's own group (its simple vehicles too); nil (the game's own group) elsewhere, without
+-- smart selections, or when the group cannot be made.
+M.REGIONS = {
+  northAmerica = { 'US', 'CA', 'MX', 'PR' },
+  europe = { 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU',
+    'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'NO', 'CH', 'IS', 'LI', 'MC', 'SM', 'AD', 'AL', 'BA',
+    'ME', 'MK', 'RS', 'XK', 'MD', 'UA', 'BY', 'FO', 'GI', 'IM', 'JE', 'GG' },
+  asiaPacific = { 'JP', 'KR', 'TW', 'HK', 'MO', 'SG', 'MY', 'TH', 'ID', 'PH', 'AU', 'NZ' },
+}
+M.COUNTRY_NAMES = { US = 'United States', DE = 'Germany', IT = 'Italy', FR = 'France', JP = 'Japan' }   -- (countryRef)
+M.GROUP_SIZE = 40       -- vehicles drawn for the traffic's pool
+local regionOfCountry = {}
+for region, list in pairs(M.REGIONS) do for _, cc in ipairs(list) do regionOfCountry[cc] = region end end
+
+function M.regionOf(cc)
+  return type(cc) == 'string' and regionOfCountry[string.upper(cc)] or nil
+end
+
+function M.regionalGroupParams(cc, getSetting)
+  local region = M.regionOf(cc)
+  if not region or not getSetting or not getSetting('trafficSmartSelections') then return nil end
+  local params = { filters = { Type = { car = 1, truck = 0.6 }, Region = { [region] = 1, default = 1 } },
+    country = M.COUNTRY_NAMES[string.upper(cc)] or 'default', maxYear = 0, minPop = 50, allConfigs = true,
+    allMods = getSetting('trafficAllowMods') and true or false, modelPopPower = 1, configPopPower = 1 }
+  if getSetting('trafficSimpleVehicles') then
+    -- (the simple traffic models' configs carry their region too: US, EU and Japanese-market bodies; the game's
+    -- own simple group, createTrafficGroup's: prop traffic only, every config)
+    params.filters.Type = { proptraffic = 1 }
+    params.minPop = 0
+  else
+    params.filters['Config Type'] = { Police = 0, other = 1 }
+    if params.allMods then params.filters.Type.automation = 1; params.minPop = 0 end
+  end
+  return params, region
+end
+
+local function regionalGroup()
+  local st = rawget(_G, 'settings')
+  local cc = graph and graph.rules and graph.rules.country
+  local params, region = M.regionalGroupParams(cc, st and st.getValue and function(k) return st.getValue(k) end)
+  M.trafficRegionKey = region or 'none'
+  M.trafficRegion = nil
+  if not params then return nil end
+  if not core_multiSpawn and extensions and extensions.load then pcall(extensions.load, 'core_multiSpawn') end
+  if not (core_multiSpawn and core_multiSpawn.createGroup) then return nil end
+  local ok, g = pcall(core_multiSpawn.createGroup, M.GROUP_SIZE, params)
+  if not ok or type(g) ~= 'table' or not g[1] then return nil end
+  M.trafficRegion = region
+  log('I', 'beamngEarth', string.format('traffic: %s vehicles (%s)', region, tostring(cc)))
+  return g
+end
+
+local function setupTraffic(gt, c)
+  local okG, group = pcall(regionalGroup)
+  local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
+    { police = c.police, vehGroup = okG and group or nil })
+  if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+end
+
 local function startTraffic()
   started = true
   M.restoreChoice()       -- freeroam's own spawn time has passed
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
-  if gt and gt.getState() ~= 'on' then
-    local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
-  end
+  if gt and gt.getState() ~= 'on' then setupTraffic(gt, c) end
+end
+
+-- The traffic set up again with the new place's vehicles when a graph of another region comes (a teleport from
+-- the US to Germany kept the American cars): once per region change, the stock group outside the regions.
+M.REGION_CHECK_S = 2.0
+local regionCheckAt = 0
+local function checkRegion(t)
+  if t < regionCheckAt or not started or not M.trafficRegionKey then return end
+  regionCheckAt = t + M.REGION_CHECK_S
+  local want = M.regionOf(graph and graph.rules and graph.rules.country) or 'none'
+  if want == M.trafficRegionKey then return end
+  local c = M.choice
+  local gt = c and c.traffic and trafficSystem() or nil
+  if not gt or gt.getState() ~= 'on' then return end
+  log('I', 'beamngEarth', string.format('traffic: region %s -> %s, set up again', M.trafficRegionKey, want))
+  setupTraffic(gt, c)
+  M.trafficRegionKey = want         -- (once a change, whatever the setup did)
 end
 
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
 -- back on the new place's graph once it is in.
 local heldActive = nil
+
+-- Adaptive traffic amount (PR #728 / #773, ProxyFirewall202; docs/ADAPTIVE_TRAFFIC.md): with the setting on (M.ADAPTIVE,
+-- settings adaptiveTraffic; off by default), the stock traffic's active amount follows the graph's trafficProfile.target
+-- (server traffic.py: the nearest populated place and the road length round the graph's centre, a divided road
+-- doubling it), never over the player's own amount (the ceiling before we touched it, or the cars spawned), moved one
+-- car at a time at most every ADAPTIVE_STEP_S; after a teleport the new place's amount at once. Not while the pool is
+-- held for a teleport or an occupied traffic car is protected. A ceiling changed by someone else (the radial menu, the
+-- game's UI) becomes the player's amount. Off again: the player's amount back. Looked at every ADAPTIVE_CHECK_S.
+M.ADAPTIVE = false
+M.ADAPTIVE_STEP_S = 5
+M.ADAPTIVE_CHECK_S = 1
+-- base: the player's amount (the stock ceiling we found, or set by someone else since); seen: the ceiling as we last
+-- left it; touched: we changed it; paused: the player's traffic toggled off (ceiling 0), left alone until it is back
+local function newAdaptive()
+  return { base = nil, seen = nil, touched = false, paused = false, target = nil, lastStep = -math.huge,
+           lastCheck = -math.huge }
+end
+local adaptive = newAdaptive()
+
+-- Pure: the amount (whole cars) for a profile target t and the player's amount cap.
+function M.adaptiveTarget(t, cap)
+  t, cap = tonumber(t), tonumber(cap)
+  if not t or t ~= t or not cap or cap ~= cap then return nil end
+  return math.max(0, math.min(math.floor(cap), math.floor(t + 0.5)))
+end
+
+-- Pure: the next ceiling from current toward target, one car at a time.
+function M.adaptiveStep(current, target)
+  if current < target then return current + 1 elseif current > target then return current - 1 end
+  return current
+end
+
+-- The player's amount as a number of cars: base, at most the cars the traffic spawned (a ceiling of math.huge: those).
+local function adaptiveCap(gt)
+  local base = adaptive.base
+  local n = gt.getNumOfTraffic and tonumber(gt.getNumOfTraffic()) or nil
+  if not base or base == math.huge then base = n or base end
+  if n and base then base = math.min(base, n) end
+  return base
+end
+
+-- The amount the graph's profile asks for now (nil: adaptive off, no profile or no player's amount yet).
+local function adaptiveAmount(gt)
+  if not (M.ADAPTIVE and graph and graph.trafficProfile and gt and adaptive.base) then return nil end
+  return M.adaptiveTarget(graph.trafficProfile.target, adaptiveCap(gt))
+end
+
+local function updateAdaptive(now)
+  if now - adaptive.lastCheck < M.ADAPTIVE_CHECK_S then return end
+  adaptive.lastCheck = now
+  local gt = gameplay_traffic
+  if not (started and M.choice.traffic and gt and gt.getState and gt.getState() == 'on' and gt.setActiveAmount) then
+    return
+  end
+  if heldActive ~= nil or respawnAll or next(protectedTraffic) ~= nil then return end
+  local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
+  local cur = tonumber(vars.activeAmount)
+  if cur == nil then return end
+  if not M.ADAPTIVE then
+    if adaptive.touched and cur == adaptive.seen and adaptive.base ~= nil and not adaptive.paused then
+      pcall(gt.setActiveAmount, adaptive.base)               -- (off again: the player's amount back)
+      log('I', 'beamngEarth', 'Adaptive traffic off: active amount back to ' .. tostring(adaptive.base))
+    end
+    if adaptive.base ~= nil then adaptive = newAdaptive() end
+    return
+  end
+  if adaptive.seen == nil or cur ~= adaptive.seen then
+    -- (first look, or changed by someone else: the player's amount now; 0: their traffic toggled off)
+    if cur == 0 then adaptive.paused = true else adaptive.base, adaptive.paused = cur, false end
+    adaptive.seen = cur
+  end
+  if adaptive.paused then return end
+  local target = adaptiveAmount(gt)
+  adaptive.target = target
+  if not target or now - adaptive.lastStep < M.ADAPTIVE_STEP_S then return end
+  local current = cur
+  if current == math.huge then current = adaptiveCap(gt) end
+  if not current or current == target then return end
+  local nextAmount = M.adaptiveStep(current, target)
+  local ok, err = pcall(gt.setActiveAmount, nextAmount)
+  if ok then
+    adaptive.seen, adaptive.touched, adaptive.lastStep = nextAmount, true, now
+    log('D', 'beamngEarth', string.format('Adaptive traffic: active amount %s -> %d (target %d)', tostring(current),
+      nextAmount, target))
+  else
+    log('W', 'beamngEarth', 'Adaptive traffic: setActiveAmount: ' .. tostring(err))
+  end
+end
+
+function M._adaptiveTick(now) return updateAdaptive(now) end     -- (tests)
+function M.setAdaptive(on) M.ADAPTIVE = on and true or false end
+
+function M.trafficStatus()
+  return { enabled = M.ADAPTIVE, target = adaptive.target, applied = adaptive.touched and adaptive.seen or nil,
+           base = adaptive.base, paused = adaptive.paused, profile = graph and graph.trafficProfile or nil }
+end
+
 -- A rebase (core finishRebase, xf: the old frame -> the new one): the server's graph moved into the new anchor and
 -- applied again at once, as the roads and trees are moved. It was dropped instead (its anchor no longer the current
 -- one) and the game's map stayed in the old frame until the server's graph for the new anchor came, seconds later:
@@ -810,13 +1001,15 @@ function M.transform(xf, anchorId)
     end
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, lines = lines, moved = true }
+            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true
 end
 
 function M.currentGraph() return graph end      -- (tests)
+function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
+function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
 function M.onTeleport()
   respawnAll = true
@@ -1005,11 +1198,19 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  do
+    local ok, err = pcall(checkRegion, t0)
+    if not ok then log('W', 'beamngEarth', 'navgraph region: ' .. tostring(err)) end
+  end
   if applied then
     local ok, err = pcall(launchRespawned, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end
     ok, err = pcall(overtakeScan, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph overtake scan: ' .. tostring(err)) end
+    if t0 - adaptive.lastCheck >= M.ADAPTIVE_CHECK_S then       -- (once a second, on or off: off puts the amount back)
+      ok, err = pcall(updateAdaptive, t0)
+      if not ok then log('W', 'beamngEarth', 'navgraph adaptive traffic: ' .. tostring(err)) end
+    end
   end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
@@ -1064,6 +1265,12 @@ function M.update(aid, b, gov)
       local gt = gameplay_traffic
       if gt and heldActive then
         syncTrafficPool(gt)
+        -- (adaptive: the new place's amount at once, not stepped up from the old place's)
+        if M.ADAPTIVE and not adaptive.paused then
+          if adaptive.base == nil then adaptive.base = heldActive end    -- (the pool's 0 while held is not the player's)
+          local okA2, want = pcall(adaptiveAmount, gt)
+          if okA2 and want then heldActive, adaptive.seen, adaptive.touched = want, want, true end
+        end
         pcall(gt.setActiveAmount, heldActive)
         heldActive = nil
         scatterTraffic(gt, b)
@@ -1089,7 +1296,7 @@ function M.status()
            launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
-           traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
+           traffic = gameplay_traffic and gameplay_traffic.getState() or nil, trafficAdaptive = M.trafficStatus() }
 end
 
 function M.reset()
@@ -1111,6 +1318,7 @@ function M.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
+  adaptive = newAdaptive()
   launchCount, launchWait, lastLaunchScan, junctionNodes, junctionOf = {}, {}, -math.huge, nil, nil
   overtake.reset()
   pendingSignals = nil

@@ -79,6 +79,11 @@ T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, 
 T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }, 31),
+  'ahead, as fast: follows')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 25, y = 0 }, 31),
+  'ahead and faster: outruns the graph, not following (GitHub #855)')
+T.check(N.stopReach(31) > 200 and N.stopReach(10) < 60 + 1, 'a dead end seen as far as the car needs to stop')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
@@ -176,6 +181,90 @@ do
     'its tunnel lines (the minimap) too')
   T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
   jsonDecode, readFile = jd, rf
+end
+
+-- adaptive traffic amount (PR #728 / #773): the graph's trafficProfile kept through a rebase; the target capped at the
+-- player's amount, whole cars, one car a step; off by default
+do
+  T.check(N.ADAPTIVE == false, 'adaptive traffic off by default')
+  T.check(N.adaptiveTarget(4.4, 10) == 4 and N.adaptiveTarget(4.6, 10) == 5 and N.adaptiveTarget(64, 12) == 12
+    and N.adaptiveTarget(-1, 10) == 0 and N.adaptiveTarget(nil, 10) == nil and N.adaptiveTarget(0 / 0, 10) == nil,
+    'adaptive target: rounded, capped at the player\'s amount, never negative')
+  T.check(N.adaptiveStep(12, 7) == 11 and N.adaptiveStep(3, 8) == 4 and N.adaptiveStep(5, 5) == 5,
+    'adaptive step: one car at a time')
+  local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
+  jsonDecode = function() return { nodes = { a = { 0, 0, 5, 3 }, b = { 50, 0, 5, 3 } },
+    edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, trafficProfile = { target = 6.5, band = 'suburban' } } end
+  readFile = function() return '{}' end
+  T.check(N.onMessage({ anchorId = 3, path = 'x', serial = 2 }, 3) and N.currentGraph().trafficProfile.target == 6.5,
+    'the graph keeps its traffic profile')
+  N.transform({ apply = function(_, x, y, z) return x, y, z end }, 4)
+  T.check(N.currentGraph().trafficProfile.band == 'suburban', '... through a rebase')
+  local st = N.trafficStatus()
+  T.check(st.enabled == false and st.profile and st.profile.target == 6.5, 'traffic status: off, the profile shown')
+  N.setAdaptive(true)
+  T.check(N.ADAPTIVE == true and N.trafficStatus().enabled, 'the setting turns it on')
+  N.setAdaptive(false)
+  -- the stock traffic's ceiling moved toward the profile's 6.5 -> 7 cars, one every ADAPTIVE_STEP_S
+  local gt0, log0 = rawget(_G, 'gameplay_traffic'), rawget(_G, 'log')
+  local vars = { activeAmount = 10 }
+  gameplay_traffic = { getState = function() return 'on' end, getTrafficVars = function() return vars end,
+    getNumOfTraffic = function() return 10 end, setActiveAmount = function(n) vars.activeAmount = n end,
+    getTrafficData = function() return {} end }
+  if not log0 then log = function() end end
+  N.takeChoice({ trafficMode = 'enabled', trafficParked = 'disabled' })
+  N._startTraffic()
+  N._adaptiveTick(100)
+  T.check(vars.activeAmount == 10, 'off: the player\'s amount untouched')
+  N.setAdaptive(true)
+  N._adaptiveTick(101)
+  T.check(vars.activeAmount == 9, 'on: one car down toward the target: ' .. tostring(vars.activeAmount))
+  N._adaptiveTick(103)
+  T.check(vars.activeAmount == 9, '... not again within ADAPTIVE_STEP_S')
+  for t = 106, 140, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 7 and N.trafficStatus().target == 7, 'settled at the target: ' .. tostring(vars.activeAmount))
+  vars.activeAmount = 0                       -- (the player toggled the traffic off)
+  for t = 146, 170, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 0 and N.trafficStatus().paused, 'toggled off: left off')
+  vars.activeAmount = 4                       -- (on again with another amount: theirs now, under the target)
+  for t = 176, 200, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 4 and N.trafficStatus().base == 4, 'the player\'s new amount caps it: ' ..
+    tostring(vars.activeAmount))
+  vars.activeAmount = 10
+  for t = 206, 230, 5 do N._adaptiveTick(t) end
+  T.check(vars.activeAmount == 7, 'raised again: back down to the target')
+  N.setAdaptive(false)
+  N._adaptiveTick(240)
+  T.check(vars.activeAmount == 10, 'off again: the player\'s amount back: ' .. tostring(vars.activeAmount))
+  N._adaptiveTick(245)
+  T.check(vars.activeAmount == 10 and N.trafficStatus().base == nil, 'and left alone')
+  N.reset()
+  gameplay_traffic = gt0
+  if not log0 then log = nil end
+  jsonDecode, readFile = jd, rf
+end
+
+-- regional traffic vehicles: the road rules' country -> the stock levels' region, the game's own filters; none
+-- elsewhere or without smart selections (the game's own group then)
+do
+  T.check(N.regionOf('US') == 'northAmerica' and N.regionOf('de') == 'europe' and N.regionOf('JP') == 'asiaPacific'
+    and N.regionOf('BR') == nil and N.regionOf(nil) == nil, 'regions by country')
+  local set = { trafficSmartSelections = true, trafficSimpleVehicles = false, trafficAllowMods = false }
+  local get = function(k) return set[k] end
+  local p, region = N.regionalGroupParams('DE', get)
+  T.check(region == 'europe' and p.filters.Region.europe == 1 and p.filters.Region.default == 1
+    and p.filters['Config Type'].Police == 0 and p.country == 'Germany' and p.minPop == 50, 'europe group params')
+  T.check(N.regionalGroupParams('NL', get).country == 'default', 'a country the game has no name for: default')
+  T.check(N.regionalGroupParams('BR', get) == nil, 'no region: the game\'s own group')
+  set.trafficSmartSelections = false
+  T.check(N.regionalGroupParams('US', get) == nil, 'smart selections off: the game\'s own group')
+  set.trafficSmartSelections, set.trafficSimpleVehicles = true, true
+  local ps, rs = N.regionalGroupParams('US', get)
+  T.check(rs == 'northAmerica' and ps.filters.Type.proptraffic == 1 and ps.filters.Type.car == nil
+    and ps.filters.Region.northAmerica == 1 and ps.minPop == 0 and ps.allConfigs, 'simple vehicles: of the region too')
+  set.trafficSimpleVehicles, set.trafficAllowMods = false, true
+  local pm = N.regionalGroupParams('US', get)
+  T.check(pm.allMods and pm.filters.Type.automation == 1 and pm.minPop == 0, 'mods allowed: as the game')
 end
 
 T.done('test_navgraph')

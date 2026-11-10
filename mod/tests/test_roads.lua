@@ -298,6 +298,21 @@ roads.update(gov, 2)
 T.check(#statics() == 2, 'the collision mesh once the car is clear')
 roads.onDrop({ anchorId = 2, key = '0_0' })
 roads.update(gov, 2)
+-- A diagonal sidewalk may be inside the tile box but well away from the car.
+files['/t/diagonal.json'] = '{ chunks = { }, walkcol = { shape = "/t/diag.cdae", pos = { 0, 0, 0 } }, ' ..
+  'colliders = { walkcol = { { 99, 99, 0, 113, 113, 0.15, { 100, 100, 112, 112, 111, 113, 99, 101 } } } } }'
+car.pos = vec3(109, 102, 0.5)
+roads.onTile({ anchorId = 2, key = '0_0', path = '/t/diagonal.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 1, 'collision made beside a diagonal sidewalk while inside its bounding box')
+roads.onDrop({ anchorId = 2, key = '0_0' })
+roads.update(gov, 2)
+car.pos = vec3(108, 108.5, 0.5)
+roads.onTile({ anchorId = 2, key = '0_0', path = '/t/diagonal.json', n = 0 }, 2)
+roads.update(gov, 2)
+T.check(#statics() == 0, 'a collider still waits if the player is on the actual sidewalk')
+roads.onDrop({ anchorId = 2, key = '0_0' })
+roads.update(gov, 2)
 -- colliders only near the car: a far tile's sidewalk waits, made as the car comes near, dropped far behind
 roads.COLLIDE_CHECK_S = 0
 roads.RELOAD_EVERY_S = 0

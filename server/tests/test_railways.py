@@ -331,6 +331,17 @@ class RailwayTest(unittest.TestCase):
         o = np.argsort(pts[:, 0])
         return f, pts[o, 0], z[o]
 
+    def test_a_deck_up_a_steep_line_does_not_lift_the_track_below(self):
+        """GitHub #1051, Andermatt: a rack railway climbing ~10 % from the station to a bridge up the slope; the deck's
+        height, carried down the track at GRADE, stood the station's tracks 14 m over their own ground. A deck at its
+        line's level lifts nothing: the track below keeps its own bed."""
+        def slope(xy):          # level to x = -100 (the station), then 10 % up
+            return 1000.0 + 0.10 * np.maximum(xy[:, 0] + 100.0, 0.0)
+        f, x, z = self._line(slope)
+        ground = slope(np.c_[x, np.zeros(len(x))])
+        station = x < -150
+        self.assertLess(float(np.abs(z[station] - ground[station]).max()), 0.5, "the station on its own ground")
+
     def test_bridge_over_a_dip_keeps_the_line_level(self):
         """A short bridge over a stream or an underpass road (the ground 3 m down under it): the deck straight at the
         line's height, no ramps (a 6 m clearance stood an 8 m culvert's track 6.8 m up on 4.5 m ramps, 2026-10-25)."""

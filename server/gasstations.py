@@ -1798,7 +1798,7 @@ def station_cells(frame, tx, ty):
     return roads.cells_of_tile(frame, tx, ty, margin=TRAVEL_REACH_M + MERGE_M)
 
 
-def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
+def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
     """(records of the stations whose position lies in road tile (tx, ty), ids of the canopy outlines to leave out of
     its buildings): every station within its reach_of of the tile is laid out, so a canopy whose centroid (buildings.py's
     owner rule) is in this tile is dropped here even when its station is the neighbour's. md: mapdata.MapData;
@@ -1807,7 +1807,10 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
     list that gets (station id, [(lat (k,), lon (k,))]) of this tile's stations' forecourt pads (forecourt_pad; the
     ground's painters: surface.Surface.add_fuel_pads). Without places data (offline, no file): no stations.
     The EV chargers near the tile (evchargers.py) are laid out after the stations: their records carry "energy":
-    ["electricEnergy"], a charger by a laid-out station stands off its forecourt's edge (_beside_station)."""
+    ["electricEnergy"], a charger by a laid-out station stands off its forecourt's edge (_beside_station).
+    tried: a list that gets (kind "fuel" | "ev", lat, lon, laid out) of every station and charger whose position the tile
+    owns (the station finder, stationindex.StationIndex.mark: the user, 2026-11-09, a listing the world built nothing
+    for leaves the map)."""
     import evchargers
     import roads
     box = roads.tile_bbox(tx, ty)
@@ -1829,7 +1832,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
     except Exception as e:      # an unreachable source costs the stations, not the tile
         log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
-    sites = []
+    sites, owned = [], []
     for st in stations:
         r = reach_of(st)
         if not (x0 - r <= st.x < x1 + r and y0 - r <= st.y < y1 + r):
@@ -1844,11 +1847,17 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
                           service_lines(frame, rls, st.x, st.y, r), style_of(float(la), float(lo)))
         except Exception as e:
             log.debug("gas station %s: %s", st.id, e)
-            continue
+            continue            # (an error is no report: the listing stays on the finder's map)
+        if roads.box_owns(box, st.x, st.y):
+            owned.append(st)
         if site is not None:
             sites.append(site)
     recs, skip = [], set()
     kept = list(_one_per_shop(sites))      # (twice: the stations, then the chargers beside them)
+    if tried is not None:
+        laid = {site.station.id for site in kept}
+        for st in owned:
+            tried.append(("fuel",) + _ll_of(frame, st.x, st.y) + (st.id in laid,))
     for site in kept:
         skip.update(site.drop_ids)
         if cuts is not None:
@@ -1867,6 +1876,8 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         except Exception as e:
             log.debug("EV charger %s: %s", ch.id, e)
             continue
+        if tried is not None:
+            tried.append(("ev",) + _ll_of(frame, ch.x, ch.y) + (site is not None,))
         if site is None:
             continue
         rec = _record(site, frame, elev)
@@ -1875,6 +1886,12 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None):
         if pads is not None and site.pad:
             pads.append((site.station.id, _pad_ll(site.pad, frame)))
     return recs, frozenset(skip)
+
+
+def _ll_of(frame, x, y):
+    """(lat, lon) of a frame position, as floats."""
+    la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
+    return float(la), float(lo)
 
 
 def _charger_site(frame, md, ch, stations):

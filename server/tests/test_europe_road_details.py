@@ -58,9 +58,15 @@ class RailsTest(unittest.TestCase):
             toward_road=np.array([0.,1. if r[2]<0 else -1.])
             self.assertGreater(float(-axes[1,:2]@toward_road),.99)
 
-    def test_country_gate_left_hand_side_and_disable(self):
-        with mock.patch.object(eu,'country_at',return_value='GB'):
-            rows=self.rows(rr=[highway()]);self.assertEqual({round(r[2],1)for r in rows},{4.5})
+    def test_country_gate_and_disable(self):
+        for country in ('GB', 'IE'):
+            with mock.patch.object(eu, 'country_at', return_value=country):
+                rr = [highway(), highway('west', -18., True)]
+                rows = self.rows(box=(0., -30., 512., 30.), rr=rr)
+                self.assertEqual({r[2] for r in rows}, {4.5, -22.5})
+        for country in ('IT', 'NL', 'PL', 'NO'):
+            with mock.patch.object(eu, 'country_at', return_value=country):
+                self.assertEqual({r[2] for r in self.rows()}, {-4.5, 22.5})
         with mock.patch.object(eu,'country_at',return_value='US'):self.assertEqual(self.rows(),[])
         with mock.patch.dict(os.environ,{'BNE_EU_ROAD_DETAILS':'off'}):self.assertEqual(self.rows(),[])
         self.assertEqual(self.rows(rr=[highway(link=True)]),[])
@@ -69,6 +75,37 @@ class RailsTest(unittest.TestCase):
         self.assertEqual(eu.PROFILES['DE'],('mixed','none'))
         self.assertEqual(eu.PROFILES['SE'],('a','white'))
         self.assertEqual(eu.PROFILES['CH'],('a','none'))
+
+    def test_italian_motorway_only_adds_delineators_on_the_open_verge(self):
+        import delineators
+        box = (0., -20., 512., 40.)
+        bare = delineators.motorway_verges(self.roads, box, lambda *_: 'IT', [])
+        post = next(r for r in bare if r[2] < 0. and 30. < r[1] < 480.)
+        left, right = post[1] - 11., post[1] + 11.
+        # A short opening on one side is bounded by a mapped rail end and start.
+        # This guardrail is also farther out than the fallback's default offset.
+        def mapped_row(group, x, y=-8., z=0.):
+            return [group, x, y, z, 0., 0., .9, 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.]
+        mapped = [mapped_row(2, left), mapped_row(1, right), mapped_row(0, left - 3.)]
+        with mock.patch.object(eu, 'country_at', return_value='IT'):
+            rails = self.rows(box, mapped)
+            unpaired = self.rows(box, mapped[:1])
+        self.assertEqual({r[0] for r in rails}, {eu.group_index('IT', part=p) for p in ('start', 'end', 'run')})
+        self.assertEqual({r[2] for r in rails if abs(r[1] - post[1]) < 6.}, {22.5})
+        self.assertTrue(any(r[2] == -4.5 and abs(r[1] - post[1]) < 2. for r in unpaired))
+        self.assertTrue(any(r[2] == -4.5 for r in rails))
+        posts = delineators.motorway_verges(self.roads, box, lambda *_: 'IT', rails)
+        self.assertEqual(posts, [post])
+        self.assertEqual(delineators.motorway_verges(self.roads, box, lambda *_: 'FR', []), [])
+
+    def test_mapped_shoulder_across_tile_edge_suppresses_fallback(self):
+        mapped = [0, 50., -7.5, 0., 0., 0., .9, 0., 1., 0., 0., 0., 1., 0., 0., 0., 1.]
+        with mock.patch.object(guardrails, '_mapped_forest_rows', return_value=[mapped]) as provider:
+            rows = guardrails.forest_rows(self.frame, None, (0., -6., 512., 40.), flat, roads=self.roads)
+        self.assertLess(provider.call_args.args[2][1], mapped[2])
+        self.assertTrue(any(abs(r[1] - 50.) < 1.5 and r[2] > 0. for r in rows))
+        self.assertFalse(any(abs(r[1] - 50.) < 1.5 and r[2] < 0. for r in rows))
+        self.assertNotIn(-7.5, {r[2] for r in rows})
 
     def test_tile_ownership_and_mapped_barrier_suppression(self):
         union=self.rows();split=self.rows((0,-20,256,40))+self.rows((256,-20,512,40))

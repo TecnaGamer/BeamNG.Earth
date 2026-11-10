@@ -1009,12 +1009,22 @@ def profile(rails, ground, underpasses=()):
     if seeds:                                   # the decks' heights out along the track, GRADE per metre down
         top = max(seeds.values())
         d = roads._dijkstra(adj, {n: (top - h) / GRADE for n, h in seeds.items()})
+        # (a ground track: how far a deck stands over the track's own bed where they meet, run out at GRADE per metre
+        # on top of the bed, not the deck's height itself: on a mountain line climbing 10 % (a rack railway) a deck up
+        # the slope carried down at 2 % stood Andermatt's station 14 m over its own ground, GitHub #1051. On level ground
+        # the two are the same ramp.)
+        lifts = {node: h - float(np.mean(ends[node])) for node, h in seeds.items() if node in ends}
+        lifts = {node: v for node, v in lifts.items() if v > 0.0}
+        if lifts:
+            ltop = max(lifts.values())
+            dl = roads._dijkstra(adj, {node: (ltop - v) / GRADE for node, v in lifts.items()})
         for n, (a, b, s) in enumerate(edges):
-            reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
             if rails[n][2] == "bridge":         # (two decks end to end: still a straight run between their ends)
+                reach = np.maximum(top - GRADE * (d[a] + s), top - GRADE * (d[b] + s[-1] - s))
                 zb[n] = _envelope(s, np.maximum(zb[n], reach))
-            else:                               # a ground track follows its own bed: a distant deck carries the
-                zb[n] = np.minimum(np.maximum(zb[n], reach), zb[n] + SEED_LIFT_MAX_M)   # ramps to it, no higher
+            elif lifts:                         # a ground track follows its own bed: a distant deck carries the
+                lift = np.maximum(ltop - GRADE * (dl[a] + s), ltop - GRADE * (dl[b] + s[-1] - s))     # ramps to it
+                zb[n] = zb[n] + np.clip(lift, 0.0, SEED_LIFT_MAX_M)
     return list(zip(zb, zgs))
 
 

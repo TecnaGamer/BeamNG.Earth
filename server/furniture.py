@@ -12,6 +12,7 @@ generation"). Pure.
 import functools
 import hashlib
 import math
+import os
 
 import numpy as np
 
@@ -215,7 +216,15 @@ G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
+# The Nordic countries' junctions (Sweden's rule, junction_controls, the same in its neighbours): a lower road gives way
+# to the road through (a give-way triangle), roads of one class meet by the right-hand rule (no sign), a stop sign only
+# where the map has one. Norway: trafikkreglene §7 (vikeplikt for kjørende fra høyre; skilt 202 where a road joins a
+# main road), a stop sign (206) only where the view is poor (GitHub #1064: Harstad's minor junctions had STOP signs,
+# two back to back on one island); Finland's, Denmark's and Iceland's road traffic acts the same.
+GIVE_WAY_COUNTRIES = {"SE", "NO", "FI", "DK", "IS", "AX", "FO"}
+YELLOW_B1_COUNTRIES = {"SE", "FI", "AX"}       # (their give-way triangle is yellow inside: G_B1; Norway's white)
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
+ARM_JOIN_M = 3.0            # m: a road end alone this close to a junction of others belongs to it (_arms)
 
 
 def _arms(roads):
@@ -233,6 +242,17 @@ def _arms(roads):
                 continue
             k = (round(float(p[0]) / JUNCTION_SNAP_M), round(float(p[1]) / JUNCTION_SNAP_M))
             ends.setdefault(k, []).append((fid, spec, d / L, p, start, length))
+    # an end left alone within ARM_JOIN_M of a junction of two or more ends joins it (GitHub #1062: Harstad's roundabout
+    # entries ended 1-2.5 m off the ring's nodes, each a junction of one, and got no give-way sign)
+    multi = [k for k, v in ends.items() if len(v) >= 2]
+    if multi:
+        mp = np.array([np.asarray(ends[k][0][3][:2], np.float64) for k in multi])
+        for k in [k for k, v in ends.items() if len(v) == 1]:
+            p = np.asarray(ends[k][0][3][:2], np.float64)
+            d = np.hypot(*(mp - p).T)
+            j = int(np.argmin(d))
+            if d[j] <= ARM_JOIN_M:
+                ends[multi[j]].append(ends.pop(k)[0])
     return ends
 
 
@@ -245,6 +265,53 @@ def _outbound(a):
     if len(a) < 5 or not a[1].oneway or not getattr(a[1], "dir", 0):
         return False
     return (a[1].dir > 0) == bool(a[4])
+
+
+# Road-class right of way at unsignalised junctions (PR #728 / #773, ProxyFirewall202; BNE_PRIORITY_STOPS=on, off by
+# default: it puts stop signs, stop lines and AI stops at many more junctions everywhere, in the country too, and is
+# not checked in game yet). Where the roads of a junction rank differently (PRIORITY_RANK), the road through it is its
+# two highest arms (as Sweden's _SE_RANK) and every lower arm coming in stops; the AI's approaches carry the same order
+# in their drivability (navgraph._priority_way). Mapped signals still win, the hierarchy wins over guessed ones (no
+# infrastructure data); Sweden keeps its own rules, Germany's kernel its own junctions (de_on). Left as before: a
+# junction with a link (ramps and merges: a stop there halted the AI on an on-ramp's merge), a motorway, or fewer than
+# three ranked arms (service roads, driveways, tracks are neither the road through nor stopped: no stop sign at
+# every driveway).
+PRIORITY_STOPS = os.environ.get("BNE_PRIORITY_STOPS", "off") == "on"
+PRIORITY_RANK = {"trunk": 9, "primary": 8, "secondary": 7, "tertiary": 6, "unclassified": 5, "residential": 4,
+                 "living_street": 3}
+PRIORITY_DRIVABILITY = {3: 0.50, 4: 0.79, 5: 0.80, 6: 0.90, 7: 0.96, 8: 0.97, 9: 0.98}
+
+
+def priority_rank(spec):
+    """The road's rank in the right-of-way hierarchy (PRIORITY_RANK), None outside it (links, motorways, service)."""
+    if getattr(spec, "link", False):
+        return None
+    return PRIORITY_RANK.get(str(getattr(spec, "cls", "")))
+
+
+def priority_stop_arms(arms, ring=None):
+    """The arms (fid, spec, u, point, at its start, length) that stop by road-class right of way (PRIORITY_STOPS)."""
+    if not PRIORITY_STOPS or len(arms) < 3:
+        return []
+    if ring and sum(1 for a in arms if a[0] in ring) >= 2:
+        return []
+    if any(getattr(a[1], "link", False) or a[1].cls == "motorway" for a in arms):
+        return []
+    ranked = [(a, r) for a in arms for r in (priority_rank(a[1]),) if r is not None]
+    if len(ranked) < 3:
+        return []
+    through = sorted((r for _, r in ranked), reverse=True)[1]
+    return [a for a, r in ranked if r < through and not _outbound(a)]
+
+
+def priority_controls(arms, ring=None, signals=None, country=None):
+    """priority_stop_arms where the hierarchy decides the junction: not in Sweden, not at a mapped signal."""
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
+        return []
+    stops = priority_stop_arms(arms, ring)
+    if stops and signals is not None and _is_signalled(arms, signals):
+        return []
+    return stops
 
 
 SIGNAL_NEAR_M = 25.0        # m past the junction's widest arm a mapped traffic signal may stand (OSM maps them at the
@@ -343,14 +410,15 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
     major = [a for a in arms if a[1].cls in MAJOR]
-    minor = [a for a in arms if a[1].cls in MINOR]
-    if _is_signalled(arms, signals):
+    minor = [a for a in arms if a[1].cls in MINOR and not _outbound(a)]    # (no stop sign on a one-way out of it)
+    stops = priority_controls(arms, ring, signals, country)
+    if not stops and _is_signalled(arms, signals):
         # one head per way in: none on a one-way arm leaving it, none on a short link to the next signalled
         # junction (a divided road crossing a street is two junctions 20 m apart: the user's report 2026-10-14,
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
-    if str(country or "").upper() == "SE":
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
         put = []
@@ -361,13 +429,17 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
             if what is not None and not _outbound(a):
                 put.append((a, what))
         return put
+    if stops:
+        return [(a, G_STOP) for a in stops]
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
         # the stem: the arm least in line with another
         def straightest(a):
             return max(-float(a[2] @ b[2]) for b in arms if b is not a)
-        return [(min(arms, key=straightest), G_STOP)] if all(a[1].cls in MINOR for a in arms) else []
+        incoming = [a for a in arms if not _outbound(a)]
+        stem = min(incoming, key=straightest) if incoming else None
+        return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and stem is not None else []
     # the all-way coin flip: keyed on the roads that meet there (their map ids, sorted: the arms' order differs between
     # the road tiles and the road graph), the same from both and from every anchor (an 8 m cell of the junction in
     # the anchor's frame flipped junctions at a rebase: geotiles, 2026-10-29)
@@ -488,7 +560,8 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     designs.decide's decisions of the tile's junctions (made once for the signs and the paint, roads.build_tile); a
     junction of three arms or more it has not is decided here."""
     x0, y0, x1, y1 = box
-    sweden = str(country or "").upper() == "SE"
+    sweden = str(country or "").upper() in GIVE_WAY_COUNTRIES      # (the Nordic rules: GIVE_WAY_COUNTRIES)
+    yellow_b1 = str(country or "").upper() in YELLOW_B1_COUNTRIES   # (Sweden's and Finland's yellow give-way sign)
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -545,7 +618,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
                 continue
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         here = _controlled_here(arms, signals)
-        if len(arms) < 3 or not (on_ring or here or sweden):
+        if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
             continue
         if not (_owns(box, p[0], p[1])):
             continue
@@ -558,7 +631,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         wide = max(a[1].width for a in arms) / 2
         for arm, what in put:
             side, yaw = approach_pose(arm[2], what, left_hand)
-            b1 = sweden and what == G_YIELD
+            b1 = yellow_b1 and what == G_YIELD
             group = G_B1 if b1 else what
             if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)

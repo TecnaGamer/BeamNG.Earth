@@ -79,6 +79,7 @@ TICK_S = 30.0               # the background thread's check interval
 # space filled players' disks: the first week's telemetry had ~19k "No space left on device" errors (OSError 28),
 # most at the far tiles): 5 % of the disk, at least DISK_RESERVE_MIN and at most DISK_RESERVE_MAX
 DISK_RESERVE_SHARE = 0.05
+DISK_CHECK_S = 10.0         # s between disk_short's questions to the disk (a busy hard disk answers in seconds)
 DISK_RESERVE_MIN = 2 * 1e9
 DISK_RESERVE_MAX = 10 * 1e9
 DISK_MARGIN = 1e9           # ... and a disk short of it is cut back this much further (not a file at a time)
@@ -157,6 +158,7 @@ class Cache(NoCache):
         self._used = 0              # bytes of the entries with a known size
         self._cap = None            # bytes, 0 = unlimited (set below)
         self.disk_usage = shutil.disk_usage     # (tests: a stand-in)
+        self._disk_short, self._disk_at, self._disk_busy = 0, -float("inf"), False     # (disk_short's last answer)
         self._disk_warned = False
         self._dirty = False
         self.ready = False          # the start-up walk is done
@@ -582,15 +584,30 @@ class Cache(NoCache):
         return m
 
     # --- the background thread -------------------------------------------------------------------
-    def disk_short(self):
+    def disk_short(self, wait=False):
         """Bytes the cache's disk is short of its free-space reserve (DISK_RESERVE_*), 0 when it has it (or when the
-        disk cannot be asked)."""
+        disk cannot be asked). The disk is asked at most every DISK_CHECK_S, on a thread of its own; the answer is the
+        last one it gave (0 before the first): asked on every pose (refresh_status -> net_note), a busy hard disk took
+        2.6-9.9 s to answer on Windows and stalled the event loop 19 times in 23 minutes (GitHub #1054). wait: ask
+        now and wait for the answer (eviction's own check, off the loop)."""
+        now = time.monotonic()
+        if wait:
+            self._disk_check(now)
+        elif now - self._disk_at >= DISK_CHECK_S and not self._disk_busy:
+            self._disk_busy = True
+            threading.Thread(target=self._disk_check, args=(now,), name="cache disk check", daemon=True).start()
+        return self._disk_short
+
+    def _disk_check(self, now):
         try:
             du = self.disk_usage(self.root)
+            reserve = min(DISK_RESERVE_MAX, max(DISK_RESERVE_MIN, du.total * DISK_RESERVE_SHARE))
+            self._disk_short = int(max(0, reserve - du.free))
         except OSError:
-            return 0
-        reserve = min(DISK_RESERVE_MAX, max(DISK_RESERVE_MIN, du.total * DISK_RESERVE_SHARE))
-        return int(max(0, reserve - du.free))
+            self._disk_short = 0
+        finally:
+            self._disk_at = now
+            self._disk_busy = False
 
     def tick(self):
         """One check: evict when over the cap or when the disk runs short of its free reserve (at most every EVICT_S),
@@ -600,7 +617,7 @@ class Cache(NoCache):
         now = self.now()
         cap = self._cap
         due = self._last_evict is None or now - self._last_evict >= EVICT_S
-        short = self.disk_short() if self.managed else 0
+        short = self.disk_short(wait=True) if self.managed else 0
         if short and due:
             target = max(0, self._used - short - int(DISK_MARGIN))
             if self._used > target:

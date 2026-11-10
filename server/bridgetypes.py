@@ -69,6 +69,9 @@ NETWORK_SHARE = 4.0     # ... or this many times its run over water (not a city'
 _db = None
 _wd = None
 WD_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bridges_wd.npz")
+# bridges_wd.npz's build (its source text keys the revisit cache: revisit.source_closure): 2026-11-10, a cantilever
+# bridge a truss only where Wikidata says steel or iron (GitHub #1066: Andoybrua, concrete, was a 750 m through truss)
+WD_BUILD = "2026-11-10"
 WD_MATCH_M = 150.0      # a Wikidata bridge's point this close to the decks is theirs (its points sit on the bridge)
 
 

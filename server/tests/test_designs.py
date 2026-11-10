@@ -1394,7 +1394,8 @@ class MarkingsTest(unittest.TestCase):
         lines += [("east", "secondary", [tuple(c + (18, 0)), tuple(c + (140, 0))]),
                   ("west", "residential", [tuple(c - (18, 0)), tuple(c - (140, 0))])]
         feats = self.layer(None, lines=lines)
-        off, _ = self.build(feats, False)
+        with mock.patch.dict(os.environ, {"BNE_ROUNDABOUTS": "off"}):      # (plan 038 paints every country's entries)
+            off, _ = self.build(feats, False)
         self.assertFalse(self.z341(off), "today: nothing at the entries")
         self.assertFalse(self.paint(off))
         ch, _ = self.build(feats)

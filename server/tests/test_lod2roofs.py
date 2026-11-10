@@ -1,3 +1,4 @@
+import os
 """lod2roofs: a measured record fills what the map leaves out of the footprint it stands in; the map's own values stay,
 nothing is asked for outside Germany, and a missing shard means the predicted roofs."""
 import io
@@ -157,3 +158,23 @@ class ShardTest(Base):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CreditTest(unittest.TestCase):
+    def test_credited_only_with_a_shard_on_disk(self):
+        import tempfile, credits
+        d = tempfile.mkdtemp()
+        self.addCleanup(__import__("shutil").rmtree, d, True)
+        lat, lon = 52.52, 13.405                    # (Berlin)
+        self.assertFalse(lr.credited_near(d, lat, lon, 500.0))
+        x, y = lr.tile_of(lat, lon)
+        os.makedirs(os.path.join(d, "pagesdata", "lod2"))
+        path = os.path.join(d, "pagesdata", "lod2", f"{x}_{y}.npz")
+        open(path, "wb").close()                    # (a 404 kept as an empty file: no records, no credit)
+        self.assertFalse(lr.credited_near(d, lat, lon, 500.0))
+        with open(path, "wb") as fh:
+            fh.write(b"x")
+        self.assertTrue(lr.credited_near(d, lat, lon, 500.0))
+        self.assertFalse(lr.credited_near(d, 48.85, 2.35, 500.0))     # (Paris: outside Germany)
+        self.assertIn("GeoBasis-DE", credits.full_label("roof:lod2-de"))
+        self.assertIn("roof:lod2-de", credits.ORDER)

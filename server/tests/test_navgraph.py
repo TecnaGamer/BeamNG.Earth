@@ -54,6 +54,38 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_graph_has_a_traffic_profile(self):
+        g = graph([[(0, 0), (300, 0)]], ["primary"], connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        p = g["trafficProfile"]
+        self.assertEqual(p["sampleRadiusM"], 750)
+        self.assertAlmostEqual(p["roadDensityKmKm2"], 0.3 / (np.pi * 0.75 ** 2), places=2)
+        self.assertEqual(p["roadClass"], "primary")
+        self.assertIn("target", p)
+        self.assertTrue(all(len(e) == 8 for e in g["edges"]), "the edges as before")
+
+    def test_priority_stops_in_the_graph(self):
+        """furniture.PRIORITY_STOPS: a residential crossing a primary stops (a stop junction for the AI), its approaches
+        below the primary's in drivability, the primary's a little slower than with it off."""
+        lines = [[(-100, 0), (0, 0)], [(0, 0), (100, 0)], [(0, -100), (0, 0)], [(0, 0), (0, 100)]]
+        con = [(0, "W", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "E", 1.0, 1.0),
+               (2, "S", 0.0, 0.0), (2, "J", 1.0, 1.0), (3, "J", 0.0, 0.0), (3, "N", 1.0, 1.0)]
+        cls = ["primary", "primary", "residential", "residential"]
+        import furniture
+        off = graph(lines, cls, connectors=con)
+        with mock.patch.object(furniture, "PRIORITY_STOPS", True):
+            on = graph(lines, cls, connectors=con)
+        stops = [s for s in on["signals"] if s["j"] == "cJ"]
+        self.assertEqual(len(stops), 1)
+        self.assertEqual(stops[0]["kind"], "stop")
+        self.assertEqual(len(stops[0]["app"]), 2, "the two residential approaches")
+
+        res_on = [e for e in on["edges"] if "cJ" in e[:2] and e[6] < 0.8]
+        self.assertTrue(res_on and all(e[6] == furniture.PRIORITY_DRIVABILITY[4] for e in res_on))
+        prim_on = sorted(e[5] for e in on["edges"] if "cJ" in e[:2] and e[6] > 0.9)
+        prim_off = sorted(e[5] for e in off["edges"] if "cJ" in e[:2] and e[6] > 0.9)
+        self.assertEqual(len(prim_on), len(prim_off))
+        self.assertTrue(all(a < b for a, b in zip(prim_on, prim_off)), (prim_on, prim_off))
+
     def test_junction_shares_the_connector(self):
         g = graph([[(0, 0), (100, 0)], [(100, 0), (100, 100)]], ["residential", "residential"],
                   connectors=[(0, "A", 0.0, 0.0), (0, "J", 1.0, 1.0), (1, "J", 0.0, 0.0), (1, "B", 1.0, 1.0)])
@@ -179,6 +211,7 @@ class GraphTest(unittest.TestCase):
     def test_tunnel_stretch_left_out(self):
         f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        f.rules["max_speed_kmh"] = rules([(0, 70.0)], "float")
         g = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
         for e in g["edges"]:
             mid = (g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2
@@ -187,7 +220,9 @@ class GraphTest(unittest.TestCase):
         # ... but drawn on the minimap (its "lines"): the stretch from 120 to 210 m covered, end to end
         xs = sorted(x for ln in g["lines"] for x in (ln[0], ln[2]))
         self.assertTrue(g["lines"] and xs[0] <= 130 and xs[-1] >= 200, g["lines"])
-        self.assertTrue(all(len(ln) == 5 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+        self.assertTrue(all(len(ln) == 6 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+        self.assertTrue(all(abs(ln[5] - 70.0 / 3.6) < 0.01 for ln in g["lines"]),
+                        "the separate tunnel minimap lines retain the mapped legal limit in m/s")
 
     def test_a_built_tunnel_is_the_ais_at_its_floor(self):
         """A tunnel the road tiles build (roads.TunnelProfiles' parts: tunnels=) is driven through, its nodes at the
@@ -822,3 +857,15 @@ class RulesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostedLimitTest(unittest.TestCase):
+    """GitHub #1061: an edge's posted limit (e[9]) where its AI target (e[5]) is not it, or not mapped."""
+
+    def test_posted_field(self):
+        import navgraph as ng
+        self.assertIsNone(ng.posted_field(24.6, 24.6, True))          # (the target is the limit: nothing)
+        self.assertIsNone(ng.posted_field(24.6, 24.6, False))
+        self.assertEqual(ng.posted_field(24.6, 18.0, True), 24.6)     # (a bend: the limit)
+        self.assertEqual(ng.posted_field(24.6, 18.0, False), -24.6)   # (the class's default: negative)
+        self.assertIsNone(ng.posted_field(None, 10.0, True))

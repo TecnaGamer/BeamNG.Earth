@@ -219,10 +219,14 @@ class Vegetation:
         except ValueError:
             return
         keys = sorted(keys, key=lambda k: (k.center()[0] - lat) ** 2 + ((k.center()[1] - lon) * math.cos(math.radians(lat))) ** 2)
+        with self._lock:
+            mem = set(self._mem)
         with self._warm_cv:
+            # (in memory only here; a cell on disk is skipped by the warm thread: ready()'s file checks for 64 cells, on
+            # the event loop from on_pose, held it 11.3 s on a busy hard disk, GitHub #1054)
             for k in keys:
                 kk = (int(k.x), int(k.y))
-                if kk not in self._warm and not self.ready(k):
+                if kk not in self._warm and kk not in mem:
                     self._warm.append(kk)
             if self._warm_thread is None:
                 self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
@@ -237,6 +241,8 @@ class Vegetation:
                     self._warm_cv.wait()
                 x, y = self._warm.pop(0)
             try:
+                if self.ready((mapcells.ZOOM, x, y)):
+                    continue            # (built before: on disk)
                 self.cell((mapcells.ZOOM, x, y))
             except Exception as e:
                 import netfetch

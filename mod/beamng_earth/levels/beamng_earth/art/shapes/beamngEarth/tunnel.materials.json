@@ -159,7 +159,8 @@
       {}
     ],
     "groundType": "ROCK",
-    "translucent": false
+    "translucent": false,
+    "doubleSided": true
   },
   "bne_tunnel_soil": {
     "name": "bne_tunnel_soil",
@@ -496,7 +497,8 @@
       {}
     ],
     "groundType": "CONCRETE",
-    "translucent": false
+    "translucent": false,
+    "doubleSided": true
   },
   "bne_rail_ballast_weedy": {
     "name": "bne_rail_ballast_weedy",

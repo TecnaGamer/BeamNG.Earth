@@ -272,14 +272,16 @@ def validate_artifact(data, artifact=None):
         if len(groups[group]) != len(meta[name]) or any(len(a) < 2 for a in groups[group]):
             raise BundleError("Polyline metadata cardinality mismatch")
     from grading import Plan
-    from roads import Spec
+    from roads import Spec, spec_from_json
+    from sidewalks import EU_SLAB
     from grading import set_widen
     plans, ci, bi, wi = [], 0, 0, 0
-    fields = {"fid", "half", "abut", "road_half", "rid", "max_wall", "cut", "bank", "steep", "widen"}
+    fields = {"fid", "half", "abut", "road_half", "rid", "rank", "max_wall", "cut", "bank", "steep", "widen"}
     for item, xy, heights in zip(plans_meta, groups["p"], groups["z"]):
         if (not isinstance(item, dict) or set(item) != fields or len(xy) < 2 or len(xy) != len(heights)
                 or not _text(item["fid"])
                 or type(item["rid"]) is not int or not -1 <= item["rid"] <= 2 ** 31 - 1
+                or type(item["rank"]) is not int or not -1 <= item["rank"] <= 10000
                 or not all(_number(item[k], 0, 10000) for k in ("half", "road_half", "max_wall"))
                 or not isinstance(item["abut"], list) or len(item["abut"]) != 2
                 or any(type(v) is not bool for v in item["abut"])
@@ -304,6 +306,7 @@ def validate_artifact(data, artifact=None):
             wi += 1
         p = Plan(xy, heights, item["half"], tuple(item["abut"]), cut, item["road_half"])
         p.rid, p.max_wall, p.bank, p.steep = item["rid"], item["max_wall"], bank, item["steep"]
+        p.rank = item["rank"]
         set_widen(p, widen)
         plans.append((item["fid"], p))
     if ci != len(groups["c"]) or bi != len(groups["b"]) or wi != len(groups["w"]):
@@ -313,15 +316,23 @@ def validate_artifact(data, artifact=None):
             raise BundleError("Invalid width")
     opens = []
     for xy, spec in zip(groups["o"], meta["opens"]):
-        if not isinstance(spec, dict) or set(spec) != set(Spec._fields):
+        if not isinstance(spec, dict) or set(spec) - {"street"} != set(Spec._fields) - {"street"}:
             raise BundleError("Invalid road specification")
         for name, value in spec.items():
             if name in ("kind", "cls"):
                 valid = _text(value, 128)
             elif name == "surf":
                 valid = value is None or _text(value, 128)
-            elif name in ("urban", "oneway", "link", "mountain"):
+            elif name in ("urban", "oneway", "link", "mountain", "france"):
                 valid = type(value) is bool
+            elif name == "street":
+                valid = value is None or (
+                    isinstance(value, list) and len(value) == 4 and _number(value[2], 0, 5)
+                    and type(value[3]) is bool and all(
+                        w is None or (isinstance(w, list) and len(w) == 4 and _number(w[0], .5, 7)
+                                      and _number(w[1], 0, 20) and _number(w[2], 0, 1)
+                                      and isinstance(w[3], str) and w[3] in EU_SLAB)
+                        for w in value[:2]))
             elif name == "sides":
                 valid = value is None or isinstance(value, list) and len(value) <= 2 and all(type(v) is int and v in (-1, 1) for v in value)
             elif name == "dir":
@@ -330,7 +341,7 @@ def validate_artifact(data, artifact=None):
                 valid = value is None and name in ("kmh", "gap", "median", "lanes") or _number(value, 0, 10000)
             if not valid:
                 raise BundleError("Invalid road specification field")
-        opens.append((xy, Spec(**{**spec, "sides": tuple(spec["sides"]) if spec["sides"] is not None else None})))
+        opens.append((xy, spec_from_json(spec)))
     return plans, list(zip(groups["k"], meta["keeps"])), list(zip(groups["v"], meta["covers"])), opens
 
 

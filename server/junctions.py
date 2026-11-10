@@ -202,7 +202,16 @@ def _crosses(a, b, line):
     return bool(((d1 * d2 < 0) & (d3 * d4 < 0)).any())
 
 
-def _across(roads, bi, bj, cr, X, walk_w, debug=None):
+def _corner_is_simple(curb, inward, outer):
+    """The arc and the far edge must form a single slab with no crossing sides."""
+    from sidewalks import CURB_W
+
+    outline = np.vstack((curb + inward * CURB_W, np.asarray(outer)[:, :2]))
+    closed = np.vstack((outline, outline[0]))
+    return not any(_crosses(a, b, closed) for a, b in zip(closed[:-1], closed[1:]))
+
+
+def _across(roads, bi, bj, cr, X, walk_w, debug=None, footways=(None, None)):
     """The corner from branch bi (its left side) to branch bj (its right side), whose nodes the road cr joins:
     (corner dict as find's, cut on bi, cut on bj) or None (the pieces do not fit, or the corner would lie on a
     carriageway). No curb extensions here: the curb at the full width."""
@@ -248,8 +257,9 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     nrm /= np.maximum(np.hypot(*nrm.T), 1e-9)[:, None]
     flip = ((curb2 - X) * nrm).sum(1) < 0           # toward the sidewalk: away from the junction
     nrm[flip] = -nrm[flip]
-    wki = spi.walk if walk_w is None else walk_w
-    wkj = spj.walk if walk_w is None else walk_w
+    fi, fj = footways
+    wki = fi.width if fi is not None else (spi.walk if walk_w is None else walk_w)
+    wkj = fj.width if fj is not None else (spj.walk if walk_w is None else walk_w)
     wkc = max(wki, wkj)
     ni, nj, nc = _left(ui), _left(uj), _left(uc)
     Oi = _line_x(Pi + ni * (wi + wki), ui, Pi - nc * (wc + wkc), uc)
@@ -262,6 +272,8 @@ def _across(roads, bi, bj, cr, X, walk_w, debug=None):
     mids = [Oj] if len(a1) == 0 else [Oi] if len(a2) == 0 else [Oj, Oi]
     outer = [(*(Pj + uj * tj - nj * (wj + wkj)), zj)] + [(*o, zo) for o in mids] + \
         [(*(Pi + ui * ti + ni * (wi + wki)), zi)]
+    if (fi is not None or fj is not None) and not _corner_is_simple(curb2, nrm, outer):
+        return None
     probe = np.vstack([curb2 + nrm * 0.8, curb2 + nrm * 2.0, mids])
     hit = _on_carriageway(probe, roads, (X, 60.0), half={roads[ri][0]: wi, roads[rj][0]: wj, roads[cr][0]: wc})
     if hit is not None:
@@ -429,14 +441,28 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
             if ri == rj and n == 2:
                 continue
             spi, spj = roads[ri][1], roads[rj][1]
+            fi = fj = None
+            if not pavement:
+                ei, ej = getattr(spi, "street", None), getattr(spj, "street", None)
+                if ei is not None:
+                    fi = ei.side(li)
+                    if fi is None or fi.setback:
+                        continue
+                if ej is not None:
+                    fj = ej.side(-lj)
+                    if fj is None or fj.setback:
+                        continue
+            footway = max((f for f in (fi, fj) if f), key=lambda f: (f.width, f.surface), default=None)
             na, nb = node_of[(ri, vi)], node_of[(rj, vj)]
             cr = connector.get(frozenset((na, nb))) if na != nb else None
             if cr is not None and has_walk(spi) and has_walk(spj) and not pavement:     # (a curb's: not pavement's)
                 # two nodes of a merged junction: the curb turns onto the connector's edge at one node,
                 # runs along it and turns off at the other (an offset junction, Fells Point 2026-10-17)
-                got = _across(roads, branches[i], branches[j], cr, X, walk_w, debug)
+                got = _across(roads, branches[i], branches[j], cr, X, walk_w, debug, (fi, fj))
                 if got is not None:
                     corner, ci, cj = got
+                    if footway is not None:
+                        corner["footway"] = footway
                     corners.append(corner)
                     cuts.setdefault((roads[ri][0], li), []).append((Pi.copy(), ui, ci))
                     cuts.setdefault((roads[rj][0], -lj), []).append((Pj.copy(), uj, cj))
@@ -491,8 +517,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                     if debug is not None:
                         debug.append(('short branch', round(_branch_len(roads[ri][2], vi, si), 1), round(ci, 1), round(_branch_len(roads[rj][2], vj, sj), 1), round(cj, 1), X.round(1).tolist()))
                     continue
-                wki = spi.walk if walk_w is None else walk_w
-                wkj = spj.walk if walk_w is None else walk_w
+                wki = fi.width if fi is not None else (spi.walk if walk_w is None else walk_w)
+                wkj = fj.width if fj is not None else (spj.walk if walk_w is None else walk_w)
                 O = _line_x(Pi + ni * (wi + wki), ui, Pj - nj * (wj + wkj), uj)
                 if O is None:
                     continue
@@ -523,6 +549,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 zci = _z_along(roads[ri][2], vi, si, ci)
                 zcj = _z_along(roads[rj][2], vj, sj, cj)
                 outer = [(*(Pj + uj * cj - nj * (wj + wkj)), zcj), (*O, zo), (*(Pi + ui * ci + ni * (wi + wki)), zci)]
+                if footway is not None and not _corner_is_simple(curb2, nrm, outer):
+                    continue
                 Cc = _line_x(Pi + ni * di, ui, Pj - nj * dj, uj)
                 fill = (np.vstack([[*Cc, zo], np.column_stack((arc2, z[len(pre):len(pre) + k]))])
                         if Cc is not None else None)            # (an np.r_ per arc point: ~1/6 of find())
@@ -544,6 +572,8 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                         debug.append(('on carriageway', hit[:8], hit in internal, roads[ri][0][:8], roads[rj][0][:8], round(theta), X.round(1).tolist()))
                     continue
                 corner = {"arc": curb, "inward": nrm, "outer": outer, "fill": fill, "ramps": []}
+                if footway is not None:
+                    corner["footway"] = footway
                 if pavement:
                     corner["road_sides"] = ((roads[ri][0], li), (roads[rj][0], -lj))
                     corner["edge_cuts"] = ((Pi.copy(), ui, ci), (Pj.copy(), uj, cj))

@@ -31,6 +31,7 @@ unchanged).
 """
 import logging
 import math
+import os
 import time
 
 import numpy as np
@@ -110,12 +111,25 @@ FEATURES = {
     "canopy:lidarbc-chm": "LidarBC (OGL-BC)",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
+    "roof:lod2-de": "German states' LoD2 roofs (GeoBasis-DE)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+}
+# (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
+LONG = {
+    "roof:lod2-de": "Roof shapes and heights: changed data from the German states' LoD2 building models: "
+                    "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0; Bayerische Vermessungsverwaltung - "
+                    "www.geodaten.bayern.de (CC BY 4.0); Geoportal Berlin (dl-de/zero-2.0); GeoBasis-DE / LGB "
+                    "(dl-de/by-2-0); Landesamt GeoInformation Bremen (CC BY 4.0); Freie und Hansestadt Hamburg, LGV "
+                    "(dl-de/by-2-0); HVBG Hessen (dl-de/zero-2.0); (c) GeoBasis-DE/LGLN (CC BY 4.0); (c) GeoBasis-DE/M-V "
+                    "(CC BY 4.0); Geobasis NRW (dl-de/zero-2.0); (c) GeoBasis-DE / LVermGeoRP, dl-de/by-2-0, "
+                    "www.lvermgeo.rlp.de; Landesamt fur Geobasisinformation Sachsen (GeoSN), dl-de/by-2-0; "
+                    "(c) GeoBasis-DE / LVermGeo ST (dl-de/by-2-0); data changed",
 }
 SHORT.update(FEATURES)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
+          ("roof", "Roofs", "Far roofs"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
           ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)
@@ -144,7 +158,7 @@ def full_label(i):
         return ELEVATION.get(name, name)
     if i == WEATHER_ID:
         return weathermod.CREDIT
-    return FEATURES.get(i, name)
+    return LONG.get(i) or FEATURES.get(i, name)
 
 
 def label(i):
@@ -231,6 +245,14 @@ def feature_ids(conn):
             if bridgetypes.wd_near(lat, lon, FEATURE_NEAR_M):
                 ids.add("bridge:wikidata")
         except Exception:           # (the inventories are optional files)
+            pass
+        try:                        # (a measured German roof shard on disk near: lod2roofs)
+            import lod2roofs
+            src = getattr(md, "lod2_roofs", None)
+            if src is not None and src.dir and lod2roofs.credited_near(os.path.dirname(os.path.dirname(src.dir)),
+                                                                      lat, lon, FEATURE_NEAR_M):
+                ids.add("roof:lod2-de")
+        except Exception:
             pass
         try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
             import threedmr

@@ -213,6 +213,7 @@ class PortalCover(unittest.TestCase):
                          "a long one stays a low arch")
 
 
+
 class ArchRaise(unittest.TestCase):
     def test_ground_over_a_low_arch_stays_over_its_vault(self):
         xy = np.array([[0.0, 0.0], [30.0, 0.0]])
