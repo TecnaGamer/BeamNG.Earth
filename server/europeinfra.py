@@ -8,7 +8,7 @@ No profile changes junction priorities, speed limits, or STOP placement.
 """
 from dataclasses import dataclass,replace
 
-VERSION = 'europe-infrastructure-v4-town-layouts'
+VERSION = 'europe-infrastructure-v5-italian-albanian-delineators'
 
 
 @dataclass(frozen=True)
@@ -58,7 +58,7 @@ TOWNS = {
 # measured national percentages. The France preference is kept in poleprofiles.
 KITS = {
     'AD': Kit('red_white', 'ad', ('concrete_round',), 'red'),
-    'AL': Kit('red_white', 'red_black', ('concrete_round', 'concrete_three'), 'blue'),
+    'AL': Kit('red_white', 'it_al', ('concrete_round', 'concrete_three'), 'blue'),
     'AT': Kit('red_white', 'at', ('concrete_round', 'wood_a'), 'blue_border'),
     'AX': Kit('yellow_black', 'nordic', ('wood_side', 'wood_h'), 'blue'),
     'BA': Kit('red_white', 'red_black', ('concrete_round',), 'yellow'),
@@ -84,7 +84,7 @@ KITS = {
     'IE': Kit('yellow_black', 'ie', ('wood_side', 'wood_a'), 'ie'),
     'IM': Kit('white_black', 'gb', ('wood_side',), 'uk'),
     'IS': Kit('yellow_black', 'is', ('wood_h',), 'skyline_yellow'),
-    'IT': Kit('white_black', 'red_black', ('concrete_round', 'concrete_pair'), 'plain'),
+    'IT': Kit('white_black', 'it_al', ('concrete_round', 'concrete_pair'), 'plain'),
     'JE': Kit('white_black', 'gb', ('wood_side',), 'uk'),
     'LI': Kit('white_black', 'ch', ('wood_side', 'concrete_round'), 'plain'),
     'LT': Kit('red_white', 'red_black', ('concrete_three', 'wood_a'), 'blue'),

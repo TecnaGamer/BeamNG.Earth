@@ -9,7 +9,8 @@ import os
 import numpy as np
 import geotiles
 
-VERSION='eu-road-details-2026-11-v3-local-directions-j14'
+VERSION='eu-road-details-2026-11-v5-motorway-verges'
+VERGE_CONTEXT_M = 32.0
 PROFILES={c:('a','red') for c in
           'AD AL AM AT AX AZ BA BE BG BY CH CY CZ DE DK EE ES FI FO FR GB GE GG GI GR HR HU IE IM IS IT JE LI LT LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SK SM TR UA VA XK'.split()}
 for c in 'DE IE ME TR'.split():PROFILES[c]=('mixed','red')
@@ -82,6 +83,47 @@ def _near_barrier(q,segments,reach=2.0):
     return bool((np.linalg.norm(q-a-t[:,None]*d,axis=1)<reach).any())
 
 
+def is_motorway_mainline(spec):
+    return spec.cls == 'motorway' and spec.oneway and not spec.link and spec.kind == 'paved'
+
+
+def _verge_evidence(rows):
+    """Mapped modules and short openings between facing mapped terminals."""
+    a, b = _rail_segments(rows)
+    xyz = np.asarray([r[1:4] for r in rows if len(r) >= 17], float).reshape(-1, 3)
+    lines = np.column_stack((b - a, np.zeros(len(a))))
+    terminals = [(np.asarray(r[1:4]), np.asarray(r[8:10]) * (-1 if r[0] in (1, 5) else 1))
+                 for r in rows if len(r) >= 17 and r[0] in (1, 2, 4, 5)]
+    if terminals:
+        ends, outward = map(np.asarray, zip(*terminals))
+        gaps, spans = [], []
+        for i, (end, heading) in enumerate(terminals):
+            d = ends[i+1:] - end
+            along = d[:, :2] @ heading
+            across = d[:, 0] * heading[1] - d[:, 1] * heading[0]
+            match = ((along >= 4.) & (along <= 25.) & (np.abs(across) <= 1.5)
+                     & (np.abs(d[:, 2]) <= 1.8) & (outward[i+1:] @ heading < -.94))
+            gaps.extend(end + .5 * d[match])
+            spans.extend(d[match])
+        if gaps:
+            xyz = np.vstack((xyz, gaps))
+            lines = np.vstack((lines, spans))
+    half = .5 * np.linalg.norm(lines[:, :2], axis=1)
+    return xyz, lines / np.maximum(2. * half[:, None], 1e-9), half
+
+
+def _verge_covered(q, tangent, outward, evidence):
+    xyz, axes, half = evidence
+    delta = q - xyz
+    along = np.clip((delta[:, :2] * axes[:, :2]).sum(1), -half, half)
+    offset = delta - along[:, None] * axes
+    across = offset[:, :2] @ outward
+    return bool(((np.abs(axes[:, :2] @ tangent) > .85)
+                 & (np.abs(offset[:, :2] @ tangent) < 1.75)
+                 & (np.abs(offset[:, 2]) < 2.)
+                 & (across > -6.) & (across < 1.5)).any())
+
+
 def _clear(q,segments,margin=.55):
     if segments is None:return True
     v=q[:2]-segments['a'];s=np.clip((v*segments['unit']).sum(1),0,segments['len'])
@@ -130,23 +172,24 @@ def sos_access(rows,phones,road_segments=None):
     return [r for i,r in enumerate(rows)if i not in removed]+caps
 
 
-def extend(frame,roads,box,elev,mapped,decks=()):
+def extend(frame,roads,box,elev,mapped,decks=(),*,context=None):
     """Outer rail estimates: no crossing carriageways, ramps, bridges or mapped barriers.
 
     Uses full feature station origins then half-open tile ownership. This is
     intentionally a visual motorway fallback, not a claim rails exist everywhere.
     """
     if not enabled():return mapped
+    from europeinfra import LEFT_HAND
     import furniture as f
     import guardrails as g
     from roadphones import on_highways
     phones=on_highways(frame,roads,box,50)
-    rsegs=g._road_segments(roads);barriers=_rail_segments(mapped)
+    rsegs=g._road_segments(roads)
+    evidence=_verge_evidence(mapped if context is None else context)
     deck_segments=g._deck_segments(decks)
     result=list(mapped);seen=set()
     for fid,spec,line,*_ in roads:
-        if spec.cls not in {'motorway','trunk'} or not spec.oneway or spec.link or spec.kind!='paved':continue
-        if spec.cls=='trunk' and (spec.walk or spec.urban):continue
+        if not is_motorway_mainline(spec):continue
         line=np.asarray(line,float)
         if len(line)<2 or line.shape[1]<3:continue
         identity=(str(fid),tuple(np.round(line[0,:2],2)),tuple(np.round(line[-1,:2],2)))
@@ -158,11 +201,8 @@ def extend(frame,roads,box,elev,mapped,decks=()):
         stations=(np.arange(count)+.5)*(length/count)
         # Existing source direction is preserved; dir chooses the driving side.
         pts,tans=f._at(line,stations);before,_=f._at(line,stations-1.5);after,_=f._at(line,stations+1.5)
-        country0=country_at(frame,pts[len(pts)//2]) if len(pts) else None
-        if country0 not in PROFILES:continue
-        driving=1 if country0 in {'GB','IE','IM','JE','GG','CY','MT'} else -1
-        side=driving*(spec.dir or 1)
-        for k,(p,t,a,b) in enumerate(zip(pts,tans,before,after)):
+        side=(1 if country_at(frame,pts[len(pts)//2]) in LEFT_HAND else -1)*(spec.dir or 1)
+        for p,t,a,b in zip(pts,tans,before,after):
             n=np.array([-t[1],t[0]])*side
             q=p.copy();q[:2]+=n*(spec.width/2+1.0)
             if not geotiles.box_owns(box,*q[:2]):continue
@@ -170,7 +210,7 @@ def extend(frame,roads,box,elev,mapped,decks=()):
             if country not in PROFILES:continue
             # All carriageways protect against longitudinal overlap and junction closure.
             if any(not _clear(q+np.r_[t*step,0.],rsegs)for step in (-1.5,0.,1.5)):continue
-            if _near_barrier(q[:2],barriers):continue
+            if _verge_covered(q,t[:2],n,evidence):continue
             if deck_segments is not None and g._relate(q[:2],deck_segments,t[:2]) is not None:continue
             forward=np.r_[t[:2],(b[2]-a[2])/3.];forward/=max(np.linalg.norm(forward),1e-9)
             # The model's smooth side is -local Y; face it toward the road.

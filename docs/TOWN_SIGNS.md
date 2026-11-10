@@ -121,3 +121,11 @@ sont rendues hors jeu en projection frontale ; éclairage, import BeamNG, rendu
 de nuit et lisibilité en mouvement restent à vérifier dans le jeu sous Windows.
 Les atlas déjà générés sont fournis. Les reconstruire exige Pillow et fontTools,
 uniquement au développement : `python tools/build_town_fonts.py`.
+
+## Avec les panneaux de localité de BeamNG.Earth (Settings > World > Town signs)
+
+Quand le réglage *Town signs* est actif (par défaut), c'est `server/townentry.py` qui place les panneaux d'entrée
+et de sortie (limites de commune, agglomérations). Avec le kit régional activé, les panneaux français (et
+monégasques) gardent cet emplacement mais sont dessinés avec ce modèle : proportions EB10 / EB20 de
+`townlayout.py`, lettrage Typoroute L1 de l'atlas, sortie au dos du même panneau, poteaux du kit
+(`roads.kit_town_boards`). Sans le kit, les faces de `townentry.py` restent inchangées.

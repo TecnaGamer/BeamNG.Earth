@@ -88,6 +88,37 @@ class RegionalGeoTest(unittest.TestCase):
                             {m['name'] for m in shape['materials']})
         self.assertEqual((out / names['signs']).read_bytes(), sign_bytes)
 
+    def test_skin_renders_the_actual_material_and_height_from_walk_records(self):
+        out = self.root / 'retained'
+        out.mkdir()
+        paths = [
+            {"pts": np.array([[-25., -10., 0.], [25., -10., 0.]]), "w": 1.1, "height": .045,
+             "side": -1, "caps": (True, True), "europe": True, "surface": "pavers"},
+            {"pts": np.array([[-25., 10., 0.], [25., 10., 0.]]), "w": 1.4, "height": .13,
+             "side": 1, "caps": (True, True), "europe": True, "surface": "slabs"},
+        ]
+        lat, lon = self.tile.frame.lat0, self.tile.frame.lon0
+        import pickle
+        inputs = {"walks": paths, "chunks": [], "ctx": []}
+        path = out / bw.geo_names(self.tile.key)["inputs"]       # (the session file the skin reads, as dev keeps it)
+        path.write_bytes(pickle.dumps(inputs))
+        bw._geo_inputs[self.tile.key] = (bw._file_sig(str(path)), inputs)
+        self.addCleanup(bw._geo_inputs.pop, self.tile.key, None)
+        bw._geo_skin(1, lat, lon, 15, self.gx, self.gy, str(out), '/test',
+                     True, 0., 1 / 32, lambda: self.fail('already retained'))
+        names = bw.geo_names(self.tile.key, 1)
+        shape = cdae.read(out / names["walk"])
+        mesh = cdae.mesh_arrays(shape["meshes"][0])
+        z = {}
+        for start, count, flags in mesh["primitives"]:
+            mat = shape["materials"][int(flags) & 0x0fffffff]["name"]
+            vertices = mesh["verts"][mesh["indices"][start:start + count]]
+            z[mat] = float(vertices[:, 2].max())
+        self.assertIn("bne_eu_walk_pavers", z)
+        self.assertIn("bne_eu_walk_slabs", z)
+        self.assertNotIn("bne_eu_asphalt_walk", z)
+        self.assertAlmostEqual(z["bne_eu_walk_slabs"] - z["bne_eu_walk_pavers"], .085, delta=.015)
+
     def test_prebuilt_content_is_reused_and_off_has_separate_cache(self):
         scratch = self.root / 'prebuild'
         key = bw.prebuild_geo(self.gx, self.gy, 15, str(scratch), True, False, False,
@@ -131,6 +162,54 @@ class RegionalGeoTest(unittest.TestCase):
 
 
 class NativePaletteTest(unittest.TestCase):
+    def test_overlapping_acute_approach_yields_to_the_mapped_walk(self):
+        from frontage_geometry import Coverage
+
+        common = {"w": 1.8, "side": 1, "caps": (True, False), "europe": True}
+        mapped = dict(common, mapped=True, pts=np.array([[0., 0., 0.], [24., 0., 0.]]))
+        inferred = dict(common, pts=np.array([[0., -1.2, 0.], [9., .4, 0.], [24., 5., 0.]]))
+        kept = sidewalks.clear_overlaps([inferred, mapped])
+        a, b = kept
+        self.assertIs(b, mapped)
+        self.assertGreater(a["pts"][0, 0], 9.)
+        self.assertEqual(a["caps"], (True, False))
+        coverage = Coverage((-4., -5., 26., 8.))
+        for quad in sidewalks._slab_quads(*sidewalks._slab_edges(b)):
+            coverage.reserve(quad)
+        self.assertFalse(any(list(coverage.overlaps(q)) for q in sidewalks._slab_quads(*sidewalks._slab_edges(a))))
+
+    def test_concave_corner_top_stays_inside_its_outline(self):
+        from polygon import contains_points
+
+        arc = np.array([[0., 0., 0.], [2., 0., 0.], [2., 2., 0.],
+                        [4., 2., 0.], [4., 0., 0.], [6., 0., 0.]])
+        inward = np.tile([0., 1.], (len(arc), 1))
+        outer = np.array([[6., 5., 0.], [3., 2.6, 0.], [0., 5., 0.]])
+        outline = np.vstack((arc[:, :2] + sidewalks.CURB_W * inward, outer[:, :2]))
+        b = sidewalks.Builder((0., 0., 0.), collision=True)
+        b.add_corner(arc, inward, outer, europe=True, surface="slabs")
+        for mesh, material in ((b.arrays(), sidewalks.EU_SLAB["slabs"]), (b.col.arrays(), 1)):
+            P, T, _, M = mesh
+            slab = P[T[M == material], :2]
+            self.assertTrue(len(slab))
+            self.assertTrue(contains_points(outline, slab.mean(axis=1)).all())
+
+    def test_low_sidewalk_end_descends_in_the_visual_and_collision_mesh(self):
+        def ground(x, y):
+            return .015 * x + .01 * y
+
+        points = np.array([[0., 3., ground(0., 2.4)], [12., 3., ground(12., 2.4)]])
+        walk = {"pts": points, "w": 1.2, "side": 1, "caps": (True, False),
+                "height": .045, "europe": True, "surface": "pavers"}
+        b = sidewalks.Builder((0., 0., 0.), collision=True, ground=ground)
+        b.add_walk(walk, 2.5)
+        for P, T, *_ in (b.arrays(), b.col.arrays()):
+            self.assertTrue(len(T))
+            end = P[np.isclose(P[:, 0], 0.)]
+            np.testing.assert_allclose(end[:, 2], ground(end[:, 0], end[:, 1]) - .005)
+            flat = P[np.isclose(P[:, 0], 12.)]
+            self.assertGreater(float((flat[:, 2] - ground(flat[:, 0], flat[:, 1])).max()), .04)
+
     def test_mixed_palettes_preserve_native_geometry_and_collision(self):
         plain, mixed = [sidewalks.Builder((0, 0, 0), collision=True) for _ in range(2)]
         for i, eu in enumerate([False, True, False, True]):

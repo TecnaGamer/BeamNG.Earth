@@ -21,6 +21,7 @@
 
 local stopwatch = require('beamngEarth/stopwatch')
 local sea = require('beamngEarth/sea')
+local speedtraps = require('beamngEarth/speedtraps')
 
 local M = {}
 
@@ -357,6 +358,7 @@ local function dropTile(key)
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
+  if t.speedTraps then speedtraps.dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
@@ -398,6 +400,7 @@ end
 local function switchAnchor(aid)
   if aid == anchorId then return end
   anchorId = aid
+  speedtraps.resetMotion()
   for key, t in pairs(tiles) do
     if t.anchor ~= aid and not t.ghost and not t.geo then dropTile(key) end   -- (geotiles: M.replace)
   end
@@ -709,6 +712,11 @@ local function geoRows(key, t, data, replacing)
     require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, data.park, 1, 4))
     t.park = true
   end
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    local rows = M.mapRows(pl, data.speedTraps, 2, 5)
+    speedtraps.onRows(key, M.mapRows(pl, rows, 8))
+    t.speedTraps = true
+  end
   if type(data.fuel) == 'table' and data.fuel[1] then
     require('beamngEarth/gasstations').onRows(t.anchor, key, M.mapStations(pl, data.fuel))
     t.fuel = true
@@ -976,6 +984,7 @@ end
 -- the tiles moved.
 function M.replace(a, aid)
   if not a then return 0 end
+  speedtraps.resetMotion()
   anchorObj = a
   local n = 0
   for key, t in pairs(tiles) do
@@ -1121,6 +1130,10 @@ function M.onTile(msg, currentAnchor, a)
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
   protectWater(tiles[key], data, a)
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    speedtraps.onRows(key, data.speedTraps)
+    tiles[key].speedTraps = true
+  end
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
@@ -1772,7 +1785,7 @@ local function step(name)
   M.steps[name] = t - stepT0
   stepT0 = t
 end
-function M.update(gov, currentAnchor, player, view, a)
+function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
   -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
   -- that asynchronous rebuild before restoring deep water over its old bore.
   if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
@@ -1791,6 +1804,7 @@ function M.update(gov, currentAnchor, player, view, a)
     prewarmId, prewarmWant = nil, prewarmPath
   end
   if currentAnchor then switchAnchor(currentAnchor) end
+  if dtReal then speedtraps.update(not holdActive and player or nil, dtSim, dtReal) end
   step('anchor')
   releaseGhosts(player)
   step('ghosts')
@@ -1924,6 +1938,7 @@ M.PLAYER_DZ = 2.5   -- m above / below
 -- curb held the whole tile's sidewalk collision (one mesh a tile), and a tile made again while the car drove its
 -- streets had no solid sidewalks at all (the user, 2026-10-27: "sidewalks are missing collision", Fells Point)
 M.WALK_PLAYER_R = 0.0
+M.WALK_URGENT_M = 25
 M.DECK_BOX_BELOW_M = 2.2    -- a deck box's floor is this far under its lowest surface (server roads.collider_boxes:
                             -- roadmesh.DECK_DEPTH 1.2 + 1.0)
 M.DECK_ON_M = 0.2           -- the car's position this far under that surface or less: on the deck (not held)
@@ -1937,18 +1952,42 @@ function M.nearPlayer(p, r)
   return dx * dx + dy * dy <= r * r
 end
 
+local function colliderPosition(p, t, what)
+  local pp = t and t.geo and t.pls and t.pls[what]
+  if not pp then return p end
+  local x, y, z = pp.inv:apply(p.x, p.y, p.z)
+  return { x = x, y = y, z = z }
+end
+
+local function overWalk(p, outline)
+  if type(outline) ~= 'table' or #outline < 6 then return true end
+  local inside = false
+  local x, y = outline[#outline - 1], outline[#outline]
+  for i = 1, #outline, 2 do
+    local u, v = outline[i], outline[i + 1]
+    if (y > p.y) ~= (v > p.y) and p.x < x + (u - x) * (p.y - y) / (v - y) then
+      inside = not inside
+    end
+    local dx, dy = u - x, v - y
+    local l2 = dx * dx + dy * dy
+    if l2 > 0 then
+      local t = math.max(0, math.min(1, ((p.x - x) * dx + (p.y - y) * dy) / l2))
+      local ex, ey = p.x - x - t * dx, p.y - y - t * dy
+      if ex * ex + ey * ey < 0.18 * 0.18 then return true end
+    end
+    x, y = u, v
+  end
+  return inside
+end
+
 playerIn = function(boxes, what, t)
   -- (a drop hold: the car does not move until its ground and colliders are in, then it is set on top of them)
   if holdActive or type(boxes) ~= 'table' or #boxes == 0 then return false end
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return false end
-  local p = veh:getPosition()
-  local pp = t and t.geo and t.pls and t.pls[what]
-  if pp then      -- a geotile's content: its boxes are in the tile's frame, the player mapped into it
-    local x, y, z = pp.inv:apply(p.x, p.y, p.z)
-    p = { x = x, y = y, z = z }
-  end
-  local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  local p = colliderPosition(veh:getPosition(), t, what)
+  local walk = what == 'walk' or what == 'walkcol'
+  local r, dz = walk and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
   if what == 'barrier' then r = 1.0 end -- only a car intersecting the narrow median holds its collision
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
@@ -1958,7 +1997,7 @@ playerIn = function(boxes, what, t)
         -- through it (I-95, Baltimore, a Deck test drive 2026-10-20)
         local surf = b[3] + M.DECK_BOX_BELOW_M
         if p.z < surf - M.DECK_ON_M and p.z > surf - M.DECK_BOX_BELOW_M - dz then return true end
-      elseif p.z >= b[3] - dz and p.z <= b[6] + dz then
+      elseif p.z >= b[3] - dz and p.z <= b[6] + dz and (not walk or overWalk(p, b[7])) then
         return true
       end
     end
@@ -2038,20 +2077,29 @@ function M.nextWalk(q)
   return best
 end
 
--- The walkQ index of a bridge deck's or tunnel's collider the car reaches within URGENT_S (150 m at least; not behind a
--- fast car), the nearest, or nil.
+-- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
 function M.urgentWalk(q)
   local p, dir = playerNow()
   if not p then return nil end
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
+    local t = tiles[e.key]
     if e.what == 'deck' or e.what == 'tunnel' then
-      local t = tiles[e.key]
       if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
         local dx, dy = t.cx - p.x, t.cy - p.y
         local d = math.sqrt(dx * dx + dy * dy)
         if d <= reach and d < bd and (not dir or dx * dir.x + dy * dir.y > -M.TILE_M / 2) then best, bd = i, d end
+      end
+    elseif e.what == 'walkcol' and t and not t.ghost and (not e.tile or e.tile == t) then
+      local at = colliderPosition(p, t, e.what)
+      for _, b in ipairs(t.colliders.walkcol or {}) do
+        if b[7] and at.z >= b[3] - 2 and at.z <= b[6] + 2 then
+          local dx = math.max(b[1] - at.x, at.x - b[4], 0)
+          local dy = math.max(b[2] - at.y, at.y - b[5], 0)
+          local d = math.sqrt(dx * dx + dy * dy)
+          if d <= M.WALK_URGENT_M and d < bd then best, bd = i, d end
+        end
       end
     end
   end
@@ -2176,6 +2224,7 @@ end
 
 function M.clear()
   for key in pairs(tiles) do dropTile(key) end
+  speedtraps.clear()
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
     if f.id then deleteQ[#deleteQ + 1] = f.id end
