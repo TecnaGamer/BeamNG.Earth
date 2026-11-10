@@ -689,7 +689,7 @@ fn nan_max(a: f64, b: f64) -> f64 {
 
 /// Each feature's [min e, min n, max e, max n] of all its coordinates (mapgeom.Features.boxes: NaN where one of them
 /// is NaN, +inf / -inf without any), from coord_off[ring_off[part_off[i]]] to the next feature's.
-fn feature_boxes(xy: &numpy::ndarray::ArrayView2<f64>, co: &numpy::ndarray::ArrayView1<i64>,
+pub(crate) fn feature_boxes(xy: &numpy::ndarray::ArrayView2<f64>, co: &numpy::ndarray::ArrayView1<i64>,
                  ro: &numpy::ndarray::ArrayView1<i64>, po: &numpy::ndarray::ArrayView1<i64>) -> Vec<[f64; 4]> {
     let n = po.len().saturating_sub(1);
     let mut out = Vec::with_capacity(n);
@@ -720,6 +720,12 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
     let boxes: Vec<Vec<[f64; 4]>> = layers.iter()
         .map(|(xy, co, ro, po)| feature_boxes(&xy.as_array(), &co.as_array(), &ro.as_array(), &po.as_array()))
         .collect();
+    let (off, rows) = select_core(&boxes, near_m)?;
+    Some((off.into_pyarray(py), rows.into_pyarray(py)))
+}
+
+/// gradesep_select on the layers' feature boxes: (layer offsets, rows), None when no own box is finite.
+pub(crate) fn select_core(boxes: &[Vec<[f64; 4]>], near_m: f64) -> Option<(Vec<i64>, Vec<i64>)> {
     let own = boxes.first()?;
     let mut bx: Option<[f64; 4]> = None;
     for b in own.iter().filter(|b| b.iter().all(|v| v.is_finite())) {
@@ -732,7 +738,7 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
     let bx = [c[0] - near_m, c[1] - near_m, c[2] + near_m, c[3] + near_m];
     let mut off = vec![0i64];
     let mut rows: Vec<i64> = Vec::new();
-    for lb in &boxes {
+    for lb in boxes {
         for (i, b) in lb.iter().enumerate() {
             if !((b[2] < bx[0]) || (b[0] > bx[2]) || (b[3] < bx[1]) || (b[1] > bx[3])) {
                 rows.push(i as i64);
@@ -740,7 +746,7 @@ pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near
         }
         off.push(rows.len() as i64);
     }
-    Some((off.into_pyarray(py), rows.into_pyarray(py)))
+    Some((off, rows))
 }
 
 /// One layer for gradesep_gather_rows: (xy (N, 2) in the asking cell's frame, coord_off, ring_off, part_off,

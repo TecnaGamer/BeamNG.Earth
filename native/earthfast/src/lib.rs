@@ -71,6 +71,8 @@ mod furnstations;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
+mod specs;
+mod gsrows;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -184,18 +186,20 @@ fn points_inside<'py>(py: Python<'py>, poly: PyReadonlyArray2<'py, f64>, pts: Py
 #[pyfunction]
 fn polyline_dist<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, pts: PyReadonlyArray2<'py, f64>)
                       -> Bound<'py, PyArray1<f64>> {
-    let l = line.as_array();
-    let q = pts.as_array();
+    polyline_dist_core(line.as_array(), pts.as_array()).into_pyarray(py)
+}
+
+/// polyline_dist on views (roads' spec kernels call it in Rust).
+pub(crate) fn polyline_dist_core(l: numpy::ndarray::ArrayView2<f64>, q: numpy::ndarray::ArrayView2<f64>) -> Vec<f64> {
     let k = l.nrows();
-    let v: Vec<f64> = q.rows().into_iter().map(|r| {
+    q.rows().into_iter().map(|r| {
         let mut best = f64::INFINITY;
         for i in 0..k.saturating_sub(1) {
             let d = seg_dist(l[[i, 0]], l[[i, 1]], l[[i + 1, 0]], l[[i + 1, 1]], r[0], r[1]);
             if d < best { best = d; }
         }
         best
-    }).collect();
-    v.into_pyarray(py)
+    }).collect()
 }
 
 /// furniture._clear: is (px, py) farther than its segment's half width + margin from every segment not owned by
@@ -222,8 +226,12 @@ fn clear_of(segs: PyReadonlyArray2<f64>, half: PyReadonlyArray1<f64>, owner: PyR
 #[pyfunction]
 fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, gap_max: f64, cos_par: f64)
              -> (f64, f64) {
-    let a = a.as_array();
-    let b = b.as_array();
+    dual_side_core(a.as_array(), b.as_array(), gap_min, gap_max, cos_par)
+}
+
+/// dual_side on views (roads' spec kernels call it in Rust).
+pub(crate) fn dual_side_core(a: numpy::ndarray::ArrayView2<f64>, b: numpy::ndarray::ArrayView2<f64>, gap_min: f64,
+                             gap_max: f64, cos_par: f64) -> (f64, f64) {
     let ka = a.nrows();
     let kb = b.nrows();
     if ka < 2 || kb < 2 {
@@ -404,13 +412,17 @@ fn segment_crossings_g(
     ground: PyReadonlyArray2<f64>,
     ground_starts: PyReadonlyArray1<i64>,
 ) -> Vec<(usize, usize, f64, f64, f64)> {
-    let pa = parts.as_array();
-    let ps = part_starts.as_array();
-    let ga = ground.as_array();
-    let gs = ground_starts.as_array();
+    let (pa, ps, ga, gs) = (parts.as_array(), part_starts.as_array(), ground.as_array(), ground_starts.as_array());
+    py.detach(|| segment_crossings_core(pa, ps, ga, gs))
+}
+
+/// segment_crossings_g on views (gradesep's underpasses call it in Rust).
+pub(crate) fn segment_crossings_core(pa: numpy::ndarray::ArrayView2<f64>, ps: numpy::ndarray::ArrayView1<i64>,
+                                     ga: numpy::ndarray::ArrayView2<f64>, gs: numpy::ndarray::ArrayView1<i64>)
+                                     -> Vec<(usize, usize, f64, f64, f64)> {
     let np_ = ps.len().saturating_sub(1);
     let ng = gs.len().saturating_sub(1);
-    py.detach(|| {
+    {
         let bbox = |a: &numpy::ndarray::ArrayView2<f64>, i0: usize, i1: usize| {
             let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
             for k in i0..i1 {
@@ -454,7 +466,7 @@ fn segment_crossings_g(
             }
         }
         out
-    })
+    }
 }
 
 /// (line index, arc m along ma, sin of the angle) where each of the polylines ga (gs (L + 1,): where each begins,
@@ -4988,11 +5000,15 @@ fn sharp_cuts<'py>(py: Python<'py>, g: PyReadonlyArray1<'py, f64>, z: PyReadonly
 #[pyfunction]
 fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: f64, min_turn_deg: f64)
                     -> Bound<'py, PyArray1<bool>> {
-    let p = xy.as_array();
+    tight_bends_core(xy.as_array(), half_span, min_turn_deg).into_pyarray(py)
+}
+
+/// tight_bends on a view (roads' spec kernels call it in Rust).
+pub(crate) fn tight_bends_core(p: numpy::ndarray::ArrayView2<f64>, half_span: f64, min_turn_deg: f64) -> Vec<bool> {
     let k = p.nrows();
     let mut out = vec![false; k];
     if k < 3 {
-        return out.into_pyarray(py);
+        return out;
     }
     let mut s = vec![0.0f64; k];
     for i in 1..k {
@@ -5014,7 +5030,7 @@ fn tight_bends<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, half_span: 
         let (vx, vy) = dir(s[i] + half_span);
         out[i] = ux * vx + uy * vy <= cos_min;
     }
-    out.into_pyarray(py)
+    out
 }
 
 
@@ -5831,6 +5847,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
     // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
     // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
-    m.add("VERSION", 188)?;
+    m.add_class::<specs::RoadRules>()?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_layer_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_back, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(gsrows::gradesep_underpasses, m)?)?;
+    // 189: specs::RoadRules (roads.road_specs / bridge_specs / tunnel_specs / _structure_width / dual_carriageways a
+    // layer at a time; carriageway, ring_width, dual_cap, switchbacks, _ramp_junction) and gsrows (gradesep._layer_rows,
+    // _to_frame, _rows / _owners, _underpasses and _spans' back mapping)
+    m.add("VERSION", 189)?;
     Ok(())
 }

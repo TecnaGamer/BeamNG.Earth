@@ -137,7 +137,7 @@ pub(crate) fn np_sum(a: &[f64]) -> f64 {
 }
 
 /// roads._feature_length_m of the rings ring_off[part_off[i]]..ring_off[part_off[i + 1]].
-fn feature_length(ll: &numpy::ndarray::ArrayView2<f64>, co: &[i64], ro: &[i64], po: &[i64], i: usize) -> f64 {
+pub(crate) fn feature_length(ll: &numpy::ndarray::ArrayView2<f64>, co: &[i64], ro: &[i64], po: &[i64], i: usize) -> f64 {
     let mut total = 0.0f64;
     for p in po[i] as usize..po[i + 1] as usize {
         for r in ro[p] as usize..ro[p + 1] as usize {

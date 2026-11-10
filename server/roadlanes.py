@@ -71,7 +71,8 @@ def invalidate(feats):
     for key in ("_road_specs", "_sign_specs", "_sign_rows", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
                 "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_flow_rows", "_lane_flow",
                 "_lane_flow_home", "_lane_shifts", "_road_tapers", "_deck_tapers", "_lane_overrides", "_ramp_junction",
-                "_placement_rows", "_structure_w", "_structure_w_bridges", "_level_layer"):
+                "_placement_rows", "_structure_w", "_structure_w_bridges", "_level_layer", "_spec_inputs",
+                "_map_surface_values", "_lengths_all", "_raw_flat", "_raw_flat_kinds"):
         feats.__dict__.pop(key, None)
 
 

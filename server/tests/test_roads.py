@@ -1861,12 +1861,13 @@ class MountainRoadTest(unittest.TestCase):
         """A mapped lanes=2 is a two-way road's count, not its width (the Stelvio, 2026-11-05: its way got lanes=2 and
         lost the pass road's 6 m); a third lane is a wider road."""
         f = features([_zigzag(4), _zigzag(4)], ["secondary", "secondary"])
-        base = [sp._replace(mountain=False, width=7.1) for sp in roads.road_specs(f)]
-        got = roads._mountain_roads(f, [base[0]._replace(lanes=2), base[1]._replace(lanes=3)])
+        f.attrs["osm_lanes"] = np.array([2.0, 3.0])
+        got = roads.road_specs(f)
+        self.assertEqual([sp.lanes for sp in got], [2, 3])
         self.assertTrue(got[0].mountain)
         self.assertEqual(got[0].width, roads.MOUNTAIN_ROAD_M)
         self.assertFalse(got[1].mountain)
-        self.assertEqual(got[1].width, 7.1)
+        self.assertEqual(got[1].width, roads.carriageway("secondary", "paved", False, None, False, 3))
 
     def test_no_centre_line(self):
         line = np.array([(0.0, 0.0, 0.0), (100.0, 0.0, 0.0)])
