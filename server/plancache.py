@@ -165,9 +165,11 @@ class PlanCache:
 
     def _revisit_key(self, key):
         import revisit
-        # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02)
+        import roadz
+        # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02; a cell with Hong Kong's measured
+        # heights its own: the plans made there before, or with BNE_ROADZ_HK=off, are not those)
         return revisit.format_key("plans", plans_format(), *self.persist[1],
-                                  (int(key[0]), int(key[1]), int(key[2])))
+                                  (int(key[0]), int(key[1]), int(key[2])), *(("hk1",) if roadz.hk_cell(key) else ()))
 
     def _where(self, key):
         """revisit.where of cell key's plans (the map's cache view), or None."""
@@ -202,7 +204,8 @@ class PlanCache:
 
     def _baked(self, key):
         """A baked pack's plans of cell key (bakepack.py: made offline for this map data and signature), or None."""
-        if self.persist is None:
+        import roadz
+        if self.persist is None or roadz.hk_cell(key):     # (packs are made without Hong Kong's heights)
             return None
         import io
         import bakepack
@@ -253,7 +256,9 @@ class PlanCache:
             with open(tmp, "wb") as fh:
                 np.savez(fh, **arrays)
             provenance = None
-            if persist:
+            import roadz
+            shared = not roadz.hk_cell(key)         # (Hong Kong's heights stay on this computer: roadz.hk_cell)
+            if persist and shared:
                 from worldbundle import canonical, completion_record
                 with open(tmp, "rb") as fh:
                     digest = hashlib.sha256(fh.read()).hexdigest()
@@ -282,8 +287,9 @@ class PlanCache:
                 with open(p, "rb") as fh:
                     revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
                                   where=self._where(key), code=revisit.format_marker("plans", plans_format()))
-                import mpshare          # (a BeamMP session shares them: the hub sends them to the server)
-                mpshare.note_built(self.persist[0], self.signature, key)
+                if shared:
+                    import mpshare      # (a BeamMP session shares them: the hub sends them to the server)
+                    mpshare.note_built(self.persist[0], self.signature, key)
         except (OSError, ValueError, TypeError):
             return False
         with self._lock:

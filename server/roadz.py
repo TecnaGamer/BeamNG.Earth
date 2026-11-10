@@ -9,6 +9,13 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   reads BD TOPO with (CRS:84 bbox, GeoJSON, the "ign_wfs" lane).
 - "nvdb": Norway, the Norwegian Public Roads Administration's NVDB API v4 road network (NLOD 2.0): LINESTRING Z,
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
+- "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
+  decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
+  750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's low reads across the carriageway, none in a tunnel
+  or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
+  The sheets a cell reads are kept in a size-capped folder (BNE_ROADZ_HK_SHEETS_MB) for its neighbours. Its heights
+  are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share or
+  baked pack).
 - "lidar": the US, USGS 3DEP point clouds (Entwine Point Tiles on AWS, public domain): for every road bridge of the
   cell, its deck measured along its own map line (earthfast.deck_lidar: the points' surfaces per 4 m station, one
   drivable surface picked by a Viterbi pass; any non-noise class, as class 17 is not to be trusted: Baltimore 2014
@@ -24,8 +31,9 @@ heights then lose their spikes and impossible grades (earthfast.profile_clean). 
 the source's own ground: the median of (source Z - our DEM) over its ground roads near the part (else the cell's) is
 taken off, so a datum or survey offset of 0.5-2 m makes no step where the deck meets our graded approach.
 
-Off: BNE_ROADZ=off (every source), BNE_LIDAR_DECKS=off (the US lidar decks only). Pure given the cached data: every
-process reads the same files; a fetch that fails is a revisit fault (netfetch) and the inference stands in.
+Off: BNE_ROADZ=off (every source), BNE_LIDAR_DECKS=off (the US lidar decks only), BNE_ROADZ_HK=off (Hong Kong
+only). Pure given the cached data: every process reads the same files; a fetch that fails is a revisit fault
+(netfetch) and the inference stands in.
 Malformed vector survey records are isolated: invalid XY splits a line into valid runs, invalid Z is missing, and
 bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
 existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
@@ -40,12 +48,15 @@ import re
 import threading
 import time
 import unicodedata
+import urllib.parse
+import zipfile
 from collections import OrderedDict
 
 import numpy as np
 
 import fast
 import mapcells
+import roadzhk
 
 log = logging.getLogger("earthd.roadz")
 
@@ -54,11 +65,13 @@ VERSION = 3                 # (2: the lidar cells carry the ground stretches fou
 NATIVE = 102                # earthfast.VERSION of the kernels below
 ON = os.environ.get("BNE_ROADZ", "on") != "off"
 LIDAR_ON = os.environ.get("BNE_LIDAR_DECKS", "on") != "off"
+HK_ON = os.environ.get("BNE_ROADZ_HK", "on") != "off"
 LIDAR_INDEX_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "usgs3dep_index.json.gz")
 PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfiles / Grader ask it
 
 FR_BOUNDS = (41.3, -5.2, 51.2, 9.7)         # lat0, lon0, lat1, lon1: metropolitan France (PR #456's box)
 NO_BOUNDS = (57.9, 4.0, 71.3, 31.3)         # mainland Norway
+HK_BOUNDS = (22.13, 113.82, 22.57, 114.45)  # the Hong Kong SAR
 US_BOUNDS = ((24.0, -125.0, 49.5, -66.5), (51.0, -170.0, 71.5, -129.0), (18.5, -161.0, 22.5, -154.5))
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 WFS_LANE = "ign_wfs"
@@ -68,6 +81,17 @@ NVDB_URL = "https://nvdbapiles.atlas.vegvesen.no/vegnett/api/v4/veglenkesekvense
 NVDB_HEADERS = {"X-Client": "BeamNG.Earth", "Accept": "application/json"}     # (NVDB asks clients to name themselves)
 NVDB_PAGE = 1000
 NVDB_PAGES = 40
+HK_TD_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/td_rcd_1638949160594_2844/FeatureServer/10/"
+             "query")
+HK_SHEETS_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/cedd_rcd_1629267205233_87895/FeatureServer/"
+                 "{}/query")
+HK_LAYERS = {"dtm": 0, "dsm": 1}            # the sheet index's layers: DTM_2020, DSM_2020
+HK_SHEET_HOST = "bulkdata.csdi.gov.hk"
+HK_PAGE = 2000              # (the service's maxRecordCount: 3000)
+HK_PAGES = 20
+HK_IDS = 200                # OBJECTIDs a request (its URL under the service's limit: 2.4 kB answered 404, 1.8 kB not)
+HK_FETCH_THREADS = 4        # sheets read at once (bulkdata.csdi.gov.hk's policy: 4)
+HK_SHEETS_MB = float(os.environ.get("BNE_ROADZ_HK_SHEETS_MB", "1024"))
 EPT_BASE = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/"
 EPT_R = 6378137.0           # EPSG:3857's sphere
 
@@ -164,17 +188,32 @@ def _in(b, lat, lon):
 
 
 def sources_at(lat, lon, lidar=None):
-    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'lidar' (bridges only; lidar: on, default
-    LIDAR_ON)."""
+    """The sources that may know heights at (lat, lon): 'ign', 'nvdb', 'hk' (HK_ON), 'lidar' (bridges only; lidar: on,
+    default LIDAR_ON)."""
     lidar = LIDAR_ON if lidar is None else lidar
     out = []
     if _in(FR_BOUNDS, lat, lon):
         out.append("ign")
     if _in(NO_BOUNDS, lat, lon):
         out.append("nvdb")
+    if HK_ON and _in(HK_BOUNDS, lat, lon):
+        out.append("hk")
     if lidar and any(_in(b, lat, lon) for b in US_BOUNDS):
         out.append("lidar")
     return out
+
+
+def hk_cell(key):
+    """Does map cell key (z, x, y) take Hong Kong's measured heights (the source on, the cell's box meeting HK_BOUNDS
+    with CLIP_PAD_M to spare)? Its road plans are then kept on this computer only: the HK government's terms allow
+    redistribution, but with an indemnity and terms that may change without notice, so they never go into a world
+    bundle (plancache: no .complete marker), a BeamMP share (mpshare.note_built) or a baked pack (made with it off)."""
+    if not (ON and HK_ON):
+        return False
+    lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
+    pad = CLIP_PAD_M / 111320.0
+    return (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
+            and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad)
 
 
 def _norm(text):
@@ -565,7 +604,7 @@ class RoadZ:
             if got is None:
                 t0 = time.monotonic()
                 try:
-                    got = {"ign": self._ign, "nvdb": self._nvdb, "lidar": self._lidar}[src](key)
+                    got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk, "lidar": self._lidar}[src](key)
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
                     import revisit
@@ -653,6 +692,131 @@ class RoadZ:
                 break
             start = nxt
         return Lines.build(rows)
+
+    def _arcgis(self, url, params):
+        """The features of an ArcGIS REST query, every page (ordered by OBJECTID: the same pages each time)."""
+        feats = []
+        for page in range(HK_PAGES):
+            q = dict(params, f="json", resultOffset=page * HK_PAGE, resultRecordCount=HK_PAGE)
+            d = self._get_json(f"{url}?{urllib.parse.urlencode(q, safe=',')}")
+            if "error" in d:            # (ArcGIS answers its errors with a 200)
+                raise ValueError(f"ArcGIS {url}: {d['error']}")
+            feats += d.get("features") or []
+            if not d.get("exceededTransferLimit"):
+                return feats
+        raise ValueError(f"ArcGIS {url}: over {HK_PAGES} pages")
+
+    def _hk(self, key):
+        lon0, lat0, lon1, lat1 = key.bounds()
+        k = 1.0 / max(0.05, math.cos(math.radians((lat0 + lat1) / 2)))
+        plat = CLIP_PAD_M / 111320.0
+        plon = plat * k
+        # (the lines a little further out too: a higher deck there hides a lower one in the box)
+        qlat = (CLIP_PAD_M + roadzhk.OCCLUDE_M) / 111320.0
+        env = f"{lon0 - qlat * k:.6f},{lat0 - qlat:.6f},{lon1 + qlat * k:.6f},{lat1 + qlat:.6f}"
+        fields = "OBJECTID,ELEVATION,ROUTE_NUM,STREET_ENAME"
+        feats = self._arcgis(HK_TD_URL, {"where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope",
+                                         "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outSR": 4326,
+                                         "outFields": fields, "orderByFields": "OBJECTID"})
+        # the same features in HK1980 Grid by their ids: the envelope query with outSR 2326 answers another set of
+        # lines (2026-11-10: 89 for 84 at Shek Mun, some 50 m outside the box), the vertices themselves agree to 0.4 mm
+        ids = sorted({(f.get("attributes") or {}).get("OBJECTID") for f in feats} - {None})
+        grid = []
+        for i in range(0, len(ids), HK_IDS):
+            grid += self._arcgis(HK_TD_URL, {"objectIds": ",".join(str(int(v)) for v in ids[i:i + HK_IDS]),
+                                             "outSR": 2326, "outFields": "OBJECTID", "orderByFields": "OBJECTID"})
+        lines = roadzhk.parse_td(feats, grid)
+
+        def inside(ll):
+            return ((ll[:, 0] >= lon0 - plon) & (ll[:, 0] <= lon1 + plon)
+                    & (ll[:, 1] >= lat0 - plat) & (ll[:, 1] <= lat1 + plat))
+        runs = roadzhk.stations(lines, inside)
+        return Lines.build(roadzhk.rows(lines, runs, self._hk_reader("dtm"), self._hk_reader("dsm")))
+
+    def _hk_reader(self, layer):
+        """(x, y) -> the LiDAR layer's ("dtm" / "dsm") heights at those HK1980 Grid points, NaN where it has none: the
+        sheets under them, one at a time."""
+        def read(x, y):
+            out = np.full(len(x), np.nan)
+            if not len(x):
+                return out
+            env = f"{x.min() - 1:.1f},{y.min() - 1:.1f},{x.max() + 1:.1f},{y.max() + 1:.1f}"
+            sheets = self._arcgis(HK_SHEETS_URL.format(HK_LAYERS[layer]), {
+                "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope", "inSR": 2326,
+                "spatialRel": "esriSpatialRelIntersects", "outSR": 2326, "outFields": "TILE_NAME,URL",
+                "orderByFields": "TILE_NAME"})
+            todo, taken = [], np.zeros(len(x), bool)
+            for f in sheets:
+                a = f.get("attributes") or {}
+                ring = np.asarray(((f.get("geometry") or {}).get("rings") or [[]])[0], np.float64).reshape(-1, 2)
+                if not len(ring):
+                    continue
+                m = ((x >= ring[:, 0].min()) & (x < ring[:, 0].max()) & (y >= ring[:, 1].min())
+                     & (y < ring[:, 1].max()) & ~taken)
+                if m.any():
+                    taken |= m
+                    todo.append((m, str(a.get("TILE_NAME") or ""), str(a.get("URL") or "")))
+
+            def one(t):
+                m, name, url = t
+                return m, self._hk_sheet(layer, name, url).sample(x[m], y[m])
+            from runtimeprofiler import ThreadPoolExecutor
+            # (one sheet in memory a thread: ~7 MB; the host serves ~0.8 MB/s a connection)
+            with ThreadPoolExecutor(HK_FETCH_THREADS, thread_name_prefix="roadz-hk") as pool:
+                for m, got in pool.map(one, todo):
+                    out[m] = got
+            return out
+        return read
+
+    def _hk_sheet(self, layer, name, url):
+        """The roadzhk.Sheet of a LiDAR sheet: from the kept sheets (the least recently read of them dropped past
+        HK_SHEETS_MB) or downloaded."""
+        u = urllib.parse.urlsplit(url)
+        if u.scheme != "https" or u.hostname != HK_SHEET_HOST or not re.fullmatch(r"[0-9A-Z]{4,8}", name):
+            raise ValueError(f"LiDAR sheet {name!r}: {url!r}")
+        p = os.path.join(self.dir, "hksheets", layer, f"{name}.zip") if self.dir else None
+        with self._lock:
+            lock = self._cell_locks.setdefault(("hksheet", layer, name), threading.Lock())
+        with lock:
+            if p and os.path.exists(p):
+                try:
+                    with open(p, "rb") as fh:
+                        got = roadzhk.Sheet(fh.read())
+                    os.utime(p)
+                    return got
+                except (OSError, ValueError, zipfile.BadZipFile) as e:
+                    log.debug("roadz hk sheet %s: %s", p, e)
+            body = self._fetch(urllib.parse.urlunsplit(u._replace(path=urllib.parse.quote(u.path))))
+            got = roadzhk.Sheet(body)
+            if p:
+                import staging
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(tmp, "wb") as fh:
+                    fh.write(body)
+                staging.replace_cached(tmp, p)
+                self._hk_trim()
+            return got
+
+    def _hk_trim(self):
+        """The kept LiDAR sheets cut back to HK_SHEETS_MB, the least recently read first."""
+        root = os.path.join(self.dir, "hksheets")
+        files = []
+        for dp, _dn, fns in os.walk(root):
+            for fn in fns:
+                if fn.endswith(".zip"):
+                    try:
+                        st = os.stat(os.path.join(dp, fn))
+                    except OSError:
+                        continue
+                    files.append((st.st_mtime, st.st_size, os.path.join(dp, fn)))
+        total = sum(f[1] for f in files)
+        for _t, size, path in sorted(files):
+            if total <= HK_SHEETS_MB * 1e6:
+                break
+            with contextlib.suppress(OSError):
+                os.remove(path)
+                total -= size
 
     def _ept_of(self, name):
         with self._lock:
