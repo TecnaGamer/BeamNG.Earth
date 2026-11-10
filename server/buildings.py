@@ -1734,7 +1734,9 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
 # most tanks seen on the aerials have no piece; its tank-sized pieces follow the buildings' heights, not the tanks
 # (pieces of 6-40 m2 rising 2.5-12 m per building: Midtown 0.83, Upper West Side 0.52, Lower East Side 0.33, Park
 # Slope's rowhouses 0.10), and of 12 picked as the most tank-like (square or many-cornered) one (maybe two) was a
-# tank on the photo.
+# tank on the photo. The NYS 2024 orthophoto is (2026-11-10, 15 hand-marked 250 m squares, 104 tanks): Chelsea 28 and
+# Murray Hill 23 in a square, Jackson Heights' and Crown Heights' 5-6 storey blocks none at all, Park Slope none; where
+# tools/build_nyc_tanks.py has found them (nyctanks.py, precision ~0.95, recall ~0.73) measured_tank_rows places those.
 WATER_TANK_BOXES = ((40.49, -74.27, 40.92, -73.68),)
 WATER_TANK_FLOORS = (6, 30)
 WATER_TANK_MIN_M2 = 150.0
@@ -1786,6 +1788,53 @@ def _tank_spot(spec):
     return None
 
 
+def _tank_row(spec, gmin, gmax, p, u, sc, x0, y0):
+    z = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+    yaw = math.degrees(math.atan2(u[1], u[0])) + 90.0 * int(_hash01(spec.seed, "tank yaw") * 4)
+    return ["rooftank", round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), round(z, 2),
+            round(yaw % 360.0, 1), 1.0, round(WATER_TANK_MODEL_H * sc, 2), 0.0]
+
+
+# Measured tanks (nyctanks.py: found on the NYS 2024 orthophoto): each on the topmost roof under its point, the model
+# scaled to the photo's diameter (the model's top is WATER_TANK_MODEL_D across), within WATER_TANK_D_SCALE
+WATER_TANK_MODEL_D = 3.4
+WATER_TANK_D_SCALE = (0.8, 1.7)
+
+
+def measured_tank_rows(items, x0, y0, tanks, covered):
+    """Forest rows of measured tanks (tanks: nyctanks.Tanks in the frame; covered: per item, is it in a cell the photo
+    answers for) plus the procedural ones (spec.tank) of the items outside the covered cells. A point on no item's
+    roof: none (a building the map lacks)."""
+    rows = []
+    rings = []
+    for k, (spec, gmin, gmax) in enumerate(items):
+        ring = np.asarray(spec.ring, np.float64)[:, :2]
+        rings.append(ring if len(ring) >= 3 else None)
+        if not covered[k] and spec.tank:
+            rows += tank_rows([(spec, gmin, gmax)], x0, y0)
+    if tanks is None or not len(tanks):
+        return rows
+    lo = np.array([r.min(0) if r is not None else (np.inf, np.inf) for r in rings]).reshape(-1, 2)
+    hi = np.array([r.max(0) if r is not None else (-np.inf, -np.inf) for r in rings]).reshape(-1, 2)
+    for (px, py), d in zip(tanks.pts - np.array([x0, y0]), tanks.d):
+        cand = np.flatnonzero((lo[:, 0] <= px) & (px <= hi[:, 0]) & (lo[:, 1] <= py) & (py <= hi[:, 1]))
+        best, bz = None, -np.inf
+        for k in cand.tolist():
+            if not covered[k] or not _inside(rings[k], (px, py)):
+                continue
+            spec, gmin, gmax = items[k]
+            z = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
+            if z > bz:
+                best, bz = k, z
+        if best is None:
+            continue
+        spec, gmin, gmax = items[best]
+        _c, u, _hl, _hw = oriented_box(rings[best])
+        sc = float(np.clip(d / WATER_TANK_MODEL_D, *WATER_TANK_D_SCALE))
+        rows.append(_tank_row(spec, gmin, gmax, np.array([px, py]), u, sc, x0, y0))
+    return rows
+
+
 def tank_rows(items, x0, y0):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's rooftank: Small Island's rooftop water tank,
     the stock model) of the items' water tanks (spec.tank: water_tank), on their roofs, in the frame (x0, y0: the
@@ -1801,10 +1850,7 @@ def tank_rows(items, x0, y0):
         if got is None:
             continue
         p, half, sc, u = got
-        z = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
-        yaw = math.degrees(math.atan2(u[1], u[0])) + 90.0 * int(_hash01(spec.seed, "tank yaw") * 4)
-        rows.append(["rooftank", round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), round(z, 2),
-                     round(yaw % 360.0, 1), 1.0, round(WATER_TANK_MODEL_H * sc, 2), 0.0])
+        rows.append(_tank_row(spec, gmin, gmax, p, u, sc, x0, y0))
     return rows
 
 
