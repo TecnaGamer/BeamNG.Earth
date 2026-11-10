@@ -344,6 +344,14 @@ UNDER_POLDER_M = -1.0       # m: a road this far under the sea is behind dikes (
 # mapped end 0.4 m under it in the lidar; dug 8 m to clear that, its dip ran on through 28th Street and lowered Liberty
 # Avenue 3 m into a walled trench (the user's report, 2026-10-29). (Not on the coarse models: no cutting there, BR-381.)
 UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
+# A deck a source measured (roadz) is as high as measured over the road under it, not its ends' straight line, and the
+# road under it needs only real headroom under it (UNDER_MEASURED_HEADROOM_M, not MIN_BRIDGE_HEADROOM_M's guess for an
+# unmeasured deck): I-75 dipped 1.5 m under a measured overpass at Findlay, Ohio, flat in the photos, its deck 6.7 m
+# over the road (about 5 m under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the
+# ends' line or over it (lower is the ground under a removed deck, not a deck).
+UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
+UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
+UNDER_MEASURED_TOL_M = 0.5
 UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # A road's ground where a deck crosses over it is read from beside the deck (deck_capped): the elevation under a deck is
 # the deck, not the road. Lidar keeps some short decks as ground (Tartu mnt's two 18-21 m decks over Järve tee at Assaku,
@@ -2577,6 +2585,27 @@ class _Planner:
         k = int(near[np.argmin(d[near])])
         return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k])
 
+    def _measured_corridor(self, bridge, corridor):
+        """The measured deck's lowest height (m) along a bridge between arcs corridor (lo, hi), every DECK_STEP; None
+        unless at least half of it is measured."""
+        import roadz
+        b = np.asarray(bridge, np.float64)[:, :2]
+        sb = np.r_[0.0, np.cumsum(np.hypot(*np.diff(b, axis=0).T))]
+        a = np.linspace(corridor[0], corridor[1], max(2, int(math.ceil((corridor[1] - corridor[0]) / roadsmod.DECK_STEP)) + 1))
+        line = np.stack([np.interp(a, sb, b[:, 0]), np.interp(a, sb, b[:, 1])], axis=1)
+        try:
+            z = roadz.PROVIDER.observed(self.frame, line, OBS_HALF_M, 1)
+        except Exception as e:
+            log.debug("grading: measured deck over a road: %s: %s", type(e).__name__, e)
+            return None
+        if z is None:
+            return None
+        z = np.asarray(z, np.float64)
+        ok = np.isfinite(z)
+        if 2 * int(ok.sum()) < len(z):
+            return None
+        return float(np.min(z[ok]))
+
     def _measured_over(self, bridge, z_at):
         """The measured deck's most over the ground under it (m), along the bridge every DECK_STEP (a straight overpass is
         often mapped as two points, both on the ground); None when nothing is measured."""
@@ -3011,7 +3040,7 @@ class _Planner:
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)
-                cz = None
+                cz, measured = None, False
                 if CW_ON and not rail_span[bi]:
                     sb = np.r_[0.0, np.cumsum(np.hypot(*np.diff(b, axis=0).T))]
                     cpts = np.stack([np.interp(corridor, sb, b[:, 0]), np.interp(corridor, sb, b[:, 1])], axis=1)
@@ -3021,6 +3050,14 @@ class _Planner:
                 else:
                     ze = deck_ends(bi)
                     deck = float(np.min(ze[0] + (ze[1] - ze[0]) * corridor / L))
+                    if UNDER_MEASURED_ON and not rail:
+                        # (a measured deck stands where it was measured: an arched overpass's middle over its ends'
+                        # straight line, which dug I-75 1.5 m down under the 108 m deck at Findlay, Ohio, flat in the
+                        # photos; stale lidar of the ground under a removed deck reads lower and changes nothing)
+                        mz = self._measured_corridor(b, corridor)
+                        if mz is not None:
+                            measured = mz >= deck - UNDER_MEASURED_TOL_M
+                            deck = max(deck, mz)
                 # where along this road (its nearest vertex segment)
                 t = np.clip(((pt - xy[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
                 j = int(np.argmin(np.linalg.norm(xy[:-1] + t[:, None] * ab - pt, axis=1)))
@@ -3030,6 +3067,8 @@ class _Planner:
                 depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
                     roadsmod.deck_depth(roadsmod.geom_span([b]))
                 clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
+                if measured:                    # (its real headroom, not the one a guessed deck is given)
+                    clear -= roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
                 cand_xs.append((bi, pt))
