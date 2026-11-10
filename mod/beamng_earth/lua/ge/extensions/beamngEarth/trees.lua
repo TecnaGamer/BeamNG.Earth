@@ -27,6 +27,14 @@ M.RINGS = { { 300, 1.0 }, { 700, 0.6 }, { 1500, 0.35 }, { 1e9, 0.2 } }   -- tile
 -- on the GPU, and the engine's tick hitched at every tile change while driving: 19.8 fps over a drive, 38.4 with trees
 -- off; 2026-10-20). Cities and farmland stay under it (Columbia: ~540 a tile).
 M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
+-- Far clumps (server vegetation.CLUMP_OF; GitHub #1074: "trees cost too much"): a tile beyond CLUMP_M shows the clump
+-- items of its forest squares (FAR_ONLY groups: one stock forest-filler shape for 4-8 trees) instead of the trees they
+-- stand for (rows whose scale is negative), which show only within it. A tile's distance is to its nearest point
+-- (boxDist): a tile 200 m off holds trees out to ~500 m, and a 20 m tree is drawn as its imposter beyond ~230 m
+-- anyway; within SOLID_M (the colliding trees round the car) every tree is its own. Scaled with the tree distance and
+-- density settings (rescale: QUALITY_LEVELS' clump).
+M.CLUMP_M = 200
+M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
@@ -256,6 +264,16 @@ M.CATALOG = {
     { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
     { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
   },
+  -- Far clumps (server vegetation.CLUMP_OF, GitHub #1074): one item for a forest square's 4-8 trees, shown only
+  -- beyond CLUMP_M (FAR_ONLY) where those trees are not (rows with a negative scale). The stock maps' own forest
+  -- fillers, in the materials of the single trees they stand for (no new materials); heights from their bounds
+  -- (the asset survey, 2026-11-10).
+  conifer_clump = { { ECA .. 'trees/trees_douglasfir/tree_douglasfir_group_low', 22.6 } },
+  deciduous_clump = {
+    { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 }, { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
+  },
+  oak_west_clump = { { WCA .. 'trees/trees_oak/oak_a_distant', 9.8 } },
+  mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
@@ -499,18 +517,19 @@ M.groupOff = { lampglow = true }
 -- and caps' distances, and the server's tree tile reach (core.sendGraphics treeScale: vegetation.SEND_M times it;
 -- GHOST_FAR_M follows). 'normal': the defaults above. (Before the split 'trees' also set the distance: low 0.75,
 -- medium 0.9, high 1.3, ultra 1.6; settings.lua migrates a saved level so.)
+-- clump: CLUMP_M's factor (the far clumps start nearer on the low levels: GitHub #1074 asked for imposters only).
 M.QUALITY_LEVELS = {
-  lowest = { rank = 0.3, cap = 0.3 },       -- (GitHub #714: ~37 fps in a forest on Low with a 3060 Ti at 1440p)
-  low = { rank = 0.5, cap = 0.5 },
-  medium = { rank = 0.7, cap = 0.7 },
-  normal = { rank = 1.0, cap = 1.0 },
-  high = { rank = 1.35, cap = 1.5 },
-  ultra = { rank = 1.7, cap = 2.2 },
-  extreme = { rank = 2.5, cap = 2.5 },      -- (rank 2.5: every item the server sends out to ~700 m x distance)
+  lowest = { rank = 0.3, cap = 0.3, clump = 0.5 },     -- (GitHub #714: ~37 fps in a forest on Low, 3060 Ti at 1440p)
+  low = { rank = 0.5, cap = 0.5, clump = 0.67 },
+  medium = { rank = 0.7, cap = 0.7, clump = 0.85 },
+  normal = { rank = 1.0, cap = 1.0, clump = 1.0 },
+  high = { rank = 1.35, cap = 1.5, clump = 1.0 },
+  ultra = { rank = 1.7, cap = 2.2, clump = 1.35 },
+  extreme = { rank = 2.5, cap = 2.5, clump = 1.7 },    -- (rank 2.5: every item the server sends out to ~700 m x distance)
 }
 M.DISTANCES = { nearest = 0.6, near = 0.75, medium = 0.9, normal = 1.0, far = 1.3, farther = 1.6, max = 2.2 }
 M.TILE_SEND_M, M.TILE_DROP_M = 1280, 1536     -- the server's vegetation SEND_M / DROP_M at distance 1
-local BASE_RINGS, BASE_CAP = nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
+local BASE_RINGS, BASE_CAP, BASE_CLUMP = nil, nil, nil   -- (the defaults, copied at the first setQuality / setDistance)
 M.quality = 'normal'
 M.distance = 'normal'
 
@@ -528,6 +547,12 @@ function M.scaledRings(level, rings, caps, distance)
   return r, c
 end
 
+-- Pure: CLUMP_M of a density level and a distance level from the base distance.
+function M.clumpDistance(level, distance, base)
+  local q = M.QUALITY_LEVELS[level] or M.QUALITY_LEVELS.normal
+  return math.floor((base or 200) * (q.clump or 1) * (M.DISTANCES[distance or 'normal'] or 1.0) + 0.5)
+end
+
 -- The server's tree tile reach factor for a distance level (core.sendGraphics treeScale).
 function M.distanceScale(distance) return M.DISTANCES[distance or M.distance] or 1.0 end
 
@@ -536,8 +561,10 @@ local function rescale()
     BASE_RINGS, BASE_CAP = {}, {}
     for i, v in ipairs(M.RINGS) do BASE_RINGS[i] = { v[1], v[2] } end
     for i, v in ipairs(M.TILE_CAP) do BASE_CAP[i] = { v[1], v[2] } end
+    BASE_CLUMP = M.CLUMP_M
   end
   M.RINGS, M.TILE_CAP = M.scaledRings(M.quality, BASE_RINGS, BASE_CAP, M.distance)
+  M.CLUMP_M = M.clumpDistance(M.quality, M.distance, BASE_CLUMP)
   M.GHOST_FAR_M = math.floor(M.TILE_SEND_M * M.distanceScale() + 0.5) + (M.TILE_DROP_M - M.TILE_SEND_M)
   M.refresh()
 end
@@ -1029,19 +1056,30 @@ end
 
 -- The rank tile t shows below at distance d: threshold(d), lowered to keep it within M.TILE_CAP (the cap-th lowest
 -- of its rows' ranks: exact whatever share of the area's items the server sent, vegetation.TILE_ROWS_MAX).
+-- The ranks are those of the rows shown at that side of CLUMP_M: within it every row but the far clumps (FAR_ONLY),
+-- beyond it every row but the trees they stand for (a negative scale).
 local function tileThreshold(d, t)
   local want = threshold(d)
   local n = t.n or 0
   for _, r in ipairs(M.TILE_CAP) do
     if d <= r[1] then
       if n <= r[2] then return want end
-      if not t.ranks then
-        local rk, f, s = newTable(n, 0), t.f, t.s
-        for i = 1, n do rk[i] = f[(i - 1) * s + F_RANK] end
+      local far = d > M.CLUMP_M
+      local rk = far and t.ranksFar or t.ranksNear
+      if not rk then
+        local f, s, names, m = t.f, t.s, t.groups or GROUPS, 0
+        rk = newTable(n, 0)
+        for i = 1, n do
+          local b = (i - 1) * s
+          local g = names[f[b + F_GROUP] + 1]
+          local out = far and f[b + F_SCALE] < 0 or not far and g ~= nil and M.FAR_ONLY[g]
+          if not out then m = m + 1; rk[m] = f[b + F_RANK] end
+        end
         table.sort(rk)
-        t.ranks = rk
+        if far then t.ranksFar = rk else t.ranksNear = rk end
       end
-      return math.min(want, t.ranks[r[2] + 1])
+      if #rk <= r[2] then return want end
+      return math.min(want, rk[r[2] + 1])
     end
   end
   return want
@@ -1109,7 +1147,7 @@ bandCapsUpdate = function()
 end
 groupBand = function(t, d)
   if bandCaps[1] == nil then bandCapsUpdate() end
-  local k = 0
+  local k = d > M.CLUMP_M and 0.5 or 0      -- (the far clumps' side: caps are whole metres)
   for i = 1, #bandCaps do
     local cap = bandCaps[i]
     if d > cap then break end
@@ -1435,6 +1473,12 @@ function M.update(anchorId, player, view, frameMs)
           end
         elseif cap and dist > cap then
           r = 2     -- this group is not shown this far out
+        end
+        -- the far clumps beyond CLUMP_M, the trees they stand for within it
+        if g and M.FAR_ONLY[g] then
+          if dist <= M.CLUMP_M then r = 2 end
+        elseif f[b + F_SCALE] < 0 and dist > M.CLUMP_M then
+          r = 2
         end
         if g and M.groupOff[g] then r = 2 end    -- a group the player turned off (setGroupEnabled)
         -- a group this mod has no shapes for (a newer server's): left out, not drawn as a tree

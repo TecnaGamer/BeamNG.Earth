@@ -424,6 +424,69 @@ class DemFailedTest(unittest.TestCase):
             self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")
 
 
+class ClumpTest(unittest.TestCase):
+    """GitHub #1074: a forest square's trees get one far clump item; they are flagged (negative scale)."""
+
+    def _items(self, lat, lon, group, lcls=10):
+        n = len(lat)
+        f32 = lambda v: np.full(n, v, np.float32)       # noqa: E731
+        it = veg.Items(np.asarray(lon, float), np.asarray(lat, float), f32(20.0), f32(3.4),
+                       np.full(n, veg.KIND_TREE, np.uint8), np.asarray(group, np.uint8),
+                       np.linspace(0.1, 0.9, n).astype(np.float32), f32(0.0), f32(1.0))
+        return it, np.full(n, lcls, np.uint8)
+
+    def test_a_dense_square_becomes_one_clump(self):
+        cell = veg.clump_cell(LAT)
+        # a square's corner (Web Mercator, from the world's edge): three firs in it, one fir alone two squares away
+        x0 = (np.floor((-8524000.0 + 20037508.342789244) / cell) + 0.5) * cell - 20037508.342789244
+        y0 = (np.floor((4764000.0 + 20037508.342789244) / cell) + 0.5) * cell - 20037508.342789244
+        xs = np.array([x0 - 2, x0 + 2, x0, x0 + 2 * cell])
+        ys = np.array([y0, y0 + 1, y0 - 2, y0])
+        lon, lat = veg._to4326(xs, ys)
+        it, lc = self._items(lat, lon, [veg.G_CONIFER, veg.G_CONIFER, veg.G_DECIDUOUS, veg.G_CONIFER])
+        out = veg.clumps(it, lc, LAT)
+        self.assertEqual(len(out), 5)
+        self.assertEqual(list(out.scale[:4] < 0), [True, True, True, False])
+        self.assertEqual(int(out.group[4]), veg.G_CONIFER_CLUMP, "most of them firs")
+        self.assertAlmostEqual(float(out.rank[4]), float(it.rank[:3].min()), places=6)
+        cx, cy = veg._to3857(out.lon[4:], out.lat[4:])
+        self.assertAlmostEqual(float(cx[0]), float(xs[:3].mean()), places=3)
+        self.assertAlmostEqual(float(cy[0]), float(ys[:3].mean()), places=3)
+        again = veg.clumps(it, lc, LAT)
+        self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.yaw, out.yaw), "deterministic")
+
+    def test_street_trees_and_palms_stay_single(self):
+        x0, y0 = -8524000.0, 4764000.0
+        lon, lat = veg._to4326(np.array([x0, x0 + 1, x0 + 2]), np.array([y0, y0 + 1, y0]))
+        it, lc = self._items(lat, lon, [veg.G_DECIDUOUS] * 3, lcls=veg.WC["built"])
+        self.assertEqual(len(veg.clumps(it, lc, LAT)), 3)
+        it, lc = self._items(lat, lon, [veg.G_PALM] * 3)
+        self.assertEqual(len(veg.clumps(it, lc, LAT)), 3)
+
+    def test_grid_fits_the_geotiles(self):
+        import geotiles
+        tile = 2 * np.pi * veg.R / (1 << geotiles.Z)
+        for lat in (0.0, 45.0, 60.0, 80.0):
+            k = tile / veg.clump_cell(lat)
+            self.assertAlmostEqual(k, round(k), places=9)
+            self.assertTrue(10 <= veg.clump_cell(lat) * np.cos(np.radians(lat)) <= 27)
+
+    def test_clumps_beside_the_tile_cap(self):
+        n = 30
+        it = veg.Items(*(np.zeros(n) for _ in range(4)), np.zeros(n, np.uint8),
+                       np.array([veg.G_CONIFER] * 20 + [veg.G_CONIFER_CLUMP] * 10, np.uint8),
+                       np.linspace(0, 1, n).astype(np.float32)[::-1].copy(), np.zeros(n), np.ones(n))
+        old = veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX
+        veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX = 5, 3
+        try:
+            keep = veg._capped(it)
+        finally:
+            veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX = old
+        self.assertEqual(int(np.sum(it.group[keep] == veg.G_CONIFER)), 5)
+        self.assertEqual(int(np.sum(it.group[keep] == veg.G_CONIFER_CLUMP)), 3)
+        self.assertTrue(np.all(np.diff(keep) > 0))
+
+
 class OrchardTest(unittest.TestCase):
     def test_trees_stand_in_lines(self):
         import mapgeom

@@ -77,6 +77,7 @@ mod gsrows;
 mod planends;
 mod wallsindex;
 mod mappedlamps;
+mod vegclumps;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6112,6 +6113,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 199: mappedlamps (the mapped street lamps' arms toward their road, the mapped points along each road; 198 is
     // another branch's)
     // 198: reframe_segs (roadwidth's walls in another cell's frame in one pass)
-    m.add("VERSION", 199)?;
+    m.add_function(wrap_pyfunction!(vegclumps::veg_clumps, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::field_lattice, m)?)?;
+    // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
+    // orchards', vineyards' and hay bales' rows)
+    m.add("VERSION", 201)?;
     Ok(())
 }

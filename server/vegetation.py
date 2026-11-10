@@ -37,21 +37,36 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 25          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 26          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
-                      # Mediterranean basin's own trees, G_MEDITERRANEAN)
+                      # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
-          "oak_west", "tropical", "mediterranean")
+          "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
+          "mediterranean_clump")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
- G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN) = range(len(GROUPS))
+ G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
+ G_MEDITERRANEAN_CLUMP) = range(16)
+# Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
+# world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
+# CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
+# tree_douglasfir_group_low / tree_oak_forest_group / tree_beech_forest_group, West Coast USA's oak_a_distant, Italy's
+# holm_oak_filler_center, 4-8 trees each, the materials of the single trees they stand for). The mod shows the clump
+# beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
+# forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
+CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP}
+CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
+CLUMP_CELL_M = 18.0
+CLUMP_MIN = 3
+CLUMP_ROWS_MAX = 2000       # clump rows a tile sends at most (beside TILE_ROWS_MAX's single items)
 # The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
 # and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
 # 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
@@ -443,7 +458,9 @@ class Vegetation:
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
         if orchard.any():
-            tree = _drop_on_mask(tree, orchard, chm)
+            keep = _keep_off_mask(tree, orchard, chm)
+            tree, lcls = tree.take(keep), lcls[keep]
+        tree = clumps(tree, lcls, (lat0 + lat1) / 2)
         scatter = self._scatter(cd, lc, blocked | paved | orchard, chm, hs)
         edge = self._edge(cd, lc, blocked | orchard, road, chm, hs)
         planted = orchard_items(lu, chm, blocked, (lon0, lat0, lon1, lat1))
@@ -632,10 +649,10 @@ FARM_BUSH_CELL = 2000
 FARM_MIN_M2 = 800.0
 
 
-def _drop_on_mask(items, mask, chm):
-    """items whose position is not on a set pixel of mask (canopy trees inside an orchard)."""
+def _keep_off_mask(items, mask, chm):
+    """Per item: its position is not on a set pixel of mask (canopy trees inside an orchard go)."""
     if len(items) == 0 or mask is None or not np.any(mask):
-        return items
+        return np.ones(len(items), bool)
     x, y = _to3857(items.lon, items.lat)
     c = np.floor((x - chm.x0) / chm.dx).astype(np.int64)
     r = np.floor((chm.y0 - y) / chm.dy).astype(np.int64)
@@ -643,7 +660,46 @@ def _drop_on_mask(items, mask, chm):
     inside = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
     drop = np.zeros(len(items), bool)
     drop[inside] = mask[r[inside], c[inside]]
-    return items.take(~drop)
+    return ~drop
+
+
+def clump_cell(lat):
+    """The clump grid's square (Web Mercator m) at latitude lat: a whole number of them a geotile (geotiles.Z), each
+    about CLUMP_CELL_M on the ground."""
+    import geotiles
+    tile = 2.0 * math.pi * R / (1 << geotiles.Z)
+    k = max(1, int(round(tile * max(math.cos(math.radians(lat)), 0.05) / CLUMP_CELL_M)))
+    return tile / k
+
+
+def clumps(tree, lcls, lat):
+    """tree (a cell's canopy Items) with the far clumps added (CLUMP_OF, earthfast.veg_clumps) and the trees they
+    stand for flagged (a negative scale: trees.lua shows them only within its near ring). lcls: the land cover class
+    of each; lat: the cell's (clump_cell). Street trees (built-up land) stay single."""
+    if len(tree) < CLUMP_MIN:
+        return tree
+    fast.require(201, "veg_clumps")
+    x, y = _to3857(tree.lon, tree.lat)
+    table = [255] * len(GROUPS)
+    for g, c in CLUMP_OF.items():
+        table[g] = c
+    member, cx, cy, ch, cr, cg, cu = fast._ef.veg_clumps(
+        np.ascontiguousarray(x, np.float64), np.ascontiguousarray(y, np.float64),
+        np.ascontiguousarray(tree.group, np.uint8), np.ascontiguousarray(tree.kind, np.uint8),
+        np.ascontiguousarray(tree.height, np.float32), np.ascontiguousarray(tree.rank, np.float32),
+        np.ascontiguousarray(lcls, np.uint8), table, KIND_TREE, WC["built"], clump_cell(lat), CLUMP_MIN)
+    if not len(cx):
+        return tree
+    member = np.asarray(member, bool)
+    scale = tree.scale.copy()
+    scale[member] = -np.abs(scale[member])
+    tree = Items(tree.lon, tree.lat, tree.height, tree.radius, tree.kind, tree.group, tree.rank, tree.yaw, scale)
+    lon, la = _to4326(np.asarray(cx), np.asarray(cy))
+    h = np.asarray(ch, np.float32)
+    n = len(lon)
+    return _concat(tree, Items(lon, la, h, (0.3 * h + 2.0).astype(np.float32), np.full(n, KIND_TREE, np.uint8),
+                               np.asarray(cg, np.uint8), np.asarray(cr, np.float32),
+                               (np.asarray(cu) * 360.0).astype(np.float32), np.ones(n, np.float32)))
 
 
 def _fid_key(fid):
@@ -1025,7 +1081,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK)]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK) + CLUMP_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):
@@ -1071,6 +1127,18 @@ def _off_graded(it, e, n, zg, raw):
     return it.take(keep), e[keep], n[keep], zg[keep]
 
 
+def _capped(it):
+    """The rows a tile sends (sorted indices): the TILE_ROWS_MAX lowest ranks of its single items, and the
+    CLUMP_ROWS_MAX lowest of its far clumps beside them (they never show where the single ones do)."""
+    clump = np.isin(it.group, CLUMP_GROUPS)
+    out = []
+    for sel, cap in ((np.flatnonzero(~clump), TILE_ROWS_MAX), (np.flatnonzero(clump), CLUMP_ROWS_MAX)):
+        if len(sel) > cap:
+            sel = sel[np.argpartition(it.rank[sel], cap - 1)[:cap]]
+        out.append(sel)
+    return np.sort(np.concatenate(out))
+
+
 def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False, raw=None):
     """The items of anchor tile (tx, ty), each [group, x, y, z, yaw, scale, height, rank] in the anchor
     frame, the ground z from elev(lat, lon) (the DEM shaped as the block's ground: runways, carved
@@ -1102,7 +1170,7 @@ def tile_items(frame, tx, ty, veg, cell_ready, elev, sea=None, as_json=False, ra
     if len(it) == 0:
         return _no_items(as_json, clat, clon)
     if len(it) > TILE_ROWS_MAX:         # dense forest: the lowest ranks only (the mod shows no more of a tile)
-        keep = np.sort(np.argpartition(it.rank, TILE_ROWS_MAX - 1)[:TILE_ROWS_MAX])
+        keep = _capped(it)
         it, e, n = it.take(keep), e[keep], n[keep]
     zg = np.asarray(elev(it.lat, it.lon), np.float64)
     it, e, n, zg = _off_graded(it, e, n, zg, raw)
@@ -1152,7 +1220,7 @@ def geo_tile_items(gx, gy, veg, cell_ready, elev, sea=None, as_json=False, raw=N
     if len(it) == 0:
         return _no_items(as_json, clat, clon), 0.0
     if len(it) > TILE_ROWS_MAX:
-        keep = np.sort(np.argpartition(it.rank, TILE_ROWS_MAX - 1)[:TILE_ROWS_MAX])
+        keep = _capped(it)
         it, e, n = it.take(keep), e[keep], n[keep]
     zg = np.asarray(elev(it.lat, it.lon), np.float64)
     it, e, n, zg = _off_graded(it, e, n, zg, raw)

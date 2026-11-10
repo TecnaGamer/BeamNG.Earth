@@ -677,6 +677,42 @@ do
   T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
   T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
 end
+do -- far clumps (server vegetation.CLUMP_OF, GitHub #1074): the clump beyond CLUMP_M, the trees it stands for within it
+  local function shapes()
+    local out = {}
+    for it in pairs(items) do
+      local sf = it.d.fields.shapeFile
+      local k = sf:find('group_low', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
+      out[k] = (out[k] or 0) + 1
+    end
+    return out
+  end
+  for k in pairs(items) do items[k] = nil end
+  -- three firs of a square (scale < 0), its clump, and a lone fir
+  trees.onRows(41, '0_0', { { 0, 10, 10, 0, 0, -1, 20, 0.1 }, { 0, 14, 10, 0, 0, -1, 21, 0.2 },
+    { 0, 12, 14, 0, 0, -1, 22, 0.3 }, { 1, 12, 11, 0, 0, 1, 21, 0.1 }, { 0, 100, 100, 0, 0, 1, 20, 0.05 } },
+    { 'conifer', 'conifer_clump' })
+  for _ = 1, 10 do trees.update(41, { x = 0, y = 0 }) end
+  local s = shapes()
+  T.check(s.fir == 4 and not s.clump, 'near: the square\'s firs and the lone one, no clump')
+  for _ = 1, 10 do trees.update(41, { x = 0, y = 256 + trees.CLUMP_M + 100 }) end
+  s = shapes()
+  T.check(s.fir == 1 and s.clump == 1, 'far: the clump and the lone fir, not the square\'s firs')
+  T.check(trees.clumpDistance('normal', 'normal', 200) == 200 and trees.clumpDistance('lowest', 'far', 200) == 130,
+    'clump distance by density and distance')
+  -- the far cap counts the clumps and the single trees, not the trees the clumps stand for
+  local rows = {}
+  for i = 1, 3000 do rows[#rows + 1] = { 0, i % 200, 50 + i % 7, 0, 0, -1, 20, 0.001 } end     -- (low ranks first)
+  for i = 1, 300 do rows[#rows + 1] = { 1, i % 200, 60, 0, 0, 1, 20, 0.1 } end
+  for k in pairs(items) do items[k] = nil end
+  trees.onRows(41, '0_0', rows, { 'conifer', 'conifer_clump' })
+  for _ = 1, 20 do trees.update(41, { x = 0, y = 256 + 900 }) end      -- (the 700-1500 m ring: 900 a tile at most)
+  s = shapes()
+  T.check(s.clump == 300 and not s.fir, 'far cap: every clump (the 3000 trees they stand for not counted)')
+  trees.onDrop({ anchorId = 41, key = '0_0' })
+  for _ = 1, 20 do trees.update(41, { x = 0, y = 0 }) end
+end
+
 do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
   local shape, sc = trees.pick('golfflag', 2.05, 0.3)
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
