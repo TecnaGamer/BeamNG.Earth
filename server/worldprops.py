@@ -103,8 +103,9 @@ def tile_props(frame, tx, ty, md, elev, lamps=None):
     boxes.sort(key=lambda b: (b["x"], b["y"]))
     placed.extend(boxes[:CONT_TILE_MAX])
     if mapped:
-        _aim_lamps(mapped, lambda: _lamp_roads(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=LAMP_ROAD_M),
-                                                             "roads")))
+        reach = LAMP_NEAR_M + LAMP_ROAD_M
+        _aim_lamps(mapped, lambda: _lamp_roads(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=reach), "roads"),
+                                               (x0 - reach, y0 - reach, x1 + reach, y1 + reach)))
         placed.extend(mapped)
     if not placed:
         return [], skip
@@ -148,9 +149,23 @@ def _street_lamps(frame, feats, rows, box, placed):
     """Add the mapped lamp nodes (OpenStreetMap nodes only, no interpolation along lit ways) in box to placed, as
     worldprops records with "lamp_id" and their arm's kind / layer for _aim_lamps."""
     cls = _cls(feats)
-    at = np.arange(len(feats.kind)) if rows is None else np.asarray(rows, np.int64)
-    if cls is not None:         # (only the lamps' tags are read: a city cell has thousands of other points)
-        at = at[cls[at] == "street_lamp"]
+    if cls is not None and isinstance(feats, mapgeom.Features):
+        # (the cell's lamp points and their places in the frame, once per layer and frame: a city cell has thousands
+        # of lamps and other points; a tile looks at the few in its box)
+        def make():
+            at = np.flatnonzero((cls == "street_lamp") & (np.asarray(feats.kind) == mapgeom.POINT))
+            xy = feats.xy_in(frame)
+            first = feats.coord_off[feats.ring_off[feats.part_off[at]]] if len(at) else np.zeros(0, np.int64)
+            return at, (xy[first] if len(at) else np.zeros((0, 2)))
+        at, xy = _memo(feats, "lamp_pts", frame, make)
+        keep = (xy[:, 0] >= box[0]) & (xy[:, 0] < box[2]) & (xy[:, 1] >= box[1]) & (xy[:, 1] < box[3])
+        if rows is not None:
+            keep &= np.isin(at, np.asarray(rows, np.int64))
+        at = at[keep]
+    else:
+        at = np.arange(len(feats.kind)) if rows is None else np.asarray(rows, np.int64)
+        if cls is not None:
+            at = at[cls[at] == "street_lamp"]
     src = feats.attrs.get("src_record")
     seen = {p["lamp_id"] for p in placed}
     for i in at.tolist():
@@ -210,16 +225,16 @@ def _aim_lamps(lamps, lines_fn):
             p["yaw"] = y
 
 
-def _lamp_roads(frame, layers):
-    """(points (m, 2), offsets (k + 1), layer (k,) NaN: none) of the drivable centrelines near the tile (no footways,
-    no tunnels), in a stable order (their ids, then their ends)."""
+def _lamp_roads(frame, layers, near=None):
+    """(points (m, 2), offsets (k + 1), layer (k,) NaN: none) of the drivable centrelines (no footways, no tunnels)
+    whose boxes meet near (x0, y0, x1, y1; None: all), in a stable order (their ids, then their ends)."""
     result = []
     for feats, rows in layers:
         def make():
-            lines, at = _layer_lines(frame, feats)
+            lines, at = _memo(feats, "lines", frame, lambda: _layer_lines(frame, feats))     # (shared: _polylines')
             cls = _cls(feats)
             table = feats.rules.get("layer") if hasattr(feats, "rules") else None
-            found, indices = [], []
+            found, indices, boxes = [], [], []
             for line, i in zip(lines, at):
                 tags = _tags_of(feats, i)
                 kind = tags.get("highway") or (str(cls[i]) if cls is not None else "")
@@ -236,10 +251,15 @@ def _lamp_roads(frame, layers):
                     level = math.nan
                 found.append((str(feats.ids[i]), line, level))
                 indices.append(i)
-            return found, indices
-        found, indices = _memo(feats, "lamp_roads", frame, make)
+                boxes.append((*line.min(0), *line.max(0)))
+            return found, np.asarray(indices, np.int64), np.asarray(boxes, np.float64).reshape(-1, 4)
+        found, indices, boxes = _memo(feats, "lamp_roads", frame, make)
         pick = _picked(feats, rows, indices)
-        result.extend(found if pick is None else (found[k] for k in np.flatnonzero(pick)))
+        keep = np.ones(len(found), bool) if pick is None else np.asarray(pick, bool)
+        if near is not None and len(found):
+            keep &= ((boxes[:, 2] >= near[0]) & (boxes[:, 0] <= near[2]) & (boxes[:, 3] >= near[1])
+                     & (boxes[:, 1] <= near[3]))
+        result.extend(found[k] for k in np.flatnonzero(keep).tolist())
     result.sort(key=lambda r: (r[0], tuple(r[1][0]), tuple(r[1][-1])))
     off = np.zeros(len(result) + 1, np.int64)
     if result:
