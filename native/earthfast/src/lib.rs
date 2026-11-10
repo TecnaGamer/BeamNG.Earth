@@ -1583,12 +1583,11 @@ const RANK_BUILT: i64 = 100;
 /// grade ranks within this of the higher road's take the same side ease (a service road or driveway beside a
 /// residential street); a bigger class gap (a residential approach to a primary) keeps the old blend, whose side
 /// ease cut that approach to a 67 % step
-const RANK_SIDE_MAX_DIFF: i64 = 4;
+const RANK_SIDE_MAX_DIFF: i64 = 6;
 /// the hard hold of a road's own carriageway applies to primary and below; a motorway or trunk keeps the old blend
 /// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
 /// smoothness there)
 const RANK_HOLD_MAX: i64 = 114;
-
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
