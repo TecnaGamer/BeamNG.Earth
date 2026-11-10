@@ -256,5 +256,23 @@ class OwnRecordTest(unittest.TestCase):
         self.assertFalse(bt._near_sites(np.array([300.0, 800.0]), [outline]))
 
 
+class MappedTowersTest(unittest.TestCase):
+    """A suspension span between the towers the map has: the pair either side of its centre on its part; a tower
+    mapped as parts is one tower with its tallest top."""
+
+    def test_span_between_mapped_towers(self):
+        xy = np.c_[np.linspace(0.0, 1000.0, 101), np.zeros(101)]
+        P = [(xy, np.full(101, 40.0), 20.0)]
+        arcs = [np.linspace(0.0, 1000.0, 101)]
+        ms, tops = bt.mapped_towers(P, arcs, (0, 500.0, 480.0), [(np.array([230.0, 5.0]), 120.0),
+                                                                   (np.array([760.0, -5.0]), 118.0)])
+        self.assertEqual(ms[0], 0)
+        self.assertAlmostEqual(ms[1], 495.0, delta=10.0)
+        self.assertAlmostEqual(ms[2], 530.0, delta=10.0)
+        self.assertEqual(tops, [120.0, 118.0])
+        same, none = bt.mapped_towers(P, arcs, (0, 500.0, 480.0), [(np.array([230.0, 5.0]), 120.0)])
+        self.assertEqual((same, none), ((0, 500.0, 480.0), None), "one tower only: as before")
+
+
 if __name__ == "__main__":
     unittest.main()

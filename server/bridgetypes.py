@@ -555,7 +555,12 @@ def pylon_sites(frame, feats_list, ground_fn):
             c = np.array([float(np.mean(e)), float(np.mean(n))])
             g = float(np.asarray(ground_fn(c[None]), np.float64).reshape(-1)[0])
             out.append((c, g + h))
-    return out
+    # (a tower mapped as several parts, the Golden Gate's north tower's 12-224 m: one tower, its tallest top)
+    merged = []
+    for c, top in sorted(out, key=lambda t: -t[1]):
+        if not any(float(np.hypot(*(c - m[0]))) <= PYLON_MERGE_M for m in merged):
+            merged.append((c, top))
+    return merged
 
 
 def _osm_outlines(frame, parts, feats_list):
@@ -937,6 +942,7 @@ PYLON_NEAR_M = 40.0     # m: a pylon this near the span's part is on it
 PYLON_REACH = 0.9       # ... and within this share of the span from its centre
 PYLON_SADDLE_M = 3.0    # m: the cable's saddle under a tower's top
 PYLON_MIN_H = 30.0      # m: a bridge support this tall (or tagged pylon) is a tower
+PYLON_MERGE_M = 40.0    # m: supports this near each other are one tower (its parts)
 STAYED_TOWER = 1 / 4.0  # a cable-stayed pylon's top over the deck: a share of the main span
 HANGER_M = 12.0         # m between hangers / stays / spandrel posts
 
