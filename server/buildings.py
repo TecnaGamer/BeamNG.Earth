@@ -1696,7 +1696,14 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
 # Mapillary 360 photo (40.7088 -74.0002, 2026-11-10: a tank on the roofs in front of the skyline) and a player's
 # screenshot that had them; none drawn before. Not mapped (Overture's infrastructure has none on Manhattan's roofs):
 # by the seed, on WATER_TANK_SHARE of the flat roofs of WATER_TANK_FLOORS storeys in WATER_TANK_BOXES (the five
-# boroughs, Hudson County), not on glass curtain walls, new buildings, sheds, churches or industry.
+# boroughs, Hudson County), not on glass curtain walls, new buildings, sheds, churches or industry. The city's 2014 3-D
+# Building Model (nycmassing.py) is no source for them either (measured 2026-11-10): it has no round solids for them (its
+# 3-60 m2 rooftop pieces are boxes; the few round ones are turrets, cupolas, an apse), a tank there at all is a box of
+# the size and height of a stair bulkhead (SoHo: 38.6 m2, 3.8 m on a 29.1 m roof, beside a 15.1 m2, 3.7 m bulkhead), and
+# most tanks seen on the aerials have no piece; its tank-sized pieces follow the buildings' heights, not the tanks
+# (pieces of 6-40 m2 rising 2.5-12 m per building: Midtown 0.83, Upper West Side 0.52, Lower East Side 0.33, Park
+# Slope's rowhouses 0.10), and of 12 picked as the most tank-like (square or many-cornered) one (maybe two) was a
+# tank on the photo.
 WATER_TANK_BOXES = ((40.49, -74.27, 40.92, -73.68),)
 WATER_TANK_FLOORS = (6, 30)
 WATER_TANK_MIN_M2 = 150.0
@@ -3906,8 +3913,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             bparts = parts_of.get(str(key)) if key is not None else None
             nyc_group = None
             if not bparts and nyc_rows and i in nyc_rows and nycmassing.takes(a, i):
-                # (no parts of its own: New York's measured setbacks, a band per roof level; the 2014 model has the
-                # water tanks and bulkheads too: drawn as parts, the building takes no procedural tank)
+                # (no parts of its own: New York's measured setbacks, a band per roof level, its bulkheads too; its
+                # water tank is the procedural one on the top part, WATER_TANK_TOP_M: the model has none to place)
                 bparts = nyc_idx.parts(nyc_rows[i]) or None
                 nyc_group = ("nyc", key if key is not None else (id(f), i))
             ship_parts = None

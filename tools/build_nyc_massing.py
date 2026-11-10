@@ -3,7 +3,8 @@
 
 The city's 3-D Building Model (NYC Office of Technology and Innovation, formerly DoITT, 2014: one multipatch per
 building, BIN and DOITT_ID, EPSG:2263 US feet; "LoD1.5": every roof level more than 8 ft from its neighbours is a
-flat roof of its own, bulkheads, water tanks and towers over 10 ft included, no sloped faces, spires or antennas) is
+flat roof of its own, bulkheads, water tanks and towers over 10 ft included, no sloped faces, spires or antennas: a tank
+is a box like a bulkhead, often none at all, so no tank is told apart: buildings.WATER_TANK_*'s notes) is
 turned into stacked parts: the building's roof levels sorted, and for each band between two levels the outline of
 everything at or above the band's top (the union of the roofs that high): a wedding cake of flat prisms, each from the
 level below to its own. Bands that set back by less than SETBACK_M2 are one; pieces under MIN_PART_M2 are left out;

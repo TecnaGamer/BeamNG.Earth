@@ -1,8 +1,8 @@
 """New York City's measured building massing: the setbacks of its 2014 3-D Building Model as building parts.
 
 The city's model (NYC Office of Technology and Innovation, formerly DoITT, 2014) has every roof level of every
-building that differs by more than 8 ft as a flat roof of its own (bulkheads, water tanks and towers over 10 ft
-included). tools/build_nyc_massing.py turns each building with setbacks into stacked parts (a band per roof level,
+building that differs by more than 8 ft as a flat roof of its own (bulkheads and towers over 10 ft included; its
+water tanks, where it has them at all, are boxes like the bulkheads: buildings.WATER_TANK_* places tanks). tools/build_nyc_massing.py turns each building with setbacks into stacked parts (a band per roof level,
 its outline the union of the roofs at or above its top), checks it against the city's live Building Footprints
 (gone, rebuilt since 2014, or a different height: left out) and writes a shard per z14 map cell (mapcells.py) to the
 data repo's Pages (<BASE>/14/<x>/<y>.npz, ~10-170 kB a cell).
