@@ -1132,12 +1132,23 @@ fn reframe_segs<'py>(py: Python<'py>, segs: PyReadonlyArray2<'py, f64>, o1: PyRe
     }
     let flat: Vec<f64> = s.iter().copied().collect();
     let out = release(py, n * 200, move || {
-        let mut out = Vec::with_capacity(n * 4);
-        for p in flat.chunks_exact(2) {
-            let (la, lo, _) = e2g_one(p[0], p[1], 0.0, &oa, &ra);
+        let conv = |x: f64, y: f64| {
+            let (la, lo, _) = e2g_one(x, y, 0.0, &oa, &ra);
             let (e, nn, _) = g2e_one(la, lo, 0.0, &ob, &rb);
-            out.push(e);
-            out.push(nn);
+            (e, nn)
+        };
+        let mut out = Vec::with_capacity(n * 4);
+        // (a ring's walls follow each other: a segment's start is the one before's end, the same bits, converted once)
+        let mut prev: Option<([u64; 2], (f64, f64))> = None;
+        for s in flat.chunks_exact(4) {
+            let k0 = [s[0].to_bits(), s[1].to_bits()];
+            let a = match prev {
+                Some((k, v)) if k == k0 => v,
+                _ => conv(s[0], s[1]),
+            };
+            let b = conv(s[2], s[3]);
+            prev = Some(([s[2].to_bits(), s[3].to_bits()], b));
+            out.extend_from_slice(&[a.0, a.1, b.0, b.1]);
         }
         out
     });
