@@ -28,9 +28,9 @@
 -- (places only sends a request to the app, which answers from what it has).
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 4
+M.MAJOR, M.MINOR = 1, 5
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
-  gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true }
+  gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached' }
@@ -132,6 +132,33 @@ function M.inTunnel(x, y, z)
   local ok, r = pcall(amb.inTunnel, x, y, z)
   if not ok then return nil end
   return r == true
+end
+
+-- The posted speed limit of the road the player is on (1.5, has('speedLimit'); GitHub #1061: a sat nav add-on):
+-- { ms = the limit in m/s, mapped = true (the map's) / false (the road class's default) / nil (not known: where
+-- the limit is the AI's own speed the graph does not say), unit = 'mph' | 'kmh' (the country's signs) }; nil off the
+-- roads, before the world is there or off our level. The AI's target speed (lower in bends) is not it: the graph's
+-- posted field, else its speed where the two are the same.
+M.SPEED_ROAD_M = 4.0        -- m past the road's half width the player still counts as on it
+function M.speedLimit()
+  if not M.inWorld() then return nil end
+  local nav = mod('navgraph')
+  local g = nav and nav.currentGraph and nav.currentGraph()
+  local veh = getPlayerVehicle and getPlayerVehicle(0)
+  if not (g and veh and map and map.getMap and map.findClosestRoad) then return nil end
+  local ok, m = pcall(map.getMap)
+  if not ok or not m or not m.nodes then return nil end
+  local p = veh:getPosition()
+  local n1, n2, dist = map.findClosestRoad(p)
+  local a, b = n1 and m.nodes[n1], n2 and m.nodes[n2]
+  local e = a and b and a.links and (a.links[n2] or (b.links and b.links[n1]))
+  if not e or not e.speedLimit then return nil end
+  if dist and dist > (e.inRadius or 4) + M.SPEED_ROAD_M then return nil end
+  local raw = tonumber(e.posted)
+  local mapped = nil
+  if raw then mapped = raw > 0 end
+  return { ms = raw and math.abs(raw) or e.speedLimit, mapped = mapped,
+           unit = g.mph == false and 'kmh' or 'mph' }
 end
 
 -- The weather the world shows now (1.3, has('weather')): { rain = 0..1, snow = 0..1 (how hard it falls where the

@@ -201,7 +201,8 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[9] or e[8] }     -- (e[9]: a road narrowing to a tunnel's portal)
+          inRadius = e[8], outRadius = e[9] or e[8],      -- (e[9]: a road narrowing to a tunnel's portal)
+          posted = e[10] }      -- (the posted limit where speedLimit is not it, negative: the class's default; api)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -252,7 +253,8 @@ function M.onMessage(msg, currentAnchor)
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
             lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
-            trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil }  -- (M.ADAPTIVE)
+            trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil,  -- (M.ADAPTIVE)
+            mph = g.mph }       -- (the country's speed signs: api.speedLimit)
   dirty = true
   return true
 end
@@ -999,7 +1001,7 @@ function M.transform(xf, anchorId)
     end
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, moved = true }
+            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, mph = graph.mph, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true

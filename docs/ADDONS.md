@@ -153,7 +153,7 @@ end
 | function | returns |
 |---|---|
 | `version()` | `major, minor` (1, 4) |
-| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4) |
+| `has(name)` | `'pose'`, `'place'`, `'teleport'`, `'gps'`, `'notify'`, `'events'`, `'options'` (1.1), `'gpsRoute'` (1.2), `'inTunnel'`, `'weather'` (1.3), `'places'`, `'buildings'` (1.4), `'speedLimit'` (1.5) |
 | `earthVersion()` | the app's version (`"1.8.2-beta"`) once connected, else nil |
 | `connected()` | the BeamNG.Earth app connected |
 | `inWorld()` | the BeamNG.Earth level loaded |
@@ -167,6 +167,7 @@ end
 | `notify(text, seconds)` | a short message on screen |
 | `inTunnel()`, `inTunnel(x, y, z)` | 1.3: the player (1 m over its position), or a point in game coordinates, under a roof: a tunnel, a covered arch, a parking structure (the rule the tunnel sound uses). `true` / `false`, nil before the world is there |
 | `weather()` | 1.3: `{rain, snow, code, tempC, windMs, gustMs, visibilityM, rainMmH, snowCmH}`: `rain` / `snow` 0..1 as hard as it falls where the camera is (none above the cloud base), `code` the WMO weather code, the rest from the latest report (nil where not known); nil before the first report |
+| `speedLimit()` | 1.5: the posted speed limit of the road the player is on: `{ms, mapped, unit}` (`ms` in m/s; `mapped` true for the map's own limit, false for the road class's default, nil where not known; `unit` `'mph'` or `'kmh'`, the country's signs). Not the AI's target speed, which is lower in bends. nil off the road, before the world is there or on another level |
 | `places(lat, lon, opts, callback)` | 1.4: Overture's places of every kind round a point, nearest first (see "Places" below). Returns the request's id, or `nil, why` |
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |

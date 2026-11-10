@@ -854,3 +854,15 @@ class RulesTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PostedLimitTest(unittest.TestCase):
+    """GitHub #1061: an edge's posted limit (e[9]) where its AI target (e[5]) is not it, or not mapped."""
+
+    def test_posted_field(self):
+        import navgraph as ng
+        self.assertIsNone(ng.posted_field(24.6, 24.6, True))          # (the target is the limit: nothing)
+        self.assertIsNone(ng.posted_field(24.6, 24.6, False))
+        self.assertEqual(ng.posted_field(24.6, 18.0, True), 24.6)     # (a bend: the limit)
+        self.assertEqual(ng.posted_field(24.6, 18.0, False), -24.6)   # (the class's default: negative)
+        self.assertIsNone(ng.posted_field(None, 10.0, True))

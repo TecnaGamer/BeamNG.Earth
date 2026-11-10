@@ -49,7 +49,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 4, 'version 1.4 (places, buildings)')
+T.check(api.version() == 1 and select(2, api.version()) == 5, 'version 1.5 (speedLimit)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -237,5 +237,30 @@ api.onUpdate(2)
 T.check(#late == 1 and late[1].error == 'timed out' and late[1].pending == false, 'places: timed out once')
 api.onUpdate(api.PLACES_TIMEOUT_S * 2)
 T.check(#late == 1, 'places: only once')
+
+-- the posted speed limit (1.5, GitHub #1061): the link's posted field, else its speed; nil off the road
+T.check(api.has('speedLimit'), 'has speedLimit')
+veh.getPosition = function() return vec3(0, 0, 0) end
+local roadDist = 1.0
+local link = { speedLimit = 22.35, inRadius = 3.5 }
+map = { getMap = function() return { nodes = { a = { links = { b = link } }, b = { links = { a = link } } } } end,
+        findClosestRoad = function() return 'a', 'b', roadDist end }
+package.loaded['beamngEarth/navgraph'] = { currentGraph = function() return { mph = true } end }
+local sl = api.speedLimit()
+T.check(sl and sl.ms == 22.35 and sl.mapped == nil and sl.unit == 'mph', 'no posted field: the edge speed')
+link.speedLimit, link.posted = 15.0, 22.4      -- (a bend: the AI's target lower than the limit)
+sl = api.speedLimit()
+T.check(sl.ms == 22.4 and sl.mapped == true, 'a bend: the posted limit, not the target')
+link.posted = -13.9
+sl = api.speedLimit()
+T.check(sl.ms == 13.9 and sl.mapped == false, 'the class default: not mapped')
+package.loaded['beamngEarth/navgraph'] = { currentGraph = function() return { mph = false } end }
+T.check(api.speedLimit().unit == 'kmh', 'a km/h country')
+roadDist = 20
+T.check(api.speedLimit() == nil, 'off the road: nil')
+st.inOurLevel = false
+roadDist = 1
+T.check(api.speedLimit() == nil, 'another level: nil')
+st.inOurLevel = true
 
 T.done('test_api')

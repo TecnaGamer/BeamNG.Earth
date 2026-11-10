@@ -156,6 +156,32 @@ def _us_state(feats, i):
     return _us_place(feats, i)[0]
 
 
+def mapped_limit(feats, i, at=0.5):
+    """Is road feature i's speed limit at fraction at the map's own (max_speed_kmh), not its class's default?"""
+    speed = feats.rules.get("max_speed_kmh")
+    if speed is None:
+        return False
+    for r in speed.rows(i):
+        if speed.start[r] <= at <= speed.end[r]:
+            v = float(speed.value[r])
+            if math.isfinite(v) and v > 0:
+                return True
+    return False
+
+
+def posted_field(legal, target, mapped):
+    """An edge's posted limit field (e[9], the modding API's speedLimit: GitHub #1061): None where the edge's speed
+    (e[5], the AI's target: min(legal, the curve's)) is the posted limit (most edges: the graph files stay as they
+    were; always writing whether it is mapped grew every unmapped road's edges); else the limit (m/s, 0.1), negative
+    when it is the road class's default, not mapped. Pure."""
+    if legal is None or not math.isfinite(legal) or legal <= 0:
+        return None
+    if abs(legal - target) < 0.05:
+        return None
+    v = round(float(legal), 1)
+    return v if mapped else -v
+
+
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
@@ -305,6 +331,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     The graph's "trafficProfile": the adaptive traffic amount's profile of its centre (_traffic_profile)."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
+    posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
@@ -528,6 +555,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     half = max(1.5, min(half, spec.width / 2 + roadmesh.TUNNEL_SHOULDER - TUNNEL_AI_WALL_M))
                 edges.append([a, b, 1 if direction else 0, lo, li, round(target, 2), driv, round(half, 2)])
                 edge_fids.append(fid)
+                pf = posted_field(legal, target, mapped_limit(feats, i, (full[j] + full[j + 1]) / (2 * L)))
+                if pf is not None:
+                    posted[id(edges[-1])] = pf
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
     # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
@@ -622,9 +652,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             uniq.append(e)
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
+    for e in uniq:              # (the posted limit last: e[9], after the optional portal radius e[8])
+        pf = posted.get(id(e))
+        if pf is not None:
+            if len(e) == 8:
+                e.append(None)
+            e.append(pf)
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
     return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
-            "trafficProfile": _traffic_profile(frame, density_lines, cx, cy)}
+            "trafficProfile": _traffic_profile(frame, density_lines, cx, cy), "mph": bool(mph)}
 
 
 # Adaptive traffic (PR #728 / #773, ProxyFirewall202; traffic.py, docs/ADAPTIVE_TRAFFIC.md): the graph carries a
