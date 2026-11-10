@@ -248,7 +248,11 @@ def scan(root, box=None, limit=None, workers=1, keep_images=False):
             if os.path.exists(p):
                 body = open(p, "rb").read()
             else:
-                body = f.get(url).body
+                try:
+                    body = f.get(url).body
+                except Exception as e:      # (a timeout or a refusal: this chip waits for the next pass)
+                    print(chip, "skipped:", str(e)[-80:], flush=True)
+                    continue
                 if keep_images:
                     os.makedirs(img_dir, exist_ok=True)
                     with open(p, "wb") as fh:
