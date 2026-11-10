@@ -168,6 +168,13 @@ TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the
 _NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
 
 
+def _borders(server):
+    """Whether the road rules' country (navgraph.country_at) asks the real borders first: where the regional scenery is
+    on (--regional-poles, on by default), whose border data the server fetches at its start anyway; off, the nearest
+    airport alone as before (no border download)."""
+    return getattr(server, "regional_poles", "off") != "off"
+
+
 def _perf(server):
     return getattr(server, "perf", None) or _NO_PERF
 
@@ -973,7 +980,7 @@ class Server:
         _railways.RAW_ELEV = lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM)
         # runways graded in (--airports on: main() loads the OurAirports copy before the worker processes)
         self.airports = airportgrademod.AirportGrader(airports_db, self.dem) if airports_db is not None else None
-        self.airports_db = airports_db  # (also the road rules' country: navgraph.country_near)
+        self.airports_db = airports_db  # (also the road rules' country where no border says: navgraph.country_at)
         self.regional_poles = regional_poles
         if regional_poles != "off":
             import countrybounds
@@ -1899,9 +1906,9 @@ class Server:
         return result
 
     def country_at(self, lat, lon):
-        """The ISO country code at (lat, lon) (its nearest airport's: navgraph.country_near), or None."""
+        """The ISO country code at (lat, lon) (its border's, else its nearest airport's: navgraph.country_at), or None."""
         try:
-            return navgraphmod.country_near(self.airports_db, float(lat), float(lon))
+            return navgraphmod.country_at(self.airports_db, float(lat), float(lon), _borders(self))
         except (TypeError, ValueError):
             return None
 
@@ -1909,7 +1916,7 @@ class Server:
         """Whether traffic drives on the left at the anchor (its country's road rules, navgraph.road_rules)."""
         lh = getattr(anchor, "_left_hand", None)
         if lh is None:
-            lh = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, anchor.lat, anchor.lon))["rightHandDrive"]
+            lh = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, anchor.lat, anchor.lon, _borders(self)))["rightHandDrive"]
             anchor._left_hand = lh
         return lh
 
@@ -1918,16 +1925,16 @@ class Server:
         poles)."""
         v = getattr(anchor, "_buried", None)
         if v is None:
-            v = furnituremod.buried_share(navgraphmod.country_near(self.airports_db, anchor.lat, anchor.lon))
+            v = furnituremod.buried_share(navgraphmod.country_at(self.airports_db, anchor.lat, anchor.lon, _borders(self)))
             anchor._buried = v
         return v
 
     def country(self, anchor):
-        """The anchor's country (ISO alpha-2, its nearest airport's: navgraph.country_near), or None: the road
+        """The anchor's country (ISO alpha-2, its border's, else its nearest airport's: navgraph.country_at), or None: the road
         markings' style (markings.style)."""
         v = getattr(anchor, "_country", "")
         if v == "":
-            v = navgraphmod.country_near(self.airports_db, anchor.lat, anchor.lon) if self.airports_db else None
+            v = navgraphmod.country_at(self.airports_db, anchor.lat, anchor.lon, _borders(self))
             anchor._country = v
         return v
 
@@ -1935,8 +1942,8 @@ class Server:
         """The anchor's street lamp rules (furniture.lamp_region: their spacing)."""
         v = getattr(anchor, "_lamp_region", "")
         if v == "":
-            v = furnituremod.lamp_region(navgraphmod.country_near(self.airports_db, anchor.lat, anchor.lon),
-                                         navgraphmod.region_near(self.airports_db, anchor.lat, anchor.lon))
+            v = furnituremod.lamp_region(navgraphmod.country_at(self.airports_db, anchor.lat, anchor.lon, _borders(self)),
+                                         navgraphmod.region_at(self.airports_db, anchor.lat, anchor.lon, _borders(self)))
             anchor._lamp_region = v
         return v
 
@@ -1949,7 +1956,7 @@ class Server:
         """Whether speed limits are posted in mph at the anchor (its country, navgraph.road_rules)."""
         v = getattr(anchor, "_mph", None)
         if v is None:
-            v = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, anchor.lat, anchor.lon))["mph"]
+            v = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, anchor.lat, anchor.lon, _borders(self)))["mph"]
             anchor._mph = v
         return v
 
@@ -1962,7 +1969,7 @@ class Server:
         if self.road_pool is not None:      # in a road process, with its bridges (blockworker.navgraph)
             t0 = time.perf_counter()
             cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
-            rules = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, float(cla), float(clo)))
+            rules = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
             rules["de_junctions"] = designsmod.enabled(self.dej_on)
             path, n_nodes, n_edges = self.road_pool.submit(
                 blockworker.navgraph, aid, anchor.lat, anchor.lon, anchor.zooms[0], x, y, self.out_dir,
@@ -2024,7 +2031,7 @@ class Server:
                                   country=self.country(anchor), priority=None if nodes is None else nodes["priority"],
                                   de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
         cla, clo, _ = anchor.frame.enu_to_geodetic(x, y, 0.0)
-        graph["rules"] = navgraphmod.road_rules(navgraphmod.country_near(self.airports_db, float(cla), float(clo)))
+        graph["rules"] = navgraphmod.road_rules(navgraphmod.country_at(self.airports_db, float(cla), float(clo), _borders(self)))
         graph["rules"]["de_junctions"] = designsmod.enabled(self.dej_on)
         for old in glob.glob(os.path.join(self.out_dir, f"navgraph_{aid}_*.json")):    # one file at a time
             try:
@@ -2265,11 +2272,11 @@ class Server:
         got = cache.get((gx, gy, z))
         if got is None:
             la, lo = geotiles.centre(gx, gy, z)
-            c = navgraphmod.country_near(self.airports_db, la, lo)
+            c = navgraphmod.country_at(self.airports_db, la, lo, _borders(self))
             got = (bool(navgraphmod.road_rules(c)["rightHandDrive"]), bool(navgraphmod.road_rules(c)["mph"]),
                    furnituremod.buried_share(c),
-                   furnituremod.lamp_region(c, navgraphmod.region_near(self.airports_db, la, lo)),
-                   c if self.airports_db else None, demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM))
+                   furnituremod.lamp_region(c, navgraphmod.region_at(self.airports_db, la, lo, _borders(self))),
+                   c, demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM))
             if len(cache) > 20000:
                 cache.clear()
             cache[(gx, gy, z)] = got
