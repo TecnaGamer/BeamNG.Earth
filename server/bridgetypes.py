@@ -529,6 +529,35 @@ def _family(code):
     return FAMILIES.get(code, "plain")
 
 
+def pylon_sites(frame, feats_list, ground_fn):
+    """[(centre (2,) in the frame, top z)] of the mapped bridge towers among infrastructure layers: bridge_support
+    outlines tagged bridge:support=pylon or PYLON_MIN_H tall, with a height (their top: the ground there + it)."""
+    out, seen = [], set()
+    for f in feats_list:
+        if f is None or not len(f) or f.attrs.get("class") is None or f.attrs.get("height") is None:
+            continue
+        cls, hs, tags = f.attrs["class"], f.attrs["height"], f.attrs.get("tags")
+        for i in np.flatnonzero(np.asarray(cls).astype(str) == "bridge_support"):
+            h = float(hs[i]) if hs[i] is not None else float("nan")
+            if not np.isfinite(h) or f.kind[i] != 3:
+                continue
+            if h < PYLON_MIN_H and not (tags is not None and "pylon" in str(tags[i])):
+                continue
+            fid = str(f.ids[i]) if hasattr(f, "ids") else (id(f), i)
+            if fid in seen:
+                continue
+            seen.add(fid)
+            parts = f.parts(i)
+            if not parts or len(parts[0][0]) < 3:
+                continue
+            import mapgeom
+            e, n = mapgeom.enu_xy(f, frame, np.asarray(parts[0][0], np.float64))
+            c = np.array([float(np.mean(e)), float(np.mean(n))])
+            g = float(np.asarray(ground_fn(c[None]), np.float64).reshape(-1)[0])
+            out.append((c, g + h))
+    return out
+
+
 def _osm_outlines(frame, parts, feats_list):
     """[(tags dict, outline (k, 2) in the frame)] of the bridge outlines tagged bridge:structure (infrastructure, kind
     3) holding at least OSM_MIN_M of the chain's deck."""
@@ -901,6 +930,13 @@ TIED_SPAN_M = 300.0     # a through arch shorter than this is tied: it springs a
 SUSP_TOWER = 1 / 9.0    # a suspension tower's top over the deck: a share of the main span (Golden Gate: 1280, 150)
 SUSP_SIDE = 0.35        # the side spans: a share of the main span past each tower
 SUSP_LOW_M = 3.0        # m: the main cable's lowest point over the deck
+# The towers the map has (OSM bridge:support=pylon outlines, Overture infrastructure bridge_support: the Brooklyn
+# Bridge's granite towers, 83 m): the main span between them, the cables over their tops, no steel tower of our own
+# beside them (the generated span centred on the river put steel towers 60-80 m inside them, 2026-11-10)
+PYLON_NEAR_M = 40.0     # m: a pylon this near the span's part is on it
+PYLON_REACH = 0.9       # ... and within this share of the span from its centre
+PYLON_SADDLE_M = 3.0    # m: the cable's saddle under a tower's top
+PYLON_MIN_H = 30.0      # m: a bridge support this tall (or tagged pylon) is a tower
 STAYED_TOWER = 1 / 4.0  # a cable-stayed pylon's top over the deck: a share of the main span
 HANGER_M = 12.0         # m between hangers / stays / spandrel posts
 
@@ -1084,8 +1120,34 @@ def arch_members(P, arcs, tans, ms, info, ground_fn):
     return beams
 
 
-def suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=False):
-    """Towers, main cables and hangers of a suspension span; with stayed, pylons and fans of stays."""
+def mapped_towers(P, arcs, ms, pylons):
+    """(main span (k, c, L), [top z, top z]) between the two mapped pylons [(xy (2,), top z)] nearest the main span's
+    centre on either side of it, on its part (within PYLON_NEAR_M of the line), or (ms, None) without such a pair."""
+    if not pylons or ms is None:
+        return ms, None
+    k, c, L = ms
+    xy = P[k][0]
+    s = arcs[k]
+    on = []
+    for q, top in pylons:
+        d = np.hypot(*(xy - np.asarray(q, np.float64)[:2]).T)
+        i = int(np.argmin(d))
+        if d[i] <= PYLON_NEAR_M and abs(s[i] - c) <= PYLON_REACH * L:
+            on.append((float(s[i]), float(top)))
+    left = [t for t in on if t[0] < c]
+    right = [t for t in on if t[0] >= c]
+    if not left or not right:
+        return ms, None
+    a, b = max(left), min(right)
+    if b[0] - a[0] < SPAN_MIN:
+        return ms, None
+    return (k, (a[0] + b[0]) / 2, b[0] - a[0]), [a[1], b[1]]
+
+
+def suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=False, mapped_tops=None):
+    """Towers, main cables and hangers of a suspension span; with stayed, pylons and fans of stays. mapped_tops: the
+    two towers' top heights where the map has them (mapped_towers: drawn by the buildings, stone or steel as mapped),
+    the cables hung from them and no tower of our own."""
     k, c, L = ms
     s_part = arcs[k]
     towers = [c - L / 2, c + L / 2]
@@ -1093,9 +1155,12 @@ def suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=False):
     H = (STAYED_TOWER if stayed else SUSP_TOWER) * L
     leg = (_sz(L, 1 / 250, 2.5, 8.0), _sz(L, 1 / 180, 3.0, 10.0))
     tops = []
-    for sc in towers:
+    for ti, sc in enumerate(towers):
         p, t, nrm, lo, hi, zlo, zhi = _station(P, tans, k, sc, arcs)
         gz = float(np.asarray(ground_fn(p[None]), np.float64)[0])
+        if mapped_tops is not None:
+            tops.append((p, t, nrm, lo, hi, max(float(mapped_tops[ti]) - PYLON_SADDLE_M, zhi + 5.0)))
+            continue
         top = zhi + H
         legs = []
         for off in (lo - leg[0] / 2, hi + leg[0] / 2):
@@ -1149,19 +1214,19 @@ def suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=False):
     return beams
 
 
-def structure_members(parts, info, ground_fn, wet_fn=None, road_lines=()):
+def structure_members(parts, info, ground_fn, wet_fn=None, road_lines=(), pylons=()):
     """(beams, piers) of a chain's structure (chain_structure): a truss (truss_members, a lens or a curved top chord
     where info["shape"] says), an arch, a suspension or a cable-stayed span (one main span: main_span, centred on the
     river: _river), a movable span (movable_members); ([], []) for a plain deck. Each beam carries its paint (p, q, w,
     h, paint)."""
     if info is None:
         return [], []
-    beams, piers = _structure_members(parts, info, ground_fn, wet_fn, road_lines)
+    beams, piers = _structure_members(parts, info, ground_fn, wet_fn, road_lines, pylons)
     pt = info.get("paint") or "grey"
     return [tuple(b[:4]) + (pt,) for b in beams], piers
 
 
-def _structure_members(parts, info, ground_fn, wet_fn, road_lines):
+def _structure_members(parts, info, ground_fn, wet_fn, road_lines, pylons=()):
     if info["type"] in TRUSS_TYPES:
         return truss_members(parts, info, ground_fn, wet_fn, with_piers=True, road_lines=road_lines)
     if info["type"] in MOVABLE_TYPES:
@@ -1174,8 +1239,9 @@ def _structure_members(parts, info, ground_fn, wet_fn, road_lines):
         return [], []
     if info["type"] in ARCH_TYPES:
         return _clear_of_decks(arch_members(P, arcs, tans, ms, info, ground_fn), P), []
-    return _clear_of_decks(suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=info["type"] == NBI_STAYED),
-                           P), []
+    ms, mtops = mapped_towers(P, arcs, ms, pylons)
+    return _clear_of_decks(suspension_members(P, arcs, tans, ms, info, ground_fn, stayed=info["type"] == NBI_STAYED,
+                                              mapped_tops=mtops), P), []
 
 
 LIFT_TOWER = 0.42       # a lift span's towers: their tops over the deck, a share of the span (the Hawthorne Bridge:

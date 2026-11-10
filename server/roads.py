@@ -7261,8 +7261,12 @@ class BridgeProfiles:
                 infra = [self.infra_fn(k) for k in mapcells.cells_for_points(la, lo)]
             wet = self._wet_at if self.wet is not None else None
             beams, piers = [], []
+            pylons = None
             for info in bridgetypes.chain_structures(self.frame, chain, wet, infra):
-                b, p = bridgetypes.structure_members(chain, info, self._ground, wet, road_lines=self._roads_near)
+                if pylons is None and info.get("type") in (bridgetypes.NBI_SUSPENSION, bridgetypes.NBI_STAYED):
+                    pylons = bridgetypes.pylon_sites(self.frame, infra, self._ground) if infra else []
+                b, p = bridgetypes.structure_members(chain, info, self._ground, wet, road_lines=self._roads_near,
+                                                     pylons=pylons or ())
                 beams += b
                 piers += p
             return beams, piers
