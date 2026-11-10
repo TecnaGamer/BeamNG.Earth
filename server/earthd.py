@@ -2670,6 +2670,8 @@ class Server:
         guardrail_rows = guardrail_rows + blockworker._median_rows(
             anchor.frame, near_roads, box, elev, self.left_hand(anchor), self.country(anchor), guardrail_rows, tx, ty,
             deck_parts, barrier_chunks)
+        guardrail_rows = guardrail_rows + blockworker._drop_rows(
+            anchor.frame, near_roads, box, elev, guardrail_rows, tx, ty, guardrail_decks)
         wide = {}                       # (the wider cells' ways, both of these want the same)
         guardrail_rows = guardrail_rows + blockworker._motesfri_rows(
             anchor.frame, cell_fn, near_roads, box, elev, urban, self.road_widths, self.left_hand(anchor),

@@ -669,10 +669,12 @@ def _stack_watch(what):
 
 def _radar_key():
     """PR #505's French speed cameras in the road tiles' revisit keys: their catalogue's digest while they are on
-    (BNE_FR_ROADS), nothing otherwise (the keys of every tile built without them unchanged)."""
+    (BNE_FR_ROADS), and the drop side's estimated rails' version while they are on (BNE_DROP_RAILS); nothing otherwise
+    (the keys of every tile built without them unchanged)."""
     import radars
     sig = radars.signature()
-    return () if sig is None else (sig,)
+    import droprails
+    return (() if sig is None else (sig,)) + droprails.key()
 
 
 def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
@@ -1107,6 +1109,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     guardrail_rows = medianbarriers.mapped_rows(guardrail_rows, barrier_chunks)
     guardrail_rows = guardrail_rows + _median_rows(frame, near_roads, box, elev, left_hand, country, guardrail_rows,
                                                    tx, ty, deck_parts, barrier_chunks)
+    guardrail_rows = guardrail_rows + _drop_rows(frame, near_roads, box, elev, guardrail_rows, tx, ty, guardrail_decks)
     wide = {}                           # (the wider cells' ways, both of these want the same)
     guardrail_rows = guardrail_rows + _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, _s.widths, left_hand,
                                                      country, guardrail_rows, tx, ty, chunks, wide)
@@ -1896,6 +1899,20 @@ def _median_rows(frame, near_roads, box, elev, left_hand, country, mapped, tx, t
         return euguardrails.localize(frame, rows)
     except Exception as ex:
         log.warning("median barriers: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        return []
+
+
+def _drop_rows(frame, near_roads, box, elev, mapped, tx, ty, decks=()):
+    """The estimated rails on a drop's side of a rural road (droprails.tile_rows, BNE_DROP_RAILS), [] if off or they
+    fail (logged)."""
+    import droprails
+    if not droprails.enabled():
+        return []
+    try:
+        import euguardrails
+        return euguardrails.localize(frame, droprails.tile_rows(frame, near_roads, box, elev, mapped, decks))
+    except Exception as ex:
+        log.warning("drop rails: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         return []
 
 
