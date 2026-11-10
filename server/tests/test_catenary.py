@@ -179,6 +179,59 @@ class CatenaryTest(unittest.TestCase):
         keys2 = {tuple(np.round(w[0], 1)) for w, r in wires2 if r == catenary.CONTACT_R}
         self.assertFalse(keys & keys2)
 
+    def _contact_ends(self, wires):
+        return [(tuple(np.round(w[0, :2], 1)), tuple(np.round(w[-1, :2], 1))) for w, r in wires if r == catenary.CONTACT_R]
+
+    def _chain(self, wires):
+        """The contact wires as one chain: the sorted ends joined; returns (number of wires, the gaps between consecutive
+        wires' ends along x, 0 where they join)."""
+        ws = sorted((w for w, r in wires if r == catenary.CONTACT_R), key=lambda w: min(w[0, 0], w[-1, 0]))
+        gaps = [float(np.hypot(*(a[-1, :2] - b[0, :2]))) for a, b in zip(ws[:-1], ws[1:])]
+        return len(ws), gaps
+
+    def test_wire_runs_on_through_the_joint_of_two_ways(self):
+        f = electrified([[(-300.0, 100.0), (120.0, 100.0)], [(120.0, 100.0), (550.0, 100.0)]])
+        ms = masts(f)
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        n, gaps = self._chain(wires)
+        self.assertGreater(n, 8)
+        self.assertLess(max(gaps), 0.05, "every wire starts where the one before it ends, over the joint too")
+        joint = [w for w, r in wires if r == catenary.CONTACT_R and min(w[0, 0], w[-1, 0]) < 120.0 < max(w[0, 0], w[-1, 0])]
+        self.assertTrue(joint, "a span crosses the joint")
+
+    def test_a_branch_wire_starts_on_the_main_track(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)], [(150.0, 100.0), (300.0, 160.0)]])
+        ms = masts(f)
+        ends = [m for m in ms if "link" in m and m["link"][1].get("end")]
+        self.assertTrue(ends, "the branch's end on the main track gets an anchor")
+        e = ends[0]["link"][1]
+        self.assertAlmostEqual(float(e["q"][1]), 100.0, delta=0.5)
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        starts = [w[0, :2] for w, r in wires if r == catenary.CONTACT_R] + [w[-1, :2] for w, r in wires if r == catenary.CONTACT_R]
+        self.assertTrue(any(float(np.hypot(*(p - e["q"]))) < 0.05 for p in starts), "a contact wire ends at that anchor")
+
+    def test_droppers_every_few_metres_and_the_gap_between_wires(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
+        rows, wires = catenary.rows_and_wires(masts(f), lambda x, y: True)
+        drops = [w for w, r in wires if r == catenary.DROPPER_R]
+        xs = np.sort(np.array([float(d[0, 0]) for d in drops]))
+        near = np.diff(xs)[np.diff(xs) > 0.5]
+        self.assertTrue(len(near) and near.max() <= catenary.DROPPER_EVERY_M * 1.5 + 1.0, near.max())
+        for d in drops:
+            self.assertGreater(float(d[1, 2] - d[0, 2]), catenary.DROPPER_MIN_GAP_M)
+        gaps = [float(d[1, 2] - d[0, 2]) for d in drops]
+        self.assertAlmostEqual(min(gaps), 0.5, delta=0.1, msg="half a metre between the messenger and the contact wire at mid span")
+
+    def test_portal_holders_per_track(self):
+        f = electrified([[(-300.0, y), (700.0, y)] for y in (100.0, 106.0, 112.0)])
+        ms = masts(f)
+        pt = next(m for m in ms if m.get("portal"))
+        wires = catenary.portal_wires(pt)
+        ins = [w for w, r in wires if r == catenary.INS_R]
+        self.assertEqual(len(ins), 2 * 3, "two rod insulators on each of the three tracks")
+        clamps = [w for w, r in wires if r == catenary.CLAMP_R]
+        self.assertEqual(len(clamps), 3)
+
     def test_mapped_masts_are_used(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
         from test_roads import LAT, LON, M_LAT, M_LON

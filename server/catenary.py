@@ -40,9 +40,13 @@ Z_CONTACT = 6.18
 Z_MESSENGER = 7.80
 RAIL_TOP_M = 0.58               # the rail head over the bed line (railways.RAIL_TOP_M's ballast + sleeper + rail)
 MAST_Z_BAND = (-0.5, 0.2)       # the mast's base over the track's bed at most this far off it
-MESSENGER_SAG_M = 1.3           # at mid-span
-DROPPER_EVERY_M = 10.0
-CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.007
+MESSENGER_SAG_M = 1.12          # at mid-span: leaves 0.5 m between the messenger and the contact wire there (Z_MESSENGER - Z_CONTACT = 1.62)
+DROPPER_EVERY_M = 5.0           # m between droppers (real lines: 4-6 m; the user's "every half metre" was left to the rules, 2026-11-10)
+DROPPER_FIRST_M = 2.0           # m from a mast to its first dropper
+DROPPER_MIN_GAP_M = 0.12        # a dropper shorter than this is not drawn
+CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.010
+JOINT_M = 1.5                   # m: part ends this close are one line (a joint of two OSM ways, a switch's branch)
+LINK_MAX_M = 150.0              # m: the longest span a joint's link may be
 # the style of a country's masts: "su" the concrete spun mast (ex-USSR, and where concrete is the usual: Poland,
 # Czechia, Slovakia, Hungary, Romania, the Baltics), "eu" the steel H-beam mast (Germany and the rest: DB uses both,
 # Bane NOR steel; the others' norms were not found: a guess, agreed with the user 2026-11-05). STYLE_GROUPS: mast, post.
@@ -57,10 +61,12 @@ PORTAL_Z = 8.0                  # m: the truss's lower chord over the tracks' be
 PORTAL_H = 1.0                  # m the truss girder is deep
 PORTAL_PANEL_M = 1.0            # m of a diagonal's panel
 POST_H = 10.4                   # m (the post models' height)
-CHORD_R, DIAG_R = 0.05, 0.025   # the girder's bars' half widths (drawn as the tile's wire ribbons)
+CHORD_R, DIAG_R = 0.05, 0.025
+HOLDER_INS_M = 0.4             # m a rod insulator is long (two of them with a gap hold a contact wire to the girder)
+INS_R, CLAMP_R = 0.035, 0.03   # their half widths   # the girder's bars' half widths (drawn as the tile's wire ribbons)
 ELECTRIC = {"contact_line", "yes"}     # (not "rail": a third rail has no overhead line)
-MIN_SPAN_DRAWN_M = 8.0
-MAX_SPAN_DRAWN_M = 110.0
+MIN_SPAN_DRAWN_M = 0.3         # (a portal and a mast may stand close: the wire must still join them)
+MAX_SPAN_DRAWN_M = 200.0
 
 
 def _h01(key, salt):
@@ -331,6 +337,56 @@ def masts_of(frame, cells, box, ground, rings=()):
             toward = (p - q) / max(float(np.hypot(*(p - q))), 1e-9)
             out.append({"fid": fid, "part": pi, "s": s, "q": q, "axis": p, "z": z, "zax": zax, "dir": toward,
                         "u": u, "pos": len(out)})
+    out.extend(_joints(parts, arcs, out, ground))
+    return out
+
+
+def _tip(m):
+    """The point of a mast's contact wire (its attach point over the track's axis, z the contact wire's height)."""
+    return np.r_[m["q"] + m["dir"] * ARM_OUT_M, m["z"] + Z_CONTACT]
+
+
+def _joints(parts, arcs, masts, ground):
+    """Entries joining the wires where a line's pieces meet: {"link": (a, b)} (two mast dicts, drawn as a span) for
+    two ways whose ends meet (JOINT_M), and for the end of a way that meets another way's side (a switch's branch) a
+    virtual mast at the end (the branch's wire starts on the main track's) linked to the branch's last mast. Without
+    these every joint of two OSM ways cut the wire (Vinnytsia, Kalynivka: the user's shots, 2026-11-10)."""
+    by_part = {}
+    for m in masts:
+        if not m.get("portal") and "part" in m:
+            by_part.setdefault(m["part"], []).append(m)
+    for ms in by_part.values():
+        ms.sort(key=lambda m: m["s"])
+    ends = []        # (part, end point, which end 0/1, the mast nearest that end)
+    for pi, (_f, xy) in enumerate(parts):
+        ms = by_part.get(pi)
+        if not ms:
+            continue
+        ends.append((pi, xy[0], 0, ms[0]))
+        ends.append((pi, xy[-1], 1, ms[-1]))
+    out, used = [], set()
+    for i, (pa, ea, ka, ma) in enumerate(ends):
+        for j in range(i + 1, len(ends)):
+            pb, eb, kb, mb = ends[j]
+            if pa != pb and float(np.hypot(*(ea - eb))) <= JOINT_M:
+                out.append({"link": (ma, mb)})
+                used.add(i)
+                used.add(j)
+    for i, (pa, ea, ka, ma) in enumerate(ends):
+        if i in used:
+            continue
+        for pj, (_f, xyj) in enumerate(parts):
+            if pj == pa:
+                continue
+            s, q, uj, d = _nearest(xyj, arcs[pj], ea)
+            if d > JOINT_M * 2 or not 1.0 < s < arcs[pj][-1] - 1.0:
+                continue
+            z = float(np.asarray(ground(np.array([ea])), np.float64).ravel()[0])
+            end = {"fid": parts[pa][0], "part": pa, "s": 0.0 if ka == 0 else float(arcs[pa][-1]), "q": ea, "axis": ea,
+                   "z": z, "zax": z, "dir": np.zeros(2), "u": uj, "virtual": True, "end": True}
+            out.append({"link": (ma, end)})
+            used.add(i)
+            break
     return out
 
 
@@ -347,9 +403,47 @@ def portal_wires(pt):
     wires = [(np.c_[xy[[0, -1]], [zbot, zbot]], CHORD_R), (np.c_[xy[[0, -1]], [ztop, ztop]], CHORD_R)]
     zz = np.where(np.arange(n + 1) % 2 == 0, zbot, ztop)
     wires.append((np.c_[xy, zz], DIAG_R))
+    u = (b - a) / max(L, 1e-9)
     for q, z in pt["tracks"]:
-        wires.append((np.array([[q[0], q[1], zbot], [q[0], q[1], z + Z_CONTACT]]), DROPPER_R))
+        zc = z + Z_CONTACT
+        # the holder of this track's contact wire: a rod insulator (two thick sticks with a gap) under the lower
+        # chord, the hanger, and the registration arm (a short clamp along the girder at the contact wire)
+        zi = zbot - HOLDER_INS_M
+        wires.append((np.array([[q[0], q[1], zbot], [q[0], q[1], zi]]), INS_R))
+        wires.append((np.array([[q[0], q[1], zi - 0.08], [q[0], q[1], zi - 0.08 - HOLDER_INS_M * 0.6]]), INS_R))
+        wires.append((np.array([[q[0], q[1], zi - 0.08 - HOLDER_INS_M * 0.6], [q[0], q[1], zc + 0.12]]), DROPPER_R))
+        for sgn in (-1.0, 1.0):          # (the clamp's two arms, under the girder's axis)
+            e = q + u * (0.3 * sgn)
+            wires.append((np.array([[q[0], q[1], zc + 0.12], [e[0], e[1], zc + 0.05]]), DROPPER_R))
+        wires.append((np.array([[q[0] - u[0] * 0.15, q[1] - u[1] * 0.15, zc], [q[0] + u[0] * 0.15, q[1] + u[1] * 0.15, zc]]), CLAMP_R))
+    # a stub of the girder's end plate where each post meets the chords
+    for (pq, _pz) in pt["posts"]:
+        wires.append((np.array([[pq[0], pq[1], zbot - 0.4], [pq[0], pq[1], ztop + 0.3]]), CHORD_R * 1.6))
     return wires
+
+
+def span_wires(a, b):
+    """The wires of one span between masts a and b: the contact wire, the messenger with its sag, the droppers every
+    DROPPER_EVERY_M (the first DROPPER_FIRST_M from a mast, none shorter than DROPPER_MIN_GAP_M). Pure."""
+    c0, c1 = _tip(a), _tip(b)
+    m0, m1 = c0.copy(), c1.copy()
+    m0[2], m1[2] = a["z"] + Z_MESSENGER, b["z"] + Z_MESSENGER
+    span = float(np.hypot(*(c1[:2] - c0[:2])))
+    n = max(2, int(math.ceil(span / 10.0)))
+    ts = np.linspace(0.0, 1.0, n + 1)
+    contact = np.array([c0 + (c1 - c0) * t for t in ts])
+    mess = np.array([m0 + (m1 - m0) * t for t in ts])
+    mess[:, 2] -= MESSENGER_SAG_M * 4.0 * ts * (1.0 - ts)
+    out = [(contact, CONTACT_R), (mess, MESSENGER_R)]
+    first = min(DROPPER_FIRST_M, span / 2.0)
+    k = max(1, int(round((span - 2.0 * first) / DROPPER_EVERY_M)))
+    for t in ([first / span + (1.0 - 2.0 * first / span) * i / k for i in range(k + 1)] if span > 4.0 else [0.5]):
+        top = m0 + (m1 - m0) * t
+        top[2] -= MESSENGER_SAG_M * 4.0 * t * (1.0 - t)
+        bot = c0 + (c1 - c0) * t
+        if top[2] - bot[2] > DROPPER_MIN_GAP_M:
+            out.append((np.array([bot, top]), DROPPER_R))
+    return out
 
 
 def rows_and_wires(masts, box_owns, style="su"):
@@ -358,8 +452,11 @@ def rows_and_wires(masts, box_owns, style="su"):
     (wires), by the tile that holds its first post; a virtual mast (a portal's track) only anchors the wires."""
     rows, wires = [], []
     g_mast, g_post = STYLE_GROUPS[style]
-    by_line = {}
+    by_line, links = {}, []
     for m in masts:
+        if "link" in m:
+            links.append(m["link"])
+            continue
         if m.get("portal"):
             if box_owns(float(m["q"][0]), float(m["q"][1])):
                 wires.extend(portal_wires(m))
@@ -382,28 +479,14 @@ def rows_and_wires(masts, box_owns, style="su"):
                 continue
             if not box_owns(float(a["q"][0]), float(a["q"][1])):
                 continue
-            tip = [np.r_[m["q"] + m["dir"] * ARM_OUT_M, m["z"]] for m in (a, b)]
-            c0, c1 = tip[0].copy(), tip[1].copy()
-            c0[2], c1[2] = a["z"] + Z_CONTACT, b["z"] + Z_CONTACT
-            m0, m1 = c0.copy(), c1.copy()
-            m0[2], m1[2] = a["z"] + Z_MESSENGER, b["z"] + Z_MESSENGER
-            n = max(2, int(math.ceil(span / 10.0)))
-            ts = np.linspace(0.0, 1.0, n + 1)
-            contact = np.array([c0 + (c1 - c0) * t for t in ts])
-            mess = np.array([m0 + (m1 - m0) * t for t in ts])
-            mess[:, 2] -= MESSENGER_SAG_M * 4.0 * ts * (1.0 - ts)
-            wires.append((contact, CONTACT_R))
-            wires.append((mess, MESSENGER_R))
-            k = max(1, int(span // DROPPER_EVERY_M))
-            for i in range(1, k):
-                t = i / k
-                top = m0 + (m1 - m0) * t
-                top[2] -= MESSENGER_SAG_M * 4.0 * t * (1.0 - t)
-                bot = c0 + (c1 - c0) * t
-                if top[2] - bot[2] > 0.15:
-                    wires.append((np.array([bot, top]), DROPPER_R))
+            wires.extend(span_wires(a, b))
+    for lk in links:
+        a, b = lk
+        span = float(np.hypot(*(_tip(b)[:2] - _tip(a)[:2])))
+        if span <= LINK_MAX_M and box_owns(float(a["q"][0]), float(a["q"][1])):
+            wires.extend(span_wires(a, b))
     for m in masts:
-        if m.get("portal") or m.get("virtual"):
+        if m.get("portal") or m.get("virtual") or "link" in m:
             continue
         if box_owns(float(m["q"][0]), float(m["q"][1])):
             yaw = math.degrees(math.atan2(m["dir"][1], m["dir"][0])) % 360.0
