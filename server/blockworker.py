@@ -1027,12 +1027,6 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                                frame, drawn, np.c_[x, y], q), frontage_country, left_hand,
                                            redrape=walks_raw is None, props=props, grass=front_grass)
         chunks += paving
-        if city:
-            try:
-                chunks += streetfront.city_frontage(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
-                                                    drives, _cover >= streetfront.CITY_DENSE_COVER)
-            except Exception as ex:         # (the sidewalks as they are)
-                log.warning("city frontage: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         if frontage_country and front_grass is not None:
             key = tx.key if hasattr(tx, "key") else f"{frame.lat0:.8f}:{frame.lon0:.8f}:{tx}:{ty}"
             fuel_pads.extend(streetfront.pad_items(frame, box, key, paving, front_grass))
@@ -1043,6 +1037,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         buildingsmod.brick_walks(walks, items, centre[0], centre[1], side)
         if walks_raw is not None:
             buildingsmod.brick_walks(walks_raw, items, centre[0], centre[1], side)
+        if city:        # (after brick_walks: a brick sidewalk's frontage is brick)
+            try:
+                chunks += streetfront.city_frontage(frame, tx, ty, _s.md, frontage_walks, rings, items, near_roads,
+                                                    drives, _cover >= streetfront.CITY_DENSE_COVER)
+            except Exception as ex:         # (the sidewalks as they are)
+                log.warning("city frontage: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
     mark("doors_park")
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks, separate_bays=bool(frontage_country))
     mark("markings")

@@ -211,6 +211,8 @@ class CityFrontageTest(unittest.TestCase):
         self.assertAlmostEqual(max(ys), 8. - .07, places=2)
         self.assertGreater(min(ys), 5.)
         self.assertFalse(streetfront.chunks(*args, **dict(kw, any_surface=False)), "a plain sidewalk: Europe's only")
+        brick = streetfront.chunks(FRAME, [dict(self.WALK, brick=True)], [shop], [], STREETS, [], BOX, **kw)
+        self.assertEqual({c["m"] for c in brick}, {sidewalks.MATERIALS[sidewalks.BRICK]}, "brick to the wall")
         far = rectangle(0., 14., 24., 24.)
         self.assertFalse(streetfront.chunks(FRAME, [dict(self.WALK)], [far], [], STREETS, [], BOX,
                                             **dict(kw, shops=[far])), "8.5 m back: a setback, not a sidewalk")

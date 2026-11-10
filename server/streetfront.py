@@ -531,7 +531,8 @@ def chunks(frame, walks, buildings, lots, carriageways, drives, box, *, shops=()
                 if len(lawns):
                     grass.extend(lawns[photo.strip_share(lawns, photo.green) >= .58])
             end = boundary
-        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else fill
+        style = walk.get("surface") if walk.get("mapped") and walk.get("surface") in PAVER_SURFACES else \
+            "brick" if any_surface and walk.get("brick") else fill      # (city_frontage: brick to the wall on brick)
         start = back - .035 * normal
         for run in np.split(i, np.flatnonzero(np.diff(i) != 1) + 1):
             at = slice(run[0], run[-1] + 2)
