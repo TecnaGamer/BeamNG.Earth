@@ -24,7 +24,7 @@ import railstations as rs
 import roads
 import staging
 
-KERNEL = 147
+KERNEL = 188
 SUBTITLE = {"UA": "Залізнична станція", "RU": "Железнодорожная станция", "CZ": "Železniční stanice", "SK": "Železničná stanica",
             "PL": "Stacja kolejowa", "DE": "Bahnhof", "AT": "Bahnhof", "default": "Railway station"}
 FACE_VERSION = 1

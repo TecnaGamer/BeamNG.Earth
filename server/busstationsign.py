@@ -23,7 +23,7 @@ import staging
 
 log = logging.getLogger("earthd.busstations")
 
-KERNEL = 147                    # earthfast VERSION with dirsign_town_face / dirsign_mesh
+KERNEL = 188                    # earthfast VERSION with dirsign_town_face / dirsign_mesh
 FACE_VERSION = 1
 PX_PER_M = 200.0
 BG, INK, EDGE, BAR = (0, 74, 153), (255, 255, 255), (255, 255, 255), (0, 0, 0)    # blue, white (the usual station blue)

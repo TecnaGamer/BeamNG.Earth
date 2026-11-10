@@ -5573,6 +5573,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -5822,6 +5823,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Model's records joined to the map's footprints)
     m.add_function(wrap_pyfunction!(rooftop::roof_kit, m)?)?;
     // 187: rooftop::roof_kit (buildings._clutter: penthouses, stair / lift bulkheads and rooftop units on flat roofs)
-    m.add("VERSION", 187)?;
+    // 188: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
+    // railway stations' signs)
+    m.add("VERSION", 188)?;
     Ok(())
 }
