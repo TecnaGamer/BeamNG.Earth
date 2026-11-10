@@ -11519,10 +11519,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import cdae
         import furniture
         x0, y0, _, _ = tile_bbox(tx, ty)
-        wm = furniture.wire_mesh(wires, (x0, y0, 0.0))
+        import catenary
+        wm = furniture.wire_mesh(wires, (x0, y0, 0.0), catenary.wire_material)    # (copper / bronze / steel / dark by class)
         if wm is not None:
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material="bne_wire", object_name="wires")
+            cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material=wm[3], tri_materials=wm[4],
+                       object_name="wires")
             data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})

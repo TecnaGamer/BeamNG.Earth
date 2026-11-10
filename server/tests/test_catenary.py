@@ -232,6 +232,19 @@ class CatenaryTest(unittest.TestCase):
         clamps = [w for w, r in wires if r == catenary.CLAMP_R]
         self.assertEqual(len(clamps), 3)
 
+    def test_wire_materials_by_class(self):
+        import furniture
+        f = electrified([[(-300.0, y), (700.0, y)] for y in (100.0, 106.0, 112.0)])
+        ms = masts(f)
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        wires = list(wires) + [(np.array([[0.0, 0.0, 8.0], [30.0, 0.0, 8.0]]), furniture.WIRE_R)]
+        wm = furniture.wire_mesh(wires, (0.0, 0.0, 0.0), catenary.wire_material)
+        P, T, UV, names, TM = wm
+        self.assertEqual(set(names), {catenary.MAT_COPPER, catenary.MAT_BRONZE, catenary.MAT_STEEL, catenary.MAT_INSULATOR,
+                                      "bne_wire"})
+        self.assertEqual(len(TM), len(T))
+        self.assertEqual(furniture.wire_mesh(wires, (0, 0, 0))[0].shape, P.shape, "the plain call is as it was")
+
     def test_mapped_masts_are_used(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
         from test_roads import LAT, LON, M_LAT, M_LON

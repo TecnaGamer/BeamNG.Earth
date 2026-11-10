@@ -422,6 +422,24 @@ def portal_wires(pt):
     return wires
 
 
+MAT_COPPER, MAT_BRONZE, MAT_STEEL, MAT_INSULATOR = "bne_cat_wire_copper", "bne_cat_wire_bronze", "bne_cat_wire_steel", "bne_cat_wire_ins"
+
+
+def wire_material(r, default="bne_wire"):
+    """The material of a wire ribbon by its half width (the catenary's classes are told apart by it): the contact wire
+    copper, the messenger and droppers bronze, the girder's bars galvanised steel, insulators dark porcelain; any other
+    (a power line's) `default`."""
+    if r == CONTACT_R:
+        return MAT_COPPER
+    if r in (MESSENGER_R, DROPPER_R):
+        return MAT_BRONZE
+    if r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R):
+        return MAT_STEEL
+    if r == INS_R:
+        return MAT_INSULATOR
+    return default
+
+
 def span_wires(a, b):
     """The wires of one span between masts a and b: the contact wire, the messenger with its sag, the droppers every
     DROPPER_EVERY_M (the first DROPPER_FIRST_M from a mast, none shorter than DROPPER_MIN_GAP_M). Pure."""

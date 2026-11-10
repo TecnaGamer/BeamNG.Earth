@@ -179,13 +179,21 @@ def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
     return out
 
 
-def wire_mesh(lines, origin):
+def wire_mesh(lines, origin, material_of=None):
     """A mesh of the wires (each its points, or (points, half width): WIRE_R when not given): two crossed ribbons per
-    segment (seen from any side): (positions, tris, uvs)."""
-    P, T = [], []
+    segment (seen from any side): (positions, tris, uvs). material_of(half width) -> a material name: then
+    (positions, tris, uvs, [names], per-triangle index into them), the triangles grouped by material."""
+    P, T, TM = [], [], []
+    names = []
     ox, oy, oz = origin
     for line in lines:
         line, r = line if isinstance(line, tuple) else (line, WIRE_R)
+        mi = 0
+        if material_of is not None:
+            nm = material_of(r)
+            if nm not in names:
+                names.append(nm)
+            mi = names.index(nm)
         if len(P) + 8 * (len(line) - 1) > WIRE_VERTS_MAX:       # (8 vertices a segment; the rest left out)
             break
         for a, b in zip(line[:-1], line[1:]):
@@ -204,9 +212,12 @@ def wire_mesh(lines, origin):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
                 T += [(i, i + 1, i + 2), (i, i + 2, i + 3), (i, i + 2, i + 1), (i, i + 3, i + 2)]
+                TM += [mi] * 4
     if not P:
         return None
     P = np.array(P) - np.array([ox, oy, oz])
+    if material_of is not None:
+        return P, np.array(T, np.int64), np.zeros((len(P), 2)), names, np.array(TM, np.int64)
     return P, np.array(T, np.int64), np.zeros((len(P), 2))
 
 
