@@ -1443,25 +1443,31 @@ SKEL_CAP_M = 5.0
 
 def skeleton_rise(ring, holes=()):
     """The skeleton's highest point over ring (and its holes) at a slope of 1: the widest half span, m; 0 if it failed."""
-    fast.require(179, "skeleton_roof")
+    fast.require(180, "skeleton_roof")
     try:
-        tri, _g = fast._ef.skeleton_roof(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
-                                         [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in holes or ()],
-                                         1.0, 0.0, 0.0)
+        tri, _g, _gab = fast._ef.skeleton_roof(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
+                                               [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2])
+                                                for h in holes or ()], 1.0, 0.0, 0.0, False)
     except Exception:
         return 0.0
     return float(tri[:, 2].max()) if len(tri) else 0.0
 
 
-def _skel_roof(m, spec, ring, z_eave, rm):
-    """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof)."""
-    fast.require(179, "skeleton_roof")
+def _skel_roof(m, spec, ring, z_eave, rm, fac):
+    """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof). A
+    gabled one's hip ends are gables (the skeleton's gable: each end's top moved onto its wall, the wall in the
+    facade's plain colour, as a box house's gable)."""
+    fast.require(180, "skeleton_roof")
     k = math.tan(math.radians(roof_pitch(spec)))
-    tri, grad = fast._ef.skeleton_roof(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
-                                       [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()],
-                                       float(k), float(z_eave), float(spec.skel_cap or 0.0))
+    tri, grad, gab = fast._ef.skeleton_roof(
+        np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
+        [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()], float(k), float(z_eave),
+        float(spec.skel_cap or 0.0), spec.roof == "gabled")
     if not len(grad):
         return False
+    for j in range(len(gab) // 3):
+        a, b, c = (tuple(float(x) for x in gab[3 * j + i]) for i in range(3))
+        m.tri(a, b, c, (0, 0.995), (0.02, 0.995), (0.01, 0.999), fac)
     for j in range(len(grad)):
         gx, gy = float(grad[j, 0]), float(grad[j, 1])
         gm = math.hypot(gx, gy)
@@ -1584,7 +1590,7 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
         return
-    if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm):
+    if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade]):
         return
     if getattr(spec, "holes", None) and spec.roof != "flat":      # (the skeleton failed over a yard: a flat lid)
         _holed_lid(m, ring, spec.holes, z_eave, rm)

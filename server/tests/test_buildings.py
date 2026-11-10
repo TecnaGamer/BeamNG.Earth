@@ -2245,3 +2245,18 @@ class SkeletonRoofTest(unittest.TestCase):
         P = np.asarray(bld.build([(spec, 0.0, 0.0)])[0], np.float64).reshape(-1, 3)
         self.assertGreater(P[:, 2].max(), spec.height + 1.0)             # (pitched)
         self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())     # (the yard open)
+
+
+class SkeletonGableTest(unittest.TestCase):
+    def test_an_l_house_mapped_gabled_has_gables(self):
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        s = bld.plan(L, {"class": "house", "roof_shape": "gabled", "height": 9.0, "roof_height": 3.0}, 0, 48.1, 11.5)
+        self.assertTrue(s.skel)
+        looks = bld._Looks(s.seed)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, looks)
+        fac = looks[s.facade][0]
+        M = np.asarray(m.M)
+        self.assertGreaterEqual(int((M == fac).sum()), 2)               # (two gable walls: the arms' ends)
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)

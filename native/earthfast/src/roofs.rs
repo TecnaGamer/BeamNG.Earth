@@ -370,7 +370,11 @@ fn bisector(n1: P, n2: P) -> Option<P> {
 }
 
 /// The faces of the skeleton roof: per original edge a polygon of (x, y, time) points; None when it fails.
-fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
+type Faces = (Vec<Vec<(f64, f64, f64)>>, Vec<[(f64, f64, f64); 3]>);
+
+/// gable: each hip end (a face of three corners whose top is where a ridge ends) turned into a gable: its top moved
+/// onto its wall (the ridge runs on to it; Streets GL's idea), the face a wall, returned apart (the gables).
+fn skeleton_faces(loops: &[Vec<P>], gable: bool) -> Option<Faces> {
     // original edges: (a, b, inward normal); the region is on each directed edge's left
     let mut edges: Vec<(P, P, P)> = Vec::new();
     let mut verts: Vec<WV> = Vec::new();
@@ -526,7 +530,7 @@ fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
         }
     }
     // each original edge's face: its base, then the arcs bounding it from its end back to its start
-    let mut faces = Vec::with_capacity(ne);
+    let mut faces_i: Vec<Vec<usize>> = Vec::with_capacity(ne);
     for e in 0..ne {
         let mut adj: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
         for (k, &(a, b, l, r)) in arcs.iter().enumerate() {
@@ -538,7 +542,7 @@ fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
         // the base's start and end nodes: the original vertices whose e_out / e_in is e
         let start = (0..verts.len()).find(|&k| verts[k].t == 0.0 && verts[k].e_out == e).map(|k| verts[k].node)?;
         let end = (0..verts.len()).find(|&k| verts[k].t == 0.0 && verts[k].e_in == e).map(|k| verts[k].node)?;
-        let mut poly = vec![nodes[start], nodes[end]];
+        let mut poly = vec![start, end];
         let mut used = vec![false; arcs.len()];
         let mut cur = end;
         let mut steps = 0;
@@ -550,12 +554,37 @@ fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
             let (a, b, _, _) = arcs[nxt];
             cur = if a == cur { b } else { a };
             if cur != start {
-                poly.push(nodes[cur]);
+                poly.push(cur);
             }
         }
-        faces.push(poly);
+        faces_i.push(poly);
     }
-    Some(faces)
+    let mut gables: Vec<[(f64, f64, f64); 3]> = Vec::new();
+    if gable {
+        let mut degree = vec![0usize; nodes.len()];
+        for &(a, b, _, _) in &arcs {
+            if a != b {
+                degree[a] += 1;
+                degree[b] += 1;
+            }
+        }
+        let mut moved = vec![false; nodes.len()];
+        for f in faces_i.iter_mut() {
+            if f.len() != 3 || degree[f[2]] != 3 || moved[f[2]] { continue; }
+            let (a, b, top) = (nodes[f[0]], nodes[f[1]], nodes[f[2]]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l2 = dx * dx + dy * dy;
+            if l2 < 1e-9 { continue; }
+            let u = (((top.0 - a.0) * dx + (top.1 - a.1) * dy) / l2).clamp(0.0, 1.0);
+            let q = (a.0 + dx * u, a.1 + dy * u, top.2);
+            nodes[f[2]] = q;
+            moved[f[2]] = true;
+            gables.push([a, b, q]);
+            f.clear();                          // (now a wall: no roof face)
+        }
+    }
+    let faces = faces_i.iter().filter(|f| !f.is_empty()).map(|f| f.iter().map(|&k| nodes[k]).collect()).collect();
+    Some((faces, gables))
 }
 
 /// buildings._roof's hipped roof over any outline (and its courtyards) by the straight skeleton: outer (n, 2), holes
@@ -564,7 +593,8 @@ fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
 /// failed (the caller's other roof).
 #[pyfunction]
 pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, holes: Vec<PyReadonlyArray2<'py, f64>>,
-                          k: f64, e: f64, cap: f64) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+                          k: f64, e: f64, cap: f64, gable: bool)
+                          -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
     let rd = |a: &PyReadonlyArray2<'py, f64>| -> Vec<P> {
         let v = a.as_array();
         (0..v.nrows()).map(|i| (v[[i, 0]], v[[i, 1]])).collect()
@@ -572,7 +602,7 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
     let area = |r: &[P]| -> f64 { (0..r.len()).map(|i| r[i].0 * r[(i + 1) % r.len()].1 - r[(i + 1) % r.len()].0 * r[i].1).sum::<f64>() / 2.0 };
     let mut o = rd(&outer);
     let hs: Vec<Vec<P>> = holes.iter().map(|h| rd(h)).collect();
-    let (tri, grad) = py.detach(move || {
+    let (tri, grad, gab) = py.detach(move || {
         if area(&o) < 0.0 { o.reverse(); }
         let mut loops = vec![o.clone()];
         let mut want = area(&o);
@@ -584,6 +614,7 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
         }
         let mut tri: Vec<f64> = Vec::new();
         let mut grad: Vec<f64> = Vec::new();
+        let mut gab: Vec<f64> = Vec::new();
         let orig: Vec<P> = loops.iter().flatten().copied().collect();
         // (a tenth of a millimetre's nudge per corner, the same every build: an L's arm walls meet at the very time
         // its reflex corner reaches the far wall, and the vertex left between two opposite edges has no bisector;
@@ -596,7 +627,7 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
                 q.1 += (b - 0.5) * 2e-4;
             }
         }
-        let Some(faces) = skeleton_faces(&loops) else { return (tri, grad) };
+        let Some((faces, gables)) = skeleton_faces(&loops, gable) else { return (tri, grad, gab) };
         let zcap = if cap > 0.0 { e + cap } else { f64::INFINITY };
         let mut got = 0.0;
         let mut out: Vec<[(f64, f64, f64); 3]> = Vec::new();
@@ -622,7 +653,7 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
             }
         }
         if (got - want).abs() > 0.01 * want.abs() + 0.5 {
-            return (Vec::new(), Vec::new());       // (the skeleton did not cover the outline: the other roof)
+            return (Vec::new(), Vec::new(), Vec::new());   // (the skeleton did not cover the outline: the other roof)
         }
         for t3 in out.iter_mut() {
             for q in t3.iter_mut() {
@@ -656,11 +687,27 @@ pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, ho
                 }
             }
         }
-        (tri, grad)
+        // the gables' walls, under the cap (over it the roof is flat: the wall stops there too)
+        for g in gables {
+            let mut t3 = [(g[0].0, g[0].1, e), (g[1].0, g[1].1, e), (g[2].0, g[2].1, e + k * g[2].2)];
+            for q in t3.iter_mut().take(2) {
+                if let Some(o) = orig.iter().find(|o| (o.0 - q.0).abs() < 5e-4 && (o.1 - q.1).abs() < 5e-4) {
+                    q.0 = o.0;
+                    q.1 = o.1;
+                }
+            }
+            let below = clip_z(&t3, zcap, true);
+            for i in 1..below.len().saturating_sub(1) {
+                for q in [below[0], below[i], below[i + 1]] { gab.extend_from_slice(&[q.0, q.1, q.2]); }
+            }
+        }
+        (tri, grad, gab)
     });
     let m = grad.len() / 2;
+    let g = gab.len() / 3;
     (numpy::ndarray::Array2::from_shape_vec((m * 3, 3), tri).unwrap().into_pyarray(py),
-     numpy::ndarray::Array2::from_shape_vec((m, 2), grad).unwrap().into_pyarray(py))
+     numpy::ndarray::Array2::from_shape_vec((m, 2), grad).unwrap().into_pyarray(py),
+     numpy::ndarray::Array2::from_shape_vec((g, 3), gab).unwrap().into_pyarray(py))
 }
 
 /// A triangle's part under (below: true) or over z.
