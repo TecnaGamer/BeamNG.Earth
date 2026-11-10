@@ -2326,3 +2326,29 @@ class RoofPhotoTest(unittest.TestCase):
         dark = bld.plan(ring, {"class": "retail", "roof_shape": "flat", "_roof_photo": (0.3, 0.3, 0.32)})
         self.assertTrue(white.roof_mat.startswith(bld.ROOF_BRIGHT_MAT + "|c_"), white.roof_mat)
         self.assertTrue(dark.roof_mat.startswith(bld.ROOF_FLAT + "|c_"), dark.roof_mat)
+
+
+class TankTest(unittest.TestCase):
+    """Round tanks and silos (TANK_CLASSES): painted steel or concrete with a shallow dome, not a shed."""
+
+    def ring(self, r=10.0, n=24):
+        t = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+        return np.c_[r * np.cos(t), r * np.sin(t)]
+
+    def test_a_round_tank(self):
+        sp = bld.plan(self.ring(), {"class": "storage_tank"})
+        self.assertEqual((sp.cls, sp.roof, sp.windows), ("tank", "dome", False))
+        self.assertLess(sp.pitch, 20.0, "a shallow dome")
+        P, UV, T, M, mats, C = bld.build([(sp, 0.0, 0.0)])
+        top = float(np.asarray(P)[:, 2].max())
+        self.assertAlmostEqual(top, sp.height + 0.12 * 20.0, delta=0.6)
+        self.assertIsNotNone(bld.collision_mesh([(sp, 0.0, 0.0)]))
+
+    def test_a_silo_and_what_is_not_a_tank(self):
+        silo = bld.plan(self.ring(4.0), {"class": "silo"})
+        self.assertEqual(silo.cls, "tank")
+        self.assertGreater(silo.height, 8.0, "a silo is tall")
+        square = np.array([[0, 0], [20, 0], [20, 20], [0, 20]], float)
+        self.assertNotEqual(bld.plan(square, {"class": "storage_tank"}).cls, "tank")
+        self.assertNotEqual(bld.plan(self.ring(), {"class": "storage_tank", "roof_shape": "flat"}).cls, "tank",
+                            "a mapped roof shape: as mapped")

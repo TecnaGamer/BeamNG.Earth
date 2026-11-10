@@ -363,6 +363,15 @@ def photo_tint(mat, rgb):
     return tuple(round(v / ROOF_PHOTO_STEP) * ROOF_PHOTO_STEP for v in t)
 
 
+def circularity(ring):
+    """4 pi A / P^2 of ring (k, 2): 1 for a circle, 0.79 for a square."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    if len(r) < 3:
+        return 0.0
+    per = float(np.hypot(*np.diff(np.vstack([r, r[:1]]), axis=0).T).sum())
+    return float(4.0 * math.pi * (abs(_area2(r)) / 2.0) / max(per * per, 1e-9))
+
+
 def custom_look(mat, rgb):
     """A look key in LOOKS for material mat with RGB tuple in [0, 1]."""
     key = f"{mat}|c_{rgb[0]:.3f}_{rgb[1]:.3f}_{rgb[2]:.3f}"
@@ -427,6 +436,13 @@ PYRAMID_MIN_M2 = 500.0
 PYRAMID_PLINTH_M = 1.0
 ELEVATOR_CLASSES = {"", "industrial", "silo", "grain_silo", "storage_tank", "farm_auxiliary", "agricultural"}
 ELEVATOR_MIN_H = 15.0       # m mapped (a height, no floors)
+TANK_CLASSES = {"storage_tank", "tank", "silo", "grain_silo", "gasometer", "digester", "slurry_tank", "oil_tank",
+                "water_tank"}
+TANK_ROUND = 0.85           # 4 pi A / P^2 at least: a circle (a square is 0.79)
+TANK_MAX_M2 = 20000.0       # (the largest oil tanks: ~110 m across)
+TANK_H, TANK_SILO_H = 0.6, 1.6      # height over the diameter when not mapped
+TANK_RISE, TANK_SILO_RISE = 0.12, 0.2   # the dome's rise over the diameter
+TANK_PAINTS = ((0.92, 0.92, 0.90), (0.84, 0.85, 0.86), (0.90, 0.88, 0.80), (0.72, 0.76, 0.72))
 ELEVATOR_MAX_M2 = 1500.0
 ELEVATOR_SLENDER = 0.7      # height / sqrt(area) at least (11 x 11 m, 25 m: 2.3; 28 x 31 m, 23 m: 0.78; a 15 m motel: 0.4)
 GLASS_FLOORS = (20, 40)     # towers from 20 floors: glass, but for OLD_TOWER_GLASS of the old ones below 40 ...
@@ -737,6 +753,21 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         return Spec(ring=ring, floors=1, floor_h=h, height=h, roof="flat", roof_mat="bne_precast", facade="bne_precast",
                     band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None, windows=False, steeple=False,
                     porch=False, cls="elevator", deck=False, pitch=None)
+    # a round tank or silo (OSM's storage tanks, silos, gasometers, digesters are mapped as circles): painted steel or
+    # plain concrete with a shallow dome, not a shed in siding with a gable over a circle (the user, 2026-11-10:
+    # "smarter procedural generation to make them more realistic")
+    if cls in TANK_CLASSES and len(ring) >= 8 and not (attrs.get("roof_shape") or "") and area <= TANK_MAX_M2 \
+            and circularity(ring) >= TANK_ROUND:
+        diam = 2.0 * math.sqrt(area / math.pi)
+        silo = cls in ("silo", "grain_silo")
+        if h is None or not np.isfinite(h) or h <= 0:
+            h = float(np.clip((TANK_SILO_H if silo else TANK_H) * diam, 4.0, 45.0 if silo else 25.0))
+        rise = min((TANK_SILO_RISE if silo else TANK_RISE) * diam, 0.4 * h)
+        look = f"{PANEL}|0" if silo else custom_look(METALWALL, TANK_PAINTS[int(_hash01(seed, "tank") * len(TANK_PAINTS))])
+        return Spec(ring=ring, floors=1, floor_h=max(h - rise, 1.0), height=max(h - rise, 1.0), roof="dome",
+                    roof_mat=look, facade=look, band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None,
+                    windows=False, steeple=False, porch=False, cls="tank", deck=False,
+                    pitch=math.degrees(math.atan2(rise, max(diam / 2, 0.1))))
     if attrs.get("bridge_part"):    # a mapped part of a bridge's tower (support_rings): a plain box of painted steel
         return Spec(ring=ring, floors=1, floor_h=h or BRIDGE_PIER_M, height=h or BRIDGE_PIER_M, roof="flat",
                     roof_mat=f"{STEEL}|{attrs['bridge_part']}", facade=f"{STEEL}|{attrs['bridge_part']}", band=None,
