@@ -3805,7 +3805,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
                    passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
-                   industrial=None):
+                   industrial=None, parts_min_top=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3914,6 +3914,10 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN:
                     bparts = [(p[0], (float(bh), 0.0)) + tuple(p[2:]) for p in bparts]
                     outline_h = float(nf) * FLOOR_M
+            if bparts and parts_min_top is not None and max(
+                    [p[1][0] + p[1][1] for p in bparts if p[1] is not None] + [float(at.get("height") or 0.0)]) \
+                    < parts_min_top:
+                bparts = []             # (the skyline: a low building's parts add nothing seen from afar, SKY_PARTS_MIN_M)
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -5600,6 +5604,9 @@ SKY_SLENDER_H = 30.0        # ... but not a mast or a spire this tall)
 # no spire (its parts: blue glass, a 121 m mast; the bridge view against a 360 photo and a player's screenshot,
 # 2026-11-10). BNE_SKY_PARTS=off: the outlines alone.
 SKY_PARTS = os.environ.get("BNE_SKY_PARTS", "on") != "off"
+SKY_PARTS_MIN_M = 150.0     # m: only a building this tall is drawn from its parts there (16 km2 of Midtown's skyline:
+                            # every building's parts +60 % items and +53 % vertices; from 60 m +50 %; from 150 m +14 %
+                            # items, +13 % vertices, Woolworth's and the towers' crowns and masts kept)
 SKY_BOX_AREA_M2 = 600.0     # a footprint smaller than this is drawn as its oriented box
 SKY_MAX_CORNERS = 12        # a larger one with more corners: every k-th kept
 
@@ -5706,7 +5713,8 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     cds = [md.cell(k, layers=sky_layers, kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
     items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(SKY_SLENDER_H, SKY_MIN_AREA_M2), own=own,
-                           part_layers=[c.layers.get("building_parts") for c in cds] if SKY_PARTS else ())
+                           part_layers=[c.layers.get("building_parts") for c in cds] if SKY_PARTS else (),
+                           parts_min_top=SKY_PARTS_MIN_M)
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
