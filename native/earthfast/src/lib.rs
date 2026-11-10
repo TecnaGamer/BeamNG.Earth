@@ -33,6 +33,7 @@ mod lamps;
 mod decks;
 mod deckmerge;
 mod levels;
+mod levelrules;
 mod tapers;
 mod islands;
 mod ribbons;
@@ -452,58 +453,52 @@ fn segment_crossings_g(
     })
 }
 
-/// roads._seg_hits for many ground lines: (line index, arc m along m, sin of the angle) where each of the polylines
-/// (pts (n, 2), starts (L + 1,), the last: n) crosses polyline m (k, 2); per line, per segment of m, per segment of the
-/// line in order: numpy's float64 arithmetic of the Python it replaces (_bridge_reach's loop, 2026-10-25).
-#[pyfunction]
-fn seg_hits(py: Python<'_>, m: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>)
-            -> Vec<(usize, f64, f64)> {
-    let ma = m.as_array();
-    let ga = pts.as_array();
-    let gs = starts.as_array();
-    let nm = ma.nrows();
+/// (line index, arc m along ma, sin of the angle) where each of the polylines ga (gs (L + 1,): where each begins,
+/// the last: its length) crosses polyline ma; per line, per segment of ma, per segment of the line in order:
+/// numpy's float64 arithmetic of the Python it replaced (roads._bridge_reach's crossings, 2026-10-25;
+/// levelrules.rs).
+pub(crate) fn seg_hits_core(ma: &[[f64; 2]], ga: &[[f64; 2]], gs: &[usize]) -> Vec<(usize, f64, f64)> {
+    let nm = ma.len();
     let ng = gs.len().saturating_sub(1);
-    py.detach(|| {
-        let mut out = Vec::new();
-        if nm < 2 { return out; }
-        let mut sm = vec![0.0f64; nm];
-        for k in 1..nm {
-            sm[k] = sm[k - 1] + (ma[[k, 0]] - ma[[k - 1, 0]]).hypot(ma[[k, 1]] - ma[[k - 1, 1]]);
+    let mut out = Vec::new();
+    if nm < 2 { return out; }
+    let mut sm = vec![0.0f64; nm];
+    for k in 1..nm {
+        sm[k] = sm[k - 1] + (ma[k][0] - ma[k - 1][0]).hypot(ma[k][1] - ma[k - 1][1]);
+    }
+    let (mut mx0, mut my0, mut mx1, mut my1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for k in 0..nm {
+        mx0 = mx0.min(ma[k][0]); mx1 = mx1.max(ma[k][0]);
+        my0 = my0.min(ma[k][1]); my1 = my1.max(ma[k][1]);
+    }
+    for g in 0..ng {
+        let (j0, j1) = (gs[g], gs[g + 1]);
+        if j1 < j0 + 2 { continue; }
+        let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for k in j0..j1 {
+            gx0 = gx0.min(ga[k][0]); gx1 = gx1.max(ga[k][0]);
+            gy0 = gy0.min(ga[k][1]); gy1 = gy1.max(ga[k][1]);
         }
-        let (mut mx0, mut my0, mut mx1, mut my1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-        for k in 0..nm {
-            mx0 = mx0.min(ma[[k, 0]]); mx1 = mx1.max(ma[[k, 0]]);
-            my0 = my0.min(ma[[k, 1]]); my1 = my1.max(ma[[k, 1]]);
-        }
-        for g in 0..ng {
-            let (j0, j1) = (gs[g] as usize, gs[g + 1] as usize);
-            if j1 < j0 + 2 { continue; }
-            let (mut gx0, mut gy0, mut gx1, mut gy1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-            for k in j0..j1 {
-                gx0 = gx0.min(ga[[k, 0]]); gx1 = gx1.max(ga[[k, 0]]);
-                gy0 = gy0.min(ga[[k, 1]]); gy1 = gy1.max(ga[[k, 1]]);
-            }
-            if gx1 < mx0 || gx0 > mx1 || gy1 < my0 || gy0 > my1 { continue; }
-            for k in 0..nm - 1 {
-                let (px, py_) = (ma[[k, 0]], ma[[k, 1]]);
-                let (rx, ry) = (ma[[k + 1, 0]] - px, ma[[k + 1, 1]] - py_);
-                for n in j0..j1 - 1 {
-                    let (cx, cy) = (ga[[n, 0]], ga[[n, 1]]);
-                    let (sx, sy) = (ga[[n + 1, 0]] - cx, ga[[n + 1, 1]] - cy);
-                    let den = rx * sy - ry * sx;
-                    if !(den.abs() > 1e-12) { continue; }
-                    let (wx, wy) = (cx - px, cy - py_);
-                    let t = (wx * sy - wy * sx) / den;
-                    let u = (wx * ry - wy * rx) / den;
-                    if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
-                        let sin = den.abs() / (rx.hypot(ry) * sx.hypot(sy)).max(1e-12);
-                        out.push((g, sm[k] + t * (sm[k + 1] - sm[k]), sin));
-                    }
+        if gx1 < mx0 || gx0 > mx1 || gy1 < my0 || gy0 > my1 { continue; }
+        for k in 0..nm - 1 {
+            let (px, py_) = (ma[k][0], ma[k][1]);
+            let (rx, ry) = (ma[k + 1][0] - px, ma[k + 1][1] - py_);
+            for n in j0..j1 - 1 {
+                let (cx, cy) = (ga[n][0], ga[n][1]);
+                let (sx, sy) = (ga[n + 1][0] - cx, ga[n + 1][1] - cy);
+                let den = rx * sy - ry * sx;
+                if !(den.abs() > 1e-12) { continue; }
+                let (wx, wy) = (cx - px, cy - py_);
+                let t = (wx * sy - wy * sx) / den;
+                let u = (wx * ry - wy * rx) / den;
+                if t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0 {
+                    let sin = den.abs() / (rx.hypot(ry) * sx.hypot(sy)).max(1e-12);
+                    out.push((g, sm[k] + t * (sm[k + 1] - sm[k]), sin));
                 }
             }
         }
-        out
-    })
+    }
+    out
 }
 
 /// roads._under_decks: which points (xy (k, 2), road heights z (k,)) lie under a bridge deck: per deck chunk (its
@@ -706,34 +701,30 @@ fn clip_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, x0: f64,
     (numpy::ndarray::Array2::from_shape_vec((n, dim), data).unwrap().into_pyarray(py), starts.into_pyarray(py))
 }
 
-/// Which points (n, 2) lie within (tx, ty) of a target (k, 2) along both axes (a box test, through a grid of the
-/// targets): roads._skew_decks' pre-check of the features' ends against the bridges' ends (lon / lat).
-#[pyfunction]
-fn ends_near(py: Python<'_>, pts: PyReadonlyArray2<f64>, targets: PyReadonlyArray2<f64>, tx: f64, ty: f64) -> Vec<bool> {
-    let (p, t) = (pts.as_array(), targets.as_array());
-    py.detach(|| {
-        let n = p.nrows();
-        if t.nrows() == 0 || !(tx > 0.0 && ty > 0.0) { return vec![false; n]; }
-        let mut map: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
-        for j in 0..t.nrows() {
-            let (x, y) = (t[[j, 0]], t[[j, 1]]);
-            if !(x.is_finite() && y.is_finite()) { continue; }
-            map.entry(((x / tx).floor() as i64, (y / ty).floor() as i64)).or_default().push(j);
-        }
-        (0..n).map(|i| {
-            let (x, y) = (p[[i, 0]], p[[i, 1]]);
-            if !(x.is_finite() && y.is_finite()) { return false; }
-            let (kx, ky) = ((x / tx).floor() as i64, (y / ty).floor() as i64);
-            for gx in kx - 1..=kx + 1 {
-                for gy in ky - 1..=ky + 1 {
-                    if let Some(v) = map.get(&(gx, gy)) {
-                        if v.iter().any(|&j| (t[[j, 0]] - x).abs() <= tx && (t[[j, 1]] - y).abs() <= ty) { return true; }
-                    }
+/// Which points p lie within (tx, ty) of a target t along both axes (a box test, through a grid of the targets):
+/// roads._skew_decks' pre-check of the features' ends against the bridges' ends (lon / lat; levelrules.rs).
+pub(crate) fn ends_near_core(p: &[[f64; 2]], t: &[[f64; 2]], tx: f64, ty: f64) -> Vec<bool> {
+    let n = p.len();
+    if t.is_empty() || !(tx > 0.0 && ty > 0.0) { return vec![false; n]; }
+    let mut map: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
+    for (j, q) in t.iter().enumerate() {
+        let (x, y) = (q[0], q[1]);
+        if !(x.is_finite() && y.is_finite()) { continue; }
+        map.entry(((x / tx).floor() as i64, (y / ty).floor() as i64)).or_default().push(j);
+    }
+    (0..n).map(|i| {
+        let (x, y) = (p[i][0], p[i][1]);
+        if !(x.is_finite() && y.is_finite()) { return false; }
+        let (kx, ky) = ((x / tx).floor() as i64, (y / ty).floor() as i64);
+        for gx in kx - 1..=kx + 1 {
+            for gy in ky - 1..=ky + 1 {
+                if let Some(v) = map.get(&(gx, gy)) {
+                    if v.iter().any(|&j| (t[j][0] - x).abs() <= tx && (t[j][1] - y).abs() <= ty) { return true; }
                 }
             }
-            false
-        }).collect()
-    })
+        }
+        false
+    }).collect()
 }
 
 /// roads._deck_crossings: (i, j, arc on i, arc on j) where polylines i < j cross away from their end points.
@@ -5592,7 +5583,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(junctionsnap::hold_junction_corridors, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_cover_roads, m)?)?;
-    m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
@@ -5619,8 +5609,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // (2026-11-08: gradesep._spans' rows and lines over the layers as they are; roads._deck_gaps' look round a road)
     m.add_function(wrap_pyfunction!(gradesep::gradesep_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_gather_rows, m)?)?;
-    m.add_function(wrap_pyfunction!(decks::first_ring_ends, m)?)?;
-    m.add_function(wrap_pyfunction!(decks::deck_gaps_round, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
@@ -5683,14 +5671,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(building_walls, m)?)?;
     m.add_function(wrap_pyfunction!(float_predictor_f32, m)?)?;
     m.add_function(wrap_pyfunction!(segment_crossings, m)?)?;
-    m.add_function(wrap_pyfunction!(seg_hits, m)?)?;
     m.add_function(wrap_pyfunction!(under_decks, m)?)?;
     m.add_function(wrap_pyfunction!(road_through, m)?)?;
     m.add_function(wrap_pyfunction!(face_normal_sum, m)?)?;
     m.add_function(wrap_pyfunction!(first_use, m)?)?;
     m.add_function(wrap_pyfunction!(near_crossers, m)?)?;
     m.add_function(wrap_pyfunction!(clip_polyline, m)?)?;
-    m.add_function(wrap_pyfunction!(ends_near, m)?)?;
     m.add_function(wrap_pyfunction!(gpu_name, m)?)?;
     m.add_function(wrap_pyfunction!(seam_detect_gpu, m)?)?;
     m.add_function(wrap_pyfunction!(bc1_encode_gpu, m)?)?;
@@ -5813,6 +5799,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
+    // (roads.level_ranges' rules a layer at a time: _skew_decks, _deck_gaps, _lidar_gaps, the grade separations' merge,
+    // lidar_gap_candidates)
+    m.add_class::<levelrules::LevelLayer>()?;
+    m.add_function(wrap_pyfunction!(levelrules::level_extras, m)?)?;
     // 176: roofs::heightfield_roof; 177: roofs::triangulate_holes; 178: frontage::FrontageCoverage (PR #505's paved
     // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof; 180: its gables;
     // 181: grade_points' road ranks (rk, rank_fade, rank_height_fade: PR #1050)
@@ -5823,6 +5813,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 183: bdtopo::bdtopo_points,
     // bdtopo::bdtopo_match (France's measured buildings, server/bdtopo.py: PR #456's BD TOPO join, ported)
     // 184: building_walls' vary / win_cells (wall_cells: the night windows' cells, PR #916 reworked)
-    m.add("VERSION", 184)?;
+    // 185: levelrules (LevelLayer: rules / near / lidar_lines, level_extras: roads.level_ranges' rules per
+    // layer; deck_gaps_round, seg_hits, ends_near and tunnel_reach folded into them)
+    m.add("VERSION", 185)?;
     Ok(())
 }

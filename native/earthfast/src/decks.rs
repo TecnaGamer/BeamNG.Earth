@@ -667,49 +667,23 @@ pub fn deck_tents<'py>(py: Python<'py>, s: PyReadonlyArray1<'py, f64>, z: PyRead
     out.into_pyarray(py)
 }
 
-/// roads._first_ring_ends: (n, 4) per feature its first ring's first and last coordinates (lon0, lat0, lon1, lat1),
-/// NaN without a part or with a first ring of fewer than 2 coordinates.
-#[pyfunction]
-pub fn first_ring_ends<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py, f64>, coord_off: PyReadonlyArray1<'py, i64>,
-                            ring_off: PyReadonlyArray1<'py, i64>, part_off: PyReadonlyArray1<'py, i64>)
-                            -> Bound<'py, PyArray2<f64>> {
-    let (ll, co, ro, po) = (lonlat.as_array(), coord_off.as_array(), ring_off.as_array(), part_off.as_array());
-    let n = po.len().saturating_sub(1);
-    let mut out = vec![f64::NAN; 4 * n];
-    for i in 0..n {
-        if po[i + 1] <= po[i] {
-            continue;
-        }
-        let r = ro[po[i] as usize] as usize;
-        let (a, b) = (co[r], co[r + 1]);
-        if b - a >= 2 {
-            let (a, b) = (a as usize, b as usize - 1);
-            out[4 * i..4 * i + 4].copy_from_slice(&[ll[[a, 0]], ll[[a, 1]], ll[[b, 0]], ll[[b, 1]]]);
-        }
-    }
-    numpy::ndarray::Array2::from_shape_vec((n, 4), out).expect("ends").into_pyarray(py)
-}
-
 /// roads._deck_gaps' look round feature i of a layer, in lon / lat (2026-11-08: a numpy pass over the whole layer per
-/// road near a bridge, ~3/4 of _deck_gaps on a Midtown tile). ring (k, 2): i's line; ends (n, 4): each feature's
+/// road near a bridge, ~3/4 of _deck_gaps on a Midtown tile; levelrules.rs calls it since the rules moved there). ring (k, 2): i's line; ends (n, 4): each feature's
 /// first ring's ends (first_ring_ends); boxes (n, 4): their lon / lat boxes (lon0, lat0, lon1, lat1); spec (n,): 1 for
 /// a road with a spec; kx, ky: m per degree. Returns (hits (4,): for ring's first and its last point the (feature,
 /// end 0 / 1) of the one other feature's end within join_m m of it, -1 / -1 for none or for more than one; others
 /// (m, 2): the ends of the other roads with a spec whose boxes come within pad_m m of ring's box (by feature, then
 /// end), in m from ring's first point). numpy's numbers: np.hypot's distance, np.min / np.max's box.
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, ends: PyReadonlyArray2<'py, f64>,
-                            boxes: PyReadonlyArray2<'py, f64>, spec: PyReadonlyArray1<'py, u8>, i: i64, kx: f64,
-                            ky: f64, join_m: f64, pad_m: f64) -> (Vec<i64>, Bound<'py, PyArray2<f64>>) {
-    let (ring, ends, boxes, spec) = (ring.as_array(), ends.as_array(), boxes.as_array(), spec.as_array());
-    let n = ends.nrows();
-    let k = ring.nrows();
-    let mut hits = vec![-1i64; 4];
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn deck_gaps_round(ring: &[[f64; 2]], ends: &[[f64; 4]], boxes: &[[f64; 4]], spec: &[u8], i: i64, kx: f64,
+                              ky: f64, join_m: f64, pad_m: f64) -> ([i64; 4], Vec<[f64; 2]>) {
+    let n = ends.len();
+    let k = ring.len();
+    let mut hits = [-1i64; 4];
     if k == 0 {
-        return (hits, numpy::ndarray::Array2::<f64>::zeros((0, 2)).into_pyarray(py));
+        return (hits, Vec::new());
     }
-    for (e, p) in [ring[[0, 0]], ring[[0, 1]], ring[[k - 1, 0]], ring[[k - 1, 1]]].chunks(2).enumerate() {
+    for (e, p) in [ring[0], ring[k - 1]].iter().enumerate() {
         let mut found: Option<(usize, usize)> = None;
         let mut count = 0;
         'all: for j in 0..n {
@@ -717,8 +691,8 @@ pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, e
                 continue;
             }
             for end in 0..2 {
-                let a = (ends[[j, 2 * end]] - p[0]) * kx;
-                let b = (ends[[j, 2 * end + 1]] - p[1]) * ky;
+                let a = (ends[j][2 * end] - p[0]) * kx;
+                let b = (ends[j][2 * end + 1] - p[1]) * ky;
                 // (np.hypot's d < join_m; hypot is never under the larger of |a| and |b|: a cheap test first)
                 if a.abs() >= join_m || b.abs() >= join_m {
                     continue;
@@ -739,33 +713,31 @@ pub fn deck_gaps_round<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, e
         }
     }
     // ring's box (np.min / np.max: NaN if any is) grown by pad_m
-    let (mut lo, mut hi) = ([ring[[0, 0]], ring[[0, 1]]], [ring[[0, 0]], ring[[0, 1]]]);
-    for v in 1..k {
+    let (mut lo, mut hi) = (ring[0], ring[0]);
+    for v in ring.iter().skip(1) {
         for c in 0..2 {
-            let x = ring[[v, c]];
+            let x = v[c];
             lo[c] = if lo[c].is_nan() || x.is_nan() { f64::NAN } else if x < lo[c] { x } else { lo[c] };
             hi[c] = if hi[c].is_nan() || x.is_nan() { f64::NAN } else if x > hi[c] { x } else { hi[c] };
         }
     }
     let pad = [pad_m / kx, pad_m / ky];
     let (lo, hi) = ([lo[0] - pad[0], lo[1] - pad[1]], [hi[0] + pad[0], hi[1] + pad[1]]);
-    let (r0x, r0y) = (ring[[0, 0]], ring[[0, 1]]);
-    let mut others: Vec<f64> = Vec::new();
+    let (r0x, r0y) = (ring[0][0], ring[0][1]);
+    let mut others: Vec<[f64; 2]> = Vec::new();
     for j in 0..n {
-        if !(boxes[[j, 0]] <= hi[0] && boxes[[j, 2]] >= lo[0] && boxes[[j, 1]] <= hi[1] && boxes[[j, 3]] >= lo[1]) {
+        if !(boxes[j][0] <= hi[0] && boxes[j][2] >= lo[0] && boxes[j][1] <= hi[1] && boxes[j][3] >= lo[1]) {
             continue;
         }
         if j as i64 == i || spec[j] == 0 {
             continue;
         }
         for end in 0..2 {
-            let (x, y) = (ends[[j, 2 * end]], ends[[j, 2 * end + 1]]);
+            let (x, y) = (ends[j][2 * end], ends[j][2 * end + 1]);
             if x.is_finite() && y.is_finite() {
-                others.push((x - r0x) * kx);
-                others.push((y - r0y) * ky);
+                others.push([(x - r0x) * kx, (y - r0y) * ky]);
             }
         }
     }
-    let m = others.len() / 2;
-    (hits, numpy::ndarray::Array2::from_shape_vec((m, 2), others).expect("others").into_pyarray(py))
+    (hits, others)
 }

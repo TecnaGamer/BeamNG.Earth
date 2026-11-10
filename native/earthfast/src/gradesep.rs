@@ -513,7 +513,7 @@ pub fn gradesep_spans<'py>(
 
 /// numpy's interp for one x over increasing xp (binary search for the last xp[j] <= x; x at xp[j] exactly: fp[j]; the
 /// slope form, tried from the other end when it is NaN; below xp[0]: fp[0], above or at the last: fp[last]).
-fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
+pub(crate) fn np_interp(x: f64, xp: &[f64], fp: &[f64]) -> f64 {
     let n = xp.len();
     if n == 0 {
         return f64::NAN;

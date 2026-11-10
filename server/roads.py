@@ -404,24 +404,46 @@ def level_ranges(feats, i, _home=True):
         _cell_ranges(feats)
         got = memo.get(i)
         if got is None:
-            # (the lidar's elevated stretches gap-filled again: one ending 12 m short of the map's deck left a ground
-            # piece between them mid-ramp, by I-395 in Baltimore)
-            got = memo[i] = _deck_gaps(feats, i, _lidar_gaps(feats, i, rule_level_ranges(feats, i)))
+            _level_many(feats, [i])
+            got = memo[i]
     if feats.__dict__.get("_lidar_rule"):
         import revisit                      # (the rule for want of the lidar: nothing built on it is kept)
         revisit.fault(lidar=True)
     return list(got)
 
 
+def _level_many(feats, idx):
+    """level_ranges of features idx into feats' memo where not there yet: their rule ranges with the lidar's elevated
+    stretches (_lidar_answers) made bridge and gap-filled again (one ending 12 m short of the map's deck left a ground
+    piece between them mid-ramp, by I-395 in Baltimore); earthfast.LevelLayer.rules, all at once."""
+    memo = feats.__dict__.setdefault("_level_ranges", {})
+    idx = [i for i in idx if i not in memo]
+    if not idx:
+        return
+    rule = _rule_many(feats, idx)
+    answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
+    lid = [answers.get(str(feats.ids[i])) or () for i in idx] if answers else None
+    for i, r in zip(idx, _level_steps(feats, idx, rule, _STEP_LIDAR | _STEP_GAPS, lid)):
+        memo.setdefault(i, r)
+
+
 def rule_level_ranges(feats, i):
     """level_ranges before the lidar's elevated stretches (_lidar_gaps): the map's ranges lengthened (_skew_decks) and
     their short ground gaps between decks filled (_deck_gaps). roadz.py measures the lidar along these (its answer is
     what level_ranges adds). Remembered on feats."""
+    return list(_rule_many(feats, [i])[0])
+
+
+def _rule_many(feats, idx):
+    """[rule_level_ranges] of features idx (the memo's lists: callers must not change them), the missing ones made at
+    once (earthfast.LevelLayer.rules)."""
     memo = feats.__dict__.setdefault("_rule_level_ranges", {})
-    got = memo.get(i)
-    if got is None:
-        got = memo[i] = _deck_gaps(feats, i, _skew_decks(feats, i, raw_level_ranges(feats, i)))
-    return list(got)
+    miss = [i for i in idx if i not in memo]
+    if miss:
+        raw = _raw_memo(feats)
+        for i, r in zip(miss, _level_steps(feats, miss, [raw[i] for i in miss], _STEP_SKEW | _STEP_GAPS)):
+            memo.setdefault(i, r)
+    return [memo[i] for i in idx]
 
 
 def raw_level_ranges(feats, i):
@@ -434,6 +456,26 @@ def raw_level_ranges(feats, i):
         if got is None:
             got = memo[i] = _level_ranges(feats, i)
     return list(got)
+
+
+def _raw_memo(feats):
+    """{i: raw_level_ranges} of every feature (the memo itself: callers must not change it), the missing ones made at
+    once (_level_ranges_many). The rules after them (earthfast.LevelLayer.rules) read every feature's."""
+    memo = feats.__dict__.setdefault("_raw_level_ranges", {})
+    n = len(feats)
+    if len(memo) < n:
+        _cell_ranges(feats, load_only=True)
+        miss = [i for i in range(n) if i not in memo]
+        if miss:
+            for i, r in zip(miss, _level_ranges_many(feats, miss)):
+                memo.setdefault(i, r)
+    return memo
+
+
+def _raw_all(feats):
+    """[raw_level_ranges] of every feature (the memo's lists: callers must not change them)."""
+    memo = _raw_memo(feats)
+    return [memo[i] for i in range(len(feats))]
 
 
 # Per-cell facts shared by the server's processes and kept for the next run (the revisit cache: one file per cell and
@@ -630,20 +672,26 @@ def _cell_ranges(feats, load_only=False):
     f0 = revisit.thread_faults()
     t0 = time.perf_counter()
     try:
-        raw = [raw_level_ranges(feats, i) for i in range(len(feats))]
+        raw = [list(r) for r in _raw_all(feats)]
         # (most roads have no range, no end near a bridge's and no lidar answer: their level ranges are [] whatever the
-        # chain below does, and its per-feature calls were ~1 s of CPU a cell on first visits, Fells Point 2026-11-06)
+        # rules do; the rest made at once, earthfast.LevelLayer.rules: one Python call chain per feature was ~1 s of
+        # CPU a cell on first visits, Fells Point 2026-11-06)
         near = _near_bridge_ends(feats)
         answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
         lvl_memo = st.setdefault("_level_ranges", {})
-        lvl = []
+        todo, ruled = [], False
         for i in range(len(feats)):
-            if (near is not None and not raw[i] and not near[i] and not answers.get(str(feats.ids[i]))
-                    and i not in lvl_memo):
+            if (near is not None and not raw[i] and not near[i] and i not in lvl_memo
+                    and not (answers and answers.get(str(feats.ids[i])))):
                 lvl_memo[i] = []
-                lvl.append([])
             else:
-                lvl.append(level_ranges(feats, i, _home=False))
+                ruled = True
+                if i not in lvl_memo:
+                    todo.append(i)
+        _level_many(feats, todo)
+        if ruled and st.get("_lidar_rule"):
+            revisit.fault(lidar=True)       # (as level_ranges: built on the rule for want of the lidar)
+        lvl = [list(lvl_memo[i]) for i in range(len(feats))]
     except BaseException:
         if mine:
             import xproc
@@ -711,32 +759,98 @@ def _feature_boxes(feats):
     return got
 
 
-def _raw_ground_parts(feats, j):
-    """Feature j's on-ground pieces from its raw_level_ranges (_skew_decks: level_ranges of the others would recurse)."""
-    pieces, at = [], 0.0
-    for a, b, _ in raw_level_ranges(feats, j):
-        if a - at > MIN_PART:
-            pieces.append((at, a))
-        at = max(at, b)
-    if 1.0 - at > MIN_PART:
-        pieces.append((at, 1.0))
-    out = []
-    for part in feats.parts(j):
-        for ring in part:
-            if len(ring) >= 2:
-                for a, b in pieces:
-                    out.append(ring if (a, b) == (0.0, 1.0) else sub_polyline(ring, a, b))
-    return out
+_KIND_CODES = {"bridge": 1, "tunnel": 2, "ground": 3}
+_STEP_SKEW, _STEP_LIDAR, _STEP_GAPS, _STEP_PORTAL = 1, 2, 4, 8      # (earthfast.LevelLayer.rules' steps, in that order)
 
 
-def _seg_hits(m, lines):
-    """(line index, arc m along polyline m, sin of the angle) where each of the polylines lines (all (k, 2) m) crosses
-    m (earthfast.seg_hits). Pure."""
-    import fast
-    fast.require(73, "seg_hits")
-    starts = np.r_[0, np.cumsum([len(g) for g in lines])].astype(np.int64)
-    return fast._ef.seg_hits(np.ascontiguousarray(m, np.float64),
-                             np.ascontiguousarray(np.vstack(lines), np.float64), starts)
+def _ranges_flat(lists):
+    """(off (n + 1,), ranges (m, 2), kinds (m,) int8: _KIND_CODES) of n range lists, the kernels' form."""
+    off = np.zeros(len(lists) + 1, np.int64)
+    flat, kinds = [], []
+    for k, rr in enumerate(lists):
+        for r in rr:
+            flat.append((r[0], r[1]))
+            kinds.append(_KIND_CODES.get(r[2], 0))
+        off[k + 1] = len(kinds)
+    return off, np.asarray(flat, np.float64).reshape(-1, 2), np.asarray(kinds, np.int8)
+
+
+def _ranges_lists(off, rng, kinds):
+    """The range lists of the kernels' (off, ranges, kinds)."""
+    rl, kl, ol = rng.tolist(), kinds.tolist(), off.tolist()
+    return [[(rl[r][0], rl[r][1], _KIND_NAMES[kl[r]]) for r in range(ol[k], ol[k + 1])] for k in range(len(ol) - 1)]
+
+
+def _level_layer(feats):
+    """earthfast.LevelLayer of feats: its geometry and every feature's raw_level_ranges as the rules read them, made
+    once (kept on feats: one feature's rules cost that feature's work); and the bridge features among them."""
+    got = feats.__dict__.get("_level_layer")
+    if got is None:
+        import fast
+        fast.require(185, "LevelLayer")
+        raw = _raw_all(feats)
+        ll = np.ascontiguousarray(feats.lonlat, np.float64)
+        got = feats.__dict__["_level_layer"] = (fast._ef.LevelLayer(
+            ll if ll.ndim == 2 else ll.reshape(-1, 2), np.ascontiguousarray(feats.coord_off, np.int64),
+            np.ascontiguousarray(feats.ring_off, np.int64), np.ascontiguousarray(feats.part_off, np.int64),
+            *_ranges_flat(raw)), [i for i, rr in enumerate(raw) if any(r[2] == "bridge" for r in rr)])
+    return got
+
+
+def _level_prm():
+    """The rules' constants as earthfast.LevelLayer.rules takes them (read at each call: tests switch them)."""
+    return np.array([float(SKEW_ON), SKEW_MARGIN_M, SKEW_SLOPE_M, SKEW_MAX_M, SKEW_MIN_SIN, GAP_JOIN_M,
+                     float(GAP_DECK_ON), GAP_DECK_M, GAP_JUNCTION_M, GAP_JOIN_M, PORTAL_DECK_M, MIN_PART,
+                     TUNNEL_PORTAL_CLEAR_M, TUNNEL_ROAD_MIN_SIN, TUNNEL_PORTAL_REACH_M, TUNNEL_PORTAL_GROW_M,
+                     TUNNEL_PORTAL_END_M, TUNNEL_PORTAL_SHRINK_M, TUNNEL_PORTAL_MIN_M, float(LIDAR_GAPS_ON)], np.float64)
+
+
+def _spec_widths(feats, specs):
+    """(n,) widths of specs (_road_specs_kept(feats); NaN where none), kept on feats for that list."""
+    got = feats.__dict__.get("_level_spec_w")
+    if got is None or got[0] is not specs:
+        got = feats.__dict__["_level_spec_w"] = (specs, np.fromiter(
+            (np.nan if s is None else float(s.width) for s in specs), np.float64, len(specs)))
+    return got[1]
+
+
+def _structure_widths(feats, idx):
+    """(sk (n,) uint8, sw (n,)): _structure_width of features idx as the kernels take it (0 not made, 1 None, 2 its
+    width), each made once per layer (kept on feats)."""
+    got = feats.__dict__.get("_structure_w")
+    if got is None:
+        got = feats.__dict__["_structure_w"] = (np.zeros(len(feats), np.uint8), np.full(len(feats), np.nan))
+    sk, sw = got
+    for i in idx:
+        if sk[i] == 0:
+            w = _structure_width(feats, i)
+            if w is not None:
+                sw[i] = w
+            sk[i] = 1 if w is None else 2
+    return sk, sw
+
+
+def _level_steps(feats, idx, inputs, steps, lidar=None):
+    """Features idx's ranges after the rules steps (_STEP_*: _skew_decks, _lidar_gaps (lidar: each one's elevated
+    stretches, _lidar_answers), _deck_gaps, _portal_decks, in that order) from inputs (their range lists), all at once
+    (earthfast.LevelLayer.rules: the Python's calls per feature, ~100k a dense cell, were ~30 % of a cold Baltimore
+    tile's planning, 2026-11-10). Pure given feats, road_specs and the lidar's answer."""
+    if not idx:
+        return []
+    layer, bridges = _level_layer(feats)
+    specs = _road_specs_kept(feats)
+    if steps & _STEP_SKEW and not feats.__dict__.get("_structure_w_bridges"):
+        _structure_widths(feats, bridges)           # (_bridge_reach's of the bridges joined at an end)
+        feats.__dict__["_structure_w_bridges"] = True
+    sk, sw = _structure_widths(feats, idx)
+    if lidar is None:
+        lid_off, lid_pts = np.zeros(0, np.int64), np.zeros((0, 4))
+    else:
+        lid_off = np.r_[0, np.cumsum([len(g) for g in lidar])].astype(np.int64)
+        lid_pts = np.asarray([(a[0], a[1], b[0], b[1]) for g in lidar for a, b in g], np.float64).reshape(-1, 4)
+    return _ranges_lists(*layer.rules(_spec_mask(feats, specs), _spec_widths(feats, specs), sk, sw,
+                                      np.asarray(idx, np.int64), *_ranges_flat(inputs), lid_off, lid_pts, steps,
+                                      _level_prm()))
 
 
 def _structure_width(feats, i):
@@ -760,82 +874,6 @@ def _structure_width(feats, i):
     return carriageway(cls, kind, False, rule_w, ow, lanes, link=roadlanes.is_link(feats, i))
 
 
-def _ring_kx(ring):
-    """m per degree of longitude along lon/lat polyline ring as sub_polyline measures it (at its mean latitude): its
-    level ranges' fractions. At its first point instead, a 15 km motorway's crossing came 8.7 m along from where its
-    deck was cut (the A4 at Glaireuse, #1020)."""
-    return 111320.0 * math.cos(math.radians(float(np.mean(np.asarray(ring, np.float64)[:, 1]))))
-
-
-def _bridge_reach(feats, i):
-    """Bridge feature i's ranges lengthened over the ground roads crossing under them (SKEW_*), and how far past each
-    end of the feature they would reach: {"ranges": [...], "over": [m past its start, m past its end]} (_skew_decks
-    puts that on the road joined there). Remembered on feats. Pure given feats."""
-    memo = feats.__dict__.setdefault("_bridge_reach", {})
-    got = memo.get(i)
-    if got is not None:
-        return got
-    rngs = raw_level_ranges(feats, i)
-    got = {"ranges": rngs, "over": [0.0, 0.0]}
-    memo[i] = got
-    specs = road_specs(feats)
-    up_w = specs[i].width if specs[i] is not None else _structure_width(feats, i)
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if up_w is None or not rings or not any(k == "bridge" for _, _, k in rngs):
-        return got
-    ring = rings[0]
-    kx, ky = _ring_kx(ring), 111320.0
-    m = (ring - ring[0]) * [kx, ky]
-    sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
-    L = float(sm[-1])
-    if L <= 0:
-        return got
-    boxes = _feature_boxes(feats)
-    out, over = [], [0.0, 0.0]
-    for n, (a, b, k) in enumerate(rngs):
-        if k == "bridge":
-            a0, b0 = a, b
-            lo_m, hi_m = a0 * L, b0 * L
-            # (only the bridge's own stretch: a crossing counts under it; a 3 km segment's whole line and every road
-            # near it cost a rail-yard tile seconds, 2026-10-25)
-            inner = (sm > lo_m) & (sm < hi_m)      # (metres: sub_polyline scales lon/lat)
-            sub = np.vstack([[np.interp(lo_m, sm, m[:, 0]), np.interp(lo_m, sm, m[:, 1])], m[inner],
-                             [np.interp(hi_m, sm, m[:, 0]), np.interp(hi_m, sm, m[:, 1])]])
-            pad = 1.0
-            blo = (sub.min(0) - pad) / [kx, ky] + ring[0]
-            bhi = (sub.max(0) + pad) / [kx, ky] + ring[0]
-            near = np.flatnonzero((boxes[:, 0] <= bhi[0]) & (boxes[:, 2] >= blo[0]) & (boxes[:, 1] <= bhi[1]) &
-                                  (boxes[:, 3] >= blo[1]))
-            gl, gj = [], []
-            for j in near:
-                if j == i or specs[j] is None:
-                    continue
-                for g in _raw_ground_parts(feats, j):
-                    gl.append((np.asarray(g, np.float64) - ring[0]) * [kx, ky])
-                    gj.append(j)
-            lo0, hi0 = lo_m, hi_m           # (arcs along sub: from lo0; a crossing at either end of it does not count)
-            for g, sc, sin in (_seg_hits(sub, gl) if gl else ()):
-                sc += lo0
-                if not lo0 < sc < hi0:
-                    continue
-                j = gj[g]
-                sin = max(sin, SKEW_MIN_SIN)
-                cos = math.sqrt(max(0.0, 1.0 - sin * sin))
-                h = (specs[j].width / 2 + SKEW_MARGIN_M + SKEW_SLOPE_M) / sin + (up_w / 2) * cos / sin
-                lo_m = min(lo_m, max(a0 * L - SKEW_MAX_M, sc - h))
-                hi_m = max(hi_m, min(b0 * L + SKEW_MAX_M, sc + h))
-            prev = out[-1][1] if out else 0.0   # (never into a neighbouring range; past the feature's ends: "over")
-            nxt = rngs[n + 1][0] if n + 1 < len(rngs) else 1.0
-            if lo_m < 0 and a0 <= 1e-9:
-                over[0] = max(over[0], -lo_m)
-            if hi_m > L and b0 >= 1.0 - 1e-9:
-                over[1] = max(over[1], hi_m - L)
-            a, b = max(lo_m / L, prev, 0.0), min(hi_m / L, nxt, 1.0)
-        out.append((a, b, k))
-    got = memo[i] = {"ranges": out, "over": over}
-    return got
-
-
 # A tunnel's portal moved out past a ground road crossing over the tunnel's road at it (earthfast.tunnel_reach): its
 # carriageway and TUNNEL_PORTAL_CLEAR_M past it (along the road: / the sine of the crossing, at least TUNNEL_ROAD_MIN_SIN),
 # a crossing up to TUNNEL_PORTAL_REACH_M outside the portal, TUNNEL_PORTAL_GROW_M at most. OSM often ends an underpass's
@@ -852,170 +890,25 @@ TUNNEL_PORTAL_SHRINK_M = 60.0
 TUNNEL_PORTAL_MIN_M = 8.0
 
 
-def _tunnel_reach(feats, i, rngs):
-    """rngs with feature i's tunnel ranges grown over the ground roads crossing it at their portals
-    (TUNNEL_PORTAL_*), never into a neighbouring range. Pure given feats."""
-    specs = road_specs(feats)
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if specs[i] is None or not rings:
-        return rngs
-    ring = rings[0]
-    kx, ky = _ring_kx(ring), 111320.0
-    m = (ring - ring[0]) * [kx, ky]
-    sm = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
-    L = float(sm[-1])
-    if L <= 0:
-        return rngs
-    tun = [n for n, (_, _, k) in enumerate(rngs) if k == "tunnel"]
-    pad = (TUNNEL_PORTAL_REACH_M + TUNNEL_PORTAL_GROW_M + 1.0) / np.array([kx, ky])
-    boxes = _feature_boxes(feats)
-    near = np.zeros(len(boxes), bool)
-    ports = []                      # (the portals in m from ring[0])
-    for n in tun:                   # (the roads near the portals only)
-        for f in rngs[n][:2]:
-            pm = np.array([np.interp(f * L, sm, m[:, 0]), np.interp(f * L, sm, m[:, 1])])
-            ports.append(pm)
-            p = pm / [kx, ky] + ring[0]
-            near |= ((boxes[:, 0] <= p[0] + pad[0]) & (boxes[:, 2] >= p[0] - pad[0]) & (boxes[:, 1] <= p[1] + pad[1]) &
-                     (boxes[:, 3] >= p[1] - pad[1]))
-    ports = np.asarray(ports, np.float64).reshape(-1, 2)
-    gl, hw = [], []
-    for j in np.flatnonzero(near):
-        if j == i or specs[j] is None:
-            continue
-        for g in _raw_ground_parts(feats, j):
-            g = (np.asarray(g, np.float64)[:, :2] - ring[0]) * [kx, ky]
-            # a road ending at a portal is the tunnel road's own approach going on (a junction there), neither a road
-            # crossing over the portal nor one running alongside it: the kernel's shrink took it for the latter and
-            # moved the portal of an underpass under I-280 (37.6002, -122.4240) 5 m in, up onto the embankment; with
-            # the cover over its floor line under TUNNEL_OPEN_COVER the underpass was graded as an open road, a trench
-            # up to 3.5 m deep across both carriageways (2026-11-09)
-            if len(ports) and np.min(np.hypot(*(ports[:, None, :] - g[[0, -1]][None, :, :]).transpose(2, 0, 1))) \
-                    < TUNNEL_PORTAL_END_M:
-                continue
-            gl.append(g)
-            hw.append(specs[j].width / 2)
-    if not gl:
-        return rngs
-    import fast
-    fast.require(97, "tunnel_reach")
-    got = fast._ef.tunnel_reach(
-        np.ascontiguousarray(m), np.ascontiguousarray(sm),
-        np.ascontiguousarray([[rngs[n][0] * L, rngs[n][1] * L] for n in tun], np.float64),
-        np.ascontiguousarray(np.concatenate(gl)), np.r_[0, np.cumsum([len(g) for g in gl])].astype(np.int64),
-        np.asarray(hw, np.float64), np.array([TUNNEL_PORTAL_CLEAR_M, TUNNEL_ROAD_MIN_SIN, TUNNEL_PORTAL_REACH_M,
-                                              TUNNEL_PORTAL_GROW_M, TUNNEL_PORTAL_END_M, TUNNEL_PORTAL_SHRINK_M,
-                                              TUNNEL_PORTAL_MIN_M], np.float64))
-    out = list(rngs)
-    for q, n in enumerate(tun):
-        prev = out[n - 1][1] if n > 0 else 0.0
-        nxt = out[n + 1][0] if n + 1 < len(out) else 1.0
-        out[n] = (max(float(got[q, 0]) / L, prev), min(float(got[q, 1]) / L, nxt), "tunnel")
-    return [r for r in out if r[1] > r[0]]      # (a tunnel left shorter than nothing: ground)
-
-
-def _bridge_ends(feats):
-    """(indices (k,), end points lon/lat (k, 2, 2)) of the features with a bridge range, once per cell."""
-    got = feats.__dict__.get("_bridge_ends")
-    if got is None:
-        idx, ends = [], []
-        for b in range(len(feats)):
-            if not any(k == "bridge" for _, _, k in raw_level_ranges(feats, b)):
-                continue
-            rings = [r for part in feats.parts(b) for r in part if len(r) >= 2]
-            if rings:
-                idx.append(b)
-                ends.append((rings[0][0], rings[0][-1]))
-        got = (np.asarray(idx, np.int64), np.asarray(ends, np.float64).reshape(-1, 2, 2))
-        feats.__dict__["_bridge_ends"] = got
-    return got
+_NO_NEAR = object()
 
 
 def _near_bridge_ends(feats):
     """Per feature: may an end of its first ring lie within _skew_decks' 0.75 m of a bridge feature's end? A box test
-    in lon / lat, wider than that everywhere (earthfast.ends_near; most features are nowhere near a bridge, and their
-    exact test was most of _skew_decks' time, 2026-10-25). None: no pre-check. Kept on feats."""
-    got = feats.__dict__.get("_near_bridge_ends")
-    if got is not None:
-        return got
-    import fast
-    bidx, bends = _bridge_ends(feats)
-    n = len(feats)
-    ends = np.full((n, 2, 2), np.nan)
-    exact = np.zeros(n, bool)       # (no first ring of 2 points or more: _skew_decks' own test, which finds its ring)
-    for i in range(n):
-        if feats.part_off[i + 1] <= feats.part_off[i]:
-            continue                # (no parts: nothing to lengthen)
-        r = feats.ring_off[feats.part_off[i]]
-        a, b = feats.coord_off[r], feats.coord_off[r + 1]
-        if b - a >= 2:
-            ends[i, 0], ends[i, 1] = feats.lonlat[a], feats.lonlat[b - 1]
-        else:
-            exact[i] = True
-    lat = float(np.nanmax(np.abs(ends[:, :, 1]))) if np.isfinite(ends[:, :, 1]).any() else 0.0
-    if not np.isfinite(lat) or lat > 89.0:
-        feats.__dict__["_near_bridge_ends"] = got = None
-        return got
-    ty = 2.0 / 111320.0                                         # (2 m: 0.75 m and room)
-    tx = ty / max(math.cos(math.radians(min(lat + 0.1, 89.0))), 1e-3)
-    fast.require(75, "ends_near")
-    m = np.asarray(fast._ef.ends_near(np.ascontiguousarray(ends.reshape(-1, 2)),
-                                     np.ascontiguousarray(bends.reshape(-1, 2)), float(tx), float(ty)), bool)
-    got = m.reshape(n, 2).any(axis=1) | exact
-    feats.__dict__["_near_bridge_ends"] = got
+    in lon / lat, wider than that everywhere (earthfast.LevelLayer.near; most features are nowhere near a bridge, and
+    their exact test was most of _skew_decks' time, 2026-10-25). None: no pre-check (ends past 89 deg). Kept on feats."""
+    got = feats.__dict__.get("_near_bridge_ends", _NO_NEAR)
+    if got is _NO_NEAR:
+        got = feats.__dict__["_near_bridge_ends"] = _level_layer(feats)[0].near()
     return got
 
 
 def _skew_decks(feats, i, rngs):
-    """rngs (feature i's raw_level_ranges) with its bridge ranges lengthened over the roads crossing under them
-    (_bridge_reach), and a bridge range at an end of i where a bridge feature joined there reaches past its own end
-    onto i (Overture makes most short bridges a segment of their own). Pure given feats."""
-    if any(k == "tunnel" for _, _, k in rngs):
-        rngs = _tunnel_reach(feats, i, rngs)
-    if not SKEW_ON:
-        return rngs
-    if any(k == "bridge" for _, _, k in rngs):
-        rngs = _bridge_reach(feats, i)["ranges"]
-    bidx, bends = _bridge_ends(feats)
-    if not len(bidx):
-        return rngs
-    near = _near_bridge_ends(feats)
-    if near is not None and not near[i]:
-        return rngs                             # (no end of it near a bridge's end: nothing joins it)
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if not rings:
-        return rngs
-    ring = rings[0]
-    kx, ky = _ring_kx(ring), 111320.0
-    tol = 0.75
-    add = []
-    L = None
-    for end, p in ((0, ring[0]), (1, ring[-1])):
-        if any((a <= 1e-9 if end == 0 else b >= 1.0 - 1e-9) for a, b, _ in rngs):
-            continue                            # off the ground at that end already
-        d = np.hypot((bends[:, :, 0] - p[0]) * kx, (bends[:, :, 1] - p[1]) * ky)     # (k, 2) to each bridge's ends
-        best = 0.0
-        for r, e2 in zip(*np.nonzero(d < tol)):
-            b = int(bidx[r])
-            if b != i:
-                best = max(best, _bridge_reach(feats, b)["over"][int(e2)])
-        if best > 0:
-            if L is None:
-                L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
-            if L <= 0:
-                break
-            f = min(best, SKEW_MAX_M) / L
-            add.append((0.0, min(f, 1.0), "bridge") if end == 0 else (max(1.0 - f, 0.0), 1.0, "bridge"))
-    if not add:
-        return rngs
-    out = []
-    for a, b, k in sorted(list(rngs) + add):
-        if out and a <= out[-1][1] + 1e-9:     # (overlapping a range already there: joined, as level_ranges does)
-            pa, pb, pk = out[-1]
-            out[-1] = (pa, max(pb, b), "tunnel" if "tunnel" in (pk, k) else "bridge")
-        else:
-            out.append((a, b, k))
-    return out
+    """rngs (feature i's raw_level_ranges) with its tunnel ranges' portals moved past the ground roads over them
+    (TUNNEL_PORTAL_*), its bridge ranges lengthened over the roads crossing under them (SKEW_*), and a bridge range at
+    an end of i where a bridge feature joined there reaches past its own end onto i (Overture makes most short bridges a
+    segment of their own). Pure given feats (earthfast.LevelLayer.rules)."""
+    return _level_steps(feats, [i], [rngs], _STEP_SKEW)[0]
 
 
 # A ground piece of a road shorter than GAP_DECK_M with a deck on both sides (a bridge range of its own, or another
@@ -1025,21 +918,8 @@ def _skew_decks(feats, i, rngs):
 GAP_DECK_ON = os.environ.get("BNE_DECK_GAPS", "on") != "off"
 GAP_DECK_M = 60.0
 GAP_JUNCTION_M = 1.5
-GAP_JOIN_M = 0.75           # (_skew_decks' tolerance for a road's end at another's)
-
-
-def _first_ring_ends(feats):
-    """(n, 4) lon / lat of each feature's first ring's two ends (lon0, lat0, lon1, lat1; NaN: none), kept on feats
-    (earthfast.first_ring_ends)."""
-    got = feats.__dict__.get("_first_ring_ends")
-    if got is None:
-        import fast
-        fast.require(169, "first_ring_ends")
-        ll = np.asarray(feats.lonlat, np.float64)
-        got = feats.__dict__["_first_ring_ends"] = fast._ef.first_ring_ends(
-            ll if ll.ndim == 2 else ll.reshape(-1, 2), np.ascontiguousarray(feats.coord_off, np.int64),
-            np.ascontiguousarray(feats.ring_off, np.int64), np.ascontiguousarray(feats.part_off, np.int64))
-    return got
+GAP_JOIN_M = 0.75           # m: a road's end this near another's is joined to it (_skew_decks: a bridge's reach past
+                            # its end goes on onto it; _deck_gaps: its deck goes on from there)
 
 
 def _spec_mask(feats, specs):
@@ -1060,89 +940,15 @@ PORTAL_DECK_M = 30.0
 
 def _portal_decks(feats, i, rngs):
     """rngs (feature i's level ranges, sorted) with each short ground gap between a tunnel and a bridge (PORTAL_DECK_M,
-    no road meeting it) made bridge. Pure given feats."""
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if not rings or len(rngs) < 2:
-        return rngs
-    ring = rings[0][:, :2]
-    kx, ky = _ring_kx(ring), 111320.0
-    L = float(np.hypot(*(np.diff(ring, axis=0) * [kx, ky]).T).sum())
-    if L <= 0:
-        return rngs
-    out = list(rngs)
-    for n in range(len(out) - 1):
-        (a0, b0, k0), (a1, b1, k1) = out[n], out[n + 1]
-        if {k0, k1} != {"tunnel", "bridge"} or not 0.0 < (a1 - b0) * L <= PORTAL_DECK_M:
-            continue
-        gap = sub_polyline(ring, b0, a1)
-        ends = _first_ring_ends(feats)
-        mask = _spec_mask(feats, _road_specs_kept(feats))
-        boxes = _feature_boxes(feats)
-        pad = (GAP_JUNCTION_M + 1.0) / np.array([kx, ky])
-        lo, hi = gap.min(0) - pad, gap.max(0) + pad
-        cand = np.flatnonzero((boxes[:, 0] <= hi[0]) & (boxes[:, 2] >= lo[0]) & (boxes[:, 1] <= hi[1]) &
-                              (boxes[:, 3] >= lo[1]) & (mask > 0))
-        gm = (gap - ring[0]) * [kx, ky]
-        pe = np.array([e for j in cand if j != i for e in (ends[j, :2], ends[j, 2:])], np.float64).reshape(-1, 2)
-        pe = (pe[np.isfinite(pe).all(1)] - ring[0]) * [kx, ky]
-        if len(pe) and float(_seg_dist(pe, gm[:-1], gm[1:]).min()) <= GAP_JUNCTION_M:
-            continue
-        if k0 == "bridge":
-            out[n] = (a0, a1, "bridge")
-        else:
-            out[n + 1] = (b0, b1, "bridge")
-    return out
+    no road meeting it) made bridge. Pure given feats (earthfast.LevelLayer.rules)."""
+    return _level_steps(feats, [i], [rngs], _STEP_PORTAL)[0]
 
 
 def _deck_gaps(feats, i, rngs):
-    """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*;
-    earthfast.deck_gaps). A road with a tunnel range keeps its own. Pure given feats."""
-    if not GAP_DECK_ON:
-        return rngs
-    kinds = [r[2] for r in rngs] if rngs else ()   # (most roads have no range: 127k calls in two cells' planning)
-    if "tunnel" in kinds:
-        return _portal_decks(feats, i, rngs) if "bridge" in kinds else rngs
-    if "bridge" not in kinds:
-        near = _near_bridge_ends(feats)
-        if near is not None and not near[i]:
-            return rngs                         # (no bridge of its own, none ending at it)
-    if _structure_width(feats, i) is None:
-        return rngs                             # (railways: their own pieces)
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if not rings:
-        return rngs
-    ring = rings[0][:, :2]
-    kx, ky = _ring_kx(ring), 111320.0
-    m = (ring - ring[0]) * [kx, ky]
-    L = float(np.hypot(*np.diff(m, axis=0).T).sum())
-    if L <= 0:
-        return rngs
-    specs = _road_specs_kept(feats)
-    import fast
-    fast.require(169, "deck_gaps_round")
-    # (the other roads' ends at its two ends and near it, earthfast.deck_gaps_round: numpy over the whole layer for
-    # each road near a bridge was ~3/4 of this, 2026-11-08)
-    hits, others = fast._ef.deck_gaps_round(ring, _first_ring_ends(feats), _feature_boxes(feats),
-                                            _spec_mask(feats, specs), i, kx, ky, GAP_JOIN_M, GAP_JUNCTION_M + 1.0)
-    end_deck = []
-    for e in (0, 1):
-        j, k = hits[2 * e], hits[2 * e + 1]
-        ok = j >= 0
-        if ok:
-            rj = raw_level_ranges(feats, j)
-            ok = any(kk == "bridge" and (a <= 1e-6 if k == 0 else b >= 1.0 - 1e-6) for a, b, kk in rj)
-        end_deck.append(ok)
-    bridges = [(a * L, b * L) for a, b, k in rngs if k == "bridge"]
-    got = fast._ef.deck_gaps(np.ascontiguousarray(m), np.asarray(bridges, np.float64).reshape(-1, 2),
-                             np.asarray(end_deck, np.int64), others, GAP_DECK_M, GAP_JUNCTION_M)
-    # (np.allclose's test, rtol 1e-5 / atol 1e-8, on these few numbers)
-    if len(got) == len(bridges) and all(x == y or (math.isfinite(y) and abs(x - y) <= 1e-8 + 1e-5 * abs(y))
-                                        for g, r in zip(got.tolist(), bridges) for x, y in zip(g, r)):
-        return rngs
-    out = [(float(min(max(a / L, 0.0), 1.0)), float(min(max(b / L, 0.0), 1.0)), "bridge") for a, b in got]
-    out[0] = (0.0, out[0][1], "bridge") if got[0, 0] <= 1e-6 else out[0]
-    out[-1] = (out[-1][0], 1.0, "bridge") if got[-1, 1] >= L - 1e-6 else out[-1]
-    return out
+    """rngs (feature i's level ranges) with its short ground gaps between decks made bridge (GAP_DECK_*); a road with a
+    tunnel range keeps its own, but for the gap between a portal and a bridge (_portal_decks). Pure given feats
+    (earthfast.LevelLayer.rules)."""
+    return _level_steps(feats, [i], [rngs], _STEP_GAPS)[0]
 
 
 # Ground stretches the lidar shows on a structure (roadz.py, US 3DEP; the user, 2026-10-29: "Sure add the check"): a
@@ -1156,10 +962,6 @@ LIDAR_GAP_TOUCH_M = 1.0     # m: a ground piece's end this near a deck piece's e
 LIDAR_GAP_REACH_M = 150.0   # m of a ground piece measured from that end at most
 
 
-def _ll_metres(lat):
-    return 111320.0 * math.cos(math.radians(lat)), 111320.0
-
-
 def rule_level_ranges_near(feats):
     """{i: rule_level_ranges} of the features that can have a bridge range by the rule: one of their own (raw) or a
     bridge ending near them (_skew_decks / _deck_gaps add none elsewhere). Kept on feats."""
@@ -1167,61 +969,46 @@ def rule_level_ranges_near(feats):
     if got is not None:
         return got
     near = _near_bridge_ends(feats)
-    memo = feats.__dict__.get("_raw_level_ranges", {})
-    got = {}
-    for i in range(len(feats)):
-        raw = memo.get(i)
-        raw = raw if raw is not None else raw_level_ranges(feats, i)
-        if any(k == "bridge" for _, _, k in raw) or near is None or near[i]:
-            got[i] = rule_level_ranges(feats, i)
+    raw = _raw_all(feats)
+    idx = [i for i in range(len(feats)) if any(r[2] == "bridge" for r in raw[i]) or near is None or near[i]]
+    got = {i: list(r) for i, r in zip(idx, _rule_many(feats, idx))}
     feats.__dict__["_rule_near"] = got
+    return got
+
+
+def _level_rows(feats):
+    """The "level" rule table as LevelLayer.lidar_lines takes it: (feature, start, end, [str(value)]), kept on feats."""
+    got = feats.__dict__.get("_level_rows")
+    if got is None:
+        t = feats.rules.get("level")
+        if t is None or len(t.feature) == 0:
+            got = (np.zeros(0, np.int64), np.zeros(0), np.zeros(0), [])
+        else:
+            got = (np.ascontiguousarray(t.feature, np.int64), np.ascontiguousarray(t.start, np.float64),
+                   np.ascontiguousarray(t.end, np.float64), [str(v) for v in t.value])
+        feats.__dict__["_level_rows"] = got
     return got
 
 
 def lidar_gap_candidates(feats):
     """[(fid, line lon/lat (k, 2) from the deck's end outward, LIDAR_GAP_REACH_M at most, half width m)] of the drawn
     roads' ground pieces (rule_level_ranges) with an end within LIDAR_GAP_TOUCH_M of a bridge piece's end (any road's).
-    Pure given feats; kept on it."""
+    Pure given feats (earthfast.LevelLayer.lidar_lines); kept on it."""
     got = feats.__dict__.get("_lidar_gap_candidates")
     if got is not None:
         return got
     n = len(feats)
-    rule = [None] * n
-    ends = []
-    for i, rr in rule_level_ranges_near(feats).items():
-        rule[i] = rr                            # (the others: no bridge of their own, none ending at them)
-        for r in _parts_by_level_new(feats, i, "bridge", rule[i]):
-            r = np.asarray(r, np.float64)
-            ends += [r[0, :2], r[-1, :2]]
-    out = []
-    if ends:
-        E = np.asarray(ends, np.float64)
-        for i in range(n):
-            if rule[i] is None or any(k == "tunnel" for _, _, k in rule[i]):
-                continue
-            w = _structure_width(feats, i)
-            if w is None:
-                continue
-            fid = str(feats.ids[i])
-            for r in _parts_by_level_new(feats, i, "ground", rule[i]):
-                r = np.asarray(r, np.float64)[:, :2]
-                if len(r) < 2:
-                    continue
-                kx, ky = _ll_metres(float(r[0, 1]))
-                for at in (0, -1):
-                    d = np.hypot((E[:, 0] - r[at, 0]) * kx, (E[:, 1] - r[at, 1]) * ky)
-                    if not (d < LIDAR_GAP_TOUCH_M).any():
-                        continue
-                    line = r if at == 0 else r[::-1]
-                    m = (line - line[0]) * [kx, ky]
-                    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(m, axis=0).T))]
-                    if s[-1] > LIDAR_GAP_REACH_M:
-                        keep = s < LIDAR_GAP_REACH_M
-                        cut = [np.interp(LIDAR_GAP_REACH_M, s, line[:, k]) for k in (0, 1)]
-                        line = np.vstack([line[keep], cut])
-                    out.append((fid, np.ascontiguousarray(line), max(2.5, w / 2)))
-    feats.__dict__["_lidar_gap_candidates"] = out
-    return out
+    rules = rule_level_ranges_near(feats)       # (the others: no bridge of their own, none ending at them)
+    have = np.zeros(n, np.uint8)
+    have[list(rules)] = 1
+    off, rng, kinds = _ranges_flat([rules.get(i, ()) for i in range(n)])
+    sk, sw = _structure_widths(feats, list(rules))
+    cf, co, pts, half = _level_layer(feats)[0].lidar_lines(off, rng, kinds, have, sk, sw, *_level_rows(feats),
+                                                           np.array([MIN_PART, LIDAR_GAP_TOUCH_M, LIDAR_GAP_REACH_M]))
+    co = co.tolist()
+    got = [(str(feats.ids[f]), pts[co[c]:co[c + 1]], float(half[c])) for c, f in enumerate(cf.tolist())]
+    feats.__dict__["_lidar_gap_candidates"] = got
+    return got
 
 
 def _lidar_cell(cid):
@@ -1273,87 +1060,34 @@ def _lidar_answers(feats):
     return got
 
 
-def _ring_fraction(ring, p):
-    """The fraction of lon/lat polyline ring's length (sub_polyline's metric) at its point nearest p (lon, lat)."""
-    ring = np.asarray(ring, np.float64)[:, :2]
-    c = math.cos(math.radians(float(np.mean(ring[:, 1]))))
-    q = ring * [c, 1.0]
-    pp = np.asarray(p, np.float64)[:2] * [c, 1.0]
-    a, b = q[:-1], q[1:]
-    ab = b - a
-    l2 = np.maximum((ab ** 2).sum(1), 1e-30)
-    t = np.clip(((pp - a) * ab).sum(1) / l2, 0.0, 1.0)
-    d = np.hypot(*(a + t[:, None] * ab - pp).T)
-    k = int(np.argmin(d))
-    seg = np.sqrt(l2)
-    s = np.r_[0.0, np.cumsum(seg)]
-    return float((s[k] + t[k] * seg[k]) / max(s[-1], 1e-30))
-
-
-def _lidar_gaps(feats, i, rngs):
-    """rngs (rule_level_ranges) with the stretches the lidar found elevated (_lidar_answers) made bridge, never over a
-    tunnel's range. Pure given feats and roadz's answer."""
-    if not LIDAR_GAPS_ON or any(k == "tunnel" for _, _, k in rngs):
-        return rngs
-    got = _lidar_answers(feats).get(str(feats.ids[i]))
-    if not got:
-        return rngs
-    rings = [np.asarray(r, np.float64) for part in feats.parts(i) for r in part if len(r) >= 2]
-    if not rings:
-        return rngs
-    add = []
-    for a, b in got:
-        fa, fb = sorted((_ring_fraction(rings[0], a), _ring_fraction(rings[0], b)))
-        if fb - fa > MIN_PART:
-            add.append((0.0 if fa < 1e-4 else fa, 1.0 if fb > 1.0 - 1e-4 else fb, "bridge"))
-    out = []
-    for a, b, k in sorted(list(rngs) + add):
-        if out and a <= out[-1][1] + 1e-9:
-            out[-1] = (out[-1][0], max(out[-1][1], b), "bridge")
-        else:
-            out.append((a, b, k))
-    return out
-
-
 def _level_ranges(feats, i):
     """tag_level_ranges with the grade separations the map has no bridge for (gradesep.py: the cell's own, from its
     roads and its neighbours'), where no range of the map's is, and its underpasses' tunnel ranges made ground."""
-    out = tag_level_ranges(feats, i)
+    return _level_ranges_many(feats, [i])[0]
+
+
+def _level_ranges_many(feats, idx):
+    """[_level_ranges] of features idx: the grade separations' spans gathered here (the cell's hook, _gradesep_many),
+    merged into the map's ranges at once (earthfast.level_extras)."""
+    tags = _tag_ranges_list(feats)
     hook = feats.__dict__.get("_bnge_gradesep")
-    extra = list(hook(feats).get(i) or ()) if hook is not None else []
-    extra += _gradesep_elsewhere(feats, i)
-    if not extra:
-        return out
-    for a, b, _k in (r for r in extra if r[2] == "ground"):       # (an underpass: its tunnel range is ground)
-        cut = []
-        for fa, fb, k in out:
-            if k != "tunnel" or fb <= a or fa >= b:
-                cut.append((fa, fb, k))
-                continue
-            if fa < a - 1e-5:
-                cut.append((fa, a, k))
-            if fb > b + 1e-5:
-                cut.append((b, fb, k))
-        out = cut
-    add = []
-    for a, b, _k in (r for r in extra if r[2] == "bridge"):
-        for fa, fb, _ in out:
-            if fb <= a or fa >= b:
-                continue
-            if fa > a:
-                add.append((a, fa, "bridge"))
-            a = max(a, fb)
-            if a >= b:
-                break
-        if b - a > 1e-5:
-            add.append((a, b, "bridge"))
-    merged = []                                 # (touching bridge ranges joined: the map's fractions are float32s)
-    for a, b, k in sorted(out + add):
-        if merged and k == merged[-1][2] and a <= merged[-1][1] + 1e-5:
-            merged[-1] = (merged[-1][0], max(merged[-1][1], b), k)
-        else:
-            merged.append((a, b, k))
-    return merged
+    own = hook(feats) if hook is not None and idx else None
+    far = _gradesep_many(feats, idx)
+    out, rows = [], []
+    for k, i in enumerate(idx):
+        extra = list(own.get(i) or ()) if own is not None else []
+        extra += far.get(i, ())
+        out.append(list(tags[i]))
+        if extra:
+            rows.append((k, i, extra))
+    if rows:
+        import fast
+        fast.require(185, "level_extras")
+        got = _ranges_lists(*fast._ef.level_extras(*_ranges_flat([tags[i] for _, i, _ in rows]),
+                                                   *_ranges_flat([e for _, _, e in rows])))
+        for (k, _, _), r in zip(rows, got):
+            out[k] = r
+    return out
 
 
 def _cell_bounds(feats):
@@ -1398,43 +1132,57 @@ def _gradesep_elsewhere(feats, i):
     trench 2 m deep (2026-11-09). [] where this cell is not its home or it stays in this cell. (The cells it crosses are
     the neighbours whose bounds its box overlaps, and every feature's home cell is made at once: mapcells.cells_for_bbox
     and _home_cell per feature were 2.4 of its 3.2 own CPU-s in a cold Queens tile, 2026-11-09.)"""
+    return _gradesep_many(feats, [i]).get(i, [])
+
+
+def _gradesep_many(feats, idx):
+    """{i: _gradesep_elsewhere(feats, i)} of features idx with any: the box tests of all at once (numpy; one feature
+    at a time they were 0.5 of 2.2 CPU-s of 9 Baltimore cells' level ranges, 2026-11-10), the neighbours asked once."""
     me = feats.__dict__.get("_bnge_cell")
     near_hook = feats.__dict__.get("_bnge_neighbours")
-    if me is None or near_hook is None:
-        return []
-    home = _home_cells(feats)[i]
-    lon0, lat0, lon1, lat1 = (float(v) for v in _feature_boxes(feats)[i])
-    if not np.isfinite([lon0, lat0, lon1, lat1]).all():
-        return []
+    if me is None or near_hook is None or not len(idx):
+        return {}
+    homes = _home_cells(feats)
+    boxes = _feature_boxes(feats)
+    ix = np.asarray(idx, np.int64)
+    b = boxes[ix]
+    keep = np.isfinite(b).all(axis=1)
     cb = _cell_bounds(feats)
-    if cb is not None and cb[0] <= lon0 and lon1 <= cb[2] and cb[1] <= lat0 and lat1 <= cb[3]:
-        return []                       # (it stays in this cell)
-    if home != me[0] and not _home_far(feats, near_hook, home):
-        return []                       # (its home copy is at hand: level_ranges takes that one's)
+    if cb is not None:                  # (it stays in this cell)
+        keep &= ~((cb[0] <= b[:, 0]) & (b[:, 2] <= cb[2]) & (cb[1] <= b[:, 1]) & (b[:, 3] <= cb[3]))
+    # (its home copy at hand: level_ranges takes that one's)
+    cand = [i for i in ix[keep].tolist() if homes[i] == me[0] or _home_far(feats, near_hook, homes[i])]
+    if not cand:
+        return {}
     import revisit
     try:
         near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
     except Exception as e:              # (not kept: made again with them)
         log.debug("gradesep elsewhere: neighbours: %s: %s", type(e).__name__, e)
         revisit.fault()
-        return []
-    fid = feats.ids[i]
-    out = []
-    for other in near:
-        if other.__dict__["_bnge_cell"][0] == me[0]:
-            continue
-        ob = _cell_bounds(other)
-        if ob is not None and (lon1 < ob[0] or lon0 > ob[2] or lat1 < ob[1] or lat0 > ob[3]):
-            continue                    # (it does not reach that cell)
-        hook = other.__dict__.get("_bnge_gradesep")
-        if hook is None:
-            continue
-        pos = other.__dict__.get("_id_pos")
-        if pos is None:
-            pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
-        j = pos.get(fid)
-        if j is not None:
-            out.extend(hook(other).get(j) or ())
+        return {}
+    out = {}
+    for i in cand:
+        lon0, lat0, lon1, lat1 = (float(v) for v in boxes[i])
+        fid = feats.ids[i]
+        got = []
+        for other in near:
+            if other.__dict__["_bnge_cell"][0] == me[0]:
+                continue
+            ob = _cell_bounds(other)
+            if ob is not None and (lon1 < ob[0] or lon0 > ob[2] or lat1 < ob[1] or lat0 > ob[3]):
+                continue                # (it does not reach that cell)
+            hook = other.__dict__.get("_bnge_gradesep")
+            if hook is None:
+                continue
+            pos = other.__dict__.get("_id_pos")
+            if pos is None:
+                pos = other.__dict__["_id_pos"] = {f: j for j, f in enumerate(other.ids.tolist())}
+            j = pos.get(fid)
+            if j is not None:
+                got.extend(hook(other).get(j) or ())
+        if got:
+            out[i] = got
     return out
 
 

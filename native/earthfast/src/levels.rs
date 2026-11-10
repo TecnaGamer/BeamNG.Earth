@@ -19,18 +19,30 @@ pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f6
     if ranges.ncols() != 2 || starts.len() != ends.len() || starts.len() != values.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("bridge level rule shapes differ"));
     }
-    let rules: Vec<(f64, f64, f64)> = values.iter().enumerate().filter_map(|(i, v)| {
-        let level = v.parse::<f64>().ok()?;
-        let (a, b) = (starts[i], ends[i]);
-        (a.is_finite() && b.is_finite() && b > a && level.is_finite())
-            .then_some((a, b, level.max(1.0)))
-    }).collect();
+    let rules: Vec<(f64, f64, f64)> = values.iter().enumerate()
+        .filter_map(|(i, v)| level_rule(starts[i], ends[i], v)).collect();
+    let ranges: Vec<(f64, f64)> = ranges.rows().into_iter().map(|r| (r[0], r[1])).collect();
+    let result = level_spans(&ranges, &rules, min_part);
+    let xy: Vec<f64> = result.iter().flat_map(|r| [r.0, r.1]).collect();
+    let levels: Vec<f64> = result.iter().map(|r| r.2).collect();
+    Ok((numpy::ndarray::Array2::from_shape_vec((result.len(), 2), xy).unwrap().into_pyarray(py),
+        levels.into_pyarray(py)))
+}
+
+/// A level rule row (start, end, its value as Python's str of it) as bridge_level_spans takes it: None where the value
+/// is no number or the range is empty.
+pub(crate) fn level_rule(a: f64, b: f64, v: &str) -> Option<(f64, f64, f64)> {
+    let level = v.parse::<f64>().ok()?;
+    (a.is_finite() && b.is_finite() && b > a && level.is_finite()).then_some((a, b, level.max(1.0)))
+}
+
+/// bridge_level_spans on slices (levelrules.rs: lidar_gap_candidates' bridge pieces).
+pub(crate) fn level_spans(ranges: &[(f64, f64)], rules: &[(f64, f64, f64)], min_part: f64) -> Vec<(f64, f64, f64)> {
     let mut result = Vec::new();
-    for range in ranges.rows() {
-        let (a, b) = (range[0], range[1]);
+    for &(a, b) in ranges {
         if !a.is_finite() || !b.is_finite() || b - a <= min_part { continue; }
         let mut cuts = vec![a, b];
-        for &(s, e, _) in &rules {
+        for &(s, e, _) in rules {
             if s > a && s < b { cuts.push(s); }
             if e > a && e < b { cuts.push(e); }
         }
@@ -64,18 +76,15 @@ pub fn bridge_level_spans<'py>(py: Python<'py>, ranges: PyReadonlyArray2<'py, f6
             result.push(span);
         }
     }
-    let xy: Vec<f64> = result.iter().flat_map(|r| [r.0, r.1]).collect();
-    let levels: Vec<f64> = result.iter().map(|r| r.2).collect();
-    Ok((numpy::ndarray::Array2::from_shape_vec((result.len(), 2), xy).unwrap().into_pyarray(py),
-        levels.into_pyarray(py)))
+    result
 }
 
 const BRIDGE: i8 = 1;
 const TUNNEL: i8 = 2;
 
-type R = (f64, f64, i8);
+pub(crate) type R = (f64, f64, i8);
 
-fn cmp_r(x: &R, y: &R) -> std::cmp::Ordering {
+pub(crate) fn cmp_r(x: &R, y: &R) -> std::cmp::Ordering {
     x.0.partial_cmp(&y.0)
         .unwrap_or(std::cmp::Ordering::Equal)
         .then(x.1.partial_cmp(&y.1).unwrap_or(std::cmp::Ordering::Equal))
