@@ -232,5 +232,42 @@ class MarkTest(IndexCase):
         self.assertEqual(len(self.index(md).query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
 
 
+import threading  # noqa: E402
+
+import test_server  # noqa: E402
+
+
+class FakeIndex:
+    def __init__(self):
+        self.calls = []
+
+    def query(self, lat, lon, r_km, kinds, mode):
+        self.calls.append((lat, lon, r_km, tuple(kinds), mode, threading.current_thread().name))
+        return [{"lat": lat, "lon": lon, "name": "Sheetz", "brand": "Sheetz", "kind": "fuel", "km": 0.4}], mode == "near"
+
+
+class StationsMessageTest(test_server.ServerHarness):
+    """stations through a session: stations_result with its id, the index's items and partial, the query off the
+    event loop; without an index an empty answer that says so."""
+
+    def test_stations_message(self):
+        self.hello()
+        self.server.stations = None
+        self.c.send({"type": "stations", "id": 1, "lat": 40.44, "lon": -80.0, "r_km": 5.0, "kinds": ["fuel"],
+                     "mode": "map"})
+        m, _ = self.c.until(lambda m: m["type"] == "stations_result", timeout=10)
+        self.assertEqual((m["id"], m["items"], m["partial"], m.get("error")), (1, [], False, "no stations"))
+        fake = self.server.stations = FakeIndex()
+        self.server.gas_stations = True
+        self.c.send({"type": "stations", "id": 2, "lat": 40.44, "lon": -80.0, "r_km": 25.0, "kinds": ["fuel", "ev"],
+                     "mode": "near"})
+        m, _ = self.c.until(lambda m: m["type"] == "stations_result" and m["id"] == 2, timeout=10)
+        self.assertEqual(m["items"][0]["name"], "Sheetz")
+        self.assertTrue(m["partial"])
+        lat, lon, r_km, kinds, mode, thread = fake.calls[0]
+        self.assertEqual((lat, lon, r_km, kinds, mode), (40.44, -80.0, 25.0, ("fuel", "ev"), "near"))
+        self.assertNotEqual(thread, threading.main_thread().name, "the query ran off the event loop")
+
+
 if __name__ == "__main__":
     unittest.main()

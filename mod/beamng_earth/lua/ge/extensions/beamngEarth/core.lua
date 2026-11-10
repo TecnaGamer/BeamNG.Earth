@@ -3151,6 +3151,13 @@ function M.requestGeocode(id, q, lat, lon, full)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
+-- The station finder (finder.lua, the world map's layers): the nearest gas stations / EV chargers (kinds: 'fuel', 'ev')
+-- within rKm of lat, lon; mode 'map' (cached cells only) or 'near' (rings outward); the answer is stations_result.
+function M.requestStations(id, lat, lon, rKm, kinds, mode)
+  if not net.isConnected() then return false end
+  net.send({ type = 'stations', id = id, lat = lat, lon = lon, r_km = rKm, kinds = kinds, mode = mode })
+  return true
+end
 function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,

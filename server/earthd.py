@@ -151,6 +151,7 @@ import imagery as imagerymod  # noqa: E402
 import matslots as matslotsmod  # noqa: E402
 import maptiles as maptilesmod  # noqa: E402
 import geocode as geocodemod  # noqa: E402
+import stationindex as stationindexmod  # noqa: E402
 import routing as routingmod  # noqa: E402
 import updates as updatesmod  # noqa: E402
 import cpupin  # noqa: E402
@@ -1190,6 +1191,10 @@ class Server:
         # (the settings page's switch turns them off and on again: set_gas_stations; never on without the flag)
         self.gas_allowed = bool(gas_stations) and mapdata is not None
         self.gas_stations = self.gas_allowed
+        # the station finder's index (stationindex.py: the map's gas station / EV charger layers, Nearest, the low fuel
+        # prompt; the user, 2026-11-09), beside the map data's cache; None without map data
+        raw = getattr(mapdata, "raw_dir", None)
+        self.stations = stationindexmod.StationIndex(os.path.join(raw, "stationindex"), mapdata) if raw else None
         # OpenStreetMap's fuel stations (osmfuel.py, the OSM test: the user, 2026-10-28, "lets test OSM if it is too laggy
         # we will revert"): fetched in the background per cell around the road tiles the car wants, never waited for; a
         # cell with stations that came after its tiles were sent sends them again (osm_fuel_want)
@@ -6176,6 +6181,26 @@ class Connection:
         log.debug("geocode %r: %d results%s", q, len(out["results"]), (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
 
+    async def stations(self, msg):
+        """The station finder {"id", "lat", "lon", "r_km", "kinds", "mode"} -> stations_result {"id", "items": [{"lat",
+        "lon", "name", "brand", "kind", "km"}], "partial", "error"?} (stationindex.StationIndex.query, in the search
+        pool: it reads, builds and may download cells)."""
+        out = {"type": "stations_result", "id": msg.get("id"), "items": [], "partial": False}
+        idx = getattr(self.s, "stations", None)
+        if idx is None or not self.s.gas_stations:
+            out["error"] = "no stations"
+        else:
+            try:
+                kinds = [k for k in (msg.get("kinds") or ()) if k in ("fuel", "ev")]
+                out["items"], out["partial"] = await asyncio.get_running_loop().run_in_executor(
+                    self.s.search_pool, idx.query, float(msg["lat"]), float(msg["lon"]),
+                    float(msg.get("r_km") or stationindexmod.R_KM_MAX), kinds,
+                    "near" if msg.get("mode") == "near" else "map")
+            except Exception as e:      # a bad ask, an unreadable cell: an empty answer that says why
+                out["error"] = f"{type(e).__name__}: {e}"[:200]
+                log.debug("stations: %s", out["error"])
+        self.send(out)
+
     async def cache_map(self, msg):
         """The map's cache view {"id", "z", "x0", "y0", "x1", "y1", "mode"?} -> cache_map_result {"id", "z", "x0",
         "y0", "w", "h", "cells" (base64, a level per cell), "gen", "ready", "error"?} (covermap.CoverMap.query)."""
@@ -6685,6 +6710,8 @@ class Connection:
             self.spawn(self.area_add(msg))
         elif kind == "area_cmd":                # a saved area paused, resumed or deleted
             self.spawn(self.area_cmd(msg))
+        elif kind == "stations":                # the station finder: the map's layers, Nearest (stationindex.py)
+            self.spawn(self.stations(msg))
         elif kind == "route":                   # the GPS: the whole road route (routing.py)
             self.spawn(self.route(msg))
         elif kind == "where":                   # the status bar's street, town and country (geocode.py)
