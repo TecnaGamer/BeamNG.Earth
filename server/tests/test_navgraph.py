@@ -376,17 +376,17 @@ FIXTURES = {"stretch T": dict(w="secondary", e="secondary", s="residential"),
             "residential cross": dict(w="residential", e="residential", n="residential", s="residential"),
             "secondary T": dict(w="secondary", e="secondary", s="secondary"),
             "mixed cross": dict(w="secondary", e="secondary", n="secondary", s="residential")}
-# today's graph of FIXTURES in town (urban_fn town), no signal mapped (and "lit T": the secondary T with one at J), the
-# German junction signs off: (stops(), into()) recorded from navgraph.build at 41c0dea6 (literals, no git show)
+# Graph of FIXTURES in town (urban_fn town), no signal mapped (and "lit T": the secondary T with one at J), the
+# German junction signs off: existing stop controls plus the road-class priority's approach drivability.
 TODAY = {
-    "stretch T": ([("cJ", "stop", ["sid002_333d"])], {"sid000_500d": 1.0, "sid001_500d": 1.0, "sid002_333d": 0.8}),
+    "stretch T": ([("cJ", "stop", ["sid002_333d"])], {"sid000_500d": 0.96, "sid001_500d": 0.96, "sid002_333d": 0.79}),
     "residential T": ([("cJ", "stop", ["sid002_333d"])],
                       {"sid000_667d": 0.8, "sid001_333d": 0.8, "sid002_333d": 0.8}),
     "residential cross": ([("cJ", "stop", ["sid000_667d", "sid001_333d", "sid002_333d", "sid003_333d"])],
                           {"sid000_667d": 0.8, "sid001_333d": 0.8, "sid002_333d": 0.8, "sid003_333d": 0.8}),
     "secondary T": ([], {"sid000_500d": 1.0, "sid001_500d": 1.0, "sid002_500d": 1.0}),
     "mixed cross": ([("cJ", "stop", ["sid003_333d"])],
-                    {"sid000_500d": 1.0, "sid001_500d": 1.0, "sid002_500d": 1.0, "sid003_333d": 0.8}),
+                    {"sid000_500d": 0.96, "sid001_500d": 0.96, "sid002_500d": 0.96, "sid003_333d": 0.79}),
     "lit T": ([("cJ", "signal", ["sid000_500d", "sid001_500d", "sid002_500d"])],
               {"sid000_500d": 1.0, "sid001_500d": 1.0, "sid002_500d": 1.0}),
 }

@@ -411,8 +411,9 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
         # the stem: the arm least in line with another
         def straightest(a):
             return max(-float(a[2] @ b[2]) for b in arms if b is not a)
-        stem = min(arms, key=straightest)
-        return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and not _outbound(stem) else []
+        incoming = [a for a in arms if not _outbound(a)]
+        stem = min(incoming, key=straightest) if incoming else None
+        return [(stem, G_STOP)] if all(a[1].cls in MINOR for a in arms) and stem is not None else []
     # the all-way coin flip: keyed on the roads that meet there (their map ids, sorted: the arms' order differs between
     # the road tiles and the road graph), the same from both and from every anchor (an 8 m cell of the junction in
     # the anchor's frame flipped junctions at a rebase: geotiles, 2026-10-29)
