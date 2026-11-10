@@ -27,7 +27,7 @@ REF_NEAR_M = 14.0           # track points this near the platform are its refere
 REF_REACH_M = 25.0          # a platform with no edge at a track follows the nearest track within this
 REF_K = 6                   # nearest reference points weighed for a point inside
 STRIP_IN_M = 0.25           # the yellow edge band stands this far in from the edge ...
-STRIP_W_M = 0.50
+STRIP_W_M = 0.60
 LINE_IN_M = 0.85            # ... the thin white line beside it this far
 LINE_W_M = 0.10
 LIFT_M = 0.006              # strips over the slab's top (no z-fighting)
@@ -35,9 +35,10 @@ RUN_BREAK_M = 6.0           # a gap in the snapped points longer than this ends 
 TILE_MARGIN_M = 6.0
 
 CONCRETE = bm.PLATFORM_TOP
+TOP = (rs.PAVERS, 2.0)      # the platform's top: concrete pavers, one texture over 2 m
 KERB = bm.KERB
 LINE = bm.TACTILE
-BAND = ("line_yellow", 1.0)     # the yellow band for the blind along the kerb (the real platforms': a yellow line)
+BAND = (rs.TACTILE, 1.2)    # the yellow tactile band along the kerb, one texture (4 x 4 tiles) over 1.2 m
 
 
 TURN_BREAK_DEG = 35.0       # a run of the track edge ends at a corner this sharp (a platform's end)
@@ -191,7 +192,7 @@ def _slab(mesh, frame, elev, ref, ring, height):
         return None
     fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
     zt = top_z(ref, dense, fb) + height
-    mesh.add(CONCRETE[0], np.column_stack((dense, zt)), dense / CONCRETE[1], T)
+    mesh.add(TOP[0], np.column_stack((dense, zt)), dense / TOP[1], T)
     zd = bm.ground(frame, elev, dense)
     bm.walls(mesh, KERB[0], KERB[1], dense, np.minimum(zd, zt - 0.3) - bm.SLAB_FOOT_M, zt)
     return dense, zt
@@ -223,7 +224,7 @@ def _strips(mesh, ref, pl, height, frame, elev):
             for i in range(m - 1):
                 T += [[i, i + 1, m + i + 1], [i, m + i + 1, m + i]]
             s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
-            UV = np.vstack((np.c_[s / mat[1], np.zeros(m)], np.c_[s / mat[1], np.ones(m)]))
+            UV = np.vstack((np.c_[s / mat[1], np.zeros(m)], np.c_[s / mat[1], np.full(m, w / mat[1])]))
             mesh.add(mat[0], P, UV, T)
 
 
@@ -274,7 +275,7 @@ def _roofs(mesh, frame, elev, st, box, columns_only=False):
         ztop = float(np.median(zs)) + ROOF_H_M + ROOF_THICK_M              # (one height for the whole roof: every tile alike)
         zbot = ztop - ROOF_THICK_M
         step = ROOF_STEP_M
-        mat, rep = STEEL
+        mat, rep = rs.canopy_material(st.roof_looks.get(rid, rs.CANOPY_DEFAULT)), STEEL[1]
         if not columns_only:                # (the lean collider has the columns only)
             bm._face(mesh, mat, rep, ring, lambda P, z=ztop: np.full(len(P), z), step=step)
             bm._face(mesh, mat, rep, ring, lambda P, z=zbot: np.full(len(P), z), up=False, step=step)

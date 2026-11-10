@@ -92,7 +92,7 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
                       "sub": (_attr(feats, "subtype", i) or "").lower(), "name": _attr(feats, "name", i) or "",
                       "tags": tags_of(feats, i), "kind": kind, "xy": xy}
                 for k in ("height", "min_height", "num_floors", "roof_shape", "surface", "basic_category",
-                          "taxonomy", "subclass"):
+                          "taxonomy", "subclass", "roof_color", "roof_material"):
                     v = _attr(feats, k, i)
                     if v is not None:
                         it[k] = v

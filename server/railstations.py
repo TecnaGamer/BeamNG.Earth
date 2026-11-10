@@ -55,6 +55,41 @@ CANOPY_MIN_W_M = 2.5
 CANOPY_STEP_M = 2.0
 MAIN_STATION_PLATFORMS = 3  # a station of this many platforms or more roofs the ones without a mapped roof
 
+# Materials (tools/make_station_textures.py, railstation.materials.json)
+PAVERS = "bne_platform_pavers"          # the platform's top
+TACTILE = "bne_platform_tactile"        # the yellow band along the track edge
+# the canopies' steel, tinted: the map's roof colour picks the nearest (the map rarely has one: then "grey")
+CANOPY_PALETTE = {"grey": (0.71, 0.72, 0.72), "white": (0.90, 0.90, 0.88), "dark": (0.30, 0.31, 0.33),
+                  "blue": (0.18, 0.36, 0.66), "green": (0.20, 0.45, 0.30), "red": (0.62, 0.16, 0.14),
+                  "brown": (0.42, 0.28, 0.20), "yellow": (0.85, 0.68, 0.15)}
+CANOPY_DEFAULT = "grey"
+ROOF_MATERIAL_LOOK = {"glass": "white", "metal": "grey", "steel": "grey", "tin": "grey", "zinc": "grey",
+                      "concrete": "white", "copper": "green", "plastic": "white", "polycarbonate": "white"}
+
+
+def canopy_material(look):
+    return "bne_canopy_" + look
+
+
+def canopy_look(colour=None, material=None):
+    """The palette name nearest to a mapped colour (hex or CSS name, as buildings.parse_color reads it), else the look of
+    a mapped roof material, else CANOPY_DEFAULT."""
+    rgb = None
+    if colour:
+        import buildings
+        rgb = buildings.parse_color(str(colour))
+    if rgb is not None:
+        return min(CANOPY_PALETTE, key=lambda k: sum((a - b) ** 2 for a, b in zip(CANOPY_PALETTE[k], rgb)))
+    m = str(material or "").strip().lower()
+    return ROOF_MATERIAL_LOOK.get(m, CANOPY_DEFAULT)
+
+
+def _item_look(it):
+    t = it.get("tags") or {}
+    colour = it.get("roof_color") or t.get("roof:colour") or t.get("colour") or t.get("building:colour")
+    material = it.get("roof_material") or t.get("roof:material") or t.get("material")
+    return canopy_look(colour, material), bool(colour or material)
+
 # Standard distances (m) of a platform's edge from the track's axis and its height over the rail head, by country
 # (typical values of the national rules: UA PTE, CZ SŽ, DE EBO / TSI PRM). "high" is a main station, "low" a halt.
 EDGE_M = {"UA": 1.92, "CZ": 1.67, "SK": 1.67, "DE": 1.675, "AT": 1.725, "PL": 1.67, "default": 1.7}
@@ -141,6 +176,7 @@ class RailStation:
         self.synth = False
         self.country = None
         self.claimed = set()            # ids of buildings-layer roofs the station draws itself (tile_skip)
+        self.roof_looks = {}            # roof id -> CANOPY_PALETTE name
 
 
 # --- geometry --------------------------------------------------------------------------------------------------
@@ -614,6 +650,8 @@ def synth_canopies(st):
         rid = "synth:" + str(pl.id)
         st.roofs.append((rid, ring))
         pl.roofs.append(rid)
+        known = st.__dict__.get("_known_looks") or []
+        st.roof_looks[rid] = known[0] if known else CANOPY_DEFAULT     # (the station's mapped roofs' colour, if any)
 
 
 def _runs_of(pl):
@@ -704,6 +742,10 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
                 if not any(r[0] == it["id"] for r in st.roofs):
                     st.roofs.append((it["id"], ring))
                     st.claimed.add(it["id"])
+                    look, known = _item_look(it)
+                    st.roof_looks[it["id"]] = look
+                    if known:
+                        st.__dict__.setdefault("_known_looks", []).append(look)
 
     st.links = _links(near, st.tracks, plats, st.hub)
     synth_canopies(st)

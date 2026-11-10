@@ -133,12 +133,12 @@ if __name__ == "__main__":
 class RoofsAndFurnitureTest(unittest.TestCase):
     def test_roofs_are_open_on_columns_standing_on_the_platform(self):
         import busstations as bs
-        st = stations_of("hk_hln")[0]
+        st = no_links(stations_of("hk_hln")[0])
         st.country = "CZ"
         self.assertTrue(st.roofs)
         self.assertEqual(st.claimed, {r[0] for r in st.roofs})
         m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
-        V = tops(m, rm.STEEL[0])
+        V = np.vstack([tops(m, rs.canopy_material(k)) for k in rs.CANOPY_PALETTE if rs.canopy_material(k) in m[3]])
         h = max(rm.platform_height(p, "CZ", len(st.platforms)) for p in st.platforms)
         floor = 100.0 + rm.RAIL_TOP_M + h
         self.assertGreater(V[:, 2].max(), floor + rm.ROOF_H_M - 0.5)       # (the roof's top over the platform)
@@ -500,6 +500,37 @@ class CanopyTest(unittest.TestCase):
         st = no_links(stations_of("vinnytsia")[0])
         st.country = "UA"
         m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
-        V = tops(m, rm.STEEL[0])
+        V = tops(m, rs.canopy_material(rs.CANOPY_DEFAULT))       # (no colour in the map for Vinnytsia: grey)
         h = max(rm.platform_height(p, "UA", len(st.platforms)) for p in st.platforms)
         self.assertGreater(V[:, 2].max(), 100.0 + rm.RAIL_TOP_M + h + rm.ROOF_H_M - 0.1)
+
+
+class LookTest(unittest.TestCase):
+    def test_canopy_colour_from_the_map(self):
+        self.assertEqual(rs.canopy_look("#2F5DA8"), "blue")
+        self.assertEqual(rs.canopy_look("red"), "red")
+        self.assertEqual(rs.canopy_look(None, "glass"), "white")
+        self.assertEqual(rs.canopy_look(None, None), rs.CANOPY_DEFAULT)
+        self.assertEqual(rs.canopy_look("not a colour", "metal"), "grey")
+
+    def test_top_is_pavers_and_band_is_tactile(self):
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
+        self.assertIn(rs.PAVERS, m[3])
+        self.assertIn(rs.TACTILE, m[3])
+        V = tops(m, rs.PAVERS)
+        h = max(rm.platform_height(p, "UA", len(st.platforms)) for p in st.platforms)
+        self.assertAlmostEqual(V[:, 2].max(), 100.0 + rm.RAIL_TOP_M + h, delta=0.02)
+
+    def test_every_material_is_in_the_mods_file(self):
+        import json
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "railstation.materials.json")
+        with open(path, encoding="utf8") as f:
+            mats = json.load(f)
+        for name in [rs.PAVERS, rs.TACTILE] + [rs.canopy_material(k) for k in rs.CANOPY_PALETTE]:
+            self.assertIn(name, mats)
+            for key in ("baseColorMap", "normalMap", "roughnessMap"):
+                p = mats[name]["Stages"][0][key]
+                self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), os.path.basename(p))), p)
