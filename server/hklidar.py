@@ -113,16 +113,16 @@ class Sheet:
         return out
 
     def bilinear(self, x, y):
-        """Heights between the pixel centres at (x, y) (in the sheet; its edge pixels held to its edge), NaN where one
-        of the four has none."""
+        """Heights between the pixel centres at (x, y) (in the sheet; the half pixel round its edge extended from the
+        last two), NaN where one of the four has none."""
         x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
         out = np.full(x.shape, np.nan)
         u = (x - self.x0) / self.dx - 0.5
         v = (self.y0 - y) / self.dy - 0.5
         ok = (u >= -0.5) & (u < self.w - 0.5) & (v >= -0.5) & (v < self.h - 0.5)
-        u, v = np.clip(u[ok], 0, self.w - 1), np.clip(v[ok], 0, self.h - 1)
-        c0 = np.minimum(np.floor(u).astype(np.int64), max(self.w - 2, 0))
-        r0 = np.minimum(np.floor(v).astype(np.int64), max(self.h - 2, 0))
+        u, v = u[ok], v[ok]
+        c0 = np.clip(np.floor(u).astype(np.int64), 0, max(self.w - 2, 0))
+        r0 = np.clip(np.floor(v).astype(np.int64), 0, max(self.h - 2, 0))
         fu, fv = u - c0, v - r0
         c1, r1 = np.minimum(c0 + 1, self.w - 1), np.minimum(r0 + 1, self.h - 1)
         out[ok] = ((self._at(c0, r0) * (1 - fu) + self._at(c1, r0) * fu) * (1 - fv)

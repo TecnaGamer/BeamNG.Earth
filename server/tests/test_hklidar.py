@@ -42,8 +42,8 @@ class SheetTest(unittest.TestCase):
         px = X0 + np.array([1.0, 5.1, 19.9, 0.1, 10.2, 21.0])
         py = Y0 - np.array([1.0, 2.6, 11.9, 0.1, 5.2, 1.0])
         got = s.bilinear(px, py)
-        row = np.clip((Y0 - py[:4]) / 0.5 - 0.5, 0, 23)
-        np.testing.assert_allclose(got[:4], 3.0 * np.clip(px[:4] - X0, 0.25, 19.75) + 0.1 * row, atol=1e-4)
+        row = (Y0 - py[:4]) / 0.5 - 0.5
+        np.testing.assert_allclose(got[:4], 3.0 * (px[:4] - X0) + 0.1 * row, atol=1e-4)
         self.assertTrue(np.isnan(got[4]), "next to a pixel it has none of")
         self.assertTrue(np.isnan(got[5]), "outside the sheet")
 
