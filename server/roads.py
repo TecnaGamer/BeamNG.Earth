@@ -3986,6 +3986,10 @@ def _end_joins(lines, halves, ground_lines):
 # that end at the other deck's height where they differ by more than END_ON_STEP_M (earthfast.deck_end_on).
 END_ON_MARGIN_M = 0.5
 END_ON_STEP_M = 0.3
+# a bridge's loose end over water with no road going on (a ferry's linkspan, a pier: BridgeProfiles._landing_ground)
+LANDING_ON = os.environ.get("BNE_LANDING", "on") != "off"
+LANDING_FREEBOARD_M = 2.0   # m over the sea such an end is held at (a ferry's car deck, a pier's top: about level with its quay)
+LANDING_ROAD_M = 3.0        # m: a ground road's point this near a loose end makes it an abutment
 
 
 def _end_ons(lines, halves, levels, ground_lines):
@@ -6834,6 +6838,46 @@ class BridgeProfiles:
                 i = j + 1
         return out
 
+    def _landing_ground(self, lines, gl):
+        """self._ground with each loose end of the chain (lines) that stands over water and has no ground road (gl)
+        going on from it held at LANDING_FREEBOARD_M over the sea, never under its ground: a ferry's linkspan or a
+        pier, mapped as a bridge out to where the ferry route starts. Held at its abutment's ground, the sea bed, the
+        Lodingen quay's two linkspans fell 7 m in their 20 m (60 %) into the fjord (GitHub #1067, 68.420 N 15.994 E).
+        self._ground itself when there is no such end."""
+        if self.wet is None or not LANDING_ON or not lines:
+            return self._ground
+        ends = [np.asarray(ln, np.float64)[i, :2] for ln in lines if len(ln) >= 2 for i in (0, -1)]
+        q = np.round(np.asarray(ends) / 0.5).astype(np.int64)
+        _, inv, cnt = np.unique(q, axis=0, return_inverse=True, return_counts=True)
+        loose = [p for p, c in zip(ends, cnt[inv.ravel()]) if c == 1]
+        if not loose:
+            return self._ground
+        road_pts = [np.asarray(g, np.float64)[:, :2] for g in gl if len(g)]
+        road_pts = np.concatenate(road_pts) if road_pts else np.zeros((0, 2))
+        keep = []
+        for p in loose:
+            if len(road_pts) and float(np.hypot(*(road_pts - p).T).min()) <= LANDING_ROAD_M:
+                continue                    # (a road goes on from it: an abutment)
+            la, lo, _ = self.frame.enu_to_geodetic(np.array([p[0]]), np.array([p[1]]), 0.0)
+            depth = self.wet(la, lo)
+            if depth is None or not float(np.asarray(depth, np.float64).ravel()[0]) > 0.5:
+                continue
+            sea = float(self.frame.geodetic_to_enu(la, lo, np.zeros(1))[2][0])
+            g = float(np.asarray(self._ground(np.asarray([p], np.float64)), np.float64)[0])
+            if sea + LANDING_FREEBOARD_M > g + 0.05:
+                keep.append((float(p[0]), float(p[1]), sea + LANDING_FREEBOARD_M))
+        if not keep:
+            return self._ground
+        ks = np.asarray(keep, np.float64)
+
+        def ground(xy):
+            z = np.asarray(self._ground(xy), np.float64)
+            xy = np.asarray(xy, np.float64).reshape(-1, 2)
+            for px, py, zt in ks:
+                z = np.where((np.abs(xy[:, 0] - px) < 1e-6) & (np.abs(xy[:, 1] - py) < 1e-6), np.maximum(z, zt), z)
+            return z
+        return ground
+
     def _ground(self, xy):
         la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
         return self.frame.geodetic_to_enu(la, lo, np.asarray(self.elev(la, lo), np.float64))[2]
@@ -7032,7 +7076,8 @@ class BridgeProfiles:
         def solve(ground_fn):
             return deck_profile(lines, ground_fn, required + rails + water, clear=deck_road_clear(depth),
                                 levels=levels, widths=[pool[k][0].width for k in comp], pins=pins)
-        zs = solve(self._ground)
+        base = self._landing_ground(lines, gl)
+        zs = solve(base)
         # a free end standing on another deck: solved again with it at that deck's height as drawn (measured too:
         # _observed) (_end_ons)
         over = {}
@@ -7050,7 +7095,7 @@ class BridgeProfiles:
             vals = np.array(list(over.values()), np.float64)
 
             def ground_on(xy):
-                z = np.asarray(self._ground(xy), np.float64)
+                z = np.asarray(base(xy), np.float64)
                 xy = np.asarray(xy, np.float64).reshape(-1, 2)
                 for (px, py), zt in zip(keys_, vals):
                     z = np.where((np.abs(xy[:, 0] - px) < 1e-6) & (np.abs(xy[:, 1] - py) < 1e-6), zt, z)
@@ -7179,9 +7224,13 @@ class BridgeProfiles:
             s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
             zz = np.asarray(fast._ef.deck_blend(s, np.ascontiguousarray(base), float(t0), float(t1), OBS_BLEND_DG,
                                                 OBS_BLEND_MIN_M, 0.5), np.float64)
-            if o is not None and len(s) > 3:
-                step = np.interp(np.arange(0.0, s[-1], 2.0), s, zz)
-                g = np.abs(np.diff(step)) / 2.0 if len(step) > 1 else np.zeros(1)
+            # (every part, however short: a 4 m deck of three points skipped this, and a measurement 5 m over its ends
+            # stood its middle up as a tent across the road, GitHub #1066 at Fauskevag, 68.6619 N 16.5691 E)
+            if o is not None and len(s) >= 2 and s[-1] > 0:
+                t = np.r_[np.arange(0.0, s[-1], 2.0), s[-1]]
+                t = t[np.r_[True, np.diff(t) > 0.25]]
+                step = np.interp(t, s, zz)
+                g = np.abs(np.diff(step)) / np.maximum(np.diff(t), 0.5) if len(step) > 1 else np.zeros(1)
                 if len(g) and float(g.max()) > OBS_MAX_GRADE:
                     log.debug("observed deck %s: %.0f %% after the blend, the solve kept", comp[k], 100 * g.max())
                     zz = np.asarray(fast._ef.deck_blend(s, np.ascontiguousarray(z), float(t0), float(t1), OBS_BLEND_DG,

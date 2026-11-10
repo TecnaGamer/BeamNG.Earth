@@ -369,6 +369,19 @@ class BridgeOverrideTest(unittest.TestCase):
         _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0, atol=1e-9, err_msg="steeper than OBS_MAX_GRADE: the solve stays")
 
+    def test_short_deck_spike_refused(self):
+        # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
+        # the grade check skipped parts this short, and the spike stood across the road as a tent (GitHub #1066)
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        k = ("culvert", 0)
+        pool = {k: (types.SimpleNamespace(width=9.0), None, 0.0, 1.0, 3, "")}
+        line = np.c_[[0.0, 2.2, 4.4], [0.0, 0.0, 0.0]]
+        z = np.array([FLAT, FLAT - 0.2, FLAT - 0.4])
+        roadz.PROVIDER = StubProvider(lambda xy_, s: FLAT + np.where(np.abs(s - 2.2) < 0.1, 5.2, 0.0) - 0.2 * s / 2.2)
+        out = bp._observed([k], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=0.05)
+
 
 @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
 class GradingOverrideTest(unittest.TestCase):
