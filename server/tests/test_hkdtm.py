@@ -1,7 +1,7 @@
-"""Hong Kong's lidar terrain (hkdtm.py): the HK1980 Grid projection against PROJ, the near terrain read from the DTM
-sheets on PROJ's grid and moved to EGM2008, a cold place's tiles never waiting for a sheet (short for the run, the
-sheets read from the next run on), and plans made on it kept out of every share. Synthetic sheets only
-(hklidarfixtures)."""
+"""Hong Kong's lidar terrain (hkdtm.py, dem.py): the HK1980 Grid projection against PROJ, the near terrain read from
+the DTM sheets on PROJ's grid and moved to EGM2008, a cold place's tiles never waiting for a sheet (Mapterhorn's
+heights for the run, nothing built on them kept, the sheets read from the next run on), the sea left to Mapterhorn,
+the off switch and plans made on it kept out of every share. Synthetic sheets only (hklidarfixtures)."""
 import json
 import os
 import subprocess
@@ -17,12 +17,14 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import credits  # noqa: E402
 import dem as demmod  # noqa: E402
 import hkdtm  # noqa: E402
 import hklidar  # noqa: E402
 import hrdem  # noqa: E402
 import mapcells  # noqa: E402
 import plancache  # noqa: E402
+import revisit  # noqa: E402
 import roadz  # noqa: E402
 import xproc  # noqa: E402
 from hklidarfixtures import tiff_zip  # noqa: E402
@@ -143,6 +145,47 @@ class TileTest(unittest.TestCase):
         self.assertEqual(self.fetcher.queries, [])
 
 
+class DemTest(unittest.TestCase):
+    """dem.py's near tile over Hong Kong: Mapterhorn's while short (not mirrored, a revisit fault), the DTM blended in
+    from the next run (mirrored apart, credited), the sea Mapterhorn's."""
+
+    def test_cold_then_read(self):
+        f = Fetcher()
+        with tempfile.TemporaryDirectory() as d:
+            with mock.patch.dict(os.environ, {xproc.RUN_ENV: "run1"}):
+                dm = demmod.Dem(os.path.join(d, "dem"), fetcher=f)
+                f0 = revisit.faults()
+                a = dm._load_tile(KEY)
+                np.testing.assert_array_equal(a, 100 + KEY[1] % 1000)
+                self.assertGreater(revisit.faults(), f0, "nothing built on it kept")
+                self.assertFalse(os.path.exists(dm._mirror_path(KEY)), "not mirrored")
+                self.assertNotIn(KEY, dm.hkdtm_served)
+                settle(dm.hkdtm)
+            with mock.patch.dict(os.environ, {xproc.RUN_ENV: "run2"}):
+                dm = demmod.Dem(os.path.join(d, "dem"), fetcher=f)
+                f0 = revisit.faults()
+                a = dm._load_tile(KEY)
+                self.assertEqual(revisit.faults(), f0)
+                self.assertIn(KEY, dm.hkdtm_served)
+                self.assertIn("g1h", dm._mirror_path(KEY))
+                self.assertTrue(os.path.exists(dm._mirror_path(KEY)), "mirrored, apart from Mapterhorn's own")
+            lat, lon = hrdem.tile_lat_lon(*KEY, hkdtm.TILE)
+            e, n = hkdtm.grid(lat, lon)
+            deep = (e > 839000) & (e < SEA_E - 100) & (n > 826900) & (n < 827900)
+            np.testing.assert_allclose(a[deep], ground(e, n)[deep] + hkdtm.TO_EGM2008_M, atol=2e-3)
+            np.testing.assert_array_equal(a[e > SEA_E + 2], 100 + KEY[1] % 1000)
+            edge = (e > SEA_E - 50) & (e < SEA_E - PX)
+            self.assertTrue(((a[edge] > ground(e, n)[edge] - 1) & (a[edge] < 100 + KEY[1] % 1000)).all(),
+                            "feathered into Mapterhorn's at the sea")
+        self.assertTrue(credits.line({"dem:hkdtm"}).startswith("Elevation: HK Gov CEDD LiDAR"))
+
+    def test_off_switch(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(hkdtm, "ON", False):
+            dm = demmod.Dem(os.path.join(d, "dem"), fetcher=Fetcher())
+            self.assertIsNone(dm.hkdtm)
+            self.assertNotIn("g1h", dm._mirror_path(KEY))
+
+
 class NotSharedTest(unittest.TestCase):
     """Plans made on Hong Kong's terrain stay on this computer, with the road heights off too."""
 
@@ -177,6 +220,11 @@ class NotSharedTest(unittest.TestCase):
             env = {k: v for k, v in os.environ.items() if k not in ("BNE_HKDTM", "BNE_ROADZ_HK")}
             got = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
             self.assertEqual((got.returncode, got.stdout.strip()), (0, "()"), got.stderr[-2000:])
+
+    def test_credited(self):
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "CREDITS.md"),
+                  encoding="utf-8") as fh:
+            self.assertIn(f'"Elevation: {credits.full_label("dem:hkdtm")}"', fh.read())
 
 
 if __name__ == "__main__":

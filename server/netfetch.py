@@ -365,7 +365,8 @@ ROLES = {
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "data.3dbag.nl": "the Netherlands' measured roof shapes and heights (3DBAG); predicted meanwhile",
     "portal.csdi.gov.hk": "Hong Kong's road lines and LiDAR index for measured road heights; estimated meanwhile",
-    "bulkdata.csdi.gov.hk": "Hong Kong's LiDAR for measured road and bridge heights; estimated meanwhile",
+    "bulkdata.csdi.gov.hk": "Hong Kong's LiDAR for measured road and bridge heights and the terrain; estimated "
+                            "meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment, lane markings and New York's "
                             "building setbacks; estimated meanwhile",
     "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",

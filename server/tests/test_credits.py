@@ -63,10 +63,12 @@ class WordingTest(unittest.TestCase):
 
     def test_elevation_and_weather(self):
         self.assertEqual(set(credits.ELEVATION), {demmod.MAPTERHORN["name"], demmod.AWS["name"], polardem.SOURCE,
-                                                  "lidarbc", "hrdem"})
+                                                  "lidarbc", "hrdem", "hkdtm"})
         # the open government licences' required wording ("Contains information licensed under ...")
         self.assertIn("Open Government Licence - British Columbia", credits.ELEVATION["lidarbc"])
         self.assertIn("Open Government Licence - Canada", credits.ELEVATION["hrdem"])
+        self.assertIn("(c) Government of the Hong Kong SAR, from DATA.GOV.HK and the CSDI Portal",
+                      credits.ELEVATION["hkdtm"])
         self.assertIn("mapterhorn.com/attribution", credits.ELEVATION["mapterhorn"])
         # the Copernicus DEM's required wording (its licence)
         self.assertIn("provided under COPERNICUS by the European Union and ESA", credits.ELEVATION[polardem.SOURCE])
