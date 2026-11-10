@@ -5884,26 +5884,53 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
     n = len(plans)
     held = set(held)
     xys = [np.asarray(p.xy, np.float64)[:, :2] for _f, p in plans]
-    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] if len(xy) >= 2 else np.zeros(len(xy))
-            for xy in xys]
-    # nodes: clusters of road ends; members (plan, arc position, vertex index)
-    end_pts = np.array([[xy[0], xy[-1]] for xy in xys], np.float64).reshape(-1, 2, 2)
-    centres, members = [], []
-    for i in range(n):
+    # (only the roads that can be within RAMP_REACH_M of a raised one along the network: their boxes within that of a
+    # seed's; every road of a dense cell took part, clustered against every node in Python: a downtown Denver cell's
+    # plans took over 90 s, the four road processes waiting on its plan lock, 2026-11-10)
+    lo = np.array([xy.min(0) if len(xy) else (np.inf, np.inf) for xy in xys], np.float64)
+    hi = np.array([xy.max(0) if len(xy) else (-np.inf, -np.inf) for xy in xys], np.float64)
+    reach = RAMP_REACH_M + RAMP_NODE_M + 20.0
+    near = np.zeros(n, bool)
+    for i in seeds:
+        near |= ((lo <= hi[i] + reach) & (hi >= lo[i] - reach)).all(axis=1)
+    cand = np.flatnonzero(near).tolist()
+    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] if len(xy) >= 2 and near[i] else
+            np.zeros(max(len(xy), 1)) for i, xy in enumerate(xys)]
+    # nodes: clusters of road ends (a grid of RAMP_NODE_M cells, its neighbours looked in); members (plan, arc position,
+    # vertex index)
+    centres, members, grid = [], [], {}
+    for i in cand:
+        if len(xys[i]) < 1:
+            continue
         for e in (0, 1):
-            q = end_pts[i, e]
-            for c, ms in zip(centres, members):
-                if np.hypot(*(c - q)) <= RAMP_NODE_M:
-                    ms.append((i, float(arcs[i][0 if e == 0 else -1]), 0 if e == 0 else len(xys[i]) - 1))
+            q = xys[i][0 if e == 0 else -1]
+            gx, gy = int(math.floor(q[0] / RAMP_NODE_M)), int(math.floor(q[1] / RAMP_NODE_M))
+            found = None
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    for c in grid.get((gx + dx, gy + dy), ()):
+                        if np.hypot(*(centres[c] - q)) <= RAMP_NODE_M:
+                            found = c
+                            break
+                    if found is not None:
+                        break
+                if found is not None:
                     break
-            else:
+            m = (i, float(arcs[i][0 if e == 0 else -1]), 0 if e == 0 else len(xys[i]) - 1)
+            if found is None:
                 centres.append(q)
-                members.append([(i, float(arcs[i][0 if e == 0 else -1]), 0 if e == 0 else len(xys[i]) - 1)])
+                members.append([m])
+                grid.setdefault((gx, gy), []).append(len(centres) - 1)
+            else:
+                members[found].append(m)
     # a node on another road's middle: that road's nearest vertex joins it
     for c, ms in zip(centres, members):
         own = {i for i, _a, _v in ms}
-        for i in range(n):
+        for i in cand:
             if i in own or len(xys[i]) < 3:
+                continue
+            if not ((lo[i] <= c + RAMP_NODE_M + float(plans[i][1].half)).all()
+                    and (hi[i] >= c - RAMP_NODE_M - float(plans[i][1].half)).all()):
                 continue
             d = np.hypot(*(xys[i] - c).T)
             v = int(np.argmin(d))
