@@ -110,4 +110,16 @@ clock = clock + F.CHECK_S + 1
 F.onUpdate(0.1)
 T.check(#sent == 0 and #msgs == 0, 'already routed to a station: quiet')
 
+-- the radial menu's entry: an action in the stock "Other" ring, never on the top level (whose items are categories with
+-- a goto: an action there broke the menu's navigation in game, "attempt to index field 'goto'", 2026-11-09)
+local added
+core_quickAccess = { addEntry = function(a) added = a end }
+F.onQuickAccessLoaded()
+T.check(added and added.level == '/root/sandbox/other/', 'the Other ring: ' .. tostring(added and added.level))
+local entries = {}
+added.generator(entries)
+T.check(#entries == 1 and type(entries[1].onSelect) == 'function' and entries[1].title == 'Nearest station',
+  'one Nearest station action')
+core_quickAccess = nil
+
 T.done('test_finder')

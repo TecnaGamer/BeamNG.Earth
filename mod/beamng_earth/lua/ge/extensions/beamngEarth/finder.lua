@@ -197,11 +197,14 @@ function M.onUpdate()
   end)
 end
 
--- The radial menu's entry (core_quickAccess: its root level, our level only).
+-- The radial menu's entry (core_quickAccess), our level only: an action in the stock "Other" ring, beside Save / Load
+-- (quickAccess.lua's '/root/sandbox/other/'). Not the top level: its items are categories with a goto, and an action
+-- there broke the menu's navigation (in game, 2026-11-09: "the circle doesn't change but the click does").
+M.RADIAL_LEVEL = '/root/sandbox/other/'
 function M.onQuickAccessLoaded()
   local qa = rawget(_G, 'core_quickAccess')
   if not (qa and qa.addEntry) then return end
-  qa.addEntry({ level = '/root/sandbox/', generator = function(entries)
+  qa.addEntry({ level = M.RADIAL_LEVEL, generator = function(entries)
     local st = player()
     if not (st and st.inOurLevel) then return end
     table.insert(entries, { title = 'Nearest station', icon = 'fuelPump', uniqueID = 'beamngEarthNearestStation',
