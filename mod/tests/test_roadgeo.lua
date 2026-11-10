@@ -267,6 +267,10 @@ roads.reset()
 -- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
 do
   roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
+  -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
+  local room = roads.RELOAD_ROOM_MS
+  roads.RELOAD_ROOM_MS = math.huge
   local function reloads() return S.calls.reloadCollision or 0 end
   -- a second road geotile ~8 km east; each tile's only collider a 3dmr deck slab (spawned at once at any distance)
   local gx2, gy2 = geotile.tileOf(LAT, LON + 8000 / (111320 * math.cos(math.rad(LAT))))
@@ -321,6 +325,7 @@ do
   T.check(roads.replace(A, 3) == 2, 'both geotiles re-placed')
   run(3, A)
   T.check(reloads() == r0 + 5, 'a rebase forces the rebuild')
+  roads.RELOAD_ROOM_MS = room
   roads.reset()
 end
 
