@@ -1155,12 +1155,12 @@ local function onMessage(msg)
       M.germanJunctionSigns = v == true
       net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
     end
-    -- the town signs' switch (settings townSigns, off by default for now: opt-in until its performance check)
+    -- the town signs' switch (settings townSigns, on by default since 2026-11-10)
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       local v = settings and settings.get and settings.get('townSigns')
       if v == nil then v = M.townSigns end
-      M.townSigns = v == true
+      M.townSigns = v ~= false
       net.send({ type = 'town_signs', on = M.townSigns })
     end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)

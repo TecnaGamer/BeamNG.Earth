@@ -31,7 +31,7 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 1
+M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -95,7 +95,7 @@ M.SCHEMA = {
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
   -- the town entry and exit signs where a road enters a town's built-up land, each country's own (server townentry.py;
   -- the message town_signs; BNE_TOWNSIGNS=on / off forces it)
-  townSigns = { kind = 'bool', default = false, label = 'Town signs' },
+  townSigns = { kind = 'bool', default = true, label = 'Town signs' },
   -- the traffic's amount by the place (navgraph.lua M.ADAPTIVE, server traffic.py; PR #728 / #773, ProxyFirewall202):
   -- more cars in cities, fewer in the country, never more than the player's own amount
   adaptiveTraffic = { kind = 'bool', default = false, label = 'Adaptive traffic amount' },
@@ -281,6 +281,9 @@ function M.load(path)
       end
     end
     M.fillNewKnobs(data)
+    -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
+    -- old default, not as a choice; once saved as version 2 the player's own setting stands)
+    if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then

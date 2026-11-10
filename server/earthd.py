@@ -1210,8 +1210,8 @@ class Server:
         self.dej_on = False         # the settings page's German junction signs (designs.enabled; BNE_DEJUNCTIONS forces it;
                                     # off by default until its in-game performance check)
         self.dirs_on = False        # the settings page's Direction signs (dirsigns.enabled; BNE_DIRSIGNS=on forces it)
-        self.towns_on = False       # the settings page's Town signs (townentry.enabled; BNE_TOWNSIGNS=on / off forces it;
-                                    # opt-in as before until an in-game performance check)
+        self.towns_on = True        # the settings page's Town signs (townentry.enabled; BNE_TOWNSIGNS=on / off forces it;
+                                    # on by default since 2026-11-10, the user's call)
         if self.gas_stations and surface is not None and hasattr(surface, "gas_pads"):
             surface.gas_pads = True     # their forecourts painted asphalt (surface.Surface.fuel_pads)
         self.traffic = bool(traffic) and mapdata is not None   # the AI road graph around the player (navgraph.py)
