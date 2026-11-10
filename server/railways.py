@@ -225,7 +225,7 @@ def grade_plans(frame, cells, box, elev, load=None):
     pad = GRADE_HALF_M + 15.0
     out = []
     tunnels = tunnels + coarse_underpasses(frame, cells, box, rails, GRADE_REACH_M)
-    prof = _beds(frame, rails, ground, tunnels, (), load, elev, raw=ground)
+    prof = _beds(frame, rails, ground, tunnels, load, elev, raw=ground)
     if railxing.ENABLED:        # (the bed flush with the road at a level crossing: the ground is graded to it, else the
         prof = _flushed(frame, cells, box, rails, prof, ground, tunnels)     # ballast and sleepers lay under the ground)
     for (fid, _c, kind, xy), (zb, _zg) in zip(rails, prof):
@@ -1471,7 +1471,7 @@ def tunnel_hole_parts(frame, load, elev, box):
         return []
     ground = point_ground(frame, elev, ("holes", round(float(frame.lat0), 7), round(float(frame.lon0), 7)))
     out = []
-    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, _beds(frame, rails, ground, [], (), load, elev)):
+    for (fid, _c, kind, xy), (zb, _zg) in zip(rails, _beds(frame, rails, ground, [], load, elev)):
         if kind == "tunnel" and len(xy) >= 2:
             out.append((str(fid), xy, np.asarray(zb, np.float64) + BALLAST_H - TUNNEL_FLOOR_M))
     return out
