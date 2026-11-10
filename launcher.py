@@ -22,6 +22,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
     launcher.py --no-gcpatch     the game without the grass patch
     launcher.py --proton / --native   Linux: which build of the game to start (default: found)
     launcher.py --gpu off        hybrid graphics: never steer the game's GPU (auto does, discrete forces it)
+    launcher.py --clear-cache    delete the map download cache first (instant; the files go in the background)
     launcher.py -- --verbose     anything after -- goes to the server
 """
 
@@ -168,6 +169,27 @@ def cache_dir_arg(given, dd=None):
         return path
     path = app_settings(dd).get("cacheDir")
     return path if isinstance(path, str) and path else None
+
+
+def clear_cache(extra):
+    """--clear-cache (GitHub #1081: deleting the cache's many small files took a player very long): the download cache
+    the server is about to use (its --cache-dir in extra, else the default) moved aside at once (cache.clear_all); the
+    server deletes it in the background after it starts. Only while no server runs (the caller checked the port)."""
+    path = apppaths.default_cache_dir()
+    for i, a in enumerate(extra):
+        if a == "--cache-dir" and i + 1 < len(extra):
+            path = extra[i + 1]
+        elif a.startswith("--cache-dir="):
+            path = a.split("=", 1)[1]
+    sys.path.insert(0, os.path.join(ROOT, "server"))
+    try:
+        import cache as cachemod
+        moved = cachemod.clear_all(path)
+    except Exception as e:              # (never in the way of a start)
+        row("Download cache", f"not cleared ({type(e).__name__}: {e})")
+        return
+    row("Download cache", f"cleared ({len(moved)} folders in {path}; their files are deleted in the background)"
+        if moved else f"nothing to clear in {path}")
 
 
 # --- the server -----------------------------------------------------------------------------------
@@ -1647,6 +1669,9 @@ def main():
     ap.add_argument("--cache-dir", metavar="PATH",
                     help="where the map download cache goes, e.g. another drive (kept for the next starts; "
                          "'default' goes back to .cache/beamng-earth in your home folder)")
+    ap.add_argument("--clear-cache", action="store_true",
+                    help="delete the map download cache before starting (at once: its folders are moved aside and "
+                         "deleted in the background while you play; saved areas download again)")
     ap.add_argument("--beammp-launcher", metavar="PATH",
                     help="the BeamMP launcher you already have (its file or folder; kept for the next starts)")
     ap.add_argument("--game-dir", metavar="PATH",
@@ -1935,6 +1960,8 @@ def run(args):
                 "left over from an earlier start.",
                 "Close its window (or end 'BeamNG.Earth' in the task manager), then start again.")
         sys.exit(1)
+    if getattr(args, "clear_cache", False):
+        clear_cache(extra)
     log_path = os.path.join(data_dir(), "logs", "server.log")
     server = start_server(user_dir, extra, log_path, game_running=bool(running))
     beammp = None

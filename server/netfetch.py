@@ -27,7 +27,7 @@ hosts get DEFAULT_POLICY):
   * daily budgets (soft: at 80 % prefetch / background stop with one warning, at 100 % demand runs
     at half rate with a warning per hour; hard: BudgetExceeded), counted per UTC day and persisted
     in <stats_dir>/<YYYY-MM-DD>.json (every STATS_FLUSH_S and at close), so a restart keeps them;
-  * response classes: 404/410 -> NotFound (the caller writes its .404 marker; miss_alive() gives the
+  * response classes: 404/410 -> NotFound (the caller remembers it: missindex.record; miss_alive() gives the
     marker its policy TTL), a 3xx from a tile host -> rate limited (EOX redirects throttled clients
     to its home page), a 200 with an HTML page from a tile host -> BadResponse (not cached, counted
     as a failure), other 4xx -> FetchFailed (no marker: some servers answer 400 when overloaded).
@@ -46,6 +46,7 @@ import email.utils
 import http.client
 import json
 import logging
+import missindex
 import os
 import random
 import ssl
@@ -405,7 +406,7 @@ class FetchError(IOError):
 
 
 class NotFound(FetchError):
-    """404 / 410: the host has no data there (the caller writes a .404 marker)."""
+    """404 / 410: the host has no data there (the caller remembers it: missindex.record)."""
 
 
 class RateLimited(FetchError):
@@ -473,15 +474,14 @@ def parse_retry_after(value, now_wall=None):
 
 
 def miss_alive(path, ttl, now_wall=None):
-    """Is the .404 marker at path still valid? Markers are empty files; their mtime is the time of the
-    404 (markers written before TTLs existed keep working: they expire ttl after they were made)."""
-    try:
-        mtime = os.path.getmtime(path)
-    except OSError:
+    """Is the 404 remembered for marker path ("<dir>/<y>.404": missindex.py's column index, or an old marker file
+    whose mtime is the time of the 404) still valid: younger than ttl (None: forever)?"""
+    t = missindex.when(path)
+    if t is None:
         return False
     if ttl is None:
         return True
-    return (time.time() if now_wall is None else now_wall) - mtime < ttl
+    return (time.time() if now_wall is None else now_wall) - t < ttl
 
 
 # --- token bucket ------------------------------------------------------------------------------
@@ -1019,12 +1019,15 @@ class Fetcher:
         return not self.offline_flag and not self.host(host).breaker.is_open()
 
     def miss_alive(self, path, url):
-        """A .404 marker for url is valid: within the host's miss_ttl, or the host cannot be asked now
-        (offline / breaker open), so an expired marker still counts as "no data" instead of an error."""
-        if not os.path.exists(path):
+        """A 404 remembered for url at marker path (missindex.py) is valid: within the host's miss_ttl, or the host
+        cannot be asked now (offline / breaker open), so an expired one still counts as "no data" instead of an
+        error."""
+        t = missindex.when(path)
+        if t is None:
             return False
         host = host_of(url)
-        return miss_alive(path, self.policy(host).miss_ttl, self.wall()) or not self.available(host)
+        ttl = self.policy(host).miss_ttl
+        return ttl is None or self.wall() - t < ttl or not self.available(host)
 
     # --- admission ---------------------------------------------------------------------------
     def _check_policy(self, h, url, kind):

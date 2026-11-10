@@ -22,6 +22,7 @@ import cache as cachemod  # noqa: E402
 import dem as demmod  # noqa: E402
 import earthd  # noqa: E402
 import imagery as imagerymod  # noqa: E402
+import missindex  # noqa: E402
 import netfetch  # noqa: E402
 
 DAY = 86400.0
@@ -598,7 +599,7 @@ class StubFetcher:
         pass
 
     def miss_alive(self, path, url):
-        return os.path.exists(path)
+        return missindex.known(path)
 
     def get(self, url, kind="demand", headers=None):
         self.calls.append(url)
@@ -622,13 +623,17 @@ class ProducerTest(Base):
         d._download(demmod.MAPTERHORN, 12, 1, 2)
         self.assertEqual(c._entries["dem/mapterhorn/12/1/2.webp"][0], len(buf.getvalue()))
         self.assertIsNone(d._download(demmod.AWS, 13, 0, 0))
-        self.assertEqual(c._entries["dem/aws-terrarium/13/0/0.404"][0], 0, "the marker: tracked, empty")
+        e = c._entries["dem/aws-terrarium/13/0/_misses"]
+        self.assertTrue(e[0] > 0 and not c._evictable("dem/aws-terrarium/13/0/_misses", e[0]),
+                        "the column's miss index: tracked, never evicted")
+        self.assertNotIn("dem/aws-terrarium/13/0/0.404", c._entries, "no marker file")
         self.clock.t += 100
         d._download(demmod.MAPTERHORN, 12, 1, 2)                # a disk hit: last use now
         self.assertEqual((len(f.calls), c._entries["dem/mapterhorn/12/1/2.webp"][1]), (2, T0 + 100))
         self.clock.t += cachemod.PROTECT_S + 1
         c.evict(target=0)
         self.assertFalse(exists(self.root, "dem/mapterhorn/12/1/2.webp"))
+        self.assertTrue(exists(self.root, "dem/aws-terrarium/13/0/_misses"), "a miss index is never evicted")
         d._download(demmod.MAPTERHORN, 12, 1, 2)                # evicted: downloaded again
         self.assertEqual(len(f.calls), 3)
         # an undecodable tile leaves the cache and the bookkeeping

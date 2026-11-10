@@ -361,6 +361,10 @@ your system's folder window, or type or paste a folder and press **Use**. Or sta
 (e.g. a shortcut to `BeamNG.Earth-<version>.exe --cache-dir "D:\BeamNG.Earth cache"`). It is used from the next start
 and remembered; `default` goes back. Move the old cache folder there first to keep what is already downloaded.
 
+**Deleting the whole map cache:** start the app once with `--clear-cache`. Its folders are moved aside at once and
+deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
+keeps the area around you.
+
 **BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
 where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;
 `--game-dir PATH` sets it too, `--game-dir default` forgets it. A game folder outside Steam is started directly. On

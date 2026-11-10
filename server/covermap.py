@@ -18,6 +18,7 @@ import os
 import threading
 
 import fast
+import missindex
 import revisit
 
 log = logging.getLogger("earthd.covermap")
@@ -88,6 +89,8 @@ class CoverMap:
         self.offsets = {}                   # sidecar path -> bytes read
         self.sidecar_at = -1e18
         self.caps_id = None
+        self.misses = {}                    # column key ("dem/mapterhorn/16/1") -> (ys of index lines, ys of marker files)
+        self.root = os.path.abspath(cache_dir) + os.sep
         self._thread = None
 
     # --- building ---------------------------------------------------------------------------------
@@ -98,6 +101,64 @@ class CoverMap:
 
     def _changed(self, key, added):
         self.pending.append((key, added))   # (under the cache's lock: cache.used / forget / _remove)
+
+    def _miss_event(self, path, added):
+        """missindex's listener: a miss this process recorded, cleared or migrated, as its old marker's key."""
+        if not path.startswith(self.root):
+            path = os.path.abspath(path)
+            if not path.startswith(self.root):
+                return
+        key = path[len(self.root):].replace(os.sep, "/")
+        cache = self.cache
+        if cache is None:
+            return
+        with cache._lock:
+            self.pending.append((key, added, True))
+
+    def _ops(self, items):
+        """[(key, added)] (cache keys: files, old marker files "<col>/<y>.404" among them, miss index files
+        "<col>/_misses") and [(key, added, True)] (missindex's listener: an index line of this process, by its marker
+        key) as the index's [(key, added)]: a miss counted once whether it is an old marker file, an index line or
+        both; a miss index file's lines read (missindex.column) when it is new or changed, all dropped when it is gone.
+        Under self.lock."""
+        out = []
+        for item in items:
+            key, added, line = item[0], item[1], len(item) > 2
+            col, _, name = key.rpartition("/")
+            if name == missindex.NAME:
+                lines, files = self.misses.setdefault(col, (set(), set()))
+                ys = set(missindex.column(os.path.join(self.root, *col.split("/")))) if added else set()
+                out += [(f"{col}/{y}{missindex.SUFFIX}", False) for y in lines - ys if y not in files]
+                out += [(f"{col}/{y}{missindex.SUFFIX}", True) for y in ys - lines if y not in files]
+                lines.clear()
+                lines.update(ys)
+                continue
+            d, y = missindex.split(name)
+            if d is None:
+                out.append((key, added))
+                continue
+            lines, files = self.misses.setdefault(col, (set(), set()))
+            was = y in lines or y in files
+            which = lines if line else files
+            if added:
+                which.add(y)
+            else:
+                which.discard(y)
+            now = y in lines or y in files
+            if now != was:
+                out.append((key, now))
+        return out
+
+    def _apply(self, ops):
+        """The index's adds and removes in order (runs of one kind per call). Under self.lock."""
+        run, add = [], None
+        for key, added in ops + [(None, None)]:
+            if added is not add and run:
+                (self.idx.add if add else self.idx.remove)(run)
+                run = []
+            if key is not None:
+                run.append(key)
+                add = added
 
     def _run(self):
         try:
@@ -118,6 +179,13 @@ class CoverMap:
             with cache._lock:                   # the hook and the snapshot at one moment: nothing missed or doubled
                 cache.on_change = self._changed
                 keys = list(cache._entries)
+            if self._miss_event not in missindex.listeners:
+                missindex.listeners.append(self._miss_event)
+            special = [k for k in keys if k.endswith((missindex.SUFFIX, "/" + missindex.NAME))]
+            if special:
+                keys = [k for k in keys if not k.endswith((missindex.SUFFIX, "/" + missindex.NAME))]
+                with self.lock:
+                    keys += [k for k, added in self._ops([(k, True) for k in special])]
             n = 0
             for i in range(0, len(keys), ADD_CHUNK):
                 with self.lock:
@@ -140,14 +208,7 @@ class CoverMap:
         if not got:
             return
         with self.lock:
-            run, add = [], None
-            for key, added in got + [(None, None)]:
-                if added is not add and run:
-                    (self.idx.add if add else self.idx.remove)(run)
-                    run = []
-                if key is not None:
-                    run.append(key)
-                    add = added
+            self._apply(self._ops(got))
         self.gen += 1
 
     def _sidecars(self, force=False):
@@ -200,7 +261,7 @@ class CoverMap:
             return 0
         self.fresh = ((z, x0, y0, w, h), now)
         known = cache._entries          # (membership only: a dict lookup, no lock)
-        seen, new = 0, []
+        seen, new, cols = 0, [], []
         for prefix, _cls, _fz in self.rules:
             base = os.path.join(cache.root, *prefix.rstrip("/").split("/"))
             try:
@@ -226,6 +287,11 @@ class CoverMap:
                     try:
                         with os.scandir(os.path.join(zdir, xs)) as it:
                             for de in it:
+                                if de.name == missindex.NAME:      # (another process's misses: read if changed)
+                                    cols.append((f"{prefix}{zs}/{xs}/{de.name}", True))
+                                    if f"{prefix}{zs}/{xs}/{de.name}" not in known:
+                                        new.append(de.path)
+                                    continue
                                 stem = de.name.split(".", 1)[0]
                                 if not stem.isdigit() or not ty0 <= int(stem) <= ty1 or ".tmp" in de.name:
                                     continue
@@ -238,6 +304,12 @@ class CoverMap:
                         break
         for p in new:
             cache.wrote(p)
+        if cols:
+            with self.lock:
+                ops = self._ops(cols)
+                self._apply(ops)
+            if ops:
+                self.gen += 1
         return len(new)
 
     def _caps(self):
@@ -306,6 +378,8 @@ class CoverMap:
         return out
 
     def close(self):
+        if self._miss_event in missindex.listeners:
+            missindex.listeners.remove(self._miss_event)
         if self.cache is not None and self.cache.on_change == self._changed:
             with self.cache._lock:
                 self.cache.on_change = None
