@@ -844,6 +844,8 @@ def plan_roads(frame, parts, elev, abut=None, ext=None, pins=None, cuts=True, co
         la, lo, _ = frame.enu_to_geodetic(allxy[:, 0], allxy[:, 1], 0.0)
         zall = np.asarray(elev(la, lo), np.float64)
     out, k = [], 0
+    if obs is not None and hasattr(obs, "prepare"):     # (its parts' questions at once: _Planner._obs)
+        obs.prepare([pr[0] for pr in prof if pr is not None])
     for j, ((lonlat, spec), pr) in enumerate(zip(parts, prof)):
         if pr is None:
             out.append(None)
@@ -2635,16 +2637,30 @@ class _Planner:
             if not APPROACH_LIDAR_ON or not getattr(prov, "lidar", False):
                 return None
 
+            ready = {}          # id(xy) -> (xy, _touches_bridge_ends' answer): plan_roads' parts at once (prepare)
+
             def approach_obs(xy, spec):
                 # (on lidar terrain: the lidar's measured approaches alone, the parts from a bridge's end: roadz
                 # APPROACH_*; their embankments our DTM smooths away)
-                if not self._touches_bridge_end(xy):
+                got = ready.get(id(xy))
+                touch = got[1] if got is not None and got[0] is xy else self._touches_bridge_end(xy)
+                if isinstance(touch, BaseException):
+                    raise touch
+                if not touch:
                     return None
                 try:
                     return prov.observed(self.frame, xy, spec.width / 2, 0, lidar_ground=True)
                 except Exception as e:  # the DEM's rather than no grading
                     log.debug("grading: measured approach: %s: %s", type(e).__name__, e)
                     return None
+
+            def prepare(xys):
+                ready.clear()
+                try:
+                    ready.update((id(xy), (xy, t)) for xy, t in zip(xys, self._touches_bridge_ends(xys)))
+                except Exception as e:      # (each asked on its own then)
+                    log.debug("grading: bridge ends at once: %s: %s", type(e).__name__, e)
+            approach_obs.prepare = prepare
             return approach_obs
 
         def obs(xy, spec):
@@ -2654,6 +2670,48 @@ class _Planner:
                 log.debug("grading: measured road heights: %s: %s", type(e).__name__, e)
                 return None
         return obs
+
+    def _touches_bridge_ends(self, xys):
+        """_touches_bridge_end of each road part of xys at once (both tips' cells read once for all, earthfast
+        plan_ends_near): per part True / False, or the exception its own call would raise (a tip's cell unread, the
+        first tip's before the second's, a first tip at an end answering before its second's cell is asked)."""
+        import fast
+        fast.require(194, "plan_ends_near")
+        f64 = np.float64
+        xs = [np.asarray(xy, f64) for xy in xys]
+        has = [i for i, xy in enumerate(xs) if len(xy) >= 2]
+        out = [False] * len(xs)
+        if not has:
+            return out
+        tips = np.array([(float(xs[i][j][0]), float(xs[i][j][1])) for i in has for j in (0, -1)], f64).reshape(-1, 2)
+        la, lo, _ = self.frame.enu_to_geodetic(tips[:, 0], tips[:, 1], 0.0)
+        cells = mapcells.cells_of(np.asarray(la, f64), np.asarray(lo, f64))
+        uniq = sorted({(c.x, c.y) for c in cells})
+        cends, cerr = [], {}
+        for x, y in uniq:
+            try:
+                cends.append(np.asarray(self._cell_enu(mapcells.CellKey(mapcells.ZOOM, x, y), ground=False)["ends"],
+                                        f64).reshape(-1, 2))
+            except Exception as e:      # (raised where the part's own call reads it)
+                cends.append(np.zeros((0, 2), f64))
+                cerr[(x, y)] = e
+        cx = np.array([c.x for c in cells], np.int64)
+        cy = np.array([c.y for c in cells], np.int64)
+        st, off, _cand = fast._ef.plan_ends_near(
+            tips, cx, cx, cy, cy, np.zeros((0, 2), f64), np.array([u[0] for u in uniq], np.int64),
+            np.array([u[1] for u in uniq], np.int64), np.array([u not in cerr for u in uniq], bool),
+            np.r_[0, np.cumsum([len(c) for c in cends])].astype(np.int64),
+            np.ascontiguousarray(np.concatenate(cends), f64), 1 << mapcells.ZOOM, -1.0, float(APPROACH_TOUCH_M), 0.0,
+            False)
+        for n, i in enumerate(has):
+            for t in (2 * n, 2 * n + 1):
+                if not st[t]:
+                    out[i] = cerr[(cells[t].x, cells[t].y)]
+                    break
+                if off[t + 1] > off[t]:
+                    out[i] = True
+                    break
+        return out
 
     def _touches_bridge_end(self, xy):
         """Does a road part (xy (k, 2) in this frame) start or end at a bridge's end (APPROACH_TOUCH_M)?"""
@@ -2883,6 +2941,14 @@ class _Planner:
         signalled junction at Wesley Chapel: its ramp could not rise in 8 m and the deck stood 1-2 m over the
         interstate, GitHub #1043). Never a motorway or trunk (_never_raised). The same in every cell: _junction_lift is a
         function of the map round the point."""
+        # (the bridge ends round every end asked, at once: _ends_near; one at a time each read its cells' ends sorted
+        # unique, ~4 % of a cold Fells Point planning, 2026-11-10)
+        ask = [(i, at_end) for i, (_f, p) in enumerate(plans)
+               if not (specs[i] is None or _never_raised(specs[i]) or len(p.xy) < 2 or touch[i].any())
+               for at_end in (False, True)]
+        cands = self._junction_cands([(plans[i][1].xy[-1] if at_end else plans[i][1].xy[0],
+                                       plans[i][1].xy[0] if at_end else plans[i][1].xy[-1]) for i, at_end in ask])
+        cands = dict(zip(ask, cands)) if cands is not None else {}
         for i, (fid, p) in enumerate(plans):
             # (an approach itself has its own ramp, its height from its abutment's rules: raised again from the other
             # bridge's junction it stood 8 m too high over I-75, a diverging diamond's two decks sharing the crossovers)
@@ -2892,7 +2958,7 @@ class _Planner:
             add = None
             for at_end in (False, True):
                 e = p.xy[-1] if at_end else p.xy[0]
-                got = self._junction_lift(e, p.xy[0] if at_end else p.xy[-1])
+                got = self._junction_lift(e, p.xy[0] if at_end else p.xy[-1], cands.get((i, at_end), _UNSET))
                 if got is None or self._under_a_deck(p.xy):
                     continue                # (a road under a deck keeps its clearance: never raised from a junction)
                 lift, _others = got
@@ -2996,29 +3062,93 @@ class _Planner:
             return False
         return any(cr for cr in roadsmod._crossings_by(decks, [xy]))
 
-    def _junction_lift(self, e, other):
+    @staticmethod
+    def _junction_key(e, other):
+        return (round(float(e[0]) * 2), round(float(e[1]) * 2), round(float(other[0])), round(float(other[1])))
+
+    def _junction_cands(self, pairs):
+        """_junction_lift's bridge ends round each (e, other) of pairs whose answer is not kept yet (_ends_near; a
+        later pair of an earlier one's key: that one's), all at once: [cands, None (a cell unread) or _UNSET (kept)],
+        or None when they could not be had at once (each asked on its own then)."""
+        if not pairs:
+            return []
+        memo = self.__dict__.setdefault("_junction_memo", {})
+        with self.lock:
+            todo = [n for n, (e, o) in enumerate(pairs) if self._junction_key(e, o) not in memo]
+        out = [_UNSET] * len(pairs)
+        if not todo:
+            return out
+        try:
+            r = JUNCTION_STUB_M + JUNCTION_ZONE_M
+            got = self._ends_near([pairs[n][0] for n in todo], r, APPROACH_TOUCH_M, r, [pairs[n][1] for n in todo])
+        except Exception as ex:     # (each its own then, and its own failure)
+            log.debug("grading: junction ends at once: %s: %s", type(ex).__name__, ex)
+            return None
+        for n, c in zip(todo, got):
+            out[n] = c
+        return out
+
+    def _ends_near(self, pts, reach, rmin, rmax, others=None):
+        """Per point of pts [(2+,)] in the frame: the bridge ends (_cell_enu's) of its cells (cells_for_points of the
+        point alone, padded reach m), rounded to the mm and each once in (x, y) order, at rmin < d <= rmax from it and,
+        with others [(2+,)], not within APPROACH_TOUCH_M of its other point; None for a point one of whose cells could
+        not be read. earthfast.plan_ends_near: the cells read once for all the points."""
+        import fast
+        fast.require(194, "plan_ends_near")
+        f64 = np.float64
+        q = np.array([(float(p[0]), float(p[1])) for p in pts], f64).reshape(-1, 2)
+        if not len(q):
+            return []
+        la, lo, _ = self.frame.enu_to_geodetic(q[:, 0], q[:, 1], 0.0)
+        la, lo = np.asarray(la, f64), np.asarray(lo, f64)
+        pad = reach / 111320.0
+        padlon = np.array([pad / max(0.05, math.cos(math.radians(v))) for v in la.tolist()], f64)
+        ix0, ix1, iy0, iy1 = mapcells.bbox_ranges(la - pad, lo - padlon, la + pad, lo + padlon)
+        n = 1 << mapcells.ZOOM
+        codes = set()
+        for dx in range(int((ix1 - ix0).max()) + 1):
+            for dy in range(int(max(0, (iy1 - iy0).max())) + 1):
+                ok = (ix0 + dx <= ix1) & (iy0 + dy <= iy1)
+                codes.update(zip(((ix0[ok] + dx) % n).tolist(), (iy0[ok] + dy).tolist()))
+        cells = sorted(codes)
+        cok, cends = [], []
+        for x, y in cells:
+            try:
+                cends.append(np.asarray(self._cell_enu(mapcells.CellKey(mapcells.ZOOM, x, y), ground=False)["ends"],
+                                        f64).reshape(-1, 2))
+                cok.append(True)
+            except Exception as ex:     # (the points asking it: None)
+                log.debug("grading: bridge ends of %d/%d/%d: %s: %s", mapcells.ZOOM, x, y, type(ex).__name__, ex)
+                cends.append(np.zeros((0, 2), f64))
+                cok.append(False)
+        o = (np.array([(float(p[0]), float(p[1])) for p in others], f64).reshape(-1, 2) if others is not None
+             else np.zeros((0, 2), f64))
+        st, off, cand = fast._ef.plan_ends_near(
+            q, ix0, ix1, iy0, iy1, o, np.array([c[0] for c in cells], np.int64), np.array([c[1] for c in cells], np.int64),
+            np.array(cok, bool), np.r_[0, np.cumsum([len(c) for c in cends])].astype(np.int64),
+            np.ascontiguousarray(np.concatenate(cends) if cends else np.zeros((0, 2)), f64), n, float(rmin), float(rmax),
+            float(APPROACH_TOUCH_M), True)
+        return [cand[off[i]:off[i + 1]] if st[i] else None for i in range(len(q))]
+
+    def _junction_lift(self, e, other, cands=_UNSET):
         """(m to raise a road end e at a junction, the roads its ramp keeps clear of) when e is within JUNCTION_ZONE_M of
         the far end of a short approach (JUNCTION_STUB_M) to a raised abutment (_end_lift) and the road is not that
         approach (its other end, other, not at the abutment): what is left there of that approach's cosine ramp
         (approach_add's run). None otherwise. Cached per point; a function of the map round it."""
-        k = (round(float(e[0]) * 2), round(float(e[1]) * 2), round(float(other[0])), round(float(other[1])))
+        k = self._junction_key(e, other)
         memo = self.__dict__.setdefault("_junction_memo", {})
         with self.lock:
             if k in memo:
                 return memo[k]
         res = None
         try:
-            la, lo, _ = self.frame.enu_to_geodetic(np.array([e[0]]), np.array([e[1]]), 0.0)
-            pad = (JUNCTION_STUB_M + JUNCTION_ZONE_M) / 111320.0
-            keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, math.cos(math.radians(float(la[0])))))),
-                          key=str)
-            ends = [np.asarray(self._cell_enu(kk, ground=False)["ends"], np.float64).reshape(-1, 2) for kk in keys]
-            ends = np.unique(np.round(np.concatenate(ends), 3), axis=0) if ends else np.zeros((0, 2))
-            if len(ends):
-                d = np.hypot(ends[:, 0] - e[0], ends[:, 1] - e[1])
-                for b in ends[(d > APPROACH_TOUCH_M) & (d <= JUNCTION_STUB_M + JUNCTION_ZONE_M)]:
-                    if np.hypot(*(np.asarray(other[:2]) - b)) <= APPROACH_TOUCH_M:
-                        continue            # (the approach itself: its own ramp)
+            if cands is _UNSET:         # (the abutments round it, the approach itself left out: its own ramp)
+                r = JUNCTION_STUB_M + JUNCTION_ZONE_M
+                cands = self._ends_near([e], r, APPROACH_TOUCH_M, r, [other])[0]
+            if cands is None:
+                raise LookupError("a cell's road parts round it could not be read")
+            if len(cands):
+                for b in cands:
                     got = self._end_lift(b)
                     if got is None or len(got) != 4 or got[3] or float(got[0]) < JUNCTION_MIN_LIFT or not self._jr_at(b):
                         continue            # (an inferred lift of JUNCTION_MIN_LIFT or more over a freeway only)
@@ -3084,10 +3214,10 @@ class _Planner:
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
             bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
-            for (line, _h, cls), (fid, j, sg, med) in zip(c["ground"], c["ground_ids"]):
+            gl, gi = c["ground"], c["ground_ids"]
+            for n_ in np.flatnonzero(_boxes_meet(c["ground_box"], lo, hi)).tolist():
+                (line, _h, cls), (fid, j, sg, med) = gl[n_], gi[n_]
                 if cls in UNGRADED or len(line) < 2:
-                    continue
-                if (line.max(0) < lo).any() or (line.min(0) > hi).any():
                     continue
                 got = ground.get((fid, j))      # (the longest copy of a part, as each cell has it)
                 if got is None or len(line) > len(got[0]):
@@ -4227,7 +4357,9 @@ class _Planner:
         return {"bridges": bridges, "bridge_cls": bcls, "bridge_ids": bids, "bridge_levels": blevels,
                 "bridge_half": bhalf, "ground": ground_l, "ground_ids": ground_ids, "ground_link": ground_link,
                 "end_of": end_of, "span_bridges": span_xy,
-                "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy}
+                "ends": np.asarray(ends, np.float64).reshape(-1, 2), "rail_bridges": rail_xy, "rail_ground": rail_gxy,
+                # (each line's box [min e, min n, max e, max n], made once: the passes skip the far ones at once)
+                "ground_box": _line_boxes([g[0] for g in ground_l]), "rail_ground_box": _line_boxes(rail_gxy)}
 
     def _decks_ll(self, lonlat):
         """_decks_near of the cell holding the middle of a lon/lat part (a pin height's plan: the cell's own plans
@@ -4560,16 +4692,9 @@ class _Planner:
         got = self._end_lift_raw(xy)
         if got is None or not TWIN_ON or not got[1]:
             return got
-        la, lo, _ = self.frame.enu_to_geodetic(np.array([xy[0]]), np.array([xy[1]]), 0.0)
-        pad = (TWIN_M + APPROACH_TOUCH_M) / 111320.0
-        keys = sorted(set(mapcells.cells_for_points(la, lo, pad, pad / max(0.05, math.cos(math.radians(float(la[0])))))),
-                      key=str)
-        ends = [np.asarray(self._cell_enu(k, ground=False)["ends"], np.float64).reshape(-1, 2) for k in keys]
-        ends = np.unique(np.round(np.concatenate(ends), 3), axis=0) if ends else np.zeros((0, 2))
-        if not len(ends):
-            return got
-        d = np.hypot(ends[:, 0] - xy[0], ends[:, 1] - xy[1])
-        cand = ends[(d > APPROACH_TOUCH_M) & (d <= TWIN_M)]
+        cand = self._ends_near([xy], TWIN_M + APPROACH_TOUCH_M, APPROACH_TOUCH_M, TWIN_M)[0]
+        if cand is None:
+            raise LookupError("a cell's road parts round it could not be read")
         if not len(cand):
             return got
         keep, lifts = [], {}
@@ -4837,8 +4962,8 @@ class _Planner:
                 others.append((line, half))
 
         # (the tracks near it: crossed under like a road, never an approach or a road beside the ramp)
-        rails = [line for c in cs for line in c.get("rail_ground", ())
-                 if not ((line.max(0) < lo_b).any() or (line.min(0) > hi_b).any())]
+        rails = [c["rail_ground"][n_] for c in cs for n_ in
+                 np.flatnonzero(_boxes_meet(c["rail_ground_box"], lo_b, hi_b)).tolist()]
 
         def z_at(p):
             la_, lo_, _ = self.frame.enu_to_geodetic(p[:, 0], p[:, 1], 0.0)
@@ -6000,37 +6125,43 @@ def grade_points(px, py, base, plans, lift=0.0):
                                  np.ascontiguousarray(ABD, f64))
 
 
+def _line_boxes(lines):
+    """(n, 4): each line's (k >= 1, 2+) [min e, min n, max e, max n]."""
+    if not lines:
+        return np.zeros((0, 4), np.float64)
+    pts = np.concatenate([np.asarray(ln, np.float64)[:, :2] for ln in lines])
+    st = np.r_[0, np.cumsum([len(ln) for ln in lines])[:-1]]
+    return np.concatenate([np.minimum.reduceat(pts, st, axis=0), np.maximum.reduceat(pts, st, axis=0)], axis=1)
+
+
+def _boxes_meet(boxes, lo, hi):
+    """(n,) bool: boxes (n, 4) (_line_boxes) not wholly below lo (2,) nor above hi (2,) on either axis: the lines whose
+    `not ((line.max(0) < lo).any() or (line.min(0) > hi).any())`."""
+    return ~((boxes[:, 2] < lo[0]) | (boxes[:, 3] < lo[1]) | (boxes[:, 0] > hi[0]) | (boxes[:, 1] > hi[1]))
+
+
 def bridge_chain(line, all_bridges):
     """The bridge parts joined to line through their ends (within 0.75 m), line itself excluded. Pure."""
+    import fast
+    fast.require(194, "plan_bridge_chain")      # (planends.rs: the frontier search over the parts' ends)
     line = np.asarray(line, np.float64)[:, :2]
-    parts = [np.asarray(b, np.float64)[:, :2] for b in all_bridges]
-    parts = [b for b in parts if not (len(b) == len(line) and np.array_equal(b, line))]
-    if not parts:
-        return []
-    first = np.array([b[0] for b in parts])
-    last = np.array([b[-1] for b in parts])
-    out, frontier, used = [], [line[0], line[-1]], np.zeros(len(parts), bool)
-    while frontier:
-        e = frontier.pop()
-        d = np.minimum(np.hypot(first[:, 0] - e[0], first[:, 1] - e[1]), np.hypot(last[:, 0] - e[0], last[:, 1] - e[1]))
-        for k in np.flatnonzero((d < 0.75) & ~used):    # (in the parts' order, as a loop over them would)
-            used[k] = True
-            out.append(parts[k])
-            frontier += [parts[k][0], parts[k][-1]]
-    return out
+    return [np.asarray(all_bridges[k], np.float64)[:, :2]
+            for k in fast._ef.plan_bridge_chain(_f64_lines(all_bridges), line, 0.75)]
+
+
+def _f64_lines(lines):
+    """lines as float64 arrays (the native kernels' argument; the planner's are already)."""
+    return [b if isinstance(b, np.ndarray) and b.dtype == np.float64 and b.ndim == 2 else
+            np.asarray(b, np.float64).reshape(len(b), -1) for b in lines]
 
 
 def bridge_chain_ends_free(line, all_bridges, xy):
     """Whether the end of bridge line nearest xy is an abutment: no other bridge part ends within 0.75 m. Pure."""
+    import fast
+    fast.require(194, "plan_bridges_joined")
     line = np.asarray(line, np.float64)
     end = line[0, :2] if np.hypot(*(line[0, :2] - xy[:2])) <= np.hypot(*(line[-1, :2] - xy[:2])) else line[-1, :2]
-    for o in all_bridges:
-        o = np.asarray(o, np.float64)
-        if len(o) == len(line) and np.array_equal(o, line):
-            continue
-        if min(np.hypot(*(o[0, :2] - end)), np.hypot(*(o[-1, :2] - end))) < 0.75:
-            return False
-    return True
+    return not fast._ef.plan_bridges_joined(_f64_lines(all_bridges), line, end[None], 0.75, False)[0]
 
 
 def deck_key(line, half):
@@ -6103,17 +6234,16 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         zu = np.asarray(zu, np.float64).copy()
         zu[:nr] = ground_under_deck(line, half, [(c[2], ground_lines[g]) for g, cs in enumerate(by) for c in cs], z_at)
     arcs = np.array([c[1] for c in cr], np.float64)
+    import fast
+    fast.require(194, "plan_bridges_joined")
+    bl = _f64_lines(all_bridges)
 
-    def joined_at(end, own=None):
-        own = line if own is None else own
-        for other in all_bridges:
-            if other is own or (len(other) == len(own) and np.array_equal(np.asarray(other)[:, :2], own[:, :2])):
-                continue
-            o = np.asarray(other, np.float64)
-            if min(np.hypot(*(o[0, :2] - end)), np.hypot(*(o[-1, :2] - end))) < 0.75:
-                return True
-        return False
-    joined = (joined_at(line[0]), joined_at(line[-1]))
+    def joined_ends(own):
+        """(first, last): does another bridge part (not own) have an end within 0.75 m of own's first / last point."""
+        own = np.asarray(own, np.float64)[:, :2]
+        a, b = fast._ef.plan_bridges_joined(bl, own, np.ascontiguousarray(own[[0, -1]]), 0.75, True)
+        return bool(a), bool(b)
+    joined = joined_ends(line)
     # (not a junction at an abutment; at a joint with the chain's next part the crossing is mid-bridge: Commerce
     # Street's bridge over I-95 in Springfield VA, split 2 m from where the motorway passes under, GitHub #138)
     rail = np.arange(len(cr)) >= nr
@@ -6140,7 +6270,7 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
     for part in (chain or ()):
         part = np.asarray(part, np.float64)[:, :2]
         sp = float(np.hypot(*np.diff(part, axis=0).T).sum())
-        pj = (joined_at(part[0], part), joined_at(part[-1], part))
+        pj = joined_ends(part)
         if by is not None:
             got = [(c, ground_lines[g]) for g, cs in enumerate(roadsmod._crossings_by([part], ground_lines)) for c in cs]
         else:

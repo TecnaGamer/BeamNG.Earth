@@ -22,6 +22,10 @@ from dataclasses import dataclass, field, replace
 
 import numpy as np
 
+import geodesy
+
+_ENU_G2E = geodesy.EnuFrame.geodetic_to_enu    # (Features.xy_in: frames converting as EnuFrame does)
+
 POINT, LINE, POLYGON = 1, 2, 3
 
 
@@ -123,11 +127,21 @@ class Features:
         memo = self.__dict__.setdefault("_xy_in", {})
         got = memo.get(key)
         if got is None:
-            if len(self.lonlat):
+            if not len(self.lonlat):
+                got = np.zeros((0, 2), np.float64)
+            elif memo and type(frame).geodetic_to_enu is _ENU_G2E and self.lonlat.dtype == np.float64:
+                # (another frame than the one kept: the layer's ECEF made once and kept, each frame's (e, n) its
+                # rotation alone, the numbers geodetic_to_enu gives. gradesep reads a cell's roads in each of its eight
+                # neighbours' frames, each a full conversion before: 2026-11-10)
+                import fast
+                fast.require(194, "ecef_to_frame")
+                ecef = self.__dict__.get("_ecef")
+                if ecef is None:
+                    ecef = self.__dict__["_ecef"] = fast._ef.lonlat_to_ecef(self.lonlat)
+                got = fast._ef.ecef_to_frame(ecef, frame.origin, frame.rot)
+            else:
                 e, n, _ = frame.geodetic_to_enu(self.lonlat[:, 1], self.lonlat[:, 0], 0.0)
                 got = np.stack([e, n], axis=1)
-            else:
-                got = np.zeros((0, 2), np.float64)
             if len(memo) >= 2:                  # an anchor or two at a time
                 memo.pop(next(iter(memo)))
             memo[key] = got

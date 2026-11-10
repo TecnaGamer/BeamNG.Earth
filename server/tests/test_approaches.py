@@ -404,5 +404,42 @@ class UnderwaterTunnelTest(unittest.TestCase):
         self.assertTrue(np.allclose(g2.apply(la, lo, raw), raw), "under water: none")
 
 
+class EndsNearTest(unittest.TestCase):
+    """_Planner._ends_near (planends.rs): the bridge ends of a point's own cells, rounded to the mm, each once in (x, y)
+    order, in the distance band, the approach's own other end left out; None where a cell of its own is unreadable."""
+
+    def planner(self, ends_of, bad=()):
+        import threading
+        import geodesy
+        import mapcells
+        g = object.__new__(grading._Planner)
+        g.lock = threading.Lock()
+        g.frame = geodesy.EnuFrame(40.754, -73.984)
+
+        def cell_enu(k, ground=True):
+            if (k.x, k.y) in bad:
+                raise OSError("unreadable")
+            return {"ends": ends_of.get((k.x, k.y), np.zeros((0, 2)))}
+        g._cell_enu = cell_enu
+        self.home = mapcells.cell_of(40.754, -73.984)
+        return g
+
+    def test_band_round_unique_order(self):
+        self.planner({})
+        k = (self.home.x, self.home.y)
+        ends = np.array([[30.0004, 5.0], [30.0, 5.0], [-20.0, 1.0], [1.0, 1.0], [150.0, 0.0], [-20.0, -3.0]])
+        g = self.planner({k: ends})
+        got = g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0)[0]
+        # (30.0004 rounds to 30.0: one; 1, 1 too near; 150 too far; sorted by x then y)
+        self.assertEqual(got.tolist(), [[-20.0, -3.0], [-20.0, 1.0], [30.0, 5.0]])
+        got = g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0, [np.array([-21.0, 1.5])])[0]
+        self.assertEqual(got.tolist(), [[-20.0, -3.0], [30.0, 5.0]], "the other end's abutment left out")
+
+    def test_unreadable_cell(self):
+        self.planner({})
+        g = self.planner({}, bad={(self.home.x, self.home.y)})
+        self.assertIsNone(g._ends_near([np.array([0.0, 0.0])], 100.0, 2.5, 100.0)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

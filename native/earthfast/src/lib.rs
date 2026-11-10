@@ -74,6 +74,8 @@ mod nycmassing;
 mod rooftop;
 mod specs;
 mod gsrows;
+mod planends;
+mod wallsindex;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -869,35 +871,121 @@ fn inside_view(p: &numpy::ndarray::ArrayView2<f64>, x: f64, y: f64) -> bool {
     c
 }
 
+/// geodesy.EnuFrame.geodetic_to_enu's maths for one point (lat, lon degrees, h m): WGS84 to ECEF, then into the frame
+/// (origin (3,) ECEF, rot (3, 3) rows E, N, U). The one copy every entry below uses (their numbers the same).
+#[inline]
+fn g2e_one(lat: f64, lon: f64, hv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const E2: f64 = F * (2.0 - F);
+    let (phi, lam) = (lat.to_radians(), lon.to_radians());
+    let (sl, cl) = (phi.sin(), phi.cos());
+    let nr = A / (1.0 - E2 * sl * sl).sqrt();
+    let rr = (nr + hv) * cl;
+    let x = rr * lam.cos() - o[0];
+    let y = rr * lam.sin() - o[1];
+    let z = (nr * (1.0 - E2) + hv) * sl - o[2];
+    (r[0][0] * x + r[0][1] * y + r[0][2] * z, r[1][0] * x + r[1][1] * y + r[1][2] * z,
+     r[2][0] * x + r[2][1] * y + r[2][2] * z)
+}
+
+/// geodesy.EnuFrame.enu_to_geodetic's maths for one point: ENU (e, n, u) -> ECEF through the frame -> (lat, lon, h)
+/// by Heikkinen's closed form (the polar axis included).
+#[inline]
+fn e2g_one(ev: f64, nv: f64, uv: f64, o: &[f64; 3], r: &[[f64; 3]; 3]) -> (f64, f64, f64) {
+    const A: f64 = 6378137.0;
+    const F: f64 = 1.0 / 298.257223563;
+    const B: f64 = A * (1.0 - F);
+    const E2: f64 = F * (2.0 - F);
+    const EP2: f64 = E2 / (1.0 - E2);
+    let x = o[0] + r[0][0] * ev + r[1][0] * nv + r[2][0] * uv;
+    let y = o[1] + r[0][1] * ev + r[1][1] * nv + r[2][1] * uv;
+    let z = o[2] + r[0][2] * ev + r[1][2] * nv + r[2][2] * uv;
+    let p2 = x * x + y * y;
+    let p = p2.sqrt();
+    let z2 = z * z;
+    let (la, h);
+    if p < 1e-6 {
+        la = if z >= 0.0 { 90.0 } else { -90.0 };
+        h = z.abs() - B;
+    } else {
+        let f_ = 54.0 * B * B * z2;
+        let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
+        let c = E2 * E2 * f_ * p2 / (g * g * g);
+        let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
+        let k = s + 1.0 + 1.0 / s;
+        let pp = f_ / (3.0 * k * k * g * g);
+        let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
+        let r0 = -pp * E2 * p / (1.0 + q)
+            + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
+        let t = (p - E2 * r0) * (p - E2 * r0);
+        let uu = (t + z2).sqrt();
+        let vv = (t + (1.0 - E2) * z2).sqrt();
+        let z0 = B * B * z / (A * vv);
+        h = uu * (1.0 - B * B / (A * vv));
+        la = (z + EP2 * z0).atan2(p).to_degrees();
+    }
+    (la, y.atan2(x).to_degrees(), h)
+}
+
+fn frame_of(origin: &PyReadonlyArray1<'_, f64>, rot: &PyReadonlyArray2<'_, f64>) -> PyResult<([f64; 3], [[f64; 3]; 3])> {
+    let (o, r) = (origin.as_array(), rot.as_array());
+    if o.len() < 3 || r.nrows() < 3 || r.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("a frame: origin (3,), rot (3, 3)"));
+    }
+    Ok(([o[0], o[1], o[2]], [[r[[0, 0]], r[[0, 1]], r[[0, 2]]], [r[[1, 0]], r[[1, 1]], r[[1, 2]]],
+                             [r[[2, 0]], r[[2, 1]], r[[2, 2]]]]))
+}
+
+type Three<'py> = (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>);
+
+/// (x, y, z) of every point i by one(a[i], b[i], c(i)), the GIL let go for long lists.
+fn three<'py, C, O>(py: Python<'py>, a: numpy::ndarray::ArrayView1<f64>, b: numpy::ndarray::ArrayView1<f64>, c: C,
+                    cost: usize, one: O) -> Three<'py>
+where
+    C: Fn(usize) -> f64 + Sync,
+    O: Fn(f64, f64, f64) -> (f64, f64, f64) + Sync,
+{
+    let n = a.len();
+    let (x, y, z) = release(py, n * cost, || {
+        let (mut x, mut y, mut z) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
+        for i in 0..n {
+            let v = one(a[i], b[i], c(i));
+            x.push(v.0);
+            y.push(v.1);
+            z.push(v.2);
+        }
+        (x, y, z)
+    });
+    (x.into_pyarray(py), y.into_pyarray(py), z.into_pyarray(py))
+}
+
 /// geodesy.EnuFrame.geodetic_to_enu for 1-D lat, lon, h (degrees, metres): WGS84 to ECEF, then into the frame
 /// (origin (3,) ECEF, rot (3, 3) rows E, N, U). -> (e, n, u).
 #[pyfunction]
 fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
                         h: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
-    const A: f64 = 6378137.0;
-    const F: f64 = 1.0 / 298.257223563;
-    const E2: f64 = F * (2.0 - F);
-    let (la, lo, hh, o, r) = (lat.as_array(), lon.as_array(), h.as_array(), origin.as_array(), rot.as_array());
-    let n = la.len();
-    let (e, nn, u) = release(py, n * 40, || {
-    let (mut e, mut nn, mut u) = (Vec::with_capacity(n), Vec::with_capacity(n), Vec::with_capacity(n));
-    for i in 0..n {
-        let (phi, lam, hv) = (la[i].to_radians(), lo[i].to_radians(), hh[i]);
-        let (sl, cl) = (phi.sin(), phi.cos());
-        let nr = A / (1.0 - E2 * sl * sl).sqrt();
-        let rr = (nr + hv) * cl;
-        let x = rr * lam.cos() - o[0];
-        let y = rr * lam.sin() - o[1];
-        let z = (nr * (1.0 - E2) + hv) * sl - o[2];
-        e.push(r[[0, 0]] * x + r[[0, 1]] * y + r[[0, 2]] * z);
-        nn.push(r[[1, 0]] * x + r[[1, 1]] * y + r[[1, 2]] * z);
-        u.push(r[[2, 0]] * x + r[[2, 1]] * y + r[[2, 2]] * z);
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo, hh) = (lat.as_array(), lon.as_array(), h.as_array());
+    if lo.len() != la.len() || hh.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu: arrays of different lengths"));
     }
-    (e, nn, u)
-    });
-    (e.into_pyarray(py), nn.into_pyarray(py), u.into_pyarray(py))
+    Ok(three(py, la, lo, |i| hh[i], 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
+}
+
+/// geodetic_to_enu with one height for every point (geodesy._rust3's common call: the same numbers, no array of
+/// heights made and broadcast for it).
+#[pyfunction]
+fn geodetic_to_enu_c<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>, h: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (la, lo) = (lat.as_array(), lon.as_array());
+    if lo.len() != la.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("geodetic_to_enu_c: arrays of different lengths"));
+    }
+    Ok(three(py, la, lo, |_| h, 40, |a, b, c| g2e_one(a, b, c, &o, &r)))
 }
 
 /// geodesy.EnuFrame.enu_to_geodetic for point lists: ENU (e, n, u) -> ECEF through the frame (origin, rot rows =
@@ -906,53 +994,86 @@ fn geodetic_to_enu<'py>(py: Python<'py>, lat: PyReadonlyArray1<'py, f64>, lon: P
 #[pyfunction]
 fn enu_to_geodetic<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>,
                         u: PyReadonlyArray1<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
-                        rot: PyReadonlyArray2<'py, f64>)
-                        -> (Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>, Bound<'py, PyArray1<f64>>) {
+                        rot: PyReadonlyArray2<'py, f64>) -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na, ua) = (e.as_array(), n.as_array(), u.as_array());
+    if na.len() != ea.len() || ua.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |i| ua[i], 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// enu_to_geodetic with one up value for every point (geodesy._rust3's common call).
+#[pyfunction]
+fn enu_to_geodetic_c<'py>(py: Python<'py>, e: PyReadonlyArray1<'py, f64>, n: PyReadonlyArray1<'py, f64>, u: f64,
+                          origin: PyReadonlyArray1<'py, f64>, rot: PyReadonlyArray2<'py, f64>)
+                          -> PyResult<Three<'py>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let (ea, na) = (e.as_array(), n.as_array());
+    if na.len() != ea.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("enu_to_geodetic_c: arrays of different lengths"));
+    }
+    Ok(three(py, ea, na, |_| u, 60, |a, b, c| e2g_one(a, b, c, &o, &r)))
+}
+
+/// mapgeom.Features.xy_in's first half: the WGS84 ECEF (n, 3) of lon/lat points (ll (n, 2), h = 0), kept per layer;
+/// ecef_to_frame turns it into any frame's (e, n) with the numbers geodetic_to_enu gives (its very operations: the
+/// origin subtracted from the same products). A cell's roads layer is read in each of its neighbours' frames
+/// (gradesep: nine), each time with its trigonometry again.
+#[pyfunction]
+fn lonlat_to_ecef<'py>(py: Python<'py>, ll: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
     const A: f64 = 6378137.0;
     const F: f64 = 1.0 / 298.257223563;
-    const B: f64 = A * (1.0 - F);
     const E2: f64 = F * (2.0 - F);
-    const EP2: f64 = E2 / (1.0 - E2);
-    let (ea, na, ua, o, r) = (e.as_array(), n.as_array(), u.as_array(), origin.as_array(), rot.as_array());
-    let m = ea.len();
-    let (lat, lon, hgt) = release(py, m * 60, || {
-    let (mut lat, mut lon, mut hgt) = (Vec::with_capacity(m), Vec::with_capacity(m), Vec::with_capacity(m));
-    for i in 0..m {
-        let (ev, nv, uv) = (ea[i], na[i], ua[i]);
-        let x = o[0] + r[[0, 0]] * ev + r[[1, 0]] * nv + r[[2, 0]] * uv;
-        let y = o[1] + r[[0, 1]] * ev + r[[1, 1]] * nv + r[[2, 1]] * uv;
-        let z = o[2] + r[[0, 2]] * ev + r[[1, 2]] * nv + r[[2, 2]] * uv;
-        let p2 = x * x + y * y;
-        let p = p2.sqrt();
-        let z2 = z * z;
-        let (la, h);
-        if p < 1e-6 {
-            la = if z >= 0.0 { 90.0 } else { -90.0 };
-            h = z.abs() - B;
-        } else {
-            let f_ = 54.0 * B * B * z2;
-            let g = p2 + (1.0 - E2) * z2 - E2 * (A * A - B * B);
-            let c = E2 * E2 * f_ * p2 / (g * g * g);
-            let s = (1.0 + c + (c * c + 2.0 * c).sqrt()).cbrt();
-            let k = s + 1.0 + 1.0 / s;
-            let pp = f_ / (3.0 * k * k * g * g);
-            let q = (1.0 + 2.0 * E2 * E2 * pp).sqrt();
-            let r0 = -pp * E2 * p / (1.0 + q)
-                + (0.5 * A * A * (1.0 + 1.0 / q) - pp * (1.0 - E2) * z2 / (q * (1.0 + q)) - 0.5 * pp * p2).max(0.0).sqrt();
-            let t = (p - E2 * r0) * (p - E2 * r0);
-            let uu = (t + z2).sqrt();
-            let vv = (t + (1.0 - E2) * z2).sqrt();
-            let z0 = B * B * z / (A * vv);
-            h = uu * (1.0 - B * B / (A * vv));
-            la = (z + EP2 * z0).atan2(p).to_degrees();
-        }
-        lat.push(la);
-        lon.push(y.atan2(x).to_degrees());
-        hgt.push(h);
+    let p = ll.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 2 {
+        return Err(pyo3::exceptions::PyValueError::new_err("lonlat_to_ecef: (n, 2) lon/lat"));
     }
-    (lat, lon, hgt)
+    let out = release(py, n * 40, || {
+        let mut out = Vec::with_capacity(n * 3);
+        for i in 0..n {
+            // (g2e_one's first half with h = 0)
+            let hv = 0.0f64;
+            let (phi, lam) = (p[[i, 1]].to_radians(), p[[i, 0]].to_radians());
+            let (sl, cl) = (phi.sin(), phi.cos());
+            let nr = A / (1.0 - E2 * sl * sl).sqrt();
+            let rr = (nr + hv) * cl;
+            out.push(rr * lam.cos());
+            out.push(rr * lam.sin());
+            out.push((nr * (1.0 - E2) + hv) * sl);
+        }
+        out
     });
-    (lat.into_pyarray(py), lon.into_pyarray(py), hgt.into_pyarray(py))
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 3), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 2) east / north in the frame (origin, rot) of ECEF points (lonlat_to_ecef's): geodetic_to_enu's last step.
+#[pyfunction]
+fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: PyReadonlyArray1<'py, f64>,
+                      rot: PyReadonlyArray2<'py, f64>) -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (o, r) = frame_of(&origin, &rot)?;
+    let p = xyz.as_array();
+    let n = p.nrows();
+    if n > 0 && p.ncols() < 3 {
+        return Err(pyo3::exceptions::PyValueError::new_err("ecef_to_frame: (n, 3) ECEF"));
+    }
+    let out = release(py, n * 6, || {
+        let mut out = Vec::with_capacity(n * 2);
+        for i in 0..n {
+            let x = p[[i, 0]] - o[0];
+            let y = p[[i, 1]] - o[1];
+            let z = p[[i, 2]] - o[2];
+            out.push(r[0][0] * x + r[0][1] * y + r[0][2] * z);
+            out.push(r[1][0] * x + r[1][1] * y + r[1][2] * z);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 2), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
 }
 
 /// bc7.encode: BC7 mode-6 blocks (16 bytes each, row-major) of an (h, w, 3|4) uint8 image, edges padded by
@@ -5671,6 +5792,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(point_inside, m)?)?;
     m.add_function(wrap_pyfunction!(geodetic_to_enu, m)?)?;
     m.add_function(wrap_pyfunction!(enu_to_geodetic, m)?)?;
+    m.add_function(wrap_pyfunction!(geodetic_to_enu_c, m)?)?;
+    m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
+    m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
+    m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
     m.add_function(wrap_pyfunction!(densify, m)?)?;
@@ -5878,7 +6003,15 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
     // GitHub #1098)
     // 191: building_walls' shop_edges (a shop's ground floor on its street walls only)
-    // 193: regional_groups' med / g_med (the Mediterranean basin's trees; 192 is rs-plans' if it lands)
-    m.add("VERSION", 193)?;
+    // 193: regional_groups' med / g_med (the Mediterranean basin's trees)
+    m.add_function(wrap_pyfunction!(planends::plan_ends_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridges_joined, m)?)?;
+    m.add_function(wrap_pyfunction!(planends::plan_bridge_chain, m)?)?;
+    m.add_function(wrap_pyfunction!(wallsindex::walls_index, m)?)?;
+    // 194: planends (grading's bridge-end queries a cell's plan ends at a time: _ends_near, bridge_chain, the joined
+    // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
+    // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
+    // another frame by the rotation alone); wallsindex (roadwidth.Walls' bucket index)
+    m.add("VERSION", 194)?;
     Ok(())
 }

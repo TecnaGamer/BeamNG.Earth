@@ -76,26 +76,12 @@ class Walls:
             bk, self.seg_of = index
             self.keys, self.first, self.counts = bk[0], bk[1], bk[2]     # (rows: contiguous, as the Rust loop takes)
             return
-        # bucket index, vectorised (a Python loop per segment took ~18 s for a city's 9 cells, 2026-10-12):
-        # one (segment, bucket) pair per bucket a segment's box touches, sorted by bucket key
-        s = np.asarray(self.segs, np.float64)
-        bx0 = np.floor(np.minimum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        bx1 = np.floor(np.maximum(s[:, 0], s[:, 2]) / BUCKET).astype(np.int64)
-        by0 = np.floor(np.minimum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        by1 = np.floor(np.maximum(s[:, 1], s[:, 3]) / BUCKET).astype(np.int64)
-        nx, ny = bx1 - bx0 + 1, by1 - by0 + 1
-        cnt = nx * ny
-        seg = np.repeat(np.arange(len(s)), cnt)
-        k = np.arange(cnt.sum()) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-        bx = np.repeat(bx0, cnt) + k % np.repeat(nx, cnt)
-        by = np.repeat(by0, cnt) + k // np.repeat(nx, cnt)
-        key = self._key(bx, by)
-        # (any order within a bucket: a ray keeps its nearest hit; np.unique would sort the sorted keys again)
-        order = np.argsort(key)
-        ks = key[order]
-        first = np.flatnonzero(np.r_[True, ks[1:] != ks[:-1]]) if len(ks) else np.zeros(0, np.int64)
-        self.keys = ks[first]
-        self.first, self.counts, self.seg_of = first, np.diff(np.r_[first, len(ks)]), seg[order]
+        # the bucket index (wallsindex.rs: one (segment, bucket) pair per bucket a segment's box touches, sorted by
+        # bucket key; numpy's ~15 whole-array passes were ~1.7 % of a cold road tile's samples, 2026-11-10)
+        import fast
+        fast.require(194, "walls_index")
+        self.keys, self.first, self.counts, self.seg_of = fast._ef.walls_index(
+            np.ascontiguousarray(self.segs, np.float64).reshape(-1, 4), float(BUCKET))
 
     def index_arrays(self):
         """(buckets (3, B) int64 rows key, first, count, seg_of (P,) int64): the bucket index, for the store."""
