@@ -758,6 +758,25 @@ cells outward from the car and may download up to 4 cells a call until a station
 Every road tile reports which of the stations it owns it laid out (`gasstations.tile_sites(..., tried=)`): a listing
 the world built nothing for leaves the answers, and comes back if a later build lays it out.
 
+### Station shards (`tools/build_station_tags.py`, `railtags.StationTags`; Bauer33333 on #716, 2026-11-04: "Almost 3/4 of `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`")
+
+A weekly OpenStreetMap dataset `stations`, built and published like the rail, lane and sign shards (the
+`BeamNG.Earth-data` repo's GitHub Action, served from its Pages): every `amenity=fuel` and `amenity=charging_station`
+(a node, or a way's centre) with its name, brand (or operator / network) and, for chargers, `capacity`; and every
+`man_made=charge_point` node. z7 shards (`stations/<x>/<y>.json.gz`, FORMAT 1: `{"s": [[id, kind, lon, lat, name,
+brand, cap]], "p": [[lon, lat]]}`) and `stations/manifest.json`; the Berlin extract is 2,127 stations (70 % of its
+chargers with a capacity) and 84 charge points in under 0.1 MB.
+
+- **The station finder** lists a cell's stations from the shards when its map data is not downloaded (the map then
+  shows stations everywhere; Nearest no longer downloads cells ring by ring). Once the cell's map data is on disk its
+  list is built from it, as before. The road tiles' empty-listing reports apply to both.
+- **EV chargers:** a site matching a shard charging station within `MERGE_M` gets its `capacity` chargers (at most
+  `evchargers.CAP_MAX`, 12); a site with 2+ mapped charge points stands a charger at each (at most 16), facing the
+  nearest drive line or road, its stall in front, points in buildings or on roads dropped.
+- `mapdata.versions()["stations"]` is the build in use (as `rails`): the road tiles' cache keys follow it.
+- Off (`BNE_STATIONTAGS=off`), not published yet, offline or unreachable: nothing changes (the finder downloads cells,
+  the chargers keep their guessed counts). `BNE_STATIONS_DIR=<folder>` reads a local build instead.
+
 ### Town signs (`server/townsigns.py`; `BNE_TOWNSIGNS=on`, off by default)
 
 Each country's own town entry and exit signs where a paved road enters a town's built-up land. The towns are
@@ -809,7 +828,7 @@ determinism, queries, the download / weekly refresh / last-good-copy store behin
 the CLI), the grading on synthetic DEMs (limits, data ends, steep / relaxed / coarse, crossings, no steps,
 footprint, determinism, `heightmap.grid_u` with the graded sampler) and the markings (classes, stripe counts,
 designators, on the pavement, no overlaps, mirrored ends, displaced thresholds, closed runways).
-`test_stationindex.py` the station finder: a cell's stations, the map's cached cells, Nearest's rings, the road tiles' reports and the `stations` message. `test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
+`test_build_station_tags.py` the station shards' builder (skipped without osmium). `test_stationindex.py` the station finder: a cell's stations, the map's cached cells, Nearest's rings, the road tiles' reports and the `stations` message. `test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
 tests. `test_farfield.py` selection, hysteresis, swap groups, err/sink/skirt and the shipped mod
 assets. `test_mesh.py` mesh mode: selection down to L-2 with the min-level radii (no gaps/overlaps on
 64 m cells), the 25 % hysteresis at 150/400 m, L-2 vertices == terrain PNG heights (float64 and the
