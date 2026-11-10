@@ -301,10 +301,13 @@ class JunctionRaiseFalseLiftTest(unittest.TestCase):
         # (the junction's roads: the cross streets 20-60 m off it, the road on past it)
         pts = [(x, y) for x in (-43.0, 43.0) for y in (-60.0, -40.0, -20.0, 20.0, 40.0, 60.0)] + \
               [(x, 0.0) for x in (-100.0, -70.0, 70.0, 100.0)]
-        before = self.graded(cut_elev, f, pts, JR_TRUSTED=False)
+        before = self.graded(cut_elev, f, pts, JR_TRUSTED=False, LIFT_UNDER_BESIDE=False)
         after = self.graded(cut_elev, f, pts)
         self.assertGreater(before.max(), 2.0, "the case raised its junction before the fix")
         self.assertLess(after.max(), 0.5, (before.round(1), after.round(1)))
+        # (either alone: the junction raise asking the road under's own ground, or the abutment's lift reading it)
+        for knobs in ({"JR_TRUSTED": False}, {"LIFT_UNDER_BESIDE": False}):
+            self.assertLess(self.graded(cut_elev, f, pts, **knobs).max(), 0.5, knobs)
 
     def test_a_freeways_own_deck_is_no_raised_junctions(self):
         # (a motorway on the ground over a street on its own deck, 20 m on to the gore where a link leaves: its

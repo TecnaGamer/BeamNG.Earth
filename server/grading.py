@@ -380,6 +380,9 @@ UNDER_LIDAR_DECK_M = roadsmod.AT_GRADE_M
 # coarse models (their smeared embankments are wider than that: UNDER_RUN_*).
 UNDER_DECK_ON = os.environ.get("BNE_UNDER_DECK_GROUND", "on") != "off"
 UNDER_DECK_SIDE_M = 15.0    # m past a deck's side the road's ground is read (Assaku's hump: 6-13 m past its decks)
+# ... and an overpass's abutment lift reads the road under the same way (bridge_lifts' half, _end_lift_raw): an
+# elevation holding the deck over a cut read the motorway at the deck's height and asked 6.7-8.5 m (GitHub #1077, #1086)
+LIFT_UNDER_BESIDE = os.environ.get("BNE_LIFT_UNDER_BESIDE", "on") != "off"
 # A walkway bridge is not a road, so it never becomes a deck. The elevation still has it: a footbridge across a
 # motorway cut is a ridge of ground in the carriageway (a catwalk over I-87 at Lake George, GitHub #802). Its span
 # caps the road under it the same way a road deck does, and nothing else (no ramp, no abutment).
@@ -4631,7 +4634,7 @@ class _Planner:
         best = None
         # (the road under's ground read beside the deck, as its own plan reads it: not on the coarse models, UNDER_DECK_ON)
         bhalf = None
-        if UNDER_DECK_ON and not self._coarse(home):
+        if LIFT_UNDER_BESIDE and UNDER_DECK_ON and not self._coarse(home):
             bi = hc["end_of"][int(hit[0])]
             hs = hc.get("bridge_half") or ()
             bhalf = float(hs[bi]) if bi < len(hs) and hs[bi] > 0 else 4.0
