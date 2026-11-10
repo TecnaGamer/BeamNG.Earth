@@ -191,6 +191,17 @@ class MarkTest(IndexCase):
         idx.mark([("fuel", la + 1e-5, lo, True)])           # (the tile built again: laid out this time)
         self.assertEqual(len(idx.query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
 
+    def test_rebuilt_tile_restores(self):
+        # a road tile built again (another anchor, a later rule) that lays the station out: the latest report wins
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo)]})
+        idx = self.index(md)
+        idx.mark([("fuel", la, lo, False)])
+        idx.mark([("fuel", la, lo, True)])
+        self.assertEqual(len(idx.query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
+        idx.mark([("fuel", la, lo, False)])
+        self.assertEqual(idx.query(la, lo, 5.0, ["fuel"], "map")[0], [])
+
     def test_mark_kind_apart(self):
         la, lo = centre(A)
         md = CellMD({A: [place("a", la, lo)]})

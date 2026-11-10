@@ -2350,6 +2350,7 @@ class Server:
             raise
         if res is not None and res.get("content") is not None:
             self.keep_fuel_pads(res["content"][3])
+            Server.keep_fuel_tried(self, (res["content"][2] or {}).get("fuel_tried"))
         return res
 
     def geo_content_key(self, gx, gy):
@@ -2445,6 +2446,8 @@ class Server:
                 raise
             log.debug("road tile %d_%d: %.2f s (queue + build)", tx, ty, time.perf_counter() - t0)
             self.keep_fuel_pads(res[2])
+            if len(res) > 3:            # (a revisit cache hit has no report: nothing marked)
+                Server.keep_fuel_tried(self, res[3])
             return res[:2]
         self.mapdata.warm(roadsmod.tile_needs(anchor.frame, tx, ty, self.buildings, self.road_widths is not None,
                                               1 + seacarvemod.LINE_CELLS if self.sea is not None else 0))
@@ -2463,11 +2466,12 @@ class Server:
                 anchor.bridges = self.chain_view(anchor, "bridges", elev)
             if anchor.tunnels is None:
                 anchor.tunnels = self.chain_view(anchor, "tunnels", elev, g)
-        fuel, skip, fuel_cuts, fuel_pads = [], frozenset(), [], []
+        fuel, skip, fuel_cuts, fuel_pads, fuel_tried = [], frozenset(), [], [], []
         if self.gas_stations:       # pumps and refuel areas; their canopy outlines left out of the buildings
             fuel, skip = gasstationsmod.tile_sites(anchor.frame, tx, ty, self.mapdata, elev, cuts=fuel_cuts,
-                                                   pads=fuel_pads)
+                                                   pads=fuel_pads, tried=fuel_tried)
             self.keep_fuel_pads(fuel_pads)
+            Server.keep_fuel_tried(self, fuel_tried)
         props = [] if self.buildings else None
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
@@ -2927,6 +2931,16 @@ class Server:
             new = self.surface.add_fuel_pads(pads)
             if new:
                 self.pads_stale(new)
+
+    def keep_fuel_tried(self, tried):
+        """A road tile's report of which stations it laid out (gasstations.tile_sites tried) into the station finder's
+        index: a listing the world built nothing for leaves the map (the user, 2026-11-09). Worker threads."""
+        idx = getattr(self, "stations", None)
+        if tried and idx is not None:
+            try:
+                idx.mark(tried)
+            except Exception as e:      # (the finder's bookkeeping never costs a tile)
+                log.debug("station index: %s: %s", type(e).__name__, e)
 
     def pads_stale(self, items=None):
         """The built blocks whose photo was painted without these pads [(id, rings)] (every built block: None)

@@ -894,10 +894,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("profiles")
     walks = []
     urban = _s.surface.urban if _s.surface is not None else None
-    fuel, skip, fuel_cuts, fuel_pads = [], frozenset(), [], []
+    fuel, skip, fuel_cuts, fuel_pads, fuel_tried = [], frozenset(), [], [], []
     if gas_stations:                    # pumps and refuel areas; their canopy outlines left out of the buildings
-        import gasstations
-        fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads)
+        import gasstations              # (tried: which stations were laid out, for the station finder's map)
+        fuel, skip = gasstations.tile_sites(frame, tx, ty, _s.md, elev, cuts=fuel_cuts, pads=fuel_pads,
+                                            tried=fuel_tried)
     mark("fuel")
     props = [] if buildings else None
     lines = [] if buildings else None
@@ -1181,6 +1182,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     P.chunks, P.ctx, P.walks, P.box, P.origin = chunks, ctx, walks, box, (x0, y0, 0.0)
     P.custom, P.custom_entries = _custom, _entries
     P.bld, P.props, P.wires, P.park, P.fuel, P.fuel_pads = bld, props, wires, park, fuel, fuel_pads
+    P.fuel_tried = fuel_tried
     P.guardrail_rows, P.garage_sound, P.wells = guardrail_rows, garage_sound, oil_wells
     P.barrier_mesh, P.barrier_chunks = barrier_mesh, barrier_chunks     # (PR #471's median barriers)
     P.turbines = turbine_rows
@@ -1209,7 +1211,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
                               guardrail_rows=P.guardrail_rows, garage_sound=P.garage_sound,
                               signs=P.signs, custom_entries=P.custom_entries, wells=P.wells, bld_none=bool(buildings),
-                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces) + (P.fuel_pads,)
+                              barrier_mesh=P.barrier_mesh, barrier_chunks=P.barrier_chunks, turbines=P.turbines, towns=P.town_faces) + (P.fuel_pads, P.fuel_tried)
     mark("write")
     return out
 
@@ -1456,6 +1458,7 @@ def _geo_content(gx, gy, zoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_
                     de_junctions=de_junctions, towns_on=towns_on)
     P.walks_raw = walks_raw
     path, n, info = _write_geo_content(out_dir, vfs_dir, tile, P)
+    info = dict(info or {}, fuel_tried=[list(t) for t in getattr(P, "fuel_tried", ())])     # (the station finder)
     mark("write")
     _geo_stats["content_built"] += 1
     if revisit.ON and revisit.faults() == f0:     # (complete: nothing it read failed or was missing)
