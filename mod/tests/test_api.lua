@@ -28,7 +28,10 @@ package.loaded['beamngEarth/gps'] = {
   setDestination = function(lat, lon, name) dest = { lat = lat, lon = lon, name = name } return true end,
   setRoute = function(points) dest = { lat = points[#points].lat, lon = points[#points].lon, name = 'route' } return true end,
   clear = function() dest = nil end,
-  status = function() return dest and { lat = dest.lat, lon = dest.lon, name = dest.name, remaining = 1200, eta = 90 } end,
+  status = function() return dest and { lat = dest.lat, lon = dest.lon, name = dest.name, remaining = 1200, eta = 90,
+    off = 3.5, routeVersion = 7 } end,
+  route = function() return dest and { version = 7, points = { { 45.0, 7.0 }, { 45.01, 7.0 } }, dist = 1112,
+    dur = 80, elev = { { 0, 250 }, { 1112, 260 } }, legs = nil } end,
 }
 
 local anchor = geodesy.newAnchor(45.0, 7.0)
@@ -49,7 +52,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 5, 'version 1.5 (speedLimit)')
+T.check(api.version() == 1 and select(2, api.version()) == 6, 'version 1.6 (routeGeometry, transform)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -261,6 +264,31 @@ T.check(api.speedLimit() == nil, 'off the road: nil')
 st.inOurLevel = false
 roadDist = 1
 T.check(api.speedLimit() == nil, 'another level: nil')
+st.inOurLevel = true
+
+-- the route geometry and the coordinate transform (1.6, GitHub #1075)
+T.check(api.has('routeGeometry') and api.has('transform'), 'has routeGeometry, transform')
+T.check(api.gpsRoute() == nil, 'no destination: no route')
+api.gpsSet(45.01, 7.0, 'north')
+local r = api.gpsRoute()
+T.check(r and r.version == 7 and #r.points == 2 and r.points[2][1] == 45.01 and r.elev[2][2] == 260, 'the route')
+r.points[1][1] = 0
+T.check(api.gpsRoute().points[1][1] == 45.0, 'a copy: the caller changes nothing')
+local g = api.gps()
+T.check(g.off == 3.5 and g.routeVersion == 7, 'gps(): off the route, its version')
+api.gpsClear()
+local gx, gy, gz = api.toGame(45.0, 7.0)
+T.near(gx, 0, 1e-6, 'toGame: the origin x')
+T.near(gy, 0, 1e-6, 'toGame: the origin y')
+local la, lo = api.toGeo(gx, gy, gz)
+T.near(la, 45.0, 1e-9, 'toGeo: back')
+T.near(lo, 7.0, 1e-9, 'toGeo: back lon')
+local ex, ey = api.toGame(45.0, 7.01)
+T.check(ex > 780 and ex < 800 and math.abs(ey) < 2, 'toGame: 0.01 deg east is ~787 m east (' .. ex .. ', ' .. ey .. ')')
+local bl, bo = api.toGeo(ex, ey)
+T.near(bo, 7.01, 1e-8, 'toGeo round trip')
+st.inOurLevel = false
+T.check(api.toGame(45.0, 7.0) == nil and api.toGeo(0, 0) == nil, 'another level: nil')
 st.inOurLevel = true
 
 T.done('test_api')
