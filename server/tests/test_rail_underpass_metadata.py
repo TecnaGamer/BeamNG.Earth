@@ -28,9 +28,12 @@ class UnderpassMetadataTest(unittest.TestCase):
     def effective(self, f, rail_bridge=False, road_ranges=()):
         # The effective result saved by gradesep/cellfacts, without mutating original map flags.
         ranges = {0: [(0.0, 1.0, "bridge")] if rail_bridge else [], 1: list(road_ranges)}
+        # (roads' batched readers too: bridge_specs / tunnel_specs read the layer's ranges at once, earthfast.RoadRules)
         return mock.patch.multiple(roads,
                                    raw_level_ranges=lambda feats, i: list(ranges[i]),
-                                   level_ranges=lambda feats, i: list(ranges[i]))
+                                   level_ranges=lambda feats, i: list(ranges[i]),
+                                   _raw_all=lambda feats: [list(ranges[i]) for i in range(len(feats))],
+                                   _level_lists=lambda feats, idx: {i: list(ranges[i]) for i in idx})
 
     def test_converted_tunnel_keeps_promoted_deck_clear(self):
         f = self.cell()
