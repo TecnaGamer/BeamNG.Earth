@@ -69,7 +69,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
             continue
         w = wk.get("w", 2.5)
         phase = furniture._h01(fid, side, "parkph") * SPOT_LEN_M
-        for p, away in furniture._stations(run, line, SPOT_LEN_M, phase, CORNER_CLEAR_M, side):
+        for p, away, _ in furniture._stations(run, line, SPOT_LEN_M, phase, CORNER_CLEAR_M, side):
             q = p[:2] - away * (w / 2 + CURB_OFF_M)          # from the sidewalk's middle past the curb
             if not (_owns(box, q[0], q[1])):
                 continue

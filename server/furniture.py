@@ -955,24 +955,15 @@ def lamp_lenses(rows):
 
 
 def _stations(run, line, spacing, phase, clear, side):
-    """(point (3,), away-from-the-road unit (2,)) on a sidewalk run at the road's stations phase + k spacing
-    (arc length along the road line, so every tile and anchor gets the same ones), END_CLEAR_M from the run's
-    ends."""
-    s_run = _project(line, run[:, :2])
-    lo, hi = min(s_run[0], s_run[-1]), max(s_run[0], s_run[-1])
-    k0, k1 = math.ceil((lo - phase) / spacing), math.floor((hi - phase) / spacing)
-    if k1 < k0:
-        return []
-    p_road, _ = _at(line, phase + spacing * np.arange(k0, k1 + 1))
-    s_on_run = _project(run, p_road[:, :2])
-    L = _arclen(run)[-1]
-    out = []
-    for s in s_on_run:
-        if s < clear or s > L - clear:
-            continue
-        p, d = _at(run, np.array([s]))
-        out.append((p[0], np.array([-d[0][1], d[0][0]]) * side))   # away from the road (sidewalks.run_geometry)
-    return out
+    """[(point (3,), away-from-the-road unit (2,), arc length (the point's _project on the road line))] on a sidewalk
+    run at the road's stations phase + k spacing (arc length along the road line, so every tile and anchor gets the
+    same ones), END_CLEAR_M from the run's ends (earthfast furniture_stations: one call per run)."""
+    import fast
+    fast.require(188, "furniture stations")
+    P, O, S = fast._ef.furniture_stations(np.ascontiguousarray(run, np.float64),
+                                          np.ascontiguousarray(line, np.float64), float(spacing), float(phase),
+                                          float(clear), float(side))
+    return list(zip(P, O, S.tolist()))
 
 
 DECK_HEADROOM_M = 0.5      # m a prop's top stays below a bridge deck over it
@@ -1142,11 +1133,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             return _h01(fid, side, k, group, "development") < weight
 
         def put(group, spacing, phase, curb_off, height, yaw_fn, clear=END_CLEAR_M, optional=False):
-            for p, out in _stations(run, line, spacing, phase, clear, side):
+            for p, out, s_line in _stations(run, line, spacing, phase, clear, side):
                 q = p[:2] - out * (w / 2 - curb_off)
                 if _owns(box, q[0], q[1]) and not on_bed(q):
                     if optional:
-                        k = int(round((float(_project(line, p[None, :2])[0]) - phase) / spacing))
+                        k = int(round((s_line - phase) / spacing))
                         if not decorated(group, p, out, k):
                             continue
                     chosen, height_ = group, height
@@ -1164,7 +1155,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                 lit.add(fid)
                 run_poles = []
                 ph = _h01(fid, "tphase") * TOWN_POLE_SPACING
-                for p, out in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
+                for p, out, _ in _stations(run, line, TOWN_POLE_SPACING, ph, END_CLEAR_M, side):
                     q = p[:2] - out * (w / 2 - 0.6)
                     if on_bed(q):
                         continue
@@ -1199,12 +1190,12 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             # street trees in pits along the curb (the photos' dense streets have rows of them; the canopy
             # model has few there): small broadleaves, both sides, clear of the junctions
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
-            for p, out in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
+            for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
                 q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
                 if _owns(box, q[0], q[1]):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
-                    k = int(round((float(_project(line, p[None, :2])[0]) - tph) / STREET_TREE_SPACING))
+                    k = int(round((s_line - tph) / STREET_TREE_SPACING))
                     if not decorated(G_STREET_TREE, p, out, k):
                         continue
                     h = 6.5 + 3.5 * _h01(fid, side, k, "th")

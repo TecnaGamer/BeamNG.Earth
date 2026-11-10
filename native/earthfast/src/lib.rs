@@ -1,5 +1,6 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
+mod devctx;
 mod devraster;
 mod roofs;
 mod roofphoto;
@@ -66,6 +67,7 @@ mod underdeck;
 mod railseam;
 mod classgrid;
 mod frontage;
+mod furnstations;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -5620,7 +5622,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(groundpaint::value_noises, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::pad_cover, m)?)?;
     m.add_function(wrap_pyfunction!(groundpaint::paint_pads, m)?)?;
-    m.add_function(wrap_pyfunction!(devraster::fill_bits, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::cloud_layer, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::shell_lonlat, m)?)?;
     m.add_function(wrap_pyfunction!(spaceclouds::night_lights, m)?)?;
@@ -5822,6 +5823,14 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Model's records joined to the map's footprints)
     m.add_function(wrap_pyfunction!(rooftop::roof_kit, m)?)?;
     // 187: rooftop::roof_kit (buildings._clutter: penthouses, stair / lift bulkheads and rooftop units on flat roofs)
-    m.add("VERSION", 187)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_building_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_land_bits, m)?)?;
+    m.add_function(wrap_pyfunction!(devctx::dev_pois, m)?)?;
+    m.add_class::<devctx::DevContext>()?;
+    m.add_function(wrap_pyfunction!(furnstations::furniture_stations, m)?)?;
+    // 188: devctx (development.py's Context whole: dev_building_bits / dev_land_bits / dev_pois, the labels of a
+    // Features in one call; DevContext, the tile's raster and its batched samples); furnstations::furniture_stations
+    // (furniture._stations: a sidewalk run's stations with their k arc lengths, one call per run)
+    m.add("VERSION", 188)?;
     Ok(())
 }
