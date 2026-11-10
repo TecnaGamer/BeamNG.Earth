@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
+mod roofs;
 mod gravity;
 mod polyproject;
 mod s3url;
@@ -5604,6 +5605,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
-    m.add("VERSION", 175)?;
+    m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
+    m.add("VERSION", 176)?;
     Ok(())
 }

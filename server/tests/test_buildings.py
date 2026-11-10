@@ -2086,3 +2086,52 @@ class MappedRoofTest(unittest.TestCase):
             P = np.asarray(m.P).reshape(-1, 3)
             south, north = P[P[:, 1] < 1.0], P[P[:, 1] > 7.0]
             self.assertEqual(south[:, 2].min() < north[:, 2].min(), low_south, d)
+
+
+class OutlineRoofTest(unittest.TestCase):
+    """An L-shaped house: its pitched roof on its own outline (heightfield_roof), not flat (box fill under 0.8)."""
+    L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+
+    def test_an_l_house_keeps_its_gabled_roof_on_its_outline(self):
+        s = bld.plan(self.L, {"class": "house", "roof_shape": "gabled"}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "gabled")
+        self.assertTrue(s.hf)
+        self.assertEqual(len(bld.drawn_ring(s)), len(self.L))          # (its walls on the outline, not a box)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertGreater(P[:, 2].max(), s.height + 1.0)              # (a pitched roof over the eave)
+        self.assertGreaterEqual(P[:, 2].min(), s.height - 1e-6)        # (nothing under the eave)
+        xy = P[:, :2]                                                   # (inside the outline's box, no overhang)
+        self.assertTrue((xy.min(0) >= -1e-6).all() and (xy.max(0) <= [12 + 1e-6, 14 + 1e-6]).all())
+
+    def test_a_rectangle_keeps_the_box_roof(self):
+        s = bld.plan(np.array([[0, 0], [12, 0], [12, 8], [0, 8]], float), {"class": "house", "roof_shape": "gabled"},
+                     0, 48.1, 11.5)
+        self.assertFalse(s.hf)
+
+
+class CanopyTest(unittest.TestCase):
+    """building=roof / carport / shelter: a roof on posts, driven under (they were walled sheds)."""
+
+    def test_a_fuel_canopy_is_open_underneath(self):
+        ring = np.array([[0, 0], [24, 0], [24, 12], [0, 12]], float)
+        s = bld.plan(ring, {"class": "roof"}, 0, 39.2, -76.6)
+        self.assertEqual(s.roof, "flat")
+        self.assertAlmostEqual(s.height, bld.CANOPY_H["roof"])
+        for mesh in (bld.build([(s, 0.0, 0.0)]), bld.collision_mesh([(s, 0.0, 0.0)])):
+            P = np.asarray(mesh[0], np.float64).reshape(-1, 3)
+            T = np.asarray(mesh[2], np.int64).reshape(-1, 3)
+            # nothing at a car's height (0.5-1.5 m) except the posts: every such vertex within a post of one
+            mid = P[(P[:, 2] > 0.5) & (P[:, 2] < 1.5)]
+            posts = bld.canopy_posts(ring)
+            for p in mid:
+                self.assertLess(np.hypot(*(posts - p[:2]).T).min(), bld.CANOPY_POST_HALF_M * 1.5 + 1e-6)
+            self.assertGreater(len(T), 0)
+            self.assertAlmostEqual(P[:, 2].max(), bld.CANOPY_H["roof"], delta=0.01)
+        self.assertEqual(len(bld.canopy_posts(ring)), 4 + 2 * 3 + 2 * 1)    # (corners; 24 m edges: 3 more, 12 m: 1)
+
+    def test_a_mapped_height_and_a_carport(self):
+        ring = np.array([[0, 0], [6, 0], [6, 5], [0, 5]], float)
+        self.assertAlmostEqual(bld.plan(ring, {"class": "carport"}, 0, 39.2, -76.6).height, bld.CANOPY_H["carport"])
+        self.assertAlmostEqual(bld.plan(ring, {"class": "roof", "height": 7.0}, 0, 39.2, -76.6).height, 7.0)

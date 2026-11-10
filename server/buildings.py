@@ -358,7 +358,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h")
+                 "roof_h", "hf")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -679,9 +679,14 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if roof in DOME_ROOFS:
         if hw < 1.0 or hw > DOME_MAX_HW:
             roof = "flat"
-    elif roof != "flat" and (box_fill < (0.6 if church else 0.8) or shw < 2.0
-                             or shw > (18.0 if barn else 20.0 if church else 14.0)):
+    elif roof != "flat" and (shw < 2.0 or shw > (18.0 if barn else 20.0 if church else 14.0)):
         roof = "flat"
+    elif roof != "flat" and box_fill < (0.6 if church else 0.8):
+        # (an L / T / U house: its roof on its own outline, heightfield_roof, where the box would add too much; a
+        # church keeps its nave's box)
+        roof = "flat" if (church or roof not in HF_FORMS or box_fill < HF_MIN_FILL or len(ring) > HF_MAX_VERTS) \
+            else roof
+    hf = roof in HF_FORMS and not church and box_fill < HF_BOX_FILL and len(ring) <= HF_MAX_VERTS
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
     tall = (nf or (h or 0) / FLOOR_M) >= TOWER_SHOP_FLOORS
@@ -880,13 +885,22 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if porch:   # pitched roofs draw the walls on the oriented box: an L-shaped house's door wall can be inside it
         _, _, hl, hw = oriented_box(ring)
         porch = area >= 0.9 * 4 * hl * hw
+    if cls in CANOPY_CLASSES and not garage:
+        # (an open roof on posts, driven and walked under: _canopy; its mapped height its top)
+        roof, hf, porch = "flat", False, False
+        try:
+            hm = float(attrs.get("height"))
+        except (TypeError, ValueError):
+            hm = float("nan")
+        h = hm if math.isfinite(hm) and 2.0 <= hm <= 30.0 else CANOPY_H.get(cls, 3.0)
+        nf, floor_h = 1, h
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
                 windows=windows, steeple=church and area < 2500 and roof not in DOME_ROOFS, porch=porch, cls=cls,
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
-                across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")))
+                across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf)
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
@@ -1105,12 +1119,81 @@ def base_z(spec, gmin, gmax):
     return gmin if spec.portal else gmax
 
 
+# Open structures (research 2026-11-10: OSM's building=roof, 2.6 M worldwide, carports and shelters were walled sheds
+# in front of fuel pumps, platforms and parking): a roof slab CANOPY_SLAB_M thick at the top on posts, the posts at
+# the corners and every CANOPY_POST_GAP_M along the edges, CANOPY_POST_IN_M inside; collision the same (driven under).
+CANOPY_CLASSES = {"roof", "carport", "shelter"}
+CANOPY_H = {"roof": 4.5, "carport": 2.6, "shelter": 2.8}    # m: its top without a mapped height
+CANOPY_SLAB_M = 0.35
+CANOPY_POST_HALF_M = 0.14
+CANOPY_POST_GAP_M = 8.0
+CANOPY_POST_IN_M = 0.45
+CANOPY_POSTS_MAX = 48
+
+
+def canopy_posts(ring):
+    """The posts' centres (k, 2) of a canopy over ring: each corner and every CANOPY_POST_GAP_M along each edge,
+    CANOPY_POST_IN_M inside it (along the edge's inner normal; a corner along the two normals' mean). Pure."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    if len(r) > 3 and np.allclose(r[0], r[-1]):
+        r = r[:-1]
+    if _area2(r) < 0:
+        r = r[::-1]
+    n = len(r)
+    out = []
+    for i in range(n):
+        a, b = r[i], r[(i + 1) % n]
+        d = b - a
+        L = float(np.hypot(*d))
+        if L < 1e-6:
+            continue
+        nin = np.array([-d[1], d[0]]) / L                   # (counter-clockwise: the inside is on the left)
+        p0 = r[i - 1]
+        d0 = a - p0
+        L0 = max(float(np.hypot(*d0)), 1e-6)
+        n0 = np.array([-d0[1], d0[0]]) / L0
+        nc = n0 + nin
+        nc = nc / max(float(np.hypot(*nc)), 1e-6)
+        out.append(a + nc * CANOPY_POST_IN_M)
+        k = int(L // CANOPY_POST_GAP_M)
+        for j in range(1, k + 1):
+            t = j / (k + 1)
+            out.append(a + d * t + nin * CANOPY_POST_IN_M)
+    if len(out) > CANOPY_POSTS_MAX:
+        out = out[::int(math.ceil(len(out) / CANOPY_POSTS_MAX))]
+    return np.array(out, np.float64).reshape(-1, 2)
+
+
+def _canopy(m, spec, gmin, gmax, roof_tok, post_tok, lite=False):
+    """An open structure (CANOPY_CLASSES): its roof slab and posts."""
+    r = np.asarray(spec.ring, np.float64)[:, :2]
+    if len(r) > 3 and np.allclose(r[0], r[-1]):
+        r = r[:-1]
+    if _area2(r) < 0:
+        r = r[::-1]
+    z_top = base_z(spec, gmin, gmax) + (spec.min_h or 0.0) + spec.height
+    z_bot = z_top - CANOPY_SLAB_M
+    uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in r]
+    m.poly([(p[0], p[1], z_top) for p in r], uv, roof_tok)
+    m.poly([(p[0], p[1], z_bot) for p in r[::-1]], uv[::-1], post_tok)
+    for i in range(len(r)):
+        a, b = r[i], r[(i + 1) % len(r)]
+        m.quad((a[0], a[1], z_bot), (b[0], b[1], z_bot), (b[0], b[1], z_top), (a[0], a[1], z_top),
+               (0.002, 0.995), (0.012, 0.995), (0.012, 0.999), (0.002, 0.999), post_tok)
+    posts = canopy_posts(r)
+    if lite and len(posts) > 4:
+        posts = posts[::max(1, len(posts) // 4)]
+    for p in posts:
+        _box(m, p, np.array([1.0, 0.0]), CANOPY_POST_HALF_M, CANOPY_POST_HALF_M, gmin - FOUNDATION_M, z_bot, post_tok)
+
+
 def drawn_ring(spec):
     """The footprint its walls are drawn on: a pitched roof's house is its oriented box (build); its door, steps and
     porch go on these walls (on the map's outline they stood off a box wall at an angle, or inside it, only the
     door's frame showing: Stelvio pass, the user's reports 2026-10-17)."""
     ring = spec.ring
-    if spec.roof != "flat" and spec.roof not in DOME_ROOFS:     # (a dome stands on its own round drum)
+    if spec.roof != "flat" and spec.roof not in DOME_ROOFS and not getattr(spec, "hf", False):
+        # (a dome stands on its own round drum; a heightfield roof on the outline itself)
         if spec.fr_house:
             import francehouse_mesh
             c, u, hl, hw = francehouse_mesh.model_box(ring)
@@ -1294,6 +1377,53 @@ def _dome(m, ring, z_eave, rise, mat, shape="dome", lite=False):
                 m.quad(a, b, bu, au, uv(a), uv(b), uv(bu), uv(au), mat)
 
 
+# Pitched roofs on the footprint's own outline (heightfield_roof, research 2026-11-10): a footprint filling less than
+# HF_BOX_FILL of its oriented box (an L / T / U house, a bent row) has its roof over its outline and its walls on it
+# (the box's walls stood out past an L's inner corner; under 0.8 the roof went flat: 11-13 % of houses); under
+# HF_MIN_FILL, or with more than HF_MAX_VERTS corners, flat as before.
+HF_FORMS = {"gabled": 0, "hipped": 1, "pyramidal": 1, "half-hipped": 2, "skillion": 3}
+HF_BOX_FILL = 0.9
+HF_MIN_FILL = 0.45
+HF_MAX_VERTS = 48
+
+
+def _hf_roof(m, spec, ring, z_eave, rm, fac):
+    """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
+    fast.require(176, "heightfield_roof")
+    r = np.asarray(ring, np.float64)[:, :2]
+    if len(r) > 3 and np.allclose(r[0], r[-1]):
+        r = r[:-1]
+    if _area2(r) < 0:
+        r = r[::-1]
+    r = np.ascontiguousarray(r)
+    c, u, hl, hw = oriented_box(r)
+    if getattr(spec, "across", False):
+        u, hl, hw = np.array([-u[1], u[0]]), hw, hl
+    rh = getattr(spec, "roof_h", None)
+    if spec.roof == "skillion":
+        k = rh / (2.0 * max(hw, 0.5)) if rh else math.tan(math.radians(SKILLION_PITCH))
+    else:
+        k = math.tan(math.radians(roof_pitch(spec)))
+    hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
+    tri, grad, walls = fast._ef.heightfield_roof(r, HF_FORMS[spec.roof], float(c[0]), float(c[1]), float(u[0]),
+                                                 float(u[1]), float(k), float(z_eave), HALF_HIP, float(hi))
+    for j in range(len(grad)):
+        gx, gy = float(grad[j, 0]), float(grad[j, 1])
+        gm = math.hypot(gx, gy)
+        if gm < 1e-9:
+            d, a, f = (0.0, 1.0), (1.0, 0.0), 1.0
+        else:
+            d = (gx / gm, gy / gm)                  # (up the slope)
+            a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
+        pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
+        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
+        m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
+    for ax, ay, za, bx, by, zb in walls.tolist():
+        if za - z_eave > 0.02 or zb - z_eave > 0.02:
+            m.quad((ax, ay, z_eave), (bx, by, z_eave), (bx, by, zb), (ax, ay, za),
+                   (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
+
+
 # the roof shapes as Overture spells some (OSM's spellings kept)
 ROOF_ALIASES = {"half_hipped": "half-hipped", "halfhipped": "half-hipped", "double_saltbox": "saltbox",
                 "quadruple_saltbox": "saltbox", "lean_to": "skillion", "monopitch": "skillion", "pitched": "gabled",
@@ -1361,6 +1491,9 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         pts = [(p[0], p[1], z_eave) for p in ring]
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
+        return
+    if getattr(spec, "hf", False) and spec.roof in HF_FORMS:
+        _hf_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade])
         return
     c, u, hl, hw = oriented_box(ring)
     if getattr(spec, "across", False):              # (the ridge across the long axis: the box's frame turned)
@@ -1810,6 +1943,9 @@ def build(specs_and_ground, lite=False):
         if spec.cls == "ship":
             ships.draw(m, spec, gmin, gmax, mat_idx, lite)
             continue
+        if spec.cls in CANOPY_CLASSES and not spec.deck and (spec.min_h or 0.0) <= 0.5:
+            _canopy(m, spec, gmin, gmax, mat_idx[spec.roof_mat], mat_idx[spec.facade], lite)
+            continue
         ring = drawn_ring(spec)
         mh = spec.min_h or 0.0
         if spec.deck and not lite and _parking_deck(m, spec, gmin, gmax, mat_idx):
@@ -1897,11 +2033,15 @@ def collision_mesh(specs_and_ground):
         if spec.cls == landmarks.LANDMARK:      # (its legs and decks: walked and driven under)
             landmarks.collision(m, spec, gmin, tok)
             continue
+        if spec.cls in CANOPY_CLASSES and not spec.deck and (spec.min_h or 0.0) <= 0.5:   # (driven under)
+            _canopy(m, spec, gmin, gmax, tok, tok)
+            continue
         if deck_plan(spec, gmin, gmax) is not None:
             _parking_deck(m, spec, gmin, gmax, _Looks(spec.seed))
             continue
         ring = np.asarray(spec.ring, np.float64)
-        if spec.roof != "flat" and spec.roof not in DOME_ROOFS:   # (a dome's drum: its own round outline, as drawn)
+        if spec.roof != "flat" and spec.roof not in DOME_ROOFS and not getattr(spec, "hf", False):
+            # (a dome's drum: its own round outline, as drawn; a heightfield roof's walls: the outline)
             c, u, hl, hw = oriented_box(ring)
             v = np.array([-u[1], u[0]])
             ring = np.array([c - u * hl - v * hw, c + u * hl - v * hw, c + u * hl + v * hw, c - u * hl + v * hw])
