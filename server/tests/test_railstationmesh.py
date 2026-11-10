@@ -534,3 +534,29 @@ class LookTest(unittest.TestCase):
             for key in ("baseColorMap", "normalMap", "roughnessMap"):
                 p = mats[name]["Stages"][0][key]
                 self.assertTrue(os.path.exists(os.path.join(os.path.dirname(path), os.path.basename(p))), p)
+
+
+class IslandFlatTest(unittest.TestCase):
+    def test_an_island_between_two_beds_is_flat_across_with_no_ridge(self):
+        t = np.arange(0.0, 200.0, 4.0)
+        ref = [(np.c_[t, np.zeros_like(t)], np.full(len(t), 100.6)), (np.c_[t, np.full(len(t), 9.0)], np.full(len(t), 100.9))]
+        across = np.c_[np.full(30, 100.0), np.linspace(1.7, 7.3, 30)]          # (edge to edge of a 5.6 m island)
+        z = rm.top_z(ref, across, lambda xy: xy[:, 0] * 0)
+        self.assertLess(float(np.ptp(z)), 0.02)                                # (no step where the nearer track changes)
+        self.assertAlmostEqual(float(z.mean()), 100.75, delta=0.03)            # (the mean of the two heads' profiles)
+
+    def test_another_platforms_far_track_counts_for_nothing(self):
+        t = np.arange(0.0, 200.0, 4.0)
+        ref = [(np.c_[t, np.zeros_like(t)], np.full(len(t), 100.6)), (np.c_[t, np.full(len(t), 30.0)], np.full(len(t), 105.0))]
+        z = rm.top_z(ref, np.array([[100.0, 2.0]]), lambda xy: xy[:, 0] * 0)
+        self.assertAlmostEqual(float(z[0]), 100.6, delta=0.01)
+
+    def test_a_real_island_has_no_ridge(self):
+        st = no_links(stations_of("kozyatyn")[0])
+        st.country = "UA"
+        pl = next(p for p in st.platforms if p.island)
+        ref = rm.reference(None, FLAT, pl)
+        self.assertGreaterEqual(len(ref), 2)
+        d = bm._densify(pl.ring, 2.0)
+        z = rm.top_z(ref, d, lambda xy: xy[:, 0] * 0)
+        self.assertLess(float(np.ptp(z)), 0.05)                                # (a flat ground: a flat platform)

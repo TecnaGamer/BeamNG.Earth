@@ -161,24 +161,30 @@ def _profile_z(poly, z, xy):
     return d[r, j], z[j] + (z[j + 1] - z[j]) * tt
 
 
+ISLAND_M = 14.0             # tracks this far from a point (beyond the nearest) are not the platform's other side
+ISLAND_FADE_M = 6.0
+
+
 def top_z(ref, xy, fallback):
-    """Heights (k,) of the platform's top at xy: the rail head's profile along the nearest of its tracks (reference's), the
-    same across the platform. Without a reference (fallback: xy -> z) the terrain's."""
+    """Heights (k,) of the platform's top at xy: the rail head's profile along the platform's tracks. An island platform
+    between two tracks (whose beds differ by a few cm to decimetres) stands at the MEAN of the two profiles at the point's
+    feet: flat across, with no ridge where the nearer track changes. A track farther than ISLAND_M past the nearest (another
+    platform's) counts for nothing, fading over ISLAND_FADE_M. Without a reference (fallback: xy -> z) the terrain's."""
     xy = np.asarray(xy, float).reshape(-1, 2)
     if not ref:
         return fallback(xy)
     out = np.empty(len(xy))
     for c in range(0, len(xy), 1500):
         q = xy[c:c + 1500]
-        best_d, best_z = None, None
+        ds, zs = [], []
         for poly, z in ref:
             d, zz = _profile_z(poly, z, q)
-            if best_d is None:
-                best_d, best_z = d, zz
-            else:
-                sel = d < best_d
-                best_d, best_z = np.where(sel, d, best_d), np.where(sel, zz, best_z)
-        out[c:c + 1500] = best_z
+            ds.append(d)
+            zs.append(zz)
+        ds, zs = np.array(ds), np.array(zs)
+        extra = ds - ds.min(0)                                                 # (how much farther than the nearest track)
+        w = np.clip((ISLAND_M - extra) / ISLAND_FADE_M, 0.0, 1.0)              # (1 up to ISLAND_M - ISLAND_FADE_M past it)
+        out[c:c + 1500] = (w * zs).sum(0) / w.sum(0)
     return out
 
 
