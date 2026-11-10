@@ -16,7 +16,7 @@ import numpy as np
 
 import mapcells
 import mapgeom
-from guardrails import DECK_AUTO_SNAP_TOLERANCE_M, _deck_level_hint, _surface_info
+from guardrails import DECK_AUTO_SNAP_TOLERANCE_M, DECK_WIDE_REACH_M, _deck_level_hint, _surface_info
 
 log = logging.getLogger("earthd.fences")
 
@@ -41,6 +41,11 @@ WALL_DECK_REACH_M = 4.0     # m past a deck's edge a bridge wall (its own layer/
 CHAIN_TYPES = {"chain_link", "chainlink", "chain-link", "chain"}
 NOISE_TYPES = {"noise_barrier", "noisebarrier", "sound_barrier"}
 BBOX_PAD_M = 8.0
+ALONG_EDGE_M = 4.0      # m past a deck's edge an untagged barrier running along it is its parapet (ALONG_*)
+ALONG_DEG = 15.0        # within this angle of the deck's direction
+ALONG_FRAC = 0.7        # ... for this share of its panels
+PARAPET_ON = os.environ.get("BNE_FENCE_PARAPET", "on") != "off"
+CHAIN_OFF_ROAD_ON = os.environ.get("BNE_FENCE_OFF_ROAD", "on") != "off"
 OUTLINE_PAD_M = 1.0     # m past a bridge outline's edge a barrier along it still counts as on it (both mapped by hand)
 
 
@@ -126,6 +131,60 @@ def _in_outlines(rings, pts):
         near = a[None] + t[:, :, None] * d[None]
         m |= np.hypot(pts[:, None, 0] - near[:, :, 0], pts[:, None, 1] - near[:, :, 1]).min(axis=1) <= OUTLINE_PAD_M
     return m
+
+
+def _on_road(points, z, roads):
+    """Which XY points (at heights z) stand on a carriageway of roads (build_tile's (fid, spec, centreline (k, 3), _))
+    at their own level (WALL_LEVEL_M): within its half width + WALL_ON_ROAD_M. Pure."""
+    hit = np.zeros(len(points), bool)
+    for r in roads:
+        try:
+            pts = np.asarray(r[2] if len(r) > 2 else r, np.float64)
+            wide = float(getattr(r[1] if len(r) > 1 else None, "width", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        if pts.ndim != 2 or pts.shape[1] < 3 or len(pts) < 2 or wide <= 0:
+            continue
+        a, b = pts[:-1, :2], pts[1:, :2]
+        d = b - a
+        l2 = np.maximum((d * d).sum(1), 1e-12)
+        v = points[:, None, :] - a[None, :, :]
+        t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
+        q = a[None, :, :] + t[:, :, None] * d[None, :, :]
+        dm = np.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
+        k = np.argmin(dm, axis=1)
+        rr = np.arange(len(points))
+        zq = pts[k, 2] + t[rr, k] * (pts[k + 1, 2] - pts[k, 2])
+        hit |= (dm[rr, k] < wide / 2.0 + WALL_ON_ROAD_M) & (np.abs(zq - z) <= WALL_LEVEL_M)
+    return hit
+
+
+def _along_deck(points, tangents, decks):
+    """(distance from the nearest deck's centreline, its half width, |cos| of the angle between tangents and the
+    deck there) for XY points (inf, 0, 0 with no deck within its half width + DECK_WIDE_REACH_M). Pure."""
+    n = len(points)
+    dist, half, cosa = np.full(n, np.inf), np.zeros(n), np.zeros(n)
+    for deck in decks or ():
+        line = np.asarray(deck.get("n", ()), np.float64)
+        if line.ndim != 2 or len(line) < 2:
+            continue
+        a, b = line[:-1, :2], line[1:, :2]
+        d = b - a
+        l2 = np.maximum((d * d).sum(1), 1e-12)
+        v = points[:, None, :] - a[None, :, :]
+        t = np.clip((v * d[None]).sum(2) / l2[None], 0.0, 1.0)
+        q = a[None, :, :] + t[:, :, None] * d[None, :, :]
+        dm = np.hypot(q[:, :, 0] - points[:, None, 0], q[:, :, 1] - points[:, None, 1])
+        k = np.argmin(dm, axis=1)
+        rr = np.arange(n)
+        dk = dm[rr, k]
+        h = float(deck.get("w", 0.0) or 0.0) / 2.0
+        take = (dk < dist) & (dk <= h + DECK_WIDE_REACH_M)
+        if take.any():
+            seg = d[k] / np.sqrt(l2[k])[:, None]
+            c = np.abs((seg * tangents).sum(1))
+            dist[take], half[take], cosa[take] = dk[take], h, c[take]
+    return dist, half, cosa
 
 
 def rows(frame, infra_fn, box, elev, decks=(), roads=()):
@@ -451,6 +510,32 @@ def rows(frame, infra_fn, box, elev, decks=(), roads=()):
                 if (before is None or before) and (after is None or after) and (before or after):
                     z[idx[i0:i1 + 1]] = wide[idx[i0:i1 + 1]]
                 i0 = i1 + 1
+        # A barrier running along a bridge's edge for most of its length is the bridge's parapet, whatever its tags
+        # say (none here): OSM ways 'barrier=jersey_barrier, fence_type=chain_link' along both sides of SR 103's
+        # bridge over I-75 at Bluffton, Ohio, no bridge / layer tag, stood their chain-link across the interstate
+        # under it (the user, 2026-11-10). Each of its panels within ALONG_EDGE_M of the deck's edge and running with
+        # it (ALONG_DEG) stands on the deck, when ALONG_FRAC of the part's panels do.
+        for idx in groups.values() if PARAPET_ON else ():
+            idx = np.asarray(idx, np.int64)
+            tang = np.array([[pending[i][10], pending[i][11]] for i in idx], np.float64)
+            dist, half, cosa = _along_deck(mid[idx], tang, decks)
+            along = np.isfinite(dist) & (dist <= half + ALONG_EDGE_M) & (cosa >= math.cos(math.radians(ALONG_DEG))) \
+                & np.isfinite(wide[idx])
+            if along.sum() < max(2, ALONG_FRAC * len(idx)):
+                continue
+            # (only one that would otherwise stand across a road under the bridge: a wall along a viaduct with
+            # nothing under it can be on the ground there)
+            if not roads or not _on_road(mid[idx[along]], z[idx[along]], roads).any():
+                continue
+            z[idx[along]] = wide[idx[along]]
+    # and never a chain-link panel standing on a carriageway at its own level (a fence ending at a road is mapped
+    # to its edge; one drawn over it is a level the data left out)
+    chain_on = [i for i, p in enumerate(pending) if p[0] == G_CHAIN and p[9]]
+    if chain_on and roads and CHAIN_OFF_ROAD_ON:
+        cxy = np.array([[pending[i][4], pending[i][5]] for i in chain_on], np.float64)
+        for j in np.flatnonzero(_on_road(cxy, z[chain_on], roads)).tolist():
+            p = pending[chain_on[j]]
+            pending[chain_on[j]] = p[:9] + (False,) + p[10:]
     out = []
     for p, zz in zip(pending, z):
         if not p[9]:
