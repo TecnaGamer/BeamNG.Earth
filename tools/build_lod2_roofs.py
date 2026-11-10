@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Germany's measured roofs: the shards server/lod2roofs.py reads, from the states' open LoD2 models.
+"""Measured roofs: the shards server/lod2roofs.py reads, from open national and state LoD2 building models.
 
-Each state's tiles are fetched one at a time, reduced to one small row per building and thrown away, so the ~600 GB of
+Each source's tiles are fetched one at a time, reduced to one small row per building and thrown away, so the ~600 GB of
 CityGML never lie on disk at once (rows: ~20 bytes; shards: ~6 bytes a building).
 
   python tools/build_lod2_roofs.py fetch HE [workers]    resumable: <root>/out/HE.done, HE.csv.gz
   python tools/build_lod2_roofs.py shards DIR HE BY ...  <DIR>/<x>/<y>.npz and manifest.json
+  python tools/build_lod2_roofs.py validate URL ...      lod2_classify blind on German tiles vs their roofType
+
+Sources: the German states (two-letter codes: AdV CityGML with its roofType); CH (swissBUILDINGS3D 3.0, Switzerland and
+Liechtenstein: swisstopo's File Geodatabase per map sheet); EE (Estonia's LoD2 CityGML per municipality). Where a model
+has no roofType, tools/lod2_classify.py reads the shape from the roof faces into the same AdV code. Each country's
+shards go to a folder of their own: lod2/ Germany, lod2-ch/, lod2-ee/ (server/lod2roofs.SOURCES).
 
 The root is BNE_LOD2_ROOT. Niedersachsen's tile list is its index GeoJSON, saved as <root>/ni.geojson.
-Needs lxml and pyproj. Licences and credits of each state: CREDITS.md.
+Needs lxml and pyproj; CH also pyogrio (for the GDAL its wheel bundles). Licences and credits: CREDITS.md.
 """
 import csv
 import ctypes
@@ -20,6 +26,7 @@ import math
 import multiprocessing as mp
 import os
 import re
+import shutil
 import sys
 import tempfile
 import time
@@ -31,6 +38,9 @@ import zipfile
 import numpy as np
 from lxml import etree
 from pyproj import Transformer
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import lod2_classify  # noqa: E402
 
 ROOT = os.environ.get("BNE_LOD2_ROOT", "lod2")
 OUT = os.path.join(ROOT, "out")
@@ -49,9 +59,11 @@ def local(tag):
 
 
 def rings(el):
-    """[(n, 3) point lists] of every posList / pos ring under el."""
+    """[(n, 3) point lists] of the outer ring of every polygon under el (a hole runs the other way round)."""
     out = []
-    for e in el.iter():
+    for e in el.iter("{*}posList", "{*}LinearRing"):
+        if local(e.getparent().tag) == "interior" or local(e.getparent().getparent().tag) == "interior":
+            continue
         n = local(e.tag)
         if n == "posList" and e.text:
             v = e.text.split()
@@ -99,9 +111,13 @@ def ridge(rs):
     return az
 
 
+NORTH_FIRST = {3301}        # CRSs whose files give the northing first (Estonia's L-EST97)
+SKIP_KINDS = {"30", "40"}   # Estonia's tyyp: a foundation, a ruin (no roof to read)
+
+
 def row(el, epsg, part):
     roof = height = None
-    ground, roofs, walls = [], [], []
+    ground, roofs, walls, untyped = [], [], [], False
     for e in el.iter():
         n = local(e.tag)
         if n == "BuildingPart" and e is not el:
@@ -119,18 +135,74 @@ def row(el, epsg, part):
             roofs += rings(e)
         elif n == "WallSurface":
             walls += rings(e)
+        elif n in ("lod2MultiSurface", "lod2Solid") and local(e.getparent().tag) in ("Building", "BuildingPart"):
+            untyped = True
+        elif n == "intAttribute" and e.get("name") == "tyyp" and "".join(e.itertext()).strip() in SKIP_KINDS:
+            return None
+    if not ground and not roofs and untyped:
+        # (a model without thematic surfaces, Estonia's: its faces sorted by the way they face)
+        ground, walls, roofs = lod2_classify.split_untyped(rings(el))
     if not ground and not roofs:
         return None
+    if epsg in NORTH_FIRST:
+        ground, roofs, walls = ([[(p[1], p[0], p[2]) for p in r] for r in rs] for rs in (ground, roofs, walls))
+    if not roof and roofs:
+        code = lod2_classify.classify(roofs)        # (no roofType: the shape read from the roof faces)
+        roof = str(code) if code else ""
     c = centroid(ground or roofs)
     if c is None:
         return None
     zs = [p[2] for r in ground for p in r] or [p[2] for r in walls for p in r]
     rz = [p[2] for r in roofs for p in r]
     az = ridge(roofs)
-    return {"x": round(c[0], 2), "y": round(c[1], 2), "epsg": epsg, "area": round(c[2], 1), "roof": roof or "",
-            "height": "" if height is None else round(height, 2), "z0": round(min(zs), 2) if zs else "",
-            "zr": round(min(rz), 2) if rz else "", "zt": round(max(rz), 2) if rz else "",
-            "ridge": "" if az is None else round(az), "part": int(part)}
+    out = {"x": round(c[0], 2), "y": round(c[1], 2), "epsg": epsg, "area": round(c[2], 1), "roof": roof or "",
+           "height": "" if height is None else round(height, 2), "z0": round(min(zs), 2) if zs else "",
+           "zr": round(min(rz), 2) if rz else "", "zt": round(max(rz), 2) if rz else "",
+           "ridge": "" if az is None else round(az), "part": int(part)}
+    if BLIND and roofs:
+        out["blind"] = lod2_classify.classify(roofs)      # (validate: the faces' answer beside the model's own)
+    return out
+
+
+BLIND = False
+
+
+def validate(urls):
+    """The roof classifier against German tiles' own roofType: each tile fetched, every building (part) with a
+    roofType classified blind from its roof faces, a confusion matrix of the shapes (server/lod2roofs.SHAPES)."""
+    global BLIND
+    BLIND = True
+    os.makedirs(TMP, exist_ok=True)
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "server"))
+    from lod2roofs import SHAPES
+
+    def shape(code):
+        try:
+            return SHAPES.get(int(code), "mixed")
+        except (TypeError, ValueError):
+            return "mixed"
+    tally = {}
+    for url in urls:
+        p = os.path.join(TMP, "validate.part")
+        with get(url, 300) as r, open(p, "wb") as o:
+            while b := r.read(1 << 20):
+                o.write(b)
+        try:
+            for r in rows_of(p, url):
+                if r["roof"] and "blind" in r:
+                    k = (shape(r["roof"]), shape(r["blind"]) if r["blind"] else "none")
+                    tally[k] = tally.get(k, 0) + 1
+        finally:
+            os.remove(p)
+        print(url.rsplit("/", 1)[-1], sum(tally.values()), flush=True)
+    names = ["flat", "skillion", "gabled", "hipped", "half-hipped", "mansard", "pyramidal", "dome", "round", "mixed",
+             "none"]
+    print("true \\ got".ljust(12) + "".join(n[:7].rjust(8) for n in names) + "       n  recall")
+    for t in names:
+        n = sum(tally.get((t, g), 0) for g in names)
+        if n:
+            print(t.ljust(12) + "".join(str(tally.get((t, g), 0)).rjust(8) for g in names) +
+                  f"{n:8d}  {tally.get((t, t), 0) / n:6.1%}")
 
 
 def clear(el):
@@ -271,7 +343,119 @@ def jobs(state):
     if state == "SN":
         return grid("https://geocloud.landesvermessung.sachsen.de/public.php/dav/files/AyJqXpJAZJXomCb/"
                     "lod2_33{e}_{n}_2_sn_citygml.zip", 276, 502, 2, 5556, 5732, 2)
+    if state == "CH":
+        return swiss_sheets()
+    if state == "EE":
+        page = "https://geoportaal.maaruum.ee/eng/Download-3D-data-p837.html"
+        files = sorted(set(re.findall(r"f=(hooned_lod2-[^&\"']+-citygml\.zip)", text(page))))
+        return [(P.unquote(f), f"{EE}?lang_id=2&plugin_act=otsing&andmetyyp=hooned_lod2&dl=1&f={f}&page_id=837")
+                for f in files if "eesti" not in f]     # (the municipalities; the national file is all of them again)
     raise SystemExit("unknown state " + state)
+
+
+EE = "https://geoportaal.maaruum.ee/index.php"
+STAC = "https://data.geo.admin.ch/api/stac/v0.9/collections/ch.swisstopo.swissbuildings3d_3_0/items"
+
+
+def swiss_sheets():
+    """swissBUILDINGS3D 3.0: the newest File Geodatabase of each map sheet (1:25k sheet quarters; older years of a
+    sheet are kept in the catalogue too). The GDB, not the CityGML: every sheet has one (a CityGML only about half),
+    at half the size."""
+    newest, url = {}, STAC + "?limit=100"
+    while url:
+        d = json.loads(text(url))
+        for f in d["features"]:
+            p = f["id"].split("_")
+            gdb = [a["href"] for a in f["assets"].values() if a["href"].endswith(".gdb.zip")]
+            if len(p) == 5 and gdb and p[3] >= newest.get(p[4], ("",))[0]:
+                newest[p[4]] = (p[3], gdb[0])
+        url = next((ln["href"] for ln in d["links"] if ln["rel"] == "next"), None)
+        time.sleep(0.2)
+    return [(sheet, u) for sheet, (_, u) in sorted(newest.items())]
+
+
+def _inside(x, y, r):
+    """Is (x, y) inside ring r ((n, >=2) array)?"""
+    xs, ys = r[:, 0], r[:, 1]
+    xj, yj = np.roll(xs, 1), np.roll(ys, 1)
+    cross = (ys > y) != (yj > y)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        xi = (xj - xs) * (y - ys) / (yj - ys) + xs
+    return bool(np.count_nonzero(cross & (x < xi)) % 2)
+
+
+def _point_in(r):
+    """A point inside ring r (its centroid when that is inside; else the middle of the widest stretch across it at
+    the centroid's northing): the runtime joins a record to the footprint it stands in."""
+    c = centroid([[(float(p[0]), float(p[1]), 0.0) for p in r]])
+    if c is None:
+        return None
+    if _inside(c[0], c[1], r):
+        return c
+    xs, ys = r[:, 0], r[:, 1]
+    xj, yj = np.roll(xs, 1), np.roll(ys, 1)
+    cut = (ys > c[1]) != (yj > c[1])
+    xi = np.sort((xj - xs)[cut] * (c[1] - ys[cut]) / (yj - ys)[cut] + xs[cut])
+    if len(xi) < 2:
+        return c
+    k = int(np.argmax(xi[1::2] - xi[0::2][:len(xi[1::2])]))
+    return (float(xi[2 * k] + xi[2 * k + 1]) / 2, c[1], c[2])
+
+
+def swiss_rows(gdb):
+    """Rows of a swissBUILDINGS3D File Geodatabase: one per footprint (layer Floor: a building's solid), with the roof
+    elements (layer Roof, top faces with their overhangs) of its building unit that stand over it. The roof shape is
+    read from the faces (lod2_classify); the height is from the ground point to the top of the roof."""
+    import lod2_ogr
+    floors, roofs = {}, {}
+    with lod2_ogr.Dataset(gdb) as ds:
+        for at, wkb in ds.features("Floor", {"GEBAEUDEEINHEIT", "UUID", "GELAENDEPUNKT", "GESAMTHOEHE"}):
+            rs = [np.asarray(r, np.float64) for r in lod2_ogr.rings(wkb) if len(r) >= 3]
+            if not rs:
+                continue
+            big = max(rs, key=lambda r: (centroid([[tuple(p) for p in r]]) or (0, 0, 0))[2])
+            floors.setdefault(at.get("GEBAEUDEEINHEIT") or at.get("UUID"), []).append(
+                {"ring": big, "rings": rs, "ground": _num(at.get("GELAENDEPUNKT")), "total": _num(at.get("GESAMTHOEHE")),
+                 "roofs": []})
+        for at, wkb in ds.features("Roof", {"GEBAEUDEEINHEIT", "UUID"}):
+            rs = [np.asarray(r, np.float64) for r in lod2_ogr.rings(wkb) if len(r) >= 3]
+            if rs:
+                roofs.setdefault(at.get("GEBAEUDEEINHEIT") or at.get("UUID"), []).append(rs)
+    for unit, fl in floors.items():
+        for rs in roofs.get(unit, ()):
+            pts = np.concatenate(rs)
+            x, y = float(pts[:, 0].mean()), float(pts[:, 1].mean())
+            k = next((i for i, f in enumerate(fl) if _inside(x, y, f["ring"])), None)
+            if k is None:
+                k = int(np.argmin([np.hypot(*(f["ring"][:, :2].mean(0) - (x, y))) for f in fl]))
+            fl[k]["roofs"] += rs
+        for f in fl:
+            c = _point_in(f["ring"])
+            if c is None:
+                continue
+            area = sum(abs((centroid([[tuple(p) for p in r]]) or (0, 0, 0))[2]) for r in f["rings"])
+            # (the ground: swisstopo's terrain point of the building, as its GESAMTHOEHE is measured from; the
+            # footprint's own lowest corner on a slope, or with a basement ramp, would add metres)
+            z0 = f["ground"]
+            if not math.isfinite(z0):
+                z0 = float(min(r[:, 2].min() for r in f["rings"]))
+            code = lod2_classify.classify(f["roofs"]) if f["roofs"] else None
+            zr = float(min(r[:, 2].min() for r in f["roofs"])) if f["roofs"] else None
+            zt = float(max(r[:, 2].max() for r in f["roofs"])) if f["roofs"] else None
+            h = zt - z0 if zt is not None and math.isfinite(z0) else f["total"]
+            az = ridge([[tuple(p) for p in r] for r in f["roofs"]]) if f["roofs"] else None
+            yield {"x": round(c[0], 2), "y": round(c[1], 2), "epsg": 2056, "area": round(area, 1),
+                   "roof": str(code) if code else "", "height": round(h, 2) if math.isfinite(h) else "",
+                   "z0": round(z0, 2) if math.isfinite(z0) else "", "zr": "" if zr is None else round(zr, 2),
+                   "zt": "" if zt is None else round(zt, 2), "ridge": "" if az is None else round(az),
+                   "part": int(len(fl) > 1)}
+
+
+def _num(s):
+    try:
+        return float(s)
+    except (TypeError, ValueError):
+        return float("nan")
 
 
 def rows_of(path, name, depth=0):
@@ -283,6 +467,18 @@ def rows_of(path, name, depth=0):
             yield from parse(f)
         return
     with zipfile.ZipFile(path) as z:
+        gdbs = sorted({n.split(".gdb/")[0] + ".gdb" for n in z.namelist() if ".gdb/" in n})
+        if gdbs:            # (a File Geodatabase is a folder: unpacked next to the download, read, removed)
+            d = tempfile.mkdtemp(dir=TMP)
+            try:
+                for n in z.namelist():
+                    if ".gdb/" in n and not n.endswith("/") and ".." not in n and not n.startswith("/"):
+                        z.extract(n, d)
+                for g in gdbs:
+                    yield from swiss_rows(os.path.join(d, g))
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
+            return
         for n in z.namelist():
             low = n.lower()
             if low.endswith(".zip") and depth < 3:
@@ -461,5 +657,7 @@ if __name__ == "__main__":
         fetch(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 2)
     elif len(sys.argv) >= 4 and sys.argv[1] == "shards":
         build(sys.argv[2], sys.argv[3:])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "validate":
+        validate(sys.argv[2:])
     else:
         raise SystemExit(__doc__)

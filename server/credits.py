@@ -112,6 +112,8 @@ FEATURES = {
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
     "roof:lod2-de": "German states' LoD2 roofs (GeoBasis-DE)",
+    "roof:lod2-ch": "swisstopo (swissBUILDINGS3D)",
+    "roof:lod2-ee": "Estonian Land and Spatial Development Board",
     "roof:3dbag": "3DBAG (tudelft3d, 3DGI)",
     "bld:bdtopo-fr": "IGN BD TOPO",
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
@@ -132,6 +134,11 @@ LONG = {
                     "(CC BY 4.0); Geobasis NRW (dl-de/zero-2.0); (c) GeoBasis-DE / LVermGeoRP, dl-de/by-2-0, "
                     "www.lvermgeo.rlp.de; Landesamt fur Geobasisinformation Sachsen (GeoSN), dl-de/by-2-0; "
                     "(c) GeoBasis-DE / LVermGeo ST (dl-de/by-2-0); data changed",
+    "roof:lod2-ch": "Roof shapes and heights in Switzerland and Liechtenstein: © swisstopo, swissBUILDINGS3D 3.0 "
+                    "Beta (open use, source required); roof shapes read from the models' faces, data changed",
+    "roof:lod2-ee": "Building 3D model data: Republic of Estonia Land and Spatial Development Board 2026 (open data "
+                    "licence, https://geoportaal.maaruum.ee/opendata-licence); roof shapes read from the models' "
+                    "faces, data changed",
 }
 SHORT.update(FEATURES)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
@@ -254,12 +261,11 @@ def feature_ids(conn):
                 ids.add("bridge:wikidata")
         except Exception:           # (the inventories are optional files)
             pass
-        try:                        # (a measured German roof shard on disk near: lod2roofs)
+        try:                        # (a measured roof shard on disk near, each country's own credit: lod2roofs)
             import lod2roofs
             src = getattr(md, "lod2_roofs", None)
-            if src is not None and src.dir and lod2roofs.credited_near(os.path.dirname(os.path.dirname(src.dir)),
-                                                                      lat, lon, FEATURE_NEAR_M):
-                ids.add("roof:lod2-de")
+            if src is not None and (src.cache_dir or src.local):
+                ids |= lod2roofs.credited_near(src.cache_dir, lat, lon, FEATURE_NEAR_M, src.local)
         except Exception:
             pass
         try:                        # (a measured Dutch roof square on disk near: threedbag)

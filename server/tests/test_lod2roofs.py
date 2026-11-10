@@ -176,5 +176,63 @@ class CreditTest(unittest.TestCase):
             fh.write(b"x")
         self.assertTrue(lr.credited_near(d, lat, lon, 500.0))
         self.assertFalse(lr.credited_near(d, 48.85, 2.35, 500.0))     # (Paris: outside Germany)
+        self.assertEqual(lr.credited_near(d, lat, lon, 500.0), {"roof:lod2-de"})
         self.assertIn("GeoBasis-DE", credits.full_label("roof:lod2-de"))
         self.assertIn("roof:lod2-de", credits.ORDER)
+
+
+class CountriesTest(unittest.TestCase):
+    """Several countries' shards, each in its own folder and box; a local folder (BNE_LOD2_DIR) instead of the site."""
+
+    def folders(self, lat, lon):
+        f = Fetcher(error=netfetch.NotFound("none"))
+        lr.Source(None, f).tile(geodesy.EnuFrame(lat, lon), -200, -200, 200, 200)
+        return {u.split(f"{lr.railtags.PAGES}/", 1)[1].split("/")[0] for u in f.urls}
+
+    def test_each_place_asks_only_the_countries_whose_box_it_is_in(self):
+        self.assertEqual(self.folders(59.437, 24.7536), {"lod2-ee"})                 # (Tallinn)
+        self.assertEqual(self.folders(46.948, 7.4474), {"lod2-ch"})                  # (Bern)
+        self.assertEqual(self.folders(47.3769, 8.5417), {"lod2", "lod2-ch"})         # (Zurich: in both boxes)
+        self.assertEqual(self.folders(52.52, 13.405), {"lod2"})                      # (Berlin)
+        self.assertEqual(self.folders(48.85, 2.35), set())                           # (Paris)
+
+    def local(self, d, folder, lat, lon, rows):
+        x, y = lr.tile_of(lat, lon)
+        os.makedirs(os.path.join(d, folder, str(x)), exist_ok=True)
+        with open(os.path.join(d, folder, str(x), f"{y}.npz"), "wb") as fh:
+            fh.write(shard(rows))
+
+    def test_a_local_folder_is_read_and_nothing_fetched(self):
+        lat, lon = 59.437, 24.7536
+        with tempfile.TemporaryDirectory() as d:
+            self.local(d, "lod2-ee", lat, lon, [(lat, lon, 3200, 12.0, 4.0)])
+            f = Fetcher(error=AssertionError("fetched"))
+            rec = lr.Source(None, f, local=d).tile(geodesy.EnuFrame(lat, lon), -200, -200, 200, 200)
+            self.assertEqual(f.urls, [])
+            at = rec.fill({"roof_shape": None, "height": None}, *ring(0, 0))
+            self.assertEqual((at["roof_shape"], at["height"]), ("hipped", 12.0))
+
+    def test_a_border_tile_joins_both_countries_records(self):
+        lat, lon = 47.3769, 8.5417
+        with tempfile.TemporaryDirectory() as d:
+            self.local(d, "lod2", lat, lon, [(lat, lon + 0.002, 3100, 9.0, 3.0)])
+            self.local(d, "lod2-ch", lat, lon, [(lat, lon, 3300, 14.0, 5.0)])
+            frame = geodesy.EnuFrame(lat, lon)
+            rec = lr.Source(None, None, local=d).tile(frame, -400, -400, 400, 400)
+            self.assertEqual(rec.fill({"roof_shape": None, "height": None}, *ring(0, 0))["roof_shape"], "half-hipped")
+            e, _, _ = frame.geodetic_to_enu(np.array([lat]), np.array([lon + 0.002]), 0.0)
+            self.assertEqual(rec.fill({"roof_shape": None}, *ring(float(e[0]), 0))["roof_shape"], "gabled")
+
+    def test_each_country_credited_near_its_own_shards(self):
+        import credits
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(lr.credited_near(None, 59.437, 24.7536, 500.0, local=d), set())
+            self.local(d, "lod2-ee", 59.437, 24.7536, [(59.437, 24.7536, 3100, 9.0, 3.0)])
+            self.local(d, "lod2-ch", 46.948, 7.4474, [(46.948, 7.4474, 3100, 9.0, 3.0)])
+            self.assertEqual(lr.credited_near(None, 59.437, 24.7536, 500.0, local=d), {"roof:lod2-ee"})
+            self.assertEqual(lr.credited_near(None, 46.948, 7.4474, 500.0, local=d), {"roof:lod2-ch"})
+            self.assertEqual(lr.credited_near(None, 52.52, 13.405, 500.0, local=d), set())
+        for c in lr.SOURCES:
+            self.assertIn(c.credit, credits.ORDER)
+        self.assertIn("swisstopo", credits.full_label("roof:lod2-ch"))
+        self.assertIn("Land and Spatial Development Board", credits.full_label("roof:lod2-ee"))
