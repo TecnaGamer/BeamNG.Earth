@@ -1445,24 +1445,40 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
 
 /// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
 const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
+/// a built road's grade rank (grading.GRADE_RANK_BUILT): only these reach past their core over rank_fade (the side
+/// road's ease; an unpaved road's rank is below it)
+const RANK_BUILT: i64 = 100;
+/// grade ranks within this of the higher road's take the same side ease (a service road or driveway beside a
+/// residential street); a bigger class gap (a residential approach to a primary) keeps the old blend, whose side
+/// ease cut that approach to a 67 % step
+const RANK_SIDE_MAX_DIFF: i64 = 4;
+/// the hard hold of a road's own carriageway applies to primary and below; a motorway or trunk keeps the old blend
+/// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
+/// smoothness there)
+const RANK_HOLD_MAX: i64 = 114;
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
                      base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>, b: PyReadonlyArray2<'py, f64>,
                      za: PyReadonlyArray1<'py, f64>, zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
-                     rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
+                     rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>, rk: PyReadonlyArray1<'py, i64>,
+                     abut: PyReadonlyArray1<'py, u8>, cut: PyReadonlyArray2<'py, f64>,
                      ba: PyReadonlyArray1<'py, f64>, bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
                      link: PyReadonlyArray1<'py, u8>, extrap: f64,
                      lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64, blend_r: f64,
                      bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
                      sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
-                     yield_ramp: f64, abut_under: f64, abut_d: PyReadonlyArray2<'py, f64>)
+                     yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
+                     abut_d: PyReadonlyArray2<'py, f64>)
                      -> Bound<'py, PyArray1<f64>> {
     let abut_d = abut_d.as_array();         // (segments, 2): along its road to a start / end abutment, NaN: none
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
     let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
     let (rh, rid) = (rh.as_array(), rid.as_array());
+    // (segments): a road's grading rank (grading.grade_rank): a lower one gives way over a higher one's core, so a
+    // dirt track beside a paved road no longer pulls the asphalt down
+    let rk = rk.as_array();
     let abut = abut.as_array();
     let cut = cut.as_array();               // (segments, 6): a cutting's wall, top and top offset, left then right
     // (segments): the cross slope at each segment's ends (m per m toward its left: a banked curve, grading.bank)
@@ -1524,6 +1540,18 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
     let mut bdeep = vec![0.0f64; n];
     let mut bz = vec![f64::NAN; n];
     let mut bid = vec![-1i64; n];
+    // (rank) the highest-ranked road whose core each point lies in (d - its core half width, negative inside), its
+    // road, its surface height there, and how much of its ground it holds (1 across the carriageway, easing to 0
+    // over its shoulder: a lower road's ground blends in from the painted edge out): see pass 1
+    let mut hdeep = vec![f64::INFINITY; n];
+    let mut hrank = vec![i64::MIN; n];
+    // (the second-highest rank there: equal to hrank when another road of its rank is at the point, so its carriageway
+    // is not held over that one's)
+    let mut hrank2 = vec![i64::MIN; n];
+    let mut hid = vec![-1i64; n];
+    let mut hz = vec![f64::NAN; n];
+    let mut hyield = vec![0.0f64; n];
+    let mut hcar = vec![0u8; n];            // (the point is within the higher road's own carriageway)
     let smooth = |v: f64| { let v = v.clamp(0.0, 1.0); v * v * (3.0 - 2.0 * v) };
     // pass 1: a pair with d - h past this has u >= 1 (its core hs <= h, its ramp tt <= t_max, a wall's flat and ramp
     // wall_flat + wall_t), so w = 0: skipped (a margin for the rounding)
@@ -1551,9 +1579,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
             let (abx, aby) = (bx - ax, by - ay);
             let l2 = abx * abx + aby * aby;
             // pass 0's farthest effect: a carriageway (rh), an abutment (h), a cutting's band (h + wall_flat) and top
-            // (cut_reach: its side and ahead limits), a core (h + core_fade); a margin for the rounding
-            let far0 = rh[s].max(h[s] + if has_cut[s] { wall_flat.max(0.0) } else { 0.0 }).max(cut_reach[s])
+            // (cut_reach: its side and ahead limits), a core (h + core_fade), a higher road's rank influence
+            // (h + rank_fade: the side road's ease onto it); a margin for the rounding
+            let far0_base = rh[s].max(h[s] + if has_cut[s] { wall_flat.max(0.0) } else { 0.0 }).max(cut_reach[s])
                 .max(h[s] + if sep { core_fade } else { 0.0 }) + 1e-6;
+            let far0 = far0_base.max(h[s] + if rk[s] >= RANK_BUILT { rank_fade } else { 0.0 } + 1e-6);
             for row in cy0..=cy1 {
                 let i0 = sk.partition_point(|&k| k < row * nbx + cx0);
                 let i1 = sk.partition_point(|&k| k <= row * nbx + cx1);
@@ -1612,6 +1642,33 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                             cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
+                        }
+                        // (rank) the highest-ranked road whose core holds the point (equal ranks: the deeper core); a
+                        // plan leading onto a bridge (abut) is taken as beside it, not over the point's ground, and a
+                        // cutting's core ends at its wall (as pass 1's hs / drop: the same ground reaches there)
+                        let hs0 = if cwall.is_finite() { h[s].min(cwall) } else { h[s] };
+                        let drop0 = cwall.is_finite() && !ctop.is_finite() && d > cwall;
+                        if rk[s] >= 0 && abut[s] == 0 && !drop0 && d - hs0 < rank_fade
+                            && (rk[s] > hrank[idx] || (rk[s] == hrank[idx] && d - hs0 < hdeep[idx])) {
+                            hdeep[idx] = d - hs0;
+                            if rk[s] > hrank[idx] || (hid[idx] != rid[s] && rk[s] == hrank[idx]) {
+                                hrank2[idx] = hrank[idx];
+                            }
+                            hrank[idx] = rk[s];
+                            hid[idx] = rid[s];
+                            hz[idx] = target;
+                            // (its ground is held across the carriageway; the blend starts at the painted edge, reaches
+                            // the lower road's full weight its shoulder plus rank_fade out: gentle on the side road too,
+                            // not a step at the shoulder's edge)
+                            let shoulder = (hs0 - rh[s]).max(0.0);
+                            let reach = shoulder + rank_fade;
+                            hyield[idx] = 1.0 - smooth(((d - rh[s]) / reach).clamp(0.0, 1.0));
+                            hcar[idx] = (d <= rh[s]) as u8;
+                        }
+                        // (past the other effects' reach only the rank's own: the rest of pass 0 changes nothing
+                        // there, and running it for the rank's wider reach cost ~10 % of a city block's grading)
+                        if d > far0_base {
+                            continue;
                         }
                         if abut[s] != 0 && d <= h[s] && target > top[idx] {
                             top[idx] = target;
@@ -1690,6 +1747,31 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         yf = yf.max(apart(target - bz[idx]));
                     }
                     yf *= smooth((d - rh[s]) / ramp);
+                    // (a lower-ranked road gives way over a higher-ranked one's ground (grading.grade_rank): a built
+                    // (paved / cobble) road keeps its own ground where an unpaved dirt road or track runs beside it,
+                    // and a built side road eases onto a higher built one the same way. On the higher road's
+                    // carriageway the lower one gives way whole; past its painted edge the lower road's own target is
+                    // eased onto the higher road's ground over its shoulder plus rank_fade, so the side road ramps
+                    // gently instead of stepping at the shoulder's edge. Only roads at grade count (an abutment or
+                    // bridge is not on the point's ground), and a road's own other stretches never give way: hairpins
+                    // as before)
+                    let mut tgt = target;
+                    let side_ease = rk[s] < RANK_BUILT || hrank[idx] - rk[s] <= RANK_SIDE_MAX_DIFF;
+                    if rk[s] >= 0 && hrank[idx] > rk[s] && side_ease && abut[s] == 0 && hid[idx] != rid[s] {
+                        // (on the higher road's own carriageway its ground is held whole, whatever the height
+                        // difference: a dirt path 1-2 m lower beside the asphalt still left a dip in it. Past the
+                        // painted edge the height fade decides: a road far above or below is not on its ground)
+                        let rf = if hcar[idx] != 0 { 1.0 } else {
+                            let dz = (target - hz[idx]).abs();
+                            1.0 - smooth((dz - wall_cut).max(0.0) / rank_height_fade)
+                        };
+                        let raise = hyield[idx] * rf;
+                        if hcar[idx] != 0 {
+                            yf = yf.max(raise);
+                        } else {
+                            tgt = target + (hz[idx] - target) * raise;
+                        }
+                    }
                     if w > 0.0 && !drop && yf < 1.0 && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
                         let w = w * (1.0 - yf);
                         let r = d / blend_r;
@@ -1700,7 +1782,7 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                                 * smooth((d - hs) / core_fade) * smooth((side - ahead) / side_fade);
                             wb *= 1.0 - f;
                         }
-                        num[idx] += wb * target;
+                        num[idx] += wb * tgt;
                         den[idx] += wb;
                         if w > wmax[idx] {
                             wmax[idx] = w;
@@ -1713,7 +1795,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
     for j in 0..n {
         let i = order[j];
         out[i] = beff[j];
-        if den[j] > 0.0 {
+        // (a road whose rank is the point's highest, with no equal-ranked road there, holds its own carriageway whole:
+        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres)
+        if hcar[j] != 0 && hrank[j] > hrank2[j] && hrank[j] <= RANK_HOLD_MAX {
+            out[i] = hz[j] + lift;
+        } else if den[j] > 0.0 {
             out[i] = beff[j] + wmax[j] * (num[j] / den[j] - beff[j] + lift);
         }
     }
@@ -5611,7 +5697,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
     // 176: roofs::heightfield_roof; 177: roofs::triangulate_holes; 178: frontage::FrontageCoverage (PR #505's paved
-    // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof; 180: its gables
-    m.add("VERSION", 180)?;
+    // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof; 180: its gables;
+    // 181: grade_points' road ranks (rk, rank_fade, rank_height_fade: PR #1050)
+    m.add("VERSION", 181)?;
     Ok(())
 }

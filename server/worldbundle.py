@@ -276,11 +276,12 @@ def validate_artifact(data, artifact=None):
     from sidewalks import EU_SLAB
     from grading import set_widen
     plans, ci, bi, wi = [], 0, 0, 0
-    fields = {"fid", "half", "abut", "road_half", "rid", "max_wall", "cut", "bank", "steep", "widen"}
+    fields = {"fid", "half", "abut", "road_half", "rid", "rank", "max_wall", "cut", "bank", "steep", "widen"}
     for item, xy, heights in zip(plans_meta, groups["p"], groups["z"]):
         if (not isinstance(item, dict) or set(item) != fields or len(xy) < 2 or len(xy) != len(heights)
                 or not _text(item["fid"])
                 or type(item["rid"]) is not int or not -1 <= item["rid"] <= 2 ** 31 - 1
+                or type(item["rank"]) is not int or not -1 <= item["rank"] <= 10000
                 or not all(_number(item[k], 0, 10000) for k in ("half", "road_half", "max_wall"))
                 or not isinstance(item["abut"], list) or len(item["abut"]) != 2
                 or any(type(v) is not bool for v in item["abut"])
@@ -305,6 +306,7 @@ def validate_artifact(data, artifact=None):
             wi += 1
         p = Plan(xy, heights, item["half"], tuple(item["abut"]), cut, item["road_half"])
         p.rid, p.max_wall, p.bank, p.steep = item["rid"], item["max_wall"], bank, item["steep"]
+        p.rank = item["rank"]
         set_widen(p, widen)
         plans.append((item["fid"], p))
     if ci != len(groups["c"]) or bi != len(groups["b"]) or wi != len(groups["w"]):
