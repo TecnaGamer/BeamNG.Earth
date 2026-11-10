@@ -1195,7 +1195,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
         mark("powerlines")
     import windturbines
-    turbine_rows = windturbines.tile_turbines(frame, tx, ty, elev)
+    turbine_rows = windturbines.tile_turbines(
+        frame, tx, ty, elev, windturbines.worldcover_built_fn(_s.md) if getattr(_s, "md", None) is not None else None)
     if getattr(_s, "md", None) is not None:
         import golf
         try:

@@ -1870,8 +1870,12 @@ class Server:
             return cached
         clat, clon, south, west, north, east = geotiles.info(gx, gy, TURBINE_Z)
         frame = geotiles.frame(gx, gy, TURBINE_Z)
-        features = tuple(f for f in windturbines.near(south, west, north, east)
-                         if geotiles.tile_of(f.lat, f.lon, TURBINE_Z) == (gx, gy))
+        # (the drawn ones only: rows_for_features leaves a small one out, and a count short of the features below was
+        # taken for missing heights, so a tile holding one was never kept and asked again each time)
+        features = tuple(windturbines.keep(
+            [f for f in windturbines.near(south, west, north, east)
+             if geotiles.tile_of(f.lat, f.lon, TURBINE_Z) == (gx, gy)],
+            windturbines.worldcover_built_fn(self.mapdata) if self.mapdata is not None else None))
         rows = []
         if features:
             zoom = demmod.zoom_for(clat, 1.25, demmod.FINE_ZOOM)
@@ -2735,7 +2739,9 @@ class Server:
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
         import windturbines
-        turbine_rows = windturbines.tile_turbines(anchor.frame, tx, ty, elev)
+        turbine_rows = windturbines.tile_turbines(
+            anchor.frame, tx, ty, elev,
+            windturbines.worldcover_built_fn(self.mapdata) if self.mapdata is not None else None)
         if self.mapdata is not None:
             import golf
             try:
