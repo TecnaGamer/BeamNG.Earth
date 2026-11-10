@@ -161,6 +161,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
 - Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
   air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
+- Measured roofs from national LoD2 building models: each building's roof shape (flat, gabled, hipped, half-hipped,
+  mansard, pyramidal, ...), height and roof rise fill what the map does not say, in Germany (the states' models) and,
+  once their data is published, Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
+  has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
+  once per area; `BNE_LOD2_ROOFS=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
