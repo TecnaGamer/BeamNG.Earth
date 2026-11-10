@@ -229,6 +229,140 @@ def parse_color(val):
     return None
 
 
+# Roof colours from the aerial photo (the user, 2026-11-10: "more accurate textures on the buildings"): where a
+# high-resolution regional orthophoto covers the tile and the ground photo has already fetched it (streetfront's
+# cached_photo sources, read from disk only), a roof with no mapped colour takes the median colour of the photo's
+# pixels on it (native roof_photo_colours: inside the footprint, ROOF_PHOTO_INSET_M in from its outline, vegetation and
+# deep shadow left out). The roof textures are near neutral grey and the vertex colour multiplies them, so the tint
+# is the photo's colour over the texture's own mean (ROOF_TEX_MEAN, measured from the stock textures), at most 1.
+# The tile's photo is fetched (netfetch's limits; the same tiles the ground photo takes near the car) on a thread
+# started as the tile begins (RoofPhotoFuture), while its footprints are put together; a failed or slow fetch faults
+# the tile (revisit: built again, coloured, on a later visit) and keeps the procedural roofs.
+ROOF_PHOTO_ON = os.environ.get("BNE_ROOF_PHOTO", "on") != "off"
+ROOF_PHOTO_INSET_M = 1.0
+ROOF_PHOTO_MIN_PX = 6
+ROOF_PHOTO_SHADOW = 3 * 40          # an 8-bit r + g + b under this is shadow
+ROOF_PHOTO_PX = 512                 # the tile's photo (0.6 m per pixel over a 256 m tile and its margin)
+ROOF_PHOTO_STEP = 0.02              # tints rounded to this (fewer distinct looks)
+ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate": (0.359, 0.361, 0.388),
+                 "bne_bld_roof_shingle": (0.585, 0.577, 0.571), "bne_bld_roof_metal": (0.64, 0.64, 0.64),
+                 "bne_bld_panel": (0.815, 0.815, 0.815)}
+# a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
+# asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
+ROOF_BRIGHT_MAT = "bne_bld_panel"
+
+
+class RoofPhoto:
+    """The tile's cached orthophoto (rgb rows north to south over [x0, x0 + size] x [y0, y0 + size], anchor frame)."""
+
+    def __init__(self, rgb, x0, y0, size):
+        self.rgb, self.x0, self.y0, self.size = np.ascontiguousarray(rgb, np.uint8), float(x0), float(y0), float(size)
+
+    def colours(self, rings):
+        """(n, 3) sRGB roof colours of rings [(k, 2) anchor frame]; NaN rows where none."""
+        if not rings:
+            return np.zeros((0, 3))
+        import fast
+        fast.require(182, "roof_photo_colours")
+        rr = [np.asarray(r, np.float64)[:, :2] for r in rings]
+        off = np.r_[0, np.cumsum([len(r) for r in rr])].astype(np.int64)
+        return np.asarray(fast._ef.roof_photo_colours(self.rgb, self.x0, self.y0, self.size,
+                                                      np.ascontiguousarray(np.concatenate(rr)), off,
+                                                      float(ROOF_PHOTO_INSET_M), int(ROOF_PHOTO_MIN_PX),
+                                                      int(ROOF_PHOTO_SHADOW)), np.float64)
+
+
+ROOF_PHOTO_WAIT_S = 8.0     # s the buildings wait for the tile's photo at most (then the procedural roofs, a fault)
+_PHOTO_READERS = {}
+_PHOTO_LOCK = __import__("threading").Lock()
+_PHOTO_POOL = None
+
+
+def _photo_reader_live(cache_dir, sources):
+    """An imagery.Imagery of the regional sources that fetches what is missing (one per process and source set)."""
+    key = (os.fspath(cache_dir), tuple(sources))
+    with _PHOTO_LOCK:
+        got = _PHOTO_READERS.get(key)
+        if got is None:
+            import imagery
+            got = _PHOTO_READERS[key] = imagery.Imagery(os.path.join(key[0], "imagery"), key[1], fetch_workers=4,
+                                                        mem_tiles=24, leaf_on=False)
+        return got
+
+
+class RoofPhotoFuture:
+    """roof_photo on a thread (started when the tile starts): colours() waits for it ROOF_PHOTO_WAIT_S at most."""
+
+    def __init__(self, frame, x0, y0, x1, y1, cache_dir):
+        global _PHOTO_POOL
+        self.fut = None
+        if not ROOF_PHOTO_ON or cache_dir is None or not _photo_sources(frame, x0, y0, x1, y1):
+            return
+        with _PHOTO_LOCK:
+            if _PHOTO_POOL is None:
+                from concurrent.futures import ThreadPoolExecutor
+                _PHOTO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="roofphoto")
+        self.fut = _PHOTO_POOL.submit(roof_photo, frame, x0, y0, x1, y1, cache_dir, True)
+
+    def colours(self, rings):
+        if self.fut is None:
+            return None
+        try:
+            ph = self.fut.result(timeout=ROOF_PHOTO_WAIT_S)
+        except Exception:
+            ph = None
+        if ph is None:
+            import revisit
+            revisit.fault()         # (a later visit builds it again, with the photo)
+            return None
+        return ph.colours(rings)
+
+
+def _photo_sources(frame, x0, y0, x1, y1):
+    import imagery_regional
+    lat, lon, _ = frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
+    lat, lon = float(np.asarray(lat).ravel()[0]), float(np.asarray(lon).ravel()[0])
+    return tuple(name for name, (_u, _c, (s_, w_, n_, e_), *_r) in imagery_regional.REGIONAL.items()
+                 if s_ <= lat <= n_ and w_ <= lon <= e_)
+
+
+def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False):
+    """RoofPhoto of the tile's box from the regional orthophoto (online: fetching what is missing; else what is
+    on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off)."""
+    if not ROOF_PHOTO_ON or cache_dir is None:
+        return None
+    try:
+        import imagery
+        import streetfront
+        sources = _photo_sources(frame, x0, y0, x1, y1)
+        if not sources:
+            return None
+        pad = 8.0
+        size = max(x1 - x0, y1 - y0) + 2 * pad
+        px = ROOF_PHOTO_PX
+        reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
+                                                                                                 sources)
+        rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
+        if sum(used.get(name, 0) for name in sources) < px * px * 0.95:
+            return None
+        return RoofPhoto(rgb, x0 - pad, y0 - pad, size)
+    except imagery.ImageryError:
+        return None
+    except Exception as ex:             # (the procedural roofs rather than none)
+        import logging
+        logging.getLogger("earthd.buildings").debug("roof photo: %s: %s", type(ex).__name__, ex)
+        return None
+
+
+def photo_tint(mat, rgb):
+    """The vertex tint of roof material mat that shows the photo's colour rgb (sRGB 0..1) over its texture."""
+    mean = ROOF_TEX_MEAN.get(mat)
+    if mean is None:
+        return None
+    t = [min(1.0, max(0.05, float(c) / max(m, 1e-3))) for c, m in zip(rgb, mean)]
+    return tuple(round(v / ROOF_PHOTO_STEP) * ROOF_PHOTO_STEP for v in t)
+
+
 def custom_look(mat, rgb):
     """A look key in LOOKS for material mat with RGB tuple in [0, 1]."""
     key = f"{mat}|c_{rgb[0]:.3f}_{rgb[1]:.3f}_{rgb[2]:.3f}"
@@ -898,6 +1032,15 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if rc is not None:
         base_rmat = roof_mat.split("|")[0]
         roof_mat = custom_look(base_rmat, rc)
+    elif attrs.get("_roof_photo") is not None and not rmat:
+        # (the roof's colour in the aerial photo, RoofPhoto: a mapped colour or material wins)
+        base_rmat = roof_mat.split("|")[0]
+        if roof == "flat" and base_rmat == ROOF_FLAT and \
+                max(attrs["_roof_photo"]) > 0.95 * max(ROOF_TEX_MEAN[ROOF_FLAT]):
+            base_rmat = ROOF_BRIGHT_MAT
+        tint = photo_tint(base_rmat, attrs["_roof_photo"])
+        if tint is not None:
+            roof_mat = custom_look(base_rmat, tint)
     if (barn or shed) and not stone_hut:    # plain walls tinted: barns the region's barn red or wood, sheds the siding colours
         tints = WALL_TINTS[SIDING]
         if barn and _hash01(seed, "barn") < style.barn_red:
@@ -3270,7 +3413,7 @@ def _outline_under_parts(at, bparts):
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
-                   passage_xy=None, rails_xy=None, roofs=None):
+                   passage_xy=None, rails_xy=None, roofs=None, photo=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3573,7 +3716,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         cnt = np.maximum(np.asarray(ends, np.int64) - starts, 1)
         house_res = house_land.at_many(np.add.reduceat(la_all, starts) / cnt, np.add.reduceat(lo_all, starts) / cnt) \
             if len(la_all) else np.zeros(len(rings), bool)
+    # (the roofs' colours in the tile's cached aerial photo, RoofPhoto: all at once)
+    roof_rgb = photo.colours([np.asarray(r, np.float64)[:, :2] + [x0, y0] for r in rings]) \
+        if photo is not None and len(rings) else None
+    if roof_rgb is not None and len(roof_rgb) != len(rings):
+        roof_rgb = None
     for k, (ring, at, sh, look, mh) in enumerate(zip(rings, attrs, shared, looks, mins)):
+        if roof_rgb is not None and np.isfinite(roof_rgb[k]).all() and not at.get("roof_color"):
+            at = dict(at, _roof_photo=tuple(float(v) for v in roof_rgb[k]))
         if mh > 0.5 and at.get("height") is not None and np.isfinite(at["height"]) and look is None:
             at = dict(at, height=max(2.5, float(at["height"]) - mh))     # a building's own height range
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
@@ -4481,6 +4631,8 @@ def road_tile_items(
 
     box = roads.tile_bbox(tx, ty)
     x0, y0, x1, y1 = box
+    # (the tile's aerial photo for the roofs' colours, fetched while the footprints are put together: RoofPhotoFuture)
+    photo = RoofPhotoFuture(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
     cds = [
         md.cell(
@@ -4501,6 +4653,7 @@ def road_tile_items(
         own=box if hasattr(box, "owns") else None,
         part_layers=[c.layers.get("building_parts") for c in cds],
         roofs=measured_roofs(md, frame, x0, y0, x1, y1),
+        photo=photo,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,

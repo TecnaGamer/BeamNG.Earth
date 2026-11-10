@@ -2278,3 +2278,51 @@ class SkeletonGableTest(unittest.TestCase):
         self.assertGreaterEqual(int((M == fac).sum()), 2)               # (two gable walls: the arms' ends)
         P = np.asarray(m.P).reshape(-1, 3)
         self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)
+
+
+class RoofPhotoTest(unittest.TestCase):
+    """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
+
+    def photo(self, roof=(180, 70, 50), tree=None):
+        rgb = np.full((100, 100, 3), (90, 90, 90), np.uint8)           # 1 m pixels over [0, 100] x [0, 100]
+        rgb[40:60, 30:70] = roof                                       # a 40 x 20 m roof: x 30..70, y 40..60
+        if tree is not None:
+            rgb[40:60, 30:30 + tree] = (40, 110, 40)
+        return bld.RoofPhoto(rgb, 0.0, 0.0, 100.0)
+
+    def test_the_roof_s_median_colour(self):
+        ring = np.array([[30, 40], [70, 40], [70, 60], [30, 60]], float)
+        c = self.photo().colours([ring])
+        np.testing.assert_allclose(c[0], np.array([180, 70, 50]) / 255.0, atol=1e-9)
+
+    def test_the_outline_s_edge_and_a_tree_left_out(self):
+        # (an outline 2 m too big still reads the roof inside its inset; a tree over a third of it is left out)
+        ring = np.array([[28, 38], [72, 38], [72, 62], [28, 62]], float)
+        c = self.photo(tree=12).colours([ring])
+        self.assertTrue(np.isfinite(c[0]).all())
+        self.assertGreater(c[0][0], c[0][1] + 0.2, "the red roof, not the tree or the street")
+
+    def test_a_roof_under_trees_has_none(self):
+        ring = np.array([[30, 40], [70, 40], [70, 60], [30, 60]], float)
+        self.assertTrue(np.isnan(self.photo(tree=30).colours([ring])[0]).all())
+
+    def test_the_tint_shows_the_photo_s_colour(self):
+        t = bld.photo_tint(bld.ROOF_SHINGLE, (0.5, 0.29, 0.23))
+        mean = bld.ROOF_TEX_MEAN[bld.ROOF_SHINGLE]
+        shown = [a * b for a, b in zip(t, mean)]
+        np.testing.assert_allclose(shown, (0.5, 0.29, 0.23), atol=0.02)
+        self.assertEqual(bld.photo_tint(bld.ROOF_FLAT, (0.95, 0.95, 0.95)), (1.0, 1.0, 1.0), "at most the texture")
+
+    def test_a_mapped_colour_wins(self):
+        ring = np.array([[0, 0], [12, 0], [12, 9], [0, 9]], float)
+        mapped = bld.plan(ring, {"class": "house", "roof_color": "red", "_roof_photo": (0.2, 0.2, 0.6)})
+        photo = bld.plan(ring, {"class": "house", "_roof_photo": (0.2, 0.2, 0.6)})
+        self.assertNotEqual(mapped.roof_mat, photo.roof_mat)
+        self.assertIn("|c_", photo.roof_mat)
+
+    def test_a_white_flat_roof_takes_the_light_texture(self):
+        ring = np.array([[0, 0], [40, 0], [40, 30], [0, 30]], float)
+        white = bld.plan(ring, {"class": "retail", "roof_shape": "flat", "_roof_photo": (0.9, 0.9, 0.9)})
+        dark = bld.plan(ring, {"class": "retail", "roof_shape": "flat", "_roof_photo": (0.3, 0.3, 0.32)})
+        self.assertTrue(white.roof_mat.startswith(bld.ROOF_BRIGHT_MAT + "|c_"), white.roof_mat)
+        self.assertTrue(dark.roof_mat.startswith(bld.ROOF_FLAT + "|c_"), dark.roof_mat)

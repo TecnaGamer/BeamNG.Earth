@@ -2,6 +2,7 @@
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devraster;
 mod roofs;
+mod roofphoto;
 mod gravity;
 mod polyproject;
 mod s3url;
@@ -5710,6 +5711,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 176: roofs::heightfield_roof; 177: roofs::triangulate_holes; 178: frontage::FrontageCoverage (PR #505's paved
     // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof; 180: its gables;
     // 181: grade_points' road ranks (rk, rank_fade, rank_height_fade: PR #1050)
-    m.add("VERSION", 181)?;
+    m.add_function(wrap_pyfunction!(roofphoto::roof_photo_colours, m)?)?;
+    // 182: roofphoto::roof_photo_colours (buildings.RoofPhoto: roof colours from the cached orthophoto)
+    m.add("VERSION", 182)?;
     Ok(())
 }
