@@ -57,6 +57,7 @@ import fast
 import hklidar
 import mapcells
 import roadzhk
+import xproc
 
 log = logging.getLogger("earthd.roadz")
 
@@ -169,8 +170,7 @@ def precache_gaps_wait(seconds=None):
 APPROACH_END_TOL_M = 1.0
 APPROACH_REJOIN_M = 0.3
 APPROACH_MIN_DEV_M = 0.5
-SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
-SESSION_KEEP_S = 86400.0
+SESSION_ENV = xproc.RUN_ENV
 
 class LidarDropped(Exception):
     """A cell's lidar read stopped: this run goes without it (RoadZ._read)."""
@@ -1121,27 +1121,12 @@ class RoadZ:
 
     # ---- the elevated ground stretches, one answer per cell and session ----
     def _session_dir(self):
-        """The folder this server run's decisions are kept in (its processes share BNGE_ROADZ_SESSION; a process alone:
-        its own), older runs' cleared out once. None without a cache."""
+        """The folder this server run's decisions are kept in (xproc.run_dir). None without a cache."""
         if not self.dir:
             return None
         got = getattr(self, "_sdir", None)
-        if got is not None:
-            return got
-        sid = re.sub(r"[^A-Za-z0-9_.-]", "_", os.environ.get(SESSION_ENV) or f"p{os.getpid()}.{int(time.time())}")
-        root = os.path.join(self.dir, "gapsession")
-        got = os.path.join(root, sid)
-        os.makedirs(got, exist_ok=True)
-        try:
-            now = time.time()
-            for name in os.listdir(root):
-                q = os.path.join(root, name)
-                if name != sid and now - os.path.getmtime(q) > SESSION_KEEP_S:
-                    import shutil
-                    shutil.rmtree(q, ignore_errors=True)
-        except OSError:
-            pass
-        self._sdir = got
+        if got is None:
+            got = self._sdir = xproc.run_dir(os.path.join(self.dir, "gapsession"))
         return got
 
     def _decision(self, src, key):
@@ -1150,28 +1135,15 @@ class RoadZ:
 
     def _decide(self, key, gaps, src="lidar"):
         """This session's decision for cell key's source src: gaps (a list, or None: the rule) unless a process decided
-        first, whose decision is taken (a file made once: os.link fails when it is there)."""
+        first, whose decision is taken (xproc.decide)."""
         p = self._decision(src, key)
         if p is None:
             return gaps
-        if not os.path.exists(p):
-            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"gaps": None if gaps is None else [[f, list(a), list(b)] for f, a, b in gaps]}, fh)
-            try:
-                os.link(tmp, p)
-            except OSError:
-                pass                        # (decided by another process meanwhile)
-            finally:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+        got = xproc.decide(p, {"gaps": None if gaps is None else [[f, list(a), list(b)] for f, a, b in gaps]})
         try:
-            with open(p, encoding="utf-8") as fh:
-                got = json.load(fh)["gaps"]
+            got = got["gaps"]
             return None if got is None else [(str(f), tuple(a), tuple(b)) for f, a, b in got]
-        except (OSError, ValueError, KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             return gaps
 
     def gap_answers(self, keys, src="lidar"):
