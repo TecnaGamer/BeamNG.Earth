@@ -534,6 +534,15 @@ class Sources:
 
 
 @needs_duckdb
+class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_station_tags_beside_rail_tags(self):
+        # the weekly station shards' reader (railtags.StationTags), made with the map data like the rail one
+        import railtags
+        md, _ = self.mapdata()
+        self.assertIsInstance(md.station_tags, railtags.StationTags)
+
+
+@needs_duckdb
 class StacTest(Sources, SmallBlocks, unittest.TestCase):
     def test_files_for_cell(self):
         md, t = self.mapdata()
