@@ -45,6 +45,15 @@ ROOF_NEAR_M = 6.0           # a roof this near a platform (or overlapping it) co
 LINK_JOIN_M = 2.5           # ways whose ends are this near are one link
 LINK_PLATFORM_M = 6.0       # a link's end this near a platform ends on it
 MIN_CONFIDENCE = 4
+CANOPY_LEN_M = 110.0        # a canopy worked out for a platform without a mapped roof: this long at most ...
+CANOPY_SHARE = 0.6          # ... and this share of the platform's edge at most
+CANOPY_MIN_RUN_M = 60.0     # a platform's edge shorter than this gets none
+CANOPY_IN_M = 1.2           # the canopy stands this far in from the track edge (the safety zone stays open)
+CANOPY_BACK_M = 0.8         # ... and ends this far from the platform's other edge
+CANOPY_MAX_W_M = 7.5        # the canopy reaches this far from its first line at most
+CANOPY_MIN_W_M = 2.5
+CANOPY_STEP_M = 2.0
+MAIN_STATION_PLATFORMS = 3  # a station of this many platforms or more roofs the ones without a mapped roof
 
 # Standard distances (m) of a platform's edge from the track's axis and its height over the rail head, by country
 # (typical values of the national rules: UA PTE, CZ SŽ, DE EBO / TSI PRM). "high" is a main station, "low" a halt.
@@ -525,6 +534,94 @@ def _inside_any(path, platforms, crosses):
     return True
 
 
+def _ray_hit(ring, p, d, limit=60.0):
+    """Distance along the unit direction d from p to the first crossing of the polygon ring's outline, or None."""
+    a = bs._open(ring)
+    b = np.roll(a, -1, axis=0)
+    e = b - a
+    den = d[0] * e[:, 1] - d[1] * e[:, 0]
+    ok = np.abs(den) > 1e-9
+    q = a - p
+    t = np.where(ok, (q[:, 0] * e[:, 1] - q[:, 1] * e[:, 0]) / np.where(ok, den, 1.0), -1.0)
+    u = np.where(ok, (q[:, 0] * d[1] - q[:, 1] * d[0]) / np.where(ok, den, 1.0), -1.0)
+    hit = ok & (t > 1e-6) & (u >= 0.0) & (u <= 1.0) & (t < limit)
+    return float(t[hit].min()) if hit.any() else None
+
+
+def _canopy_ring(pl, run, centre_arc, length):
+    """The ring (counter-clockwise) of a canopy along the platform's track-edge run: `length` m long about `centre_arc` (arc
+    length along the run), from CANOPY_IN_M in from the edge to the platform's far edge (CANOPY_BACK_M short of it), at most
+    CANOPY_MAX_W_M wide; None where the platform is narrower than CANOPY_MIN_W_M there."""
+    pts = pl.ring[run]
+    s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+    lo, hi = max(0.0, centre_arc - length / 2.0), min(float(s[-1]), centre_arc + length / 2.0)
+    if hi - lo < 20.0:
+        return None
+    ss = np.arange(lo, hi + 1e-6, CANOPY_STEP_M)
+    line = np.c_[np.interp(ss, s, pts[:, 0]), np.interp(ss, s, pts[:, 1])]
+    t = np.zeros_like(line)
+    t[1:-1] = line[2:] - line[:-2]
+    t[0], t[-1] = line[1] - line[0], line[-1] - line[-2]
+    t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
+    nrm = np.c_[-t[:, 1], t[:, 0]]                  # (the platform is to the left of its counter-clockwise ring)
+    width = []
+    for p, n in zip(line, nrm):
+        w = _ray_hit(pl.ring, p + n * 0.05, n)
+        width.append(w if w is not None else CANOPY_MAX_W_M + CANOPY_IN_M + CANOPY_BACK_M)
+    width = np.asarray(width)
+    k = 5
+    padded = np.concatenate((np.full(k, width[0]), width, np.full(k, width[-1])))
+    width = np.array([np.median(padded[i:i + 2 * k + 1]) for i in range(len(width))])      # (a median: a spike is a ray's slip)
+    far = np.minimum(width - CANOPY_BACK_M, CANOPY_IN_M + CANOPY_MAX_W_M)
+    if float(np.median(far - CANOPY_IN_M)) < CANOPY_MIN_W_M:
+        return None
+    far = np.maximum(far, CANOPY_IN_M + CANOPY_MIN_W_M * 0.5)
+    ring = np.vstack((line + nrm * CANOPY_IN_M, (line + nrm * far[:, None])[::-1]))
+    return _ccw(ring)
+
+
+def synth_canopies(st):
+    """Platforms with no mapped roof that the map says have one (shelter=yes, covered=yes) or that belong to a main station
+    (CANOPY_... platforms or more): a canopy over the stretch of the platform nearest the hall (else its middle), worked out
+    from the platform's own outline. The map has the roofs of a few platforms only; the platforms of a big station are roofed."""
+    main = st.kind == "station" and len(st.platforms) >= MAIN_STATION_PLATFORMS
+    hall = bs.centroid(max(st.buildings, key=lambda b: bs.area(b[1]))[1]) if st.buildings else None
+    for pl in st.platforms:
+        if pl.roofs or not pl.mapped:
+            continue
+        want = pl.tag("shelter") == "yes" or pl.tag("covered") == "yes" or main
+        if not want or pl.tag("covered") == "no" or pl.tag("shelter") == "no":
+            continue
+        runs = []
+        for run in _runs_of(pl):
+            pts = pl.ring[run]
+            ln = float(np.hypot(*np.diff(pts, axis=0).T).sum())
+            if ln >= CANOPY_MIN_RUN_M:
+                runs.append((ln, run))
+        if not runs:
+            continue
+        ln, run = max(runs, key=lambda r: r[0])
+        pts = pl.ring[run]
+        s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
+        arc = ln / 2.0
+        if hall is not None:
+            arc = float(s[int(np.argmin(np.hypot(*(pts - hall).T)))])
+        length = min(CANOPY_LEN_M, CANOPY_SHARE * ln)
+        arc = min(max(arc, length / 2.0), ln - length / 2.0)
+        ring = _canopy_ring(pl, run, arc, length)
+        if ring is None or bs.area(ring) < 60.0:
+            continue
+        rid = "synth:" + str(pl.id)
+        st.roofs.append((rid, ring))
+        pl.roofs.append(rid)
+
+
+def _runs_of(pl):
+    """[index list] the runs of the platform's track edge (railstationmesh._runs, without importing it at module level)."""
+    import railstationmesh
+    return railstationmesh._runs(pl.snapped, pl.ring, pl.tidx)
+
+
 def hubs_of(groups):
     """[(2,)] the hub of each seed group (find's): the mean of its seeds."""
     return [np.asarray([_centre(s) for s in g]).mean(0) for g in groups]
@@ -609,6 +706,7 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
                     st.claimed.add(it["id"])
 
     st.links = _links(near, st.tracks, plats, st.hub)
+    synth_canopies(st)
 
     # worked out from the track: no platform mapped
     if not plats:

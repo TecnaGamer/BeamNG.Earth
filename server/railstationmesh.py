@@ -21,15 +21,15 @@ import railunderpass
 import railstations as rs
 
 RAIL_TOP_M = 0.58           # the rail head over the bed (railways.RAIL_TOP_M: ballast 0.3 - sleeper sink 0.08 + sleeper 0.2 + rail 0.16)
-SMOOTH_N = 13               # reference points averaged along the track (REF_STEP_M apart): the DEM's noise out of it
+SMOOTH_N = 11               # reference points averaged along the track (REF_STEP_M apart), twice: the DEM's noise out of it
 REF_STEP_M = 4.0
 REF_NEAR_M = 14.0           # track points this near the platform are its reference
 REF_REACH_M = 25.0          # a platform with no edge at a track follows the nearest track within this
 REF_K = 6                   # nearest reference points weighed for a point inside
-STRIP_IN_M = 0.45           # the tactile strip stands this far in from the edge ...
-STRIP_W_M = 0.40
-LINE_IN_M = 1.00            # ... the safety line this far
-LINE_W_M = 0.12
+STRIP_IN_M = 0.25           # the yellow edge band stands this far in from the edge ...
+STRIP_W_M = 0.50
+LINE_IN_M = 0.85            # ... the thin white line beside it this far
+LINE_W_M = 0.10
 LIFT_M = 0.006              # strips over the slab's top (no z-fighting)
 RUN_BREAK_M = 6.0           # a gap in the snapped points longer than this ends a run of the edge
 TILE_MARGIN_M = 6.0
@@ -37,6 +37,7 @@ TILE_MARGIN_M = 6.0
 CONCRETE = bm.PLATFORM_TOP
 KERB = bm.KERB
 LINE = bm.TACTILE
+BAND = ("line_yellow", 1.0)     # the yellow band for the blind along the kerb (the real platforms': a yellow line)
 
 
 TURN_BREAK_DEG = 35.0       # a run of the track edge ends at a corner this sharp (a platform's end)
@@ -120,45 +121,63 @@ def _ref_tracks(pl):
 
 
 def reference(frame, elev, pl):
-    """(xy (k, 2), z (k,)) the rail head's height along the track(s) the platform stands by: the drawn ground at points every
-    REF_STEP_M of the track within REF_NEAR_M of the platform, smoothed along the track (the DEM's noise out of it; the
-    ground under a track is graded to its bed, so it is the bed), plus the rail head over the bed. None without a track."""
-    pts, zs = [], []
+    """[(poly (k, 2), z (k,))] the rail head's height along each track the platform stands by: the drawn ground at points
+    every REF_STEP_M of the track within REF_NEAR_M of the platform (and a window past its ends), smoothed along the track (the
+    DEM's noise out of it; the ground under a track is graded to its bed, so it is the bed), plus the rail head over the bed.
+    [] without a track. top_z reads it as a profile along the track: a platform is as flat across as a track is."""
+    out = []
     ring = pl.ring[::max(1, len(pl.ring) // 160)]
     for xy in _ref_tracks(pl):
         q = _resample(np.asarray(xy, float), REF_STEP_M)
+        if len(q) < 2:
+            continue
         d = np.sqrt(((q[:, None, :] - ring[None, :, :]) ** 2).sum(2)).min(1)
         keep = d < REF_NEAR_M
         if not keep.any():
             continue
         i = np.flatnonzero(keep)
-        lo, hi = int(i[0]), int(i[-1])
-        lo, hi = max(0, lo - SMOOTH_N), min(len(q) - 1, hi + SMOOTH_N)       # (a window's width past the platform's ends)
+        lo, hi = max(0, int(i[0]) - SMOOTH_N), min(len(q) - 1, int(i[-1]) + SMOOTH_N)    # (a window's width past the platform's ends)
         sel = q[lo:hi + 1]
-        z = _smooth(bm.ground(frame, elev, sel), SMOOTH_N)
-        near = keep[lo:hi + 1]
-        pts.append(sel[near])
-        zs.append(z[near] + RAIL_TOP_M)
-    if not pts:
-        return None
-    return np.vstack(pts), np.concatenate(zs)
+        if len(sel) < 2:
+            continue
+        z = _smooth(_smooth(bm.ground(frame, elev, sel), SMOOTH_N), SMOOTH_N) + RAIL_TOP_M
+        out.append((sel, z))
+    return out
+
+
+def _profile_z(poly, z, xy):
+    """(distance, height) of each point of xy (k, 2) against the polyline: the height of the foot of the perpendicular (the
+    ends clamped), linear along each segment."""
+    a, b = poly[:-1], poly[1:]
+    ab = b - a
+    l2 = np.maximum((ab ** 2).sum(1), 1e-9)
+    t = np.clip(((xy[:, None, 0] - a[None, :, 0]) * ab[None, :, 0] + (xy[:, None, 1] - a[None, :, 1]) * ab[None, :, 1]) / l2, 0.0, 1.0)
+    f = a[None] + ab[None] * t[:, :, None]
+    d = np.hypot(f[:, :, 0] - xy[:, None, 0], f[:, :, 1] - xy[:, None, 1])
+    j = np.argmin(d, axis=1)
+    r = np.arange(len(xy))
+    tt = t[r, j]
+    return d[r, j], z[j] + (z[j + 1] - z[j]) * tt
 
 
 def top_z(ref, xy, fallback):
-    """Heights (k,) of the platform's top at xy: the reference points' heights weighed by 1 / (distance^2 + 1) over the
-    nearest REF_K of them. Without a reference (fallback: xy -> z) the terrain's."""
-    if ref is None:
+    """Heights (k,) of the platform's top at xy: the rail head's profile along the nearest of its tracks (reference's), the
+    same across the platform. Without a reference (fallback: xy -> z) the terrain's."""
+    xy = np.asarray(xy, float).reshape(-1, 2)
+    if not ref:
         return fallback(xy)
-    rp, rz = ref
     out = np.empty(len(xy))
-    k = min(REF_K, len(rp))
-    for a in range(0, len(xy), 2000):
-        q = xy[a:a + 2000]
-        d2 = ((q[:, None, :] - rp[None, :, :]) ** 2).sum(2)
-        near = np.argpartition(d2, k - 1, axis=1)[:, :k] if k < d2.shape[1] else np.tile(np.arange(k), (len(q), 1))
-        dd = np.take_along_axis(d2, near, 1)
-        w = 1.0 / (dd + 1.0)
-        out[a:a + 2000] = (w * rz[near]).sum(1) / w.sum(1)
+    for c in range(0, len(xy), 1500):
+        q = xy[c:c + 1500]
+        best_d, best_z = None, None
+        for poly, z in ref:
+            d, zz = _profile_z(poly, z, q)
+            if best_d is None:
+                best_d, best_z = d, zz
+            else:
+                sel = d < best_d
+                best_d, best_z = np.where(sel, d, best_d), np.where(sel, zz, best_z)
+        out[c:c + 1500] = best_z
     return out
 
 
@@ -194,7 +213,7 @@ def _strips(mesh, ref, pl, height, frame, elev):
         d[-1] = pts[-1] - pts[-2]
         d /= np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None]
         nrm = np.c_[-d[:, 1], d[:, 0]]
-        for off, w in ((STRIP_IN_M, STRIP_W_M), (LINE_IN_M, LINE_W_M)):
+        for off, w, mat in ((STRIP_IN_M, STRIP_W_M, BAND), (LINE_IN_M, LINE_W_M, LINE)):
             a, b = pts + nrm * off, pts + nrm * (off + w)
             za = top_z(ref, a, fb) + height + LIFT_M
             zb = top_z(ref, b, fb) + height + LIFT_M
@@ -204,8 +223,8 @@ def _strips(mesh, ref, pl, height, frame, elev):
             for i in range(m - 1):
                 T += [[i, i + 1, m + i + 1], [i, m + i + 1, m + i]]
             s = np.concatenate(([0.0], np.cumsum(np.hypot(*np.diff(pts, axis=0).T))))
-            UV = np.vstack((np.c_[s / LINE[1], np.zeros(m)], np.c_[s / LINE[1], np.ones(m)]))
-            mesh.add(LINE[0], P, UV, T)
+            UV = np.vstack((np.c_[s / mat[1], np.zeros(m)], np.c_[s / mat[1], np.ones(m)]))
+            mesh.add(mat[0], P, UV, T)
 
 
 def surface(frame, elev, st, pl):
@@ -335,9 +354,9 @@ def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
             h = platform_height(pl, st.country, len(st.platforms))
             ref = reference(frame, elev, pl)
             _slab(mesh, frame, elev, ref, pl.ring, h)
-            if tactile and ref is not None:
+            if tactile and ref:
                 _strips(mesh, ref, pl, h, frame, elev)
-            if ref is not None:
+            if ref:
                 _ramps(mesh, frame, elev, ref, pl, h)
         _roofs(mesh, frame, elev, st, box, columns_only=collide)
         for ln in st.links:

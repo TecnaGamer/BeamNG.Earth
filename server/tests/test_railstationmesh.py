@@ -438,3 +438,68 @@ class RampTest(unittest.TestCase):
         m2 = bm._Mesh()
         rm._ramps(m2, None, low, rm.reference(None, low, pl), pl, -0.5)       # (below the ground: none)
         self.assertIsNone(m2.result(BIG, (0.0, 0.0, 0.0)))
+
+
+class FlatAndYellowTest(unittest.TestCase):
+    def test_a_platform_is_flat_across_and_ignores_the_ground_ripple(self):
+        st = no_links(stations_of("kalynivka")[0])
+        st.country = "UA"
+        def noise(xy):                                  # (deterministic white noise of +-0.35 m: the DEM's own)
+            v = np.sin(np.round(xy[:, 0]) * 12.9898 + np.round(xy[:, 1]) * 78.233) * 43758.5453
+            return 100.0 + 0.35 * ((v - np.floor(v)) * 2.0 - 1.0)
+        ripple = bm.DrawnGround(noise)
+        keep = rm._ramps
+        rm._ramps = lambda *a, **k: None
+        try:
+            m = rm.mesh(None, BIG, [st], ripple, (0.0, 0.0, 0.0))
+        finally:
+            rm._ramps = keep
+        V = tops(m, rm.CONCRETE[0])
+        top = V[V[:, 2] > 100.7]                        # (the slab's top: 0.58 + 0.2 over the ground, not its walls' feet)
+        self.assertGreater(len(top), 30)
+        self.assertLess(float(np.ptp(top[:, 2])), 0.12)  # (0.7 m of noise under it: the profile along the track leaves a hair)
+
+    def test_the_edge_band_is_yellow_beside_the_kerb(self):
+        import busstations as bs
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
+        self.assertIn(rm.BAND[0], m[3])
+        V = tops(m, rm.BAND[0])
+        edge = rs.norm("UA")[0]
+        for p in V[::9]:
+            d = min(bs.dist_to_path(xy, p[:2]) for _t, xy in st.tracks)
+            self.assertGreater(d, edge + rm.STRIP_IN_M - 0.25)
+            self.assertLess(d, edge + rm.STRIP_IN_M + rm.STRIP_W_M + 0.25)
+
+
+class CanopyTest(unittest.TestCase):
+    def test_a_main_station_roofs_its_platforms_near_the_hall(self):
+        st = stations_of("vinnytsia")[0]
+        syn = [r for r in st.roofs if str(r[0]).startswith("synth:")]
+        self.assertGreaterEqual(len(syn), 2)
+        edge = rs.norm("UA")[0]
+        import busstations as bs
+        for rid, ring in syn:
+            pl = next(p for p in st.platforms if rid in p.roofs)
+            inside = [bs.contains(pl.ring, q) for q in ring[::3]]
+            self.assertGreater(sum(inside) / len(inside), 0.85)
+            d = min(bs.dist_to_path(xy, q) for _t, xy in st.tracks for q in ring[::5])
+            self.assertGreater(d, edge + 0.8)
+            self.assertGreater(bs.area(ring), 200.0)
+
+    def test_the_maps_no_shelter_is_kept(self):
+        st = stations_of("trutnov")[0]                   # (shelter=no on every platform)
+        self.assertFalse([r for r in st.roofs if str(r[0]).startswith("synth:")])
+
+    def test_a_small_halt_gets_none(self):
+        st = stations_of("kalynivka")[0]
+        self.assertFalse(st.roofs)
+
+    def test_canopies_stand_in_the_mesh_with_columns(self):
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
+        V = tops(m, rm.STEEL[0])
+        h = max(rm.platform_height(p, "UA", len(st.platforms)) for p in st.platforms)
+        self.assertGreater(V[:, 2].max(), 100.0 + rm.RAIL_TOP_M + h + rm.ROOF_H_M - 0.1)
