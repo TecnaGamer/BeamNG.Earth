@@ -2135,3 +2135,16 @@ class CanopyTest(unittest.TestCase):
         ring = np.array([[0, 0], [6, 0], [6, 5], [0, 5]], float)
         self.assertAlmostEqual(bld.plan(ring, {"class": "carport"}, 0, 39.2, -76.6).height, bld.CANOPY_H["carport"])
         self.assertAlmostEqual(bld.plan(ring, {"class": "roof", "height": 7.0}, 0, 39.2, -76.6).height, 7.0)
+
+
+class TileRoofAttrsTest(unittest.TestCase):
+    def test_the_maps_ridge_orientation_reaches_plan(self):
+        import geodesy
+        f = geodesy.EnuFrame(48.1, 11.5)
+        e = np.array([20.0, 32.0, 32.0, 20.0, 20.0]); n = np.array([20.0, 20.0, 28.0, 28.0, 20.0])
+        la, lo, _ = f.enu_to_geodetic(e, n, 0.0)
+        b = Feats(["B1"], [np.stack([lo, la], 1)], **{"class": ["house"], "roof_shape": ["gabled"],
+                                                       "roof_orientation": ["across"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        self.assertEqual(len(items), 1)
+        self.assertTrue(items[0][0].across)
