@@ -178,6 +178,12 @@ def reach_of(ch):
 
 # --- the weekly OpenStreetMap station shards (railtags.StationTags; Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
 # `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`")
+# (the user in game, 2026-11-09, Barstow's Supercharger as a row of 12: "some of them are sliding off a hill ... it
+# look s silly"; "Do that or just shift them") a row stays on level ground: it slides along its aisle by whole chargers
+# (ROW_SLIDE) to where every charger and stall is within FLAT_M of the row's middle height, else is shortened; a mapped
+# charge point on a bank is dropped
+FLAT_M = 0.5
+ROW_SLIDE = (0, -1, 1, -2, 2, -3, 3, -4, 4)
 CAP_MAX = 12                # chargers a site gets from its capacity at most (a big Supercharger has 12-40 stalls)
 POINTS_MAX = 16             # mapped charge points a site stands chargers at, at most
 
@@ -311,11 +317,17 @@ def _kerb_clear(pts, areas, blds, roads, service=()):
     return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
 
-def _at_points(ch, blds, roads, service, shape):
+def _level(pts, height):
+    """Whether every point's ground (height(xs, ys)) is within FLAT_M of their middle (median) height."""
+    h = np.asarray(height(pts[:, 0], pts[:, 1]), np.float64).ravel()
+    return bool(np.all(np.abs(h - np.median(h)) <= FLAT_M))
+
+
+def _at_points(ch, blds, roads, service, shape, height=None):
     """A site with a charger at each mapped charge point, facing the nearest drive line within AISLE_REACH_M (else the
     nearest public road), its stall in front; a point whose charger or stall is in a building or on a road dropped.
     None when fewer than 2 stand (today's placements then). No pad: a mapped site's ground is there already."""
-    props, areas = [], []
+    props, areas, keep = [], [], []
     for px, py in ch.points:
         p = np.array([px, py], np.float64)
         near = _nearest(service, p)
@@ -325,18 +337,26 @@ def _at_points(ch, blds, roads, service, shape):
         stall = p + f * (CHARGER_BACK_M + STALL_M / 2.0)
         if not gs._clear(np.array([p, stall]), blds, roads):
             continue
+        keep.append((p, stall))
         yaw = gs._yaw(f)
         props.append(dict(shape=shape, x=float(px), y=float(py), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
                           scale=[1.0, 1.0, 1.0], collide=True))
         areas.append(dict(x=float(stall[0]), y=float(stall[1]), dz=gs.AREA_DZ, yaw=yaw % 360.0,
                           half=[STALL_M / 2, AREA_W_M / 2, 2.75], icon=gs.ICON_DZ))
+    if height is not None and keep:             # (a point on a bank: off the middle height of the site's points)
+        hp = np.asarray(height(np.array([k[0][0] for k in keep]), np.array([k[0][1] for k in keep])), np.float64)
+        hs = np.asarray(height(np.array([k[1][0] for k in keep]), np.array([k[1][1] for k in keep])), np.float64)
+        med = float(np.median(np.concatenate([hp.ravel(), hs.ravel()])))
+        ok = (np.abs(hp.ravel() - med) <= FLAT_M) & (np.abs(hs.ravel() - med) <= FLAT_M)
+        props = [p for p, k in zip(props, ok) if k]
+        areas = [a for a, k in zip(areas, ok) if k]
     if len(props) < 2:
         return None
     st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
     return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=[])
 
 
-def layout(ch, blds, roads, service=(), style="default"):
+def layout(ch, blds, roads, service=(), style="default", height=None):
     """A charger site (gasstations.Site): count_of(ch) chargers in a straight row CHARGER_GAP_M apart, each facing its
     stall STALL_M deep, along the nearest service line within AISLE_REACH_M (the stalls on the aisle's side) or at the
     site's position facing the nearest public road; or, by a public road, on its kerb KERB_GAP_M apart facing it, the
@@ -347,7 +367,7 @@ def layout(ch, blds, roads, service=(), style="default"):
     shapes = CHARGER_SHAPES.get(style, CHARGER_SHAPES["default"])
     shape = shapes[0] if ch.big else shapes[1]
     if len(ch.points) >= 2:
-        site = _at_points(ch, blds, roads, service, shape)
+        site = _at_points(ch, blds, roads, service, shape, height)
         if site is not None:
             return site
     tries = _placements(ch, roads, service)
@@ -361,8 +381,12 @@ def layout(ch, blds, roads, service=(), style="default"):
                 front, area_yaw, pad = -nrm, gs._yaw(u), []
             else:
                 centre, u, f = data
-                pts, stalls, ring = _row(centre, u, f, n)
-                if not gs._clear(np.vstack([pts, stalls]), blds, roads):
+                for s in (ROW_SLIDE if height is not None else (0,)):     # (height(xs, ys): the ground, level rows)
+                    pts, stalls, ring = _row(centre + u * (s * CHARGER_GAP_M), u, f, n)
+                    both = np.vstack([pts, stalls])
+                    if gs._clear(both, blds, roads) and (height is None or _level(both, height)):
+                        break
+                else:
                     continue
                 front, area_yaw, pad = f, gs._yaw(f), [ring]
             yaw = gs._yaw(front)

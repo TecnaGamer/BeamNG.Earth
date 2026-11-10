@@ -364,6 +364,45 @@ class ShardTest(unittest.TestCase):
         self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], before, "shards unreachable: as before")
 
 
+class LevelGroundTest(unittest.TestCase):
+    """A row stays on level ground (the user in game, 2026-11-09, Barstow's Supercharger as 12: "some of them are
+    sliding off a hill ... it look s silly"; "Do that or just shift them"): it slides along the aisle to where every
+    charger and stall is within FLAT_M of the row's middle, else is shortened; a mapped point on a bank is dropped."""
+
+    @staticmethod
+    def bank(xs, ys):                  # (flat lot west of x = 10, a bank falling 0.5 m a metre east of it)
+        xs = np.asarray(xs, np.float64)
+        return np.where(xs > 10.0, -(xs - 10.0) * 0.5, 0.0)
+
+    def heights(self, site):
+        pts = np.array([(p["x"], p["y"]) for p in site.props] + [(a["x"], a["y"]) for a in site.areas])
+        return self.bank(pts[:, 0], pts[:, 1])
+
+    def test_a_long_row_stays_on_the_lot(self):
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=self.bank)
+        h = self.heights(site)
+        self.assertLessEqual(float(np.max(np.abs(h - np.median(h)))), ev.FLAT_M, "every charger on level ground")
+        self.assertEqual(len(site.props), 12, "slid along the aisle onto the lot: all 12 kept")
+
+    def test_no_room_on_the_level_shortens(self):
+        cliff = lambda xs, ys: np.where(np.abs(np.asarray(xs, np.float64)) > 7.0, -5.0, 0.0)     # (a 14 m level bit)
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=cliff)
+        self.assertLessEqual(len(site.props), 5)
+        self.assertTrue(all(abs(p["x"]) <= 7.0 for p in site.props))
+
+    def test_a_point_on_the_bank_is_dropped(self):
+        ch = dataclasses.replace(charger(big=True), points=((-6.0, 0.0), (-2.0, 0.0), (2.0, 0.0), (30.0, 0.0)))
+        site = ev.layout(ch, [], [ROAD], [AISLE], "default", height=self.bank)
+        self.assertEqual(sorted(round(p["x"]) for p in site.props), [-6, -2, 2])
+
+    def test_without_heights_as_before(self):
+        ch = dataclasses.replace(charger(big=True), cap=12)
+        a = ev.layout(ch, [], [ROAD], [AISLE], "default")
+        self.assertEqual(round(np.mean([p["x"] for p in a.props]), 6), 0.0, "centred on the site as before")
+
+
 def roads_xy(ll):
     """(x, y) in FRAME of a pad's (lat, lon) arrays."""
     la, lo = ll
