@@ -1753,7 +1753,11 @@ class PhotoMaskTest(unittest.TestCase):
 class RealTagsTest(unittest.TestCase):
     def test_parse_color(self):
         self.assertEqual(bld.parse_color("#fff"), (1.0, 1.0, 1.0))
-        self.assertEqual(bld.parse_color("#00ff00"), (0.0, 1.0, 0.0))
+        self.assertEqual(bld.parse_color("#10ee20"), (16 / 255, 238 / 255, 32 / 255))   # (a mapper's own hex)
+        # (Overture's canonical hexes of OSM's names read as those names: grey #778899 was a blue slate)
+        self.assertEqual(bld.parse_color("#00ff00"), bld.COLOR_NAMES["lime"])
+        self.assertEqual(bld.parse_color("#778899"), bld.COLOR_NAMES["grey"])
+        self.assertEqual(bld.parse_color("#FF0000"), bld.COLOR_NAMES["red"])
         self.assertEqual(bld.parse_color("red"), (0.75, 0.15, 0.15))
         self.assertEqual(bld.parse_color("terracotta"), (0.78, 0.40, 0.26))
         self.assertEqual(bld.parse_color("copper"), (0.55, 0.75, 0.65))
@@ -1793,7 +1797,7 @@ class RealTagsTest(unittest.TestCase):
         self.assertLess(rgba[2], 80)
 
         # Hex color
-        s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#00ff00"}, 0, 39.2, -76.6)
+        s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#10ee20"}, 0, 39.2, -76.6)
         mat_idx2 = bld._Looks(s2.seed)
         _, rgba2 = mat_idx2[s2.facade]
         self.assertLess(rgba2[0], 50)
@@ -1846,15 +1850,15 @@ class RealTagsTest(unittest.TestCase):
                                                     "facade_color": ["#ff0000"], "roof_color": ["#0000ff"]})
         parts = Feats(["P1", "P2"], [ll(10, 10, 20, 20), ll(12, 12, 16, 16)],
                       **{"building_id": ["B1", "B1"], "height": [10.0, 30.0], "min_height": [0.0, 10.0],
-                         "roof_shape": ["flat", "hipped"], "facade_color": ["#ff0000", "#00ff00"],
+                         "roof_shape": ["flat", "hipped"], "facade_color": ["#ff0000", "#10ee20"],
                          "roof_color": ["#0000ff", "#ffff00"]})
         items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la, lo: np.zeros(np.shape(la)),
                                    part_layers=[parts])
         self.assertEqual(len(items), 2)
         p1_spec, p2_spec = items[0][0], items[1][0]
-        # P1 has red facade and blue roof
+        # P1 has red facade and blue roof (Overture's #ff0000: the muted red of "red")
         _, p1_rgba = bld._Looks(p1_spec.seed)[p1_spec.facade]
-        self.assertGreater(p1_rgba[0], 200)
+        self.assertGreater(p1_rgba[0], 150)
         self.assertLess(p1_rgba[1], 50)
         # P2 has green facade (overridden on the part) and yellow roof
         _, p2_rgba = bld._Looks(p2_spec.seed)[p2_spec.facade]
@@ -2039,3 +2043,46 @@ class RoadPassageTest(unittest.TestCase):
         self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0), [], "a service road is not a through road")
         self.assertEqual(len(bld.road_lines(FRAME, [f], 0.0, 0.0, classes=bld.ROAD_PASSAGE_CLASSES)), 1)
         self.assertEqual(bld.road_lines(FRAME, [f], 0.0, 0.0, classes={"residential"}), [])
+
+
+class MappedRoofTest(unittest.TestCase):
+    """Research 2026-11-10: Overture's half_hipped, mapped roof heights, roof:orientation and roof:direction."""
+
+    def test_overtures_half_hipped_is_drawn(self):
+        s = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "half_hipped"}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "half-hipped")
+
+    def test_a_mapped_roof_height_sets_the_roof_top(self):
+        # 12 x 8 m house, 12 m tall with a 6 m roof: walls 6 m, the ridge at 12 m (was: the region's pitch on 6 m walls)
+        attrs = {"class": "house", "height": 12.0, "roof_shape": "gabled", "roof_height": 6.0}
+        s = bld.plan(rect(0, 0, 12, 8), attrs, 0, 48.1, 11.5)
+        self.assertAlmostEqual(s.height, 6.0, delta=0.01)
+        self.assertAlmostEqual(math.tan(math.radians(s.pitch)) * 4.0, 6.0, delta=0.05)
+        m = bld.Mesh()
+        mat = bld._Looks(s.seed)
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, mat)
+        zs = np.asarray(m.P).reshape(-1, 3)[:, 2]
+        self.assertAlmostEqual(zs.max(), 12.0, delta=0.05)
+
+    def test_across_turns_the_ridge(self):
+        def ridge_axis(attrs):
+            s = bld.plan(rect(0, 0, 12, 8), dict({"class": "house", "roof_shape": "gabled"}, **attrs), 0, 48.1, 11.5)
+            m = bld.Mesh()
+            bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+            P = np.asarray(m.P).reshape(-1, 3)
+            top = P[P[:, 2] > P[:, 2].max() - 1e-6]
+            return np.ptp(top[:, 0]), np.ptp(top[:, 1])
+        dx, dy = ridge_axis({})
+        self.assertGreater(dx, dy)                      # (along the 12 m side: x)
+        dx, dy = ridge_axis({"roof_orientation": "across"})
+        self.assertGreater(dy, dx)                      # (across: along y)
+
+    def test_a_lean_to_slopes_toward_its_direction(self):
+        for d, low_south in ((180.0, True), (0.0, False)):
+            s = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "skillion", "roof_direction": d},
+                         0, 48.1, 11.5)
+            m = bld.Mesh()
+            bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+            P = np.asarray(m.P).reshape(-1, 3)
+            south, north = P[P[:, 1] < 1.0], P[P[:, 1] > 7.0]
+            self.assertEqual(south[:, 2].min() < north[:, 2].min(), low_south, d)

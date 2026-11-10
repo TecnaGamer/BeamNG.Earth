@@ -183,11 +183,27 @@ COLOR_NAMES = {
 }
 
 
+# Overture writes OSM's colour names as strong X11 / CSS hexes (grey -> #778899, a blue slate; brown -> #8B4513; red ->
+# #FF0000: 6,820 pure red roofs in one cache, research 2026-11-10): an exact one is read as the name it came from, in
+# COLOR_NAMES' muted shades. A mapper's own hex rarely is one of these exactly.
+OVERTURE_HEX = {
+    "#ff0000": "red", "#778899": "grey", "#808080": "grey", "#708090": "grey", "#8b4513": "brown", "#a52a2a": "brown",
+    "#ffff00": "yellow", "#ffffe0": "lightyellow", "#ffa500": "orange", "#0000ff": "blue", "#008000": "green",
+    "#00ff00": "lime", "#b03060": "maroon", "#800000": "maroon", "#ffffff": "white", "#000000": "black",
+    "#a9a9a9": "darkgrey", "#696969": "darkgrey", "#d3d3d3": "lightgrey", "#c0c0c0": "silver", "#f5f5dc": "beige",
+    "#d2b48c": "tan", "#fffdd0": "cream", "#e2725b": "terracotta", "#ffc0cb": "pink", "#800080": "purple",
+    "#00ffff": "cyan", "#008080": "teal", "#000080": "navy", "#ffd700": "gold", "#f0e68c": "khaki",
+    "#fa8072": "salmon", "#ff7f50": "coral", "#add8e6": "lightblue", "#90ee90": "lightgreen", "#006400": "darkgreen",
+    "#8b0000": "darkred", "#b22222": "brick", "#228b22": "forestgreen",
+}
+
+
 def parse_color(val):
     """Parse an OSM/Overture color (hex or CSS name) into an (r, g, b) float tuple in [0, 1], or None."""
     if not val or not isinstance(val, str):
         return None
     s = val.strip().lower().replace(" ", "").replace("-", "_")
+    s = OVERTURE_HEX.get(s, s)
     if s in COLOR_NAMES:
         return COLOR_NAMES[s]
     if s.startswith("#"):
@@ -341,7 +357,8 @@ def oriented_box(p):
 class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
-                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house")
+                 "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
+                 "roof_h")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -622,12 +639,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             nf = 2 + int(seed * 2)
         else:
             nf = 2 + int(seed * 3)
-    roof_given = (attrs.get("roof_shape") or "").lower()
+    # (Overture writes half_hipped: OSM's half-hipped never matched, its 133 k roofs came out predicted; its saltbox is
+    # mostly OSM's double / quadruple saltbox, a gambrel's or a mansard's look: research 2026-11-10)
+    roof_given = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
     if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
     elif roof_given in DOME_ROOFS:
         roof = roof_given
-    elif roof_given in ("round", "saltbox"):
+    elif roof_given == "saltbox":
+        roof = "gambrel" if hl > 1.3 * hw else "mansard"
+    elif roof_given == "round":
         roof = "gabled"
     else:
         detached_house = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not industrial and not row
@@ -650,14 +671,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 roof = "gabled" if seed < 1.0 - style.hipped else "hipped"
         else:
             roof = "flat"
+    across, hi = ridge_frame(ring, roof, attrs.get("roof_orientation"), attrs.get("roof_direction"))
+    shw = hl if across else hw                      # (the half span the roof's slopes cover)
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
     # (a mapped dome follows its own outline: round parts and the largest domes keep it; a sliver or a dome over
     # DOME_MAX_HW is more likely a mapping slip: flat)
     if roof in DOME_ROOFS:
         if hw < 1.0 or hw > DOME_MAX_HW:
             roof = "flat"
-    elif roof != "flat" and (box_fill < (0.6 if church else 0.8) or hw < 2.0
-                             or hw > (18.0 if barn else 20.0 if church else 14.0)):
+    elif roof != "flat" and (box_fill < (0.6 if church else 0.8) or shw < 2.0
+                             or shw > (18.0 if barn else 20.0 if church else 14.0)):
         roof = "flat"
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
@@ -676,7 +699,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         elif attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
         elif roof != "flat":
-            h = max(2.5, h - roof_rise(roof, hw, style.pitch or PITCH.get(roof, PITCH["gabled"])))
+            h = max(2.5, h - roof_rise(roof, shw, style.pitch or PITCH.get(roof, PITCH["gabled"])))
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -769,18 +792,20 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     elif fm == "glass":
         facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}"
         band, plain, wall = BAND_OFFICE, False, None
-    elif fm in ("wood", "timber", "log", "wood_boards") and not (barn or shed):
+    elif fm in ("wood", "timber", "log", "wood_boards", "timber_framing") and not (barn or shed):
         wall = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
         facade, plain = wall, False
-    elif fm in ("concrete", "cement", "precast") and not (barn or shed):
+    elif fm in ("concrete", "cement", "precast", "cement_block") and not (barn or shed):
         wall = f"{CONCRETE}|0"
         facade, plain = wall, False
-    elif fm in ("plaster", "stucco", "render") and not (barn or shed):
+    elif fm in ("plaster", "stucco", "render", "clay") and not (barn or shed):
         wall = f"{STUCCO}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[STUCCO]))}"
         facade = wall
     elif fm in ("metal", "steel", "corrugated_iron", "aluminium") and not (barn or shed):
         wall = f"{METALWALL}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[METALWALL]))}"
         facade, plain = wall, False
+    elif fm in ("plastic", "vinyl") and not (barn or shed):     # (vinyl siding, the US's most mapped "plastic")
+        facade, band, plain = SIDING, None, True
     fc = parse_color(attrs.get("facade_color"))
     if fc is not None and not attrs.get("bridge_part"):
         if wall is not None:
@@ -820,6 +845,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof_mat = f"{ROOF_FLAT}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_FLAT]))}"
     elif rmat == "glass":
         roof_mat = f"{OFFICE}|0"
+    elif rmat in ("eternit", "asbestos", "fibre_cement"):        # (corrugated fibre cement: pale grey)
+        roof_mat = custom_look(ROOF_METAL, (0.62, 0.62, 0.60))
+    elif rmat == "plastic":
+        roof_mat = f"{ROOF_METAL}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_METAL]))}"
+    elif rmat in ("grass", "green"):                              # (a green roof)
+        roof_mat = custom_look(ROOF_FLAT, (0.30, 0.42, 0.20))
+    elif rmat == "thatch":
+        roof_mat = custom_look(ROOF_SHINGLE, (0.52, 0.43, 0.28))
+    elif rmat in ("solar_panels", "solar"):
+        roof_mat = custom_look(ROOF_METAL, (0.10, 0.14, 0.28))
     elif roof == "flat" or barn or shed:
         roof_mat = ROOF_FLAT if roof == "flat" else ROOF_METAL
         roof_mat = f"{roof_mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[roof_mat]))}"
@@ -850,7 +885,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 windows=windows, steeple=church and area < 2500 and roof not in DOME_ROOFS, porch=porch, cls=cls,
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
-                else style.pitch)
+                else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
+                across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")))
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
@@ -1258,6 +1294,63 @@ def _dome(m, ring, z_eave, rise, mat, shape="dome", lite=False):
                 m.quad(a, b, bu, au, uv(a), uv(b), uv(bu), uv(au), mat)
 
 
+# the roof shapes as Overture spells some (OSM's spellings kept)
+ROOF_ALIASES = {"half_hipped": "half-hipped", "halfhipped": "half-hipped", "double_saltbox": "saltbox",
+                "quadruple_saltbox": "saltbox", "lean_to": "skillion", "monopitch": "skillion", "pitched": "gabled",
+                "side_hipped": "hipped"}
+MAPPED_PITCH = (8.0, 62.0)      # degrees: a mapped roof height's pitch kept in this range (slips: 30 m roofs)
+PITCH_FORMS = ("gabled", "hipped", "half-hipped", "pyramidal")
+
+
+def mapped_roof_h(roof, roof_height):
+    """A mapped / measured roof height (m) a pitched roof is drawn with, or None."""
+    try:
+        rh = float(roof_height)
+    except (TypeError, ValueError):
+        return None
+    if roof in ("flat",) or roof in DOME_ROOFS or not math.isfinite(rh) or rh <= 0.2:
+        return None
+    return rh
+
+
+def mapped_pitch(roof, shw, roof_height):
+    """The pitch (degrees) that makes a roof of half span shw rise roof_height (the map's or a measured LoD2 roof:
+    its top where the map says, not at the region's pitch with the walls cut down by the mapped height: research
+    2026-11-10), MAPPED_PITCH bounded; None: no mapped height, or a form with its own pitches."""
+    rh = mapped_roof_h(roof, roof_height)
+    if rh is None or roof not in PITCH_FORMS or shw <= 0.5:
+        return None
+    return min(max(math.degrees(math.atan2(rh, float(shw))), MAPPED_PITCH[0]), MAPPED_PITCH[1])
+
+
+def ridge_frame(ring, roof, orientation, direction):
+    """(across, hi) for a pitched roof on ring's oriented box: across: the ridge runs across the long axis (the map's
+    roof:orientation=across, 72 % of the 40 k mapped; or a roof:direction, the way its slopes face, along the long
+    axis); hi: a lean-to's high side (+1 / -1 along the box's width once turned, opposite where its slope faces), None:
+    unknown (the seed's). Overture's roof_direction is OSM's roof:direction (compass degrees the slope faces) whatever
+    its schema text says (checked on mapped skillions, 2026-11-10)."""
+    if roof == "flat" or roof in DOME_ROOFS:
+        return False, None
+    across = str(orientation or "").lower() == "across"
+    hi = None
+    try:
+        d = float(direction)
+    except (TypeError, ValueError):
+        d = float("nan")
+    if math.isfinite(d):
+        try:
+            _c, u, _hl, _hw = oriented_box(ring)
+        except ValueError:
+            return across, None
+        dv = np.array([math.sin(math.radians(d)), math.cos(math.radians(d))])     # (east, north)
+        v = np.array([-u[1], u[0]])
+        across = abs(float(dv @ u)) > abs(float(dv @ v))
+        if across:
+            v = -u                                          # (the frame turned: v' = -u, as _roof turns it)
+        hi = -1.0 if float(dv @ v) > 0 else 1.0             # (the slope faces down toward d: the high side away)
+    return across, hi
+
+
 def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
     rm = mat_idx[spec.roof_mat]
     if spec.roof in DOME_ROOFS:
@@ -1270,6 +1363,8 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         m.poly(pts, uv, rm)
         return
     c, u, hl, hw = oriented_box(ring)
+    if getattr(spec, "across", False):              # (the ridge across the long axis: the box's frame turned)
+        u, hl, hw = np.array([-u[1], u[0]]), hw, hl
     v = np.array([-u[1], u[0]])
     hl2, hw2 = hl + EAVE_M, hw + EAVE_M
     rise = hw2 * math.tan(math.radians(roof_pitch(spec)))
@@ -1293,8 +1388,9 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
             m.tri(pts[0], b, c, (0, 0.995), (0.02, 0.995), (0.01, 0.999), mat_idx[spec.facade])
 
     if spec.roof == "skillion":
-        tan = math.tan(math.radians(SKILLION_PITCH))
-        hi = 1.0 if spec.seed < 0.5 else -1.0           # (no direction in the data: which side is high, per building)
+        rh = getattr(spec, "roof_h", None)
+        tan = rh / (2.0 * max(hw, 0.5)) if rh else math.tan(math.radians(SKILLION_PITCH))
+        hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)   # (the map's slope direction, or a coin)
 
         def z(t):
             return z_eave + (hi * t + hw) * tan
@@ -2715,6 +2811,10 @@ def road_across(ring, lines, max_w=ACROSS_W):
 CENTRE_PREFILTER_M = 1.0       # m of slack for Features.outer_centres (cumulative sums: within ~1e-5 m of the exact mean)
 
 
+PART_OWN = ("roof_shape", "facade_color", "roof_color", "roof_height", "facade_material", "roof_material",
+            "roof_direction", "roof_orientation")
+
+
 def _parts_index(f):
     """{building id: [rows]} of a building parts layer, kept on it (the cells stay decoded in memory: every tile of
     them looks parts up again)."""
@@ -2771,7 +2871,9 @@ class _PartsOf:
         e, n = mapgeom.enu_xy(f, self.frame, outer)
         a = f.attrs
         # (its own roof shape and mapped colours: hudsontadams' PR #167)
-        own = {k: (a[k][i] if k in a else None) for k in ("roof_shape", "facade_color", "roof_color")}
+        # (and its roof height, materials and roof direction where the layer has them: a part's own roof height was read
+        # and dropped, research 2026-11-10)
+        own = {k: (a[k][i] if k in a else None) for k in PART_OWN}
         return np.stack([e, n], 1), _part_heights(a, i), own
 
     def get(self, bid, default=None):
@@ -3027,9 +3129,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None,
                                   "roof_shape": p_rshape,
-                                  "building_height": top, "facade_material": at.get("facade_material"),
+                                  "building_height": top,
+                                  "facade_material": pat.get("facade_material") or at.get("facade_material"),
                                   "facade_color": p_fcol,
-                                  "roof_material": at.get("roof_material"),
+                                  "roof_material": pat.get("roof_material") or at.get("roof_material"),
+                                  "roof_height": pat.get("roof_height"),
+                                  "roof_direction": pat.get("roof_direction"),
+                                  "roof_orientation": pat.get("roof_orientation"),
                                   "roof_color": p_rcol,
                                   "bridge_part": _on_support(r, supports) if str(at.get("facade_material") or "")
                                   .lower() in STEEL_MATERIALS else None,
