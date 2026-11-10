@@ -388,6 +388,9 @@ class MapData:
              "lanes": lanes.known() if lanes is not None else None,
              "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
              "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        st = getattr(self, "station_tags", None)
+        if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
+            v["stations"] = st.known()
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
         if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
