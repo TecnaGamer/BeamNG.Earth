@@ -409,7 +409,7 @@ class Context:
             for mid in self.regions[region]:
                 mid = int(mid)
                 try:
-                    mlat, mlon, _ = threedmr.model_position(mid, self.cache_dir)
+                    mlat, mlon, *_ = threedmr.model_position(mid, self.cache_dir)
                     distance = math.hypot((centre[0]-mlat)*111320., (centre[1]-mlon)*111320.*math.cos(math.radians(mlat)))
                     if distance > reach:
                         continue
