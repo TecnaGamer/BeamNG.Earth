@@ -251,7 +251,8 @@ function M.onMessage(msg, currentAnchor)
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
             signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
-            lines = type(g.lines) == 'table' and g.lines or nil }      -- (tunnel stretches: the minimap's, minimaproads)
+            lines = type(g.lines) == 'table' and g.lines or nil,      -- (tunnel stretches: the minimap's, minimaproads)
+            trafficProfile = type(g.trafficProfile) == 'table' and g.trafficProfile or nil }  -- (M.ADAPTIVE)
   dirty = true
   return true
 end
@@ -877,6 +878,103 @@ end
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
 -- back on the new place's graph once it is in.
 local heldActive = nil
+
+-- Adaptive traffic amount (PR #728 / #773, ProxyFirewall202; docs/ADAPTIVE_TRAFFIC.md): with the setting on (M.ADAPTIVE,
+-- settings adaptiveTraffic; off by default), the stock traffic's active amount follows the graph's trafficProfile.target
+-- (server traffic.py: the nearest populated place and the road length round the graph's centre, a divided road
+-- doubling it), never over the player's own amount (the ceiling before we touched it, or the cars spawned), moved one
+-- car at a time at most every ADAPTIVE_STEP_S; after a teleport the new place's amount at once. Not while the pool is
+-- held for a teleport or an occupied traffic car is protected. A ceiling changed by someone else (the radial menu, the
+-- game's UI) becomes the player's amount. Off again: the player's amount back. Looked at every ADAPTIVE_CHECK_S.
+M.ADAPTIVE = false
+M.ADAPTIVE_STEP_S = 5
+M.ADAPTIVE_CHECK_S = 1
+-- base: the player's amount (the stock ceiling we found, or set by someone else since); seen: the ceiling as we last
+-- left it; touched: we changed it; paused: the player's traffic toggled off (ceiling 0), left alone until it is back
+local function newAdaptive()
+  return { base = nil, seen = nil, touched = false, paused = false, target = nil, lastStep = -math.huge,
+           lastCheck = -math.huge }
+end
+local adaptive = newAdaptive()
+
+-- Pure: the amount (whole cars) for a profile target t and the player's amount cap.
+function M.adaptiveTarget(t, cap)
+  t, cap = tonumber(t), tonumber(cap)
+  if not t or t ~= t or not cap or cap ~= cap then return nil end
+  return math.max(0, math.min(math.floor(cap), math.floor(t + 0.5)))
+end
+
+-- Pure: the next ceiling from current toward target, one car at a time.
+function M.adaptiveStep(current, target)
+  if current < target then return current + 1 elseif current > target then return current - 1 end
+  return current
+end
+
+-- The player's amount as a number of cars: base, at most the cars the traffic spawned (a ceiling of math.huge: those).
+local function adaptiveCap(gt)
+  local base = adaptive.base
+  local n = gt.getNumOfTraffic and tonumber(gt.getNumOfTraffic()) or nil
+  if not base or base == math.huge then base = n or base end
+  if n and base then base = math.min(base, n) end
+  return base
+end
+
+-- The amount the graph's profile asks for now (nil: adaptive off, no profile or no player's amount yet).
+local function adaptiveAmount(gt)
+  if not (M.ADAPTIVE and graph and graph.trafficProfile and gt and adaptive.base) then return nil end
+  return M.adaptiveTarget(graph.trafficProfile.target, adaptiveCap(gt))
+end
+
+local function updateAdaptive(now)
+  if now - adaptive.lastCheck < M.ADAPTIVE_CHECK_S then return end
+  adaptive.lastCheck = now
+  local gt = gameplay_traffic
+  if not (started and M.choice.traffic and gt and gt.getState and gt.getState() == 'on' and gt.setActiveAmount) then
+    return
+  end
+  if heldActive ~= nil or respawnAll or next(protectedTraffic) ~= nil then return end
+  local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
+  local cur = tonumber(vars.activeAmount)
+  if cur == nil then return end
+  if not M.ADAPTIVE then
+    if adaptive.touched and cur == adaptive.seen and adaptive.base ~= nil and not adaptive.paused then
+      pcall(gt.setActiveAmount, adaptive.base)               -- (off again: the player's amount back)
+      log('I', 'beamngEarth', 'Adaptive traffic off: active amount back to ' .. tostring(adaptive.base))
+    end
+    if adaptive.base ~= nil then adaptive = newAdaptive() end
+    return
+  end
+  if adaptive.seen == nil or cur ~= adaptive.seen then
+    -- (first look, or changed by someone else: the player's amount now; 0: their traffic toggled off)
+    if cur == 0 then adaptive.paused = true else adaptive.base, adaptive.paused = cur, false end
+    adaptive.seen = cur
+  end
+  if adaptive.paused then return end
+  local target = adaptiveAmount(gt)
+  adaptive.target = target
+  if not target or now - adaptive.lastStep < M.ADAPTIVE_STEP_S then return end
+  local current = cur
+  if current == math.huge then current = adaptiveCap(gt) end
+  if not current or current == target then return end
+  local nextAmount = M.adaptiveStep(current, target)
+  local ok, err = pcall(gt.setActiveAmount, nextAmount)
+  if ok then
+    adaptive.seen, adaptive.touched, adaptive.lastStep = nextAmount, true, now
+    log('D', 'beamngEarth', string.format('Adaptive traffic: active amount %s -> %d (target %d)', tostring(current),
+      nextAmount, target))
+  else
+    log('W', 'beamngEarth', 'Adaptive traffic: setActiveAmount: ' .. tostring(err))
+  end
+end
+
+function M._adaptiveTick(now) return updateAdaptive(now) end     -- (tests)
+function M.setAdaptive(on) M.ADAPTIVE = on and true or false end
+
+function M.trafficStatus()
+  return { enabled = M.ADAPTIVE, target = adaptive.target, applied = adaptive.touched and adaptive.seen or nil,
+           base = adaptive.base, paused = adaptive.paused, profile = graph and graph.trafficProfile or nil }
+end
+
 -- A rebase (core finishRebase, xf: the old frame -> the new one): the server's graph moved into the new anchor and
 -- applied again at once, as the roads and trees are moved. It was dropped instead (its anchor no longer the current
 -- one) and the game's map stayed in the old frame until the server's graph for the new anchor came, seconds later:
@@ -901,7 +999,7 @@ function M.transform(xf, anchorId)
     end
   end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, lines = lines, moved = true }
+            rules = graph.rules, lines = lines, trafficProfile = graph.trafficProfile, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true
@@ -1107,6 +1205,10 @@ function M.update(aid, b, gov)
     if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end
     ok, err = pcall(overtakeScan, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph overtake scan: ' .. tostring(err)) end
+    if t0 - adaptive.lastCheck >= M.ADAPTIVE_CHECK_S then       -- (once a second, on or off: off puts the amount back)
+      ok, err = pcall(updateAdaptive, t0)
+      if not ok then log('W', 'beamngEarth', 'navgraph adaptive traffic: ' .. tostring(err)) end
+    end
   end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
@@ -1161,6 +1263,12 @@ function M.update(aid, b, gov)
       local gt = gameplay_traffic
       if gt and heldActive then
         syncTrafficPool(gt)
+        -- (adaptive: the new place's amount at once, not stepped up from the old place's)
+        if M.ADAPTIVE and not adaptive.paused then
+          if adaptive.base == nil then adaptive.base = heldActive end    -- (the pool's 0 while held is not the player's)
+          local okA2, want = pcall(adaptiveAmount, gt)
+          if okA2 and want then heldActive, adaptive.seen, adaptive.touched = want, want, true end
+        end
         pcall(gt.setActiveAmount, heldActive)
         heldActive = nil
         scatterTraffic(gt, b)
@@ -1186,7 +1294,7 @@ function M.status()
            launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
-           traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
+           traffic = gameplay_traffic and gameplay_traffic.getState() or nil, trafficAdaptive = M.trafficStatus() }
 end
 
 function M.reset()
@@ -1208,6 +1316,7 @@ function M.reset()
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
+  adaptive = newAdaptive()
   launchCount, launchWait, lastLaunchScan, junctionNodes, junctionOf = {}, {}, -math.huge, nil, nil
   overtake.reset()
   pendingSignals = nil
