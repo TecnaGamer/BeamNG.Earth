@@ -1700,6 +1700,8 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
 WATER_TANK_BOXES = ((40.49, -74.27, 40.92, -73.68),)
 WATER_TANK_FLOORS = (6, 30)
 WATER_TANK_MIN_M2 = 150.0
+WATER_TANK_TOP_M = 6.0          # m: a part of a building drawn from parts carries its tank when its roof is this near the
+                                # building's top (the main roof beside its stair / lift bulkhead)
 WATER_TANK_SHARE = 0.55
 # The tank: Small Island's rooftop water tower (si_water_tower: wooden staves under a metal top on steel legs and a
 # base, 3.3 x 3.4 x 6.1 m; the user: "before creating new models see if they already exist in BeamNG assets"), a
@@ -1709,13 +1711,15 @@ WATER_TANK_HALF_M = 1.75
 WATER_TANK_SCALE = (0.9, 1.35)
 
 
-def water_tank(spec, lat, lon, area, era_=None):
-    """Does this building get a rooftop water tank (WATER_TANK_*)? Pure (the seed)."""
+def water_tank(spec, lat, lon, area, era_=None, floors=None):
+    """Does this building get a rooftop water tank (WATER_TANK_*)? floors: the whole building's storeys (a part's own
+    spec counts only its own). Pure (the seed)."""
     if lat is None or lon is None or spec.roof != "flat" or spec.plain or spec.holes or area < WATER_TANK_MIN_M2:
         return False
     if not any(b[0] <= lat <= b[2] and b[1] <= lon <= b[3] for b in WATER_TANK_BOXES):
         return False
-    if not WATER_TANK_FLOORS[0] <= (spec.floors or 0) <= WATER_TANK_FLOORS[1] or era_ == "new":
+    nf = floors if floors is not None else (spec.floors or 0)
+    if not WATER_TANK_FLOORS[0] <= nf <= WATER_TANK_FLOORS[1] or era_ == "new":
         return False
     if str(spec.facade or "").startswith(OFFICE) or spec.cls in SHED_CLASSES or spec.cls in CHURCH_CLASSES \
             or spec.cls in ("industrial", "warehouse", "mast", "tank", "greenhouse", "hangar", "parking"):
@@ -4193,8 +4197,14 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
-        spec.tank = mh <= 0.5 and look is None and water_tank(spec, clat, clon, abs(_area2(ring)) / 2,
-                                                               era(at.get("_year")))
+        # (a building drawn from its parts (the map's, New York's 3-D model's): its tank on its topmost part, the
+        # building's storeys from its whole height; without, the setbacks took New York's tanks away)
+        top_b = at.get("building_height")
+        top_part = look is not None and top_b is not None \
+            and float(top_b) - (mh + float(spec.height or 0.0)) < WATER_TANK_TOP_M     # (the main roof, under a bulkhead)
+        spec.tank = ((mh <= 0.5 and look is None) or top_part) and water_tank(
+            spec, clat, clon, abs(_area2(ring)) / 2, era(at.get("_year")),
+            floors=int(round(float(top_b) / FLOOR_M)) if top_part else None)
         if at.get("_holes") and ((spec.roof == "flat" and not spec.hf) or spec.skel) and spec.cls not in CANOPY_CLASSES \
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]

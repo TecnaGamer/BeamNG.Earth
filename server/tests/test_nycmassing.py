@@ -193,11 +193,16 @@ class TileTest(unittest.TestCase):
                          [(0, 20), (20, 80)])
         self.assertEqual(len({s.seed for s, _, _ in items}), 1, "one look")
 
-    def test_no_procedural_water_tank_on_measured_massing(self):
+    def test_water_tank_on_the_topmost_part_only(self):
+        # (the setbacks took New York's tanks away: the model's own are smaller than its pieces kept; a building drawn
+        # from its parts gets one on its topmost part, as many of these roofs have)
         f = layer([sq(10, 10, 40, 40)])
         with mock.patch.object(bld, "water_tank", lambda *a, **k: True):
             self.assertTrue(all(s.tank for s, _, _ in self._items(f, None)))
-            self.assertFalse(any(s.tank for s, _, _ in self._items(f, Stub(records([record(1)])))))
+            items = self._items(f, Stub(records([record(1)])))
+            self.assertGreater(len(items), 1)
+            tops = [float(s.min_h or 0) + float(s.height or 0) for s, _, _ in items]
+            self.assertEqual([s.tank for s, _, _ in items], [max(tops) - t < bld.WATER_TANK_TOP_M for t in tops])
 
     def test_map_parts_win(self):
         f = layer([sq(10, 10, 40, 40)])
