@@ -8087,13 +8087,45 @@ class Connection:
                     z = min(max(z, getattr(demmod, "MIN_ZOOM", 0)), demmod.MAX_ZOOM)
                     return dem.sample(la, lo, z)
 
+                def low_roads():    # the roads under the sea round the player (seatiles.low_roads): their tiles split
+                    md = sea.md
+                    r = seatilesmod.LOW_ROAD_RADIUS_M
+                    la0, lo0, _ = frame.enu_to_geodetic(x - r, y - r, 0.0)
+                    la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
+                    try:
+                        every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
+                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        if len(keys) < len(every):
+                            missing[0] = True
+                        memo = getattr(self, "_sea_low_lines", None)     # (cells) -> road lines: read once
+                        if memo is None or memo[0] != keys:
+                            lines = []
+                            for key in keys:
+                                f = md.cell(key, layers=("roads",)).layers.get("roads")
+                                if f is None or len(f) == 0:
+                                    continue
+                                sub = f.attrs.get("subtype")
+                                for i in range(len(f)):
+                                    if sub is not None and str(sub[i]) != "road":
+                                        continue
+                                    lines += roadsmod.ground_parts(f, i) + roadsmod.tunnel_parts(f, i)
+                            memo = self._sea_low_lines = (keys, lines)
+
+                        def sea_at(la, lo):
+                            return sea.sea_at(dem, la, lo, seatilesmod.SEA_TILE_FLOOR, False)
+                        return seatilesmod.low_roads(frame, x, y, memo[1], lake_ground, sea_at,
+                                                     lambda la, lo: dem.sample(la, lo, seatilesmod.LAKE_DEM_ZOOM))
+                    except Exception as e:      # none: the tiles as before
+                        log.debug("sea tiles' low roads: %s", e)
+                        return None
+
                 def plan():
                     pacer.hold()        # (a teleport's first block first)
                     asked = sea.warm_asked
                     # with the cells at hand (the others are built in the background and used by the
                     # next plan, SEA_CHECK_S later): water appears at once at a new place
                     tiles = (seatilesmod.plan(frame, x, y, lambda la, lo, size: sea.sea_at(dem, la, lo, size, False),
-                                              ground_at=sea_ground)
+                                              ground_at=sea_ground, low_roads_xy=low_roads())
                              + seatilesmod.plan_lakes(frame, x, y, lambda la, lo: sea.lake_at(la, lo, False),
                                                       lake_ground))
                     def carved(la, lo):     # the river beds' level (seacarve), NaN elsewhere

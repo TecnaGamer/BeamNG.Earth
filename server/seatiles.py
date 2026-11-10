@@ -34,6 +34,17 @@ SEA_FLOOR_K = 0.0625            # ... farther away, down to this share of the di
 SEA_FLOOD_SHARE = 0.05
 SEA_SPLIT_SAMPLES = (16, 64)    # samples per edge of a tile checked for low land: size / 32, within these
 SEA_MAX_TILES = 200             # nearest first
+# A road below the sea in a cutting (GitHub #1059, #1060: the Brooklyn-Battery Tunnel's Manhattan approach, -1.8 m in the
+# DEM, and the Holland Tunnel's, under the 2048 m tile of the harbour beside them) is a strip too narrow for
+# SEA_FLOOD_SHARE (0.1-3 % of those tiles' land), and the tile's WaterBlock filled its cutting: a tile with a point of a
+# road on land more than LOW_ROAD_M under the sea (low_roads) is split as the polders' are, within LOW_ROAD_RADIUS_M of
+# the player (the far tiles stay whole: SEA_MAX_TILES)
+LOW_ROAD_M = 0.5
+LOW_ROAD_STEP_M = 8.0           # m between a road's points looked at
+LOW_ROAD_RADIUS_M = 2048.0
+LOW_ROAD_SHORE_M = 32.0         # m: a point with sea this near is left out (its SEA_TILE_FLOOR tile is mostly sea and
+                                # kept: splitting on to it only made tiles; Manhattan's waterfront, 129 of 283 points)
+LOW_ROAD_RAW_M = 5.0            # m: only the points whose raw DEM (raw_at) is under the sea plus this are graded
 SEA_E = 0.0                     # m: the sea surface (seacarve.SEA_E)
 EARTH_R = 6371000.0
 
@@ -104,10 +115,58 @@ def _grid(frame, corners, s, n):
     return lat, lon
 
 
-def plan(frame, x, y, sea_at, radius=None, ground_at=None):
+def low_roads(frame, x, y, lines, ground_at, sea_at, raw_at=None, radius=LOW_ROAD_RADIUS_M, step=LOW_ROAD_STEP_M):
+    """(n, 2) frame xy of the points of road lines (lon/lat polylines: their ground and tunnel parts) within radius of
+    (x, y), every step m, whose ground (ground_at(lat, lon): as graded, a cutting's road) lies more than LOW_ROAD_M
+    under the sea and that have no sea within LOW_ROAD_SHORE_M (sea_at(lat, lon) -> bool; a road on a pier the DEM has
+    as water is sea).
+    raw_at(lat, lon) (optional, cheaper than ground_at): only the points under SEA_E + LOW_ROAD_RAW_M there are graded."""
+    pts = []
+    for ll in lines:
+        ll = np.asarray(ll, np.float64)
+        if ll.ndim != 2 or len(ll) < 2:
+            continue
+        e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], np.zeros(len(ll)))
+        q = np.c_[np.asarray(e, np.float64), np.asarray(n, np.float64)]
+        if (np.hypot(q[:, 0] - x, q[:, 1] - y) > radius + 1e4).all():
+            continue
+        arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(q, axis=0).T))]
+        s = np.arange(0.0, arc[-1] + 1e-9, step)
+        q = np.c_[np.interp(s, arc, q[:, 0]), np.interp(s, arc, q[:, 1])]
+        pts.append(q[np.hypot(q[:, 0] - x, q[:, 1] - y) <= radius])
+    q = np.concatenate(pts) if pts else np.zeros((0, 2))
+    if not len(q):
+        return q
+    la, lo, _ = frame.enu_to_geodetic(q[:, 0], q[:, 1], np.zeros(len(q)))
+    la, lo = np.asarray(la, np.float64).reshape(-1), np.asarray(lo, np.float64).reshape(-1)
+    if raw_at is not None:
+        near = np.asarray(raw_at(la, lo), np.float64).reshape(-1) < SEA_E + LOW_ROAD_RAW_M
+        q, la, lo = q[near], la[near], lo[near]
+        if not len(q):
+            return q
+    low = np.asarray(ground_at(la, lo), np.float64).reshape(-1) < SEA_E - LOW_ROAD_M
+    q = q[low]
+    d = LOW_ROAD_SHORE_M
+    for dx, dy in ((0.0, 0.0), (d, 0.0), (-d, 0.0), (0.0, d), (0.0, -d), (.7 * d, .7 * d), (-.7 * d, .7 * d),
+                   (.7 * d, -.7 * d), (-.7 * d, -.7 * d)):
+        if not len(q):
+            break
+        a, b, _ = frame.enu_to_geodetic(q[:, 0] + dx, q[:, 1] + dy, np.zeros(len(q)))
+        q = q[~np.asarray(sea_at(np.asarray(a, np.float64).reshape(-1), np.asarray(b, np.float64).reshape(-1)),
+                          bool).reshape(-1)]
+    return q
+
+
+def _holds(pts, x0, y0, s):
+    return pts is not None and len(pts) > 0 and bool(((pts[:, 0] >= x0) & (pts[:, 0] < x0 + s)
+                                                     & (pts[:, 1] >= y0) & (pts[:, 1] < y0 + s)).any())
+
+
+def plan(frame, x, y, sea_at, radius=None, ground_at=None, low_roads_xy=None):
     """The sea tiles around (x, y) in `frame` (a geodesy.EnuFrame). sea_at(lat, lon, size) -> bool array:
     which sample points of a tile of that size are sea. ground_at(lat, lon, size) -> the ground's heights there
-    (None: not checked): a tile with land under the sea in it is split (SEA_FLOOD_M)."""
+    (None: not checked): a tile with land under the sea in it is split (SEA_FLOOD_M); so is one holding a point of
+    low_roads_xy (low_roads: roads under the sea, (n, 2) frame xy), when ground_at is given."""
     leaves = squares(x, y, radius)
     if not leaves:
         return []
@@ -136,7 +195,7 @@ def plan(frame, x, y, sea_at, radius=None, ground_at=None):
             for (x0, y0), w, lo in zip(corners, wet, low):
                 # (a share, not any: the DEM's water under the piers the map has as land, Manhattan's waterfront,
                 # split every tile on to 200)
-                if lo.mean() <= SEA_FLOOD_SHARE:
+                if lo.mean() <= SEA_FLOOD_SHARE and not _holds(low_roads_xy, x0, y0, s):
                     keep.append((x0, y0, s))
                 elif s / 2 >= max(SEA_TILE_FLOOR, SEA_FLOOR_K * _dist(x, y, x0, y0, s)):
                     h = s / 2
