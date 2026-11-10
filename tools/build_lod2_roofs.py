@@ -9,9 +9,10 @@ CityGML never lie on disk at once (rows: ~20 bytes; shards: ~6 bytes a building)
   python tools/build_lod2_roofs.py validate URL ...      lod2_classify blind on German tiles vs their roofType
 
 Sources: the German states (two-letter codes: AdV CityGML with its roofType); CH (swissBUILDINGS3D 3.0, Switzerland and
-Liechtenstein: swisstopo's File Geodatabase per map sheet); EE (Estonia's LoD2 CityGML per municipality). Where a model
-has no roofType, tools/lod2_classify.py reads the shape from the roof faces into the same AdV code. Each country's
-shards go to a folder of their own: lod2/ Germany, lod2-ch/, lod2-ee/ (server/lod2roofs.SOURCES).
+Liechtenstein: swisstopo's File Geodatabase per map sheet); EE (Estonia's LoD2 CityGML per municipality); WIEN
+(Vienna's generalised roof model, CityGML per 1:1000 sheet, roofType by name). Where a model has no roofType,
+tools/lod2_classify.py reads the shape from the roof faces into the same AdV code. Each country's shards go to a
+folder of their own: lod2/ Germany, lod2-ch/, lod2-ee/, lod2-wien/ (server/lod2roofs.SOURCES).
 
 The root is BNE_LOD2_ROOT. Niedersachsen's tile list is its index GeoJSON, saved as <root>/ni.geojson.
 Needs lxml and pyproj; CH also pyogrio (for the GDAL its wheel bundles). Licences and credits: CREDITS.md.
@@ -112,6 +113,11 @@ def ridge(rs):
 
 
 NORTH_FIRST = {3301}        # CRSs whose files give the northing first (Estonia's L-EST97)
+# roofType given as a name (Vienna's Dachmodell) -> the AdV code
+ROOF_NAMES = {"FLACHDACH": 1000, "PULTDACH": 2100, "VERSETZTESPULTDACH": 2200, "SATTELDACH": 3100, "WALMDACH": 3200,
+              "KRUEPPELWALMDACH": 3300, "KRÜPPELWALMDACH": 3300, "MANSARDDACH": 3400, "ZELTDACH": 3500,
+              "KEGELDACH": 3600, "KUPPELDACH": 3700, "SHEDDACH": 3800, "BOGENDACH": 3900, "TONNENDACH": 3900,
+              "TURMDACH": 4000, "SPITZDACH": 4000, "MISCHFORM": 5000, "SONSTIGES": 9999}
 SKIP_KINDS = {"30", "40"}   # Estonia's tyyp: a foundation, a ruin (no roof to read)
 
 
@@ -124,6 +130,7 @@ def row(el, epsg, part):
             continue
         if n == "roofType" and e.text and roof is None:
             roof = e.text.strip()
+            roof = str(ROOF_NAMES.get(roof.upper(), roof)) if not roof.isdigit() else roof
         elif n == "measuredHeight" and e.text and height is None:
             try:
                 height = float(e.text)
@@ -146,8 +153,9 @@ def row(el, epsg, part):
         return None
     if epsg in NORTH_FIRST:
         ground, roofs, walls = ([[(p[1], p[0], p[2]) for p in r] for r in rs] for rs in (ground, roofs, walls))
+    rise = None
     if not roof and roofs:
-        code = lod2_classify.classify(roofs)        # (no roofType: the shape read from the roof faces)
+        code, rise = lod2_classify.classify_rise(roofs)     # (no roofType: the shape read from the roof faces)
         roof = str(code) if code else ""
     c = centroid(ground or roofs)
     if c is None:
@@ -155,9 +163,10 @@ def row(el, epsg, part):
     zs = [p[2] for r in ground for p in r] or [p[2] for r in walls for p in r]
     rz = [p[2] for r in roofs for p in r]
     az = ridge(roofs)
+    zr = (max(rz) - rise if rise is not None else min(rz)) if rz else None    # (the roof height is zt - zr)
     out = {"x": round(c[0], 2), "y": round(c[1], 2), "epsg": epsg, "area": round(c[2], 1), "roof": roof or "",
            "height": "" if height is None else round(height, 2), "z0": round(min(zs), 2) if zs else "",
-           "zr": round(min(rz), 2) if rz else "", "zt": round(max(rz), 2) if rz else "",
+           "zr": round(zr, 2) if rz else "", "zt": round(max(rz), 2) if rz else "",
            "ridge": "" if az is None else round(az), "part": int(part)}
     if BLIND and roofs:
         out["blind"] = lod2_classify.classify(roofs)      # (validate: the faces' answer beside the model's own)
@@ -184,9 +193,13 @@ def validate(urls):
     tally = {}
     for url in urls:
         p = os.path.join(TMP, "validate.part")
-        with get(url, 300) as r, open(p, "wb") as o:
-            while b := r.read(1 << 20):
-                o.write(b)
+        try:
+            with get(url, 300) as r, open(p, "wb") as o:
+                while b := r.read(1 << 20):
+                    o.write(b)
+        except urllib.error.HTTPError as e:
+            print(url.rsplit("/", 1)[-1], "http", e.code)
+            continue
         try:
             for r in rows_of(p, url):
                 if r["roof"] and "blind" in r:
@@ -345,6 +358,12 @@ def jobs(state):
                     "lod2_33{e}_{n}_2_sn_citygml.zip", 276, 502, 2, 5556, 5732, 2)
     if state == "CH":
         return swiss_sheets()
+    if state == "WIEN":         # Vienna's generalised roof model (LOD2.1, with roofType), one file per 1:1000 sheet
+        d = json.loads(text("https://data.wien.gv.at/daten/geo?service=WFS&request=GetFeature&version=1.1.0"
+                            "&typeName=ogdwien:MZKBLATT1000OGD&srsName=EPSG:4326&outputFormat=json"))
+        sheets = sorted({f["properties"]["MZK1000"] for f in d["features"] if f["properties"].get("MZK1000")})
+        return [(s, f"https://www.wien.gv.at/ma41datenviewer/downloads/geodaten/lod2_gml/{s}_lod2_gml.zip")
+                for s in sheets]
     if state == "EE":
         page = "https://geoportaal.maaruum.ee/eng/Download-3D-data-p837.html"
         files = sorted(set(re.findall(r"f=(hooned_lod2-[^&\"']+-citygml\.zip)", text(page))))
@@ -439,9 +458,9 @@ def swiss_rows(gdb):
             z0 = f["ground"]
             if not math.isfinite(z0):
                 z0 = float(min(r[:, 2].min() for r in f["rings"]))
-            code = lod2_classify.classify(f["roofs"]) if f["roofs"] else None
-            zr = float(min(r[:, 2].min() for r in f["roofs"])) if f["roofs"] else None
+            code, rise = lod2_classify.classify_rise(f["roofs"]) if f["roofs"] else (None, 0.0)
             zt = float(max(r[:, 2].max() for r in f["roofs"])) if f["roofs"] else None
+            zr = zt - rise if zt is not None else None          # (the roof height is zt - zr: the shape's rise)
             h = zt - z0 if zt is not None and math.isfinite(z0) else f["total"]
             az = ridge([[tuple(p) for p in r] for r in f["roofs"]]) if f["roofs"] else None
             yield {"x": round(c[0], 2), "y": round(c[1], 2), "epsg": 2056, "area": round(area, 1),
@@ -556,7 +575,7 @@ def read(state):
             code = 0
         h = num(height)
         lo, hi, g = num(zr), num(zt), num(z0)
-        if not h > 0 and hi > g:
+        if not h > 0.5 and hi > g:         # (none, or a placeholder: Vienna gives some 0.01)
             h = hi - g
         rh = hi - lo if hi >= lo else 0.0
         if not 0.5 < h < 400:
@@ -657,7 +676,7 @@ if __name__ == "__main__":
         fetch(sys.argv[2], int(sys.argv[3]) if len(sys.argv) > 3 else 2)
     elif len(sys.argv) >= 4 and sys.argv[1] == "shards":
         build(sys.argv[2], sys.argv[3:])
-    elif len(sys.argv) >= 3 and sys.argv[1] == "validate":
-        validate(sys.argv[2:])
+    elif len(sys.argv) >= 3 and sys.argv[1] == "validate":     # (URLs, or @file of URLs)
+        validate([u for a in sys.argv[2:] for u in (open(a[1:]).read().split() if a.startswith("@") else [a])])
     else:
         raise SystemExit(__doc__)

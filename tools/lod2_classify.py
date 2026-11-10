@@ -240,6 +240,23 @@ def classify(rings):
     return None if f is None else decide(f)
 
 
+def classify_rise(rings):
+    """(code, rise m): classify()'s code and the rise of that roof shape, from the eaves of its main sides to the
+    top (0 for a flat roof). Not the span of all the roof faces: a building of several levels (a low wing with a flat
+    roof beside a gabled block, a stepped block) would give a roof as tall as the steps (Tallinn: 16.6 m on a 22 m
+    building)."""
+    f = features(rings)
+    if f is None:
+        return None, 0.0
+    code = decide(f)
+    if code in (FLAT, None):
+        return code, 0.0
+    sides = [s for s in f["sides"] if s[1] >= SIDE_SHARE * f["sloped"]] or f["sides"]
+    if not sides:
+        return code, 0.0
+    return code, max(0.0, max(s[4] for s in sides) - min(s[3] for s in sides))
+
+
 def decide(f):
     """The AdV code of features()."""
     if f["flat"] >= 0.8:

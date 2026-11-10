@@ -194,6 +194,8 @@ class CountriesTest(unittest.TestCase):
         self.assertEqual(self.folders(46.948, 7.4474), {"lod2-ch"})                  # (Bern)
         self.assertEqual(self.folders(47.3769, 8.5417), {"lod2", "lod2-ch"})         # (Zurich: in both boxes)
         self.assertEqual(self.folders(52.52, 13.405), {"lod2"})                      # (Berlin)
+        self.assertEqual(self.folders(48.2082, 16.3738), {"lod2-wien"})              # (Vienna)
+        self.assertEqual(self.folders(47.07, 15.44), set())                          # (Graz: Austria, not Vienna)
         self.assertEqual(self.folders(48.85, 2.35), set())                           # (Paris)
 
     def local(self, d, folder, lat, lon, rows):

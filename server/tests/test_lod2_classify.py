@@ -100,6 +100,15 @@ class ClassifyTest(unittest.TestCase):
         dormer = [[(4, 1.5, 1.6), (6, 1.5, 1.6), (6, 2.5, 1.9), (4, 2.5, 1.9)]]
         self.assertEqual(C.classify(gabled() + dormer), C.GABLED)
 
+    def test_the_rise_is_the_shapes_not_the_span_of_all_faces(self):
+        """A gabled block (3 m rise, eaves at 12 m) over a low flat-roofed wing (4 m): the roof is 3 m, not 11."""
+        block = [[(x, y, z + 12) for x, y, z in r] for r in gabled()]
+        wing = [[(10, 0, 4), (16, 0, 4), (16, 2, 4), (10, 2, 4)]]
+        code, rise = C.classify_rise(block + wing)
+        self.assertEqual(code, C.GABLED)
+        self.assertAlmostEqual(rise, 3.0, 2)
+        self.assertEqual(C.classify_rise([[(0, 0, 5), (10, 0, 5), (10, 8, 5), (0, 8, 5)]]), (C.FLAT, 0.0))
+
     def test_nothing_usable(self):
         self.assertIsNone(C.classify([]))
         self.assertIsNone(C.classify([[(0, 0, 0), (1, 0, 0), (1, 0, 3)]]))           # (upright only)

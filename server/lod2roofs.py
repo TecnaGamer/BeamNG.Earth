@@ -45,6 +45,7 @@ SOURCES = (
     Country("de", "lod2", (47.2, 5.8, 55.1, 15.1), "roof:lod2-de"),            # the German states (AdV)
     Country("ch", "lod2-ch", (45.8, 5.9, 47.85, 10.55), "roof:lod2-ch"),      # swissBUILDINGS3D: CH and Liechtenstein
     Country("ee", "lod2-ee", (57.45, 21.6, 59.85, 28.25), "roof:lod2-ee"),    # Estonia
+    Country("wien", "lod2-wien", (48.11, 16.17, 48.33, 16.58), "roof:lod2-wien"),   # Vienna (the city's roof model)
 )
 BOX = SOURCES[0].box            # (Germany's: kept for callers that ask for it)
 # AdV roofType -> roof:shape. 5000 (mixed), 9999 (other) and an empty code say nothing about the shape: predicted.
