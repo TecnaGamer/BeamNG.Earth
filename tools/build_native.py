@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Build the world server's Rust kernels (native/earthfast) and put the module next to the server:
 server/earthfast.abi3.so (Linux) or server/earthfast.pyd (Windows). One build works for every Python from 3.10
-(the stable ABI). Needs Rust (https://rustup.rs). The server runs without it (server/fast.py: the Python code).
+(the stable ABI). Needs Rust (https://rustup.rs). The server requires this module at fast.MIN_VERSION or newer.
 
     python3 tools/build_native.py              # this platform
     python3 tools/build_native.py --windows    # server/earthfast.pyd from Linux: cargo-zigbuild, zig on PATH,
                                                # rustup target add x86_64-pc-windows-gnu
+    python3 tools/build_native.py --fast       # a development build (cargo profile "fast": no LTO, incremental),
+                                               # several times quicker to rebuild; never commit or ship it (a
+                                               # release build afterwards clears the FAST_MARK warning file)
 """
 import glob
 
@@ -26,6 +29,7 @@ CRATE = os.path.join(ROOT, "native", "earthfast")
 
 
 WIN_TARGET = "x86_64-pc-windows-gnu"
+FAST_MARK = os.path.join(ROOT, "server", "earthfast.FAST-BUILD-do-not-commit")
 LINUX_TARGET = "x86_64-unknown-linux-gnu"
 LINUX_GLIBC = "2.35"           # the oldest glibc the Linux module runs on (the AppImage's own limit too)
 
@@ -45,10 +49,28 @@ def windows():
     print("built", dst)
 
 
+def fast_build():
+    """The development profile for this platform only (no glibc pin: a local module for tests and A/Bs)."""
+    subprocess.run(["cargo", "build", "--profile", "fast"], cwd=CRATE, check=True)
+    lib = "earthfast.dll" if sys.platform == "win32" else "libearthfast.dylib" if sys.platform == "darwin" \
+        else "libearthfast.so"
+    dst = os.path.join(ROOT, "server", "earthfast.pyd" if sys.platform == "win32" else "earthfast.abi3.so")
+    install(os.path.join(CRATE, "target", "fast", lib), dst)
+    with open(FAST_MARK, "w") as f:
+        f.write("server/earthfast was built with tools/build_native.py --fast: rebuild without --fast before "
+                "committing it\n")
+    print("built", dst, "(FAST development build: rebuild without --fast before committing)")
+
+
 def main():
+    if "--fast" in sys.argv[1:]:
+        fast_build()
+        return
     if "--windows" in sys.argv[1:]:
         windows()
         return
+    if os.path.exists(FAST_MARK):
+        os.remove(FAST_MARK)
     if sys.platform.startswith("linux") and shutil.which("cargo-zigbuild") and shutil.which("zig"):
         # against glibc LINUX_GLIBC (cargo-zigbuild), not this machine's: built on a rolling distro, the module asked
         # for glibc 2.43 / 2.44 and failed to load on a Steam Deck (2.43 without the 2.44 symbols) and would on every

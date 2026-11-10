@@ -59,6 +59,7 @@ import json
 import functools
 import math
 import os
+import time
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -84,15 +85,19 @@ CELL_COUNTS = (32, 64)
 K_TABLE = {32: {1: 3.0, 2: 3.0, 3: 2.5}, 64: {1: 0.75, 2: 1.5, 3: 1.5, 4: 1.25}}
 # Mesh mode: everything within NEAR_RADII[cells][m] of the player is level m or finer (v1.3 §B).
 NEAR_RADII = {32: {-2: 150.0, -1: 400.0}, 64: {-1: 150.0, 0: 400.0}}
-# Mesh near-visual mode's finest level: the one whose vertices are the 2 m physics lattice
-# (cells * 2 m = its size): L-2 = 64 m with 32 cells, L-1 = 128 m with 64.
+# Mesh near-visual mode's finest level: the one whose vertices are the far field's 2 m lattice (heightmap.FAR_SQUARE,
+# every second sample of the 1 m physics block; cells * 2 m = its size): L-2 = 64 m with 32 cells, L-1 = 128 m with 64.
 MESH_MIN_LEVEL = {32: -2, 64: -1}
 CONTENT_FORMAT = {32: 3, 64: 4}     # the protocol's FORMAT (hello.format) of each layout
 # Texture edge (px) per level from the finest level of the mode, the last value repeating. 32: the
 # v1.3.1 rule (two finest levels tex_near, the rest tex_far; both 256). 64 (§3.1; P8 may change it):
 # 256 to L1, 512 from L2 (keeps today's texel density at distance).
 TEX_DEFAULT = {32: (256, 256, 256), 64: (256, 256, 256, 512)}
-BLOCK_SIZES = (1024, 512)   # terrain block samples per edge (M4, docs/V1_4_SPEC.md §3.5: 512, mesh mode only)
+BLOCK_SIZES = (1024, 2048)  # terrain block samples per edge (heightmap.SQUARE apart: 1 km, 2 km)
+# Terrain mode's block: frozen at the v1.3.1 layout's 2 km on its 256 m grid, its L0 floor's tiles aligned with the
+# block's edges (a 1 km block on the 128 m grid always straddles 256 m tiles: the uncover gate closed, 2026-11-01):
+# 2048 samples at 1 m
+TERRAIN_BLOCK = 2048
 # Triangles per tile shape: 8192 + 512 at 64 cells. The old 8192 was the ProceduralMesh rule;
 # .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (VERTS_MAX), which the fine near
 # tiles (NEAR_FINE_M, up to ~2x the grid's triangles at a cutting) keep under.
@@ -125,7 +130,7 @@ NEAR_FINE_NEXT_M = 1.0          # ... and the level after it (L0, to ~400 m) eve
 NEAR_MASK_PX = {0: 1024, 1: 512}
 NEAR_FINE_EPS = 0.1             # of the sample spacing (5 cm at 0.5 m, 10 cm at 1 m)
 NEAR_FINE_VERTS = 60000
-LATTICE = int(BASE / heightmap.SQUARE) + 1      # 129 terrain samples per L0 tile edge
+LATTICE = int(BASE / heightmap.FAR_SQUARE) + 1  # 129 far-lattice samples per L0 tile edge
 PALETTE_W, PALETTE_H = 256, 32
 WATER_U = 0.02
 MATERIAL = "bngEarthFar_v3"     # static material shipped with the mod (§6.2)
@@ -144,7 +149,10 @@ REFRACTION_K = 0.13             # standard terrestrial refraction; the cull's ef
 R_REFRACTED = R_EARTH / (1.0 - REFRACTION_K)    # 7323 km. The geometry (and the sky) have no refraction,
                                                 # so using R' only makes the cull generous (~7 % farther).
 HORIZON_MIN = RADIUS            # the disc is never smaller than today's radius, and nothing within it is culled
-HORIZON_MAX = 1500000.0         # radius cap (spec: raised from 700 km so planes see far; eyes up to ~40 km)
+HORIZON_MAX = 2600000.0         # radius cap (spec: raised from 700 km so planes see far; 2026-11-06 from 1500 km: an eye
+                                # at 400 km, the ISS's height, sees 2290 km: the ground ended in a blue band short of it)
+HORIZON_GRID_MAX = 1500000.0    # ... the zmax grid stays this big (nodes past it are kept, never culled: zmax inf), so a
+                                # camera in space does not read the DEM's block maxima of a 5000 km square
 HORIZON_MAX_LEVEL = 10          # L10 = 262 km, 4 km vertex spacing with 64 cells: a silhouette at 300+ km
 # Texture px of the coarse levels in horizon mode (a 256 px L9 is 512 m/px; at 300 km one screen
 # pixel is ~100 m, so the texture is never the limit); imagery.render picks the low source zoom.
@@ -166,17 +174,19 @@ class Layout:
     cells' default). Made once by earthd.Server and passed to select (K, radii), build_tile,
     zoom_for_level and heightmap, so nothing depends on a module setting."""
     cells: int = 32
-    block: int = heightmap.SIZE
+    block: int = None               # (None: heightmap.SIZE; terrain mode: TERRAIN_BLOCK)
     mesh: bool = True
     tex: tuple = None
 
     def __post_init__(self):
+        if self.block is None:
+            object.__setattr__(self, "block", heightmap.SIZE if self.mesh else TERRAIN_BLOCK)
         if self.cells not in CELL_COUNTS:
             raise ValueError(f"cells must be one of {CELL_COUNTS}, not {self.cells!r}")
         if self.block not in BLOCK_SIZES:
             raise ValueError(f"terrain block size {self.block!r} is not supported (one of {BLOCK_SIZES})")
-        if not self.mesh and (self.cells != 32 or self.block != heightmap.SIZE):
-            raise ValueError("terrain near-visual mode is frozen at the v1.3.1 layout (32 cells, 1024² block)")
+        if not self.mesh and (self.cells != 32 or self.block != TERRAIN_BLOCK):
+            raise ValueError(f"terrain near-visual mode is frozen at its layout (32 cells, {TERRAIN_BLOCK}² block)")
         tex = TEX_DEFAULT[self.cells] if self.tex is None else tuple(int(v) for v in self.tex)
         if not tex:
             raise ValueError("no texture size")
@@ -368,9 +378,21 @@ SSE_HYSTERESIS = 0.5
 SSE_SPACING_CAP = 2.0
 
 
+def out_of_view(cone, x0, y0, x1, y1, d):
+    """The factor a node's distance counts with in the selection for the 3D map's view cone (9 values: view_cone's 8
+    and the factor): 1 in the cone, the factor outside (earthfast farglobal.rs out_of_view, the same rule)."""
+    if len(cone) < 9 or d <= 0.0:
+        return 1.0
+    cx, cy, cz = (x0 + x1) / 2 - cone[0], (y0 + y1) / 2 - cone[1], cone[7] - cone[2]
+    r = math.sqrt(cx * cx + cy * cy + cz * cz)
+    slack = math.asin(min(1.0, math.hypot(x1 - x0, y1 - y0) * 0.5 / max(r, 1.0)))
+    a = math.acos(max(-1.0, min(1.0, (cx * cone[3] + cy * cone[4] + cz * cone[5]) / max(r, 1e-9))))
+    return 1.0 if a - slack <= math.acos(max(-1.0, min(1.0, cone[6]))) else max(1.0, cone[8])
+
+
 def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
            radius=RADIUS, max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131,
-           disc=False, horizon=None, forced_level=0, view=None, region=None):
+           disc=False, horizon=None, forced_level=0, view=None, region=None, eye_h=0.0, cone=None):
     """Desired tiles for a player at (px, py).
 
     region (global far tiles, select_global): a Region, the refined finest global tiles; the roots are then the
@@ -425,7 +447,10 @@ def select(px, py, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS,
                 if d is None:
                     d = math.hypot(max(x0 - px, 0.0, px - x1), max(y0 - py, 0.0, py - y1))
                 lim = switch_distance(lvl, kfun, radii, min_level)
-                split = d < lim or (node in prev_refined and d < (1.0 + h) * lim)
+                d3 = math.hypot(d, eye_h)       # (eye_h: the camera's height over the ground; select_global)
+                if cone is not None:
+                    d3 *= out_of_view(cone, x0, y0, x1, y1, d)
+                split = d3 < lim or (node in prev_refined and d3 < (1.0 + h) * lim)
                 if not split and view is not None and d < view.reach * lim:
                     px_ = view.pixels(node, x0, y0, x1, y1)
                     if px_ is not None:
@@ -454,8 +479,26 @@ VIEW_MAX_DEG = 80.0
 ASPECT = 16 / 9
 
 
+VIEW_MARGIN_3D_DEG = 5.0
+
+
 def view_cone(cam):
-    """(x, y, unit forward fx, fy, cos of the cone's half angle) from a pose.cam dict, or None (no usable heading)."""
+    """(x, y, unit forward fx, fy, cos of the cone's half angle) from a pose.cam dict, or None (no usable heading).
+    The 3D map (cam.tx: its target on the ground) gets the 3D cone (x, y, z, fx, fy, fz, cos, ground z) round the
+    screen's diagonal: a tilted view's ground under the camera is off the screen (earthfast.view_distances)."""
+    if cam.get("tx") is not None:
+        try:
+            x, y, z = float(cam["x"]), float(cam["y"]), float(cam["z"])
+            fx, fy, fz = float(cam["fx"]), float(cam["fy"]), float(cam["fz"])
+            fov, gz = float(cam.get("fovDeg") or 60), float(cam.get("tz") or 0.0)
+        except (KeyError, TypeError, ValueError):
+            return None
+        n = math.sqrt(fx * fx + fy * fy + fz * fz)
+        if not (n > 0.5 and all(map(math.isfinite, (x, y, z, fx, fy, fz, fov, gz)))):
+            return None
+        tv = math.tan(math.radians(fov) / 2)
+        half = math.degrees(math.atan(math.hypot(tv, tv * ASPECT))) + VIEW_MARGIN_3D_DEG
+        return x, y, z, fx / n, fy / n, fz / n, math.cos(math.radians(min(half, 89.0))), gz
     try:
         x, y, fx, fy = float(cam["x"]), float(cam["y"]), float(cam["fx"]), float(cam["fy"])
         fov = float(cam.get("fovDeg") or 60)
@@ -480,7 +523,7 @@ def view_distances(tiles, cone, x, y):
         return [t.distance(x, y) for t in tiles]
     if not tiles:
         return []
-    fast.require(1, "view_distances")
+    fast.require(161 if len(cone) == 8 else 1, "view_distances")
     bb = np.array([t.bbox for t in tiles], np.float64)
     return fast._ef.view_distances(bb, float(x), float(y), list(cone) if cone else [], float(VIEW_PENALTY)).tolist()
 
@@ -579,7 +622,8 @@ GLOBAL_MIN_LEVEL = 3
 GLOBAL_MAX_LAT = 84.5          # deg: the selection's whole radius must stay within Web Mercator
 GLOBAL_MIN_AREA = 1e-3          # m^2: an overlap below this is a shared edge, not an overlap
 GLOBAL_OVERLAP_REL = 0.01      # ... and below this of the smaller footprint (the quads' straight edges off the curved parallels)
-GLOBAL_NEED = 109               # earthfast farglobal.rs
+GLOBAL_NEED = 160               # earthfast farglobal.rs (160: far_global_select eye_h)
+GLOBAL_CONE_NEED = 162          # (162: its view cone, the 3D map: farglobal.rs out_of_view)
 GLOBAL_GEO_VERSION = 1          # bump: every global tile's cached geometry / texture is built again
 GLOBAL_PROTO = 1                # hello.globalFar: the mod places global far tiles (farfield.lua GLOBAL_FAR)
 
@@ -727,11 +771,11 @@ class Region:
 
 def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=None, h=HYSTERESIS, radius=RADIUS,
                   max_level=MAX_LEVEL, hold=frozenset(), min_level=0, radii=None, layout=V131, disc=False,
-                  horizon=None, forced_level=0, view=None):
+                  horizon=None, forced_level=0, view=None, anchor_nodes=True, eye_h=0.0, cone=None):
     """select() with the levels from GLOBAL_MIN_LEVEL up as global tiles (GTile, Mercator zoom zf for level 3) and the
     anchor's nodes (L <= 2, Tile / Piece) in the refined zoom-zf tiles. frame: the anchor's EnuFrame; the rest as
     select(). Returns ({key: tile}, refined nodes: anchor (L, i, j) and global ("m", z, x, y))."""
-    fast.require(GLOBAL_NEED, "global far tiles")
+    fast.require(GLOBAL_NEED if cone is None else GLOBAL_CONE_NEED, "global far tiles")
     kfun = kfun or layout.k
     radii = NEAR_RADII[layout.cells] if radii is None else radii
     gprev = [tuple(n[1:]) for n in prev_refined if len(n) == 4]
@@ -745,21 +789,40 @@ def select_global(frame, px, py, zf, forced=(), prev_refined=frozenset(), kfun=N
         hz = (float(horizon.reach), float(HORIZON_MIN), float(R_REFRACTED), np.ascontiguousarray(g.base, np.float64),
               float(g.half), float(level_size(HORIZON_GRID_LEVEL)),
               (int(merc[0]), int(merc[1]), int(merc[2]), merc[3]) if merc is not None else None)
+    t0 = time.perf_counter()
     tiles, grefined, regions = fast._ef.far_global_select(
         float(frame.lat0), float(frame.lon0), float(px), float(py), float(radius), bool(disc), int(zf), int(max_level),
-        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz)
+        ks, rmin, float(h), gprev, ghold, [tuple(float(v) for v in b) for b in forced], hz, float(eye_h),
+        *(([float(v) for v in cone],) if cone is not None else ()))
     out = {}
     for z, x, y, q, s in tiles:
         t = GTile(int(z), int(x), int(y), GLOBAL_MIN_LEVEL + int(zf) - int(z), tuple(q), float(s))
         out[t.key] = t
     refined = {("m", int(z), int(x), int(y)) for z, x, y in grefined}
+    t1 = time.perf_counter()
+    if regions and not anchor_nodes:
+        # (a camera high above the ground, the 3D map: the finest global tiles are leaves, no anchor nodes in them;
+        # those nodes, a few metres to a km, are below a pixel from there, and their Python selection took 0.25-0.37 s
+        # of the event loop at each camera move, 2026-11-07)
+        for x, y, q in regions:
+            q = tuple(float(v) for v in q)
+            e = [math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1]) for k in range(4)]
+            t = GTile(int(zf), int(x), int(y), GLOBAL_MIN_LEVEL, q, float(sum(e) / 4))
+            out[t.key] = t
+            refined.discard(("m", int(zf), int(x), int(y)))
+        regions = []
     if regions:
         aout, aref = select(px, py, forced, {n for n in prev_refined if len(n) == 3}, kfun, h, radius,
                             GLOBAL_MIN_LEVEL - 1, {n for n in hold if len(n) == 3}, min_level, radii, layout, disc,
-                            None, forced_level, view, region=Region(zf, regions))
+                            None, forced_level, view, region=Region(zf, regions), eye_h=eye_h, cone=cone)
         out.update(aout)
         refined |= aref
+    global LAST_GLOBAL_SELECT
+    LAST_GLOBAL_SELECT = (t1 - t0, time.perf_counter() - t1, len(regions or ()), len(tiles))
     return out, refined
+
+
+LAST_GLOBAL_SELECT = None   # (global part s, anchor part s, regions, global tiles) of the last select_global (logs)
 
 
 def global_frame_ll(z, x, y):
@@ -819,7 +882,7 @@ def horizon_extent(h_eye, margin=0.0):
     """Half-size of the zmax grid an eye h_eye m above sea level needs: everything that can rise
     above its horizon (terrain up to Z_TOP) within the radius cap, plus `margin` (how far the player
     can be from the anchor), rounded up to whole L10 nodes (the pyramid's top level)."""
-    e = min(HORIZON_MAX, horizon_distance(h_eye) + horizon_distance(Z_TOP)) + margin
+    e = min(HORIZON_GRID_MAX, horizon_distance(h_eye) + horizon_distance(Z_TOP)) + margin
     s = level_size(HORIZON_MAX_LEVEL)
     return max(1, math.ceil(e / s)) * s
 
@@ -1122,12 +1185,14 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         # for L-2) gives the vertices (32 cells: every 4th / 2nd / every sample; 64 cells: every
         # 2nd / every sample for L0 / L-1), the error reference at half the vertex spacing and the
         # sink reference (all samples).
-        n = int(S / heightmap.SQUARE) + 1
+        n = int(S / heightmap.FAR_SQUARE) + 1
         step = (n - 1) // cells
         if step < 1 or (n - 1) % cells:
             raise ValueError(f"level {tile.level} is finer than the {cells}-cell layout's lattice level")
-        k0x, k0y = int(x0 // heightmap.SQUARE), int(y0 // heightmap.SQUARE)
-        lxs, lys = heightmap.lattice_coords(k0x, n), heightmap.lattice_coords(k0y, n)
+        # (the far field's own 2 m lattice, FAR_SQUARE: every second sample of the 1 m block, the same values)
+        k0x, k0y = int(x0 // heightmap.FAR_SQUARE), int(y0 // heightmap.FAR_SQUARE)
+        lxs = (k0x + np.arange(n, dtype=np.int64)).astype(np.float64) * heightmap.FAR_SQUARE
+        lys = (k0y + np.arange(n, dtype=np.int64)).astype(np.float64) * heightmap.FAR_SQUARE
         lelev, lu = heightmap.surface(frame, elev_fn, lxs, lys)
         lq = lu if q is None else heightmap.quantise(lu, q) * q
         xs, ys = lxs[::step], lys[::step]
@@ -1138,7 +1203,10 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
             r = x0 + np.arange(2 * cells + 1) * (sp / 2), y0 + np.arange(2 * cells + 1) * (sp / 2)
             ref = heightmap.surface_u(frame, elev_fn, *r)
         if with_sink:                   # L0 (terrain mode) or any near level (detail mode)
-            terrain = lq
+            # (on the far lattice, not the block's own 1 m samples: a dip at an odd metre can show a sliver of the tile
+            # at the drawn block's edge ring; measuring at 1 m made every near tile ~4x the surface work and the
+            # pending block's tiles slower than the rest, 2026-11-01)
+            terrain, terrain_sq = lq, heightmap.FAR_SQUARE
     else:
         xs = x0 + np.arange(cells + 1) * sp
         ys = y0 + np.arange(cells + 1) * sp
@@ -1184,7 +1252,7 @@ def build_tile(frame, dem, tile, zoom, q=None, ref_zoom=None, with_sink=True, la
         err = float(np.abs(ref - surface_at(U, sp, RX, RY)).max())
     sink = None
     if terrain is not None:
-        lf = np.arange(terrain.shape[0]) * heightmap.SQUARE
+        lf = np.arange(terrain.shape[0]) * terrain_sq
         LX, LY = np.meshgrid(lf, lf)
         sink = float(max(0.0, (surface_at(U, sp, LX, LY) - terrain).max()) + SINK_MARGIN)
 

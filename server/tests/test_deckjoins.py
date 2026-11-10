@@ -189,6 +189,25 @@ class GroundGapTest(unittest.TestCase):
         f = _feats(self.lines, [0, 2])
         self.assertEqual(roads.level_ranges(f, 1), [])
 
+    def test_as_the_python_it_was(self):
+        """_deck_gaps' answers are exactly those of the Python before its look round moved to earthfast
+        (tests/gradesep_reference.py)."""
+        import gradesep_reference
+        roadz.PROVIDER = None
+        for f in [_feats(self.lines, [0, 2]), _feats([[(0, -300), (0, -50)], [(0, -50), (0, 50)], [(0, 50), (0, 300)]],
+                                                     [0, 2]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0), (80, 0)], "residential")]),
+                  _feats(self.lines, [0, 2], extra=[([(0, 0.3), (80, 0)], "residential"),
+                                                    ([(0, -0.2), (-60, 0)], "residential")]),
+                  _feats([[(0, -300), (0, -20)], [(0.4, -20), (0, 20)], [(0, 20), (0, 300)]], [0, 2]),
+                  features([[(0, -300), (0, 300)]] + CROSS, ["motorway", "residential", "residential"],
+                           flags=[(0, "is_bridge", 0.0, 280 / 600), (0, "is_bridge", 320 / 600, 1.0)])]:
+            for i in range(len(f)):
+                rngs = roads._skew_decks(f, i, roads.raw_level_ranges(f, i))
+                with self.subTest(n=len(f), i=i):
+                    self.assertEqual(repr(roads._deck_gaps(f, i, list(rngs))),
+                                     repr(gradesep_reference.deck_gaps(f, i, list(rngs))))
+
 
 
 @unittest.skipUnless(NATIVE, "earthfast 105")
@@ -223,12 +242,14 @@ class PinnedJointTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider(lambda xy, s: np.full(len(xy), FLAT + 6.0))
         self.check()
 
-    def test_unpinned_parts(self):
-        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]), np.array([[0.0, -50], [0, 0]])]
-        out, gfn = roads._unpinned(lines, lambda xy: np.asarray(xy, np.float64)[:, 0], [(0.0, 0.0)])
-        ends = [tuple(np.round(out[0][0], 2)), tuple(np.round(out[1][0], 2)), tuple(np.round(out[2][-1], 2))]
-        self.assertEqual(len(set(ends)), 3, "each part's own end")
-        np.testing.assert_allclose(gfn(np.array(ends)), 0.0, atol=1e-9, err_msg="the ground at the joint itself")
+    def test_pin_splits_connectivity_without_moving_geometry(self):
+        lines = [np.array([[0.0, 0], [0, 50]]), np.array([[0.0, 0], [50, 50]]),
+                 np.array([[0.0, -50], [0, 0]])]
+        nodes, edges, adj = roads._curve_graph(lines, [(0.0, 0.0)])
+        ends = [edges[0][0], edges[1][0], edges[2][1]]
+        self.assertEqual(len(set(ends)), 3, "each incident part has its own abutment")
+        np.testing.assert_allclose(np.array(nodes)[ends], 0.0)
+        self.assertTrue(all(len(adj[nd]) == 1 for nd in ends))
 
 
 

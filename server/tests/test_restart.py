@@ -13,7 +13,7 @@ SessionAdoptionTest (earthd.Server's session folders, no streaming):
   - main_async's sweep removes the folders off the event loop; a folder with the new session's own id
     is never an orphan.
 
-RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 512² mesh-mode session;
+RestartDriveTest (fault injection with the mod simulator, modsim): a 64-cell, 1024² (1 m) mesh-mode session;
 the mod teleports twice (its anchor 2) or once (its anchor 1: the new server's resync anchor id too, so
 no pose or terrain request may name it until the resync commits, core.lua anchorKnown; the resync
 commit waits the governor's CALM_TIMEOUT so poses go out meanwhile), drives east, then the server is
@@ -35,6 +35,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -49,7 +50,7 @@ from test_integration_drive import near_holes  # noqa: E402
 
 LAT, LON = test_server.LAT, test_server.LON
 MOD_VERSION = "0.4.0"
-SIZE = 512
+SIZE = 1024                     # the 1 km block (1024² at 1 m; it was 512² at 2 m)
 DT = 1 / 60
 SPEED = 30.0
 PACE = 1.5                      # simulated seconds per wall second while a server streams
@@ -82,15 +83,23 @@ class _Conn:
 
 class SessionAdoptionTest(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
+        # (Windows: a file the server's trash thread is deleting stays "delete pending" for a moment, and the temporary
+        # folder's own delete then got "Access is denied": the release workflow's Windows tests failed now and then)
+        self.tmp = tempfile.TemporaryDirectory(ignore_cleanup_errors=True)
         self.addCleanup(self.tmp.cleanup)
         self.root = self.tmp.name
         self.stale = make_session(self.root, "20260101-000000-aaaa", earthd.SESSION_STALE_S + 600)
         self.a = make_session(self.root, "20261010-120000-bbbb", 300)
         self.b = make_session(self.root, "20261010-120500-cccc", 120)
+        running = earthd.game_running
+        self._real_game_running = running
+        earthd.game_running = lambda: True          # (a game runs: the younger sessions wait for its claim)
+        self.addCleanup(setattr, earthd, "game_running", running)
         self.s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
         self.addCleanup(self.s.tile_pool.shutdown)
         self.addCleanup(self.s.hm_pool.shutdown)
+        # (its trash thread deletes the stale session moved there: finished before the temporary folder goes)
+        self.addCleanup(lambda: self.s.trash_thread is not None and self.s.trash_thread.join(30))
 
     def conn(self):
         c = _Conn()
@@ -187,29 +196,71 @@ class SessionAdoptionTest(unittest.TestCase):
         self.assertLess(time.time() - os.path.getmtime(own), 5, "heartbeat: the own marker touched")
 
     def test_sweep_deletes_off_the_event_loop(self):
-        """An unclaimed orphan is a whole session (~1 GB, thousands of files): main_async's sweep
-        (sweep_sessions_async) keeps the bookkeeping on the loop and removes the folders in a worker
-        thread, so the streaming never stalls behind an rmtree."""
+        """An unclaimed orphan is a whole session (~11k files): main_async's sweep (sweep_sessions_async) keeps the
+        bookkeeping on the loop, lists the files in a worker thread, and deletes them one at a time through the delete
+        queue (a game runs: its file watcher took a whole session moved out at once as an 8.6 s frame, 2026-11-02)."""
         self.s.orphan_s = 30.0
+        self.s.delete_interval = 0.005
         for sid in self.s.orphans:
             self.s.orphans[sid] -= 1000
         t = time.time() - 100
         for d in (self.a[0], self.b[0]):
             os.utime(os.path.join(d, earthd.SESSION_MARKER), (t, t))
         threads = []
-        rm = self.s._rmtree_session
-        self.s._rmtree_session = lambda sid: (threads.append(threading.get_ident()), rm(sid))
+        listing = self.s._session_paths
+        self.s._session_paths = lambda sid: (threads.append(threading.get_ident()), listing(sid))[1]
         loop = asyncio.new_event_loop()
         self.addCleanup(loop.close)
+        seen = []
 
         async def run():
-            return threading.get_ident(), await self.s.sweep_sessions_async()
+            me = threading.get_ident()
+            gone = await self.s.sweep_sessions_async()
+            for _ in range(400):
+                seen.append(len(os.listdir(self.a[0])) if os.path.exists(self.a[0]) else -1)
+                if not any(os.path.exists(p) for p in self.a + self.b):
+                    break
+                await asyncio.sleep(0.005)
+            return me, gone
         loop_thread, gone = loop.run_until_complete(run())
         self.assertEqual(sorted(gone), ["20261010-120000-bbbb", "20261010-120500-cccc"])
         self.assertEqual(len(threads), 2)
-        self.assertNotIn(loop_thread, threads, "the folders are removed off the event loop")
-        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b))
+        self.assertNotIn(loop_thread, threads, "the files are listed off the event loop")
+        self.assertFalse(any(os.path.exists(p) for p in self.a + self.b), "deleted in the end, folders too")
+        self.assertGreater(len(set(seen)), 2, f"one file at a time: {seen[:20]}")
         self.assertEqual(self.s.orphans, {})
+
+    def test_no_game_at_start_every_earlier_session_goes(self):
+        """No game running at the start (the launcher starts the server first): every earlier session goes now, moved
+        out of the user folder at once (no file watcher sees it), deleted by the trash thread; none kept as an orphan."""
+        a = make_session(self.root, "20261011-080000-dddd", 300)
+        earthd.game_running = lambda: False
+        s = earthd.Server(self.root, os.path.join(self.root, "cache"), imagery=None)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.hm_pool.shutdown)
+        self.assertFalse(any(os.path.exists(p) for p in a + self.a + self.b), "moved out of the user folder")
+        self.assertEqual(s.orphans, {})
+        self.assertIsNotNone(s.trash_thread)
+        s.trash_thread.join(10)
+        self.assertEqual(os.listdir(os.path.join(self.root, "cache", earthd.TRASH_DIR)), [])
+        self.assertTrue(os.path.isdir(s.out_dir), "its own session stays")
+
+    def test_game_running_as_the_launcher_says(self):
+        """The launcher starts the game right after the server: BNGEARTH_GAME_AT_START says whether one ran before."""
+        real = self._real_game_running
+        old = os.environ.get("BNGEARTH_GAME_AT_START")
+        try:
+            os.environ["BNGEARTH_GAME_AT_START"] = "0"
+            self.assertFalse(real())
+            os.environ["BNGEARTH_GAME_AT_START"] = "1"
+            self.assertTrue(real())
+            del os.environ["BNGEARTH_GAME_AT_START"]
+            self.assertIsInstance(real(), bool)
+        finally:
+            if old is None:
+                os.environ.pop("BNGEARTH_GAME_AT_START", None)
+            else:
+                os.environ["BNGEARTH_GAME_AT_START"] = old
 
     def test_own_sid_never_an_orphan(self):
         """A folder that happens to carry the new session's id (a restart in the same second with the same
@@ -237,7 +288,7 @@ class SessionAdoptionTest(unittest.TestCase):
 
 
 class _Running:
-    """An in-process server (mesh mode, 64 cells, 512² block, synthetic DEM and imagery) on its own loop."""
+    """An in-process server (mesh mode, 64 cells, 1024² block at 1 m, synthetic DEM and imagery) on its own loop."""
 
     def __init__(self, user_dir):
         s = earthd.Server(user_dir, os.path.join(user_dir, "cache"), tile_workers=3, imagery=None, near_visual="mesh",
@@ -285,6 +336,13 @@ class _Running:
 
 
 class RestartDriveTest(unittest.TestCase):
+    def setUp(self):
+        # (the game outlives the killed server: a game runs whatever this machine runs, so the dead session waits for
+        # its claim; with no game the start moves earlier sessions out at once, _scan_sessions)
+        running = earthd.game_running
+        earthd.game_running = lambda: True
+        self.addCleanup(setattr, earthd, "game_running", running)
+
     def test_kill_and_restart_mid_drive(self):
         """The mod's anchor 2: none of the new server's anchor ids is the mod's until it rebases."""
         self._drive(teleports=2)
@@ -594,6 +652,79 @@ class RestartDriveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LeakedPacksTest(unittest.TestCase):
+    """A replaced stand-in / earlier refresh lost only its photo, its pack stayed (165 GB on a test PC, 2026-11-03):
+    _remove_base takes both; the packs earlier builds leaked go once, at a start with no game running."""
+
+    def server(self, root):
+        s = earthd.Server(root, os.path.join(root, "cache"), imagery=None)
+        self.addCleanup(s.tile_pool.shutdown)
+        self.addCleanup(s.hm_pool.shutdown)
+        return s
+
+    def test_a_photo_goes_with_its_pack(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True):
+            s = self.server(root)
+            name = "hm_1_0_0_base_q.png"
+            open(os.path.join(s.out_dir, name), "w").close()
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir, exist_ok=True)
+            pack = os.path.join(cdir, terraincache.base_key(f"{s.vfs_dir}/{name}", earthd.BASE_AO_VFS) + ".dds")
+            other = os.path.join(cdir, "0123456789abcdef.dds")
+            for p in (pack, other):
+                open(p, "w").close()
+            s._remove_base(name)
+            self.assertFalse(os.path.exists(os.path.join(s.out_dir, name)) or os.path.exists(pack))
+            self.assertTrue(os.path.exists(other), "the game's own packs stay")
+
+    def test_replaced_photos_stay_until_their_block_goes(self):
+        # a refreshed block's old photo (its stand-in) may still be on screen (the refresh deferred at speed): its
+        # pack stays until the block is evicted (deleted at the refresh, the game packed it again: ~0.75 s frames)
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: True), \
+                mock.patch.object(earthd, "HM_CACHE", 0):
+            s = self.server(root)
+            key = (1, 0.0, 0.0)
+            names = [s.base_name(key), s.quick_base_name(key), s.base_name(key, 2)]
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir, exist_ok=True)
+            packs = [os.path.join(cdir, terraincache.base_key(f"{s.vfs_dir}/{n}", earthd.BASE_AO_VFS) + ".dds")
+                     for n in names]
+            for p in [os.path.join(s.out_dir, n) for n in names] + packs:
+                open(p, "w").close()
+            s.hm[key] = {"base": names[2], "old_bases": [names[1]]}
+            s.hm_committed, s.hm_sent = [], []
+            s.evict_heightmaps(fresh=None)
+            self.assertNotIn(key, s.hm)
+            self.assertFalse(any(os.path.exists(p) for p in packs), "every photo of the block goes with it")
+
+    def test_leaked_packs_wiped_once_with_no_game(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: False), \
+                mock.patch.object(earthd.Server, "PACK_WIPE_MIN_BYTES", 10):
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir)
+            with open(os.path.join(cdir, "aaaaaaaaaaaaaaaa.dds"), "wb") as f:
+                f.write(b"x" * 100)
+            self.server(root)
+            self.assertFalse(os.path.exists(os.path.join(cdir, "aaaaaaaaaaaaaaaa.dds")), "over the size: wiped")
+            os.makedirs(cdir, exist_ok=True)
+            with open(os.path.join(cdir, "bbbbbbbbbbbbbbbb.dds"), "wb") as f:
+                f.write(b"x" * 100)
+            self.server(root)
+            self.assertTrue(os.path.exists(os.path.join(cdir, "bbbbbbbbbbbbbbbb.dds")), "once only")
+
+    def test_a_small_cache_is_kept(self):
+        import terraincache
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(earthd, "game_running", lambda: False):
+            cdir = terraincache.cache_dir(root)
+            os.makedirs(cdir)
+            open(os.path.join(cdir, "cccccccccccccccc.dds"), "w").close()
+            self.server(root)
+            self.assertTrue(os.path.exists(os.path.join(cdir, "cccccccccccccccc.dds")))
 
 
 class TerrainCacheGoesWithItsSessionTest(unittest.TestCase):

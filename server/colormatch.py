@@ -63,6 +63,7 @@ import json
 import logging
 import math
 import os
+import zipfile
 import threading
 import time
 from collections import OrderedDict
@@ -1003,6 +1004,15 @@ class ColorMatch:
                 if m is None:
                     return None
                 a = {k: f[k] for k in f.files if k != "meta"}
+        except (zipfile.BadZipFile, EOFError) as e:
+            # (damaged, as a crash or a full disk leaves it: removed so it is computed again, not read and failed at
+            # every far tile over it for good; telemetry 2026-11-09: far tiles' BadZipFile ~1.1 M times in a week)
+            log.warning("colormatch: damaged %s (%s): computed again", npz, type(e).__name__)
+            try:
+                os.remove(npz)
+            except OSError:
+                pass
+            return None
         except (OSError, ValueError, KeyError):
             return None
         self.disk.used(npz)
@@ -1175,8 +1185,9 @@ class ColorMatch:
             except Exception as e:      # network trouble: tried again later
                 if self._closed:
                     return
-                # deferred: the imagery host's bucket is kept for demand (a cold start): not a fault
-                (log.debug if getattr(e, "deferred", False) else log.warning)(
+                # deferred: the imagery host's bucket is kept for demand (a cold start): not a fault; unavailable: the
+                # host's circuit breaker is open, netfetch said so once (a warning a region a retry flooded the log)
+                (log.debug if getattr(e, "deferred", False) or getattr(e, "unavailable", False) else log.warning)(
                     "colormatch region %s: %s: %s", rk, type(e).__name__, e)
                 with self._lock:
                     self._failed[rk] = time.monotonic()

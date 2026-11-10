@@ -81,8 +81,8 @@ deleted under a live tile renders as nothing), so it is kept until the game says
 touched) and deleted, through the rate-limited delete queue with the folder last, once no pose names
 them any more; one nobody claims goes (removed in a worker thread) `SESSION_ORPHAN_S` (10 min) after the server found it and after
 its marker was last touched (a live server touches its own marker every `SESSION_HEARTBEAT_S`, 60 s,
-so a second server never deletes a running one's folder). A connection that closes makes its claims
-orphans again, with a fresh grace. The mod resyncs at its current origin meanwhile (a new session:
+so a second server never deletes a running one's folder). A game lease keeps these claims across
+transport closure until its complete reconnect snapshot releases them. The mod resyncs at its current origin meanwhile (a new session:
 anchor ids start at 1 again; the mod keys the old session's tiles by session, and sends no `pose` or
 `prepare_terrain` until the resync commits: its anchor id is the old session's and may name one of the
 new server's anchors), so nothing on screen loses its files and no level reload is needed
@@ -95,6 +95,21 @@ DEM LRU holds 512 decoded 512² tiles (~512 MB at most), the imagery LRU 512 dec
 
 ## Protocol 4 (as implemented)
 
+Reconnect ownership is an additive `hello` capability, `streamLease=1`. The server
+returns `leaseId`; the mod retains it across TCP and level resets and sends it
+back with `leaseSession`, `slotSession`, the complete `slotsHeld` snapshot and
+`held` anchor IDs (including its current anchor). An empty Lua array may encode
+as `{}`. The snapshot is validated before replacing the old connection; EOF does
+not release game-owned slots, anchors or adopted session folders. See
+[streaming reliability](../docs/STREAMING_RELIABILITY.md) for the wire contract,
+queue limits, legacy behavior and offline validation limits.
+
+Subsea tunnels require `hello.waterguard = 1` from the mod when server water is enabled. The server echoes the
+negotiated version, or requests a mod update and starts no world jobs until a compatible hello arrives. Without
+water, older clients remain supported. Tunnel road JSON may contain `waterguard` records with stable IDs,
+geodetic floor nodes, conservative radius and vault height; their exclusions must outlive the actual colliders.
+See [subsea validation](../docs/SUBSEA_TUNNEL_VALIDATION.md).
+
 Changes from protocol 3 (V1_3_SPEC §E): `hello.protocol = 4`; the server's `hello` gains
 `nearVisual` and `attribution`; `far_tile` gains `material`, `texture`, `detail` (all three, or
 none when imagery is off or failed for that tile: then it is a v3-style tile with the static
@@ -105,6 +120,34 @@ Frames: 4-byte little-endian length + UTF-8 JSON (unchanged). Numbers for `cx`/`
 as JSON floats (`512.0`). All positions are in the ENU plane of the anchor named by `anchorId`.
 
 ### mod → server
+
+`hello.trafficVisuals: 2` opts into visual-only traffic routes. The server answers the same capability when geotiles,
+roads and traffic are available. Without it neither side starts this stream; older clients and servers keep their
+existing behaviour. `traffic_visuals` (`enabled`, bool) requests it only while the mod's setting, roads and night
+are on. It also requires BeamNG traffic unless the mod's independent-lights switch is enabled. Two existing
+geotile trackers use the shared worker pool, one job per tracker in flight,
+independently of buildings and the physical AI graph. The mod keeps received tiles while temporarily disabled.
+After discarding its route cache (a level reload), it sends `traffic_visuals` with `enabled: true, reset: true` to
+request both streams again on the surviving connection. Ordinary off/on toggles omit `reset` and reuse the cache.
+
+`traffic_tile` carries `anchorId`, `key` (`g14_x_y`), `path`, `n`, `frame` (lat/lon), `pivot` and optional inline `data`;
+`traffic_drop` carries `anchorId` and `key`. `traffic_far_tile` / `traffic_far_drop` have the same fields. The near
+stream covers 5.5 km and includes local / unpaved roads; the far stream covers major roads to 11 km with a 4.5 km
+inner skip. Shared routes have the same id; the client retains them while either stream owns them.
+
+The JSON is `{v:2,key,frame,pivot,paths}`; each path has a stable `id`, XYZ `points` in the tile's world frame,
+`speed` (m/s), `spacing` (peak metres per cosmetic car per direction), `reach` (m), `roadClass`, `surface`, and
+`offset` (m right of travel; currently zero: heights are sampled in each lane). Stable 2 km pieces bound long ways;
+the client retains them across rebases. Bridge routes use the same solved deck profiles as far bridge slabs;
+tunnels remain excluded. Bounds: 128 routes / 8192 points per tile, 512 points per route; the client holds at most 384 tiles,
+8192 routes and 196608 prepared or pending points. Client quality selects a world population of at most
+512/1024/2048 cosmetic cars (twice as many planes), including those fading out, independently of camera direction
+or zoom. Demand-based range shares, distance LOD and 2 Hz cached off-screen motion bound updates; hidden planes
+receive no transform uploads and newly revealed actors refresh immediately. Local routes fade out
+by 6 km and major routes by 10 km. No vehicles, lights or collision. The route planner is Rust
+(`native/earthfast/src/traffic.rs`, bundled native 139 on this base); Python marshals shared road rules and height samples. At capacity
+the mod defers whole tiles by file descriptor and retries after ownership releases space, with bounded resync
+for descriptor overflow. [Distant traffic](../docs/DISTANT_TRAFFIC.md) maps the code, limits and lifecycle.
 
 | Message | Notes |
 |---|---|
@@ -125,7 +168,8 @@ as JSON floats (`512.0`). All positions are in the ENU plane of the anchor named
 | `{"type":"hello","protocol":4,"format":3,"serverVersion":"0.4.0","sessionId":"…","farFormat":"cdae"\|"dae","material":"bngEarthFar_v3","nearVisual":"mesh"\|"terrain","attribution":"…","cells":64,"blockSize":512,"horizon":true,"deshadow":"full","colormatch":"s2"}` | `format`: 3 with `--cells 32` (v1.3.1), 4 with `--cells 64`; `cells` (v1.4 M1) only with format 4: the tiles' cells per edge (the mod's crossover fallback error and the exact level of its `exactMiss` metric; 32 without it). `blockSize` (v1.4 M4) only with `--block 512`: the terrain block's samples per edge; the mod configures its lattice, terrain-follow table, layer / flat maps and rebase staleness rule from it before anything else (1024 without it); every `terrain.size` of the session is this size. `horizon` (v1.4 M1h) only with `--horizon`: every `status` then carries `radius`; the mod sets the sky's planet radius to 6371 km and its view distance from the radius. `deshadow` only with `--deshadow lambert|full`: the mode (the mod's settings page shows it; it is server-side only). `colormatch` only with `--colormatch s2`: the same for the colour-seam removal. `farFormat` tells which shape type the tiles are; `material` is the static palette material (tiles without imagery). `nearVisual`: `mesh` = disable the TerrainBlock's rendering (physics only), the tiles draw all the ground; `terrain` = v1.2. `attribution`: the credit line for the sources in use (with `--colormatch s2` also the S2 reference layers when the chain lacks them), e.g. "Imagery: USGS The National Map (public domain); EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2023), CC BY-NC-SA 4.0; EOxCloudless https://cloudless.eox.at by EOX IT Services GmbH (Contains modified Copernicus Sentinel data 2016 & 2017), CC BY 4.0; Weather data by Open-Meteo.com; Elevation: Mapterhorn (see mapterhorn.com/attribution), AWS Terrain Tiles / Mapzen". |
 | `{"type":"status","text":"…","backlog":n,"radius":m}` | Progress text, and protocol/format mismatch warnings; while the network is degraded or `--offline`, the text ends in " \| Degraded: …" / " \| Offline - using cached data" (see "Network"; re-sent when that changes). `backlog` (v1.4 M0): desired far tiles of the current anchor not shown yet; with `--status-interval S` the last status is re-sent every S s while it changes. `radius` (v1.4 M1h, `--horizon` only): the far-field radius in m (80 km to 1500 km); the last status is re-sent when it moves by more than 2 %. The mod sets `LevelInfo.visibleDistance` = max(100 km, 1.1 × radius), with 10 % hysteresis. |
 | `{"type":"anchor_ready","requestId":N,"anchorId":A,"lat":d,"lon":d,"groundZ":m,"terrain":{"cx","cy","heightmap","size":1024,"squareSize":2.0,"zBase","maxHeight","q"}}` | `size`: 1024, or 512 with `--block 512` (`hello.blockSize`). `groundZ` = terrain height at (0, 0) of the new frame (bilinear on the quantised grid, i.e. what the game will report), or `null` if (0, 0) is outside the block. `q` = height quantum, `maxHeight = q·65536`, `zBase` a multiple of 64 m (so of `q`). No `anchorKey` yet (lattice anchors are phase 5). With `--gas-stations on`, `fuelShapes`: the shapes the anchor's region's gas stations use (`gasstations.style_shapes`), which the mod preloads (only that region's). |
-| `{"type":"anchor_error","requestId":N,"error":"…"}` | |
+| `{"type":"anchor_progress","requestId":N,"stage":"terrain","elapsed":s}` | Additive protocol-4 heartbeat while preparing an anchor (every 2 seconds, plus an initial message). Stages: `preparing`, `land_cover`, `terrain`, `finalizing`; elapsed monotonic seconds since this request began. It stops at completion/cancellation. Older mods ignore it; newer mods also accept servers without it. This reports activity, not a completion percentage. |
+| `{"type":"anchor_error","requestId":N,"error":"…","stage":"terrain"}` | Setup, terrain and finalization failures produce a terminal reply. `stage` is optional (absent for input validation errors and older servers). |
 | `{"type":"terrain_ready","requestId":N,"anchorId":A,"cx","cy","heightmap","size":1024,"squareSize":2.0,"zBase","maxHeight","q"}` | Same terrain fields as in `anchor_ready`. With `--surface on` the terrain (here and in `anchor_ready.terrain`) also carries `layers` (one mask VFS path per material) and `materials` (`[[TerrainMaterial name, ground model], ...]`, same order; the last is the level's dirt). |
 | `{"type":"terrain_error","requestId":N,"anchorId":A,"error":"…"}` | Unknown anchor, bad fields or a DEM failure (so a request never hangs). |
 | `{"type":"far_tile","anchorId":A,"key":"L_i_j","level":L,"shape":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.cdae","pos":[x,y,z],"err":m,"skirt":m,"sink":m,"state":"group","material":"bngEarthSat_<A>_<key>","texture":"/temp/beamngEarth/<sid>/far_<A>_<L_i_j>.dds","detail":true,"tex":256}` | A tile to **load hidden**; it becomes visible only through a `far_swap`. `level` −2…9 (−2, −1 in mesh mode only; up to 10 with `--horizon`); footprint `[pos.x, pos.x + 256·2^level]²`. `pos` = SW corner, z = rounded mean height (an integer, so L-2 vertex heights stay exact multiples of `q`). `err` = max deviation of the tile from a 2× finer DEM reference (m). `skirt` = its skirt depth, `max(2, 0.02·S, 2.5·err + 1)`. `sink` (**L0 in terrain mode only**) = how far to lower the tile so it lies ≥ 0.3 m under the terrain block everywhere (measured against the block's own 2 m Q-rounded lattice). `state` is always `"group"` (`"prefetch"` is phase 4). Keys never depend on the terrain block. **Imagery** (all three or none): `material` = the material name written into the shape (create a Material with `mapTo` = it and `colorMap` = `texture` before the tile; the key's `-` signs are written `m`, e.g. `bngEarthSat_3_m2_10_m4`); `texture` = DDS DXT1 with a full mip chain next to the shape, row 0 = the tile's north edge; `detail` = the shape has UV1 (world-locked detail coordinates, one unit per `DETAIL_M` = 2 m). Without them the shape references the static `bngEarthFar_v3` palette material. `tex` (v1.4 M1, format 4 only, with the material) = the texture's edge in px: the mod's governor unit kind (`cdaeTex128/256/512`). |
@@ -146,6 +190,22 @@ first (the mod's cover and commit gating need them), then tiles of groups that a
 sent, then the rest, nearest first (in mesh mode there is no block class: the L-2 tiles around the
 player come first by distance). The imagery of the next 12 queued tiles is fetched ahead of their
 build.
+
+## Wind turbine geotiles
+
+The client's optional `hello.turbineGeo: 1` enables mapped turbine landmarks independently of the road/building
+capabilities. The server answers `turbineGeo: 1`, then uses the existing vegetation tile tracker on a zoom-15 grid:
+4 km send, 5 km drop, at most two builds in flight. `turbines_tile` carries `{anchorId,key,path,n,frame:[lat,lon],pivot}`;
+`turbines_drop` carries `{anchorId,key}`. The file contains `{sid,key,frame,pivot,turbines:[...]}`. Every turbine
+record preserves `osm:<node|way>:<id>`, lat/lon, XYZ, yaw, uniform scale, dimension basis, and `collide:false`.
+The mod rejects a different server session, maps source-frame records into its current anchor, and retains them
+across rebases. Nearby road records share these identities, provide graded height/collision, and take placement
+priority; the last owner removes the two stock parts. Models use native LOD/ambient animation. Empty cells do no
+DEM sampling. `windturbines.py` reads the bundled, fingerprinted worldwide index; there is no runtime OSM query.
+
+The global index and provenance are rebuilt by `tools/build_windturbines.py --download`, then the resulting
+SHA256 must replace `windturbines.INDEX_SHA256` so source-fingerprinted revisit entries are invalidated normally.
+See [global turbine report](../docs/research/2026-11-01-wind-turbine-global.md) for source and validation details.
 
 ## Terrain block (§1, §12 P1)
 
@@ -671,6 +731,39 @@ Steam Deck's memory), and the ground's three painters use them: the ground model
 photo (`photo_pads`, the paved roads' colour, under the roads) and the near tiles' asphalt mask (`road_mask`). Only
 with `--gas-stations on` (`Surface.gas_pads`, set by `Server` and `blockworker.init`).
 
+### EV chargers (`server/evchargers.py`; the user, 2026-10-29: "real life ev stations mapped like the gas stations are but using beam assets to have real recharging in the game")
+
+Every charger near the road tile, from Overture's places (`basic_category` / `taxonomy` `ev_charging_station`, and a
+gas listing named as a charger: Shell Recharge, BP Pulse) and OpenStreetMap's `amenity=charging_station` (`osmfuel.py`
+reads it in the same pass as the fuel stations: same columns, no more requests; cells under `osmfuel_cells/v2`). Records
+within 60 m are one site. A known fast network (Tesla, Electrify America, Ionity, EVgo, Fastned ...) or two records is a
+big site: a row of 4-8 chargers (Tesla's 8) along the nearest parking aisle within 30 m, each facing a 5.5 m stall;
+anything else gets 2 at its position facing the nearest road. A row is shortened to fit clear of buildings and roads;
+a charger with no clear spot (in a parking garage) is skipped. A charger within 60 m of a laid-out station stands off
+its forecourt's edge. One plain asphalt pad per site (the gas stations' pad store), no markings. Models: West Coast's
+2020 / 2022 units, East Coast's in the US East, Italy's in Europe (docs/research/2026-10-29-ev-chargers.md). The
+records go with the station records (`fuel`), with `"energy": ["electricEnergy"]`: the mod hands that to the stock
+POI (the charge prompt, the bolt icon). They come and go with the gas stations; OSM's with `BNGE_OSM_FUEL`.
+
+### Town signs (`server/townsigns.py`; `BNE_TOWNSIGNS=on`, off by default)
+
+Each country's own town entry and exit signs where a paved road enters a town's built-up land. The towns are
+Overture's divisions (`mapdata` layers `town_areas`, the areas: communes, municipalities, districts; and
+`town_points`, the villages' points), per country the level that is a town there (`VILLAGE_COUNTRIES`,
+`DISTRICT_AREAS` and the tables beside them); their built-up land is the land cover's (`commune_agglomeration`: 40 m
+past the last houses, gaps under 300 m closed). A sign stands where a paved road (no motorway, trunk, link, service
+road or track; no roundabout ring) crosses that edge, the exit sign on the entry sign's back. With it off, neither
+layer is fetched and no tile changes.
+
+A road tile's props carry the signs as rows of groups `townin_<cc>_<hash>` / `townout_<cc>_<hash>` (`<cc>_` only for a
+country with a plate of its own, `PLATES`), and the tile's JSON `"townsigns": {group: {shape, texture, material}}`: each
+face's quad (`.dae`) and texture (`.png`, `face_image`: the country's sign drawn with Pillow, 400 px a metre) written in
+the session's folder (`write_face`). Additive: an older mod ignores it. The mod (`townsigns.lua`) makes each face's
+Material once a session and its `trees.lua` catalog entry before the props; `trees.lua` puts the face (never colliding)
+and the shared body (`sign_town_body[_<cc>].dae`, the posts and the plate's back, `tools/generate_town_signs.py`) at one
+spot, as the speed-limit signs'. A road tile waits for its village points and land cover at most `POINTS_WAIT_S` (45 s)
+once, and is built without signs when they have not come.
+
 ## Airports and runways (`server/airports.py`, `runwaygeom.py`, `runwaymarks.py`; docs/research/2026-10-11-airports.md)
 
 Not used by earthd yet. OurAirports' `airports.csv` / `runways.csv` (public domain) are downloaded through
@@ -703,7 +796,7 @@ determinism, queries, the download / weekly refresh / last-good-copy store behin
 the CLI), the grading on synthetic DEMs (limits, data ends, steep / relaxed / coarse, crossings, no steps,
 footprint, determinism, `heightmap.grid_u` with the graded sampler) and the markings (classes, stripe counts,
 designators, on the pavement, no overlaps, mirrored ends, displaced thresholds, closed runways).
-`test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
+`test_evchargers.py` the EV chargers: their sites from both sources, sizes, layouts, records and pads. `test_gasstations.py` the gas stations: categories and the two brand lists, merged pins and their names, the shop and the canopies (a car wash behind the shop is not one), mapped drive lanes, the layouts and their clearances, the region styles, the road tile's records and dropped canopies across tiles (`BNGE_GAS_REAL=1`: the user's stations near Pittsburgh from the real Overture data). `test_cdae.py` holds the golden `.cdae` tests. `test_heightmap.py` the lattice/quantum identity
 tests. `test_farfield.py` selection, hysteresis, swap groups, err/sink/skirt and the shipped mod
 assets. `test_mesh.py` mesh mode: selection down to L-2 with the min-level radii (no gaps/overlaps on
 64 m cells), the 25 % hysteresis at 150/400 m, L-2 vertices == terrain PNG heights (float64 and the

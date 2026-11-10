@@ -8,7 +8,7 @@
 
 Needs, in the Python that runs it: pyinstaller and the server's packages (server/requirements.txt). The Rust kernels
 (server/earthfast.abi3.so / .pyd) and, on Linux, tools/gcpatch/build/libbngearth_gcpatch.so go in when they exist
-(tools/build_native.py, tools/gcpatch/build.sh); the app runs without them. The AppImage step needs appimagetool
+(tools/build_native.py, tools/gcpatch/build.sh); earthfast is required by the world server. The AppImage step needs appimagetool
 (https://github.com/AppImage/appimagetool); GitHub Actions builds both (.github/workflows/release.yml).
 
 The .exe, against antivirus false positives (VirusTotal, 2026-10-17: 2/60 on 1.4.35, Bkav Pro and SecureAge's
@@ -151,10 +151,18 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--hidden-import", "truststore",     # Windows: the native certificate store (netfetch.windows_ssl_context, PR #371)
            "--add-data", f"{os.path.join(ROOT, 'mod', 'beamng_earth')}{SEP}mod/beamng_earth",
            "--add-data", f"{os.path.join(ROOT, 'VERSION')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'LICENSE')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'CREDITS.md')}{SEP}.",
+           "--add-data", f"{os.path.join(ROOT, 'docs', 'SHARED_WORLD.md')}{SEP}docs",
+           "--add-data", f"{os.path.join(ROOT, 'docs', 'RELAUNCH_TROUBLESHOOTING.md')}{SEP}docs",
+           "--add-data", f"{os.path.join(ROOT, 'docs', 'STABILITY_VALIDATION.md')}{SEP}docs",
            "--add-data", f"{os.path.join(server, 'bridges_us.npz')}{SEP}.",     # (bridgetypes.DB_PATH: beside the modules)
            "--add-data", f"{os.path.join(server, 'bridges_wd.npz')}{SEP}.",     # (bridgetypes.WD_PATH)
            "--add-data", f"{os.path.join(server, 'koppen_1991_2020_0p1.png')}{SEP}.",  # (climate.PATH)
            "--add-data", f"{os.path.join(server, 'oil_wells.npz')}{SEP}.",  # (oilwells.PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbine_phase1.json')}{SEP}.",  # (windturbines.DATA_PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbines.npz')}{SEP}.",  # (windturbines.INDEX_PATH)
+           "--add-data", f"{os.path.join(server, 'wind_turbines.provenance.json')}{SEP}.",
            "--add-data", f"{os.path.join(server, 'refineries.npz')}{SEP}.",  # (industry.PATH)
            # (overture.BUNDLED: the pinned release's STAC index, tools/build_stac_index.py)
            "--add-data", f"{os.path.join(server, 'overture_stac_' + _overture_release() + '.json.gz')}{SEP}.",
@@ -164,13 +172,23 @@ def pyinstaller(work, ico, onefile, ver=None, boot=None):
            "--add-data", f"{os.path.join(server, 'usgs3dep_index.json.gz')}{SEP}.",     # (roadz.LIDAR_INDEX_PATH)
            # the highway signs' lettering metrics and US state outlines (exitsigns.GLYPHS, signstates.DATA)
            "--add-data", f"{os.path.join(server, 'sign_glyphs.json')}{SEP}.",
-           "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}."]
+           "--add-data", f"{os.path.join(server, 'sign_states.geojson')}{SEP}.",
+           # server/data/ (billboardsource.PATH: the mapped billboards; missing from 1.8.0's exe, a warning per worker)
+           "--add-data", f"{os.path.join(server, 'data')}{SEP}data",
+           "--add-data", f"{os.path.join(server, 'mile_markers_us.json')}{SEP}.",
+           "--add-data", f"{os.path.join(server, 'ky_interstate_medians.json')}{SEP}."]
     # the sources' fingerprint (peerwork.code_id: compute-sharing helpers build only for the same code)
     sys.path.insert(0, server)
     import peerwork
     with open(os.path.join(work, "CODE_ID"), "w", encoding="ascii") as f:
         f.write(peerwork.source_id(server))
     cmd += ["--add-data", f"{os.path.join(work, 'CODE_ID')}{SEP}."]
+    # (the revisit cache's own fingerprint: only the modules its items are made with, revisit.source_id; an update of
+    # the rest keeps every place's cache)
+    import revisit
+    with open(os.path.join(work, "REVISIT_ID"), "w", encoding="ascii") as f:
+        f.write(revisit.source_id(server))
+    cmd += ["--add-data", f"{os.path.join(work, 'REVISIT_ID')}{SEP}."]
     cmd += ["--onefile"] if onefile else ["--onedir"]
     if IS_WIN:
         vf, mf = version_files(work, ver)
@@ -193,10 +211,11 @@ def appimage(dist, png, out, tool):
     appdir = os.path.join(os.path.dirname(dist), "AppDir")
     shutil.rmtree(appdir, ignore_errors=True)
     shutil.copytree(os.path.join(dist, NAME), os.path.join(appdir, "usr", "lib", NAME), symlinks=True)
-    with open(os.path.join(appdir, "AppRun"), "w") as f:
-        f.write('#!/bin/sh\nHERE="$(dirname "$(readlink -f "$0")")"\n'
-                f'exec "$HERE/usr/lib/{NAME}/{NAME}" "$@"\n')
-    os.chmod(os.path.join(appdir, "AppRun"), 0o755)
+    # AppRun is the app itself (a link), not a shell script: an older copy hands over to this file (launcher.hand_over)
+    # with its own bundle's LD_LIBRARY_PATH, and /bin/sh (bash on Arch, CachyOS, SteamOS) died under that bundle's
+    # libreadline ("symbol lookup error: rl_trim_arg_from_keyseq"), so every update from 1.8.1 .. 1.8.2-beta.dev.226
+    # fell back to the old copy (2026-11-07). The PyInstaller bootloader needs only libc, libdl, libz and libpthread.
+    os.symlink(os.path.join("usr", "lib", NAME, NAME), os.path.join(appdir, "AppRun"))
     with open(os.path.join(appdir, "beamng-earth.desktop"), "w") as f:
         f.write(f"[Desktop Entry]\nType=Application\nName={NAME}\nComment=Drive the real world in BeamNG.drive\n"
                 "Exec=BeamNG.Earth\nIcon=beamng-earth\nCategories=Game;\nTerminal=false\n")

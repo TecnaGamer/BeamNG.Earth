@@ -54,10 +54,52 @@ def save_app_settings(dd=None, **kw):
         json.dump(d, f, indent=2)
 
 
+def drive_relative(path):
+    """Is path a Windows drive-relative path ("c:games\\x", "c:games"): a drive letter with no separator after it?
+    That is what c:\\games\\beamng-cache becomes when a shell drops its backslashes (Git Bash, MSYS, unquoted), and
+    Windows takes it as relative to that drive's current folder: GitHub #895, the cache went to the home folder."""
+    p = (path or "").strip().strip('"').strip("'").strip()
+    return len(p) >= 2 and p[0].isalpha() and p[1] == ":" and (len(p) == 2 or p[2] not in "\\/")
+
+
+def drive_relative_problem(path):
+    """The player's message for a drive_relative path, or None."""
+    if not drive_relative(path):
+        return None
+    p = (path or "").strip().strip('"').strip("'").strip()
+    return (f"{p} has no \\ or / after the drive letter, so Windows would put it in the current folder (were the "
+            f"backslashes removed by the terminal?). Write it with / (e.g. {p[:2]}/games/beamng-cache) or in quotes")
+
+
 def clean(path):
     """A path as typed or pasted: quotes and spaces around it gone, ~ and variables expanded, absolute."""
     path = (path or "").strip().strip('"').strip("'").strip()
     return os.path.abspath(os.path.expandvars(os.path.expanduser(path))) if path else ""
+
+
+# --- the game's user folder, as the game itself reported it -----------------------------------------
+
+def saved_user_dir(dd=None):
+    """The BeamNG user folder (its version folder, "current") the game said it uses (the mod's hello userPath, saved by
+    the world server when it differed from the one it was given), or None."""
+    p = app_settings(dd).get("gameUserDir")
+    return p if isinstance(p, str) and p and os.path.isdir(p) else None
+
+
+def set_user_dir(path, dd=None):
+    save_app_settings(dd, gameUserDir=os.path.normpath(path) if path else None)
+
+
+def same_dir(a, b):
+    """Two folder paths naming the same folder (case and separators on Windows; links resolved)."""
+    if not a or not b:
+        return False
+    try:
+        if os.path.exists(a) and os.path.exists(b):
+            return os.path.samefile(a, b)
+    except OSError:
+        pass
+    return os.path.normcase(os.path.normpath(a)) == os.path.normcase(os.path.normpath(b))
 
 
 # --- the download cache ---------------------------------------------------------------------------
@@ -74,6 +116,9 @@ def set_cache_dir(path, dd=None):
     if (path or "").strip().strip('"').lower() in ("", "default"):
         save_app_settings(dd, cacheDir=None)
         return None, None
+    bad = drive_relative_problem(path)
+    if bad:
+        return None, bad
     path = clean(path)
     try:
         os.makedirs(path, exist_ok=True)

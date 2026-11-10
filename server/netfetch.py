@@ -40,6 +40,8 @@ One User-Agent for the whole project (USER_AGENT): the app, its version and the 
 user name, e-mail, machine name, location or session id is ever sent.
 """
 import collections
+import ioprofiler
+import netstate
 import email.utils
 import http.client
 import json
@@ -48,10 +50,14 @@ import os
 import random
 import ssl
 import threading
+import weakref
 import time
 from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+import base64
+import errno
+import urllib.request
 from urllib.parse import urlsplit
 
 log = logging.getLogger("earthd.net")
@@ -78,6 +84,10 @@ DAY = 86400.0
 TOKEN_EPS = 1e-4                # a token short by rounding (clock resolution) counts as a token
 OFFLINE_TEXT = "Offline - using cached data"
 
+# testing a slow connection (a player's large downloads ran at ~1 MB/s each, 2026-11-04): every response takes at least
+# its size at this many MB/s, plus BNGE_NET_LATENCY_MS, while it holds its connection slot. Off without the variable.
+TEST_MBPS = float(os.environ.get("BNGE_NET_MBPS") or 0)
+TEST_LATENCY_S = float(os.environ.get("BNGE_NET_LATENCY_MS") or 0) / 1000.0
 NETLOG = os.environ.get("BNGE_NETLOG")      # debugging: every network request, one line each, from every process
 
 
@@ -135,7 +145,9 @@ POLICIES = {
     # (2026-10-16, the user: raise them, lower again on trouble; a first visit's far field waited ~100 s on 15/s)
     # (2026-10-23, the user: raise it again: 24 at once; a PC already got ~26/s with 12 and the same far field with 24,
     # all answered, so it helps players far from USGS, whose every request waits longer)
-    "basemap.nationalmap.gov": HostPolicy(rate=50.0, burst=150.0, max_conc=24, daily_budget=150000,
+    # (2026-11-07, the user: "i think its safe to increase USGS": 100/s, 32 at once; behind CloudFront, telemetry over
+    # ~500 players showed no 429 and 0.1 % errors at 50/s, and the 3D map's fresh views waited on ~1,350 deferred)
+    "basemap.nationalmap.gov": HostPolicy(rate=100.0, burst=300.0, max_conc=32, daily_budget=150000,
                                           allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # NAIP through USGS's ArcGIS exportImage (imagery.py "naip"): one 1024² image a request, 4-10 s each
     # and 5xx under parallel requests (docs/research/2026-10-10-us-state-imagery.md, in-game 2026-10-13):
@@ -161,7 +173,9 @@ POLICIES = {
                                     breaker_threshold=6, breaker_window=120.0),
     # (20/s, 12 at once: the user's OK 2026-10-30; at 10/s a first visit's far field outside the US took ~4 min, 761
     # tiles in 241 s at Canterbury; s2maps-tiles.eu, EOX's other domain, refuses us: no mirror)
-    "tiles.maps.eox.at": HostPolicy(rate=20.0, burst=80.0, max_conc=12, daily_budget=30000,
+    # (40/s, 24 at once, 80,000 a day: the user, 2026-11-07, "i think we could increase our own limit if needed": the 3D
+    # map's first views waited on 4,648 deferred EOX requests and used 23,258 of the 30,000 by mid-morning)
+    "tiles.maps.eox.at": HostPolicy(rate=40.0, burst=160.0, max_conc=24, daily_budget=80000,
                                     allow_prefetch=True, offline_ok=True, miss_ttl=90 * DAY, **TILE_HOST),
     # (a tile not in Cloudflare's edge cache takes ~1 s before its first byte: requests in flight set the rate)
     "tiles.mapterhorn.com": HostPolicy(rate=50.0, burst=200.0, max_conc=32, daily_budget=80000,
@@ -173,6 +187,10 @@ POLICIES = {
     "tecnagamer.github.io": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=2000, allow_prefetch=True,
                                        offline_ok=True, miss_ttl=7 * DAY, timeout=20.0, max_attempts=2,
                                        base_delay=2.0, breaker_threshold=6, breaker_window=120.0, optional=True),
+    # the clouds seen from space (spaceclouds.py: NASA GIBS's latest VIIRS true-colour day, up to 144 small tiles when a
+    # camera rises above the clouds; public domain, no key)
+    "gibs.earthdata.nasa.gov": HostPolicy(rate=8.0, burst=40.0, max_conc=6, daily_budget=6000, cache_ttl=3 * 3600.0,
+                                          miss_ttl=3600.0, timeout=20.0, max_attempts=2, optional=True, **TILE_HOST),
     # 20 variables a request = 2 Open-Meteo calls: 500 requests = 1,000 calls a day, hard
     "api.open-meteo.com": HostPolicy(rate=0.1, burst=2.0, max_conc=1, daily_budget=500, daily_hard=500,
                                      cache_ttl=900.0, miss_ttl=None, max_wait=15.0, timeout=10.0, optional=True),
@@ -210,6 +228,16 @@ POLICIES = {
     # debounced and cached; a modest rate, a daily cap (fair use of a free public service)
     "photon.komoot.io": HostPolicy(rate=2.0, burst=4.0, max_conc=1, daily_budget=2000, daily_hard=3000,
                                    cache_ttl=7 * DAY, miss_ttl=None, max_wait=5.0, timeout=12.0, max_attempts=1, optional=True),
+    # Nominatim (OpenStreetMap's own geocoder; geocode.py): streets and house numbers when the player presses Enter.
+    # Its usage policy: one request a second at most, no autocomplete, a User-Agent that names the app
+    "nominatim.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=300, daily_hard=500,
+                                              cache_ttl=7 * DAY, miss_ttl=None, max_wait=2.5, timeout=8.0,
+                                              max_attempts=1, optional=True),
+    # Wikidata and Wikipedia (geocode.py): landmarks as you type, debounced by the map; a modest rate and a User-Agent
+    # that names the app, as their API etiquette asks (the Wikipedias: WIKIPEDIA_LANGS below)
+    "www.wikidata.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                   cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0, max_attempts=1,
+                                   optional=True),
     # OSRM on OpenStreetMap by FOSSGIS (routing.py): one request per GPS destination or re-route; their fair use:
     # ~1 request a second at most, no bulk
     "routing.openstreetmap.de": HostPolicy(rate=0.5, burst=2.0, max_conc=1, daily_budget=300, daily_hard=500,
@@ -250,6 +278,12 @@ POLICIES = {
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
     "build.protomaps.com": HostPolicy(denied=True, daily_hard=0),
 }
+# The Wikipedias the map's search asks (geocode.wiki_langs): by the player's country and the computer's language
+WIKIPEDIA_LANGS = ("en", "de", "fr", "it", "es", "pt", "nl", "pl", "cs", "sk", "sv", "no", "da", "fi", "hu", "ro", "el",
+                   "tr", "ru", "uk", "ja", "ko", "zh", "hr", "sl", "bg", "sr")
+POLICIES.update({f"{lang}.wikipedia.org": HostPolicy(rate=4.0, burst=8.0, max_conc=2, daily_budget=3000, daily_hard=5000,
+                                                     cache_ttl=7 * DAY, miss_ttl=None, max_wait=3.0, timeout=6.0,
+                                                     max_attempts=1, optional=True) for lang in WIKIPEDIA_LANGS})
 # Any other host: the conservative WMS-type row of §5.2 (2/s, 2 at once, no prefetch).
 # Regional orthophoto services (imagery_regional.py): tile caches at a modest shared rate, exports one at a time.
 # Optional: the global imagery stands in while one is down (Lower Saxony's WMS answered a maintenance page for hours,
@@ -273,6 +307,15 @@ def _regional_policies():
 
 
 POLICIES.update(_regional_policies())
+# The project's own tile host (cdn.py, imagery "bngs2": Cloudflare R2 behind its CDN; tile packs, ~64 tiles a request)
+_CDN_HOST = os.environ.get("BNGE_CDN_BASE", "https://tiles.tgforever.net").split("://", 1)[-1].split("/", 1)[0]
+POLICIES[_CDN_HOST] = HostPolicy(rate=50.0, burst=200.0, max_conc=16, daily_budget=60000, allow_prefetch=True,
+                                 offline_ok=True, miss_ttl=30 * DAY, **TILE_HOST)
+# IGN's Géoplateforme (France's photos, WMTS; roadz's WFS on the same host): its tile service is outside the per-IP
+# rate limits and the WFS allows 30 requests/s (cartes.gouv.fr "Limites d'usage", 2026-11-07). The 6/s of the regional
+# tile hosts made a fresh French place load ~3 far tiles/s (Paris on the 3D map: 198 s, 2026-11-07)
+POLICIES["data.geopf.fr"] = replace(POLICIES["data.geopf.fr"], rate=25.0, burst=50.0, max_conc=12,
+                                    daily_budget=100000)
 DEFAULT_POLICY = HostPolicy()
 
 # What each source gives the world, and what the player gets while it does not answer (the user, 2026-10-27: "in case
@@ -280,6 +323,7 @@ DEFAULT_POLICY = HostPolicy()
 # status line (Server.net_note); SOURCES.md says more about each.
 ROLES = {
     "basemap.nationalmap.gov": "US aerial photos; coarser satellite photos meanwhile",
+    _CDN_HOST: "satellite photos of the distant land (the project's own tile host); the other photo sources meanwhile",
     "imagery.nationalmap.gov": "detailed US aerial photos (NAIP); coarser photos meanwhile",
     "apps.geo.fpac.usda.gov": "detailed US aerial photos (NAIP, second source); coarser photos meanwhile",
     "mdgeodata.md.gov": "Maryland's 6-inch aerial photos; coarser photos meanwhile",
@@ -304,15 +348,21 @@ ROLES = {
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",
+    "gibs.earthdata.nasa.gov": "the clouds seen from space; a clear sky from orbit meanwhile",
     "api.open-meteo.com": "live weather; the weather stays as it is meanwhile",
     "downloads.sourceforge.net": "the gravity model; standard gravity meanwhile",
-    "photon.komoot.io": "the map's address search",
+    "photon.komoot.io": "the map's address search (the other search sources stand in)",
+    "nominatim.openstreetmap.org": "street and address search on Enter",
+    "www.wikidata.org": "landmarks in the map's search",
     "routing.openstreetmap.de": "GPS routes",
     "earth.tgforever.net": "the BeamNG.Earth server list in BeamMP",
     "raw.githubusercontent.com": "the update check",
     "api.github.com": "one-click updates",
     "github.com": "one-click updates",
 }
+
+
+ROLES.update({f"{lang}.wikipedia.org": "landmarks in the map's search" for lang in WIKIPEDIA_LANGS})
 
 
 def role_of(host):
@@ -617,32 +667,162 @@ def windows_ssl_context():
 
 class HttpsTransport:
     """GET over one persistent HTTP(S) connection per thread and host (a fresh TLS handshake per tile
-    roughly doubled the latency). No redirects are followed."""
+    roughly doubled the latency). No redirects are followed. Honours HTTP_PROXY / HTTPS_PROXY / NO_PROXY
+    (and urllib.request.getproxies() as a fallback) so users behind a corporate proxy can reach the
+    data sources; SOCKS proxies are not supported (PySocks is not a dependency)."""
 
     def __init__(self):
         self._local = threading.local()
         self._tls_context = windows_ssl_context()
 
+    # --- proxy helpers ---------------------------------------------------------------
+    SYSTEM_PROXIES_S = 60.0     # the system's proxy settings (getproxies: the registry on Windows) read at most this often
+
+    _system = {"fn": None, "at": float("-inf"), "val": {}}
+
+    @classmethod
+    def _system_proxies(cls):
+        """urllib.request.getproxies(), kept SYSTEM_PROXIES_S: it was read up to three times per request (on Windows
+        from the registry), every tile's download (2026-11-02). A different getproxies (a test's mock) is read anew."""
+        fn, now, got = urllib.request.getproxies, time.monotonic(), cls._system
+        if got["fn"] is not fn or now - got["at"] > cls.SYSTEM_PROXIES_S:
+            try:
+                val = fn() or {}
+            except Exception:
+                val = {}
+            got.update(fn=fn, at=now, val=val)
+        return got["val"]
+
+    @classmethod
+    def _resolve_proxy(cls, scheme, host):
+        """Return (proxy_host, proxy_port, proxy_user, proxy_pass) or None when no proxy applies."""
+        # NO_PROXY / no_proxy: comma-separated list of hosts (or suffixes) to bypass.
+        no_proxy = os.environ.get("NO_PROXY") or os.environ.get("no_proxy") or ""
+        if not no_proxy:
+            no_proxy = cls._system_proxies().get("no", "") or ""
+        for entry in (e.strip() for e in no_proxy.split(",") if e.strip()):
+            if entry == "*" or host == entry or host.endswith("." + entry):
+                return None
+        # env first (higher priority), then urllib's view of the system proxy
+        for var in ("HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"):
+            val = os.environ.get(var)
+            if val:
+                break
+        else:
+            sysp = cls._system_proxies()
+            val = sysp.get(scheme) or sysp.get("all")
+        if not val:
+            log.debug("net: no proxy for %s (no env var / system proxy)", host)
+            return None
+        val = val.strip()
+        if "://" in val:
+            val = val.split("://", 1)[1]
+        user = passw = None
+        if "@" in val:
+            creds, val = val.rsplit("@", 1)
+            if ":" in creds:
+                user, passw = creds.split(":", 1)
+            else:
+                user = creds
+        if ":" in val:
+            phost, pport = val.rsplit(":", 1)
+            try:
+                pport = int(pport)
+            except ValueError:
+                phost, pport = val, (443 if scheme == "https" else 80)
+        else:
+            phost, pport = val, (443 if scheme == "https" else 80)
+        if phost.lower().startswith("socks"):
+            log.warning("net: SOCKS proxies are not supported; ignoring %s", val)
+            return None
+        log.debug("net: proxy resolved for %s: %s:%d (user=%s)", host, phost, pport, user or "-")
+        return phost, pport, user, passw
+
     def request(self, url, headers, timeout):
-        """(status, {lower-case header: value}, body)."""
+        """(status, {lower-case header: value}, body). A public S3 source on an IPv6-only network (GitHub #763: its
+        hosts have no AAAA record) goes to the bucket's dual-stack endpoint (PR #808), but only once an IPv4 connection
+        to it found no route (_no_route), and from then on for this run: Python's http.client has no Happy Eyeballs, so
+        on the many networks where IPv6 is set up but broken, dual-stack hosts first would wait out every new
+        connection's IPv6 attempt. Source URLs stay the cache, quota and NO_PROXY identities; proxied requests are left
+        to the proxy."""
+        u = urlsplit(url)
+        proxy = self._resolve_proxy(u.scheme, u.hostname or "")
+        host = (u.hostname or "").lower()
+        auth = any(k.lower() == "authorization" for k in headers)
+        if proxy is None and host in _DUALSTACK_HOSTS:
+            dual = _dualstack(url, auth)
+            if dual != url:
+                return self._request_once(dual, headers, timeout, proxy)
+        try:
+            return self._request_once(url, headers, timeout, proxy)
+        except OSError as e:
+            if proxy is not None or not _no_route(e):
+                raise
+            dual = _dualstack(url, auth)
+            if dual == url:
+                raise
+            got = self._request_once(dual, headers, timeout, proxy)
+            if host not in _DUALSTACK_HOSTS:
+                _DUALSTACK_HOSTS.add(host)
+                log.info("net: %s has no IPv4 route here: its dual-stack endpoint from now on (%s)", host,
+                         urlsplit(dual).hostname)
+            return got
+
+    def _request_once(self, url, headers, timeout, proxy):
+        """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
         conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
-        key = (u.scheme, u.netloc)
+        if proxy is None:
+            key = (u.scheme, u.netloc, None)
+        else:
+            log.debug("net: %s -> proxy %s:%d", url, proxy[0], proxy[1])
+            key = (u.scheme, u.netloc, proxy[0], proxy[1])
         while True:
             conn = conns.get(key)
             reused = conn is not None
             if conn is None:
-                if u.scheme == "https":
+                if proxy is not None and u.scheme == "https":
+                    phost, pport, puser, ppass = proxy
                     kwargs = {"timeout": timeout}
                     if self._tls_context is not None:
                         kwargs["context"] = self._tls_context
-                    conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    conn = http.client.HTTPSConnection(phost, pport, **kwargs)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn.set_tunnel(u.hostname, u.port or 443,
+                                       headers={"Proxy-Authorization": f"Basic {creds}"})
+                    else:
+                        conn.set_tunnel(u.hostname, u.port or 443)
+                    conn = conns[key] = conn
+                elif proxy is not None:
+                    phost, pport, puser, ppass = proxy
+                    conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
+                    if puser is not None:
+                        creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
+                        conn._proxy_auth = f"Basic {creds}"
+                    conn = conns[key] = conn
                 else:
-                    conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                    if u.scheme == "https":
+                        kwargs = {"timeout": timeout}
+                        if self._tls_context is not None:
+                            kwargs["context"] = self._tls_context
+                        conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                    else:
+                        conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
             try:
-                conn.request("GET", path, headers=dict(headers, Connection="keep-alive"))
+                req_headers = dict(headers, Connection="keep-alive")
+                if proxy is not None and u.scheme == "http":
+                    phost, pport, puser, ppass = proxy
+                    if getattr(conn, "_proxy_auth", None):
+                        req_headers["Proxy-Authorization"] = conn._proxy_auth
+                    # absolute URL for the proxy
+                    full_url = url
+                    conn.request("GET", full_url, headers=req_headers)
+                else:
+                    conn.request("GET", path, headers=req_headers)
                 r = conn.getresponse()
+                ioprofiler.headers_received()
                 body = r.read()
                 return r.status, {k.lower(): v for k, v in r.getheaders()}, body
             except (http.client.HTTPException, OSError):
@@ -651,6 +831,27 @@ class HttpsTransport:
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
                     raise               # Fetcher retries through the bucket, with backoff)
                 # else: the server may have closed the idle keep-alive connection; reconnect once
+
+
+# IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
+# their dual-stack endpoints since (transport request)
+_DUALSTACK_HOSTS = set()
+# errno / WinError of a connection with no route to the address (an IPv6-only network, no NAT64): ENETUNREACH,
+# EHOSTUNREACH, EADDRNOTAVAIL; WSAENETUNREACH 10051, WSAEHOSTUNREACH 10065, WSAEADDRNOTAVAIL 10049
+_NO_ROUTE = {errno.ENETUNREACH, errno.EHOSTUNREACH, errno.EADDRNOTAVAIL, 10051, 10065, 10049}
+
+
+def _no_route(e):
+    """Is OSError e a connection that found no route to the host's (IPv4) address?"""
+    return getattr(e, "winerror", None) in _NO_ROUTE or getattr(e, "errno", None) in _NO_ROUTE
+
+
+def _dualstack(url, authorized):
+    """The bucket's dual-stack endpoint URL for a known public S3 source (native earthfast s3_dualstack_url), else
+    url."""
+    import fast
+    fast.require(153, "S3 dual-stack endpoints")
+    return fast._ef.s3_dualstack_url(url, bool(authorized))
 
 
 # --- download speed ---------------------------------------------------------------------------
@@ -676,10 +877,64 @@ class Host:
         self.breaker = CircuitBreaker(policy.breaker_threshold, policy.breaker_window, policy.breaker_open,
                                       policy.breaker_max, clock)
         self.day = dict.fromkeys(COUNTERS, 0)       # this UTC day (persisted)
+        self.total = dict.fromkeys(COUNTERS, 0)     # this process's lifetime (telemetry.py sums every process's)
         self.minute = dict.fromkeys(COUNTERS, 0)    # since the last summary
         self.warned = 0.0                           # wall time of the 80 % budget warning (0 = none)
         self.warned_over = 0.0                      # ... and of the last over-budget one
         self.half_rate = False
+
+
+# --- every process's totals, for telemetry.py -------------------------------------------------------------------------
+# BNE_NETSTATS_PROC (earthd sets it before its worker processes start, so they inherit it): a folder where every process
+# writes its fetchers' lifetime per-host counters (<pid>.json, at most every PROC_WRITE_S, and at exit); the main
+# process's telemetry sums what changed. The worker processes' fetchers keep no stats_dir of their own.
+_PROC_DIR = os.environ.get("BNE_NETSTATS_PROC") or None
+PROC_WRITE_S = 30.0
+_ALL = weakref.WeakSet()            # this process's fetchers
+_proc_state = {"at": 0.0, "lock": threading.Lock(), "exit": False}
+
+
+def process_totals():
+    """{host: {counter: n}} of every fetcher of this process, over its lifetime."""
+    out = {}
+    for f in list(_ALL):
+        with f._lock:
+            for name, h in f._hosts.items():
+                d = out.setdefault(name, dict.fromkeys(COUNTERS, 0))
+                for k, v in h.total.items():
+                    d[k] += v
+    return out
+
+
+def write_process_totals():
+    """This process's totals to <BNE_NETSTATS_PROC>/<pid>.json (atomic)."""
+    if not _PROC_DIR:
+        return
+    try:
+        os.makedirs(_PROC_DIR, exist_ok=True)
+        path = os.path.join(_PROC_DIR, f"{os.getpid()}.json")
+        tmp = path + ".tmp"
+        with open(tmp, "w") as fh:
+            json.dump({"pid": os.getpid(), "at": time.time(), "hosts": process_totals()}, fh)
+        os.replace(tmp, path)
+    except OSError as e:
+        log.debug("net: process totals: %s", e)
+
+
+def _proc_writer():
+    st = _proc_state
+    now = time.monotonic()
+    if now - st["at"] < PROC_WRITE_S or not st["lock"].acquire(blocking=False):
+        return
+    try:
+        st["at"] = now
+        if not st["exit"]:
+            import atexit
+            atexit.register(write_process_totals)
+            st["exit"] = True
+        write_process_totals()
+    finally:
+        st["lock"].release()
 
 
 class Fetcher:
@@ -702,6 +957,7 @@ class Fetcher:
         self._flushed = clock()
         self._load_stats()
         self._rates = collections.deque(maxlen=64)     # (clock, MB/s) of the large responses (throughput)
+        _ALL.add(self)
 
     def throughput(self):
         """The median speed (MB/s) the large responses of the last RATE_WINDOW_S came in at, or None (too few)."""
@@ -912,8 +1168,10 @@ class Fetcher:
                 try:
                     self._count(h, "requests")
                     t0 = self.clock()
+                    netstate.begin()        # (the loading line's "downloading" part, across the server's processes)
+                    body = None
                     try:
-                        status, rh, body = self.transport.request(url, hd, p.timeout)
+                        status, rh, body = ioprofiler.request(self.transport, url, hd, p.timeout)
                     except (http.client.HTTPException, OSError) as e:
                         self._count(h, "errors")
                         self._failed(h)
@@ -921,12 +1179,18 @@ class Fetcher:
                         err = FetchFailed(f"{url}: {type(e).__name__}: {e}", url, h.name)
                         continue
                     elapsed = self.clock() - t0
+                    if TEST_MBPS > 0 or TEST_LATENCY_S > 0:       # (testing: a slow connection)
+                        want = TEST_LATENCY_S + (len(body or b"") / (TEST_MBPS * 1e6) if TEST_MBPS > 0 else 0.0)
+                        if want > elapsed:
+                            time.sleep(want - elapsed)
+                            elapsed = want
                     if body and len(body) >= RATE_MIN_BYTES and elapsed > 0:
                         with self._lock:
                             self._rates.append((t0 + elapsed, len(body) / elapsed / 1e6))
                     if NETLOG:
                         _netlog(url, hd, status, body)
                 finally:
+                    netstate.end(len(body) if body else 0)
                     sem.release()
                 res = self._classify(h, url, status, {k.lower(): v for k, v in (rh or {}).items()}, body, elapsed)
                 probe = False               # the breaker has its verdict
@@ -959,6 +1223,9 @@ class Fetcher:
             else:
                 self._succeeded(h)
             return Response(status, body, rh, elapsed)
+        if status == 304:                   # "not modified": the answer to a request with If-None-Match (addons.py's
+            self._succeeded(h)              # GitHub pages); only such a request gets one
+            return Response(status, body or b"", rh, elapsed)
         if status in (404, 410):
             self._count(h, "s404")
             self._succeeded(h)              # the host answered: it is healthy
@@ -991,13 +1258,14 @@ class Fetcher:
         if h.breaker.success():
             log.info("net: %s: circuit closed", h.name)
 
+    @ioprofiler.session_request
     @contextmanager
-    def session(self, url, kind="demand"):
+    def session(self, url, kind="demand", lane=None):
         """For a caller that does its own HTTP (gravity.py's resumable download through urllib, which
         follows SourceForge's mirror redirects): admission, a slot and a token for one request. Inside,
         set `s.status` and `s.nbytes`; an exception counts as a failure (an HTTPError's status and
-        Retry-After are honoured) and is re-raised."""
-        h, probe = self._admit(url, kind)
+        Retry-After are honoured) and is re-raised. lane: as get's."""
+        h, probe = self._admit(url, kind, lane)
         try:
             sem = self._acquire(h, url, kind)
         except FetchError:
@@ -1034,6 +1302,9 @@ class Fetcher:
         with self._lock:
             h.day[what] += n
             h.minute[what] += n
+            h.total[what] += n
+        if _PROC_DIR and what == "requests":
+            _proc_writer()
 
     def _count(self, h, what, n=1):
         self._rollover()

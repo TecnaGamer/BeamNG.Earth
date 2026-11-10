@@ -25,6 +25,61 @@ def slope(la, lo):
 
 
 class RoadMeshTest(unittest.TestCase):
+    def test_sharp_ground_ribbon_covers_both_arms_without_miter_pinching(self):
+        """#740: every interior point of both mapped road rectangles remains covered at an isolated hairpin."""
+        for degrees in (121, 130, 150, -130, -150):
+            for half in (0.075, 1.75, 4.0):
+                angle = math.radians(degrees)
+                # Unequal non-lattice lengths also exercise an apex between resampling stations.
+                pts = np.array([[0., 0., 0.], [80.3, 0., 0.],
+                                [80.3 + 83.7 * math.cos(angle), 83.7 * math.sin(angle), 0.]])
+                with self.subTest(degrees=degrees, half=half):
+                    left, right, v, *_ = roadmesh.ribbons([chunk("road_asphalt_2lane", half * 2, pts)])[0]
+                    xy = np.r_[left, right]
+                    triangles = roadmesh._keep_up(roadmesh._quads(0, len(left), 0, 1), xy, 0)
+                    samples = []
+                    for a, b in zip(pts[:-1, :2], pts[1:, :2]):
+                        tangent = (b - a) / np.linalg.norm(b - a)
+                        normal = np.array([-tangent[1], tangent[0]])
+                        stations = np.r_[np.linspace(.001, .999, 65), .99999, .00001]
+                        for across in (-.999, -.5, 0., .5, .999):
+                            samples.extend(a + stations[:, None] * (b - a) + across * half * normal)
+                    samples = np.asarray(samples)
+                    tri = xy[triangles]
+                    edge = np.roll(tri, -1, axis=1) - tri
+                    delta = samples[:, None, None, :] - tri[None]
+                    cross = edge[None, :, :, 0] * delta[:, :, :, 1] - edge[None, :, :, 1] * delta[:, :, :, 0]
+                    covered = ((cross >= -1e-8).all(2) | (cross <= 1e-8).all(2)).any(1)
+                    self.assertTrue(covered.all(), f"{np.count_nonzero(~covered)} road samples missing")
+                    # The area of a butt-capped, bevel-joined constant-width polyline (no folded/overlapping fan).
+                    expected = 2 * half * 164 - half ** 2 * (math.tan(abs(angle) / 2) - math.sin(abs(angle)) / 2)
+                    e1, e2 = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+                    area = np.abs(e1[:, 0] * e2[:, 1] - e1[:, 1] * e2[:, 0]).sum() / 2
+                    self.assertAlmostEqual(area, expected, places=6)
+                    self.assertTrue(np.isfinite(xy).all())
+                    self.assertTrue((np.diff(v) >= 0).all(), "texture distance stays monotone through the bevel")
+                    np.testing.assert_allclose((left[[0, -1]] + right[[0, -1]]) / 2, pts[[0, -1], :2])
+
+    def test_sharp_ribbon_never_extrudes_a_miter_past_short_arms(self):
+        angle = math.radians(175)
+        pts = [[0, 0, 0], [4, 0, 0], [4 + 4 * math.cos(angle), 4 * math.sin(angle), 0]]
+        left, right, *_ = roadmesh.ribbons([chunk("road_asphalt_2lane", 8, pts)])[0]
+        self.assertLess(np.abs(np.r_[left, right]).max(), 12, "no unbounded intersection at a near reversal")
+
+    def test_beveled_hairpin_mesh_keeps_its_area_across_a_tile_seam(self):
+        angle = math.radians(150)
+        pts = [[176, 0, 0], [256, 0, 0], [256 + 80 * math.cos(angle), 80 * math.sin(angle), 0]]
+        chunks = [chunk("road_asphalt_2lane", 8, pts)]
+        flat = lambda la, lo: np.zeros(np.shape(la))
+        area = 0.
+        for box in ((0., -100., 256., 100.), (256., -100., 512., 100.)):
+            p, t, *_ = roadmesh.build(FRAME, chunks, flat, (0., 0., 0.), clip=box)
+            tri = p[t, :2]
+            a, b = tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]
+            area += np.abs(a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]).sum() / 2
+        expected = 8 * 160 - 16 * (math.tan(angle / 2) - math.sin(angle) / 2)
+        self.assertAlmostEqual(area, expected, delta=.01)
+
     def test_ribbons_drape_face_up_and_lift(self):
         chunks = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (40, 0, 0), (80, 20, 0)]),
                   chunk("line_yellow", 0.12, [(0, 0.12, 0), (40, 0.12, 0)])]
@@ -129,14 +184,14 @@ class FollowTest(unittest.TestCase):
         elev = self.bumpy()
         chunks = [chunk("road_asphalt_2lane", 9.0, [(3.3, 1.7, 0), (61.9, 40.2, 0), (90.0, 20.0, 0)])]
         P, T, UV, mats, M = roadmesh.build(FRAME, chunks, elev, (0.0, 0.0, 0.0), 0.015, follow=True, q=1 / 32)
-        # the engine's terrain: samples every 2 m (rounded to 1/32 m), each square cut south-west to north-east
+        # the engine's terrain: samples every GRID_M (1 m, rounded to 1/32 m), each square cut south-west to north-east
+        sq = roadmesh.GRID_M
         def ground(x, y):
-            la, lo, _ = FRAME.enu_to_geodetic(np.array([x]), np.array([y]), 0.0)
-            i, j = math.floor(x / 2), math.floor(y / 2)
+            i, j = math.floor(x / sq), math.floor(y / sq)
             def s(a, b):
-                la_, lo_, _ = FRAME.enu_to_geodetic(np.array([2.0 * a]), np.array([2.0 * b]), 0.0)
+                la_, lo_, _ = FRAME.enu_to_geodetic(np.array([sq * a]), np.array([sq * b]), 0.0)
                 return round(float(FRAME.geodetic_to_enu(la_, lo_, elev(la_, lo_))[2][0]) * 32) / 32
-            u, v = x / 2 - i, y / 2 - j
+            u, v = x / sq - i, y / sq - j
             if v > u:
                 return s(i, j) + v * (s(i, j + 1) - s(i, j)) + u * (s(i + 1, j + 1) - s(i, j + 1))
             return s(i, j) + u * (s(i + 1, j) - s(i, j)) + v * (s(i + 1, j + 1) - s(i + 1, j))
@@ -155,17 +210,18 @@ class FollowTest(unittest.TestCase):
     def test_no_climbing_a_step(self):
         """A strip beside a cutting's wall: in the lattice cells holding the step it stays at the road's level instead
         of climbing the lattice's teeth (FOLLOW_STEP_M / FOLLOW_MAX_UP), elsewhere it follows the ground."""
+        sq = roadmesh.GRID_M                                # (1 m squares)
         grid = np.zeros((10, 10))
-        grid[:, 5:] = 4.0                                   # a 4 m step between x = 8 and x = 10
+        grid[:, 5:] = 4.0                                   # a 4 m step between x = 4 sq and x = 5 sq
         grid[:, :5] += np.arange(5) * 0.1                   # a gentle slope before it (followed)
-        P = np.array([[1.0, 1.0], [9.5, 1.0], [9.5, 15.0], [1.0, 15.0]])
+        P = np.array([[0.5, 0.5], [4.75, 0.5], [4.75, 7.5], [0.5, 7.5]]) * sq
         T = np.array([[0, 1, 2], [0, 2, 3]])
         UV = np.zeros((4, 2))
         Q, _, U, _ = roadmesh.follow_ground(P, UV, T, grid, 0, 0)
-        step = Q[:, 0] > 8.0
+        step = Q[:, 0] > 4.0 * sq
         self.assertTrue(step.any())
         self.assertLessEqual(Q[step, 2].max(), 0.4 + roadmesh.FOLLOW_MAX_UP + 1e-9, "held down at the step")
-        flat = Q[:, 0] < 7.9
+        flat = Q[:, 0] < 3.95 * sq
         self.assertGreater(Q[flat, 2].max(), 0.25, "the slope before it followed")
 
 
@@ -195,6 +251,79 @@ class TrimOverlapsTest(unittest.TestCase):
             (m, _), (r, _) = roadmesh.trim_overlaps([main, ramp])
             np.testing.assert_allclose(m[1], main[0][1])
             np.testing.assert_allclose(r[0], ramp[0][0])
+
+
+class MedianGapTest(unittest.TestCase):
+    """The gap from a deck's edge to another deck's across a median: beside it and outside it only (a merge on I-95 by
+    the Middle Branch, 2026-10-31: the decks going on from the joint counted as a median growing behind it, the slab
+    filled out past the road and the parapet gone)."""
+
+    def ribbon(self, x0, x1, y, half, fid, z=50.0):
+        x = np.arange(x0, x1 + 1e-9, 2.0)
+        mid = np.c_[x, np.full(len(x), y)]
+        return ((mid + [0, half], mid - [0, half], x / 10, "m", "base", np.full(len(x), z)), {"fid": fid})
+
+    def test_side_by_side_decks_have_their_gap(self):
+        a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 10.0, 4.0, "b")
+        (gl, gr, _, _), _ = roadmesh._median_gaps([a, b])
+        np.testing.assert_allclose(gl[2:-2], 2.0)
+        self.assertFalse(gr.any())
+
+    def test_deck_going_on_is_no_median(self):
+        a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(40, 80, 0.0, 4.0, "b")
+        for gl, gr, _, _ in roadmesh._median_gaps([a, b]):
+            self.assertFalse(gl.any() or gr.any())
+
+    def test_wider_deck_behind_a_merge_is_no_median(self):
+        # two narrower decks ending side by side where a wider one goes on: its edges see their ends behind
+        on = self.ribbon(0, 40, 0.0, 8.4, "on")
+        left, right = self.ribbon(-40, 0, 4.4, 4.0, "l"), self.ribbon(-40, 0, -2.6, 5.8, "r")
+        (gl, gr, _, _), _, _ = roadmesh._median_gaps([on, left, right])
+        self.assertFalse(gl.any() or gr.any(), (gl, gr))
+
+    def test_edge_over_another_deck_is_no_median(self):
+        a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 6.0, 4.0, "b")    # overlapping by 2 m
+        for gl, gr, _, _ in roadmesh._median_gaps([a, b]):
+            self.assertFalse(gl.any() or gr.any())
+
+    def test_opposite_traffic_over_each_other_keeps_its_median(self):
+        a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 7.0, 4.0, "b")    # overlapping by 1 m
+        a[1]["tdir"], b[1]["tdir"] = 1, -1
+        (gl, _, ol, _), (_, gr, _, orr) = roadmesh._median_gaps([a, b])
+        self.assertTrue(gl[2:-2].all() and ol[2:-2].all(), "a's left edge: the median toward b's traffic")
+        self.assertTrue(gr[2:-2].all() and orr[2:-2].all())
+
+
+class ParapetCoverTest(unittest.TestCase):
+    """No parapet where another deck's surface lies: over it, not past its square end (two ramps merging into a new
+    road on I-95 by the Middle Branch, 2026-10-31: each deck's round end hid the other's parapet for 7 m)."""
+
+    def ribbon(self, x0, x1, y, half, fid):
+        x = np.arange(x0, x1 + 1e-9, 2.0)
+        mid = np.c_[x, np.full(len(x), y)]
+        return ((mid + [0, half], mid - [0, half], x / 10, "m", "base", np.full(len(x), 50.0)), {"fid": fid})
+
+    def test_deck_going_on_keeps_both_parapets(self):
+        on, ramp = self.ribbon(0, 40, 0.0, 8.4, "on"), self.ribbon(-40, 0, 2.6, 5.8, "ramp")    # left edges flush
+        (cl, _), (cl2, _) = roadmesh._parapet_cover([on, ramp])
+        self.assertFalse(cl.any(), "the wider deck's left edge past the ramp's end")
+        self.assertFalse(cl2.any())
+
+    def test_ground_road_ending_on_a_deck_covers_it(self):
+        # a driveway meeting a deck's side at grade ends on its edge: no parapet across it (rampcheck.py, the JFX)
+        deck = self.ribbon(0, 40, 0.0, 6.5, "deck")
+        x = np.arange(0.0, 20.1, 2.0)
+        mid = np.c_[np.full(len(x), 20.0), 6.5 + x]                    # its end on the deck's left edge
+        drive = ((mid + [-2.0, 0], mid + [2.0, 0], x / 10, "m", "base", np.full(len(x), 50.0)), {"fid": "drive"})
+        (cl, _), = roadmesh._parapet_cover([deck], [drive])
+        k = int(np.argmin(np.abs(deck[0][0][:, 0] - 20.0)))
+        self.assertTrue(cl[k], "covered where the driveway meets it")
+
+    def test_side_by_side_still_covered(self):
+        a, b = self.ribbon(0, 40, 0.0, 4.0, "a"), self.ribbon(0, 40, 7.0, 4.0, "b")    # overlapping by 1 m
+        (cl, cr), (cl2, cr2) = roadmesh._parapet_cover([a, b])
+        self.assertTrue(cl[1:-1].all() and cr2[1:-1].all(), "(their end points alone open: no run of their own)")
+        self.assertFalse(cr.any() or cl2.any())
 
 
 class BridgeCurbSelectionTest(unittest.TestCase):
@@ -231,7 +360,8 @@ class BridgeTest(unittest.TestCase):
         deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
                 "n": [[0, 0, 20.0], [50, 0, 22.0]]}
         P, T, UV, mats, M = roadmesh.deck([deck], (0.0, 0.0, 0.0))
-        self.assertEqual(mats, [roadmesh.DECK_SIDE, roadmesh.DECK_TOP], "an opaque slab, a plain asphalt top")
+        self.assertEqual(mats, list(dict.fromkeys([roadmesh.DECK_SIDE, roadmesh.DECK_TOP])),
+                         "an opaque slab, a plain asphalt top")
         n = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])
         n /= np.linalg.norm(n, axis=1)[:, None]
         flat = np.abs(n[:, 2]) > 0.5
@@ -489,3 +619,158 @@ class BridgeProfilesTest(unittest.TestCase):
         k = 5                                   # ramp point 20 m from the split, 2.4 m off the mainline
         j = int(np.argmin(np.abs(main[:, 0] - ramp[k, 0])))
         self.assertLess(abs(out[1][k] - out[0][j]), abs(zs[1][k] - zs[0][j]) / 2 + 1e-9)
+
+    def test_abutment_blend_zero_step(self):
+        deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
+                "n": [[10, 0, 20.0], [50, 0, 20.0]]}
+        ground = chunk("road_asphalt_2lane", 8.0, [[0, 0, 0], [10, 0, 0]])
+        elev = lambda la, lo: np.full(len(la), 20.0)
+        res = roadmesh.build(FRAME, [deck, ground], elev, (0.0, 0.0, 0.0), lift=0.04)
+        self.assertIsNotNone(res)
+        P, T, UV, mats, M = res
+        at_abut = np.isclose(P[:, 0], 10.0, atol=0.05)
+        self.assertTrue(at_abut.sum() >= 4)
+        z_abut = P[at_abut, 2]
+        self.assertLess(np.ptp(z_abut), 0.005, f"Step at abutment: {np.ptp(z_abut)}")
+
+    def test_a_ground_line_is_not_snapped_to_the_deck_asphalt(self):
+        """GitHub #739: a ground centre line ending at a deck's end takes the deck's line's edges (its layer, its width),
+        not the deck asphalt's 8 m ones (the nearest of any kind: the line fanned out at the bridge's end)."""
+        deck = {"m": "road_asphalt_2lane", "w": 8.0, "tl": 11.0, "p": 20, "deck": True, "fixed": True,
+                "n": [[10, 0, 20.0], [50, 0, 20.0]]}
+        dline = {**chunk("line_yellow", 0.12, [[10, 0, 20.0], [50, 0, 20.0]]), "deck": True, "fixed": True,
+                 "layer": "mark"}
+        gline = {**chunk("line_yellow", 0.12, [[0, 0, 0], [10, 0, 0]]), "layer": "mark"}
+        elev = lambda la, lo: np.full(len(la), 20.0)
+        res = roadmesh.build(FRAME, [deck, dline, gline], elev, (0.0, 0.0, 0.0), lift=0.04)
+        P, T, UV, mats, M = res[:5]
+        ki = mats.index("line_yellow")
+        verts = np.unique(T[np.asarray(M) == ki].ravel())
+        ys = P[verts, 1]
+        self.assertLess(float(np.ptp(ys)), 0.5, f"the yellow line spread to {np.ptp(ys):.2f} m")
+
+    def test_median_barrier_kept_when_facing_different_decks(self):
+        # Two parallel decks side by side: when each side faces a different target, medians are not suppressed
+        x = np.linspace(0.0, 50.0, 15)
+        left1 = np.c_[x, np.full_like(x, -4.0)]
+        right1 = np.c_[x, np.full_like(x, 0.0)]
+        z1 = np.full_like(x, 20.0)
+        c1 = {"fid": ("road", 1), "tdir": 1}
+        rb1 = ((left1, right1, np.linspace(0.0, 50.0, 15), "deck_asphalt", 1, z1), c1)
+
+        left2 = np.c_[x, np.full_like(x, 1.0)]
+        right2 = np.c_[x, np.full_like(x, 5.0)]
+        z2 = np.full_like(x, 20.0)
+        c2 = {"fid": ("road", 2), "tdir": 1}
+        rb2 = ((left2, right2, np.linspace(0.0, 50.0, 15), "deck_asphalt", 1, z2), c2)
+
+        gaps = roadmesh._median_gaps([rb1, rb2])
+        self.assertEqual(len(gaps), 2)
+        # rb1 right edge faces rb2 left edge (gap ~ 1.0m <= MEDIAN_BARRIER_M)
+        gl1, gr1, opp_l1, opp_r1 = gaps[0]
+        gl2, gr2, opp_l2, opp_r2 = gaps[1]
+        self.assertTrue((gr1 > 0).any(), "deck 1 right median detected")
+        self.assertTrue((gl2 > 0).any(), "deck 2 left median detected")
+
+
+def _bend(turn_deg, arm=80.0):
+    turn = math.radians(turn_deg)
+    end = np.array([arm, 0.0]) + arm * np.array([math.cos(turn), math.sin(turn)])
+    return np.array([[0.0, 0.0, 0.0], [arm, 0.0, 0.0], [end[0], end[1], 0.0]])
+
+
+def _turns(xy):
+    d = np.diff(np.asarray(xy, np.float64)[:, :2], axis=0)
+    d = d[np.hypot(d[:, 0], d[:, 1]) > 0.05]
+    t = d / np.hypot(d[:, 0], d[:, 1])[:, None]
+    return np.abs(np.degrees(np.arctan2(t[:-1, 0] * t[1:, 1] - t[:-1, 1] * t[1:, 0], (t[:-1] * t[1:]).sum(1))))
+
+
+def _strip(pts, w=3.5, slen=100.0, s0=0.0, s1=None, fends=(1, 1), m="bne_dirt_variation_01"):
+    c = chunk(m, w, pts, tl=56.0)
+    L = float(np.hypot(*np.diff(np.asarray(pts, np.float64)[:, :2], axis=0).T).sum())
+    c.update(slen=slen, s0=s0, s1=s0 + L if s1 is None else s1, fends=list(fends))
+    return c
+
+
+class DirtCornerTest(unittest.TestCase):
+    """A dirt or gravel strip's sharp bend is a wide arc (from PR #455): the ruts do not kink at the mapped corner."""
+
+    def test_a_moderate_bend_sweeps_wide_of_the_corner(self):
+        out = roadmesh.round_dirt_centerline(_bend(50), 1.75)
+        self.assertGreater(np.hypot(out[:, 0] - 80, out[:, 1]).min(), 2.0, "the ruts leave the mapped corner")
+        self.assertLess(_turns(out).max(), roadmesh.DIRT_BEND_STEP_DEG + 0.5)
+        left, right = roadmesh.ribbons([_strip(out)])[0][:2]
+        self.assertLess(max(_turns(left).max(), _turns(right).max()), roadmesh.DIRT_BEND_STEP_DEG + 1.0)
+        self.assertTrue(np.allclose(out[[0, -1]], _bend(50)[[0, -1]]), "the ends stay")
+
+    def test_a_square_corner_on_long_arms_and_a_right_turn(self):
+        out = roadmesh.round_dirt_centerline(_bend(90), 1.75)
+        self.assertGreater(np.hypot(out[:, 0] - 80, out[:, 1]).min(), 6.0)
+        self.assertLess(_turns(out).max(), roadmesh.DIRT_BEND_STEP_DEG + 0.5)
+        self.assertLess(roadmesh.round_dirt_centerline(_bend(-50), 1.75)[:, 1].min(), -1.0, "rounds to its side")
+
+    def test_gentle_bends_and_short_arms_keep_the_point(self):
+        src = _bend(6)
+        self.assertTrue(np.array_equal(roadmesh.round_dirt_centerline(src, 1.75), src))
+        short = _bend(130, arm=5.0)
+        self.assertLess(np.hypot(*(roadmesh.round_dirt_centerline(short, 1.75)[:, :2] - [5.0, 0.0]).T).min(), 0.05)
+
+    def test_heights_run_along_the_arc(self):
+        src = _bend(70)
+        src[:, 2] = [0.0, 8.0, 16.0]
+        out = roadmesh.round_dirt_centerline(src, 2.0)
+        self.assertTrue((np.diff(out[:, 2]) >= -1e-9).all(), "z climbs monotonically through the bend")
+
+
+class DirtFadeTest(unittest.TestCase):
+    """A strip in a road mesh: four rows (the feathered sides), a sixth element (the fade uv on the second uv),
+    the strips' materials first; a mesh without one is as before."""
+
+    def test_a_strip_has_the_fade_uv_and_others_do_not(self):
+        flat = lambda la, lo: np.zeros(np.shape(la))      # noqa: E731
+        paved = [chunk("road_asphalt_2lane", 6.0, [(0, 0, 0), (60, 0, 0)])]
+        self.assertEqual(len(roadmesh.build(FRAME, paved, flat, (0.0, 0.0, 0.0))), 5)
+        mesh = roadmesh.build(FRAME, paved + [chunk("line_white", 0.12, [(0, 20, 0), (60, 20, 0)]),
+                                              _strip([(0, 40, 0), (60, 40, 0)], slen=60.0)], flat, (0.0, 0.0, 0.0))
+        self.assertEqual(len(mesh), 6)
+        P, T, UV, mats, M, F = mesh
+        self.assertEqual(mats[0], "bne_dirt_variation_01", "the strip's material first: the lines draw over it")
+        self.assertEqual(F.shape, (len(P), 2))
+        mine = np.zeros(len(P), bool)
+        mine[T[M == 0].ravel()] = True
+        self.assertTrue(np.allclose(F[~mine], 0.5), "the rest samples the solid middle")
+        self.assertEqual(sorted(set(np.round(UV[mine, 0], 4))),
+                         sorted({0.0, 1.0, round(1.2 / 3.5, 4), round(1 - 1.2 / 3.5, 4)}), "four rows across")
+        self.assertEqual(sorted(set(np.round(F[mine, 0], 4))), [0.0, 0.5, 1.0])
+        s = UV[mine, 1] * 56.0
+        self.assertTrue(np.allclose(F[mine][s <= 1e-6, 1], 0.0) and np.allclose(F[mine][s >= 60 - 1e-6, 1], 1.0))
+        mids = (s > roadmesh.END_FADE_SHARE * 60 + 0.1) & (s < 60 - roadmesh.END_FADE_SHARE * 60 - 0.1)
+        self.assertTrue(np.allclose(F[mine][mids, 1], 0.5))
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "road.cdae")
+            roadmesh.write(p, mesh)
+            a = cdae.mesh_arrays(cdae.decode(open(p, "rb").read())["meshes"][0])
+            self.assertEqual(len(a["tverts2"]), len(a["verts"]), "the fade uv written as the second uv")
+
+    def test_a_joined_end_and_the_cuts_keep_the_fade(self):
+        flat = lambda la, lo: np.zeros(np.shape(la))      # noqa: E731
+        c = _strip([(0, 0, 0), (100, 0, 0)], slen=100.0, fends=(1, 0))
+        P, T, UV, mats, M, F = roadmesh.build(FRAME, [c], flat, (0.0, 0.0, 0.0), clip=(-50, -50, 50, 50))
+        self.assertTrue(np.allclose(F[np.abs(P[:, 0] - 50) < 1e-6, 1], 0.5), "solid at the tile's edge")
+        self.assertLess(float(F[P[:, 0] < 0.5, 1].max()), 0.05, "the open start fades")
+        c = _strip([(0, 0, 0), (100, 0, 0)], slen=100.0, fends=(0, 0))
+        P, T, UV, mats, M, F = roadmesh.build(FRAME, [c], flat, (0.0, 0.0, 0.0), clip=(-50, -50, 150, 50))
+        inner = (UV[:, 0] > 0.4) & (UV[:, 0] < 0.6)
+        self.assertTrue(np.allclose(F[inner, 1], 0.5), "joined ends: no fade along")
+
+    def test_plazas_merge_keeps_the_fade(self):
+        import plazas
+        flat = lambda la, lo: np.zeros(np.shape(la))      # noqa: E731
+        road = roadmesh.build(FRAME, [_strip([(0, 0, 0), (60, 0, 0)])], flat, (0.0, 0.0, 0.0))
+        pm = (np.zeros((3, 3)), np.array([[0, 1, 2]]), np.zeros((3, 2)), ["m_gm_concrete_plain"], np.array([0]))
+        out = plazas.merge(road, pm)
+        self.assertEqual(len(out), 6)
+        self.assertEqual(len(out[5]), len(out[0]))
+        self.assertTrue(np.allclose(out[5][-3:], 0.5))
+        self.assertEqual(len(plazas.merge(pm, pm)), 5)

@@ -1,0 +1,38 @@
+{
+  "bne_distant_traffic_glow": {
+    "name": "bne_distant_traffic_glow",
+    "mapTo": "bne_distant_traffic_glow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0,
+          0,
+          0,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 1,
+        "emissiveFactor": [
+          1,
+          1,
+          1
+        ],
+        "emissiveIntensityNits": 320,
+        "instanceEmissive": true,
+        "instanceOpacity": true,
+        "opacityFactor": 1,
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/traffic/glow.color.dds"
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "translucentBlendOp": "LerpAlpha",
+    "translucentZWrite": false,
+    "castShadows": false,
+    "doubleSided": true
+  }
+}

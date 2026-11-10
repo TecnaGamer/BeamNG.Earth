@@ -570,14 +570,14 @@ const M_LETTERS: i64 = 3;
 const M_BLACK: i64 = 4;
 const TEXT_DEPTH: f64 = 0.02;       // the lettering this far in front of the face (no flicker at distance)
 
-struct Mesh {
-    p: Vec<[f64; 3]>,
-    t: Vec<[i64; 3]>,
-    uv: Vec<[f64; 2]>,
-    mi: Vec<i64>,
-    centre: [f64; 3],
-    face: [f64; 2],
-    right: [f64; 2],
+pub(crate) struct Mesh {
+    pub(crate) p: Vec<[f64; 3]>,
+    pub(crate) t: Vec<[i64; 3]>,
+    pub(crate) uv: Vec<[f64; 2]>,
+    pub(crate) mi: Vec<i64>,
+    pub(crate) centre: [f64; 3],
+    pub(crate) face: [f64; 2],
+    pub(crate) right: [f64; 2],
 }
 
 impl Mesh {
@@ -587,7 +587,7 @@ impl Mesh {
          self.centre[2] + q[2]]
     }
 
-    fn quad(&mut self, q: [[f64; 3]; 4], m: i64, uv: [[f64; 2]; 4]) {
+    pub(crate) fn quad(&mut self, q: [[f64; 3]; 4], m: i64, uv: [[f64; 2]; 4]) {
         let i = self.p.len() as i64;
         for (k, v) in q.iter().enumerate() {
             let w = self.world(*v);
@@ -612,7 +612,7 @@ impl Mesh {
     }
 
     /// A box (x: depth toward the driver, y: to the driver's right, z: up), as exitsigns.Mesh.box.
-    fn cuboid(&mut self, lo: [f64; 3], hi: [f64; 3], m: i64) {
+    pub(crate) fn cuboid(&mut self, lo: [f64; 3], hi: [f64; 3], m: i64) {
         let ([x, y, z], [xx, yy, zz]) = (lo, hi);
         let uv = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
         for q in [[[x, y, z], [x, y, zz], [x, yy, zz], [x, yy, z]], [[xx, y, z], [xx, yy, z], [xx, yy, zz], [xx, y, zz]],
@@ -657,7 +657,7 @@ impl Mesh {
 }
 
 /// A rounded rectangle's outline (counter-clockwise as the driver sees it): width w, bottom z0, height h, radius r.
-fn rounded(w: f64, z0: f64, h: f64, r: f64) -> Vec<[f64; 2]> {
+pub(crate) fn rounded(w: f64, z0: f64, h: f64, r: f64) -> Vec<[f64; 2]> {
     let mut out = Vec::with_capacity(28);
     for (cy, cz, start) in [(w / 2.0 - r, z0 + r, -90.0f64), (w / 2.0 - r, z0 + h - r, 0.0),
                             (-w / 2.0 + r, z0 + h - r, 90.0), (-w / 2.0 + r, z0 + r, 180.0)] {

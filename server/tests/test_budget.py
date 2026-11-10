@@ -98,8 +98,32 @@ class PriorityTest(unittest.TestCase):
             for n in (3, 6, 9):
                 self.assertTrue(self.run_child(get.format(n=n, w=True)).startswith("None "), "a worker: as inherited")
         elif hasattr(os, "nice"):
-            self.assertEqual(self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b)"),
-                             "3")
+            # (+3, or up to the ceiling of 19 when the test itself already runs nice: a niced shell's gate run)
+            got = self.run_child("import os; b=os.nice(0); budget.lower_priority(3); print(os.nice(0)-b, b)").split()
+            self.assertEqual(int(got[0]), min(3, 19 - int(got[1])))
+
+
+class RaiseThreadTest(unittest.TestCase):
+    """raise_thread: the event loop's thread one step above the process's others on Windows, nothing elsewhere."""
+
+    def test_raised(self):
+        if sys.platform != "win32":
+            self.assertIsNone(budget.raise_thread())
+            return
+        import threading
+        got = []
+
+        def run():          # (a thread of its own: the test runner's keeps its priority)
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32")
+            k.GetCurrentThread.restype = wintypes.HANDLE
+            k.GetThreadPriority.argtypes = (wintypes.HANDLE,)
+            got.append((budget.raise_thread(), k.GetThreadPriority(k.GetCurrentThread())))
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        self.assertEqual(got, [("thread above normal", 1)])
 
 
 if __name__ == "__main__":

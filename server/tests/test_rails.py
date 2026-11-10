@@ -64,5 +64,40 @@ class TrackTest(unittest.TestCase):
         self.assertEqual(rails.tile_chunks(FRAME, 5, 5, self.cells), [])
 
 
+class SwedishTownTramTest(unittest.TestCase):
+    """A tram beside a street: VGU 2024's 3.5 m from the road's edge to a reserved track's middle."""
+    TOWN = staticmethod(lambda la, lo: np.ones(np.shape(la), bool))
+
+    def track(self, y, country="SE", urban=None):
+        roadline = [(-300, 128), (600, 128)]
+        feats = cells([[(-300, 128 + y), (600, 128 + y)], roadline], ["tram", "residential"], ["rail", "road"])
+        return rails.tile_chunks(FRAME, 0, 0, feats, country, self.TOWN if urban is None else urban)
+
+    def test_near_the_road_is_paved_street_track(self):
+        half = roads.road_specs(cells([[(-300, 128), (600, 128)]], ["residential"], ["road"])[0], self.TOWN)[0].width / 2
+        ch = self.track(half + 1.5)
+        mats = {c["m"] for c in ch}
+        self.assertIn(rails.STREET_TRACK["m"], mats)
+        self.assertIn(rails.EMBEDDED["m"], mats)
+        self.assertNotIn(rails.BALLAST["m"], mats)
+        self.assertNotIn(rails.SLEEPER["m"], mats)
+
+    def test_past_the_distance_is_a_reserved_track(self):
+        mats = {c["m"] for c in self.track(14.0)}
+        self.assertIn(rails.BALLAST["m"], mats)
+        self.assertNotIn("road_tramline", mats)
+
+    def test_out_of_town_or_abroad_nothing_changes(self):
+        country = lambda la, lo: np.zeros(np.shape(la), bool)       # noqa: E731
+        self.assertIn(rails.BALLAST["m"], {c["m"] for c in self.track(8.0, urban=country)})
+        self.assertIn(rails.BALLAST["m"], {c["m"] for c in self.track(8.0, country="DE")})
+
+    def test_tram_lines_for_the_sidewalks(self):
+        feats = cells([[(-300, 133), (600, 133)], [(-300, 128), (600, 128)]], ["tram", "residential"], ["rail", "road"])
+        lines = rails.tram_lines(FRAME, 0, 0, feats)
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(lines[0][1], rails.EMBEDDED["w"] / 2)
+
+
 if __name__ == "__main__":
     unittest.main()

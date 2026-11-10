@@ -1,11 +1,20 @@
 """updates: the GitHub version check."""
+import json
 import sys
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import netfetch  # noqa: E402
 import updates  # noqa: E402
+
+
+def published(version="1.8.1", **changes):
+    release = {"tag_name": "v" + version, "html_url": f"{updates.PAGE_URL}/tag/v{version}",
+               "draft": False, "prerelease": False}
+    release.update(changes)
+    return json.dumps(release)
 
 
 class FakeNet:
@@ -59,17 +68,28 @@ class UpdatesTest(unittest.TestCase):
         self.assertIsNone(updates.check("1.7.2-beta.dev.12", net), "up to date (the list kept: no second request)")
         self.assertEqual(len(net.urls), 1)
         updates._releases[:] = [0.0, None]
-        self.assertIsNone(updates.check("1.7.2-beta", FakeNet("1.7.2-beta")), "a beta asks VERSION on main as before")
+        self.assertIsNone(updates.check("1.8.1", FakeNet(published())), "main channel checks its published release")
 
     def test_check(self):
-        net = FakeNet("1.5.0-preview\n")
-        r = updates.check("1.4.0-preview", net)
-        self.assertEqual(r["latest"], "1.5.0-preview")
-        self.assertEqual(r["url"], updates.PAGE_URL)
-        self.assertEqual(net.urls[0], (updates.VERSION_URL, "background"))
-        self.assertIsNone(updates.check("1.5.0-preview", FakeNet("1.5.0-preview")), "up to date")
+        net = FakeNet(published())
+        r = updates.check("1.7.4-beta", net)
+        self.assertEqual(r["latest"], "1.8.1")
+        self.assertEqual(r["url"], updates.PAGE_URL + "/tag/v1.8.1")
+        self.assertEqual(net.urls[0], (updates.LATEST_API, "background"))
+        self.assertIsNone(updates.check("1.8.1", FakeNet(published())), "up to date")
         self.assertIsNone(updates.check("1.4.0", FakeNet(err=netfetch.FetchError("offline"))), "offline: nothing")
         self.assertIsNone(updates.check(None, FakeNet("2.0.0")), "no local VERSION: nothing")
+
+    def test_unpublished_main_version_is_not_an_update(self):
+        self.assertIsNone(updates.check("1.7.4-beta", FakeNet("1.8.1\n")))
+        self.assertIsNone(updates.check("1.7.4-beta", FakeNet(published("1.7.3"))))
+
+    def test_ineligible_or_malformed_published_release_is_ignored(self):
+        for body in (published(draft=True), published(prerelease=True), published("1.9.0-dev.1"),
+                     published(html_url="https://example.com/release"), published(tag_name="invalid"),
+                     "[]", "null", "{}", "not JSON"):
+            with self.subTest(body=body):
+                self.assertIsNone(updates.check("1.7.4-beta", FakeNet(body)))
 
 
 if __name__ == "__main__":
@@ -82,10 +102,31 @@ class OpenPageTest(unittest.TestCase):
 
     def test_only_the_projects_pages(self):
         calls = []
-        ok = updates.open_page("https://github.com/TecnaGamer/BeamNG.Earth/releases", popen=lambda *a, **k: calls.append(a))
+        with mock.patch.object(updates.os, "startfile", create=True) as startfile:
+            ok = updates.open_page(updates.PAGE_URL, popen=lambda *a, **k: calls.append(a))
+            if updates.sys.platform == "win32":
+                self.assertTrue(ok)
+                startfile.assert_called_once_with(updates.PAGE_URL)
         if updates.sys.platform != "win32":
             self.assertTrue(ok)
-            self.assertEqual(calls[0][0][1], "https://github.com/TecnaGamer/BeamNG.Earth/releases")
+            self.assertEqual(calls[0][0][1], updates.PAGE_URL)
         for bad in ("https://evil.example/x", "https://github.com/someone/else", None, 5,
-                    "https://github.com/TecnaGamer/BeamNG.Earth/releases\" && rm -rf ~"):
+                    updates.PAGE_URL + '\" && rm -rf ~', "https://github.com/redthepro/Beam-Earth/releases"):
             self.assertFalse(updates.open_page(bad, popen=lambda *a, **k: calls.append(a)), bad)
+
+    def test_the_about_page_links(self):
+        """The settings page's About buttons and contributors (the game's openWebBrowser refuses other sites): the
+        Discord, Ko-fi, the project and a user's profile; nothing after a profile, nothing else on those sites."""
+        for ok in ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", "https://github.com/TecnaGamer/BeamNG.Earth",
+                   "https://github.com/brechtknecht", "https://github.com/wyo-backroads"):
+            self.assertTrue(updates.openable(ok), ok)
+        for bad in ("https://discord.gg/other", "https://ko-fi.com/someoneelse", "https://github.com/someone/repo",
+                    "https://github.com/a-", "https://github.com/x?y=1", "http://github.com/brechtknecht",
+                    "https://github.com.evil.example/x", "https://discord.gg/tgf/../x", "https://github.com/" + "a" * 40):
+            self.assertFalse(updates.openable(bad), bad)
+
+    def test_downloads_stay_on_upstream(self):
+        import selfupdate
+        self.assertEqual(updates.REPO, "TecnaGamer/BeamNG.Earth")
+        self.assertEqual(selfupdate.API_URL, updates.LATEST_API)
+        self.assertEqual(selfupdate.ASSET_PREFIX, "https://github.com/TecnaGamer/BeamNG.Earth/releases/download/")

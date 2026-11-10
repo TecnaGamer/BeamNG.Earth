@@ -6,6 +6,7 @@ local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
 local ms = require('beamngEarth/mpsession')
+T.near(ms.dist(0, 179.995, 0, -179.995), 1111.949, 0.01, 'damage neighbours across the date line')
 
 -- pure: who is hidden
 local hide = ms.toHide({ [10] = 1, [11] = 2, [12] = 3 }, function(pid) return pid == 1 or pid == 2 end)
@@ -78,6 +79,17 @@ ms.update(ms.HIDE_S, anchor, { x = 100, y = 0, z = 0 })
 T.check(require('beamngEarth/mpanchor').knows(2) and not require('beamngEarth/mpanchor').knows(3),
   'mpanchor told the anchors')
 
+-- A complete anchors snapshot expires missing or malformed peers. This also keeps
+-- a disconnected player's origin from being reused for a new player with that id.
+decoded.bad = { ['1'] = decoded.g['1'], ['2'] = { aLat = 0 / 0, aLon = 0, lat = 0, lon = 0 } }
+handlers.bngeAnchors('bad')
+T.check(not require('beamngEarth/mpanchor').knows(2), 'invalid peer anchor is not retained')
+handlers.bngeAnchors('g')
+decoded.empty = {}
+handlers.bngeAnchors('empty')
+T.check(not require('beamngEarth/mpanchor').knows(2), 'peer missing from complete snapshot is forgotten')
+handlers.bngeAnchors('g')
+
 -- no ground where a car comes back on: it stays off, its spot a collision focus, until the ground is there (or
 -- GROUND_WAIT_S passed)
 local late = car(23, 4, false)
@@ -113,6 +125,11 @@ ms.update(0.01, anchor, { x = 100, y = 0, z = 0 })
 T.check(#sent == n0 + 1, 'our anchor changed: a pose at once')
 
 -- the go-to asked of core (once a session, a little beside the other player)
+for _, bad in ipairs({ 0 / 0, math.huge, 91, 'nan' }) do
+  decoded.invalidGo = { lat = bad, lon = 0 }
+  handlers.bngeGoTo('invalidGo')
+  T.check(asked.go == nil, 'invalid go-to neither teleports nor consumes the session invitation')
+end
 decoded.t = { lat = 36.7, lon = -118.3 }
 handlers.bngeGoTo('t')
 T.check(asked.go and asked.go[1] == 36.7 and asked.go[2] > -118.3, 'go-to: beside the other player')
@@ -249,6 +266,9 @@ T.check(ms.adoptAnchor(40, -111.9) == nil, 'adoptAnchor: none (shared world buil
 -- reset: every car back on
 ms.reset()
 T.check(stranger.active == 1 and next(ms.state().deactivated) == nil, 'reset: the cars back on')
+decoded.dateLineGo = { lat = 0, lon = 179.99999 }
+handlers.bngeGoTo('dateLineGo')
+T.check(asked.go and asked.go[2] >= -180 and asked.go[2] < -179.99, 'go-to offset wraps at the date line')
 -- copies repaired: BeamMP's full-damage message for another player's car is kept, and put on once the car is
 -- SYNC_FAR_M from our camera (near us it keeps what our game worked out); its vehicle Lua checks it first (beams
 -- broken here only: reset, then the owner's state REPAIR_FRAMES frames later)

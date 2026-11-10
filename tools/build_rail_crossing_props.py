@@ -213,11 +213,13 @@ def write_dae(path, name, lods, col):
                   '<technique_common>' + "".join(f'<instance_material symbol="{k}-mat" target="#{k}-mat"/>'
                                                  for k in mats if m.tri.get(k))
                   + '</technique_common></bind_material></instance_geometry></node>\n')
-    geoms += _geom(f"{name}-col-g", col, mats)
-    nodes += (f'<node id="Colmesh_{name}-1" name="Colmesh_{name}-1"><instance_geometry url="#{name}-col-g">'
-              '<bind_material><technique_common>' + "".join(f'<instance_material symbol="{k}-mat" target="#{k}-mat"/>'
-                                                            for k in mats if col.tri.get(k))
-              + '</technique_common></bind_material></instance_geometry></node>\n')
+    if any(col.tri.values()):       # (no collision mesh: nothing to hit)
+        geoms += _geom(f"{name}-col-g", col, mats)
+        nodes += (f'<node id="Colmesh_{name}-1" name="Colmesh_{name}-1"><instance_geometry url="#{name}-col-g">'
+                  '<bind_material><technique_common>' + "".join(f'<instance_material symbol="{k}-mat" '
+                                                                f'target="#{k}-mat"/>'
+                                                                for k in mats if col.tri.get(k))
+                  + '</technique_common></bind_material></instance_geometry></node>\n')
     effects = "".join(f'<effect id="{k}-fx"><profile_COMMON><technique sid="common"><lambert><diffuse>'
                       f'<color>0.8 0.8 0.8 1</color></diffuse></lambert></technique></profile_COMMON></effect>\n'
                       for k in mats)

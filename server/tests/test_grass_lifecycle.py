@@ -180,6 +180,23 @@ class BaseRefreshGrassTest(unittest.TestCase):
                                                    "base": "full_r1.png", "anchorId": KEY[0],
                                                    "grassRefresh": True})
 
+    def test_refresh_uses_photo_worker_colors_without_rendering_twice(self):
+        connection, server, current, replacement, messages, patches, tasks = self.refresh_fixture()
+        server.photo_pool = object()
+        def base_elsewhere(anchor, cx, cy, pool, photo, quick, revision):
+            self.assertIs(pool, server.photo_pool)
+            self.assertFalse(quick)
+            photo.extend(("worker-rgb", "worker-colors"))
+            return "full_r1.png"
+        server._base_elsewhere = base_elsewhere
+        server.write_base = lambda *args: self.fail("worker photo must not be rendered again")
+        earthd.Connection.base_refresh(connection, KEY[0])
+        asyncio.run(tasks.pop())
+        self.assertFalse(connection.base_busy)
+        self.assertEqual(patches, [(KEY, "worker-colors")])
+        self.assertEqual(messages[0]["terrain"]["ter"], "grass-revision.ter")
+        self.assertEqual(messages[0]["base"], "/temp/earth/full_r1.png")
+
     def test_refresh_cannot_publish_a_block_replaced_while_patch_was_running(self):
         connection, server, current, replacement, messages, patches, tasks = self.refresh_fixture(True)
         earthd.Connection.base_refresh(connection, KEY[0])
@@ -206,7 +223,9 @@ class GrassRevisionFilesTest(unittest.TestCase):
             layout=SimpleNamespace(block=32), hm=OrderedDict(((KEY, self.state),)),
             hm_committed=[], hm_sent=[], connections=[], base_stale=set(), base_pending={},
             near_visual="mesh", surface=object(), _remove=earthd.Server._remove,
-            hm_name=lambda key: "b.png", base_name=lambda key: "b_base.png")
+            hm_name=lambda key: "b.png", base_name=lambda key: "b_base.png",
+            quick_base_name=lambda key: "b_quick.png",
+            _remove_base=lambda name: earthd.Server._remove(os.path.join(self.root, name)))
 
     def refresh(self, color):
         rgb = np.broadcast_to(np.array((42, 78, 36), np.uint8), (32, 32, 3))

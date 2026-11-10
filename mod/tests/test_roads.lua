@@ -18,7 +18,26 @@ local files = {}
 readFile = function(p) return files[p] end
 jsonDecode = function(s) return assert(load('return ' .. s))() end   -- the test writes Lua table text
 
+-- Each update represents a frame. Do not depend on host clock resolution: on Windows several
+-- updates can occur in the same os.clock tick, leaving the zero-delay rebuild tests pending.
+local elapsedMs = 0
+local stopwatch = require('beamngEarth/stopwatch')
+stopwatch.clock = function()
+  local start = elapsedMs
+  return function() return elapsedMs - start end
+end
+stopwatch.new = stopwatch.clock
+local turbineRows, turbineDrops = {}, {}
+package.loaded['beamngEarth/windturbines'] = {
+  onRows = function(key, rows) turbineRows[#turbineRows + 1] = { key, rows } end,
+  dropKey = function(key) turbineDrops[#turbineDrops + 1] = key end,
+}
 local roads = require('beamngEarth/roads')
+local update = roads.update
+roads.update = function(...)
+  elapsedMs = elapsedMs + 16
+  return update(...)
+end
 
 local gov = { tries = 0 }
 function gov:try() self.tries = self.tries + 1; return self.allow == nil or self.tries <= self.allow end
@@ -28,7 +47,8 @@ function gov:chargeMotion() end
 local function chunk(x)
   return string.format('{ m = "road_asphalt_2lane", w = 6, tl = 11, p = 20, n = { {%d, 0, 10}, {%d, 10, 10}, {%d, 20, 10} } }', x, x, x)
 end
-files['/t/a.json'] = '{ chunks = { ' .. chunk(0) .. ', ' .. chunk(5) .. ' } }'
+files['/t/a.json'] = '{ chunks = { ' .. chunk(0) .. ', ' .. chunk(5) .. [[ },
+  turbines = { { id = "osm:node:1175681635", x = 1, y = 2, z = 1800, yaw = 30, scale = 1 } } }]]
 files['/t/b.json'] = '{ chunks = { ' .. chunk(50) .. ' } }'
 
 local function decalRoads()
@@ -46,6 +66,8 @@ T.check(f.drivability == '-1' and f.overObjects == 'false', 'not in the navgraph
 -- a tile: queued, then made one chunk per governor unit
 T.check(roads.onTile({ anchorId = 1, key = '0_0', path = '/t/a.json', n = 2 }, 1) == true, 'tile accepted')
 T.check(roads.status().queued == 2 and decalRoads() == 0, 'queued, nothing made yet')
+T.check(turbineRows[1][1] == '1:0_0' and turbineRows[1][2][1].id == 'osm:node:1175681635'
+  and turbineRows[1][2][1].z == 1800, 'legacy road tile passes turbine identity and world base')
 gov.allow, gov.tries = 1, 0
 roads.update(gov, 1)
 T.check(decalRoads() == 1 and roads.status().queued == 1, 'one chunk per allowed unit')
@@ -61,11 +83,13 @@ T.check(roads.onTile({ anchorId = 9, key = '0_0', path = '/t/b.json', n = 1 }, 1
 
 -- drop
 roads.onTile({ anchorId = 1, key = '1_0', path = '/t/b.json', n = 1 }, 1)
+T.check(#turbineRows[#turbineRows][2] == 0, 'legacy road tile without turbines reconciles an empty list')
 roads.update(gov, 1)
 T.check(decalRoads() == 3, 'second tile made')
 roads.onDrop({ anchorId = 1, key = '0_0' })
 roads.update(gov, 1)
 T.check(decalRoads() == 1 and roads.status().tiles == 1, 'dropped tile deleted')
+T.check(turbineDrops[1] == '1:0_0', 'legacy tile drop releases its turbine owner')
 
 -- a re-sent tile replaces its old roads
 roads.onTile({ anchorId = 1, key = '1_0', path = '/t/b.json', n = 1 }, 1)
@@ -426,5 +450,73 @@ do
   T.check(S.calls.reload_Material == 2, 'one reload a changed material')
   for _, m in pairs(made) do m:delete() end
   roads.reset()
+end
+
+-- Dynamic sign text is one render-only mesh; resend/drop clean up the same way as wires.
+roads.reset(); gov.allow = nil
+files['/t/signs.json'] = '{ chunks = {}, signs = { shape = "/t/signs_3_0_0.cdae", pos = {0,0,0} } }'
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3)
+roads.update(gov,3)
+T.check(#statics() == 1 and statics()[1].fields.collisionType == 'None', 'sign faces render only (posts collide separately)')
+roads.onTile({anchorId=3,key='0_0',path='/t/signs.json',n=0},3); roads.update(gov,3)
+T.check(#statics() == 1, 'revisited signs do not duplicate')
+roads.onDrop({anchorId=3,key='0_0'}); roads.update(gov,3)
+T.check(#statics() == 0, 'sign mesh deleted with tile')
+-- the materials' prewarm shape, and its sibling in the dirt and gravel strips' vertex format when the server wrote one
+do
+  roads.reset()
+  local function shapes()
+    local r = {}
+    for _, o in ipairs(S.liveOf('TSStatic')) do r[#r + 1] = o:getField('shapeName') end
+    table.sort(r)
+    return table.concat(r, ' ')
+  end
+  for _, o in ipairs(S.liveOf('TSStatic')) do o:delete() end
+  local exists = FS.fileExists
+  FS.fileExists = function(_, p) return p == '/t/a/prewarm_x.cdae' end
+  T.check(roads.prewarm('/t/a/prewarm.cdae'), 'prewarm taken')
+  T.check(shapes() == '/t/a/prewarm.cdae /t/a/prewarm_x.cdae', 'both prewarm shapes: ' .. shapes())
+  FS.fileExists = function() return false end
+  roads.prewarm('/t/b/prewarm.cdae')
+  T.check(shapes() == '/t/b/prewarm.cdae', 'an older server: its one shape, the old ones gone: ' .. shapes())
+  FS.fileExists = exists
+  for _, o in ipairs(S.liveOf('TSStatic')) do o:delete() end
+  roads.reset()
+end
+-- Custom median walls have their own collision and lifecycle, separate from decks and signs.
+do
+  roads.reset()
+  -- (the barrier's statics only: the materials' prewarm shapes stand beside them)
+  local function statics()
+    local r = {}
+    for _, o in pairs(S.objects) do
+      if o.class == 'TSStatic' and not tostring(o.fields and o.fields.shapeName or ''):find('prewarm', 1, true) then
+        r[#r + 1] = o
+      end
+    end
+    return r
+  end
+  gov.allow, gov.tries = nil, 0
+  car.pos = vec3(103, 105, .5)
+  getPlayerVehicle = function() return car end
+  files['/t/barrier.json'] = '{ chunks = {}, barrier = { shape = "/t/barrier_7_0_0.cdae", pos = { 0, 0, 0 } }, ' ..
+    'colliders = { barrier = { { 99.5, 100, -.5, 100.5, 110, 1.9 } } } }'
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/barrier.json', n = 0 }, 7)
+  roads.update(gov, 7)
+  T.check(#statics() == 1, 'barrier beside the car loads without a wide collision hold')
+  T.check(statics()[1].fields.collisionType == 'Visible Mesh Final', 'custom barrier collides')
+  roads.onDrop({ anchorId = 7, key = '0_0' })
+  roads.update(gov, 7)
+  T.check(#statics() == 0, 'barrier deleted with its tile')
+  car.pos = vec3(100, 105, .5)
+  roads.onTile({ anchorId = 7, key = '0_0', path = '/t/barrier.json', n = 0 }, 7)
+  roads.update(gov, 7)
+  T.check(#statics() == 0, 'barrier collision held while intersecting the car')
+  car.pos = vec3(103, 105, .5)
+  roads.update(gov, 7)
+  T.check(#statics() == 1, 'barrier released once the car is clear')
+  roads.clear()
+  T.check(#statics() == 0, 'clear leaves no orphaned barrier')
+  getPlayerVehicle = nil
 end
 T.done('test_roads')

@@ -15,8 +15,9 @@ are built starts afresh.
 
 Where each item stands (the map's cache view, covermap.py): store(..., where=where(...)) also appends one line to this
 process's revisit/where/<pid>_<start>.tsv (one os.write under O_APPEND: whole lines, and only this process writes
-the file): the code_key, the settings it was built with (sig(): one short hash per setting, compared with
-earthd.Server.world_signature()), kind, key, the anchor and the item's box in degrees. compact() (the server's start)
+the file; the handle closes after each append so Windows can remove an idle cache): the code_key, the settings it was
+built with (sig(): one short hash per setting, compared with earthd.Server.world_signature()), kind, key, the anchor
+and the item's box in degrees. compact() (the server's start)
 folds the files into one and drops the lines whose zip is gone."""
 import hashlib
 import json
@@ -36,7 +37,6 @@ WHERE_DIR = "where"
 WHERE_KINDS = ("roads", "roadsg", "plans", "bldfar", "bldsky", "brfar", "fargeo", "far")    # (cellfacts: per cell, no place)
 NEAR_KINDS = ("roads", "roadsg", "plans")    # the drivable world (the road geotiles too); the others the distant view
 COMPACTED = threading.Event()           # set once compact() ran in this process (covermap reads the files after it)
-_where = {}                             # cache dir -> this process's open sidecar fd
 _START = int(time.time())
 
 _faults = [0]
@@ -44,32 +44,107 @@ _code = []
 _lock = threading.Lock()
 
 
-def fault():
-    """Something a build may read failed or was not there yet: builds running now are not kept."""
+_tl = threading.local()
+
+
+def fault(lidar=False):
+    """Something a build may read failed or was not there yet: builds running now are not kept. Counted for the process
+    (faults) and, unless lidar (roads.level_ranges' lidar rule: the cell's own, kept for the session), for this thread
+    (thread_faults)."""
     _faults[0] += 1
+    if not lidar:
+        _tl.n = getattr(_tl, "n", 0) + 1
+    else:
+        _tl.lidar = getattr(_tl, "lidar", 0) + 1
 
 
 def faults():
     return _faults[0]
 
 
+def thread_faults():
+    """This thread's faults (fault): what a computation done in this thread alone read short (roads._cell_ranges)."""
+    return getattr(_tl, "n", 0)
+
+
+def thread_lidar_faults():
+    """This thread's lidar rule faults (fault(lidar=True)): built on the rule for want of the lidar."""
+    return getattr(_tl, "lidar", 0)
+
+
+_PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")
+_IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([^#\n]+))", re.M)
+
+
+def source_closure(here):
+    """The server modules (file names) whose code the cached items depend on: the ones that make or read them (a
+    revisit.key / load / store or _revisit_tile call), and every server module they import, anywhere in their code (a
+    function's own imports too), and so on. The rest (earthd, its pools and schedulers, the UI's helpers: ~25 of 118
+    modules) changes nothing the cache keeps: an update of those alone kept every place's cache, where any change
+    of any module made every place a first visit again (a dev build each push; 2026-11-02)."""
+    srcs = {}
+    for name in os.listdir(here):
+        if name.endswith(".py"):
+            try:
+                with open(os.path.join(here, name), encoding="utf-8") as f:
+                    srcs[name[:-3]] = f.read()
+            except (OSError, UnicodeDecodeError):
+                pass
+    todo = [m for m, src in srcs.items() if m != "revisit" and _PRODUCES.search(src)]
+    seen = set()
+    while todo:
+        m = todo.pop()
+        if m in seen or m not in srcs:
+            continue
+        seen.add(m)
+        for a, b in _IMPORT.findall(srcs[m]):
+            for n in ([a] if a else [p.strip().split(" ")[0].split(".")[0] for p in b.split(",")]):
+                if n in srcs and n not in seen:
+                    todo.append(n)
+    seen.add("revisit")
+    return sorted(f"{m}.py" for m in seen)
+
+
+def source_id(here):
+    """The fingerprint of source_closure's files and the native module (a packaged app's REVISIT_ID, tools/build_app.py)."""
+    h = hashlib.sha1()
+    names = source_closure(here) + sorted(n for n in os.listdir(here) if n.startswith("earthfast"))
+    for name in names:
+        try:
+            with open(os.path.join(here, name), "rb") as f:
+                h.update(name.encode() + b"\0" + f.read())
+        except OSError:
+            pass
+    return h.hexdigest()
+
+
+# BNE_* settings that change no item's content (the cache's own, how far ahead tiles are wanted): not build switches
+NOT_SWITCHES = ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP", "BNE_ROADS_SEND_M", "BNE_ROADS_DROP_M",
+                "BNE_ROADS_LEAD_S", "BNE_ROADS_LEAD_M")
+
+
 def code_key():
-    """A hash of the server's source files and native module (once per process)."""
+    """A hash of the code the cached items depend on (source_id; a packaged app's REVISIT_ID, written by its build) and
+    the build switches (BNE_*), once per process."""
     with _lock:
         if not _code:
             here = os.path.dirname(os.path.abspath(__file__))
             h = hashlib.sha1()
-            for name in sorted(os.listdir(here)):
-                # (a packaged app's modules are in its archive, not beside __file__: the build's CODE_ID, their
-                # fingerprint, is; without it a Python-only update reused the older build's items. From PR #368)
-                if name == "CODE_ID" or name.endswith(".py") or name.startswith("earthfast"):
-                    try:
-                        with open(os.path.join(here, name), "rb") as f:
-                            h.update(name.encode() + b"\0" + f.read())
-                    except OSError:
-                        pass
+            got = None
+            # (a packaged app's modules are in its archive, not beside __file__: the build's fingerprint is; without one
+            # a Python-only update reused the older build's items. From PR #368. An older build's CODE_ID: all of it)
+            for name in ("REVISIT_ID", "CODE_ID"):
+                try:
+                    with open(os.path.join(here, name), "rb") as f:
+                        got = name.encode() + b"\0" + f.read()
+                    break
+                except OSError:
+                    pass
+            if got is None or any(n.endswith(".py") for n in os.listdir(here)):
+                got = source_id(here).encode()      # (from the sources beside it: a dev tree, a source install)
+            h.update(got)
             for k in sorted(os.environ):                # (the build switches: BNE_*)
-                if k.startswith("BNE_") and k not in ("BNE_REVISIT", "BNE_REVISIT_MB", "BNE_REVISIT_SKIP"):
+                if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())
             _code.append(h.hexdigest()[:16])
         return _code[0]
@@ -79,6 +154,47 @@ def key(kind, *parts):
     """The cache key of an item: its kind, what it was built from (the anchor's lat/lon, the tile, the settings) and
     the code."""
     return hashlib.sha1(repr((kind, code_key(), parts)).encode()).hexdigest()
+
+
+# Items kept across code changes (the user, 2026-11-02: road plans and cell facts survive updates): keyed by their
+# output's format number instead of the code (plancache.PLANS_FORMAT, roads.FACTS_FORMAT: bumped whenever a change
+# makes other output; tests/test_bake_formats.py fails on its fixture until they are), with the build switches still.
+_formats = {}               # kind -> its current format marker (format_marker), for the map's cache view
+
+
+def switches_key():
+    """A hash of the build switches (BNE_*) alone, once per process: code_key's without the code."""
+    with _lock:
+        if not _switches:
+            h = hashlib.sha1()
+            for k in sorted(os.environ):
+                if k.startswith("BNE_") and k not in NOT_SWITCHES:
+                    h.update(f"{k}={os.environ[k]}".encode())
+            _switches.append(h.hexdigest()[:16])
+        return _switches[0]
+
+
+_switches = []
+
+
+def format_marker(kind, fmt):
+    """What a format-keyed item's sidecar line holds in place of the code key ("fmt:<kind>:<n>:<switches>")."""
+    m = f"fmt:{kind}:{fmt}:{switches_key()}"
+    _formats[kind] = m
+    return m
+
+
+def format_key(kind, fmt, *parts):
+    """key() for an item kept across code changes: its kind, its output format fmt and what it was built from."""
+    return hashlib.sha1(repr((kind, format_marker(kind, fmt), parts)).encode()).hexdigest()
+
+
+def current_codes():
+    """The sidecar code values of items this server reads: its code_key and the format markers (the plans' always:
+    they are stored by the road processes, the map's cache view asks in the main one)."""
+    import plancache
+    format_marker("plans", plancache.plans_format())
+    return {code_key(), *_formats.values()}
 
 
 def _path(cache_dir, kind, k):
@@ -112,22 +228,27 @@ def where(lat, lon, s, w, n, e, settings):
     return (float(lat), float(lon), float(s), float(w), float(n), float(e), settings)
 
 
-def _note(cache_dir, kind, k, wh):
+def _note(cache_dir, kind, k, wh, code=None):
     """One sidecar line for item k (never raises)."""
     try:
         lat, lon, s, w, n, e, settings = wh
-        line = (f"{code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
-        fd = _where.get(cache_dir)
-        if fd is None:
-            with _lock:
-                fd = _where.get(cache_dir)
-                if fd is None:
-                    d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
-                    os.makedirs(d, exist_ok=True)
-                    fd = _where[cache_dir] = os.open(os.path.join(d, f"{os.getpid()}_{_START}.tsv"),
-                                                     os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0),
-                                                     0o644)
-        os.write(fd, line.encode("utf-8"))
+        line = (f"{code or code_key()}\t{settings}\t{kind}\t{k}\t{lat:.7f}\t{lon:.7f}\t{s:.6f}\t{w:.6f}\t{n:.6f}\t{e:.6f}\n")
+        d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
+        path = os.path.join(d, f"{os.getpid()}_{_START}.tsv")
+        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
+        # Keep the handle only while writing. Cached descriptors blocked Windows cache cleanup and, on Unix,
+        # silently wrote into an unlinked file after a cache directory was replaced. Serialise our threads too:
+        # Windows' append descriptors do not promise POSIX's atomic seek-to-end/write between different handles.
+        with _lock:
+            try:
+                fd = os.open(path, flags, 0o644)
+            except FileNotFoundError:
+                os.makedirs(d, exist_ok=True)
+                fd = os.open(path, flags, 0o644)
+            try:
+                os.write(fd, line.encode("utf-8"))
+            finally:
+                os.close(fd)
     except Exception:
         pass
 
@@ -189,22 +310,97 @@ def compact(cache_dir, before=None):
         COMPACTED.set()
 
 
-def store(cache_dir, kind, k, blobs, extra=None, where=None):
-    """Keep an item under key k: blobs {name: bytes}, extra JSON data; where (where()): the place it stands, for the
-    map's cache view (a sidecar line). Never raises; False when not kept."""
-    if not ON or kind in SKIP:
+# A far tile's texture (and its road mask) kept as a file beside its zip, not in it: a hit hard-links it into the
+# session folder (place) and keeping one hard-links the session's file in (Side on store), so neither writes its
+# bytes again: every warm visit unzipped and wrote each far texture, ~0.5 GB of a warm 8 min drive at 150 mph
+# (2026-11-04, Discord: "hard on the drive"). Zips of before keep them inside and still load.
+SIDE_KINDS = frozenset({"far", "fartex"})
+SIDE_NAMES = ("tex.dds", "mask.dds")
+SIDE_SUFFIXES = tuple("." + n for n in SIDE_NAMES)
+
+
+class Side:
+    """A blob that is a file: its path (load: the kept file; store: a file to keep, linked in)."""
+    __slots__ = ("path",)
+
+    def __init__(self, path):
+        self.path = path
+
+    def read(self):
+        with open(self.path, "rb") as f:
+            return f.read()
+
+
+def _side(path, name):
+    return f"{path[:-4]}.{name}"
+
+
+def _link_or_copy(src, dst):
+    """dst becomes src's content atomically: a hard link (nothing written), a copy where links fail (another volume)."""
+    import shutil
+    tmp = f"{dst}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.link(src, tmp)
+    except OSError:
+        shutil.copyfile(src, tmp)
+    os.replace(tmp, dst)
+
+
+def place(blob, dst):
+    """A loaded blob written to dst (atomically, staging): a Side hard-linked, bytes written."""
+    import staging
+    tmp = staging.tmp_for(dst)
+    if isinstance(blob, Side):
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        # (a link only through a unique staging name: the fallback name, dst + ".tmp", is the one every writer opens
+        # with "wb", and a link left there by a crash would have been truncated with the cache's file behind it)
+        linked = False
+        if tmp != dst + ".tmp":
+            try:
+                os.link(blob.path, tmp)
+                linked = True
+            except OSError:
+                pass
+        if not linked:
+            import shutil
+            shutil.copyfile(blob.path, tmp)
+    else:
+        with open(tmp, "wb") as f:
+            f.write(blob)
+    staging.replace(tmp, dst)
+
+
+def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
+    """Keep an item under key k: blobs {name: bytes, or Side(path): a file linked in}, extra JSON data; where (where()):
+    the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
+    format-keyed item, else code_key). Never raises; False when not kept."""
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
     path = _path(cache_dir, kind, k)
     tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        side = [n for n in SIDE_NAMES if n in blobs] if kind in SIDE_KINDS else []
+        for n in side:          # (before the zip: a zip there means its files are)
+            b = blobs[n]
+            if isinstance(b, Side):
+                _link_or_copy(b.path, _side(path, n))
+            else:
+                st = f"{_side(path, n)}.{os.getpid()}.{threading.get_ident()}.tmp"
+                with open(st, "wb") as f:
+                    f.write(b)
+                os.replace(st, _side(path, n))
+        inside = {n: (b.read() if isinstance(b, Side) else b) for n, b in blobs.items() if n not in side}
         with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
-            for name, data in blobs.items():
+            for name, data in inside.items():
                 z.writestr(name, data)
-            z.writestr("meta.json", json.dumps({"names": list(blobs), "extra": extra}))
+            z.writestr("meta.json", json.dumps({"names": list(inside), "side": side, "extra": extra}))
         os.replace(tmp, path)
         if where is not None:
-            _note(cache_dir, kind, k, where)
+            _note(cache_dir, kind, k, where, code)
         return True
     except Exception:
         try:
@@ -216,7 +412,7 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None):
 
 def load(cache_dir, kind, k):
     """({name: bytes}, extra) of the item under key k, or None when there is none (or it cannot be read)."""
-    if not ON or kind in SKIP:
+    if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     path = _path(cache_dir, kind, k)
     if not os.path.exists(path):
@@ -225,10 +421,16 @@ def load(cache_dir, kind, k):
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("meta.json"))
             blobs = {name: z.read(name) for name in meta["names"]}
-        try:
-            os.utime(path, None)            # (used: kept longest when cut back)
-        except OSError:
-            pass
+        for n in meta.get("side") or ():
+            sp = _side(path, n)
+            if not os.path.exists(sp):      # (its file cut back alone: built again)
+                return None
+            blobs[n] = Side(sp)
+        for p in [path] + [_side(path, n) for n in meta.get("side") or ()]:
+            try:
+                os.utime(p, None)           # (used: kept longest when cut back, the zip and its files alike)
+            except OSError:
+                pass
         return blobs, meta.get("extra")
     except Exception:
         return None
@@ -241,7 +443,7 @@ def swap(text, tokens):
     return text
 
 
-SHAPE_RE = re.compile(r'"shape":"([^"]+)"')
+SHAPE_RE = re.compile(r'"(?:shape|texture)":"([^"]+)"')   # (texture: a town sign's face, townsigns.write_face)
 
 
 def shapes_in(text, vfs_dir):

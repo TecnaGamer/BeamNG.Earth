@@ -9,6 +9,10 @@
 local dir = (arg[0]:match('^(.*)[/\\]') or '.')
 local T = dofile(dir .. '/testlib.lua')
 local S = dofile(dir .. '/stubs.lua')
+-- (the v1.3.1 block, 1024² at 2 m: these checks are written for it; the 1 m default: test_lattice / test_follow)
+require('beamngEarth/lattice').configure(1024, 2.0)
+require('beamngEarth/follow').configure()
+require('beamngEarth/rebase').configure(2048)
 require('beamngEarth/farfield').SPARE_MAX = 0 -- deletion timing as before; the spare pool: test_farfield_spares.lua
 local framing = require('beamngEarth/framing')
 local geodesy = require('beamngEarth/geodesy')
@@ -194,6 +198,7 @@ T.check(tb and tb.lastImport.sq == SQ and tb.pos.x == -1024 and tb.pos.y == -102
 frames(3)
 T.check(#received('hello') == 1 and received('hello')[1].protocol == 4 and received('hello')[1].format == 4,
   'hello (protocol 4, format 4: the newest the mod reads) sent on connect')
+T.check(received('hello')[1].turbineGeo == 1, 'far turbine geotile capability sent on connect')
 T.check(calls.safeTeleport == 1, 'player placed on flat ground')
 
 -- capture the mod's warnings (the stub log() drops everything)
@@ -268,6 +273,23 @@ do -- late imagery updates the active block's environmental masks and compact ma
   T.check(ter.slots[1] == 'bngEarthGroundGrassDry' and n == 1, 'late active photo selects dry grass and rebuilds cover once')
   T.check(core._state().baseRefreshes == 1, 'late active environmental refresh counted')
   T.check(rebuilt == 1, 'palette refresh invalidates cells retained by the optional engine patch')
+  local previousTer, previousBase = tb.fields.terrainFile, ter.base()
+  veh.vel = vec3(40, 0, 0)
+  frames(2)
+  local deferred = terrainMsg(0, 0, '/temp/beamngEarth/s1/hm_1_0_0.png', 1100)
+  deferred.ter, deferred.base = '/temp/beamngEarth/s1/environment_light.ter', '/temp/beamngEarth/s1/environment_light.dds'
+  deferred.layers = { '/temp/beamngEarth/s1/grass_light.png', '/temp/beamngEarth/s1/dirt.png' }
+  deferred.materials = { { 'bngEarthGroundGrassLight', 'GRASS' }, { 'beamngEarthDirt', 'DIRT' } }
+  deferred.grassRefresh = true
+  serverSend({ type = 'block_base', anchorId = 1, cx = 0, cy = 0, base = deferred.base, terrain = deferred })
+  frames(5)
+  T.check(tb.fields.terrainFile == previousTer and ter.base() == previousBase, 'fast driving defers the entire palette/photo bundle')
+  T.check(core._baseLater and core._baseLater.terrain and n == 1, 'deferred bundle retains terrain without rebuilding cover')
+  veh.vel = vec3(0, 0, 0)
+  frames(5)
+  T.check(tb.fields.terrainFile == deferred.ter and ter.base() == deferred.base, 'slowing down applies matching deferred terrain and photo')
+  T.check(ter.slots[1] == 'bngEarthGroundGrassLight' and n == 2 and rebuilt == 2, 'deferred palette rebuilds cover exactly once')
+  T.check(core._state().baseRefreshes == 2 and core._baseLater == nil, 'deferred refresh counted once and cleared')
   cover.afterBlockChange = after
   cover.rebuild = rebuild
   core.setNearVisual('terrain')
@@ -879,8 +901,38 @@ do -- the window gets its view only while it is shown: it is hidden by default (
   T.check(#views == 1 and type(views[1].connection) == 'string', 'shown window: its view built')
   ui.draw, ui.visible = draw, vis0
 end
+-- The connection survives a level reload; its negotiated capability must survive the scene reset too.
+do
+  local actual, seen = core._trafficvisuals, {}
+  core._trafficvisuals = { PROTO = 2,
+    session = function(id, available) seen.id, seen.available = id, available end,
+    reset = function() seen = {} end,
+    hasWork = function() return false end, update = function() end, onTeleport = function() end }
+  serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    streamLease = 1, leaseId = 'game-owner',
+    farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
+  frames(3)
+  T.check(seen.available, 'hello negotiates distant traffic before the level reload')
+  core.onClientEndMission()
+  core.onClientStartMission()
+  T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  local leaseSession, leaseId = require('beamngEarth/net').lease()
+  T.check(leaseSession == 'traffic-reload' and leaseId == 'game-owner', 'level reset preserves resource ownership')
+  core._trafficvisuals = actual
+end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
+do
+  local n = #received('hello')
+  T.check(pumpUntil(function() return #received('hello') > n end, 10), 'reconnect sends a new hello')
+  local h = received('hello')[#received('hello')]
+  T.check(h.streamLease == 1 and h.leaseId == 'game-owner' and h.leaseSession == 'traffic-reload',
+    'reconnect names the same game resource owner')
+  T.check(h.slotSession == 'traffic-reload' and type(h.slotsHeld) == 'table' and type(h.held) == 'table',
+    'reconnect includes complete snapshots, including an empty scene')
+  T.check(not core._netq.urgent._connected and not core._netq.urgent._disconnected,
+    'ownership snapshots remain ordered after incoming tile messages')
+end
 beamngEarth_settings = nil
 
 core.onExtensionUnloaded()
@@ -909,5 +961,49 @@ do
   local a, b, c = core.safeSpot(5, 5, function() return 7 end)
   T.check(a == 5 and b == 5 and c == 7, 'safeSpot: ground under the spot: the spot itself')
   T.check(core.safeSpot(0, 0, function() return nil end) == nil, 'safeSpot: no ground anywhere near: nil')
+end
+-- a block's refreshed base photo (block_base) waits while the car is fast and comes once it is slower (core.applyBaseLater)
+do
+  local core = require('beamngEarth/core')
+  local terrain = require('beamngEarth/terrain')
+  local setBase, n = terrain.setBase, 0
+  terrain.setBase = function() n = n + 1; return true end
+  local st = core._state()
+  local was = { st.anchorId, st.block, st.player }
+  st.anchorId, st.block = 7, { cx = 512, cy = -512 }
+  core._baseLater = { anchorId = 7, cx = 512, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  st.player = { speed = core.BASE_LATER_MS + 5 }
+  T.check(core.applyBaseLater() == false and n == 0 and core._baseLater ~= nil, 'base photo refresh: waits while the car is fast')
+  st.player = { speed = (core.BASE_LATER_MS + core.BASE_NOW_MS) / 2 }
+  T.check(core.applyBaseLater() == false and n == 0, 'base photo refresh: still waits between the two speeds')
+  st.player = { speed = core.BASE_NOW_MS - 5 }
+  T.check(core.applyBaseLater() == true and n == 1 and core._baseLater == nil, 'base photo refresh: applied once the car is slower')
+  core._baseLater = { anchorId = 7, cx = 0, cy = -512, base = '/temp/beamngEarth/s2/base.png', size = 1024 }
+  T.check(core.applyBaseLater() == false and n == 1 and core._baseLater == nil,
+    'base photo refresh: dropped when its block is no longer the one in use')
+  terrain.setBase = setBase
+  st.anchorId, st.block, st.player = was[1], was[2], was[3]
+end
+-- fast pre-cache's pause (PR #773): only our own pause is let go, and the app going away ends it
+do
+  local sh = require('beamngEarth/simhold')
+  local was = { sh.paused, sh.pause }
+  local paused, calls_ = false, {}
+  sh.paused = function() return paused end
+  sh.pause = function(on) calls_[#calls_ + 1] = on; paused = on end
+  core._fastHeld, core._fastPaused = false, false
+  core.fastAreaPause('a1')
+  T.check(paused and calls_[1] == true, 'fast pre-cache: the game paused')
+  core.fastAreaPause('')
+  T.check(not paused and calls_[2] == false, 'fast pre-cache over: our pause let go')
+  paused, calls_ = true, {}                    -- the player paused already
+  core.fastAreaPause('a2')
+  core.fastAreaPause(nil)
+  T.check(paused and #calls_ == 0, "fast pre-cache: a pause it didn't make is left as it was")
+  paused, calls_ = false, {}
+  core.fastAreaPause('a3')
+  core.reconnect()                            -- (drops the connection through the '_disconnected' handler)
+  T.check(not paused and calls_[2] == false, 'fast pre-cache: the app gone, the pause let go')
+  sh.paused, sh.pause = was[1], was[2]
 end
 T.done('test_core_stubbed')

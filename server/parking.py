@@ -133,11 +133,17 @@ def _lot_rows(hw):
     return out
 
 
-def lot_spots(rings, box, z_at, blockers=()):
+LOT_ROAD_CLEAR_M = 5.0      # a lot stall whose centre is this close to a public road's centre line is on its lanes: left
+                            # out (a parking polygon drawn over a road: parked cars spawned across an Interstate's
+                            # lanes, Tann2019 on I-94 / I-90 in Montana, 2026-11-05)
+
+
+def lot_spots(rings, box, z_at, blockers=(), roads_xy=()):
     """Rows [x, y, z, heading, 1] of the stalls of parking lots (rings: (k, 2) arrays in the anchor frame)
     whose centres are in the tile box: rows along each lot's long side, every stall wholly inside the lot and
-    its centre in none of the blockers (building footprints: a garage's ground floor). z_at(x, y) -> the
-    ground (arrays). Deterministic."""
+    its centre in none of the blockers (building footprints: a garage's ground floor) nor within LOT_ROAD_CLEAR_M of
+    a public road (roads_xy: buildings.road_lines in the anchor frame). z_at(x, y) -> the ground (arrays).
+    Deterministic."""
     import buildings
     x0, y0, x1, y1 = box
     cand = []
@@ -174,6 +180,17 @@ def lot_spots(rings, box, z_at, blockers=()):
         b = np.asarray(b, np.float64)
         if len(b) >= 3:
             keep &= ~Path(b).contains_points(pts)
+    lines = [np.asarray(ln, np.float64)[:, :2] for ln in roads_xy if len(ln) >= 2]
+    if lines and keep.any():        # (one Rust pass for every stall against every road segment: earthfast's grid)
+        import fast
+        fast.require(0, "points_near_segments")
+        a = np.concatenate([ln[:-1] for ln in lines])
+        b = np.concatenate([ln[1:] for ln in lines])
+        idx = np.flatnonzero(keep)
+        near = np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(pts[idx], np.float64),
+                                                        np.ascontiguousarray(a), np.ascontiguousarray(b),
+                                                        np.full(len(a), LOT_ROAD_CLEAR_M)), bool)
+        keep[idx[near]] = False
     cand = [cnd for cnd, k in zip(cand, keep) if k][:LOT_MAX_PER_TILE]
     if not cand:
         return []
@@ -224,10 +241,16 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     existing = list(existing or [])
     box = roads.tile_bbox(tx, ty)
     blockers = [spec.ring + np.array(box[:2]) for spec, *_ in (items or ())]
+    roads_xy = []
     try:
-        feats = [md.cell(k, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
+        cells = [md.cell(k, layers=("infrastructure", "roads"), kind="demand")
                  for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)]
-        rings = lot_rings(frame, feats)
+        rings = lot_rings(frame, [c.layers.get("infrastructure") for c in cells])
+        if rings:
+            import buildings
+            roads_xy = [ln + np.array(box[:2]) for ln in
+                        buildings.road_lines(frame, [c.layers.get("roads") for c in cells], box[0], box[1],
+                                                size=max(box[2] - box[0], box[3] - box[1]))]
     except Exception:
         rings = []
     paths = [Path(np.asarray(b, np.float64)) for b in blockers + rings if len(b) >= 3]
@@ -243,7 +266,7 @@ def tile_lot_spots(frame, tx, ty, md, elev, items=None, existing=None):
     def z_at(x, y):                 # the anchor frame's up, as the ground drawn (the Earth's curve: raw heights stood a
         la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)    # spot ~6 m up 10 km from the anchor, 18 m at 15 km)
         return frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2]
-    return existing + lot_spots(rings, box, z_at, blockers)
+    return existing + lot_spots(rings, box, z_at, blockers, roads_xy)
 
 
 AISLE_END_M = 6.0           # stalls kept this far from an aisle's ends (its junctions)
@@ -273,24 +296,38 @@ def aisle_spots(roads, aisles, box, blockers=(), lots=()):
         for side in (1.0, -1.0):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
-            for q, nn, p in zip(Q, n, P):
+            hit = _hits(paths, Q)
+            for q, nn, p, h in zip(Q, n, P, hit):
                 if not (_owns(box, q[0], q[1])):
                     continue
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     continue
-                if _hit(paths, q):
+                if h:
                     continue
                 out.append([round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
                             round(math.degrees(math.atan2(nn[1], nn[0])) % 360.0, 1), 1])
     return out
 
 
-def _hit(paths, q):
-    """Does q lie in any of the polygons (Path.contains_points; one point)?"""
-    if not paths:
-        return False
-    pt = np.atleast_2d(np.asarray(q, np.float64))
-    return any(bool(np.asarray(pa.contains_points(pt)).reshape(-1)[0]) for pa in paths)
+def _hits(paths, pts):
+    """Per point of pts (k, 2): does it lie in any of the polygons (Path.contains_points)? One
+    contains_points call per polygon whose bounding box meets the points' (not one per point and polygon:
+    aisle_spots and lot_markings tested every stall against every building of the tile, 480k calls and
+    ~3 s of a Las Vegas road tile's build, 2026-11-01)."""
+    pts = np.asarray(pts, np.float64).reshape(-1, 2)
+    out = np.zeros(len(pts), bool)
+    if not paths or not len(pts):
+        return out
+    lo, hi = pts.min(0), pts.max(0)
+    for pa in paths:
+        v = pa.vertices
+        if not len(v):
+            continue
+        vlo, vhi = v.min(0), v.max(0)
+        if vlo[0] > hi[0] or vlo[1] > hi[1] or vhi[0] < lo[0] or vhi[1] < lo[1]:
+            continue                        # (contains_points is False for a point outside the polygon's box)
+        out |= np.asarray(pa.contains_points(pts), bool).reshape(-1)
+    return out
 
 
 def _groups(ok):
@@ -524,6 +561,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
             n = np.stack([-D[:, 1], D[:, 0]], 1) * side
             Q = P[:, :2] + n * (spec.width / 2 + LOT_SPOT_D_M / 2)
             keep = np.ones(len(st), bool)
+            hit = _hits(paths, Q)
             for i, (q, p) in enumerate(zip(Q, P)):
                 if not (ex0 <= q[0] < ex1 and ey0 <= q[1] < ey1):
                     keep[i] = False
@@ -531,7 +569,7 @@ def aisle_markings(roads, aisles, box, blockers=(), lots=()):
                 if not furniture._clear(np.array([q[0], q[1], p[2]]), others, fid):
                     keep[i] = False
                     continue
-                if _hit(paths, q):
+                if hit[i]:
                     keep[i] = False
             room = LOT_MAX_PER_TILE - n_stalls
             if int(keep.sum()) > room:
@@ -550,16 +588,17 @@ def drop_covered(chunks, rings):
     paths = [Path(np.asarray(r, np.float64)) for r in rings if len(np.asarray(r)) >= 3]
     if not paths:
         return list(chunks or [])
-    kept = []
+    cand, mids = [], []
     for ch in chunks or ():
         n = ch.get("n") or []
         if len(n) < 2:
             continue
-        mid = ((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0)
-        if _hit(paths, mid):
-            continue
-        kept.append(ch)
-    return kept
+        cand.append(ch)
+        mids.append(((n[0][0] + n[1][0]) / 2.0, (n[0][1] + n[1][1]) / 2.0))
+    if not cand:
+        return []
+    hit = _hits(paths, mids)            # (every midpoint at once: one at a time ~0.37 s of a Manhattan tile set)
+    return [ch for ch, h in zip(cand, hit) if not h]
 
 
 def finish_markings(frame, tx, ty, md, elev, items=None, marks=()):

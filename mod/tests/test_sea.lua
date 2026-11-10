@@ -55,6 +55,8 @@ T.check(car.nudged >= 1, 'a parked car inside a new tile is re-placed (its physi
 local pb = physBlock()
 T.check(pb and pb.renderEnabled == false and pb.pos.x == 100 and math.abs(pb.pos.z) < 0.01 and pb.scale.x == sea.PHYS_SIZE,
   'a physics block around the player at the level of its tile, not drawn')
+T.check(pb.fields.rippleTex and pb.fields.foamTex and pb.fields.depthGradientTex,
+  'the physics block has its textures (without, every move logged "Texture missing")')
 local made0 = sea.physMade
 sea.update(1, player)
 T.check(sea.physMade == made0 + 1, 'made again once the batch of new tiles is done')
@@ -108,6 +110,14 @@ Sim = { deserializeObjectFromText = function(def)
   function o:getId() return self.id end
   function o:reloadTextures() self.reloaded = true end
   function o:regenerate() self.regenerated = true end
+  function o:getWorldBox()          -- (its nodes' box, as the engine's)
+    local lo, hi = vec3(1e9, 1e9, 1e9), vec3(-1e9, -1e9, -1e9)
+    for _, n in ipairs(def.nodes) do
+      lo = vec3(math.min(lo.x, n[1]), math.min(lo.y, n[2]), math.min(lo.z, n[3]))
+      hi = vec3(math.max(hi.x, n[1]), math.max(hi.y, n[2]), math.max(hi.z, n[3]))
+    end
+    return { minExtents = lo, maxExtents = hi }
+  end
   o.def = def
   o:registerObject(def.name)
   defs[#defs + 1] = def
@@ -138,6 +148,30 @@ sea.onMessage({ type = 'sea', anchorId = 3, tiles = {}, rivers = { stream } })
 sea.update(3, player)
 sea.clear()
 T.check(next(rivers()) == nil, 'clear: removed')
+
+-- far Rivers hidden (each is a WaterObject drawn and reflected every frame), shown again on the way back
+T.check(sea.boxDistance({ 0, 0, 0, 10, 10, 10 }, vec3(5, 5, 5)) == 0, 'inside the box: 0')
+T.check(math.abs(sea.boxDistance({ 0, 0, 0, 10, 10, 10 }, vec3(13, 14, 5)) - 5) < 1e-9, 'to its nearest corner')
+local cullS = sea.RIVER_CULL_S
+sea.RIVER_CULL_S = 0
+local cam = vec3(10, 0, 10)
+getCameraPosition = function() return cam end
+sea.onMessage({ type = 'sea', anchorId = 3, tiles = {}, rivers = { stream } })
+sea.update(3, player)
+rv = rivers()[sea.RIVER_PREFIX .. 'Rabc_0_0_0']
+T.check(rv and not rv.hidden and sea.status().riversHidden == 0, 'near the camera: drawn')
+cam = vec3(20 + sea.RIVER_HIDE_M + 50, 0, 10)
+sea.update(3, player)
+T.check(rv.hidden == true and sea.status().riversHidden == 1, 'past RIVER_HIDE_M: hidden')
+cam = vec3(20 + (sea.RIVER_HIDE_M + sea.RIVER_SHOW_M) / 2, 0, 10)
+sea.update(3, player)
+T.check(rv.hidden == true, 'between the two: stays hidden (no flicker at the line)')
+cam = vec3(20 + sea.RIVER_SHOW_M - 50, 0, 10)
+sea.update(3, player)
+T.check(rv.hidden == false and sea.status().riversHidden == 0, 'back within RIVER_SHOW_M: drawn again')
+sea.clear()
+getCameraPosition = nil
+sea.RIVER_CULL_S = cullS
 
 -- origin rebase: the water moves into the new frame at once and stays under the new anchor (no gap until the server's
 -- next 'sea' message)

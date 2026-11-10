@@ -21,7 +21,7 @@ import logging
 import os
 import threading
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor
+from runtimeprofiler import ThreadPoolExecutor
 
 import numpy as np
 
@@ -36,6 +36,8 @@ END_SKIP = 10.0         # m kept clear of each end of a road (junctions)
 REACH = 25.0            # m searched each side
 NEAR_M = REACH + 10.0   # m round a road the cells whose buildings it is measured against
 COMBOS = 32             # sets of cells' walls kept (roads near a cell's edge)
+REFRAMED = 64           # a cell's wall segments in another cell's frame, kept for the sets (each set of 2-4 cells
+                        # converted every wall of its other cells through lon / lat again, 2026-11-07)
 NEAR_STEP_M = 200.0     # m between a road's points its cells are found round
 MIN_SAMPLES = 4
 WALLED = 0.6            # share of cross-sections with a building on both sides
@@ -47,6 +49,7 @@ WALK_NARROW_MIN = 0.6   # m: keep narrow streets within their measured building-
 BUCKET = 16.0           # m, wall segment buckets
 
 
+MEMO_MAX = 200000        # roads' widths kept per process (RoadWidths.memo), then forgotten all at once
 WALL_CELLS = 48          # cells of building walls kept per process (budget.py: fewer on a small machine)
 # A cell's walls also on disk (store_dir), float32 in the cell's frame (within a few km of its centre: sub-mm): every
 # server process built them from the buildings of the 9 cells around, ~0.6 s a cell on a Steam Deck, and the block
@@ -275,12 +278,20 @@ class RoadWidths:
         """store_dir: the walls' files (the map data release's own folder), or None (none kept on disk)."""
         self.cell_fn = cell_fn
         self.store_dir = store_dir
-        self.memo = {}                          # fid -> (carriageway, walk) or None
+        self.memo = {}                          # fid -> (carriageway, walk) or None (MEMO_MAX at most)
         self.walls = OrderedDict()              # cell key -> (frame, Walls), the WALL_CELLS last used
         self.combos = OrderedDict()             # cell keys -> (frame, Walls) of a road near cells' edges
+        self.reframed = OrderedDict()           # (cell key, frame's cell key) -> (its Walls, segs in that frame)
         self.lock = threading.Lock()
         self.key_locks = {}                     # cell key -> Lock: one thread builds a cell's walls
 
+
+    def clear_memory(self):
+        """Drop the walls and widths kept in memory (budget.maybe_shed)."""
+        with self.lock:
+            self.walls.clear()
+            self.combos.clear()
+            self.memo.clear()
     def _walls(self, key):
         """The walls of the buildings in cell key, in a frame at the cell's centre."""
         with self.lock:
@@ -378,10 +389,22 @@ class RoadWidths:
             if frame is None:
                 frame = f
             elif len(sg):
-                pts = sg.reshape(-1, 2)
-                la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-                sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                rk = (str(k), ck[0])
+                with self.lock:
+                    hit = self.reframed.get(rk)
+                    if hit is not None:
+                        self.reframed.move_to_end(rk)
+                if hit is not None and hit[0] is w:
+                    sg = hit[1]
+                else:
+                    pts = sg.reshape(-1, 2)
+                    la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+                    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
+                    sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                    with self.lock:
+                        self.reframed[rk] = (w, sg)
+                        while len(self.reframed) > REFRAMED:
+                            self.reframed.popitem(last=False)
             segs.append(sg)
         got = (frame, Walls(np.concatenate(segs) if segs else np.zeros((0, 4))))
         with self.lock:
@@ -403,5 +426,7 @@ class RoadWidths:
             row = measure_row(np.c_[e, n], walls)
             res = split(row) if row is not None else None
         with self.lock:
+            if len(self.memo) >= MEMO_MAX:      # (unbounded, it grew for a whole session in every road worker)
+                self.memo.clear()
             self.memo.setdefault(fid, res)
             return self.memo[fid]

@@ -13,15 +13,19 @@ and a file whose digest is missing or wrong is deleted, never run. A source copy
 import hashlib
 import json
 import os
+import ioprofiler
 import sys
 import urllib.request
 
 import netfetch
 import updates
 
-API_URL = f"https://api.github.com/repos/{updates.REPO}/releases/latest"
+API_URL = updates.LATEST_API
 ASSET_PREFIX = f"https://github.com/{updates.REPO}/releases/download/"
 STAGED = "BeamNG.Earth-update.json"     # beside the downloaded file: {"version", "path", "sha256"}
+# beside it too: a downloaded version Windows would not start (Smart App Control: an unsigned .exe, no "run anyway";
+# GitHub #823): {"version", "by"}, not offered again (earthd.check_update)
+BLOCKED = "BeamNG.Earth-update-blocked.json"
 CHUNK = 1 << 16
 
 
@@ -71,7 +75,7 @@ def pick(release, suffix):
 def _get_json(net, url):
     with net.session(url, kind="demand") as s:
         req = urllib.request.Request(url, headers={**s.headers, "Accept": "application/vnd.github+json"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with ioprofiler.urlopen(req, timeout=30, context=netfetch.windows_ssl_context()) as resp:
             s.status = resp.status
             body = resp.read(4 << 20)
             s.nbytes = len(body)
@@ -121,7 +125,7 @@ def download(net, current, path=None, progress=None):
         try:
             with net.session(url, kind="demand") as s:
                 req = urllib.request.Request(url, headers=s.headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
+                with ioprofiler.urlopen(req, timeout=60, context=netfetch.windows_ssl_context()) as resp:
                     final = resp.geturl()
                     if not final.startswith("https://"):
                         raise UpdateError("the download was redirected off https")
@@ -175,6 +179,38 @@ def staged(current, path=None):
         _remove(note)
         return None
     return new
+
+
+def drop_staged(path=None, blocked_by=None):
+    """Forget the downloaded copy (its note): it would not start (launcher.hand_over), so this one runs from now on.
+    blocked_by (e.g. "smart_app_control"): its version is remembered (BLOCKED) and not offered again (blocked)."""
+    path = path or packaged_path()
+    if not path:
+        return
+    folder = os.path.dirname(os.path.abspath(path))
+    note = os.path.join(folder, STAGED)
+    if blocked_by:
+        try:
+            with open(note, encoding="utf-8") as f:
+                version = str(json.load(f)["version"])
+            with open(os.path.join(folder, BLOCKED), "w", encoding="utf-8") as f:
+                json.dump({"version": version, "by": str(blocked_by)}, f)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    _remove(note)
+
+
+def blocked(path=None):
+    """{"version", "by"} of the newest downloaded version Windows would not start (drop_staged), or None."""
+    path = path or packaged_path()
+    if not path:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(path)), BLOCKED), encoding="utf-8") as f:
+            d = json.load(f)
+        return {"version": str(d["version"]), "by": str(d.get("by") or "")}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
 
 
 def _remove(p):

@@ -520,7 +520,9 @@ class SessionCreditsTest(test_server.ServerHarness):
         self.assertEqual([x["type"] for x in before if x["type"] == "hello"], ["hello"])
         # the player 50 km east: only AWS under the near tiles once the far field there is in
         self.pose(aid, 50000, 0)
-        _, moving = c.until(lambda m: m["type"] == "far_done", 120)
+        # (300 s: the whole far field of a new place, built beside the gate's other test servers; it ran out at 120 s
+        # in three parallel gates of 2026-11-08 and passed alone each time)
+        _, moving = c.until(lambda m: m["type"] == "far_done", 300)
         self.pose(aid, 50000, 0)
         later = self.credits_msgs(moving + c.drain(3 * self.INTERVAL))
         self.assertTrue(later)
@@ -605,6 +607,34 @@ class FeatureSourcesTest(unittest.TestCase):
         ids = credits.feature_ids(conn)
         self.assertFalse({i for i in ids if i.startswith(("map:", "canopy:", "bridge:"))}, ids)
         self.assertIn("land:esa-worldcover", ids)
+
+    def test_3dmr_model_near(self):
+        # a 3dmr.eu model the cache knows within FEATURE_NEAR_M of the player, with road tiles shown: the library is
+        # named ("3D models: 3D Model Repository (3dmr.eu)", the attribution its CC BY 4.0 models ask for); not with
+        # the models off (BNE_3DMR=off), nor once the player is away from it
+        import geodesy
+        import threedmr
+        from unittest import mock
+
+        lat, lon = 48.85809, 2.29469
+        with tempfile.TemporaryDirectory() as root:
+            os.makedirs(os.path.join(root, "threedmr_cache"))
+            with open(os.path.join(root, "threedmr_cache", "info_4.json"), "w") as f:
+                json.dump({"id": 4, "lat": lat + 0.005, "lon": lon, "title": "Eiffel Tower", "desc": ""}, f)
+            s = types.SimpleNamespace(anchors={1: types.SimpleNamespace(frame=geodesy.EnuFrame(lat, lon))},
+                                      mapdata=object(), surface=None, veg=None, airports=None, root=root)
+            conn = types.SimpleNamespace(s=s, active=1, focus=(0.0, 0.0), roads=types.SimpleNamespace(aid=1, sent={1}),
+                                         veg=None, sea_sent=None, gravity=None)
+            with mock.patch("threedmr._urllib_fetch", side_effect=AssertionError("no request")), \
+                    mock.patch.object(threedmr, "position_override", return_value=None):
+                self.assertIn("model:3dmr", credits.feature_ids(conn))
+                self.assertEqual(credits.line({"model:3dmr"}), "3D models: 3D Model Repository (3dmr.eu)")
+                with mock.patch.dict(os.environ, {"BNE_3DMR": "off"}):
+                    self.assertNotIn("model:3dmr", credits.feature_ids(conn))
+                conn.focus = (0.0, -5000.0)
+                self.assertNotIn("model:3dmr", credits.feature_ids(conn))
+        text = (Path(__file__).resolve().parents[2] / "CREDITS.md").read_text()
+        self.assertIn(f'"3D models: {credits.full_label("model:3dmr")}"', text)
 
     def test_leaf_off_share_is_no_source(self):
         ids = credits.tile_sources(None, (0, 0, 1, 1), None, None, {"usgs": 5, "leafon": 5})

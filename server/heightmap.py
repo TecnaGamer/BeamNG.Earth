@@ -1,30 +1,29 @@
 """Near-field TerrainBlock heightmap (docs/V1_2_DESIGN.md §1, §12 P1).
 
-1024 x 1024 samples at exactly s = 2.0 m, on a world-locked lattice: the block centre (cx, cy)
-is a multiple of 256 m in the anchor's ENU plane, the block position (SW corner) is
-(cx - 1024, cy - 1024, zBase), and sample (gx, gy) sits at (cx - 1024 + 2 gx, cy - 1024 + 2 gy).
-Coordinates are computed as integer lattice index x 2.0, so the same world point yields
-bit-identical lat/lon (and DEM value) in every block; a 256 m terrain-follow move is exactly
-128 samples. Row/column 1023 hold real DEM data.
+SIZE x SIZE samples at exactly s = SQUARE m (1024 x 1 m), on a world-locked lattice: the block centre (cx, cy)
+is a multiple of grid() in the anchor's ENU plane, the block position (SW corner) is (cx - HALF, cy - HALF, zBase),
+and sample (gx, gy) sits at (cx - HALF + s gx, cy - HALF + s gy). Coordinates are computed as integer lattice index x
+s, so the same world point yields bit-identical lat/lon (and DEM value) in every block. The last row/column hold real
+DEM data.
 
 The engine (probe P1) computes h = zBase + q * maxHeight / 65536. With a fixed per-anchor
 height quantum Q (a power of two), maxHeight = Q * 65536 and zBase a multiple of Q, every
 stored height is Q * round(u / Q) whatever the block, so overlapping samples of two blocks are
-identical. Physics covers [x0, x0 + (N-1) s] = 2046 m per axis (P1); the 2 m strip up to
-x0 + 2048 on the N/E edges is left to the far tiles.
+identical. Physics covers [x0, x0 + (N-1) s] per axis (P1); the last square's strip on the N/E edges is left to
+the far tiles.
 
 The value of a sample is the ENU z of the DEM surface point under it. Stored as a 16-bit
 grayscale PNG, row 0 = north.
 
-SIZE, HALF, VALID and GRID describe the v1.3.1 block. The functions that depend on the block size
-take it as a parameter (`size`, samples per edge; the server passes its Layout's `block`,
-docs/V1_4_SPEC.md §3.1), defaulting to SIZE; nothing reads a module setting at call time.
-
-M4 (docs/V1_4_SPEC.md §3.5, `earthd.py --block 512`): a 512² block, collidable [c-512, c+510],
-centred on a 128 m grid (GRIDS). Its SW corner c - 512 is then a multiple of 128 m, an even lattice
-index, so the block-local Torque diagonal parity is the world one, as with 1024² (farfield.py
-torque_split45), and a 128 m move is exactly 64 samples.
+The block: SIZE² samples SQUARE apart (1024² at 1 m since 2026-11-01, the stock maps' resolution; it was 512² at
+2 m, and 1024² at 2 m in the v1.3.1 terrain mode), collidable [c-512, c+511], centred on a 128 m grid (grid(): by the
+block's width in metres). Its SW corner c - 512 is then a multiple of 128 m, an even lattice index, so the block-local
+Torque diagonal parity is the world one (farfield.py torque_split45), and a 128 m move is exactly 128 samples. The
+functions that depend on the block size take it as a parameter (`size`, samples per edge; the server passes its
+Layout's `block`), defaulting to SIZE; nothing reads a module setting at call time. The far field's near tiles keep a
+2 m lattice (FAR_SQUARE): every second block sample, the same values.
 """
+from runtimeprofiler import step as profile_step
 import math
 import os
 import struct
@@ -36,14 +35,17 @@ import staging
 from PIL import Image
 
 SIZE = 1024
-SQUARE = 2.0                        # m; exactly representable, so the lattice is exact
-HALF = 1024.0                       # block position = centre - HALF
-VALID = (SIZE - 1) * SQUARE         # 2046 m: collidable extent from the SW corner (P1)
-GRID = 256.0                        # block centres are multiples of this (= 128 samples)
-GRIDS = {1024: GRID, 512: 128.0}    # the centre grid per block size (M4: 512² on 128 m = 64 samples)
+SQUARE = 1.0                        # m; exactly representable, so the lattice is exact
+FAR_SQUARE = 2.0                    # m: the far field's near tiles' lattice (every second block sample)
+HALF = SIZE * SQUARE / 2            # block position = centre - HALF
+VALID = (SIZE - 1) * SQUARE         # 1023 m: collidable extent from the SW corner (P1)
+GRID_BY_M = {1024.0: 128.0, 2048.0: 256.0}  # the centre grid (m) by the block's width (m)
+GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
-CHUNK = 64                          # samples: ChunkCache's chunk, 128 m (the 512² block's follow grid)
-CHUNK_CACHE = 1024                  # chunks kept per frame (32 KB each: 32 MB)
+CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
+CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
+CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
+                                    # block's own chunks are all it reads them for, and all 512 were +128 MB a process)
 # Height quanta (m), finest first: 65536 Q = 256 ... 4096 m of range per block.
 Q_LADDER = (1 / 256, 1 / 128, 1 / 64, 1 / 32, 1 / 16)
 Q_DEFAULT = 1 / 64
@@ -57,30 +59,30 @@ def snap(v, grid=GRID):
 
 
 def half_extent(size=SIZE):
-    """Block position = centre - this (1024 m for the 1024² block)."""
+    """Block position = centre - this (512 m for the 1024² block at 1 m)."""
     return size * SQUARE / 2
 
 
 def grid(size=SIZE):
-    """The centre grid of a `size`² block (256 m for 1024², 128 m for 512²)."""
-    return GRIDS[size]
+    """The centre grid of a `size`² block, by its width in metres (128 m for 1 km, 256 m for 2 km)."""
+    return GRID_BY_M[size * SQUARE]
 
 
 def valid(size=SIZE):
-    """Collidable extent from the SW corner, (N-1) * s (P1): 2046 m for 1024², 1022 m for 512²."""
+    """Collidable extent from the SW corner, (N-1) * s (P1): 1023 m for 1024² at 1 m."""
     return (size - 1) * SQUARE
 
 
 def lattice_index(c, size=SIZE):
-    """Lattice index of the first sample of a `size`² block centred at c (a multiple of 2 m)."""
+    """Lattice index of the first sample of a `size`² block centred at c (a multiple of SQUARE)."""
     k = (c - half_extent(size)) / SQUARE
     if k != math.floor(k):
-        raise ValueError(f"block centre {c} is not on the 2 m lattice")
+        raise ValueError(f"block centre {c} is not on the {SQUARE:g} m lattice")
     return int(k)
 
 
 def lattice_coords(k0, n):
-    """World coordinates of n lattice samples starting at index k0 (exact: index x 2.0)."""
+    """World coordinates of n lattice samples starting at index k0 (exact: index x SQUARE)."""
     return (k0 + np.arange(n, dtype=np.int64)).astype(np.float64) * SQUARE
 
 
@@ -102,8 +104,8 @@ def surface(frame, elev_fn, xs, ys, keep=None):
     lat = np.empty((ny, nx))
     lon = np.empty((ny, nx))
     for r0 in range(0, ny, CHUNK_ROWS):
-        e, n = np.meshgrid(xs, ys[r0:r0 + CHUNK_ROWS])
-        lat[r0:r0 + CHUNK_ROWS], lon[r0:r0 + CHUNK_ROWS], _ = frame.enu_to_geodetic(e, n, 0.0)
+        s = slice(r0, r0 + CHUNK_ROWS)
+        lat[s], lon[s], _ = frame.enu_to_geodetic(xs, ys[s, None], 0.0)
     elev = elev_fn(lat, lon)
     if keep is not None:
         keep["lat"], keep["lon"] = lat, lon
@@ -123,14 +125,15 @@ def grid_u(frame, elev_fn, cx=0.0, cy=0.0, size=SIZE, keep=None):
 
 
 class ChunkCache:
-    """Surface heights (grid_u's values) per CHUNK×CHUNK lattice chunk of one frame, so a block that moved
-    by a grid step computes only its new samples (a 512² block moving 128 m shares 7/8 of its samples
+    """Surface heights (grid_u's values) and optional geodetic coordinates per CHUNK×CHUNK lattice chunk of one frame,
+    so a block that moved by a grid step computes only its new samples (a 512² block moving 128 m shares 7/8 of its samples
     with the last; computing all of them every move took 2-10 s, more than the 2.2 s between moves at
-    58 m/s, 2026-10-12). Exact: the heights are elementwise (surface_u). LRU, thread-safe."""
+    58 m/s, 2026-10-12). Exact: the heights and coordinates are elementwise (surface_u). LRU, thread-safe."""
 
     def __init__(self, cap=CHUNK_CACHE):
         self.cap = cap
         self.chunks = OrderedDict()             # (kx, ky) lattice chunk -> (CHUNK, CHUNK) float64 [j, i]
+        self.geo = OrderedDict()                # (kx, ky) lattice chunk -> ((CHUNK, CHUNK) lat, (CHUNK, CHUNK) lon)
         self.lock = threading.Lock()
 
     def get(self, k):
@@ -138,14 +141,47 @@ class ChunkCache:
             got = self.chunks.get(k)
             if got is not None:
                 self.chunks.move_to_end(k)
+                if k in self.geo:
+                    self.geo.move_to_end(k)
             return got
 
-    def put(self, k, u):
+    def get_geo(self, k):
+        with self.lock:
+            if k not in self.chunks:
+                self.geo.pop(k, None)
+                return None
+            got = self.geo.get(k)
+            if got is not None:
+                self.geo.move_to_end(k)
+            return got
+
+    def _trim_geo(self):
+        while len(self.geo) > CHUNK_GEO_CACHE:
+            self.geo.popitem(last=False)
+
+    def put_geo(self, k, geo):
+        with self.lock:
+            if k in self.chunks and geo is not None:
+                self.geo[k] = geo
+                self.geo.move_to_end(k)
+                self._trim_geo()
+
+    def put(self, k, u, geo=None):
         with self.lock:
             self.chunks[k] = u
             self.chunks.move_to_end(k)
+            if geo is not None:
+                self.geo[k] = geo
+                self.geo.move_to_end(k)
             while len(self.chunks) > self.cap:
-                self.chunks.popitem(last=False)
+                evicted, _ = self.chunks.popitem(last=False)
+                self.geo.pop(evicted, None)
+            self._trim_geo()
+
+    def clear(self):
+        with self.lock:
+            self.chunks.clear()
+            self.geo.clear()
 
 
 def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
@@ -154,29 +190,87 @@ def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
     kx0, ky0 = lattice_index(cx, size), lattice_index(cy, size)
     if kx0 % CHUNK or ky0 % CHUNK or size % CHUNK:
         return grid_u(frame, elev_fn, cx, cy, size, keep), 1.0
-    xs, ys = sample_coords(cx, cy, size)
-    lat = np.empty((size, size))
-    lon = np.empty((size, size))
-    for r0 in range(0, size, CHUNK_ROWS):
-        e, n = np.meshgrid(xs, ys[r0:r0 + CHUNK_ROWS])
-        lat[r0:r0 + CHUNK_ROWS], lon[r0:r0 + CHUNK_ROWS], _ = frame.enu_to_geodetic(e, n, 0.0)
-    if keep is not None:
-        keep["lat"], keep["lon"] = lat, lon
+
     nc = size // CHUNK
     u = np.empty((size, size))
     missing = []
+    need_geo = []
+
+    lat = np.empty((size, size)) if keep is not None else None
+    lon = np.empty((size, size)) if keep is not None else None
+
     for cj in range(nc):
         for ci in range(nc):
             k = ((kx0 // CHUNK) + ci, (ky0 // CHUNK) + cj)
             got = cache.get(k)
             if got is None:
                 missing.append((ci, cj, k))
+                need_geo.append((ci, cj, k))
             else:
                 u[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = got
+                if keep is not None:
+                    g = cache.get_geo(k) if hasattr(cache, "get_geo") else None
+                    if g is not None:
+                        lat[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = g[0]
+                        lon[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = g[1]
+                    else:
+                        need_geo.append((ci, cj, k))
+
+    if not missing and not need_geo:
+        if keep is not None:
+            keep["lat"], keep["lon"] = lat, lon
+        return u, 0.0
+
+    if len(missing) == nc * nc:
+        xs, ys = sample_coords(cx, cy, size)
+        full_lat = np.empty((size, size))
+        full_lon = np.empty((size, size))
+        for r0 in range(0, size, CHUNK_ROWS):
+            r = slice(r0, r0 + CHUNK_ROWS)
+            full_lat[r], full_lon[r], _ = frame.enu_to_geodetic(xs, ys[r, None], 0.0)
+        elev = np.asarray(elev_fn(full_lat, full_lon), np.float64)
+        for r0 in range(0, size, CHUNK_ROWS):
+            r = slice(r0, r0 + CHUNK_ROWS)
+            u[r] = frame.geodetic_to_enu(full_lat[r], full_lon[r], elev[r])[2]
+        for cj in range(nc):
+            for ci in range(nc):
+                k = ((kx0 // CHUNK) + ci, (ky0 // CHUNK) + cj)
+                sl_y = slice(cj * CHUNK, (cj + 1) * CHUNK)
+                sl_x = slice(ci * CHUNK, (ci + 1) * CHUNK)
+                cache.put(k, u[sl_y, sl_x].copy(), geo=(full_lat[sl_y, sl_x].copy(), full_lon[sl_y, sl_x].copy()))
+        if keep is not None:
+            keep["lat"], keep["lon"] = full_lat, full_lon
+        return u, 1.0
+
+    chunk_geo = {}
+    if need_geo:
+        xs, ys = sample_coords(cx, cy, size)
+        e_chunks = []
+        n_chunks = []
+        for ci, cj, k in need_geo:
+            cx_chunk = xs[ci * CHUNK:(ci + 1) * CHUNK]
+            cy_chunk = ys[cj * CHUNK:(cj + 1) * CHUNK]
+            e, n = np.meshgrid(cx_chunk, cy_chunk)
+            e_chunks.append(e.ravel())
+            n_chunks.append(n.ravel())
+        all_e = np.concatenate(e_chunks)
+        all_n = np.concatenate(n_chunks)
+        all_la, all_lo, _ = frame.enu_to_geodetic(all_e, all_n, 0.0)
+        chunk_pts = CHUNK * CHUNK
+        for idx, (ci, cj, k) in enumerate(need_geo):
+            cla = all_la[idx * chunk_pts:(idx + 1) * chunk_pts].reshape(CHUNK, CHUNK)
+            clo = all_lo[idx * chunk_pts:(idx + 1) * chunk_pts].reshape(CHUNK, CHUNK)
+            chunk_geo[k] = (cla, clo)
+            if lat is not None:
+                lat[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = cla
+                lon[cj * CHUNK:(cj + 1) * CHUNK, ci * CHUNK:(ci + 1) * CHUNK] = clo
+            if cache.get(k) is not None and hasattr(cache, "put_geo"):
+                cache.put_geo(k, (cla, clo))
+
     if missing:
         sl = [(slice(cj * CHUNK, (cj + 1) * CHUNK), slice(ci * CHUNK, (ci + 1) * CHUNK)) for ci, cj, _ in missing]
-        mla = np.concatenate([lat[a, b].ravel() for a, b in sl])
-        mlo = np.concatenate([lon[a, b].ravel() for a, b in sl])
+        mla = np.concatenate([chunk_geo[k][0].ravel() for _, _, k in missing])
+        mlo = np.concatenate([chunk_geo[k][1].ravel() for _, _, k in missing])
         elev = np.asarray(elev_fn(mla, mlo), np.float64)
         mu = np.empty(len(mla))
         for r0 in range(0, len(mla), CHUNK_ROWS * size):
@@ -185,7 +279,11 @@ def grid_u_chunked(frame, elev_fn, cx, cy, size, cache, keep=None):
         for n_, ((a, b), (_, _, k)) in enumerate(zip(sl, missing)):
             c = mu[n_ * CHUNK * CHUNK:(n_ + 1) * CHUNK * CHUNK].reshape(CHUNK, CHUNK)
             u[a, b] = c
-            cache.put(k, c.copy())
+            cache.put(k, c.copy(), geo=chunk_geo.get(k))
+
+    if keep is not None:
+        keep["lat"], keep["lon"] = lat, lon
+
     return u, len(missing) / (nc * nc)
 
 
@@ -223,13 +321,18 @@ def write_png(path, u, q=Q_DEFAULT):
     """Quantise on the global Q lattice and write the PNG atomically.
     Returns (Q, zBase, maxHeight, qgrid)."""
     q, z_base, max_height = block_params(float(u.min()), float(u.max()), q)
-    g = quantise(u, q) - round(z_base / q)          # integer arithmetic on exact floats
-    qgrid = np.clip(g, 0, 65535).astype(np.uint16)
+    inv_q = 1.0 / q
+    k = round(z_base * inv_q)
+    g = np.rint(u * inv_q)
+    g -= k
+    qgrid = np.clip(g, 0, 65535, out=g).astype(np.uint16)
     img = Image.fromarray(np.ascontiguousarray(qgrid[::-1]))   # flip: row 0 = north (max gy)
     tmp = staging.tmp_for(path)
-    # Uncompressed: the game decodes it on the main thread during the terrain-follow commit,
-    # and level 0 imports ~7 ms faster than level 1 (43 vs 50 ms for 1024², measured in-game).
-    img.save(tmp, format="PNG", compress_level=0)
+    # Deflate level 1: 1.2 MB in 29 ms here, level 0 2.1 MB in 55 ms (1024², 2026-11-04). The game decodes it only
+    # when it imports a block (an anchor's first, or when the .ter swap cannot be used: terrain.lua swap); level 0
+    # imported ~7 ms faster (43 vs 50 ms) when every commit imported, now a few per session. The rest of the time it
+    # was ~0.3 GB of SSD writes in a warm 8 min drive at 150 mph.
+    img.save(tmp, format="PNG", compress_level=1)
     staging.replace(tmp, path)
     return q, z_base, max_height, qgrid
 
@@ -285,6 +388,7 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
     return float((h[0, 0] * (1 - wx) + h[0, 1] * wx) * (1 - wy) + (h[1, 0] * (1 - wx) + h[1, 1] * wx) * wy)
 
 
+@profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
              chunks=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
@@ -294,7 +398,9 @@ def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEF
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
-        u, _ = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
+        if keep is not None:
+            keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u

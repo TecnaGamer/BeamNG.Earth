@@ -20,10 +20,12 @@
 -- Console: beamngEarth_roads.status(), .setEnabled(bool)
 
 local stopwatch = require('beamngEarth/stopwatch')
+local sea = require('beamngEarth/sea')
 
 local M = {}
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
   '/levels/east_coast_usa/art/road/main.materials.json',         -- ECA_road_edge_dirt (the asphalt's edge, roads.EDGE_DECAL)
   '/levels/west_coast_usa/art/decals/main.materials.json',       -- roadmarkings1 (turn arrows, markings.ARROW_MATERIAL)
   '/levels/west_coast_usa/art/shapes/roads/main.materials.json',   -- curbs, sidewalk1 (the sidewalk mesh)
@@ -31,17 +33,22 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/italy/art/shapes/buildings/main.materials.json',        -- italy_cobblestone (paving stones)
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
+  '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
-  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json' }
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadside/median.materials.json' }
 M.FADE = '450 150'          -- distanceFade: start, range (m)
 M.enabled = true
 -- the highway signs (server signstream.py, from cody196's PR #363) and the speed-limit signs (speedsigns.py): sign tiles
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -92,6 +99,12 @@ M.RELOAD_WAIT_FRAMES = 3
 local reloadWaits = 0
 
 local newColliders = {}    -- { id, walkQ entry } of the colliders made since the last reloadCollision
+local CUSTOM_MATERIALS_PATH = '/levels/beamng_earth/art/shapes/beamngEarth/three_dmr.materials.json'
+local customMaterialsNeverLoaded = {}   -- sentinel: matches no readFile() result, so the very first spawnCustom always loads
+local customMaterialsContent = customMaterialsNeverLoaded   -- three_dmr.materials.json (3dmr custom meshes): its
+    -- own text as of the last load, re-loaded whenever it changes - the server keeps appending materials for
+    -- models baked later in the same session (another location, same game run), which a load-once flag missed
+
 local parked = {}          -- walkQ entries of colliders whose tile is not near enough yet
 local sinceCollideCheck = stopwatch.new()
 local held = {}            -- walkQ entries of colliding meshes held while the player is in their boxes
@@ -148,6 +161,8 @@ end
 -- one road mesh the markings showed only while the engine happened to draw them after the asphalt; with
 -- many more translucent objects in view (buildings' windows, signals) they vanished. Opaque asphalt is
 -- drawn first, always, and the translucent lines, crossings and gutters over it.
+-- The dirt and gravel strips stay translucent (dirtroad.materials.json, from PR #455): an opacity map on their second
+-- uv fades their sides and open ends into the ground; the server lists them first in a road mesh, the lines over them.
 M.OPAQUE = { 'road_asphalt_2lane', 'italy_cobblestone' }
 -- The opaque road surfaces cast no sun shadow (from Madderose's PR #41). Translucent, as the stock decal materials are,
 -- they drew none; made opaque (above) they joined the shadow pass: every road tile's mesh drawn into each shadow
@@ -190,6 +205,11 @@ local function tileKey(aid, k) return tostring(aid) .. ':' .. tostring(k) end
 -- its last object is deleted (a collider deleted and made again while the tile lives keeps it).
 local session = nil        -- the server session the slots belong to (setSession)
 local objSlot = {}         -- object id -> slot number of the pooled file it loaded
+local waterSerial, objectWater, waterReleases, waterReloads = 0, {}, {}, 0
+local function protectWater(t, data, anchor)
+  waterSerial = waterSerial + 1
+  t.waterguard = sea.protect(waterSerial, data.waterguard, anchor)
+end
 local slotLive = {}        -- slot number -> objects alive with it
 local slotDropped = {}     -- slot number -> { serial, session } of a dropped tile's slot, reported at its last delete
 local slotsGone = {}       -- { n, serial, session } to report
@@ -198,13 +218,19 @@ local function slotOf(path) return tonumber(type(path) == 'string' and path:matc
 function M.setSession(s) session = s end
 
 -- An object with a pooled shape was made / is deleted.
-local function slotMade(id, path)
+local function slotMade(id, path, water)
+  if water then objectWater[id] = water; sea.retain(water) end
   local n = slotOf(path)
   if not n then return end
   objSlot[id] = n
   slotLive[n] = (slotLive[n] or 0) + 1
 end
 local function slotObjGone(id)
+  local water = objectWater[id]
+  if water then
+    objectWater[id] = nil
+    waterReleases[#waterReleases + 1] = { water, reloads + 1 }
+  end
   local n = objSlot[id]
   if not n then return end
   objSlot[id] = nil
@@ -220,6 +246,21 @@ local function slotDrop(sl)
   if not sl then return end
   if (slotLive[sl[1]] or 0) > 0 then slotDropped[sl[1]] = { sl[2], sl[3] }
   else slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end
+end
+-- Is any mesh file a tile's parts (and exact variants) are made from gone? A server restart sends the same content
+-- again (its hash h), whose objects the tile keeps, but the new server deletes the old run's session folder their
+-- files were in: the objects showed nothing after the next reload of their shapes (the Stelvio's summit buildings,
+-- 2026-10-31: three restarts in an evening, every building of the pass gone; their world box 0..2 m at the origin).
+-- Such a tile is made again from the new message.
+local function filesGone(parts, exact)
+  for _, p in pairs(parts or {}) do
+    local sh = type(p) == 'table' and p.shape
+    if type(sh) == 'string' and sh ~= '' and not FS:fileExists(sh) then return true end
+  end
+  for _, sh in pairs(exact or {}) do
+    if type(sh) == 'string' and sh ~= '' and not FS:fileExists(sh) then return true end
+  end
+  return false
 end
 -- The slots of msg.slots[what] as { n, serial, session } (nil: not pooled).
 local function msgSlot(msg, what)
@@ -270,7 +311,13 @@ local function noteUnit(kind, ms, shape)
   if not u then u = { n = 0, ms = 0, max = 0 }; unitStats[kind] = u end
   u.n, u.ms = u.n + 1, u.ms + ms
   if ms > u.max then u.max = ms end
+  -- (one slow unit in the game's log: players' logs named "roads 80-220 ms" hitches but not what, 2026-11-04)
+  if ms >= M.SLOW_UNIT_MS then
+    log('I', 'beamngEarth', string.format('roads: slow unit %s %.0f ms%s', tostring(kind), ms,
+      shape and (' (' .. tostring(shape) .. ')') or ''))
+  end
 end
+M.SLOW_UNIT_MS = 60
 
 local function dropTile(key)
   local t = tiles[key]
@@ -283,12 +330,18 @@ local function dropTile(key)
   for _, sl in pairs(t.oldPartSlot or {}) do slotDrop(sl) end
   t.oldSkin, t.oldPart, t.oldPartSlot = nil, nil, nil
   for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end
+  if t.custom then                      -- our 3dmr models of the old content (a re-sent tile left them in place:
+    for _, id in ipairs(t.custom) do      -- two bridges z-fighting on top of each other after a teleport/rebase)
+      deleteQ[#deleteQ + 1] = id
+    end
+  end
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  if t.signs then deleteQ[#deleteQ + 1] = t.signs end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
   -- walkQ / held / createQ entries, which were then made for the new tile from pooled shape paths that had just been
   -- reported gone and refilled with another tile's shape: that tile's buildings drawn here at its ground height (houses
@@ -306,6 +359,8 @@ local function dropTile(key)
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
+  if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
+  sea.release(t.waterguard)
   tiles[key] = nil
 end
 
@@ -467,6 +522,31 @@ local function createWalk(walk, collide)
   return o:getID()
 end
 
+-- A custom 3dmr mesh (server/threedmr.py, tile field "b3dmr" {shape, pos, col}): already at its correct ground
+-- height (pos z0 is 0), spawned at pos as-is like a bld / walk TSStatic. Colliding (the models stand in the
+-- way of driving, not just decoration), except a model bridge's own drawn mesh (col false: the car drives on
+-- its invisible "_deck" slab instead). Returns the object's id.
+local function spawnCustom(key, shape, pos, rot, col)
+  local t = tiles[key]
+  if not t then return end
+  local content = readFile(CUSTOM_MATERIALS_PATH)
+  if content ~= customMaterialsContent then
+    customMaterialsContent = content
+    local ok, err = pcall(loadJsonMaterialsFile, CUSTOM_MATERIALS_PATH)
+    if not ok then log('E', 'beamngEarth', 'roads: three_dmr materials load failed: ' .. tostring(err)) end
+  end
+  -- a "_deck" shape (an invisible collision-only plate: cdae collision_only) needs collisionType
+  -- 'Collision Mesh', not 'Visible Mesh Final' (which would collide with a drawn detail it has none of)
+  local collide = string.find(shape, '_deck', 1, true) and 'Collision Mesh' or col ~= false
+  local walk = { shape = shape, pos = pos }
+  if rot then walk.rot = rot end
+  local id = createWalk(walk, collide)
+  t.custom = t.custom or {}
+  t.custom[#t.custom + 1] = id
+  if collide then collisionDirty = true end
+  return id
+end
+
 local function createChunk(chunk)
   local r = createObject('DecalRoad')
   for _, f in ipairs(M.fieldsFor(chunk)) do r:setField(f[1], 0, f[2]) end
@@ -494,7 +574,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -583,12 +663,33 @@ function M.mapStations(pl, recs)
   return out
 end
 
+-- A mapped turbine's identity and dimensions stay intact; only its base and heading belong to the anchor.
+function M.mapTurbines(pl, recs)
+  local out, dyaw = {}, geotile.yawOf(pl)
+  for i, r in ipairs(type(recs) == 'table' and recs or {}) do
+    if type(r) == 'table' then
+      local n = {}
+      for k, v in pairs(r) do n[k] = v end
+      if type(r.x) == 'number' and type(r.y) == 'number' and type(r.z) == 'number' then
+        n.x, n.y, n.z = geotile.apply(pl, r.x, r.y, r.z)
+      end
+      if type(r.yaw) == 'number' then n.yaw = r.yaw + dyaw end
+      out[i] = n
+    end
+  end
+  return out
+end
+
 -- The rows of tile t (key) handed to their modules, mapped into its current placement (made: replaced in place).
 local function geoRows(key, t, data, replacing)
   local pl = t.rowPl.pl
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
+      -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      if type(data.townsigns) == 'table' then
+        require('beamngEarth/townsigns').register(require('beamngEarth/trees'), data.townsigns)
+      end
       require('beamngEarth/trees').onGeoRows('p' .. t.gkey, t.gkey, data.props.items, data.props.groups, nil,
         t.frame, t.rowPivot or 0, t.anchorObj)
     end
@@ -617,6 +718,10 @@ local function geoRows(key, t, data, replacing)
     if t.wells and pj.placeRows then pj.placeRows(key, rows) else pj.onRows(key, rows) end
     t.wells = true
   end
+  local turbines = require('beamngEarth/windturbines')
+  local turbineRows = M.mapTurbines(pl, data.turbines)
+  if replacing then turbines.placeRows(key, turbineRows) else turbines.onRows(key, turbineRows) end
+  t.turbines = #turbineRows > 0
   if type(data.sound) == 'table' and data.sound[1] then
     local amb = require('beamngEarth/ambience')
     local flat = M.mapFlat(pl, data.sound, 8, 2, 8)
@@ -632,7 +737,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -667,12 +772,25 @@ function M.onGeoTile(msg, currentAnchor, a)
   local key = geoKey(msg.key)
   local old = tiles[key]
   local h = msg.h or data.h
-  if old and old.geo and h and old.h == h then
+  if old and old.geo and h and old.h == h and not filesGone(old.parts, old.exactShape) then
     -- the same content again (a server restart): its objects stay; the new message's slots are not used
     if type(msg.slots) == 'table' then
       for w in pairs(msg.slots) do slotDrop(msgSlot(msg, w)) end
     end
     old.anchor, old.orphan = currentAnchor, nil
+    -- (its furniture and guard rails again where trees.lua has them no more: a disconnect clears them all, trees.clear;
+    -- the poles near the car were gone after a server restart, their wires, part of the tile, still up: the Stelvio,
+    -- 2026-10-31)
+    local T = require('beamngEarth/trees')
+    if type(data.props) == 'table' and type(data.props.items) == 'table' and not T.hasGeo('p' .. old.gkey) then
+      T.onGeoRows('p' .. old.gkey, old.gkey, data.props.items, data.props.groups, nil, old.frame, old.rowPivot or 0,
+        old.anchorObj)
+    end
+    if type(data.guardrails) == 'table' and type(data.guardrails.items) == 'table' and #data.guardrails.items > 0
+        and not T.hasGeo('g' .. old.gkey) then
+      T.onGeoRows('g' .. old.gkey, old.gkey, data.guardrails.items, data.guardrails.groups, 17, old.frame,
+        old.rowPivot or 0, old.anchorObj)
+    end
     M.geoStats.kept = M.geoStats.kept + 1
     return true
   end
@@ -681,6 +799,10 @@ function M.onGeoTile(msg, currentAnchor, a)
   if not frame then lastError = 'road geotile without a frame: ' .. tostring(msg.key); return false end
   local t = { anchor = currentAnchor, geo = true, gkey = msg.key, frame = frame, h = h, objs = {}, queued = 0,
     colliders = {}, slots = {}, at = now(), colWant = {}, parts = {}, exactShape = {}, exactOf = {} }
+  -- (its buildings and their footprint share, server blockworker: the scene complexity, M.scene)
+  if type(data.scene) == 'table' and type(data.scene[1]) == 'number' then
+    t.sceneN, t.sceneCover = data.scene[1], tonumber(data.scene[2]) or 0
+  end
   local cols = type(data.colliders) == 'table' and data.colliders or {}
   local pivots, np = 0, 0
   for _, what in ipairs(M.CONTENT_WHATS) do
@@ -706,9 +828,26 @@ function M.onGeoTile(msg, currentAnchor, a)
   end
   t.rowPivot = np > 0 and pivots / np or 0
   t.data = data
+  protectWater(t, data, a)
   M.placeGeoTile(t, a)
   tiles[key] = t
   sinceChange = stopwatch.new()
+  -- the tile's baked 3dmr.eu models: their pos is in the tile's own frame, transformed
+  -- into the current anchor's world exactly like the content parts (M.geoWalk's xf)
+  -- (only here: geoRows runs again at every rebase, and spawning there left a second, untransformed copy of every
+  -- model - the doubled objects and the flickering double bridge; M.replace moves these ones instead)
+  if type(data.b3dmr) == 'table' then
+    t.customAt = {}
+    for _, ci in ipairs(data.b3dmr) do
+      if type(ci) == 'table' and type(ci.shape) == 'string' and type(ci.pos) == 'table' then
+        local pp = t.pls.bld or t.rowPl
+        local pos = { ci.pos[1], ci.pos[2], ci.pos[3] or 0 }
+        local x, y, z = pp.xf:apply(pos[1], pos[2], pos[3])
+        local id = spawnCustom(key, ci.shape, { x, y, z }, pp.q, ci.col)
+        if id then t.customAt[#t.customAt + 1] = { id = id, pos = pos } end
+      end
+    end
+  end
   geoRows(key, t, data)
   queueGeoParts(key, t, data)
   M.geoStats.tiles = M.geoStats.tiles + 1
@@ -821,7 +960,7 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+          renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
             or (t.parts.railcol ~= nil and what == 'rail') }
         walkQ[#walkQ + 1] = q
       end
@@ -868,6 +1007,16 @@ function M.replace(a, aid)
         for _, id in ipairs(t.objs) do deleteQ[#deleteQ + 1] = id end      -- (DecalRoads cannot turn)
         t.objs, t.queued = {}, 0
         sk.stale = true
+      end
+      if t.customAt then          -- its 3dmr models (onGeoTile): moved as its parts are
+        local pp = t.pls.bld or t.rowPl
+        for _, c in ipairs(t.customAt) do
+          local o = scenetree.findObjectById(c.id)
+          if o then
+            local x, y, z = pp.xf:apply(c.pos[1], c.pos[2], c.pos[3])
+            o:setPosRot(x, y, z, pp.q[1], pp.q[2], pp.q[3], pp.q[4])
+          end
+        end
       end
       if t.data then geoRows(key, t, t.data, true) end
       n = n + 1
@@ -955,8 +1104,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'exits', 'mileposts', 'merges', 'speeds' }) do
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail',
+      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -970,6 +1119,7 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  protectWater(tiles[key], data, a)
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
@@ -977,6 +1127,11 @@ function M.onTile(msg, currentAnchor, a)
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
+    if type(data.townsigns) == 'table' then   -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      local townsigns, trees = require('beamngEarth/townsigns'), require('beamngEarth/trees')
+      townsigns.register(trees, data.townsigns)
+      townsigns.addSigns(trees, msg.anchorId, data.props.items, data.props.groups)   -- (the trees in front: hidden)
+    end
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
     require('beamngEarth/nightlights').onRows(key, data.props.items, data.props.groups)   -- (the lamps' light)
     tiles[key].props = true
@@ -999,9 +1154,14 @@ function M.onTile(msg, currentAnchor, a)
     require('beamngEarth/pumpjacks').onRows(key, data.wells)
     tiles[key].wells = true
   end
+  require('beamngEarth/windturbines').onRows(key, type(data.turbines) == 'table' and data.turbines or {})
+  tiles[key].turbines = type(data.turbines) == 'table' and #data.turbines > 0
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true
+  end
+  if type(data.signs) == 'table' and data.signs.shape and type(data.signs.pos) == 'table' then
+    walkQ[#walkQ + 1] = { key = key, walk = data.signs, what = 'signs', renderOnly = true, tile = tiles[key] }
   end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
@@ -1009,6 +1169,9 @@ function M.onTile(msg, currentAnchor, a)
   -- a sign tile (key "s<tx>_<ty>"): its render-only sign shapes, kept in signData for setSignsEnabled
   tiles[key].signOnly = tostring(msg.key):match('^s%-?%d+_') ~= nil
   tiles[key].signData = {}
+  if type(data.dirs_faces) == 'table' then       -- the direction boards' Materials, before their shape (dirsigns.lua)
+    require('beamngEarth/dirsigns').register(data.dirs_faces)
+  end
   for _, what in ipairs(M.SIGN_WHATS) do
     local sign = data[what]
     if type(sign) == 'table' and sign.shape and type(sign.pos) == 'table' then
@@ -1023,6 +1186,10 @@ function M.onTile(msg, currentAnchor, a)
   local tx, ty = tostring(msg.key):match('^s?(%-?%d+)_(%-?%d+)$')
   tiles[key].cx = tx and (tonumber(tx) + 0.5) * M.TILE_M or nil
   tiles[key].cy = ty and (tonumber(ty) + 0.5) * M.TILE_M or nil
+  -- buildings on but none in this tile (server roads.write_tile bld_none: its only one a gas station's canopy outline,
+  -- left out; the user, 2026-10-29: "the third canopy is a building"): its far building tile, which has every outline,
+  -- is hidden as by a building mesh
+  tiles[key].bldNone = data.bldNone == true or nil
   -- a lean collision mesh ("bldcol", "walkcol", "railcol": server cdae collision_only) makes the drawn ones render-only
   -- (railcol: the track's bed and decks without its rails and sleepers, server railways.collision_mesh; mpsteppe's, from
   -- Madderose's PR #41)
@@ -1030,7 +1197,7 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'rail', 'railcol' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -1044,9 +1211,10 @@ function M.onTile(msg, currentAnchor, a)
 end
 
 -- Server message `bldfar_tile` {anchorId, key, path, n}: a far tile's buildings (render-only, the lite mesh);
--- shown only while the road tile of the same square has no building mesh of its own. `bldsky_tile` the same for a
--- skyline tile (server buildings.skyline_tile: SKY_UNIT x SKY_UNIT road tiles, key "ux_uy"), shown only while not all
--- of its squares' far tiles are here (they come as whole groups: no hole while they arrive, none left over after).
+-- shown only while the road tile of the same square has no building mesh of its own (nor says it has none:
+-- bldNone). `bldsky_tile` the same for a skyline tile (server buildings.skyline_tile: SKY_UNIT x SKY_UNIT road
+-- tiles, key "ux_uy"), shown only while not all of its squares' far tiles are here (they come as whole groups: no
+-- hole while they arrive, none left over after).
 M.SKY_UNIT = 4
 -- `brfar_tile` (kind 'B'): a far bridge tile's decks (server buildings.far_bridge_tile), shown only while the road
 -- tile of the same square has no deck or road mesh of its own.
@@ -1156,6 +1324,29 @@ local function farPartPlace(f, p, a)
 end
 M._farPartPlace = farPartPlace
 
+-- Pure: a far geotile's lamps {key: {pivot, rows {{x, y, z}, ...}}} as {key: {pivot, flat {x, y, z, i, ...}}} (nil: none):
+-- one table a road geotile key instead of one a lamp (78k lamp tables in the 1,400 far tiles of LA, the most of the
+-- mod's live Lua tables, which every collection goes through, 2026-11-02); i: the lamp's index in its rows (its phase)
+function M.flatLamps(lamps)
+  local out = nil
+  for k17, g in pairs(type(lamps) == 'table' and lamps or {}) do
+    local flat, n = {}, 0
+    for i, pt in ipairs(type(g) == 'table' and type(g.rows) == 'table' and g.rows or {}) do
+      local x, y, z = type(pt) == 'table' and tonumber(pt[1]), type(pt) == 'table' and tonumber(pt[2]),
+        type(pt) == 'table' and tonumber(pt[3])
+      if x and y and z then
+        flat[n + 1], flat[n + 2], flat[n + 3], flat[n + 4] = x, y, z, i
+        n = n + 4
+      end
+    end
+    if n > 0 then
+      out = out or {}
+      out[k17] = { pivot = g.pivot, flat = flat }
+    end
+  end
+  return out
+end
+
 -- A far geotile's lamps on / off: each road geotile key's rows a trees.lua geotile 'FL<kind><key>' (lampglow).
 local function farGeoLamps(f, on)
   on = on and f.lamps ~= nil and anchorObj ~= nil
@@ -1166,11 +1357,10 @@ local function farGeoLamps(f, on)
   for k17, g in pairs(f.lamps or {}) do
     local tk = 'FL' .. f.kind .. tostring(k17)
     if on then
-      local rows = {}
-      for i, pt in ipairs(type(g) == 'table' and type(g.rows) == 'table' and g.rows or {}) do
-        if type(pt) == 'table' and tonumber(pt[1]) and tonumber(pt[2]) and tonumber(pt[3]) then
-          rows[#rows + 1] = { 0, pt[1], pt[2], pt[3], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
-        end
+      local rows, flat = {}, g.flat
+      for j = 1, #flat, 4 do
+        local i = flat[j + 3]
+        rows[#rows + 1] = { 0, flat[j], flat[j + 1], flat[j + 2], 0, 1, 1, ((i * 7919) % 997) / 997 * 0.19 }
       end
       local fr = geotile.frameOf(k17)
       if #rows > 0 and fr then
@@ -1217,7 +1407,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   if k == 'F' then farSeen[key] = true end
   local old = far[key]
   local h = data.h
-  if old and old.geo and h ~= nil and old.h == h then
+  if old and old.geo and h ~= nil and old.h == h and not filesGone(old.parts) then
     release()
     old.orphan, old.anchor = nil, currentAnchor
     M.geoStats.farKept = (M.geoStats.farKept or 0) + 1
@@ -1230,7 +1420,7 @@ function M.onFarGeo(msg, currentAnchor, kind)
   local frame = geotile.frameOf({ frame = msg.frame or data.frame, key = msg.key })
   if not frame then release(); lastError = 'far geotile without a frame: ' .. tostring(msg.key); return false end
   local f = { geo = true, kind = k, gkey = msg.key, frame = frame, h = h, anchor = currentAnchor, parts = {},
-    lamps = type(data.lamps) == 'table' and next(data.lamps) ~= nil and data.lamps or nil }
+    lamps = M.flatLamps(data.lamps) }
   if k == 'S' then
     local z, x, y = geotile.parse(msg.key)
     f.sky = { z, x, y }
@@ -1340,7 +1530,7 @@ local function updateFarOne(key, f)
       elseif M.geo then
         hide = f.ghost and (f.hidden or false) or geoSquareCovered(f, key, false)
       else
-        hide = tiles[key] ~= nil and tiles[key].bld ~= nil
+        hide = tiles[key] ~= nil and (tiles[key].bld ~= nil or tiles[key].bldNone == true)
       end
       if hide ~= (f.hidden or false) then
         local o = scenetree.findObjectById(f.id)
@@ -1426,8 +1616,8 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'rail', 'railcol',
-  'exits', 'mileposts', 'merges', 'speeds' }
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'railcol',
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1569,6 +1759,7 @@ end
 -- Once per frame (core onUpdate): deletions, then creations, within the governor's budget.
 local viewAt = nil  -- core.viewAway(): the camera's { x, y } when it is away from the car, else nil (M.nextWalk)
 local prewarmId, prewarmPath, prewarmWant = nil, nil, nil     -- (the materials' prewarm shape, below)
+local prewarmXId = nil      -- its sibling in the strips' vertex format (prewarm_x.cdae), when the server wrote one
 local prewarmNow
 
 -- The last frame's update in parts (ms; diagnostics: the frame-time probes, 2026-10-29)
@@ -1581,6 +1772,16 @@ local function step(name)
   stepT0 = t
 end
 function M.update(gov, currentAnchor, player, view, a)
+  -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
+  -- that asynchronous rebuild before restoring deep water over its old bore.
+  if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
+    local keepWater = {}
+    for _, r in ipairs(waterReleases) do
+      if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+    end
+    waterReleases = keepWater
+  end
+  waterReloads = reloads
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
@@ -1657,7 +1858,7 @@ function M.update(gov, currentAnchor, player, view, a)
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
         (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
-      if ok then slotMade(id, walk.shape) end
+      if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
         M.dropOldSkin(t, q.what)
@@ -1747,6 +1948,7 @@ playerIn = function(boxes, what, t)
     p = { x = x, y = y, z = z }
   end
   local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  if what == 'barrier' then r = 1.0 end -- only a car intersecting the narrow median holds its collision
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
       if what == 'deck' then
@@ -1944,16 +2146,23 @@ prewarmNow = function()
   if not path or not M.enabled or not scenetree.MissionGroup then return end
   prewarmWant = nil
   if path == prewarmPath and prewarmId and scenetree.findObjectById(prewarmId) then return end   -- (made already)
-  if prewarmId then
-    local o = scenetree.findObjectById(prewarmId)
+  for _, old in pairs({ prewarmId or false, prewarmXId or false }) do
+    local o = old and scenetree.findObjectById(old)
     if o then o:delete() end
-    prewarmId = nil
   end
+  prewarmId, prewarmXId = nil, nil
   loadMaterials()
   local t = stopwatch.new()
   local ok, id = pcall(createWalk, { shape = path, pos = { 0, 0, -5000 } }, false)
   if not ok then lastError = tostring(id); return end
   prewarmId, prewarmPath = id, path
+  -- a road mesh with a dirt or gravel strip carries a second uv and a colour (server roadmesh.write): its materials'
+  -- instances for that vertex format, set up now too
+  local xpath = path:gsub('prewarm%.cdae$', 'prewarm_x.cdae')
+  if xpath ~= path and FS:fileExists(xpath) then
+    local okx, idx = pcall(createWalk, { shape = xpath, pos = { 0, 0, -5000 } }, false)
+    if okx then prewarmXId = idx else lastError = tostring(idx) end
+  end
   log('I', 'beamngEarth', string.format('roads: materials prewarmed in %.0f ms (%s)', t(), path))
 end
 
@@ -1983,11 +2192,15 @@ function M.clear()
   end
   deleteQ = {}
   walkQ, parked = {}, {}
-  if collisionDirty then be:reloadCollision(); collisionDirty = false end
+  if collisionDirty then be:reloadCollision(); M.collisionRebuilt() end
 end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  for _, t in pairs(tiles) do sea.release(t.waterguard) end
+  for _, token in pairs(objectWater) do sea.release(token) end
+  for _, r in ipairs(waterReleases) do sea.release(r[1]) end
+  objectWater, waterReleases, waterReloads = {}, {}, reloads
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
   for _, f in pairs(far) do
@@ -2054,6 +2267,9 @@ function M.ahead(x, y, hx, hy, dist)
         e.road = t.road ~= nil or (t.queued or 0) <= 0
         e.bld = t.bld ~= nil                    -- (a tile without buildings never has one)
         e.walk = t.walk ~= nil
+        for _, q in ipairs(walkQ) do              -- (a sidewalk / kerb import still queued: the walk lead)
+          if q.key == tkey then e.walkWait = true; break end
+        end
         local want, made, solid = 0, 0, 0
         for what in pairs(t.colWant or {}) do
           want = want + 1
@@ -2074,6 +2290,13 @@ function M.ahead(x, y, hx, hy, dist)
             end
           end
         end
+      end
+      -- the tree tile there (trees.lua, geotiles only): not arrived or still being placed (the tree lead)
+      if M.geo then
+        local T = package.loaded['beamngEarth/trees']
+        local all = T and T.debugTiles and T.debugTiles()
+        local tt = type(all) == 'table' and all['g:' .. tostring(sq)] or nil
+        e.trees = tt ~= nil and not tt.pending
       end
       out[#out + 1] = e
     end
@@ -2166,6 +2389,52 @@ function M.signTiles(x, y)
   return n, far
 end
 
+-- The server session folders the road tiles' and the far geotiles' objects are made from (their parts', exact
+-- variants' and far parts' shapes): claimed with the far field's (core.lua hello / pose `sessions`), so a restarted
+-- server keeps an earlier run's folder while a tile it sent again unchanged still shows its files. Only the far
+-- field's were claimed: the kept road tiles' folder went 10 minutes after a server restart, their buildings with it
+-- (the Stelvio's summit, 2026-10-31).
+-- (each path's folder memoised: it runs on every pose, farfield.heldSessions; cleared past HELD_MEMO_MAX paths)
+local HELD_MEMO_MAX = 20000
+local heldMemo, heldMemoN = {}, 0
+function M.heldSessions()
+  local ff = require('beamngEarth/farfield')
+  local set = {}
+  local function add(sh)
+    if type(sh) ~= 'string' then return end
+    local f = heldMemo[sh]
+    if f == nil then
+      f = ff.folderOf(sh) or false
+      if heldMemoN >= HELD_MEMO_MAX then heldMemo, heldMemoN = {}, 0 end
+      heldMemo[sh], heldMemoN = f, heldMemoN + 1
+    end
+    if f then set[f] = true end
+  end
+  for _, t in pairs(tiles) do
+    for _, p in pairs(t.parts or {}) do if type(p) == 'table' then add(p.shape) end end
+    for _, sh in pairs(t.exactShape or {}) do add(sh) end
+  end
+  for _, f in pairs(far) do
+    if f.shape then add(f.shape) end
+    for _, p in pairs(f.parts or {}) do if type(p) == 'table' then add(p.shape) end end
+  end
+  local out = {}
+  for f in pairs(set) do out[#out + 1] = f end
+  table.sort(out)
+  return out
+end
+
+-- Every server session folder the scene's objects still use (core.lua hello / pose `sessions`): the far field's and
+-- the road tiles' (heldSessions)
+function M.allHeldSessions()
+  local out, seen = {}, {}
+  for _, list in ipairs({ require('beamngEarth/farfield').heldSessions(), M.heldSessions() }) do
+    for _, f in ipairs(list) do if not seen[f] then seen[f] = true; out[#out + 1] = f end end
+  end
+  table.sort(out)
+  return out
+end
+
 function M.status()
   local nt, no, nw, nr, nd, nb, ngForest, ngRows = 0, 0, 0, 0, 0, 0, 0, 0
   for _, t in pairs(tiles) do
@@ -2190,6 +2459,25 @@ function M.status()
     urgentWalks = M.urgentWalks or 0, quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog,
     geo = M.geo or false, geoStats = M.geoStats, farGeo = M.farGeo or false, farGeoTiles = ngf,
     farGeoShown = ngShown }
+end
+
+-- The scene round the car for the anonymous performance reports (perfsummary.lua): the loaded road tiles (those within
+-- the send distance) with their buildings and mean footprint share. No place: counts only.
+-- (tiles built before their counts were sent have none: the known ones' total scaled to all; none known: nil)
+function M.scene()
+  local n, known, nb, cover = 0, 0, 0, 0
+  for _, t in pairs(tiles) do
+    if t.geo and not t.orphan then
+      n = n + 1
+      if t.sceneN then
+        known = known + 1
+        nb = nb + t.sceneN
+        cover = cover + (t.sceneCover or 0)
+      end
+    end
+  end
+  if known == 0 then return { tiles = n } end
+  return { tiles = n, buildings = math.floor(nb * n / known + 0.5), cover = cover / known }
 end
 
 local okSweep, swept = pcall(M.sweep)

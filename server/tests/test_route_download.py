@@ -81,9 +81,33 @@ class NeedAndDoneCountTest(unittest.TestCase):
         self.assertEqual(cell_layer_pairs, [])
 
 
-def connection(dem=None, mapdata=None, buildings=True, aid=1, dl_version=1):
+class FakeImagery:
+    """route_keys: one key per ~500 m of route; fetch_key: a deferred answer first for the keys in `defer`."""
+    def __init__(self, cached=(), defer=()):
+        self.cached, self.defer, self.fetched, self.asked = set(cached), set(defer), [], []
+
+    def route_keys(self, lat, lon, radius, texel_m):
+        self.texel = texel_m
+        return list(dict.fromkeys(("src", 17, round(float(a) * 200), round(float(o) * 200)) for a, o in zip(lat, lon)))
+
+    def key_done(self, key):
+        return key in self.cached
+
+    def fetch_key(self, key):
+        self.asked.append(key)
+        if key in self.cached:
+            return False
+        if key in self.defer:
+            self.defer.discard(key)
+            raise earthd.imagerymod.ImageryError("busy", deferred=True)
+        self.cached.add(key)
+        self.fetched.append(key)
+        return True
+
+
+def connection(dem=None, mapdata=None, buildings=True, aid=1, dl_version=1, imagery=None):
     sent = []
-    s = types.SimpleNamespace(dem=dem, mapdata=mapdata, buildings=buildings,
+    s = types.SimpleNamespace(dem=dem, mapdata=mapdata, buildings=buildings, imagery=imagery,
                               layout=types.SimpleNamespace(block=1024),
                               anchors={aid: types.SimpleNamespace(hm_zoom=15)},
                               route_pool=types.SimpleNamespace(submit=lambda fn: fn()))
@@ -97,6 +121,25 @@ ROUTE = [[36.0, -115.0], [36.02, -115.0]]       # ~2.2 km north
 
 
 class RouteDownloadTest(unittest.TestCase):
+    def test_the_ground_photo_along_the_route_too(self):
+        """The corridor's high-resolution photo tiles are fetched after the heights and map cells, counted in the bar;
+        a deferred one asked again; cached ones skipped (GitHub #755: a pre-cached drive still stopped to download)."""
+        img = FakeImagery()
+        keys = img.route_keys(*zip(*routeahead.arc_length_points(ROUTE, earthd.ROUTE_AHEAD_MAX_M)), 0, 1)
+        img.cached.add(keys[0])
+        img.defer.add(keys[1])
+        dem, mapdata = FakeDem(), FakeMapdata()
+        c, sent = connection(dem, mapdata, imagery=img)
+        earthd.Connection.route_download(c, 1, ROUTE)
+        self.assertEqual(sorted(img.fetched), sorted(keys[1:]), "every uncached key, the deferred one too")
+        self.assertEqual(img.asked.count(keys[1]), 2)
+        self.assertNotIn(keys[0], img.fetched)
+        self.assertEqual(sent[-1]["done"], sent[-1]["total"])
+        c0, sent0 = connection(FakeDem(), FakeMapdata())
+        earthd.Connection.route_download(c0, 1, ROUTE)
+        self.assertEqual(sent[-1]["total"], sent0[-1]["total"] + len(keys), "the photo tiles in the bar's total")
+        self.assertAlmostEqual(img.texel, 1024 * earthd.heightmap.SQUARE / earthd.BASE_RENDER_PX)
+
     def test_too_short_route_sends_inactive_empty(self):
         c, sent = connection(FakeDem(), FakeMapdata())
         earthd.Connection.route_download(c, 1, [[36.0, -115.0]])

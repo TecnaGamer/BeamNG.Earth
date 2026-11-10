@@ -19,6 +19,66 @@ local steep = { nodes = { j = { 0, 0, 22.7, 4 }, d = { 8, 0, 29.1, 3 }, h = { 0,
   edges = { { 'j', 'd', 0, 1, 1, 11.2, 1, 3 }, { 'j', 'h', 0, 1, 1, 11.2, 1, 3 } } }
 local sn, _, sne = N.toNodes(steep, { -500, -500, 500, 500 }, 60, false)
 T.check(sne == 1 and sn.j.links.h and not sn.j.links.d, 'a link steeper than MAX_GRADE left out; 37 % kept: ' .. sne)
+-- a halo (route planning past the box): the far node kept, the cut still at the box's edge
+do
+  local hn, hnn, hne, hcuts = N.toNodes(g, { -500, -500, 500, 500 }, 60, false, nil, 5000)
+  T.check(hnn == 4 and hne == 3 and hn.far ~= nil, 'halo: the node past the box kept, its road too')
+  T.check(#hcuts == 1 and hcuts[1][1] == 100, 'halo: the cut stays where the box ends (c)')
+end
+-- the fast roads' halo (Montana's I-94 / I-90, 2026-11-05): a motorway's nodes kept past the box, a street's not
+do
+  local fg = {
+    nodes = { a = { 0, 0, 1, 4 }, b = { 400, 0, 1, 4 }, m = { 700, 0, 1, 4 }, m2 = { 1200, 0, 1, 4 },
+              s = { 400, 300, 1, 3 }, s2 = { 700, 300, 1, 3 } },
+    edges = { { 'a', 'b', 1, 2, 0, 29.1, 1, 4 }, { 'b', 'm', 1, 2, 0, 29.1, 1, 4 }, { 'm', 'm2', 1, 2, 0, 29.1, 1, 4 },
+              { 'b', 's', 0, 1, 1, 11.2, 0.8, 3 }, { 's', 's2', 0, 1, 1, 11.2, 0.8, 3 } },
+  }
+  local box = { -500, -500, 500, 500 }
+  local fn, _, _, fcuts = N.toNodes(fg, box, 60, false, nil, 0, 650)   -- (the halo when on: FAST_HALO_M is 0 by default)
+  T.check(fn.m ~= nil and fn.m2 == nil, 'fast halo: the motorway node 200 m past the box kept, not one 700 m past')
+  T.check(fn.b.links.m ~= nil, 'fast halo: its road too')
+  T.check(fn.s2 == nil, 'fast halo: a street node past the box left out')
+  local bn = N.toNodes(fg, box, 60, false, nil, 0, 0)
+  T.check(bn.m == nil, 'no fast halo: the motorway ends at the box')
+  T.check(#fcuts >= 1 and fcuts[1][1] <= 440, 'fast halo: the cut stays at the box')
+end
+-- a respawned car launched (PR #728's spawn velocity): at LAUNCH_SHARE of its road's limit, along a one-way road only
+-- its way, not at a junction, not facing off the road, not on a slow street
+T.check(math.abs(N.launchSpeed(29, 1.0, true, false) - 29 * N.LAUNCH_SHARE) < 1e-9, 'launch: 90 % of 65 mph')
+T.check(N.launchSpeed(29, -1.0, true, false) == nil, 'launch: not against a one-way road')
+T.check(N.launchSpeed(29, -1.0, false, false) ~= nil, 'launch: either way on a two-way road')
+T.check(N.launchSpeed(29, 0.5, false, false) == nil, 'launch: not when facing off the road (60 degrees)')
+T.check(N.launchSpeed(29, 1.0, true, true) == nil, 'launch: not at a junction')
+T.check(N.launchSpeed(6.7, 1.0, false, false) == nil, 'launch: not on a 15 mph street')
+local cmd = N.spawnVelocityCommand(26.1)
+T.check(cmd and cmd:find('thrusters.applyVelocity', 1, true) and cmd:find('beamngEarth_spawnMotion', 1, true)
+  and cmd:find('26.100', 1, true), 'launch: the vehicle command pushes the car and spins its wheels')
+T.check(N.spawnVelocityCommand(0) == nil and N.spawnVelocityCommand(120) == nil, 'launch: no command for 0 or 120 m/s')
+-- oncoming traffic (I-94, 2026-11-05): a respawn spot on the other carriageway, 26 m left of an eastbound player
+do
+  local function divided(x, y)          -- eastbound carriageway at y = 0, westbound at y = 26 (one-way roads)
+    if math.abs(y) <= math.abs(y - 26) then return { dist = math.abs(y), dx = 1, dy = 0, oneWay = true } end
+    return { dist = math.abs(y - 26), dx = -1, dy = 0, oneWay = true }
+  end
+  local box = { -600, -600, 600, 600 }
+  local x, y, dx, dy = N.oncomingSpot(0, 0, 1, 0, box, false, divided)
+  T.check(x and x > 100 and math.abs(y - 26) <= N.ONCOMING_ON_M and dx == -1 and dy == 0,
+    'oncoming: a spot on the westbound carriageway ahead, facing the player: ' .. tostring(x) .. ',' .. tostring(y))
+  local function undivided(x, y) return { dist = math.abs(y), dx = 1, dy = 0, oneWay = false } end
+  T.check(N.oncomingSpot(0, 0, 1, 0, box, false, undivided) == nil, 'oncoming: no other carriageway, none')
+  T.check(N.oncomingSpot(0, 0, 1, 0, { -100, -600, 150, 600 }, false, divided) == nil,
+    'oncoming: none past the block\'s edge')
+  local lx, ly = N.oncomingSpot(0, 0, 1, 0, box, true, function(x, y)
+    if math.abs(y) <= math.abs(y + 26) then return { dist = math.abs(y), dx = 1, dy = 0, oneWay = true } end
+    return { dist = math.abs(y + 26), dx = -1, dy = 0, oneWay = true }
+  end)
+  T.check(lx and math.abs(ly + 26) <= N.ONCOMING_ON_M, 'oncoming, left-hand traffic: the other carriageway is to the right')
+end
+-- GitHub #353: a car ahead of a player on the move, going its way, is not respawned for the cut ahead
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'ahead, same way')
+T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
@@ -43,6 +103,12 @@ T.check(ab and nodes.b.links.a == ab, 'one edge table shared by both ends (doubl
 T.check(ab.inNode == 'a' and ab.outNode == 'b' and ab.inPos == nodes.a.pos and ab.outPos == nodes.b.pos, 'in / out nodes and positions')
 T.check(ab.speedLimit == 11.2 and ab.lanes == '-+' and not ab.oneWay and ab.inRadius == 4 and ab.outRadius == 4, 'edge fields')
 local bc = nodes.b.links.c
+do      -- a road narrowing to a tunnel's portal: the edge's end radii (e[8] at its in node, e[9] at its out node)
+  local g2 = { nodes = { p = { 0, 0, 0, 6 }, q = { 50, 0, 0, 3 } }, edges = { { 'p', 'q', 0, 1, 1, 20, 1, 6, 3 } } }
+  local n2 = N.toNodes(g2, nil, 60, false)
+  local pq = n2.p.links.q
+  T.check(pq.inRadius == 6 and pq.outRadius == 3, 'per-end radii: ' .. tostring(pq.inRadius) .. ' ' .. tostring(pq.outRadius))
+end
 T.check(bc.oneWay and bc.lanes == '+' and bc.inNode == 'b', 'one-way: in -> out is the allowed direction')
 T.check(N.inside(nil, 1e9, 0, 60) and not N.inside({ 0, 0, 100, 100 }, 50, 50, 60), 'inside')
 
@@ -98,7 +164,7 @@ do
   N.enabled = true
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
   jsonDecode = function() return { nodes = { a = { 100, 200, 5, 3 }, b = { 150, 200, 5, 3 } },
-                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } } } end
+                                   edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, lines = { { 10, 20, 30, 40, 1 } } } end
   readFile = function() return '{}' end
   T.check(N.onMessage({ anchorId = 7, path = 'x', serial = 1 }, 7), 'a graph for anchor 7')
   local xf = { apply = function(_, x, y, z) return x - 1000, y + 50, z - 2 end }
@@ -106,6 +172,8 @@ do
   local g = N.currentGraph()
   T.check(g.anchor == 8 and g.nodes.a[1] == -900 and g.nodes.a[2] == 250 and g.nodes.a[3] == 3 and g.nodes.a[4] == 3,
     'its nodes in the new frame, radius kept')
+  T.check(g.lines and g.lines[1][1] == -990 and g.lines[1][2] == 70 and g.lines[1][3] == -970 and g.lines[1][5] == 1,
+    'its tunnel lines (the minimap) too')
   T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
   jsonDecode, readFile = jd, rf
 end

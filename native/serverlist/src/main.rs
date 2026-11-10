@@ -3,16 +3,22 @@
 //! BeamMP's public list, which every BeamMP player sees); its plugin announces it here every minute instead, and the
 //! game's BeamNG.Earth tab reads the list.
 //!
-//! POST /announce  {"port": 30814, "name": "...", "players": 2, "maxPlayers": 8, "version": "1.6.2", "place": "..."}
+//! POST /announce  {"port": 30814, "name": "...", "players": 2, "maxPlayers": 8, "version": "3.9.0", "place": "...",
+//!                 "desc", "tags", "map", "modlist", "modstotalsize", "modstotal", "playerslist", "pass"}: what BeamMP's own
+//!                 heartbeat sends its list (BeamMP-Server THeartbeatThread), but never its key, and the address is not taken from it.
 //!                 The address is the one the request comes from (behind a local reverse proxy: its X-Forwarded-For),
 //!                 never the body's: a server can only list itself. Entries go TTL_S after their last announce.
-//! GET  /servers   [{"ip", "port", "name", "players", "maxPlayers", "version", "place", "age"}], newest first.
+//! GET  /servers   [{"ip", "port", "name", "players", "maxPlayers", "version", "place", "desc", "tags", "map", "modlist", "modstotalsize",
+//!                 "modstotal", "playerslist", "pass", "location", "age"}], newest first.
 //!
 //! Each server's "location" is the country its address is in (as BeamMP's own list has it, for the flag): DB-IP's
 //! IP to Country Lite table (CC BY 4.0, https://db-ip.com), downloaded next to the binary and fetched again weekly.
 //!
 //! In memory only (servers announce again within a minute of a restart). Env: BNGE_LIST_ADDR (default 0.0.0.0:47640),
 //! BNGE_LIST_GEOIP (the table's path; default dbip-country-lite.csv.gz next to the binary).
+
+mod perf;
+mod telemetry;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,7 +33,8 @@ const TTL: Duration = Duration::from_secs(180);
 const MIN_GAP: Duration = Duration::from_secs(20); // announces from one server closer than this are refused
 const MAX_SERVERS: usize = 1000;
 const MAX_PER_IP: usize = 8; // servers one address may list (one per port)
-const MAX_BODY: usize = 4096;
+const MAX_BODY: usize = 16384; // (a long mod list)
+const MAX_DESC: usize = 256; // a description's characters kept
 const GEOIP_URL: &str = "https://download.db-ip.com/free/dbip-country-lite-{ym}.csv.gz";
 const GEOIP_MAX_AGE: Duration = Duration::from_secs(7 * 86400); // the table is fetched again after this
 const GEOIP_CHECK: Duration = Duration::from_secs(6 * 3600);
@@ -41,6 +48,14 @@ struct Announce {
     max_players: Option<u32>,
     version: Option<String>,
     place: Option<String>,
+    desc: Option<String>, // ServerConfig.toml's Description (BeamMP's list shows it under the name)
+    tags: Option<String>,
+    map: Option<String>,
+    modlist: Option<String>, // "/name;" per client mod, as BeamMP's TResourceManager lists them
+    modstotalsize: Option<u64>,
+    modstotal: Option<u32>,
+    playerslist: Option<String>, // "name;" per connected player
+    pass: Option<bool>,      // has a password (never the password)
 }
 
 #[derive(Serialize, Clone)]
@@ -53,6 +68,14 @@ struct Listed {
     max_players: u32,
     version: String,
     place: String,
+    desc: String,
+    tags: String,
+    map: String,
+    modlist: String,
+    modstotalsize: u64,
+    modstotal: u32,
+    playerslist: String,
+    pass: bool,
     location: String, // ISO country code of the server's address ("" unknown)
     age: u64,
 }
@@ -250,6 +273,14 @@ impl List {
             max_players: a.max_players.unwrap_or(0).min(999),
             version: clean(a.version, 24),
             place: clean(a.place, 64),
+            desc: clean(a.desc, MAX_DESC),
+            tags: clean(a.tags, 256),
+            map: clean(a.map, 128),
+            modlist: clean(a.modlist, 8192),
+            modstotalsize: a.modstotalsize.unwrap_or(0),
+            modstotal: a.modstotal.unwrap_or(0).min(100_000),
+            playerslist: clean(a.playerslist, 2048),
+            pass: a.pass.unwrap_or(false),
             location: String::new(),
             age: 0,
         };
@@ -277,7 +308,32 @@ fn main() {
     let geo = Arc::new(Mutex::new(Arc::new(Geo::default())));
     let keep = geo.clone();
     std::thread::spawn(move || keep_geo(keep));
-    for mut req in server.incoming_requests() {
+    // usage telemetry (telemetry.rs): its files next to the binary unless BNGE_TELEMETRY_DIR
+    let tel_dir = std::env::var("BNGE_TELEMETRY_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        std::env::current_exe().ok().and_then(|e| e.parent().map(|p| p.join("telemetry"))).unwrap_or_else(|| PathBuf::from("telemetry"))
+    });
+    let token = std::env::var("BNGE_TELEMETRY_TOKEN").ok().filter(|t| t.len() >= 16);
+    // the performance totals (perf.rs); the key of the installs' daily keyed hashes lives in memory only, new each start
+    let salt = {
+        let mut buf = [0u8; 8];
+        let _ = std::fs::File::open("/dev/urandom").and_then(|mut f| f.read_exact(&mut buf));
+        u64::from_le_bytes(buf) ^ SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+    };
+    let mut perf = perf::Perf::new(Some(tel_dir.join("perf")), salt);
+    let mut tel = telemetry::Telemetry::new(Some(tel_dir));
+    // the advanced statistics (public since 2026-11-06, the user: exact country counts are fine): built at most once a
+    // minute, a shared link must not make the collector rebuild 7 days of data-source hours per visitor
+    let mut advanced: Option<(Instant, String)> = None;
+    let mut perf_cache: HashMap<u64, (Instant, String)> = HashMap::new();
+    loop {
+        let unix_now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        tel.tick(Instant::now(), unix_now);
+        perf.tick(Instant::now(), unix_now);
+        let mut req = match server.recv_timeout(Duration::from_secs(5)) {
+            Ok(Some(r)) => r,
+            Ok(None) => continue,
+            Err(_) => continue,
+        };
         let now = Instant::now();
         let path = req.url().split('?').next().unwrap_or("").to_string();
         let resp = match (req.method(), path.as_str()) {
@@ -300,10 +356,87 @@ fn main() {
                     _ => json(400, "{\"error\":\"bad request\"}".into()),
                 }
             }
+            (Method::Post, "/telemetry") => {
+                let mut body = Vec::new();
+                let read = req.as_reader().take(MAX_BODY as u64 + 1).read_to_end(&mut body);
+                match (read, client_ip(&req)) {
+                    (Ok(n), _) if n > MAX_BODY => json(413, "{\"error\":\"too big\"}".into()),
+                    (Ok(_), Some(ip)) => match serde_json::from_slice::<telemetry::Report>(&body) {
+                        Ok(mut r) => {
+                            let cc = geo.lock().unwrap().country(ip);     // (the address itself is not kept)
+                            let (id, p) = (r.id(), r.perf.take());
+                            match tel.report(ip, cc, r, now, unix_now) {
+                                Ok(()) => {
+                                    if let (Some(p), Some((v, os))) = (p, tel.info(&id)) {
+                                        perf.add(&id, &v, &os, p, now, unix_now);   // (folded into totals, then dropped)
+                                    }
+                                    json(200, "{\"ok\":true}".into())
+                                }
+                                Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                            }
+                        }
+                        Err(_) => json(400, "{\"error\":\"bad json\"}".into()),
+                    },
+                    _ => json(400, "{\"error\":\"bad request\"}".into()),
+                }
+            }
+            (Method::Get, "/stats") => json(200, tel.public(now, unix_now).to_string()),
+            (Method::Get, "/stats/now") => json(200, tel.now(now, unix_now).to_string()),
+            (Method::Get, "/stats/range") => {
+                // ?from=<unix s>&to=<unix s> (to defaults to now)
+                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+                let arg = |k: &str| q.split('&').find_map(|kv| kv.strip_prefix(k).and_then(|v| v.strip_prefix('=')))
+                    .and_then(|v| v.parse::<u64>().ok());
+                match arg("from") {
+                    Some(from) => match tel.range(now, unix_now, from, arg("to").unwrap_or(unix_now)) {
+                        Ok(v) => json(200, v.to_string()),
+                        Err((code, why)) => json(code, format!("{{\"error\":\"{why}\"}}")),
+                    },
+                    None => json(400, "{\"error\":\"from\"}".into()),
+                }
+            }
+            (Method::Get, "/stats/private") => {
+                let auth = req.headers().iter().find(|h| h.field.equiv("Authorization")).map(|h| h.value.as_str().to_string());
+                match (&token, auth) {
+                    (Some(t), Some(a)) if a == format!("Bearer {t}") => json(200, tel.private(now, unix_now).to_string()),
+                    (Some(_), _) => json(401, "{\"error\":\"token\"}".into()),
+                    (None, _) => json(404, "{\"error\":\"not found\"}".into()),
+                }
+            }
+            (Method::Get, "/stats/performance") => {
+                // ?days=N (1-400, default 7; 0: everything kept); built at most once a minute per range
+                let q = req.url().split_once('?').map(|x| x.1).unwrap_or("");
+                let days = q.split('&').find_map(|kv| kv.strip_prefix("days=")).and_then(|v| v.parse::<u64>().ok())
+                    .unwrap_or(7).min(400);
+                let fresh = perf_cache.get(&days).is_some_and(|(at, _)| now.duration_since(*at) < Duration::from_secs(60));
+                if !fresh {
+                    perf_cache.insert(days, (now, perf.public(unix_now, days).to_string()));
+                }
+                json(200, perf_cache[&days].1.clone())
+            }
+            (Method::Get, "/performance") | (Method::Get, "/performance/") => html(include_str!("performance.html")),
+            (Method::Get, "/stats/advanced") => {
+                if advanced.as_ref().is_none_or(|(at, _)| now.duration_since(*at) > Duration::from_secs(60)) {
+                    let mut v = tel.private(now, unix_now);
+                    v["errors7d"] = perf.errors(unix_now);
+                    advanced = Some((now, v.to_string()));
+                }
+                json(200, advanced.as_ref().unwrap().1.clone())
+            }
+            (Method::Get, "/players") | (Method::Get, "/players/") => html(include_str!("players.html")),
+            (Method::Get, "/players/advanced") => html(include_str!("advanced.html")),
+            (Method::Get, "/players/private") => Response::from_string("")
+                .with_status_code(301)
+                .with_header(Header::from_bytes(&b"Location"[..], &b"/players/advanced"[..]).unwrap()),
             _ => json(404, "{\"error\":\"not found\"}".into()),
         };
         let _ = req.respond(resp);
     }
+}
+
+fn html(body: &str) -> Response<std::io::Cursor<Vec<u8>>> {
+    Response::from_string(body.to_string())
+        .with_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html; charset=utf-8"[..]).unwrap())
 }
 
 #[cfg(test)]
@@ -312,7 +445,9 @@ mod tests {
 
     fn ann(port: u16, name: &str) -> Announce {
         Announce { port, name: Some(name.into()), players: Some(2), max_players: Some(8), version: Some("1.6.2".into()),
-            place: None }
+            place: None, desc: Some("Drive\u{7} anywhere".into()), tags: Some("Freeroam".into()), map: None,
+            modlist: Some("/a;/b;".into()), modstotalsize: Some(1024), modstotal: Some(2), playerslist: Some("x;".into()),
+            pass: None }
     }
 
     #[test]
@@ -325,6 +460,8 @@ mod tests {
         assert_eq!(s.len(), 1);
         assert_eq!(s[0].name, "Ab");
         assert_eq!(s[0].ip, "203.0.113.5");
+        assert_eq!(s[0].desc, "Drive anywhere");
+        assert_eq!((s[0].modlist.as_str(), s[0].modstotal, s[0].modstotalsize, s[0].pass), ("/a;/b;", 2, 1024, false));
         assert!(l.servers(t0 + TTL + Duration::from_secs(1), &Geo::default()).is_empty());
     }
 

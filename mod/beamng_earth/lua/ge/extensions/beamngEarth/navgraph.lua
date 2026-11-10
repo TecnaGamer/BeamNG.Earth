@@ -9,9 +9,27 @@
 -- edge carries its speed limit and lanes; the road rules come from a file of ours (the level's info.json has none);
 -- a reset by someone else (map.reset() with no graph rebuilds an empty one from our level) is undone next frame.
 local M = {}
+local localplayers = require('beamngEarth/localplayers')
+local overtake = require('beamngEarth/overtake')
+local controlled = {}
 
 M.EDGE_M = 60           -- graph nodes this far inside the block's ground box only
 M.MIN_GAP_S = 1.0
+-- m past the block's ground box (less EDGE_M) the graph's nodes are kept for the AI's route planning (GitHub #657 /
+-- #279: the map ended a few hundred metres ahead, the AI planned back the other way and turned round in the road);
+-- the cuts (headingToCut) and the guard stay at the box: a car is respawned before it leaves the ground. 0: off.
+M.HALO_M = 0
+-- ... but the fast roads' nodes (edges at FAST_HALO_MS or more: motorways, fast trunk roads) are kept FAST_HALO_M past it:
+-- a highway's graph ended ~450 m ahead, so a traffic car placed there (the stock traffic's respawns go 100-500 m in
+-- front of the camera) braked for the dead end and turned round across the lanes: the cars standing sideways on I-94 /
+-- I-90 in Montana (Tann2019, 2026-11-05; PR #728's route halo, there for blocks over 1200 m only). A motorway's nodes are
+-- ~80 m apart: a few dozen nodes, not the tripled city graph of HALO_M.
+-- Off for now (0): PR #773's merge A/B (autodrive east of Billings with traffic, two warm runs each, 2026-11-06) had
+-- 87.9 / 84.5 fps with it at 650 m against 92.8 / 88.2 with it off and 91.7 / 88.5 before the merge, and 89 frames
+-- over 50 ms in PhysicsAndVLUA in one run (the traffic AI's planning on the longer graph); launch, oncoming spawns and
+-- overtaking cost nothing measurable. 650 to try it.
+M.FAST_HALO_M = 0
+M.FAST_HALO_MS = 24.5     -- (55 mph)
 -- An apply (or its signals' second step) waits for a light frame (governor roomFor: at most APPLY_ROOM_MS of streaming
 -- and other work spent in it, not a terrain commit's), APPLY_WAIT_FRAMES at most
 M.APPLY_ROOM_MS = 4.0
@@ -24,10 +42,9 @@ M.UI_MAP = false        -- send our graph to the UI (the big map) on every apply
 M.RULES_FILE = '/temp/beamngEarth/roadRules.json'
 M.rules = { rightHandDrive = false, turnOnRed = true }    -- US; `rightHandDrive = true` means driving on the left
 M.enabled = true
--- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; a car
+-- Traffic (gameplay_traffic, the player's traffic amount): started once the first graph is in the map; unoccupied AI
 -- within GUARD_M of the block's edge (or past it, where there is no ground) is respawned on the graph
--- (gameplay_traffic.forceTeleport), checked every GUARD_S; after a teleport every car is, once the new
--- place's graph is in.
+-- (gameplay_traffic.forceTeleport), checked every GUARD_S; after a teleport the AI is respawned when the new graph is in.
 M.GUARD_M = 40
 M.GUARD_S = 0.5
 -- A car standing still this long (longer than a signal cycle), this far from the player, is respawned too: stock
@@ -57,6 +74,28 @@ M.JUMP_M = 30           -- a car this much farther than at the last check was re
 -- edge guard (a car popping in 100+ m ahead at motorway speed is hardly seen; in town it still goes behind).
 M.AHEAD_MS = 20         -- (45 mph)
 M.AHEAD_M = { 100, 200 }
+-- ... and every other one on the other carriageway, ONCOMING_M ahead, facing the player: on a divided highway the cars
+-- put ahead all went the player's way and the other carriageway stayed empty (Tann2019, I-94 2026-11-05: "is there a
+-- way so that traffic goes both ways on the interstate"). The other carriageway is looked for ONCOMING_SIDE_M to the
+-- side the oncoming traffic drives on (left in right-hand traffic): a one-way road there running against the player.
+M.ONCOMING = true
+M.ONCOMING_M = { 230, 170, 290 }
+M.ONCOMING_SIDE_M = { 14, 20, 26, 34, 44, 56 }
+M.ONCOMING_ON_M = 6     -- the point that far from the road at most
+-- A respawned traffic car is launched at LAUNCH_SHARE of its road's limit, its wheels spinning with it (PR #728 by
+-- ProxyFirewall202: spawnVelocityCommand and the vehicle's beamngEarth_spawnMotion): it came at 0 mph, so on a highway the
+-- cars round the player crawled up from a standstill after every respawn (every 5-30 s at 65 mph) and the autodrive
+-- behind them did 40 (Tann2019, Huntley to Billings 2026-11-05). Not near a junction (LAUNCH_JUNCTION_M), not facing
+-- off its road (LAUNCH_ALIGN) or against a one-way road; looked at every LAUNCH_SCAN_S, once the stock traffic has placed
+-- it (LAUNCH_DELAY_S after it is active), given up after LAUNCH_TIMEOUT_S.
+M.LAUNCH = true
+M.LAUNCH_SHARE = 0.9
+M.LAUNCH_MIN_MS = 8
+M.LAUNCH_ALIGN = 0.94     -- (cos 20 degrees)
+M.LAUNCH_JUNCTION_M = 20
+M.LAUNCH_SCAN_S = 0.15
+M.LAUNCH_DELAY_S = 0.4      -- (0.12 in PR #728: a launch 0.12 s after a respawn once read 63,000 mph, the car teleported again under it)
+M.LAUNCH_TIMEOUT_S = 6
 -- (gameplay_walk: 0.40's traffic.lua calls gameplay_walk.addVehicleToBlacklist when it activates its cars, and this
 -- level had none loaded: the cars spawned and never drove, 2026-10-19)
 M.EXTENSIONS = { 'core_multiSpawn', 'gameplay_traffic', 'gameplay_walk' }
@@ -69,7 +108,12 @@ local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
 local foreign = false
 local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
+M.HEADS_ONLY = true      -- setupSignals sees only our signal heads, not every TSStatic (applySignals)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
+-- (the stopwatch's wall clock for the parts of an apply; in the game os.clock reads the same, measured 2026-11-09 on
+-- Linux and Windows)
+local stopwatch = require('beamngEarth/stopwatch')
+local wall = stopwatch.clock()       -- ms since load, monotonic (one clock: stopwatch.clock() makes a new one)
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
@@ -102,9 +146,17 @@ end
 -- Pure-ish (needs vec3): the stock map's node table of graph g clipped to box b: {name = {pos, radius,
 -- links = {other = edge}}}, every edge shared by both ends (double-sided) with in/out nodes, positions and radii.
 -- Returns nodes, node count, edge count and the cuts: { x, y } of each kept node with a road to a node left out.
-function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
+function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
   local nodes, nn, ne = {}, 0, 0
   local keep = {}
+  local fast = nil        -- (fastHalo: the nodes of the fast roads, FAST_HALO_MS)
+  if fastHalo and fastHalo > 0 then
+    fast = {}
+    for _, e in ipairs(g.edges) do
+      if (tonumber(e[6]) or 0) >= M.FAST_HALO_MS then fast[e[1]], fast[e[2]] = true, true end
+    end
+  end
+  local phys = {}         -- (halo: the nodes kept past the box's edge for the AI's route planning; the cuts stay at it)
   local steps = 0
   local function step()       -- (in a coroutine: a pause every yieldEvery items, buildNodes)
     if yieldEvery then
@@ -113,7 +165,9 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     end
   end
   for name, n in pairs(g.nodes) do
-    if M.inside(b, n[1], n[2], edgeM) then keep[name] = n end
+    if M.inside(b, n[1], n[2], edgeM) then keep[name], phys[name] = n, true
+    elseif halo and halo > 0 and M.inside(b, n[1], n[2], edgeM - halo) then keep[name] = n
+    elseif fast and fast[name] and M.inside(b, n[1], n[2], edgeM - fastHalo) then keep[name] = n end
     step()
   end
   local function node(name)
@@ -132,7 +186,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     local a, bb = e[1], e[2]
     for _, pair in ipairs({ { a, bb }, { bb, a } }) do
       local k = pair[1]
-      if keep[k] and not keep[pair[2]] and g.nodes[pair[2]] and not cut[k] then
+      if phys[k] and not phys[pair[2]] and g.nodes[pair[2]] and not cut[k] then
         cut[k] = true
         cutList[#cutList + 1] = { keep[k][1], keep[k][2] }
       end
@@ -142,7 +196,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
       if not A.links[bb] then
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
-          inRadius = e[8], outRadius = e[8] }
+          inRadius = e[8], outRadius = e[9] or e[8] }     -- (e[9]: a road narrowing to a tunnel's portal)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -150,6 +204,22 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery)
     end
   end
   return nodes, nn, ne, cutList
+end
+
+M.FOLLOW_MS = 8         -- m/s the player moves at least for a car ahead going its way to keep going (followsPlayer)
+M.FOLLOW_DOT = 0.7
+
+-- Pure-ish (vectors with x, y): a traffic car at p moving along dir, ahead of a player at pp moving at pu, going the
+-- player's way: the cut it heads for is the block's edge, which moves on with the player, so it is not respawned
+-- for it (on a highway at 30 m/s a car ~200 m ahead was within the cut's reach and vanished in front of the player,
+-- GitHub #353); it still is when it leaves the box (guard's GUARD_M).
+function M.followsPlayer(p, dir, pp, pu)
+  local ps = math.sqrt(pu.x * pu.x + pu.y * pu.y)
+  local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
+  if ps < M.FOLLOW_MS or dl < 1e-6 then return false end
+  local ux, uy = pu.x / ps, pu.y / ps
+  if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
+  return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
 end
 
 -- Pure: is a car at (px, py) moving along unit (dx, dy) heading for one of the cuts within reach m (45 degrees)?
@@ -167,7 +237,8 @@ function M.onMessage(msg, currentAnchor)
   local ok, g = pcall(jsonDecode, readFile(msg.path) or '')
   if not ok or type(g) ~= 'table' or type(g.nodes) ~= 'table' or type(g.edges) ~= 'table' then return false end
   graph = { anchor = msg.anchorId, serial = msg.serial, nodes = g.nodes, edges = g.edges,
-            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil }
+            signals = type(g.signals) == 'table' and g.signals or {}, rules = type(g.rules) == 'table' and g.rules or nil,
+            lines = type(g.lines) == 'table' and g.lines or nil }      -- (tunnel stretches: the minimap's, minimaproads)
   dirty = true
   return true
 end
@@ -280,11 +351,11 @@ end
 -- pre: toNodes' results built ahead (buildNodes), else made here
 local function apply(b, pre, moved)
   setRules()
-  local tN = os.clock()
+  local tN = wall()
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
-  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive) end
-  stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
+  else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M, M.FAST_HALO_M) end
+  stats.nodesMs = wall() - tN         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
   if ts then pcall(ts.resetSignals) end
@@ -299,10 +370,10 @@ local function apply(b, pre, moved)
   end
   local okG, gps = pcall(require, 'beamngEarth/gps')
   local mOld = map.getMap and map.getMap()
-  local tG = os.clock()
+  local tG = wall()
   local keep = okG and gps.beforeGraph and gps.beforeGraph(mOld and mOld.nodes) or nil
-  stats.gpsMs = (os.clock() - tG) * 1000
-  local t0 = os.clock()
+  stats.gpsMs = wall() - tG
+  local t0 = wall()
   ours = true
   local ok, err = pcall(map.reset, nodes)
   ours = false
@@ -312,7 +383,7 @@ local function apply(b, pre, moved)
     log('E', 'beamngEarth', 'navgraph: map.reset: ' .. tostring(err))
     return false
   end
-  stats.resetMs = (os.clock() - t0) * 1000
+  stats.resetMs = wall() - t0
   local m = map.getMap()
   if persistent and persistent ~= m.nodes then
     table.clear(persistent)
@@ -321,9 +392,9 @@ local function apply(b, pre, moved)
   else
     persistent = m.nodes
   end
-  local tA = os.clock()
+  local tA = wall()
   if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
-  stats.gpsMs = stats.gpsMs + (os.clock() - tA) * 1000
+  stats.gpsMs = stats.gpsMs + (wall() - tA)
   be:queueAllObjectLua('mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
@@ -331,8 +402,8 @@ local function apply(b, pre, moved)
   if mr and mr.reset then pcall(mr.reset) end
   pendingSignals = ts and nodes or nil     -- next frame: a second, smaller hitch instead of one big one
   cuts = cl
-  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
-  stats.applyMs = (os.clock() - tN) * 1000
+  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, wall() - t0, nn, ne
+  stats.applyMs = wall() - tN
   stats.cuts = #cl
   return true
 end
@@ -354,16 +425,39 @@ end
 local function applySignals(nodes)
   local ts = core_trafficSignals
   if not ts then return end
-  local t1 = os.clock()
+  local t1 = wall()
   local okS, err2 = pcall(function()
     seenHeads = {}
     local data, ns = signalData(nodes)
     clearHeads(seenHeads)                   -- the heads of junctions no longer in the graph
-    ts.setupSignals(data, false, true)
+    local t2 = wall()
+    stats.sigDataMs = t2 - t1
+    -- setupSignals finds the signal heads by walking every TSStatic in the level (setupSignalObjects:
+    -- getObjectsByClass('TSStatic') and a dynamic-field read on each); ours holds thousands (buildings, roads, far
+    -- tiles), so each apply paid for all of them. The heads are ours (heads): only they are handed over meanwhile.
+    local gobc = rawget(_G, 'getObjectsByClass')
+    if gobc and M.HEADS_ONLY then
+      getObjectsByClass = function(cls)
+        if cls ~= 'TSStatic' then return gobc(cls) end
+        local out = {}
+        for _, h in pairs(heads) do
+          local o = scenetree.findObjectById(h.id)
+          if o then out[#out + 1] = o end
+        end
+        return out
+      end
+    end
+    local okSet, errSet = pcall(ts.setupSignals, data, false, true)
+    if gobc then getObjectsByClass = gobc end
+    if not okSet then error(errSet) end
+    local t3 = wall()
+    stats.sigSetupMs = t3 - t2
     -- a vehicle holding signals reads the state-change mailbox every frame and dies on one never written
     -- ("lpack: unexpected end of buffer", in game 2026-10-14): write an empty update before handing them out
     be:sendToMailbox('trafficSignalUpdates', lpack.encodeBin({}))
     be:queueAllObjectLua(M.setSignalsLua(serialize(ts.getMapNodeSignals())))
+    local t4 = wall()
+    stats.sigSendMs = t4 - t3
     stats.junctions = ns
     -- the road tiles' static booms stand where the switchable heads are now
     local trees = require('beamngEarth/trees')
@@ -375,9 +469,12 @@ local function applySignals(nodes)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
-    trees.refresh()
+    local t5 = wall()
+    trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
+    stats.sigTreesMs = wall() - t5
   end)
-  stats.signalsMs = (os.clock() - t1) * 1000
+  stats.signalsMs = wall() - t1
+  stats.signalsMaxMs = math.max(stats.signalsMaxMs or 0, stats.signalsMs)
   if not okS then log('W', 'beamngEarth', 'navgraph: signals: ' .. tostring(err2)) end
 end
 
@@ -407,6 +504,45 @@ function M.aheadSpot(px, py, vx, vy, b)
   return px, py, dx, dy, M.AHEAD_M[1], hi
 end
 
+-- Pure but for closest: a spot on the other carriageway ahead of a player at (px, py) heading (dx, dy) (unit), inside
+-- box b by GUARD_M + 20, for a car driving towards the player: x, y, dirX, dirY, or nil. closest(x, y) -> {dist, dx, dy,
+-- oneWay} of the nearest road (its edge's direction in -> out) or nil. leftHand: traffic on the left (the oncoming side
+-- is then to the right).
+function M.oncomingSpot(px, py, dx, dy, b, leftHand, closest)
+  local sx, sy = -dy, dx                 -- (left of the heading)
+  if leftHand then sx, sy = dy, -dx end
+  for _, ahead in ipairs(M.ONCOMING_M) do
+    for _, side in ipairs(M.ONCOMING_SIDE_M) do
+      local x, y = px + dx * ahead + sx * side, py + dy * ahead + sy * side
+      if M.inside(b, x, y, M.GUARD_M + 20) then
+        local r = closest(x, y)
+        if r and r.oneWay and r.dist <= M.ONCOMING_ON_M and (r.dx * dx + r.dy * dy) < -0.8 then
+          return x, y, r.dx, r.dy
+        end
+      end
+    end
+  end
+  return nil
+end
+
+local function closestRoad(x, y, z)
+  local m = map.getMap()
+  local n1, n2 = map.findClosestRoad(vec3(x, y, z or 0))
+  local a, c = n1 and m.nodes[n1], n2 and m.nodes[n2]
+  local e = a and c and (a.links[n2] or c.links[n1])
+  if not e then return nil end
+  local i, o = m.nodes[e.inNode or n1], m.nodes[e.outNode or n2]
+  if not i or not o then return nil end
+  local ex, ey = o.pos.x - i.pos.x, o.pos.y - i.pos.y
+  local l = math.sqrt(ex * ex + ey * ey)
+  if l < 0.1 then return nil end
+  -- (findClosestRoad's distance is 3D, the probe at the player's height: measured in the plane here)
+  local t = math.max(0, math.min(1, ((x - i.pos.x) * ex + (y - i.pos.y) * ey) / (l * l)))
+  local qx, qy = i.pos.x + t * ex, i.pos.y + t * ey
+  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay }
+end
+local oncomingTurn = false
+
 -- Pure: is a car that has stood still since `since` (nil: moving) at distance d from the player stuck at `now`?
 function M.stuck(since, now, d)
   return since ~= nil and now - since >= M.STUCK_S and d >= M.STUCK_FAR_M
@@ -416,9 +552,11 @@ end
 local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local lastTeleport = {} -- car id -> os.clock() it was last teleported
+local syncTrafficPool
 local function guard(b, all)
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
+  syncTrafficPool(gt)
   local me = playerId()
   local pv = me >= 0 and getObjectByID(me) or nil
   local pp = pv and pv:getPosition() or nil
@@ -426,9 +564,12 @@ local function guard(b, all)
   -- paused: nothing moves, nobody is stuck (the clocks start again after it)
   local paused = simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause()
   if paused then table.clear(stillSince) end
-  for id in pairs(gt.getTrafficData() or {}) do
-    if id ~= me then
-      local o = getObjectByID(id)
+  for id, traffic in pairs(gt.getTrafficData() or {}) do
+    local o = getObjectByID(id)
+    -- The full traffic table also contains player vehicles and may still contain an AI car just entered by a player.
+    if localplayers.controlled(id, o, controlled) or (type(traffic) == 'table' and traffic.isAi == false) then
+      stillSince[id], seenAt[id], lastTeleport[id] = nil, nil, nil
+    else
       if o and o:getActive() then
         local p = o:getPosition()
         local u = o:getVelocity()
@@ -440,6 +581,9 @@ local function guard(b, all)
         seenAt[id] = { p.x, p.y, s0[3] }
         local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
+        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity()) then
+          toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
+        end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
         else
@@ -458,7 +602,19 @@ local function guard(b, all)
           local pu = pv and pv:getVelocity()
           local ax, ay, adx, ady, amin, amax = nil
           if pp and pu and not all then ax, ay, adx, ady, amin, amax = M.aheadSpot(pp.x, pp.y, pu.x, pu.y, b) end
-          if ax then
+          local ox, oy, odx, ody
+          if ax and M.ONCOMING then
+            oncomingTurn = not oncomingTurn
+            if oncomingTurn then
+              local ok, x, y, ddx, ddy = pcall(M.oncomingSpot, pp.x, pp.y, adx, ady, b, M.rules.rightHandDrive,
+                function(x, y) return closestRoad(x, y, pp.z) end)
+              if ok and x then ox, oy, odx, ody = x, y, ddx, ddy end
+            end
+          end
+          if ox then
+            stats.oncomingRespawns = (stats.oncomingRespawns or 0) + 1
+            pcall(gt.forceTeleport, id, vec3(ox, oy, pp.z), vec3(odx, ody, 0), 0, 40)
+          elseif ax then
             stats.aheadRespawns = (stats.aheadRespawns or 0) + 1
             pcall(gt.forceTeleport, id, vec3(ax, ay, pp.z), vec3(adx, ady, 0), amin, amax)
           elseif cp and cf then
@@ -472,6 +628,102 @@ local function guard(b, all)
       end
     end
   end
+end
+
+-- Stock forceTeleportAll defaults to every AI id, including an AI car a local player may have just entered. Hand it
+-- an explicit filtered list instead; its full traffic data also contains non-AI player cars.
+local eligibleTraffic = {}
+local function scatterTraffic(gt, b)
+  local list = gt.getTrafficList and gt.getTrafficList()
+  if not gt.forceTeleportAll or type(list) ~= 'table' then return guard(b, true) end
+  localplayers.snapshot(controlled)
+  for i = #eligibleTraffic, 1, -1 do eligibleTraffic[i] = nil end
+  for _, id in ipairs(list) do
+    local o = getObjectByID(id)
+    if o and not localplayers.controlled(id, o, controlled) then
+      eligibleTraffic[#eligibleTraffic + 1] = id
+    end
+  end
+  pcall(gt.forceTeleportAll, eligibleTraffic)
+end
+
+-- Stock can keep a traffic car in its AI pool after somebody enters it. In particular, setActiveAmount(0) would
+-- deactivate that car, and reactivating it can invoke stock forceTeleport before our filtered scatter. Protect only
+-- the occupied AI cars, and return each to its original pool and respawn policy when its last local occupant leaves.
+local protectedTraffic, aiTraffic = {}, {}
+local function trafficPool()
+  local pools = rawget(_G, 'core_vehicleActivePooling')
+  local pool = pools and pools.getPool and pools.getPool('autoTraffic')
+  if pool and type(pool.allVehs) == 'table' and pool.removeVeh and pool.insertVeh then return pool end
+end
+
+local function releaseTraffic(id, saved, pool, data, force)
+  local t = saved.traffic
+  if data[id] == t then
+    if t.enableRespawn == false then t.enableRespawn = saved.enableRespawn end
+    if t.ignoreForceTeleport == true then t.ignoreForceTeleport = saved.ignoreForceTeleport end
+  end
+  if saved.pool == pool and pool and aiTraffic[id] and getObjectByID(id) and pool.allVehs[id] == nil then
+    pool:insertVeh(id, force)
+  end
+  protectedTraffic[id] = nil
+end
+
+-- A false return means the pool cannot safely be put on hold; the post-graph guard still recycles the AI.
+syncTrafficPool = function(gt)
+  local data = gt.getTrafficData and gt.getTrafficData() or {}
+  local list = gt.getTrafficList and gt.getTrafficList()
+  for id in pairs(aiTraffic) do aiTraffic[id] = nil end
+  if type(list) == 'table' then
+    for _, id in ipairs(list) do aiTraffic[id] = true end
+  else
+    for id, t in pairs(data) do if type(t) == 'table' and t.isAi then aiTraffic[id] = true end end
+  end
+  localplayers.snapshot(controlled)
+  local pool = trafficPool()
+  for id, saved in pairs(protectedTraffic) do
+    local o = getObjectByID(id)
+    if not aiTraffic[id] or not o or data[id] ~= saved.traffic or not localplayers.controlled(id, o, controlled) then
+      releaseTraffic(id, saved, pool, data, false)
+    end
+  end
+  local safe = type(list) == 'table'
+  for id in pairs(aiTraffic) do
+    local o, t = getObjectByID(id), data[id]
+    if o and localplayers.controlled(id, o, controlled) then
+      if type(t) ~= 'table' then
+        safe = false
+      else
+        local saved = protectedTraffic[id]
+        if not saved then
+          saved = { traffic = t, enableRespawn = t.enableRespawn, ignoreForceTeleport = t.ignoreForceTeleport }
+          protectedTraffic[id] = saved
+          t.enableRespawn, t.ignoreForceTeleport, t._teleport = false, true, nil
+          if t.state ~= nil then t.state = 'locked' end
+          if t.alpha ~= nil then t.alpha = 1 end
+          if o.setMeshAlpha then o:setMeshAlpha(1, '') end
+        end
+        if pool and pool.allVehs[id] ~= nil then
+          if pool:removeVeh(id) then saved.pool = pool else safe = false end
+        elseif not pool then
+          safe = false
+        end
+        -- A player can join while the pool is held. Clear its deferred stock teleport before making that car active.
+        if o.getActive and o.setActive and not o:getActive() then
+          t._teleport = nil
+          o:setActive(1)
+        end
+      end
+    end
+  end
+  return safe
+end
+
+-- core forwards the game's switch hook so a newly occupied traffic car is protected before the next guard tick.
+function M.onVehicleSwitched(_, _, player)
+  localplayers.observe(player)
+  local gt = gameplay_traffic
+  if gt and gt.getState() == 'on' then syncTrafficPool(gt) end
 end
 
 -- The player's traffic choice (the user, 2026-10-14: "if a player has them on then yes, if not then no"): the
@@ -548,8 +800,17 @@ function M.transform(xf, anchorId)
     m[1], m[2], m[3] = xf:apply(n[1], n[2], n[3])
     nodes[name] = m
   end
+  local lines
+  if graph.lines then
+    lines = {}
+    for i, l in ipairs(graph.lines) do
+      local x1, y1 = xf:apply(l[1], l[2], 0)
+      local x2, y2 = xf:apply(l[3], l[4], 0)
+      lines[i] = { x1, y1, x2, y2, l[5] }
+    end
+  end
   graph = { anchor = anchorId, serial = graph.serial, nodes = nodes, edges = graph.edges, signals = graph.signals,
-            rules = graph.rules, moved = true }
+            rules = graph.rules, lines = lines, moved = true }
   dirty, urgent = true, true
   if applied then applied.box = nil end
   return true
@@ -560,7 +821,7 @@ function M.currentGraph() return graph end      -- (tests)
 function M.onTeleport()
   respawnAll = true
   local gt = gameplay_traffic
-  if gt and gt.getState() == 'on' and not heldActive then
+  if gt and gt.getState() == 'on' and not heldActive and syncTrafficPool(gt) then
     local vars = gt.getTrafficVars and gt.getTrafficVars() or {}
     heldActive = vars.activeAmount or math.huge
     pcall(gt.setActiveAmount, 0)
@@ -577,7 +838,6 @@ function M.boxMoved(a, b)
 end
 
 local waited = 0
-local stopwatch = require('beamngEarth/stopwatch')
 
 -- The node tables an apply hands map.reset, built over several frames (toNodes in a coroutine, PREP_MS a frame; ~20 ms in
 -- one frame on a Steam Deck), for this graph and block box; nil until done.
@@ -591,7 +851,7 @@ local function buildNodes(b)
     setRules()
     local g, box, rh = graph, b and { b[1], b[2], b[3], b[4] } or nil, M.rules.rightHandDrive
     prep = { graph = g, box = box, co = coroutine.create(function()
-      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD) }
+      return { M.toNodes(g, box, M.EDGE_M, rh, M.PREP_YIELD, M.HALO_M, M.FAST_HALO_M) }
     end) }
   end
   if prep.result then return prep.result end
@@ -618,9 +878,139 @@ local function room(gov)
   return false
 end
 
+-- Pure (PR #728, ProxyFirewall202): the vehicle Lua that pushes a car standing (or slower than target - 1 m/s) on to
+-- target m/s along its heading (thrusters.applyVelocity) and spins its wheels to match (beamngEarth_spawnMotion), or nil.
+function M.spawnVelocityCommand(target)
+  target = tonumber(target)
+  if not target or target ~= target or target <= 1 or target == math.huge or target > 80 then return nil end
+  local threshold = math.max(0, target - 1)
+  return string.format('local _d=obj:getDirectionVector(); local _v=obj:getVelocity(); local _f=_v:dot(_d); '
+    .. 'if _f>=-1 and _f<%.3f and thrusters and type(thrusters.applyVelocity)=="function" then '
+    .. 'local _ok=pcall(thrusters.applyVelocity,_d*%.3f); if _ok then pcall(function() '
+    .. 'if not beamngEarth_spawnMotion then extensions.load("beamngEarth_spawnMotion") end; '
+    .. 'if beamngEarth_spawnMotion then beamngEarth_spawnMotion.applyRollingSpeed(%.3f) end end) end end',
+    threshold, target, target)
+end
+
+-- Pure: the speed (m/s) a respawned car is launched at on an edge with this limit (m/s), its heading's cosine with the
+-- edge's direction (in -> out; negative: against it), the edge one-way, a junction within LAUNCH_JUNCTION_M; or nil.
+function M.launchSpeed(limit, cosine, oneWay, nearJunction)
+  limit, cosine = tonumber(limit), tonumber(cosine)
+  if not limit or not cosine or nearJunction then return nil end
+  if (oneWay and cosine or math.abs(cosine)) < M.LAUNCH_ALIGN then return nil end
+  local v = limit * M.LAUNCH_SHARE
+  if v < M.LAUNCH_MIN_MS then return nil end
+  return math.min(v, 80)
+end
+
+local launchCount, launchWait, lastLaunchScan = {}, {}, -math.huge
+local junctionNodes, junctionOf = nil, nil   -- (the graph's nodes where 3+ roads meet: positions, per graph table)
+
+local function nearJunction(x, y, radius)
+  if not graph then return false end
+  if junctionOf ~= graph then
+    local deg = {}
+    for _, e in ipairs(graph.edges) do deg[e[1]], deg[e[2]] = (deg[e[1]] or 0) + 1, (deg[e[2]] or 0) + 1 end
+    junctionNodes, junctionOf = {}, graph
+    for name, n in pairs(graph.nodes) do
+      if (deg[name] or 0) > 2 then junctionNodes[#junctionNodes + 1] = n end
+    end
+  end
+  local r2 = (radius or M.LAUNCH_JUNCTION_M) ^ 2
+  for _, n in ipairs(junctionNodes) do
+    if (x - n[1]) ^ 2 + (y - n[2]) ^ 2 < r2 then return true end
+  end
+  return false
+end
+
+local function launch(id)
+  local o = getObjectByID(id)
+  if not o or not o:getActive() or localplayers.controlled(id, o, controlled) then return end
+  local m = map and map.getMap and map.getMap()
+  local p = o:getPosition()
+  local n1, n2 = map.findClosestRoad(p)
+  local a, c = m and n1 and m.nodes[n1], m and n2 and m.nodes[n2]
+  local e = a and c and (a.links[n2] or c.links[n1])
+  if not e then return end
+  local inN, outN = m.nodes[e.inNode or n1], m.nodes[e.outNode or n2]
+  if not inN or not outN then return end
+  local d = outN.pos - inN.pos
+  d.z = 0
+  local f = o:getDirectionVector()
+  f.z = 0
+  if d:length() < 0.1 or f:length() < 0.1 then return end
+  local v = M.launchSpeed(e.speedLimit, d:normalized():dot(f:normalized()), e.oneWay, nearJunction(p.x, p.y))
+  local cmd = v and M.spawnVelocityCommand(v)
+  if cmd then
+    o:queueLuaCommand(cmd)
+    stats.launches = (stats.launches or 0) + 1
+  end
+end
+
+-- Every LAUNCH_SCAN_S: the traffic cars whose respawn count went up are launched once placed (M.LAUNCH above).
+local function launchRespawned(now)
+  local gt = gameplay_traffic
+  if not M.LAUNCH or not gt or not gt.getState or gt.getState() ~= 'on' or now - lastLaunchScan < M.LAUNCH_SCAN_S then
+    return
+  end
+  lastLaunchScan = now
+  if simTimeAuthority and simTimeAuthority.getPause and simTimeAuthority.getPause() then return end
+  localplayers.snapshot(controlled)
+  local data = gt.getTrafficData() or {}
+  for id, t in pairs(data) do
+    if type(t) == 'table' and t.isAi ~= false then
+      local rc = tonumber(t.respawnCount)
+      if rc and launchCount[id] and rc > launchCount[id] then
+        launchWait[id] = { readyAt = nil, expires = now + M.LAUNCH_TIMEOUT_S }
+      end
+      launchCount[id] = rc
+      local w = launchWait[id]
+      if w then
+        if t.state == 'fadeIn' or (t.state == 'active' and t.respawnActive ~= true) then
+          w.readyAt = w.readyAt or (now + M.LAUNCH_DELAY_S)
+          if now >= w.readyAt then
+            launchWait[id] = nil
+            local ok, err = pcall(launch, id)
+            if not ok then log('W', 'beamngEarth', 'navgraph launch: ' .. tostring(err)) end
+          end
+        elseif now >= w.expires then
+          launchWait[id] = nil
+        end
+      end
+    end
+  end
+  for id in pairs(launchCount) do
+    if data[id] == nil then launchCount[id], launchWait[id] = nil, nil end
+  end
+end
+
+-- Overtaking on multi-lane highways (overtake.lua): the traffic cars and the player's car while it autodrives.
+local function overtakeScan(now)
+  local gt = gameplay_traffic
+  if not overtake.due(now) or not gt or not gt.getState or gt.getState() ~= 'on' then return end
+  local ids = {}
+  for id, t in pairs(gt.getTrafficData() or {}) do
+    if type(t) == 'table' and t.isAi ~= false then ids[id] = true end
+  end
+  local gps = package.loaded['beamngEarth/gps']
+  local st = gps and gps.status and gps.status()
+  local me = playerId()
+  local auto = st and st.autodrive and me >= 0 and me or nil
+  if auto then ids[auto] = nil end
+  localplayers.snapshot(controlled)
+  overtake.update(now, ids, auto, nearJunction, M.rules.rightHandDrive,
+    function(id) return localplayers.controlled(id, getObjectByID(id), controlled) end)
+end
+
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  if applied then
+    local ok, err = pcall(launchRespawned, t0)
+    if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end
+    ok, err = pcall(overtakeScan, t0)
+    if not ok then log('W', 'beamngEarth', 'navgraph overtake scan: ' .. tostring(err)) end
+  end
   if applied and t0 - lastGuard >= M.GUARD_S then
     lastGuard = t0
     local ok, err = pcall(guard, b, false)
@@ -652,7 +1042,8 @@ function M.update(aid, b, gov)
   local pre
   if urgent then
     setRules()
-    pre = { M.toNodes(graph, b and { b[1], b[2], b[3], b[4] } or nil, M.EDGE_M, M.rules.rightHandDrive) }
+    pre = { M.toNodes(graph, b and { b[1], b[2], b[3], b[4] } or nil, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M,
+                      M.FAST_HALO_M) }
   else
     pre = buildNodes(b)
     if not pre or not room(gov) then return end
@@ -667,16 +1058,15 @@ function M.update(aid, b, gov)
   if gov and gov.noteFrame then gov:noteFrame(sw()) end
   if okA then
     applied = { anchor = aid, serial = graph.serial, box = b and { b[1], b[2], b[3], b[4] } or {} }
-    if not started then
-      startTraffic()
-      respawnAll = false
-    elseif respawnAll then
+    if not started then startTraffic() end
+    if respawnAll then
       respawnAll = false
       local gt = gameplay_traffic
       if gt and heldActive then
+        syncTrafficPool(gt)
         pcall(gt.setActiveAmount, heldActive)
         heldActive = nil
-        if gt.forceTeleportAll then pcall(gt.forceTeleportAll) end
+        scatterTraffic(gt, b)
       else
         pcall(guard, b, true)
       end
@@ -696,15 +1086,33 @@ function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
            cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
+           launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,
            traffic = gameplay_traffic and gameplay_traffic.getState() or nil }
 end
 
 function M.reset()
+  local gt = gameplay_traffic
+  if gt and gt.getState and gt.getState() == 'on' and (heldActive or next(protectedTraffic)) then
+    syncTrafficPool(gt)
+    if heldActive then pcall(gt.setActiveAmount, heldActive) end
+    local pool, data = trafficPool(), gt.getTrafficData and gt.getTrafficData() or {}
+    -- Keep any still-occupied cars active while returning them to the stock pool on level exit.
+    for id, saved in pairs(protectedTraffic) do releaseTraffic(id, saved, pool, data, true) end
+  else
+    for id, saved in pairs(protectedTraffic) do
+      local t = saved.traffic
+      if t.enableRespawn == false then t.enableRespawn = saved.enableRespawn end
+      if t.ignoreForceTeleport == true then t.ignoreForceTeleport = saved.ignoreForceTeleport end
+      protectedTraffic[id] = nil
+    end
+  end
   heads = {}            -- (the level took them with it)
   graph, applied, dirty, lastApply, persistent, ours, foreign = nil, nil, false, -math.huge, nil, false, false
   started, respawnAll, lastGuard, heldActive = false, false, -math.huge, nil
+  launchCount, launchWait, lastLaunchScan, junctionNodes, junctionOf = {}, {}, -math.huge, nil, nil
+  overtake.reset()
   pendingSignals = nil
   stillSince = {}
   seenAt = {}

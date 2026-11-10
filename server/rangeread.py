@@ -39,7 +39,33 @@ import xproc
 log = logging.getLogger("earthd.mapdata")
 
 BLOCK = 256 * 1024          # bytes per cached block
-MAX_RUN = 64                # blocks per Range request (16 MiB)
+MAX_RUN = 64                # blocks per Range request (16 MiB) ...
+# ... but a read of more than PAR_BLOCKS blocks goes out as PAR_BLOCKS-block requests at once (RUN_THREADS, the mirrors
+# taking turns): a far host's single connection can be slow while the line is not (a player's large downloads at
+# ~1 MB/s each, 2026-11-04): a 10 MB row group was one 10 s request, its buildings' road tiles waited ~1 min.
+PAR_BLOCKS = int(os.environ.get("BNGE_RANGE_PAR_BLOCKS") or 8)
+RUN_THREADS = 8
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _run_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _pool = ThreadPoolExecutor(RUN_THREADS, thread_name_prefix="range-run")
+        return _pool
+
+
+def _quiet_call(quiet, fn, *a):
+    """fn(*a) on a pool thread with the caller's netfetch "quiet" state (a predownload's errors are no build's)."""
+    prev = getattr(netfetch._quiet, "on", False)
+    netfetch._quiet.on = quiet
+    try:
+        return fn(*a)
+    finally:
+        netfetch._quiet.on = prev
 BLOCK_WAIT_S = 60.0         # a block another process is fetching is waited for this long (xproc.once)
 MEM_BYTES = 64 * 1024 * 1024    # in-memory block LRU shared by every RemoteFile of the process
 CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)")
@@ -177,6 +203,31 @@ class RemoteFile:
         self._write(self._path(i), b)
         self._remember(i, b)
 
+    def _fetch_runs(self, runs, kind):
+        """{i: bytes} of the runs [(i0, i1)]: one alone here, several at once (PAR_BLOCKS). A failed one's error is
+        raised here once all are back, and counted a fault of this thread too (revisit: what was built from a
+        read that failed is not kept)."""
+        if len(runs) <= 1:
+            out = {}
+            for i0, i1 in runs:
+                out.update(self._fetch_run(i0, i1, kind))
+            return out
+        quiet = getattr(netfetch._quiet, "on", False)
+        futs = [_run_pool().submit(_quiet_call, quiet, self._fetch_run, i0, i1, kind) for i0, i1 in runs]
+        out, err = {}, None
+        for f in futs:
+            try:
+                out.update(f.result())
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            if not quiet and isinstance(err, netfetch.FetchError) and \
+                    not isinstance(err, (netfetch.NotFound, netfetch.Deferred)):
+                import revisit
+                revisit.fault()
+            raise err
+        return out
+
     def _fetch_run(self, i0, i1, kind):
         """Blocks i0..i1-1 in one Range request (mirrors in turn); stores and returns them."""
         start = i0 * self.block
@@ -207,25 +258,32 @@ class RemoteFile:
                 err = e
                 continue
             body = r.body
+            learned_size = None
             if self.if_match and r.headers.get("etag", self.if_match).strip() != self.if_match:
                 raise Changed(f"{url}: {r.headers.get('etag')} is not {self.if_match}")
             if r.status == 206:
-                m = CONTENT_RANGE.match(r.headers.get("content-range", ""))
-                if not m or int(m.group(1)) != start:
+                m = CONTENT_RANGE.fullmatch(r.headers.get("content-range", "").strip())
+                if not m or int(m.group(1)) != start or int(m.group(2)) < start:
                     raise RangeError(f"{url}: bad Content-Range {r.headers.get('content-range')!r}")
                 if m.group(3) != "*":
                     total = int(m.group(3))
+                    if int(m.group(2)) >= total:
+                        raise RangeError(f"{url}: Content-Range extends beyond file size {total}")
                     if self.size is None:
-                        self._learn_size(total)
+                        learned_size = total
                         end = min(end, total)
                     elif total != self.size:
                         raise RangeError(f"{url}: size {total} differs from the index's {self.size}")
+                if int(m.group(2)) != end - 1:
+                    raise RangeError(f"{url}: Content-Range does not cover {start}-{end - 1}")
             elif not (r.status == 200 and start == 0 and self.size is not None and len(body) == self.size):
                 raise RangeError(f"{url}: HTTP {r.status} without the range")
             else:
                 body = body[:end]
             if len(body) != end - start:
                 raise RangeError(f"{url}: {len(body)} bytes for range {start}-{end - 1}")
+            if learned_size is not None:
+                self._learn_size(learned_size)    # persist only after the entire answer is validated
             with self._lock:
                 self.stats["requests"] += 1
                 self.stats["net_bytes"] += len(body)
@@ -278,13 +336,25 @@ class RemoteFile:
             held = [i for i in need if xproc.take(self._lock_path(i), kind)]
             later = sorted(set(need) - set(held))
             try:
-                run = []
-                for i in held + [None]:
-                    if run and (i is None or i != run[-1] + 1 or len(run) >= MAX_RUN):
-                        out.update(self._fetch_run(run[0], run[-1] + 1, kind))
+                # A different process may have stored the block after our cache look and released its
+                # lock just before take(). Check while holding the lock, as xproc.once() does.
+                pending = []
+                for i in held:
+                    b = self._block_from_cache(i)
+                    if b is not None:
+                        out[i] = b
+                    else:
+                        pending.append(i)
+                runs, run = [], []
+                # (split only with the file's size known: a first read learns it, its runs must not pass the end)
+                cap = MAX_RUN if (self.size is None or len(pending) <= PAR_BLOCKS) else PAR_BLOCKS
+                for i in pending + [None]:
+                    if run and (i is None or i != run[-1] + 1 or len(run) >= cap):
+                        runs.append((run[0], run[-1] + 1))
                         run = []
                     if i is not None:
                         run.append(i)
+                out.update(self._fetch_runs(runs, kind))
             finally:
                 for i in held:
                     xproc.release(self._lock_path(i))
@@ -319,12 +389,20 @@ class RemoteFile:
             return b""
         i0, i1 = start // self.block, (end - 1) // self.block + 1
         got = self.blocks(i0, i1, kind)
-        buf = b"".join(got[i] for i in range(i0, i1) if i in got)
+        # An unknown size can become known during blocks(); a genuine EOF is a valid short read.
+        if self.size is not None:
+            end = min(end, self.size)
+            if end <= start:
+                return b""
+            i1 = (end - 1) // self.block + 1
+        missing = [i for i in range(i0, i1) if i not in got]
+        if missing:
+            raise RangeError(f"missing blocks {missing} for range {start}-{end - 1}")
+        buf = b"".join(got[i] for i in range(i0, i1))
         out = buf[start - i0 * self.block:end - i0 * self.block]
         # (a block left out mid-range would shift every byte after it: a corrupt page for DuckDB, not an error)
-        if len(out) != end - start and (self.size is not None or i1 - 1 in got):
-            log.warning("rangeread: short read of %s [%d, %d): %d bytes, blocks %s of %d..%d, size %s",
-                        self.cache_dir, start, end, len(out), sorted(got), i0, i1 - 1, self.size)
+        if len(out) != end - start:
+            raise RangeError(f"short read for range {start}-{end - 1}: {len(out)} bytes")
         return out
 
 

@@ -64,6 +64,33 @@ T.check(n == #settings.ORDER, 'every SCHEMA key is in ORDER (or HIDDEN)')
 -- the one-time welcome: due in our level until seen, then not again
 T.check(settings.get('welcomeSeen') == 0, 'welcome not seen yet')
 T.check(settings.uiWelcomeDone().ok and settings.get('welcomeSeen') == settings.WELCOME_VERSION, 'seen: stored')
+-- the telemetry choice (TELEMETRY.md): asked until made; the boxes start as the region says (nothing ticked before the
+-- hello named it); the sub-switches are off with the main one; the choice is the server's consent version
+T.check(settings.privacyNeeded(), 'telemetry choice: needed before one is made')
+local p0 = settings.uiPrivacy()
+T.check(p0.needed and not p0.known and p0.telemetry == false and p0.perf == false and p0.net == false,
+  'before the hello: nothing ticked')
+settings.serverPrivacy('perf_off', 1)
+local p1 = settings.uiPrivacy()
+T.check(p1.known and p1.telemetry and p1.net and p1.perf == false, 'perf_off: performance unticked')
+settings.serverPrivacy('all', 1)
+T.check(settings.uiPrivacy().perf == true, 'all: everything ticked')
+settings.serverPrivacy('bogus', 'x')
+T.check(settings.privacyRegion == 'all' and settings.telemetryConsent == 1, 'bad region / consent ignored')
+settings.uiWelcomeDone({ telemetry = false, perf = true, net = true })
+T.check(settings.get('telemetry') == false and settings.get('telemetryPerf') == false and settings.get('telemetryNet') == false
+  and settings.get('telemetryChoice') == 1 and not settings.privacyNeeded(), 'main off: the parts off too, choice made')
+local p2 = settings.uiPrivacy()
+T.check(not p2.needed and p2.telemetry == false, 'after the choice: the saved values')
+settings.serverPrivacy('all', 2)
+T.check(settings.privacyNeeded() and settings.uiPrivacy().telemetry == false, 'a new consent version asks again (an off switch stays off)')
+settings.uiWelcomeDone({ telemetry = true, perf = false, net = true })
+T.check(settings.get('telemetry') and not settings.get('telemetryPerf') and settings.get('telemetryNet')
+  and settings.get('telemetryChoice') == 2, 'choice saved with the new version')
+settings.serverPrivacy('all', 3)
+local p3 = settings.uiPrivacy()
+T.check(p3.needed and p3.telemetry and p3.perf == false and p3.net, 'asked again: the boxes as chosen before, not the region\'s')
+settings.serverPrivacy('neutral', 1)
 
 ------------------------------------------------------------------------------------------
 -- validation
@@ -96,6 +123,21 @@ T.check(vals.clouds == true and #warn == 1 and warn[1]:match('unreadable'), 'loa
 files[settings.FILE] = 42
 vals, warn = settings.load()
 T.check(vals.clouds == true and #warn == 1, 'load: a non-object file -> defaults + warning')
+files[settings.FILE] = nil
+
+-- A previous capture must never start automatically on a later session.
+files[settings.FILE] = { version = 1, runtimeProfiler = true, profilerMode = 'full' }
+vals, warn = settings.load()
+T.check(vals.runtimeProfiler == false and vals.profilerMode == 'essential' and #warn == 0,
+  'load always starts with profiling off and minimal Essential mode')
+settings.set('runtimeProfiler', true)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'explicit opt-in starts this session but saves the disabled state')
+settings.set('clouds', false)
+T.check(settings.get('runtimeProfiler') == true and files[settings.FILE].runtimeProfiler == false,
+  'saving another setting does not persist the active capture')
+vals = settings.load()
+T.check(vals.runtimeProfiler == false, 'a new session starts with profiling off')
 files[settings.FILE] = nil
 
 ------------------------------------------------------------------------------------------
@@ -233,13 +275,9 @@ T.check(s.settings.rebaseDistance == settings.get('rebaseDistance') and #s.schem
 T.check(s.status.connection == 'disconnected' and s.status.session == 'abc' and s.status.anchorId == 3
   and s.status.attribution == 'credits' and s.status.dist == 500, 'uiState: status from the core')
 T.check(s.dev and s.dev.active, 'uiState: dev state')
-T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008') and s.status.deshadow == 'off',
-  'uiState: server features (weather, gravity, de-shadowing off)')
-stTbl.deshadow = 'full'
-T.check(settings.uiState().status.deshadow == 'full', 'uiState: de-shadowing mode from the hello')
-T.check(s.status.colormatch == 'off', 'uiState: colour seams off without hello.colormatch')
-stTbl.colormatch = 's2'
-T.check(settings.uiState().status.colormatch == 's2', 'uiState: colour-seam mode from the hello')
+T.check(s.status.weather == 'Weather (real): 20 C' and s.status.gravity:match('EGM2008'),
+  'uiState: server features (weather, gravity)')
+T.check(s.status.deshadow == nil and s.status.colormatch == nil, 'uiState: no imagery rows (left the About page)')
 T.check(settings.uiDevSet('tint', true).active and devCalls[1] == 'tint=true', 'uiDevSet forwards')
 settings.uiDevPreset('lod')
 T.check(devCalls[2] == 'preset lod', 'uiDevPreset forwards')
@@ -406,6 +444,26 @@ do
   T.check(st.HIDDEN.updateDismissed, 'updateDismissed: not on the settings page')
 end
 
+-- the world server's share of the CPU (GitHub #529): on the page, the defaults as before (server cpupin.player_settings)
+do
+  local st = require('beamngEarth/settings')
+  T.check(st.SCHEMA.serverCores.kind == 'enum' and st.SCHEMA.serverCores.default == 'auto', 'serverCores: auto by default')
+  T.check(st.SCHEMA.serverPriority.kind == 'enum' and st.SCHEMA.serverPriority.default == 'low', 'serverPriority: low by default')
+  T.check(st.validate('serverCores', '2') == '2' and st.validate('serverPriority', 'normal') == 'normal', 'the choices')
+  local on = {}
+  for _, k in ipairs(st.ORDER) do on[k] = true end
+  T.check(on.serverCores and on.serverPriority, 'both on the settings page')
+end
+
+-- the 3dmr.eu models' switch: on the page, on by default (server cpupin.player_settings reads it when it starts)
+do
+  local st = require('beamngEarth/settings')
+  T.check(st.SCHEMA.models3dmr.kind == 'bool' and st.SCHEMA.models3dmr.default == true, 'models3dmr: on by default')
+  local on = {}
+  for _, k in ipairs(st.ORDER) do on[k] = true end
+  T.check(on.models3dmr, 'models3dmr on the settings page')
+end
+
 -- the map holds off the car's controls (the user, 2026-10-21: the controller drove the car behind the map): the stock
 -- groups and every driving action by name
 do
@@ -440,6 +498,34 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- Handled BigMap inputs stop before the menus' overlapping bindings (#766); the original policy is restored.
+do
+  local saved = { freeroam_bigMapMode = rawget(_G, 'freeroam_bigMapMode'), guihooks = rawget(_G, 'guihooks'),
+    pushActionMap = rawget(_G, 'pushActionMap'), popActionMap = rawget(_G, 'popActionMap') }
+  local find = scenetree.findObject
+  for _, previous in ipairs({false, true}) do
+    local am, sent = { trapHandledEvents = previous }, {}
+    local originalZoom = function() end
+    freeroam_bigMapMode = { zoomInOut = originalZoom }
+    scenetree.findObject = function(name) if name == 'BigMapActionMap' then return am end end
+    guihooks = { trigger = function(name, d) if name == settings.MAP_INPUT_EVENT then sent[#sent + 1] = d.kind end end }
+    pushActionMap, popActionMap = function() end, function() end
+    settings.mapControls(true)
+    settings.mapControls(true) -- opening twice must not replace the saved policy
+    freeroam_bigMapMode.zoomInOut(1, true)
+    -- The lower menu map receives the input only when the top action map allows a handled event through.
+    if not am.trapHandledEvents then freeroam_bigMapMode.onChangeUiFilter(1, 1) end
+    T.check(#sent == 1 and sent[1] == 'zoom_trigger', 'map zoom does not also cycle the cache layer')
+    freeroam_bigMapMode.onChangeUiFilter(1, -1)
+    T.check(sent[2] == 'filter', 'a dedicated bumper still cycles the cache layer')
+    settings.mapControls(false)
+    T.check(am.trapHandledEvents == previous and freeroam_bigMapMode.zoomInOut == originalZoom,
+      'map close restores action-map policy and stock callbacks')
+  end
+  scenetree.findObject = find
+  for k, v in pairs(saved) do rawset(_G, k, v) end
+end
+
 -- The map's hold on the controls goes when the map stops asking for its state (its close lost, GitHub #252) or a level
 -- starts, never while it asks
 do
@@ -467,6 +553,21 @@ do
   for k, v in pairs(saved) do rawset(_G, k, v) end
 end
 
+-- The map's other players in a BeamMP session: none is nil, not an empty table (it reaches EarthMap.vue as {}, not
+-- [], and the map's .map() threw every second: the map stopped drawing in multiplayer; PR #509 by Astel123457).
+do
+  local b0, m0 = package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession']
+  local others = {}
+  package.loaded['beamngEarth/beammp'] = { inSession = function() return true end }
+  package.loaded['beamngEarth/mpsession'] = { others = function() return others end }
+  local ok, st = pcall(settings.uiMapState)
+  T.check(ok and st.others == nil, 'map in a session, no other players: others nil')
+  others = { { name = 'a', lat = 1, lon = 2 } }
+  ok, st = pcall(settings.uiMapState)
+  T.check(ok and type(st.others) == 'table' and #st.others == 1, 'map in a session, one other player: listed')
+  package.loaded['beamngEarth/beammp'], package.loaded['beamngEarth/mpsession'] = b0, m0
+end
+
 -- #44: dashboard visibility is a persisted player setting.
 do
   local dashboard0, settingsFile0 = rawget(_G, 'beamngEarth_dashboard'), files[settings.FILE]
@@ -482,6 +583,40 @@ do
   settings.load()
 end
 
+-- #565: independent distant lights are opt-in and survive the settings round trip.
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local independent
+  package.loaded['beamngEarth/trafficvisuals'] = { setWithoutTraffic = function(v) independent = v end }
+  files[settings.FILE] = { version = 1 }
+  T.check(settings.load().distantTrafficWithoutTraffic == false, 'older settings retain traffic-following lights')
+  T.check(settings.set('distantTrafficWithoutTraffic', true).ok and independent == true,
+    'independent lights apply through the renderer')
+  T.check(files[settings.FILE].distantTrafficWithoutTraffic == true
+      and settings.load().distantTrafficWithoutTraffic == true, 'independent lights survive reload')
+  settings.set('distantTrafficWithoutTraffic', false)
+  T.check(independent == false, 'traffic-following lights can be restored')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
+
+
+do
+  local visual0, settingsFile0 = package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE]
+  local quality
+  package.loaded['beamngEarth/trafficvisuals'] = { setQuality = function(v) quality = v end }
+  files[settings.FILE] = { version = 1, quality = 'low' }
+  T.check(settings.load().distantTrafficQuality == 'low', 'an older Low preset gets the light traffic pool')
+  files[settings.FILE] = { version = 1, quality = 'custom' }
+  T.check(settings.load().distantTrafficQuality == 'high', 'Custom keeps the dense traffic default')
+  for _, v in ipairs({ 'low', 'medium', 'high' }) do
+    T.check(settings.set('distantTrafficQuality', v).ok and quality == v, 'traffic quality applies: ' .. v)
+    T.check(settings.load().distantTrafficQuality == v, 'traffic quality survives reload: ' .. v)
+  end
+  T.check(not settings.set('distantTrafficQuality', 'ultra').ok, 'unknown traffic quality is rejected')
+  package.loaded['beamngEarth/trafficvisuals'], files[settings.FILE] = visual0, settingsFile0
+  settings.load()
+end
 
 -- presets: picking one sets its knobs; moving a knob makes it Custom (or the preset it now matches)
 local r = settings.setQuality('low')

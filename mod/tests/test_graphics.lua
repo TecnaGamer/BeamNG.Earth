@@ -122,6 +122,12 @@ trees.setQuality('low')
 T.check(trees.RINGS[1][1] == math.floor(base[1][1] * 1.3 + 0.5) and trees.RINGS[2][2] < base[2][2],
   'density: the ranks thinner, the distance kept')
 T.check(trees.distanceScale('near') == 0.75 and trees.distanceScale('max') == 2.2, 'the server\'s reach factors')
+do  -- (GitHub #714) the lowest levels: fewer trees than Low, a shorter reach than Near, within the server's clamp (0.5)
+  local r, c = trees.scaledRings('lowest', { { 300, 1.0 }, { 1e9, 0.2 } }, { { 300, 6000 } }, 'nearest')
+  T.check(r[1][1] == 180 and math.abs(r[1][2] - 0.3) < 1e-9 and c[1][2] == 1800, 'lowest density, nearest distance')
+  T.check(trees.distanceScale('nearest') >= 0.5 and trees.distanceScale('nearest') < trees.distanceScale('near'),
+    'nearest: shorter than near, not below the server\'s 0.5')
+end
 trees.setQuality('normal'); trees.setDistance('normal')
 T.check(trees.GHOST_FAR_M == 1536, 'normal: the server\'s vegetation DROP_M')
 

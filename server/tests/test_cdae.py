@@ -50,7 +50,7 @@ class GoldenTest(unittest.TestCase):
         ours_bytes = cdae.encode(src["positions"], src["tris"], normals=src["normals"], uvs=src["uvs"],
                                  material=src["material"])
         ours = cdae.decode(ours_bytes)
-        self.assertEqual(len(ours_bytes), os.path.getsize(FIX / f"{name}.cdae"))
+        self.assertEqual(len(cdae.plain(ours_bytes)), os.path.getsize(FIX / f"{name}.cdae"))   # (written packed)
         self.assertEqual(ours["version"], gold["version"])
         self.assertEqual(gold["version"], cdae.VERSION_WORD)
         self.assertEqual(ours["header"], gold["header"])
@@ -191,6 +191,51 @@ class FormatTest(unittest.TestCase):
         d = cdae.decode(cdae.encode(pos, tri, uvs=uv, object_name="buildings"))
         self.assertEqual(d["names"], ["buildings", "detail2"])
 
+
+class SplitCollisionTest(unittest.TestCase):
+    def test_drawn_mesh_and_collision_meshes(self):
+        """collisions=: the drawn object and an object "Colmesh<k>" per collision mesh, in a "Collision-1" detail
+        (Windows builds each collision mesh in time ~quadratic in its triangles: a big shape's collision in small
+        meshes, fine ground 2026-11-01)."""
+        P = np.array([[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]], float)
+        T = np.array([[0, 1, 2], [0, 2, 3]])
+        cols = [(P[:3], np.array([[0, 1, 2]]), None), (P[[0, 2, 3]], np.array([[0, 1, 2]]), None)]
+        d = cdae.decode(cdae.encode(P, T, material="m", object_name="fine", collisions=cols))
+        self.assertEqual(d["names"][:3], ["fine", "Colmesh0", "Colmesh1"])
+        self.assertIn("Collision-1", d["names"])
+        types = [m["type"] for m in d["meshes"]]
+        self.assertEqual(types, [0, 4, 4, 0, 4, 0], "drawn, null; then each collision object's null and its own")
+        cm = [cdae.mesh_arrays(m) for m in d["meshes"] if m["type"] == 0]
+        self.assertEqual([len(m["indices"]) // 3 for m in cm], [2, 1, 1])
+        with self.assertRaises(cdae.CdaeError):
+            cdae.encode(P, T, collision_only=True, collisions=cols)
+        # (a material list the drawn mesh uses part of: the collisions' indices follow its pruning)
+        mats = ["a", "b", "c"]
+        d = cdae.decode(cdae.encode(P, T, material=mats, tri_materials=[2, 2], object_name="fine",
+                                    collisions=[(P[:3], np.array([[0, 1, 2]]), [2])]))
+        self.assertEqual(len(d["meshes"]), 4)
+
+
+
+class PackedTest(unittest.TestCase):
+    """Shapes are written with their body as one zstd frame (the game reads them as its own compressed shapes,
+    earthfast cdaez.rs); they decode as the plain file does, and plain() gives that file back."""
+
+    def test_packed_round_trip(self):
+        P = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 1], [10, 10, 2]], float)
+        T = np.array([[0, 1, 2], [1, 3, 2]])
+        data = cdae.encode(P, T, uvs=np.zeros((4, 2)), material="m")
+        h, end = cdae.unpack_one(data, 8)
+        self.assertTrue(h["compression"])
+        self.assertEqual(data[end:end + 4], b"\x28\xb5\x2f\xfd")
+        self.assertEqual(h["bodysize"], len(data) - end)
+        flat = cdae.plain(data)
+        self.assertFalse(cdae.unpack_one(flat, 8)[0]["compression"])
+        a, b = cdae.decode(data), cdae.decode(flat)
+        self.assertEqual(a["materials"], b["materials"])
+        np.testing.assert_array_equal(cdae.mesh_arrays(a["meshes"][0])["verts"],
+                                      cdae.mesh_arrays(b["meshes"][0])["verts"])
+        self.assertEqual(cdae.plain(flat), flat)
 
 if __name__ == "__main__":
     unittest.main()

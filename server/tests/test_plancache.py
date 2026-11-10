@@ -59,6 +59,21 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(md.calls, 0, "planned in the last run: read from the revisit cache")
         self.assertTrue(np.array_equal(za, zb))
 
+    def test_has(self):
+        """PlanCache.has: a cell's plans on disk, this run's or (a later run) the revisit cache's; nothing read."""
+        f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-200, 200, 50), np.linspace(-30, 60, 50), 0.0)
+        a = self.grader(FakeMD(f))
+        keys = sorted({k for pl, idx in a.store.planners_of(np.asarray(la), np.asarray(lo))
+                       for k in pl._keys(np.asarray(la)[idx], np.asarray(lo)[idx])})
+        self.assertFalse(any(a.shared.has(k) for k in keys), "nothing planned yet")
+        a.apply(la, lo, np.zeros(50))
+        self.assertTrue(all(a.shared.has(k) for k in keys), "this run's plans")
+        os.environ[plancache.RUN_ENV] = "next"          # (a later server run: its own run folder, empty)
+        b = self.grader(FakeMD(f))
+        self.assertTrue(all(b.shared.has(k) for k in keys), "the revisit cache's copy")
+        self.assertFalse(b.shared.has((14, 1, 1)), "another cell")
+
     def test_incomplete_plans_not_kept(self):
         import revisit
         f = features([[(-300, 20), (300, 20)]], ["residential"])
@@ -95,6 +110,23 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(got[0][1], False)
         self.assertEqual(got[0][0], ([], [], [], []))
         self.assertEqual(other.stats["waited"], 1)
+
+    def test_long_wait_logged_with_its_holder(self):
+        """A wait for another process's plans past LONG_WAIT_S is logged with the cell and that process (a road tile
+        "may be stuck": whose plans it waited for)."""
+        c = plancache.PlanCache(self.dir, "s")
+        c.claim(KEY)
+        other = plancache.PlanCache(self.dir, "s")
+        got = []
+        with mock.patch.object(plancache, "LONG_WAIT_S", 0.2), self.assertLogs("earthd.plancache", "WARNING") as cm:
+            t = threading.Thread(target=lambda: got.append(other.claim(KEY)))
+            t.start()
+            time.sleep(0.4)
+            c.store(KEY, [], [], [], [])
+            c.release(KEY)
+            t.join(5)
+        self.assertIn(str(os.getpid()), cm.output[0])
+        self.assertIn("they came", cm.output[0])
 
     def test_does_not_wait_behind_a_less_favoured_planner(self):
         c = plancache.PlanCache(self.dir, "s")

@@ -85,7 +85,8 @@ class GrassLayersTest(unittest.TestCase):
 
     def test_nonvegetated_surface_indices_and_holes_survive_palette_changes(self):
         original = np.full((32, 32), sf.GRASS, np.uint8)
-        excluded = (sf.ASPHALT, sf.ROCK, sf.MUD, sf.DIRT, sf.LOOSE, sf.COBBLE, heightmap.TER_HOLE)
+        excluded = (sf.ASPHALT, sf.ROCK, sf.MUD, sf.DIRT, sf.LOOSE, sf.COBBLE, sf.GOLF_ROUGH, sf.GOLF_FAIRWAY,
+                    sf.GOLF_GREEN, sf.GOLF_BUNKER, heightmap.TER_HOLE)
         for row, material in enumerate(excluded, start=4):
             original[row, 3:29] = material
         masks, (_, before, _) = self.block(original)
@@ -209,6 +210,15 @@ class GrassImageryTest(unittest.TestCase):
         _, _, b = gi.render_base(image, object(), -385, -513, 1024, 1024, set())
         # The production 128 m movement is 32 of the 4 m analysis cells.
         np.testing.assert_array_equal(a[:, 32:], b[:, :224])
+
+    def test_selected_samples_match_full_grid_for_sparse_dense_and_empty_masks(self):
+        rng = np.random.default_rng(658)
+        colors = rng.random((13, 17, 3), dtype=np.float32)
+        full = gl.sample_colors(colors, 32)
+        for fraction in (0, 0.1, 0.5, 0.9, 1):
+            mask = rng.random((32, 32)) < fraction
+            with self.subTest(fraction=fraction):
+                np.testing.assert_array_equal(gl.sample_colors(colors, 32, mask), full[mask])
 
     def test_sample_coordinates_match_terrain_nodes_and_north_south_orientation(self):
         image = ContinuousImagery()

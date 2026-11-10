@@ -1,10 +1,12 @@
 """furniture: street lights along sidewalk runs at fixed stations of their road, utility poles and their
 wires along country roads; the same stations whichever tile draws them."""
 import ast
+import math
 import re
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -16,6 +18,14 @@ import roads  # noqa: E402
 def road(fid, cls, urban, x0=-300.0, x1=600.0, y=50.0, width=8.0):
     pts = np.array([(x0, y, 0.0), (x1, y, 0.0)])
     return (fid, roads.Spec(width, "paved", urban, cls, False), pts, 0.0)
+
+
+class ConstantDevelopment:
+    def __init__(self, tier=2, limited=1., urban=1., commercial=1.):
+        self.value = SimpleNamespace(tier=tier, limited=limited, urban=urban, commercial=commercial)
+
+    def sample(self, point, outward, half_width):
+        return self.value
 
 
 
@@ -70,14 +80,137 @@ class LampTest(unittest.TestCase):
         self.assertGreaterEqual(groups.count(furniture.G_POLELAMP), 2)
         self.assertTrue(wires)
 
+    def test_no_poles_along_a_mountain_pass_road(self):
+        """A pass road (roads.Spec.mountain, the Stelvio): no utility poles nor wires, as a road in the hills
+        without the flag has them."""
+        fid, spec, pts, lon = road("m", "secondary", False)
+        rows, wires = [], []
+        for sp in (spec, spec._replace(mountain=True)):
+            got, w = [], []
+            for side in (1, -1):
+                got += furniture.place([(fid, sp, pts, lon)], self.walks((fid, sp, pts, lon), side), (0, 0, 256, 256),
+                                       wires=w, town=True)
+            rows.append([x[0] for x in got].count(furniture.G_POLE))
+            wires.append(len(w))
+        self.assertGreater(rows[0], 0)
+        self.assertEqual((rows[1], wires[1]), (0, 0))
+
     def test_hydrants_on_town_streets(self):
         r = road("h", "residential", True, x0=-300, x1=900)
         rows = []
         for side in (1, -1):
-            rows += furniture.place([r], self.walks(r, side), (0, 0, 600, 256))
+            rows += furniture.place([r], self.walks(r, side), (0, 0, 600, 256), development=ConstantDevelopment())
         hy = sorted(x[1] for x in rows if x[0] == furniture.G_HYDRANT)
         self.assertGreaterEqual(len(hy), 8)
         self.assertTrue(np.allclose(np.diff(hy), furniture.HYDRANT_SPACING / 2, atol=1.0), "alternating sides")
+
+
+class DevelopmentDecorationTest(unittest.TestCase):
+    OPTIONAL = {furniture.G_STREET_TREE, furniture.G_HYDRANT, furniture.G_BENCH, furniture.G_BIN}
+
+    def street(self, urban=True):
+        # Select a street from the existing deterministic share that receives procedural trees.
+        fid = next(f"dev{k}" for k in range(100) if furniture._h01(f"dev{k}", "trees") < furniture.STREET_TREE_SHARE)
+        r = road(fid, "tertiary", urban, x1=2000.)
+        walks = [wk for side in (1, -1) for wk in LampTest.walks(None, r, side)]
+        return r, walks
+
+    def optional(self, rows):
+        return sorted(tuple(r) for r in rows if r[0] in self.OPTIONAL)
+
+    def test_rural_or_missing_context_keeps_exact_lighting_and_wires(self):
+        r, walks = self.street()
+        for town, buried in ((False, 0.), (True, 0.), (True, 1.)):
+            for lit in (None, "yes", "no"):
+                settings = dict(town=town, buried=buried, region="na:sparse", lighting={r[0]: lit})
+                rich_wires = []
+                rich = furniture.place([r], walks, (0, 0, 512, 256), wires=rich_wires,
+                                       development=ConstantDevelopment(), **settings)
+                infrastructure = [row for row in rich if row[0] not in self.OPTIONAL]
+                # (None: no context given or readable, the old town rule: tested below)
+                for context in (ConstantDevelopment(tier=0),):
+                    with self.subTest(town=town, buried=buried, lit=lit, context=context):
+                        wires = []
+                        rows = furniture.place([r], walks, (0, 0, 512, 256), wires=wires,
+                                               development=context, **settings)
+                        self.assertEqual(self.optional(rows), [])
+                        self.assertEqual(rows, infrastructure)
+                        self.assertEqual(len(wires), len(rich_wires))
+                        for actual, expected in zip(wires, rich_wires):
+                            np.testing.assert_array_equal(actual, expected)
+
+    def test_without_a_context_the_town_rule(self):
+        """development None (a caller without it, or the tile's cells unreadable): street trees, hydrants, benches and
+        bins as before the context, on town streets only (merge of PR #670)."""
+        r, walks = self.street()
+        town = furniture.place([r], walks, (0, 0, 512, 256), development=None)
+        self.assertTrue({row[0] for row in town} & self.OPTIONAL, "a town street keeps its decoration")
+        r, walks = self.street(urban=False)
+        rural = furniture.place([r], walks, (0, 0, 512, 256), development=None)
+        self.assertEqual({row[0] for row in rural} & self.OPTIONAL, set(), "none on a country road")
+
+    def test_existing_rural_sidewalk_can_follow_local_development(self):
+        r, walks = self.street(urban=False)
+        rows = furniture.place([r], walks, (0, 0, 1000, 256), development=ConstantDevelopment())
+        self.assertEqual({row[0] for row in rows} & self.OPTIONAL, self.OPTIONAL)
+
+    def test_context_cannot_decorate_without_walks_or_on_medians(self):
+        class Unused:
+            def sample(self, *args):
+                raise AssertionError("no eligible sidewalk: context must not be sampled")
+        r, walks = self.street()
+        for runs in ([], [dict(wk, median=True) for wk in walks]):
+            rows = furniture.place([r], runs, (0, 0, 512, 256), development=Unused())
+            self.assertEqual(self.optional(rows), [])
+
+    def test_limited_decoration_is_a_stable_subset_across_tile_boxes(self):
+        r, walks = self.street()
+        limited = ConstantDevelopment(tier=1, urban=0., commercial=0.)
+        medium = furniture.place([r], walks, (0, 0, 1000, 256), development=limited)
+        rich = furniture.place([r], walks, (0, 0, 1000, 256), development=ConstantDevelopment())
+        self.assertTrue(self.optional(medium))
+        self.assertLess(len(self.optional(medium)), len(self.optional(rich)))
+        self.assertTrue(set(self.optional(medium)) <= set(self.optional(rich)))
+        self.assertFalse({row[0] for row in medium} & {furniture.G_BENCH, furniture.G_BIN},
+                         "residential context alone does not infer benches or bins")
+        for context in (limited, ConstantDevelopment()):
+            whole = furniture.place([r], walks, (0, 0, 512, 256), development=context)
+            parts = furniture.place([r], walks, (0, 0, 256, 256), development=context)
+            parts += furniture.place([r], walks, (256, 0, 512, 256), development=context)
+            self.assertEqual(self.optional(whole), self.optional(parts))
+
+    def test_procedural_trees_still_respect_bridge_headroom(self):
+        r, walks = self.street()
+        deck = (np.array([[-400., 50., 5.], [2100., 50., 5.]]), 20.)
+        rows = furniture.place([r], walks, (0, 0, 512, 256), development=ConstantDevelopment(), decks=[deck])
+        self.assertNotIn(furniture.G_STREET_TREE, [row[0] for row in rows])
+        self.assertIn(furniture.G_HYDRANT, [row[0] for row in rows], "low decoration fits under the deck")
+
+    def test_real_context_samples_shallow_storefronts_from_the_road_centre(self):
+        import development
+        from test_development import FRAME, buildings, ring
+
+        # Close shallow shops, with dense development behind them. Adding the road half-width a second time
+        # from the sidewalk's middle would jump over the streetfront and report no frontage.
+        f = buildings([ring(-160, 8, 160, 12), ring(-160, -12, 160, -8),
+                       ring(-160, 50, 160, 85), ring(-160, -85, 160, -50)], "retail", "commercial")
+
+        class Observed(development.Context):
+            def sample(self, point, out, half):
+                got = super().sample(point, out, half)
+                samples.append((np.asarray(point).copy(), got))
+                return got
+
+        samples = []
+        context = Observed(FRAME, (-256, -256, 256, 256), {"buildings": [f]})
+        r = road("storefront", "tertiary", True, y=0.)
+        walks = [wk for side in (1, -1) for wk in LampTest.walks(None, r, side)]
+        rows = furniture.place([r], walks, (-100, -20, 100, 20), development=context)
+        self.assertTrue(samples)
+        self.assertTrue(all(abs(point[1]) < 1e-9 for point, _ in samples))
+        self.assertGreater(max(got.frontage for _, got in samples), .9)
+        self.assertIn(2, [got.tier for _, got in samples])
+        self.assertIn(furniture.G_BIN, [row[0] for row in rows])
 
 
 class PoleTest(unittest.TestCase):
@@ -159,6 +292,7 @@ class PoleTest(unittest.TestCase):
         self.assertEqual(furniture.buried_share("nl"), 1.0)
         self.assertEqual(furniture.buried_share("US"), 0.0)
         self.assertEqual(furniture.buried_share(None), 0.0)
+        self.assertEqual(furniture.buried_share("ch"), 0.86)   # GitHub #911: rural Switzerland mostly cabled
         rows = furniture.place([road("c", "tertiary", False)], [], (0, 0, 256, 256), wires=[], buried=1.0)
         self.assertNotIn(furniture.G_POLE, [x[0] for x in rows])
         roads_ = [road(f"r{k}", "tertiary", False) for k in range(200)]
@@ -241,6 +375,49 @@ class JunctionTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertLess(rows[0][1], 100.0, "on the left of northbound drivers (west side)")
 
+    @staticmethod
+    def front(yaw):
+        """The way a junction prop's face looks after its yaw (the stock boom's and the signs' local -y; _yaw turns local
+        +x toward (cos, sin) of the yaw, as trees.lua and navgraph.lua turn them): the way right-hand traffic's props have
+        always faced their drivers."""
+        a = math.radians(yaw)
+        return np.array([math.sin(a), -math.cos(a)])
+
+    def test_left_hand_traffic_faces_the_drivers(self):
+        """GitHub #595 (the UK: "every time you pass a traffic light, it's facing away from the driver"): the yaw was
+        turned with the kerb side for left-hand traffic, which stood every head and sign with its back to the drivers.
+        Each faces the drivers coming in (out along the arm the approach comes from) on either side of the road."""
+        cross = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
+        tee = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0),
+               self.arm("s", "residential", 0, -1)]
+        for rs, what in ((cross, furniture.G_SIGNAL), (tee, furniture.G_STOP)):
+            for lh in (False, True):
+                rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=lh)
+                self.assertTrue(rows and all(r[0] == what for r in rows), (what, lh))
+                for r in rows:
+                    # the arm it stands at: the one whose direction from the junction is nearest the prop's
+                    away = np.array([r[1] - 100.0, r[2] - 100.0])
+                    u = max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away)))
+                    self.assertGreater(float(np.dot(self.front(r[4]), u)), 0.99,
+                                       f"{what} at {r[1:3]} (left-hand: {lh}) faces the drivers coming in")
+
+    def test_left_hand_signals_keep_their_boom_over_the_road(self):
+        """The stock boom's arm reaches to the drivers' left from its pole (a turn cannot mirror it): facing them, its
+        pole stands on their right in left-hand traffic too, so the arm hangs over the road, not the pavement. The signs
+        stand on the left (test_left_hand_traffic_stands_them_on_the_left)."""
+        rs = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
+        key = lambda r: (r[1], r[2], r[4])
+        self.assertEqual(sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True))),
+                         sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256)))))
+
+    def test_approach_pose(self):
+        u = np.array([0.0, -1.0])           # the arm to the south: northbound drivers come in
+        for what in (furniture.G_SIGNAL, furniture.G_STOP, furniture.G_YIELD):
+            rh, lh = furniture.approach_pose(u, what), furniture.approach_pose(u, what, left_hand=True)
+            self.assertEqual(rh[1], lh[1], f"{what}: one yaw on either side of the road")
+            np.testing.assert_allclose(rh[0], [1.0, 0.0], err_msg="right-hand: the east kerb")
+            np.testing.assert_allclose(lh[0], [1.0, 0.0] if what == furniture.G_SIGNAL else [-1.0, 0.0])
+
     def test_stop_on_the_stem_of_a_minor_t(self):
         rs = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]
         rows = furniture.junction_props(rs, (0, 0, 256, 256))
@@ -248,6 +425,53 @@ class JunctionTest(unittest.TestCase):
         self.assertEqual(rows[0][0], furniture.G_STOP)
         self.assertLess(rows[0][2], 100.0, "on the southern stem")
         self.assertGreater(rows[0][1], 100.0, "on its right for northbound drivers (east side)")
+
+    def test_sweden_has_give_way_where_a_street_meets_a_main_road(self):
+        rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
+        self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256))], [furniture.G_STOP])
+        rows = furniture.junction_props(rs, (0, 0, 256, 256), country="SE")
+        self.assertEqual([(r[0], r[6]) for r in rows], [(furniture.G_B1, furniture.B1_TOP)])
+        self.assertLess(rows[0][2], 100.0, "on the side road")
+
+    def test_sweden_keeps_the_right_hand_rule_between_minor_roads(self):
+        t = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]
+        self.assertEqual(furniture.junction_props(t, (0, 0, 256, 256), country="SE"), [])
+
+    def test_sweden_has_give_way_in_the_country_too(self):
+        rs = [self.arm("e", "primary", 1, 0), self.arm("w", "primary", -1, 0), self.arm("s", "residential", 0, -1)]
+        rs = [(fid, spec._replace(urban=False), pts, lon) for fid, spec, pts, lon in rs]
+        self.assertEqual(furniture.junction_props(rs, (0, 0, 256, 256)), [], "elsewhere: no signs in the country")
+        self.assertEqual([r[0] for r in furniture.junction_props(rs, (0, 0, 256, 256), country="SE")], [furniture.G_B1])
+
+    def test_sweden_a_lesser_main_road_gives_way_too(self):
+        arms = [self.arm(f, c, x, y) for f, c, x, y in (("e", "primary", 1, 0), ("w", "secondary", -1, 0), ("s", "tertiary", 0, -1))]
+        arms = [(fid, spec, np.array([x, y], float), pts[0]) for (fid, spec, pts, _), (x, y) in zip(arms, ((1, 0), (-1, 0), (0, -1)))]
+        got = furniture.junction_controls(arms, None, signals=np.zeros((0, 2)), country="SE")
+        self.assertEqual([(a[0], w) for a, w in got], [("s", furniture.G_YIELD)])
+
+    def test_b1_height_is_the_models(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import build_median_props as props
+        self.assertAlmostEqual(furniture.B1_TOP, props.B1_TOP, 2)
+        edge = props.b1_outline(8)
+        self.assertAlmostEqual(max(x for x, _ in edge) - min(x for x, _ in edge), props.B1_W, 3,
+                               "S1 is measured across the rounded corners")
+        self.assertAlmostEqual(max(z for _, z in edge) - min(z for _, z in edge), props.B1_TOP - props.B1_LOW, 3)
+        self.assertGreaterEqual(props.B1_LOW, 1.0)      # TSFS 2019:74 1 kap. 13 §: 1.0-2.0 m up
+        self.assertLessEqual(props.B1_LOW, 2.0)
+
+    def test_b1_face_is_on_the_sheet(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+        import build_median_props as props
+        from PIL import Image
+        sheet = np.asarray(Image.open(Path(props.OUT) / "bne_se_signs.png").convert("RGB")).astype(int)
+        px = lambda x, z: sheet[int(props.B1_CELL[1] - z * props.B1_PX), int(props.B1_CELL[0] + x * props.B1_PX)]  # noqa: E731
+        r, g, b = px(0.0, 0.05)
+        self.assertTrue(r > 200 and g > 170 and b < 60, "the middle is yellow")
+        for x, z in props.b1_outline(2):
+            r, g, b = px(x * 0.97, z * 0.97)
+            self.assertTrue(r > 200 and g < 110, "the edge is the border's red")
+        self.assertEqual(max(abs(z) for _, z in props.b1_outline(6)) * props.B1_PX // 1, 107.0, "405 px of 458 at 244")
 
 
 
@@ -331,3 +555,18 @@ class SignClearance(unittest.TestCase):
         big = (40.0, np.array([[-100.0, 0.0], [100.0, 0.0]]))
         self.assertIsNone(furniture._off_carriageways(np.zeros(2), np.array([0.0, 1.0]), np.array([1.0, 0.0]),
                                                       2.0, 4.0, [big]))
+
+
+class StreetTreesOffBuildings(unittest.TestCase):
+    def test_tree_in_a_rowhouse_goes_others_stay(self):
+        """A sidewalk run a metre into a rowhouse row (Canton, Baltimore): its street tree goes, one clear of the
+        walls stays, and a lamp in the same footprint is not this rule's."""
+        from types import SimpleNamespace
+        house = SimpleNamespace(ring=np.array([[10.0, 10.0], [30.0, 10.0], [30.0, 25.0], [10.0, 25.0]]))   # (tile-local)
+        rows = [[furniture.G_STREET_TREE, 120.0, 211.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # 1 m into the house
+                [furniture.G_STREET_TREE, 120.0, 209.5, 0.0, 0.0, 1.0, 7.0, 0.5],     # 0.5 m from its wall
+                [furniture.G_STREET_TREE, 145.0, 205.0, 0.0, 0.0, 1.0, 7.0, 0.5],     # clear
+                [furniture.G_LAMP, 115.0, 215.0, 0.0, 0.0, 1.0, 9.0, 0.0]]
+        out = furniture.off_buildings(rows, [house.ring + [100.0, 200.0]])
+        self.assertEqual([(r[0], r[1], r[2]) for r in out],
+                         [(furniture.G_STREET_TREE, 145.0, 205.0), (furniture.G_LAMP, 115.0, 215.0)])

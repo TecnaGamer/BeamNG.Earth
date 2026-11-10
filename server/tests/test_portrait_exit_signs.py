@@ -73,7 +73,7 @@ class PortraitExitSignsTest(unittest.TestCase):
         self.assertAlmostEqual(decision['centre'][0],-signs.DECISION_M,places=1)
         self.assertEqual(decision['distance'],'')
         self.assertEqual(decision['label'],obj['exit']['label'])
-        self.assertEqual(len(decision['bases']),3)
+        self.assertEqual(len(decision['bases']),2)
         self.assertEqual(sorted((s['kind'],s['centre']) for s in whole),
                          sorted((s['kind'],s['centre']) for s in tiles))
         short=copy.deepcopy(obj)

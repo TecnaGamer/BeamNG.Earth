@@ -5,6 +5,7 @@ import os
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -89,6 +90,50 @@ class SetupVenv(unittest.TestCase):
             install.setup_venv(dry_run=True)
         run.assert_not_called()
         self.assertFalse(os.path.exists(self.venv))
+
+
+class ModsAfterUpdate(unittest.TestCase):
+    """ensure_mods_not_disabled: the game's "mods disabled after an update" setting cleared (Discord 2026-11-05: "the
+    mods were disabled by the game itself after the update"), as its main menu's button does; nothing else."""
+
+    def settings(self, d, data=None):
+        import json
+        p = os.path.join(d, "settings", "settings.json")
+        if data is not None:
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        with open(p, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_cleared_others_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.settings(d, {"disableModsAfterUpdate": True, "onlineFeatures": "enable", "GraphicDisplayModes": "x"})
+            self.assertTrue(install.ensure_mods_not_disabled(d))
+            got = self.settings(d)
+            self.assertIs(got["disableModsAfterUpdate"], False)
+            self.assertEqual((got["onlineFeatures"], got["GraphicDisplayModes"]), ("enable", "x"))
+            self.assertFalse(install.ensure_mods_not_disabled(d), "already off: nothing written")
+
+    def test_absent_or_unreadable(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(install.ensure_mods_not_disabled(d), "no settings file")
+            self.settings(d, {"onlineFeatures": "enable"})
+            self.assertFalse(install.ensure_mods_not_disabled(d), "no setting")
+            with open(os.path.join(d, "settings", "settings.json"), "w", encoding="utf-8") as f:
+                f.write("{not json")
+            self.assertFalse(install.ensure_mods_not_disabled(d), "unreadable: left alone")
+
+    def test_not_while_the_game_runs(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.settings(d, {"disableModsAfterUpdate": True})
+            with unittest.mock.patch.object(install, "MOD_SRC", d), \
+                    unittest.mock.patch.object(install, "tree_hash", return_value="same"):
+                os.makedirs(os.path.join(d, "mods", "unpacked", install.MOD_NAME), exist_ok=True)
+                install.install_mod(d, True, dry_run=False, quiet=True, game_running=True)
+                self.assertIs(self.settings(d)["disableModsAfterUpdate"], True, "open game: its settings untouched")
+                install.install_mod(d, True, dry_run=False, quiet=True)
+                self.assertIs(self.settings(d)["disableModsAfterUpdate"], False)
 
 
 class ModActive(unittest.TestCase):

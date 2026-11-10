@@ -32,9 +32,14 @@ def captured(case):
                          np.arange(n+1, dtype=np.int64), np.arange(n+1, dtype=np.int64),
                          np.r_[0, np.cumsum(lengths)].astype(np.int64),
                          np.concatenate([w['lonlat'] for w in ways]), attrs=attrs, rules=tables)
+    # the captured land cover at the points it was read at; elsewhere the nearest of them (the roads are sampled at
+    # fixed spacing now, PR #634: not at their vertices only)
+    known = np.array([[int(v) / 1e9 for v in k.split(',')] for k in case['cover']], np.float64).reshape(-1, 2)
+    vals = np.array(list(case['cover'].values()), bool)
     def cover(la, lo):
-        return np.array([case['cover'][f'{round(float(a)*1e9)},{round(float(b)*1e9)}']
-                         for a, b in zip(la, lo)], bool)
+        q = np.column_stack([np.asarray(la, np.float64).ravel(), np.asarray(lo, np.float64).ravel()])
+        d = ((q[:, None, :] - known[None, :, :]) ** 2).sum(-1)
+        return vals[np.argmin(d, axis=1)]
     return f, cover
 
 
@@ -151,8 +156,13 @@ class RoadsideParapetTest(unittest.TestCase):
                 _, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
                 return 20.0 + np.clip((np.abs(n) - edge) / 0.8, 0.0, 1.0) * 3.0
         else:
+            # (an embankment: the road's own graded core at its height 20, the land beside it at `ground`; the walls
+            # read the road's height from the ground it is painted into, GitHub #782)
+            core = spec.width / 2 + 1.0
+
             def elev(la, lo):
-                return np.full(np.shape(la), ground)
+                _, n, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+                return np.where(np.abs(n) <= core, 20.0, ground)
         return roads.retaining_walls(FRAME,[('us30',spec,p,0.)],elev,(-10.,-30.,130.,30.))
 
     def test_divided_highway_embankment_is_not_inferred_stone_parapet(self):
@@ -163,6 +173,18 @@ class RoadsideParapetTest(unittest.TestCase):
         self.assertTrue(walls)
         self.assertTrue(all(not w.get('parapet') for w in walls))
         self.assertEqual(len(walls), len(self.walls(False,'cut')), 'the same cut walls as an undivided road')
+
+    def test_a_creek_between_far_map_points_gets_no_walls(self):
+        """GitHub #782 (Port Gregory Road, Western Australia): the road's map points 100 m apart on the banks, the
+        ground (and the road painted into it) down at the creek between them, no deck: no parapets standing 3 m over
+        the drawn road."""
+        spec = roads.Spec(8.6, 'paved', False, 'primary', False)
+        p = np.c_[[0., 120.], [0., 0.], [25.9, 25.9]]
+
+        def elev(la, lo):
+            e, _, _ = FRAME.geodetic_to_enu(np.asarray(la), np.asarray(lo), np.zeros(np.shape(la)))
+            return np.where((e > 30.) & (e < 90.), 22.9, 25.9)
+        self.assertEqual(roads.retaining_walls(FRAME, [('creek', spec, p, 0.)], elev, (-10., -30., 130., 30.)), [])
 
     def test_undivided_mountain_drop_protection_is_preserved(self):
         self.assertTrue(any(w.get('parapet') for w in self.walls(False,16.)))

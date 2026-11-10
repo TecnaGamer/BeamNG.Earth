@@ -10,6 +10,7 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -82,6 +83,43 @@ class LruTest(Base):
                          [False] * 3 + [True] * 7)
         self.assertEqual(c.usage(), (7 * MB, 7))
         self.assertEqual(c.evict(), (0, 0), "under the cap: nothing")
+
+    def test_a_disk_short_of_its_reserve_cuts_the_cache_back(self):
+        """A cap larger than the disk's free space (or unlimited): when the disk has less than its reserve free, the
+        tick evicts the least recently used files whatever the cap; files of this session's last hour stay."""
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        for i in range(10):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0)                         # unlimited
+        c.ready = True
+        free = {"b": 100e9}
+        c.disk_usage = lambda _root: Du(500e9, 500e9 - free["b"], free["b"])
+        self.assertEqual(c.disk_short(), 0)
+        c.tick()
+        self.assertEqual(c.usage(), (10 * MB, 10), "enough free space: nothing evicted")
+        # the reserve: 5 % of 500 GB is 25 GB, at most 10 GB; the disk is 4 MB short of it
+        free["b"] = 10e9 - 4 * MB
+        self.assertEqual(c.disk_short(), 4 * MB)
+        with unittest.mock.patch.object(cachemod, "DISK_MARGIN", 1 * MB):
+            c.tick()
+        self.assertEqual(c.usage(), (5 * MB, 5), "short 4 MB + 1 MB margin: the five oldest go")
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(10)],
+                         [False] * 5 + [True] * 5)
+
+    def test_disk_reserve_bounds(self):
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        c = self.make(cap_gb=20)
+        c.disk_usage = lambda _root: Du(20e9, 19.5e9, 0.5e9)       # a small disk: 2 GB at least
+        self.assertEqual(c.disk_short(), int(1.5e9))
+        c.disk_usage = lambda _root: Du(4e12, 3.99e12, 0.01e12)    # a big disk: 10 GB at most
+        self.assertEqual(c.disk_short(), 0)
+        def broken(_root):
+            raise OSError("gone")
+        c.disk_usage = broken
+        self.assertEqual(c.disk_short(), 0)
 
     def test_a_hit_moves_a_file_to_the_back(self):
         """An old file used (read) a while ago in this session outlives newer files that were not."""
@@ -335,6 +373,28 @@ class ClearTest(Base):
         self.assertEqual(m["clearedBytes"], 3 * MB + 100)
         self.assertTrue(os.path.exists(os.path.join(self.root, cachemod.INDEX_FILE)), "saved after a clear")
 
+    def test_built_caches_count_against_the_cap(self):
+        """The app's built caches (revisit/, seacarve/, roadwidth/, peercache/) count, are evicted and cleared; the
+        map data mirror counts and is cleared, never evicted file by file (a cell's files and its "ok" go together).
+        (A player, 2026-11-03: 25 GB under a 20 GB cap.)"""
+        old = T0 - 3 * DAY
+        put(self.root, "revisit/roadsg/ab/abcd.zip", MB, old - 3 * DAY)
+        put(self.root, "seacarve/v1/12/1/0.npz", MB, old - 2 * DAY)
+        put(self.root, "mapdata-mirror/v2/roads/14/1/0/ok", 10, old - 4 * DAY)
+        put(self.root, "mapdata-mirror/v2/roads/14/1/0/pack.bin", MB, old - 4 * DAY)
+        put(self.root, "roadwidth/v1/a.npy", MB, old - DAY)
+        put(self.root, "peercache/a7/a7.bin", MB, old)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0.0045)
+        self.assertEqual(c.usage(), (5 * MB + 10, 6), "all of them counted")
+        c.evict()
+        self.assertFalse(exists(self.root, "revisit/roadsg/ab/abcd.zip"), "the oldest evictable went")
+        self.assertTrue(exists(self.root, "mapdata-mirror/v2/roads/14/1/0/pack.bin"), "the mirror never evicted")
+        c.clear()
+        for rel in ("seacarve/v1/12/1/0.npz", "mapdata-mirror/v2/roads/14/1/0/ok",
+                    "mapdata-mirror/v2/roads/14/1/0/pack.bin", "roadwidth/v1/a.npy", "peercache/a7/a7.bin"):
+            self.assertFalse(exists(self.root, rel), rel + " cleared")
+
     def test_mapdata_is_managed(self):
         """mapdata/ (mapdata.py: layer files, range blocks) is tracked, evicted LRU and cleared like the
         other producers; its 404 markers stay through eviction, its files being written are not tracked."""
@@ -358,21 +418,22 @@ class ClearTest(Base):
         self.assertFalse(exists(self.root, "mapdata/raw/overture/2026-09-23.1/part-0/0.blk"), "cleared")
         self.assertFalse(exists(self.root, "mapdata/raw/overture/2026-09-23.1/part-1/404"), "markers too")
 
-    def test_clear_keeps_everything_this_session_used(self):
-        """Clear keeps the current session's files (ROADMAP "Caching": "everything except gravity/ and the
-        current session's files"), also those used more than an hour ago, which eviction may take: a
-        tile read at the start of a long drive may still be in the server's memory caches."""
+    def test_clear_keeps_only_what_was_used_lately(self):
+        """Clear keeps the files used within CLEAR_KEEP_S (the place around the player), not everything the session
+        ever used: after a long drive "Clear cache" cleared nearly nothing (a player, 2026-11-03)."""
         old = T0 - 3 * DAY
         early = put(self.root, "imagery/usgs/16/1/0.jpg", MB, old)
         put(self.root, "imagery/usgs/16/1/1.jpg", MB, old)
+        recent = put(self.root, "imagery/usgs/16/1/2.jpg", MB, old)
         c = self.make()
         c.used(early)                                   # at the start of the session
         self.clock.t += 2 * cachemod.PROTECT_S
-        self.assertEqual(c.clear(), (1, MB))
-        self.assertTrue(exists(self.root, "imagery/usgs/16/1/0.jpg"), "used this session: kept")
+        c.used(recent)                                  # around the player now
+        self.clock.t += cachemod.CLEAR_KEEP_S / 2
+        self.assertEqual(c.clear(), (2, 2 * MB))
+        self.assertFalse(exists(self.root, "imagery/usgs/16/1/0.jpg"), "used two hours ago: cleared")
         self.assertFalse(exists(self.root, "imagery/usgs/16/1/1.jpg"))
-        c.set_cap(0.0001)
-        self.assertEqual(c.evict(), (1, MB), "eviction protects the last hour only")
+        self.assertTrue(exists(self.root, "imagery/usgs/16/1/2.jpg"), "used minutes ago: kept")
 
     def test_clear_waits_for_the_walk(self):
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - DAY)

@@ -64,6 +64,8 @@ IMAGERY = {
 }
 IMAGERY.update({n: v[1] for n, v in __import__("imagery_regional").REGIONAL.items()})   # their own wording
 IMAGERY["bcortho"] = __import__("bcortho").ATTRIBUTION
+# (the project's own tile host, cdn.py: ESA WorldCover's Sentinel-2 composite, CC BY 4.0's required notice)
+IMAGERY["bngs2"] = "Contains modified Copernicus Sentinel data 2021 (ESA WorldCover Sentinel-2 composite, CC BY 4.0)"
 ELEVATION = {
     demmod.MAPTERHORN["name"]: "Mapterhorn (see mapterhorn.com/attribution)",
     demmod.AWS["name"]: "AWS Terrain Tiles / Mapzen",
@@ -91,6 +93,7 @@ SHORT = {
     "img:de_bw": "LGL BW", "img:de_nds": "LGLN", "img:de_berlin": "Geoportal Berlin", "img:de_hessen": "HVBG Hessen",
     "img:japan": "GSI Japan", "img:au_nsw": "Spatial Services NSW", "img:au_tas": "theLIST Tasmania",
     "img:ontario": "Ontario GEO", "img:bcortho": "LidarBC photos (OGL-BC)",
+    "img:bngs2": "ESA WorldCover Sentinel-2 2021 (Copernicus)",
     f"dem:{demmod.MAPTERHORN['name']}": "Mapterhorn", f"dem:{demmod.AWS['name']}": "AWS Terrain Tiles / Mapzen",
     f"dem:{polardem.SOURCE}": "Copernicus DEM (DLR, Airbus)",
     "dem:hrdem": "NRCan HRDEM (OGL-Canada)", "dem:lidarbc": "LidarBC (OGL-BC)",
@@ -106,12 +109,14 @@ FEATURES = {
     "land:esa-worldcover": "ESA WorldCover", "canopy:meta-wri-chm": "Meta & WRI",
     "canopy:lidarbc-chm": "LidarBC (OGL-BC)",
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
+    "model:3dmr": "3D Model Repository (3dmr.eu)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
 }
 SHORT.update(FEATURES)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
-          ("bridge", "Bridges", "Far bridges"), ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
+          ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
+          ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
           ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)
 ORDER = ([f"img:{n}" for n in IMAGERY] + [f"dem:{n}" for n in ELEVATION] + list(FEATURES) + [WEATHER_ID])
@@ -173,8 +178,9 @@ def feature_ids(conn):
     """The ids of the non-tile sources that built what is near the player (FEATURES): the map data's datasets in
     the cells around it (their provenance: OpenStreetMap, Microsoft's buildings, TomTom, ...) once road tiles are
     shown, the land cover with the surface on, the canopy with trees shown, NOAA with sea tiles, the bridge
-    inventories with a record near, OurAirports with a runway near, EGM2008 with real gravity. Cheap: cached
-    provenance only (mapdata.layer_provenance), never a download."""
+    inventories with a record near, 3dmr.eu with one of its models near, OurAirports with a runway near, EGM2008
+    with real gravity. Cheap: cached provenance only (mapdata.layer_provenance, threedmr.credited_near), never a
+    download."""
     import mapcells
     s = conn.s
     ids = set()
@@ -225,6 +231,12 @@ def feature_ids(conn):
             if bridgetypes.wd_near(lat, lon, FEATURE_NEAR_M):
                 ids.add("bridge:wikidata")
         except Exception:           # (the inventories are optional files)
+            pass
+        try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
+            import threedmr
+            if threedmr.credited_near(lat, lon, FEATURE_NEAR_M, getattr(s, "root", None)):
+                ids.add("model:3dmr")
+        except Exception:
             pass
     ap = getattr(s, "airports", None)
     db = getattr(ap, "db", None)

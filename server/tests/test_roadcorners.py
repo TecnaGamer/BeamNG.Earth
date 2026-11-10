@@ -68,7 +68,7 @@ class PavementCornerTest(unittest.TestCase):
         mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25)
         self.assertEqual(mat[150, 150], surface.ASPHALT, "(5.5, 5.5) is between the old square corner and the arc")
         self.assertNotEqual(mat[168, 168], surface.ASPHALT, "(10, 10) stays roadside")
-        self.assertEqual(mat[164, 164], surface.VERGE, "(9, 9): a bare verge round the corner, as along the roads")
+        self.assertEqual(mat[162, 162], surface.VERGE, "(8.5, 8.5): a bare verge round the corner, as along the roads")
         self.assertEqual(mat[168, 168], surface.GRASS)
         image = np.full((257, 257, 3), 230, np.uint8)
         photo = surface.photo_roads(image, FRAME, -32.0, -32.0, 64.0, [f])
@@ -82,7 +82,10 @@ class PavementCornerTest(unittest.TestCase):
     def test_corner_grading_holds_the_new_pavement_on_a_hillside(self):
         # a road with a narrow flat shoulder (grading.shoulder: a motorway's ramp terminal, an expressway) meets a
         # secondary: its 12 m corners' fans reach past the roads' graded ground
-        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]], ["motorway", "secondary"])
+        # Keep this grading fixture's original 13 m carriageway explicit: lane defaults must not change the
+        # geometry whose corner blending is measured here.
+        f = features([[(-100, 0), (0, 0), (100, 0)], [(0, -100), (0, 0), (0, 100)]],
+                     ["motorway", "secondary"], widths=[(0, 13.0)])
         _, rows, corners = roadcorners.source([f], frame=FRAME)
         rows = [(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon) for fid, sp, p, lon in rows]
         plans = [(fid, grading.Plan(p[:, :2], p[:, 2], sp.width / 2 + grading.shoulder(sp), road_half=sp.width / 2))
@@ -105,7 +108,8 @@ class PavementCornerTest(unittest.TestCase):
         cx, cy = np.r_[t, np.zeros(61)], np.r_[np.zeros(61), t]
         base = np.full(len(cx), 16.0)
         np.testing.assert_allclose(grading.grade_points(cx, cy, base, [p for _, p in plans + extra]),
-                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.07)
+                                   grading.grade_points(cx, cy, base, [p for _, p in plans]), atol=0.09)
+        # (0.09: the segments' lines carried on past their joints, grading.EXTRAP_M, 7.8 cm at 9 m from the junction)
         # two streets (a sidewalk-wide flat shoulder each, in the country too): their corners are on it already
         _, rows, _ = roadcorners.source([crossing()], frame=FRAME)
         self.assertEqual(roadcorners.grade([(fid, sp, np.c_[p[:, :2], np.full(len(p), 10.0)], lon)
@@ -194,6 +198,16 @@ class RuralTeeTest(unittest.TestCase):
         with patch.object(roads, "ROADS_IN_GROUND", in_ground):
             return roads.build_tile(FRAME, 0, 0, [tee()], flat, walks=[], country=country) + \
                 roads.build_tile(FRAME, -1, 0, [tee()], flat, walks=[], country=country)
+
+    def test_sweden_paints_a_give_way_line_on_the_lesser_road(self):
+        f = features([[(-100, 0), (0, 0)], [(0, 0), (100, 0)], [(0, 0), (0, 100)]], ["primary", "primary", "residential"])
+        def teeth(country):
+            return [c for t in (0, -1) for c in roads.build_tile(FRAME, t, 0, [f], flat, walks=[], country=country)
+                    if c.get("layer") == "mark" and len(c.get("poly") or ()) == 3]
+        got = teeth("SE")
+        self.assertTrue(got, "M14's triangles")
+        self.assertTrue(all(q[1] > 5.0 for c in got for q in c["poly"]), "on the side road, back from the main road")
+        self.assertEqual(teeth("DE"), [])
 
     def test_one_fill_per_corner_and_lines_along_each_arc(self):
         chunks = self.build("DE")

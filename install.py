@@ -57,15 +57,41 @@ def version():
 
 # --- finding the BeamNG.drive user folder -------------------------------------------------------
 
-def _steam_roots():
+def homes():
+    """This user's home folders, ~ first. In a container with a home of its own inside the real one (distrobox
+    --home, Bazzite: ~ was /home/<user>/distrobox/ubuntu, GitHub #709) Steam and the game use the real one, which the
+    container still sees: the folders above ~ that hold a Steam or BeamNG folder come too."""
     home = os.path.expanduser("~")
-    roots = [
-        os.path.join(home, ".steam", "steam"),
-        os.path.join(home, ".steam", "root"),
-        os.path.join(home, ".local", "share", "Steam"),
-        os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),  # Flatpak
-        os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
-    ]
+    out = [home]
+    marks = (os.path.join(".local", "share", "BeamNG"), os.path.join(".local", "share", "Steam"), ".steam",
+             os.path.join(".var", "app", "com.valvesoftware.Steam"))
+    p = os.path.abspath(home)
+    while True:
+        up = os.path.dirname(p)
+        if up == p:
+            break
+        p = up
+        if any(os.path.isdir(os.path.join(p, m)) for m in marks):
+            out.append(p)
+    seen, uniq = set(), []
+    for h in out:
+        key = os.path.realpath(h)
+        if key not in seen:
+            seen.add(key)
+            uniq.append(h)
+    return uniq
+
+
+def _steam_roots():
+    roots = []
+    for home in homes():
+        roots += [
+            os.path.join(home, ".steam", "steam"),
+            os.path.join(home, ".steam", "root"),
+            os.path.join(home, ".local", "share", "Steam"),
+            os.path.join(home, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),  # Flatpak
+            os.path.join(home, "snap", "steam", "common", ".local", "share", "Steam"),
+        ]
     libs = []
     for r in roots:
         if not os.path.isdir(r):
@@ -94,18 +120,19 @@ def native_user_dirs():
     """Where the native Linux game keeps its user folder: ~/.local/share, or inside the Steam Flatpak's own home
     (~/.var/app/com.valvesoftware.Steam: the game there never sees ~/.local/share, a player's report 2026-10-17)
     or the Steam snap's. Default first; not checked for existence."""
-    home = os.path.expanduser("~")
     tail = ("BeamNG", "BeamNG.drive", "current")
-    return [os.path.join(home, ".local", "share", *tail),
-            os.path.join(home, ".var", "app", FLATPAK_STEAM, ".local", "share", *tail),
-            os.path.join(home, ".var", "app", FLATPAK_STEAM, "data", *tail),
-            os.path.join(home, "snap", "steam", "common", ".local", "share", *tail)]
+    out = []
+    for home in homes():
+        out += [os.path.join(home, ".local", "share", *tail),
+                os.path.join(home, ".var", "app", FLATPAK_STEAM, ".local", "share", *tail),
+                os.path.join(home, ".var", "app", FLATPAK_STEAM, "data", *tail),
+                os.path.join(home, "snap", "steam", "common", ".local", "share", *tail)]
+    return out
 
 
 def flatpak_steam():
     """Steam is the Flatpak (its data folder exists)."""
-    return os.path.isdir(os.path.join(os.path.expanduser("~"), ".var", "app", FLATPAK_STEAM, ".local", "share",
-                                      "Steam"))
+    return any(os.path.isdir(os.path.join(h, ".var", "app", FLATPAK_STEAM, ".local", "share", "Steam")) for h in homes())
 
 
 def candidate_user_dirs():
@@ -129,6 +156,15 @@ def candidate_user_dirs():
         if os.path.isdir(c) and key not in seen:
             seen.add(key)
             out.append(c)
+    if not IS_WIN and len(out) > 1:
+        # (the folder the game ran from last first: its beamng.log is the newest. A folder only this app made, in a
+        # container's own home the game never sees, has none: GitHub #709. Same age: the order above)
+        def ran(d):
+            try:
+                return os.path.getmtime(os.path.join(d, "beamng.log"))
+            except OSError:
+                return -1.0
+        out.sort(key=ran, reverse=True)
     return out
 
 
@@ -184,13 +220,20 @@ def choose_user_dir(args):
 
 # --- the mod ------------------------------------------------------------------------------------
 
+# files made in the installed copy at install time, not in the source (skypatch.py): not part of its hash
+GENERATED = ("lua/ge/extensions/beamngEarth/skypatch_flag.lua",)
+
+
 def tree_hash(path):
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(path):
         dirnames.sort()
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
-            h.update(os.path.relpath(full, path).replace(os.sep, "/").encode())
+            rel = os.path.relpath(full, path).replace(os.sep, "/")
+            if rel in GENERATED:
+                continue
+            h.update(rel.encode())
             with open(full, "rb") as f:
                 h.update(hashlib.sha256(f.read()).digest())
     return h.hexdigest()
@@ -217,10 +260,40 @@ def ensure_mod_active(user_dir):
     return True
 
 
-def install_mod(user_dir, assume_yes, dry_run, quiet=False):
+def ensure_mods_not_disabled(user_dir):
+    """Undo the game's "mods disabled after an update" (settings/settings.json disableModsAfterUpdate): after a game
+    update BeamNG turns every mod off, and the setting keeps them all off at every start until the player turns them
+    back on in the main menu, so BeamNG.Earth's level was simply missing (Discord, 2026-11-04/05: "the mods were
+    disabled by the game itself after the update"). Clearing it is what the menu's button does
+    (core_modmanager.enableModsAfterUpdate): each mod comes back as its db.json entry says. Only while the game is not
+    running (it keeps its settings in memory and writes them back). True if it changed the file."""
+    path = os.path.join(user_dir, "settings", "settings.json")
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or data.get("disableModsAfterUpdate") is not True:
+        return False
+    data["disableModsAfterUpdate"] = False
+    tmp = path + ".bnge-tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def install_mod(user_dir, assume_yes, dry_run, quiet=False, game_running=False):
     """Copy the mod into the user folder. Returns 'current', 'enabled' (current, but it had been turned off in the
     game's mod list), 'updated', 'installed', 'kept' or None (dry run); quiet: no messages but the notes (the launcher
-    prints one status line)."""
+    prints one status line); game_running: the game is open (its settings are not touched: ensure_mods_not_disabled)."""
     def note(msg):
         if not quiet:
             say(msg)
@@ -230,6 +303,9 @@ def install_mod(user_dir, assume_yes, dry_run, quiet=False):
     packed = os.path.join(user_dir, "mods", MOD_NAME + ".zip")
     if os.path.isfile(packed):
         say(f"Note: there is also a zipped copy at {packed}; remove it so the game does not load two versions.")
+    if not dry_run and not game_running and ensure_mods_not_disabled(user_dir):
+        say("Mods: BeamNG.drive had turned all mods off after its update; turned them back on (as its main menu's "
+            "\"enable mods\" button does).")
     enabled = not dry_run and ensure_mod_active(user_dir)
     if enabled:
         say("Mod: it had been turned off in the game's mod list (a BeamMP server does that); turned it back on.")

@@ -60,13 +60,14 @@ Asserted (design §9 acceptance and V1_3_SPEC acceptance, the parts checkable of
       unit, plus the cost model's excess over the estimate), streaming-frame p99, and no unit
       (import, material, reveal, delete, material delete) within QUIET_BEFORE / QUIET_AFTER
       frames of a terrain commit or rebase;
-  (f) mesh mode: the visible ground near the player is the physics surface: the tile under the
+  (f) mesh mode: the visible ground near the player is the physics surface on the far field's 2 m lattice
+      (heightmap.FAR_SQUARE: every second sample of the 1 m block since 2026-11-01): the tile under the
       player is the exact level (L-2; L-1 with 64 cells) at every pose, and the vertices of every
-      shown exact tile over the committed block equal the block's heightmap samples (float64
-      exactly, float32 as the engine adds them), with the TerrainBlock's diagonal pattern; between
-      the vertices the mesh height at random points under the player differs from the engine's
-      bilinear collision (the heightmap samples) by p99 <= 5 cm and at most |twist|/4 of its 2 m
-      square (V1_4_SPEC Targets, E7; >= 200 points); tiles within the exact radius are exact at
+      shown exact tile over the committed block equal every second heightmap sample (float64
+      exactly, float32 as the engine adds them), with the TerrainBlock's diagonal pattern on that lattice; between
+      the vertices the mesh height at random points under the player differs from the bilinear surface of
+      those samples by p99 <= 5 cm and at most |twist|/4 of its 2 m square (V1_4_SPEC Targets, E7; >= 200 points;
+      the deviation from the 1 m collision itself is reported); tiles within the exact radius are exact at
       the end;
   (g) materials do not leak (every Material is referenced by a tile object, a deleted
       material's tiles are gone, none left over at the end), and the server deletes no burst of
@@ -75,7 +76,7 @@ Asserted (design §9 acceptance and V1_3_SPEC acceptance, the parts checkable of
 plus the v3/v4 protocol rules: no protocol error or server warning, terrain_ready before the
 commit threshold, one prepare_anchor per rebase, no tile of a superseded anchor, no far_remove
 of a tile the mod never had, every swap group replaces its own footprint, far_done counts match,
-terrain mode: the committed block sits on 64 L0 tiles at the end.
+terrain mode: the committed block sits on its L0 tiles at the end (16 for the 1 km block).
 
 Needs network on a cold DEM cache (<tmp>/beamng-earth-test-cache, shared with test_e2e.py).
 Environment:
@@ -150,8 +151,9 @@ CDAE_MAX_KB = {(32, False): 90, (32, True): 100, (64, True): 360}
 BILINEAR_P99_M, BILINEAR_MIN_POINTS, BILINEAR_PER_POSE = 0.05, 200, 4
 # per terrain block size (M4, docs/V1_4_SPEC.md §3.5 [I]: a 512² commit ~18 ms + reloadCollision 0.4; the
 # rebase loses the 1024² import's ~26 ms); BNGE_DRIVE_COMMIT_MS / BNGE_DRIVE_REBASE_MS override both
-COMMIT_MS = {1024: 44.0, 512: 18.4}
-REBASE_MS = {1024: 65.0, 512: 44.0}
+# (by samples: 1024² is the 1 km block at 1 m since 2026-11-01; 2048², the 2 km one at 1 m, is unmeasured: 4x 1024²)
+COMMIT_MS = {2048: 4 * 44.0, 1024: 44.0, 512: 18.4}
+REBASE_MS = {2048: 4 * 65.0, 1024: 65.0, 512: 44.0}
 for _k, _env in (("COMMIT", COMMIT_MS), ("REBASE", REBASE_MS)):
     if os.environ.get(f"BNGE_DRIVE_{_k}_MS"):
         _env.update(dict.fromkeys(_env, float(os.environ[f"BNGE_DRIVE_{_k}_MS"])))
@@ -184,7 +186,7 @@ OBSERVE_MAX_S = 75.0            # ... waiting at most this long (wall) after the
 EXCESS_MS = max(0.0, *(COSTS[k] - GOV["PRIOR"][k] for k in COSTS if k in GOV["PRIOR"]))
 MATERIAL = modsim.lua_string("farfield.lua", "MATERIAL")
 MOD_VERSION = re.search(r"MOD_VERSION = '([^']+)'", (modsim.MOD_DIR / "core.lua").read_text()).group(1)
-MODES = os.environ.get("BNGE_DRIVE_MODES", "terrain,mesh,mesh64,mesh64b512,follow512").split(",")
+MODES = os.environ.get("BNGE_DRIVE_MODES", "terrain,mesh,mesh64,mesh64b2048,follow512").split(",")
 SQ = LATTICE["SQUARE"]
 
 
@@ -395,18 +397,22 @@ def tile_vertex_heights(path, pos_z, n_cells):
     return pos_z + vz.astype(np.float64), np.float32(pos_z) + vz, tris_ok
 
 
+FAR_ST = round(LATTICE["FAR_SQUARE"] / SQ)     # block samples per far-lattice square (2: 2 m on the 1 m block)
+
+
 def block_heights(blk, x0, y0, n):
     """The terrain block's heights (float64, float32 as the engine computes them) at the n x n
-    lattice points from (x0, y0), [j, i]; None where they leave the block's valid samples.
-    blk: (cx, cy, q16 grid, zBase, maxHeight)."""
+    far-lattice points (every FAR_ST-th sample) from (x0, y0), [j, i]; None where they leave the block's valid
+    samples. blk: (cx, cy, q16 grid, zBase, maxHeight)."""
     cx, cy, g, zb, mh = blk
     N = g.shape[0]
     half = heightmap.half_extent(N)
     gx0 = round((x0 - (cx - half)) / SQ)
     gy0 = round((y0 - (cy - half)) / SQ)
-    if gx0 < 0 or gy0 < 0 or gx0 + n > N or gy0 + n > N:
+    last = FAR_ST * (n - 1) + 1
+    if gx0 < 0 or gy0 < 0 or gx0 + last > N or gy0 + last > N:
         return None
-    q = g[gy0:gy0 + n, gx0:gx0 + n]
+    q = g[gy0:gy0 + last:FAR_ST, gx0:gx0 + last:FAR_ST]
     f = np.float32
     return zb + q * (mh / 65536), f(zb) + q.astype(f) * f(mh / 65536), (gx0, gy0)
 
@@ -417,7 +423,13 @@ class DriveBase(unittest.TestCase):
     server_args = ("--near-visual", "terrain", "--imagery", "off")
     launcher = "earthd.py"
     cells = 32
-    block = 1024                # M4 (docs/V1_4_SPEC.md §3.5): the server's --block
+    block = ff.TERRAIN_BLOCK    # M4 (docs/V1_4_SPEC.md §3.5): the server's --block (terrain mode: its 2 km block)
+    # simulated seconds per wall second: half of SPEEDUP since the blocks went to 1 m squares (2026-11-01: 4x the
+    # samples of the 2 m blocks the follow tables' lead was tuned for, the server's builds that much slower; at 4 the
+    # builds of a cold start or a rebase arrived past the commit distance)
+    @property
+    def speedup(self):
+        return SPEEDUP / 2
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -442,7 +454,7 @@ class DriveBase(unittest.TestCase):
         self.errlog.close()
         keep = os.environ.get("BNGE_DRIVE_KEEP_LOG")
         if keep:
-            Path(f"{keep}.{self.near_visual}{'' if self.cells == 32 else self.cells}{'' if self.block == 1024 else '_b512'}"
+            Path(f"{keep}.{self.near_visual}{'' if self.cells == 32 else self.cells}{'' if self.block == 1024 else f'_b{self.block}'}"
                  ).write_text(Path(self.errlog.name).read_text())
         self.tmp.cleanup()
 
@@ -789,9 +801,12 @@ class DriveBase(unittest.TestCase):
                 stats["l2_checked"] += 1
                 stats["l2_d64"], stats["l2_d32"] = max(stats["l2_d64"], d64), max(stats["l2_d32"], d32)
                 gx0, gy0 = ref[2]
-                # the tile's cell (i, j) is block square (gx0 + i, gy0 + j): same split when gx0, gy0 are even
-                if d64 > 1e-9 or d32 > 1e-3 or gx0 % 2 or gy0 % 2 or not tris_ok:
-                    stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0)))
+                # the tile's cell (i, j) is far-lattice square (gx0 / FAR_ST + i, gy0 / FAR_ST + j): same split when
+                # those are even
+                if d64 > 1e-9 or d32 > 1e-3 or gx0 % (2 * FAR_ST) or gy0 % (2 * FAR_ST) or not tris_ok:
+                    # (with the block's own height step: one that did not fit the anchor's takes the next coarser one,
+                    # heightmap.block_params, and its far tiles then differ by up to half that step; drive-test-l2-flake)
+                    stats["l2_bad"].append((i.key, d64, d32, (gx0, gy0), "block q 1/%g" % (65536 / blk[4])))
             # the visible surface between vertices against the engine's bilinear collision (E7):
             # random points in the current-anchor exact tile under the player
             cur = [i for i in under if i.aid == st["anchor"] and i.level == ex and i.loaded]
@@ -801,14 +816,18 @@ class DriveBase(unittest.TestCase):
             cx, cy, q16, zb, mh = blk
             tx0, ty0 = cur[0].bbox0[:2]
             size = ff.level_size(ex)
+            fsq = heightmap.FAR_SQUARE
             for px_, py_ in rng.random((BILINEAR_PER_POSE, 2)) * size:
-                bil = heightmap.height_at(q16, zb, mh, cx, cy, tx0 + px_, ty0 + py_)
-                if bil is None:
-                    continue                    # the block's 2 m N/E strip: no collision there
-                z = float(ff.surface_at(grid, heightmap.SQUARE, px_, py_))
-                gi, gj = min(int(px_ // 2), lay.cells - 1), min(int(py_ // 2), lay.cells - 1)
+                # the bilinear surface of the far lattice's samples (every FAR_ST-th), and the 1 m collision itself
+                bil = heightmap.height_at(q16[::FAR_ST, ::FAR_ST], zb, mh, cx, cy, tx0 + px_, ty0 + py_, square=fsq)
+                col = heightmap.height_at(q16, zb, mh, cx, cy, tx0 + px_, ty0 + py_)
+                if bil is None or col is None:
+                    continue                    # the block's N/E strip: no collision there
+                z = float(ff.surface_at(grid, fsq, px_, py_))
+                gi, gj = min(int(px_ // fsq), lay.cells - 1), min(int(py_ // fsq), lay.cells - 1)
                 twist = abs(grid[gj, gi] - grid[gj, gi + 1] - grid[gj + 1, gi] + grid[gj + 1, gi + 1])
                 d = abs(z - bil)
+                stats.setdefault("collision_1m", []).append(abs(z - col))
                 stats["bilinear"].append(d)
                 stats.setdefault("bilinear_bound", []).append(twist / 4)
                 if d > twist / 4 + 1e-6:
@@ -911,12 +930,14 @@ class DriveBase(unittest.TestCase):
                                       size=size)
             if fa is None and tp and tp.get("ready") and cheb(x, y, *b) > FT["COMMIT_DIST"]:
                 stats["gated_frames"] += 1
-            # late: a request made inside the commit distance not ready past it (512²: the commit-time
+            # late: a request made inside the commit distance not ready past it (the 1 km block: the commit-time
             # re-check re-prepares past the commit distance on purpose; those are not counted)
-            if (tp and not tp.get("ready") and (tp["on_time"] or size == 1024) and cheb(x, y, *b) > FT["COMMIT_DIST"]
+            if (tp and not tp.get("ready") and (tp["on_time"] or size * SQ >= 2048) and cheb(x, y, *b) > FT["COMMIT_DIST"]
                     and not tp.get("late")):
                 tp["late"] = True
                 stats["late_terrain"] += 1
+                stats.setdefault("late_at", []).append((round(st["clock"], 2), tp["cx"], tp["cy"], b,
+                                                        round(st["clock"] - tp["sent"], 2)))
             if fa and fa[0] == "prepare":
                 st["tp"] = {"requestId": rid(), "cx": fa[1], "cy": fa[2], "wall": time.monotonic(),
                             "sent": st["clock"], "on_time": cheb(x, y, *b) <= FT["COMMIT_DIST"]}
@@ -960,7 +981,7 @@ class DriveBase(unittest.TestCase):
             gov.loading = (st["place"] is not None or st["clock"] < st["loading_until"]
                            or st["slow_for"] > CORE["SLOW_S"])
             gov.begin_frame(far.has_work(), frame_log[-1][-1] if frame_log else None)
-            pump(clock["wall0"] + clock["sim"] / SPEEDUP)
+            pump(clock["wall0"] + clock["sim"] / self.speedup)
             far_units = imports = 0
             est = 0.0
             if st["active"]:
@@ -1001,7 +1022,7 @@ class DriveBase(unittest.TestCase):
             # (frame, sim, units, imports, est ms, spent ms, heavy kind, loading, b, wall)
             frame_log.append((clock["frame"], clock["sim"], far_units, imports, est, gov.frame_spent, heavy["kind"],
                               gov.loading, gov.b, wall))
-            stats["max_lag_s"] = max(stats["max_lag_s"], time.monotonic() - (clock["wall0"] + clock["sim"] / SPEEDUP))
+            stats["max_lag_s"] = max(stats["max_lag_s"], time.monotonic() - (clock["wall0"] + clock["sim"] / self.speedup))
             self.assertFalse(stats["errors"], stats["errors"])
 
         # --- run ---------------------------------------------------------------------------
@@ -1094,13 +1115,13 @@ class DriveBase(unittest.TestCase):
         late = far.counters["late_tiles"]
         mat_used = {i.mat for i in far.live.values() if i.mat}
 
-        print(f"\n  speed-up {SPEEDUP:g} (max client lag {stats['max_lag_s']:.2f} s wall), rebase at "
+        print(f"\n  speed-up {self.speedup:g} (max client lag {stats['max_lag_s']:.2f} s wall), rebase at "
               f"{REBASE_M:.0f} m, drove {km:.2f} km, {clock['frame']} frames ({clock['sim']:.0f} s simulated)\n"
               f"  initial far set {stats['initial']['tiles']} tiles, shown by sim {stats['initial']['sim']:.1f} s "
               f"({stats['initial']['wall']:.1f} s wall)\n"
               f"  terrain_ready x{len(lat_ms)}: wall ms min/median/max {min(lat_ms):.0f}/"
               f"{sorted(lat_ms)[len(lat_ms) // 2]:.0f}/{max(lat_ms):.0f}; min margin to the commit threshold "
-              f"{min(t['margin_m'] for t in stats['terrain']):.0f} m; late {stats['late_terrain']}\n"
+              f"{min(t['margin_m'] for t in stats['terrain']):.0f} m; late {stats['late_terrain']} {stats.get('late_at', [])}\n"
               f"  follow commits {len(follows)} at {[round(x['dist']) for x in follows]} m from the old centre "
               f"(hard {stats['hard_commits']}, gated frames {stats['gated_frames']})\n"
               f"  (a) overlap samples per commit {sorted({x['samples'] for x in follows})}; max |dh| float64 "
@@ -1157,7 +1178,9 @@ class DriveBase(unittest.TestCase):
                   f"      mesh vs bilinear collision under the player: {len(stats['bilinear'])} points, median "
                   f"{100 * np.median(bl):.2f} cm, p99 {100 * np.percentile(bl, 99):.2f} cm, max {100 * bl.max():.2f} cm "
                   f"(the points' |twist|/4: p99 {100 * np.percentile(bb, 99):.2f} cm, max {100 * bb.max():.2f} cm), "
-                  f"over |twist|/4 {len(stats['bilinear_over'])}; steady frame wall p99 {wall_p99:.1f} ms "
+                  f"over |twist|/4 {len(stats['bilinear_over'])}; against the 1 m collision: p99 "
+                  f"{100 * np.percentile(stats.get('collision_1m') or [0.0], 99):.2f} cm, max "
+                  f"{100 * max(stats.get('collision_1m') or [0.0]):.2f} cm; steady frame wall p99 {wall_p99:.1f} ms "
                   f"(in-game M1 rule <= {P99_FRAME_MS_64:g})",
                   file=sys.stderr)
 
@@ -1174,7 +1197,7 @@ class DriveBase(unittest.TestCase):
         # 2026-10-15: a prediction further ahead, a few more of those; their 256 m minimum lead since 2026-10-23: up to
         # ~8 at this drive's bend, but 52 heightmaps built for 42 moves instead of 61 for 54)
         self.assertEqual(len(set(built)), hm_built, "a terrain was built twice")
-        self.assertLessEqual(len(unasked), 9 if self.block == 512 else 5, unasked)
+        self.assertLessEqual(len(unasked), 9 if size * SQ < 2048 else 5, unasked)       # (1 km: the old 512² rule)
         self.assertEqual(stats["superseded_tiles"], 0)
         self.assertFalse(far.unknown_removes, far.unknown_removes[:5])
         self.assertEqual(far.counters["unknown_swap_keys"], 0)
@@ -1183,15 +1206,18 @@ class DriveBase(unittest.TestCase):
             self.assertEqual(count, mod_count)
         self.assertEqual(len(far.live), stats["far_done"][-1][0])
         if not mesh:
-            under = [k for k in far.live if ff.overlaps(tile_bbox(k), lay.block_at(*st["block"]).bbox)]
-            self.assertEqual(len(under), 64)
+            bb = lay.block_at(*st["block"]).bbox
+            under = [k for k in far.live if ff.overlaps(tile_bbox(k), bb)]
+            L0 = ff.level_size(0)       # the L0 cells the block touches (16 for the 1 km block on the 256 m grid)
+            self.assertEqual(len(under), (math.ceil(bb[2] / L0) - math.floor(bb[0] / L0))
+                             * (math.ceil(bb[3] / L0) - math.floor(bb[1] / L0)))
             self.assertTrue(all(ff.tile_of(k).level == 0 for k in under))
         self.assertFalse(far.old)
         # (a)
         # at 30 m/s a commit moves the block 512 m (follow.lua lookahead), so >= one per 600 m (512²: the next block
         # at least MIN_LEAD (256 m) ahead and asked for once the player is past the centre, 2026-10-23: ~384 m per
         # commit, so >= one per 400 m)
-        self.assertGreaterEqual(len(follows), int(REBASE_M / (600 if size == 1024 else 400)))
+        self.assertGreaterEqual(len(follows), int(REBASE_M / (600 if size * SQ >= 2048 else 400)))   # (by width)
         # M4: the player never came within 150 m of the committed block's collidable edge
         self.assertGreaterEqual(stats["edge_min"], 150.0, stats["edge_min_at"])
         for x in follows:
@@ -1278,6 +1304,7 @@ class MeshDriveTest(DriveBase):
     near_visual = "mesh"
     server_args = ("--near-visual", "mesh", "--cells", "32", "--block", "1024", "--no-horizon", "--colormatch", "off")
     launcher = "fake_imagery_earthd.py"
+    block = 1024
 
     def test_drive_and_rebase(self):
         self.run_drive()
@@ -1292,6 +1319,7 @@ class MeshDrive64Test(DriveBase):
     near_visual = "mesh"
     server_args = ("--near-visual", "mesh", "--cells", "64", "--block", "1024", "--no-horizon", "--colormatch", "off")
     launcher = "fake_imagery_earthd.py"
+    block = 1024
     cells = 64
 
     def test_drive_and_rebase(self):
@@ -1299,17 +1327,18 @@ class MeshDrive64Test(DriveBase):
 
 
 @unittest.skipIf(os.environ.get("BNGE_SKIP_DRIVE") == "1", "BNGE_SKIP_DRIVE=1")
-@unittest.skipUnless("mesh64b512" in MODES, "BNGE_DRIVE_MODES")
-class MeshDrive64Block512Test(DriveBase):
-    """docs/V1_4_SPEC.md §3.5 (M4): the 64-cell mesh drive with --block 512: hello.blockSize, the 512²
-    physics block on a 128 m grid with the mod's 512 follow table, assertion (a) for 512² blocks
-    (overlapping samples bit-identical across every 128 m move), (f) against the 512² heightmap,
-    the player >= 150 m inside the block's collidable area at every frame, commits at 18.4 ms."""
+@unittest.skipUnless("mesh64b2048" in MODES, "BNGE_DRIVE_MODES")
+class MeshDrive64Block2048Test(DriveBase):
+    """The 64-cell mesh drive with the other block size, --block 2048 (the 2 km block at 1 m since 2026-11-01; it
+    was docs/V1_4_SPEC.md §3.5 M4's --block 512, the 1 km block at 2 m, now the default): hello.blockSize /
+    squareSize, the 2048² physics block on a 256 m grid with the mod's 2 km (_1024) follow table, assertion (a)
+    for its blocks (overlapping samples bit-identical across every move), (f) against its heightmap, the player
+    >= 150 m inside the block's collidable area at every frame."""
     near_visual = "mesh"
-    server_args = ("--near-visual", "mesh", "--cells", "64", "--block", "512", "--no-horizon", "--colormatch", "off")
+    server_args = ("--near-visual", "mesh", "--cells", "64", "--block", "2048", "--no-horizon", "--colormatch", "off")
     launcher = "fake_imagery_earthd.py"
     cells = 64
-    block = 512
+    block = 2048
 
     def test_drive_and_rebase(self):
         self.run_drive()
@@ -1352,9 +1381,10 @@ class _SlowServer(earthd.Server):
 @unittest.skipIf(os.environ.get("BNGE_SKIP_DRIVE") == "1", "BNGE_SKIP_DRIVE=1")
 @unittest.skipUnless("follow512" in MODES, "BNGE_DRIVE_MODES")
 class FollowDrive512Test(unittest.TestCase):
-    """docs/V1_4_SPEC.md §3.5 (M4) at speed: an in-process server with --block 512 (synthetic DEM, no
+    """docs/V1_4_SPEC.md §3.5 (M4) at speed: an in-process server with the 1 km block (1024² at 1 m since
+    2026-11-01, M4's 512² at 2 m before; synthetic DEM, no
     far field) answers the mod's terrain-follow and rebase requests, in real time, while the client
-    replays the mod's rules (modsim: follow.lua with the 512 table, fast mode and re-check, measured
+    replays the mod's rules (modsim: follow.lua with the 1 km (_512) table, fast mode and re-check, measured
     latencies passed back; rebase.lua with the stale-anchor rule and core.lua's rebaseHint) at 60
     frames/s on a straight route, rebasing at 2 km. Every frame the player must be on the committed
     block's collidable area:
@@ -1372,7 +1402,7 @@ class FollowDrive512Test(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
         server = _SlowServer(tmp.name, os.path.join(tmp.name, "cache"), tile_workers=1, imagery=None,
-                             near_visual="mesh", cells=64, block=512)
+                             near_visual="mesh", cells=64, block=1024)
         server.dem = test_server.FakeDem()
         server.terrain_delay = terrain_delay
         self.addCleanup(server.hm_pool.shutdown)
@@ -1407,13 +1437,13 @@ class FollowDrive512Test(unittest.TestCase):
         client.send({"type": "hello", "protocol": int(CORE["PROTOCOL"]), "format": int(CORE["FORMAT"]),
                      "modVersion": MOD_VERSION})
         h, _ = client.until(lambda m: m["type"] == "hello", 10)
-        self.assertEqual(h["blockSize"], 512)
+        self.assertEqual((h["blockSize"], h["squareSize"]), (1024, SQ))
         client.send({"type": "prepare_anchor", "requestId": 1, "lat": LAT, "lon": LON, "cx": 0, "cy": 0})
         a, _ = client.until(lambda m: m["type"] == "anchor_ready", 60)
         aid, frame = a["anchorId"], geodesy.EnuFrame(LAT, LON)
         client.send({"type": "commit_anchor", "anchorId": aid})
         client.send({"type": "commit_terrain", "anchorId": aid, "cx": 0, "cy": 0})
-        size, T = 512, modsim.follow_table(512)
+        size, T = 1024, modsim.follow_table(1024)
         st = {"block": (a["terrain"]["cx"], a["terrain"]["cy"]), "tp": None, "pending": None, "next": 2,
               "t_lat": None, "a_lat": None}
         out = {"edge_min": math.inf, "edge_at": None, "late": 0, "commits": 0, "rebases": 0, "prepare_anchor": 0,
@@ -1430,7 +1460,7 @@ class FollowDrive512Test(unittest.TestCase):
             if t == "terrain_ready":
                 p = st["tp"]
                 if p and m["requestId"] == p["requestId"] and m["anchorId"] == aid:
-                    self.assertEqual((m["size"], m["cx"] % 128, m["cy"] % 128), (512, 0, 0))
+                    self.assertEqual((m["size"], m["cx"] % 128, m["cy"] % 128), (1024, 0, 0))
                     p["ready"], p["msg"] = True, m
                     st["t_lat"] = clock - p["sent"]
                     if p["on_time"] and cheb(x, y, *st["block"]) > T["COMMIT_DIST"]:
@@ -1438,7 +1468,7 @@ class FollowDrive512Test(unittest.TestCase):
             elif t == "anchor_ready":
                 p = st["pending"]
                 if p and m["requestId"] == p["requestId"]:
-                    self.assertEqual(m["terrain"]["size"], 512)
+                    self.assertEqual(m["terrain"]["size"], 1024)
                     p["ready"], p["msg"] = True, m
                     st["a_lat"] = clock - p["sent"]
 
@@ -1515,7 +1545,7 @@ class FollowDrive512Test(unittest.TestCase):
                 out["edge_min"], out["edge_at"] = e, (round(clock, 2), round(x), round(y), st["block"])
         out["lag_s"] = time.monotonic() - (wall0 + clock)
         out["t_lat"], out["a_lat"] = st["t_lat"], st["a_lat"]
-        print(f"\n  512 follow drive {speed:g} m/s at {hdg:g} deg (+{terrain_delay:g} s heightmap, +{anchor_delay:g} s "
+        print(f"\n  1 km follow drive {speed:g} m/s at {hdg:g} deg (+{terrain_delay:g} s heightmap, +{anchor_delay:g} s "
               f"anchor): {out}", file=sys.stderr)
         self.assertLess(out["lag_s"], 1.0, "the client could not keep real time")
         return out

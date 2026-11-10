@@ -284,6 +284,7 @@ def summarize(polls, profile, label=None, visual=False):
         "reason": drive.get("reason"), "error": drive.get("error"),
         "falls": drive.get("falls"), "resets": drive.get("resets"), "rebases": drive.get("rebases"),
         "headingResyncs": drive.get("resyncs"),
+        "pathJumps": drive.get("jumps"),
         "fpsMean": _r(len(frames) / (sum(frames) / 1000.0), 1) if frames and sum(frames) > 0 else None,
         "p50": _r(_pct(frames, 0.5)), "p95": _r(_pct(frames, 0.95)), "p99": _r(_pct(frames, 0.99)),
         "maxMs": _r(max(frames) if frames else None),
