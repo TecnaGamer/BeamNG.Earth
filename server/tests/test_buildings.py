@@ -438,9 +438,10 @@ class MeshTest(unittest.TestCase):
         P = bld._sky_mesh([(spec, 0.0, 0.0)])[0]
         self.assertAlmostEqual(P[:, 2].max(), 40.0, delta=0.05)
 
-    def test_a_round_roof_is_still_a_gable(self):
+    def test_a_round_roof_is_a_barrel_not_a_dome(self):
         spec = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "round"})
-        self.assertEqual(spec.roof, "gabled")
+        self.assertEqual(spec.roof, "round")            # (OSM's round: a barrel vault along the ridge, RoundRoofTest)
+        self.assertNotIn(spec.roof, bld.DOME_ROOFS)
 
 
 class DoorTest(unittest.TestCase):
@@ -2184,3 +2185,16 @@ class CourtyardTest(unittest.TestCase):
             self.assertAlmostEqual(float(a[up & (a > 0)].sum()), 920.0, delta=15.0)
             # nothing over the yard's middle
             self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())
+
+
+class RoundRoofTest(unittest.TestCase):
+    def test_a_barrel_roof(self):
+        s = bld.plan(rect(0, 0, 30, 12), {"class": "hangar", "roof_shape": "round", "height": 10.0}, 0, 48.1, 11.5)
+        self.assertEqual(s.roof, "round")
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(P[:, 2].max(), 10.0, delta=0.05)        # (its top at the mapped height)
+        self.assertAlmostEqual(P[:, 2].min(), s.height, delta=1e-6)
+        mid = P[np.abs(P[:, 1] - 6.0) < 0.7]                           # (the crown along the middle)
+        self.assertAlmostEqual(mid[:, 2].max(), 10.0, delta=0.05)

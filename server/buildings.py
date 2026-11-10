@@ -46,6 +46,8 @@ ROOF_UV_M = 6.0             # m per repeat of the roof textures
 SIDING_UV_M = 3.0           # m per repeat of the plain wall textures (sheds, garages)
 PITCH = {"gabled": 32.0, "hipped": 26.0, "half-hipped": 32.0, "pyramidal": 26.0}     # degrees
 # roof:shape forms with pitches of their own, whatever the region's (roof_rise, _roof)
+ROUND_RISE = 0.45               # a barrel roof's rise over its half width (a mapped roof height its own)
+ROUND_SEGS = 10                 # its arc's segments across the width
 SKILLION_PITCH = 12.0           # a lean-to: one shallow slope from wall to wall
 MANSARD_PITCHES = (68.0, 18.0)  # the steep lower slope, the shallow top
 MANSARD_INSET_M = 1.2           # how far the lower slope comes in, at most
@@ -476,6 +478,8 @@ def roof_rise(roof, hw, pitch):
     tan = lambda deg: math.tan(math.radians(deg))
     if roof == "skillion":
         return 2.0 * hw * tan(SKILLION_PITCH)
+    if roof == "round":
+        return hw * ROUND_RISE
     if roof == "mansard":
         inset = min(0.3 * hw, MANSARD_INSET_M)
         return inset * tan(MANSARD_PITCHES[0]) + (hw - inset) * tan(MANSARD_PITCHES[1])
@@ -649,7 +653,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     elif roof_given == "saltbox":
         roof = "gambrel" if hl > 1.3 * hw else "mansard"
     elif roof_given == "round":
-        roof = "gabled"
+        roof = "round"                              # (a barrel vault: hangars, halls; was drawn gabled)
     else:
         detached_house = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not industrial and not row
         if church and neighbours == 0:
@@ -1554,6 +1558,21 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
                (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
         for sgn in (-1, 1):
             end_wall(sgn, [(-hw, z_eave), (hw, z_eave), (sgn * hi * hw, top)])
+        return
+    if spec.roof == "round":
+        rise = getattr(spec, "roof_h", None) or hw * ROUND_RISE
+        ts = [-hw + 2.0 * hw * k / ROUND_SEGS for k in range(ROUND_SEGS + 1)]
+        zs = [z_eave + rise * math.sqrt(max(0.0, 1.0 - (t / hw) ** 2)) for t in ts]
+        arc = 0.0
+        for k in range(ROUND_SEGS):                      # (strips along the length, counter-clockwise from above)
+            t0, t1, z0_, z1_ = ts[k], ts[k + 1], zs[k], zs[k + 1]
+            seg = math.hypot(t1 - t0, z1_ - z0_)
+            m.quad(at(hl, t0, z0_), at(hl, t1, z1_), at(-hl, t1, z1_), at(-hl, t0, z0_),
+                   (hl / ROOF_UV_M, arc / ROOF_UV_M), (hl / ROOF_UV_M, (arc + seg) / ROOF_UV_M),
+                   (-hl / ROOF_UV_M, (arc + seg) / ROOF_UV_M), (-hl / ROOF_UV_M, arc / ROOF_UV_M), rm)
+            arc += seg
+        for sgn in (-1, 1):
+            end_wall(sgn, [(-hw, z_eave), (hw, z_eave)] + [(t, z) for t, z in zip(ts[::-1], zs[::-1])][1:-1])
         return
     if spec.roof == "gambrel":
         lo, up = (math.tan(math.radians(p)) for p in GAMBREL_PITCHES)
