@@ -1,8 +1,10 @@
 """Hong Kong's lidar terrain (hkdtm.py): the HK1980 Grid projection against PROJ, the near terrain read from the DTM
 sheets on PROJ's grid and moved to EGM2008, a cold place's tiles never waiting for a sheet (short for the run, the
-sheets read from the next run on). Synthetic sheets only (hklidarfixtures)."""
+sheets read from the next run on), and plans made on it kept out of every share. Synthetic sheets only
+(hklidarfixtures)."""
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import time
@@ -19,6 +21,9 @@ import dem as demmod  # noqa: E402
 import hkdtm  # noqa: E402
 import hklidar  # noqa: E402
 import hrdem  # noqa: E402
+import mapcells  # noqa: E402
+import plancache  # noqa: E402
+import roadz  # noqa: E402
 import xproc  # noqa: E402
 from hklidarfixtures import tiff_zip  # noqa: E402
 from test_dem import TerrariumFetcher  # noqa: E402
@@ -138,6 +143,40 @@ class TileTest(unittest.TestCase):
         self.assertEqual(self.fetcher.queries, [])
 
 
+class NotSharedTest(unittest.TestCase):
+    """Plans made on Hong Kong's terrain stay on this computer, with the road heights off too."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.pc = plancache.PlanCache(os.path.join(tmp.name, "plans"), "w0s0")
+        self.pc.persist = (tmp.name, (plancache.FRAMES, "w0s0", {}))
+        self.cell = tuple(mapcells.cell_of(22.383, 114.208))
+
+    def test_terrain_alone_keeps_plans_here(self):
+        with mock.patch.object(roadz, "HK_ON", False):
+            self.assertEqual(roadz.hk_tags(self.cell), ("hkdtm1",))
+            with mock.patch("mpshare.note_built") as noted, mock.patch("revisit.store", return_value=True):
+                self.assertTrue(self.pc.store(self.cell, [], [], [], [], persist=True))
+            self.assertFalse(os.path.exists(self.pc._path(self.cell) + ".complete"), "no world-bundle marker")
+            self.assertFalse(noted.called, "no BeamMP upload")
+            with mock.patch("bakepack.find", return_value=b"baked") as find:
+                self.assertIsNone(self.pc._baked(self.cell))
+                self.assertEqual(find.call_count, 0)
+            on = self.pc._revisit_key(self.cell)
+            with mock.patch.object(hkdtm, "ON", False):
+                self.assertFalse(roadz.hk_cell(self.cell))
+                self.assertNotEqual(self.pc._revisit_key(self.cell), on)
+
+    def test_share_tools_turn_it_off(self):
+        """What sharehelper and bake_area plan in Hong Kong is made with neither (in their own process)."""
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..")
+        for d, m in (("server", "sharehelper"), ("tools", "bake_area")):
+            code = (f"import sys; sys.path.insert(0, {os.path.join(root, d)!r}); import {m}, roadz, mapcells; "
+                    "print(roadz.hk_tags(tuple(mapcells.cell_of(22.383, 114.208))))")
+            env = {k: v for k, v in os.environ.items() if k not in ("BNE_HKDTM", "BNE_ROADZ_HK")}
+            got = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True, timeout=120)
+            self.assertEqual((got.returncode, got.stdout.strip()), (0, "()"), got.stderr[-2000:])
 
 
 if __name__ == "__main__":

@@ -54,6 +54,7 @@ from collections import OrderedDict
 import numpy as np
 
 import fast
+import hkdtm
 import hklidar
 import mapcells
 import roadzhk
@@ -200,17 +201,23 @@ def sources_at(lat, lon, lidar=None):
     return out
 
 
-def hk_cell(key):
-    """Does map cell key (z, x, y) take Hong Kong's measured heights (the source on, the cell's box meeting HK_BOUNDS
-    with CLIP_PAD_M to spare)? Its road plans are then kept on this computer only: the HK government's terms allow
-    redistribution, but with an indemnity and terms that may change without notice, so they never go into a world
-    bundle (plancache: no .complete marker), a BeamMP share (mpshare.note_built) or a baked pack (made with it off)."""
-    if not (ON and HK_ON):
-        return False
+def hk_tags(key):
+    """The Hong Kong government data map cell key's road plans are made with, when its box meets HK_BOUNDS with
+    CLIP_PAD_M to spare: "hk1", its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
     lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
     pad = CLIP_PAD_M / 111320.0
-    return (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
-            and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad)
+    if not (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
+            and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
+        return ()
+    return (("hk1",) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+
+
+def hk_cell(key):
+    """Are map cell key's road plans made with Hong Kong's measured heights or terrain (hk_tags)? They are then kept on
+    this computer only: the HK government's terms allow redistribution, but with an indemnity and terms that may change
+    without notice, so they never go into a world bundle (plancache: no .complete marker), a BeamMP share
+    (mpshare.note_built) or a baked pack (made with both off)."""
+    return bool(hk_tags(key))
 
 
 _HK_LINES = {}          # path -> (mtime, has lines) of the Hong Kong cells hk_credited_near looked at
