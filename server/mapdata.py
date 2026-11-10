@@ -348,6 +348,8 @@ class MapData:
         self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
+        self.station_tags = railtags.StationTags(cache_dir, self.fetcher) if railtags.STATIONS_ON else None
         import regionaldata
         regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
         import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
