@@ -179,11 +179,13 @@ def wire_lines(poles, anchors=None, radius=None, max_span=80.0):
     return out
 
 
-def wire_mesh(lines, origin, material_of=None):
+def wire_mesh(lines, origin, material_of=None, solid_of=None):
     """A mesh of the wires (each its points, or (points, half width): WIRE_R when not given): two crossed ribbons per
     segment (seen from any side): (positions, tris, uvs). material_of(half width) -> a material name: then
-    (positions, tris, uvs, [names], per-triangle index into them), the triangles grouped by material."""
-    P, T, TM = [], [], []
+    (positions, tris, uvs, [names], per-triangle index into them), the triangles grouped by material. solid_of(half
+    width) -> True: that wire is a four-sided bar (8 vertices a segment, as the ribbons, 8 triangles, lit as a solid;
+    its UVs: round the bar / metres along it over 2) instead of two crossed ribbons."""
+    P, T, TM, UV = [], [], [], []
     names = []
     ox, oy, oz = origin
     for line in lines:
@@ -196,12 +198,30 @@ def wire_mesh(lines, origin, material_of=None):
             mi = names.index(nm)
         if len(P) + 8 * (len(line) - 1) > WIRE_VERTS_MAX:       # (8 vertices a segment; the rest left out)
             break
+        solid = solid_of is not None and solid_of(r)
+        run = 0.0
         for a, b in zip(line[:-1], line[1:]):
             d = b - a
             L = float(np.linalg.norm(d))
             if L < 1e-6:
                 continue
             d /= L
+            if solid:
+                ref = np.array([0.0, 0.0, 1.0]) if abs(d[2]) < 0.95 else np.array([1.0, 0.0, 0.0])
+                sd = np.cross(d, ref)
+                sd = sd / (np.linalg.norm(sd) or 1.0) * r
+                up = np.cross(sd, d)
+                up = up / (np.linalg.norm(up) or 1.0) * r
+                i = len(P)
+                corners = (-sd - up, sd - up, sd + up, -sd + up)
+                P += [a + c for c in corners] + [b + c for c in corners]
+                UV += [(k / 4.0, run / 2.0) for k in range(4)] + [(k / 4.0, (run + L) / 2.0) for k in range(4)]
+                for k in range(4):
+                    k1 = (k + 1) % 4
+                    T += [(i + k, i + 4 + k1, i + k1), (i + k, i + 4 + k, i + 4 + k1)]
+                TM += [mi] * 8
+                run += L
+                continue
             # (np.cross written out: the same products and differences, without its per-call cost)
             side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
             side = side / (np.linalg.norm(side) or 1.0) * r
@@ -211,14 +231,15 @@ def wire_mesh(lines, origin, material_of=None):
             for v in (side, up):
                 i = len(P)
                 P += [a - v, b - v, b + v, a + v]
+                UV += [(0.0, 0.0)] * 4
                 T += [(i, i + 1, i + 2), (i, i + 2, i + 3), (i, i + 2, i + 1), (i, i + 3, i + 2)]
                 TM += [mi] * 4
     if not P:
         return None
     P = np.array(P) - np.array([ox, oy, oz])
     if material_of is not None:
-        return P, np.array(T, np.int64), np.zeros((len(P), 2)), names, np.array(TM, np.int64)
-    return P, np.array(T, np.int64), np.zeros((len(P), 2))
+        return P, np.array(T, np.int64), np.array(UV, np.float64), names, np.array(TM, np.int64)
+    return P, np.array(T, np.int64), np.array(UV, np.float64)
 
 
 MAJOR = {"primary", "secondary", "tertiary", "trunk"}

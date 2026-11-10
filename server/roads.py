@@ -11520,7 +11520,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import furniture
         x0, y0, _, _ = tile_bbox(tx, ty)
         import catenary
-        wm = furniture.wire_mesh(wires, (x0, y0, 0.0), catenary.wire_material)    # (copper / bronze / steel / dark by class)
+        wm = furniture.wire_mesh(wires, (x0, y0, 0.0), catenary.wire_material, catenary.wire_solid)    # (copper / bronze / steel / dark by class)
         if wm is not None:
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
             cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material=wm[3], tri_materials=wm[4],

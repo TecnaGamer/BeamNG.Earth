@@ -440,6 +440,12 @@ def wire_material(r, default="bne_wire"):
     return default
 
 
+def wire_solid(r):
+    """Whether a wire ribbon of half width r is drawn as a four-sided bar: the girder's bars, the insulators and clamps
+    (the thin wires stay ribbons)."""
+    return r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, INS_R)
+
+
 def span_wires(a, b):
     """The wires of one span between masts a and b: the contact wire, the messenger with its sag, the droppers every
     DROPPER_EVERY_M (the first DROPPER_FIRST_M from a mast, none shorter than DROPPER_MIN_GAP_M). Pure."""

@@ -146,13 +146,16 @@
     "Stages": [
       {
         "baseColorFactor": [
-          0.55,
-          0.57,
-          0.58,
+          1,
+          1,
+          1,
           1
         ],
         "metallicFactor": 0.85,
-        "roughnessFactor": 0.5
+        "roughnessFactor": 0.5,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v2_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v2_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_galv_v2_r.data.png"
       },
       {},
       {},

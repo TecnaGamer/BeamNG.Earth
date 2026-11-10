@@ -244,6 +244,23 @@ class CatenaryTest(unittest.TestCase):
                                       "bne_wire"})
         self.assertEqual(len(TM), len(T))
         self.assertEqual(furniture.wire_mesh(wires, (0, 0, 0))[0].shape, P.shape, "the plain call is as it was")
+        self.assertEqual(len(UV), len(P))
+        P2, T2, UV2, n2, TM2 = furniture.wire_mesh(wires, (0, 0, 0), catenary.wire_material, catenary.wire_solid)
+        self.assertEqual(len(P2), len(P), "a bar costs the vertices two ribbons did")
+        self.assertEqual(len(UV2), len(P2))
+        steel = n2.index(catenary.MAT_STEEL)
+        bars = T2[TM2 == steel]
+        self.assertTrue(len(bars) and len(bars) % 8 == 0, "eight triangles a bar segment")
+        self.assertGreater(float(UV2[np.unique(bars)][:, 1].max()), 1.0, "UVs run along the bar")
+        out = 0
+        for a, b, c in bars:      # (counter-clockwise seen from outside: each face's normal points away from its bar's axis)
+            n = np.cross(P2[b] - P2[a], P2[c] - P2[a])
+            cen = (P2[a] + P2[b] + P2[c]) / 3.0
+            axis = (P2[a] + P2[b] + P2[c] + P2[a] + P2[b] + P2[c]) / 6.0     # (a face's own centre: tests the sign below)
+            lo = min(a, b, c) // 8 * 8
+            mid = P2[lo:lo + 8].mean(axis=0)
+            out += float(n @ (cen - mid)) > 0
+        self.assertEqual(out, len(bars), "bars face outwards")
 
     def test_mapped_masts_are_used(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
