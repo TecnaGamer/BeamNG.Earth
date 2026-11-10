@@ -1763,6 +1763,7 @@ WALK_GROUP_M = 14.0         # m along a way between two tracks' crossings of one
 WALK_SIGN_CLEAR_M = 2.6     # m a walk sign keeps from every track's axis (the ballast's foot)
 WALK_STREET_W = 6.5         # m: the panels' width where a street mapped as a pedestrian way crosses (its level crossing node)
 WALK_NODE_WAY_M = 10.0      # m from an OSM level_crossing node to its way
+WALK_PANEL_MAX_HX = 4.0     # m: a footway panel's half length along the track (a street's: more, WALK_STREET_W)
 WALK_MIN_SIN = 0.35         # a way crossing the track flatter than this (20 degrees) is left alone
 WALK_PANEL_OUT_M = 0.45     # m: half the panel outside each rail (it is 0.9 m wide)
 WALK_PANEL_GAP_M = 0.07     # m left between the middle panel and each rail (the flangeway)
@@ -1808,6 +1809,32 @@ def walk_ways(frame, cells, box, reach=60.0):
     return out
 
 
+WALK_STRICT_ON = os.environ.get("BNE_RAIL_WALK_STRICT", "on") not in ("off", "0", "false")
+WALK_STRICT_SIN = 0.6       # a way crossing a track flatter than this (37 deg) is running along it, not across (plan 040:
+                            # Kalynivka's path 20 deg to the line got panels 8 m long and a row of signs)
+WALK_LEAVE_M = 12.0         # m along the way either side of the crossing ...
+WALK_LEAVE_OFF_M = 5.0      # ... it must be this far from the track's line (it leaves the track on both sides)
+
+
+def _leaves_track(way, pt, track):
+    """Does the way (k, 2) go away from the track line (n, 2) on both sides of its crossing pt: its points WALK_LEAVE_M
+    along it either side lie WALK_LEAVE_OFF_M or more off the track? A way that ends before (a short stub) counts by
+    its end. Pure."""
+    way = np.asarray(way, np.float64)
+    s = _arc(way)
+    ab = np.diff(way, axis=0)
+    t = np.clip(((pt - way[:-1]) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    j = int(np.argmin(np.linalg.norm(way[:-1] + t[:, None] * ab - pt, axis=1)))
+    at = float(s[j] + t[j] * (s[j + 1] - s[j]))
+    dense = roads.densify(track, 1.0)[:, :2]
+    for sgn in (-1.0, 1.0):
+        a = float(np.clip(at + sgn * WALK_LEAVE_M, 0.0, s[-1]))
+        q = np.array([np.interp(a, s, way[:, 0]), np.interp(a, s, way[:, 1])])
+        if float(np.min(np.hypot(*(dense - q).T))) < WALK_LEAVE_OFF_M:
+            return False
+    return True
+
+
 def walk_crossings(rails, ways, nodes, carriage, ex):
     """The places a person crosses a ground track: [(point (2,), arc m, track part index, track unit t, way unit f, way
     width)]. Where a footway, path, cycleway or pedestrian way (ways: walk_ways) crosses a track at WALK_MIN_SIN or more, and
@@ -1832,10 +1859,12 @@ def walk_crossings(rails, ways, nodes, carriage, ex):
                 d = np.hypot(*(way[1:] - way[:-1]).T)
                 j = int(np.argmin(np.hypot(*((way[:-1] + way[1:]) / 2 - pt).T)))
                 f = (way[j + 1] - way[j]) / max(float(d[j]), 1e-9)
-                if abs(t[0] * f[1] - t[1] * f[0]) < WALK_MIN_SIN:
+                if abs(t[0] * f[1] - t[1] * f[0]) < (WALK_STRICT_SIN if WALK_STRICT_ON else WALK_MIN_SIN):
                     continue
                 if any(float(np.min(np.hypot(*(ln - pt).T))) < hw + 2.0 for ln, hw in carriage):
                     continue
+                if WALK_STRICT_ON and not _leaves_track(way, pt, xy):
+                    continue                    # (a way that runs along the track: no crossing, plan 040)
                 out.append((np.asarray(pt, np.float64), float(arc), n_part, t, f, float(ww)))
     for x, y in nodes:
         if not (ex[0] <= x <= ex[2] and ex[1] <= y <= ex[3]):
@@ -1901,7 +1930,7 @@ def walk_panel_boxes(crossings, finals, rails=None):
             z = z_bed + RAIL_TOP_M - 0.012
             z0 = z_bed + BALLAST_H - 0.15
             n = np.array([-t[1], t[0]])
-            hx = min(8.0, (ww / 2) / sin + 0.2)
+            hx = min(max(WALK_PANEL_MAX_HX, ww) if WALK_STRICT_ON else 8.0, (ww / 2) / sin + 0.2)
             ctr = lambda off: (pt + n * off)[None, :]
             a, b = t[None, :], n[None, :]
             out.append(((ctr(0.0), a, b, np.array([z0]), np.array([z])), hx, half_g - WALK_PANEL_GAP_M))

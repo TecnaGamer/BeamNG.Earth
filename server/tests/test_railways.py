@@ -341,6 +341,21 @@ class RailwayTest(unittest.TestCase):
         gap = conc[(np.abs(conc[:, 0] - 120.0) < 2.0) & (np.abs(conc[:, 1] - 102.25) < 0.5) & (np.abs(conc[:, 2] - top) < 0.01)]
         self.assertGreater(len(gap), 0, "a panel over the gap between the tracks")
 
+    def test_a_path_running_along_a_track_is_no_crossing(self):
+        rails = [(0, "standard_gauge", "ground", np.c_[np.arange(0.0, 200.0, 2.0), np.full(100, 100.0)])]
+        ex = (0.0, 0.0, 256.0, 256.0)
+        across = [(np.array([[101.0, 60.0], [101.0, 140.0]]), 1.5)]
+        got = railways.walk_crossings(rails, across, [], [], ex)
+        self.assertEqual(len(got), 1, "a path square to the track crosses it")
+        shallow = [(np.array([[41.0, 80.0], [161.0, 120.0]]), 1.5)]       # 18 deg to the line
+        self.assertEqual(railways.walk_crossings(rails, shallow, [], [], ex), [], "one 18 degrees to it runs along it")
+        slanted = [(np.array([[61.0, 70.0], [141.0, 130.0]]), 1.5)]        # 37 deg, but leaves it
+        self.assertEqual(len(railways.walk_crossings(rails, slanted, [], [], ex)), 1)
+        hugging = [(np.array([[41.0, 94.0], [91.0, 96.0], [111.0, 104.0], [161.0, 106.0]]), 1.5)]
+        self.assertEqual(railways.walk_crossings(rails, hugging, [], [], ex), [], "one that stays beside the track")
+        with unittest.mock.patch.object(railways, "WALK_STRICT_ON", False):
+            self.assertEqual(len(railways.walk_crossings(rails, hugging, [], [], ex)), 1, "BNE_RAIL_WALK_STRICT=off")
+
     def test_a_crossing_node_without_a_way_still_gets_panels_and_signs(self):
         f = features([[(-50.0, 100.0), (300.0, 100.0)]], ["standard_gauge"], subtypes=["rail"])
         lon, lat = FRAME.lon0 + 150.0 / (111320.0 * math.cos(math.radians(FRAME.lat0))), FRAME.lat0 + 100.0 / 111320.0

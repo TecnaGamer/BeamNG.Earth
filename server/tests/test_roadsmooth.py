@@ -3,6 +3,7 @@ import math
 import os
 import sys
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -269,6 +270,27 @@ class SmoothFeaturesTest(unittest.TestCase):
         g.attrs["subtype"] = np.array(["rail"])
         roadsmooth.smooth(g, self.frame)
         self.assertEqual(len(g.en), 3, "BNE_RAIL_CURVES=off")
+
+    def test_a_switch_keeps_the_vertices_where_a_branch_ends_on_the_line(self):
+        main = [(0.0, 0.0), (300.0, 0.0), (330.0, 30.0), (600.0, 30.0)]
+        branch = [(150.0, 0.4), (170.0, 60.0)]          # its end 0.4 m off the main line's first piece
+        f = _features(self.frame, [main, branch], ["standard_gauge", "standard_gauge"])
+        f.attrs["subtype"] = np.array(["rail"] * 2)
+        roadsmooth.smooth(f, self.frame)
+        co = f.coord_off
+        line = f.en[co[0]:co[1]]
+        mapped = np.array(main[1])
+        self.assertLess(float(np.min(np.hypot(*(line - mapped).T))), 1e-6, "the switch's vertex stays")
+        self.assertGreater(co[1] - co[0], 4, "the other corner is still rounded")
+        g = _features(self.frame, [main], ["standard_gauge"])
+        g.attrs["subtype"] = np.array(["rail"])
+        roadsmooth.smooth(g, self.frame)
+        self.assertGreater(float(np.min(np.hypot(*(g.en - mapped).T))), 0.05, "alone it is rounded there")
+        with unittest.mock.patch.object(roadsmooth, "SWITCH_PIN_ON", False):
+            h = _features(self.frame, [main, branch], ["standard_gauge", "standard_gauge"])
+            h.attrs["subtype"] = np.array(["rail"] * 2)
+            roadsmooth.smooth(h, self.frame)
+            self.assertGreater(float(np.min(np.hypot(*(h.en[:h.coord_off[1]] - mapped).T))), 0.05, "BNE_RAIL_SWITCH_FIX=off")
 
     def test_rule_fractions_follow_the_line(self):
         bend = [(0.0, 0.0), (200.0, 0.0), (200.0, 200.0)]

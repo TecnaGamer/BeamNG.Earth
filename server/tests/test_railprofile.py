@@ -2,6 +2,7 @@
 import os
 import sys
 import unittest
+import unittest.mock
 
 import numpy as np
 
@@ -80,6 +81,43 @@ class RailProfileTest(unittest.TestCase):
     def test_a_tram_is_left_to_the_window_profile(self):
         got = railprofile.beds(FRAME, "t", self.load, hill_xy, [("t", "tram", "ground", np.array([[0.0, 0.0], [2.0, 0.0]]))])
         self.assertTrue(np.isnan(got[0]).all())
+
+
+class JoinBedsTest(unittest.TestCase):
+    def line(self, p0, p1, step=2.0):
+        n = int(np.hypot(p1[0] - p0[0], p1[1] - p0[1]) // step) + 1
+        t = np.linspace(0.0, 1.0, n)
+        return np.c_[p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t]
+
+    def test_a_crossover_is_brought_to_the_beds_of_both_lines_it_joins(self):
+        a = self.line((0.0, 0.0), (600.0, 0.0))
+        b = self.line((0.0, 4.5), (600.0, 4.5))
+        c = self.line((100.0, 0.0), (148.0, 4.5))           # its ends on a and b, 48 m long
+        za, zb_ = np.full(len(a), 100.0), np.full(len(b), 100.0)
+        zc = np.linspace(100.45, 99.42, len(c))             # laid from its own ground: 0.45 over, 0.58 under
+        rails = [("a", "standard_gauge", "ground", a), ("b", "standard_gauge", "ground", b),
+                 ("c", "standard_gauge", "ground", c)]
+        out = railprofile.join_beds(rails, [za, zb_, zc])
+        self.assertAlmostEqual(float(out[2][0]), 100.0, places=6)
+        self.assertAlmostEqual(float(out[2][-1]), 100.0, places=6)
+        self.assertLess(float(np.abs(out[2] - 100.0).max()), 0.05, "level between the two")
+        np.testing.assert_array_equal(out[0], za)
+        with unittest.mock.patch.object(railprofile, "JOIN_ON", False):
+            self.assertEqual(float(railprofile.join_beds(rails, [za, zb_, zc])[2][0]), float(zc[0]))
+
+    def test_a_siding_leaving_a_line_runs_the_difference_out_and_a_joint_is_left(self):
+        a = self.line((0.0, 0.0), (600.0, 0.0))
+        s = self.line((100.0, 0.0), (400.0, 40.0))
+        za, zs = np.full(len(a), 100.0), np.full(len(s), 100.5)
+        rails = [("a", "standard_gauge", "ground", a), ("s", "standard_gauge", "ground", s)]
+        out = railprofile.join_beds(rails, [za, zs])
+        self.assertAlmostEqual(float(out[1][0]), 100.0, places=6)
+        self.assertAlmostEqual(float(out[1][-1]), 100.5, places=6, msg="its free end is as laid")
+        self.assertGreater(float(out[1][len(s) // 2]), 100.49, "and far on, as laid")
+        ahead = self.line((600.0, 0.0), (900.0, 0.0))       # a joint: this line starts where a ends
+        out = railprofile.join_beds([rails[0], ("j", "standard_gauge", "ground", ahead)],
+                                    [za, np.full(len(ahead), 103.0)])
+        self.assertEqual(float(out[1][0]), 103.0)
 
 
 if __name__ == "__main__":

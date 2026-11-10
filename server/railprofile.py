@@ -27,6 +27,10 @@ MARGIN_M = 350.0                    # m of line taken round a node's support (+-
 SMOOTH_STEPS = 25                   # steps (STEP_M each) either side the ground beds are averaged over, twice more
 MAX_CUT_M = 3.0                     # m the long smoothing moves a bed at most (cuttings and embankments stay modest)
 PIN_M = 30.0                        # m from a part's end the bed is left as railways.profile made it (a joint, a deck)
+JOIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false")
+JOIN_M = 2.0                        # m: a ground part's end this near another part's line (not near its ends) is a switch
+JOIN_INTERIOR_M = 3.0               # m: ... farther than this from the other part's own ends (that is a joint: profile's)
+JOIN_REACH_M = 60.0                 # m along the part the bed is brought to the other's (to nothing, smoothly)
 NODE_MEMO_MAX = 48                  # nodes kept (each a few thousand points)
 _NODES = OrderedDict()              # (anchor key, ix, iy) -> {point key: bed height}
 
@@ -52,6 +56,73 @@ def smooth(xy, zb):
     edge = np.minimum(s, s[-1] - s) / PIN_M
     w = np.clip(edge, 0.0, 1.0)
     return zb + d * (w * w * (3.0 - 2.0 * w))
+
+
+def _on_line(p, xy, s):
+    """(distance m, arc m along xy of the point of it nearest p) for the line xy (k, 2) with arcs s."""
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    t = np.clip(((p - a) * ab).sum(1) / np.maximum((ab * ab).sum(1), 1e-12), 0.0, 1.0)
+    d = np.hypot(*(a + t[:, None] * ab - p).T)
+    k = int(np.argmin(d))
+    return float(d[k]), float(s[k] + t[k] * (s[k + 1] - s[k]))
+
+
+def join_beds(rails, zbs, inside=None):
+    """zbs (the ground parts' beds, one array per part of rails [(fid, class, kind, xy)]) with each part's end that lies on
+    another part's line (a switch: a siding, a crossover's end; JOIN_M from it, JOIN_INTERIOR_M from its ends) brought
+    to that part's bed there: the difference run out along the part over JOIN_REACH_M (a part tied at both ends over its
+    whole length, a smooth blend of the two). railways.profile and smooth lay a short part's bed from its own ground, 0.45 m
+    over and 0.58 m under the main lines a crossover joins at Kalynivka, a step across the rails (plan 040). inside:
+    (x0, y0, x1, y1) the window; an end outside it is a clipped one, left alone. Pure."""
+    if not JOIN_ON:
+        return zbs
+    ground = [n for n, (_f, c, k, xy) in enumerate(rails) if k == "ground" and c != "tram" and len(xy) >= 2]
+    arcs = {n: railways._arc(np.asarray(rails[n][3], np.float64)) for n in ground}
+    boxes = {n: (np.asarray(rails[n][3], np.float64).min(0) - JOIN_M, np.asarray(rails[n][3], np.float64).max(0) + JOIN_M)
+             for n in ground}
+    out = [np.asarray(z, np.float64).copy() for z in zbs]
+    for p in ground:
+        xy = np.asarray(rails[p][3], np.float64)
+        s = arcs[p]
+        S = float(s[-1])
+        delta = [None, None]
+        for e, idx in enumerate((0, len(xy) - 1)):
+            pt = xy[idx]
+            if inside is not None and not (inside[0] <= pt[0] <= inside[2] and inside[1] <= pt[1] <= inside[3]):
+                continue
+            best = None
+            for q in ground:
+                if q == p or rails[q][0] == rails[p][0]:
+                    continue
+                lo, hi = boxes[q]
+                if (pt < lo).any() or (pt > hi).any():
+                    continue
+                qxy = np.asarray(rails[q][3], np.float64)
+                d, at = _on_line(pt, qxy, arcs[q])
+                if d < JOIN_M and JOIN_INTERIOR_M < at < arcs[q][-1] - JOIN_INTERIOR_M and (best is None or d < best[0]):
+                    best = (d, float(np.interp(at, arcs[q], np.asarray(zbs[q], np.float64))))
+            if best is not None and np.isfinite(zbs[p][idx]):
+                delta[e] = best[1] - float(zbs[p][idx])
+        if delta[0] is None and delta[1] is None:
+            continue
+        both = delta[0] is not None and delta[1] is not None
+        L = min(JOIN_REACH_M, S)
+        corr = np.zeros(len(xy))
+        if both and S <= 2 * L:
+            u = np.clip(s / max(S, 1e-9), 0.0, 1.0)     # (linear: a part laid on a slope stays as straight)
+            z0, z1 = float(zbs[p][0]) + delta[0], float(zbs[p][-1]) + delta[1]
+            out[p] = z0 + (z1 - z0) * u          # (a crossover is a straight grade between the two beds it joins:
+            continue                             # its own ground's bumps between them were 0.3 m over the lines)
+        else:
+            for e, d in enumerate(delta):
+                if d is None:
+                    continue
+                dist = s if e == 0 else S - s
+                w = np.clip(1.0 - dist / max(L, 1e-9), 0.0, 1.0)
+                corr += d * w * w * (3.0 - 2.0 * w)
+        out[p] = out[p] + corr
+    return out
 
 
 _NEIGHBOURS = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1))
@@ -85,10 +156,15 @@ def _node(frame, akey, load, ground, ix, iy):
     if rails:
         tunnels = railways.road_underpasses(frame, cells, box, reach)
         tunnels = tunnels + railways.coarse_underpasses(frame, cells, box, rails, reach)
+        zbs = []
         for (fid, _c, kind, xy), (zb, _zg) in zip(rails, railways.profile(rails, ground, tunnels)):
             if kind == "ground" and SMOOTH_ON:
                 zb = smooth(xy, zb)
-            out.update(zip(_key(fid, kind, xy), zb.tolist()))
+            zbs.append(zb)
+        inner = (box[0] - reach + 3 * railways.STEP_M, box[1] - reach + 3 * railways.STEP_M,
+                 box[2] + reach - 3 * railways.STEP_M, box[3] + reach - 3 * railways.STEP_M)
+        for (fid, _c, kind, xy), zb in zip(rails, join_beds(rails, zbs, inner)):
+            out.update(zip(_key(fid, kind, xy), np.asarray(zb).tolist()))
     _NODES[ck] = out
     while len(_NODES) > NODE_MEMO_MAX:
         _NODES.popitem(last=False)
