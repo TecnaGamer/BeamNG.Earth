@@ -15,7 +15,13 @@ import numpy as np
 STEP_M = 4.0                # m between a line's stations (roadz.LIDAR_STEP_M)
 DECK_HALF_M = 3.0           # m either side of a deck's centreline its DSM is read
 DECK_READS = (-1.0, -0.5, 0.0, 0.5, 1.0)    # (times DECK_HALF_M: the reads across)
-DECK_PCT = 25.0             # the reads' percentile: the deck's surface under vehicles, lamps and parapets
+DECK_ALONG = (-2.0, 0.0, 2.0)   # m along the line from the station the reads across are taken at
+# the reads' percentile: the deck's surface under vehicles, lamps and parapets, and over the gaps a speckled DSM has in
+# a viaduct (the 25th of 5 reads across took the ground through them: Tsing Sha Highway at 22.3777 N 114.1815 E). Over
+# the Sha Tin sites' TD decks, the median of the 15 against that: stations within 1 m of their 7-station running median
+# 82 -> 93 %, crossings with the higher tier 4.5 m or more over the lower 96 -> 99 % (138), bridge parts reaching
+# MIN_COVER 57 -> 67 % (82), 2026-11-10
+DECK_PCT = 50.0
 DECK_MIN_READS = 3
 # a deck under a higher tier's line reads that one in the DSM; the ground under a deck keeps its DTM (no decks in it)
 OCCLUDE_M = 8.0
@@ -182,7 +188,7 @@ def _low(v):
 
 def rows(lines, runs, dtm, dsm):
     """roadz Lines.build rows (lonlat, z, level, ref, name) of the runs (stations): ground from dtm(x, y), a deck the
-    DECK_PCT percentile of dsm(x, y) across the carriageway; NaN in a tunnel, where the LiDAR has none, and on a deck
+    DECK_PCT percentile of dsm(x, y) across the carriageway at DECK_ALONG; NaN in a tunnel, where the LiDAR has none, and on a deck
     within OCCLUDE_M of a higher tier's line (any of lines: its DSM is that deck's). dtm / dsm are called once each, and
     only with points to read."""
     ground = [r for r in runs if lines[r[0]].level == 0]
@@ -196,10 +202,11 @@ def rows(lines, runs, dtm, dsm):
     if decks:
         xy = np.vstack([r[2] for r in decks])
         u = np.vstack([r[3] for r in decks])
-        s = np.asarray(DECK_READS) * DECK_HALF_M
-        px = xy[:, None, 0] - u[:, None, 1] * s[None]
-        py = xy[:, None, 1] + u[:, None, 0] * s[None]
-        got = _low(np.asarray(dsm(px.ravel(), py.ravel()), np.float64).reshape(len(xy), len(s)))
+        s = np.tile(np.asarray(DECK_READS) * DECK_HALF_M, len(DECK_ALONG))[None]
+        a = np.repeat(np.asarray(DECK_ALONG, np.float64), len(DECK_READS))[None]
+        px = xy[:, None, 0] + u[:, None, 0] * a - u[:, None, 1] * s
+        py = xy[:, None, 1] + u[:, None, 1] * a + u[:, None, 0] * s
+        got = _low(np.asarray(dsm(px.ravel(), py.ravel()), np.float64).reshape(len(xy), s.shape[1]))
         lvl = np.concatenate([np.full(len(r[2]), lines[r[0]].level) for r in decks])
         for tier in sorted(set(lvl.tolist())):
             higher = [ln.xy for ln in lines if ln.level > tier]

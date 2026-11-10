@@ -191,6 +191,19 @@ class LinesTest(unittest.TestCase):
         tunnel = [r for r in by_name(self.ln, "") if r[2] < 0]
         self.assertTrue(np.isnan(tunnel[0][1]).all(), "a tunnel keeps the portal inference")
 
+    def test_a_speckled_deck_reads_its_surface(self):
+        """A viaduct's DSM with gaps to the ground under it (a third of its pixels): the deck's height, not the
+        ground's (the 25th percentile of 5 reads across took the ground at Tsing Sha Highway)."""
+        xy = np.c_[np.zeros(30), np.arange(30) * 4.0]
+        line = roadzhk.TdLine(1, "", "", xy * 0, xy)
+        runs = roadzhk.stations([line], lambda ll: np.ones(len(ll), bool))
+
+        def dsm(x, y):
+            gap = (np.floor(x * 2) * 5 + np.floor(y * 2)) % 3 == 0
+            return np.where(gap, 10.0, 20.0)
+        (_ll, z, _lv, _ref, _name), = roadzhk.rows([line], runs, None, dsm)
+        np.testing.assert_allclose(z, 20.0)
+
     def test_sheets_kept_for_the_next_cell(self):
         n = len(self.fetcher.downloads)
         self.assertEqual(n, 4, "two DTM sheets and the two DSM sheets under the decks")

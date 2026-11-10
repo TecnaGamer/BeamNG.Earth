@@ -11,7 +11,7 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   10-15 cm; medium L (in the air: a bridge), U / B (underground, in a building: a tunnel); vegsystem (E18, R4 ...).
 - "hk": Hong Kong, the Transport Department's Road Network centrelines (ELEVATION: a signed level tier, 0 ground, 1-4
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
-  750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's low reads across the carriageway, none in a tunnel
+  750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's median across the carriageway, none in a tunnel
   or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
   The sheets a cell reads are kept in a size-capped folder (BNE_ROADZ_HK_SHEETS_MB) for its neighbours; a road build
   waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its heights
