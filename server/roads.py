@@ -6764,6 +6764,37 @@ DECK_Z_HOOK = None      # grading sets it (BNE_INTERCHANGE + carriageways): hook
                         # deck line, in the frame's up metres
 
 
+OBS_UNDER_ON = os.environ.get("BNE_OBS_UNDER", "on") != "off"
+OBS_UNDER_SHARE = 0.7       # a sample this share of the two half widths from a higher deck's line is under it
+
+
+def _covered_by_higher(xy, half, level, key, pool):
+    """(k,) bool: the samples of deck line xy (half width half, level) under another part of pool (BridgeProfiles' {key:
+    (spec, line, lon, level, ...)}) of a higher level: within OBS_UNDER_SHARE of the two half widths of its line."""
+    xy = np.asarray(xy, np.float64)[:, :2]
+    out = np.zeros(len(xy), bool)
+    if not len(xy):
+        return out
+    lo, hi = xy.min(0), xy.max(0)
+    for k2, v in pool.items():
+        if k2 == key or len(v) < 4 or v[3] is None or not float(v[3]) > float(level):
+            continue
+        ln = np.asarray(v[1], np.float64)[:, :2]
+        if len(ln) < 2:
+            continue
+        reach = (half + float(v[0].width) / 2) * OBS_UNDER_SHARE
+        if (ln[:, 0].max() < lo[0] - reach or ln[:, 0].min() > hi[0] + reach or ln[:, 1].max() < lo[1] - reach
+                or ln[:, 1].min() > hi[1] + reach):
+            continue
+        a, d = ln[:-1], np.diff(ln, axis=0)
+        l2 = np.maximum((d * d).sum(1), 1e-12)
+        q = xy[:, None, :] - a[None, :, :]
+        t = np.clip((q * d[None]).sum(2) / l2[None], 0.0, 1.0)
+        dist = np.hypot(*(q - t[..., None] * d[None]).transpose(2, 0, 1)).min(1)
+        out |= dist <= reach
+    return out
+
+
 class BridgeProfiles:
     """Deck heights per bridge part for one anchor frame, each chain resolved once from all of it, so
     every tile gets the same deck (2026-10-11: computed per tile from the tile's cells, a chain's
@@ -7140,6 +7171,15 @@ class BridgeProfiles:
                 spec = pool[k][0]
                 nm = pool[k][5] if len(pool[k]) > 5 else ""
                 z = prov.observed(self.frame, xy, spec.width / 2, level, "" if nm in ("None", "nan") else nm)
+                if z is not None and OBS_UNDER_ON:
+                    # (not under a deck of a higher level: the lidar saw that one's top. The Bay Bridge's lower deck took
+                    # its upper deck's measured height and lay inside it, 61.9 m both, solved 52.3 / 60.7, Discord
+                    # 2026-11-10)
+                    cov = _covered_by_higher(xy, spec.width / 2, pool[k][3] if len(pool[k]) > 3 else 1.0, k, pool)
+                    if cov.any():
+                        z = np.where(cov, np.nan, np.asarray(z, np.float64))
+                        if not np.isfinite(z).any():
+                            z = None
                 if z is not None:
                     la, lo, _ = self.frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
                     ok = np.isfinite(z)
