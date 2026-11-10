@@ -53,6 +53,24 @@ def tiles_over(south, west, north, east):
     return [(x, y) for x in range(x0, x1 + 1) for y in range(y0, y1 + 1)]
 
 
+def credited_near(cache_dir, lat, lon, near_m):
+    """Did a measured roof shard with records come to this computer for the z10 tiles within near_m of lat, lon
+    (credits.feature_ids: the states' LoD2 licences ask for attribution)? On-disk shards only, never a download
+    (the road tiles are built in the workers, which share the cache)."""
+    if not ON or not cache_dir:
+        return False
+    d = os.path.join(cache_dir, "pagesdata", "lod2")
+    dlat = near_m / 110540.0
+    dlon = near_m / (111320.0 * max(0.1, math.cos(math.radians(lat))))
+    for x, y in tiles_over(lat - dlat, lon - dlon, lat + dlat, lon + dlon):
+        try:
+            if os.path.getsize(os.path.join(d, f"{x}_{y}.npz")) > 0:
+                return True
+        except OSError:
+            pass
+    return False
+
+
 MISS_TTL_S = 7 * 86400     # s: a shard the site did not have (404) asked again after this
 
 
