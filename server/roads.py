@@ -1648,6 +1648,9 @@ def _map_surface_value(feats, i):
     """Feature i's surface value: OpenStreetMap's own (osm_surface, joined by way id: osmtags.py), else Overture's
     rule. Overture keeps a short list and folds OSM's compacted / fine_gravel into "unpaved" (drawn as dirt): Finland's
     compacted-gravel forest roads came out as dirt tracks (the user 2026-11-03: players asking for gravel roads)."""
+    import busstations
+    if busstations.PASSAGE_IDS and str(feats.ids[i]) in busstations.PASSAGE_IDS:
+        return "asphalt"            # a bus station's drive lane (Hradec: the map says paving_stones for the whole yard)
     osm = feats.attrs.get("osm_surface")
     if osm is not None and i < len(osm):
         v = str(osm[i]).strip()
@@ -2140,7 +2143,24 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
             got = memo.setdefault(k, got)
             if towns is not None and len(towns) == len(feats):
                 memo.setdefault(tk, towns)
-    return got
+    return _passage_widths(feats, list(got))
+
+
+def _passage_widths(feats, specs):
+    """specs with a bus station's drive lanes (busstations.PASSAGE_IDS) wide enough for a 12 m bus to turn and pass. Done
+    on the way out, not inside the remembered specs: those are kept (in memory and on disk) from before the station was
+    found, and a lane made 4 m once stayed 4 m (the user 2026-11-09: Vinnytsia's and Nachod's lanes too narrow)."""
+    import busstations
+    if not busstations.PASSAGE_IDS:
+        return specs
+    for j, sp in enumerate(specs):
+        if sp is not None and sp.cls == "service" and str(feats.ids[j]) in busstations.PASSAGE_IDS:
+            kw = {}
+            if sp.kind == "cobble":             # (the map's paving_stones for the whole yard: asphalt, _map_surface_value)
+                kw = {"kind": "paved", "surf": "asphalt"}
+            specs[j] = sp._replace(width=max(sp.width, busstations.PASSAGE_W_ONEWAY_M if sp.oneway
+                                             else busstations.PASSAGE_W_TWOWAY_M), **kw)
+    return specs
 
 
 def road_towns(feats, urban_fn=None, left_hand=False):
@@ -11279,7 +11299,7 @@ def shape_files(aid, tx, ty):
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
            "rail": f"rail_{aid}_{tx}_{ty}.cdae", "signs": f"signs_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae",
-           "barrier": f"barrier_{aid}_{tx}_{ty}.cdae"}
+           "barrier": f"barrier_{aid}_{tx}_{ty}.cdae", "buscol": f"buscol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
     return out
@@ -11352,7 +11372,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=()):
+               walk_ground=None, speed_traps=(), bus_col=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -11440,6 +11460,16 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         roadmesh.write(os.path.join(out_dir, shape), barrier_mesh)
         data["barrier"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["barrier"] = medianbarriers.collider_boxes(barrier_chunks)
+    if bus_col is not None and bus_col[0] is not None:     # the bus stations' lean collision (busstationmesh.collision)
+        import cdae
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        V, T, UV, mats, idx = bus_col[0][:5]
+        shape = shape_files(aid, tx, ty)["buscol"]
+        cdae.write(os.path.join(out_dir, shape), np.asarray(V, np.float64), np.asarray(T, np.int64),
+                   uvs=np.asarray(UV, np.float64), material=list(mats), tri_materials=np.asarray(idx, np.int64),
+                   collision_only=True)
+        data["buscol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        boxes["buscol"] = bus_col[1]
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
     if bld is None and bld_none:

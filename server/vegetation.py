@@ -37,12 +37,12 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 24          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 25          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
-                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py)
+                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: no bushes in a bus station's yard)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
@@ -418,7 +418,8 @@ class Vegetation:
             if lu is not None and len(lu) and lu.attrs.get("subtype") is not None:
                 _mask_polys(lu, paved, chm, 0.0, select=lu.attrs["subtype"].astype(str) == "pedestrian")
             if inf is not None and len(inf) and inf.attrs.get("class") is not None:
-                _mask_polys(inf, paved, chm, 0.0, select=inf.attrs["class"].astype(str) == "parking")
+                _mask_polys(inf, paved, chm, 0.0,
+                            select=np.isin(inf.attrs["class"].astype(str), ("parking", "bus_station")))   # (a bus station's yard: no bushes)
             if lu is not None and len(lu) and lu.attrs.get("class") is not None:
                 _mask_polys(lu, orchard, chm, 0.0, select=lu.attrs["class"].astype(str) == "orchard")
         except Exception as e:                  # not at hand: scattered as before

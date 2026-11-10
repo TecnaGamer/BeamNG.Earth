@@ -49,6 +49,24 @@ local scatterPending = false
 
 function M.onRows(aid, key, rows)
   if type(rows) ~= 'table' then return end
+  -- the bus stations' bays ({x, y, z, heading, 2}: server busstationpark.py) are the buses' (busparked.lua), not spots
+  local bus, cars = nil, nil
+  for i, r in ipairs(rows) do
+    if r[5] == 2 then
+      bus = bus or {}
+      bus[#bus + 1] = r
+      if not cars then cars = {} for j = 1, i - 1 do cars[j] = rows[j] end end
+    elseif cars then
+      cars[#cars + 1] = r
+    end
+  end
+  if bus then
+    require('beamngEarth/busparked').onRows(aid, key, bus)
+    rows = cars
+  else
+    require('beamngEarth/busparked').dropKey(key)
+  end
+  if #rows == 0 then spots[key] = nil dirty = true return end
   -- (its box: rebuild passes over a tile whose box lies beyond KEEP_M without looking at its rows)
   local x0, y0, x1, y1 = math.huge, math.huge, -math.huge, -math.huge
   for _, r in ipairs(rows) do
@@ -65,6 +83,7 @@ function M.onRows(aid, key, rows)
 end
 
 function M.dropKey(key)
+  require('beamngEarth/busparked').dropKey(key)
   if spots[key] then
     spots[key] = nil
     dirty = true
@@ -75,6 +94,7 @@ end
 -- new place's spots once it has them.
 local heldActive = nil
 function M.onTeleport()
+  require('beamngEarth/busparked').onTeleport()
   scatterPending = true
   local gp = gameplay_parking
   if gp and gp.getState() and not heldActive then
@@ -277,6 +297,7 @@ function M.update(aid, player, blk, gov)
     if not okG then log('W', 'beamngEarth', 'parking guard: ' .. tostring(errG)) end
   end
   if player then lastPlayer = player end
+  require('beamngEarth/busparked').update(aid, player, os.clock(), gov)
   hookSetup()
   if not M.enabled or not player or not dirty or not next(spots) then return end
   -- no parked cars (the player's choice, or removed): the sites only every REBUILD_OFF_S (a rebuild cost 24 ms every
@@ -335,6 +356,7 @@ end
 
 -- The level ended: the stock system forgets our sites with it.
 function M.reset()
+  require('beamngEarth/busparked').reset()
   spots, objs, anchorId, dirty, lastBuild, sites = {}, {}, nil, false, -math.huge, nil
   hidden = {}
   box, lastGuard, heldActive = nil, -math.huge, nil

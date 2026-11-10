@@ -344,7 +344,7 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol', 'buscol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.signs then deleteQ[#deleteQ + 1] = t.signs end
@@ -602,7 +602,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -1139,7 +1139,7 @@ function M.onTile(msg, currentAnchor, a)
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
   for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail',
-      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
+      'railcol', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1235,7 +1235,8 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol',
+      'buscol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
@@ -1666,7 +1667,7 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'railcol',
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'railcol', 'buscol',
   'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 function M.transform(xf, geodesy)
@@ -1912,7 +1913,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
-        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
+        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad)
       if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
