@@ -156,10 +156,18 @@ def arrange(frame, roadside, overheads, contexts, objects, elev, chunks):
                 source = objects[sign['id']]
                 if sign['kind'] == 'confirmation':
                     source = dict(source, exit=dict(label=sign['label']))
+                road_point = centre
+                if 'ground_clearance' in sign:
+                    # The French shoulder can climb a bank: moving a sign must
+                    # still compare its face with road height, not bank height.
+                    road_point = np.asarray(sign['road_point'])-np.asarray(sign['travel'])*shift
                 trial = exitsigns._make_sign(source, sign['kind'], centre,
-                    np.asarray(sign['travel']), np.r_[centre, exitsigns._ground_z(frame, elev, centre)],
+                    np.asarray(sign['travel']), np.r_[road_point, exitsigns._ground_z(frame, elev, road_point)],
                     frame, elev, sign['side'], sign['width'], sign['height'],
-                    sign['distance'], sign['advance_m'], sign['state'])
+                    sign['distance'], sign['advance_m'], sign['state'],
+                    ground_clearance=sign.get('ground_clearance', 2.4))
+                if 'mount_side' in sign:
+                    trial['mount_side'] = sign['mount_side']
                 if not any(overlap(trial, other) for other in fixed):
                     break
             else:

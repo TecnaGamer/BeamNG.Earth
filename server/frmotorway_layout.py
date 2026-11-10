@@ -245,4 +245,5 @@ def confirmation(frame, obj, pavements, q, travel, area, elev, chunks):
         return None
     fake = dict(obj, exit=dict(label=extra['label']))
     return exitsigns._make_sign(fake, 'confirmation', centre, travel,
-        np.r_[at, exitsigns._ground_z(frame, elev, at)], frame, elev, 1, plan['width'], plan['height'])
+        np.r_[at, exitsigns._ground_z(frame, elev, at)], frame, elev, 1, plan['width'], plan['height'],
+        ground_clearance=.45)

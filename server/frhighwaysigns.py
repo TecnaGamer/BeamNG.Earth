@@ -10,6 +10,7 @@ import re
 import numpy as np
 
 import signmesh as sm
+import frdestinations
 
 GAP = .065
 MATERIALS = sm.MATERIALS + ['bne_fr_highway_blue', 'bne_fr_highway_green', 'bne_fr_highway_glyph_yellow']
@@ -38,12 +39,37 @@ def refs(content):
     return result[:4]
 
 
-def registers(content, exit=False):
-    """Only use supplied colour blocks; N-road exits have a green default block.
+def legend_shape(value, font):
+    """Unit-cap glyph positions for legends containing raised small letters."""
+    source = frdestinations.legend_chars(value)
+    if not any(scale != 1. for _, scale in source):
+        return None
+    chars = sm.font_text(''.join(c for c, _ in source), font)
+    face = sm.face_font(font)
+    stretch, spacing = face['horizontal_scale'], face['letter_spacing']
+    pairs = face.get('kerning', {})
+    cursor, previous, old_scale = 0., '', 1.
+    shapes, left, right = [], float('inf'), -float('inf')
+    for char, (_, scale) in zip(chars, source):
+        cursor += pairs.get(previous+char, 0.)*stretch*min(scale, old_scale)
+        glyph = sm.glyph_for(char, font)
+        l, b, r, t = glyph['bounds']
+        if r > l and t > b:
+            shapes.append((glyph, cursor, scale))
+            left = min(left, cursor+l*stretch*scale)
+            right = max(right, cursor+r*stretch*scale)
+        cursor += (glyph['advance']+spacing)*stretch*scale
+        previous, old_scale = char, scale
+    return shapes, left, right
 
-    This default is an illustration estimate, not a national green-pole inventory.
-    White local registers must be explicit when mixed with green destinations.
-    """
+
+def legend_width(value, font):
+    shaped = legend_shape(value, font)
+    return shaped[2]-shaped[1] if shaped else sm.measure(value, font)[0]
+
+
+def registers(content, exit=False):
+    """Explicit registers first; otherwise separate listed green/local poles."""
     supplied = content.get('fr_blocks')
     if supplied:
         return [dict(names=[sm.clean(n) for n in b.get('names', ()) if sm.clean(n)],
@@ -57,8 +83,12 @@ def registers(content, exit=False):
     colour = content.get('colour')
     if colour not in ('blue', 'green', 'white', 'yellow'):
         routes = refs(content)
-        colour = ('blue' if not exit or any(r.startswith('A') for r in routes) else
-                  'green' if any(r.startswith('N') for r in routes) else 'white')
+        if exit and not any(r.startswith('A') for r in routes):
+            greens = [n for n in names[:6] if frdestinations.is_green(n)]
+            whites = [n for n in names[:6] if not frdestinations.is_green(n)]
+            return [dict(names=group, colour=colour, italic=False, distances=())
+                    for group, colour in ((greens, 'green'), (whites, 'white')) if group]
+        colour = 'blue'
     return [dict(names=names[:6], colour=colour, italic=False,
                  distances=content.get('distances', ()))]
 
@@ -74,7 +104,7 @@ def compose(content, exit=False, distance='', lanes=2, roadside=False, confirmat
     widths = []
     for b in blocks:
         font = face_font(b['colour'])
-        text = max(sm.measure(n, font)[0]*cap for n in b['names'])
+        text = max(legend_width(n, font)*cap for n in b['names'])
         widths.append(text + margin*2 + (.9 if confirmation and b['distances'] else 0.))
     width = max(2.8, max(widths, default=0.), lanes*3.25 if not exit and not roadside else 0.)
     width = min(7.2 if exit or roadside else 16., width)
@@ -187,12 +217,30 @@ def colour_index(colour):
 
 def text(mesh, value, x, z, cap, width, colour='white', left=False, italic=False):
     font = face_font(colour)
-    ink = sm.measure(value, font)[0]*cap
+    shaped = legend_shape(value, font)
+    ink = legend_width(value, font)*cap
     if left:
         x += min(ink, width)/2
     start = len(mesh.p)
-    mesh.text(value, z, -.045, cap, width, white=colour in ('blue', 'green'),
-              font_key=font, x_offset=x, centre_ink=True, uppercase=False)
+    if shaped:
+        shapes, lbound, rbound = shaped
+        height = min(cap, width/max(rbound-lbound, .01))
+        stretch = sm.face_font(font)['horizontal_scale']
+        origin = x-(lbound+rbound)*height/2
+        material = sm.GLYPH_WHITE if colour in ('blue', 'green') else sm.GLYPH
+        for glyph, cursor, scale in shapes:
+            l, b, r, t = glyph['bounds']
+            u0, v0, u1, v1 = glyph['uv']
+            baseline = z+height/2-height*scale
+            left_x = origin+(cursor+l*stretch*scale)*height
+            right_x = origin+(cursor+r*stretch*scale)*height
+            low_z, high_z = baseline+b*height*scale, baseline+t*height*scale
+            mesh.face(material, [(left_x,-.045,low_z),(right_x,-.045,low_z),
+                                 (right_x,-.045,high_z),(left_x,-.045,high_z)],
+                      [(u0,v0),(u1,v0),(u1,v1),(u0,v1)])
+    else:
+        mesh.text(value, z, -.045, cap, width, white=colour in ('blue', 'green'),
+                  font_key=font, x_offset=x, centre_ink=True, uppercase=False)
     if italic:
         # A geometric slant is an illustration of L4, not a supplied L4 font.
         inv = np.linalg.inv(mesh.axes)
@@ -332,7 +380,7 @@ def build(exits, overheads, origin):
             fr.board(mesh, 1.55, .65, bottom+.325, sm.WHITE, r=.035)
             text(mesh, 'SORTIE '+sign['label'].get('ref', ''), 0., bottom+.325, .18, 1.35)
             for off, base in zip(sign.get('post_offsets', (-.32, .32)), sign['bases']):
-                z = float(base-sign['centre'][2])
+                z = float(base-sign['centre'][2])-.22
                 mesh.box(sm.METAL, (off*1.55, .075, (bottom+.6+z)/2), (.035, .055, (bottom+.6-z)/2))
             continue
         else:
@@ -347,7 +395,7 @@ def build(exits, overheads, origin):
         bases = sign.get('bases', [sign['centre'][2]]*2)
         offsets = sign.get('post_offsets', (-.32, .32))
         for i, x in enumerate(off*plan['width'] for off in offsets):
-            base = float(bases[min(i, len(bases)-1)]-sign['centre'][2])
+            base = float(bases[min(i, len(bases)-1)]-sign['centre'][2])-.22
             top = bottom+plan['body_height']-.07
             mesh.box(sm.METAL, (x, .10, (base+top)/2), (.045, .055, (top-base)/2))
             for p in plan['panels']:

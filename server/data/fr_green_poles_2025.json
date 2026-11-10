@@ -1,0 +1,1836 @@
+{
+  "format": 1,
+  "official_source": "https://www.sdnsd.developpement-durable.gouv.fr/IMG/pdf/joe_20250503_0104_0020-2.pdf",
+  "transcription_source": "https://www.data.gouv.fr/datasets/liste-des-poles-verts-selon-le-journal-officiel-ndeg104-du-3-mai-2025",
+  "transcription_author": "Etienne Zind",
+  "license": "CC0-1.0",
+  "source_csv_sha256": "96bcf5bc78b6480571b64075fa9c7e9b0cce659ed21247fa565b0d50db4a0bc6",
+  "notes": "Fallback classification for French exit destinations. Explicit source registers/colours take precedence; green-pole status alone does not determine every itinerary colour.",
+  "rows": [
+    {
+      "name": "BORDEAUX",
+      "group": "V",
+      "department": "33"
+    },
+    {
+      "name": "CALAIS",
+      "group": "V",
+      "department": "62"
+    },
+    {
+      "name": "GRENOBLE",
+      "group": "V",
+      "department": "38"
+    },
+    {
+      "name": "LILLE",
+      "group": "V",
+      "department": "59"
+    },
+    {
+      "name": "LYON",
+      "group": "V",
+      "department": "69"
+    },
+    {
+      "name": "MARSEILLE",
+      "group": "V",
+      "department": "13"
+    },
+    {
+      "name": "METZ|NANCY",
+      "group": "V",
+      "department": "57|54"
+    },
+    {
+      "name": "NANTES",
+      "group": "V",
+      "department": "44"
+    },
+    {
+      "name": "NICE",
+      "group": "V",
+      "department": "06"
+    },
+    {
+      "name": "PARIS",
+      "group": "V",
+      "department": "75"
+    },
+    {
+      "name": "ROUEN",
+      "group": "V",
+      "department": "76"
+    },
+    {
+      "name": "STRASBOURG",
+      "group": "V",
+      "department": "67"
+    },
+    {
+      "name": "TOULON",
+      "group": "V",
+      "department": "83"
+    },
+    {
+      "name": "TOULOUSE",
+      "group": "V",
+      "department": "31"
+    },
+    {
+      "name": "AIX EN PROVENCE",
+      "group": "IV",
+      "department": "13"
+    },
+    {
+      "name": "AMIENS",
+      "group": "IV",
+      "department": "80"
+    },
+    {
+      "name": "ANGERS",
+      "group": "IV",
+      "department": "49"
+    },
+    {
+      "name": "ANGOULÊME",
+      "group": "IV",
+      "department": "16"
+    },
+    {
+      "name": "ANNECY",
+      "group": "IV",
+      "department": "74"
+    },
+    {
+      "name": "ARRAS",
+      "group": "IV",
+      "department": "62"
+    },
+    {
+      "name": "AVIGNON",
+      "group": "IV",
+      "department": "84"
+    },
+    {
+      "name": "BAYONNE",
+      "group": "IV",
+      "department": "64"
+    },
+    {
+      "name": "BESANÇON",
+      "group": "IV",
+      "department": "25"
+    },
+    {
+      "name": "BÉZIERS",
+      "group": "IV",
+      "department": "34"
+    },
+    {
+      "name": "BOULOGNE SUR MER",
+      "group": "IV",
+      "department": "62"
+    },
+    {
+      "name": "BOURGES",
+      "group": "IV",
+      "department": "18"
+    },
+    {
+      "name": "BREST",
+      "group": "IV",
+      "department": "29"
+    },
+    {
+      "name": "CAEN",
+      "group": "IV",
+      "department": "14"
+    },
+    {
+      "name": "CANNES",
+      "group": "IV",
+      "department": "06"
+    },
+    {
+      "name": "CERGY-PONTOISE",
+      "group": "IV",
+      "department": "95"
+    },
+    {
+      "name": "CHAMBÉRY",
+      "group": "IV",
+      "department": "73"
+    },
+    {
+      "name": "CHERBOURG EN COTENTIN",
+      "group": "IV",
+      "department": "50"
+    },
+    {
+      "name": "CLERMONT-FERRAND",
+      "group": "IV",
+      "department": "63"
+    },
+    {
+      "name": "COLMAR",
+      "group": "IV",
+      "department": "68"
+    },
+    {
+      "name": "DIJON",
+      "group": "IV",
+      "department": "21"
+    },
+    {
+      "name": "DOUAI",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "DUNKERQUE",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "ÉVRY",
+      "group": "IV",
+      "department": "91"
+    },
+    {
+      "name": "FORT DE FRANCE",
+      "group": "IV",
+      "department": "972"
+    },
+    {
+      "name": "FOS|MARTIGUES",
+      "group": "IV",
+      "department": "13"
+    },
+    {
+      "name": "ID2 CHARLES DE GAULLE",
+      "group": "IV",
+      "department": "77|93|95"
+    },
+    {
+      "name": "LA ROCHELLE",
+      "group": "IV",
+      "department": "17"
+    },
+    {
+      "name": "LE HAVRE",
+      "group": "IV",
+      "department": "76"
+    },
+    {
+      "name": "LE MANS",
+      "group": "IV",
+      "department": "72"
+    },
+    {
+      "name": "LENS",
+      "group": "IV",
+      "department": "62"
+    },
+    {
+      "name": "LIMOGES",
+      "group": "IV",
+      "department": "87"
+    },
+    {
+      "name": "LORIENT",
+      "group": "IV",
+      "department": "56"
+    },
+    {
+      "name": "MARNE LA VALLÉE",
+      "group": "IV",
+      "department": "77|93|94"
+    },
+    {
+      "name": "MAUBEUGE",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "METZ",
+      "group": "IV",
+      "department": "57"
+    },
+    {
+      "name": "MONTBÉLIARD",
+      "group": "IV",
+      "department": "25"
+    },
+    {
+      "name": "MONTPELLIER",
+      "group": "IV",
+      "department": "34"
+    },
+    {
+      "name": "MULHOUSE",
+      "group": "IV",
+      "department": "68"
+    },
+    {
+      "name": "NANCY",
+      "group": "IV",
+      "department": "54"
+    },
+    {
+      "name": "NÎMES",
+      "group": "IV",
+      "department": "30"
+    },
+    {
+      "name": "ORLÉANS",
+      "group": "IV",
+      "department": "45"
+    },
+    {
+      "name": "PAU",
+      "group": "IV",
+      "department": "64"
+    },
+    {
+      "name": "PERPIGNAN",
+      "group": "IV",
+      "department": "66"
+    },
+    {
+      "name": "POITIERS",
+      "group": "IV",
+      "department": "86"
+    },
+    {
+      "name": "REIMS",
+      "group": "IV",
+      "department": "51"
+    },
+    {
+      "name": "RENNES",
+      "group": "IV",
+      "department": "35"
+    },
+    {
+      "name": "ROANNE",
+      "group": "IV",
+      "department": "42"
+    },
+    {
+      "name": "ROUBAIX",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "SAINT BRIEUC",
+      "group": "IV",
+      "department": "22"
+    },
+    {
+      "name": "SAINT DENIS",
+      "group": "IV",
+      "department": "974"
+    },
+    {
+      "name": "SAINT ÉTIENNE",
+      "group": "IV",
+      "department": "42"
+    },
+    {
+      "name": "SAINT NAZAIRE",
+      "group": "IV",
+      "department": "44"
+    },
+    {
+      "name": "SAINT PIERRE",
+      "group": "IV",
+      "department": "974"
+    },
+    {
+      "name": "THIONVILLE",
+      "group": "IV",
+      "department": "57"
+    },
+    {
+      "name": "TOURCOING",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "TOURS",
+      "group": "IV",
+      "department": "37"
+    },
+    {
+      "name": "TROYES",
+      "group": "IV",
+      "department": "10"
+    },
+    {
+      "name": "TUNNEL SOUS LA MANCHE",
+      "group": "IV",
+      "department": "62"
+    },
+    {
+      "name": "VALENCE",
+      "group": "IV",
+      "department": "26"
+    },
+    {
+      "name": "VALENCIENNES",
+      "group": "IV",
+      "department": "59"
+    },
+    {
+      "name": "VERSAILLES",
+      "group": "IV",
+      "department": "78"
+    },
+    {
+      "name": "ABBEVILLE",
+      "group": "III",
+      "department": "80"
+    },
+    {
+      "name": "AGEN",
+      "group": "III",
+      "department": "47"
+    },
+    {
+      "name": "AIX LES BAINS",
+      "group": "III",
+      "department": "73"
+    },
+    {
+      "name": "AJACCIO",
+      "group": "III",
+      "department": "2A"
+    },
+    {
+      "name": "ALBERTVILLE",
+      "group": "III",
+      "department": "73"
+    },
+    {
+      "name": "ALBI",
+      "group": "III",
+      "department": "81"
+    },
+    {
+      "name": "ALENÇON",
+      "group": "III",
+      "department": "61"
+    },
+    {
+      "name": "ALÈS",
+      "group": "III",
+      "department": "30"
+    },
+    {
+      "name": "ANNEMASSE",
+      "group": "III",
+      "department": "74"
+    },
+    {
+      "name": "ANNONAY",
+      "group": "III",
+      "department": "07"
+    },
+    {
+      "name": "ANTIBES",
+      "group": "III",
+      "department": "06"
+    },
+    {
+      "name": "ANTONY",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "ARGENTEUIL",
+      "group": "III",
+      "department": "95"
+    },
+    {
+      "name": "ARLES",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "ARMENTIÈRES",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "ASNIÈRES SUR SEINE",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "AUBAGNE",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "AUBENAS",
+      "group": "III",
+      "department": "07"
+    },
+    {
+      "name": "AUBERVILLIERS",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "AUCH",
+      "group": "III",
+      "department": "32"
+    },
+    {
+      "name": "AULNAY SOUS BOIS",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "AURILLAC",
+      "group": "III",
+      "department": "15"
+    },
+    {
+      "name": "AUTUN",
+      "group": "III",
+      "department": "71"
+    },
+    {
+      "name": "AUXERRE",
+      "group": "III",
+      "department": "89"
+    },
+    {
+      "name": "BAR LE DUC",
+      "group": "III",
+      "department": "55"
+    },
+    {
+      "name": "BASSE-TERRE",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "BASSIN D'ARCACHON",
+      "group": "III",
+      "department": "33"
+    },
+    {
+      "name": "BASTIA",
+      "group": "III",
+      "department": "2B"
+    },
+    {
+      "name": "BEAUCAIRE|TARASCON",
+      "group": "III",
+      "department": "30|13"
+    },
+    {
+      "name": "BEAUNE",
+      "group": "III",
+      "department": "21"
+    },
+    {
+      "name": "BEAUVAIS",
+      "group": "III",
+      "department": "60"
+    },
+    {
+      "name": "BELFORT",
+      "group": "III",
+      "department": "90"
+    },
+    {
+      "name": "BERCK",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "BERGERAC",
+      "group": "III",
+      "department": "24"
+    },
+    {
+      "name": "BÉTHUNE",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "BLOIS",
+      "group": "III",
+      "department": "41"
+    },
+    {
+      "name": "BOBIGNY",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "BONDY",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "BONIFACIO",
+      "group": "III",
+      "department": "2A"
+    },
+    {
+      "name": "BOULOGNE-BILLANCOURT",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "BOURG EN BRESSE",
+      "group": "III",
+      "department": "01"
+    },
+    {
+      "name": "BOURGOIN-JALLIEU",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "BRIANÇON",
+      "group": "III",
+      "department": "05"
+    },
+    {
+      "name": "BRIVE LA GAILLARDE",
+      "group": "III",
+      "department": "19"
+    },
+    {
+      "name": "BRUAY LA BUISSIÈRE",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "CAHORS",
+      "group": "III",
+      "department": "46"
+    },
+    {
+      "name": "CALVI",
+      "group": "III",
+      "department": "2B"
+    },
+    {
+      "name": "CAMBRAI",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "CARCASSONNE",
+      "group": "III",
+      "department": "11"
+    },
+    {
+      "name": "CARMAUX",
+      "group": "III",
+      "department": "81"
+    },
+    {
+      "name": "CARPENTRAS",
+      "group": "III",
+      "department": "84"
+    },
+    {
+      "name": "CASTRES",
+      "group": "III",
+      "department": "81"
+    },
+    {
+      "name": "CAVAILLON",
+      "group": "III",
+      "department": "84"
+    },
+    {
+      "name": "CAYENNE",
+      "group": "III",
+      "department": "973"
+    },
+    {
+      "name": "CHALON SUR SAÔNE",
+      "group": "III",
+      "department": "71"
+    },
+    {
+      "name": "CHÂLONS EN CHAMPAGNE",
+      "group": "III",
+      "department": "51"
+    },
+    {
+      "name": "CHAMONIX-MONT-BLANC",
+      "group": "III",
+      "department": "74"
+    },
+    {
+      "name": "CHAMPIGNY SUR MARNE",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "CHANTILLY",
+      "group": "III",
+      "department": "60"
+    },
+    {
+      "name": "CHARLEVILLE-MÉZIÈRES",
+      "group": "III",
+      "department": "08"
+    },
+    {
+      "name": "CHARTRES",
+      "group": "III",
+      "department": "28"
+    },
+    {
+      "name": "CHÂTEAU-THIERRY",
+      "group": "III",
+      "department": "02"
+    },
+    {
+      "name": "CHÂTEAUROUX",
+      "group": "III",
+      "department": "36"
+    },
+    {
+      "name": "CHATELLERAULT",
+      "group": "III",
+      "department": "86"
+    },
+    {
+      "name": "CHAUMONT",
+      "group": "III",
+      "department": "52"
+    },
+    {
+      "name": "CHAUNY|TERGNIER",
+      "group": "III",
+      "department": "02"
+    },
+    {
+      "name": "CHELLES",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "CHOLET",
+      "group": "III",
+      "department": "49"
+    },
+    {
+      "name": "CITÉ DESCARTES",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "CLAMART",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "CLICHY",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "COGNAC",
+      "group": "III",
+      "department": "16"
+    },
+    {
+      "name": "COLOMBES",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "COMPIÈGNE",
+      "group": "III",
+      "department": "60"
+    },
+    {
+      "name": "CONFLANS SAINTE HONORINE",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "CORBEIL-ESSONNES",
+      "group": "III",
+      "department": "91"
+    },
+    {
+      "name": "CORTE",
+      "group": "III",
+      "department": "2B"
+    },
+    {
+      "name": "CREIL",
+      "group": "III",
+      "department": "60"
+    },
+    {
+      "name": "CRÉTEIL",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "DAX",
+      "group": "III",
+      "department": "40"
+    },
+    {
+      "name": "DEAUVILLE|TROUVILLE",
+      "group": "III",
+      "department": "14"
+    },
+    {
+      "name": "DECAZEVILLE",
+      "group": "III",
+      "department": "12"
+    },
+    {
+      "name": "DENAIN",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "DIEPPE",
+      "group": "III",
+      "department": "76"
+    },
+    {
+      "name": "DIGNE LES BAINS",
+      "group": "III",
+      "department": "04"
+    },
+    {
+      "name": "DINAN",
+      "group": "III",
+      "department": "22"
+    },
+    {
+      "name": "DINARD",
+      "group": "III",
+      "department": "35"
+    },
+    {
+      "name": "DOLE",
+      "group": "III",
+      "department": "39"
+    },
+    {
+      "name": "DRAGUIGNAN",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "DRANCY",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "DREUX",
+      "group": "III",
+      "department": "28"
+    },
+    {
+      "name": "ÉCHIROLLES",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "ELBEUF",
+      "group": "III",
+      "department": "76"
+    },
+    {
+      "name": "ÉPERNAY",
+      "group": "III",
+      "department": "51"
+    },
+    {
+      "name": "ÉPINAL",
+      "group": "III",
+      "department": "88"
+    },
+    {
+      "name": "ÉPINAY SUR SEINE",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "ÉTAMPES",
+      "group": "III",
+      "department": "91"
+    },
+    {
+      "name": "EU|LE TRÉPORT",
+      "group": "III",
+      "department": "76"
+    },
+    {
+      "name": "ÉVREUX",
+      "group": "III",
+      "department": "27"
+    },
+    {
+      "name": "FÉCAMP",
+      "group": "III",
+      "department": "76"
+    },
+    {
+      "name": "FIGEAC|DECAZEVILLE",
+      "group": "III",
+      "department": "46|12"
+    },
+    {
+      "name": "FIRMINY",
+      "group": "III",
+      "department": "42"
+    },
+    {
+      "name": "FLERS",
+      "group": "III",
+      "department": "61"
+    },
+    {
+      "name": "FOIX",
+      "group": "III",
+      "department": "09"
+    },
+    {
+      "name": "FONTAINEBLEAU",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "FONTENAY SOUS BOIS",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "FORBACH",
+      "group": "III",
+      "department": "57"
+    },
+    {
+      "name": "FOS SUR MER",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "FOUGÈRES",
+      "group": "III",
+      "department": "35"
+    },
+    {
+      "name": "FRÉJUS|SAINT RAPHAËL",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "GAP",
+      "group": "III",
+      "department": "05"
+    },
+    {
+      "name": "GENNEVILLIERS",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "GIVORS",
+      "group": "III",
+      "department": "69"
+    },
+    {
+      "name": "GRASSE",
+      "group": "III",
+      "department": "06"
+    },
+    {
+      "name": "GUEBWILLER",
+      "group": "III",
+      "department": "68"
+    },
+    {
+      "name": "GUÉRET",
+      "group": "III",
+      "department": "23"
+    },
+    {
+      "name": "HAGUENAU",
+      "group": "III",
+      "department": "67"
+    },
+    {
+      "name": "HAZEBROUCK",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "HÉNIN-BEAUMONT",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "HYÈRES",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "ID2 BLAGNAC",
+      "group": "III",
+      "department": "31"
+    },
+    {
+      "name": "ID2 EUROAIRPORT",
+      "group": "III",
+      "department": "68"
+    },
+    {
+      "name": "ID2 MARS. PROVENCE",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "ID2 MÉRIGNAC",
+      "group": "III",
+      "department": "33"
+    },
+    {
+      "name": "ID2 NICE CÔTE D'AZUR",
+      "group": "III",
+      "department": "06"
+    },
+    {
+      "name": "ID2 ORLY",
+      "group": "III",
+      "department": "91|94"
+    },
+    {
+      "name": "ID2 SAINT EXUPÉRY",
+      "group": "III",
+      "department": "69"
+    },
+    {
+      "name": "ÎLE DE NOIRMOUTIER",
+      "group": "III",
+      "department": "85"
+    },
+    {
+      "name": "ÎLE DE RÉ",
+      "group": "III",
+      "department": "17"
+    },
+    {
+      "name": "ÎLE D'OLÉRON",
+      "group": "III",
+      "department": "17"
+    },
+    {
+      "name": "ISSY LES MOULINEAUX",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "ISTRES",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "IVRY SUR SEINE",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "KOUROU",
+      "group": "III",
+      "department": "973"
+    },
+    {
+      "name": "LA BAULE-ESCOUBLAC",
+      "group": "III",
+      "department": "44"
+    },
+    {
+      "name": "LA CIOTAT",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "LA COURNEUVE",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "LA DÉFENSE",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "LA ROCHE SUR YON",
+      "group": "III",
+      "department": "85"
+    },
+    {
+      "name": "LA SEYNE SUR MER",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "LAGNY SUR MARNE",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "LANNION",
+      "group": "III",
+      "department": "22"
+    },
+    {
+      "name": "LAON",
+      "group": "III",
+      "department": "02"
+    },
+    {
+      "name": "LAVAL",
+      "group": "III",
+      "department": "53"
+    },
+    {
+      "name": "LE BLANC MESNIL",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "LE CREUSOT",
+      "group": "III",
+      "department": "71"
+    },
+    {
+      "name": "LE GOSIER",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "LE MONT SAINT MICHEL",
+      "group": "III",
+      "department": "50"
+    },
+    {
+      "name": "LE MOULE",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "LE PORT",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "LE PUY EN VELAY",
+      "group": "III",
+      "department": "43"
+    },
+    {
+      "name": "LE RAINCY",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "LE TAMPON",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "LE TOUQUET-PARIS-PLAGE",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "LES ABYMES",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "LES MUREAUX|MEULAN",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "LES SABLES D'OLONNE",
+      "group": "III",
+      "department": "85"
+    },
+    {
+      "name": "LEVALLOIS-PERRET",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "L'HAŸ LES ROSES",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "LIBOURNE",
+      "group": "III",
+      "department": "33"
+    },
+    {
+      "name": "L'ÎLE ROUSSE",
+      "group": "III",
+      "department": "2B"
+    },
+    {
+      "name": "LISIEUX",
+      "group": "III",
+      "department": "14"
+    },
+    {
+      "name": "L'ISLE D'ABEAU",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "LONGWY",
+      "group": "III",
+      "department": "54"
+    },
+    {
+      "name": "LONS LE SAUNIER",
+      "group": "III",
+      "department": "39"
+    },
+    {
+      "name": "LOURDES",
+      "group": "III",
+      "department": "65"
+    },
+    {
+      "name": "LUNÉVILLE",
+      "group": "III",
+      "department": "54"
+    },
+    {
+      "name": "MÂCON",
+      "group": "III",
+      "department": "71"
+    },
+    {
+      "name": "MAISONS-ALFORT",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "MANTES LA JOLIE",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "MARTIGUES",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "MAZAMET",
+      "group": "III",
+      "department": "81"
+    },
+    {
+      "name": "MEAUX",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "MELUN",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "MENDE",
+      "group": "III",
+      "department": "48"
+    },
+    {
+      "name": "MENTON",
+      "group": "III",
+      "department": "06"
+    },
+    {
+      "name": "MÉRIGNAC",
+      "group": "III",
+      "department": "33"
+    },
+    {
+      "name": "MILLAU",
+      "group": "III",
+      "department": "12"
+    },
+    {
+      "name": "MONT DE MARSAN",
+      "group": "III",
+      "department": "40"
+    },
+    {
+      "name": "MONTARGIS",
+      "group": "III",
+      "department": "45"
+    },
+    {
+      "name": "MONTAUBAN",
+      "group": "III",
+      "department": "82"
+    },
+    {
+      "name": "MONTCEAU LES MINES",
+      "group": "III",
+      "department": "71"
+    },
+    {
+      "name": "MONTÉLIMAR",
+      "group": "III",
+      "department": "26"
+    },
+    {
+      "name": "MONTEREAU-FAULT-YONNE",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "MONTLUÇON",
+      "group": "III",
+      "department": "03"
+    },
+    {
+      "name": "MONTMORENCY",
+      "group": "III",
+      "department": "95"
+    },
+    {
+      "name": "MONTREUIL",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "MONTROUGE",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "MORLAIX",
+      "group": "III",
+      "department": "29"
+    },
+    {
+      "name": "MOULINS",
+      "group": "III",
+      "department": "03"
+    },
+    {
+      "name": "NANTERRE",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "NARBONNE",
+      "group": "III",
+      "department": "11"
+    },
+    {
+      "name": "NEUFCHÂTEAU",
+      "group": "III",
+      "department": "88"
+    },
+    {
+      "name": "NEUILLY SUR SEINE",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "NEVERS",
+      "group": "III",
+      "department": "58"
+    },
+    {
+      "name": "NIORT",
+      "group": "III",
+      "department": "79"
+    },
+    {
+      "name": "NOGENT SUR MARNE",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "ORANGE",
+      "group": "III",
+      "department": "84"
+    },
+    {
+      "name": "OYONNAX",
+      "group": "III",
+      "department": "01"
+    },
+    {
+      "name": "PALAISEAU",
+      "group": "III",
+      "department": "91"
+    },
+    {
+      "name": "PANTIN",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "PÉRIGUEUX",
+      "group": "III",
+      "department": "24"
+    },
+    {
+      "name": "PESSAC",
+      "group": "III",
+      "department": "33"
+    },
+    {
+      "name": "POINTE À PITRE",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "POISSY",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "PONT À MOUSSON",
+      "group": "III",
+      "department": "54"
+    },
+    {
+      "name": "PONTARLIER",
+      "group": "III",
+      "department": "25"
+    },
+    {
+      "name": "PONTOISE",
+      "group": "III",
+      "department": "95"
+    },
+    {
+      "name": "PORTE DE PARIS",
+      "group": "III",
+      "department": "93|94"
+    },
+    {
+      "name": "PORTO-VECCHIO",
+      "group": "III",
+      "department": "2A"
+    },
+    {
+      "name": "PRIVAS",
+      "group": "III",
+      "department": "07"
+    },
+    {
+      "name": "PROPRIANO",
+      "group": "III",
+      "department": "2A"
+    },
+    {
+      "name": "PROVINS",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "QUIMPER",
+      "group": "III",
+      "department": "29"
+    },
+    {
+      "name": "RAMBOUILLET",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "RIOM",
+      "group": "III",
+      "department": "63"
+    },
+    {
+      "name": "ROCHEFORT",
+      "group": "III",
+      "department": "17"
+    },
+    {
+      "name": "RODEZ",
+      "group": "III",
+      "department": "12"
+    },
+    {
+      "name": "ROMANS SUR ISÈRE",
+      "group": "III",
+      "department": "26"
+    },
+    {
+      "name": "ROYAN",
+      "group": "III",
+      "department": "17"
+    },
+    {
+      "name": "RUEIL-MALMAISON",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "RUNGIS",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "SAINT AMAND LES EAUX",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "SAINT ANDRÉ",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "SAINT AVOLD",
+      "group": "III",
+      "department": "57"
+    },
+    {
+      "name": "SAINT CHAMOND",
+      "group": "III",
+      "department": "42"
+    },
+    {
+      "name": "SAINT DENIS",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "SAINT DIÉ DES VOSGES",
+      "group": "III",
+      "department": "88"
+    },
+    {
+      "name": "SAINT DIZIER",
+      "group": "III",
+      "department": "52"
+    },
+    {
+      "name": "SAINT FRANÇOIS",
+      "group": "III",
+      "department": "971"
+    },
+    {
+      "name": "SAINT GERMAIN EN LAYE",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "SAINT JEAN DE LUZ",
+      "group": "III",
+      "department": "64"
+    },
+    {
+      "name": "SAINT LAURENT",
+      "group": "III",
+      "department": "973"
+    },
+    {
+      "name": "SAINT LEU",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "SAINT LÔ",
+      "group": "III",
+      "department": "50"
+    },
+    {
+      "name": "SAINT LOUIS",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "SAINT MALO",
+      "group": "III",
+      "department": "35"
+    },
+    {
+      "name": "SAINT MARTIN D'HÈRES",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "SAINT MAUR DES FOSSÉS",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "SAINT OMER",
+      "group": "III",
+      "department": "62"
+    },
+    {
+      "name": "SAINT OUEN",
+      "group": "III",
+      "department": "93"
+    },
+    {
+      "name": "SAINT PAUL",
+      "group": "III",
+      "department": "974"
+    },
+    {
+      "name": "SAINT QUENTIN",
+      "group": "III",
+      "department": "02"
+    },
+    {
+      "name": "SAINT QUENTIN EN YVELINES",
+      "group": "III",
+      "department": "78"
+    },
+    {
+      "name": "SAINT TROPEZ",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "SAINTE MAXIME",
+      "group": "III",
+      "department": "83"
+    },
+    {
+      "name": "SAINTES",
+      "group": "III",
+      "department": "17"
+    },
+    {
+      "name": "SALON DE PROVENCE",
+      "group": "III",
+      "department": "13"
+    },
+    {
+      "name": "SARCELLES",
+      "group": "III",
+      "department": "95"
+    },
+    {
+      "name": "SARLAT LA CANÉDA",
+      "group": "III",
+      "department": "24"
+    },
+    {
+      "name": "SARREGUEMINES",
+      "group": "III",
+      "department": "57"
+    },
+    {
+      "name": "SARTÈNE",
+      "group": "III",
+      "department": "2A"
+    },
+    {
+      "name": "SAUMUR",
+      "group": "III",
+      "department": "49"
+    },
+    {
+      "name": "SEDAN",
+      "group": "III",
+      "department": "08"
+    },
+    {
+      "name": "SÉLESTAT",
+      "group": "III",
+      "department": "67"
+    },
+    {
+      "name": "SÉNART",
+      "group": "III",
+      "department": "77|91"
+    },
+    {
+      "name": "SENLIS",
+      "group": "III",
+      "department": "60"
+    },
+    {
+      "name": "SENS",
+      "group": "III",
+      "department": "89"
+    },
+    {
+      "name": "SÈTE",
+      "group": "III",
+      "department": "34"
+    },
+    {
+      "name": "SISTERON",
+      "group": "III",
+      "department": "04"
+    },
+    {
+      "name": "SOISSONS",
+      "group": "III",
+      "department": "02"
+    },
+    {
+      "name": "SURESNES",
+      "group": "III",
+      "department": "92"
+    },
+    {
+      "name": "TARBES",
+      "group": "III",
+      "department": "65"
+    },
+    {
+      "name": "THIERS",
+      "group": "III",
+      "department": "63"
+    },
+    {
+      "name": "THONON|ÉVIAN",
+      "group": "III",
+      "department": "74"
+    },
+    {
+      "name": "TOUL",
+      "group": "III",
+      "department": "54"
+    },
+    {
+      "name": "TULLE",
+      "group": "III",
+      "department": "19"
+    },
+    {
+      "name": "VAL DE BUSSY",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VAL DE LAGNY",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VAL D'EUROPE",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VAL MAUBUÉE CENTRE",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VAL MAUBUÉE NORD",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VAL MAUBUÉE SUD",
+      "group": "III",
+      "department": "77"
+    },
+    {
+      "name": "VANNES",
+      "group": "III",
+      "department": "56"
+    },
+    {
+      "name": "VERDUN",
+      "group": "III",
+      "department": "55"
+    },
+    {
+      "name": "VERNON",
+      "group": "III",
+      "department": "27"
+    },
+    {
+      "name": "VESOUL",
+      "group": "III",
+      "department": "70"
+    },
+    {
+      "name": "VICHY",
+      "group": "III",
+      "department": "03"
+    },
+    {
+      "name": "VIENNE",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "VIERZON",
+      "group": "III",
+      "department": "18"
+    },
+    {
+      "name": "VILLEFRANCHE SUR SAÔNE",
+      "group": "III",
+      "department": "69"
+    },
+    {
+      "name": "VILLEJUIF",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "VILLENEUVE D'ASCQ",
+      "group": "III",
+      "department": "59"
+    },
+    {
+      "name": "VILLENEUVE SUR LOT",
+      "group": "III",
+      "department": "47"
+    },
+    {
+      "name": "VINCENNES",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "VITRY LE FRANÇOIS",
+      "group": "III",
+      "department": "51"
+    },
+    {
+      "name": "VITRY SUR SEINE",
+      "group": "III",
+      "department": "94"
+    },
+    {
+      "name": "VOIRON",
+      "group": "III",
+      "department": "38"
+    },
+    {
+      "name": "WATTRELOS",
+      "group": "III",
+      "department": "59"
+    }
+  ]
+}

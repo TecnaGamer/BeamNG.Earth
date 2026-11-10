@@ -111,7 +111,8 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
             if french:
                 import frmotorway_layout
                 kwargs = dict(profile=frmotorway_layout.roadside_size,
-                              advance_stations=((1000., '1000 m'), (500., '500 m')))
+                              advance_stations=((1000., '1000 m'), (500., '500 m')),
+                              roadside_side=1, ground_clearance=.45)
             placed = exitsigns.place(frame, [obj], (), area, elev, chunks, left_hand, mph,
                                       pavements=pavements, ramp_mains=mains, **kwargs)
             roadside.extend(placed)

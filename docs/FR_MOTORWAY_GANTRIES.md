@@ -14,7 +14,12 @@ with compact separate colour registers. Cartouches and S-itinerary insets are
 separate backed panels. Rear rails/clamps connect every register to the beam,
 including a short face beside a taller stack. Posts follow sampled ground.
 
-Advance boards remain roadside at 1000/500 m when the source approach permits.
+Advance boards remain on the right shoulder at 1000/500 m when the source
+approach permits, independently of the mapped branch side. Branch arrows and
+overhead panels still use that actual exit direction. Sloping ground is sampled
+at each foot: the panel stays at least 0.45 m above the highest foot and 2.2 m
+above the road, with posts embedded 0.22 m. Longitudinal overlap moves preserve
+the road-height reference and the right-hand mounting side.
 Motorway decision assemblies try 35/75/130/200 m before the split when a bridge
 or support conflict blocks a nearer station. Failed overhead planning retains
 roadside information. Asymmetric French panel bounds determine support spans;
@@ -36,9 +41,13 @@ contract used by other renderers.
 at A6 exit 26 northbound, A4 exit 18 westbound and A355 exit 2 northeastbound.
 Matching requires exit number, local junction position and incoming direction;
 opposite carriageways and distant same-numbered exits are unaffected. Elsewhere,
-explicit colour registers take precedence; N-road exits have a green-block
-estimate and other exits retain conservative route-based colour selection.
-This is not a complete national inventory of green poles or physical signs.
+explicit colour registers take precedence. Other exits split exact destination
+matches from the official 2025 green-pole list into a green register above local
+white names. Exit branches explicitly identified as motorways retain blue.
+Green-pole status is not determined by prefecture/subprefecture status alone,
+and this fallback cannot reconstruct every signed itinerary: mapped or reviewed
+colours override it. See `server/data/fr_green_poles.NOTICE.md` for provenance.
+No extra destination is invented when it is absent from the source labels.
 
 The supplied SVG is a visual reference for proportions/lane-arrow arrangements,
 not redistributed artwork. Junction coordinates derive from the 2026-11-07 OSM
@@ -55,6 +64,11 @@ secondary italic text is a geometric slant, not an official L4 font. The source
 TTF is unmodified; its attribution/licence remains bundled. See
 `tools/fonts/town/Typoroute-SOURCE.md` and `NOTICE.md`. Install the atlas and its
 JSON metrics together; `start.py` redeploys changed mod assets on the next launch.
+
+Unicode superscript letters in destination names (for example `Clermont-Fᵈ`)
+reuse ordinary atlas glyphs, reduced and raised in the mesh. Their measured
+envelope follows the same shaping, so a missing modifier-letter glyph no longer
+renders as `?`; no shared atlas repack is needed.
 
 Supports/stations remain estimated game scenery, not surveyed reproductions or
 certified manufacturing drawings. Regional activation, town signs, roads,
@@ -73,3 +87,12 @@ country isolation, metadata failures and texture/atlas assets.
 from production placement, triangles, UVs and atlas on representative test roads.
 They were visually inspected. BeamNG is unavailable here; the installed result
 still needs an in-game check at the supplied locations.
+
+### Right shoulder and destination-register follow-up
+
+`test_fr_exit_legends` adds coverage for both exit-36 source labels, raised D
+UVs/alignment, green-pole aliases and exact matches, explicit-colour precedence,
+actual left-branch arrows with right-side announcements, independently grounded
+feet on a bank, and collision moves preserving the road-height reference.
+`tools/preview_fr_exit_corrections.py` renders the production face and a synthetic
+sloping-road cross-section. These previews are not BeamNG captures.

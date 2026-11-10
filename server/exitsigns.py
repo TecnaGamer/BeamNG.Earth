@@ -364,7 +364,7 @@ def _on_deck(point, chunks, radius):
 
 
 def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, height,
-               distance_text='', distance_m=0., state=None):
+               distance_text='', distance_m=0., state=None, ground_clearance=2.4):
     right = np.array([travel[1], -travel[0]])
     if state is None:
         la, lo, _ = frame.enu_to_geodetic(float(centre[0]), float(centre[1]), 0.)
@@ -374,17 +374,21 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
     posts = np.array([centre + right * width * off for off in offsets])
     bases = np.array([_ground_z(frame, elev, p) for p in posts])
     z = _ground_z(frame, elev, centre)
-    bottom = max(float(bases.max()) + 2.4, float(road_point[2]) + 2.2)
+    bottom = max(float(bases.max()) + ground_clearance, float(road_point[2]) + 2.2)
     label = obj['exit']['label']
-    return dict(id=obj['id'], kind=kind, label=label, style=sign_style(label), state=state,
+    result = dict(id=obj['id'], kind=kind, label=label, style=sign_style(label), state=state,
                 centre=[float(centre[0]), float(centre[1]), z], travel=travel.tolist(), side=side,
                 road_point=np.asarray(road_point[:2]).tolist(),
                 bottom=bottom, width=width, height=height, bases=bases.tolist(), post_offsets=list(offsets),
                 distance=distance_text, advance_m=distance_m)
+    if ground_clearance != 2.4:
+        result['ground_clearance'] = ground_clearance
+    return result
 
 
 def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True, link_ids=(),
-          pavements=None, ramp_mains=None, profile=None, advance_stations=None):
+          pavements=None, ramp_mains=None, profile=None, advance_stations=None,
+          roadside_side=None, ground_clearance=2.4):
     """Place OSM destination signs along the generated mainline and in clear exit gores.
 
     Choose one clear gore on the full generated pavement, then test tile ownership.
@@ -430,6 +434,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
         if full is None or ramp_end is None:
             continue
         label, side = extra['label'], int(extra['side'])
+        mount_side = side if roadside_side is None else int(roadside_side)
         stations = ((ADVANCE_MPH_STATIONS if mph else ((ADVANCE_METRIC, '500 m'),))
                     if advance_stations is None else advance_stations) + ((DECISION_M, ''),)
         for distance, text in stations:
@@ -452,7 +457,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             # The fourth row value is its generated ribbon width. Its cross-section can
             # vary through lane-count changes, rather than being the native Spec width.
             edge = abs((cross[k]*(1.-t)+cross[k+1]*t)@right)*paved_width/2.
-            centre = at[:2] + right * side * (edge + 2. + width / 2.)
+            centre = at[:2] + right * mount_side * (edge + 2. + width / 2.)
             # Never put a panel in a nearby road's pavement or on a bridge deck (a ramp still mapped as a bridge where it
             # comes down: not in the ground pavements; an EXIT 3 panel stood in the Fallsway's lane where the Jones
             # Falls Expressway's Guilford Avenue ramp lands, Baltimore 2026-10-29). Advance panels too.
@@ -460,12 +465,16 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             for _ in range(12):
                 if _clear(centre, width/2+.5, polygons) and not _on_deck(centre, chunks, width/2+1.):
                     break
-                centre += right*side
+                centre += right*mount_side
             else:
                 continue
             if not (x0 <= centre[0] < x1 and y0 <= centre[1] < y1) or _on_deck(at[:2], chunks, 2.):
                 continue
-            out.append(_make_sign(obj, kind, centre, travel, at, frame, elev, side, width, height, text, distance, state))
+            sign = _make_sign(obj, kind, centre, travel, at, frame, elev, side, width, height,
+                              text, distance, state, ground_clearance=ground_clearance)
+            if roadside_side is not None:
+                sign['mount_side'] = mount_side
+            out.append(sign)
 
         width, height = size(label, 'ramp')
         candidate = _gore(extra, approach, ramp, pavements, ramp_mains, width)
