@@ -8,6 +8,8 @@ import os
 import struct
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.parse
 import zipfile
@@ -243,6 +245,64 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(info["source"], "hk")
         self.assertAlmostEqual(info["offset"], 11.0 - 8.0, delta=0.5)
         np.testing.assert_allclose(z, 20.0 - info["offset"], atol=1e-6)
+
+
+class SlowFetcher(FakeFetcher):
+    def get(self, url, **kw):
+        if urllib.parse.urlsplit(url).hostname == "bulkdata.csdi.gov.hk":
+            time.sleep(0.5)
+        return super().get(url, **kw)
+
+
+class SheetOnceTest(unittest.TestCase):
+    """Two processes (two RoadZ: no lock in common but the disk) after one sheet: one download."""
+
+    def test_a_sheet_another_process_reads_is_waited_for(self):
+        fetcher = SlowFetcher()
+        with tempfile.TemporaryDirectory() as d:
+            sheet = fetcher.sheets[0][0]["attributes"]
+            a, b = roadz.RoadZ(d, fetcher, None), roadz.RoadZ(d, fetcher, None)
+            ta = threading.Thread(target=a._hk_sheet, args=("dtm", sheet["TILE_NAME"], sheet["URL"]))
+            ta.start()
+            time.sleep(0.1)
+            got = b._hk_sheet("dtm", sheet["TILE_NAME"], sheet["URL"])
+            ta.join()
+        self.assertEqual(got.w, 100)
+        self.assertEqual(len(fetcher.downloads), 1)
+
+
+@unittest.skipUnless(NATIVE, "earthfast roadz kernels")
+class ColdCellTest(unittest.TestCase):
+    """A cold cell's sheets are waited for as the lidar's are (gap_answers): the inference within LIDAR_GAPS_WAIT_S for
+    the rest of the run and nothing planned on it kept, while the read goes on; the next run measures."""
+
+    def observe(self, rz):
+        ll = np.array([[LON0 + 100 / 1e5, LAT0 + 20 / 1.1e5], [LON0 + 100 / 1e5, LAT0 + 100 / 1.1e5]])
+        frame = geodesy.EnuFrame(LAT0, LON0)
+        e, n, _ = frame.geodetic_to_enu(np.linspace(ll[0, 1], ll[1, 1], 30), np.full(30, ll[0, 0]), 0.0)
+        with mock.patch.object(roadz, "sources_at", lambda lat, lon, lidar=None: ["hk"]):
+            return rz.observed(frame, np.c_[e, n], 4.0, 1, "")
+
+    def test_inference_meanwhile_measured_next_run(self):
+        import revisit
+        md = SimpleNamespace(dem=SimpleNamespace(sample=lambda la, lo, z: np.full(np.shape(la), 8.0)))
+        fetcher = SlowFetcher()
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(roadz, "LIDAR_GAPS_WAIT_S", 0.2):
+            with mock.patch.dict(os.environ, {roadz.SESSION_ENV: "run1"}):
+                rz = roadz.RoadZ(d, fetcher, md)
+                l0, t0 = revisit.thread_lidar_faults(), time.monotonic()
+                self.assertIsNone(self.observe(rz))
+                self.assertLess(time.monotonic() - t0, 0.45, "waited for the sheets")
+                self.assertGreater(revisit.thread_lidar_faults(), l0, "planned on the inference: not kept")
+                for t in threading.enumerate():
+                    if t.name == "roadz-gaps":
+                        t.join()
+                self.assertTrue(os.path.exists(rz._path("hk", KEY)), "read on to the end")
+                self.assertIsNone(self.observe(rz), "the run's decision")
+            with mock.patch.dict(os.environ, {roadz.SESSION_ENV: "run2"}):
+                z = self.observe(roadz.RoadZ(d, fetcher, md))
+        self.assertIsNotNone(z)
+        self.assertEqual(len(fetcher.downloads), 4, "each sheet once")
 
 
 class NotSharedTest(unittest.TestCase):

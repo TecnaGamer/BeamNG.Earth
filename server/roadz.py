@@ -13,7 +13,8 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
   750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's low reads across the carriageway, none in a tunnel
   or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
-  The sheets a cell reads are kept in a size-capped folder (BNE_ROADZ_HK_SHEETS_MB) for its neighbours. Its heights
+  The sheets a cell reads are kept in a size-capped folder (BNE_ROADZ_HK_SHEETS_MB) for its neighbours; a road build
+  waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its heights
   are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share or
   baked pack).
 - "lidar": the US, USGS 3DEP point clouds (Entwine Point Tiles on AWS, public domain): for every road bridge of the
@@ -90,8 +91,8 @@ HK_SHEET_HOST = "bulkdata.csdi.gov.hk"
 HK_PAGE = 2000              # (the service's maxRecordCount: 3000)
 HK_PAGES = 20
 HK_IDS = 200                # OBJECTIDs a request (its URL under the service's limit: 2.4 kB answered 404, 1.8 kB not)
-HK_FETCH_THREADS = 4        # sheets read at once (bulkdata.csdi.gov.hk's policy: 4)
-HK_SHEETS_MB = float(os.environ.get("BNE_ROADZ_HK_SHEETS_MB", "1024"))
+HK_FETCH_THREADS = 4        # sheets downloaded at once a process (bulkdata.csdi.gov.hk's policy: 4)
+HK_SHEETS_MB = float(os.environ.get("BNE_ROADZ_HK_SHEETS_MB", "2048"))   # (one Sha Tin place: 240 sheets, 1.3 GB)
 EPT_BASE = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/"
 EPT_R = 6378137.0           # EPSG:3857's sphere
 
@@ -136,6 +137,11 @@ LIDAR_GAP_END_TOL_M = 1.5
 LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
+# the sources a road build waits that long at most for a cell of, the inference for the rest of the run meanwhile
+# (gap_answers). Hong Kong's read goes on where the lidar's stops (_read): its heights apply only once each sheet of the
+# cell is kept, 167 MB in 62 s for a dense one (a cold place planned in 647 s, 115 s with it off; 2026-11-10), and the
+# server's processes read each sheet once (_hk_sheet)
+DEFERRED = ("lidar", "hk")
 # once a cell's lidar has missed LIDAR_GAPS_WAIT_S in this process (a slow connection, a busy source), the next cells
 # wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
 # (2026-11-05); those left to the rule are faults (built again with their lidar on a later visit)
@@ -579,20 +585,27 @@ class RoadZ:
         self._ept = {}                      # dataset name -> Ept
         self._lock = threading.Lock()
         self._cell_locks = {}
+        self._hk_slots = threading.BoundedSemaphore(HK_FETCH_THREADS)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self.enabled = ON                   # (the probes measure with it on whatever BNE_ROADZ says)
         self.lidar = LIDAR_ON
 
     # ---- cells ----
-    def lidar_wanted(self, key):
-        """Do this cell's road heights read the US lidar (gap_answers)? No network."""
+    def lidar_sources(self, key):
+        """The DEFERRED sources (a LiDAR: the US's, Hong Kong's) this cell's road heights read. No network."""
+        if not self.enabled or self.fetcher is None:
+            return []
         la, lo = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).center()
-        return bool(self.enabled and self.lidar and self.fetcher is not None and "lidar" in sources_at(la, lo, True))
+        return [s for s in sources_at(la, lo, self.lidar) if s in DEFERRED]
+
+    def lidar_wanted(self, key):
+        """Do this cell's road heights read a LiDAR (gap_answers)? No network."""
+        return bool(self.lidar_sources(key))
 
     def lidar_on_disk(self, key):
-        """Is this cell's lidar kept on disk already? No network."""
-        p = self._path("lidar", mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])))
-        return bool(p and os.path.exists(p))
+        """Is this cell's LiDAR kept on disk already? No network."""
+        k = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
+        return all(p and os.path.exists(p) for p in (self._path(s, k) for s in self.lidar_sources(k)))
 
     def _path(self, src, key):
         import roads
@@ -795,7 +808,7 @@ class RoadZ:
 
     def _hk_sheet(self, layer, name, url):
         """The roadzhk.Sheet of a LiDAR sheet: from the kept sheets (the least recently read of them dropped past
-        HK_SHEETS_MB) or downloaded."""
+        HK_SHEETS_MB) or downloaded, by one of the server's processes (xproc: the others read it when it is kept)."""
         u = urllib.parse.urlsplit(url)
         if u.scheme != "https" or u.hostname != HK_SHEET_HOST or not re.fullmatch(r"[0-9A-Z]{4,8}", name):
             raise ValueError(f"LiDAR sheet {name!r}: {url!r}")
@@ -803,25 +816,48 @@ class RoadZ:
         with self._lock:
             lock = self._cell_locks.setdefault(("hksheet", layer, name), threading.Lock())
         with lock:
-            if p and os.path.exists(p):
+            got = self._hk_kept(p) if p else None
+            if got is not None:
+                return got
+            # (HK_FETCH_THREADS downloads a process: the cells built side by side (gap_answers) queued past netfetch's
+            # max_wait for the host's request slots, and their builds failed)
+            with self._hk_slots:
+                mine = False
+                if p:
+                    import xproc
+                    got, mine = xproc.once(p + ".lock", lambda: self._hk_kept(p), xproc.STALE_S)
+                    if got is not None:
+                        return got
                 try:
-                    with open(p, "rb") as fh:
-                        got = roadzhk.Sheet(fh.read())
-                    os.utime(p)
-                    return got
-                except (OSError, ValueError, zipfile.BadZipFile) as e:
-                    log.debug("roadz hk sheet %s: %s", p, e)
-            body = self._fetch(urllib.parse.urlunsplit(u._replace(path=urllib.parse.quote(u.path))))
-            got = roadzhk.Sheet(body)
+                    body = self._fetch(urllib.parse.urlunsplit(u._replace(path=urllib.parse.quote(u.path))))
+                    got = roadzhk.Sheet(body)
+                    if p:
+                        import staging
+                        os.makedirs(os.path.dirname(p), exist_ok=True)
+                        tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+                        with open(tmp, "wb") as fh:
+                            fh.write(body)
+                        staging.replace_cached(tmp, p)
+                finally:
+                    if mine:
+                        xproc.release(p + ".lock")
             if p:
-                import staging
-                os.makedirs(os.path.dirname(p), exist_ok=True)
-                tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
-                with open(tmp, "wb") as fh:
-                    fh.write(body)
-                staging.replace_cached(tmp, p)
                 self._hk_trim()
             return got
+
+    @staticmethod
+    def _hk_kept(p):
+        """The kept sheet at p (its use noted for _hk_trim), or None."""
+        try:
+            with open(p, "rb") as fh:
+                got = roadzhk.Sheet(fh.read())
+            os.utime(p)
+            return got
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError, zipfile.BadZipFile) as e:
+            log.debug("roadz hk sheet %s: %s", p, e)
+            return None
 
     def _hk_trim(self):
         """The kept LiDAR sheets cut back to HK_SHEETS_MB, the least recently read first."""
@@ -1211,13 +1247,16 @@ class RoadZ:
         self._sdir = got
         return got
 
-    def _decide(self, key, gaps):
-        """This session's decision for cell key: gaps (a list, or None: the rule) unless a process decided first, whose
-        decision is taken (a file made once: os.link fails when it is there)."""
+    def _decision(self, src, key):
         d = self._session_dir()
-        if d is None:
+        return os.path.join(d, f"{src}_{key.z}_{key.x}_{key.y}.json") if d else None
+
+    def _decide(self, key, gaps, src="lidar"):
+        """This session's decision for cell key's source src: gaps (a list, or None: the rule) unless a process decided
+        first, whose decision is taken (a file made once: os.link fails when it is there)."""
+        p = self._decision(src, key)
+        if p is None:
             return gaps
-        p = os.path.join(d, f"{key.z}_{key.x}_{key.y}.json")
         if not os.path.exists(p):
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
@@ -1238,19 +1277,19 @@ class RoadZ:
         except (OSError, ValueError, KeyError, TypeError):
             return gaps
 
-    def gap_answers(self, keys):
+    def gap_answers(self, keys, src="lidar"):
         """{key: [(fid, lon / lat from, lon / lat to)] the cell's elevated ground stretches, or None: the rule} for the
         cells keys (the cells holding the deck ends of a roads layer's candidates), the same in every process of this
         server run: the cell's lidar (built if need be, LIDAR_GAPS_WAIT_S at most, in parallel) or this run's decision.
-        A cell left to the rule is a revisit fault (no cached ranges from it). [] outside the lidar's reach."""
+        A cell left to the rule is a revisit fault (no cached ranges from it). [] outside the lidar's reach. src: the
+        DEFERRED source asked ("hk": [] once the cell's lines are built, None: the inference)."""
         out, todo = {}, []
         for key in keys:
             key = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2]))
-            la, lo = key.center()
-            if not self.enabled or not self.lidar or self.fetcher is None or "lidar" not in sources_at(la, lo, True):
+            if src not in self.lidar_sources(key):
                 out[key] = []
                 continue
-            mk = ("gapans", str(key))
+            mk = ("gapans", src, str(key))
             with self._lock:
                 got = self._off.get(mk, ...)
             if got is not ...:
@@ -1265,15 +1304,14 @@ class RoadZ:
 
             def build(key):
                 try:
-                    ln = self.lines("lidar", key)
+                    ln = self.lines(src, key)
                     done[str(key)] = None if ln is None else list(getattr(ln, "gaps", []))
                 except Exception as e:
-                    log.debug("roadz lidar gaps %s: %s: %s", key, type(e).__name__, e)
+                    log.debug("roadz %s gaps %s: %s: %s", src, key, type(e).__name__, e)
                     done[str(key)] = None
             threads = []
             for key in todo:
-                d = self._session_dir()
-                p = os.path.join(d, f"{key.z}_{key.x}_{key.y}.json") if d else None
+                p = self._decision(src, key)
                 if p and os.path.exists(p):
                     continue                # (decided already: _decide reads it)
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
@@ -1285,25 +1323,25 @@ class RoadZ:
             if any(t.is_alive() for t in threads):
                 self._gaps_slow = True          # (LIDAR_GAPS_SLOW_WAIT_S from now on)
             for key in todo:
-                got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
+                got = self._decide(key, done.get(str(key)), src)    # (not built in time: None, the rule)
                 if got is None:
                     import revisit
                     revisit.fault(lidar=True)
                     self._dropped.add(str(key))     # (its read, still going, stops: _read)
                 with self._lock:
-                    self._off[("gapans", str(key))] = got
+                    self._off[("gapans", src, str(key))] = got
                 out[key] = got
         return out
 
-    def _lidar_skipped(self, keys):
-        """Does this server run go without the lidar of one of these cells? Its decision for each (gap_answers, the cells
+    def _lidar_skipped(self, keys, src="lidar"):
+        """Does this server run go without src (a lidar) for one of these cells? Its decision for each (gap_answers, the cells
         at once: the lidar built
         within LIDAR_GAPS_WAIT_S, else the rule for the whole run, the same in every process), so a road tile never
         waits for a cell's whole read: up to LIDAR_NODES_MAX nodes, ~50 MB a cell, ~1.5 GB of a 20 km drive through
         Seattle, and its tiles waited 18 s on average, 86 s at most, on a slow connection (BNGE_NET_MBPS=1,
         2026-11-04). The read goes on and is kept for the next run; a tile built without it is not cached."""
         try:
-            return any(v is None for v in self.gap_answers(keys).values())
+            return any(v is None for v in self.gap_answers(keys, src).values())
         except Exception as e:
             log.debug("roadz lidar decision %s: %s: %s", keys, type(e).__name__, e)
             return False
@@ -1387,7 +1425,7 @@ class RoadZ:
         qdir = np.ascontiguousarray(d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
             segs, segz, oks, cells = [], [], [], []
-            if src == "lidar" and self._lidar_skipped(keys):
+            if src in DEFERRED and self._lidar_skipped(keys, src):
                 return None                 # (this run goes without a cell's lidar: the inference, every process)
             for k in keys:
                 ln = self.lines(src, k)
