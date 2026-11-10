@@ -242,6 +242,15 @@ M.CATALOG = {
   -- a rigid portal's posts (the girder between them is the tile's wire mesh: server catenary.portal_wires)
   catpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_su', 10.4 } },
   catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
+  -- the Mediterranean basin's Cs climates (server vegetation.G_MEDITERRANEAN): Italy's own trees, already loaded with
+  -- its folder (MATERIALS); heights measured from the shapes' bounds (the asset survey, 2026-11-10)
+  mediterranean = {
+    { IT .. 'trees/trees_italy/olive', 4.3 }, { IT .. 'trees/trees_italy/holm_oak_city_small', 5.6 },
+    { IT .. 'trees/trees_italy/cypress_tree', 7.2 }, { IT .. 'trees/trees_italy/holm_oak_city_tall', 9.6 },
+    { IT .. 'trees/trees_italy/cork_oak_medium', 11.2 }, { IT .. 'trees/trees_italy/maritime_pine_2', 11.9 },
+    { IT .. 'trees/trees_italy/maritime_pine', 12.0 }, { IT .. 'trees/trees_italy/holm_oak', 12.9 },
+    { IT .. 'trees/trees_italy/cork_oak_large_1', 13.9 },
+  },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },

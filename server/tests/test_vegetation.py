@@ -271,6 +271,16 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 26.2, -98.2, 50, u=0.1), veg.G_PALM, "McAllen street trees")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 25.8, -80.2, 50, u=0.9), veg.G_DECIDUOUS)
 
+    def test_mediterranean(self):
+        """The Mediterranean basin's Cs climates take Italy's trees (holm / cork oaks, olives, maritime pines,
+        cypresses) for most broadleaves and conifers; Munich and California keep theirs."""
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 50, u=0.5), veg.G_MEDITERRANEAN, "Rome")
+        self.assertEqual(self.g(veg.G_CONIFER, 15, 43.3, 5.37, 10, u=0.5), veg.G_MEDITERRANEAN, "Marseille")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 10, u=0.95), veg.G_DECIDUOUS, "a share stays")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 48.14, 11.58, 50, u=0.1), veg.G_DECIDUOUS, "Munich")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 34.05, -118.25, 10, u=0.5), veg.G_OAK_WEST, "California")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 41.9, 12.5, 10, u=0.1), veg.G_SHRUB, "bushes are not trees")
+
     def test_beyond_north_america(self):
         """2026-10-15: Douglas firs in Punjab's fields; the Sahara's bushes were the East's."""
         self.assertLess(float(veg._conifer_share(30.9, 75.8)), 0.1, "Punjab: hardly any conifers")

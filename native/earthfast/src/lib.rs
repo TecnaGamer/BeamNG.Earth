@@ -5074,13 +5074,19 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
 /// juniper, desert_shrub, desert_rock, oak_west, tropical); wc: WorldCover's (shrub, bare, grass, built) classes.
 /// Palms are most town trees only where they are in life: South Florida, the Rio Grande Valley, coastal Southern
 /// California, the tropics; a few along the rest of the Gulf Coast (GitHub #110: Houston and Austin were mostly palms,
-/// in life live oaks and loblolly pines). The Southeast's conifers are pines.
+/// in life live oaks and loblolly pines). The Southeast's conifers are pines. med (per item) / g_med: the Mediterranean
+/// basin's Cs climates (vegetation.mediterranean): most broadleaves and conifers there are its own (holm and cork oaks,
+/// olives, maritime pines, cypresses: Italy's stock trees), MED_SHARE of them (more in town).
 #[pyfunction]
+#[pyo3(signature = (group, height, lat, lon, lcls, u, ids, wc, med=None, g_med=255))]
 #[allow(clippy::too_many_arguments)]
 fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, height: PyReadonlyArray1<'py, f64>,
                         lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
-                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4])
+                        lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4],
+                        med: Option<PyReadonlyArray1<'py, bool>>, g_med: u8)
                         -> Bound<'py, PyArray1<u8>> {
+    const MED_SHARE: (f64, f64) = (0.75, 0.9);      // (open country, in town)
+    let med = med.map(|m| m.as_array().to_vec());
     let (group, height, lat, lon, lcls, u) = (group.as_array(), height.as_array(), lat.as_array(), lon.as_array(),
                                                lcls.as_array(), u.as_array());
     let [g_dec, g_con, g_shrub, g_rock, g_pine_w, g_palm, g_juniper, g_dshrub, g_drock, g_oak_w, g_trop] = ids;
@@ -5131,6 +5137,12 @@ fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, heigh
         }
         if tropics && g == g_dec && h >= 12.0 {
             g = g_trop;
+        }
+        if let Some(m) = &med {
+            if m.get(i).copied().unwrap_or(false) && (g == g_dec || g == g_con)
+                && ui < if built { MED_SHARE.1 } else { MED_SHARE.0 } {
+                g = g_med;
+            }
         }
         out[i] = g;
     }
@@ -5866,6 +5878,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
     // GitHub #1098)
     // 191: building_walls' shop_edges (a shop's ground floor on its street walls only)
-    m.add("VERSION", 191)?;
+    // 193: regional_groups' med / g_med (the Mediterranean basin's trees; 192 is rs-plans' if it lands)
+    m.add("VERSION", 193)?;
     Ok(())
 }

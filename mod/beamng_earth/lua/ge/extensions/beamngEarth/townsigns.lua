@@ -29,7 +29,7 @@ M.FALLBACK_COLOR = '0.97 0.97 0.97 1'   -- texture file missing: a blank white p
 -- townsigns.clear_around): hidden within CLEAR_M of a sign (trees.lua's hiders)
 M.CLEAR_M = 6.0
 M.TREE_GROUPS = { deciduous = true, conifer = true, shrub = true, pine_west = true, oak_west = true, palm = true,
-  juniper = true, tropical = true, desert_shrub = true }
+  juniper = true, tropical = true, desert_shrub = true, mediterranean = true }
 M.ANCHORS_KEPT = 3     -- the signs of this many latest anchors are kept (an older anchor's tiles are gone)
 
 local faces = {}       -- group -> true: the face groups registered

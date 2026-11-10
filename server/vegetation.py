@@ -37,20 +37,26 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 24          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 25          # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
-                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py)
+                      # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
+                      # Mediterranean basin's own trees, G_MEDITERRANEAN)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
-          "oak_west", "tropical")
+          "oak_west", "tropical", "mediterranean")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
- G_OAK_WEST, G_TROPICAL) = range(len(GROUPS))
+ G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN) = range(len(GROUPS))
+# The Mediterranean basin's Cs climates (Beck et al.'s Koppen-Geiger classes 8-10: Csa, Csb, Csc) inside its box: holm
+# and cork oaks, olives, maritime pines, cypresses (Italy's stock trees, trees.lua's "mediterranean"; the asset survey
+# 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
+MED_KOPPEN = (8, 9, 10)
+MED_BOX = (28.0, -10.5, 46.5, 42.0)         # south, west, north, east
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -147,14 +153,27 @@ def regional(group, height, lat, lon, lcls, u):
     and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
     ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
     kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item. Pure."""
-    fast.require(43, "regional_groups")
+    fast.require(193, "regional_groups")
     f64 = np.float64
     n = np.size(group)
     bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
+    la, lo = bc(lat, f64), bc(lon, f64)
     return np.asarray(fast._ef.regional_groups(
-        bc(group, np.uint8), bc(height, f64), bc(lat, f64), bc(lon, f64), bc(lcls, np.uint8), bc(u, f64),
+        bc(group, np.uint8), bc(height, f64), la, lo, bc(lcls, np.uint8), bc(u, f64),
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
-         G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]]), np.uint8)
+         G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
+        mediterranean(la, lo), G_MEDITERRANEAN), np.uint8)
+
+
+def mediterranean(lat, lon):
+    """Per point: in the Mediterranean basin's Cs climates (MED_KOPPEN inside MED_BOX)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    box = (lat >= MED_BOX[0]) & (lat <= MED_BOX[2]) & (lon >= MED_BOX[1]) & (lon <= MED_BOX[3])
+    out = np.zeros(lat.shape, bool)
+    if box.any():
+        import climate
+        out[box] = np.isin(climate.koppen_many(lat[box], lon[box]), MED_KOPPEN)
+    return np.ascontiguousarray(out)
 
 
 def _north_america(lat, lon):
