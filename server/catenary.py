@@ -41,8 +41,8 @@ Z_MESSENGER = 7.80
 RAIL_TOP_M = 0.58               # the rail head over the bed line (railways.RAIL_TOP_M's ballast + sleeper + rail)
 MAST_Z_BAND = (-0.5, 0.2)       # the mast's base over the track's bed at most this far off it
 MESSENGER_SAG_M = 1.12          # at mid-span: leaves 0.5 m between the messenger and the contact wire there (Z_MESSENGER - Z_CONTACT = 1.62)
-DROPPER_EVERY_M = 5.0           # m between droppers (real lines: 4-6 m; the user's "every half metre" was left to the rules, 2026-11-10)
-DROPPER_FIRST_M = 2.0           # m from a mast to its first dropper
+DROPPER_EVERY_M = 1.0           # m between droppers (the user, 2026-11-10: "a connecting wire every metre"; real lines: 4-6 m)
+DROPPER_FIRST_M = 1.0           # m from a mast to its first dropper
 DROPPER_MIN_GAP_M = 0.12        # a dropper shorter than this is not drawn
 CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.010
 JOINT_M = 1.5                   # m: part ends this close are one line (a joint of two OSM ways, a switch's branch)
