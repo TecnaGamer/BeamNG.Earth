@@ -844,16 +844,30 @@ do
     reset = function() seen = {} end,
     hasWork = function() return false end, update = function() end, onTeleport = function() end }
   serverSend({ type = 'hello', protocol = 4, format = 4, cells = 64, sessionId = 'traffic-reload',
+    streamLease = 1, leaseId = 'game-owner',
     farFormat = 'cdae', material = 'bngEarthFar_v3', nearVisual = 'mesh', trafficVisuals = 2 })
   frames(3)
   T.check(seen.available, 'hello negotiates distant traffic before the level reload')
   core.onClientEndMission()
   core.onClientStartMission()
   T.check(seen.id == 'traffic-reload' and seen.available, 'level start restores the live connection capability')
+  local leaseSession, leaseId = require('beamngEarth/net').lease()
+  T.check(leaseSession == 'traffic-reload' and leaseId == 'game-owner', 'level reset preserves resource ownership')
   core._trafficvisuals = actual
 end
 core.reconnect()
 T.check(core.cacheState() == nil and not core.cacheClear(), 'disconnected: numbers gone, no request sent')
+do
+  local n = #received('hello')
+  T.check(pumpUntil(function() return #received('hello') > n end, 10), 'reconnect sends a new hello')
+  local h = received('hello')[#received('hello')]
+  T.check(h.streamLease == 1 and h.leaseId == 'game-owner' and h.leaseSession == 'traffic-reload',
+    'reconnect names the same game resource owner')
+  T.check(h.slotSession == 'traffic-reload' and type(h.slotsHeld) == 'table' and type(h.held) == 'table',
+    'reconnect includes complete snapshots, including an empty scene')
+  T.check(not core._netq.urgent._connected and not core._netq.urgent._disconnected,
+    'ownership snapshots remain ordered after incoming tile messages')
+end
 beamngEarth_settings = nil
 
 core.onExtensionUnloaded()
@@ -904,5 +918,27 @@ do
     'base photo refresh: dropped when its block is no longer the one in use')
   terrain.setBase = setBase
   st.anchorId, st.block, st.player = was[1], was[2], was[3]
+end
+-- fast pre-cache's pause (PR #773): only our own pause is let go, and the app going away ends it
+do
+  local sh = require('beamngEarth/simhold')
+  local was = { sh.paused, sh.pause }
+  local paused, calls_ = false, {}
+  sh.paused = function() return paused end
+  sh.pause = function(on) calls_[#calls_ + 1] = on; paused = on end
+  core._fastHeld, core._fastPaused = false, false
+  core.fastAreaPause('a1')
+  T.check(paused and calls_[1] == true, 'fast pre-cache: the game paused')
+  core.fastAreaPause('')
+  T.check(not paused and calls_[2] == false, 'fast pre-cache over: our pause let go')
+  paused, calls_ = true, {}                    -- the player paused already
+  core.fastAreaPause('a2')
+  core.fastAreaPause(nil)
+  T.check(paused and #calls_ == 0, "fast pre-cache: a pause it didn't make is left as it was")
+  paused, calls_ = false, {}
+  core.fastAreaPause('a3')
+  core.reconnect()                            -- (drops the connection through the '_disconnected' handler)
+  T.check(not paused and calls_[2] == false, 'fast pre-cache: the app gone, the pause let go')
+  sh.paused, sh.pause = was[1], was[2]
 end
 T.done('test_core_stubbed')

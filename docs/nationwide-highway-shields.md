@@ -1,5 +1,7 @@
 # Nationwide highway shields
 
+Updated against upstream `main` at `e1c72abf` for **BeamNG.Earth 1.9.1-beta**. The integration retains current French sign rendering, legacy cached shield inventories, and the full building-aware placement API. Composite guide labels retain their compact text fallback, and new specialty shields retain compass qualifiers.
+
 State, U.S. and Interstate shields are generated automatically by the normal sign
 stream. Players do not install regional inventories or run an offline build.
 
@@ -60,7 +62,7 @@ Generated one-way rules govern physical facing and side placement.
 Terrain, road matching, intersections, bridge decks, buildings and clearance can
 suppress a candidate. Independently streamed props are not a unified occupancy map.
 The implementation cannot promise every real sign or collision-free placement.
-No in-game screenshot or nationwide drive has been used to claim verification.
+The user supplied four in-game screenshots for PR #969. They illustrate individual examples; they do not constitute a nationwide placement or performance benchmark.
 
 ## Building and tests
 
@@ -74,3 +76,13 @@ Tests cover all 50 standard templates, relation-first recognition, federal/state
 separation, special networks, number fitting, cache reuse, UVs and orientation,
 streaming material registration, tile ownership, obstruction checks, first-visit
 streamed generation with the Layercake path blocked, and source outage recovery.
+
+## 1.9.1 efficiency and validation
+
+Prepared shield backgrounds use a four-entry cache. Different route numbers copy the prepared blank before adding text, avoiding repeated image decoding and resizing without sharing mutable numbered artwork. The final numbered-face cache and existing content-addressed DDS reuse remain in place.
+
+A comparison with the prior rasterizer produced byte-identical RGB output for **204 cases across all 50 states and selected specialty designs**. A synthetic batch of 24 distinct Wyoming faces improved from **76.701 ms to 32.040 ms**, median of five batches. This measures image preparation, excluding DDS encoding, game rendering, and FPS.
+
+The updated branch ran **1,184 Python tests across 70 modules: 1,157 passed, 24 skipped, two environment errors, and one existing assertion failure**. Windows denies symlink creation in the two unchanged cache tests (`WinError 1314`). The font-atlas regeneration assertion also fails with unchanged upstream files under this machine's Pillow/FreeType installation. Optional real-cache geometry tests use `BNGE_ROADGEO_REAL=0`, as in the foundation gate.
+
+All **103 Lua test modules**, both JavaScript map-math checks, OSM tag inventory, Python compilation, and source/BeamMP package builds passed. New regressions cover prepared-blank reuse without number contamination, French renderer compatibility, composite text labels, and specialty-shield direction qualifiers. User-provided screenshots are included in [PR #969](https://github.com/TecnaGamer/BeamNG.Earth/pull/969).

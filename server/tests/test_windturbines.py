@@ -208,5 +208,19 @@ class TurbinePlacementTest(unittest.TestCase):
         self.assertEqual(len(later), 1)
 
 
+
+class SmallTurbineTest(unittest.TestCase):
+    """Small (rooftop, mast, structure-mounted) turbines are left out: the Eiffel Tower's two 3.2 m turbines, mapped
+    at height 134, stood under it as toy-sized utility turbines (Discord 2026-11-06)."""
+
+    def test_the_eiffel_towers_are_left_out(self):
+        eiffel = {"height": "134.0", "rotor:diameter": "3.200000047683716"}
+        self.assertTrue(wt.small(eiffel))
+        self.assertTrue(wt.small({"height:hub": "9"}))
+        self.assertFalse(wt.small({"rotor:diameter": "82", "height:hub": "80"}))
+        self.assertFalse(wt.small({}), "unknown size: the stock turbine")
+        t = wt.Turbine("osm:node:1", 48.8581, 2.2944, eiffel, 0)
+        self.assertEqual(wt.rows_for_features(geodesy.EnuFrame(48.858, 2.294), [t], lambda la, lo: np.zeros(np.shape(la))), [])
+
 if __name__ == "__main__":
     unittest.main()

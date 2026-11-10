@@ -45,6 +45,17 @@ def text(image, value, box, colour=(38,13,13), condense=False):
         x += g['advance']*scale
 
 
+@lru_cache(maxsize=4)
+def _blank(path, aspect, background):
+    """Reuse decoded/resized templates across numbers; callers draw on a copy."""
+    size=(round(512*max(1.,aspect)),round(512*max(1.,1/aspect)))
+    with Image.open(path) as raw:
+        source=raw.convert('RGBA').resize(size,Image.Resampling.LANCZOS)
+        image=Image.new('RGB',source.size,background)
+        image.paste(source,mask=source.getchannel('A'))
+    return image
+
+
 @lru_cache(maxsize=64)
 def raster(network, ref, variant=''):
     """Bounded cache by network, number, design variant. Return immutable RGB."""
@@ -53,12 +64,9 @@ def raster(network, ref, variant=''):
     image=None
     if template.get('image') and (not variant or variant in template.get('modifiers',())):
         try:
-            with Image.open(DATA/template['image']) as raw:
-                aspect=template.get('aspect',1.)
-                size=(round(512*max(1.,aspect)),round(512*max(1.,1/aspect)))
-                source=raw.convert('RGBA').resize(size,Image.Resampling.LANCZOS)
-                image = Image.new('RGB',source.size,tuple(template.get('background',[255,255,255])))
-                image.paste(source,mask=source.getchannel('A'))
+            image=_blank(DATA/template['image'],template.get('aspect',1.),
+                         tuple(template.get('background',[255,255,255]))).copy()
+            size=image.size
             box=template['number_box']
             box=[v*size[i%2]/512 for i,v in enumerate(box)]
             text(image,ref,box,tuple(template.get('text_colour',[0,0,0])),template.get('number_fit')=='condense')

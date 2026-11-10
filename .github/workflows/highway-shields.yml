@@ -27,7 +27,7 @@ jobs:
         # pyosmium exercises the existing weekly PBF builder; not an app dependency.
         run: python -m pip install -r server/requirements.txt osmium
       - name: Shield recognition, automatic generation and distribution
-        run: python tools/run_tests.py test_nationwide_shields test_state_highway_shields test_route_repeaters test_streamed_route_shields test_guide_shield_textures test_road_source_recovery test_shield_distribution test_highway_signs test_sign_tags test_through_signs test_sign_packaging test_signready --par 2 --logs build/shield-tests
+        run: python tools/run_tests.py test_nationwide_shields test_state_highway_shields test_route_repeaters test_streamed_route_shields test_guide_shield_textures test_road_source_recovery test_shield_distribution test_highway_signs test_sign_tags test_through_signs test_sign_packaging test_signready test_exit_sign_sizing test_state_route_markers --par 2 --logs build/shield-tests
       - uses: actions/upload-artifact@v4
         if: always()
         with:

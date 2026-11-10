@@ -43,6 +43,8 @@ PLACES_FORMAT = 2               # the cell files' format (bump when what a cell 
 ZOOM = 9                        # the cells' Web-Mercator zoom up to 60 degrees of latitude (zoom_at)
 SEARCH_M = 25000.0              # towns this far around the player are read (the cells under that box)
 MEM_CELLS = 64                  # decoded cells kept in memory
+LABELS_MAX = 400                # the 3D map's labels: towns per answer (labels())
+LABELS_RADIUS_MAX_M = 150000.0  # ... and the farthest box asked (a few dozen cells at most)
 # reach of a town (km) = clamp(REACH_K * REACH_R_KM * (population / 1000) ** REACH_EXP, REACH_MIN_KM, REACH_MAX_KM):
 # REACH_R_KM * (pop / 1000) ** 0.4 is about a town's equivalent radius (Baltimore 585k: 8.7 km, its 238 km2;
 # Köln 1.07 M: 11 km, 405 km2; Leverkusen 163k: 5.2 km, 79 km2), REACH_K = 2: its edge with the outskirts
@@ -259,6 +261,49 @@ class PlaceNames:
         borders = [c[2] for c in cells if c[2] is not None and len(c[2])]
         return pick(_concat([c[0] for c in cells]), _concat([c[1] for c in cells]), lat, lon,
                     np.concatenate(borders) if borders else None)
+
+    def labels(self, lat, lon, radius_m, limit=LABELS_MAX, fetch=False, kind="background"):
+        """The towns within radius_m of (lat, lon) for the 3D map's labels: [(name, lat, lon, class, population)],
+        the largest first (classed towns ahead of districts), at most limit; names as lookup()'s (the local language
+        where Overture has it). Only the cells on disk / in memory unless fetch (then the missing ones with kind;
+        netfetch errors raised). Cells at zoom_at(lat), the box clamped to LABELS_RADIUS_MAX_M."""
+        radius_m = max(1000.0, min(float(radius_m), LABELS_RADIUS_MAX_M))
+        out = []
+        for key in cells_for(lat, lon, radius_m):
+            if fetch:
+                cell = self.cell(key, kind)
+            else:
+                with self._lock:
+                    cell = self._mem.get(key)
+                if cell is None:
+                    cell = self._load(self.path(key))
+                    if cell is None:
+                        continue
+                    with self._lock:
+                        self._mem[key] = cell
+                        while len(self._mem) > MEM_CELLS:
+                            self._mem.popitem(last=False)
+            t = cell[0]
+            n = len(t["lat"])
+            if not n:
+                continue
+            d = _dist_km(lat, lon, t["lat"], t["lon"]) * 1000.0
+            for i in np.flatnonzero(d <= radius_m):
+                cls = str(t["class"][i])
+                if str(t["subtype"][i]) not in ("locality", "localadmin"):
+                    continue
+                name = _name(t, i, geocode.lang_for(str(t["country"][i])))
+                if name:
+                    out.append((name, float(t["lat"][i]), float(t["lon"][i]), cls, float(t["population"][i])))
+        rank = {"megacity": 0, "city": 1, "town": 2, "village": 3, "hamlet": 4}
+        out.sort(key=lambda r: (rank.get(r[3], 5), -r[4], r[0]))
+        seen, uniq = set(), []
+        for r in out:                       # (a town in two cells' boxes once)
+            k = (r[0], round(r[1], 3), round(r[2], 3))
+            if k not in seen:
+                seen.add(k)
+                uniq.append(r)
+        return uniq[:limit]
 
     def cell(self, key, kind="background"):
         """(towns, areas, borders) of one cell: memory, disk, or fetched and written."""

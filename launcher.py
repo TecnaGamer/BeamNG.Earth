@@ -28,6 +28,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
 import argparse
 import multiprocessing
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -158,6 +159,9 @@ def cache_dir_arg(given, dd=None):
         if given.strip().lower() in ("", "default"):
             save_app_settings(dd, cacheDir=None)
             return None
+        bad = apppaths.drive_relative_problem(given)
+        if bad:                         # (GitHub #895: not the current folder in silence)
+            raise OSError(bad)
         path = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
         os.makedirs(path, exist_ok=True)
         save_app_settings(dd, cacheDir=path)
@@ -239,11 +243,40 @@ def run_server(argv):
     earthd.main()
 
 
+def run_addon(argv):
+    """--run-addon FILE ARGS: a companion add-on's Python file run with this app's own Python (addonrun.py: the packaged
+    app has no other), ended when the server that started it ends (BNGEARTH_PARENT: watch_parent)."""
+    watch_parent()
+    import runpy
+    script = argv[0]
+    sys.argv = [script] + list(argv[1:])
+    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+    runpy.run_path(script, run_name="__main__")
+
+
+def telemetry_on():
+    """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off; never under CI or a test
+    run (the first night's 'players' were mostly the release workflow's Windows test servers: each a new install)."""
+    if os.environ.get("CI") or "unittest" in sys.modules:
+        return False
+    return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
+    if telemetry_on() and "--offline" not in extra:
+        cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if sys.platform.startswith("linux"):    # (gamescope's WSI layer aborted the server's GPU kernels: earthd.main)
+        env.setdefault("DISABLE_GAMESCOPE_WSI", "1")
+    try:            # (the game's own files: an add-on mod replacing one needs a restart, addonrun.mod_code)
+        gd = game_install_dir()
+        if gd:
+            env["BNGEARTH_GAME_DIR"] = str(gd)
+    except Exception:
+        pass
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
@@ -331,6 +364,47 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
+def _startup_tail(log_path):
+    """A bounded, complete-line tail: startup failures can produce very large tracebacks/logs."""
+    try:
+        with open(log_path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            start = max(0, stream.tell() - 65536)
+            stream.seek(start)
+            tail = stream.read(65536)
+        return tail.partition(b"\n")[2] if start else tail
+    except OSError:
+        return b""
+
+
+def _startup_phase(tail):
+    phase = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " INFO earthd: startup: " in line:
+            phase = line.split(" INFO earthd: startup: ", 1)[1][:180]
+    return phase
+
+
+def server_start_diagnostic(proc, log_path):
+    """Describe exit versus deadline and the last known step/error, without dumping the whole log."""
+    import re
+    tail = _startup_tail(log_path)
+    code = proc.poll()
+    text = (f"The companion stopped before it was ready (exit code {code})." if code is not None else
+            "The companion is still running but did not become ready before the startup deadline.")
+    phase = _startup_phase(tail)
+    if phase:
+        text += " Last startup step: " + phase + "."
+    error = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " ERROR " in line or " CRITICAL " in line or re.match(r"^[\w.]+(?:Error|Exception):", line):
+            error = line.split(": ", 1)[-1] if " ERROR " in line or " CRITICAL " in line else line
+    if error:
+        error = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", error)[:400]
+        text += " Last error: " + error
+    return text
+
+
 def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """Read the owned child's post-bind marker from its freshly truncated startup log.
 
@@ -339,17 +413,16 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """
     marker = b"earthd listening on 127.0.0.1:"
     deadline = time.monotonic() + timeout
+    last_phase = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return False
         try:
-            with open(log_path, "rb") as log:
-                log.seek(0, os.SEEK_END)
-                start = max(0, log.tell() - 65536)
-                log.seek(start)
-                tail = log.read(65536)
-            if start:
-                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            tail = _startup_tail(log_path)
+            phase = _startup_phase(tail)
+            if phase and phase != last_phase:
+                row("World server", phase)
+                last_phase = phase
             for line in tail.splitlines():
                 if not line.startswith(marker):
                     continue
@@ -385,6 +458,25 @@ def stop_server(proc):
 
 
 # --- the game -------------------------------------------------------------------------------------
+
+def game_install_dir():
+    """The game's install folder (its shaders/, BinLinux/ ...), or None: the chosen one, Windows' registry / Steam
+    libraries, else the Steam libraries' BeamNG.drive (the Linux build or the Windows one under Proton)."""
+    import install
+    own = apppaths.saved_game_dir()
+    if own:
+        return own
+    if os.name == "nt":
+        try:
+            return windows_game_dir()
+        except Exception:
+            return None
+    for lib in install._steam_roots():
+        d = os.path.join(lib, "steamapps", "common", "BeamNG.drive")
+        if os.path.isdir(os.path.join(d, "shaders")):
+            return d
+    return None
+
 
 def linux_game_exe():
     import install
@@ -1340,7 +1432,7 @@ def hand_over():
         return False
     if not new:
         return False
-    env = {k: v for k, v in os.environ.items() if k not in ("APPDIR", "APPIMAGE", "ARGV0", "OWD")}
+    env = clean_env()                   # (the new copy without this one's AppImage variables and library path)
     print(f"Starting the updated BeamNG.Earth: {os.path.basename(new)}", flush=True)
     try:
         proc = subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
@@ -1357,14 +1449,33 @@ def hand_over():
             return True
         if code == 0:
             return True
-    problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
-            "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
-            "About) downloads it again.")
+    sac = smart_app_control_on() or "4551" in str(code)
+    if sac:
+        problem(f"Windows Smart App Control blocked the updated BeamNG.Earth ({os.path.basename(new)}).",
+                "It only runs apps from a verified publisher, and BeamNG.Earth is not code-signed yet (it is "
+                "planned). This version keeps working, and that version will not be offered again.")
+    else:
+        problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
+                "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
+                "About) downloads it again.")
     try:
-        selfupdate.drop_staged()
+        selfupdate.drop_staged(blocked_by="smart_app_control" if sac else None)
     except Exception:
         pass
     return False
+
+
+def smart_app_control_on():
+    """Is Windows 11's Smart App Control enforcing (it blocks unsigned apps without a "run anyway"; GitHub #823)?
+    HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation."""
+    if not IS_WIN:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\CI\Policy") as k:
+            return int(winreg.QueryValueEx(k, "VerifiedAndReputablePolicyState")[0]) == 1
+    except (OSError, ValueError):
+        return False
 
 
 HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
@@ -1389,12 +1500,21 @@ def update_popup(text, run=None, which=None, windows=None):
         if not which(cmd[0]):
             continue
         try:
-            code = run(cmd, timeout=600).returncode
+            # (clean_env: under the AppImage's own library path kdialog could not load its Qt libraries and exited 1,
+            # read as "No": the update was never offered on KDE desktops, 2026-11-07)
+            r = run(cmd, timeout=600, env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         except (OSError, subprocess.SubprocessError):
             continue
-        if code in (0, 1):
-            return code == 0
+        err = r.stderr.decode("utf-8", "replace") if isinstance(r.stderr, bytes) else str(r.stderr or "")
+        if POPUP_BROKEN.search(err):
+            continue                    # (the tool did not start: not an answer)
+        if r.returncode in (0, 1):
+            return r.returncode == 0
     return None
+
+
+# a pop-up tool that failed to load (the dynamic loader's own messages), not the player's "No"
+POPUP_BROKEN = re.compile(r"error while loading shared libraries|symbol lookup error|version `[^']*' not found")
 
 
 def update_at_start(args, ask=input, popup=update_popup, packaged=None, check=None, download=None, start=None):
@@ -1460,6 +1580,10 @@ def beammp_wait_seconds(value):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--run-addon":     # (before tee_log: its output is its own run.log)
+        ensure_ca_certs()
+        run_addon(sys.argv[2:])
+        return
     tee_log()
     ensure_ca_certs()
     if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
@@ -1729,6 +1853,16 @@ def run(args):
         reload_game = running and status in ("updated", "installed", "enabled")
         row("Mod", {"current": "up to date", "enabled": "turned back on", "updated": "updated",
                     "installed": "installed", "kept": "kept the installed copy"}.get(status, status or ""))
+        # the sky's haze from above the atmosphere (the 3D map from orbit; skypatch.py): from the game's own shader
+        try:
+            import skypatch
+            sky = skypatch.apply(game_install_dir(), os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME),
+                                 os.path.join(apppaths.data_dir(), "skypatch"), user_dir)
+            if sky == "patched":
+                row("Sky", "the view from orbit fixed (two lines of the game's sky shader; original kept; the game "
+                           "builds its shaders again once)")
+        except Exception as e:      # (never in the way of a start)
+            row("Sky", f"not patched ({type(e).__name__}: {e})")
     if getattr(args, "game_dir", None):
         if args.game_dir.strip().strip('"').lower() == "default":
             apppaths.set_game_dir("default")
@@ -1765,9 +1899,11 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
+        row("Telemetry", "anonymous, no location: as chosen on the game's welcome page, nothing before that "
+            "(BNE_TELEMETRY=off turns it off)" if telemetry_on() else "off")
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
-                    f"See {log_path} for the startup error, then try again.")
+                    server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")
             raise SystemExit(1)
         row("World server", "running")
         try:

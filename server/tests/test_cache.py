@@ -10,6 +10,7 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -82,6 +83,43 @@ class LruTest(Base):
                          [False] * 3 + [True] * 7)
         self.assertEqual(c.usage(), (7 * MB, 7))
         self.assertEqual(c.evict(), (0, 0), "under the cap: nothing")
+
+    def test_a_disk_short_of_its_reserve_cuts_the_cache_back(self):
+        """A cap larger than the disk's free space (or unlimited): when the disk has less than its reserve free, the
+        tick evicts the least recently used files whatever the cap; files of this session's last hour stay."""
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        for i in range(10):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0)                         # unlimited
+        c.ready = True
+        free = {"b": 100e9}
+        c.disk_usage = lambda _root: Du(500e9, 500e9 - free["b"], free["b"])
+        self.assertEqual(c.disk_short(), 0)
+        c.tick()
+        self.assertEqual(c.usage(), (10 * MB, 10), "enough free space: nothing evicted")
+        # the reserve: 5 % of 500 GB is 25 GB, at most 10 GB; the disk is 4 MB short of it
+        free["b"] = 10e9 - 4 * MB
+        self.assertEqual(c.disk_short(), 4 * MB)
+        with unittest.mock.patch.object(cachemod, "DISK_MARGIN", 1 * MB):
+            c.tick()
+        self.assertEqual(c.usage(), (5 * MB, 5), "short 4 MB + 1 MB margin: the five oldest go")
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(10)],
+                         [False] * 5 + [True] * 5)
+
+    def test_disk_reserve_bounds(self):
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        c = self.make(cap_gb=20)
+        c.disk_usage = lambda _root: Du(20e9, 19.5e9, 0.5e9)       # a small disk: 2 GB at least
+        self.assertEqual(c.disk_short(), int(1.5e9))
+        c.disk_usage = lambda _root: Du(4e12, 3.99e12, 0.01e12)    # a big disk: 10 GB at most
+        self.assertEqual(c.disk_short(), 0)
+        def broken(_root):
+            raise OSError("gone")
+        c.disk_usage = broken
+        self.assertEqual(c.disk_short(), 0)
 
     def test_a_hit_moves_a_file_to_the_back(self):
         """An old file used (read) a while ago in this session outlives newer files that were not."""

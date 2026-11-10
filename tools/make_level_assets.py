@@ -80,9 +80,11 @@ lines(os.path.join(L, "main/MissionGroup/Sky/items.level.json"), [
      "skyBrightness": 40, "sunScale": [0.996078432, 0.811764717, 0.70588237, 1], "sunScaleGradientFile": "art/sky_gradients/default/gradient_sunscale.png",
      "useNightCubemap": True},
     # TimeOfDay.time: 0 = noon, 0.5 = midnight (ARCHITECTURE.md Phase 0). latitude/longitude are
-    # read by core/celestial.lua (readWhen) and follow the player at runtime.
+    # read by core/celestial.lua (readWhen) and follow the player at runtime. dayLength: a real day (GitHub #791: without
+    # it the engine's 30-minute day ran whenever the sky was set to Manual; the game's own day-length menu offers the
+    # level's authored value as its "level default").
     {"name": "tod", "class": "TimeOfDay", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c07", "__parent": "Sky",
-     "position": [0, 0, 100], "axisTilt": 10, "play": False, "startTime": 0.1, "time": 0.1,
+     "position": [0, 0, 100], "axisTilt": 10, "play": False, "dayLength": 86400, "startTime": 0.1, "time": 0.1,
      "latitude": 36.5785, "longitude": -118.2923},
 ])
 

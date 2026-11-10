@@ -168,6 +168,22 @@ fn edge_mean(q: &[[f64; 2]; 4]) -> f64 {
     s / 4.0
 }
 
+/// cone (9): the 3D map's view cone (x, y, z, unit forward fx, fy, fz, cos of the half angle, ground z: farfield.view_cone)
+/// and the factor a node's distance counts with when it lies outside it (its box's centre off the cone by more than half
+/// its diagonal as an angle; the node under the camera, d = 0, always in): what is not on screen stays coarser (the
+/// user, 2026-11-07: "it should only take a couple seconds to see detailed terrain"; ~360 tiles a view all round).
+fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
+    if c.len() < 9 || d <= 0.0 {
+        return 1.0;
+    }
+    let (x0, y0, x1, y1) = (b[0], b[1], b[2], b[3]);
+    let (cx, cy, cz) = ((x0 + x1) / 2.0 - c[0], (y0 + y1) / 2.0 - c[1], c[7] - c[2]);
+    let r = (cx * cx + cy * cy + cz * cz).sqrt();
+    let slack = ((x1 - x0).hypot(y1 - y0) * 0.5 / r.max(1.0)).min(1.0).asin();
+    let a = ((cx * c[3] + cy * c[4] + cz * c[5]) / r.max(1e-9)).clamp(-1.0, 1.0).acos();
+    if a - slack <= c[6].clamp(-1.0, 1.0).acos() { 1.0 } else { c[8].max(1.0) }
+}
+
 /// The global part of a far-field selection for a player at (px, py) of the anchor (lat0, lon0)'s world.
 /// zf: the finest global zoom (far level 3); max_level: the coarsest far level (its zoom zf - (max_level - 3) are the
 /// roots); k[L]: K of level L (L = 3 + zf - z), rmin: the largest near radius (a switch distance is at least it);
@@ -178,13 +194,15 @@ fn edge_mean(q: &[[f64; 2]; 4]) -> f64 {
 /// Returns (tiles [(z, x, y, quad (8), real edge m)], refined [(z, x, y)], regions [(x, y, quad (8))]: the refined
 /// tiles of zoom zf, which the anchor's own nodes fill).
 #[pyfunction]
-#[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None))]
+#[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None, eye_h=0.0,
+                    cone=None))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f64, disc: bool, zf: u32,
                               max_level: i32, k: Vec<f64>, rmin: f64, h: f64, prev: Vec<(u32, i64, i64)>,
                               hold: Vec<(u32, i64, i64)>, forced: Vec<(f64, f64, f64, f64)>,
                               horizon: Option<(f64, f64, f64, PyReadonlyArray2<'py, f64>, f64, f64,
-                                               Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>)
+                                               Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>,
+                              eye_h: f64, cone: Option<Vec<f64>>)
                          -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>)> {
     let hz = horizon.map(|(reach, min_d, r, base, half, cell, merc)| {
         let a = base.as_array();
@@ -227,8 +245,15 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
         } else if hold.contains(&node) {
             prev.contains(&node)
         } else {
+            // (eye_h: the camera's height over the ground; the split goes by the 3D distance, so straight under a
+            // camera far up the tiles are as coarse as its height asks: the user, 2026-11-07, "its building a bunch of
+            // little tiles directly under the camera even tho im extreamly high up")
+            let mut d3 = (d * d + eye_h * eye_h).sqrt();
+            if let Some(c) = cone.as_deref() {
+                d3 *= out_of_view(c, &b, d);
+            }
             let lim = (k[lvl.min(k.len() - 1)] * size).max(rmin);
-            d < lim || (prev.contains(&node) && d < (1.0 + h) * lim)
+            d3 < lim || (prev.contains(&node) && d3 < (1.0 + h) * lim)
         };
         if split {
             refined.push(node);

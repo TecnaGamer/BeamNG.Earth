@@ -9,6 +9,7 @@ import numpy as np
 
 import exitsigns
 import milemarkers
+import legacyshields
 import routemarkers
 import routerepeaters
 import streamedroutes
@@ -29,6 +30,7 @@ class Source:
     def __init__(self, md, tags=None):
         self.tags = tags if tags is not None else railtags.SignTags(md.cache_dir, md.fetcher)
         self.md = md
+        self.shields = legacyshields.Source(getattr(md, 'cache_dir', None))
         self.repeaters = routerepeaters.Source(md.raw_dir, md.fetcher) if hasattr(md, 'raw_dir') else None
         self.streamed = streamedroutes.Source(md) if hasattr(md,'cell') and hasattr(md,'raw_dir') else None
         self.contexts = {}
@@ -40,7 +42,9 @@ class Source:
 
     def version(self):
         """The sign data's build in use, or None (none yet)."""
-        return self.tags.version()
+        legacy = self.shields.version()
+        version = self.tags.version()
+        return (version, legacy) if legacy else version
 
     def context(self, urban, widths):
         key = (urban, widths)
@@ -58,6 +62,7 @@ class Source:
         objects = milemarkers.query(frame, box)
         x0, y0, x1, y1 = box
         lat, lon, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.)
+        objects += self.shields.query(float(np.min(lon)), float(np.min(lat)), float(np.max(lon)), float(np.max(lat)))
         try:
             objects += self.tags.query(float(np.min(lon)), float(np.min(lat)), float(np.max(lon)), float(np.max(lat)))
         except CancelledError:
@@ -159,7 +164,7 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
     return ([s for s in exits if signlayout.owns(box, s)], [s for s in overheads if signlayout.owns(box, s)])
 
 
-def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None,
+def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, urban=None, widths=None, french=False,
                out_dir=None, vfs_dir=None, faces=None):
     """Return (exit mesh, mile-marker mesh); optional scenery cannot stop road generation."""
     source = getattr(md, 'highway_signs', None)
@@ -193,6 +198,12 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
             if placed is not None:
                 shields.append(placed)
         origin = (box[0], box[1], 0.)
+        if french:
+            import frroadmesh
+            import euguardrails
+            exits=[s for s in exits if euguardrails.country_at(frame,s['centre'])=='FR']
+            overheads=[s for s in overheads if euguardrails.country_at(frame,s['centre'])=='FR']
+            return frroadmesh.build_highways(exits,overheads,origin),None
         return (plazas.merge(throughsigns.build(exits, overheads, origin, out_dir=out_dir, vfs_dir=vfs_dir, faces=faces),
                              routemarkers.build(shields, origin, out_dir, vfs_dir, faces)),
                 milemarkers.build(miles, origin))

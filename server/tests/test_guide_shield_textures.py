@@ -9,6 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import exitsigns
 import throughsigns
 import highwayroutes
+import highwaysigns
+from types import SimpleNamespace
 import routefaces
 from test_advance_sign_layout import sign
 
@@ -36,6 +38,22 @@ class GuideTexturesTest(unittest.TestCase):
                 throughsigns.build([board], [], (0,0,0), tmp, '/cache', {})
                 write.assert_not_called()
 
+    def test_different_numbers_reuse_a_blank_without_contaminating_its_artwork(self):
+        routefaces.raster.cache_clear(); routefaces._blank.cache_clear()
+        try:
+            with mock.patch.object(routefaces.Image, 'open', wraps=routefaces.Image.open) as opened:
+                one=routefaces.raster('US:WY','210')
+                two=routefaces.raster('US:WY','211')
+                # The lettering atlas may load once as well as the blank artwork.
+                paths=[Path(call.args[0]) for call in opened.call_args_list]
+                self.assertEqual(paths.count(routefaces.DATA/'wy.png'),1)
+                self.assertNotEqual(one,two)
+                self.assertEqual(routefaces._blank.cache_info().hits,1)
+            routefaces.raster.cache_clear()
+            self.assertEqual(routefaces.raster('US:WY','210'),one)
+        finally:
+            routefaces.raster.cache_clear(); routefaces._blank.cache_clear()
+
     def test_overhead_through_and_exit_panels_register_shared_faces(self):
         for is_exit in (False, True):
             board = dict(centre=[0.,0.,0.], travel=[0.,1.], bottom=5.5,
@@ -56,6 +74,28 @@ class GuideTexturesTest(unittest.TestCase):
         label = throughsigns.label(dict(highway='motorway', oneway='yes', ref='80', destination='Laramie'),
                                    [dict(type='route', route='road', network='US:I', ref='80')])
         self.assertEqual(exitsigns.route_symbols(label['routes'],'WY')[0]['kind'], 'interstate')
+
+    def test_french_mode_retains_the_current_renderer_and_does_not_generate_us_faces(self):
+        source=SimpleNamespace(context=lambda *args:None, warned=-float('inf'))
+        md=SimpleNamespace(highway_signs=source)
+        board=dict(centre=[0.,0.,0.]); mesh=object()
+        with mock.patch.object(highwaysigns,'tile_objects',return_value=[dict(id=1)]), \
+             mock.patch.object(highwaysigns,'guide_layout',return_value=([board],[])), \
+             mock.patch.object(highwaysigns.milemarkers,'unique_objects',return_value=[]), \
+             mock.patch('euguardrails.country_at',return_value='FR'), \
+             mock.patch('frroadmesh.build_highways',return_value=mesh) as french, \
+             mock.patch.object(throughsigns,'build') as american:
+            from test_roads import FRAME,flat
+            result=highwaysigns.build_tile(md,FRAME,0,0,flat,french=True,
+                                           out_dir='unused',vfs_dir='/unused',faces={})
+        self.assertIs(result[0],mesh);self.assertIsNone(result[1])
+        french.assert_called_once();american.assert_not_called()
+
+    def test_composite_route_labels_keep_the_compact_fallback_and_special_shields_keep_direction(self):
+        route,=exitsigns.route_symbols(['I 40 BUS West'],'TX')
+        self.assertEqual((route['kind'],route['number']),('text','I 40 BUS West'))
+        route,=exitsigns.route_symbols(['FM 982 NORTH'],'TX')
+        self.assertEqual((route['network'],route['number'],route['qualifier']),('US:TX:FM','982','NORTH'))
 
     def test_artwork_preserves_aspect_inside_reserved_inset(self):
         with tempfile.TemporaryDirectory() as tmp:

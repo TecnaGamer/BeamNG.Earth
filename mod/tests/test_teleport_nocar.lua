@@ -329,6 +329,33 @@ for _, flyOff in ipairs({ false, true }) do
       string.format('still there: down onto the floor of the tube (%.1f)', cam.pos.z))
   end
 end
+-- 4c. the floor sent after anchor_ready ('tunnel_floor'), at a snapped spot off the origin (px, py): down at that spot
+do
+  floorIn = false
+  local rays = {}
+  groundAt = function(x, y, fromZ)
+    rays[#rays + 1] = { x = x, y = y }
+    return tunnelGround(x, y, fromZ)
+  end
+  core.teleport(44.3, 6.0)
+  answer(1180, { px = 30, py = -20 })
+  commits = #received('commit_anchor')
+  T.check(pumpUntil(function() return #received('commit_anchor') == commits + 1 end), 'commit (a tunnel, snapped)')
+  T.check(pumpUntil(function() return st.placeFrames == nil end, 10), 'placed (snapped)')
+  T.check(st.floorZ == nil, 'no floor yet (it comes after)')
+  serverSend({ type = 'tunnel_floor', anchorId = st.anchorId, floorZ = 1100, x = 30, y = -20 })
+  frames(2)
+  T.check(st.floorZ == 1100, 'the late floor waited for')
+  floorIn = true
+  rays = {}
+  frames(3)
+  T.check(st.floorZ == nil and near(cam.pos.z, 1100 + 1 + core.CAM_ABOVE_M) and near(cam.pos.x, 30)
+    and near(cam.pos.y, -20), string.format('down onto the floor at the spot (%.1f, %.1f, %.1f)', cam.pos.x,
+    cam.pos.y, cam.pos.z))
+  serverSend({ type = 'tunnel_floor', anchorId = st.anchorId + 7, floorZ = 900 })
+  frames(1)
+  T.check(st.floorZ == nil, 'another anchor\'s floor: ignored')
+end
 roadsMod.settledFor = settled
 
 -- 5. a car and the free camera on: the car set down at the target, the camera behind it (CAM_BEHIND_M, CAM_OVER_M)
