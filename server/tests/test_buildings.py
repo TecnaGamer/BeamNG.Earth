@@ -444,6 +444,151 @@ class MeshTest(unittest.TestCase):
         self.assertNotIn(spec.roof, bld.DOME_ROOFS)
 
 
+class NightWindowsTest(unittest.TestCase):
+    """Each lit window its own brightness at night (the user 2026-11-08; S-moreo's PR #916 reworked): a floor of a
+    window sheet's band starts at a hashed cell of it, near tiles in runs; one material per sheet; far tiles' quads as
+    many as before; the same every build."""
+
+    class _Mats(dict):
+        def __missing__(self, k):
+            return bld._Looks(1.0)[k]
+
+    def _wall(self, w=30.0, lite=False, **kw):
+        ring = rect(0, 0, w, 14)
+        args = dict(ring=ring, floors=6, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", band=bld.BAND_BRICK,
+                    shop=False, plain=False, wall=None, door=(0, 10.0), windows=None, front=0, seed=0.37)
+        args.update(kw)
+        m = bld.Mesh()
+        bld._walls(m, bld.Spec(**args), ring, 0.0, args["floors"] * 3.0, self._Mats(), lite=lite)
+        return m
+
+    def _plain(self, w, lite, band, facade="bne_bld_fac_white", floors=6, shop=False):
+        """The kernel's quads without the cells (the walls as they were)."""
+        P, UV, mid = bld.fast._ef.building_walls(
+            rect(0, 0, w, 14), 0.0, floors * 3.0, False, False, band[0], band[1], [], floors, 3.0, shop, 0, 10.0,
+            True, 0.37, False, 0, lite, bld._WALL_CONSTS, [], [])
+        return np.array(P).reshape(-1, 4, 3), np.array(UV).reshape(-1, 8), list(mid)
+
+    @staticmethod
+    def _area(P):
+        q = np.asarray(P).reshape(-1, 4, 3)
+        return float(np.linalg.norm(np.cross(q[:, 1] - q[:, 0], q[:, 3] - q[:, 0]), axis=1).sum())
+
+    def _floors(self, m, band):
+        """{(wall, floor): [u0 of each quad of the band]} of the walls' sheet quads of whole bays (not the door's plain
+        strip), wall: its direction (the rect's four)."""
+        P = np.array(m.P).reshape(-1, 4, 3)
+        uv = np.array(m.UV).reshape(-1, 8)
+        v1 = 1.0 - band[0] / bld.BANDS - 1.5 / 1024
+        out = {}
+        for q, u in zip(P, uv):
+            span = (u[2] - u[0]) * band[1]
+            if abs(u[5] - v1) < 1e-6 and abs(u[1] - (v1 - 1.0 / bld.BANDS + 3.0 / 1024)) < 1e-6 \
+                    and abs(span - round(span)) < 1e-6:
+                d = q[1, :2] - q[0, :2]
+                out.setdefault((tuple(np.sign(np.round(d, 3)).tolist()), round(float(q[0, 2]) / 3.0)),
+                               []).append(float(u[0]))
+        return out
+
+    def test_one_material_per_sheet(self):
+        """The window sheets stay one material each (#916's three per sheet cost 9 % of the frame rate)."""
+        for kw in ({}, dict(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20, shop=True)):
+            for lite in (False, True):
+                names = {bld.MATERIALS[i] for i in self._wall(lite=lite, **kw).M}
+                self.assertLessEqual(names, {bld.FACADE, bld.OFFICE, bld.SHOP}, names)
+        self.assertFalse([n for n in bld.MATERIALS if n.endswith(("_b", "_c")) and n.startswith("bne_bld_")])
+
+    def test_floors_start_apart(self):
+        """A wall's floors start at cells of their band hashed apart, whole bays (every floor began at the band's
+        first: a lit window lit from street to roof)."""
+        for kw, band in (({}, bld.BAND_BRICK), (dict(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20),
+                                                  bld.BAND_OFFICE)):
+            for lite in (False, True):
+                fl = self._floors(self._wall(lite=lite, **kw), band)
+                first = [us[0] for (d, _), us in sorted(fl.items()) if d == (1.0, 0.0)]
+                self.assertGreater(len(set(first)), 2, first)
+                for us in fl.values():
+                    for u in us:
+                        self.assertAlmostEqual(u * band[1], round(u * band[1]), 6)
+            self.assertEqual(self._wall(**kw).UV, self._wall(**kw).UV)
+
+    def test_same_cells_in_every_frame_and_tile(self):
+        """A building's cells hashed from its seed, wall, floor and bay: the same in another tile's frame (a near and a
+        far tile's), and a far tile's floor starting where the near tile's does (no lit windows jumping as a
+        building's tile changes)."""
+        band, facade = bld.BAND_OFFICE, f"{bld.OFFICE}|1"
+        ring = rect(0, 0, 61.0, 14)
+
+        def build(r, lite):
+            m = bld.Mesh()
+            bld._walls(m, bld.Spec(ring=r, floors=8, floor_h=3.0, roof="flat", facade=facade, band=band, shop=False,
+                                   plain=False, wall=None, door=None, windows=None, front=0, seed=0.61),
+                       r, 0.0, 24.0, self._Mats(), lite=lite)
+            return m
+        self.assertEqual(build(ring, False).UV, build(ring + (1234.5, -678.25), False).UV)
+        near, far = self._floors(build(ring, False), band), self._floors(build(ring, True), band)
+        self.assertEqual(near.keys(), far.keys())
+        self.assertTrue(all(near[k][0] == far[k][0] for k in near), (near, far))
+
+    def test_tall_band_as_it_was(self):
+        """The plaster sheet's tall band (bays of uneven width) left starting at its first cell."""
+        m = self._wall(band=bld.BAND_TALL)
+        _, UV0, _ = self._plain(30.0, False, bld.BAND_TALL)
+        self.assertTrue(np.allclose(np.array(m.UV).reshape(-1, 8), UV0))
+
+    def test_far_tiles_as_many_quads(self):
+        """Far tiles (lite) keep a floor one quad: the same quads, the same corners, only their cells."""
+        for w in (30.0, 61.0):
+            for band, facade in ((bld.BAND_BRICK, "bne_bld_fac_white"), (bld.BAND_OFFICE, f"{bld.OFFICE}|1")):
+                m = self._wall(w=w, lite=True, band=band, facade=facade)
+                P0, _, mid0 = self._plain(w, True, band)
+                self.assertEqual(len(m.M), 2 * len(mid0))
+                self.assertTrue(np.allclose(np.array(m.P).reshape(-1, 4, 3), P0))
+
+    def test_runs_keep_the_wall(self):
+        """Near tiles: a floor wider than two band lengths cut into runs that cover it exactly, at the sheet's scale,
+        a run no longer than two band lengths; a narrow wall's floors not cut."""
+        band = bld.BAND_BRICK
+        m = self._wall(w=61.0, band=band)
+        P0, _, mid0 = self._plain(61.0, False, band)
+        self.assertGreater(len(m.M), 2 * len(mid0))
+        self.assertAlmostEqual(self._area(m.P), self._area(P0), 6)
+        q, uv = np.array(m.P).reshape(-1, 4, 3), np.array(m.UV).reshape(-1, 8)
+        sel = (np.abs(uv[:, 5] - (1.0 - band[0] / bld.BANDS - 1.5 / 1024)) < 1e-6) & (uv[:, 2] - uv[:, 0] > 1e-6)
+        m_per_u = np.linalg.norm(q[sel, 1, :2] - q[sel, 0, :2], axis=1) / (uv[sel, 2] - uv[sel, 0])
+        self.assertTrue(np.all(np.abs(m_per_u / bld.TILE_PX_M - 1.0) < 0.15), m_per_u)
+        bays = np.round((uv[sel, 2] - uv[sel, 0]) * band[1]).astype(int)
+        self.assertGreater(len(set(bays.tolist())), 1)
+        narrow = self._wall(w=20.0, band=band)
+        self.assertEqual(len(narrow.M), 2 * len(self._plain(20.0, False, band)[2]))
+
+    def test_shopfront_bays_apart(self):
+        """A shopfront's bays (two a sheet) each a hashed one: some bays bright, some dim (SHOP_LEVELS)."""
+        m = self._wall(w=61.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True)
+        fl = self._floors(m, bld.BAND_SHOP)
+        self.assertTrue(any(len(us) > 1 for us in fl.values()), fl)
+
+    def test_laid_over_windows_take_the_sash_cells(self):
+        m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))
+        uv = np.array(m.UV).reshape(-1, 8)
+        win = uv[np.isclose(uv[:, 1], bld.WIN_UV[2]) & np.isclose(uv[:, 5], bld.WIN_UV[3])]
+        self.assertGreater(len(win), 6)
+        cells = {(round(a, 6), round(b, 6)) for a, b in bld.WIN_CELLS}
+        got = {(round(a, 6), round(b, 6)) for a, b in win[:, [0, 2]].tolist()}
+        self.assertTrue(got <= cells and len(got) > 1, got)
+
+    def test_skyline_buildings_start_apart(self):
+        ring = rect(0, 0, 40, 30)
+        starts = set()
+        for seed in (0.1, 0.2, 0.3, 0.4, 0.5):
+            sp = bld.Spec(ring=ring, floors=10, floor_h=3.0, roof="flat", facade="bne_bld_fac_white", cls="office",
+                          seed=seed, min_h=0.0, height=30.0, windows=None, roof_mat=None)
+            UV = np.asarray(bld._sky_mesh([(sp, 0.0, 0.0)])[1])
+            starts.add((round(float(UV[0, 0]), 6), round(float(UV[0, 1] % 1.0), 6)))
+            self.assertAlmostEqual(UV[0, 0] * bld.SKY_WIN_BAYS, round(UV[0, 0] * bld.SKY_WIN_BAYS), 6)
+        self.assertGreater(len(starts), 3)
+
+
 class DoorTest(unittest.TestCase):
     def test_door_faces_the_road(self):
         spec = bld.plan(rect(0, 0, 10, 8), {"class": "house"})

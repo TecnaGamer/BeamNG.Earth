@@ -1299,19 +1299,47 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
                                            DOOR_GAP_M, PLAIN_STRIP, GROUND_FLOOR_SHOP_M, WIN_OUT_M, HOUSE_BAY_M,
                                            *WIN_UV, WIN_W, WIN_H, WIN_SILL)]
-    fast.require(76, "building_walls")
+    fast.require(184, "building_walls")
     band = spec.band or (0, 1)
     good = list(band[2]) if len(band) > 2 else []
     door = spec.door
+    mats = [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
+            mat_idx["bne_bld_fac_white"] if spec.wall else None]
+    # each window its own brightness at night (see WIN_CELLS): the bands whose floors start at a hashed cell, near tiles
+    # in runs of two band lengths (the shopfronts' two bays: a bay each)
+    vary = []
+    if mats[0][0] in _SHEET_MI and not (mats[0][0] == _FACADE_MI and band[0] == 0) and not (good and not lite):
+        vary.append((0, int(band[0]), int(band[1]), 2 * int(band[1])))
+    if mats[1] is not None:
+        vary.append((1, BAND_SHOP[0], BAND_SHOP[1], 1))
     P, UV, mid = fast._ef.building_walls(
         np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), float(z0), float(z_eave), bool(spec.wall),
         bool(spec.plain), int(band[0]), int(band[1]), [int(g) for g in good], int(spec.floors), float(spec.floor_h),
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
-        int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS)
+        int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS, vary,
+        WIN_CELLS if spec.wall else [])
     if mid:
-        m.quads(P, UV, mid, [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
-                             mat_idx["bne_bld_fac_white"] if spec.wall else None])
+        m.quads(P, UV, mid, mats)
+
+
+# Night windows, each its own brightness (the user, 2026-11-08: "the brightness of windows should be randomized at
+# night", "Do towers too"; S-moreo's PR #916, reworked 2026-11-10). The window sheets' night maps light each cell of a
+# band at its own level (tools/build_night_windows.py), and each floor's quad of a band (vary: material slot, band, bays
+# per sheet, run) starts at a cell of it hashed from the building's seed, wall, floor and bay (whole bays: the same
+# windows by day; every floor began at the band's first, so a lit window was lit from street to roof); near tiles (not
+# lite) cut a floor wider than run bays into runs, each from its own cell (a band's few cells repeating along a floor
+# showed), far tiles keep it one quad; the laid-over windows (slot 2) each one of WIN_CELLS (they all took WIN_UV: lit
+# alike). In UVs only, in the kernel (earthfast.building_walls, wall_cells): #916 gave each sheet three materials (a
+# bay each, hashed) and cut every floor at its bays, near and far, and cost 9 % of the frame rate at night in Times
+# Square (138.7 / 133.9 fps -> 128.0 / 120.3, p99 11.5 -> 14 ms, new 74 ms render and 131 ms shadow hitches: the
+# materials multiply a shape's draw batches and material instancing). A synthetic downtown (576 buildings on 20 m
+# lots): #916 253k -> 835k triangles near, 102k -> 689k far, 4 -> 10 materials; this 258k near, far and materials the
+# same; on 40 m lots 163k -> 185k near. (A numpy pass for it doubled the walls' build time.)
+WIN_CELLS = [(53 / 1024, 154 / 1024), (459 / 1024, 562 / 1024), (663 / 1024, 764 / 1024)]  # the sash band's good bays
+_FACADE_MI = MATERIALS.index(FACADE)
+_SHEET_MI = (_FACADE_MI, MATERIALS.index(OFFICE))  # (the plaster sheet's band 0, BAND_TALL, has bays of uneven width:
+                                                   # a floor shifted by a bay would cut its windows; left as it was)
 
 
 PLAIN_STRIP = 0.3           # of a bay: the plain wall between two windows of a sheet's band (centred on a bay edge)
@@ -5517,8 +5545,11 @@ def _sky_mesh(items):
         zb = gmin
         fh = float(spec.floor_h or FLOOR_M) * SKY_WIN_FLOORS
         bw = SKY_BAY_M * SKY_WIN_BAYS
-        v0, v1 = (z0 - zb) / fh, (z1 - zb) / fh
-        u = 0.0
+        # (each building from its own bay and floor of the map, whole cells: the same map at every building's corner
+        # lit the same windows, S-moreo's PR #916)
+        dv = int(_hash01(spec.seed, "sky v") * SKY_WIN_FLOORS) / SKY_WIN_FLOORS
+        v0, v1 = (z0 - zb) / fh + dv, (z1 - zb) / fh + dv
+        u = int(_hash01(spec.seed, "sky u") * SKY_WIN_BAYS) / SKY_WIN_BAYS
         for i in range(n):
             a, b = ring[i], ring[(i + 1) % n]
             if windows:

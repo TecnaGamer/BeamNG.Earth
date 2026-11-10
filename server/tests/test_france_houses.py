@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "server"), str(ROOT / "tools"), str(Path(__file__).parent)]
 import buildings as b
 import cdae
+import francehouse_mesh as fm
 import francehouses as fr
 import geodesy
 import house_regions
@@ -195,6 +196,27 @@ class HouseTest(unittest.TestCase):
         np.testing.assert_array_equal(a[2], c[2])
         np.testing.assert_array_equal(a[3], c[3])
         np.testing.assert_array_equal(a[5], c[5])
+
+    def test_lit_windows_each_one_cell_of_one_material(self):
+        """Each lit window one cell of the lit glass's map (its own level and hour to go dark, GLASS_LIT), one lit
+        material (S-moreo's PR #916 had three)."""
+        lit, cells = None, set()
+        for i in range(12):
+            P, UV, T, M, mats, C = b.build([(self.plan(seed_id=str(i)), 0., 0.)])
+            names = {mats[k] for k in set(M.tolist())}
+            self.assertFalse({n for n in names if n.startswith("bne_fr_house_glass_lit_")}, names)
+            if "bne_fr_house_glass_lit" not in names:
+                continue
+            lit = mats.index("bne_fr_house_glass_lit")
+            for tri in T[M == lit]:
+                uv = UV[tri]
+                self.assertTrue(np.allclose(uv, uv[0]), uv)            # (a point: the cell's own level)
+                k = uv[0, 0] * fm.LIT_GLASS_CELLS - .5
+                self.assertAlmostEqual(k, round(k), 6)
+                cells.add(round(k))
+        self.assertIsNotNone(lit)
+        self.assertGreater(len(cells), 2, cells)
+        self.assertEqual(len(assets.GLASS_LIT), fm.LIT_GLASS_CELLS)
 
     def test_pickled_looks_keep_their_colours_without_process_dictionary(self):
         s = pickle.loads(pickle.dumps(self.plan()))
