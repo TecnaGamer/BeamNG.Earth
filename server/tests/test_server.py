@@ -1196,6 +1196,39 @@ class DeleteQueueTest(unittest.TestCase):
         dt = np.diff(times)
         self.assertGreater(float(np.median(dt)), 0.5 / earthd.DELETE_MAX_RATE)
 
+    def test_a_slow_delete_does_not_hold_the_event_loop(self):
+        """os.remove under a busy disk held the event loop 2.8 and 5.0 s after a teleport (2026-11-09): the file work
+        runs on the delete thread, the loop keeps answering; a tile built again while its delete waited keeps its file."""
+        mesh = self.make("mesh")
+        slow = os.path.join(mesh.out_dir, "slow")
+        kept = os.path.join(mesh.out_dir, "far_1_0_0_1.cdae")
+        for p in (slow, kept):
+            open(p, "w").close()
+        remove = mesh._remove
+
+        def stuck(p):
+            if p == slow:
+                time.sleep(1.0)
+            remove(p)
+        mesh._remove = stuck
+        gaps = []
+
+        async def run():
+            mesh.queue_delete([slow])
+            mesh.queue_delete([kept], (1, "0_0_1"))
+            t = time.monotonic()
+            for _ in range(30):                 # the loop ticks every 50 ms while the slow delete runs
+                await asyncio.sleep(0.05)
+                now = time.monotonic()
+                gaps.append(now - t)
+                t = now
+                if 0.2 < sum(gaps) < 0.3:
+                    mesh.tiles[(1, "0_0_1")] = object()     # built again while the slow one held the thread
+        asyncio.run(run())
+        self.assertLess(max(gaps), 0.5, "the event loop kept running during a 1 s delete")
+        self.assertFalse(os.path.exists(slow))
+        self.assertTrue(os.path.exists(kept), "rebuilt meanwhile: its file stays")
+
 
 class _GeoConn:
     def __init__(self, roads):

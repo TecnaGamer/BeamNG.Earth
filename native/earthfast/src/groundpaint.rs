@@ -13,7 +13,7 @@ pub fn mask_segments(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool
                      hw: PyReadonlyArray1<'_, f64>) -> usize {
     let (segs, hw) = (segs.as_array(), hw.as_array());
     let mut mv = mask.as_array_mut();
-    py.allow_threads(|| {
+    py.detach(|| {
         let (h, w) = (mv.shape()[0] as i64, mv.shape()[1] as i64);
         let mut n = 0usize;
         for k in 0..segs.shape()[0] {
@@ -82,7 +82,7 @@ pub fn photo_ghosts<'py>(py: Python<'py>, rgb: numpy::PyReadonlyArray3<'py, u8>,
                          -> (Bound<'py, numpy::PyArray3<u8>>, Bound<'py, numpy::PyArray2<bool>>) {
     let (img, segs, hw, ghost, road) = (rgb.as_array(), segs.as_array(), hw.as_array(), ghost.as_array(), road.as_array());
     let (h, w) = (img.shape()[0], img.shape()[1]);
-    let (out, mask) = py.allow_threads(|| {
+    let (out, mask) = py.detach(|| {
         use numpy::ndarray::{Array2, Array3};
         let mut on = Array2::<bool>::from_elem((h, w), false);
         let mut sum = vec![[0f64; 3]; n_roads];
@@ -262,7 +262,7 @@ pub fn value_noises<'py>(py: Python<'py>, x: PyReadonlyArray1<'py, f64>, y: PyRe
                          seeds: Vec<u64>) -> Vec<Bound<'py, numpy::PyArray1<f64>>> {
     use numpy::IntoPyArray;
     let (x, y) = (x.as_array(), y.as_array());
-    let outs: Vec<Vec<f64>> = py.allow_threads(|| {
+    let outs: Vec<Vec<f64>> = py.detach(|| {
         let n = x.len().min(y.len());
         let mut outs: Vec<Vec<f64>> = seeds.iter().map(|_| Vec::with_capacity(n)).collect();
         for i in 0..n {
@@ -353,7 +353,7 @@ pub fn pad_cover<'py>(py: Python<'py>, h: usize, w: usize, pads: Vec<(PyReadonly
                       -> Option<Bound<'py, numpy::PyArray2<u8>>> {
     use numpy::IntoPyArray;
     let pv = pads_of(&pads);
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let (r0, c0, nr, nc, bits) = pad_bits(h, w, &pv)?;
         let mut out = vec![0u8; h * w];
         let mut any = false;
@@ -376,7 +376,7 @@ pub fn paint_pads(py: Python<'_>, mut rgb: numpy::PyReadwriteArray3<'_, u8>,
     let pv = pads_of(&pads);
     let mut img = rgb.as_array_mut();
     let (h, w) = (img.shape()[0], img.shape()[1]);
-    py.allow_threads(|| {
+    py.detach(|| {
         let Some((r0, c0, nr, nc, bits)) = pad_bits(h, w, &pv) else { return 0 };
         let mut n = 0usize;
         for r in 0..nr {

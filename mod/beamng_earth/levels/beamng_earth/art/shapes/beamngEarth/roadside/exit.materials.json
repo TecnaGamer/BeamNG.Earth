@@ -278,6 +278,40 @@
     "alphaRef": 64,
     "translucent": false
   },
+  "bne_signs_vienna_w": {
+    "name": "bne_signs_vienna_w",
+    "mapTo": "bne_signs_vienna_w",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_w.color.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_signs_vienna_y": {
+    "name": "bne_signs_vienna_y",
+    "mapTo": "bne_signs_vienna_y",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_signs_vienna_y.color.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
   "bne_se_signs": {
     "name": "bne_se_signs",
     "mapTo": "bne_se_signs",
@@ -303,6 +337,40 @@
     "Stages": [
       {
         "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_se_signs2.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_de_signs": {
+    "name": "bne_de_signs",
+    "mapTo": "bne_de_signs",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_signs.png",
+        "roughnessFactor": 0.65,
+        "metallicFactor": 0.0
+      },
+      {},
+      {},
+      {}
+    ],
+    "castShadows": false
+  },
+  "bne_de_zones": {
+    "name": "bne_de_zones",
+    "mapTo": "bne_de_zones",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_de_zones.png",
         "roughnessFactor": 0.65,
         "metallicFactor": 0.0
       },

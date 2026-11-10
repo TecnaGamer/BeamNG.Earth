@@ -23,6 +23,7 @@ import json
 import logging
 import math
 import os
+import zipfile
 import re
 import threading
 import time
@@ -326,7 +327,7 @@ class OsmTags:
                     if "lane_hw_ok" not in f.files or "bus" not in f.files:  # (decoded before busways: decoded again)
                         return None
                     return {c: f[c] for c in f.files}
-            except (OSError, ValueError, KeyError):
+            except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile):    # (damaged: decoded again)
                 return None
         t, mine = xproc.once(path + ".lock", load, TABLE_WAIT_S, kind)
         if t is None:
@@ -535,6 +536,10 @@ def _appended_features(ways, cls, default_width=None, oneway=False):
     if oneway:
         f.rules["oneway"] = mg.rule_table(oneways, "float")
     f.clipped = np.zeros(n, bool)
+    # the mapped lane count, so a busway's dashes can see it. join() writes this same column from the cell's tags.
+    import roadlanes
+    counted = [roadlanes.count(w.get("lanes")) for w in ways]
+    f.attrs["osm_lanes"] = np.array([np.nan if v is None else float(v) for v in counted], np.float64)
     return f
 
 

@@ -48,5 +48,20 @@ T.check(light and light.id == id and light.fields.color == nl.LIGHT.color and li
 core_environment.getLightState = function() return { isNight = false } end
 clock = clock + 2; nl.update()
 T.check(light and light.fields.isEnabled == 'false' and nl.status().errors == 0, 'day disables without errors')
+-- The far glow's balls: each detail level's material lit at night, dimmer as the balls grow (tools/build_lamp_glow.py).
+local shapes = dir .. '/../beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/'
+local f = io.open(shapes .. 'bne_lamp_glow.dae'); local dae = f:read('*a'); f:close()
+f = io.open(shapes .. 'lamps.materials.json'); local mats = f:read('*a'); f:close()
+local n = 0
+for name in dae:gmatch('target="#([%w_]+)"') do
+  n = n + 1
+  T.check(nl.MATERIALS[name] ~= nil and mats:find('"' .. name .. '"', 1, true) ~= nil,
+          'glow material lit and defined: ' .. name)
+end
+T.check(n == #nl.GLOW_NITS + 1, 'a material per ball (and the speck, the lens): ' .. n)
+for k = 2, #nl.GLOW_NITS do
+  T.check(nl.GLOW_NITS[k] <= nl.GLOW_NITS[k - 1] and nl.GLOW_NITS[k] >= 25,
+          'the far balls dimmer, as bright as floodlit stone at least')
+end
 nl.reset()
 T.done('test_nightlights')

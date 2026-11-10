@@ -1,0 +1,40 @@
+{
+  "_": "OpenStreetMap traffic_sign codes of a country's own numbering to the roles of sign_roles.json (task 017, stage 4). A code absent here is not shown: doubt is no sign. `verified` lists the codes read in the country's norm text (docs/research/2026-11-06-road-signs.md 3.4: PL Dz.U. 2019 poz. 2311, CZ TP 65); the others are from memory and must be checked against a photo before the shard feeds the game. A code with a dash suffix (DE:220-10) falls back to the base before the dash.",
+  "generic": {"stop": "prio.stop", "give_way": "prio.give_way", "yield": "prio.give_way", "no_entry": "reg.no_entry"},
+  "ignored": ["city_limit", "maxspeed", "none", "yes", "no", "unknown"],
+  "countries": {
+    "DE": {
+      "codes": {"205": "prio.give_way", "206": "prio.stop", "208": "prio.oncoming", "306": "prio.main_road", "307": "prio.main_road_end",
+                "267": "reg.no_entry", "250": "reg.no_vehicles", "276": "reg.no_overtaking", "280": "reg.no_overtaking_end",
+                "283": "reg.no_stopping", "286": "reg.no_parking", "215": "mand.roundabout", "220": "info.oneway",
+                "325.1": "info.living_street", "325.2": "info.living_street_end", "330.1": "info.motorway",
+                "330.2": "info.motorway_end", "350": "info.crossing_right", "357": "info.dead_end", "237": "mand.bicycle",
+                "239": "mand.pedestrian", "101": "warn.danger", "102": "warn.crossroads", "103-10": "warn.curve_right",
+                "103-20": "warn.curve_left", "105-10": "warn.double_right", "105-20": "warn.double_left", "112": "warn.bump",
+                "114": "warn.slippery", "131": "warn.signals", "133": "warn.pedestrians", "136": "warn.children",
+                "138": "warn.cyclists", "142": "warn.animals", "123": "warn.roadworks"},
+      "verified": []
+    },
+    "PL": {
+      "codes": {"A-1": "warn.curve_right", "A-2": "warn.curve_left", "A-3": "warn.double_right", "A-4": "warn.double_left",
+                "A-6a": "warn.crossroads", "A-7": "prio.give_way", "A-11": "warn.bump", "A-14": "warn.roadworks",
+                "A-16": "warn.pedestrians", "A-17": "warn.children", "A-29": "warn.signals", "A-30": "warn.danger",
+                "B-1": "reg.no_vehicles", "B-2": "reg.no_entry", "B-20": "prio.stop", "B-25": "reg.no_overtaking",
+                "B-27": "reg.no_overtaking_end", "B-35": "reg.no_parking", "B-36": "reg.no_stopping",
+                "C-12": "mand.roundabout", "D-1": "prio.main_road", "D-2": "prio.main_road_end", "D-3": "info.oneway",
+                "D-4a": "info.dead_end", "D-6": "info.crossing_right", "D-9": "info.motorway", "D-10": "info.motorway_end",
+                "D-18": "info.parking", "D-52": "info.living_street", "D-53": "info.living_street_end"},
+      "verified": ["A-6a", "A-11", "A-14", "A-16", "A-17", "A-29", "A-30", "B-20", "B-25", "B-27", "B-35", "B-36", "C-12",
+                   "D-4a", "D-10", "D-18", "D-52", "D-53"],
+      "plates": "^T-\\d+[a-z]*$"
+    },
+    "CZ": {
+      "codes": {"B1": "reg.no_vehicles", "B2": "reg.no_entry", "P2": "prio.main_road", "P3": "prio.main_road_end",
+                "P4": "prio.give_way", "P6": "prio.stop", "IP6": "info.crossing_right", "A8": "warn.slippery",
+                "A12": "warn.children"},
+      "verified": ["B2", "P2", "P3", "P4", "P6", "IP6", "A8", "A12"],
+      "plates": "^E\\d+[a-z]*$"
+    },
+    "UA": {"codes": {}, "verified": []}
+  }
+}

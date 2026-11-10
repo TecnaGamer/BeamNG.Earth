@@ -151,10 +151,13 @@ export function searchPlaces(list, query, limit = 8) {
 }
 
 // A WMO weather code (settings.uiMapState's weather.code, from weather.lua's last message) as one emoji, the
-// same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm).
-export function weatherIcon(code) {
+// same buckets as weather.lua's M.describe (clear / cloud / fog / rain / snow / showers / storm). night: the sun is
+// down where the player is (settings.lua's weather.night): a clear sky is the moon, not the sun (GitHub #874).
+export function weatherIcon(code, night = false) {
   code = Number(code)
   if (!Number.isFinite(code)) return ""
+  if (code <= 1 && night) return "🌙"     // clear / mainly clear at night
+  if (code === 2 && night) return "☁️"     // partly cloudy at night: no sun peeking out
   if (code === 0) return "☀️"             // clear sky
   if (code <= 2) return "🌤️"         // mainly clear / partly cloudy
   if (code === 3) return "☁️"              // overcast
@@ -287,23 +290,40 @@ export function visibleLines(lines, boxes, clat, clon, z, w, h, max = 3000, norm
   const s = TILE * Math.pow(2, z), c = project(clat, clon, z)
   for (let i = 0; i < lines.length && out.length < max; i++) {
     if (!boxMeets(boxes[i], v)) continue
-    const pts = []
+    // a line's first point in the world copy nearest the view's centre, every next one beside the one before (each
+    // point wrapped on its own put a line crossing the copies' seam half in one copy, half in the next: a stroke across
+    // the whole map when zoomed far out, the user 2026-11-08), and the line again in every other copy on screen
+    const xs = [], ys = []
+    let prev = null
     if (norm) {
       const n = norm[i]
       for (let j = 0; j < n.length; j += 2) {
         let dx = n[j] * s - c.x                 // = toScreen's, operation for operation
         if (dx > s / 2) dx -= s
         if (dx < -s / 2) dx += s
-        pts.push((w / 2 + dx).toFixed(1) + "," + (h / 2 + (n[j + 1] * s - c.y)).toFixed(1))
+        if (prev !== null) dx += Math.round((prev - dx) / s) * s
+        prev = dx
+        xs.push(w / 2 + dx); ys.push(h / 2 + (n[j + 1] * s - c.y))
       }
     } else {
       const l = lines[i]
       for (let j = 0; j < l.length; j += 2) {
         const p = toScreen(l[j + 1], l[j], clat, clon, z, w, h)
-        pts.push(p.x.toFixed(1) + "," + p.y.toFixed(1))
+        let x = p.x
+        if (prev !== null) x += Math.round((prev - x) / s) * s
+        prev = x
+        xs.push(x); ys.push(p.y)
       }
     }
-    out.push(pts.join(" "))
+    if (!xs.length) continue
+    let x0 = Infinity, x1 = -Infinity
+    for (const x of xs) { if (x < x0) x0 = x; if (x > x1) x1 = x }
+    for (let k = Math.ceil(-x1 / s); k * s + x0 <= w && out.length < max; k++) {   // each copy meeting [0, w]
+      const off = k * s
+      const pts = []
+      for (let j = 0; j < xs.length; j++) pts.push((xs[j] + off).toFixed(1) + "," + ys[j].toFixed(1))
+      out.push(pts.join(" "))
+    }
   }
   return out
 }

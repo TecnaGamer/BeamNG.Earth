@@ -108,7 +108,13 @@
     </div>
     <div class="m3-msg" v-else-if="msg" @mousedown.stop>{{ msg }}</div>
     <div class="m3-compass" @mousedown.stop @click="north" title="Face north">
-      <div class="m3-needle" :style="{ transform: `rotate(${-headingDeg}deg)` }">N</div>
+      <!-- a compass needle: its red half points north, the "N" at its tip (the user, 2026-11-08: "add an arrow to the compass") -->
+      <svg class="m3-needle" viewBox="-26 -26 52 52" :style="{ transform: `rotate(${-headingDeg}deg)` }">
+        <polygon points="0,-15 5,0 -5,0" fill="#ff5a4a" />
+        <polygon points="0,15 5,0 -5,0" fill="#e6eaee" />
+        <circle r="2" fill="#1b1f24" />
+        <text x="0" y="-17" text-anchor="middle" font-size="8.5" font-weight="700" fill="#ff7a6b">N</text>
+      </svg>
     </div>
     <div class="m3-help" @mousedown.stop>Click: pick a spot &middot; Right click: menu &middot; Drag: move &middot; Right drag: turn and tilt &middot; Wheel: zoom &middot; WASD: move &middot; Q E: turn &middot; R F: tilt</div>
     <div class="m3-cross"></div>
@@ -410,7 +416,7 @@ function keyStep() {
 }
 
 function zoom(n) { engineLua(`beamngEarth_map3d.zoom(${n})`) }
-function north() { engineLua("beamngEarth_map3d.setHeading(0)") }
+function north() { engineLua("beamngEarth_map3d.setHeading(0, true)") }   // (turned smoothly, the short way)
 function back() { engineLua("beamngEarth_map3d.exit()") }
 function to2d() { engineLua("beamngEarth_map3d.to2d()") }
 
@@ -620,7 +626,7 @@ onUnmounted(() => {
 .gps-stack, .ctx-menu, .confirm, .map-toast { color: #eee; }
 .m3-compass { position: absolute; right: 24px; bottom: calc(6.5vh + 60px); width: 52px; height: 52px; border-radius: 50%; cursor: pointer;
   background: rgba(0, 0, 0, 0.6); border: 1px solid rgba(255, 255, 255, 0.3); display: flex; align-items: center; justify-content: center; }
-.m3-needle { color: #ff6b5b; font-weight: 700; font-size: 16px; transition: transform 0.1s linear; }
+.m3-needle { width: 100%; height: 100%; transition: transform 0.1s linear; overflow: visible; }
 .m3-zoom { position: absolute; right: 24px; bottom: 190px; display: flex; flex-direction: column; gap: 6px; }
 .m3-help { position: absolute; left: 50%; bottom: calc(6.5vh + 6px); transform: translateX(-50%); padding: 4px 12px; font-size: 13px; color: #fff;
   background: rgba(0, 0, 0, 0.5); border-radius: 4px; }

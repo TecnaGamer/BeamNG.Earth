@@ -7,9 +7,13 @@ reach a substation (Overture infrastructure class substation areas; no towers in
 West Coast USA's switchgear (its yard's parts as a kit, a smaller one where it does not fit) and fenced with chain link.
 The layouts in Rust (earthfast.power_line_layout, earthfast.substation_yard).
 """
+import logging
+
 import numpy as np
 
 import fast
+
+log = logging.getLogger("earthd.powerlines")
 
 G_PYLON = "pylon"
 # Lines under HV_MIN_V stand on poles, not the 36 m lattice tower: a 66 kV line runs on poles along the street in town
@@ -207,10 +211,29 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None, pole_elev=
     colliders are checked AFTER native layout (which decides tower yaw). Unlike moving a point away from one road,
     this also covers crossroads, a rotated tower's corners and services. infrastructure receives the streamed
     visible supports, including render-only ones where a collider is unsafe and the endpoints of visible spans.
-    Forest rows remain for older callers; write_tile removes their duplicates when support records are present."""
-    import roads
+    Forest rows remain for older callers; write_tile removes their duplicates when support records are present.
+
+    Cache read failures leave this optional content out without rejecting the road tile.
+    Props, wires and visible supports are published only after the whole layout succeeds.
+    """
     if md is None:
         return
+    got_props, got_wires = [], []
+    got_infrastructure = [] if infrastructure is not None else None
+    try:
+        _tile_lines(frame, tx, ty, md, elev, got_props, got_wires, clearance, pole_elev, got_infrastructure)
+    except OSError as e:
+        log.warning("power lines: tile %s_%s left out: %s: %s", tx, ty, type(e).__name__, e)
+        return
+    props.extend(got_props)
+    wires.extend(got_wires)
+    if infrastructure is not None:
+        infrastructure.extend(got_infrastructure)
+
+
+def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance, pole_elev=None, infrastructure=None):
+    """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
+    import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen, layers, cables = [], [], set(), [], {}

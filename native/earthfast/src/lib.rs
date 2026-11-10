@@ -16,9 +16,11 @@ mod traffic;
 mod dsm;
 mod vegmask;
 mod roadgeom;
+mod roadsmooth;
 mod shore;
 mod photofill;
 mod ambience;
+mod gradeguard;
 mod power;
 mod underpass;
 mod coarseease;
@@ -27,13 +29,17 @@ mod tunnelcover;
 mod gradesep;
 mod lamps;
 mod decks;
+mod deckmerge;
 mod levels;
 mod tapers;
 mod islands;
 mod ribbons;
 mod groundpaint;
 mod medians;
+mod deautobahn;
 mod speedsigns;
+mod roadsigns;
+mod townsigns_de;
 mod dirsigns;
 mod dirsigns_face;
 mod cachemap;
@@ -47,9 +53,15 @@ mod fartex;
 mod farglobal;
 mod dirtsteps;
 mod gridinterp;
+mod dejunction;
 mod streetlabels;
 mod perfclean;
 mod mdhtml;
+mod roadlanes;
+mod waytags;
+mod underdeck;
+mod railseam;
+mod classgrid;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -70,7 +82,7 @@ where
     F: pyo3::marker::Ungil + FnOnce() -> T,
     T: pyo3::marker::Ungil,
 {
-    if work >= RELEASE_MIN { py.allow_threads(f) } else { f() }
+    if work >= RELEASE_MIN { py.detach(f) } else { f() }
 }
 
 
@@ -282,7 +294,7 @@ fn dual_side(a: PyReadonlyArray2<f64>, b: PyReadonlyArray2<f64>, gap_min: f64, g
 /// path. Made on first use.
 #[pyfunction]
 fn gpu_name(py: Python<'_>) -> Option<String> {
-    py.allow_threads(|| gpu::get().map(|g| g.name.clone()))
+    py.detach(|| gpu::get().map(|g| g.name.clone()))
 }
 
 /// colormatch.detect_seams' angle loop on the GPU (gpu.rs): src (7, h, w) float32 = [w, w*L_0 .. w*L_5]. Returns
@@ -298,7 +310,7 @@ fn seam_detect_gpu<'py>(py: Python<'py>, src: PyReadonlyArray3<'py, f32>, n_ang:
         return Err(pyo3::exceptions::PyValueError::new_err("seam_detect_gpu: src must be (7, h, w)"));
     }
     let data: Vec<f32> = v.iter().copied().collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             gpu::seam_detect(g, &data, h, w, n_ang, half, depth, &offs, full, gate, agree, min_valid)
@@ -324,7 +336,7 @@ fn bc1_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let v = a.as_array();
         (v.shape()[1], v.shape()[0], v.iter().copied().collect())
     }).collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         let refs: Vec<(usize, usize, &[u8])> = data.iter().map(|(w, h, b)| (*w, *h, b.as_slice())).collect();
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc1_encode(g, &refs)))
@@ -347,7 +359,7 @@ fn bc7_encode_gpu<'py>(py: Python<'py>, imgs: Vec<PyReadonlyArray3<'py, u8>>) ->
         let b = a.as_slice().map_err(|_| pyo3::exceptions::PyValueError::new_err("bc7_encode_gpu: contiguous images"))?;
         refs.push((sh[1], sh[0], b));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let g = gpu::get().ok_or_else(|| "no GPU".to_string())?;
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| gpu::bc7_encode(g, &refs)))
             .unwrap_or_else(|_| Err("the GPU kernel panicked".to_string()))
@@ -388,7 +400,7 @@ fn segment_crossings_g(
     let gs = ground_starts.as_array();
     let np_ = ps.len().saturating_sub(1);
     let ng = gs.len().saturating_sub(1);
-    py.allow_threads(|| {
+    py.detach(|| {
         let bbox = |a: &numpy::ndarray::ArrayView2<f64>, i0: usize, i1: usize| {
             let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
             for k in i0..i1 {
@@ -446,7 +458,7 @@ fn seg_hits(py: Python<'_>, m: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>
     let gs = starts.as_array();
     let nm = ma.nrows();
     let ng = gs.len().saturating_sub(1);
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = Vec::new();
         if nm < 2 { return out; }
         let mut sm = vec![0.0f64; nm];
@@ -499,7 +511,7 @@ fn under_decks(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<f6
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
     let k = p.nrows();
     let nc = st.len().saturating_sub(1);
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = vec![false; k];
         for c in 0..nc {
             let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
@@ -537,7 +549,7 @@ fn face_normal_sum<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>, 
                         -> Bound<'py, PyArray2<f64>> {
     let (p, t) = (positions.as_array(), tris.as_array());
     let (n, m) = (p.nrows(), t.nrows());
-    let acc = py.allow_threads(|| {
+    let acc = py.detach(|| {
         let mut fnrm = vec![[0.0f64; 3]; m];
         for i in 0..m {
             let (a, b, c) = (t[[i, 0]] as usize, t[[i, 1]] as usize, t[[i, 2]] as usize);
@@ -573,7 +585,7 @@ fn first_use<'py>(py: Python<'py>, tris: PyReadonlyArray2<'py, i64>, nverts: usi
                   -> (Bound<'py, PyArray1<i64>>, Bound<'py, PyArray2<i64>>) {
     let t = tris.as_array();
     let m = t.nrows();
-    let (order, idx) = py.allow_threads(|| {
+    let (order, idx) = py.detach(|| {
         let mut remap = vec![-1i64; nverts];
         let mut order = Vec::new();
         for i in 0..m {
@@ -601,7 +613,7 @@ fn near_crossers(py: Python<'_>, xy: PyReadonlyArray2<f64>, z: PyReadonlyArray1<
     let (p, z, d, st, r) = (xy.as_array(), z.as_array(), pts.as_array(), starts.as_array(), reach.as_array());
     let k = p.nrows();
     let nc = st.len().saturating_sub(1);
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = vec![false; k];
         for c in 0..nc {
             let (j0, j1) = (st[c] as usize, st[c + 1] as usize);
@@ -634,7 +646,7 @@ fn clip_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, x0: f64,
                       -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<i64>>) {
     let p = pts.as_array();
     let (k, dim) = (p.nrows(), p.ncols());
-    let (data, starts) = py.allow_threads(|| {
+    let (data, starts) = py.detach(|| {
         let mut data: Vec<f64> = Vec::new();
         let mut starts: Vec<i64> = vec![0];
         let mut cur: Vec<Vec<f64>> = Vec::new();
@@ -694,7 +706,7 @@ fn clip_polyline<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, x0: f64,
 #[pyfunction]
 fn ends_near(py: Python<'_>, pts: PyReadonlyArray2<f64>, targets: PyReadonlyArray2<f64>, tx: f64, ty: f64) -> Vec<bool> {
     let (p, t) = (pts.as_array(), targets.as_array());
-    py.allow_threads(|| {
+    py.detach(|| {
         let n = p.nrows();
         if t.nrows() == 0 || !(tx > 0.0 && ty > 0.0) { return vec![false; n]; }
         let mut map: std::collections::HashMap<(i64, i64), Vec<usize>> = Default::default();
@@ -802,7 +814,7 @@ fn point_inside(poly: PyReadonlyArray2<f64>, x: f64, y: f64) -> bool {
 fn road_through(py: Python<'_>, ring: PyReadonlyArray2<f64>, pts: PyReadonlyArray2<f64>,
                 starts: PyReadonlyArray1<i64>, step: f64) -> f64 {
     let (r, p, st) = (ring.as_array(), pts.as_array(), starts.as_array());
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut total = 0.0f64;
         for l in 0..st.len().saturating_sub(1) {
             let (i0, i1) = (st[l] as usize, st[l + 1] as usize);
@@ -1083,7 +1095,7 @@ fn bc7_block(t: &[[i32; 4]; 16]) -> [u8; 16] {
 #[pyfunction]
 fn bc7_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyBytes> {
     let a = img.as_array();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
     let (h, w, ch) = (a.shape()[0], a.shape()[1], a.shape()[2]);
     let (nby, nbx) = ((h + 3) / 4, (w + 3) / 4);
     let mut out = vec![0u8; nby * nbx * 16];
@@ -1556,22 +1568,25 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
                         target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
                     }
-                    // past a bridge abutment's end (abut_d: how far along the road it lies from this segment), over the
-                    // deck: falling away at abut_under, not held at the end's height (the core's round end reached
-                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
-                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
-                    if abut[s] != 0 && l2 > 1e-12 && abut_under > 0.0 {
+                    // m past a bridge abutment's end (abut_d: how far along the road it lies from this segment): over
+                    // the deck
+                    let mut past = 0.0f64;
+                    if abut[s] != 0 && l2 > 1e-12 {
                         let len = l2.sqrt();
                         let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
                         let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
-                        let mut beyond = 0.0f64;
                         if da.is_finite() {
-                            beyond = beyond.max(-along - da);
+                            past = past.max(-along - da);
                         }
                         if db.is_finite() {
-                            beyond = beyond.max(along - len - db);
+                            past = past.max(along - len - db);
                         }
-                        target -= beyond * abut_under;
+                    }
+                    // there falling away at abut_under, not held at the end's height (the core's round end reached
+                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
+                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
+                    if abut_under > 0.0 {
+                        target -= past * abut_under;
                     }
                     if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
                         let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
@@ -1587,7 +1602,11 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                         // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
                         // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
                         let cr = if steep[s] != 0 { h[s] } else { rh[s] };
-                        if d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan()) {
+                        // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an
+                        // approach's carriageway reached over the railway under a short bridge, and the track's bed
+                        // gave way to it there; GitHub #909)
+                        let car = past <= yield_ramp.max(1e-6);
+                        if car && (d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan())) {
                             cdeep[idx] = d - cr;
                             carz[idx] = target;
                             carid[idx] = rid[s];
@@ -2181,7 +2200,7 @@ fn rock<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, u: PyReadonlyArray
     let img = rgb.as_array();
     let u = u.as_array();
     let oct = octaves.as_array();
-    let res = py.allow_threads(|| {
+    let res = py.detach(|| {
     let px = img.shape()[0];
     let (ny, nx) = (u.nrows(), u.ncols());
     let t = size / px as f64;
@@ -2487,7 +2506,7 @@ fn mip_levels<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, lut: PyReado
     if nc != 3 && nc != 4 {
         return Err(pyo3::exceptions::PyValueError::new_err(format!("mip_levels: 3 or 4 channels, not {}", nc)));
     }
-    let levels = py.allow_threads(|| mip_levels_core(img, lut, sharpen));
+    let levels = py.detach(|| mip_levels_core(img, lut, sharpen));
     Ok(levels.into_iter().map(|a| a.into_pyarray(py)).collect())
 }
 
@@ -2813,7 +2832,7 @@ fn float_predictor_f32<'py>(py: Python<'py>, data: &[u8], w: usize, h: usize) ->
     if data.len() < row * h {
         return Err(pyo3::exceptions::PyValueError::new_err("float_predictor_f32: tile data too short"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let mut v = vec![0f32; w * h];
         let mut b = vec![0u8; row];
         for r in 0..h {
@@ -2852,7 +2871,7 @@ fn bilinear_grid<'py>(
     if xs.len() != ys.len() {
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_grid: fx and fy differ in length"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
             let (x, y) = (xs[i], ys[i]);
             let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
@@ -3089,7 +3108,7 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
         (c[0], c[1], c[2], c[3], c[4] as i64, c[5] as i64, c[6], c[7]);
     let (gf_shop, win_out, house_bay) = (c[8], c[9], c[10]);
     let (wu0, wu1, wv0, wv1, win_w, win_h, win_sill) = (c[11], c[12], c[13], c[14], c[15], c[16], c[17]);
-    Ok(py.allow_threads(|| {
+    Ok(py.detach(|| {
         let mut pp: Vec<f64> = Vec::new();
         let mut uv: Vec<f64> = Vec::new();
         let mut mid: Vec<u8> = Vec::new();
@@ -3286,7 +3305,7 @@ fn triangulate<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>) -> Bound<'py
     let a = p.as_array();
     let n = a.nrows();
     let pts: Vec<(f64, f64)> = (0..n).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    let out = py.allow_threads(|| ear_clip(&pts));
+    let out = py.detach(|| ear_clip(&pts));
     let flat: Vec<i64> = out.iter().flat_map(|t| t.iter().copied()).collect();
     numpy::ndarray::Array2::from_shape_vec((out.len(), 3), flat).unwrap().into_pyarray(py)
 }
@@ -3344,7 +3363,7 @@ fn clean_ring_core<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, tol: f64
                         -> Option<Bound<'py, PyArray2<f64>>> {
     let a = p.as_array();
     let mut pts: Vec<(f64, f64)> = (0..a.nrows()).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    let got = py.allow_threads(|| {
+    let got = py.detach(|| {
         if pts.len() > 1 {
             let ((ax, ay), (bx, by)) = (pts[0], pts[pts.len() - 1]);
             if (ax - bx).abs() <= 1e-08 + 1e-05 * bx.abs() && (ay - by).abs() <= 1e-08 + 1e-05 * by.abs() {
@@ -3405,7 +3424,7 @@ fn clean_ring_core<'py>(py: Python<'py>, p: PyReadonlyArray2<'py, f64>, tol: f64
 fn oriented_box_core(py: Python<'_>, p: PyReadonlyArray2<'_, f64>) -> Option<(f64, f64, f64, f64, f64, f64, f64, f64)> {
     let a = p.as_array();
     let pts: Vec<(f64, f64)> = (0..a.nrows()).map(|i| (a[[i, 0]], a[[i, 1]])).collect();
-    py.allow_threads(|| {
+    py.detach(|| {
         let n = pts.len();
         let mut best: Option<(f64, (f64, f64, f64, f64, f64, f64, f64, f64))> = None;
         for i in 0..n {
@@ -3465,7 +3484,7 @@ fn bilinear_tiles<'py>(
         return Err(pyo3::exceptions::PyValueError::new_err("bilinear_tiles: fx and fy differ in length"));
     }
     let px = |y: usize, x: usize| ts[(y / tile) * nx + x / tile][[y % tile, x % tile]] as f64;
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array1::from_shape_fn(xs.len(), |i| {
             let (x, y) = (xs[i], ys[i]);
             let ix = (x.floor() as i64).clamp(0, w as i64 - 2) as usize;
@@ -3485,7 +3504,7 @@ fn bilinear_tiles<'py>(
 #[pyfunction]
 fn terrarium_heights<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyArray2<f32>> {
     let a = img.as_array();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         numpy::ndarray::Array2::from_shape_fn((a.shape()[0], a.shape()[1]), |(y, x)| {
             a[[y, x, 0]] as f32 * 256.0f32 + a[[y, x, 1]] as f32 + a[[y, x, 2]] as f32 / 256.0f32 - 32768.0f32
         })
@@ -3501,7 +3520,7 @@ fn rf_pass(py: Python<'_>, mut x: numpy::PyReadwriteArray3<'_, f32>, cut_prev: P
     let mut xa = x.as_array_mut();
     let (rows, cols, ch) = (xa.shape()[0], xa.shape()[1], xa.shape()[2]);
     let af = a as f32;
-    py.allow_threads(|| {
+    py.detach(|| {
         for r in 0..rows {
             for c in 1..cols {
                 let f = if cut[[r, c]] { 0.0f32 } else { af };
@@ -3529,7 +3548,7 @@ fn rf_pass(py: Python<'_>, mut x: numpy::PyReadwriteArray3<'_, f32>, cut_prev: P
 fn vmedian<'py>(py: Python<'py>, x: PyReadonlyArray3<'py, f32>, ok: PyReadonlyArray3<'py, bool>,
                 n: PyReadonlyArray2<'py, i64>) -> Bound<'py, PyArray2<f32>> {
     let (xa, oa, na) = (x.as_array(), ok.as_array(), n.as_array());
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let (k, h, w) = (xa.shape()[0], xa.shape()[1], xa.shape()[2]);
         let mut buf = vec![0f32; k];
         numpy::ndarray::Array2::from_shape_fn((h, w), |(y, x_)| {
@@ -3588,7 +3607,7 @@ fn seam_pass<'py>(py: Python<'py>, arrs: PyReadonlyArray3<'py, f32>, half: i64, 
     let (nch, h, w) = (view.shape()[0], view.shape()[1], view.shape()[2]);
     assert!(nch == 7);
     let a = arrs.as_slice().expect("contiguous");
-    let (score, dm) = py.allow_threads(|| {
+    let (score, dm) = py.detach(|| {
         let clip = |v: i64, hi: usize| v.clamp(0, hi as i64) as usize;
         let hi_x: Vec<usize> = (0..w as i64).map(|i| clip(i + half + 1, w)).collect();
         let lo_x: Vec<usize> = (0..w as i64).map(|i| clip(i - half, w)).collect();
@@ -3754,7 +3773,7 @@ fn road_corridors<'py>(py: Python<'py>, mut mask: numpy::PyReadwriteArray2<'py, 
     let mut m = mask.as_array_mut();
     let mut p = push.as_mut().map(|a| a.as_array_mut());
     let (n_r, n_c) = (m.shape()[0] as i64, m.shape()[1] as i64);
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..s.shape()[0] {
             let (a0, a1, b0, b1, hwk) = (s[[k, 0]], s[[k, 1]], s[[k, 2]], s[[k, 3]], h[k]);
             let c0 = ((a0.min(b0) - hwk) as i64).max(0);
@@ -3810,7 +3829,7 @@ fn horizon_steps<'py>(py: Python<'py>, hpad: PyReadonlyArray2<'py, f32>, mut bes
     let n = best.as_array().shape()[0];
     let b = best.as_slice_mut().expect("contiguous");
     let p = pad as usize;
-    py.allow_threads(|| {
+    py.detach(|| {
         for k in 0..st.shape()[0] {
             let (iy, ix, fy, fx, d) = (st[[k, 0]] as i64, st[[k, 1]] as i64, st[[k, 2]], st[[k, 3]], st[[k, 4]]);
             let (wx0, wx1, wy0, wy1) = ((1.0 - fx) as f32, fx as f32, (1.0 - fy) as f32, fy as f32);
@@ -3970,7 +3989,7 @@ fn tunnel_holes(py: Python<'_>, mut mask: numpy::PyReadwriteArray2<'_, bool>, u:
                 m0: bool, m1: bool, margin: f64, end_m: f64, side_extra: f64, squares: bool) {
     let (uv, xv, zv) = (u.as_array(), xy.as_array(), z.as_array());
     let mut mv = mask.as_array_mut();
-    py.allow_threads(|| {
+    py.detach(|| {
         let n = uv.shape()[0] as i64;
         let k = xv.shape()[0];
         if k < 2 { return; }
@@ -4273,7 +4292,7 @@ fn veg_rows_json<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, i64>, e: PyR
                       rank: PyReadonlyArray1<'py, f64>) -> String {
     let (g, e, n, z, yaw, sc, h, r) = (group.as_array(), e.as_array(), n.as_array(), z.as_array(), yaw.as_array(),
                                        scale.as_array(), height.as_array(), rank.as_array());
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut out = String::with_capacity(g.len() * 56 + 2);
         out.push('[');
         for i in 0..g.len() {
@@ -4417,7 +4436,7 @@ fn bc1_block(t: &[[i32; 3]; 16]) -> [u8; 8] {
 #[pyfunction]
 fn bc1_encode<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>) -> Bound<'py, PyBytes> {
     let a = img.as_array();
-    let out = py.allow_threads(|| bc1_encode_core(a));
+    let out = py.detach(|| bc1_encode_core(a));
     PyBytes::new(py, &out)
 }
 
@@ -4455,7 +4474,7 @@ fn mesh_warp<'py>(py: Python<'py>, img: PyReadonlyArray3<'py, u8>, qx: PyReadonl
                   qy: PyReadonlyArray2<'py, f64>, cells: usize, cw: usize, px: usize)
                   -> Bound<'py, numpy::PyArray3<u8>> {
     let (a, qx, qy) = (img.as_array(), qx.as_array(), qy.as_array());
-    let out = py.allow_threads(|| fartex::warp_rgba(a, qx, qy, cells, cw, px, 4));
+    let out = py.detach(|| fartex::warp_rgba(a, qx, qy, cells, cw, px, 4));
     out.into_pyarray(py)
 }
 
@@ -5167,7 +5186,7 @@ fn paint_lines<'py>(py: Python<'py>, rgb: PyReadonlyArray3<'py, u8>, segs: PyRea
     if kd.iter().any(|&v| v as usize >= k) {
         return Err(pyo3::exceptions::PyValueError::new_err("paint_lines: a kind past the colours"));
     }
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let (h, w) = (img.shape()[0], img.shape()[1]);
         let mut cov = vec![0f32; k * h * w];
         for s in 0..m {
@@ -5237,7 +5256,7 @@ fn rtin_mesh<'py>(py: Python<'py>, h: PyReadonlyArray2<'py, f64>, max_err: f64)
         return Err(pyo3::exceptions::PyValueError::new_err("rtin_mesh: a (2^k + 1)² grid"));
     }
     let hv: Vec<f64> = g.iter().copied().collect();
-    let (tris, surf, worst) = py.allow_threads(|| rtin_core(&hv, n, max_err));
+    let (tris, surf, worst) = py.detach(|| rtin_core(&hv, n, max_err));
     let m = tris.len();
     let tris = numpy::ndarray::Array2::from_shape_vec((m, 3), tris.into_iter().flatten().collect()).unwrap();
     let surf = numpy::ndarray::Array2::from_shape_vec((n, n), surf).unwrap();
@@ -5360,6 +5379,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::dedupe_polyline, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsmooth::road_smooth_line, m)?)?;
     m.add_function(wrap_pyfunction!(roadgeom::curve_deck, m)?)?;
     m.add_function(wrap_pyfunction!(underpass::underpass_offsets, m)?)?;
     m.add_function(wrap_pyfunction!(coarseease::ease_coarse, m)?)?;
@@ -5370,6 +5390,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(tunnelcover::tunnel_reach, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_candidates, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_spans, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::lines_covered, m)?)?;
     m.add_function(wrap_pyfunction!(shore::shore_steps, m)?)?;
     m.add_function(wrap_pyfunction!(shore::carve_segments, m)?)?;
     m.add_function(wrap_pyfunction!(vegmask::mask_polys, m)?)?;
@@ -5383,11 +5404,18 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(decks::deck_end_joins, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::road_tapers, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_flow, m)?)?;
+    m.add_function(wrap_pyfunction!(roadlanes::generated_lanes, m)?)?;
+    m.add_function(wrap_pyfunction!(roadlanes::lane_flow_cells, m)?)?;
     m.add_function(wrap_pyfunction!(tapers::lane_shifts, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_gaps, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_tents, m)?)?;
     m.add_function(wrap_pyfunction!(levels::tag_level_ranges, m)?)?;
     m.add_function(wrap_pyfunction!(gradesep::gradesep_gather, m)?)?;
+    // (2026-11-08: gradesep._spans' rows and lines over the layers as they are; roads._deck_gaps' look round a road)
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradesep::gradesep_gather_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::first_ring_ends, m)?)?;
+    m.add_function(wrap_pyfunction!(decks::deck_gaps_round, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_end_on, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad, m)?)?;
     m.add_function(wrap_pyfunction!(decks::deck_pad_rim, m)?)?;
@@ -5494,6 +5522,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(medians::median_rows, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_place, m)?)?;
     m.add_function(wrap_pyfunction!(speedsigns::speed_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_signs, m)?)?;
+    m.add_function(wrap_pyfunction!(deautobahn::autobahn_columns, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_place, m)?)?;
+    m.add_function(wrap_pyfunction!(roadsigns::road_sign_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_stretch, m)?)?;
+    m.add_function(wrap_pyfunction!(dejunction::de_junction, m)?)?;
+    m.add_function(wrap_pyfunction!(speedsigns::speed_sign_general, m)?)?;
     m.add_class::<cachemap::CoverIndex>()?;
     m.add_function(wrap_pyfunction!(cachemap::cover_rect_tiles, m)?)?;
     m.add_function(wrap_pyfunction!(areacover::area_tiles, m)?)?;
@@ -5546,6 +5581,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirtsteps::dirt_step_clamp, m)?)?;
     m.add_function(wrap_pyfunction!(gridinterp::grid_bilinear2, m)?)?;
     m.add_function(wrap_pyfunction!(streetlabels::polyline_label_points, m)?)?;
+    m.add_function(wrap_pyfunction!(levels::bridge_level_spans, m)?)?;
+    m.add_class::<classgrid::ClassGridCache>()?;
+    m.add_class::<classgrid::ClassGridPlan>()?;
+    m.add_function(wrap_pyfunction!(classgrid::class_grid_bounds, m)?)?;
     m.add_function(wrap_pyfunction!(s3_dualstack_url, m)?)?;
     m.add_function(wrap_pyfunction!(carriageways::carriageway_profiles, m)?)?;
     m.add_function(wrap_pyfunction!(mdhtml::md_html, m)?)?;
@@ -5555,6 +5594,16 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(perfclean::proc_tree, m)?)?;
     // (PR #861, zolaski333: power-line tower avoidance in one native call per tower)
     m.add_function(wrap_pyfunction!(power::power_off_roads, m)?)?;
-    m.add("VERSION", 168)?;
+    // (bridge chain solving: _merge_overlaps' pair pulls, _ground_pins)
+    m.add_function(wrap_pyfunction!(deckmerge::deck_merge_round, m)?)?;
+    m.add_function(wrap_pyfunction!(deckmerge::deck_ground_pins, m)?)?;
+    m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
+    m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
+    m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_snap, m)?)?;
+    m.add_function(wrap_pyfunction!(townsigns_de::town_sign_select, m)?)?;
+    m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
+    m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
+    m.add("VERSION", 175)?;
     Ok(())
 }

@@ -337,7 +337,6 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
     x0, y0, x1, y1 = box
     ex0, ey0, ex1, ey1 = exact if exact is not None else box
     st = markings.style(country, float(np.mean([r[3] for r in rows])))
-    edge_classes = st.edge_classes or roads.EDGE_LINE_CLASSES
     for c in find(rows, box, rings):
         sides = c["road_sides"]
         for side, cut in zip(sides, c["edge_cuts"]):
@@ -366,7 +365,7 @@ def tile(rows, box, draw_pavement, country=None, left_hand=False, rings=(), no_d
                     for ch in roads.split(roads.densify(run)):
                         if len(ch) >= 2:
                             chunks.append(roads._chunk(roads.EDGE_DECAL, roads.EDGE_DECAL["w"], ch))
-        if not all(sp.cls in edge_classes for sp in specs):
+        if not all(roads.paints_edge_line(sp.cls, st) for sp in specs):
             continue
         import franceroads
         if any(franceroads.enabled(sp) and franceroads.edge_pattern(sp) is None for sp in specs):

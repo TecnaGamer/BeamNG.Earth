@@ -159,7 +159,9 @@ local function replace(st, r)
       o:setField('collisionType', 0, r.collide and 'Collision Mesh' or 'None')
       removed = true -- either enabling or disabling collision needs the existing reload scheduler
     end
-    place(o, r)
+    -- Shared owners and identical tile reloads often deliver the same pose.
+    -- Avoid engine transform/render updates unless the geometry actually moved.
+    if changed then place(o, r) end
   end
   return removed or (changed and r.collide)
 end

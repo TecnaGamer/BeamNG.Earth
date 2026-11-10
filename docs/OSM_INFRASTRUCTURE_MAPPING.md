@@ -1,9 +1,8 @@
-# OSM infrastructure mapping update — 8 November 2026
+# OSM infrastructure mapping - BeamNG.Earth 1.9.1
 
-This updates the local implementation of PR #894. It does not publish or edit the
-upstream GitHub PR. The source folder is an extracted distribution without `.git`,
-so Git status is unavailable. Existing files were inspected and snapshots saved
-outside the workspace before editing. Perimeter fencing was not edited.
+Updated against upstream `dev` at `6feddefb` for **1.9.1-beta**. This PR combines mapped infrastructure props and power-support distinctions with the current German junction signs, railway obstacles, town settings, and road cache identities.
+
+Identical infrastructure deliveries and changes to nonpreferred tile ownership retain existing objects without reapplying engine transforms. Actual pose changes, floating-origin rebases, collision ownership changes, and missing-resource recovery retain their existing behavior. Power-line generation publishes props, wires, and support records together; a cache read failure cannot leave partial infrastructure in the road tile.
 
 ## Installed resources and naming corrections
 
@@ -240,7 +239,13 @@ or building-generation algorithms were changed. `worldprops.py` only delegates t
 communications structures to their new renderer and avoids rendering inactive or
 electrical structures through its old cell-tower path.
 
-## Validation and limits
+## 1.9.1 update validation
+
+The updated branch ran 1,263 Python regression tests across 65 modules: **1,233 passed, 28 skipped, and 2 environment errors**, with no assertion failures. The two errors are unchanged cache symlink tests denied by Windows (`WinError 1314`). The optional real-cache geometry tests are disabled with `BNGE_ROADGEO_REAL=0`, as in the foundation gate. The Germany tests passed after installing their test-only `zstandard` dependency.
+
+All **106 Lua test modules** passed, including **118 mapped-infrastructure checks** under LuaJIT 2.1. New checks cover unchanged/shared tile deliveries, changed poses, and atomic support output on cache failure. JavaScript map-math checks, the OSM tag inventory, Python compilation, and the source/BeamMP package builds passed. No new in-game rendering or FPS claim is made.
+
+## Earlier feature validation and limits
 
 **510 Python tests passed, zero failures/errors/skips**, across the new mapping
 tests and selected existing mapped-pole, world-prop, transmission, furniture,
@@ -335,3 +340,7 @@ placed, at their mapped positions. Missing source nodes produce no inferred
 replacement lamps. Other states retain their existing lighting rules.
 The road cache lighting version changes automatically; no live cache reset
 or server/game restart is performed by this change.
+
+## User-provided screenshot
+
+![Mapped antenna towers in game](images/mapped-infrastructure-1.9.1.png)

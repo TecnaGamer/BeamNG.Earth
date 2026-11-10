@@ -11,6 +11,7 @@ are in the anchor frame, z the ground (elev); the mod clips the graph to the ter
 Pure given the map cells and elev; deterministic.
 """
 import math
+import os
 import re
 
 import numpy as np
@@ -28,6 +29,9 @@ DRIVE = {"motorway": (1.0, 65), "trunk": (1.0, 55), "primary": (1.0, 45), "secon
          # traffic stays off them while a follow / chase / route AI can use them. Rural Europe: the box's nodes about
          # double (Czech farmland 136 -> 235, Black Forest 141 -> 288; a city block has ~700-1000)
          "track": (0.2, 15)}
+# (none of them, nor ENTRY_DRIVABILITY, lies in 0.85 .. 0.9: the minimap's road colour starts at 0.85 (minimaproads.lua
+# M.class), so Germany's give-way steps (DE_YIELD_STEP: a tertiary's 205 at 0.88) keep it; below 0.5 they spawn no
+# random traffic, as DE_YIELD_STEP says)
 SKIP_SUBCLASSES = {"driveway", "parking_aisle", "sidewalk", "crosswalk", "cycle_crossing"}
 URBAN_MPH_CAP = {"primary": 35, "secondary": 35, "tertiary": 30}   # in town (spec.urban) unless mapped
 # the km/h countries' rural defaults for the fast classes (Europe's 120-130 motorways: Bavaria's A9, unmapped, was
@@ -51,6 +55,15 @@ RING_MS = 30.0 / 3.6
 # the edge; the AI ran its outer wheels onto the verge on the Stelvio's hairpins and hit a parapet's end, 2026-11-01)
 MOUNTAIN_EDGE_M = 0.4
 ENTRY_DRIVABILITY = 0.9     # stock AI yields to the ring's 1.0, even on a tangential entry
+DE_YIELD_STEP = 0.02        # Germany (the German junction signs on): a 205's approach (and an exit's, StVO § 10)
+                            # this much below the lowest of the arms it gives way to (research §4.4: the stock AI gives
+                            # way on an incoming edge of lower drivability than another at the node; §5's 1.0 / 0.98).
+                            # No floor: an approach stepped below the stock traffic's spawn floor (0.5: an exit at a
+                            # living street, 0.6 -> 0.48, or a mapped 205 among living streets) spawns no random
+                            # traffic but is still driven, by it and by a route / chase AI, as a track is; a floor
+                            # would tie it with the road it gives way to there, undoing the give-way
+DE_YIELD_PASSES = 4         # times _give_way's pass is repeated (a side road that is the next junction's priority arm:
+                            # one step per junction of such a chain; a cycle of them stops here)
 # A median crossover: a short service road whose two ends are both on a motorway's main carriageways (the paved U-turns
 # for police and road crews across an Interstate's median, mapped as service roads, often access=no). As a service
 # road (0.4) random traffic could take it: cars on I-94 near Huntley MT turned across the median and into the ditch
@@ -77,6 +90,11 @@ US_MOTORWAY_MPH = {
 # names: maplayers.js) within CITY_KM: the road specs' `urban` (built up along the road: sidewalks, parking) took I-94
 # past Huntley MT (a few hundred people) for a city's interstate, 65 where the state's limit is 80 outside its
 # urbanized areas (Billings, rank 4).
+# ... and the other fast classes outside towns, where no limit is mapped: the rural limit most states set for a two-lane
+# highway by statute (55 mph; Texas 70 on its numbered highways, FM roads among them, 60 on the others), not the town
+# speeds of DRIVE: a farm-to-market road in Texas was driven at 30-35 where it is 55-70 (GitHub #888). Not unclassified
+# and below (county and gravel roads vary too much); a road built up along it (spec.urban) keeps URBAN_MPH_CAP.
+US_RURAL_MPH = {"trunk": 65, "primary": 55, "secondary": 55, "tertiary": 45}
 CITY_RANK = 6
 CITY_KM = 12.0
 _state_memo = {}
@@ -138,10 +156,11 @@ def _us_state(feats, i):
     return _us_place(feats, i)[0]
 
 
-def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
+def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
-    signs (speedsigns.py), so a sign shows what the traffic drives."""
+    signs (speedsigns.py), so a sign shows what the traffic drives. de_on (the German junction signs, the graph's):
+    a road of a German zone without a mapped limit (osm_zone_maxspeed) drives the zone's, as its 274.1 posts it."""
     if spec is None or spec.cls not in DRIVE:
         return None
     speed = feats.rules.get("max_speed_kmh")
@@ -151,10 +170,18 @@ def road_mph(feats, i, spec, mph=True, at=0.5, country=None):
                 value = float(speed.value[r])
                 if math.isfinite(value) and value > 0:
                     return value / 1.609344
+    if de_on:
+        zone = feats.attrs.get("osm_zone_maxspeed")
+        if zone is not None and isinstance(zone[i], str):
+            from designs import ZONES
+            if zone[i] in ZONES:
+                return int(zone[i][3:]) / 1.609344
     if country == "US" and spec.cls == "motorway" and not getattr(spec, "link", False):     # (not a ramp)
         state, city = _us_place(feats, i)
         if state in US_MOTORWAY_MPH:
             return float(US_MOTORWAY_MPH[state][1 if spec.urban and city else 0])
+    if country == "US" and not spec.urban and spec.cls in US_RURAL_MPH and not getattr(spec, "link", False):
+        return float(US_RURAL_MPH[spec.cls])
     if country == "SE" and spec.cls == "motorway":
         return 110.0 / 1.609344
     if country == "SE" and spec.cls in SE_ROADS:
@@ -263,7 +290,7 @@ def _deck_z(decks, fid, x, y):
 
 
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
-          mph=True, signals=None, country=None, priority=None):
+          mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=()):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
     drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
@@ -271,13 +298,18 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     (roads.BridgeProfiles; existing (xy, z) entries leave the depth unknown). Nodes on a bridge take its deck height
     (else traffic would spawn on the ground under it), and roads that are bridge all along are in the graph. widths:
     measured street widths (roadwidth.py), so the AI's lanes are on the carriageway the road mesh draws. signals:
-    the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them."""
+    the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them.
+    de_on: the German junction signs (designs.enabled): where the window touches Germany (designs.reads_here) its
+    junctions inside it as the road tiles decide them (_de_context: their context of these cells, the cells'
+    road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way)."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
+    placement = roads.placement_context(feats_list, urban_fn, widths, left_hand)    # (as the road tiles draw them)
     prop_arms = {}          # connector name -> [(fid, spec, unit vector away, point, end, length)] (the props' view)
+    pieces = {}             # fid -> [ground part (k, 2)]: the road tiles' roads (designs._arm_line: an arm's own road)
     ring_cands = []         # the roads the road tiles draw (fid, spec, pts, None): roundabout rings (islands.ring_fids)
     approaches = {}         # (connector, fid, end) -> (graph node next to it, traffic comes in)
     pending = {}            # name -> (x, y) of nodes whose z is still to sample
@@ -331,7 +363,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 tp = roads.joint_desc(copies.get(fid, [(feats, i)]),
                                       lambda f: roads.road_tapers(f, urban_fn, widths, left_hand))
                 for ring_ll in roads.ground_parts(feats, i):
-                    ring_ll = np.asarray(ring_ll, np.float64)
+                    ring_ll = placement.ring(frame, feats, i, np.asarray(ring_ll, np.float64), rspecs[i], fid)
                     if len(ring_ll) < 2:
                         continue
                     ge, gn, _ = frame.geodetic_to_enu(ring_ll[:, 1], ring_ll[:, 0], 0.0)
@@ -339,6 +371,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     half = rspecs[i].width / 2 if ws is None else (ws[:-1] + ws[1:]) / 4
                     carriage.append((half, np.column_stack([ge, gn])))
                     carriage_ll.append(ring_ll)
+                    pieces.setdefault(fid, []).append(carriage[-1][1])
             if bspecs[i] is not None and decks and fid in decks:
                 for part in decks[fid]:
                     dxy, dz = part[:2]
@@ -403,6 +436,11 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             full.append(order[-1])
             xy = np.stack([np.interp(full, s, p[:, 0]), np.interp(full, s, p[:, 1])], 1)
             deck_xy = xy.copy()
+            if placement.on:            # (the AI's lanes where the road tiles draw a placed carriageway's)
+                la_, lo_, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], 0.0)
+                psh = placement.shift(feats, i, lo_, la_, spec, fid)
+                if psh is not None:
+                    xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], psh)[:, :2]
             offset = roads.driving_offset(spec)
             if abs(offset) > 1e-6:
                 xy = roads.offset_polyline(np.c_[xy, np.zeros(len(xy))], offset)[:, :2]
@@ -471,7 +509,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         node_fid[nm] = fid
                         deck_centres[nm] = deck_xy[dk]
                         pending_by[nm] = (-w, fid)
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country) * MPH
+                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country,
+                                 de_on=de_on) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
                 if in_tunnel:
@@ -552,8 +591,17 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 radius[nm] = max(radius.get(nm, 0.0), e[7])
         for nm, x, y, z in zip(used, X, Y, Z):
             nodes[nm] = [round(float(x), 2), round(float(y), 2), round(float(z), 2), radius[nm]]
+    de_ctx = None               # Germany's junctions (de_on, the window touching Germany): the road tiles' decision
+    if de_on:
+        import designs
+        if designs.reads_here(True, frame, (cx - window - 200, cy - window - 200, cx + window + 200,
+                                            cy + window + 200)):
+            de_ctx = _de_context(frame, feats_list, urban_fn, left_hand, de_routes, priority)
+    yields = []
     signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority,
-                       decks=signal_decks, ground=signal_ground)
+                       decks=signal_decks, ground=signal_ground, de_ctx=de_ctx, pieces=pieces, yields=yields)
+    if yields:
+        _give_way(edges, approaches, yields)
     # one edge per node pair (two segments joining the same connectors: keep the first)
     uniq, pairs = [], set()
     for e in edges:
@@ -662,13 +710,105 @@ STOP_BACK_M = 2.0           # the stop point: this far before the junction's wid
 SHORT_APPROACH_M = 15.0
 
 
+def _de_context(frame, feats_list, urban_fn, left_hand, routes, priority):
+    """The road tiles' designs.context for the graph's roads (roads.build_tile's): these cells' roads (joined with the
+    lane shards: their priority roads and 30 zones) and their lane shard sign nodes (railtags.sign_nodes), the cells'
+    road_routes (routes: the ref ranks), the map's stop and give-way points (priority) and the land cover's town before
+    the tiles' drawing overrides (roads.road_towns: the signs' town test, designs.in_town)."""
+    import designs
+    import railtags
+    towns, signs = {}, []
+    for f in feats_list:
+        if f is None or len(f) == 0:
+            continue
+        got = roads.road_towns(f, urban_fn, left_hand)
+        if got is not None:
+            for fid, t in zip(f.ids, got):
+                towns.setdefault(str(fid), bool(t))
+        signs.extend(railtags.sign_nodes(f))
+    return designs.context(frame, feats_list, routes, priority, signs, towns=towns)
+
+
+def _de_decide(farms, nodes, ctx, pieces, link_ok, ring, signals, country, priority):
+    """{junction node: designs.controls' answer [(arm, what, plate)]} of the graph's junctions of three or more arms
+    whose point is inside Germany and which the kernel decides, as the road tiles' designs.decide does: their arms in
+    the tiles' order (furniture._arms of the roads by id: the lowest id's arm gives the junction's point), each arm's
+    own road (designs._arm_line of its ground part, pieces) for the map's signs. A roundabout's or a signalised
+    junction's answer (furniture.junction_controls': groups) is left out: today's graph there."""
+    import designs
+    names = [n for n, a in farms.items() if n in nodes and len(a) >= 3]
+    if not names:
+        return {}
+    own = {n: sorted(farms[n], key=lambda x: (str(x[0]), not x[4])) for n in names}
+    rows = ctx.mapped is not None and len(ctx.mapped) > 0
+    out = {}
+    for n, de in zip(names, designs._de(ctx.frame, [own[n][0][3][:2] for n in names])):
+        if not de:
+            continue
+        lines = [designs._arm_line(x, pieces) if x[0] in pieces else None for x in own[n]] if rows else None
+        ctl = designs.controls(own[n], n, link_ok, ring, signals, country, priority, ctx, lines)
+        if ctl and not any(isinstance(w, str) for _, w, _ in ctl):      # (the kernel's: one per arm, never empty)
+            out[n] = ctl
+    return out
+
+
+def _give_way(edges, approaches, yields):
+    """In place: the approach edge of each arm that gives way at a German junction (yields: _signals' [(junction node,
+    controls' answer)]), a 205's or an exit's (designs.EXIT: StVO § 10), coming in, takes drivability min(its own, the
+    lowest of the approaches it gives way to - DE_YIELD_STEP): the stock AI gives way on an incoming edge of lower
+    drivability than another at the node (the roundabout entries' method), so its traffic lets theirs go first. It
+    gives way to the arms of the junction's priority pair (306 / 301), or where it has none to its right-before-left
+    arms (a mapped 205 among them). An approach of any length (the stop's SHORT_APPROACH_M is the stop point's: a short
+    approach is stepped all the same); none where the edge or the arms it gives way to are not in the graph.
+    One edge can be a junction's give-way approach and the next junction's priority arm (a side road 30 m long that
+    goes on through the next junction): stepped for the first, it ties the second's own 205. So the pass is
+    repeated on the values the last one left, at most DE_YIELD_PASSES times, until no edge changes: the second's 205
+    a step below that (1.0, 0.98, 0.96 ...). Each pass takes its steps from the edges as they were at its start and
+    only lowers them (min), so the outcome is the same in any order of the junctions; a chain of more than
+    DE_YIELD_PASSES such junctions keeps its last tie, and so does a cycle of them (each one's 205 the next one's
+    priority arm), which would otherwise go on down."""
+    import designs
+    by = {}
+    for e in edges:
+        by.setdefault((e[0], e[1]) if e[0] <= e[1] else (e[1], e[0]), []).append(e)
+
+    def approach(name, arm):
+        nb, incoming = approaches.get((name, arm[0], 0 if arm[4] else -1), (None, False))
+        return (by.get((nb, name) if nb <= name else (name, nb)) if nb is not None else None), incoming
+    jobs = []                   # per junction: (the approaches it gives way to, its giving-way approaches)
+    for name, ctl in yields:
+        got = [(w,) + approach(name, a) for a, w, _ in ctl]
+        ref = [es for w, es, _ in got if es and w in (designs.Z306, designs.Z301)] or \
+            [es for w, es, _ in got if es and w == designs.RVL]
+        give = [es for w, es, incoming in got if es and incoming and w in (designs.Z205, designs.EXIT)]
+        if ref and give:
+            jobs.append((ref, give))
+    for _ in range(DE_YIELD_PASSES):
+        steps = []
+        for ref, give in jobs:
+            to = round(min(es[0][6] for es in ref) - DE_YIELD_STEP, 4)
+            steps += [(es, to) for es in give if any(e[6] > to for e in es)]
+        if not steps:
+            break
+        for es, to in steps:
+            for e in es:
+                e[6] = min(e[6], to)
+
+
 def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None,
-             decks=(), ground=None):
+             decks=(), ground=None, de_ctx=None, pieces=None, yields=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
     prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
     approach its stop point on the kerb-side half of the lane (where the AI's closest-edge search finds that
-    approach), the travel direction, the phase (0 / 1, by the approach's axis) and the head's prop transform."""
+    approach), the travel direction, the phase (0 / 1, by the approach's axis) and the head's prop transform.
+    Germany (de_ctx: the German junction signs' context, _de_context; pieces: the roads' ground parts {fid: [(k, 2)]}):
+    a junction inside it the kernel decides (_de_decide, the road tiles' decision) in town and out of town, a "stop"
+    on its 206 and right-before-left arms (the spec's B4: an invisible stop for the AI at right before left), no head
+    (no stop sign stands there: the 206 is the road tiles' designs sign, and the mod raises heads for signals only);
+    its 205 and exit arms appended with the junction to yields for _give_way (their drivability step); nothing else
+    there (a 306 / 301; a node the kernel does not decide: no US stop either, as the road tiles').
+    Its roundabouts and signalised junctions as everywhere."""
     import furniture
     out = []
     # furniture's arm tuples (fid, spec, u, point, at its start, length): the same decision as the road tiles' props
@@ -679,13 +819,27 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     xy = np.asarray([v[:2] for v in nodes.values()], np.float64).reshape(-1, 2)
     bounds = (*xy.min(0), *xy.max(0)) if len(xy) else (0.0, 0.0, 0.0, 0.0)
     clearance = furniture.RoadClearance(lines, decks, bounds=bounds)
+    german = {}
+    if de_ctx is not None:
+        import designs
+        german = _de_decide(farms, nodes, de_ctx, pieces or {}, link_ok, ring, signals, country, priority)
     for name, a in arms.items():
-        if name not in nodes or len(a) < 3 or not furniture._controlled_here(farms[name], signals):
+        if name not in nodes or len(a) < 3:
             continue
-        put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
-                                                                         signals=signals, country=country,
-                                                                         priority=priority)
-               if what != furniture.G_YIELD]    # give-way uses edge priority; a stop controller would force a stop
+        prop = True             # (the head's prop transform: today's signals and stops)
+        if name in german:
+            ctl = german[name]
+            if yields is not None and any(w in (designs.Z205, designs.EXIT) for _, w, _ in ctl):
+                yields.append((name, ctl))
+            put = [(arm, furniture.G_STOP) for arm, w, _ in ctl if w in (designs.Z206, designs.RVL)]
+            prop = False
+        elif not furniture._controlled_here(farms[name], signals):
+            continue
+        else:
+            put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
+                                                                             signals=signals, country=country,
+                                                                             priority=priority)
+                   if what != furniture.G_YIELD]    # give-way uses edge priority; a stop controller would force a stop
         if not put:
             continue
         kind = "signal" if put[0][1] == furniture.G_SIGNAL else "stop"
@@ -710,9 +864,11 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
                 return float(np.asarray(ground(x, y)).reshape(-1)[0]) + 0.15 if ground is not None else jz + 0.15
             # the head's prop where furniture.junction_props stands it (the switchable stock boom replaces it); none
             # where no spot is clear of the carriageways (no prop there either)
-            side, yaw = furniture.approach_pose(u, what, left_hand)
-            pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines,
-                                       group=what, base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
+            pp = None
+            if prop:
+                side, yaw = furniture.approach_pose(u, what, left_hand)
+                pp = furniture.signal_spot(np.array([jx, jy]), u, side, wide, spec.width / 2, lines, group=what,
+                                           base_z=jz + 0.15, ground=support, clearance=clearance, yaw=yaw)
             head = [None] * 4 if pp is None else [round(float(pp[0]), 2), round(float(pp[1]), 2), round(support(*pp), 2),
                                                   yaw]
             app.append([nb, round(float(q[0]), 2), round(float(q[1]), 2), round(jz, 2),
@@ -789,7 +945,7 @@ def part_fid(pid):
 # The AI through built tunnels: off until their portals fit the roads leading in (Fort Pitt Tunnel, 2026-11-05: the
 # approach carriageways, shoulders and all, are wider than the tube openings and lead into the pier between the twin
 # tubes; an AI car hit it at 38-56 mph three times). Off, every tunnel stretch is the minimap's line only, as before.
-AI_TUNNELS = False
+AI_TUNNELS = os.environ.get("BNE_AI_TUNNELS", "off") == "on"     # (off by default; on for the Fort Pitt drive tests)
 TUNNEL_AI_WALL_M = 2.5     # m the AI's road half width in a tunnel stays inside the tube's walls (a car's half width + room)
 TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: a one-lane one (3.4 m, the Park Avenue
                             # Tunnel's south portal in Manhattan) was entered at an angle off the wider approach and the
@@ -797,13 +953,42 @@ TUNNEL_AI_MIN_W = 5.0       # m of driving width a tunnel needs to be the AI's: 
 REBUILD_M = 400.0           # a new graph once the player is this far from the last one's centre
 
 
+def short_ids(graph):
+    """The graph with every node name (an Overture id and its suffix, 38-46 characters, e.g.
+    "s3d0fc61b-e9c6-487c-9938-418f4c654cb6_7555d") replaced by "n" + 12 hex characters of its hash: the same node
+    keeps the same short name in every graph (gps.lua and the traffic follow node names from one graph to the next).
+    The names were most of the file (a Times Square graph: 577 KB, 3,163 nodes named again in 3,353 edges and the
+    signals), and the game decodes the file at every rebuild (every REBUILD_M): its Lua garbage, 2026-11-09. In the
+    nodes' keys, the edges' first two fields, the signals' junction "j" and each approach's first field."""
+    import hashlib
+    memo = {}
+
+    def sid(name):
+        v = memo.get(name)
+        if v is None:
+            v = memo[name] = "n" + hashlib.blake2b(str(name).encode("utf-8"), digest_size=6).hexdigest()
+        return v
+    out = dict(graph)
+    out["nodes"] = {sid(k): v for k, v in graph.get("nodes", {}).items()}
+    out["edges"] = [[sid(e[0]), sid(e[1])] + list(e[2:]) for e in graph.get("edges", ())]
+    if graph.get("signals"):
+        out["signals"] = [dict(sg, j=sid(sg["j"]), app=[[sid(a[0])] + list(a[1:]) for a in sg.get("app", ())])
+                          for sg in graph["signals"]]
+    return out
+
+
+SHORT_IDS = True
+
+
 def write(out_dir, vfs_dir, aid, serial, graph):
-    """The graph as navgraph_<aid>_<serial>.json in the session folder; returns its vfs path."""
+    """The graph as navgraph_<aid>_<serial>.json in the session folder (short_ids); returns its vfs path."""
     import json
     import os
     name = f"navgraph_{aid}_{serial}.json"
     path = os.path.join(out_dir, name)
     tmp = staging.tmp_for(path)
+    if SHORT_IDS:
+        graph = short_ids(graph)
     with open(tmp, "w") as f:
         f.write(json.dumps(graph, separators=(",", ":")))    # the C encoder (json.dump streams in Python)
     staging.replace(tmp, path)
@@ -820,11 +1005,18 @@ class Tracker:
         self.centre = None
         self.building = False
         self.serial = 0
+        self.stale = 0          # builds up to this serial are of an old setting (refresh): not sent, not kept
         self.pool = None        # one thread of its own (vegetation.Tracker: not behind other trackers' builds)
 
     def close(self):
         if self.pool is not None:
             self.pool.shutdown(wait=False, cancel_futures=True)
+
+    def refresh(self):
+        """A setting the graph reads changed (the German junction signs): built again at the next pose, wherever the
+        player is; a build already running lands unsent."""
+        self.centre = None
+        self.stale = self.serial
 
     def on_pose(self, conn, aid, x, y, loop, build):
         """build(aid, x, y, serial) runs in a worker and returns (vfs path, nodes, edges) or None."""
@@ -851,6 +1043,9 @@ class Tracker:
             logging.getLogger("earthd.navgraph").debug("navgraph %s: %s: %s", centre, type(e).__name__, e)
             return
         if res is None:
+            return
+        if serial <= self.stale:    # (the old setting's: the next pose builds again)
+            self.aid = aid
             return
         self.aid, self.centre = aid, centre
         path, n, m = res

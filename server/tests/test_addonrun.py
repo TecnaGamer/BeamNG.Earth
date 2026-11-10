@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -25,6 +26,19 @@ def zip_of(names):
             z.writestr(n, b"-- x")
     return buf.getvalue()
 
+
+
+# (no online add-on list in these tests: addons.REGISTRY_URL points at the real data repo, and a fetch through the
+# scripted transports here took minutes and replaced the lists under test)
+_no_online = mock.patch.object(addons, "REGISTRY_URL", "")
+
+
+def setUpModule():
+    _no_online.start()
+
+
+def tearDownModule():
+    _no_online.stop()
 
 class ModCodeTest(unittest.TestCase):
     def test_own_code_only(self):

@@ -267,6 +267,16 @@ class RacewayTest(unittest.TestCase):
         self.assertEqual(sp[1].kind, "paved")
         self.assertAlmostEqual(sp[1].width, 7.0)
         self.assertTrue(sp[1].oneway)
+        self.assertIsNone(sp[1].lanes, "no mapped count: the 7 m is not two lanes")
+        line = np.array([[0.0, 0, 0], [80.0, 0, 0]])
+        kinds = {lk.get("kind") for lk, _, _ in roads.extras(sp[1], line, 4.67, country="NL")}
+        self.assertIn("edge", kinds)
+        self.assertNotIn("centre", kinds, "one-way: no centre line")
+        self.assertNotIn("lane", kinds, "no invented dash")
+        mapped = osmtags.busway_features([{"id": 1, "lanes": "2", "oneway": "yes",
+                                           "coords": np.array([[4.67, 52.36], [4.66, 52.36]])}])
+        self.assertEqual(mapped.attrs["osm_lanes"][0], 2)
+        self.assertEqual(roads.road_specs(mapped)[0].lanes, 2)
         self.assertTrue(roads.tunnel_specs(bw)[0] is not None, "the canal crossing is a tunnel")
         self.assertTrue(roads.road_specs(bw)[0] is None, "a tunnel its whole length is not also a ground road")
         base = features([[(0, 0), (100, 0)]], ["residential"])

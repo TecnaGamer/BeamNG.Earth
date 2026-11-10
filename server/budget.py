@@ -209,7 +209,6 @@ def memory_mb():
 
 def maybe_shed():
     """Between jobs: the registered caches dropped when this process is over SHED_MB. True when it shed."""
-    global shed_count
     if not SHED_MB or not _shedders:
         return False
     import time
@@ -220,6 +219,13 @@ def maybe_shed():
     if mb is None or mb < SHED_MB:
         return False
     _last_shed = time.monotonic()
+    _shed(mb, f"over {SHED_MB}")
+    return True
+
+
+def _shed(mb, why):
+    """The registered caches dropped and the memory given back (maybe_shed, the idle shed)."""
+    global shed_count
     import gc
     import logging
     for fn in list(_shedders):
@@ -231,9 +237,70 @@ def maybe_shed():
     trim()
     shed_count += 1
     after = memory_mb()
-    logging.getLogger("earthd.worker").info("memory: pid %d at %.0f MB (over %d): caches dropped, now %.0f MB",
-                                            os.getpid(), mb, SHED_MB, after or 0)
-    return True
+    logging.getLogger("earthd.worker").info("memory: pid %d at %.0f MB (%s): caches dropped, now %.0f MB",
+                                            os.getpid(), mb or 0, why, after or 0)
+
+
+# A worker that has run no job for IDLE_SHED_S drops its caches once (every profile): the far-tile workers the 3D map
+# set going, every worker on a stock level, kept what they had for as long as the game ran (a desktop: 5.7 -> 9.3 GB in
+# 17 workers after a minute of the 3D map, still there on West Coast USA; GitHub #1026). The next job reads its cells
+# from disk again. A job waits for a shed under way (JOB_LOCK, pools._call).
+IDLE_SHED_S = float(os.environ.get("BNGE_IDLE_SHED_S", "300"))     # (0: off)
+IDLE_CHECK_S = 30.0
+JOB_LOCK = None
+_last_job_end = None
+_idle_shed = False
+_idle_thread = False
+
+
+def job_lock():
+    """The lock a worker's job holds (pools._call), made once."""
+    global JOB_LOCK
+    if JOB_LOCK is None:
+        import threading
+        JOB_LOCK = threading.Lock()
+    return JOB_LOCK
+
+
+def job_ended():
+    """A job finished in this worker (pools._call): the idle clock starts again, its watcher started once."""
+    global _last_job_end, _idle_shed, _idle_thread
+    import time
+    _last_job_end, _idle_shed = time.monotonic(), False
+    if not _idle_thread and IDLE_SHED_S > 0 and _shedders:
+        import threading
+        _idle_thread = True
+        threading.Thread(target=_idle_loop, daemon=True, name="idle-shed").start()
+
+
+def idle_shed_now(now=None):
+    """The idle shed's test: True when it shed (idle IDLE_SHED_S since the last job, not shed since, no job running)."""
+    global _idle_shed
+    import time
+    now = time.monotonic() if now is None else now
+    if IDLE_SHED_S <= 0 or _idle_shed or _last_job_end is None or now - _last_job_end < IDLE_SHED_S or not _shedders:
+        return False
+    lock = job_lock()
+    if not lock.acquire(blocking=False):
+        return False
+    try:
+        if _idle_shed or now - _last_job_end < IDLE_SHED_S:
+            return False
+        _idle_shed = True
+        _shed(memory_mb(), f"idle {now - _last_job_end:.0f} s")
+        return True
+    finally:
+        lock.release()
+
+
+def _idle_loop():
+    import time
+    while True:
+        time.sleep(IDLE_CHECK_S)
+        try:
+            idle_shed_now()
+        except Exception:
+            pass
 
 
 def _malloc_small():

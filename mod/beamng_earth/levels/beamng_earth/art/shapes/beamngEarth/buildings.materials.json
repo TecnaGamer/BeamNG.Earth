@@ -356,6 +356,32 @@
     "translucent": false,
     "castShadows": false
   },
+  "bne_sidewalk_sett": {
+    "name": "bne_sidewalk_sett",
+    "mapTo": "bne_sidewalk_sett",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6b896ec1-8656-5353-b786-9e84ea63b34c",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_sidewalk_sett.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
   "bne_bld_stone": {
     "name": "bne_bld_stone",
     "mapTo": "bne_bld_stone",
@@ -612,5 +638,109 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_island_lawn": {
+    "name": "bne_island_lawn",
+    "mapTo": "bne_island_lawn",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "1457f020-7c7b-5500-a552-641f4d185bb8",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_lawn.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_island_shrubs": {
+    "name": "bne_island_shrubs",
+    "mapTo": "bne_island_shrubs",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f02de19c-ae64-5bff-aa05-88b9a2cac89f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_shrubs.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_island_gravel": {
+    "name": "bne_island_gravel",
+    "mapTo": "bne_island_gravel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b7bf815d-75ff-52e0-85b1-ea43ee57164f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_gravel.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
+  },
+  "bne_island_mulch": {
+    "name": "bne_island_mulch",
+    "mapTo": "bne_island_mulch",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "c1128c91-a929-5688-909a-421e6deca0b4",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/roundabouts/bne_island_mulch.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false,
+    "castShadows": false
   }
 }

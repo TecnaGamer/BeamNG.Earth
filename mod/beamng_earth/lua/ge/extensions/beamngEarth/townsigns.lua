@@ -1,4 +1,4 @@
--- Town entry and exit signs (server townsigns.py, BNE_TOWNSIGNS=on; the user, 2026-10-28: the sign of every town and
+-- Town entry and exit signs (server townentry.py, Settings > World > Town signs; the user, 2026-10-28: the sign of every town and
 -- village as you drive in). Each commune's face is a shape and a texture the server writes next to the road tile, which
 -- names them ("townsigns": group -> { shape, texture, material }); the body (two posts and the plate's back) is the
 -- one model every town sign shares (sign_town_body, tools/generate_town_signs.py). register makes a face's Material

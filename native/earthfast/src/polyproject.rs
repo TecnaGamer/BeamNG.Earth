@@ -90,7 +90,7 @@ pub fn polyline_project<'py>(py: Python<'py>, line: PyReadonlyArray2<'py, f64>, 
     }
     let lv: Vec<f64> = la.iter().copied().collect();
     let pv: Vec<f64> = pa.iter().copied().collect();
-    let r = py.allow_threads(|| project(&lv, lc, n, &pv, pc, m));
+    let r = py.detach(|| project(&lv, lc, n, &pv, pc, m));
     let near = numpy::ndarray::Array2::from_shape_vec((m, lc), r.near).unwrap();
     let tan = numpy::ndarray::Array2::from_shape_vec((m, 2), r.tangent).unwrap();
     Ok((r.station.into_pyarray(py), near.into_pyarray(py), tan.into_pyarray(py), r.offset.into_pyarray(py),

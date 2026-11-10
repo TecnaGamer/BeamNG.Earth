@@ -57,6 +57,7 @@ import contextlib
 import logging
 import math
 import os
+import zipfile
 import threading
 import time
 from collections import OrderedDict
@@ -864,7 +865,12 @@ class Deshadow:
         try:
             with np.load(npz) as f:
                 g = f["grids"]
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as e:
+            if isinstance(e, (EOFError, zipfile.BadZipFile)):     # (damaged: removed, computed again; colormatch's)
+                try:
+                    os.remove(npz)
+                except OSError:
+                    pass
             with self._lock:            # evicted from the disk cache (cache.py): computed again
                 self._params.pop(rk, None)
             return None

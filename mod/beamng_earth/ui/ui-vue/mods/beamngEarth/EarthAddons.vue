@@ -48,7 +48,7 @@
         <div class="addon-add-title">Add from GitHub</div>
         <div class="addons-note">Paste a GitHub repository (owner/name or its link). Its latest release is used: a .zip installs as a game mod, a .py runs beside the game. Only add things from people you trust: nobody has checked them.</div>
         <div class="addons-actions">
-          <input v-model="repoText" class="addon-add-input" type="text" placeholder="github.com/owner/name" @keydown.enter="addRepo(repoText)" @keydown.stop @keyup.stop />
+          <input @focus="typing(true)" @blur="typing(false)" v-model="repoText" class="addon-add-input" type="text" placeholder="github.com/owner/name" @keydown.enter="addRepo(repoText)" @keydown.stop @keyup.stop />
           <BngButton :accent="ACCENTS.main" :disabled="!connected || inMp || !repoText.trim() || (adding && adding.state === 'progress')" @click="addRepo(repoText)">Add</BngButton>
         </div>
         <div v-if="adding && adding.text" class="addons-note" :class="{ 'is-error': adding.state === 'error' }">{{ adding.text }}</div>
@@ -174,8 +174,8 @@
       <div v-if="tab === 'options' && lines(openCard.options).length" class="addon-options">
         <div v-for="o in lines(openCard.options)" :key="o.key" class="addon-option">
           <label class="addon-option-label">{{ o.label }}</label>
-          <input v-if="o.type === 'int'" v-model.number="edits[o.key]" class="addon-add-input addon-option-num" type="number" :min="o.min" :max="o.max" step="1" @keydown.stop @keyup.stop />
-          <input v-else-if="o.type === 'text'" v-model="edits[o.key]" class="addon-add-input" type="text" maxlength="200" @keydown.stop @keyup.stop />
+          <input @focus="typing(true)" @blur="typing(false)" v-if="o.type === 'int'" v-model.number="edits[o.key]" class="addon-add-input addon-option-num" type="number" :min="o.min" :max="o.max" step="1" @keydown.stop @keyup.stop />
+          <input @focus="typing(true)" @blur="typing(false)" v-else-if="o.type === 'text'" v-model="edits[o.key]" class="addon-add-input" type="text" maxlength="200" @keydown.stop @keyup.stop />
           <select v-else-if="o.type === 'choice'" v-model="edits[o.key]" class="addon-add-input">
             <option v-for="ch in lines(o.choices)" :key="ch" :value="ch">{{ ch }}</option>
           </select>
@@ -218,6 +218,7 @@ import {
   open, back, refresh, install, cancelConsent, manage, onTextClick, openRepo, openDownload,
   stateLine, size, day, progressText, start, stop, lines, adding, addRepo, forget, saveOptions,
 } from "./earthAddonsStore.js"
+import { typing } from "./earthSettingsStore.js"
 
 const tab = ref("readme")
 const removeAsk = ref("")
@@ -246,6 +247,8 @@ const latestDownloads = computed(() => {
 
 onMounted(start)
 onUnmounted(stop)
+// (the game keeps the keyboard unless an input says it is being typed in: as EarthMap's and EarthMap3d's inputs)
+onUnmounted(() => typing(false))
 </script>
 
 <style scoped lang="scss">

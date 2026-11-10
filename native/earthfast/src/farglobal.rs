@@ -306,7 +306,7 @@ pub fn far_box_cover(quads: PyReadonlyArray2<'_, f64>, x0: f64, y0: f64, x1: f64
 pub fn far_overlap_pairs(py: Python<'_>, polys: Vec<Vec<f64>>, side: Vec<u8>, min_area: f64, rel: f64)
                          -> Vec<(usize, usize)> {
     let ps: Vec<Vec<P2>> = polys.iter().map(|v| v.chunks(2).map(|c| [c[0], c[1]]).collect()).collect();
-    py.allow_threads(|| {
+    py.detach(|| {
         let bbs: Vec<[f64; 4]> = ps.iter().map(|p| bbox(p)).collect();
         let areas: Vec<f64> = ps.iter().map(|p| poly_area(p).abs()).collect();
         let mut order: Vec<usize> = (0..ps.len()).collect();
@@ -414,7 +414,7 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
     }
     let ev: Vec<f64> = e.iter().copied().collect();
     let rv: Vec<f64> = r.iter().copied().collect();
-    let res = py.allow_threads(move || {
+    let res = py.detach(move || {
         let (cl, cn) = centre(z, x, y);
         let f = Frame::new(cl, cn);
         let (xf0, yf1) = (x as f64, y as f64 + 1.0);
@@ -557,7 +557,7 @@ pub fn far_clip_mesh<'py>(py: Python<'py>, positions: PyReadonlyArray2<'py, f64>
     if poly_area(&clip) < 0.0 {
         clip.reverse();
     }
-    let res = py.allow_threads(move || {
+    let res = py.detach(move || {
         let k = clip.len();
         let side = |e: usize, v: &[f64; ATTR]| {
             let (a, b) = (clip[e], clip[(e + 1) % k]);

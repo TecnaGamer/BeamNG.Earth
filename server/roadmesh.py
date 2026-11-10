@@ -131,7 +131,7 @@ def layer_of(chunk):
     return "base"
 
 
-def _resample(pts, step, keep_vertices=False):
+def _resample(pts, step, keep_vertices=False, corner_half=0.0):
     """Points every `step` m along a polyline (k, 3), ends kept: (xy (m, 2), distance (m,), z (m,))."""
     seg = np.hypot(*np.diff(pts[:, :2], axis=0).T)
     s = np.concatenate(([0.0], np.cumsum(seg)))
@@ -146,6 +146,19 @@ def _resample(pts, step, keep_vertices=False):
         distance = np.minimum(np.abs(t - s[np.maximum(j - 1, 0)]),
                               np.abs(t - s[np.minimum(j, len(s) - 1)]))
         t = np.unique(np.r_[t[distance > 1e-8], s])
+        if corner_half > 0 and len(pts) > 2:
+            # A fixed deck keeps its mapped height knots. Additional lattice rows closer
+            # to a corner than its offset intersection fold the inner edge backwards.
+            # Remove only those inserted rows, including the parapet's width in the reach.
+            d = np.diff(pts[:, :2], axis=0)
+            unit = d / np.maximum(seg[:, None], 1e-9)
+            cos = np.clip(np.sum(unit[:-1] * unit[1:], axis=1), -1., 1.)
+            original = np.isin(t, s)
+            keep = np.ones(len(t), bool)
+            for j in np.flatnonzero((cos < 1 - 1e-10) & (cos > -1 + 1e-8)):
+                reach = corner_half * np.sqrt((1 - cos[j]) / (1 + cos[j]))
+                keep &= original | (np.abs(t - s[j + 1]) >= reach + 1e-8)
+            t = t[keep]
     return (np.stack([np.interp(t, s, pts[:, 0]), np.interp(t, s, pts[:, 1])], axis=1), t,
             np.interp(t, s, pts[:, 2]))
 
@@ -187,7 +200,8 @@ def ribbons(chunks, keep_none=False):
         if len(p) < 2:
             continue
         if c.get("deck") and c.get("fixed"):
-            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True)
+            corner_half = float(np.max(c.get("ws", c["w"]))) / 2 + PARAPET_W
+            xy, s, z = _resample(p, DRAPE_STEP, keep_vertices=True, corner_half=corner_half)
             if len(xy) < 2:
                 continue
             hw = float(c["w"]) / 2
@@ -1304,13 +1318,13 @@ def deck(chunks, origin, piers=(), context=(), beams=(), ground=(), parapets=Non
         lat = left - right
         u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]     # unit left
         wide = 0.0 if c.get("tunnel") else PARAPET_W
-        gl_, gr_, ol_, or_ = medians[n]
-        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_)), _opposite(gr_, or_, *_noses(gr_))
+        gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
+        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # the slab's edges, past the road's (to the middle of a median beside another deck; to a point at a gore nose),
         # changing no faster than REACH_SLOPE along it
-        el = left + u * _smooth_reach(np.maximum(wide, xl), left)[:, None]
-        er = right - u * _smooth_reach(np.maximum(wide, xr), right)[:, None]
+        el = left + u * _smooth_reach(_reach(wide, xl), left)[:, None]
+        er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
         zl = active_field.at(el) if active_field is not None else z
         zr = active_field.at(er) if active_field is not None else z
         L = np.c_[el, zl] - origin
@@ -1610,10 +1624,11 @@ def _median_gaps(rb, context=()):
     for n, ((left, right, v, m, layer, z), c) in enumerate(rb):
         own = c.get("fid", ("own", n))
         mine = _travel_vec(left, right, c.get("tdir", 0))
-        sides, opps, hit_owners = [], [], []
+        sides, opps, hit_owners, overs = [], [], [], []
         for E, out_ in ((np.c_[left, z], left - right), (np.c_[right, z], right - left)):
             g = np.zeros(len(E))
             opp = np.zeros(len(E), bool)
+            over = np.zeros(len(E), bool)
             own_hit = [None] * len(E)
             tan = np.gradient(E[:, :2], axis=0) if len(E) > 1 else np.zeros((len(E), 2))
             tan = tan / np.maximum(np.hypot(tan[:, 0], tan[:, 1]), 1e-9)[:, None]
@@ -1647,11 +1662,13 @@ def _median_gaps(rb, context=()):
                        & (((rel * out_).sum(1) > -MEDIAN_INSIDE_M) | against) & ~ends)
                 g = np.where(hit, np.maximum(d, 1e-3), g)
                 opp = np.where(hit, against, opp)
+                over = np.where(hit, (rel * out_).sum(1) < 0.0, over)     # (its edge over this slab: _opposite)
                 for idx in np.flatnonzero(hit):
                     own_hit[idx] = owner
             sides.append(g)
             opps.append(opp)
             hit_owners.append(own_hit)
+            overs.append(over)
         # (an edge facing away from the other deck is near it too where the decks are narrow: only the nearer edge
         # of the two faces the median when both edges saw the same target deck; when facing different decks on left
         # and right, both medians are kept, #651)
@@ -1661,7 +1678,7 @@ def _median_gaps(rb, context=()):
         gl = np.where(both & (gl > gr), 0.0, gl)
         gr = np.where(both & (gr >= sides[0]), 0.0, gr)
         gl, gr = _fill_short(gl, MEDIAN_FILL_PTS), _fill_short(gr, MEDIAN_FILL_PTS)
-        out.append((gl, gr, opps[0] & (gl > 0), opps[1] & (gr > 0)))
+        out.append((gl, gr, opps[0] & (gl > 0), opps[1] & (gr > 0), overs[0] & (gl > 0), overs[1] & (gr > 0)))
     return out
 
 
@@ -1674,6 +1691,13 @@ MEDIAN_BARRIER_M = 2.5
 
 
 REACH_SLOPE = 0.35      # m the slab's reach past its road (a median's fill, a nose) may change per m along its edge
+
+
+def _reach(wide, ext):
+    """The slab's reach past the road's edge: at least wide, or ext where it is negative (a median barrier in the
+    middle of two overlapping decks, _opposite)."""
+    ext = np.asarray(ext, np.float64)
+    return np.where(ext < 0.0, ext, np.maximum(wide, ext))
 
 
 def _smooth_reach(ext, edge):
@@ -1692,12 +1716,16 @@ def _smooth_reach(ext, edge):
     return ext
 
 
-def _opposite(g, opp, ext, cov):
-    """(ext, cov) of _noses with the points facing opposite traffic (opp) made a median barrier or an open gap."""
+def _opposite(g, opp, ext, cov, over=None):
+    """(ext, cov) of _noses with the points facing opposite traffic (opp) made a median barrier or an open gap. Where
+    the other deck's edge lies over this slab (over: the drawn carriageways overlap), the barrier stands in the
+    middle of the overlap, ext negative (within the road's edge): at this one's edge it stood 1.7 m into the other
+    carriageway's lanes (the S7's viaducts at Gdansk, GitHub #1025)."""
     ext, cov = ext.copy(), cov.copy()
     near = opp & (g > 0) & (g <= MEDIAN_BARRIER_M)
     far = opp & (g > MEDIAN_BARRIER_M)
-    ext = np.where(near, g / 2 + 0.05, np.where(far, 0.0, ext))
+    inside = near & over if over is not None else np.zeros(len(g), bool)
+    ext = np.where(inside, -g / 2, np.where(near, g / 2 + 0.05, np.where(far, 0.0, ext)))
     cov = np.where(opp, False, cov)
     return ext, cov
 
@@ -1805,8 +1833,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
         lat = left - right
         u = lat / np.maximum(np.hypot(lat[:, 0], lat[:, 1]), 1e-9)[:, None]
         wide = 0.0 if c.get("tunnel") else PARAPET_W
-        gl_, gr_, ol_, or_ = medians[n]
-        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_)), _opposite(gr_, or_, *_noses(gr_))
+        gl_, gr_, ol_, or_, vl_, vr_ = medians[n]
+        (xl, cl), (xr, cr_) = _opposite(gl_, ol_, *_noses(gl_), vl_), _opposite(gr_, or_, *_noses(gr_), vr_)
         covered[n] = (covered[n][0] | cl, covered[n][1] | cr_)
         # (full barriers, never the low curb: a gore nose's points, _noses; a median barrier's, _opposite)
         nose = (((gl_ > 0) & ~cl & ~ol_) | (ol_ & (gl_ <= MEDIAN_BARRIER_M)),
@@ -1815,8 +1843,8 @@ def parapet_runs(chunks, context=(), _rb=None, ground=(), pads=()):
             import roads as _roads
             covered[n] = (covered[n][0] | _roads.pad_inside(pads, left, z=z),
                           covered[n][1] | _roads.pad_inside(pads, right, z=z))
-        el = left + u * _smooth_reach(np.maximum(wide, xl), left)[:, None]
-        er = right - u * _smooth_reach(np.maximum(wide, xr), right)[:, None]
+        el = left + u * _smooth_reach(_reach(wide, xl), left)[:, None]
+        er = right - u * _smooth_reach(_reach(wide, xr), right)[:, None]
         k = len(z)
         for sgn, edge, inner, cov, nz in ((1, el, left, covered[n][0], nose[0]),
                                           (-1, er, right, covered[n][1], nose[1])):
@@ -2157,7 +2185,7 @@ def tunnel(chunks, origin, walls=()):
 def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=None, side_mat=2):
     """A low arch's stone top over its mouth (LOW_CAP_M back from the portal face at row `at`, side either way of
     the centre, `top` over the floor): its top, its sides down to the floor's level (outside the tube's walls) and
-    its back down to just over the vault (th), seen from both sides. Appended to P, T, UV, M; returns the new vertex count."""
+    its back down to just over the vault (th), each face one-sided, facing out. Appended to P, T, UV, M; returns the new vertex count."""
     nb = 1 if at == 0 else k - 2
     t = mid[nb] - mid[at]
     t = t / max(float(np.hypot(*t)), 1e-9)              # into the tube
@@ -2174,13 +2202,19 @@ def _arch_cap(P, T, UV, M, nv, mid, u, z, at, k, side, top, th, origin, depth=No
              np.array([corners[3], corners[2], over[2], over[3]]),     # its back, toward the soil over the vault
              np.array([corners[0], corners[3], foot[3], foot[0]]),     # its sides
              np.array([corners[1], corners[2], foot[2], foot[1]])]
+    # each face one-sided, facing out of the block (up, back into the soil, sideways): the top drawn both ways was two
+    # coincident triangles facing opposite ways, its collision pulled a car driving over it down into the block
+    # (the I-280 underpass at Millbrae, 2026-11-09; buildings.py: a 3dmr bridge's two-sided lattice caught the car too)
+    looks = [np.array([0.0, 0.0, 1.0]), np.r_[t, 0.0], np.r_[ua, 0.0], np.r_[-ua, 0.0]]
     for qi, q in enumerate(quads):
         P.append(q - origin)
         w = float(np.hypot(*(q[1, :2] - q[0, :2]))) or float(abs(q[1, 2] - q[0, 2]))
         h = float(np.hypot(*(q[2, :2] - q[1, :2]))) + float(abs(q[2, 2] - q[1, 2]))
         UV.append(np.array([[0, 0], [w, 0], [w, h], [0, h]], np.float64) / (SOIL_UV_M if qi == 0 else STONE_UV_M))
         tri = np.array([[nv, nv + 1, nv + 2], [nv, nv + 2, nv + 3]], np.int64)
-        T.append(np.concatenate([tri, tri[:, ::-1]]))
+        e = q - q[0]
+        nrm = np.cross(e[1], e[2]) + np.cross(e[2], e[3])
+        T.append(tri if float(nrm @ looks[qi]) >= 0.0 else tri[:, ::-1])
         M.append(4 if qi == 0 else side_mat)            # its top grass, its sides stone (concrete: side_mat 0)
         nv += 4
     return nv

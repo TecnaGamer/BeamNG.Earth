@@ -79,6 +79,11 @@ T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, 
 T.check(not N.followsPlayer({ x = -200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'behind: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = -1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }), 'oncoming: not')
 T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 2, y = 0 }), 'player slow: not')
+T.check(N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 30, y = 0 }, 31),
+  'ahead, as fast: follows')
+T.check(not N.followsPlayer({ x = 200, y = 0 }, { x = 1, y = 0 }, { x = 0, y = 0 }, { x = 25, y = 0 }, 31),
+  'ahead and faster: outruns the graph, not following (GitHub #855)')
+T.check(N.stopReach(31) > 200 and N.stopReach(10) < 60 + 1, 'a dead end seen as far as the car needs to stop')
 T.check(N.headingToCut(60, 0, 1, 0, cuts, 60), 'a car 40 m from the cut, heading for it')
 T.check(not N.headingToCut(60, 0, -1, 0, cuts, 60), '... heading away from it: not')
 T.check(not N.headingToCut(60, 0, 0, 1, cuts, 60), '... across: not')
@@ -176,6 +181,29 @@ do
     'its tunnel lines (the minimap) too')
   T.check(not N.transform(nil, 9) and N.currentGraph().anchor == 8, 'no transform: nothing')
   jsonDecode, readFile = jd, rf
+end
+
+-- regional traffic vehicles: the road rules' country -> the stock levels' region, the game's own filters; none
+-- elsewhere or without smart selections (the game's own group then)
+do
+  T.check(N.regionOf('US') == 'northAmerica' and N.regionOf('de') == 'europe' and N.regionOf('JP') == 'asiaPacific'
+    and N.regionOf('BR') == nil and N.regionOf(nil) == nil, 'regions by country')
+  local set = { trafficSmartSelections = true, trafficSimpleVehicles = false, trafficAllowMods = false }
+  local get = function(k) return set[k] end
+  local p, region = N.regionalGroupParams('DE', get)
+  T.check(region == 'europe' and p.filters.Region.europe == 1 and p.filters.Region.default == 1
+    and p.filters['Config Type'].Police == 0 and p.country == 'Germany' and p.minPop == 50, 'europe group params')
+  T.check(N.regionalGroupParams('NL', get).country == 'default', 'a country the game has no name for: default')
+  T.check(N.regionalGroupParams('BR', get) == nil, 'no region: the game\'s own group')
+  set.trafficSmartSelections = false
+  T.check(N.regionalGroupParams('US', get) == nil, 'smart selections off: the game\'s own group')
+  set.trafficSmartSelections, set.trafficSimpleVehicles = true, true
+  local ps, rs = N.regionalGroupParams('US', get)
+  T.check(rs == 'northAmerica' and ps.filters.Type.proptraffic == 1 and ps.filters.Type.car == nil
+    and ps.filters.Region.northAmerica == 1 and ps.minPop == 0 and ps.allConfigs, 'simple vehicles: of the region too')
+  set.trafficSimpleVehicles, set.trafficAllowMods = false, true
+  local pm = N.regionalGroupParams('US', get)
+  T.check(pm.allMods and pm.filters.Type.automation == 1 and pm.minPop == 0, 'mods allowed: as the game')
 end
 
 T.done('test_navgraph')

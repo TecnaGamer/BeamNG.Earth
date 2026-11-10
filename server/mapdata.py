@@ -69,6 +69,7 @@ import netfetch
 import overture
 import rangeread
 import revisit
+import roadsmooth
 import staging
 import xproc
 
@@ -273,6 +274,8 @@ class MapData:
         # their reads at the tile's build start, so they are mostly there when the props ask at its end
         self.side_sources = [self.picnic_osm]
         self.rasters = maprasters.Rasters(self.raw_dir, self.fetcher, os.path.join(cache_dir, "dem", "lidarbc"))
+        import lod2roofs                # (Germany's measured roofs: shape and height of each building)
+        self.lod2_roofs = lod2roofs.Source(cache_dir, self.fetcher) if lod2roofs.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
         import regionaldata
@@ -334,11 +337,14 @@ class MapData:
     def versions(self):
         rails = getattr(self, "rail_tags", None)
         lanes = getattr(self, "lane_tags", None)
-        return {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
-                "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
-                "lanes": lanes.known() if lanes is not None else None,
-                "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
-                "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        v = {"pipeline": VERSION, "overture": self.release, "worldcover": maprasters.WORLDCOVER_RELEASE,
+             "canopy": maprasters.CHM_RELEASE, "rails": rails.known() if rails is not None else None,
+             "lanes": lanes.known() if lanes is not None else None,
+             "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
+             "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
+            v["roadsmooth"] = roadsmooth.VERSION
+        return v
 
     def bundle_versions(self):
         """Offline source identity for prepared road plans, including cached but not yet opened shards.
@@ -734,6 +740,8 @@ class MapData:
                     f = f.localize(frame)
                 self._rails(key, layer, f)
                 self._lanes(key, layer, f)
+                if layer == "roads":
+                    f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
                 if layer == "roads":
@@ -837,6 +845,9 @@ class MapData:
         with self._mem_lock:
             self._mem.clear()
             self._mem_bytes = 0
+        for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
+            if tags is not None:
+                tags.clear_memory()
 
     def _remember(self, k, entry):
         """Keep a decoded layer for the next cell() of it (at most MEM_MB in all, least recently used out)."""

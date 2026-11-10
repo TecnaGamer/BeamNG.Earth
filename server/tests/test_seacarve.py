@@ -129,6 +129,32 @@ class SeaCarveTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as other:
             np.testing.assert_array_equal(a, seacarve.SeaCarver(BathyMapData(), other).depth(lat, lon))
 
+    def test_damaged_cell_files_built_again(self):
+        """A cell file left empty, cut short or zeroed (a crash after its write) is built again, not an exception at
+        every far tile and terrain block over the cell for good (telemetry 2026-11-08: far tiles' EOFError and
+        BadZipFile)."""
+        import glob
+        lat = np.array([south(7.3), south(31)])
+        lon = np.array([LON0, LON0 + 0.001])
+        good = seacarve.SeaCarver(BathyMapData(), self.tmp.name).depth(lat, lon)
+        files = glob.glob(os.path.join(self.tmp.name, "**", "*.npz"), recursive=True)
+        self.assertTrue(files)
+        for name, damage in (("empty", lambda b: b""), ("cut short", lambda b: b[:len(b) // 2]),
+                             ("zeroed", lambda b: b"\0" * len(b))):
+            for p in files:
+                for raw in glob.glob(p[:-4] + ".rawb.npy"):
+                    os.remove(raw)
+                with open(p, "rb") as f:
+                    body = f.read()
+                with open(p, "wb") as f:
+                    f.write(damage(body))
+            with self.assertLogs("earthd.staging", "WARNING"):
+                got = seacarve.SeaCarver(BathyMapData(), self.tmp.name).depth(lat, lon)
+            np.testing.assert_array_equal(got, good, name)
+            for p in files:
+                with np.load(p) as f:       # written whole again
+                    self.assertIn("any", f.files, name)
+
     def test_raw_copy_stores_only_the_blocks_with_water(self):
         """The raw copy keeps the RAW_BLOCK_PX blocks with water (and one land block): a landlocked first visit's
         cells were 9.4 MB each, 3 % of their pixels water (2026-11-05). Read back the same, lookups and all of it."""

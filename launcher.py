@@ -159,6 +159,9 @@ def cache_dir_arg(given, dd=None):
         if given.strip().lower() in ("", "default"):
             save_app_settings(dd, cacheDir=None)
             return None
+        bad = apppaths.drive_relative_problem(given)
+        if bad:                         # (GitHub #895: not the current folder in silence)
+            raise OSError(bad)
         path = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
         os.makedirs(path, exist_ok=True)
         save_app_settings(dd, cacheDir=path)
@@ -561,6 +564,48 @@ def game_pids():
         if name in names and not any(b"--type=" in a for a in args):     # (its CEF helpers: one rewritten argv string)
             out.append(int(d))
     return out
+
+
+def windows_visible_window(pids):
+    """Has any of the processes pids a visible top-level window (Windows: EnumWindows; None elsewhere or when it
+    could not be asked)? A game process left without one (a crashed game hanging in the background) kept the app
+    saying "already running" and never started the game (GitHub #1038)."""
+    if not IS_WIN or not pids:
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+        user32 = ctypes.WinDLL("user32")
+        want, found = set(int(p) for p in pids), []
+        proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+        def each(hwnd, _lp):
+            if user32.IsWindowVisible(hwnd):
+                pid = wintypes.DWORD()
+                user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value in want:
+                    found.append(pid.value)
+                    return False
+            return True
+        user32.EnumWindows(proto(each), 0)
+        return bool(found)
+    except Exception:
+        return None
+
+
+STUCK_GAME_S = 15.0     # a game "already running" without a window this long after the check: stuck (windowless_game)
+
+
+def windowless_game(pids_fn=None, window_fn=None, wait_s=STUCK_GAME_S, sleep=time.sleep):
+    """True when the game seen running has no visible window now and still none wait_s later (a game process left
+    hanging in the background); False / None (it could not be told) otherwise."""
+    pids_fn, window_fn = pids_fn or game_pids, window_fn or windows_visible_window
+    pids = pids_fn()
+    if not pids or window_fn(pids) is not False:
+        return False if pids else None
+    sleep(wait_s)
+    pids = pids_fn()
+    return bool(pids) and window_fn(pids) is False
 
 
 def game_connected():
@@ -1918,6 +1963,11 @@ def run(args):
             return
         watch_game_log(user_dir, time.time() - 5)
         if running:
+            if IS_WIN and windowless_game():
+                problem("a BeamNG.drive process is running in the background without a window (left over from a "
+                        "game that crashed or did not close?), so the game cannot start.",
+                        "Open Task Manager (Ctrl+Shift+Esc) > Details, end every BeamNG.drive.x64.exe, then start "
+                        "BeamNG.Earth again.")
             if not reload_game:
                 row("Game", "already running")
             elif install.reload_running_game(user_dir):

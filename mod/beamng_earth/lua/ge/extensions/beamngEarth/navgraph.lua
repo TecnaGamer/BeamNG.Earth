@@ -65,6 +65,11 @@ M.RESPAWN_M = { 60, 300 }   -- a respawned car goes this far (min, max) behind t
 M.CUT_M = 60
 M.CUT_S = 4
 M.CUT_FRESH_M = 95
+-- ... and at least as far as the car needs to stop for it (its speed squared over 2 CUT_DECEL, CUT_STOP_M more): the
+-- AI plans to the end of the graph and brakes for the dead end long before 4 s from it; at 70 mph it braked from
+-- ~200 m and turned round across the lanes ahead of the player, every half minute on a motorway (GitHub #855 / #966)
+M.CUT_DECEL = 2.5
+M.CUT_STOP_M = 30
 M.FRESH_S = 5
 M.COOLDOWN_S = 8.0
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
@@ -108,7 +113,12 @@ local persistent = nil  -- the node table handed out once (research §2.7.2)
 local ours = false
 local foreign = false
 local urgent = false      -- a rebase moved the graph: applied again without waiting for MIN_GAP_S (M.transform)
+M.HEADS_ONLY = true      -- setupSignals sees only our signal heads, not every TSStatic (applySignals)
 local stats = { applies = 0, lastMs = 0, nodes = 0, edges = 0 }
+-- (the stopwatch's wall clock for the parts of an apply; in the game os.clock reads the same, measured 2026-11-09 on
+-- Linux and Windows)
+local stopwatch = require('beamngEarth/stopwatch')
+local wall = stopwatch.clock()       -- ms since load, monotonic (one clock: stopwatch.clock() makes a new one)
 local pendingSignals = nil -- the clipped nodes whose signals go in next frame
 local started = false
 local respawnAll = false
@@ -208,10 +218,18 @@ M.FOLLOW_DOT = 0.7
 -- player's way: the cut it heads for is the block's edge, which moves on with the player, so it is not respawned
 -- for it (on a highway at 30 m/s a car ~200 m ahead was within the cut's reach and vanished in front of the player,
 -- GitHub #353); it still is when it leaves the box (guard's GUARD_M).
-function M.followsPlayer(p, dir, pp, pu)
+-- How far ahead a car at sp m/s sees a dead end it will brake for (CUT_DECEL, CUT_STOP_M). Pure.
+function M.stopReach(sp)
+  return (sp or 0) ^ 2 / (2 * M.CUT_DECEL) + M.CUT_STOP_M
+end
+
+-- (car_sp: a car faster than the player by FOLLOW_FASTER_MS outruns the graph growing with the player: not following)
+M.FOLLOW_FASTER_MS = 2.0
+function M.followsPlayer(p, dir, pp, pu, car_sp)
   local ps = math.sqrt(pu.x * pu.x + pu.y * pu.y)
   local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
   if ps < M.FOLLOW_MS or dl < 1e-6 then return false end
+  if car_sp and car_sp > ps + M.FOLLOW_FASTER_MS then return false end
   local ux, uy = pu.x / ps, pu.y / ps
   if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
   return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
@@ -346,11 +364,11 @@ end
 -- pre: toNodes' results built ahead (buildNodes), else made here
 local function apply(b, pre, moved)
   setRules()
-  local tN = os.clock()
+  local tN = wall()
   local nodes, nn, ne, cl
   if pre then nodes, nn, ne, cl = pre[1], pre[2], pre[3], pre[4]
   else nodes, nn, ne, cl = M.toNodes(graph, b, M.EDGE_M, M.rules.rightHandDrive, nil, M.HALO_M, M.FAST_HALO_M) end
-  stats.nodesMs = (os.clock() - tN) * 1000         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
+  stats.nodesMs = wall() - tN         -- (the parts of an apply's frame: the hitch hunt, 2026-10-23)
   local ts = signalsSystem()
   -- before the reset: its onNavgraphReloaded would place the old instances on the new graph (research §2.8)
   if ts then pcall(ts.resetSignals) end
@@ -365,10 +383,10 @@ local function apply(b, pre, moved)
   end
   local okG, gps = pcall(require, 'beamngEarth/gps')
   local mOld = map.getMap and map.getMap()
-  local tG = os.clock()
+  local tG = wall()
   local keep = okG and gps.beforeGraph and gps.beforeGraph(mOld and mOld.nodes) or nil
-  stats.gpsMs = (os.clock() - tG) * 1000
-  local t0 = os.clock()
+  stats.gpsMs = wall() - tG
+  local t0 = wall()
   ours = true
   local ok, err = pcall(map.reset, nodes)
   ours = false
@@ -378,7 +396,7 @@ local function apply(b, pre, moved)
     log('E', 'beamngEarth', 'navgraph: map.reset: ' .. tostring(err))
     return false
   end
-  stats.resetMs = (os.clock() - t0) * 1000
+  stats.resetMs = wall() - t0
   local m = map.getMap()
   if persistent and persistent ~= m.nodes then
     table.clear(persistent)
@@ -387,9 +405,9 @@ local function apply(b, pre, moved)
   else
     persistent = m.nodes
   end
-  local tA = os.clock()
+  local tA = wall()
   if keep then pcall(gps.afterGraph, keep, m.nodes, moved) end    -- before the vehicles' new map
-  stats.gpsMs = stats.gpsMs + (os.clock() - tA) * 1000
+  stats.gpsMs = stats.gpsMs + (wall() - tA)
   be:queueAllObjectLua('mapmgr.requestMap()')
   -- the minimap (the navigation app, in 0.40's freeroam layout and ours) indexes the map's roads once and keeps them:
   -- it showed the first graph's streets, or none, as the player drove on (the user, 2026-10-22)
@@ -397,8 +415,8 @@ local function apply(b, pre, moved)
   if mr and mr.reset then pcall(mr.reset) end
   pendingSignals = ts and nodes or nil     -- next frame: a second, smaller hitch instead of one big one
   cuts = cl
-  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, (os.clock() - t0) * 1000, nn, ne
-  stats.applyMs = (os.clock() - tN) * 1000
+  stats.applies, stats.lastMs, stats.nodes, stats.edges = stats.applies + 1, wall() - t0, nn, ne
+  stats.applyMs = wall() - tN
   stats.cuts = #cl
   return true
 end
@@ -420,16 +438,39 @@ end
 local function applySignals(nodes)
   local ts = core_trafficSignals
   if not ts then return end
-  local t1 = os.clock()
+  local t1 = wall()
   local okS, err2 = pcall(function()
     seenHeads = {}
     local data, ns = signalData(nodes)
     clearHeads(seenHeads)                   -- the heads of junctions no longer in the graph
-    ts.setupSignals(data, false, true)
+    local t2 = wall()
+    stats.sigDataMs = t2 - t1
+    -- setupSignals finds the signal heads by walking every TSStatic in the level (setupSignalObjects:
+    -- getObjectsByClass('TSStatic') and a dynamic-field read on each); ours holds thousands (buildings, roads, far
+    -- tiles), so each apply paid for all of them. The heads are ours (heads): only they are handed over meanwhile.
+    local gobc = rawget(_G, 'getObjectsByClass')
+    if gobc and M.HEADS_ONLY then
+      getObjectsByClass = function(cls)
+        if cls ~= 'TSStatic' then return gobc(cls) end
+        local out = {}
+        for _, h in pairs(heads) do
+          local o = scenetree.findObjectById(h.id)
+          if o then out[#out + 1] = o end
+        end
+        return out
+      end
+    end
+    local okSet, errSet = pcall(ts.setupSignals, data, false, true)
+    if gobc then getObjectsByClass = gobc end
+    if not okSet then error(errSet) end
+    local t3 = wall()
+    stats.sigSetupMs = t3 - t2
     -- a vehicle holding signals reads the state-change mailbox every frame and dies on one never written
     -- ("lpack: unexpected end of buffer", in game 2026-10-14): write an empty update before handing them out
     be:sendToMailbox('trafficSignalUpdates', lpack.encodeBin({}))
     be:queueAllObjectLua(M.setSignalsLua(serialize(ts.getMapNodeSignals())))
+    local t4 = wall()
+    stats.sigSendMs = t4 - t3
     stats.junctions = ns
     -- the road tiles' static booms stand where the switchable heads are now
     local trees = require('beamngEarth/trees')
@@ -441,9 +482,12 @@ local function applySignals(nodes)
       for dx = -1, 1 do for dy = -1, 1 do if grid[(cx + dx) .. ',' .. (cy + dy)] then return true end end end
       return false
     end
+    local t5 = wall()
     trees.refresh('signal')            -- (only the tiles with signal items: suppress hides nothing else)
+    stats.sigTreesMs = wall() - t5
   end)
-  stats.signalsMs = (os.clock() - t1) * 1000
+  stats.signalsMs = wall() - t1
+  stats.signalsMaxMs = math.max(stats.signalsMaxMs or 0, stats.signalsMs)
   if not okS then log('W', 'beamngEarth', 'navgraph: signals: ' .. tostring(err2)) end
 end
 
@@ -548,9 +592,10 @@ local function guard(b, all)
         local s0 = seenAt[id]
         if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then s0 = { p.x, p.y, now } end
         seenAt[id] = { p.x, p.y, s0[3] }
-        local reach = now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S)
+        local reach = math.max(now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S),
+          M.stopReach(sp))
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
-        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity()) then
+        if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity(), sp) then
           toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
         end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
@@ -741,15 +786,92 @@ function M.takeChoice(o)
   return M.choice
 end
 
+-- The traffic cars of the region the player is in (the user, 2026-11-09: "the normal maps have this already"): a stock
+-- level names its region in info.json (northAmerica, europe, asiaPacific) and the game's traffic picks the vehicles
+-- of that region with Options > Gameplay > Traffic's smart selections on (gameplay/traffic/trafficUtils
+-- getBaseGroupParams). Ours spans the Earth: the region of the road rules' country (server navgraph.road_rules),
+-- the same filters as the game's own group (its simple vehicles too); nil (the game's own group) elsewhere, without
+-- smart selections, or when the group cannot be made.
+M.REGIONS = {
+  northAmerica = { 'US', 'CA', 'MX', 'PR' },
+  europe = { 'AT', 'BE', 'BG', 'HR', 'CY', 'CZ', 'DK', 'EE', 'FI', 'FR', 'DE', 'GR', 'HU', 'IE', 'IT', 'LV', 'LT', 'LU',
+    'MT', 'NL', 'PL', 'PT', 'RO', 'SK', 'SI', 'ES', 'SE', 'GB', 'NO', 'CH', 'IS', 'LI', 'MC', 'SM', 'AD', 'AL', 'BA',
+    'ME', 'MK', 'RS', 'XK', 'MD', 'UA', 'BY', 'FO', 'GI', 'IM', 'JE', 'GG' },
+  asiaPacific = { 'JP', 'KR', 'TW', 'HK', 'MO', 'SG', 'MY', 'TH', 'ID', 'PH', 'AU', 'NZ' },
+}
+M.COUNTRY_NAMES = { US = 'United States', DE = 'Germany', IT = 'Italy', FR = 'France', JP = 'Japan' }   -- (countryRef)
+M.GROUP_SIZE = 40       -- vehicles drawn for the traffic's pool
+local regionOfCountry = {}
+for region, list in pairs(M.REGIONS) do for _, cc in ipairs(list) do regionOfCountry[cc] = region end end
+
+function M.regionOf(cc)
+  return type(cc) == 'string' and regionOfCountry[string.upper(cc)] or nil
+end
+
+function M.regionalGroupParams(cc, getSetting)
+  local region = M.regionOf(cc)
+  if not region or not getSetting or not getSetting('trafficSmartSelections') then return nil end
+  local params = { filters = { Type = { car = 1, truck = 0.6 }, Region = { [region] = 1, default = 1 } },
+    country = M.COUNTRY_NAMES[string.upper(cc)] or 'default', maxYear = 0, minPop = 50, allConfigs = true,
+    allMods = getSetting('trafficAllowMods') and true or false, modelPopPower = 1, configPopPower = 1 }
+  if getSetting('trafficSimpleVehicles') then
+    -- (the simple traffic models' configs carry their region too: US, EU and Japanese-market bodies; the game's
+    -- own simple group, createTrafficGroup's: prop traffic only, every config)
+    params.filters.Type = { proptraffic = 1 }
+    params.minPop = 0
+  else
+    params.filters['Config Type'] = { Police = 0, other = 1 }
+    if params.allMods then params.filters.Type.automation = 1; params.minPop = 0 end
+  end
+  return params, region
+end
+
+local function regionalGroup()
+  local st = rawget(_G, 'settings')
+  local cc = graph and graph.rules and graph.rules.country
+  local params, region = M.regionalGroupParams(cc, st and st.getValue and function(k) return st.getValue(k) end)
+  M.trafficRegionKey = region or 'none'
+  M.trafficRegion = nil
+  if not params then return nil end
+  if not core_multiSpawn and extensions and extensions.load then pcall(extensions.load, 'core_multiSpawn') end
+  if not (core_multiSpawn and core_multiSpawn.createGroup) then return nil end
+  local ok, g = pcall(core_multiSpawn.createGroup, M.GROUP_SIZE, params)
+  if not ok or type(g) ~= 'table' or not g[1] then return nil end
+  M.trafficRegion = region
+  log('I', 'beamngEarth', string.format('traffic: %s vehicles (%s)', region, tostring(cc)))
+  return g
+end
+
+local function setupTraffic(gt, c)
+  local okG, group = pcall(regionalGroup)
+  local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1,
+    { police = c.police, vehGroup = okG and group or nil })
+  if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
+end
+
 local function startTraffic()
   started = true
   M.restoreChoice()       -- freeroam's own spawn time has passed
   local c = M.choice
   local gt = c.traffic and trafficSystem() or nil
-  if gt and gt.getState() ~= 'on' then
-    local ok, err = pcall(gt.setupTraffic, c.trafficAmount ~= 0 and c.trafficAmount or -1, { police = c.police })
-    if not ok then log('W', 'beamngEarth', 'navgraph: setupTraffic: ' .. tostring(err)) end
-  end
+  if gt and gt.getState() ~= 'on' then setupTraffic(gt, c) end
+end
+
+-- The traffic set up again with the new place's vehicles when a graph of another region comes (a teleport from
+-- the US to Germany kept the American cars): once per region change, the stock group outside the regions.
+M.REGION_CHECK_S = 2.0
+local regionCheckAt = 0
+local function checkRegion(t)
+  if t < regionCheckAt or not started or not M.trafficRegionKey then return end
+  regionCheckAt = t + M.REGION_CHECK_S
+  local want = M.regionOf(graph and graph.rules and graph.rules.country) or 'none'
+  if want == M.trafficRegionKey then return end
+  local c = M.choice
+  local gt = c and c.traffic and trafficSystem() or nil
+  if not gt or gt.getState() ~= 'on' then return end
+  log('I', 'beamngEarth', string.format('traffic: region %s -> %s, set up again', M.trafficRegionKey, want))
+  setupTraffic(gt, c)
+  M.trafficRegionKey = want         -- (once a change, whatever the setup did)
 end
 
 -- The player teleported: the traffic cars go inactive (no physics: their old positions have no ground) and come
@@ -786,6 +908,8 @@ function M.transform(xf, anchorId)
 end
 
 function M.currentGraph() return graph end      -- (tests)
+function M._startTraffic() return startTraffic() end    -- (tests: the level start's traffic, by hand)
+function M._cuts() return cuts end      -- (probes: the clip's cut nodes)
 
 function M.onTeleport()
   respawnAll = true
@@ -807,7 +931,6 @@ function M.boxMoved(a, b)
 end
 
 local waited = 0
-local stopwatch = require('beamngEarth/stopwatch')
 
 -- The node tables an apply hands map.reset, built over several frames (toNodes in a coroutine, PREP_MS a frame; ~20 ms in
 -- one frame on a Steam Deck), for this graph and block box; nil until done.
@@ -975,6 +1098,10 @@ end
 function M.update(aid, b, gov)
   if not M.enabled or not graph then return end
   local t0 = os.clock()
+  do
+    local ok, err = pcall(checkRegion, t0)
+    if not ok then log('W', 'beamngEarth', 'navgraph region: ' .. tostring(err)) end
+  end
   if applied then
     local ok, err = pcall(launchRespawned, t0)
     if not ok then log('W', 'beamngEarth', 'navgraph launch scan: ' .. tostring(err)) end

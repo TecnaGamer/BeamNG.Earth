@@ -31,9 +31,9 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
-  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
+  rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
@@ -51,7 +51,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -88,7 +88,7 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   barn = true, celltower = true, container = true, gantry = true, giveway = true, stop = true, signal = true,
   picnicgrill = true, picnictable = true, pylon = true, hvpole = true, tollbooth = true, watertower = true, cable = true,
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
-  rrgate_eu_l = true, rrgate_l = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
+  rrgate_eu_l = true, rrgate_l = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_turboburger = true }
 
@@ -97,6 +97,7 @@ local WCA = '/levels/west_coast_usa/art/shapes/'
 local UT = '/levels/Utah/art/shapes/'
 local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
+local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
@@ -113,6 +114,11 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
+  -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
+  -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
+  tuft = { { HIR .. 'groundcover/daisies_closetop', 0.11 }, { HIR .. 'groundcover/Clover_closetop', 0.17 } },
+  fern = { { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+           { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 } },
   conifer = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
@@ -193,6 +199,9 @@ M.CATALOG = {
   bin = { { '/art/shapes/garage_and_dealership/Clutter/clutter_city_bin_round', 1.1 }, { WCA .. 'objects/garbage_bin_a', 1.1 } },
   polelamp = { { ECA .. 'buildings/electrical_pole_lamp', 1.1 } },
   streetlight = { { '/art/shapes/garage_and_dealership/Clutter/eca_lamppost', 9.0 } },
+  -- the local lamp posts of Europe and its neighbours (server citylamps.py; tools/build_city_lamps.py)
+  eu_lamp_steel = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_steel', 9.0 } },
+  eu_lamp_concrete = { { '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps/bne_lamp_eu_concrete', 9.0 } },
   pole = { { '/levels/automation_test_track/art/shapes/objects/s_powerpole_3wire', 9.2 } },
   -- optional French demo (server poleprofiles.py): original mesh, three LODs, one lean collision hull
   pole_concrete_recessed = { { '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles/bne_pole_concrete_recessed', 8.5 } },
@@ -227,6 +236,12 @@ M.CATALOG = {
   rrflash = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher', 4.7 } }, rrflash_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_flasher_eu', 4.7 } },
   rrgate = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate', 8.25 } }, rrgate_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_l', 8.25 } },
   rrgate_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu', 8.25 } }, rrgate_eu_l = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_rr_gate_eu_l', 8.25 } },
+  -- railway catenary mast with its cantilever (server catenary.py; tools/blender/build_catenary.py); its +x toward the track
+  catmast = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_mast', 9.0 } },
+  catmast_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_steel', 9.3 } },
+  -- a rigid portal's posts (the girder between them is the tile's wire mesh: server catenary.portal_wires)
+  catpost = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_su', 10.4 } },
+  catpost_eu = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_cat_post_eu', 10.4 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
@@ -271,6 +286,36 @@ for g, h in pairs(SE_SIGNS) do
   M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
   M.GROUP_MAX_M[g] = 500
 end
+-- Germany's junction signs (server designs.py GROUPS and HEIGHTS, tools/build_median_props.py's DE_SIGNS): each
+-- mesh is its sign at its true size (Größe 1 to 3, some over a 1002 plate, a roundabout's 205 over its 215), so rows
+-- carry these heights and draw at 1:1. Few items a tile: one spelling each (ONE_SPELLING), shown out to 300 m.
+local DE_SIGNS = { de_z205_g1 = 2.519, de_z205 = 2.742, de_z205_g3 = 3.038, de_z206_g1 = 2.9, de_z206 = 2.9,
+  de_z206_g3 = 3.05, de_z301_g1 = 2.519, de_z301 = 2.742, de_z301_g3 = 3.038, de_z306_g1 = 2.571, de_z306 = 2.816,
+  de_z306_g3 = 3.142, de_z307_g1 = 2.571, de_z307 = 2.816, de_z307_g3 = 3.142, de_z205_p0_g1 = 2.989,
+  de_z205_p0 = 3.392, de_z205_p0_g3 = 3.838, de_z205_p1_g1 = 2.989, de_z205_p1 = 3.392, de_z205_p1_g3 = 3.838,
+  de_z205_p2_g1 = 2.989, de_z205_p2 = 3.392, de_z205_p2_g3 = 3.838, de_z205_p3_g1 = 2.989, de_z205_p3 = 3.392,
+  de_z205_p3_g3 = 3.838, de_z205_p4_g1 = 2.989, de_z205_p4 = 3.392, de_z205_p4_g3 = 3.838, de_z205_p5_g1 = 2.989,
+  de_z205_p5 = 3.392, de_z205_p5_g3 = 3.838, de_z205_p6_g1 = 2.989, de_z205_p6 = 3.392, de_z205_p6_g3 = 3.838,
+  de_z205_p7_g1 = 2.989, de_z205_p7 = 3.392, de_z205_p7_g3 = 3.838, de_z205_p8_g1 = 2.989, de_z205_p8 = 3.392,
+  de_z205_p8_g3 = 3.838, de_z205_p9_g1 = 2.989, de_z205_p9 = 3.392, de_z205_p9_g3 = 3.838, de_z206_p0_g1 = 3.55,
+  de_z206_p0 = 3.55, de_z206_p0_g3 = 3.85, de_z206_p1_g1 = 3.55, de_z206_p1 = 3.55, de_z206_p1_g3 = 3.85,
+  de_z206_p2_g1 = 3.55, de_z206_p2 = 3.55, de_z206_p2_g3 = 3.85, de_z206_p3_g1 = 3.55, de_z206_p3 = 3.55,
+  de_z206_p3_g3 = 3.85, de_z206_p4_g1 = 3.55, de_z206_p4 = 3.55, de_z206_p4_g3 = 3.85, de_z206_p5_g1 = 3.55,
+  de_z206_p5 = 3.55, de_z206_p5_g3 = 3.85, de_z206_p6_g1 = 3.55, de_z206_p6 = 3.55, de_z206_p6_g3 = 3.85,
+  de_z206_p7_g1 = 3.55, de_z206_p7 = 3.55, de_z206_p7_g3 = 3.85, de_z206_p8_g1 = 3.55, de_z206_p8 = 3.55,
+  de_z206_p8_g3 = 3.85, de_z206_p9_g1 = 3.55, de_z206_p9 = 3.55, de_z206_p9_g3 = 3.85, de_z306_p0_g1 = 3.041,
+  de_z306_p0 = 3.466, de_z306_p0_g3 = 3.942, de_z306_p1_g1 = 3.041, de_z306_p1 = 3.466, de_z306_p1_g3 = 3.942,
+  de_z306_p2_g1 = 3.041, de_z306_p2 = 3.466, de_z306_p2_g3 = 3.942, de_z306_p3_g1 = 3.041, de_z306_p3 = 3.466,
+  de_z306_p3_g3 = 3.942, de_z306_p4_g1 = 3.041, de_z306_p4 = 3.466, de_z306_p4_g3 = 3.942, de_z306_p5_g1 = 3.041,
+  de_z306_p5 = 3.466, de_z306_p5_g3 = 3.942, de_z306_p6_g1 = 3.041, de_z306_p6 = 3.466, de_z306_p6_g3 = 3.942,
+  de_z306_p7_g1 = 3.041, de_z306_p7 = 3.466, de_z306_p7_g3 = 3.942, de_z306_p8_g1 = 3.041, de_z306_p8 = 3.466,
+  de_z306_p8_g3 = 3.942, de_z306_p9_g1 = 3.041, de_z306_p9 = 3.466, de_z306_p9_g3 = 3.942,
+  de_z205_z215_g1 = 3.169, de_z205_z215 = 3.392, de_z205_z215_g3 = 3.838 }
+for g, h in pairs(DE_SIGNS) do
+  M.CATALOG[g] = { { '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, h } }
+  M.GROUP_MAX_M[g] = 300
+  M.ONE_SPELLING[g] = true
+end
 -- Mapped chain-link fences and noise walls (server fences.py): West Coast USA's chain-link panel (2.04 m along
 -- its x, the origin at the forward end) and its concrete noise blocker (4 m along its y).
 M.CATALOG.chainlink = { { '/art/shapes/objects/s_chainlink_old', 1.76 } }
@@ -308,7 +353,7 @@ M.GROUP_MAX_M.golfflag = 400
 -- below the tile cap.
 function M.isBarrier(g)
   return g ~= nil and (g:sub(1, 9) == 'guardrail' or g:sub(1, 6) == 'jersey' or g == 'cable' or g == 'kantstolpe'
-    or g:sub(1, 3) == 'se_')      -- (a sign thinned away is a rule gone, not a tree fewer)
+    or g:sub(1, 3) == 'se_' or g:sub(1, 3) == 'de_')      -- (a sign thinned away is a rule gone, not a tree fewer)
 end
 
 -- the Vienna Convention's round km/h signs: their shapes and how far out they show (CATALOG, GROUP_MAX_M)
@@ -342,6 +387,7 @@ local MATERIALS = {
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic',
   '/levels/beamng_earth/art/shapes/beamngEarth/europe_infrastructure',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_poles',
+  '/levels/beamng_earth/art/shapes/beamngEarth/city_lamps',
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture',
   '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs',
   ECA .. 'trees/trees_oak', ECA .. 'trees/trees_beech', ECA .. 'trees/trees_aspen', ECA .. 'trees/trees_douglasfir',
@@ -356,6 +402,7 @@ local MATERIALS = {
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
   JV .. 'misc',     -- the cell tower
+  HIR .. 'groundcover',     -- the clover and daisy patches and ferns of a roundabout's island (server roundabouts.py)
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
@@ -790,6 +837,12 @@ end
 -- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
 M.NEW_SHAPES_PER_FRAME = 1
 local touched, touchedItems, newShapes = {}, 0, 0
+local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
+  { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 } }     -- the last two passes' (M.frameWork)
+local workMade, workRemoved = 0, 0
+-- The last two passes' work ([1] the last): items made / removed, shapes touched and their items in the level, shapes
+-- new this session, Forests made.
+function M.frameWork() return frameWork end
 local newShapeCap = math.huge
 local everMade = {}     -- shape -> true once it had items this session (the engine keeps it loaded)
 local function allow(shape)
@@ -1183,6 +1236,15 @@ function M.update(anchorId, player, view, frameMs)
     clock = stopwatch.new() } or nil
   local budget = M.PER_FRAME * M.EVERY_N
   local limit, elapsed = frameMs or M.FRAME_MS, M.clock()
+  -- the previous pass's work, for a hitch's context (core.perfContext: the engine's tick pays for a pass's Forest
+  -- changes, 0.5 us an item of every shape touched; a repeatable 136-612 ms tick beside a Manhattan park, 2026-11-08)
+  local w = frameWork[2]
+  frameWork[2], frameWork[1] = frameWork[1], w
+  local nTouched = 0
+  for _ in pairs(touched) do nTouched = nTouched + 1 end
+  w.made, w.removed, w.shapes, w.items, w.new, w.forests = M.made - workMade, M.removed - workRemoved, nTouched,
+    touchedItems, newShapes, newForests
+  workMade, workRemoved = M.made, M.removed
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0

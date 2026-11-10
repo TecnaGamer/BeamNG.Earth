@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!--
+   ***************************************************************************
+   Bundesanstalt fuer Strassenwesen
+   RWBA-Symbol
+   Bezeichnung:
+   Toiletten
+   Ausdehnung in cm:
+         X_min     X_max     Y_min     Y_max
+         0.00000  15.00000   0.00000  15.00000
+-->
+
+<svg
+   width="150"
+   height="150"
+   version="1.1"
+   id="svg6247"
+   sodipodi:docname="RWBA Symbol 15 - Flughafen.svg"
+   inkscape:version="1.1 (c68e22c387, 2021-05-23)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs6251">
+    <clipPath
+       id="clip35">
+      <path
+         d="m 225.63672,470.55078 h 51.02344 v 51.02344 h -51.02344 z m 0,0"
+         id="path1373" />
+    </clipPath>
+    <clipPath
+       id="clip36">
+      <path
+         d="m 315.77734,470.55078 h 51.02735 v 51.02344 h -51.02735 z m 0,0"
+         id="path1376" />
+    </clipPath>
+    <clipPath
+       id="clip30">
+      <path
+         d="m 315.77734,557.71484 h 51.02735 v 51.02344 h -51.02735 z m 0,0"
+         id="path1358" />
+    </clipPath>
+  </defs>
+  <sodipodi:namedview
+     id="namedview6249"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     showgrid="false"
+     inkscape:zoom="1.774838"
+     inkscape:cx="-17.184667"
+     inkscape:cy="85.359903"
+     inkscape:window-width="1555"
+     inkscape:window-height="1013"
+     inkscape:window-x="347"
+     inkscape:window-y="15"
+     inkscape:window-maximized="0"
+     inkscape:current-layer="svg6247"
+     showguides="true"
+     inkscape:guide-bbox="true" />
+  <!--
+   ***************************************************************************
+-->
+  <path
+     fill="white"
+     fill-rule="evenodd"
+     stroke="black"
+     stroke-width="0.25"
+     d="M0 150L0 0L150 0L150 150L0 150Z"
+     id="path6243" />
+  <!--
+      * SYMBOL WC *
+-->
+  <g
+     clip-path="url(#clip30)"
+     clip-rule="nonzero"
+     id="g2802"
+     transform="matrix(2.944725,0,0,2.944725,-930.01393,-1642.4533)">
+    <path
+       style="fill:#191919;fill-opacity:1;fill-rule:nonzero;stroke:none"
+       d="m 346.39453,605.34375 h 4.25 l -8.50391,-19.77734 14.45704,-0.63672 4.25,5.95312 h 2.55468 l -1.70312,-7.65234 1.70312,-7.65625 h -2.55468 l -4.25,5.95312 -14.45704,-0.63672 8.50391,-19.77343 h -4.25 l -14.34766,19.41797 -7.33593,-0.0703 c -1.34766,-0.0273 -2.6836,0.25 -3.91016,0.8125 -0.46484,0.21485 -0.87891,0.52735 -1.21484,0.91407 -0.25,0.28906 -0.39453,0.65625 -0.40235,1.03906 0.008,0.38281 0.15235,0.74609 0.40235,1.03515 0.33593,0.38672 0.7539,0.69922 1.21484,0.91797 1.22656,0.5586 2.5625,0.83594 3.91016,0.8086 l 7.33593,-0.0703 z"
+       id="path2800"
+       sodipodi:nodetypes="ccccccccccccccccccccccc" />
+  </g>
+</svg>

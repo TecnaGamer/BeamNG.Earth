@@ -1137,11 +1137,33 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
-    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
       net.send({ type = 'direction_signs', on = M.directionSigns })
+    end
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadSigns')
+      if v ~= nil then M.roadSigns = v == true end
+      net.send({ type = 'road_signs', on = M.roadSigns ~= false })
+    end
+    -- the German junction signs' switch (settings germanJunctionSigns, off by default until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('germanJunctionSigns')
+      if v == nil then v = M.germanJunctionSigns end
+      M.germanJunctionSigns = v == true
+      net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
+    end
+    -- the town signs' switch (settings townSigns, off by default for now: opt-in until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('townSigns')
+      if v == nil then v = M.townSigns end
+      M.townSigns = v == true
+      net.send({ type = 'town_signs', on = M.townSigns })
     end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
@@ -1383,6 +1405,9 @@ local function onMessage(msg)
   elseif t == 'map_labels_result' then       -- the 3D map's labels (map3d.lua; server maplabels.py)
     local m3 = rawget(_G, 'beamngEarth_map3d')
     if m3 and m3.onMapLabels then m3.onMapLabels(msg) end
+  elseif t == 'places_result' then           -- the modding API's places (api.lua; server places.py)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onPlaces then api._onPlaces(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
@@ -2299,6 +2324,17 @@ local function perfContext()
   end
   local okT, ts = pcall(trees.status)
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end
+  local okW, fw = pcall(trees.frameWork)
+  if okW and fw then
+    for i = 1, 2 do
+      local w = fw[i]
+      if w.made + w.removed + w.forests > 0 then
+        d[#d + 1] = string.format('trees %s: +%d -%d items, %d shapes (%d items in the level)%s%s',
+          i == 1 and 'last pass' or 'pass before', w.made, w.removed, w.shapes, w.items,
+          w.new > 0 and (', ' .. w.new .. ' new shapes') or '', w.forests > 0 and (', ' .. w.forests .. ' new Forests') or '')
+      end
+    end
+  end
   if (st.serverBacklog or 0) > 0 then d[#d + 1] = 'server backlog ' .. st.serverBacklog end
   c.doing = table.concat(d, ', ')
   c.extra = string.format('Lua %.0f MB%s%s', collectgarbage('count') / 1024,
@@ -2353,7 +2389,9 @@ function M._psum.sample()
   end)
   if okV and type(tv) == 'number' then loaded.traffic = tv end
   s.loaded = loaded
-  s.edge = st.guard and st.guard.pausedByUs or false
+  -- held at the edge: the guard holding the car back (mode 'hold') or the rare full pause; the first night counted
+  -- only the pause (0.0 % over 233 hours)
+  s.edge = (st.guard and (st.guard.mode == 'hold' or st.guard.pausedByUs)) and true or false
   s.drop = dropHold.active or false
   s.loading = st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil
   local m3 = rawget(_G, 'beamngEarth_map3d')
@@ -2367,8 +2405,13 @@ function M._psum.frame(ms, hrec)
   local p = st.player
   local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
   local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
-  ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
-    st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  -- only frames the player is playing: not paused (menus, the edge guard's pause: that time is counted as held) and
+  -- not in the background, where the game slows its own frames down (the game's lowPerformance sampler does the same)
+  local focused = not Engine.isProgramFocused or Engine.isProgramFocused()
+  if focused and not simPaused() then
+    ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
+      st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  end
   if st.clock < ps.sampleAt then return end
   ps.sampleAt = st.clock + 1
   local okS, smp = pcall(ps.sample)
@@ -2641,6 +2684,11 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    do                              -- (traffic over the limit as the country drives: speeding.lua)
+      local ok, err = pcall(require('beamngEarth/speeding').update, dtReal, navgraph.currentGraph())
+      if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
+    end
+    t = mark('speeding', t)
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do
@@ -3106,10 +3154,10 @@ function M.requestGeocode(id, q, lat, lon, full)
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload') })
   return true
 end
 function M.takeRoute(id)
@@ -3296,6 +3344,32 @@ function M.setDirectionSigns(on)
   if M.directionSigns == on then return end
   M.directionSigns = on
   net.send({ type = 'direction_signs', on = on })
+end
+
+-- The road signs on / off (settings roadSigns): the server builds the sign tiles again with or without them.
+function M.setRoadSigns(on)
+  on = on == true
+  if M.roadSigns == on then return end
+  M.roadSigns = on
+  net.send({ type = 'road_signs', on = on })
+end
+
+-- The German junction signs on / off (settings germanJunctionSigns): the server builds the road and sign tiles again
+-- with or without them (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setGermanJunctionSigns(on)
+  on = on == true
+  if M.germanJunctionSigns == on then return end
+  M.germanJunctionSigns = on
+  net.send({ type = 'german_junctions', on = on })
+end
+
+-- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
+-- (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setTownSigns(on)
+  on = on == true
+  if M.townSigns == on then return end
+  M.townSigns = on
+  net.send({ type = 'town_signs', on = on })
 end
 
 M.onUpdate = onUpdate

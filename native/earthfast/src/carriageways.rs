@@ -118,7 +118,7 @@ pub fn carriageway_profiles<'py>(
         couplings,
     };
     let (z, d) = py
-        .allow_threads(|| solver::solve(&problem, rounds, budget_s))
+        .detach(|| solver::solve(&problem, rounds, budget_s))
         .map_err(PyValueError::new_err)?;
     let diagnostics = PyDict::new(py);
     diagnostics.set_item("rounds", d.rounds)?;

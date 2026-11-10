@@ -111,8 +111,15 @@ def md(text, base, fold=False):
     return fast.md_html(text, base, fold)
 
 
+REAL_REGISTRY_URL = addons.REGISTRY_URL      # (Base turns it off for every test)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
+        # (no online list unless a test sets one: REGISTRY_URL points at the real data repo)
+        p = mock.patch.object(addons, "REGISTRY_URL", "")
+        p.start()
+        self.addCleanup(p.stop)
         self.tmp = tempfile.TemporaryDirectory(dir=os.environ.get("BNGE_TEST_TMP") or None)
         self.user = os.path.join(self.tmp.name, "user")
         self.cache = os.path.join(self.tmp.name, "cache")
@@ -135,12 +142,16 @@ class Base(unittest.TestCase):
 
 class RegistryTest(unittest.TestCase):
     def test_bundled_registry_is_valid(self):
-        # (empty until the add-ons' authors agreed to be listed, the user 2026-11-08: "i havent talked to any of the
-        # mod authors yet"; every entry it has must be valid)
+        # (only add-ons whose authors agreed to be listed: the trucking career back on 2026-11-09, the user: "add the
+        # worldwide trucking carrer back to the addon list"; every entry it has must be valid)
         es = addons.load_registry()
         with open(addons.REGISTRY_PATH, encoding="utf-8") as f:
             self.assertEqual(len(es), len(json.load(f)["addons"]), "every bundled entry is valid")
         self.assertEqual(len({e["id"] for e in es}), len(es), "no id twice")
+        t = next(e for e in es if e["id"] == "trucking-dc")
+        self.assertEqual(t["modFile"], "worldwide-trucking-dangerous-contracts.zip")
+        self.assertTrue(t["asset"].search("worldwide-trucking-dangerous-contracts.zip"))
+        self.assertFalse(t["asset"].search("worldwide-trucking-server.zip"), "not its server package")
 
     def test_invalid_entries_are_left_out(self):
         bad = [dict(registry()["addons"][0], **ch) for ch in (
@@ -381,6 +392,23 @@ class RegistryUrlTest(Base):
         b = self.make({r"pages\.example": [(200, {}, b"{broken", 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
         with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
             self.assertEqual([c["id"] for c in b.cards()], ["some-mod"], "a broken copy: the bundled one stays")
+
+    def test_an_empty_online_list_takes_every_addon_off(self):
+        empty = {"format": 1, "addons": []}
+        a = self.make({r"pages\.example": [(200, {}, json.dumps(empty).encode(), 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
+        with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
+            self.assertEqual(a.cards(), [], "an empty list is an answer")
+
+    def test_all_invalid_entries_keep_the_bundled_list(self):
+        bad = {"format": 1, "addons": [{"id": "x", "futureField": True}]}
+        a = self.make({r"pages\.example": [(200, {}, json.dumps(bad).encode(), 0)], r"/releases\?": [(200, {}, b"[]", 0)]})
+        with mock.patch.object(addons, "REGISTRY_URL", "https://pages.example/addons.json"):
+            self.assertEqual([c["id"] for c in a.cards()], ["some-mod"], "nothing valid in it: the bundled one stays")
+
+    def test_the_online_copy_is_on_an_allowed_host(self):
+        import urllib.parse
+        host = urllib.parse.urlparse(REAL_REGISTRY_URL).hostname
+        self.assertIn(host, nf.POLICIES, "netfetch has a policy for the online list's host")
 
 
 class NetfetchNotModifiedTest(unittest.TestCase):

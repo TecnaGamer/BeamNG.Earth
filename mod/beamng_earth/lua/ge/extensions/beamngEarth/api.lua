@@ -13,6 +13,7 @@
 --   onBeamNGEarthWorldReady(info)     the world around the player is loaded (after the level loads, a teleport)
 --   onBeamNGEarthTeleported(info)     a teleport finished: info.lat / lon where the player is now
 --   onBeamNGEarthRouteArrived(info)   the GPS destination reached: info.lat / lon / name
+--   onBeamNGEarthWaypointReached(info) a GPS waypoint passed (1.2, has('gpsRoute')): info.lat / lon / name / left
 --   onBeamNGEarthAddonOptions(info)   an add-on's options were saved on its Options tab: info.id, info.values
 -- or with api.on(event, fn) ('worldReady', 'teleported', 'routeArrived', 'addonOptions'), which returns a handle for
 -- api.off(handle).
@@ -20,13 +21,19 @@
 -- Options (1.1, has('options')): an add-on declares them in its beamngEarth_addon.json ({"options": [{"key": "port",
 -- "label": "Port", "type": "int", "default": 47700, "min": 1024, "max": 65535}]}, docs/ADDONS.md); the player sets them
 -- on its Options tab; api.addonOptions(id) is { key = value } (the defaults until then), or nil before the list came.
--- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself.
+-- Places (1.4, has('places') / has('buildings')): api.places(lat, lon, opts, callback) asks the BeamNG.Earth app for
+-- Overture's places round a point (every kind, docs/ADDONS.md); the callback gets each answer (one at once from the map
+-- cells on disk, one more later when some were missing: result.pending says whether another is coming).
+-- Pure reads are cheap (no allocation beyond the returned table); nothing here blocks or talks to the network itself
+-- (places only sends a request to the app, which answers from what it has).
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 1
-local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true }
+M.MAJOR, M.MINOR = 1, 4
+local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
+  gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
-  routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions' }
+  routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
+  waypointReached = 'onBeamNGEarthWaypointReached' }
 
 local function core() return rawget(_G, 'beamngEarth_core') end
 local function state()
@@ -45,7 +52,8 @@ end
 
 -- The API's version: major (a change that can break callers), minor (additions).
 function M.version() return M.MAJOR, M.MINOR end
--- Whether this API has a feature: 'pose', 'place', 'teleport', 'gps', 'notify', 'events'.
+-- Whether this API has a feature: 'pose', 'place', 'teleport', 'gps', 'notify', 'events', ... ('places', 'buildings'
+-- since 1.4; docs/ADDONS.md lists them all).
 function M.has(name) return FEATURES[name] == true end
 -- BeamNG.Earth's app version ("1.8.2-beta"), once its app is connected; nil before.
 function M.earthVersion()
@@ -109,6 +117,38 @@ function M.pose()
   return p
 end
 
+-- Is the player (or x, y, z in game coordinates) under a roof: a tunnel, a covered arch, a parking structure (1.3,
+-- has('inTunnel'); GitHub #1028: an add-on's automatic headlights)? true / false; nil before the world is there. The
+-- rule the tunnel sound uses (ambience.inTunnel); the player's point is 1 m over its position (a car's cabin).
+function M.inTunnel(x, y, z)
+  local amb = mod('ambience')
+  if not (amb and type(amb.inTunnel) == 'function') then return nil end
+  if x == nil then
+    local st = state()
+    local pl = st and st.player
+    if not (pl and pl.x and pl.y and pl.z) then return nil end
+    x, y, z = pl.x, pl.y, pl.z + 1
+  end
+  local ok, r = pcall(amb.inTunnel, x, y, z)
+  if not ok then return nil end
+  return r == true
+end
+
+-- The weather the world shows now (1.3, has('weather')): { rain = 0..1, snow = 0..1 (how hard it falls where the
+-- camera is: none above the cloud base), code (WMO weather code), tempC (at sea level), windMs, gustMs, visibilityM,
+-- rainMmH, snowCmH }, fields nil where not known; nil when there is no weather yet (before the first report, or the
+-- weather off).
+function M.weather()
+  local w = mod('weather')
+  if not w then return nil end
+  local m = type(w.current) == 'function' and w.current() or nil
+  if type(m) ~= 'table' then return nil end
+  local wind = type(m.wind) == 'table' and m.wind or {}
+  return { rain = tonumber(w.rainNow) or 0, snow = tonumber(w.snowNow) or 0, code = tonumber(m.code),
+    tempC = tonumber(m.slTempC), windMs = tonumber(wind.ms), gustMs = tonumber(wind.gustMs),
+    visibilityM = tonumber(m.visM), rainMmH = tonumber(m.rainMmH), snowCmH = tonumber(m.snowCmH) }
+end
+
 -- lat, lon of the player now (nil before the world is there).
 function M.position()
   local st = state()
@@ -152,17 +192,28 @@ function M.gpsSet(lat, lon, name)
   return gps.setDestination(lat, lon, type(name) == 'string' and name or nil) == true
 end
 
+-- The GPS through waypoints (1.2, has('gpsRoute'); GitHub #935): points { { lat, lon, name? }... }, the last the
+-- destination, at most 11 (10 waypoints), planned as one route. True, or false and why.
+function M.gpsSetRoute(points)
+  local gps = mod('gps')
+  if not gps or not gps.setRoute then return false, 'BeamNG.Earth is not loaded' end
+  return gps.setRoute(points)
+end
+
 function M.gpsClear()
   local gps = mod('gps')
   if gps then gps.clear() end
 end
 
--- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning }, or nil without one.
+-- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning, waypoints, legs }, or
+-- nil without one (waypoints: those still ahead, { { lat, lon, name }... }; legs: the planned route's { { dist m,
+-- dur s }... } from the start through each waypoint, with waypoints only).
 function M.gps()
   local gps = mod('gps')
   local s = gps and gps.status and gps.status()
   if type(s) ~= 'table' then return nil end
-  return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true }
+  return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true,
+           waypoints = s.waypoints or {}, legs = s.legs }
 end
 
 -- A short message on the screen (the game's own messages), seconds (default 5).
@@ -170,6 +221,84 @@ function M.notify(text, seconds)
   if type(text) ~= 'string' or text == '' then return false end
   if ui_message then pcall(ui_message, text:sub(1, 300), tonumber(seconds) or 5, 'beamngEarthApi') return true end
   return false
+end
+
+------------------------------------------------------------------------------------------
+-- places (1.4)
+
+-- (an answer the app never sent, a lost connection: the callback still hears once, after this long. The app's own
+-- wait for missing cells is 2 min, earthd PLACES_TRIES)
+M.PLACES_TIMEOUT_S = 150
+local placeReqs, placeReqId, clock = {}, 0, 0
+
+local function placesRequest(lat, lon, opts, callback, buildings)
+  if type(opts) == 'function' and callback == nil then opts, callback = nil, opts end
+  lat, lon = tonumber(lat), tonumber(lon)
+  if not lat or not lon or lat < -90 or lat > 90 or lon < -180 or lon > 180 then return nil, 'bad coordinates' end
+  if type(callback) ~= 'function' then return nil, 'no callback' end
+  local net = mod('net')
+  if not (net and M.connected()) then return nil, 'Companion server not connected' end
+  opts = type(opts) == 'table' and opts or {}
+  local cats = nil
+  if type(opts.categories) == 'table' then
+    cats = {}
+    for _, c in ipairs(opts.categories) do if type(c) == 'string' then cats[#cats + 1] = c end end
+    if #cats == 0 then cats = nil end       -- (an empty table goes as JSON {}, not []: none sent, every kind)
+  end
+  placeReqId = placeReqId + 1
+  placeReqs[placeReqId] = { fn = callback, t = clock }
+  net.send({ type = 'places', id = placeReqId, lat = lat, lon = lon, radius = tonumber(opts.radius),
+    categories = cats, limit = tonumber(opts.limit), cursor = type(opts.cursor) == 'string' and opts.cursor or nil,
+    buildings = buildings or opts.buildings == true, minConfidence = tonumber(opts.minConfidence) })
+  return placeReqId
+end
+
+-- Overture's places round lat, lon (1.4, has('places')), every kind (not only the 3D map's). opts (all optional):
+--   radius (m, default 1000, at most 3000), categories ({ 'gas_station', 'car_*', 'group:food' }: Overture
+--   basic_category values, prefixes ending in '*', or the map's icon groups), limit (default 50, at most 200), cursor
+--   (a result's next: the next page), minConfidence (0..1), buildings (true: the footprints too, as api.buildings).
+-- callback(result) for each answer: { places = { { id, name, category, lat, lon, confidence, open }... } nearest first
+-- (open: Overture's operating_status, '' when not known), buildings (asked only), complete (every map cell round the
+-- point was read), pending (another answer for this request is coming), next (the next page's cursor, nil on the
+-- last), error (why there are none: no map data, bad request, timed out) }. Returns the request's id, or nil and why.
+-- Only places in map cells the app has or fetches in the background: nothing is downloaded ahead of the world.
+function M.places(lat, lon, opts, callback) return placesRequest(lat, lon, opts, callback, false) end
+
+-- The buildings' footprints round lat, lon (1.4, has('buildings')): as places, with result.buildings
+-- { { id, lat, lon, height (m), levels, name, class, outline = { { lat, lon }... } }... } nearest first (height,
+-- levels nil where not mapped), within 500 m and at most 100.
+function M.buildings(lat, lon, opts, callback) return placesRequest(lat, lon, opts, callback, true) end
+
+local function placesCall(r, result)
+  local ok, err = pcall(r.fn, result)
+  if not ok and log then log('W', 'beamngEarth', 'api: a places callback failed: ' .. tostring(err)) end
+end
+
+-- (ours: core.lua hands the app's places_result here)
+function M._onPlaces(msg)
+  local r = type(msg) == 'table' and placeReqs[msg.id]
+  if not r then return end
+  local result = { places = type(msg.places) == 'table' and msg.places or {}, complete = msg.complete == true,
+    pending = msg.pending == true, next = type(msg.next) == 'string' and msg.next or nil,
+    error = type(msg.error) == 'string' and msg.error or nil,
+    buildings = type(msg.buildings) == 'table' and msg.buildings or nil }
+  if not result.pending then placeReqs[msg.id] = nil end
+  placesCall(r, result)
+end
+
+local function placesTimeouts(dt)
+  clock = clock + (tonumber(dt) or 0)
+  local late = {}
+  for id, r in pairs(placeReqs) do
+    if clock - r.t > M.PLACES_TIMEOUT_S then late[#late + 1] = id end
+  end
+  -- (called after the walk: a callback may ask again, and a key added during pairs() is undefined in Lua)
+  table.sort(late)
+  for _, id in ipairs(late) do
+    local r = placeReqs[id]
+    placeReqs[id] = nil
+    placesCall(r, { places = {}, complete = false, pending = false, error = 'timed out' })
+  end
 end
 
 ------------------------------------------------------------------------------------------
@@ -208,7 +337,8 @@ end
 
 local wasReady, teleporting = false, false
 
-function M.onUpdate()
+function M.onUpdate(dtReal)
+  if next(placeReqs) then placesTimeouts(dtReal) end
   local st = state()
   if not st then wasReady, teleporting = false, false return end
   if st.pending and st.pending.purpose == 'teleport' then teleporting = true end
@@ -222,6 +352,6 @@ function M.onUpdate()
   wasReady = ready
 end
 
-function M._reset() listeners, wasReady, teleporting = {}, false, false end
+function M._reset() listeners, wasReady, teleporting, placeReqs, clock = {}, false, false, {}, 0 end
 
 return M

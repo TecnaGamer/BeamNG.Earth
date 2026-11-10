@@ -21,7 +21,8 @@ struct Lines<'a> {
     xy: numpy::ndarray::ArrayView2<'a, f64>,
     st: Vec<usize>,
     arc: Vec<f64>,                               // per point: m along its line
-    ends: HashMap<(i64, i64), Vec<(usize, bool)>>, // (line, its last point) by ENDS_G grid square
+    ends: std::cell::OnceCell<HashMap<(i64, i64), Vec<(usize, bool)>>>, // (line, its last point) by ENDS_G grid
+                                                                         // square, made when first asked (next())
 }
 
 const ENDS_G: f64 = 4.0; // m: the end points' grid (next(): tol at most this)
@@ -35,19 +36,25 @@ impl<'a> Lines<'a> {
                 arc[k] = arc[k - 1] + (xy[[k, 0]] - xy[[k - 1, 0]]).hypot(xy[[k, 1]] - xy[[k - 1, 1]]);
             }
         }
-        let mut ends: HashMap<(i64, i64), Vec<(usize, bool)>> = HashMap::new();
-        for l in 0..st.len().saturating_sub(1) {
-            if st[l + 1] < st[l] + 2 {
-                continue;
+        Lines { xy, st, arc, ends: std::cell::OnceCell::new() }
+    }
+    fn ends(&self) -> &HashMap<(i64, i64), Vec<(usize, bool)>> {
+        self.ends.get_or_init(|| {
+            let (xy, st) = (&self.xy, &self.st);
+            let mut ends: HashMap<(i64, i64), Vec<(usize, bool)>> = HashMap::new();
+            for l in 0..st.len().saturating_sub(1) {
+                if st[l + 1] < st[l] + 2 {
+                    continue;
+                }
+                for last in [false, true] {
+                    let k = if last { st[l + 1] - 1 } else { st[l] };
+                    ends.entry(((xy[[k, 0]] / ENDS_G).floor() as i64, (xy[[k, 1]] / ENDS_G).floor() as i64))
+                        .or_default()
+                        .push((l, last));
+                }
             }
-            for last in [false, true] {
-                let k = if last { st[l + 1] - 1 } else { st[l] };
-                ends.entry(((xy[[k, 0]] / ENDS_G).floor() as i64, (xy[[k, 1]] / ENDS_G).floor() as i64))
-                    .or_default()
-                    .push((l, last));
-            }
-        }
-        Lines { xy, st, arc, ends }
+            ends
+        })
     }
     fn n(&self) -> usize {
         self.st.len().saturating_sub(1)
@@ -96,7 +103,7 @@ impl<'a> Lines<'a> {
         let mut near: Vec<(usize, bool)> = Vec::new();
         for dx in -1..=1 {
             for dy in -1..=1 {
-                if let Some(v) = self.ends.get(&(gx + dx, gy + dy)) {
+                if let Some(v) = self.ends().get(&(gx + dx, gy + dy)) {
                     near.extend(v.iter().copied());
                 }
             }
@@ -151,7 +158,9 @@ impl<'a> Lines<'a> {
 /// d2 = d1 + prm[2]; past a line's end on along the line joined there, as gradesep_spans goes on). how: 0 compare the heights; 1 i passes over j's short tunnel (a railway's: i a road); 2 i is a gap between two decks
 /// (both its ends within prm[4] m of deck_ends (rows x, y, that deck's length m), shorter than prm[5] m) crossing a
 /// ground line, or shorter than prm[7] times the longer deck it joins: a bridge whole. One row per pair of lines and
-/// crossing (a crossing at a shared point of two segments counted once).
+/// crossing (a crossing at a shared point of two segments counted once). prm[8] (optional) non-zero: the how 1 rows
+/// alone (only the pairs with a short tunnel are tried: gradesep.py's tunnels-only mode, which keeps no other; the
+/// same rows in the same order as the others left out of the whole answer).
 #[pyfunction]
 pub fn gradesep_candidates<'py>(
     py: Python<'py>,
@@ -167,6 +176,7 @@ pub fn gradesep_candidates<'py>(
                                                    group.as_array(), deck_ends.as_array(), prm.as_array());
     let (end_m, gap, step, min_sin, touch, gap_max, turn, gap_share) =
         (prm[0], prm[1], prm[2], prm[3], prm[4], prm[5], prm[6], prm[7]);
+    let under_only = prm.len() > 8 && prm[8] != 0.0;
     let ln = Lines::new(xy, starts);
     let n = ln.n();
     // the longest deck ending at p (deck_ends rows x, y, its deck's length), 0 none
@@ -191,7 +201,8 @@ pub fn gradesep_candidates<'py>(
     };
     let gap_end: Vec<(f64, f64)> = (0..n)
         .map(|l| {
-            if under(kind[l]) || ln.st[l + 1] < ln.st[l] + 2 || ln.len(l) >= gap_max {
+            // (under_only: no gap rows, how 2, wanted)
+            if under_only || under(kind[l]) || ln.st[l + 1] < ln.st[l] + 2 || ln.len(l) >= gap_max {
                 (0.0, 0.0)
             } else {
                 (deck_at(ln.end(l, false)), deck_at(ln.end(l, true)))
@@ -213,15 +224,26 @@ pub fn gradesep_candidates<'py>(
     // the lines whose boxes may overlap, by a grid of their boxes (every pair was tried: 0.13 s a city cell, ~7000 lines)
     const G: f64 = 128.0;
     let cell_of = |v: f64| (v / G).floor() as i64;
+    // (under_only: the grid of the short tunnels alone, ugrid, for the other lines; a tunnel's own pairs by a look
+    // through every line for those of its grid squares: the same lines in the same order as the whole grid's)
     let mut grid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
-    for l in 0..n {
+    let mut ugrid: HashMap<(i64, i64), Vec<usize>> = HashMap::new();
+    let gridded = |l: usize| {
         let (x0, y0, x1, y1) = boxes[l];
-        if !(x0.is_finite() && y0.is_finite()) || (x1 - x0) / G > 64.0 || (y1 - y0) / G > 64.0 {
+        !(!(x0.is_finite() && y0.is_finite()) || (x1 - x0) / G > 64.0 || (y1 - y0) / G > 64.0)
+    };
+    for l in 0..n {
+        if !gridded(l) {
             continue;   // (no points, or a line some km across: in the "wide" list)
         }
+        if under_only && !under(kind[l]) {
+            continue;
+        }
+        let (x0, y0, x1, y1) = boxes[l];
+        let g = if under_only { &mut ugrid } else { &mut grid };
         for gx in cell_of(x0)..=cell_of(x1) {
             for gy in cell_of(y0)..=cell_of(y1) {
-                grid.entry((gx, gy)).or_default().push(l);
+                g.entry((gx, gy)).or_default().push(l);
             }
         }
     }
@@ -231,6 +253,7 @@ pub fn gradesep_candidates<'py>(
             x0.is_finite() && y0.is_finite() && ((x1 - x0) / G > 64.0 || (y1 - y0) / G > 64.0)
         })
         .collect();
+    let uwide: Vec<usize> = wide.iter().copied().filter(|&l| under(kind[l])).collect();
     let mut stamp = vec![usize::MAX; n];
     for a in 0..n {
         let (ax0, ay0, ax1, ay1) = boxes[a];
@@ -240,6 +263,41 @@ pub fn gradesep_candidates<'py>(
         let mut near: Vec<usize> = Vec::new();
         if (ax1 - ax0) / G > 64.0 || (ay1 - ay0) / G > 64.0 {
             near.extend(a + 1..n);
+        } else if under_only && !under(kind[a]) {
+            // (only the short tunnels: their grid and the wide ones)
+            for gx in cell_of(ax0)..=cell_of(ax1) {
+                for gy in cell_of(ay0)..=cell_of(ay1) {
+                    for &b in ugrid.get(&(gx, gy)).map(|v| v.as_slice()).unwrap_or(&[]) {
+                        if b > a && stamp[b] != a {
+                            stamp[b] = a;
+                            near.push(b);
+                        }
+                    }
+                }
+            }
+            for &b in &uwide {
+                if b > a && stamp[b] != a {
+                    stamp[b] = a;
+                    near.push(b);
+                }
+            }
+            near.sort_unstable();
+        } else if under_only {
+            // (a short tunnel: every gridded line sharing one of its grid squares, as the whole grid gives them)
+            let (cx0, cx1, cy0, cy1) = (cell_of(ax0), cell_of(ax1), cell_of(ay0), cell_of(ay1));
+            for b in a + 1..n {
+                if gridded(b) {
+                    let (bx0, by0, bx1, by1) = boxes[b];
+                    let (dx0, dx1, dy0, dy1) = (cell_of(bx0), cell_of(bx1), cell_of(by0), cell_of(by1));
+                    if dx0.max(cx0) <= dx1.min(cx1) && dy0.max(cy0) <= dy1.min(cy1) {
+                        near.push(b);
+                        continue;
+                    }
+                }
+                if wide.binary_search(&b).is_ok() {
+                    near.push(b);
+                }
+            }
         } else {
             for gx in cell_of(ax0)..=cell_of(ax1) {
                 for gy in cell_of(ay0)..=cell_of(ay1) {
@@ -262,6 +320,9 @@ pub fn gradesep_candidates<'py>(
         for b in near {
             if ln.st[b + 1] < ln.st[b] + 2 || group[a] == group[b] || (under(kind[a]) && under(kind[b])) {
                 continue;
+            }
+            if under_only && !under(kind[a]) && !under(kind[b]) {
+                continue;   // (how 0 / 2 rows only: none wanted; gap_done is theirs alone)
             }
             // over a short tunnel: only a road (a railway's own pieces, or one railway by another, are no overpass)
             if (kind[a] == UNDER && kind[b] != ROAD) || (kind[b] == UNDER && kind[a] != ROAD) {
@@ -365,7 +426,8 @@ fn median(v: &[f64]) -> Option<f64> {
 /// The bridge spans (rows line, from m, to m, the crossing's how) of gradesep_candidates' crossings with the ground heights z (8 per
 /// row, NaN unknown): how 0 a bridge on the line whose ground is higher by prm[0] m (medians) and by prm[1] m on
 /// each side of each line; how 1 on i; then the other's half width + prm[2] m either side of the crossing over the
-/// sine (at least prm[4]), at least prm[3] m; how 2 the whole line. A span past a line's end goes on along the line
+/// sine (at least prm[4]), plus the bridged line's own half width over the tangent (a skew crossing), at least
+/// prm[3] m; how 2 the whole line. A span past a line's end goes on along the line
 /// joined there (an end within prm[5] m, the straightest of the same kind turning less than acos prm[6]).
 #[pyfunction]
 pub fn gradesep_spans<'py>(
@@ -418,7 +480,10 @@ pub fn gradesep_spans<'py>(
         if under(kind[up]) {
             continue;
         }
-        let h = ((half[lo] + clear) / sin.max(min_sin)).max(min_half);
+        // (a skew crossing: the lower line's band also runs along the upper one by the upper's half width over the
+        // tangent across its carriageway, so its edges clear too: a track at 45 deg under a motorway, GitHub #1020)
+        let sn = sin.max(min_sin).min(1.0);
+        let h = ((half[lo] + clear) / sn + half[up] * (1.0 - sn * sn).sqrt() / sn).max(min_half);
         spans.push((up, s - h, s + h, how));
     }
     // past a line's end: on along the straightest line joined there (one step)
@@ -513,6 +578,71 @@ fn cut(xy: &[[f64; 2]], a: f64, b: f64) -> Vec<[f64; 2]> {
     out
 }
 
+/// One layer's arrays as gradesep_gather / gradesep_gather_rows read them.
+struct Layer<'a> {
+    xy: numpy::ndarray::ArrayView2<'a, f64>,
+    co: numpy::ndarray::ArrayView1<'a, i64>,
+    ro: numpy::ndarray::ArrayView1<'a, i64>,
+    po: numpy::ndarray::ArrayView1<'a, i64>,
+    poff: numpy::ndarray::ArrayView1<'a, i64>,
+    pk: numpy::ndarray::ArrayView1<'a, i64>,
+    pa: numpy::ndarray::ArrayView1<'a, f64>,
+    pb: numpy::ndarray::ArrayView1<'a, f64>,
+}
+
+/// The lines and deck ends gathered so far (gather_row).
+#[derive(Default)]
+struct Gathered {
+    pts: Vec<f64>,
+    starts: Vec<i64>,
+    line_row: Vec<i64>,
+    line_piece: Vec<i64>,
+    de: Vec<f64>,
+    deck_row: Vec<i64>,
+}
+
+/// Feature i of lay cut into its pieces (its parts' rings of 2 or more points, each cut at each piece's fractions):
+/// the ground pieces appended to g's lines (row r, piece index), the decks' end points and
+/// lengths to g.de. gradesep_gather's loop, the same in gradesep_gather_rows.
+fn gather_row(lay: &Layer, i: usize, r: i64, g: &mut Gathered) {
+    let (p0, p1) = (lay.poff[i] as usize, lay.poff[i + 1] as usize);
+    if p1 <= p0 {
+        return;
+    }
+    for p in lay.po[i] as usize..lay.po[i + 1] as usize {
+        for gr in lay.ro[p] as usize..lay.ro[p + 1] as usize {
+            let (a, b) = (lay.co[gr] as usize, lay.co[gr + 1] as usize);
+            if b - a < 2 {
+                continue;
+            }
+            let ring: Vec<[f64; 2]> = (a..b).map(|k| [lay.xy[[k, 0]], lay.xy[[k, 1]]]).collect();
+            for q in p0..p1 {
+                let piece = if lay.pa[q] == 0.0 && lay.pb[q] == 1.0 { ring.clone() } else { cut(&ring, lay.pa[q], lay.pb[q]) };
+                if piece.len() < 2 {
+                    continue;
+                }
+                if lay.pk[q] < 0 {
+                    let seg: Vec<f64> = (1..piece.len())
+                        .map(|k| (piece[k][0] - piece[k - 1][0]).hypot(piece[k][1] - piece[k - 1][1]))
+                        .collect();
+                    let l = crate::levels::np_sum(&seg);
+                    let (f, e) = (piece[0], piece[piece.len() - 1]);
+                    g.de.extend_from_slice(&[f[0], f[1], l, e[0], e[1], l]);
+                    g.deck_row.push(r);
+                    continue;
+                }
+                for v in &piece {
+                    g.pts.push(v[0]);
+                    g.pts.push(v[1]);
+                }
+                g.starts.push((g.pts.len() / 2) as i64);
+                g.line_row.push(r);
+                g.line_piece.push(q as i64);
+            }
+        }
+    }
+}
+
 /// gradesep._spans' lines (2026-11-02: 1.9 of its 3.6 s on 6 Midtown cells was this loop in Python, each layer walked
 /// again for each of the nine cells round it). rows (r,): the layer's features in order; for each, its parts' rings
 /// (offsets part_off / ring_off / coord_off into xy, the layer in the asking cell's frame) cut into its pieces
@@ -530,54 +660,198 @@ pub fn gradesep_gather<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, coo
                                 Bound<'py, PyArray2<f64>>, Bound<'py, numpy::PyArray1<i64>>) {
     let (xy, co, ro, po) = (xy.as_array(), coord_off.as_array(), ring_off.as_array(), part_off.as_array());
     let (rows, poff, pk, pa, pb) = (rows.as_array(), piece_off.as_array(), pk.as_array(), pa.as_array(), pb.as_array());
-    let mut pts: Vec<f64> = Vec::new();
-    let mut starts: Vec<i64> = vec![0];
-    let mut line_row: Vec<i64> = Vec::new();
-    let mut line_piece: Vec<i64> = Vec::new();
-    let mut de: Vec<f64> = Vec::new();
-    let mut deck_row: Vec<i64> = Vec::new();
+    let lay = Layer { xy, co, ro, po, poff, pk, pa, pb };
+    let mut g = Gathered::default();
+    g.starts.push(0);
     for (r, &i) in rows.iter().enumerate() {
-        let i = i as usize;
-        let (p0, p1) = (poff[i] as usize, poff[i + 1] as usize);
-        if p1 <= p0 {
-            continue;
-        }
-        for p in po[i] as usize..po[i + 1] as usize {
-            for g in ro[p] as usize..ro[p + 1] as usize {
-                let (a, b) = (co[g] as usize, co[g + 1] as usize);
-                if b - a < 2 {
-                    continue;
-                }
-                let ring: Vec<[f64; 2]> = (a..b).map(|k| [xy[[k, 0]], xy[[k, 1]]]).collect();
-                for q in p0..p1 {
-                    let piece = if pa[q] == 0.0 && pb[q] == 1.0 { ring.clone() } else { cut(&ring, pa[q], pb[q]) };
-                    if piece.len() < 2 {
-                        continue;
-                    }
-                    if pk[q] < 0 {
-                        let seg: Vec<f64> = (1..piece.len())
-                            .map(|k| (piece[k][0] - piece[k - 1][0]).hypot(piece[k][1] - piece[k - 1][1]))
-                            .collect();
-                        let l = crate::levels::np_sum(&seg);
-                        let (f, e) = (piece[0], piece[piece.len() - 1]);
-                        de.extend_from_slice(&[f[0], f[1], l, e[0], e[1], l]);
-                        deck_row.push(r as i64);
-                        continue;
-                    }
-                    for v in &piece {
-                        pts.push(v[0]);
-                        pts.push(v[1]);
-                    }
-                    starts.push((pts.len() / 2) as i64);
-                    line_row.push(r as i64);
-                    line_piece.push(q as i64);
-                }
-            }
-        }
+        gather_row(&lay, i as usize, r as i64, &mut g);
     }
+    let Gathered { pts, starts, line_row, line_piece, de, deck_row } = g;
     let m = pts.len() / 2;
     let d = deck_row.len();
     (Array2::from_shape_vec((m, 2), pts).expect("points").into_pyarray(py), starts.into_pyarray(py),
      line_row.into_pyarray(py), line_piece.into_pyarray(py),
      Array2::from_shape_vec((2 * d, 3), de).expect("decks").into_pyarray(py), deck_row.into_pyarray(py))
+}
+
+/// One layer for gradesep_select: (xy (N, 2) in the asking cell's frame, coord_off, ring_off, part_off).
+type SelectLayer<'py> = (PyReadonlyArray2<'py, f64>, PyReadonlyArray1<'py, i64>, PyReadonlyArray1<'py, i64>,
+                         PyReadonlyArray1<'py, i64>);
+
+/// np.minimum / np.maximum's NaN: either NaN gives NaN.
+fn nan_min(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() { f64::NAN } else if b < a { b } else { a }
+}
+
+fn nan_max(a: f64, b: f64) -> f64 {
+    if a.is_nan() || b.is_nan() { f64::NAN } else if b > a { b } else { a }
+}
+
+/// Each feature's [min e, min n, max e, max n] of all its coordinates (mapgeom.Features.boxes: NaN where one of them
+/// is NaN, +inf / -inf without any), from coord_off[ring_off[part_off[i]]] to the next feature's.
+fn feature_boxes(xy: &numpy::ndarray::ArrayView2<f64>, co: &numpy::ndarray::ArrayView1<i64>,
+                 ro: &numpy::ndarray::ArrayView1<i64>, po: &numpy::ndarray::ArrayView1<i64>) -> Vec<[f64; 4]> {
+    let n = po.len().saturating_sub(1);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let (c0, c1) = (co[ro[po[i] as usize] as usize] as usize, co[ro[po[i + 1] as usize] as usize] as usize);
+        let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+        if c1 > c0 {
+            b = [xy[[c0, 0]], xy[[c0, 1]], xy[[c0, 0]], xy[[c0, 1]]];
+            for k in c0 + 1..c1 {
+                let (x, y) = (xy[[k, 0]], xy[[k, 1]]);
+                b = [nan_min(b[0], x), nan_min(b[1], y), nan_max(b[2], x), nan_max(b[3], y)];
+            }
+        }
+        out.push(b);
+    }
+    out
+}
+
+/// gradesep._spans' rows before their ids: layers (SelectLayer, the first the asking cell's own). The box round the
+/// first layer's features whose boxes are all finite, grown by near_m; per layer in order, the features whose boxes
+/// meet it (a NaN box meets it, as numpy's test has it). (layer offsets (L + 1,) into rows, rows (r,) ascending per
+/// layer); None when no box of the first layer is finite. (2026-11-08: Features.boxes and the Python loop over the
+/// rows were ~1/4 of _spans on a Midtown tile.)
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn gradesep_select<'py>(py: Python<'py>, layers: Vec<SelectLayer<'py>>, near_m: f64)
+                            -> Option<(Bound<'py, numpy::PyArray1<i64>>, Bound<'py, numpy::PyArray1<i64>>)> {
+    let boxes: Vec<Vec<[f64; 4]>> = layers.iter()
+        .map(|(xy, co, ro, po)| feature_boxes(&xy.as_array(), &co.as_array(), &ro.as_array(), &po.as_array()))
+        .collect();
+    let own = boxes.first()?;
+    let mut bx: Option<[f64; 4]> = None;
+    for b in own.iter().filter(|b| b.iter().all(|v| v.is_finite())) {
+        bx = Some(match bx {
+            None => *b,
+            Some(c) => [c[0].min(b[0]), c[1].min(b[1]), c[2].max(b[2]), c[3].max(b[3])],
+        });
+    }
+    let c = bx?;
+    let bx = [c[0] - near_m, c[1] - near_m, c[2] + near_m, c[3] + near_m];
+    let mut off = vec![0i64];
+    let mut rows: Vec<i64> = Vec::new();
+    for lb in &boxes {
+        for (i, b) in lb.iter().enumerate() {
+            if !((b[2] < bx[0]) || (b[0] > bx[2]) || (b[3] < bx[1]) || (b[1] > bx[3])) {
+                rows.push(i as i64);
+            }
+        }
+        off.push(rows.len() as i64);
+    }
+    Some((off.into_pyarray(py), rows.into_pyarray(py)))
+}
+
+/// One layer for gradesep_gather_rows: (xy (N, 2) in the asking cell's frame, coord_off, ring_off, part_off,
+/// piece_off, pk, pa, pb as gradesep_gather's, halves (n,) each feature's half width).
+type GatherLayer<'py> = (PyReadonlyArray2<'py, f64>, PyReadonlyArray1<'py, i64>, PyReadonlyArray1<'py, i64>,
+                         PyReadonlyArray1<'py, i64>, PyReadonlyArray1<'py, i64>, PyReadonlyArray1<'py, i64>,
+                         PyReadonlyArray1<'py, f64>, PyReadonlyArray1<'py, f64>, PyReadonlyArray1<'py, f64>);
+
+/// gradesep_gather over several layers without joining them: rows r of (row_layer[r], row[r]). Returns (line points
+/// (m, 2), their starts (l + 1,), each line's row index, kind, from and to fractions, half width, deck ends and
+/// lengths (2d, 3)): gradesep_gather's numbers and its caller's lookups of them.
+#[pyfunction]
+#[allow(clippy::type_complexity)]
+pub fn gradesep_gather_rows<'py>(py: Python<'py>, layers: Vec<GatherLayer<'py>>, row_layer: PyReadonlyArray1<'py, i64>,
+                                 row: PyReadonlyArray1<'py, i64>)
+                                 -> (Bound<'py, PyArray2<f64>>, Bound<'py, numpy::PyArray1<i64>>,
+                                     Bound<'py, numpy::PyArray1<i64>>, Bound<'py, numpy::PyArray1<i64>>,
+                                     Bound<'py, numpy::PyArray1<f64>>, Bound<'py, numpy::PyArray1<f64>>,
+                                     Bound<'py, numpy::PyArray1<f64>>, Bound<'py, PyArray2<f64>>) {
+    let lays: Vec<(Layer, numpy::ndarray::ArrayView1<f64>)> = layers.iter()
+        .map(|(xy, co, ro, po, poff, pk, pa, pb, h)| (Layer {
+            xy: xy.as_array(), co: co.as_array(), ro: ro.as_array(), po: po.as_array(), poff: poff.as_array(),
+            pk: pk.as_array(), pa: pa.as_array(), pb: pb.as_array() }, h.as_array()))
+        .collect();
+    let (rl, ri) = (row_layer.as_array(), row.as_array());
+    let mut g = Gathered::default();
+    g.starts.push(0);
+    let (mut kind, mut fa, mut fb, mut half) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for r in 0..rl.len() {
+        let (lay, h) = &lays[rl[r] as usize];
+        let i = ri[r] as usize;
+        let before = g.line_piece.len();
+        gather_row(lay, i, r as i64, &mut g);
+        for &q in &g.line_piece[before..] {
+            let q = q as usize;
+            kind.push(lay.pk[q]);
+            fa.push(lay.pa[q]);
+            fb.push(lay.pb[q]);
+            half.push(h[i]);
+        }
+    }
+    let Gathered { pts, starts, line_row, de, .. } = g;
+    let m = pts.len() / 2;
+    let d = de.len() / 6;
+    (Array2::from_shape_vec((m, 2), pts).expect("points").into_pyarray(py), starts.into_pyarray(py),
+     line_row.into_pyarray(py), kind.into_pyarray(py), fa.into_pyarray(py), fb.into_pyarray(py),
+     half.into_pyarray(py), Array2::from_shape_vec((2 * d, 3), de).expect("decks").into_pyarray(py))
+}
+
+/// Which of the lines xy[starts[i]..starts[i + 1]] (their first two columns) lie along another of the same group
+/// that is longer (or as long and listed first): every vertex within tol m of that one. A deck clipped at one cell's
+/// box beside the whole deck from the next cell (grading._lower_underpasses' spans: joined at their shared end
+/// into a chain doubling back, the carriageway under it dug 8 m into its own ground, the A4 at Glaireuse, #1020).
+#[pyfunction]
+pub fn lines_covered<'py>(
+    py: Python<'py>,
+    xy: PyReadonlyArray2<'py, f64>,
+    starts: PyReadonlyArray1<'py, i64>,
+    group: PyReadonlyArray1<'py, i64>,
+    tol: f64,
+) -> Bound<'py, numpy::PyArray1<bool>> {
+    let (xy, starts, group) = (xy.as_array(), starts.as_array(), group.as_array());
+    let n = starts.len().saturating_sub(1);
+    let mut len = vec![0.0f64; n];
+    let mut bb = vec![[f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY]; n];
+    for i in 0..n {
+        let (a, b) = (starts[i] as usize, starts[i + 1] as usize);
+        for k in a..b {
+            let (x, y) = (xy[[k, 0]], xy[[k, 1]]);
+            bb[i] = [bb[i][0].min(x), bb[i][1].min(y), bb[i][2].max(x), bb[i][3].max(y)];
+            if k > a {
+                len[i] += (x - xy[[k - 1, 0]]).hypot(y - xy[[k - 1, 1]]);
+            }
+        }
+    }
+    let near = |x: f64, y: f64, j: usize| -> bool {
+        let (a, b) = (starts[j] as usize, starts[j + 1] as usize);
+        if b - a == 1 {
+            return (x - xy[[a, 0]]).hypot(y - xy[[a, 1]]) <= tol;
+        }
+        for k in a..b.saturating_sub(1) {
+            let (x0, y0, x1, y1) = (xy[[k, 0]], xy[[k, 1]], xy[[k + 1, 0]], xy[[k + 1, 1]]);
+            let (dx, dy) = (x1 - x0, y1 - y0);
+            let l2 = dx * dx + dy * dy;
+            let t = if l2 > 0.0 { (((x - x0) * dx + (y - y0) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+            if (x - x0 - t * dx).hypot(y - y0 - t * dy) <= tol {
+                return true;
+            }
+        }
+        false
+    };
+    let mut out = vec![false; n];
+    for i in 0..n {
+        let (a, b) = (starts[i] as usize, starts[i + 1] as usize);
+        if b <= a {
+            continue;
+        }
+        for j in 0..n {
+            if j == i || group[j] != group[i] || len[j] < len[i] || (len[j] == len[i] && j > i) {
+                continue;
+            }
+            if bb[i][0] < bb[j][0] - tol || bb[i][1] < bb[j][1] - tol || bb[i][2] > bb[j][2] + tol
+                || bb[i][3] > bb[j][3] + tol
+            {
+                continue;
+            }
+            if (a..b).all(|k| near(xy[[k, 0]], xy[[k, 1]], j)) {
+                out[i] = true;
+                break;
+            }
+        }
+    }
+    numpy::PyArray1::from_vec(py, out)
 }

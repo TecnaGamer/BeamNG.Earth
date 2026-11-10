@@ -1863,6 +1863,9 @@ def _part_heights(a, i):
 ROAD_THROUGH_M = 15.0       # a footprint that public roads run through this far is a structure over them
 OVER_ROAD_CLEAR_M = 5.5     # ... lifted this high (an expressway's or a station's slab over the streets: Baltimore's
                             # 17,500 m2 one by I-83, the AI drove into its wall at 35 mph, 2026-10-14)
+LEVEL_THROUGH_M = 5.0       # ... this far for one mapped over the ground (OSM layer >= 1, Overture's level): Noranda Station's
+                            # concourse over Tonkin Highway in Perth (layer 1, no min_height), 80 x 118 m over the platforms
+                            # in the median and 6 m of one carriageway, stood as a wall across its lanes (GitHub #914)
 SITE_M2 = 100_000.0         # m2: a footprint this large that public roads run through (ROAD_THROUGH_M) is a mapped site
                             # (a planned development, a campus outline tagged building), not a structure over them: left
                             # out, not lifted (the largest decks over roads are a few hectares; OSM's 1.35 km2 "Blueberry
@@ -2019,22 +2022,39 @@ OVER_TUNNEL_CLEAR_M = 7.5   # (the tube's vault is roadmesh.TUNNEL_H = 6.8 m ove
                             # east portal building closed the tunnel)
 
 
-def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
-    """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through)."""
+class RoadLines(list):
+    """road_lines' polylines, a list as before, with .half: each line's drawn half-width (m; roads.road_specs' rural
+    width / 2, None where it has no spec): _ml_false's on-the-lanes test."""
+    def __init__(self, *a):
+        super().__init__(*a)
+        self.half = []
+
+
+
+def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0, classes=THROUGH_CLASSES, skip_sub=()):
+    """Polylines (k, 2) relative to (x0, y0) of the public roads on the ground near the tile (for road_through), a
+    RoadLines (their drawn half-widths in .half). classes: the road classes taken; skip_sub: the OSM subclasses left
+    out (a car park's aisles)."""
     import roads as roadsmod
-    out = []
+    out = RoadLines()
     for f in road_layers:
         if f is None or len(f.kind) == 0:
             continue
         cls = f.attrs.get("class")
         if cls is None:
             continue
+        sub = f.attrs.get("subclass") if skip_sub else None
         bb = f.boxes(frame)             # (only the roads near the tile: the test below, all at once)
         near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
                               & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
+        specs = None
         for i in near.tolist():
-            if str(cls[i]) not in THROUGH_CLASSES:
+            if str(cls[i]) not in classes or (sub is not None and str(sub[i]) in skip_sub):
                 continue
+            if specs is None:
+                specs = roadsmod.road_specs(f)      # (remembered on the layer: the road tiles ask for them anyway)
+            sp = specs[i] if i < len(specs) else None
+            half = float(sp.width) / 2 if sp is not None and np.isfinite(sp.width) and sp.width > 0 else None
             if roadsmod.level_ranges(f, i):
                 # its pieces on the ground (a motorway segment with a short overpass in it was left out whole, and the
                 # lorries machine-learned as buildings on its lanes stayed: the A7, GitHub #239; PR #71's finding)
@@ -2052,13 +2072,71 @@ def road_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
                         or xy[:, 1].min() > size + margin:
                     continue
                 out.append(xy)
+                out.half.append(half)
     return out
+
+
+RAIL_BED_CLEAR_M = 3.2     # m from a track's axis a footprint may not reach (the ballast's foot ~2.3 m): BNE_RAIL_XING; a hut
+                           # stood with its wall on the ballast and the rails ran into it (Kalynivka, 2026-11-05)
+
+
+def rail_lines(frame, road_layers, x0, y0, margin=50.0, size=256.0):
+    """Polylines (k, 2) relative to (x0, y0) of the railway tracks on the ground near the tile (railways.drawn's, the
+    ground pieces); none unless BNE_RAIL_XING is on."""
+    import railxing
+    if not railxing.ENABLED:
+        return []
+    import railways
+    import roads as roadsmod
+    out = []
+    for f in road_layers:
+        if f is None or len(f.kind) == 0 or "subtype" not in f.attrs:
+            continue
+        bb = f.boxes(frame)
+        near = np.flatnonzero((bb[:, 2] - x0 >= -margin) & (bb[:, 0] - x0 <= size + margin)
+                              & (bb[:, 3] - y0 >= -margin) & (bb[:, 1] - y0 <= size + margin))
+        for i in near.tolist():
+            got = railways.drawn(f, i)
+            if got is None or got[0] == "tram":
+                continue
+            for ll in roadsmod.ground_parts(f, i):
+                if len(ll) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, np.asarray(ll, np.float64))
+                out.append(np.stack([e - x0, n - y0], 1))
+    return out
+
+
+def on_rail_bed(ring, rails_xy, step=1.0):
+    """Whether footprint ring (k, 2) reaches RAIL_BED_CLEAR_M of a track: its outline sampled every step m, and its
+    centre."""
+    if not rails_xy:
+        return False
+    pts = [ring.mean(0)[None]]
+    for a, b in zip(ring, np.roll(ring, -1, axis=0)):
+        n = max(1, int(np.ceil(float(np.hypot(*(b - a))) / step)))
+        pts.append(a + (b - a) * (np.arange(n) / n)[:, None])
+    allp = np.vstack(pts)
+    for ln in rails_xy:
+        a, b = ln[:-1], ln[1:]
+        d = b - a
+        t = np.clip(((allp[:, None, :] - a[None]) * d[None]).sum(2) / np.maximum((d * d).sum(1), 1e-12)[None], 0.0, 1.0)
+        q = a[None] + t[:, :, None] * d[None]
+        if float(np.hypot(*(q - allp[:, None, :]).transpose(2, 0, 1)).min()) <= RAIL_BED_CLEAR_M:
+            return True
+    return False
 
 
 PASSAGE_W = 11.0           # m: the passage a bridge's road takes through its tower (Tower Bridge: 2 lanes + walks) ...
 PASSAGE_H = 7.0            # ... this high over the tower's mapped bottom (its deck: the part starts at the road), ...
 PASSAGE_CLEAR = 6.5        # m: the way over a deck through a building (with the decks' heights)
 PASSAGE_BOTTOM_M = 20.0    # ... in a structure whose bottom is this low (not its high walkways or tops)
+PASSAGE_UNDER_M = 0.2      # m: a part whose top is this far under the deck is under it (whole); up to 1 m over it was
+                           # too (the Golden Gate's roadway slab mapped in its north tower, 73-74.65 m, stood ~1 m over the
+                           # deck across all six lanes, GitHub #1032)
+PASSAGE_MARGIN_M = 1.5     # m: with the decks' widths the way is every deck through the footprint and this either side
+                           # (its parapets and walks): the Golden Gate Bridge's six lanes, ~20 m, kept a strut of its
+                           # north tower over their outer lanes through PASSAGE_W (GitHub #1032)
 
 
 def _clip_half(ring, p0, nrm, keep_ge):
@@ -2121,6 +2199,50 @@ def on_deck(ring, decks, ground):
     return bool(off.min() < inner and off.max() > -inner), zd
 
 
+SPLIT_MIN_L = 100.0         # m: a flat-roofed footprint at least this long ...
+SPLIT_MAX_W = 30.0          # ... and at most this wide ...
+SPLIT_DZ = 3.0              # ... over ground varying more than this along it, or ...
+SPLIT_ALWAYS_L = 256.0      # ... at least this long (a road tile's side: its far end in other tiles) stands in pieces
+PIECE_LEN_M = 25.0          # m: its pieces this long at most, cut at the same places by every tile (ground_pieces) and
+                            # each drawn by the tile that owns its centre (tile_buildings): a 25 m x 30 m piece reaches
+                            # < 20 m past its tile, within the decks' (blockworker._tile_decks) and lines' margins
+PIECE_STEP_M = 5.0          # m between the ground's readings along its middle line
+
+
+def ground_pieces(frame, ring, x0, y0, elev):
+    """(pieces, drop m): a long, narrow footprint ring (k, 2) (relative to (x0, y0)) cut across its length into pieces
+    of at most PIECE_LEN_M, each standing on its own ground, and how much its ground varies along it. A building's
+    floor is its footprint's highest ground (base_z): over 3 km the SLAC Klystron Gallery's stood 13 m over its trench
+    where I-280 crosses it, and its only collidable copy was its centre's road tile's, 1.1 km away (2026-11-07). The
+    cuts are at the same places whichever tile asks (its oriented box, its axis pointing east / north: as the plazas'
+    triangles and the container yards' grid), so each tile keeps the pieces whose centre it owns, and no piece is
+    doubled or missing. ([ring], 0) when it is not long and narrow (SPLIT_MIN_L, SPLIT_MAX_W), or its ground varies
+    less than SPLIT_DZ along it and it is shorter than SPLIT_ALWAYS_L; elev(lat, lon) the ground (arrays)."""
+    c, u, hl, hw = oriented_box(ring)
+    if 2 * hl < SPLIT_MIN_L or 2 * hw > SPLIT_MAX_W:
+        return [ring], 0.0
+    if u[0] < -1e-9 or (abs(u[0]) <= 1e-9 and u[1] < 0):
+        u = -u
+    t = np.r_[np.arange(-hl, hl, PIECE_STEP_M), hl]
+    p = c + t[:, None] * u
+    la, lo, _ = frame.enu_to_geodetic(p[:, 0] + x0, p[:, 1] + y0, 0.0)
+    g = np.asarray(elev(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64)
+    drop = float(np.ptp(g)) if np.isfinite(g).all() else 0.0
+    if drop <= SPLIT_DZ and 2 * hl < SPLIT_ALWAYS_L:
+        return [ring], 0.0
+    n = int(np.ceil(2 * hl / PIECE_LEN_M))
+    bounds = [-hl + 2 * hl * k / n for k in range(n + 1)]
+    bounds[0], bounds[-1] = -hl - 1.0, hl + 1.0
+    out = []
+    for a, b in zip(bounds[:-1], bounds[1:]):
+        r = _clip_half(ring, c + u * a, u, True)
+        r = _clip_half(r, c + u * b, u, False) if r is not None else None
+        r = clean_ring(r) if r is not None else None    # (clipped rings are closed: their roofs half triangulated)
+        if r is not None:
+            out.append(r)
+    return (out, drop) if len(out) > 1 else ([ring], 0.0)
+
+
 def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None):
     """Buildings a road bridge runs through split round a PASSAGE_W wide way (Tower Bridge's road ran into its towers'
     stone and its Southern Gate, the user 2026-10-18: "the buildings are still in the middle of the bridge", "this
@@ -2152,12 +2274,37 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
                     best = (d, a + t * ab, ab / max(float(np.hypot(*ab)), 1e-9), zd)
         _, p0, u, zd = best
         nrm = np.array([-u[1], u[0]])
+        lo_w, hi_w = -PASSAGE_W / 2, PASSAGE_W / 2
+        if decks:                       # (as wide as every deck through it at about this height, PASSAGE_MARGIN_M more)
+            a_, b_ = np.inf, -np.inf
+            for k, ln in enumerate(lines):
+                w_ = float(decks[k][2]) if len(decks[k]) > 2 else None
+                if w_ is None or road_through(ring, [ln]) < 3.0:
+                    continue
+                d_ = np.diff(ln, axis=0)
+                t_ = np.clip(((c - ln[:-1]) * d_).sum(1) / np.maximum((d_ * d_).sum(1), 1e-9), 0.0, 1.0)
+                q_ = ln[:-1] + t_[:, None] * d_
+                j_ = int(np.argmin(np.hypot(*(q_ - c).T)))
+                dir_ = d_[j_] / max(float(np.hypot(*d_[j_])), 1e-9)
+                if abs(float(dir_ @ u)) < 0.9:
+                    continue
+                if zd is not None:
+                    z_ = decks[k][1]
+                    if abs(float(z_[j_] + t_[j_] * (z_[j_ + 1] - z_[j_])) - zd) > 3.0:
+                        continue
+                off = float((q_[j_] - p0) @ nrm)
+                a_, b_ = min(a_, off - w_ / 2), max(b_, off + w_ / 2)
+            if np.isfinite(a_):
+                lo_w, hi_w = min(lo_w, a_ - PASSAGE_MARGIN_M), max(hi_w, b_ + PASSAGE_MARGIN_M)
         h = at.get("height")
         own = look is not None          # (a building's part carries its own height over its bottom, a building its top)
         top = (mh + float(h) if own else float(h)) if h is not None and np.isfinite(h) else mh + PASSAGE_H + 3.0
         if zd is not None and ground_at is not None and np.isfinite(zd):
-            dh = zd - float(ground_at(c))           # the deck's height over the building's ground
-            if top <= dh + 1.0 or mh >= dh + PASSAGE_CLEAR:
+            # the deck's height over the ground the part is drawn on: its footprint's highest (base_z; at its centre,
+            # the Golden Gate's north tower slab, its footprint up the shore, was drawn ~2 m higher than that took,
+            # over the deck, GitHub #1032)
+            dh = zd - float(ground_at(ring, True) if at.get("portal") else ground_at(ring))
+            if top <= dh - PASSAGE_UNDER_M or mh >= dh + PASSAGE_CLEAR:
                 R.append(ring), A.append(at), L.append(look), M.append(mh)
                 continue                            # under the deck, or over its way
             low, cut = max(mh, dh - 1.5), dh + PASSAGE_CLEAR
@@ -2166,8 +2313,9 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
         cut = min(cut, top)
         if low > mh + 0.5:                          # solid under the deck
             R.append(ring), A.append(dict(at, height=(low - mh) if own else low)), L.append(look), M.append(mh)
-        for sgn in (1, -1):
-            piece = _clip_half(ring, p0 + nrm * sgn * PASSAGE_W / 2, nrm * sgn, True)
+        for sgn, edge in ((1, hi_w), (-1, lo_w)):
+            piece = _clip_half(ring, p0 + nrm * edge, nrm * sgn, True)
+            piece = clean_ring(piece) if piece is not None else None    # (closed rings: roofs half triangulated)
             if piece is not None and cut > low + 0.5:
                 R.append(piece), A.append(dict(at, height=(cut - low) if own else cut)), L.append(look), M.append(low)
         if top > cut + 1.0:
@@ -2175,8 +2323,162 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
     return R, A, L, M
 
 
+ROAD_PASSAGE_ON = os.environ.get("BNE_ROAD_PASSAGE", "on") != "off"
+ROAD_PASSAGE_CLASSES = {"service"}      # (the through classes are lifted over instead, ROAD_THROUGH_M)
+ROAD_PASSAGE_SKIP = ("parking_aisle", "driveway", "drive-through")      # (inside a car park or a lot: no passage)
+ROAD_PASSAGE_W = 7.0        # m: the way cut through a footprint for a mapped road inside it (a lane and its margins)
+ROAD_PASSAGE_H = 4.5        # m: its clear height; the building goes on over it where it is taller
+ROAD_PASSAGE_RUN_M = 8.0    # m of road at least this deep inside a footprint make a passage (less: the outline's slop)
+ROAD_PASSAGE_DEEP_M = 2.0   # m: "deep" is this far in from the footprint's edge
+ROAD_PASSAGE_STEP_M = 3.0   # m: the road's samples for that test
+ROAD_PASSAGE_MAX_SEGS = 3   # a way of more straight stretches than this (a lot's winding aisles) is no passage ...
+ROAD_PASSAGE_MAX_PIECES = 24    # ... and a footprint that would be cut into more pieces than this stays whole
+ROAD_PASSAGE_SKIP_ATTRS = ("ship", "ml", "bridge_part", "bridge_masonry", "pier", "portal")
+ROAD_PASSAGE_GARAGE_M2 = 12_000.0   # a car park's own footprint (flagged garage) this small or smaller has no passages;
+                                    # a larger one is a building that holds a car park (Ulemiste keskus, 51,000 m2)
+
+
+def _simplify(p, tol=1.0):
+    """The polyline p (k, 2) without the points within tol m of the line between the kept ones (Douglas-Peucker)."""
+    keep = np.zeros(len(p), bool)
+    keep[0] = keep[-1] = True
+    stack = [(0, len(p) - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b <= a + 1:
+            continue
+        d = p[b] - p[a]
+        n = float(np.hypot(*d))
+        q = p[a + 1:b] - p[a]
+        dist = np.abs(q[:, 0] * d[1] - q[:, 1] * d[0]) / n if n > 1e-9 else np.hypot(*q.T)
+        k = int(np.argmax(dist))
+        if dist[k] > tol:
+            keep[a + 1 + k] = True
+            stack += [(a, a + 1 + k), (a + 1 + k, b)]
+    return p[keep]
+
+
+def _edge_dist(pts, ring):
+    """Distance (m) of each of the points (k, 2) to the closed ring's edges."""
+    a, b = ring[:-1], ring[1:]
+    ab = b - a
+    den = np.maximum((ab * ab).sum(1), 1e-12)
+    out = np.full(len(pts), np.inf)
+    for j, q in enumerate(pts):
+        t = np.clip(((q - a) * ab).sum(1) / den, 0.0, 1.0)
+        out[j] = float(np.hypot(*(a + t[:, None] * ab - q).T).min())
+    return out
+
+
+def road_spans(ring, line):
+    """The stretches of the polyline (k, 2) that lie deep inside the footprint ring (ROAD_PASSAGE_DEEP_M in from its
+    edge) for at least ROAD_PASSAGE_RUN_M, each with a stride of road past either end: [polyline (j, 2)]. A road
+    crossing the outline's edge or running along it, a few metres off the mapped line, has none."""
+    from polygon import Path
+    seg = np.hypot(*np.diff(line, axis=0).T)
+    arc = np.r_[0.0, np.cumsum(seg)]
+    if arc[-1] < ROAD_PASSAGE_RUN_M:
+        return []
+    t = np.unique(np.r_[np.arange(0.0, arc[-1], ROAD_PASSAGE_STEP_M), arc[-1]])
+    p = np.stack([np.interp(t, arc, line[:, 0]), np.interp(t, arc, line[:, 1])], 1)
+    deep = Path(ring).contains_points(p)
+    if not deep.any():
+        return []
+    deep &= _edge_dist(p, ring) >= ROAD_PASSAGE_DEEP_M
+    out, k = [], 0
+    while k < len(deep):
+        if not deep[k]:
+            k += 1
+            continue
+        j = k
+        while j < len(deep) and deep[j]:
+            j += 1
+        if t[j - 1] - t[k] >= ROAD_PASSAGE_RUN_M:
+            lo, hi = max(k - 2, 0), min(j + 1, len(p))          # (a stride more each end: out through the wall)
+            sp = _simplify(p[lo:hi])
+            if len(sp) - 1 <= ROAD_PASSAGE_MAX_SEGS:
+                out.append(sp)
+        k = j
+    return out
+
+
+def _cut_quad(ring, quad):
+    """(the parts of ring outside the convex quad (4, 2), counter-clockwise; the part inside it or None)."""
+    rest, outs = ring, []
+    for j in range(4):
+        v0, v1 = quad[j], quad[(j + 1) % 4]
+        d = v1 - v0
+        inw = np.array([-d[1], d[0]]) / max(float(np.hypot(*d)), 1e-9)
+        o = _clip_half(rest, v0, -inw, True)
+        if o is not None:
+            outs.append(o)
+        rest = _clip_half(rest, v0, inw, True)
+        if rest is None:
+            return outs, None
+    return outs, rest
+
+
+def _road_passages(rings, attrs, looks, mins, lines):
+    """A road mapped inside a footprint with no tunnel or bridge tag (a mall's service roads through its covered way,
+    Ulemiste keskus: the road runs in under the building at the back and comes out of its far side) is a passage, not
+    a wall: the footprint is cut round the road's way, ROAD_PASSAGE_W wide, solid from the ground up beside it and
+    from ROAD_PASSAGE_H over the road (lintels) where the building is taller, open where it is not. Only
+    ground-level buildings with a height of their own; lines: the roads (road_lines, ROAD_PASSAGE_CLASSES, not a car
+    park's aisles). Pure."""
+    if not lines:
+        return rings, attrs, looks, mins
+    bx = line_boxes(lines)
+    R, A, L, M = [], [], [], []
+    for ring, at, look, mh in zip(rings, attrs, looks, mins):
+        h = at.get("height")
+        r = np.asarray(ring, np.float64)
+        spans = []
+        if (look is None and mh <= 0.5 and h is not None and np.isfinite(h)
+                and not any(at.get(k) for k in ROAD_PASSAGE_SKIP_ATTRS)
+                and not (at.get("garage") and abs(_area2(r)) / 2 <= ROAD_PASSAGE_GARAGE_M2)):
+            lo, hi = r.min(0), r.max(0)
+            near = np.flatnonzero((bx[:, 2] >= lo[0]) & (bx[:, 0] <= hi[0]) & (bx[:, 3] >= lo[1]) & (bx[:, 1] <= hi[1]))
+            for li in near:
+                spans += road_spans(r, np.asarray(lines[li], np.float64)[:, :2])
+        if not spans:
+            R.append(ring), A.append(at), L.append(look), M.append(mh)
+            continue
+        solid, lintels = [r], []
+        for sp in spans:
+            for a, b in zip(sp[:-1], sp[1:]):
+                d = b - a
+                n = float(np.hypot(*d))
+                if n < 0.5:
+                    continue
+                u = d / n
+                w = np.array([-u[1], u[0]]) * ROAD_PASSAGE_W / 2
+                a_, b_ = a - u * 0.5, b + u * 0.5               # (half a metre over each end: no sliver at a bend)
+                quad = np.array([a_ - w, b_ - w, b_ + w, a_ + w])
+                nxt = []
+                for piece in solid:
+                    outs, inside = _cut_quad(piece, quad)
+                    nxt += outs
+                    if inside is not None:
+                        lintels.append(inside)
+                solid = nxt
+        if len(solid) + len(lintels) > ROAD_PASSAGE_MAX_PIECES:
+            R.append(ring), A.append(at), L.append(look), M.append(mh)
+            continue
+        for piece in solid:
+            R.append(piece), A.append(at), L.append(look), M.append(mh)
+        if float(h) > ROAD_PASSAGE_H + 1.0:
+            for piece in lintels:
+                R.append(piece), A.append(at), L.append(look), M.append(ROAD_PASSAGE_H)
+    return R, A, L, M
+
+
 ML_BRIDGE_M = 6.0          # m of a road bridge's line through a machine-learned footprint: the deck, not a building
 ML_ROAD_M = 4.0            # m from a public road's centre line to a machine-learned footprint's centre: a vehicle on it
+                           # (at least; where the road's drawn width is known, ML_ROAD_EDGE_M past its half-width)
+ML_ROAD_EDGE_M = 1.0       # m past a road's drawn edge a machine-learned footprint's centre still counts as on its lanes
+                           # (I-280 at Cupertino, 2026-11-08: Overture aed44c00-..., Microsoft's 8 x 30 m outline of a
+                           # lorry, height 0.73 m, 7.0 m from the centre line of a 5-lane, 26 m wide carriageway stood as a
+                           # house in the fast lane: ML_ROAD_M alone covered its middle two lanes)
 ML_MEDIAN_M = 9.0          # m: a machine-learned footprint between two parallel roads this close on either side lies in a
                            # dual carriageway's median (GitHub #90: a house between Moscow's Bolshaya Tulskaya carriageways)
 
@@ -2191,6 +2493,21 @@ def _line_dist(p, lines):
         q = a + t[:, None] * d
         best = min(best, float(np.hypot(*(q - p).T).min()))
     return best
+
+
+def _on_lanes(c, roads_xy):
+    """Does point c (2,) lie on a public road's drawn surface: within its half-width + ML_ROAD_EDGE_M of its centre
+    line (roads_xy.half, road_lines), and within ML_ROAD_M of any (a plain list without widths: that alone)?"""
+    halves = getattr(roads_xy, "half", None)
+    for k, ln in enumerate(roads_xy):
+        h = halves[k] if halves is not None and k < len(halves) else None
+        reach = max(ML_ROAD_M, h + ML_ROAD_EDGE_M) if h is not None else ML_ROAD_M
+        if len(ln) < 2 or ln[:, 0].min() > c[0] + reach or ln[:, 0].max() < c[0] - reach or \
+                ln[:, 1].min() > c[1] + reach or ln[:, 1].max() < c[1] - reach:
+            continue
+        if _line_dist(c, [ln]) <= reach:
+            return True
+    return False
 
 
 def _nearest_on(p, ln):
@@ -2226,11 +2543,11 @@ def _in_median(c, roads_xy):
 def _ml_false(ring, bridges_xy, water_xy, roads_xy=None):
     """A machine-learned footprint (Microsoft's, Google's) that is a bridge deck, a boat or a vehicle: a road bridge
     runs through it, its centre lies on mapped water (Tower Bridge's river: barges as brick buildings, 2026-10-18), on
-    a public road (a lorry on a Norwegian trunk road stood as a white building over the lanes, GitHub #2) or in a dual
-    carriageway's median (_in_median, GitHub #90)."""
+    a public road's lanes (_on_lanes: a lorry on a Norwegian trunk road stood as a white building over the lanes,
+    GitHub #2; one in I-280's fast lane, ML_ROAD_EDGE_M) or in a dual carriageway's median (_in_median, GitHub #90)."""
     if bridges_xy and road_through(ring, bridges_xy) >= ML_BRIDGE_M:
         return True
-    if roads_xy and (_line_dist(ring.mean(0), roads_xy) <= ML_ROAD_M or _in_median(ring.mean(0), roads_xy)):
+    if roads_xy and (_on_lanes(ring.mean(0), roads_xy) or _in_median(ring.mean(0), roads_xy)):
         return True
     if water_xy:
         from polygon import Path
@@ -2578,7 +2895,8 @@ def _outline_under_parts(at, bparts):
 @profile_step('Building site selection')
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
-                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=()):
+                   ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
+                   passage_xy=None, rails_xy=None, roofs=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -2591,7 +2909,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
     buildings) is a deck, a boat or a vehicle, left out (_ml_false). skip: ids of buildings left out (a gas station's
     canopy, drawn by the mod from the stock levels' props: gasstations.tile_sites). min_size (min height m, min
     footprint m²): only buildings at least that tall or that large (the skyline tiles: skyline_tile), tested before
-    any other work on a building."""
+    any other work on a building. roofs: lod2roofs.Records, the measured roofs that fill what the map leaves out."""
     parts_of = _PartsOf(frame, part_layers)     # building id -> [(ring in the anchor frame, (own height, bottom))]
     seen = set()
     rings, attrs, looks, mins = [], [], [], []
@@ -2604,7 +2922,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         if isinstance(f, mapgeom.Features):     # only the buildings whose centre may be in the tile (the exact test below)
             cx_, cy_ = f.outer_centres(frame)
             m = CENTRE_PREFILTER_M
-            rows = np.flatnonzero((cx_ >= x0 - m) & (cx_ < x1 + m) & (cy_ >= y0 - m) & (cy_ < y1 + m)).tolist()
+            near_ = (cx_ >= x0 - m) & (cx_ < x1 + m) & (cy_ >= y0 - m) & (cy_ < y1 + m)
+            if min_size is None:                # ... and the long ones reaching into it (its pieces: ground_pieces)
+                bb_ = f.boxes(frame)
+                pm = PIECE_LEN_M
+                near_ |= (np.hypot(bb_[:, 2] - bb_[:, 0], bb_[:, 3] - bb_[:, 1]) >= SPLIT_MIN_L) \
+                    & (bb_[:, 2] >= x0 - pm) & (bb_[:, 0] < x1 + pm) & (bb_[:, 3] >= y0 - pm) & (bb_[:, 1] < y1 + pm)
+            rows = np.flatnonzero(near_).tolist()
         for i in rows:
             if a.get("is_underground") is not None and bool(a["is_underground"][i]):
                 continue
@@ -2623,8 +2947,11 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             e, n = mapgeom.enu_xy(f, frame, outer)
             k = len(e) - 1             # the same reduction as np.mean, without its wrapper (36k calls a tile set)
             cx, cy = float(e[:-1].sum() / k), float(n[:-1].sum() / k)
-            if not (x0 <= cx < x1 and y0 <= cy < y1) if own is None else not own.owns(cx, cy):
-                continue
+            edge = not (x0 <= cx < x1 and y0 <= cy < y1) if own is None else not own.owns(cx, cy)
+            if edge and (min_size is not None or float(np.hypot(np.ptp(e), np.ptp(n))) < SPLIT_MIN_L
+                         or (a.get("src_record") is not None and landmarks.of(a["src_record"][i]) is not None)
+                         or (key is not None and parts_of.get(str(key)))):
+                continue                # (its centre's tile's: only a long one's pieces may be this tile's)
             if min_size is not None:
                 h_ = a["height"][i] if a.get("height") is not None else None
                 if h_ is None or not np.isfinite(h_):
@@ -2637,6 +2964,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                    "facade_material", "facade_color", "roof_material", "roof_color")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
+            if roofs is not None:
+                roofs.fill(at, e, n)
             lm = landmarks.of(a["src_record"][i]) if a.get("src_record") is not None else None
             if lm is not None:          # a landmark (landmarks.py): its own model on its footprint, its parts left out
                 ring = clean_ring(np.stack([e - x0, n - y0], 1))
@@ -2664,6 +2993,17 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         if pr_ is not None:
                             ship_parts.append((pr_, p[1]))
                     bparts = None
+            outline_h = None
+            if bparts and all(p[1] is None for p in bparts):
+                # parts without heights (a dome's, a tower's) on a building whose height is theirs, the levels its
+                # body's: the parts up to the height, the outline at its levels (the Maryland State House, 54 m to the
+                # lantern over 3 storeys, came out a 54 m block, 2026-11-07)
+                bh, nf = at.get("height"), at.get("num_floors")
+                if bh is not None and np.isfinite(bh) and nf is not None and np.isfinite(nf) and nf >= 1 \
+                        and (nf + 1) * FLOOR_M < bh \
+                        and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN:
+                    bparts = [(p[0], (float(bh), 0.0)) + tuple(p[2:]) for p in bparts]
+                    outline_h = float(nf) * FLOOR_M
             if bparts and any(p[1] is not None for p in bparts):
                 # drawn as its parts, with the building's class and one look for all of them; a part
                 # without a height takes the building's (else its lowest known part's)
@@ -2704,8 +3044,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         and parts_cover(np.stack([e, n], 1), [p[0] for p in bparts]) < PARTS_COVER_MIN):
                     continue
                 # (parts over too little of it: the outline too, as a building of its own: PARTS_COVER_MIN)
+                if outline_h is not None:
+                    at = dict(at, height=outline_h, roof_height=None)
             ring = clean_ring(np.stack([e - x0, n - y0], 1))
             if ring is None or _area2(ring) / 2 < MIN_AREA_M2:
+                continue
+            if rails_xy and on_rail_bed(ring, rails_xy):        # (a building on a railway's bed: BNE_RAIL_XING)
                 continue
             is_ml = "src_dataset" in a and str(a["src_dataset"][i]) != "OpenStreetMap"
             if is_ml and _ml_false(ring, bridges_xy, water_xy, ml_roads_xy if ml_roads_xy is not None else roads_xy):
@@ -2716,37 +3060,58 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             mh = float(mh) if mh is not None and np.isfinite(mh) and mh > 0 else 0.0
             if mh <= 0.5 and roads_xy and _area2(ring) / 2 >= SITE_M2 and road_through(ring, roads_xy) >= ROAD_THROUGH_M:
                 continue                # a mapped site, not a building (SITE_M2)
-            rings.append(ring)
-            if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= ROAD_THROUGH_M or road_across(ring, roads_xy)):
-                mh = OVER_ROAD_CLEAR_M
-                h = at.get("height")
-                if h is None or not np.isfinite(h) or h < mh + 3.0:
-                    at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
-            if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M:
-                # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
-                # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
-                # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17)
-                lift = _portal_lift(frame, ring, x0, y0, tunnels_xy, elev)
-                if lift > 0.5:
-                    mh = lift
-                    at = dict(at, portal=True)
+            flat = str(at.get("roof_shape") or "flat").lower() == "flat"
+            pieces, drop = ([ring], 0.0) if is_ml or mh > 0.5 or not flat or str(at.get("class") or "") in \
+                BRIDGE_CLASSES else ground_pieces(frame, ring, x0, y0, elev)
+            if len(pieces) > 1:         # the pieces whose centre is this tile's (each piece in one tile)
+                pc_ = np.array([r_.mean(0) for r_ in pieces]) + [x0, y0]     # (clean rings: no closing point)
+                mine = (pc_[:, 0] >= x0) & (pc_[:, 0] < x1) & (pc_[:, 1] >= y0) & (pc_[:, 1] < y1) if own is None \
+                    else np.asarray(own.owns(pc_[:, 0], pc_[:, 1]), bool)
+                kept = [r_ for r_, k_ in zip(pieces, np.atleast_1d(mine).tolist()) if k_]
+            else:
+                kept = [] if edge else pieces
+            h_ = at.get("height")
+            if len(pieces) > 1 and h_ is not None and np.isfinite(h_) and h_ > 0:
+                # its mapped height is from its lowest ground to its top (OSM's height, a lidar's top less the ground):
+                # the slope along it is in it, and each piece stands on its own ground (the gallery's 18.3 m was
+                # ~3 m of building over a 15.2 m grade: its pieces stood 9 m over I-280's deck, 2026-11-07)
+                at = dict(at, height=max(FLOOR_M, float(h_) - drop))
+            lv_ = a["level"][i] if a.get("level") is not None else None
+            through_m = ROAD_THROUGH_M if lv_ is None or not np.isfinite(lv_) or lv_ < 1 else LEVEL_THROUGH_M
+            at0, mh0 = at, mh
+            for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
+                at, mh = at0, mh0
+                rings.append(ring)
+                if mh <= 0.5 and roads_xy and (road_through(ring, roads_xy) >= through_m or road_across(ring, roads_xy)):
+                    mh = OVER_ROAD_CLEAR_M
                     h = at.get("height")
                     if h is None or not np.isfinite(h) or h < mh + 3.0:
-                        at = dict(at, height=mh + 3.0)
-            if mh <= 0.5 and garages_xy and _covers_garage(ring, garages_xy):
-                at = dict(at, garage=True)
-            on = _on_support(ring, supports)
-            if on is not None:              # a bridge's own: no flats' windows (Tower Bridge's towers, the user 2026-10-18)
-                fm_ = str(at.get("facade_material") or "").lower()
-                at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
-            if is_ml:
-                at = dict(at, ml=True)          # (_ml_steep once its ground is known)
-            elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
-                    ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
-                at = dict(at, ship=True, ship_parts=ship_parts)
-            attrs.append(at)
-            looks.append(None)
-            mins.append(mh)
+                        at = dict(at, height=mh + 3.0)      # keeps its top; at least a slab's worth over the clearance
+                if mh < OVER_TUNNEL_CLEAR_M and tunnels_xy and road_through(ring, tunnels_xy) >= TUNNEL_THROUGH_M:
+                    # over a tunnel: its floor OVER_TUNNEL_CLEAR_M over the road at the mouth near it (the lowest ground
+                    # along the tunnel's line round it), from its own lowest ground (base_z); none where its ground is
+                    # that high already (a house on the hill over the tube: Wabash's floated ~10 m, 2026-10-17)
+                    lift = _portal_lift(frame, ring, x0, y0, tunnels_xy, elev)
+                    if lift > 0.5:
+                        mh = lift
+                        at = dict(at, portal=True)
+                        h = at.get("height")
+                        if h is None or not np.isfinite(h) or h < mh + 3.0:
+                            at = dict(at, height=mh + 3.0)
+                if mh <= 0.5 and garages_xy and _covers_garage(ring, garages_xy):
+                    at = dict(at, garage=True)
+                on = _on_support(ring, supports)
+                if on is not None:              # a bridge's own: no flats' windows (Tower Bridge's towers, the user 2026-10-18)
+                    fm_ = str(at.get("facade_material") or "").lower()
+                    at = dict(at, bridge_part=on) if fm_ in STEEL_MATERIALS else dict(at, bridge_masonry=fm_)
+                if is_ml:
+                    at = dict(at, ml=True)          # (_ml_steep once its ground is known)
+                elif on is None and mh <= 0.5 and (ship_parts is not None or ships.is_ship(
+                        ring, at, lambda: ships.on_water(ring.mean(0), water_xy))):     # (the water test asked last)
+                    at = dict(at, ship=True, ship_parts=ship_parts)
+                attrs.append(at)
+                looks.append(None)
+                mins.append(mh)
     if not rings:
         return []
     # a quay structure alongside a moored ship: a low deck (its scanned height is the ship's flank). The ship may be
@@ -2773,11 +3138,15 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 if not rings:
                     return []
     if bridges_xy or decks:             # a road bridge through a building: a passage (Tower Bridge's towers and gate)
-        def ground_at(c):
-            la, lo, _ = frame.enu_to_geodetic(float(c[0]) + x0, float(c[1]) + y0, 0.0)
-            z = float(np.asarray(elev(np.array([float(la)]), np.array([float(lo)])), np.float64)[0])
-            return float(frame.geodetic_to_enu(float(la), float(lo), z)[2])       # (the decks' frame up)
+        def ground_at(r, lowest=False):  # (a footprint's highest ground, base_z's (its lowest for a portal building))
+            r = np.atleast_2d(np.asarray(r, np.float64))[:, :2]
+            la, lo, _ = frame.enu_to_geodetic(r[:, 0] + x0, r[:, 1] + y0, np.zeros(len(r)))
+            la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+            z = np.asarray(frame.geodetic_to_enu(la, lo, np.asarray(elev(la, lo), np.float64))[2], np.float64)
+            return float(np.nanmin(z) if lowest else np.nanmax(z))     # (the decks' frame up)
         rings, attrs, looks, mins = _passages(rings, attrs, looks, mins, bridges_xy, decks, ground_at)
+    if ROAD_PASSAGE_ON and passage_xy:     # a road mapped inside a building: a passage (a mall's covered way)
+        rings, attrs, looks, mins = _road_passages(rings, attrs, looks, mins, passage_xy)
     shared = _shared_walls(rings)
     cover = sum(_area2(r) / 2 for r, mh in zip(rings, mins) if mh <= 0.5) / ((x1 - x0) * (y1 - y0))
     town, dense = cover < TOWN_COVERAGE, cover > BRICK_WALK_COVERAGE
@@ -3279,6 +3648,58 @@ def _front_fence(spec, a, d, Le, f, A, D, L2, half, z, driveway, roads=None):
     return rows
 
 
+FOOTPRINT_GATE_M = 40.0   # (was 150 in PR #854: a statue or tower in a park was moved onto a building that far off)  # _nearest_building_footprint: a candidate footprint farther than this from a
+# model's own api point is not considered its building at all - the map's own data for a tile a model landed
+# in by a wide, SEARCH_CORRECT_R_M-radius hit (far outside this) is not trusted that loosely either.
+FOOTPRINT_SIZE_MIN = 0.4  # ... nor is one smaller than this fraction of the model's own major side (a garden
+FOOTPRINT_SIZE_MAX = 3.0  # shed next to a cathedral) or bigger than this one (a city block round a kiosk)
+FOOTPRINT_SIZE_TIE_FRAC = 0.2  # two candidates within this fraction of each other's own major side are "the
+# same size" as far as _nearest_building_footprint is concerned - too close to call apart by size alone, and
+# the map's own footprints carry no name this far downstream (tile_buildings drops it) to break the tie with
+
+
+def _ring_major_m(ring):
+    """A footprint ring's own major horizontal side, metres - the same measure _custom_tile_entries already
+    takes of a model's bbox (max(dx, dy)), so the two are comparable."""
+    xs, ys = ring[:, 0], ring[:, 1]
+    return float(max(xs.max() - xs.min(), ys.max() - ys.min()))
+
+
+def _nearest_building_footprint(items, x0, y0, px, py, model_major_m):
+    """The map's own building footprint (items: road_tile_items' tile_buildings result, rings relative to
+    (x0, y0)) closest to (px, py) - a 3dmr.eu model's own, uncorrected api point - among those plausibly ITS
+    building: within FOOTPRINT_GATE_M and sized within [FOOTPRINT_SIZE_MIN, FOOTPRINT_SIZE_MAX] of the
+    model's own major side (model_major_m). threedmr model_position's level 3 (called from _custom_tile_
+    entries only for a model whose own source is "api" - no override/fix/tagged-OSM-way/desc correction
+    already placed it more precisely): a mapper's upload pin regularly sits tens of metres from the real
+    building (probe/position_audit.json), closer to the map's own footprint than to nothing.
+
+    Returns the footprint's own centre (x, y) in the same frame as (px, py), or None - the api point is kept
+    - when nothing passes both gates, or the closest match's own size is within FOOTPRINT_SIZE_TIE_FRAC of
+    another, equally plausible candidate's: which of the two is the model's own building would be a guess,
+    and a user's report of a model "jumping" to the wrong one of two near-identical row houses is worse than
+    leaving it at its mapper's own (merely imprecise) point - "сомневаешься - не двигай" (owner review)."""
+    cands = []
+    for it in items:
+        spec = it[0]
+        major = _ring_major_m(spec.ring)
+        if not (model_major_m * FOOTPRINT_SIZE_MIN <= major <= model_major_m * FOOTPRINT_SIZE_MAX):
+            continue
+        c = spec.ring.mean(0) + (x0, y0)
+        dist = math.hypot(c[0] - px, c[1] - py)
+        if dist > FOOTPRINT_GATE_M:
+            continue
+        cands.append((dist, major, float(c[0]), float(c[1])))
+    if not cands:
+        return None
+    cands.sort(key=lambda t: t[0])
+    best = cands[0]
+    for other in cands[1:]:
+        if abs(other[1] - best[1]) <= FOOTPRINT_SIZE_TIE_FRAC * max(other[1], best[1]):
+            return None
+    return best[2], best[3]
+
+
 def _suppress_under_models(items, radii, x0, y0):
     """items (tile_buildings', rings relative to (x0, y0)) with every footprint whose centre falls inside one
     of radii's circles dropped: a baked 3dmr.eu model (_custom_tile_entries' radii, [(id, cx, cy, radius)]
@@ -3406,7 +3827,7 @@ def _centred(pos):
     return P
 
 
-def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None):
+def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items=None, origin=None):
     """custom's (tile_buildings') 3dmr.eu models fetched, plus any local (no-3dmr-base, a "local" key -
     road_tile_items') models loaded straight off disk (threedmr.load_local_model, no fetch_model/osm_yaw),
     baked into out_dir and registered in the mod's materials (one per distinct source material a model uses
@@ -3420,6 +3841,15 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     - the real mesh's own footprint is not known until it is downloaded and decoded, so the radius can only
     be had here (a user's report at Baghdad's Al-Shaheed Monument, model 24: two procedural "sector"
     stubs of its domes' lower tiers stayed and poked through the real mesh once it loaded).
+
+    items, origin ((x0, y0), items' own rings relative to it - road_tile_items'/road_tile's): threedmr model_
+    position's level 3, _nearest_building_footprint, run here (not in model_position - the map's own tile
+    data is not that function's to read) right after a model's own mesh bbox is known and before the radius
+    above, so suppression centres on the adjusted spot too. Only for a model whose custom entry's own
+    "source" (road_tile_items') is "api" - no override/threedmr_position_fixes.json/tagged-OSM-way/desc
+    correction already placed it more precisely - and never a "local" one (the player's own point, not a
+    3dmr.eu upload to second-guess). Skipped entirely (items/origin not given, or BNGE_3DMR_NO_REPOSITION
+    set) the way level 2 already is: the model stays at its own custom["xy"].
 
     A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M - told apart
     from a monument's or a building's) carries the road itself (FV=24, a user's report: no stub under it, driven on, no
@@ -3475,6 +3905,23 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             if max(dx, dy) > MODEL_MAX_M:
                 log.warning("3dmr model %s: %.0f x %.0f m, wider than %.0f m: not placed", cid, dx, dy, MODEL_MAX_M)
                 continue
+            if (
+                items is not None
+                and origin is not None
+                and "local" not in c
+                and c.get("source") == "api"
+                and not os.environ.get(threedmr.NO_REPOSITION_ENV)
+            ):
+                fp = _nearest_building_footprint(
+                    items, origin[0], origin[1], c["xy"][0], c["xy"][1], max(dx, dy)
+                )
+                if fp is not None:
+                    log.info(
+                        "3dmr model %s: positioned by the nearest map building footprint "
+                        "(api point was %.1f,%.1f)",
+                        cid, c["xy"][0], c["xy"][1],
+                    )
+                    c = dict(c, xy=fp)
             is_bridge = _is_bridge(pos) and "local" not in c
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
@@ -3603,14 +4050,18 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
     return entries, radii, []
 
 
-def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None):
+def custom_models(frame, custom, ground, out_dir, vfs_dir, road_ends=None, items=None, origin=None):
     """(entries, radii) of custom's 3dmr.eu / local models, baked into out_dir (_custom_tile_entries);
     ([], []) without custom footprints or out_dir/vfs_dir. Exposed on its own so a caller that needs
     entries/radii before the road mesh is built can bake the models once here and hand this same
-    (entries, radii) to road_tile() below, rather than road_tile() baking them a second time."""
+    (entries, radii) to road_tile() below, rather than road_tile() baking them a second time. items, origin:
+    _custom_tile_entries' own nearest-footprint level - the caller's own tile_buildings result and its tile
+    origin (x0, y0), when it has them (road_tile_items' "items", roads.tile_bbox(tx, ty)[:2])."""
     if not (custom and out_dir and vfs_dir):
         return [], [], []
-    return _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=road_ends)
+    return _custom_tile_entries(
+        frame, custom, ground, out_dir, vfs_dir, road_ends=road_ends, items=items, origin=origin
+    )
 
 
 def road_tile_items(
@@ -3654,8 +4105,12 @@ def road_tile_items(
         ground,
         own=box if hasattr(box, "owns") else None,
         part_layers=[c.layers.get("building_parts") for c in cds],
+        roofs=measured_roofs(md, frame, x0, y0, x1, y1),
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+        passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,
+                              classes=ROAD_PASSAGE_CLASSES, skip_sub=ROAD_PASSAGE_SKIP),
+        rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         tunnels_xy=tunnel_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         garages_xy=garage_rings(
@@ -3691,14 +4146,15 @@ def road_tile_items(
         for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
             mid = int(mid)
             try:
-                mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)
+                mlat, mlon, _corrected, source = threedmr.model_position(mid, cache_dir)
                 mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
             except Exception:
                 log.warning("3dmr model %s: info failed", mid, exc_info=True)
                 continue
             if x0 <= mx < x1 and y0 <= my < y1:
                 custom.append(
-                    {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon)}
+                    {"id": mid, "xy": (float(mx), float(my)), "latlon": (mlat, mlon),
+                     "source": source}
                 )
         for entry in threedmr.local_models(cache_dir):
             mlat, mlon = float(entry["lat"]), float(entry["lon"])
@@ -3710,6 +4166,7 @@ def road_tile_items(
                         "xy": (float(mx), float(my)),
                         "latlon": (mlat, mlon),
                         "local": entry,
+                        "source": "local",
                     }
                 )
     return items, custom
@@ -3764,7 +4221,7 @@ def bridge_footprints(frame, tx, ty, cache_dir):
     for mid in threedmr.region_ids(float(clat), float(clon), cache_dir):
         mid = int(mid)
         try:
-            mlat, mlon, _corrected = threedmr.model_position(mid, cache_dir)
+            mlat, mlon, _corrected, _source = threedmr.model_position(mid, cache_dir)
             mx, my, _ = frame.geodetic_to_enu(mlat, mlon, 0.0)
             mx, my = float(mx), float(my)
             if math.hypot(mx - cx, my - cy) > reach:
@@ -3928,7 +4385,7 @@ def road_tile(
         )
     if entries is None and radii is None:
         entries, radii, _boxes = custom_models(
-            frame, custom, ground, out_dir, vfs_dir
+            frame, custom, ground, out_dir, vfs_dir, items=items, origin=(x0, y0)
         )
     if radii:
         items = _suppress_under_models(items, radii, x0, y0)
@@ -3959,6 +4416,12 @@ BRIDGE_MIN_SPAN_M = 100.0  # ... and only once it also reaches this far (a narro
 FAR_LAYERS = ("buildings", "building_parts", "infrastructure", "roads", "water")
 
 
+def measured_roofs(md, frame, x0, y0, x1, y1):
+    """The measured roofs (lod2roofs.Records) of a tile, or None: none there, or a map without them."""
+    src = getattr(md, "lod2_roofs", None)
+    return src.tile(frame, x0, y0, x1, y1) if src is not None else None
+
+
 def far_needs(frame, tile, ty):
     """The map cells and layers far_items reads for road tile (tile, ty) (blockworker: fetched together first)."""
     import roads
@@ -3980,12 +4443,14 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
                            house_land_layers=[c.layers.get("land_use") for c in cds],
+                           roofs=measured_roofs(md, frame, x0, y0, x1, y1),
                            west_town=district_town(frame, tile, ty, md),
                            garages_xy=garage_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            supports=support_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
                            bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
                            water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
                            ml_roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
+                           rails_xy=rail_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0),
                            ways_xy=way_lines(frame, [c.layers.get("roads") for c in cds], x0, y0, size=x1 - x0))
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
