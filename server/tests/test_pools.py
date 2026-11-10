@@ -177,3 +177,49 @@ class RespawnTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class HungWatchdogTest(unittest.TestCase):
+    """GitHub #1058: every road process stopped finishing jobs; their waiters (the AI road graph, terrain patches) had
+    no timeout, so nothing restarted the processes. A job running hung_s or more recycles the pool."""
+
+    def test_a_hung_job_without_a_timeout_ends_in_a_restart(self):
+        import time
+        with unittest.mock.patch.object(pools.RespawningPool, "WATCH_S", 0.2):
+            p = pools.RespawningPool("test", 1, mp_context=SPAWN, hung_s=1.5)
+        try:
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)      # (the process started)
+            fut = p.submit(time.sleep, 3600)
+            with self.assertLogs("earthd.pools", "WARNING"):
+                with self.assertRaises(BrokenProcessPool):
+                    fut.result(timeout=60)                              # (the bare wait ends: the pool recycled)
+            self.assertEqual(p.respawns, 1)
+            self.assertEqual(p.submit(abs, -4).result(timeout=60), 4)   # (and works again)
+        finally:
+            p.shutdown()
+
+    def test_a_queued_job_is_not_counted_and_a_short_one_is_left_alone(self):
+        p = pools.RespawningPool("test", 1, mp_context=SPAWN, hung_s=3600.0)
+        try:
+            self.assertEqual(p.submit(abs, -3).result(timeout=60), 3)
+            self.assertFalse(p._watch_step(0.0))
+            self.assertEqual(p.respawns, 0)
+            self.assertEqual(p._live, {})                                # (done jobs leave the watch list)
+        finally:
+            p.shutdown()
+
+
+class HungDumpTest(unittest.TestCase):
+    def test_a_long_job_writes_its_stacks(self):
+        import subprocess, textwrap
+        code = textwrap.dedent("""
+            import sys, os
+            sys.path.insert(0, %r)
+            os.environ["BNGE_HUNG_DUMP_S"] = "0.5"
+            import pools, time
+            print(pools._call(time.sleep, (1.2,), {}))
+        """ % os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIn("Thread", r.stderr)               # (faulthandler's dump of the running threads)
+        self.assertIn("None", r.stdout)                 # (and the job ran to its end: not stopped)
