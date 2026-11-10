@@ -1853,6 +1853,28 @@ class SpireTest(unittest.TestCase):
         self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
 
 
+class WaterTankTest(unittest.TestCase):
+    """New York's mid-rise flat roofs carry cedar water tanks on steel legs (water_tank / _water_tank); nowhere else."""
+
+    def test_rule_and_mesh(self):
+        ring = np.array([[0, 0], [30, 0], [30, 20], [0, 20]], float)
+        specs = [bld.plan(ring + i * 0.37, {"class": "apartments", "num_floors": 12, "seed_id": str(i)}, 1,
+                          40.718, -73.999) for i in range(120)]
+        share = np.mean([bld.water_tank(sp, 40.718, -73.999, 600.0) for sp in specs])
+        self.assertTrue(0.35 < share < 0.75, share)
+        self.assertFalse(any(bld.water_tank(sp, 48.85, 2.35, 600.0) for sp in specs), "Paris: none")
+        low = bld.plan(ring, {"class": "house", "num_floors": 2}, 0, 40.718, -73.999)
+        self.assertFalse(bld.water_tank(low, 40.718, -73.999, 600.0), "two storeys: none")
+        glass = bld.plan(ring, {"class": "office", "num_floors": 20, "facade_material": "glass"}, 0, 40.718, -73.999)
+        self.assertFalse(bld.water_tank(glass, 40.718, -73.999, 600.0), "a curtain wall: none")
+        sp = specs[0]
+        sp.min_h, sp.tank = 0.0, True
+        top_with = float(np.max(np.asarray(bld.build([(sp, 0.0, 0.0)])[0])[:, 2]))
+        sp.tank = False
+        top_without = float(np.max(np.asarray(bld.build([(sp, 0.0, 0.0)])[0])[:, 2]))
+        self.assertGreater(top_with - top_without, 6.0, "legs + staves + cap over the roof")
+
+
 if __name__ == "__main__":
     unittest.main()
 

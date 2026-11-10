@@ -572,7 +572,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1678,6 +1678,77 @@ def _clutter(m, spec, ring, z_eave, mat_idx):
         _box(m, p, u, hx, hy, z_eave, z_eave + h, mat)
 
 
+# Rooftop water tanks: New York's buildings of six storeys or more keep their water in a cedar tank on steel legs on
+# the roof (the city's water pressure reaches about six storeys; ~10,000 tanks). The Brooklyn Bridge view against a
+# Mapillary 360 photo (40.7088 -74.0002, 2026-11-10: a tank on the roofs in front of the skyline) and a player's
+# screenshot that had them; none drawn before. Not mapped (Overture's infrastructure has none on Manhattan's roofs):
+# by the seed, on WATER_TANK_SHARE of the flat roofs of WATER_TANK_FLOORS storeys in WATER_TANK_BOXES (the five
+# boroughs, Hudson County), not on glass curtain walls, new buildings, sheds, churches or industry.
+WATER_TANK_BOXES = ((40.49, -74.27, 40.92, -73.68),)
+WATER_TANK_FLOORS = (6, 30)
+WATER_TANK_MIN_M2 = 150.0
+WATER_TANK_SHARE = 0.55
+WATER_TANK_R = (1.7, 2.6)       # m: the barrel's radius ...
+WATER_TANK_H = (3.8, 5.4)       # ... its staves' height ...
+WATER_TANK_LEGS = (3.0, 4.5)    # ... its legs over the roof
+WATER_TANK_SIDES = 12
+WATER_TANK_WOOD = ((0.74, 0.63, 0.52), (0.66, 0.60, 0.55), (0.80, 0.70, 0.56), (0.58, 0.52, 0.47))  # (x the siding)
+
+
+def water_tank(spec, lat, lon, area, era_=None):
+    """Does this building get a rooftop water tank (WATER_TANK_*)? Pure (the seed)."""
+    if lat is None or lon is None or spec.roof != "flat" or spec.plain or spec.holes or area < WATER_TANK_MIN_M2:
+        return False
+    if not any(b[0] <= lat <= b[2] and b[1] <= lon <= b[3] for b in WATER_TANK_BOXES):
+        return False
+    if not WATER_TANK_FLOORS[0] <= (spec.floors or 0) <= WATER_TANK_FLOORS[1] or era_ == "new":
+        return False
+    if str(spec.facade or "").startswith(OFFICE) or spec.cls in SHED_CLASSES or spec.cls in CHURCH_CLASSES \
+            or spec.cls in ("industrial", "warehouse", "mast", "tank", "greenhouse", "hangar", "parking"):
+        return False
+    return _hash01(spec.seed, "water tank") < WATER_TANK_SHARE
+
+
+def _water_tank(m, spec, ring, z_roof, mat_idx):
+    """A cedar water tank on steel legs on the flat roof ring at z_roof (spec.tank: water_tank)."""
+    c, u, hl, hw = oriented_box(ring)
+    v = np.array([-u[1], u[0]])
+    r = WATER_TANK_R[0] + (WATER_TANK_R[1] - WATER_TANK_R[0]) * _hash01(spec.seed, "tank r")
+    if hw < r + 1.5:
+        return
+    for k in range(6):                  # (a spot inside the roof, clear of its edges)
+        s = (_hash01(spec.seed, "tank x", k) * 2 - 1) * max(hl - r - 1.5, 0.0)
+        t = (_hash01(spec.seed, "tank y", k) * 2 - 1) * max(hw - r - 1.5, 0.0)
+        p = c + u * s + v * t
+        if all(_inside(ring, p + d) for d in (u * (r + 1), -u * (r + 1), v * (r + 1), -v * (r + 1))):
+            break
+    else:
+        return
+    legs = WATER_TANK_LEGS[0] + (WATER_TANK_LEGS[1] - WATER_TANK_LEGS[0]) * _hash01(spec.seed, "tank legs")
+    tall = WATER_TANK_H[0] + (WATER_TANK_H[1] - WATER_TANK_H[0]) * _hash01(spec.seed, "tank h")
+    steel = mat_idx[custom_look(METALWALL, (0.32, 0.32, 0.33))]
+    wood = mat_idx[custom_look(SIDING, WATER_TANK_WOOD[int(_hash01(spec.seed, "tank wood") * len(WATER_TANK_WOOD))])]
+    cap = mat_idx[custom_look(ROOF_FLAT, (0.62, 0.58, 0.54))]
+    z0 = z_roof + legs
+    d = r * 0.62
+    for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):     # the legs and the deck they carry
+        _box(m, p + u * sx * d + v * sy * d, u, 0.14, 0.14, z_roof, z0, steel)
+    _box(m, p, u, r * 0.9, r * 0.9, z0 - 0.35, z0, steel)
+    n = WATER_TANK_SIDES
+    ang = [2 * math.pi * i / n for i in range(n + 1)]
+    pts = [p + (u * math.cos(a) + v * math.sin(a)) * r for a in ang]
+    z1 = z0 + tall
+    for i in range(n):                  # (the staves run up: the siding's boards turned on end)
+        a, b = pts[i], pts[i + 1]
+        u0, u1 = (2 * math.pi * r * i / n) / SIDING_UV_M, (2 * math.pi * r * (i + 1) / n) / SIDING_UV_M
+        m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1),
+               (0.0, u0), (0.0, u1), (tall / SIDING_UV_M, u1), (tall / SIDING_UV_M, u0), wood)
+    apex = (float(p[0]), float(p[1]), z1 + 0.45 * r)
+    for i in range(n):                  # its conical cap
+        a, b = pts[i] + (pts[i] - p) * 0.06, pts[i + 1] + (pts[i + 1] - p) * 0.06
+        m.tri((a[0], a[1], z1), (b[0], b[1], z1), apex, (0, 0), (1, 0), (0.5, 1.0), cap)
+
+
 # Domes and onion domes from the map's roof:shape (GitHub #593's thread: "a dedicated landmark procedural generator"
 # instead of hand-made models): a cathedral's, a mosque's or a capitol's dome is mapped as a building part with
 # roof:shape=dome / onion and often its roof:height; drawn as a gable before. The footprint's own outline shrinks to
@@ -2430,6 +2501,8 @@ def build(specs_and_ground, lite=False):
             _cornice(m, spec, ring, z_eave, mat_idx)
         if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
             _clutter(m, spec, ring, z_eave, mat_idx)
+            if spec.tank:
+                _water_tank(m, spec, ring, z_eave, mat_idx)
         if spec.steeple:
             _steeple(m, spec, z_eave, mat_idx)
         if spec.stoop and not lite:
@@ -4081,6 +4154,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
+        spec.tank = mh <= 0.5 and look is None and water_tank(spec, clat, clon, abs(_area2(ring)) / 2,
+                                                               era(at.get("_year")))
         if at.get("_holes") and ((spec.roof == "flat" and not spec.hf) or spec.skel) and spec.cls not in CANOPY_CLASSES \
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]
