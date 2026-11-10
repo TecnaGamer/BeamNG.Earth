@@ -639,6 +639,9 @@ BENCH_YAW = 90.0            # the bench model's front is its local +y (the yaw p
 COLLISION_BOXES = {
     G_LAMP: (9.0, ((-0.203, -0.200, -0.420, 0.144, 0.201, 7.124),
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
+    # tools/build_french_furniture.py:collision('lantern'), at its catalog height.
+    # Regional lamps must not bypass the same all-road checks as stock lamps.
+    "fr_lantern": (5.4, ((-0.064, -0.064, 0.000, 0.064, 0.064, 4.650),)),
     G_POLE: (9.2, ((-0.260, -0.300, -1.000, 0.260, 0.300, 7.772),
                    (-0.900, -0.348, 7.772, 0.901, 0.300, 8.000))),
     G_POLELAMP: (1.1, ((-2.891, -0.110, -0.365, 0.039, 0.110, 0.699),)),
