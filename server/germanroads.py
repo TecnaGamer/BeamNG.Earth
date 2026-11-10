@@ -412,6 +412,16 @@ def _fit_parking(sp):
     return sp if (sp.width - park) / n >= fit else sp._replace(parking=False)
 
 
+def gave_lanes(feats, i, sp):
+    """Are road i's lanes (its spec sp) the survey's, the map having none? Then they say nothing of the street's width,
+    and roads._measured_widths still measures it between the buildings (Cologne: a 12.9 m street drawn 11.1 m from
+    two surveyed lanes alone)."""
+    if not ON or sp is None or not sp.lanes or sp.cls not in LANE_CLASSES or sp.link:
+        return False
+    import roads
+    return roads._lane_count(feats, i, sp.cls) is None
+
+
 def surveyed_width(feats, i, sp):
     """The surveyed width of road i (its spec sp), None where there is none (no axis, a mapped width, a ramp):
     roads._measured_widths keeps the width measured between the buildings above it (FLOOR_ONLY)."""

@@ -228,6 +228,18 @@ class GermanRoadsTest(unittest.TestCase):
         self.assertEqual((a.width, b.width), (a0.width, b0.width))
         self.assertGreater(a.width, 2.5)
 
+    def test_surveyed_lanes_alone_leave_the_width_to_the_buildings(self):
+        write_shard(self.tmp.name, [(EAST, 0.0, 2, 1, 3, 0)])         # (two lanes, no width surveyed)
+        f = features([[(-300.0, 0.0), (300.0, 0.0)]], ["tertiary"])
+        town = lambda la, lo: np.ones(len(np.atleast_1d(la)), bool)   # noqa: E731
+        sp = roads._road_specs(f, town, False)[0]
+        self.assertEqual(sp.lanes, 2)
+        self.assertTrue(germanroads.gave_lanes(f, 0, sp))
+        self.assertEqual(roads._measured_widths(f, [sp], lambda fid, ll: (12.9, 2.5))[0].width, 12.9)
+        osm = features([[(-300.0, 0.0), (300.0, 0.0)]], ["tertiary"], osm={"osm_lanes": ["2"]})
+        sp2 = roads._road_specs(osm, town, False)[0]
+        self.assertFalse(germanroads.gave_lanes(osm, 0, sp2))               # (the map's own lanes: as before)
+
     def test_a_main_road_never_turns_to_earth(self):
         write_shard(self.tmp.name, [(EAST, 0.0, 0, 6, 3, 0)])
         self.assertEqual(self.specs(features([[(-300.0, 0.0), (300.0, 0.0)]], ["primary"]))[0].kind, "paved")

@@ -3775,8 +3775,9 @@ def _measured_widths(feats, specs, widths):
             continue        # (a roundabout: _rings' circulatory width; the buildings stand round the whole circle)
         a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
         b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
-        if _osm(feats, "width", j, *OSM_WIDTH_M) is not None or sp.lanes:
-            continue        # (OpenStreetMap's own width, or its lane count's)
+        import germanroads
+        if _osm(feats, "width", j, *OSM_WIDTH_M) is not None or (sp.lanes and not germanroads.gave_lanes(feats, j, sp)):
+            continue        # (OpenStreetMap's own width, or its lane count's; Germany's surveyed lanes are no width)
         if sp.street is not None and (not sp.urban or not has_sidewalks(sp)
                                       or any(w.setback for _, w in sp.street.walks())):
             continue        # (the walls beyond verges are not the carriageway's limits)
