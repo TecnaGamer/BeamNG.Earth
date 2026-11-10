@@ -224,6 +224,7 @@ _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassifi
 GIVE_WAY_COUNTRIES = {"SE", "NO", "FI", "DK", "IS", "AX", "FO"}
 YELLOW_B1_COUNTRIES = {"SE", "FI", "AX"}       # (their give-way triangle is yellow inside: G_B1; Norway's white)
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
+ARM_JOIN_M = 3.0            # m: a road end alone this close to a junction of others belongs to it (_arms)
 
 
 def _arms(roads):
@@ -241,6 +242,17 @@ def _arms(roads):
                 continue
             k = (round(float(p[0]) / JUNCTION_SNAP_M), round(float(p[1]) / JUNCTION_SNAP_M))
             ends.setdefault(k, []).append((fid, spec, d / L, p, start, length))
+    # an end left alone within ARM_JOIN_M of a junction of two or more ends joins it (GitHub #1062: Harstad's roundabout
+    # entries ended 1-2.5 m off the ring's nodes, each a junction of one, and got no give-way sign)
+    multi = [k for k, v in ends.items() if len(v) >= 2]
+    if multi:
+        mp = np.array([np.asarray(ends[k][0][3][:2], np.float64) for k in multi])
+        for k in [k for k, v in ends.items() if len(v) == 1]:
+            p = np.asarray(ends[k][0][3][:2], np.float64)
+            d = np.hypot(*(mp - p).T)
+            j = int(np.argmin(d))
+            if d[j] <= ARM_JOIN_M:
+                ends[multi[j]].append(ends.pop(k)[0])
     return ends
 
 

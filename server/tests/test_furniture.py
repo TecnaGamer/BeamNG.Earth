@@ -631,3 +631,20 @@ class NordicJunctionTest(unittest.TestCase):
                   ("b", side, np.array([-1.0, 0.0]), (0.0, 0.0), False),
                   ("c", side, np.array([0.0, 1.0]), (0.0, 0.0), True)]
         self.assertEqual(furniture.junction_controls(minors, 0, country="NO"), [])     # (the right-hand rule)
+
+
+class ArmJoinTest(unittest.TestCase):
+    """GitHub #1062: a roundabout's entries ended 1-2.5 m off the ring's nodes: each a junction of one, no sign."""
+
+    def test_a_lone_end_near_a_junction_joins_it(self):
+        import numpy as np
+        from types import SimpleNamespace as NS
+        sp = NS(cls="trunk", oneway=False, dir=0, width=7.0, urban=False)
+        roads = [("r1", sp, np.array([[-20.0, 0.0, 0.0], [0.0, 0.0, 0.0]]), None),
+                 ("r2", sp, np.array([[0.0, 0.0, 0.0], [20.0, 5.0, 0.0]]), None),
+                 ("ap", sp, np.array([[2.0, -1.5, 0.0], [2.0, -30.0, 0.0]]), None),       # (its end 2.5 m off)
+                 ("far", sp, np.array([[60.0, 0.0, 0.0], [90.0, 0.0, 0.0]]), None)]
+        j = furniture._arms(roads)
+        sizes = sorted(len(v) for v in j.values())
+        self.assertEqual(sizes[-1], 3)
+        self.assertTrue(any({a[0] for a in v} == {"r1", "r2", "ap"} for v in j.values()))
