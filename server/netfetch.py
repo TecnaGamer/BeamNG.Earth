@@ -274,6 +274,11 @@ POLICIES = {
     "nvdbapiles.atlas.vegvesen.no": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                                allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
                                                max_attempts=3, base_delay=2.0, optional=True),
+    # 3DBAG's WFS (threedbag.py: the Netherlands' measured roofs): one request per 250 m square of the Dutch grid as road
+    # tiles there are built, kept on disk; a modest rate for a university's public service
+    "data.3dbag.nl": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
+                                allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
+                                max_attempts=3, base_delay=2.0, optional=True),
     # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
     "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),

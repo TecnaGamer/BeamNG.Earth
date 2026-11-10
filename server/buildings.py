@@ -3413,7 +3413,7 @@ def _outline_under_parts(at, bparts):
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
-                   passage_xy=None, rails_xy=None, roofs=None, photo=None):
+                   passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3721,12 +3721,18 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         if photo is not None and len(rings) else None
     if roof_rgb is not None and len(roof_rgb) != len(rings):
         roof_rgb = None
+    # (the Netherlands' measured roofs, threedbag.Fetch: the tile's squares, asked for as the tile started)
+    bag_match = bag3d.index() if bag3d is not None else None
     for k, (ring, at, sh, look, mh) in enumerate(zip(rings, attrs, shared, looks, mins)):
         if roof_rgb is not None and np.isfinite(roof_rgb[k]).all() and not at.get("roof_color"):
             at = dict(at, _roof_photo=tuple(float(v) for v in roof_rgb[k]))
+        i0, i1 = (ends[k - 1] if k else 0), ends[k]
+        if bag_match is not None and look is None and mh <= 0.5 and ok[i0:i1].all():
+            import threedbag
+            at = threedbag.apply(at, bag_match.match(float(la_all[i0:i1].mean()), float(lo_all[i0:i1].mean()),
+                                                     abs(_area2(ring)) / 2, at.get("bag_id")))
         if mh > 0.5 and at.get("height") is not None and np.isfinite(at["height"]) and look is None:
             at = dict(at, height=max(2.5, float(at["height"]) - mh))     # a building's own height range
-        i0, i1 = (ends[k - 1] if k else 0), ends[k]
         if francehouses.ON:
             if not ok[i0:i1].all():
                 continue
@@ -4633,6 +4639,8 @@ def road_tile_items(
     x0, y0, x1, y1 = box
     # (the tile's aerial photo for the roofs' colours, fetched while the footprints are put together: RoofPhotoFuture)
     photo = RoofPhotoFuture(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))
+    import threedbag
+    bag3d = threedbag.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (the Dutch roofs, likewise)
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
     cds = [
         md.cell(
@@ -4654,6 +4662,7 @@ def road_tile_items(
         part_layers=[c.layers.get("building_parts") for c in cds],
         roofs=measured_roofs(md, frame, x0, y0, x1, y1),
         photo=photo,
+        bag3d=bag3d,
         west_town=district_town(frame, tx, ty, md),
         roads_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         passage_xy=road_lines(frame, [c.layers.get("roads") for c in cds], x0, y0,

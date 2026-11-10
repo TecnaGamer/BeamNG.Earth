@@ -112,10 +112,13 @@ FEATURES = {
     "sea:noaa": "NOAA NCEI", "bridge:nbi": "FHWA NBI", "bridge:wikidata": "Wikidata",
     "model:3dmr": "3D Model Repository (3dmr.eu)",
     "roof:lod2-de": "German states' LoD2 roofs (GeoBasis-DE)",
+    "roof:3dbag": "3DBAG (tudelft3d, 3DGI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
+    "roof:3dbag": "Roof shapes and heights in the Netherlands: \u00a9 3DBAG by tudelft3d and 3DGI (CC BY 4.0), "
+                  "data changed",
     "roof:lod2-de": "Roof shapes and heights: changed data from the German states' LoD2 building models: "
                     "Datenquelle: LGL, www.lgl-bw.de, dl-de/by-2-0; Bayerische Vermessungsverwaltung - "
                     "www.geodaten.bayern.de (CC BY 4.0); Geoportal Berlin (dl-de/zero-2.0); GeoBasis-DE / LGB "
@@ -252,6 +255,12 @@ def feature_ids(conn):
             if src is not None and src.dir and lod2roofs.credited_near(os.path.dirname(os.path.dirname(src.dir)),
                                                                       lat, lon, FEATURE_NEAR_M):
                 ids.add("roof:lod2-de")
+        except Exception:
+            pass
+        try:                        # (a measured Dutch roof square on disk near: threedbag)
+            import threedbag
+            if threedbag.credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("roof:3dbag")
         except Exception:
             pass
         try:                        # (a 3dmr.eu model near: threedmr's cached answers only)
