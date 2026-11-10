@@ -2148,3 +2148,39 @@ class TileRoofAttrsTest(unittest.TestCase):
         items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
         self.assertEqual(len(items), 1)
         self.assertTrue(items[0][0].across)
+
+
+class HoledFeats(Feats):
+    def parts(self, i):
+        return [[np.asarray(r, np.float64) for r in self.rings[i]]]
+
+
+class CourtyardTest(unittest.TestCase):
+    """A city block round a yard: its inner ring kept open, walls facing the yard (only the outer ring was drawn)."""
+
+    def test_a_block_keeps_its_courtyard(self):
+        import geodesy
+        f = geodesy.EnuFrame(52.52, 13.40)
+
+        def ll(pts):
+            pts = np.asarray(pts, float)
+            la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            return np.stack([lo, la], 1)
+        outer = ll([[20, 20], [60, 20], [60, 50], [20, 50], [20, 20]])
+        yard = ll([[30, 28], [50, 28], [50, 42], [30, 42], [30, 28]])
+        b = HoledFeats(["B"], [[outer, yard]], **{"class": ["apartments"], "height": [18.0], "roof_shape": ["flat"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        self.assertEqual(len(items), 1)
+        spec = items[0][0]
+        self.assertTrue(spec.holes)
+        for mesh in (bld.build([(spec, 0.0, 0.0)]), bld.collision_mesh([(spec, 0.0, 0.0)])):
+            P = np.asarray(mesh[0], np.float64).reshape(-1, 3)
+            T = np.asarray(mesh[2], np.int64).reshape(-1, 3)
+            # the lid: up-facing triangles at the top cover the block less its yard (40 x 30 - 20 x 14 = 920 m2)
+            top = spec.height                                           # (the lid: at the eave; cornices stand over it)
+            A = P[T]
+            up = (np.abs(A[:, :, 2] - top) < 1e-6).all(1)
+            a = 0.5 * ((A[:, 1, 0] - A[:, 0, 0]) * (A[:, 2, 1] - A[:, 0, 1]) - (A[:, 2, 0] - A[:, 0, 0]) * (A[:, 1, 1] - A[:, 0, 1]))
+            self.assertAlmostEqual(float(a[up & (a > 0)].sum()), 920.0, delta=15.0)
+            # nothing over the yard's middle
+            self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())

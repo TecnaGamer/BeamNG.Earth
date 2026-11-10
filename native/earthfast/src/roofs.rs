@@ -202,3 +202,136 @@ pub fn heightfield_roof<'py>(py: Python<'py>, ring: PyReadonlyArray2<'py, f64>, 
      numpy::ndarray::Array2::from_shape_vec((m, 2), grad).unwrap().into_pyarray(py),
      numpy::ndarray::Array2::from_shape_vec((w, 6), flat).unwrap().into_pyarray(py))
 }
+
+type P = (f64, f64);
+
+fn orient(a: P, b: P, c: P) -> f64 {
+    (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0)
+}
+
+/// Do segments ab and cd cross at a point inside both (not at an end)?
+fn proper(a: P, b: P, c: P, d: P) -> bool {
+    let (o1, o2, o3, o4) = (orient(a, b, c), orient(a, b, d), orient(c, d, a), orient(c, d, b));
+    o1 * o2 < -1e-12 && o3 * o4 < -1e-12
+}
+
+fn inside(ring: &[P], p: P) -> bool {
+    let mut c = false;
+    let n = ring.len();
+    for i in 0..n {
+        let (a, b) = (ring[i], ring[(i + 1) % n]);
+        if (a.1 > p.1) != (b.1 > p.1) && p.0 < a.0 + (p.1 - a.1) / (b.1 - a.1) * (b.0 - a.0) {
+            c = !c;
+        }
+    }
+    c
+}
+
+/// The outer ring (counter-clockwise) with each hole (clockwise) joined to it by a bridge to a vertex it sees, holes in
+/// the order of their largest x (Eberly's hole elimination, the nearest visible vertex rather than the ray's).
+fn bridge_holes(outer: Vec<P>, mut holes: Vec<Vec<P>>) -> Vec<P> {
+    holes.sort_by(|a, b| {
+        let ma = a.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.0));
+        let mb = b.iter().fold(f64::NEG_INFINITY, |m, p| m.max(p.0));
+        mb.partial_cmp(&ma).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut ring = outer;
+    for h in 0..holes.len() {
+        let hole = holes[h].clone();
+        let mi = (0..hole.len()).max_by(|&i, &j| hole[i].0.partial_cmp(&hole[j].0).unwrap()).unwrap();
+        let m = hole[mi];
+        let mut order: Vec<usize> = (0..ring.len()).collect();
+        order.sort_by(|&i, &j| {
+            let di = (ring[i].0 - m.0).powi(2) + (ring[i].1 - m.1).powi(2);
+            let dj = (ring[j].0 - m.0).powi(2) + (ring[j].1 - m.1).powi(2);
+            di.partial_cmp(&dj).unwrap()
+        });
+        let edges_ok = |v: P| {
+            let blocked = |r: &[P]| (0..r.len()).any(|i| proper(m, v, r[i], r[(i + 1) % r.len()]));
+            !(blocked(&ring) || holes[h..].iter().any(|o| blocked(o)))
+        };
+        let pick = order.into_iter().find(|&vi| {
+            let v = ring[vi];
+            let mid = ((m.0 + v.0) / 2.0, (m.1 + v.1) / 2.0);
+            edges_ok(v) && inside(&ring, mid) && !inside(&hole, mid)
+        });
+        let Some(vi) = pick else { continue };      // (no bridge found: that hole is left filled)
+        let mut out = Vec::with_capacity(ring.len() + hole.len() + 2);
+        out.extend_from_slice(&ring[..=vi]);
+        out.extend(hole[mi..].iter().copied());
+        out.extend(hole[..=mi].iter().copied());
+        out.extend_from_slice(&ring[vi..]);
+        ring = out;
+    }
+    ring
+}
+
+/// ear_clip for a bridged ring: a vertex at the same place as a corner of the ear (a bridge's two copies) does not
+/// block it.
+fn ear_clip_bridged(pts: &[P]) -> Vec<[i64; 3]> {
+    let n = pts.len();
+    let same = |a: P, b: P| (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9;
+    let mut idx: Vec<usize> = (0..n).collect();
+    let mut out: Vec<[i64; 3]> = Vec::new();
+    let mut guard = 0usize;
+    while idx.len() > 3 && guard < 4 * n * n {
+        guard += 1;
+        let m = idx.len();
+        let mut found = false;
+        for k in 0..m {
+            let (i0, i1, i2) = (idx[(k + m - 1) % m], idx[k], idx[(k + 1) % m]);
+            let (pa, pb, pc) = (pts[i0], pts[i1], pts[i2]);
+            if orient(pa, pb, pc) <= 1e-12 {
+                continue;
+            }
+            let ear = idx.iter().all(|&j| {
+                if j == i0 || j == i1 || j == i2 { return true; }
+                let q = pts[j];
+                if same(q, pa) || same(q, pb) || same(q, pc) { return true; }
+                !(orient(pa, pb, q) >= 0.0 && orient(pb, pc, q) >= 0.0 && orient(pc, pa, q) >= 0.0)
+            });
+            if ear {
+                out.push([i0 as i64, i1 as i64, i2 as i64]);
+                idx.remove(k);
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            break;
+        }
+    }
+    if idx.len() == 3 {
+        out.push([idx[0] as i64, idx[1] as i64, idx[2] as i64]);
+    }
+    out
+}
+
+/// buildings' flat roof over a courtyard building: the outer ring (n, 2) and its holes (each (k, 2), any winding),
+/// triangulated with the holes left open: (points (m, 2), triangles (t, 3) counter-clockwise from above). A hole no
+/// bridge reaches stays filled.
+#[pyfunction]
+pub fn triangulate_holes<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, holes: Vec<PyReadonlyArray2<'py, f64>>)
+                              -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>) {
+    let rd = |a: &PyReadonlyArray2<'py, f64>| -> Vec<P> {
+        let v = a.as_array();
+        (0..v.nrows()).map(|i| (v[[i, 0]], v[[i, 1]])).collect()
+    };
+    let area = |r: &[P]| -> f64 { (0..r.len()).map(|i| r[i].0 * r[(i + 1) % r.len()].1 - r[(i + 1) % r.len()].0 * r[i].1).sum() };
+    let mut o = rd(&outer);
+    let hs: Vec<Vec<P>> = holes.iter().map(|h| rd(h)).collect();
+    let (pts, tris) = py.detach(move || {
+        if area(&o) < 0.0 { o.reverse(); }
+        let hs: Vec<Vec<P>> = hs.into_iter().filter(|h| h.len() >= 3).map(|mut h| {
+            if area(&h) > 0.0 { h.reverse(); }
+            h
+        }).collect();
+        let ring = bridge_holes(o, hs);
+        let tris = ear_clip_bridged(&ring);
+        (ring, tris)
+    });
+    let flat: Vec<f64> = pts.iter().flat_map(|p| [p.0, p.1]).collect();
+    let ti: Vec<i64> = tris.iter().flat_map(|t| t.iter().copied()).collect();
+    (numpy::ndarray::Array2::from_shape_vec((pts.len(), 2), flat).unwrap().into_pyarray(py),
+     numpy::ndarray::Array2::from_shape_vec((tris.len(), 3), ti).unwrap().into_pyarray(py))
+}

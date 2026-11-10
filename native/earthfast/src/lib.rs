@@ -5606,6 +5606,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
-    m.add("VERSION", 176)?;
+    m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
+    m.add("VERSION", 177)?;
     Ok(())
 }

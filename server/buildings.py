@@ -358,7 +358,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf")
+                 "roof_h", "hf", "holes")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1387,6 +1387,20 @@ HF_MIN_FILL = 0.45
 HF_MAX_VERTS = 48
 
 
+COURTYARD_MIN_M2 = 6.0      # m2: a smaller inner ring (a light well, a mapping slip) is left covered
+
+
+def _holed_lid(m, ring, holes, z, mat, uv_on=True):
+    """A flat lid over ring with its holes (courtyards) left open (fast.triangulate_holes)."""
+    fast.require(177, "triangulate_holes")
+    pts, tris = fast._ef.triangulate_holes(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
+                                           [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in holes])
+    for a, b, c in tris.tolist():
+        P = [(float(pts[i, 0]), float(pts[i, 1]), z) for i in (a, b, c)]
+        uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in P] if uv_on else [(0.0, 0.0)] * 3
+        m.tri(P[0], P[1], P[2], uv[0], uv[1], uv[2], mat)
+
+
 def _hf_roof(m, spec, ring, z_eave, rm, fac):
     """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
     fast.require(176, "heightfield_roof")
@@ -1488,6 +1502,9 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         _dome(m, ring, z_eave, hw * math.tan(math.radians(roof_pitch(spec))), rm, spec.roof, lite)
         return
     if spec.roof == "flat":
+        if getattr(spec, "holes", None):
+            _holed_lid(m, ring, spec.holes, z_eave, rm)
+            return
         pts = [(p[0], p[1], z_eave) for p in ring]
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
@@ -1953,12 +1970,14 @@ def build(specs_and_ground, lite=False):
         z0 = gmin - (SKIRT_LITE_M if lite else SKIRT_M) if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
+        for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
+            _walls(m, spec, hole, z0, z_eave, mat_idx, lite)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
         if spec.roof == "flat" and not spec.plain and spec.floors <= 6 and not lite:
             _cornice(m, spec, ring, z_eave, mat_idx)
-        if not lite:
+        if not lite and not spec.holes:               # (roof clutter scattered over a yard would float)
             _clutter(m, spec, ring, z_eave, mat_idx)
         if spec.steeple:
             _steeple(m, spec, z_eave, mat_idx)
@@ -2050,10 +2069,15 @@ def collision_mesh(specs_and_ground):
         mh = spec.min_h or 0.0
         z0 = gmin - FOUNDATION_M if mh <= 0.5 else base_z(spec, gmin, gmax) + mh
         z1 = base_z(spec, gmin, gmax) + mh + (spec.floor_h if spec.cls == "ship" else spec.height)  # (a ship: its deck)
-        for i in range(len(ring)):
-            a, b = ring[i], ring[(i + 1) % len(ring)]
-            m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), zero, zero, zero, zero, tok)
-        m.poly([(p[0], p[1], z1) for p in ring], [zero] * len(ring), tok)
+        for loop in [ring] + list(spec.holes or ()):  # (a courtyard's walls too: its hole clockwise, facing the yard)
+            for i in range(len(loop)):
+                a, b = loop[i], loop[(i + 1) % len(loop)]
+                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), zero, zero, zero, zero,
+                       tok)
+        if spec.holes:
+            _holed_lid(m, ring, spec.holes, z1, tok, uv_on=False)
+        else:
+            m.poly([(p[0], p[1], z1) for p in ring], [zero] * len(ring), tok)
         if mh > 0.5:                # over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [zero] * len(ring), tok)
     if m.n == 0:
@@ -3325,6 +3349,19 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 at = dict(at, height=max(FLOOR_M, float(h_) - drop))
             lv_ = a["level"][i] if a.get("level") is not None else None
             through_m = ROAD_THROUGH_M if lv_ is None or not np.isfinite(lv_) or lv_ < 1 else LEVEL_THROUGH_M
+            if len(pieces) == 1 and len(parts[0]) > 1:
+                # (its courtyards: the inner rings, research 2026-11-10: only the outer ring was drawn, a Berlin block
+                # solid over its yard)
+                holes_ = []
+                for inner in parts[0][1:]:
+                    if len(inner) < 4:
+                        continue
+                    he, hn = mapgeom.enu_xy(f, frame, np.asarray(inner, np.float64))
+                    hr = clean_ring(np.stack([he - x0, hn - y0], 1))
+                    if hr is not None and abs(_area2(hr)) / 2 >= COURTYARD_MIN_M2:
+                        holes_.append(hr if _area2(hr) < 0 else hr[::-1])       # (clockwise: walls face the yard)
+                if holes_:
+                    at = dict(at, _holes=holes_)
             at0, mh0 = at, mh
             for ring in kept:           # (a long one on varied ground: its pieces, each on its own ground)
                 at, mh = at0, mh0
@@ -3441,6 +3478,9 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
+        if at.get("_holes") and spec.roof == "flat" and not spec.hf and spec.cls not in CANOPY_CLASSES \
+                and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
+            spec.holes = at["_holes"]
         spec.portal = bool(at.get("portal"))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
         if not ok[i0:i1].all():
