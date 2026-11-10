@@ -11087,6 +11087,24 @@ def geo_wanted(frame, x, y, vx=0.0, vy=0.0):
     return want
 
 
+STUCK_DUMP_S = 600.0        # s between two stack dumps of this process for stuck road tiles (_stuck_dump)
+_stuck_dumped = [-1e9]
+
+
+def _stuck_dump(what):
+    """The server process's stacks once in a while when a road tile is stuck (GitHub #1058: the hang may be here,
+    before any job reaches a road process, where the road pool's watchdog and its workers' dumps see nothing); on a
+    thread of its own (the dump writes a temporary file: never the event loop's wait on a slow disk)."""
+    import time as _t
+    now = _t.monotonic()
+    if now - _stuck_dumped[0] < STUCK_DUMP_S:
+        return
+    _stuck_dumped[0] = now
+    import stackdump
+    import threading as _th
+    _th.Thread(target=stackdump.dump, args=(what,), name="stuck dump", daemon=True).start()
+
+
 class GeoTracker:
     """Per connection: the road geotiles the mod has. Content is sent once for the connection (kept by the mod across
     anchors, sent: its keys), skins per anchor (skins), exact variants per anchor (shown: the variant's anchor per
@@ -11285,6 +11303,7 @@ class GeoTracker:
                 self.stuck_said.add(k)
                 log.warning("road geotile %s of anchor %d: not ready after %.0f s (%d in flight, %d sent): "
                             "a first visit on a slow or busy machine can take this long; a road process that hangs is restarted by itself after a few minutes (clearing the cache does not help)", k, aid, now - t0, len(self.building), len(self.sent))
+                _stuck_dump(f"road geotile {k} of anchor {aid} not ready after {now - t0:.0f} s")
 
         def far(k):
             q = geotiles.quad(frame, *k)
