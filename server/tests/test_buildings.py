@@ -2198,3 +2198,17 @@ class RoundRoofTest(unittest.TestCase):
         self.assertAlmostEqual(P[:, 2].min(), s.height, delta=1e-6)
         mid = P[np.abs(P[:, 1] - 6.0) < 0.7]                           # (the crown along the middle)
         self.assertAlmostEqual(mid[:, 2].max(), 10.0, delta=0.05)
+
+
+class MlHeightTest(unittest.TestCase):
+    def test_mapped_floors_overrule_an_implausible_ml_height(self):
+        r = np.array([[0, 0], [20, 0], [20, 15], [0, 15]], float)
+        ml = bld.plan(r, {"class": "apartments", "height": 9.4, "num_floors": 6,
+                          "height_src": "Microsoft ML Buildings"}, 0, 40.7, -74.0)
+        self.assertGreater(ml.height, 15.0)                         # (6 floors, not 1.57 m each)
+        osm = bld.plan(r, {"class": "apartments", "height": 9.4, "num_floors": 6, "height_src": "OpenStreetMap"},
+                       0, 40.7, -74.0)
+        self.assertAlmostEqual(osm.height, 9.4, delta=0.01)         # (the map's own height kept)
+        ok = bld.plan(r, {"class": "apartments", "height": 19.0, "num_floors": 6,
+                          "height_src": "Microsoft ML Buildings"}, 0, 40.7, -74.0)
+        self.assertAlmostEqual(ok.height, 19.0, delta=0.01)         # (a plausible one kept)

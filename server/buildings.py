@@ -48,6 +48,12 @@ PITCH = {"gabled": 32.0, "hipped": 26.0, "half-hipped": 32.0, "pyramidal": 26.0}
 # roof:shape forms with pitches of their own, whatever the region's (roof_rise, _roof)
 ROUND_RISE = 0.45               # a barrel roof's rise over its half width (a mapped roof height its own)
 ROUND_SEGS = 10                 # its arc's segments across the width
+# A machine-learned height (Overture merges Microsoft's and Google's onto OSM footprints) is the footprint's average,
+# not its top (research 2026-11-10: where OSM has floors and Overture an ML height, Manhattan came out at a median
+# 1.57 m a floor): against mapped floors, one giving less than ML_FLOOR_M[0] or more than ML_FLOOR_M[1] a floor is left
+# out and the floors decide.
+ML_HEIGHT_SOURCES = {"Microsoft ML Buildings", "Google Open Buildings"}
+ML_FLOOR_M = (2.2, 6.0)
 SKILLION_PITCH = 12.0           # a lean-to: one shallow slope from wall to wall
 MANSARD_PITCHES = (68.0, 18.0)  # the steep lower slope, the shallow top
 MANSARD_INSET_M = 1.2           # how far the lower slope comes in, at most
@@ -579,6 +585,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         nf = 1                                          # a nave: one tall storey under a steep gable
     h = None if h is None or not np.isfinite(h) or h <= 0 else float(h)
     nf = None if nf is None or not np.isfinite(nf) or nf <= 0 else int(round(nf))
+    if h is not None and nf is not None and str(attrs.get("height_src") or "") in ML_HEIGHT_SOURCES \
+            and not (ML_FLOOR_M[0] <= h / nf <= ML_FLOOR_M[1]):
+        h = None            # (an ML height, the footprint's average, against the map's own floors: the floors)
     rh = attrs.get("roof_height")
     rh = float(rh) if rh is not None and np.isfinite(rh) else None
     if ((attrs.get("roof_shape") or "").lower() == "pyramidal" and h is not None and rh is not None
@@ -3247,7 +3256,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color", "roof_orientation",
-                   "roof_direction")}
+                   "roof_direction", "height_src")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
             if roofs is not None:
