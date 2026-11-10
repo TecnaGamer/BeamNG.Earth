@@ -1829,6 +1829,30 @@ class GreenhouseTest(unittest.TestCase):
         self.assertIn(bld.GLASSHOUSE, bld.MATERIALS)
 
 
+class SpireTest(unittest.TestCase):
+    """A slender steel part is a mast; a pyramidal roof rising several times its half span is a spire at full height
+    (One World Trade Center's mast: 5 x 5 m, 121 m, roof:height 80); the skyline keeps parts and pyramidal crowns."""
+
+    def test_mast_and_spire(self):
+        ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
+        sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
+                             "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
+        self.assertEqual((sp.cls, sp.roof, sp.windows), ("mast", "pyramidal", False))
+        self.assertAlmostEqual(sp.height + 2.5 * math.tan(math.radians(sp.pitch)), 121.0, places=1)
+        stone = bld.plan(np.array([[0, 0], [6, 0], [6, 6], [0, 6]], float),
+                         {"class": "church", "height": 30.0, "facade_material": "stone"}, 0, 48.1, 11.5)
+        self.assertNotEqual(stone.cls, "mast", "a stone bell tower is not steel")
+        house = bld.mapped_pitch("gabled", 4.0, 30.0)
+        self.assertEqual(house, bld.MAPPED_PITCH[1], "a 30 m gable on a house: still capped")
+
+    def test_skyline_pyramid(self):
+        ring = np.array([[0, 0], [5, 0], [5, 5], [0, 5]], float)
+        sp = bld.plan(ring, {"class": "commercial", "height": 121.0, "facade_material": "metal",
+                             "roof_shape": "pyramidal", "roof_height": 80.0}, 0, 40.713, -74.013)
+        P = bld._sky_mesh([(sp, 0.0, 0.0)])[0]
+        self.assertAlmostEqual(float(np.max(np.asarray(P)[:, 2])), 121.0, places=0)
+
+
 if __name__ == "__main__":
     unittest.main()
 

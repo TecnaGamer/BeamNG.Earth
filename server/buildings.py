@@ -485,6 +485,11 @@ TANK_PAINTS = ((0.92, 0.92, 0.90), (0.84, 0.85, 0.86), (0.90, 0.88, 0.80), (0.72
 # A greenhouse (Westland, NL: 52.010 4.260, the aerial photo 2026-11-10): hectares of pale glass in aluminium bars, a
 # Venlo block 5-7 m to the gutter under a near-flat ridged roof; a garden one a small glass gable. Drawn in glazing
 # (GLASSHOUSE), clear, whitewashed (summer shading) or with the shade screens drawn (dark), or as the aerial shows it.
+MAST_MAX_M2 = 100.0         # m2: a mast's footprint at most ...
+MAST_MIN_H = 20.0           # ... this tall ...
+MAST_MATERIALS = ("metal", "steel")     # ... of steel, or slender past MAST_SLENDER (height / sqrt(area))
+MAST_SLENDER = 8.0
+MAST_RGB = (0.62, 0.64, 0.66)
 GREENHOUSE_CLASSES = {"greenhouse", "glasshouse"}
 GREENHOUSE_H = 6.0          # m to the gutter of a commercial block (no height mapped)
 GREENHOUSE_SMALL_M2 = 150.0     # m2: a garden greenhouse this small at most ...
@@ -843,6 +848,19 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                     roof_mat=look, facade=look, band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None,
                     windows=False, steeple=False, porch=False, cls="greenhouse", deck=False,
                     pitch=GREENHOUSE_PITCH if small else None)
+    # a mast or a spire's shaft: a very slender part or building of steel (One World Trade Center's 5 x 5 m, 121 m mast
+    # was siding with 14 storeys of windows): plain steel, no windows, its mapped roof kept (mapped_pitch: a spire)
+    if area <= MAST_MAX_M2 and h is not None and np.isfinite(h) and h >= MAST_MIN_H and not attrs.get("bridge_part") \
+            and (str(attrs.get("facade_material") or "").lower() in MAST_MATERIALS
+                 or h / math.sqrt(max(area, 1.0)) >= MAST_SLENDER):
+        look = custom_look(METALWALL, MAST_RGB)
+        mroof = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
+        rh_m = mapped_roof_h(mroof, attrs.get("roof_height")) if mroof == "pyramidal" else None
+        walls = max(h - rh_m, 1.0) if rh_m else h
+        return Spec(ring=ring, floors=1, floor_h=walls, height=walls, roof=mroof if rh_m else "flat", roof_mat=look,
+                    facade=look, band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None, windows=False,
+                    steeple=False, porch=False, cls="mast", deck=False,
+                    pitch=mapped_pitch(mroof, oriented_box(ring)[3], attrs.get("roof_height")) if rh_m else None)
     if attrs.get("bridge_part"):    # a mapped part of a bridge's tower (support_rings): a plain box of painted steel
         return Spec(ring=ring, floors=1, floor_h=h or BRIDGE_PIER_M, height=h or BRIDGE_PIER_M, roof="flat",
                     roof_mat=f"{STEEL}|{attrs['bridge_part']}", facade=f"{STEEL}|{attrs['bridge_part']}", band=None,
@@ -1824,6 +1842,11 @@ ROOF_ALIASES = {"half_hipped": "half-hipped", "halfhipped": "half-hipped", "doub
                 "quadruple_saltbox": "saltbox", "lean_to": "skillion", "monopitch": "skillion", "pitched": "gabled",
                 "side_hipped": "hipped"}
 MAPPED_PITCH = (8.0, 62.0)      # degrees: a mapped roof height's pitch kept in this range (slips: 30 m roofs)
+# ... but a pyramidal roof on a small footprint rising several times its half span is a spire (One World Trade
+# Center's mast: a 5 x 5 m part, roof:height 80 m, drawn 5 m tall at 62 degrees; mapped church steeples): its own
+# rise, up to SPIRE_PITCH (the Brooklyn Bridge view against a 360 photo and a player's screenshot, 2026-11-10)
+SPIRE_MAX_M = 12.0              # m: a spire's half span at most
+SPIRE_PITCH = 89.5
 PITCH_FORMS = ("gabled", "hipped", "half-hipped", "pyramidal")
 
 
@@ -1845,7 +1868,8 @@ def mapped_pitch(roof, shw, roof_height):
     rh = mapped_roof_h(roof, roof_height)
     if rh is None or roof not in PITCH_FORMS or shw <= 0.5:
         return None
-    return min(max(math.degrees(math.atan2(rh, float(shw))), MAPPED_PITCH[0]), MAPPED_PITCH[1])
+    top = SPIRE_PITCH if roof == "pyramidal" and shw <= SPIRE_MAX_M else MAPPED_PITCH[1]
+    return min(max(math.degrees(math.atan2(rh, float(shw))), MAPPED_PITCH[0]), top)
 
 
 def ridge_frame(ring, roof, orientation, direction):
@@ -5484,7 +5508,13 @@ SKY_UNIT = 4
 SKY_SEND_M = float(os.environ.get("BNE_SKY_SEND_M", "4800"))
 SKY_DROP_M = SKY_SEND_M + 800.0
 SKY_PER_POSE = 2
-SKY_MIN_AREA_M2 = 40.0      # (sheds left out)
+SKY_MIN_AREA_M2 = 40.0      # (sheds left out ...
+SKY_SLENDER_H = 30.0        # ... but not a mast or a spire this tall)
+# The skyline from the buildings' parts too: Woolworth's tower (parts to 241 m over a 120 m outline) was 120 m in it, so
+# from the Brooklyn Bridge (0.8 km) it was missing, and One World Trade Center a box in the outline's default look with
+# no spire (its parts: blue glass, a 121 m mast; the bridge view against a 360 photo and a player's screenshot,
+# 2026-11-10). BNE_SKY_PARTS=off: the outlines alone.
+SKY_PARTS = os.environ.get("BNE_SKY_PARTS", "on") != "off"
 SKY_BOX_AREA_M2 = 600.0     # a footprint smaller than this is drawn as its oriented box
 SKY_MAX_CORNERS = 12        # a larger one with more corners: every k-th kept
 
@@ -5560,6 +5590,12 @@ def _sky_mesh(items):
             else:
                 m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
         m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+        if spec.roof == "pyramidal":    # (a tower's crown or a spire: its apex over the middle, sky_items)
+            c = ring.mean(0)
+            top = (c[0], c[1], z1 + oriented_box(ring)[3] * math.tan(math.radians(roof_pitch(spec))))
+            for i in range(n):
+                a, b = ring[i], ring[(i + 1) % n]
+                m.tri((a[0], a[1], z1), (b[0], b[1], z1), top, uv, uv, uv, wall)
         if spec.roof in DOME_ROOFS:     # (a mapped dome: far away too, on its drum)
             _dome(m, ring, z1, oriented_box(ring)[3] * math.tan(math.radians(roof_pitch(spec))), roof, spec.roof,
                   lite=True)
@@ -5574,16 +5610,18 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
     the cells are not at hand (fetched in the background: asked again later). own: a geotile's box (its own buildings
     and lamps, each in one tile)."""
     x0, y0, x1, y1 = box
-    # (and the roads: their street lamps, far_lamps)
-    if not all(md.has(k, "buildings") and md.has(k, "roads") for k in keys):
+    # (and the roads: their street lamps, far_lamps; and the building parts: a tower's own height and colours, SKY_PARTS)
+    sky_layers = ("buildings", "building_parts", "roads") if SKY_PARTS else ("buildings", "roads")
+    if not all(md.has(k, layer) for k in keys for layer in sky_layers):
         # (the background lane: never before what the player is near; in the map data's own threads, all at once: one
         # after another in the one far process they held the far buildings back, 2026-11-07)
-        md.warm([(k, layer) for k in keys for layer in ("buildings", "roads")], kind="prefetch")
+        md.warm([(k, layer) for k in keys for layer in sky_layers], kind="prefetch")
         return None
     measured_wait(md, keys, wait=False)
-    cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
+    cds = [md.cell(k, layers=sky_layers, kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
-    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2), own=own)
+    items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(SKY_SLENDER_H, SKY_MIN_AREA_M2), own=own,
+                           part_layers=[c.layers.get("building_parts") for c in cds] if SKY_PARTS else ())
     size = max(x1 - x0, y1 - y0)
     lamps = far_lamps(frame, [c.layers.get("roads") for c in cds], x0, y0, size,
                       built_squares(items, 0.0, 0.0, size), ground, lamp_region, own=own)
@@ -5596,7 +5634,8 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
             ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
         spec.ring = ring
-        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = "flat", None, None, None, None, None
+        keep = spec.roof if spec.roof == "pyramidal" and len(ring) <= SKY_MAX_CORNERS else "flat"   # (a crown, a spire)
+        spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
     items.sort(key=lambda it: (-(float(it[0].height or 0.0) + float(it[0].min_h or 0.0)), str(it[0].seed)))
     picked, n = [], 0
     for it in items:                        # (the tallest first, up to the 16-bit vertex budget: 5 per corner)
