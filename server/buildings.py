@@ -70,6 +70,15 @@ CORNICE_UP_M = 0.2
 # Materials (mod/.../art/shapes/beamngEarth/buildings.materials.json): the window sheets in a few tints, the
 # shop / office sheet, roofs, plain walls.
 FACADE_TINTS = ("bne_bld_fac_white", "bne_bld_fac_cream", "bne_bld_fac_sand", "bne_bld_fac_grey")
+# the plastered blocks' colours by region (FACADE_TINTS elsewhere): the Mediterranean's warm ochres, oranges and pinks
+# (Rome's Trastevere against Mapillary, 2026-11-10: ours were white / cream / sand / grey), Latin America's brighter
+REGION_FACADE_TINTS = {
+    "mediterranean": ("bne_bld_fac_cream", "bne_bld_fac_sand", "bne_bld_fac_ochre", "bne_bld_fac_terracotta",
+                      "bne_bld_fac_salmon", "bne_bld_fac_yellow", "bne_bld_fac_white", "bne_bld_fac_ochre"),
+    "latin_america": ("bne_bld_fac_white", "bne_bld_fac_cream", "bne_bld_fac_ochre", "bne_bld_fac_terracotta",
+                      "bne_bld_fac_salmon", "bne_bld_fac_yellow", "bne_bld_fac_blue", "bne_bld_fac_green",
+                      "bne_bld_fac_rose"),
+}
 PAINT_TINTS = ("bne_bld_fac_blue", "bne_bld_fac_green", "bne_bld_fac_rose", "bne_bld_fac_yellow")   # painted houses
 BRICK_TINTS = ("bne_bld_fac_white", "bne_bld_fac_brickdark", "bne_bld_fac_brickwarm")   # the brick band's
 SHOP = "bne_bld_shop"
@@ -120,6 +129,9 @@ LOOKS = {
     "bne_bld_fac_brickdark": (FACADE, (0.78, 0.72, 0.70)), "bne_bld_fac_brickwarm": (FACADE, (1.0, 0.88, 0.80)),
     "bne_bld_fac_blue": (FACADE, (0.80, 0.87, 0.96)), "bne_bld_fac_green": (FACADE, (0.84, 0.92, 0.82)),
     "bne_bld_fac_rose": (FACADE, (0.99, 0.86, 0.82)), "bne_bld_fac_yellow": (FACADE, (1.0, 0.95, 0.72)),
+    # Rome's palazzi (Mapillary in Trastevere, 2026-11-10): ochre, burnt orange, salmon over the plaster sheet
+    "bne_bld_fac_ochre": (FACADE, (1.0, 0.80, 0.52)), "bne_bld_fac_terracotta": (FACADE, (0.96, 0.66, 0.50)),
+    "bne_bld_fac_salmon": (FACADE, (1.0, 0.80, 0.70)),
     SHOP: (SHOP, (1.0, 1.0, 1.0)), OFFICE: (OFFICE, (1.0, 1.0, 1.0)), SIDING: (SIDING, (0.93, 0.92, 0.88)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
@@ -1044,7 +1056,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             if _hash01(seed, "brick") < brick_share(lat, lon) * 1.2 * ERA_BRICK.get(ep, 1.0):
                 facade, band = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK
             else:
-                facade = FACADE_TINTS[int(seed * 7919) % len(FACADE_TINTS)]
+                tints = REGION_FACADE_TINTS.get(style.name, FACADE_TINTS)
+                facade = tints[int(seed * 7919) % len(tints)]
                 band = BAND_TALL if seed < 0.6 else BAND_SASH
         elif tall or (industrial and not shed):
             facade = f"{OFFICE}|{int(_hash01(seed, 'glass tint') * len(WALL_TINTS[OFFICE]))}" if tall \
@@ -1058,7 +1071,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 band = BAND_BRICK
                 facade = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)]
             else:
-                facade = FACADE_TINTS[int(seed * 7919) % len(FACADE_TINTS)]
+                tints = REGION_FACADE_TINTS.get(style.name, FACADE_TINTS)
+                facade = tints[int(seed * 7919) % len(tints)]
                 if (row or cls in HOUSE_CLASSES) and _hash01(seed, "paint") < style.paint:
                     facade = PAINT_TINTS[int(_hash01(seed, "pc") * len(PAINT_TINTS))]
                 if ep in ERA_BAND:
