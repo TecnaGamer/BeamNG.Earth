@@ -2491,6 +2491,9 @@ def on_rail_bed(ring, rails_xy, step=1.0):
 PASSAGE_W = 11.0           # m: the passage a bridge's road takes through its tower (Tower Bridge: 2 lanes + walks) ...
 PASSAGE_H = 7.0            # ... this high over the tower's mapped bottom (its deck: the part starts at the road), ...
 PASSAGE_CLEAR = 6.5        # m: the way over a deck through a building (with the decks' heights)
+PASSAGE_STACK_M = 15.0     # m: decks through a building this far over or under the nearest one share its way (a
+                            # double-deck bridge: the Bay Bridge's lower deck ran into its towers' solid foot under
+                            # the upper one's way, Discord 2026-11-10)
 PASSAGE_BOTTOM_M = 20.0    # ... in a structure whose bottom is this low (not its high walkways or tops)
 PASSAGE_UNDER_M = 0.2      # m: a part whose top is this far under the deck is under it (whole); up to 1 m over it was
                            # too (the Golden Gate's roadway slab mapped in its north tower, 73-74.65 m, stood ~1 m over the
@@ -2636,6 +2639,7 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
         _, p0, u, zd = best
         nrm = np.array([-u[1], u[0]])
         lo_w, hi_w = -PASSAGE_W / 2, PASSAGE_W / 2
+        z_lo = z_hi = zd                # (the lowest and highest deck of the stack through it: PASSAGE_STACK_M)
         if decks:                       # (as wide as every deck through it at about this height, PASSAGE_MARGIN_M more)
             a_, b_ = np.inf, -np.inf
             for k, ln in enumerate(lines):
@@ -2651,8 +2655,10 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
                     continue
                 if zd is not None:
                     z_ = decks[k][1]
-                    if abs(float(z_[j_] + t_[j_] * (z_[j_ + 1] - z_[j_])) - zd) > 3.0:
+                    zk = float(z_[j_] + t_[j_] * (z_[j_ + 1] - z_[j_]))
+                    if not np.isfinite(zk) or abs(zk - zd) > PASSAGE_STACK_M:
                         continue
+                    z_lo, z_hi = min(z_lo, zk), max(z_hi, zk)
                 off = float((q_[j_] - p0) @ nrm)
                 a_, b_ = min(a_, off - w_ / 2), max(b_, off + w_ / 2)
             if np.isfinite(a_):
@@ -2664,11 +2670,12 @@ def _passages(rings, attrs, looks, mins, bridges_xy, decks=None, ground_at=None)
             # the deck's height over the ground the part is drawn on: its footprint's highest (base_z; at its centre,
             # the Golden Gate's north tower slab, its footprint up the shore, was drawn ~2 m higher than that took,
             # over the deck, GitHub #1032)
-            dh = zd - float(ground_at(ring, True) if at.get("portal") else ground_at(ring))
-            if top <= dh - PASSAGE_UNDER_M or mh >= dh + PASSAGE_CLEAR:
+            g_ = float(ground_at(ring, True) if at.get("portal") else ground_at(ring))
+            dh_lo, dh_hi = z_lo - g_, z_hi - g_     # (a double-deck bridge: its lower deck's way too)
+            if top <= dh_lo - PASSAGE_UNDER_M or mh >= dh_hi + PASSAGE_CLEAR:
                 R.append(ring), A.append(at), L.append(look), M.append(mh)
-                continue                            # under the deck, or over its way
-            low, cut = max(mh, dh - 1.5), dh + PASSAGE_CLEAR
+                continue                            # under the decks, or over their way
+            low, cut = max(mh, dh_lo - 1.5), dh_hi + PASSAGE_CLEAR
         else:
             low, cut = mh, mh + PASSAGE_H
         cut = min(cut, top)

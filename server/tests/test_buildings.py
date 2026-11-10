@@ -1194,6 +1194,24 @@ class BridgePassageTest(unittest.TestCase):
         R3, *_ = bld._passages([ring], [{"bridge_masonry": "stone", "height": 10.0}], ["k"], [47.0], road)
         self.assertEqual(len(R3), 1)
 
+    def test_a_double_deck_bridge_s_way_spans_both_decks(self):
+        """The Bay Bridge's W6 tower (bridge_structure, 160 m): its upper deck 64 m up got the way through it, the lower
+        one 9 m under it ran into the solid foot under that way (Discord 2026-11-10). With both decks through it the way
+        reaches from under the lower one to PASSAGE_CLEAR over the upper one."""
+        ring = np.array([[-15, -3], [15, -3], [15, 3], [-15, 3], [-15, -3]], float)
+        road = [np.array([[0.0, -50.0], [0.0, 50.0]])]
+        decks = [(road[0], np.array([64.0, 64.0]), 20.0), (road[0] + [0.5, 0.0], np.array([55.0, 55.0]), 18.0)]
+        R, A, L, M = bld._passages([ring], [{"height": 160.0}], [None], [0.0], road, decks, lambda c: 0.0)
+        whole = [(m, a["height"]) for r, a, m in zip(R, A, M) if np.ptp(r[:, 0]) > 29.0]
+        sides = [(r, m) for r, m in zip(R, M) if np.ptp(r[:, 0]) < 29.0]
+        self.assertEqual([m for m, _h in whole if m == 0.0], [0.0], "one solid foot")
+        self.assertLessEqual(dict(whole)[0.0], 55.0 - 1.0, "the foot stops under the lower deck")
+        self.assertIn(64.0 + bld.PASSAGE_CLEAR, M, "the whole footprint again over the upper deck's way")
+        self.assertEqual(len(sides), 2)
+        for r, m in sides:              # (beside both decks, from under the lower one)
+            self.assertGreaterEqual(np.abs(r[:, 0]).min(), 10.0 - 1e-6)
+            self.assertLessEqual(m, 55.0 - 1.0)
+
     def test_a_wide_deck_s_passage_is_as_wide_as_the_deck(self):
         """GitHub #1032: the Golden Gate Bridge's north tower, a strut mapped 73-75 m over its base 4 m over the six-lane
         deck: through an 11 m passage its two halves stood over the outer lanes. With the deck's width the way is the
