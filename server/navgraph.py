@@ -301,7 +301,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     the mapped traffic signals (furniture.mapped_signals; None: guessed), as the road tiles' props have them.
     de_on: the German junction signs (designs.enabled): where the window touches Germany (designs.reads_here) its
     junctions inside it as the road tiles decide them (_de_context: their context of these cells, the cells'
-    road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way)."""
+    road_routes de_routes, priority: the map's stop and give-way points, secrossings.nodes'; _signals, _give_way).
+    The graph's "trafficProfile": the adaptive traffic amount's profile of its centre (_traffic_profile)."""
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
@@ -325,6 +326,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     tunnel_node = {}        # name -> fid of the tunnel its height is read from
     tube_edges = set()      # id() of the edges through a tunnel (portal_taper)
     mainline = _mainline_connectors(feats_list)     # (CROSSOVER_M)
+    density_lines = []      # [(centreline xy, spec)] of the drivable roads near, for the traffic profile (_traffic_profile)
+    import traffic
+    density_r = traffic.SAMPLE_RADIUS_M
     for feats in feats_list:
         if feats is None or len(feats) == 0:
             continue
@@ -349,8 +353,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 continue
             e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
             p = np.stack([e, n], 1)
-            if (p[:, 0].max() < cx - window - 200 or p[:, 0].min() > cx + window + 200 or
-                    p[:, 1].max() < cy - window - 200 or p[:, 1].min() > cy + window + 200):
+            pmin, pmax = p.min(0), p.max(0)
+            if (pmax[0] < cx - window - 200 or pmin[0] > cx + window + 200 or
+                    pmax[1] < cy - window - 200 or pmin[1] > cy + window + 200):
                 continue
             if rspecs[i] is not None:
                 ring_cands.append((fid, rspecs[i], np.column_stack([p, np.zeros(len(p))]), None))
@@ -397,6 +402,9 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                             (fid, rspecs[i], dd / dl, np.array([p[j0][0], p[j0][1], 0.0]), end, L))
             if spec.cls not in DRIVE or roads._rule_value(sub, i) in SKIP_SUBCLASSES:
                 continue
+            if spec.cls not in DENSITY_SKIP and pmax[0] >= cx - density_r and pmin[0] <= cx + density_r and \
+                    pmax[1] >= cy - density_r and pmin[1] <= cy + density_r:
+                density_lines.append((p, spec))      # (adaptive traffic: _traffic_profile)
             tunnel_ranges = [(a_, b_) for a_, b_, k_ in roads.level_ranges(feats, i) if k_ == "tunnel"]
             # the nodes along it: connectors at their arc length, shape points that bend it, long gaps split
             marks = {}
@@ -597,11 +605,14 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
         if designs.reads_here(True, frame, (cx - window - 200, cy - window - 200, cx + window + 200,
                                             cy + window + 200)):
             de_ctx = _de_context(frame, feats_list, urban_fn, left_hand, de_routes, priority)
-    yields = []
+    yields, priorities = [], []
     signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority,
-                       decks=signal_decks, ground=signal_ground, de_ctx=de_ctx, pieces=pieces, yields=yields)
+                       decks=signal_decks, ground=signal_ground, de_ctx=de_ctx, pieces=pieces, yields=yields,
+                       priorities=priorities)
     if yields:
         _give_way(edges, approaches, yields)
+    if priorities:
+        _priority_way(edges, approaches, priorities)
     # one edge per node pair (two segments joining the same connectors: keep the first)
     uniq, pairs = [], set()
     for e in edges:
@@ -612,7 +623,78 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
-    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines}
+    return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
+            "trafficProfile": _traffic_profile(frame, density_lines, cx, cy)}
+
+
+# Adaptive traffic (PR #728 / #773, ProxyFirewall202; traffic.py, docs/ADAPTIVE_TRAFFIC.md): the graph carries a
+# population profile of its centre, from the drivable road length within traffic.SAMPLE_RADIUS_M (tracks and busways
+# left out: farm tracks are not traffic roads), the road nearest the centre (a divided one doubles it) and the nearest
+# populated place (settlements.py). The mod uses it only with its Adaptive traffic amount setting on.
+DENSITY_SKIP = {"track", "busway"}
+NEAR_ROAD_M = 100.0         # the nearest road counts for the divided-road multiplier this close to the centre
+_profile_warned = []
+
+
+def _traffic_profile(frame, lines, cx, cy):
+    """traffic.calculate's profile at the graph's centre (cx, cy) from lines [(xy (k, 2), spec)]: one vectorised pass
+    over all their segments (the length inside the sample circle, the nearest segment); never raises."""
+    import logging
+    import settlements
+    import traffic
+    radius = traffic.SAMPLE_RADIUS_M
+    try:
+        try:
+            la, lo, _ = frame.enu_to_geodetic(float(cx), float(cy), 0.0)
+            place = settlements.nearest(float(np.asarray(la).reshape(-1)[0]), float(np.asarray(lo).reshape(-1)[0]))
+        except Exception as e:      # (no place: the mapped roads alone)
+            place = None
+            if not _profile_warned:
+                _profile_warned.append(1)
+                logging.getLogger("earthd.navgraph").warning("adaptive traffic: no settlement lookup (%s: %s)",
+                                                             type(e).__name__, e)
+        total = urban = major = local = 0.0
+        near = (math.inf, None)
+        if lines:
+            # every line's points end to end; the segments between two lines (owner changes) left out
+            pts = np.concatenate([np.asarray(xy, np.float64)[:, :2] for xy, _ in lines])
+            owner = np.repeat(np.arange(len(lines)), [len(xy) for xy, _ in lines])
+            same = owner[1:] == owner[:-1]
+            a, d, owner = pts[:-1][same] - (cx, cy), np.diff(pts, axis=0)[same], owner[:-1][same]
+            aa = np.einsum("ij,ij->i", d, d)
+            ok = aa > 1e-12
+            aa_ = np.where(ok, aa, 1.0)
+            # the length of each segment inside the circle (the chord's parameter range [lo, hi] clipped to [0, 1])
+            bb = 2.0 * np.einsum("ij,ij->i", a, d)
+            cc = np.einsum("ij,ij->i", a, a) - radius * radius
+            disc = bb * bb - 4.0 * aa_ * cc
+            root = np.sqrt(np.maximum(disc, 0.0))
+            lo_ = np.maximum(0.0, (-bb - root) / (2.0 * aa_))
+            hi_ = np.minimum(1.0, (-bb + root) / (2.0 * aa_))
+            inside = np.where(ok & (disc >= 0.0), np.sqrt(aa_) * np.maximum(0.0, hi_ - lo_), 0.0)
+            per = np.bincount(owner, inside, minlength=len(lines))
+            flags = np.array([(bool(getattr(sp, "urban", False)), sp.cls in traffic.MAJOR_CLASSES,
+                               sp.cls in traffic.LOCAL_CLASSES) for _, sp in lines], np.float64).reshape(-1, 3)
+            total = float(per.sum())
+            urban, major, local = (float(v) for v in per @ flags)
+            # the segment nearest the centre (its closest point)
+            t = np.clip(-np.einsum("ij,ij->i", a, d) / aa_, 0.0, 1.0)
+            q = a + t[:, None] * d
+            dist = np.hypot(q[:, 0], q[:, 1])
+            if len(dist):
+                j = int(np.argmin(dist))
+                near = (float(dist[j]), lines[int(owner[j])][1])
+        dist, sp = near
+        cls = sp.cls if sp is not None and dist <= NEAR_ROAD_M else "unknown"
+        divided = sp is not None and dist <= NEAR_ROAD_M and traffic.is_divided_road(
+            sp.cls, getattr(sp, "median", 0.0), getattr(sp, "link", False), getattr(sp, "oneway", False))
+        prof = traffic.calculate(total, urban, major, local, settlement=place, road_class=cls, divided=divided,
+                                 sample_radius_m=radius, max_traffic=traffic.SERVER_TARGET_MAX)
+        prof["roadDistanceM"] = round(dist, 1) if dist < math.inf else None
+        return prof
+    except Exception as e:          # (a graph without a profile rather than none: the mod keeps the player's amount)
+        logging.getLogger("earthd.navgraph").warning("adaptive traffic profile: %s: %s", type(e).__name__, e)
+        return None
 
 
 PORTAL_LEAD_M = 60.0        # m before a tunnel's portal over which the AI's road narrows to the tube's (portal_taper)
@@ -795,8 +877,41 @@ def _give_way(edges, approaches, yields):
                 e[6] = min(e[6], to)
 
 
+PRIORITY_SLOW_MS = 2.0      # the road through a right-of-way junction (_priority_way): its approach this much slower,
+PRIORITY_SLOW_FLOOR_MS = 6.0    # not under this (nor raised to it)
+
+
+def _priority_way(edges, approaches, priorities):
+    """In place (furniture.PRIORITY_STOPS, PR #728 / #773): the approach edges coming into each junction road-class
+    right of way decides (priorities: _signals' [(junction node, arms)]) take drivability min(their own, their road's
+    furniture.PRIORITY_DRIVABILITY): the stock AI gives way on an incoming edge of lower drivability than another at
+    the node (_give_way's method), so a side road's traffic, stopped at its sign, lets the road through go first;
+    the road through's own approaches come in PRIORITY_SLOW_MS slower (at most down to PRIORITY_SLOW_FLOOR_MS)."""
+    import furniture
+    by = {}
+    for e in edges:
+        by.setdefault((e[0], e[1]) if e[0] <= e[1] else (e[1], e[0]), []).append(e)
+    for name, arms in priorities:
+        ranked = [(a, furniture.priority_rank(a[1])) for a in arms]
+        ranked = [(a, r) for a, r in ranked if r is not None]
+        incoming = []
+        for a, r in ranked:
+            nb, inc = approaches.get((name, a[0], 0 if a[4] else -1), (None, False))
+            es = by.get((nb, name) if nb is not None and nb <= name else (name, nb)) if nb is not None else None
+            if es and inc:
+                incoming.append((r, es))
+        if not incoming:
+            continue
+        top = max(r for r, _ in incoming)
+        for r, es in incoming:
+            for e in es:
+                e[6] = min(e[6], furniture.PRIORITY_DRIVABILITY[r])
+                if r == top:
+                    e[5] = round(min(e[5], max(PRIORITY_SLOW_FLOOR_MS, e[5] - PRIORITY_SLOW_MS)), 2)
+
+
 def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), signals=None, country=None, priority=None,
-             decks=(), ground=None, de_ctx=None, pieces=None, yields=None):
+             decks=(), ground=None, de_ctx=None, pieces=None, yields=None, priorities=None):
     """[{"j": junction node, "kind": "signal" | "stop", "app": [[approach node, x, y, z, dir x, dir y, phase, prop x,
     prop y, prop z, prop yaw]]}] of the urban junctions furniture.junction_controls controls, decided on the arms
     the road tiles' props see (arms) and built for the graph's approaches into them (approaches): per incoming
@@ -808,7 +923,8 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
     (no stop sign stands there: the 206 is the road tiles' designs sign, and the mod raises heads for signals only);
     its 205 and exit arms appended with the junction to yields for _give_way (their drivability step); nothing else
     there (a 306 / 301; a node the kernel does not decide: no US stop either, as the road tiles').
-    Its roundabouts and signalised junctions as everywhere."""
+    Its roundabouts and signalised junctions as everywhere. priorities: the junctions road-class right of way decides
+    (furniture.priority_controls) appended as (junction node, its arms), for _priority_way."""
     import furniture
     out = []
     # furniture's arm tuples (fid, spec, u, point, at its start, length): the same decision as the road tiles' props
@@ -833,13 +949,17 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
                 yields.append((name, ctl))
             put = [(arm, furniture.G_STOP) for arm, w, _ in ctl if w in (designs.Z206, designs.RVL)]
             prop = False
-        elif not furniture._controlled_here(farms[name], signals):
-            continue
         else:
+            # (road-class right of way, furniture.PRIORITY_STOPS: in the country too, as the road tiles' props)
+            prio = furniture.priority_controls(farms[name], ring, signals, country)
+            if not prio and not furniture._controlled_here(farms[name], signals):
+                continue
             put = [(arm, what) for arm, what in furniture.junction_controls(farms[name], None, link_ok, ring=ring,
                                                                              signals=signals, country=country,
                                                                              priority=priority)
                    if what != furniture.G_YIELD]    # give-way uses edge priority; a stop controller would force a stop
+            if prio and priorities is not None:
+                priorities.append((name, farms[name]))
         if not put:
             continue
         kind = "signal" if put[0][1] == furniture.G_SIGNAL else "stop"
