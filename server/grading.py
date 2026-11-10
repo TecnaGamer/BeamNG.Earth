@@ -94,8 +94,13 @@ PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._pla
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
-RANK_SIDE_FADE_M = 20.0     # m past a higher road's core a lower road's ground still yields to it (grade_rank: a
-                            # dirt road beside a pavement eases onto it over this far, not a step at its shoulder)
+RANK_SIDE_FADE_M = 8.0      # m past a higher road's core a lower road's ground still yields to it (grade_rank: a
+                            # dirt road beside a pavement eases onto it over this far, not a step at its shoulder).
+                            # At most T_MAX (a plan's box pad): grade_points' pass 0 pairs a built road with every
+                            # point this far past its core. PR #1050's 20 m reached past what pass 0 took in, so the
+                            # points a batch's bucket grid happened to cover got the rank and others not: the result
+                            # depended on the batch (test_smooth_road_collision). 8 m: the shortest its tests pass
+                            # with (a block's grading +16-19 % in cities over dev, 12 m +27 %)
 RANK_HEIGHT_FADE_M = 8.0    # m of height difference over which that ease fades out (a side road far above or below
                             # is not pulled onto the higher one; a short 1 m fade cut a climbing side road to a step)
 UNDER_RANK_DIP_M = 0.5      # m a road lowered under a deck (_lower_underpasses) loses its grade rank: it crosses

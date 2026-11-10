@@ -276,6 +276,24 @@ class GradePointsTest(unittest.TestCase):
         self.assertTrue(np.allclose(out[inside], 100.0, atol=0.01), "the asphalt's carriageway is whole")
         self.assertGreater(float(out[-1]), 99.5, "the side road eases onto the asphalt, not a dip")
 
+    def test_ranks_do_not_depend_on_the_batch(self):
+        # A paved road with a dirt track beside it, graded in one batch and in shifted batches: the same heights to the
+        # last bit (PR #1050's 20 m rank reach went past what grade_points' pass 0 took in, and the points a batch's
+        # bucket grid happened to cover got the rank: test_smooth_road_collision's step at a batch edge)
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5, road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 1, 2
+        ys = np.arange(-3.0, 25.0, 0.37)
+        xs = np.full(len(ys), 3.3)
+        base = np.full(len(ys), 99.0)
+        full = grading.grade_points(xs, ys, base, [paved, dirt])
+        for parts in (2, 3, 5):
+            got = np.concatenate([grading.grade_points(xs[k], ys[k], base[k], [paved, dirt])
+                                  for k in np.array_split(np.arange(len(ys)), parts)])
+            np.testing.assert_array_equal(full, got)
+
     def test_a_dirt_road_gives_way_only_inside_a_paved_core(self):
         # Outside the paved road's core the dirt road keeps its own profile, and its ground blends back to the
         # natural one: the rule is no blanket lift of the unpaved road.

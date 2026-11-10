@@ -1564,7 +1564,10 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
         }
         for s in 0..h.len() {
             // (pass 0 within the blend's reach too: the Python loop pairs the points with a segment once, at h + t_max)
-            let reach = if pass == 0 { (h[s] + if sep { core_fade } else { 0.0 }).max(cut_reach[s]).min(h[s] + t_max) }
+            // (and a built road's rank to rank_fade past its core: every point that far, not those a bucket of the
+            // batch's grid happened to take in, or the result depended on the batch, test_smooth_road_collision)
+            let reach = if pass == 0 { (h[s] + if sep { core_fade } else { 0.0 }).max(cut_reach[s]).min(h[s] + t_max)
+                                       .max(if rk[s] >= RANK_BUILT { h[s] + rank_fade } else { 0.0 }) }
                         else { h[s] + t_max };
             let (ax, ay, bx, by) = (a[[s, 0]], a[[s, 1]], b[[s, 0]], b[[s, 1]]);
             let (lo_x, hi_x) = (ax.min(bx) - reach, ax.max(bx) + reach);
