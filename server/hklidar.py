@@ -36,7 +36,9 @@ PAGE = 2000                 # (the service's maxRecordCount: 3000)
 PAGES = 20
 FETCH_THREADS = 4           # sheets downloaded at once a process (bulkdata.csdi.gov.hk's policy: 4)
 BACKGROUND_THREADS = 2      # of them for the downloads nothing waits for (later)
-SHEETS_MB = float(os.environ.get("BNE_HK_SHEETS_MB", "2048"))   # (one Sha Tin place: 240 sheets, 1.3 GB)
+# (a Sha Tin place's road heights read 240 sheets, 1.3 GB; its terrain about 160 DTM sheets, a third of them the same:
+# three such places went past 2 GB and dropped the road heights' DSM sheets)
+SHEETS_MB = float(os.environ.get("BNE_HK_SHEETS_MB", "4096"))
 MEM_SHEETS = 8              # decoded sheets kept in memory a process (~7 MB each)
 NODATA = -9000.0            # the sheets' nodata is -9999
 
