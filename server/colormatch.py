@@ -58,6 +58,7 @@ is demand (render's own fetch). The calls earthd
 makes on its event loop (prepare, request, status) never decode a field (stat calls only); tile
 workers read fields from disk without holding the lock.
 """
+import collections
 import heapq
 import json
 import logging
@@ -924,6 +925,10 @@ class ColorMatch:
         self._events = {}                   # rk -> Event, set when its field is done (or failed)
         self._failed = {}                   # rk -> monotonic time of the failure
         self._queue = []                    # heap of (distance m, seq, rk)
+        self._probe = collections.deque()   # request's regions to look for on disk (_prober)
+        self._probe_set = set()
+        self._probe_cv = threading.Condition()
+        self._probe_thread = None
         self._seq = 0
         self._center = None
         self._listeners = []
@@ -1096,14 +1101,41 @@ class ColorMatch:
 
     def request(self, key):
         """A source tile will be needed (prefetch, on the event loop): queue its region's field
-        unless it is known (never waits, never decodes)."""
+        unless it is known (never waits, never decodes, never touches the disk: whether it is on disk is the probe
+        thread's question; two stat calls a tile on the loop held it 7.2 s on a busy hard disk, GitHub #1054)."""
         if not self.handles(key):
             return
         rk = self.region_of(*key[1:])
-        if not self._peek(rk):
-            with self._lock:
-                if self._wanted(rk):
-                    self._enqueue(rk)
+        with self._lock:
+            if rk in self._fields or rk in self._events:
+                return
+        with self._probe_cv:
+            if rk in self._probe_set:
+                return
+            self._probe_set.add(rk)
+            self._probe.append(rk)
+            if self._probe_thread is None:
+                self._probe_thread = threading.Thread(target=self._prober, name="colormatch probe", daemon=True)
+                self._probe_thread.start()
+            self._probe_cv.notify()
+
+    def _prober(self):
+        """request's disk check, off the event loop: a region neither in memory, queued nor on disk is queued."""
+        while True:
+            with self._probe_cv:
+                while not self._probe and not self._closed:
+                    self._probe_cv.wait()
+                if self._closed:
+                    return
+                rk = self._probe.popleft()
+                self._probe_set.discard(rk)
+            try:
+                if not self._peek(rk):
+                    with self._lock:
+                        if self._wanted(rk):
+                            self._enqueue(rk)
+            except Exception:
+                log.exception("colormatch probe")
 
     def field(self, rk, enqueue=True):
         """The region's Field, EMPTY, or None if not ready (then queued, within REQUEST_M). Reads
@@ -1399,3 +1431,5 @@ class ColorMatch:
         with self._lock:
             self._closed = True
             self._cv.notify_all()
+        with self._probe_cv:
+            self._probe_cv.notify_all()
