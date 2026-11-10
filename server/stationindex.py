@@ -166,6 +166,8 @@ class StationIndex:
                     here = {"lat": m[1], "lon": m[2]}
                     marks = [o for o in marks if o[0] != m[0] or _m({"lat": o[1], "lon": o[2]}, here) > MARK_M]
                     marks.append(m)
+                if marks == list(e.get("marks") or []):
+                    continue            # (unchanged: no rewrite of the cell's file at every road tile, SSD writes)
                 e["marks"] = marks
                 try:
                     self._save(key, e)
