@@ -74,6 +74,10 @@ class _State:
         import fra
         self.fra = fra.Crossings(cache_dir, net) if roads else None     # (the US's level crossings' devices)
         self.grading = bool(grading) and self.md is not None
+        # the lids a bare-earth DEM leaves out over a tunnel under a ground road (tunnellids.py, GitHub #1083)
+        import tunnellids
+        self.lids = (tunnellids.Lids(self.md, lambda la, lo, _d=self.dem: _d.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                     if self.grading and tunnellids.ON else None)
         self.widths = (roadwidthmod.RoadWidths(
             lambda key: md.cell(key, layers=("buildings",), kind="demand").layers.get("buildings"),
             roadwidthmod.store_dir(cache_dir, md)).get
@@ -115,7 +119,7 @@ class _State:
                 if self.grading and getattr(self, "plan_store", None) is None:
                     # (one store for every anchor: the plans are the planning regions', whatever the anchor)
                     self.plan_store = gradingmod.PlanStore(
-                        self.md, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.widths)
+                        self.md, plan_elev, self.widths)
                     # (its tunnels' drowned question asked of the road tiles' chain store: resolved once for both)
                     self.plan_store.tunnel_store = lambda: self.__dict__.get("chain_stores", {}).get("tunnels")
                 grader = (gradingmod.Grader(frame, self.md, self.plan_store.elev, self.widths,
@@ -327,9 +331,18 @@ def ground(frame, la, lo, z):
     z = np.asarray(z, np.float64) + grading.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
     if _s.airports is not None:
         z = _s.airports.apply(la, lo, z)
+    if getattr(_s, "lids", None) is not None:
+        z = _s.lids.apply(la, lo, z)
     if _s.sea is not None:
         z = _s.sea.carve(la, lo, z)
     return z
+
+
+def plan_elev(la, lo):
+    """The road plans' ground (PlanStore's elev): the DEM at grading.PROFILE_ZOOM with the tunnels' lids
+    (tunnellids), as earthd.Server._plan_elev."""
+    z = _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+    return _s.lids.apply(la, lo, z) if getattr(_s, "lids", None) is not None else z
 
 
 def veg_geo(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, flat=False):
@@ -1287,7 +1300,7 @@ def _frame_grader(frame):
     with _s.lock:
         if getattr(_s, "plan_store", None) is None:     # (one store for every frame: _State.anchor's)
             _s.plan_store = gradingmod.PlanStore(
-                _s.md, lambda la, lo: _s.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), _s.widths)
+                _s.md, plan_elev, _s.widths)
             _s.plan_store.tunnel_store = lambda: _s.__dict__.get("chain_stores", {}).get("tunnels")
     gr = gradingmod.Grader(frame, _s.md, _s.plan_store.elev, _s.widths, store=_s.plan_store)
     gr.wet = _s.sea.depth if getattr(_s, "sea", None) is not None else None

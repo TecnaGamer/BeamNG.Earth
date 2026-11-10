@@ -1187,6 +1187,10 @@ class Server:
         if mapdata is not None and getattr(mapdata, "dem", 0) is None:
             mapdata.dem = self.dem  # (gradesep's ground)
         self.grading = bool(grading) and mapdata is not None   # ground graded under roads (grading.py)
+        # the lids a bare-earth DEM leaves out over a tunnel under a ground road (tunnellids.py, GitHub #1083)
+        import tunnellids
+        self.lids = (tunnellids.Lids(mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM))
+                     if self.grading and tunnellids.ON else None)
         # street widths measured between the buildings (roadwidth.py), decided once per road per run
         self.sidewalks = sidewalks  # raised sidewalk meshes with the road tiles (sidewalks.py)
         self.buildings = buildings  # building meshes with the road tiles (buildings.py)
@@ -3031,11 +3035,18 @@ class Server:
         z = self.ground(anchor.frame, la, lo, float(self.dem.sample(la, lo, anchor.hm_zoom)))
         return round(float(anchor.frame.geodetic_to_enu(la, lo, z)[2]), 3)
 
+    def _plan_elev(self, la, lo):
+        """The road plans' ground: the DEM at grading.PROFILE_ZOOM with the tunnels' lids (tunnellids)."""
+        z = self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)
+        return self.lids.apply(la, lo, z) if getattr(self, "lids", None) is not None else z
+
     def ground(self, frame, la, lo, z):
         """blockworker.ground here: runways graded in, the sea floor carved, the land off the roads roughened."""
         z = np.asarray(z, np.float64) + gradingmod.terrain_bumps(np.asarray(la, np.float64), np.asarray(lo, np.float64))
         if self.airports is not None:
             z = self.airports.apply(la, lo, z)
+        if getattr(self, "lids", None) is not None:
+            z = self.lids.apply(la, lo, z)
         if self.sea is not None:
             z = self.sea.carve(la, lo, z)
         return z
@@ -3052,7 +3063,7 @@ class Server:
                 # (every anchor's view of one store: the plans are the planning regions', whatever the anchor)
                 if getattr(self, "plan_store", None) is None:
                     self.plan_store = gradingmod.PlanStore(
-                        self.mapdata, lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM), self.road_widths)
+                        self.mapdata, self._plan_elev, self.road_widths)
                 grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
                                           store=self.plan_store)
                 grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
