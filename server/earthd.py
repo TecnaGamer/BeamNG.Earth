@@ -235,6 +235,7 @@ BLOCK_DRAWN = ("terrain", "detail")
 TUNNEL_NEAR_M = 40.0          # m round a teleport's spot searched for a tunnel's tube (tunnel_floor)
 TUNNEL_FLOOR_UNDER_M = 2.0     # a tunnel floor this far under the ground at a teleport's origin: the car goes on the floor
 SEA_CHECK_S = 15.0          # sea (--sea on): the water tiles planned again when the player enters another
+LOW_ROAD_CELLS = 64             # map cells whose road points (seatiles.road_points) the sea plan keeps per connection
                             # 512 m square, or after this long (cells built meanwhile; seatiles.py)
 VIEW_AWAY_M = 50.0              # m: a camera this far from the car centres what is drawn (Conn.camera_away)
 PATCH_KEY = re.compile(r"[A-Za-z0-9_-]{1,64}")   # a terrain patch key (terrainpatch.lua)
@@ -8125,13 +8126,67 @@ class Connection:
                     z = min(max(z, getattr(demmod, "MIN_ZOOM", 0)), demmod.MAX_ZOOM)
                     return dem.sample(la, lo, z)
 
+                def low_roads():    # the roads under the sea round the player (seatiles.low_points): their tiles split
+                    md = sea.md
+                    r = seatilesmod.LOW_ROAD_RADIUS_M
+                    la0, lo0, _ = frame.enu_to_geodetic(x - r, y - r, 0.0)
+                    la1, lo1, _ = frame.enu_to_geodetic(x + r, y + r, 0.0)
+                    try:
+                        every = mapcells.cells_for_bbox(float(la0), float(lo0), float(la1), float(lo1), max_cells=256)
+                        keys = tuple(key for key in every if os.path.exists(md.path(mapdatamod._key(key), "roads")))
+                        if len(keys) < len(every):
+                            missing[0] = True
+                        # a cell's road points every LOW_ROAD_STEP_M and the raw DEM there, made once per cell for the
+                        # anchor (lower Manhattan's 9 cells: 15,000 lines, 162,000 points, ~3.5 s to read and sample)
+                        memo = getattr(self, "_sea_low_cells", None)
+                        if memo is None or memo[0] != aid:
+                            memo = self._sea_low_cells = (aid, {})
+                        cells = memo[1]
+                        for key in keys:
+                            if key in cells:
+                                continue
+                            lines = []
+                            f = md.cell(key, layers=("roads",)).layers.get("roads")
+                            sub = None if f is None else f.attrs.get("subtype")
+                            for i in range(0 if f is None else len(f)):
+                                if sub is not None and str(sub[i]) != "road":
+                                    continue
+                                lines += roadsmod.ground_parts(f, i) + roadsmod.tunnel_parts(f, i)
+                            pts = seatilesmod.road_points(frame, lines)
+                            la, lo, _ = frame.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(len(pts)))
+                            raw = np.asarray(dem.sample(np.asarray(la, np.float64).reshape(-1),
+                                                        np.asarray(lo, np.float64).reshape(-1),
+                                                        seatilesmod.LAKE_DEM_ZOOM), np.float64).reshape(-1)
+                            if np.isfinite(raw).all():      # (a DEM tile missing: read again next time)
+                                cells[key] = (pts, raw)
+                        for key in [k for k in cells if k not in keys][:max(0, len(cells) - LOW_ROAD_CELLS)]:
+                            del cells[key]
+                        got = [cells[key] for key in keys if key in cells]
+                        pts = np.concatenate([p for p, _ in got]) if got else np.zeros((0, 2))
+                        raw = np.concatenate([r for _, r in got]) if got else np.zeros(0)
+
+                        def sea_at(la, lo):
+                            return sea.sea_at(dem, la, lo, seatilesmod.SEA_TILE_FLOOR, False)
+
+                        def low_ground(la, lo):
+                            # graded under the roads where the road processes have planned already (planned_only:
+                            # this thread plans no cells itself: lower Manhattan's 2 km round the player, every cell
+                            # planned for it, held it 46 s on a first visit)
+                            z = dem.sample(la, lo, seatilesmod.LAKE_DEM_ZOOM)
+                            return grader.apply(la, lo, z, planned_only=True) if grader is not None else z
+                        return seatilesmod.low_points(frame, x, y, pts, low_ground, sea_at, raw)
+                    except Exception as e:      # none: the tiles as before
+                        log.debug("sea tiles' low roads: %s", e)
+                        return None
+
                 def plan():
                     pacer.hold()        # (a teleport's first block first)
                     asked = sea.warm_asked
                     # with the cells at hand (the others are built in the background and used by the
                     # next plan, SEA_CHECK_S later): water appears at once at a new place
                     tiles = (seatilesmod.plan(frame, x, y, lambda la, lo, size: sea.sea_at(dem, la, lo, size, False),
-                                              ground_at=sea_ground)
+                                              ground_at=sea_ground,
+                                              low_roads_xy=low_roads if seatilesmod.LOW_ROADS_ON else None)
                              + seatilesmod.plan_lakes(frame, x, y, lambda la, lo: sea.lake_at(la, lo, False),
                                                       lake_ground))
                     def carved(la, lo):     # the river beds' level (seacarve), NaN elsewhere
