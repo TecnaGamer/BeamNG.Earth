@@ -213,6 +213,21 @@ class SourceTest(unittest.TestCase):
             self.assertNotIn("hk", roadz.sources_at(22.38, 114.2))
             self.assertFalse(roadz.hk_cell(KEY))
 
+    def test_credited_where_its_lines_are_kept(self):
+        import credits
+        with tempfile.TemporaryDirectory() as d:
+            self.assertFalse(roadz.hk_credited_near(d, LAT0, LON0, 2000.0))
+            rz = roadz.RoadZ(d, FakeFetcher(), None)
+            rz.lines("hk", KEY)
+            self.assertTrue(roadz.hk_credited_near(d, LAT0, LON0, 2000.0))
+            self.assertFalse(roadz.hk_credited_near(d, LAT0 + 0.1, LON0, 2000.0), "no cell kept there")
+            with mock.patch.object(roadz, "HK_ON", False):
+                self.assertFalse(roadz.hk_credited_near(d, LAT0, LON0, 2000.0))
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "CREDITS.md"),
+                  encoding="utf-8") as fh:
+            self.assertIn(f'"Road heights: {credits.full_label("roadz:hk")}"', fh.read())
+        self.assertTrue(credits.line({"roadz:hk"}).startswith("Road heights: HK Gov"))
+
     @unittest.skipUnless(NATIVE, "earthfast roadz kernels")
     def test_observed_deck_on_our_datum(self):
         """A map bridge over the fixture's lower deck takes its LiDAR height less the LiDAR's ground over our DEM."""

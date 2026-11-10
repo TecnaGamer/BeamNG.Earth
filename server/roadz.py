@@ -216,6 +216,31 @@ def hk_cell(key):
             and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad)
 
 
+_HK_LINES = {}          # path -> (mtime, has lines) of the Hong Kong cells hk_credited_near looked at
+
+
+def hk_credited_near(cache_dir, lat, lon, near_m):
+    """Is a Hong Kong cell with lines kept on this computer within near_m of (lat, lon) (credits.feature_ids)? Disk
+    only."""
+    if not (ON and HK_ON and cache_dir and _in(HK_BOUNDS, lat, lon)):
+        return False
+    d = near_m / 111320.0
+    k = max(0.05, math.cos(math.radians(lat)))
+    for key in mapcells.cells_for_bbox(lat - d, lon - d / k, lat + d, lon + d / k):
+        p = os.path.join(cache_dir, "roadz", f"v{VERSION}", "hk", str(key) + ".npz")
+        try:
+            mt = os.stat(p).st_mtime
+            got = _HK_LINES.get(p)
+            if got is None or got[0] != mt:
+                with np.load(p, allow_pickle=False) as z:
+                    got = _HK_LINES[p] = (mt, len(z["off"]) > 1)
+        except (OSError, ValueError, KeyError):
+            continue
+        if got[1]:
+            return True
+    return False
+
+
 def _norm(text):
     t = unicodedata.normalize("NFKD", str(text or "")).encode("ascii", "ignore").decode().lower()
     return "" if t in ("none", "null", "nan") else t
