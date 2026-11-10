@@ -37,8 +37,8 @@ def _worker(args):
     orig_store = plancache.PlanCache.store
     orig_facts = roads._facts_store
 
-    def store(self, key, plans, keeps, covers, opens, persist=False):
-        ok = orig_store(self, key, plans, keeps, covers, opens, persist)
+    def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
+        ok = orig_store(self, key, plans, keeps, covers, opens, decks, persist=persist)
         if ok and persist:
             rec.write(json.dumps({"plans": [int(k) for k in key], "sig": self.signature,
                                   "path": self._path(key)}) + "\n")

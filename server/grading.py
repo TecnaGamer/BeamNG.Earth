@@ -388,6 +388,34 @@ LIFT_UNDER_BESIDE = os.environ.get("BNE_LIFT_UNDER_BESIDE", "on") != "off"
 # caps the road under it the same way a road deck does, and nothing else (no ramp, no abutment).
 WALK_SPAN_CLASSES = {"footway", "path", "pedestrian", "cycleway", "bridleway", "steps"}
 WALK_SPAN_HALF_M = 4.0      # m: the walkway, wide enough that the side read covers the ridge the elevation leaves
+# Bridges in the elevation itself (GitHub #1098): a surface model (Copernicus GLO-30, outside the lidar areas) holds
+# decks, pylons and cables as ground, and some lidar models fill a removed deck's gap at about its height. Under the Pont
+# de Normandie's south approach (49.427 N 0.2747 E) the tiles hold a 60-150 m ridge exactly under the deck over ~8 m of
+# marsh, and the terrain block copied it: a sheer 100 m wall under the deck. A deck spans OVER low ground, so the real
+# ground under one is never a ridge along it reaching toward it. Under every mapped deck (road, rail, walkway span),
+# stations every DECK_GROUND_STEP_M: where the elevation on its centre line stands over the higher of the two sides
+# (DECK_GROUND_FIX_M past its edges, along the normal and along lines turned DECK_GROUND_DIRS_DEG from it: an embankment
+# crossing under the deck lies along one of them, both its samples on it), by DECK_GROUND_T0_M (none) to _T1_M (all),
+# the ground between the two sides' feet (each side's profile out to DECK_GROUND_OFFS_M past the edge, to where it
+# falls no more steeply than DECK_GROUND_SLOPE: a smeared ridge's flanks are the ridge) is lowered to the line between
+# them, never raised. Samples inside another deck (a twin carriageway's, DECK_GROUND_MASK_M round it) are left out. The
+# planner's own elevation (self.elev: the roads' profiles) and the ground it grades (apply: terrain blocks, the near far
+# tiles, road tiles, the physics ground the decks' piers stand on) both read it. Rust: earthfast deckground.rs.
+DECK_GROUND_ON = os.environ.get("BNE_DECK_GROUND", "on") != "off"
+DECK_GROUND_STEP_M = 6.0
+DECK_GROUND_OFFS_M = (3.0, 6.0, 9.0, 12.0, 15.0, 19.0, 23.0, 28.0, 34.0, 41.0, 49.0, 58.0, 68.0, 80.0, 94.0, 110.0,
+                      128.0, 148.0)     # m past a deck's edge each side's profile is read (a pylon's cone: ~140 m)
+DECK_GROUND_FIX_M = (15.0, 25.0, 36.0)  # m past the edge of the trigger's samples (each side the first not in a deck)
+DECK_GROUND_DIRS_DEG = (0.0, 35.0, -35.0, 60.0, -60.0)
+DECK_GROUND_SLOPE = 0.15                # m/m: a side's profile has reached its foot where it falls no more than this
+DECK_GROUND_T0_M = 2.0                  # m of rise over the sides (median of 3 stations): no correction ...
+DECK_GROUND_T1_M = 4.0                  # ... the whole correction (Copernicus' noise is ~1-2 m)
+DECK_GROUND_MASK_M = 1.5                # m round another deck's footprint its side samples are left out
+DECK_GROUND_BLEND_M = 4.0               # m past the feet the lowering fades out
+DECK_GROUND_END_M = 3.0                 # m past a deck's ends (onto its approaches) the lowering fades out
+DECK_GROUND_REACH_M = 160.0             # m from a deck's centre line no sample goes (the cells read round a point)
+DECK_GROUND_KEPT = 8192                 # decks' corrections a planner keeps (_deck_patches; most are None)
+DECK_GROUND_PACKS_KEPT = 256            # cell sets' corrected decks kept (_deck_pack_cells)
 UNDER_DECK_MAX_M = 30.0     # m along the road a deck covers at most either side of the crossing (an oblique one)
 UNDER_DECK_PAD_M = 3.0 * SIGMA_MAJOR_M + PROFILE_STEP + UNDER_DECK_SIDE_M + UNDER_DECK_MAX_M    # m round a cell: the
                             # farthest its plans' samples reach past its box (their extensions), and a deck's window
@@ -1965,6 +1993,10 @@ class _Planner:
 
     def __init__(self, frame, mapdata, elev, widths=None, store=None, region=None):
         self.frame, self.md, self.elev, self.widths = frame, mapdata, elev, widths
+        # (the elevation as read; the plans read it with the bridges it holds under mapped decks taken out: DECK_GROUND_*)
+        self.elev_raw = elev
+        if DECK_GROUND_ON and elev is not None:
+            self.elev = self._elev_decked
         self.store, self.region = store, region
         self.cells = {}
         self.failed = {}        # cell key -> monotonic time of the last failed fetch
@@ -1973,6 +2005,8 @@ class _Planner:
         self.covers = {}        # cell key -> [(xy (k, 2), half width)]: the tunnels whose ground over them stays
         self.keeps = {}         # cell key -> [(xy (k, 2), half width)]: the UNGRADED roads' carriageways
         self.opens = {}         # cell key -> [(xy (k, 2), Spec)]: the tunnels' open sections (roads in the open)
+        self.dgcells = {}       # cell key -> the corrected decks within reach of it (_cell_deck_patches)
+        self._dg_local = threading.local()  # (stack: the corrected decks of the cells this thread is planning)
 
     # the store's settings (set on the anchors' Graders after they are made): shared: plancache.PlanCache (the cells'
     # plans shared with the server's other processes); wet(lat, lon) -> water depth (m): tunnels under water are left
@@ -2010,17 +2044,20 @@ class _Planner:
             if key not in src.cells:            # (its fetch failed: asked again later)
                 return []
             keeps, covers, opens = src.keeps.get(key, []), src.covers.get(key, []), src.opens.get(key, [])
+            dg = src.dgcells.get(key, [])
         import geotiles
 
         def m(xy):
             return geotiles.world_xy_map(src.frame, self.frame, xy)
         got = ([(fid, mapped_plan(p, m)) for fid, p in plans], [(m(xy), hw) for xy, hw in keeps],
-               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens])
+               [(m(xy), w) for xy, w in covers], [(m(xy), sp) for xy, sp in opens],
+               [(dk, m(line), half, rows) for dk, line, half, rows in dg])
         with self.lock:
             self.cells.setdefault(key, got[0])
             self.keeps.setdefault(key, got[1])
             self.covers.setdefault(key, got[2])
             self.opens.setdefault(key, got[3])
+            self.dgcells.setdefault(key, got[4])
             return self.cells[key]
 
     def _cell_plans(self, key):
@@ -2056,7 +2093,17 @@ class _Planner:
                 import stackdump    # (a slow plan holds every process waiting for it: say where it waits)
                 watch = stackdump.watch(PLAN_SLOW_S, f"cell {key}'s plans still being made after {PLAN_SLOW_S:.0f} s")
                 try:
-                    got = self._make_cell(key)
+                    # (the corrected decks within reach of the cell first: its plans' own elevation reads them while
+                    # it is planned, _elev_decked; the decks of the cells its plans read anyway, _decks_near's)
+                    dg = self._cell_deck_patches(key)
+                    stack = self._dg_local.__dict__.setdefault("stack", [])
+                    stack.append(self._pack_of([(ln, h, r) for _k, ln, h, r in dg]))
+                    try:
+                        got = self._make_cell(key)
+                    finally:
+                        stack.pop()
+                    if got is not None:
+                        got = tuple(got) + (dg,)
                 finally:
                     watch.cancel()
             if got is None:
@@ -2067,12 +2114,15 @@ class _Planner:
         finally:
             if mine:
                 self.shared.release(key)
-        plans, keeps, covers, opens = got
+        plans, keeps, covers, opens = got[:4]
+        # (plans kept without their corrected decks, a pinned bundle's: made here, from the map's road data)
+        dg = got[4] if len(got) > 4 and got[4] is not None else self._cell_deck_patches(key)
         with self.lock:
             self.cells.setdefault(key, plans)
             self.keeps.setdefault(key, keeps)
             self.covers.setdefault(key, covers)
             self.opens.setdefault(key, opens)
+            self.dgcells.setdefault(key, dg)
             return self.cells[key]
 
     def _make_cell(self, key):
@@ -4227,6 +4277,248 @@ class _Planner:
                 memo[str(key)] = out
         return out
 
+    # --- bridges in the elevation (DECK_GROUND_*) ------------------------------------------------------------------
+    @staticmethod
+    def _deck_rows(c):
+        """[(key, line (k, 2), half width)] of a cell's road, rail and walkway decks (_cell_enu's)."""
+        halves = c.get("bridge_half") or [0.0] * len(c["bridges"])
+        out = []
+        for line, half in (list(zip(c["bridges"], halves))
+                           + [(r, railwaysmod.DECK_HALF_M) for r in c.get("rail_bridges", ())]
+                           + [(r, WALK_SPAN_HALF_M) for r in c.get("span_bridges", ())]):
+            line = np.asarray(line, np.float64)[:, :2]
+            if len(line) < 2 or not half > 0:
+                continue
+            out.append((deck_key(line, half), line, float(half)))
+        return out
+
+    def _decks_in(self, keys):
+        """({key: (line, half width)} of the decks of cells keys, each once; whether a cell was missing)."""
+        out, short = {}, False
+        for k in keys:
+            with self.lock:
+                failed = self.failed.get(k)
+            if failed is not None and time.monotonic() - failed < RETRY_S:
+                short = True            # (its road data failed: asked again after RETRY_S, as its plans are)
+                continue
+            try:
+                c = self._cell_enu(k, ground=False)
+            except Exception as e:      # (that cell's decks left out; nothing kept)
+                log.debug("grading: deck ground of %s: %s: %s", k, type(e).__name__, e)
+                with self.lock:
+                    self.failed[k] = time.monotonic()
+                short = True
+                continue
+            rm = self.__dict__.setdefault("_dg_rows", {})
+            got = rm.get(str(k))
+            if got is None or got[0] is not c:      # (made once per cell's parts)
+                got = rm[str(k)] = (c, self._deck_rows(c))
+                if len(rm) > 2 * ENU_CACHE_MAX:
+                    rm.clear()
+            for key, line, half in got[1]:
+                out.setdefault(key, (line, half))
+        return out, short
+
+    def _cells_round(self, lat, lon, reach):
+        """The map cells within reach m of the points (as _keys)."""
+        pad = reach / 111320.0
+        padlon = pad / max(0.05, math.cos(math.radians(float(np.mean(lat)))))
+        keys = mapcells.cells_for_points(lat, lon, pad, padlon)
+        if len(keys) > SPREAD_CELLS:
+            keys = mapcells.cells_near_points(lat, lon, pad, padlon)
+        return keys
+
+    def _deck_patches(self, decks):
+        """{key: patch or None} of decks {key: (line, half width)}: a patch (line, half, rows (m, 6): station arc, ground
+        left, ground right, foot left, foot right, weight) where the elevation holds a bridge under the deck, else None.
+        Each deck's own (its samples and the decks round it within DECK_GROUND_REACH_M, whatever cell asks), made once;
+        the missing ones in one probe."""
+        memo = self.__dict__.setdefault("_dg_memo", OrderedDict())
+        out, todo = {}, []
+        with self.lock:
+            for k in decks:
+                if k in memo:
+                    memo.move_to_end(k)
+                    out[k] = memo[k]
+                else:
+                    todo.append(k)
+        if not todo:
+            return out
+        import fast
+        lines = [decks[k] for k in todo]
+        # each deck's neighbours (the decks of the cells it lies in: no cells read past them): their footprints are
+        # left out of its side samples
+        masks, mask_of, mindex, keep, by_cells = [], [], {}, [], {}
+        for line, half in lines:
+            la, lo, _ = self.frame.enu_to_geodetic(line[:, 0], line[:, 1], 0.0)
+            cells = tuple(self._cells_round(np.asarray(la, np.float64), np.asarray(lo, np.float64), 0.0))
+            got = by_cells.get(cells)
+            if got is None:             # (the decks of those cells, their boxes: once per cell set)
+                near, short = self._decks_in(cells)
+                items = sorted(near.items())
+                for mk, (ml, mh) in items:
+                    if mk not in mindex:
+                        mindex[mk] = len(masks)
+                        masks.append((ml, mh))
+                idx = np.array([mindex[mk] for mk, _v in items], np.int64)
+                bx = np.array([(*ml.min(0) - mh, *ml.max(0) + mh) for _mk, (ml, mh) in items],
+                              np.float64).reshape(-1, 4)
+                got = by_cells[cells] = (idx, bx, short)
+            idx, bx, short = got
+            keep.append(not short)
+            r = DECK_GROUND_REACH_M + DECK_GROUND_MASK_M
+            lo_, hi_ = line.min(0) - r, line.max(0) + r
+            near_ = (bx[:, 2] >= lo_[0]) & (bx[:, 3] >= lo_[1]) & (bx[:, 0] <= hi_[0]) & (bx[:, 1] <= hi_[1])
+            mask_of.append([int(j) for j in idx[near_]])
+        dirs = np.radians(np.asarray(DECK_GROUND_DIRS_DEG, np.float64))
+        args = (DECK_GROUND_STEP_M, DECK_GROUND_OFFS_M, DECK_GROUND_FIX_M, dirs, DECK_GROUND_REACH_M)
+        pts = fast.deck_ground_probe(lines, *args)
+        if len(pts):
+            la, lo, _ = self.frame.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            z = np.asarray(self.elev_raw(np.asarray(la, np.float64), np.asarray(lo, np.float64)), np.float64).ravel()
+        else:
+            z = np.zeros(0)
+        active, soff, rows = fast.deck_ground_fit(lines, *args, z, masks, mask_of, DECK_GROUND_SLOPE,
+                                                  DECK_GROUND_T0_M, DECK_GROUND_T1_M, DECK_GROUND_MASK_M)
+        a = 0
+        got = {}
+        for k, (line, half), on in zip(todo, lines, active):
+            if on:
+                got[k] = (line, half, np.array(rows[soff[a]:soff[a + 1]], np.float64))
+                a += 1
+            else:
+                got[k] = None
+        with self.lock:
+            for k, ok in zip(todo, keep):
+                if ok:              # (a neighbour cell missing: asked again)
+                    memo[k] = got[k]
+            while len(memo) > DECK_GROUND_KEPT:
+                memo.popitem(last=False)
+        out.update(got)
+        return out
+
+    def _pack_of(self, act):
+        """deck_ground_apply's arrays of corrected decks act [(line, half, rows)]: (lat/lon box (4,), off, xy, half,
+        soff, rows), or None without any."""
+        if not act:
+            return None
+        import fast
+        off, xy, half = fast._lines_flat([(p[0], p[1]) for p in act])
+        soff = np.r_[0, np.cumsum([len(p[2]) for p in act])].astype(np.int64)
+        rows = np.ascontiguousarray(np.concatenate([p[2] for p in act]), np.float64)
+        r = max(float(np.max(p[2][:, 3:5])) for p in act) + DECK_GROUND_BLEND_M + DECK_GROUND_END_M + 1.0
+        lo_, hi_ = xy.min(0) - r, xy.max(0) + r
+        ce = np.array([lo_[0], hi_[0], lo_[0], hi_[0]])
+        cn = np.array([lo_[1], lo_[1], hi_[1], hi_[1]])
+        bla, blo, _ = self.frame.enu_to_geodetic(ce, cn, 0.0)
+        bla, blo = np.asarray(bla, np.float64), np.asarray(blo, np.float64)
+        # (the box's corners in lat/lon, widened a little: the frame's lines are not parallels and meridians)
+        g = 2.0 * r / 111320.0
+        gl = g / max(0.05, math.cos(math.radians(min(89.0, float(np.abs(bla).max()) + g))))
+        box = np.array([bla.min() - g, blo.min() - gl, bla.max() + g, blo.max() + gl])
+        return (box, off, xy, half, soff, rows)
+
+    def _cell_deck_patches(self, key):
+        """[(deck key, line (k, 2), half width, rows (m, 6))] of the corrected decks within reach of cell key's box,
+        kept with its plans (plancache): the ground it grades reads them without the map's road data
+        (_deck_pack_cells)."""
+        if not DECK_GROUND_ON:
+            return []
+        try:
+            lon0, lat0, lon1, lat1 = (float(v) for v in key.bounds())
+            keys = self._cells_round(np.array([lat0, lat1]), np.array([lon0, lon1]),
+                                     DECK_GROUND_REACH_M + DECK_GROUND_END_M + DECK_GROUND_BLEND_M)
+            decks, _short = self._decks_in(keys)
+            # (only the decks within reach of the cell: the other decks of those cells lie in further cells, whose
+            # parts their side samples' neighbours would be read from; 18 more cells per Baltimore cell, 2026-11-10)
+            r = DECK_GROUND_REACH_M + DECK_GROUND_END_M + DECK_GROUND_BLEND_M
+            ce, cn, _ = self.frame.geodetic_to_enu(np.array([lat0, lat0, lat1, lat1]), np.array([lon0, lon1, lon0, lon1]),
+                                                   0.0)
+            ce, cn = np.asarray(ce, np.float64), np.asarray(cn, np.float64)
+            x0, y0, x1, y1 = ce.min() - r, cn.min() - r, ce.max() + r, cn.max() + r
+            decks = {k: (ln, h) for k, (ln, h) in decks.items()
+                     if ln[:, 0].max() >= x0 and ln[:, 1].max() >= y0 and ln[:, 0].min() <= x1 and ln[:, 1].min() <= y1}
+            patches = self._deck_patches(decks)
+        except Exception as e:      # (the elevation as it is there rather than no plans)
+            log.debug("grading: deck ground of cell %s: %s: %s", key, type(e).__name__, e)
+            return []
+        return [(k, p[0], p[1], p[2]) for k, p in sorted(patches.items()) if p is not None]
+
+    def _deck_pack_cells(self, keys):
+        """_pack_of the corrected decks kept with the plans of cells keys (planned: _cell_plans), each deck once.
+        Kept per cell set."""
+        mk = tuple(sorted(str(k) for k in keys))
+        memo = self.__dict__.setdefault("_dg_cell_packs", OrderedDict())
+        with self.lock:
+            if mk in memo:
+                memo.move_to_end(mk)
+                return memo[mk]
+            recs = [self.dgcells.get(k) for k in keys]
+        done = all(r is not None for r in recs)
+        seen = {}
+        for r in recs:
+            for dk, line, half, rows in (r or ()):
+                seen.setdefault(dk, (line, half, rows))
+        pack = self._pack_of([seen[k] for k in sorted(seen)])
+        if done:
+            with self.lock:
+                memo[mk] = pack
+                while len(memo) > DECK_GROUND_PACKS_KEPT:
+                    memo.popitem(last=False)
+        return pack
+
+    def _deck_ground(self, lat, lon, z, e=None, n=None, keys=None):
+        """z (n,) at points (lat, lon) (frame ENU e, n when at hand) with the bridges the elevation holds under mapped
+        decks taken out (DECK_GROUND_*): z itself when nothing changes. keys: the planned cells round the points whose
+        kept corrections are used (apply); None: the cell this thread is planning's, else the planned cells' the points
+        lie in (the plans' own elevation: never a cell read for it). Pure in the map and the elevation (each point's
+        decks are those within DECK_GROUND_REACH_M of it, whatever else is asked with it: every one of them is kept
+        with the plans of the point's own cell)."""
+        if not DECK_GROUND_ON or not len(z):
+            return z
+        try:
+            if keys is None:
+                stack = self._dg_local.__dict__.get("stack")
+                if stack:
+                    pack = stack[-1]
+                else:
+                    keys = self._planned_keys(self._cells_round(lat, lon, 0.0))
+                    pack = self._deck_pack_cells(keys) if keys else None
+            else:
+                pack = self._deck_pack_cells(keys)
+            if pack is None:
+                return z
+            box = pack[0]
+            inside = (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
+            if not inside.any():
+                return z
+            if e is None:
+                ei, ni, _ = self.frame.geodetic_to_enu(lat[inside], lon[inside], 0.0)
+            else:
+                ei, ni = e[inside], n[inside]
+            import fast
+            got = fast.deck_ground_apply(ei, ni, np.asarray(z, np.float64)[inside], *pack[1:], DECK_GROUND_BLEND_M,
+                                         DECK_GROUND_END_M)
+        except Exception as ex:     # (the elevation as it is rather than none)
+            log.debug("grading: deck ground: %s: %s", type(ex).__name__, ex)
+            return z
+        if got is None:
+            return z
+        out = np.array(z, np.float64, copy=True)
+        out[inside] = got
+        return out
+
+    def _elev_decked(self, la, lo):
+        """self.elev: elev_raw with the bridges it holds under mapped decks taken out (_deck_ground)."""
+        z = self.elev_raw(la, lo)
+        lat = np.asarray(la, np.float64).ravel()
+        lon = np.asarray(lo, np.float64).ravel()
+        zz = np.asarray(z, np.float64)
+        if zz.size != lat.size or not lat.size:
+            return z
+        got = self._deck_ground(lat, lon, zz.ravel())
+        return z if got is zz.ravel() or got is None else got.reshape(zz.shape)
+
     def _ground_table(self, keys, cs):
         """The ground road parts of the cells keys (cs: their _cell_enu), each once (the first copy, by its first point
         and length), in their order: (lines, half widths, boxes' lo (n, 2), hi (n, 2), first points, last points).
@@ -4990,6 +5282,18 @@ class _Planner:
             keys = mapcells.cells_near_points(lat, lon, pad, padlon)
         return keys
 
+    def _planned_keys(self, keys):
+        """The cells of keys planned already (here, or a neighbouring region's planned there: read in by _cell_plans)."""
+        with self.lock:
+            have = {k for k in keys if k in self.cells}
+        for k in keys:
+            src = None if k in have else self._foreign(k)
+            if src is not None:
+                with src.lock:
+                    if k in src.cells:
+                        have.add(k)
+        return [k for k in keys if k in have]
+
     def _plan_set(self, keys, roads_only):
         """(plans, PlanPack of them) of the cells keys: each road once, in the order of their keys. Remembered once all
         the cells are planned (a road tile asks for the same few cells' plans dozens of times: merging them cost a
@@ -5035,22 +5339,22 @@ class _Planner:
             return base
         keys = self._keys(lat, lon)
         if planned_only:
-            with self.lock:
-                have = {k for k in keys if k in self.cells}
-            for k in keys:              # (a neighbouring region's, planned there: read in)
-                src = None if k in have else self._foreign(k)
-                if src is not None:
-                    with src.lock:
-                        if k in src.cells:
-                            have.add(k)
-            keys = [k for k in keys if k in have]
+            keys = self._planned_keys(keys)
             if not keys:
                 return base
         plans, pack = self._plan_set(keys, roads_only)
-        if not plans and not (RACEWAY_SMOOTH_ON and self._has_keeps()):
+        graded = bool(plans) or (RACEWAY_SMOOTH_ON and self._has_keeps())
+        e = n = None
+        if graded:
+            e, n, _ = self.frame.geodetic_to_enu(lat.ravel(), lon.ravel(), 0.0)
+            e, n = np.asarray(e), np.asarray(n)
+        if DECK_GROUND_ON:      # (the ground under a deck, not the bridge the elevation holds there: DECK_GROUND_*)
+            flat = base.ravel()
+            got = self._deck_ground(lat.ravel(), lon.ravel(), flat, e, n, keys=keys)
+            if got is not flat:
+                base = np.asarray(got, np.float64).reshape(shape)
+        if not graded:
             return base
-        e, n, _ = self.frame.geodetic_to_enu(lat.ravel(), lon.ravel(), 0.0)
-        e, n = np.asarray(e), np.asarray(n)
         out = grade_points(e, n, base.ravel(), pack, lift) if plans else np.array(base.ravel(), np.float64, copy=True)
         race = self._on_kept(e, n)
         if race is not None:                # (the terrain is a racetrack's surface: GitHub #143, smoothed: #833)
@@ -5346,6 +5650,36 @@ class Grader:
         out = np.array(b, np.float64, copy=True)
         for pl, idx in parts:
             out[idx] = pl.apply(la[idx], lo[idx], b[idx], lift, roads_only, planned_only)
+        return out.reshape(base.shape)
+
+    def deck_ground(self, lat, lon, base):
+        """base at the points with the bridges the elevation holds under mapped decks taken out (DECK_GROUND_*), from
+        the decks and corrections the planners have made already (no reads, nothing planned: the far tiles past the
+        graded levels, DeckGroundDem). Same shape as base."""
+        base = np.asarray(base, np.float64)
+        if not DECK_GROUND_ON or base.size == 0:
+            return base
+        la = np.asarray(lat, np.float64).ravel()
+        lo = np.asarray(lon, np.float64).ravel()
+        b = base.ravel()
+        out = b
+        for pl, idx in self.store.planners_of(la, lo):
+            zb = b if idx is None else b[idx]
+            pla, plo = (la, lo) if idx is None else (la[idx], lo[idx])
+            keys = pl._planned_keys(pl._keys(pla, plo))
+            if not keys:
+                continue
+            for k in keys:              # (a neighbouring region's: its kept corrections read in)
+                pl._cell_plans(k)
+            got = pl._deck_ground(pla, plo, zb, keys=keys)
+            if got is zb:
+                continue
+            if out is b:
+                out = np.array(b, np.float64, copy=True)
+            if idx is None:
+                out[:] = got
+            else:
+                out[idx] = got
         return out.reshape(base.shape)
 
     def open_tunnels(self, lat, lon):
@@ -5697,6 +6031,13 @@ def bridge_chain_ends_free(line, all_bridges, xy):
         if min(np.hypot(*(o[0, :2] - end)), np.hypot(*(o[-1, :2] - end))) < 0.75:
             return False
     return True
+
+
+def deck_key(line, half):
+    """A deck's key (DECK_GROUND_*: each deck once, whatever cell's copy): its ends, points and half width."""
+    line = np.asarray(line, np.float64)
+    return (round(float(line[0, 0]), 1), round(float(line[0, 1]), 1), round(float(line[-1, 0]), 1),
+            round(float(line[-1, 1]), 1), len(line), round(float(half), 2))
 
 
 def ground_under_deck(deck, half, crossings, z_at):
@@ -6382,6 +6723,22 @@ class GradedDem:
         # the land off the roads is rougher than the roads themselves (the grading flattens the road's own strip)
         base = np.asarray(base, np.float64) + terrain_bumps(np.asarray(lat, np.float64), np.asarray(lon, np.float64))
         return self._grader.apply(lat, lon, base)
+
+    def __getattr__(self, name):
+        return getattr(self._dem, name)
+
+
+class DeckGroundDem:
+    """dem.Dem with sample() lowered under the decks where the elevation holds a bridge (Grader.deck_ground: from the
+    corrections made already, no grading): the far tiles past the graded levels, which showed the Pont de Normandie's
+    ridge from afar while the near ground had none (GitHub #1098)."""
+
+    def __init__(self, dem, grader):
+        self._dem, self._grader = dem, grader
+
+    def sample(self, lat, lon, zoom, progress=None):
+        base = self._dem.sample(lat, lon, zoom, progress) if progress is not None else self._dem.sample(lat, lon, zoom)
+        return self._grader.deck_ground(lat, lon, base)
 
     def __getattr__(self, name):
         return getattr(self._dem, name)

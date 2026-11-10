@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 189 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 190 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -210,6 +210,43 @@ def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move,
                                 np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
                                 np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),
                                 float(slope), float(tol), float(max_move), float(grade))
+
+
+def _lines_flat(lines):
+    """(off (n + 1,) int64, xy (m, 2), half (n,)) of [(line (k, 2+), half width)]."""
+    xy = [np.asarray(ln, np.float64)[:, :2] for ln, _h in lines]
+    off = np.r_[0, np.cumsum([len(a) for a in xy])].astype(np.int64)
+    return (off, np.ascontiguousarray(np.concatenate(xy) if xy else np.zeros((0, 2)), np.float64),
+            np.array([float(h) for _ln, h in lines], np.float64))
+
+
+def deck_ground_probe(lines, step, offs, fix, dirs, reach):
+    """grading's bridges-in-the-elevation probe (deckground.rs): the sample points (m, 2) of lines [(line, half)]."""
+    require(190, "deck_ground_probe")
+    off, xy, half = _lines_flat(lines)
+    return _ef.deck_ground_probe(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                                 np.asarray(dirs, np.float64), float(reach))
+
+
+def deck_ground_fit(lines, step, offs, fix, dirs, reach, z, masks, mask_of, slope, t0, t1, mask_m):
+    """deckground.rs: (active (n,) bool, station offsets of the active decks (a + 1,), their rows (m, 6)) from the
+    probe's heights z; masks [(line, half)], deck i's being masks[j] for j in mask_of[i]."""
+    require(190, "deck_ground_fit")
+    off, xy, half = _lines_flat(lines)
+    moff, mxy, mhalf = _lines_flat(masks)
+    mo = np.r_[0, np.cumsum([len(m) for m in mask_of])].astype(np.int64)
+    mi = np.array([j for m in mask_of for j in m], np.int64)
+    return _ef.deck_ground_fit(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                               np.asarray(dirs, np.float64), float(reach), np.ascontiguousarray(z, np.float64),
+                               moff, mxy, mhalf, mo, mi, float(slope), float(t0), float(t1), float(mask_m))
+
+
+def deck_ground_apply(e, n, base, off, xy, half, soff, rows, blend, end):
+    """deckground.rs: base (n,) lowered under the corrected decks, or None when nothing changes."""
+    require(190, "deck_ground_apply")
+    return _ef.deck_ground_apply(np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64),
+                                 np.ascontiguousarray(base, np.float64), off, xy, half, soff, rows, float(blend),
+                                 float(end))
 
 
 def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):

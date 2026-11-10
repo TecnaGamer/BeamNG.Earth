@@ -4526,11 +4526,13 @@ class Server:
             ref_zoom = anchor.zooms[lvl - 1] if lvl > 0 else None
             zoom = anchor.zooms[max(lvl, 0)]
             part = self.piece_parts.get((anchor.id, node.key)) if node is not tile else None
-            g = self.grader_for(anchor) if lvl <= 0 and self.far_pool is None else None   # graded like the block
+            g = self.grader_for(anchor) if self.far_pool is None else None   # graded like the block (levels <= 0)
             base = self.airports.wrap(self.dem) if self.airports is not None else self.dem
             if self.sea is not None:
                 base = seacarvemod.SeaDem(base, self.sea if lvl <= seacarvemod.CARVE_MAX_LEVEL else None)
-            src = gradingmod.GradedDem(base, g) if g is not None else base
+            # (past them: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
+            src = (gradingmod.GradedDem(base, g) if lvl <= 0 else gradingmod.DeckGroundDem(base, g)) \
+                if g is not None else base
             analyses = self.deshadow is not None or self.colormatch is not None
             if quick and analyses and self.far_pool is not None and self.imagery is not None and node is tile:
                 # the 3D map at a place not seen yet (photos still to come): the quick texture from the raw photos in

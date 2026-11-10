@@ -108,7 +108,7 @@ class PlanCacheTest(unittest.TestCase):
         c.release(KEY)
         t.join(5)
         self.assertEqual(got[0][1], False)
-        self.assertEqual(got[0][0], ([], [], [], []))
+        self.assertEqual(got[0][0], ([], [], [], [], []))     # (the corrected decks last: grading.DECK_GROUND_*)
         self.assertEqual(other.stats["waited"], 1)
 
     def test_long_wait_logged_with_its_holder(self):

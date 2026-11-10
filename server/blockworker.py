@@ -2442,7 +2442,9 @@ def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):
     base = _s.airports.wrap(_s.dem) if _s.airports is not None else _s.dem
     if _s.sea is not None:
         base = seacarvemod.SeaDem(base, _s.sea if tile.level <= seacarvemod.CARVE_MAX_LEVEL else None)
-    src = gradingmod.GradedDem(base, g) if (g is not None and tile.level <= 0) else base
+    # (past the graded levels: the bridges the elevation holds under decks taken out where already found, DeckGroundDem)
+    src = (gradingmod.GradedDem(base, g) if tile.level <= 0 else gradingmod.DeckGroundDem(base, g)) \
+        if g is not None else base
     return farfield.build_tile(frame, src, tile, zoom, q, ref_zoom, with_sink=with_sink,
                                layout=layout)
 

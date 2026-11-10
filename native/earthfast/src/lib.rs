@@ -64,6 +64,7 @@ mod mdhtml;
 mod roadlanes;
 mod waytags;
 mod underdeck;
+mod deckground;
 mod railseam;
 mod classgrid;
 mod frontage;
@@ -5856,6 +5857,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 189: specs::RoadRules (roads.road_specs / bridge_specs / tunnel_specs / _structure_width / dual_carriageways a
     // layer at a time; carriageway, ring_width, dual_cap, switchbacks, _ramp_junction) and gsrows (gradesep._layer_rows,
     // _to_frame, _rows / _owners, _underpasses and _spans' back mapping)
-    m.add("VERSION", 189)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_probe, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_fit, m)?)?;
+    m.add_function(wrap_pyfunction!(deckground::deck_ground_apply, m)?)?;
+    // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
+    // GitHub #1098)
+    m.add("VERSION", 190)?;
     Ok(())
 }

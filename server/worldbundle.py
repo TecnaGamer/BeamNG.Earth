@@ -25,6 +25,7 @@ ENV = "BNGE_WORLD_BUNDLE"
 HEX = re.compile(r"[0-9a-f]{64}\Z")
 SIGNATURE = re.compile(r"w[01]s[01]\Z")
 GROUPS = ("p", "z", "c", "b", "w", "k", "v", "o")   # plancache.store's array groups
+DECK_GROUPS = ("g", "r")    # ... and the corrected decks' (grading.DECK_GROUND_*: lines (k, 2), stations (m, 6)), optional
 
 
 class BundleError(ValueError):
@@ -192,7 +193,7 @@ def validate_artifact(data, artifact=None):
         raise BundleError("Artifact exceeds size limit")
     if artifact is not None and (len(data) != artifact["size"] or hashlib.sha256(data).hexdigest() != artifact["sha256"]):
         raise BundleError("Artifact integrity mismatch")
-    allowed = {"meta"} | set(GROUPS) | {g + "_n" for g in GROUPS}
+    allowed = {"meta"} | set(GROUPS + DECK_GROUPS) | {g + "_n" for g in GROUPS + DECK_GROUPS}
     arrays = {}
     try:
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
@@ -234,12 +235,16 @@ def validate_artifact(data, artifact=None):
     if "meta" not in arrays or any(g + "_n" not in arrays for g in GROUPS):
         raise BundleError("Missing plan arrays")
     meta = _json(arrays["meta"].tobytes())
-    if not isinstance(meta, dict) or set(meta) != {"plans", "keeps", "covers", "opens"}:
+    if not isinstance(meta, dict) or set(meta) - {"decks"} != {"plans", "keeps", "covers", "opens"}:
         raise BundleError("Invalid plan metadata")
+    has_decks = "decks" in meta
+    if has_decks != all(g + "_n" in arrays for g in DECK_GROUPS) or (
+            not has_decks and any(g in arrays or g + "_n" in arrays for g in DECK_GROUPS)):
+        raise BundleError("Missing plan arrays")
     if any(not isinstance(v, list) or len(v) > MAX_ROWS for v in meta.values()):
         raise BundleError("Invalid plan metadata counts")
     groups = {}
-    for group in GROUPS:
+    for group in GROUPS + (DECK_GROUPS if has_decks else ()):
         lengths = arrays[group + "_n"]
         if (lengths < 0).any() or any(int(v) > MAX_ROWS for v in lengths):
             raise BundleError("Invalid array lengths")
@@ -250,7 +255,7 @@ def validate_artifact(data, artifact=None):
                 raise BundleError("Unreferenced array data")
             groups[group] = []
             continue
-        dims = {"p": 2, "k": 2, "v": 2, "o": 2, "c": 6}
+        dims = {"p": 2, "k": 2, "v": 2, "o": 2, "c": 6, "g": 2, "r": 6}
         if (a is None or total != len(a) or total > MAX_ROWS or
                 (group in dims and (a.ndim != 2 or a.shape[1] != dims[group])) or
                 (group in ("z", "b", "w") and a.ndim != 1)):
@@ -268,7 +273,7 @@ def validate_artifact(data, artifact=None):
     plans_meta = meta["plans"]
     if len(plans_meta) != len(groups["p"]) or len(plans_meta) != len(groups["z"]):
         raise BundleError("Plan metadata cardinality mismatch")
-    for group, name in (("k", "keeps"), ("v", "covers"), ("o", "opens")):
+    for group, name in (("k", "keeps"), ("v", "covers"), ("o", "opens")) + ((("g", "decks"),) if has_decks else ()):
         if len(groups[group]) != len(meta[name]) or any(len(a) < 2 for a in groups[group]):
             raise BundleError("Polyline metadata cardinality mismatch")
     from grading import Plan
@@ -342,7 +347,15 @@ def validate_artifact(data, artifact=None):
             if not valid:
                 raise BundleError("Invalid road specification field")
         opens.append((xy, spec_from_json(spec)))
-    return plans, list(zip(groups["k"], meta["keeps"])), list(zip(groups["v"], meta["covers"])), opens
+    decks = None
+    if has_decks:
+        if len(groups["r"]) != len(meta["decks"]) or any(len(r) < 1 for r in groups["r"]) \
+                or not all(_number(v, 0, 10000) and v > 0 for v in meta["decks"]):
+            raise BundleError("Invalid corrected decks")
+        from grading import deck_key
+        decks = [(deck_key(line, half), line, float(half), rows)
+                 for line, rows, half in zip(groups["g"], groups["r"], meta["decks"])]
+    return plans, list(zip(groups["k"], meta["keeps"])), list(zip(groups["v"], meta["covers"])), opens, decks
 
 
 def artifact_bytes(root, entry):

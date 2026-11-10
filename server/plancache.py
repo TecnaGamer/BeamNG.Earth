@@ -66,7 +66,7 @@ def start_run(cache_dir):
 # The plans' output format: their key in the revisit cache (kept across updates) and in baked packs (bakepack.py), in
 # place of the code hash. Bump it whenever a change makes other plans (grading, its inputs' rules), or players keep the
 # old ones; tests/test_bake_formats.py fails until it is bumped (its fixture's digest is stored with the number).
-PLANS_FORMAT = 42     # 42: an overpass's abutment lift reads the road under beside the deck, as that road's own plan reads it (grading.ground_under_deck, LIFT_UNDER_BESIDE: an elevation holding the deck over a motorway cut asked 6.7-8.5 m at Albox, GitHub #1086, PR #1090); 41: a short road tunnel grade separation made ground still holds the railway over it at underpass clearance (railways.road_underpasses reads the map's tunnel ranges too: Nashville, PR #1094); 40: no junction raise at a freeway's own deck, nor for a lift only an elevation model holding the deck over the road under asks (grading JR_OWN_CLASS / JR_TRUSTED: Andalusia's roundabouts and slip roads stood 5-8 m over the ground, GitHub #1077); 39: road grading ranks: a built (paved / cobble) road keeps its own ground where a dirt road runs beside it, the dirt road adapting; a side road eases onto the higher road's ground (RANK_SIDE_FADE_M, RANK_HEIGHT_FADE_M) and the blend starts at the painted asphalt edge; a road with no equal-ranked road at a point holds its own carriageway, and a junction pad takes only the highest-ranked branch (GitHub #771, PR #1050); 38: a road under a measured deck needs only real headroom under it, the deck as measured over it (grading UNDER_MEASURED_ON: I-75 dipped 1.5 m under an overpass at Findlay); 37: the ramp envelope only where the geometry breaks (a step of 0.3 m or more where roads meet, a raised road steeper than 12 % and than before), else nothing changes; 36: the roads round a raised junction and a freeway overpass's approaches on ramps no steeper than 6 % (grading.ramp_envelope: steps of 45-58 % at Findlay's diverging diamond), freeway links rise with their junction; 35: an approach's junction rises with it (grading JUNCTION_RAISE_ON: the junction's roads no longer cap its ramp; GitHub #1043, #1045); 34: a ground track takes a distant deck's rise over its own bed, not its height (railways.profile: a mountain line's deck carried down at 2 % stood Andermatt's station 14 m up, GitHub #1051); 33: a small roundabout's ring wider by its fitted radius (roads.ring_width, PR #1048); 32: a measured deck on the ground where clearance needs a lift is stale (grading OBS_STALE_LIFT_M, roads OBS_STALE_M: GitHub #1045), and 31's tunnel end rule taken back (it pushed portals out of approach cuts at Caldecott, Tom Lantos, the Gotthard); 31: a tunnel's short open end run over a drop is tube (roads.portal_cover: Fort Pitt's east portal onto its bridge); 30: FACTS_FORMAT 13 (skew crossings' grade-separation bridges long enough for the road under them, GitHub #1020); 29: FACTS_FORMAT 12 (a long road's copies far from its home agree on its bridges over underpasses, GitHub #1020); 28: a rail bed beside a road that crosses under it (a bridge, SEAM_CROSS_M of height at a
+PLANS_FORMAT = 43     # 43: the plans' elevation has the bridges it holds under mapped decks taken out (grading.DECK_GROUND_*: the Pont de Normandie's 60-150 m ridge under its deck, GitHub #1098); 42: an overpass's abutment lift reads the road under beside the deck, as that road's own plan reads it (grading.ground_under_deck, LIFT_UNDER_BESIDE: an elevation holding the deck over a motorway cut asked 6.7-8.5 m at Albox, GitHub #1086, PR #1090); 41: a short road tunnel grade separation made ground still holds the railway over it at underpass clearance (railways.road_underpasses reads the map's tunnel ranges too: Nashville, PR #1094); 40: no junction raise at a freeway's own deck, nor for a lift only an elevation model holding the deck over the road under asks (grading JR_OWN_CLASS / JR_TRUSTED: Andalusia's roundabouts and slip roads stood 5-8 m over the ground, GitHub #1077); 39: road grading ranks: a built (paved / cobble) road keeps its own ground where a dirt road runs beside it, the dirt road adapting; a side road eases onto the higher road's ground (RANK_SIDE_FADE_M, RANK_HEIGHT_FADE_M) and the blend starts at the painted asphalt edge; a road with no equal-ranked road at a point holds its own carriageway, and a junction pad takes only the highest-ranked branch (GitHub #771, PR #1050); 38: a road under a measured deck needs only real headroom under it, the deck as measured over it (grading UNDER_MEASURED_ON: I-75 dipped 1.5 m under an overpass at Findlay); 37: the ramp envelope only where the geometry breaks (a step of 0.3 m or more where roads meet, a raised road steeper than 12 % and than before), else nothing changes; 36: the roads round a raised junction and a freeway overpass's approaches on ramps no steeper than 6 % (grading.ramp_envelope: steps of 45-58 % at Findlay's diverging diamond), freeway links rise with their junction; 35: an approach's junction rises with it (grading JUNCTION_RAISE_ON: the junction's roads no longer cap its ramp; GitHub #1043, #1045); 34: a ground track takes a distant deck's rise over its own bed, not its height (railways.profile: a mountain line's deck carried down at 2 % stood Andermatt's station 14 m up, GitHub #1051); 33: a small roundabout's ring wider by its fitted radius (roads.ring_width, PR #1048); 32: a measured deck on the ground where clearance needs a lift is stale (grading OBS_STALE_LIFT_M, roads OBS_STALE_M: GitHub #1045), and 31's tunnel end rule taken back (it pushed portals out of approach cuts at Caldecott, Tom Lantos, the Gotthard); 31: a tunnel's short open end run over a drop is tube (roads.portal_cover: Fort Pitt's east portal onto its bridge); 30: FACTS_FORMAT 13 (skew crossings' grade-separation bridges long enough for the road under them, GitHub #1020); 29: FACTS_FORMAT 12 (a long road's copies far from its home agree on its bridges over underpasses, GitHub #1020); 28: a rail bed beside a road that crosses under it (a bridge, SEAM_CROSS_M of height at a
                       # crossing angle) keeps its own level: the approach fill is not taken down to the road under
                       # the deck and the two sides meet the deck; 27: FACTS_FORMAT 11 (an underpass in a cutting bridged by the roads over it, GitHub #1009); PR #1014's one-way carriageways drawn and graded where OpenStreetMap's placement puts their lanes (PR #1014); 26: CA-1's Tom Lantos tunnels: a bridge starts at a tunnel's portal over a short ground gap (roads._portal_decks, FACTS_FORMAT 10), no portal low arch shorter than SECTION_MIN_M before a full tube (roads.portal_cover), and a tunnel's own sections (a low arch at its portal, the full tube) and a part going on from another's end never twin tunnels (roads.twin_tunnels: grading._twin_trimmed cut them, CA-1's Tom Lantos bore lost its tube); 25: underpasses: no open-road trench through the roads over them, a tunnel's portal kept where its own approach road joins it (roads._tunnel_reach) and a road's bridge over one found in any cell it crosses (roads._gradesep_elsewhere; FACTS_FORMAT 9); 24: a segment's tunnel ranges joined only where one source way spans the gap (PR #927); a rail bed's band past its ballast gives way to an approach's carriageway, no claim past an abutment end (PR #920, #909); bridge pieces keep their mapped local levels across merged interchange roads (PR #873, #866); 23: bridge seams without steps: a deck end meets its road, a street off an abutment held level, a single span shared between its approaches, a stream crossed at the road's level, a track beside a road with room for the ground between (grading._pin_cw_ends, _hold_mouth, _grade_match, railroadseam.py, roads.water_clear); 22: overpasses mapped in parts are one span and road ends within 2 m one dip node (#973, #983; still the same release as 21); 21: one bump for the 2026-11-08 PR batch: abandoned railways not graded (#953, #706), dirt roads on the coarse global elevation smoothed over DIRT_SIGMA_COARSE_M (#951, #835), rail viaduct decks' heights capped (#949), worn railway lines cut at motorways (#946, #918); 18: cutting probes located through grading.enu_to_ll_dense (heights moved < 0.1 mm); 17: PR #843 (restored highway and ramp shoulder widths); 16: walkway bridge spans cap the road under them (PR #842) and OSM busways graded (PR #836); 15: continuous subsea tunnel profiles and their approaches (PR #822, #792); 14: past an abutment end the ground falls away under a still-climbing deck (ABUT_UNDER_GRADE)
                       # 13: centimetre-scale dirt wear and bounded edge displacement from random banking
@@ -125,7 +125,7 @@ class PlanCache:
         return os.path.join(self.dir, f"{int(key[0])}_{int(key[1])}_{int(key[2])}.npz")
 
     def load(self, key):
-        """(plans, keeps, covers, opens) of cell key from the cache, or None."""
+        """(plans, keeps, covers, opens, corrected decks or None) of cell key from the cache, or None."""
         from grading import Plan, set_widen
         from roads import spec_from_json
         try:
@@ -141,6 +141,9 @@ class PlanCache:
                 lists = {g: _split(f, g) for g in ("p", "z", "c", "k", "v", "o")}
                 lists["b"] = _split(f, "b") if "b_n" in f.files else []
                 lists["w"] = _split(f, "w") if "w_n" in f.files else []
+                # (grading.DECK_GROUND_*: the decks over a bridge the elevation holds, their lines and stations)
+                lists["g"] = _split(f, "g") if "g_n" in f.files else None
+                lists["r"] = _split(f, "r") if "r_n" in f.files else None
         except (OSError, ValueError, KeyError, TypeError, EOFError, zipfile.BadZipFile):   # (damaged: planned again)
             return None
         plans, cuts, banks, widens = [], iter(lists["c"]), iter(lists["b"]), iter(lists["w"])
@@ -159,9 +162,14 @@ class PlanCache:
             opens = [(xy, spec_from_json(sp)) for xy, sp in zip(lists["o"], meta["opens"])]
         except (TypeError, ValueError, KeyError):
             return None
+        decks = None
+        if lists["g"] is not None and lists["r"] is not None and "decks" in meta:
+            from grading import deck_key
+            decks = [(deck_key(line, half), line, float(half), rows)
+                     for line, rows, half in zip(lists["g"], lists["r"], meta["decks"])]
         with self._lock:
             self.stats["read"] += 1
-        return plans, keeps, covers, opens
+        return plans, keeps, covers, opens, decks
 
     def _revisit_key(self, key):
         import revisit
@@ -224,7 +232,7 @@ class PlanCache:
             return None
         return io.BytesIO(got[0]["plans.npz"])
 
-    def store(self, key, plans, keeps, covers, opens, persist=False):
+    def store(self, key, plans, keeps, covers, opens, decks=None, persist=False):
         """Write cell key's plans for the run's other processes; persist: also into the revisit cache (complete plans:
         nothing they read failed or was missing, Grader._plan_cell)."""
         from roads import _spec_json
@@ -236,7 +244,8 @@ class PlanCache:
                            "widen": getattr(p, "widen", None) is not None}
                           for fid, p in plans],
                 "keeps": [float(hw) for _xy, hw in keeps], "covers": [float(w) for _xy, w in covers],
-                "opens": [_spec_json(sp) for _xy, sp in opens]}
+                "opens": [_spec_json(sp) for _xy, sp in opens],
+                "decks": [float(half) for _k, _line, half, _rows in (decks or ())]}
         arrays = {"meta": np.frombuffer(json.dumps(meta).encode("utf-8"), np.uint8)}
         try:
             _pack(arrays, "p", [p.xy for _f, p in plans])
@@ -247,6 +256,8 @@ class PlanCache:
             _pack(arrays, "k", [xy for xy, _hw in keeps])
             _pack(arrays, "v", [xy for xy, _w in covers])
             _pack(arrays, "o", [xy for xy, _sp in opens])
+            _pack(arrays, "g", [np.asarray(line, np.float64) for _k, line, _h, _r in (decks or ())])
+            _pack(arrays, "r", [np.asarray(rows, np.float64) for _k, _l, _h, rows in (decks or ())])
             p = self._path(key)
             os.makedirs(self.dir, exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
