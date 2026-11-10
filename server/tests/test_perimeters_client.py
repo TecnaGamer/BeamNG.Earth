@@ -4,7 +4,7 @@ import sys
 import unittest
 
 try:
-    from lupa import LuaRuntime
+    from lupa.luajit21 import LuaRuntime
 except ImportError:
     LuaRuntime = None
 
@@ -131,6 +131,38 @@ class ClientTest(unittest.TestCase):
         self.module.transform(xf)
         self.assertAlmostEqual(obj.matrix.pos.x,before+100)
         self.assertAlmostEqual(obj.matrix.pos.z,3.1)
+
+    def test_nearest_budget_is_selected_from_a_large_unsorted_tile(self):
+        # Distinct distances make the result independent of Lua table iteration.
+        self.module.BUDGET=5
+        self.lua.execute("sortSizes={}; originalSort=table.sort; table.sort=function(t, f) sortSizes[#sortSizes+1]=#t; return originalSort(t,f) end")
+        rows=self.lua.table_from([self.lua.table_from([i,0,0,i+1,0,0,str(i)]) for i in range(500,0,-1)])
+        self.module.onRows('large',rows)
+        self.module.update()
+        live=[self.lua.globals().objects[i].matrix.pos.x for i in range(1,6)]
+        self.assertEqual(live,[1.5,2.5,3.5,4.5,5.5])
+        self.assertEqual(self.lua.globals().sortSizes[1],5)
+
+    def test_paused_creates_still_unloads_and_enables_safe_collisions(self):
+        self.module.clearForCollision=lambda row:False
+        self.module.onRows('tile',self.rows); self.module.update()
+        self.module.clearForCollision=lambda row:True
+        self.module.update(False)
+        self.assertTrue(self.module.trace()[1]['collisionReady'])
+        self.lua.globals().cameraX=1000; self.module.update(False)
+        self.assertEqual(self.module.status()['instantiated'],0)
+        self.lua.globals().cameraX=0
+        self.lua.execute("table.sort=function() error('paused streaming must not sort candidates') end")
+        self.module.update(False)
+        self.assertEqual(self.module.status()['instantiated'],0)
+
+    def test_replaced_and_rebased_panels_use_the_current_midpoint(self):
+        self.module.onRows('tile',self.rows)
+        xf=self.lua.eval('{apply=function(self,x,y,z) return x+1000,y,z end}')
+        self.module.transform(xf); self.module.update()
+        self.assertEqual(self.module.made,0)
+        self.module.onRows('tile',self.rows); self.module.update()
+        self.assertEqual(self.module.made,1)
 
     def test_modified_lua_files_parse(self):
         for name in ('perimeters.lua','roads.lua','core.lua','trees.lua'):

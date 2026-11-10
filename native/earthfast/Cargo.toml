@@ -25,10 +25,15 @@ zune-jpeg = "0.5"
 zstd = { version = "0.13", default-features = false }
 # Stable traffic-piece priority, compatible with the original route stream's BLAKE2s-64 priorities.
 blake2 = "0.10"
+# Coupled road profiles: native sparse convex QP solver (Apache-2.0); no BLAS or Python optimizer at runtime.
+clarabel = { version = "0.11.1", default-features = false, features = ["serde"] }
 # The direction signs' faces drawn in the kernel (dirsigns_face.rs): glyphs rasterised by fontdue (pure Rust, MIT /
 # Apache-2.0), the picture encoded by png (pure Rust, MIT / Apache-2.0)
 fontdue = "0.9"
 png = "0.17"
+# The Add-ons page's README and release notes as safe HTML (mdhtml.rs: our own tags from the parser's events, no raw
+# HTML passed through); pulldown-cmark, pure Rust, MIT
+pulldown-cmark = { version = "0.13", default-features = false }
 
 [profile.release]
 opt-level = 3

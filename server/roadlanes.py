@@ -54,9 +54,23 @@ def is_link(feats, i):
 
 
 def invalidate(feats):
-    """Enrichment can arrive after specs were requested; discard derived facts."""
-    for key in ("_road_specs", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
-                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_overrides"):
+    """Enrichment can arrive after specs were requested; discard derived facts.
+
+    Keep 1.8's cell identity and neighbour hook: they make lane-flow and deck
+    joints consistent across cell boundaries. Evict this cell's in-memory
+    facts too, so a reloaded feature cannot resurrect its previous widths.
+    """
+    import roads
+    feats._road_revision = getattr(feats, "_road_revision", 0) + 1
+    cid = feats.__dict__.get("_bnge_cell")
+    if cid is not None:
+        with roads._FACTS_LOCK:
+            for key in list(roads._FACTS_MEM):
+                if key[0] == cid:
+                    roads._FACTS_MEM.pop(key, None)
+    for key in ("_road_specs", "_sign_specs", "_sign_rows", "_bridge_specs", "_tunnel_specs", "_generated_lanes",
+                "_raw_level_ranges", "_level_ranges", "_ranges_state", "_lane_flow_rows", "_lane_flow",
+                "_lane_flow_home", "_lane_shifts", "_road_tapers", "_deck_tapers", "_lane_overrides", "_ramp_junction"):
         feats.__dict__.pop(key, None)
 
 
@@ -154,106 +168,80 @@ def join(feats, tags, ids, geometry=None):
     invalidate(feats)
 
 
-def continuations(feats, eligible):
-    """Unique reciprocal matches at aligned ends, respecting flow and connectors."""
-    classes = feats.attrs.get("class", [""] * len(feats))
-    origin = feats.lonlat[0] if len(feats.lonlat) else np.zeros(2)
-    scale = np.array([111320. * np.cos(np.radians(origin[1])), 110574.])
-    ends, buckets = {}, {}
-    connectors = feats.rules.get("connectors")
-    for i in sorted(eligible):
-        parts = feats.parts(i)
-        if len(parts) != 1 or len(parts[0]) != 1:
-            continue
-        line = (parts[0][0] - origin) * scale
-        if len(line) < 2:
-            continue
-        line = line[np.r_[True, np.linalg.norm(np.diff(line, axis=0), axis=1) > .01]]
-        if len(line) < 2:
-            continue
-        for end, other in ((0, 1), (1, -2)):
-            at = 0 if end == 0 else -1
-            tangent = line[other] - line[at]
-            tangent /= np.linalg.norm(tangent)
-            ids = frozenset(str(connectors.value[r]) for r in connectors.rows(i)
-                            if abs(float(connectors.start[r]) - end) < .001) if connectors else frozenset()
-            direction = rule(feats, "oneway", i)
-            flow = (0 if direction is None else int(np.sign(direction))) * (1 if end else -1)
-            ends[i, end] = (line[at], tangent, ids, flow)
-            buckets.setdefault(tuple(np.floor(line[at]).astype(int)), []).append((i, end))
-    choices = {}
-    for a, (p, tangent, ids, flow) in ends.items():
-        key = np.floor(p).astype(int)
-        near = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                for b in buckets.get((key[0] + dx, key[1] + dy), ()):
-                    q, heading, other_ids, other_flow = ends[b]
-                    if (a[0] != b[0] and classes[a[0]] == classes[b[0]] and flow == -other_flow
-                            and not (ids and other_ids and ids.isdisjoint(other_ids))
-                            and np.linalg.norm(p - q) <= .75 and tangent @ heading < -.9):
-                        near.append(b)
-        if len(near) == 1:
-            choices[a] = near[0]
-    return {a: b for a, b in choices.items() if choices.get(b) == a}
+def ucs4(values):
+    """str(v) of each value as a C-contiguous uint32 array (n, w) of code points, zero-padded (a NumPy str array's own
+    buffer where it is one): the kernels compare these as the strings."""
+    a = np.asarray(values)
+    if a.dtype.kind != "U" or a.dtype.byteorder == ">":
+        a = a.astype(str)
+    a = np.ascontiguousarray(a.ravel())
+    return a.view(np.uint32).reshape(len(a), a.dtype.itemsize // 4)
 
 
-def bounded_components(candidates, joins):
-    """Missing chains with exactly two known ends; no loops, dead ends or forks."""
-    unseen = set(candidates)
-    while unseen:
-        component, pending, outside, closed = set(), [min(unseen)], [], True
-        while pending:
-            i = pending.pop()
-            if i in component:
-                continue
-            component.add(i)
-            for end in (0, 1):
-                b = joins.get((i, end))
-                if b is None:
-                    closed = False
-                elif b[0] in candidates:
-                    pending.append(b[0])
-                else:
-                    outside.append(b[0])
-        unseen.difference_update(component)
-        if closed and len(outside) == 2 and outside[0] != outside[1]:
-            yield component, outside
+def _equals(col, n, values):
+    """Per feature: attrs column col's value is one of values (False all along without the column)."""
+    out = np.zeros(n, bool)
+    if col is not None and n:
+        c = np.asarray(col)
+        for v in values:
+            out |= c == v
+    return out
+
+
+def links(feats):
+    """is_link of every feature, as one bool array."""
+    n = len(feats)
+    out = np.zeros(n, bool)
+    table = feats.rules.get("subclass")
+    if table is not None and len(table.feature) and n:
+        maj = table.majors(n)
+        hit = np.asarray(table.value).astype(str) == "link"
+        out |= (maj >= 0) & hit[np.maximum(maj, 0)]
+    sub = feats.attrs.get("subclass")
+    if sub is not None and n:
+        out |= np.asarray(sub).astype(str) == "link"
+    return out
 
 
 def generated_counts(feats):
-    """Validated mapped counts and bounded highway gaps; defaults stay in roads."""
+    """Validated mapped counts and bounded highway gaps; defaults stay in roads. The map's count of each feature (its
+    way's, a geometry match's, the lane tags' total or its direction's), then the gaps of a highway chain between two
+    pieces whose counts agree (the chain's ends matched where they meet aligned, by flow and connectors): one
+    earthfast.generated_lanes call (the Python was ~8 ms per Manhattan roads layer, 2026-11-08; its reference:
+    tests/lanes_reference.py). Remembered on feats."""
     saved = feats.__dict__.get("_generated_lanes")
     if saved is not None:
         return saved
+    import fast
+    fast.require(169, "generated_lanes")
     n = len(feats)
-    counts = [count(v) for v in feats.attrs.get("lane_count", feats.attrs.get("osm_lanes", [None] * n))]
-    columns = [feats.attrs.get(k, [None] * n) for k in
-               ("osm_lane_total", "osm_lanes_forward", "osm_lanes_backward", "osm_lanes_both_ways")]
-    for i in range(n):
-        total = count(columns[0][i])
-        if total is not None:
-            counts[i] = total
-        elif counts[i] is None:
-            fwd = count(columns[1][i], 0)
-            bwd = count(columns[2][i], 0)
-            both = count(columns[3][i], 0) or 0
-            direction = rule(feats, "oneway", i)
-            if direction is None and fwd is not None and bwd is not None:
-                counts[i] = count(fwd + bwd + both)
-            elif direction is not None:
-                counts[i] = count(fwd if direction > 0 else bwd)
-    classes = feats.attrs.get("class", [""] * n)
-    rings = feats.attrs.get("osm_junction", [""] * n)
-    eligible = {i for i in range(n) if classes[i] in HIGHWAYS and not is_link(feats, i)
-                and rings[i] not in ("roundabout", "circular")}
-    missing = {i for i in eligible if counts[i] is None}
-    if missing:
-        for component, outside in bounded_components(missing, continuations(feats, eligible)):
-            agreed = counts[outside[0]]
-            if agreed is not None and agreed == counts[outside[1]]:
-                for i in component:
-                    counts[i] = agreed
+    a = feats.attrs
+    oneway = feats.rules.get("oneway")
+    dirs, has = np.zeros(n), np.zeros(n, bool)
+    if oneway is not None and len(oneway.feature) and n:
+        maj = oneway.majors(n)
+        has = maj >= 0
+        dirs = np.where(has, np.asarray(oneway.value, np.float64)[np.maximum(maj, 0)], 0.0)
+    hw = np.where(_equals(a.get("class"), n, ("motorway",)), 1, 0) + np.where(_equals(a.get("class"), n, ("trunk",)),
+                                                                              2, 0)
+    eligible = (hw > 0) & ~links(feats) & ~_equals(a.get("osm_junction"), n, ("roundabout", "circular"))
+    con = feats.rules.get("connectors")
+    if con is not None and len(con.feature):
+        con_f = np.ascontiguousarray(con.feature, np.int64)
+        con_s = np.ascontiguousarray(con.start, np.float64)
+        con_v = ucs4(con.value)
+    else:
+        con_f, con_s, con_v = np.zeros(0, np.int64), np.zeros(0), np.zeros((0, 1), np.uint32)
+    origin = feats.lonlat[0] if len(feats.lonlat) else np.zeros(2)
+    scale = np.array([111320. * np.cos(np.radians(origin[1])), 110574.])
+    got = fast._ef.generated_lanes(
+        a.get("lane_count", a.get("osm_lanes")), a.get("osm_lane_total"), a.get("osm_lanes_forward"),
+        a.get("osm_lanes_backward"), a.get("osm_lanes_both_ways"), np.ascontiguousarray(dirs, np.float64),
+        np.ascontiguousarray(has, bool), np.ascontiguousarray(eligible, bool), np.ascontiguousarray(hw, np.int64),
+        np.ascontiguousarray(feats.part_off, np.int64), np.ascontiguousarray(feats.ring_off, np.int64),
+        np.ascontiguousarray(feats.coord_off, np.int64), np.ascontiguousarray(feats.lonlat, np.float64).reshape(-1, 2),
+        (float(origin[0]), float(origin[1])), (float(scale[0]), float(scale[1])), con_f, con_s, con_v)
+    counts = [None if c < 0 else c for c in got.tolist()]
     import rampoverrides
     for i, lanes in rampoverrides.lane_counts(feats).items():
         counts[i] = lanes

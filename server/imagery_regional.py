@@ -14,13 +14,18 @@ ARCGIS_EXPORT = "bbox={bbox}&bboxSR=3857&imageSR=3857&size={size},{size}&format=
 # a WMS without Web Mercator: the tile's extent in latitude / longitude (imagery.lat_lon_bbox)
 WMS_4326 = ("SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0&STYLES=&CRS=EPSG:4326&BBOX={bbox4326}&WIDTH={size}&HEIGHT={size}"
             "&FORMAT=image/jpeg")
+# DGT's MapProxy rejects image/jpeg (its advertised JPEG type is malformed).
+# PNG with an opaque white background uses the existing export nodata policy.
+DGT_WMS = ("SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1&STYLES=&SRS=EPSG:3857&BBOX={bbox}&WIDTH={size}&HEIGHT={size}"
+           "&FORMAT=image/png&TRANSPARENT=FALSE&BGCOLOR=0xFFFFFF")
 
 # The place each regional source covers, for the player (netfetch.role_of: what a source that does not answer affects)
 PLACE = {
     "ct2023": "Connecticut", "ma2025": "Massachusetts", "dc2025": "Washington, DC", "indiana": "Indiana",
     "ohio": "Ohio", "ncarolina": "North Carolina", "penn": "Pennsylvania", "virginia": "Virginia",
     "newyork": "New York State", "newjersey": "New Jersey", "delaware": "Delaware", "vermont": "Vermont",
-    "swiss": "Switzerland", "france": "France", "spain": "Spain", "netherlands": "the Netherlands",
+    "swiss": "Switzerland", "france": "France", "pt_dgt2021": "Portugal", "pt_dgt2018": "Portugal",
+    "spain": "Spain", "netherlands": "the Netherlands",
     "luxembourg": "Luxembourg", "austria": "Austria", "it_bolzano": "South Tyrol", "it_pcn": "Italy",
     "poland": "Poland", "czechia": "Czechia", "estonia": "Estonia", "flanders": "Flanders (Belgium)",
     "de_bayern": "Bavaria", "de_nrw": "North Rhine-Westphalia", "de_bw": "Baden-Wurttemberg",
@@ -63,6 +68,16 @@ REGIONAL = {
     "france": ("https://data.geopf.fr/wmts?SERVICE=WMTS&REQUEST=GetTile&VERSION=1.0.0&LAYER=ORTHOIMAGERY.ORTHOPHOTOS"
                "&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}",
                "IGN BD ORTHO (Licence Ouverte 2.0)", (41.30, -5.20, 51.10, 9.60), "xyz", False),
+    # Newer northern flights first; blank parts fall through to the mainland 2018
+    # coverage. Both services advertise the whole mainland, but the 2021 flights hold
+    # imagery only north of ~39.58 N (Braga to Leiria; Santarem, Lisbon, Evora and Faro
+    # come back ~97 % white, ~260 ms per empty z15 parent: PR #868's review). 39.5 keeps
+    # the south from asking it first. Keep both ahead of Spain, whose broad box also
+    # includes Portugal.
+    "pt_dgt2021": ("https://cartografia.dgterritorio.gov.pt/ortos2021/service?LAYERS=Ortos2021-RGB&" + DGT_WMS,
+                   "DGT Portugal orthophotos 2021 (CC BY 4.0)", (39.50, -10.20, 42.28, -5.95), "export", False),
+    "pt_dgt2018": ("https://cartografia.dgterritorio.gov.pt/ortos2018/service?LAYERS=Ortos2018-RGB&" + DGT_WMS,
+                   "DGT Portugal orthophotos 2018 (CC BY 4.0)", (36.72, -10.20, 42.28, -5.95), "export", False),
     "spain": ("https://tms-pnoa-ma.idee.es/1.0.0/pnoa-ma/{z}/{x}/{ty}.jpeg", "PNOA (c) IGN Espana (CC BY 4.0)",
               (27.60, -18.20, 43.80, 4.40), "xyz", False),
     "netherlands": ("https://service.pdok.nl/hwh/luchtfotorgb/wmts/v1_0/Actueel_orthoHR/EPSG:3857/{z}/{x}/{y}.jpeg",

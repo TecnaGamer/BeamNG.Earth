@@ -220,13 +220,20 @@ def choose_user_dir(args):
 
 # --- the mod ------------------------------------------------------------------------------------
 
+# files made in the installed copy at install time, not in the source (skypatch.py): not part of its hash
+GENERATED = ("lua/ge/extensions/beamngEarth/skypatch_flag.lua",)
+
+
 def tree_hash(path):
     h = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(path):
         dirnames.sort()
         for name in sorted(filenames):
             full = os.path.join(dirpath, name)
-            h.update(os.path.relpath(full, path).replace(os.sep, "/").encode())
+            rel = os.path.relpath(full, path).replace(os.sep, "/")
+            if rel in GENERATED:
+                continue
+            h.update(rel.encode())
             with open(full, "rb") as f:
                 h.update(hashlib.sha256(f.read()).digest())
     return h.hexdigest()

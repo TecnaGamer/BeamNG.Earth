@@ -352,6 +352,19 @@ def dimensions(tags):
             "scale": scale}
 
 
+# Small turbines are left out: a rotor under SMALL_ROTOR_M or a hub under SMALL_HUB_M is a rooftop, mast or tower-mounted
+# one (the Eiffel Tower's two 3.2 m turbines, mapped at height 134 on its second floor, stood under it scaled down to a
+# toy of the stock utility turbine, Discord 2026-11-06); the model is a utility-scale turbine standing on the ground.
+SMALL_ROTOR_M = 10.0
+SMALL_HUB_M = 15.0
+
+
+def small(tags):
+    """Is this a small (rooftop, mast, structure-mounted) turbine by its mapped rotor or hub (SMALL_*)?"""
+    rotor, hub = length_m(tags.get("rotor:diameter")), length_m(tags.get("height:hub"))
+    return (rotor is not None and rotor < SMALL_ROTOR_M) or (hub is not None and hub < SMALL_HUB_M)
+
+
 def rows_for_features(frame, features, elev, collide=True):
     """One batched terrain sample and coordinate conversion for a set of mapped turbines."""
     if not features:
@@ -372,7 +385,7 @@ def rows_for_features(frame, features, elev, collide=True):
         return []
     out = []
     for k, turbine in enumerate(features):
-        if not valid[k]:
+        if not valid[k] or small(turbine.tags):
             continue
         size = dimensions(turbine.tags)
         out.append({"id": turbine.id, "lat": turbine.lat, "lon": turbine.lon,

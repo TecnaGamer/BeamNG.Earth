@@ -33,6 +33,15 @@ console.log("mapmath fallback ok:", fb.length, "stand-ins for", tiles.length, "t
   assert.strictEqual(mm.visibleLabels(pts, 50, 0, 5, 800, 600, { maxZoom: 4 }).length, 0)
   const vb = mm.viewBox(0, 179.9, 6, 800, 600)
   assert.ok(vb[0] > vb[2], "a view over the antimeridian")
+  // zoomed far out (the world 512 px wide in a 2000 px view): a line across the copies' seam (180 deg from the view's
+  // centre) stays in one piece (no stroke across the map, the user 2026-11-08) and is drawn in every copy on screen
+  const seam = [[25, 22, 40, 22]]
+  const far = mm.visibleLines(seam, mm.lineBoxes(seam), 30, -148, 1, 2000, 1000)
+  assert.ok(far.length >= 3, "the line in each copy of the world on screen: " + far.length)
+  for (const f of far) {
+    const xs = f.split(" ").map(q => Number(q.split(",")[0]))
+    assert.ok(Math.abs(xs[1] - xs[0]) < 40, "a 15 degree line stays ~21 px long, not a stroke across the map: " + f)
+  }
   console.log("mapmath layers ok")
 }
 

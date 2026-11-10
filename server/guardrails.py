@@ -28,6 +28,13 @@ GROUPS = ("guardrail", "guardrail_start", "guardrail_end", "guardrail_back", "gu
           "guardrail_back_end", "jersey", "jersey_end", "cable", "kantstolpe",
           "se_f17", "se_f17_400", "se_f17_300", "se_f17_200", "se_f18_11", "se_f18_12", "se_f18_21", "se_f2", "se_c1",
           "se_b3", "se_e1", "se_e2", "se_a19")      # (sesigns.py's: rows go in after every barrier's, medians only reads those)
+STOCK_GROUPS = GROUPS
+import euguardrails
+ALL_GROUPS = GROUPS + euguardrails.GROUPS
+
+
+def groups_for(rows):
+    return ALL_GROUPS if any(int(r[0])>=len(STOCK_GROUPS)for r in rows) else STOCK_GROUPS
 G_JERSEY, G_JERSEY_END, G_CABLE = 6, 7, 8
 KINDS = {"guard_rail": 0, "jersey_barrier": G_JERSEY, "cable_barrier": G_CABLE}    # mapped class -> its module group
 HEIGHTS = {G_JERSEY: 0.88, G_JERSEY_END: 0.88, G_CABLE: 1.0}                       # (the rest: MODULE_HEIGHT_M)
@@ -464,6 +471,7 @@ def _deck_segments(decks):
 # split at a bridge (CT 72 under High Street, its lower part layer=-1 and not among the ground roads) its piece's end
 # looks like a dead end, and two modules stood in its lanes.
 RAIL_CLEAR_M = 0.25             # m a rail across a road's line keeps clear of its carriageway's edge
+LANE_CENTER_M = 1.5             # m of the centre line that stays put: a median, not a side rail drawn in the lane
 CROSS_SAMPLES = 7               # points along a module checked
 
 
@@ -510,6 +518,75 @@ def _across_road(a, b, rsegs):
     return bool(np.any(d < sh[None] + RAIL_CLEAR_M))
 
 
+def _along_road(a, b, rsegs):
+    """The ground carriageway a module runs along, or None.
+
+    A side rail mapped inside the generated width still follows that road (GitHub #680). The match is the
+    segment it is parallel to and beside. `median` is the deck test: the rail sits between two carriageways,
+    so it is not pushed out to either edge. `dot` is compared with a deck's alignment; the closer one owns
+    the rail, which keeps a lower road's rail off a bridge it only crosses at a shallow angle.
+    """
+    if rsegs is None:
+        return None
+    a, b = np.asarray(a, np.float64), np.asarray(b, np.float64)
+    direction = b - a
+    tangent_len = float(np.hypot(direction[0], direction[1]))
+    if tangent_len < 1e-6:
+        return None
+    tangent = direction / tangent_len
+    mid = 0.5 * (a + b)
+    dots = np.abs(rsegs["unit"] @ tangent)
+    aligned = dots >= PARAPET_PARALLEL_DOT
+    if not aligned.any():
+        return None
+    v = mid - rsegs["a"]
+    along = np.sum(v * rsegs["unit"], axis=1)
+    lateral = v[:, 0] * rsegs["unit"][:, 1] - v[:, 1] * rsegs["unit"][:, 0]
+    span = (along >= -1e-4) & (along <= rsegs["len"] + 1e-4)
+    near = aligned & span & (np.abs(lateral) <= rsegs["half"] + ALONGSIDE_REACH_M)
+    if not near.any():
+        return None
+    cand = np.flatnonzero(near)
+    best = float(dots[cand].max())
+    tied = cand[dots[cand] >= best - 1e-6]
+    k = int(tied[np.argmin(np.abs(lateral[tied]))])
+    unit = rsegs["unit"][k]
+    other = aligned & (np.arange(len(dots)) != k)
+    median = False
+    if other.any():
+        a2, u2, l2 = rsegs["a"][other], rsegs["unit"][other], rsegs["len"][other]
+        t2 = np.clip(np.sum((mid - a2) * u2, axis=1), 0.0, l2)
+        n2 = a2 + t2[:, None] * u2
+        d2 = np.hypot(*(mid - n2).T) - rsegs["half"][other]
+        j = int(np.argmin(d2))
+        if float(d2[j]) <= MEDIAN_REACH_M:
+            t1 = float(np.clip(along[k], 0.0, rsegs["len"][k]))
+            n1 = rsegs["a"][k] + t1 * unit
+            median = float(np.dot(mid - n1, mid - n2[j])) < 0.0
+    return {"dot": float(dots[k]), "lat": float(lateral[k]), "half": float(rsegs["half"][k]),
+            "origin": np.asarray(rsegs["a"][k], np.float64), "unit": np.asarray(unit, np.float64),
+            "median": median}
+
+
+def _shift_to_edge(a, b, road):
+    """Move both ends of a side rail out to its carriageway edge. A centre barrier, a median, and a rail
+    already outside the edge stay where they were mapped."""
+    if road is None or road["median"]:
+        return a, b
+    if abs(road["lat"]) <= LANE_CENTER_M or abs(road["lat"]) >= road["half"] - 0.05:
+        return a, b
+    target = math.copysign(road["half"] + RAIL_CLEAR_M, road["lat"])
+    origin, unit = road["origin"], road["unit"]
+    right = np.array([unit[1], -unit[0]], np.float64)
+
+    def move(p):
+        v = np.asarray(p, np.float64) - origin
+        cur = float(v[0] * unit[1] - v[1] * unit[0])
+        return np.asarray(p, np.float64) + (target - cur) * right
+
+    return move(a), move(b)
+
+
 def _relate(mid, segs, direction=None):
     """Relate a rail module to a nearby deck only when it runs along that deck.
 
@@ -522,21 +599,24 @@ def _relate(mid, segs, direction=None):
     lateral = v[:, 0] * segs["unit"][:, 1] - v[:, 1] * segs["unit"][:, 0]
     span = (along >= -1e-4) & (along <= segs["len"] + SPAN_TOL_M)
     past = np.abs(lateral) - segs["half"]
+    tangent = None
     aligned = np.ones(len(segs["unit"]), bool)
     if direction is not None:
         tangent = np.asarray(direction, np.float64)
         tangent_len = float(np.hypot(tangent[0], tangent[1]))
         if tangent_len < 1e-6:
             return None
-        aligned = np.abs(segs["unit"] @ (tangent / tangent_len)) >= PARAPET_PARALLEL_DOT
+        tangent = tangent / tangent_len
+        aligned = np.abs(segs["unit"] @ tangent) >= PARAPET_PARALLEL_DOT
     near = span & aligned & (past <= BRIDGE_SIDE_CLEARANCE_M + ALONGSIDE_REACH_M)
     if not near.any():
         return None
     cand = np.flatnonzero(near)
     k = int(cand[np.argmin(past[cand])])
     deck = int(segs["idx"][k])
+    dot = 1.0 if tangent is None else float(abs(segs["unit"][k] @ tangent))
     rel = {"past": float(past[k]), "lat": float(abs(lateral[k])), "half": float(segs["half"][k]),
-           "deck": deck, "median": False}
+           "deck": deck, "median": False, "dot": dot}
     other = (segs["idx"] != deck) & aligned
     if other.any():
         a2, u2, l2 = segs["a"][other], segs["unit"][other], segs["len"][other]
@@ -679,7 +759,7 @@ def _self_doubles(rows, dist=0.9, dot=0.8, dz=1.5):
 
 
 
-def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+def _mapped_forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
                 supported_decks_out=None, roads=()):
     """Return Forest-item rows for the stock Italy guardrail model.
 
@@ -696,6 +776,8 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
     are dropped, and aligned approach rails join the bridge over JOIN_LENGTH_M.
     When supplied, supported_decks_out receives the indices of decks supported by mapped rails.
     roads: the ground carriageways near the tile (build_tile roads_out): no rail on the ground stands across their lanes.
+    A rail that follows a ground road more closely than a deck stays on that road. A side rail standing in that
+    road's lanes is shifted out to the carriageway edge; a centre barrier and a median stay where they were mapped.
     """
     if supported_decks_out is not None:
         supported_decks_out.clear()
@@ -830,10 +912,15 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                     source_a, source_b = np.asarray(a, np.float64), np.asarray(b, np.float64)
                     mid = 0.5 * (source_a + source_b)
                     mode, shifts = "ground", None
+                    road = _along_road(source_a, source_b, rsegs)
                     if deck_hint is not False:
                         direction = source_b - source_a
                         rel = _relate(mid, segs, direction) if segs is not None else None
-                        if rel is not None:
+                        # An untagged rail belongs to the carriageway it actually follows. A shallow angle
+                        # still clears the deck's parallel test; the closer alignment keeps the rail on that road.
+                        road_claims = (road is not None and deck_hint is not True and
+                                       (rel is None or road["dot"] > rel["dot"]))
+                        if rel is not None and not road_claims:
                             edge_band = rel["lat"] > rel["half"] - INTERIOR_MARGIN_M
                             if rel["median"]:
                                 mode = "median"                # between two aligned decks: stays at deck height
@@ -843,12 +930,20 @@ def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rail
                                 continue                       # on the deck's edge: the bridge's own rail is there
                             else:
                                 mode = "beside"                # beside the deck: ground rail unless it hangs
-                        else:
+                        elif not road_claims:
                             shifts = _join_module(source_a, source_b, ends, direction)
                             if shifts is not None:
                                 mode = "join"
+                    if mode == "ground":
+                        source_a, source_b = _shift_to_edge(source_a, source_b, road)
                     if mode not in ("deck", "median") and _across_road(source_a, source_b, rsegs):
                         continue                               # across a road's lanes: no real rail stands there
+                    # The span of a bridge is a deck, not a ground road, so a rail that cuts across it
+                    # and follows no carriageway is never caught above. Where the bank is at the road's
+                    # height that piece stands in the lane. A rail that does follow a road stays.
+                    if (mode not in ("deck", "median") and road is None and
+                            _across_road(source_a, source_b, segs)):
+                        continue
                     parapet_xy_match = _overlaps_bridge_parapet(source_a, source_b, parapet_segments)
                     if not parapet_xy_match:
                         parapet_xy_match = _overlaps_bridge_parapet(
@@ -1069,3 +1164,10 @@ def bridge_rows(parapets, frame=None):
                          float(back[0]), float(back[1]), float(back[2]),
                          float(up[0]), float(up[1]), float(up[2])])
     return rows
+
+
+def forest_rows(frame, infra_fn, exact, elev, decks=(), parapets=(), bridge_rails=False,
+                supported_decks_out=None, roads=()):
+    rows=_mapped_forest_rows(frame,infra_fn,exact,elev,decks,parapets,bridge_rails,supported_decks_out,roads)
+    if not euguardrails.enabled():return rows
+    return euguardrails.extend(frame,roads,exact,elev,rows,decks)

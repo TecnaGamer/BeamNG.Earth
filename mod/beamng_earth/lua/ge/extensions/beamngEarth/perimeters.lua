@@ -92,7 +92,8 @@ function M.onRows(key,rows,report)
       local p = registry[r[7]] or {refs={}}
       -- Copy wire rows: rebase transforms must never mutate cached road JSON.
       local copy={}; for i,v in ipairs(r) do copy[i]=v end
-      p.row=copy; p.refs[key]=true; registry[r[7]]=p
+      p.row=copy; p.cx=(copy[1]+copy[4])/2; p.cy=(copy[2]+copy[5])/2
+      p.refs[key]=true; registry[r[7]]=p
       if p.object then
         local o = scenetree.findObjectById(p.object)
         if o then place(o,copy,p.collisionReady) else p.object = nil end
@@ -116,8 +117,37 @@ function M.transform(xf)
     local r = p.row
     r[1],r[2],r[3] = xf:apply(r[1],r[2],r[3])
     r[4],r[5],r[6] = xf:apply(r[4],r[5],r[6])
+    p.cx, p.cy = (r[1]+r[4])/2, (r[2]+r[5])/2
     local o = p.object and scenetree.findObjectById(p.object)
     if o then place(o,r,p.collisionReady) end
+  end
+end
+
+-- Keep only the nearest frame's worth of panels in a max heap. The root is the
+-- farthest retained candidate, so distant panels need no allocation or sorting.
+local function offer(candidates, panel, distance, budget)
+  if budget <= 0 then return end
+  local n = #candidates
+  if n < budget then
+    local i = n+1
+    local entry = {p=panel,d=distance}
+    while i > 1 do
+      local parent = math.floor(i/2)
+      if candidates[parent].d >= distance then break end
+      candidates[i] = candidates[parent]; i = parent
+    end
+    candidates[i] = entry
+  elseif distance < candidates[1].d then
+    local entry = candidates[1]
+    entry.p, entry.d = panel, distance
+    local i = 1
+    while i*2 <= n do
+      local child = i*2
+      if child < n and candidates[child+1].d > candidates[child].d then child = child+1 end
+      if candidates[child].d <= distance then break end
+      candidates[i] = candidates[child]; i = child
+    end
+    candidates[i] = entry
   end
 end
 
@@ -125,6 +155,8 @@ function M.update(allowCreates)
   if not next(tiles) or not materials() then return end
   local px,py = SFXSystem.getPositionXYZ()
   local candidates = {}
+  local budget = allowCreates == false and 0 or math.max(0, math.floor(M.BUDGET))
+  local draw2, unload2 = M.DRAW_M^2, M.UNLOAD_M^2
   for _,p in pairs(registry) do
     local r = p.row
     if p.object and not p.collisionReady and (not M.clearForCollision or M.clearForCollision(r)) then
@@ -134,15 +166,15 @@ function M.update(allowCreates)
         if M.onCollide then M.onCollide() end
       end
     end
-    local distance = ((r[1]+r[4])/2-px)^2 + ((r[2]+r[5])/2-py)^2
-    if distance > M.UNLOAD_M^2 then
+    local distance = (p.cx-px)^2 + (p.cy-py)^2
+    if distance > unload2 then
       if p.object then remove(p) end
-    elseif distance <= M.DRAW_M^2 and not p.object and not p.failed then
-      candidates[#candidates+1] = {p=p,d=distance}
+    elseif budget > 0 and distance <= draw2 and not p.object and not p.failed then
+      offer(candidates,p,distance,budget)
     end
   end
+  if #candidates == 0 then return end
   table.sort(candidates,function(a,b) return a.d < b.d end)
-  if allowCreates == false then return end
   local started = os.clock()
   for i=1,math.min(M.BUDGET,#candidates) do
     if i>1 and os.clock()-started > .002 then break end

@@ -1,0 +1,212 @@
+{
+  "bne_fr_wood": {
+    "name": "bne_fr_wood",
+    "mapTo": "bne_fr_wood",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6ab8f779-08ad-5803-a6d3-9dd1f5e92508",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.52,
+          0.45,
+          0.34,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.8,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/fr_furniture/wood_grain.png"
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_steel": {
+    "name": "bne_fr_steel",
+    "mapTo": "bne_fr_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6a718e30-0765-5728-8a27-57a35e9bf83b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.43,
+          0.46,
+          0.46,
+          1.0
+        ],
+        "metallicFactor": 0.6,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_dark": {
+    "name": "bne_fr_dark",
+    "mapTo": "bne_fr_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "72c1f38b-0c24-502c-942b-c3d6f60c7fa9",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.025,
+          0.03,
+          0.03,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_blue": {
+    "name": "bne_fr_blue",
+    "mapTo": "bne_fr_blue",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "30a7b5df-5920-52c3-a2ee-c477b546a470",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.015,
+          0.16,
+          0.58,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_white": {
+    "name": "bne_fr_white",
+    "mapTo": "bne_fr_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "49897a6c-aca0-5d38-a352-8bebef6a4280",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.83,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_red": {
+    "name": "bne_fr_red",
+    "mapTo": "bne_fr_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "480a6d9d-9a22-5cc7-b4fa-f5f7d3e809cf",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.7,
+          0.025,
+          0.025,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_green": {
+    "name": "bne_fr_green",
+    "mapTo": "bne_fr_green",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "083fd7c9-8276-5c87-af70-e7dc1552a679",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.1,
+          0.15,
+          0.11,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_glass": {
+    "name": "bne_fr_glass",
+    "mapTo": "bne_fr_glass",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f4aaa82e-596e-5dc1-a50e-e31bc09e5963",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.65,
+          0.57,
+          0.36,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48,
+        "emissiveFactor": [
+          0,
+          0,
+          0
+        ],
+        "emissiveIntensityNits": -1
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_reflector": {
+    "name": "bne_fr_reflector",
+    "mapTo": "bne_fr_reflector",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "641295d8-85fe-5d4e-8ae0-89bf0bb69f7b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.78,
+          0.79,
+          0.72,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "doubleSided": false
+  },
+  "bne_fr_chevron": {
+    "name": "bne_fr_chevron",
+    "mapTo": "bne_fr_chevron",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "04fea720-cacc-56bd-a7e6-046d686b2167",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.83,
+          1.0
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.48,
+        "retroreflectivity": 0.8
+      }
+    ],
+    "doubleSided": false
+  }
+}
