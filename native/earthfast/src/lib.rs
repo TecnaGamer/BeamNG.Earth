@@ -3325,15 +3325,19 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// the repr). Returns (positions: 12 per quad, uvs: 8 per quad, material per quad: 0 the facade, 1 the shopfront,
 /// 2 the window white). c: the constants (see buildings._walls). door_edge / front: -1 for none. vary / win_cells:
 /// the night windows' cells (wall_cells). shop_edges: the walls (ring edges) a shop's ground floor faces a street on,
-/// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's).
+/// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's). shop_band
+/// (v0, v1, unit m): the shop floor from rows v0..v1 of its own sheet, a whole repeat per unit m (an office tower's
+/// lobby, 197); None: the shop sheet's band shop_k.
 #[pyfunction]
 #[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
-                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new()))]
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new(),
+                    shop_band=None))]
 #[allow(clippy::too_many_arguments)]
 fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_eave: f64, wall: bool, plain: bool,
                   band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool, door_edge: i64,
                   door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64, lite: bool, c: Vec<f64>,
-                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>, shop_edges: Vec<i64>)
+                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>, shop_edges: Vec<i64>,
+                  shop_band: Option<(f64, f64, f64)>)
                   -> PyResult<(Vec<f64>, Vec<f64>, Vec<u8>)> {
     if c.len() != 18 {
         return Err(pyo3::exceptions::PyValueError::new_err("building_walls: 18 constants"));
@@ -3474,8 +3478,13 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                 if f == 0 && shop && (shop_edges.is_empty() || shop_edges.contains(&(i as i64))) {
                     m = 1u8;
                     bk = shop_k;
-                    let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
-                    uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    if let Some((_, _, unit)) = shop_band {     // (its own sheet: whole repeats of unit m)
+                        let nbs = rnd(l / unit).max(1);
+                        uu = if l > 2.0 { nbs as f64 } else { 0.02 * l };
+                    } else {
+                        let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
+                        uu = if l > 2.0 { nbs as f64 / shop_bpt as f64 } else { 0.02 * l };
+                    }
                 } else {
                     m = 0u8;
                     bk = band_k;
@@ -3504,7 +3513,10 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                         continue;
                     }
                 }
-                let (v0, v1) = band_v(bk);
+                let (v0, v1) = match shop_band {
+                    Some((sv0, sv1, _)) if m == 1 => (sv0, sv1),
+                    _ => band_v(bk),
+                };
                 let has_door = f == 0 && roof_flat && door_edge >= 0 && door_edge == i as i64;
                 if has_door && door_gap < door_pos && door_pos < l - door_gap {
                     let (mut s0, mut s1) = (door_pos - door_gap, door_pos + door_gap);
@@ -6012,6 +6024,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // ends of bridge_lifts / bridge_chain_ends_free); geodetic_to_enu_c / enu_to_geodetic_c (one height for all: the
     // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
     // another frame by the rotation alone); wallsindex (roadwidth.Walls' bucket index)
-    m.add("VERSION", 194)?;
+    // 197: building_walls' shop_band (an office tower's lobby sheet)
+    m.add("VERSION", 197)?;
     Ok(())
 }

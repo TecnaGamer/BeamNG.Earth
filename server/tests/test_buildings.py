@@ -530,7 +530,7 @@ class NightWindowsTest(unittest.TestCase):
         for kw in ({}, dict(facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=20, shop=True)):
             for lite in (False, True):
                 names = {bld.MATERIALS[i] for i in self._wall(lite=lite, **kw).M}
-                self.assertLessEqual(names, {bld.FACADE, bld.OFFICE, bld.SHOP}, names)
+                self.assertLessEqual(names, {bld.FACADE, bld.OFFICE, bld.SHOP, bld.LOBBY}, names)
         self.assertFalse([n for n in bld.MATERIALS if n.endswith(("_b", "_c")) and n.startswith("bne_bld_")])
 
     def test_floors_start_apart(self):
@@ -599,9 +599,23 @@ class NightWindowsTest(unittest.TestCase):
 
     def test_shopfront_bays_apart(self):
         """A shopfront's bays (two a sheet) each a hashed one: some bays bright, some dim (SHOP_LEVELS)."""
-        m = self._wall(w=61.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True)
+        m = self._wall(w=61.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=8, shop=True, cls="retail")
         fl = self._floors(m, bld.BAND_SHOP)
         self.assertTrue(any(len(us) > 1 for us in fl.values()), fl)
+
+    def test_office_tower_lobby(self):
+        """An office tower's street floor is the corporate lobby sheet's lower half (LOBBY_BAND), whole repeats; a
+        retail one keeps its shopfront."""
+        lobby, shop = bld.MATERIALS.index(bld.LOBBY), bld.MATERIALS.index(bld.SHOP)
+        m = self._wall(w=34.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=12, shop=True)
+        M = np.asarray(m.M)
+        self.assertIn(lobby, M)
+        self.assertNotIn(shop, M)
+        uv = np.asarray(m.UV).reshape(-1, 8)
+        q = np.asarray(m.M)[::2] == lobby
+        self.assertTrue(np.all((uv[q][:, 1::2] >= bld.LOBBY_BAND[0] - 1e-9) & (uv[q][:, 1::2] <= bld.LOBBY_BAND[1] + 1e-9)))
+        r = self._wall(w=34.0, facade=f"{bld.OFFICE}|1", band=bld.BAND_OFFICE, floors=12, shop=True, cls="retail")
+        self.assertIn(shop, np.asarray(r.M))
 
     def test_laid_over_windows_take_the_sash_cells(self):
         m = self._wall(floors=2, roof="gable", band=(2, 1), plain=True, wall="siding", door=(0, 0.5))

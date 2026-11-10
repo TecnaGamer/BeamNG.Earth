@@ -89,6 +89,11 @@ ROOF_SLATE = "bne_bld_roof_slate"
 # survey 2026-11-10): the clay roofs of the regional styles and of roof:material=roof_tiles, which were the slate texture
 # tinted orange. Its repeat is ROOF_TILES_UV_M (about four tiles across), not the other roofs' ROOF_UV_M
 ROOF_TILES = "bne_bld_roof_tiles"
+# an office tower's street floor: a lobby of glass doors (the stock corporate facade sheet,
+# assets/materials/trim/metal/m_facade_corporate: its lower half, the asset survey 2026-11-10), not a shopfront
+LOBBY = "bne_bld_lobby"
+LOBBY_BAND = (0.004, 0.496, 6.8)      # its rows (v, Collada: the sheet's lower half) and m per repeat (three bays)
+LOBBY_NOT = {"retail", "supermarket", "kiosk", "restaurant", "commercial"}
 ROOF_TILES_UV_M = 1.2
 ROOF_SHINGLE = "bne_bld_roof_shingle"
 SIDING = "bne_bld_siding"
@@ -117,7 +122,7 @@ LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosse
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES)
+             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -133,6 +138,7 @@ LOOKS = {
     "bne_bld_fac_ochre": (FACADE, (1.0, 0.80, 0.52)), "bne_bld_fac_terracotta": (FACADE, (0.96, 0.66, 0.50)),
     "bne_bld_fac_salmon": (FACADE, (1.0, 0.80, 0.70)),
     SHOP: (SHOP, (1.0, 1.0, 1.0)), OFFICE: (OFFICE, (1.0, 1.0, 1.0)), SIDING: (SIDING, (0.93, 0.92, 0.88)),
+    LOBBY: (LOBBY, (1.0, 1.0, 1.0)),
 }
 ROOF_TINTS = {               # per roof material: the colours a building's roof takes (hashed)
     ROOF_FLAT: ((0.85, 0.85, 0.85), (0.62, 0.62, 0.64), (0.95, 0.93, 0.88), (0.45, 0.45, 0.46), (0.75, 0.70, 0.64)),
@@ -1360,18 +1366,20 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
                                            DOOR_GAP_M, PLAIN_STRIP, GROUND_FLOOR_SHOP_M, WIN_OUT_M, HOUSE_BAY_M,
                                            *WIN_UV, WIN_W, WIN_H, WIN_SILL)]
-    fast.require(191, "building_walls")
+    fast.require(197, "building_walls")
     band = spec.band or (0, 1)
     good = list(band[2]) if len(band) > 2 else []
     door = spec.door
-    mats = [mat_idx[spec.facade], mat_idx[SHOP] if (spec.shop or spec.wall) else None,
+    lobby = bool(spec.shop) and not spec.wall and str(spec.facade or "").startswith(OFFICE) \
+        and spec.cls not in LOBBY_NOT
+    mats = [mat_idx[spec.facade], mat_idx[LOBBY if lobby else SHOP] if (spec.shop or spec.wall) else None,
             mat_idx["bne_bld_fac_white"] if spec.wall else None]
     # each window its own brightness at night (see WIN_CELLS): the bands whose floors start at a hashed cell, near tiles
     # in runs of two band lengths (the shopfronts' two bays: a bay each)
     vary = []
     if mats[0][0] in _SHEET_MI and not (mats[0][0] == _FACADE_MI and band[0] == 0) and not (good and not lite):
         vary.append((0, int(band[0]), int(band[1]), 2 * int(band[1])))
-    if mats[1] is not None:
+    if mats[1] is not None and not lobby:
         vary.append((1, BAND_SHOP[0], BAND_SHOP[1], 1))
     P, UV, mid = fast._ef.building_walls(
         np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]), float(z0), float(z_eave), bool(spec.wall),
@@ -1380,7 +1388,8 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS, vary,
         WIN_CELLS if spec.wall else [],
-        [-1] if hole else [int(e) for e in (spec.street or ())])     # (a shop's ground floor on its street walls: doors())
+        [-1] if hole else [int(e) for e in (spec.street or ())],    # (a shop's ground floor on its street walls: doors())
+        LOBBY_BAND if lobby else None)
     if mid:
         m.quads(P, UV, mid, mats)
 

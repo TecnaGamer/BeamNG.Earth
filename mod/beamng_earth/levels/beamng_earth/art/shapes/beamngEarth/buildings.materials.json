@@ -794,5 +794,31 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_bld_lobby": {
+    "name": "bne_bld_lobby",
+    "mapTo": "bne_bld_lobby",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "15a3fb8e-bc51-54d6-9e75-9e546c9ed815",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/trim/metal/m_facade_corporate/t_windows_corporate_b.color.png",
+        "normalMap": "/assets/materials/trim/metal/m_facade_corporate/t_windows_corporate_nm.normal.png",
+        "roughnessMap": "/assets/materials/trim/metal/m_facade_corporate/t_windows_corporate_r.data.png",
+        "metallicMap": "/assets/materials/trim/metal/m_facade_corporate/t_windows_corporate_m.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }
