@@ -6285,20 +6285,22 @@ def _chunk(look, w, c):
     return out
 
 
-def _surface_pieces(look, width, line, box, ends=(True, True)):
+def _surface_pieces(look, width, line, box, ends=(True, True), s_off=0.0, s_len=None):
     """The carriageway chunks of `line` (k, 3) cut to box. A dirt or gravel strip (look "aspect", DIRT_LOOK) is rounded
     at its sharp bends first, the whole line (roadmesh.round_dirt_centerline, before the 12 m densify; every tile rounds
     the same arcs), and each chunk carries s0 / s1 (m along the line to its ends: the ruts run on across a tile's edge),
     slen (the line's length) and fends (ends: which of the line's ends are open, its strip fading out there:
-    _strip_open_ends). From PR #455; the distance rides through the cut as a fourth column. Pure."""
+    _strip_open_ends). From PR #455; the distance rides through the cut as a fourth column. s_off, s_len: a piece of a
+    longer strip (strip_runs): its start's distance along the whole line and that line's length, so the ruts run on
+    across tiles whether or not a tile sees the cut. Pure."""
     line = np.asarray(line, np.float64)
     if not look.get("aspect") or len(line) < 2:
         return [_chunk(look, width, c) for piece in clip_polyline(line, *box)
                 for c in split(densify(simplify(piece))) if len(c) >= 2]
     rl = densify(roadmesh.round_dirt_centerline(simplify(line[:, :3]), float(width) / 2.0))
     d = np.diff(rl[:, :2], axis=0)
-    s = np.r_[0.0, np.cumsum(np.hypot(d[:, 0], d[:, 1]))]
-    slen = round(float(s[-1]), 2)
+    s = float(s_off) + np.r_[0.0, np.cumsum(np.hypot(d[:, 0], d[:, 1]))]
+    slen = round(float(s[-1] if s_len is None else max(float(s_len), s[-1])), 2)
     fends = [int(bool(ends[0])), int(bool(ends[1]))]
     out = []
     for piece in clip_polyline(np.c_[rl, s], *box):
@@ -6307,6 +6309,65 @@ def _surface_pieces(look, width, line, box, ends=(True, True)):
                 ch = _chunk(look, width, c[:, :3])
                 ch.update(s0=round(float(c[0, 3]), 3), s1=round(float(c[-1, 3]), 3), slen=slen, fends=fends)
                 out.append(ch)
+    return out
+
+
+STRIP_PAVED_STEP_M = 1.0    # m between the strip's points tested against the paved carriageways (strip_runs)
+STRIP_PAVED_MARGIN_M = 0.3  # m past a paved road's half width its asphalt reaches (surface.PHOTO_ROAD_EDGE_M and some)
+
+
+def _built_segments(roads):
+    """(a (m, 2), b (m, 2), half widths (m,)) of the paved and cobbled carriageways among roads ((fid, spec, centreline,
+    lon)), or None when there are none (strip_runs). Pure."""
+    a, b, hw = [], [], []
+    for _fid, spec, pts, _lon in roads:
+        if spec is None or spec.kind not in BUILT:
+            continue
+        xy = np.asarray(pts, np.float64)[:, :2]
+        if len(xy) < 2:
+            continue
+        a.append(xy[:-1])
+        b.append(xy[1:])
+        hw.append(np.full(len(xy) - 1, spec.width / 2 + STRIP_PAVED_MARGIN_M))
+    if not a:
+        return None
+    return np.ascontiguousarray(np.vstack(a)), np.ascontiguousarray(np.vstack(b)), np.ascontiguousarray(np.concatenate(hw))
+
+
+def strip_runs(pts, paved):
+    """[(run (k, 3), (cut at its start, cut at its end), its start's distance along pts, pts' length)] of a dirt or gravel
+    strip's centreline pts (k, 3) without the
+    stretches inside a paved carriageway (paved: _built_segments' or None): a track crossing an asphalt road was drawn
+    over it, its ruts across the lanes (GitHub #771, the user's three examples). The whole line, uncut, where it meets
+    none. earthfast.points_near_segments on the line every STRIP_PAVED_STEP_M."""
+    pts = np.asarray(pts, np.float64)
+    if paved is None or len(pts) < 2:
+        return [(pts, (False, False), 0.0, None)]
+    a, b, hw = paved
+    lo, hi = pts[:, :2].min(0) - float(hw.max()), pts[:, :2].max(0) + float(hw.max())
+    near = (np.maximum(a[:, 0], b[:, 0]) >= lo[0]) & (np.minimum(a[:, 0], b[:, 0]) <= hi[0]) & \
+        (np.maximum(a[:, 1], b[:, 1]) >= lo[1]) & (np.minimum(a[:, 1], b[:, 1]) <= hi[1])
+    if not near.any():
+        return [(pts, (False, False), 0.0, None)]
+    import fast
+    fast.require(0, "points_near_segments")
+    line = densify(pts, spacing=STRIP_PAVED_STEP_M)
+    inside = np.asarray(fast._ef.points_near_segments(np.ascontiguousarray(line[:, :2]), a[near], b[near], hw[near]),
+                        bool)
+    if not inside.any():
+        return [(pts, (False, False), 0.0, None)]
+    sl = np.r_[0.0, np.cumsum(np.hypot(*np.diff(line[:, :2], axis=0).T))]
+    out, i, n = [], 0, len(line)
+    while i < n:
+        if inside[i]:
+            i += 1
+            continue
+        j = i
+        while j + 1 < n and not inside[j + 1]:
+            j += 1
+        if j > i:
+            out.append((line[i:j + 1], (i > 0, j < n - 1), float(sl[i]), float(sl[-1])))
+        i = j + 1
     return out
 
 
@@ -9947,6 +10008,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     # surface pass off there is no ROCK/GRASS mask, and the road would otherwise vanish entirely
     rough = (lambda sp: terrain_paint and terrain_surface(sp) is not None)     # noqa: E731
     strip_ends = _strip_open_ends(roads, rings, seen, near, rough) if DIRT_STRIPS else {}
+    paved_segs = _built_segments(roads) if DIRT_STRIPS else None
     for k_road, (fid, spec, pts, _) in enumerate(roads):
         # the carriageway painted into the ground (surface.photo_roads); a dirt or gravel road's strip over it
         # (DIRT_LOOK)
@@ -9956,7 +10018,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             continue
         look = look_of(spec, fid)
         if look.get("aspect"):                  # (a strip: whole, its distance along the road, its open ends)
-            chunks.extend(_surface_pieces(look, spec.width, pts, box, strip_ends.get(k_road, (True, True))))
+            ends = strip_ends.get(k_road, (True, True))
+            for run, (cut0, cut1), s_off, s_len in strip_runs(pts, paved_segs):
+                # (cut at a paved carriageway: the strip ends there, not fading over the asphalt)
+                chunks.extend(_surface_pieces(look, spec.width, run, box,
+                                              (ends[0] and not cut0, ends[1] and not cut1), s_off, s_len))
             continue
         lanes = [(0.0, spec.width)]
         if look.get("strip"):                   # parallel strips across the width (see LOOK)

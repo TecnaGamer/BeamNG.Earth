@@ -315,14 +315,20 @@ class BuildTileTest(unittest.TestCase):
         f = features([[(-300, 50), (300, 50)], [(100, 10), (100, 200)]], ["primary", "track"])
         surfaces = {l["m"] for l in roads.LOOK.values()} | set(roads.DIRT_MATERIALS)
         chunks = [c for c in roads.build_tile(FRAME, 0, 0, [f], flat) if c["m"] in surfaces]
-        self.assertEqual(len(chunks), 2, "one surface chunk per road (lines and sidewalks aside)")
+        # (one surface chunk per road, lines and sidewalks aside; the track's strip in two, cut at the primary it crosses:
+        # roads.strip_runs, GitHub #771)
+        self.assertEqual(len(chunks), 3, "the primary's chunk and the track's two")
         prim = next(c for c in chunks if c["w"] == roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M)
         xs = [n[0] for n in prim["n"]]
         self.assertAlmostEqual(min(xs), -roads.OVERLAP, delta=0.05)
         self.assertAlmostEqual(max(xs), roads.TILE + roads.OVERLAP, delta=0.05)
         self.assertTrue(all(abs(n[1] - 50) < 0.3 for n in prim["n"]), "on its line (the test helper is spherical: ~0.13 m)")
         self.assertEqual(prim["m"], roads.LOOK["paved"]["m"])
-        track = next(c for c in chunks if c is not prim)
+        tracks = [c for c in chunks if c is not prim]
+        half = (roads.STYLE["primary"][0] + 2 * roads.EDGE_STRIP_M) / 2
+        for t in tracks:
+            self.assertFalse(any(abs(n[1] - 50) < half - 0.5 for n in t["n"]), "no strip over the primary's carriageway")
+        track = max(tracks, key=lambda c: c["s1"])
         self.assertIn(track["m"], roads.DIRT_VARIATIONS)
         self.assertAlmostEqual(track["tl"], roads.DIRT_LOOK["dirt"]["aspect"] * track["w"], places=2)
         self.assertGreater(track["s1"], track["s0"], "the strip's distance runs along the road")
