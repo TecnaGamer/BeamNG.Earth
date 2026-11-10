@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
@@ -215,6 +216,25 @@ class MarkTest(IndexCase):
         idx = self.index(md)
         idx.mark([("fuel", la, lo, False)])                 # (the tile was built before the map asked)
         self.assertEqual(idx.query(la, lo, 5.0, ["fuel"], "map")[0], [])
+
+    def test_concurrent_marks_kept(self):
+        # (road tiles report from several worker threads: two reports for one cell, read-modify-write each, lost one)
+        import time
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo), place("b", la + 0.003, lo)]})
+        idx = self.index(md)
+        save = idx._save
+
+        def slow(key, e):
+            time.sleep(0.05)
+            save(key, e)
+        idx._save = slow
+        ts = [threading.Thread(target=idx.mark, args=([("fuel", la + d, lo, False)],)) for d in (0.0, 0.003)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        self.assertEqual(idx.query(la, lo, 5.0, ["fuel"], "map")[0], [], "both reports kept")
 
     def test_marks_kept_on_disk(self):
         la, lo = centre(A)

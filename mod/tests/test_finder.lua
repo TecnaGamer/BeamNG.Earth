@@ -116,6 +116,7 @@ local added
 core_quickAccess = { addEntry = function(a) added = a end }
 F.onQuickAccessLoaded()
 T.check(added and added.level == '/root/sandbox/other/', 'the Other ring: ' .. tostring(added and added.level))
+T.check(added.uniqueID == 'beamngEarthFinder', 'a uniqueID: registered again (an extension reload) it replaces itself')
 local entries = {}
 added.generator(entries)
 T.check(#entries == 1 and type(entries[1].onSelect) == 'function' and entries[1].title == 'Nearest station',

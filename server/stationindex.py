@@ -87,6 +87,9 @@ class StationIndex:
         self.dir = os.path.join(root, f"v{INDEX_VERSION}-{getattr(mapdata, 'OSM_POI_VERSION', 0)}")
         self._mem = {}
         self._lock = threading.Lock()
+        # a cell file's read-modify-write (mark, _build's merge): road tiles report from several worker threads, and
+        # two reports for one cell each writing what it read lost the other's
+        self._wlock = threading.Lock()
 
     # --- the cells' files -------------------------------------------------------------------------------------------
     def _path(self, key):
@@ -122,19 +125,12 @@ class StationIndex:
 
     def _build(self, key):
         items = cell_items(self.md, key)
-        with self._lock:                # (a mark that came meanwhile is kept)
-            e = dict(self._mem.get(key) or self._entry_unlocked(key))
-        e["items"] = items
-        self._save(key, e)
-        self._remember(key, e)
+        with self._wlock:               # (a mark that came meanwhile is kept)
+            e = dict(self._entry(key))
+            e["items"] = items
+            self._save(key, e)
+            self._remember(key, e)
         return e
-
-    def _entry_unlocked(self, key):
-        try:
-            with open(self._path(key), encoding="utf-8") as f:
-                return json.load(f)
-        except (OSError, ValueError):
-            return {"items": None, "marks": []}
 
     # --- the road tiles' reports ------------------------------------------------------------------------------------
     def mark(self, tried):
@@ -148,18 +144,19 @@ class StationIndex:
             except ValueError:
                 continue
         for key, new in by.items():
-            e = dict(self._entry(key))
-            marks = list(e.get("marks") or [])
-            for m in new:
-                here = {"lat": m[1], "lon": m[2]}
-                marks = [o for o in marks if o[0] != m[0] or _m({"lat": o[1], "lon": o[2]}, here) > MARK_M]
-                marks.append(m)
-            e["marks"] = marks
-            try:
-                self._save(key, e)
-            except OSError as ex:
-                log.debug("station index %s: %s", key, ex)
-            self._remember(key, e)
+            with self._wlock:
+                e = dict(self._entry(key))
+                marks = list(e.get("marks") or [])
+                for m in new:
+                    here = {"lat": m[1], "lon": m[2]}
+                    marks = [o for o in marks if o[0] != m[0] or _m({"lat": o[1], "lon": o[2]}, here) > MARK_M]
+                    marks.append(m)
+                e["marks"] = marks
+                try:
+                    self._save(key, e)
+                except OSError as ex:
+                    log.debug("station index %s: %s", key, ex)
+                self._remember(key, e)
 
     @staticmethod
     def _empty(item, marks):

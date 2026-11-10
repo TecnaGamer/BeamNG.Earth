@@ -204,7 +204,7 @@ M.RADIAL_LEVEL = '/root/sandbox/other/'
 function M.onQuickAccessLoaded()
   local qa = rawget(_G, 'core_quickAccess')
   if not (qa and qa.addEntry) then return end
-  qa.addEntry({ level = M.RADIAL_LEVEL, generator = function(entries)
+  qa.addEntry({ level = M.RADIAL_LEVEL, uniqueID = 'beamngEarthFinder', generator = function(entries)
     local st = player()
     if not (st and st.inOurLevel) then return end
     table.insert(entries, { title = 'Nearest station', icon = 'fuelPump', uniqueID = 'beamngEarthNearestStation',
