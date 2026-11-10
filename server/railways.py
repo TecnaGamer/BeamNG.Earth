@@ -281,18 +281,37 @@ UNDERPASS_MIN_SIN = 0.25    # conservatively exclude near-parallel tracks beside
 
 
 def road_underpasses(frame, cells, box, reach=REACH_M):
-    """Short mapped road tunnels near box as (xy, half width), each part once."""
+    """Short road tunnels near box as (xy, half width), including source tunnels made ground by gradesep."""
     near = (box[0] - reach, box[1] - reach, box[2] + reach, box[3] + reach)
     out, seen = [], set()
     for feats in cells:
         if feats is None or not len(feats):
             continue
         specs = roads.tunnel_specs(feats)
+        ground_specs = None
         boxes = feats.boxes(frame)
         for i, sp in enumerate(specs):
-            if sp is None or not _box_hit(boxes[i], near):
+            if not _box_hit(boxes[i], near):
                 continue
-            for ring in roads.tunnel_parts(feats, i):
+            rings = roads.tunnel_parts(feats, i) if sp is not None else []
+            # gradesep can turn a short road tunnel into ground and the tracks above it into bridges.
+            # Keep that source clearance evidence (Nashville, Carney Street), including when another
+            # tunnel on the same feature remains. Retained tunnels keep their cleared portal ends.
+            tagged = [(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i) if kind == "tunnel"]
+            missing = []
+            if tagged:          # (the map's tunnels first: most features have none)
+                effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
+                missing = [(a, b, kind) for a, b, kind in tagged
+                           if not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART for c, d in effective)]
+            if missing:
+                if ground_specs is None:
+                    ground_specs = roads.road_specs(feats)
+                sp = sp or ground_specs[i]
+                if sp is not None:
+                    rings += roads._parts_by_level_new(feats, i, "tunnel", rngs=missing)
+            if sp is None:
+                continue
+            for ring in rings:
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 xy = np.c_[e, n]
                 if len(xy) < 2 or _arc(xy)[-1] > roads.UNDERPASS_MAX_M:
