@@ -29,10 +29,11 @@ T.check(#q == 1 and idx.links[q[1] + 4] == 3, 'c-far (a long link) found near it
 T.check(#R.query(idx, -5000, -5000, 100) == 0, 'nothing far away')
 -- a tunnel's stretch (not in the AI's edges): drawn too
 do
-  local gt = { anchor = 1, nodes = g.nodes, edges = g.edges, lines = { { -400, 0, -300, 0, 1 } } }
+  local gt = { anchor = 1, nodes = g.nodes, edges = g.edges, lines = { { -400, 0, -300, 0, 1, 19.4 } } }
   local it = R.build(gt, 128)
   local ql = R.query(it, -350, 0, 20)
-  T.check(it.count == 4 and #ql == 1 and it.links[ql[1]] == -400 and it.links[ql[1] + 4] == 1, 'a tunnel line drawn')
+  T.check(it.count == 4 and #ql == 1 and it.links[ql[1]] == -400 and it.links[ql[1] + 4] == 1
+    and it.graph.lines[1][6] == 19.4, 'a tunnel line drawn; its legal speed metadata stays available')
 end
 
 -- built over frames: the old index drawn until the new one is done

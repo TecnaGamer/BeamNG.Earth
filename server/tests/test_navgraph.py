@@ -211,6 +211,7 @@ class GraphTest(unittest.TestCase):
     def test_tunnel_stretch_left_out(self):
         f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        f.rules["max_speed_kmh"] = rules([(0, 70.0)], "float")
         g = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
         for e in g["edges"]:
             mid = (g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2
@@ -219,7 +220,9 @@ class GraphTest(unittest.TestCase):
         # ... but drawn on the minimap (its "lines"): the stretch from 120 to 210 m covered, end to end
         xs = sorted(x for ln in g["lines"] for x in (ln[0], ln[2]))
         self.assertTrue(g["lines"] and xs[0] <= 130 and xs[-1] >= 200, g["lines"])
-        self.assertTrue(all(len(ln) == 5 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+        self.assertTrue(all(len(ln) == 6 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+        self.assertTrue(all(abs(ln[5] - 70.0 / 3.6) < 0.01 for ln in g["lines"]),
+                        "the separate tunnel minimap lines retain the mapped legal limit in m/s")
 
     def test_a_built_tunnel_is_the_ais_at_its_floor(self):
         """A tunnel the road tiles build (roads.TunnelProfiles' parts: tunnels=) is driven through, its nodes at the
