@@ -93,6 +93,13 @@ def enabled(server):
     return ON or bool(getattr(server, "dirs_on", False))
 
 
+def board_country(frame, x, y):
+    """The board's country, never the nationality of a destination abroad."""
+    import countrybounds
+    lat, lon, _ = frame.enu_to_geodetic(float(x), float(y), 0.)
+    return countrybounds.bundled().at(float(lat), float(lon))
+
+
 def parse_routes(text):
     """[(network, ref, from, to)] of a road_routes row's "network|ref|from|to;..." (the layer's routes_txt)."""
     out = []
@@ -306,8 +313,7 @@ def build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir,
             continue
         first, n = int(b[10]), int(b[11])
         mine = krows[first:first + n]
-        # the country's style: where the board's first place is
-        cc = next((pl.cc[int(r[i])] for r in mine for i in (5, 7) if r[i] >= 0), None)
+        cc = board_country(frame, b[0], b[1])
         style = st["countries"].get(cc)
         if style is None:
             continue
