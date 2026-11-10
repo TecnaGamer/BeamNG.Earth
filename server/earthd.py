@@ -2501,17 +2501,18 @@ class Server:
         park = [] if self.buildings else None
         signs = [] if self.buildings and poleprofiles.kit_enabled(Server.pole_profile(self, anchor)) else None
         items = town = None
-        wrows = []
+        wrows, mapped_lamps = [], None
         _bridge_fps, _bridge_ends = [], {}      # 3dmr model bridges over the tile (as blockworker._tile_parts)
         if self.buildings:
             # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
             try:
                 import worldprops
-                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev)
+                mapped_lamps = [] if worldprops.MAPPED_LAMPS else None     # (furniture.place draws them)
+                wrows, barn_ids = worldprops.tile_props(anchor.frame, tx, ty, self.mapdata, elev, lamps=mapped_lamps)
                 skip = frozenset(skip) | frozenset(barn_ids)
             except Exception as ex:
                 log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
-                wrows = []
+                wrows, mapped_lamps = [], None
             # (on the graded ground, as blockworker.roads_tile)
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
@@ -2589,7 +2590,7 @@ class Server:
                                      driveways_out=mapped_drives,
                                      nodes=sign_nodes, clearance_out=clearance,
                                      development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns,
-                                     de_on=designsmod.enabled(self.dej_on), de_routes=de_routes)
+                                     de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps)
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines

@@ -717,6 +717,14 @@ G_GLOW = "lampglow"
 LAMP_HEADS = {G_LAMP: (2.71130, -0.00032, 7.95393), G_POLELAMP: (-2.67592, 0.00012, 0.43511), "fr_lantern": (0.0, 0.0, 4.67)}
 for _g in citylamps.GROUPS:         # the local lamp posts (citylamps.py): the lens under their luminaire
     LAMP_HEADS[_g] = citylamps.HEAD
+# The mapped OpenStreetMap lamps' own stock posts (worldprops._street_lamps, by lamp_mount; PR #981 by wyo-backroads):
+# each head (x, y, z in the model's frame, the lens's yaw relative to the post's), two for a double arm.
+MAPPED_LAMP_HEADS = {
+    "streetlight_straight_mast": ((-.00029, -.41864, 12.0477, -90.),),
+    "streetlight_double_arm": ((4.9, 0., 12.65, 0.), (-4.9, 0., 12.65, 180.)),
+    "streetlight_high_mast": ((0., 0., 17.9326, 0.),),
+}
+G_HIGH_MAST_LENS = "high_mast_light"      # (nightlights.lua: a broader, brighter downward light)
 LENS_DROP_M = 0.03
 TOWN_POLE_CLASSES = {"residential", "tertiary", "unclassified", "secondary", "living_street", "primary", "trunk"}
 TOWN_POLE_SPACING = 40.0
@@ -745,7 +753,8 @@ PARTIAL_END_M = 15.0        # m from a rural ramp's ends its two lamps stand (pa
                             # Handbook 2012 / AASHTO: luminaires at the gores and the ramp terminals only; every rural
                             # ramp lit end to end put 27 lamps on a Wyoming interchange of I-80, Discord 2026-10-28)
 HIGHWAY_LAMP_H = {"na": 13.5, None: 11.0}         # (ramps: the street post, NJDOT's 26 ft on ramps)
-LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4, **{g: citylamps.HEIGHT for g in citylamps.GROUPS}}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
+LAMP_H = {G_LAMP: 9.0, "polelamp": 1.1, "fr_lantern": 5.4, **{g: citylamps.HEIGHT for g in citylamps.GROUPS},
+         "streetlight_straight_mast": 12.25, "streetlight_double_arm": 13.76, "streetlight_high_mast": 18.03}    # the catalog's heights (trees.lua CATALOG): a row's height over it, its scale
 POLE_LAMP_Z = 7.0           # m above the pole's base
 HYDRANT_SPACING = 120.0
 BENCH_SPACING = 140.0
@@ -937,21 +946,45 @@ class RoadClearance:
 
 
 def lamp_lenses(rows):
-    """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under the head of every lamp row (LAMP_HEADS; its scale: the row's
-    height over the catalog's, 1 for both), and a G_GLOW row at the same place."""
+    """A lens row [G_LENS, x, y, z, yaw, 1, 1, 0] under each head of every lamp row (LAMP_HEADS, MAPPED_LAMP_HEADS: a
+    double arm has two; its scale: the row's height over the catalog's, 1 for both), and a G_GLOW row at the same
+    place. A lantern's lens is its own group (fr_lantern_light), a high mast's G_HIGH_MAST_LENS."""
     out = []
     for r in rows:
-        head = LAMP_HEADS.get(r[0])
-        if head is None:
-            continue
+        heads = MAPPED_LAMP_HEADS.get(r[0])
+        if heads is None:
+            head = LAMP_HEADS.get(r[0])
+            if head is None:
+                continue
+            heads = (head,)
         a = math.radians(r[4])
         c, s_ = math.cos(a), math.sin(a)
         k = r[6] / LAMP_H.get(r[0], r[6]) if r[6] else 1.0     # (a scaled lamp: its head scaled alike)
-        hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
-        lens = ["fr_lantern_light" if r[0] == "fr_lantern" else G_LENS, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
-                round(r[3] + hz - LENS_DROP_M, 2), r[4], 1.0, 1.0, r[7]]
-        out += [lens, [G_GLOW] + lens[1:]]
+        group = ("fr_lantern_light" if r[0] == "fr_lantern" else G_HIGH_MAST_LENS if r[0] == "streetlight_high_mast"
+                 else G_LENS)
+        for head in heads:
+            hx, hy, hz = head[0] * k, head[1] * k, head[2] * k
+            yaw = (r[4] + head[3]) % 360. if len(head) > 3 and head[3] else r[4]
+            lens = [group, round(r[1] + c * hx - s_ * hy, 2), round(r[2] + s_ * hx + c * hy, 2),
+                    round(r[3] + hz - LENS_DROP_M, 2), yaw, 1.0, 1.0, r[7]]
+            out += [lens, [G_GLOW] + lens[1:]]
     return out
+
+
+def roads_with_points(roads, points, extra_m, least=MAPPED_ALONG_MIN):
+    """The ids of the roads (build_tile's (fid, spec, centreline (k, 3), lon)) with at least `least` of points (n, 2)
+    within their half width + extra_m of their centreline (earthfast points_along): mapped poles or lamps along them."""
+    points = np.asarray(points if points is not None else (), np.float64).reshape(-1, 2)
+    if len(points) < max(least, 1) or not roads:
+        return set()
+    lines = [np.asarray(pts, np.float64)[:, :2] for _, _, pts, _ in roads]
+    off = np.zeros(len(lines) + 1, np.int64)
+    off[1:] = np.cumsum([len(ln) for ln in lines])
+    import fast
+    fast.require(199, "mapped points along roads")
+    count = fast._ef.points_along(np.ascontiguousarray(points), np.ascontiguousarray(np.concatenate(lines)), off,
+                                  np.array([sp.width / 2 + extra_m for _, sp, _, _ in roads], np.float64))
+    return {roads[i][0] for i in np.flatnonzero(count >= least)}
 
 
 def _stations(run, line, spacing, phase, clear, side):
@@ -1047,7 +1080,7 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
           sign_obstacles=None, defer_gore=False, obstacles=(), mapped_poles=None, de_on=False, de_ctx=None,
-          de_ctl=None):
+          de_ctl=None, mapped_lamps=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -1061,28 +1094,22 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     lamp spacing. pole_frame: ENU frame for the position-based country profiles. mapped_poles: (n, 2) ENU points of
     the mapped poles mappedpoles.py draws (road_points): a road with MAPPED_ALONG_MIN of them along it guesses no
     utility poles (its lamps on posts in town, as where the lines are buried); None: none mapped. de_on, de_ctx,
-    de_ctl: Germany's junction signs (junction_props)."""
+    de_ctl: Germany's junction signs (junction_props). mapped_lamps: the rows of the mapped street lamps on and near the
+    tile (worldprops.tile_props' lamps): the tile's own drawn as mapped (where the local posts stand, the default ones
+    become those), and a road with MAPPED_ALONG_MIN of them along it guesses no lamps (lit=no)."""
     pole_at = poleprofiles.selector(pole_profile, pole_frame)
     kit_at = poleprofiles.kit_selector(pole_profile, pole_frame)
     spacing_of = lamp_spacing(region, dense=not town)
-    lighting = lighting or {}  # OSM way lighting; absent/unknown keeps the inferred rule
+    lighting = dict(lighting or {})  # OSM way lighting; absent/unknown keeps the inferred rule
+    mapped_lamps = list(mapped_lamps or ())
+    # (the mapped lamps stand instead of guessed ones along their road; the other roads keep their rules)
+    lighting.update(dict.fromkeys(roads_with_points(roads, [r[1:3] for r in mapped_lamps], MAPPED_ALONG_M), "no"))
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
-    mapped = (np.asarray(mapped_poles, np.float64).reshape(-1, 2) if mapped_poles is not None
-              else np.empty((0, 2)))
-    along = {}
+    poles_along = roads_with_points(roads, mapped_poles, MAPPED_ALONG_M)
 
     def mapped_along(fid):      # are there mapped poles along this road (mappedpoles.py draws those instead)?
-        if fid not in along:
-            sp, pts = by_fid.get(fid, (None, None))
-            hit = False
-            if sp is not None and pts is not None and len(pts) > 1 and len(mapped) >= MAPPED_ALONG_MIN:
-                line = np.asarray(pts, np.float64)[:, :2]
-                reach = sp.width / 2 + MAPPED_ALONG_M
-                near = mapped[np.all((mapped >= line.min(0) - reach) & (mapped <= line.max(0) + reach), axis=1)]
-                hit = sum(_seg_dist_min(p, line) <= reach for p in near) >= MAPPED_ALONG_MIN
-            along[fid] = hit
-        return along[fid]
+        return fid in poles_along
 
     def overhead(fid):          # does this road's line run on poles (not buried)?
         import franceroads
@@ -1299,6 +1326,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             import frgore
             rows.extend(frgore.place(pole_frame,roads,box,country_at,
                                     ground=sign_obstacles.ground if sign_obstacles is not None else None,decks=decks))
+    # (the tile's own, at their mapped points: not moved off the clearance like a guessed one)
+    rows += [list(r) for r in mapped_lamps if _owns(box, r[1], r[2])]
     rows = citylamps.localize(rows, poleprofiles.lamp_country_selector(pole_profile, pole_frame))
     return under_decks(rows + lamp_lenses(rows), list(decks), wires)
 

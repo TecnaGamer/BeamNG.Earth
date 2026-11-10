@@ -18,6 +18,8 @@ doubled and not cut in half. Deterministic (hashed yaw, colour and which boxes s
 import json
 import logging
 import math
+import os
+import re
 
 import numpy as np
 
@@ -58,10 +60,11 @@ BILL_ROAD_M = 120.0
 ROAD_MARGIN_M = 140.0
 
 
-def tile_props(frame, tx, ty, md, elev):
+def tile_props(frame, tx, ty, md, elev, lamps=None):
     """(rows, barn ids) of road tile (tx, ty). barn ids are the footprints replaced by the stock barn
     (buildings.road_tile_items skip). elev(lat, lon) is the ground. md None, or a cell that cannot be
-    read, yields nothing of that layer."""
+    read, yields nothing of that layer. lamps: a list that gets the rows of the mapped street lamps on and within
+    LAMP_NEAR_M of the tile (_street_lamps; furniture.place's mapped_lamps draws the tile's own), None: none made."""
     import buildings
     import roads
     if md is None:
@@ -77,7 +80,11 @@ def tile_props(frame, tx, ty, md, elev):
                                                       "roads")))
     bld_rings = _Once(lambda: _building_rings(frame, blds))
     placed, skip, boxes = [], set(), []
+    mapped = [] if lamps is not None else None
     for feats, rows in infra:
+        if mapped is not None:
+            _street_lamps(frame, feats, rows, (x0 - LAMP_NEAR_M, y0 - LAMP_NEAR_M, x1 + LAMP_NEAR_M, y1 + LAMP_NEAR_M),
+                          mapped)
         _towers(frame, feats, rows, (x0, y0, x1, y1), placed)
         _billboards(frame, feats, rows, (x0, y0, x1, y1), roads_xy, placed)
     for feats, rows in land:
@@ -95,6 +102,10 @@ def tile_props(frame, tx, ty, md, elev):
         _barns(frame, feats, rows, (x0, y0, x1, y1), placed, skip)
     boxes.sort(key=lambda b: (b["x"], b["y"]))
     placed.extend(boxes[:CONT_TILE_MAX])
+    if mapped:
+        _aim_lamps(mapped, lambda: _lamp_roads(frame, _layer(md, roads.cells_of_tile(frame, tx, ty, margin=LAMP_ROAD_M),
+                                                             "roads")))
+        placed.extend(mapped)
     if not placed:
         return [], skip
     lat = np.array([p["lat"] for p in placed], np.float64)
@@ -103,9 +114,138 @@ def tile_props(frame, tx, ty, md, elev):
     z = np.asarray(z, np.float64)
     rows = []
     for p, zz in zip(placed, z):
-        rows.append([p["group"], round(p["x"], 2), round(p["y"], 2), round(float(zz) + p["lift"], 2),
-                     round(p["yaw"], 1), 1.0, round(p["h"], 2), round(p["rank"], 4)])
+        row = [p["group"], round(p["x"], 2), round(p["y"], 2), round(float(zz) + p["lift"], 2),
+               round(p["yaw"], 1), 1.0, round(p["h"], 2), round(p["rank"], 4)]
+        (lamps if "lamp_id" in p else rows).append(row)
     return rows, skip
+
+
+# Mapped street lamps (OpenStreetMap highway=street_lamp nodes, everywhere; PR #981 by wyo-backroads): each at its
+# mapped point, the stock post its lamp_mount names (the others the ordinary street post), the arm turned toward the
+# nearest drivable road (earthfast lamp_road_yaw), the tag's direction where no road is within LAMP_ROAD_M. A road with
+# mapped lamps along it guesses none (furniture.place). BNE_MAPPED_LAMPS=off: none (the guessed lamps only).
+MAPPED_LAMPS = os.environ.get("BNE_MAPPED_LAMPS", "on").strip().lower() not in ("off", "0", "no", "false")
+HIGH_MAST_H = 18.03             # Driver Experience s_light_pole_high_mast visible bounds: z=0..18.032 m
+STRAIGHT_MAST_H = 12.25         # Driver Experience s_light_pole, authored cm converted to metres
+DOUBLE_ARM_H = 13.76            # the stock pole_light_double (art/shapes/objects): -0.715..13.046 m; its foundation buried
+STREET_LAMP_H = 9.0             # the ordinary post (furniture.G_LAMP's catalog height)
+MAPPED_LAMP_MODELS = {
+    "high_mast": ("streetlight_high_mast", HIGH_MAST_H),
+    "straight_mast": ("streetlight_straight_mast", STRAIGHT_MAST_H),
+    "double_arm": ("streetlight_double_arm", DOUBLE_ARM_H),
+}
+# lamp_road_yaw's kinds: an arm along the model's +x, along its -y (the straight mast), a double arm across the road
+LAMP_ARM_KIND = {"streetlight_straight_mast": 1, "streetlight_double_arm": 2}
+LAMP_ROAD_M = 80.0
+LAMP_NEAR_M = 40.0              # m round the tile whose lamps also tell its roads they have mapped ones (furniture.place)
+LAMP_ROAD_CLASSES = {"motorway", "trunk", "primary", "secondary", "tertiary", "residential", "unclassified", "service",
+                     "living_street", "motorway_link", "trunk_link", "primary_link", "secondary_link", "tertiary_link"}
+_OSM_NODE = re.compile(r"n(\d+)(?:@\S+)?")
+_LAMP_OFF = ("disused", "abandoned", "demolished", "razed", "construction", "proposed")
+
+
+def _street_lamps(frame, feats, rows, box, placed):
+    """Add the mapped lamp nodes (OpenStreetMap nodes only, no interpolation along lit ways) in box to placed, as
+    worldprops records with "lamp_id" and their arm's kind / layer for _aim_lamps."""
+    cls = _cls(feats)
+    at = np.arange(len(feats.kind)) if rows is None else np.asarray(rows, np.int64)
+    if cls is not None:         # (only the lamps' tags are read: a city cell has thousands of other points)
+        at = at[cls[at] == "street_lamp"]
+    src = feats.attrs.get("src_record")
+    seen = {p["lamp_id"] for p in placed}
+    for i in at.tolist():
+        if int(feats.kind[i]) != mapgeom.POINT:
+            continue
+        match = _OSM_NODE.fullmatch(str(src[i])) if src is not None else None
+        if match is None:
+            continue
+        fid = "osm:node:" + match[1]
+        tags = _tags_of(feats, i)
+        if cls is None and tags.get("highway") != "street_lamp":
+            continue
+        if str(tags.get("location", "")).lower() in {"underground", "underwater", "indoor", "tunnel"} or any(
+                str(tags.get(k, "no")).lower() not in {"no", "false", "0", "", "none"} for k in _LAMP_OFF):
+            continue
+        xy = _ring_xy(feats, i, frame)
+        if xy is None:
+            continue
+        x, y = _centre(xy)
+        if not _inside(x, y, box) or fid in seen:
+            continue
+        seen.add(fid)
+        la, lo = _ll(frame, x, y)
+        group, height = MAPPED_LAMP_MODELS.get(tags.get("lamp_mount"), ("streetlight", STREET_LAMP_H))
+        yaw = 0.
+        try:
+            bearing = float(tags.get("direction", ""))
+            if math.isfinite(bearing):
+                # OSM bearings: north=0, east=90; model arms: +X, except the straight mast's -Y.
+                yaw = ((180. if group == "streetlight_straight_mast" else 90.) - bearing) % 360.
+        except (TypeError, ValueError):
+            pass
+        try:
+            layer = float(tags["layer"]) if "layer" in tags else math.nan
+        except (TypeError, ValueError):
+            layer = math.nan
+        placed.append({"group": group, "x": x, "y": y, "lat": la, "lon": lo, "lift": 0., "h": height, "yaw": yaw,
+                       "rank": 0., "lamp_id": fid, "arm": LAMP_ARM_KIND.get(group, 0), "layer": layer})
+
+
+def _aim_lamps(lamps, lines_fn):
+    """Turn each mapped lamp's arm toward its nearest drivable road (lines_fn(): _lamp_roads' arrays, made only when
+    a lamp has an arm: a high mast has none); one with no road within LAMP_ROAD_M keeps its tag's direction."""
+    aim = [p for p in lamps if p["group"] != "streetlight_high_mast"]
+    if not aim:
+        return
+    line_pts, off, level = lines_fn()
+    if len(off) < 2:
+        return
+    import fast
+    fast.require(199, "mapped street lamps")
+    yaw = fast._ef.lamp_road_yaw(np.array([[p["x"], p["y"]] for p in aim], np.float64),
+                                 np.array([p["layer"] for p in aim], np.float64),
+                                 np.array([p["arm"] for p in aim], np.int64), line_pts, off, level, LAMP_ROAD_M)
+    for p, y in zip(aim, yaw.tolist()):
+        if math.isfinite(y):
+            p["yaw"] = y
+
+
+def _lamp_roads(frame, layers):
+    """(points (m, 2), offsets (k + 1), layer (k,) NaN: none) of the drivable centrelines near the tile (no footways,
+    no tunnels), in a stable order (their ids, then their ends)."""
+    result = []
+    for feats, rows in layers:
+        def make():
+            lines, at = _layer_lines(frame, feats)
+            cls = _cls(feats)
+            table = feats.rules.get("layer") if hasattr(feats, "rules") else None
+            found, indices = [], []
+            for line, i in zip(lines, at):
+                tags = _tags_of(feats, i)
+                kind = tags.get("highway") or (str(cls[i]) if cls is not None else "")
+                if kind not in LAMP_ROAD_CLASSES or tags.get("tunnel") in ("yes", "building_passage"):
+                    continue
+                level = tags.get("layer")
+                if level is None and table is not None:
+                    take = table.rows(i)
+                    if len(take):
+                        level = table.value[take[0]]
+                try:
+                    level = float(level) if level is not None else math.nan
+                except (ValueError, TypeError):
+                    level = math.nan
+                found.append((str(feats.ids[i]), line, level))
+                indices.append(i)
+            return found, indices
+        found, indices = _memo(feats, "lamp_roads", frame, make)
+        pick = _picked(feats, rows, indices)
+        result.extend(found if pick is None else (found[k] for k in np.flatnonzero(pick)))
+    result.sort(key=lambda r: (r[0], tuple(r[1][0]), tuple(r[1][-1])))
+    off = np.zeros(len(result) + 1, np.int64)
+    if result:
+        off[1:] = np.cumsum([len(r[1]) for r in result])
+    pts = np.concatenate([r[1] for r in result]) if result else np.zeros((0, 2))
+    return (np.ascontiguousarray(pts, np.float64), off, np.array([r[2] for r in result], np.float64))
 
 
 class _Once:

@@ -59,6 +59,17 @@ shape, sc = trees.pick('pole_concrete_recessed', 8.5, 0)
 T.check(shape:find('/regional_poles/bne_pole_concrete_recessed', 1, true) ~= nil and sc == 1,
         'regional pole: its own model at the authored height, not a fallback tree')
 
+shape, sc = trees.pick('streetlight_high_mast', 18.03, 0)
+T.check(shape == '/levels/driver_training/art/shapes/buildings/s_light_pole_high_mast' and sc == 1,
+        'mapped high-mast lamp: ETK stock asset at its authored scale')
+shape, sc = trees.pick('streetlight_straight_mast', 12.25, 0)
+T.check(shape == '/levels/driver_training/art/shapes/buildings/s_light_pole' and sc == 1,
+        'straight-mast lamp: Driver Experience stock pole at authored scale')
+shape, sc = trees.pick('streetlight_double_arm', 13.76, 0)
+T.check(shape == '/art/shapes/objects/pole_light_double' and sc == 1,
+        'double-arm lamp: West Coast stock pole at authored scale')
+T.check(trees.NO_COLLIDE.high_mast_light == true, 'high-mast light markers do not collide')
+
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
 for i = 0, 99 do rows[#rows + 1] = string.format('{0, %d, 10, 5, 0, 1, 12, %.2f}', i, i / 100) end

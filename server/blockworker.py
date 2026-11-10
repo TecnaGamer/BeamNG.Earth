@@ -919,6 +919,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     items = town = None
     _scene = (0, 0.0) if buildings else None
     wrows = []
+    mapped_lamps = None
     _custom, _entries = [], []      # the 3dmr.eu / local models in the tile, their baked entries (roads.write_tile)
     _bridge_fps = []                # 3dmr model bridges over the tile: no procedural bridge under them
     _bridge_ends = {}
@@ -935,11 +936,12 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         # stock towers, containers, billboards and barns; a replaced barn's id is left out of the buildings
         try:
             import worldprops
-            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev)
+            mapped_lamps = [] if worldprops.MAPPED_LAMPS else None     # (furniture.place draws them)
+            wrows, barn_ids = worldprops.tile_props(frame, tx, ty, _s.md, elev, lamps=mapped_lamps)
             skip = frozenset(skip) | frozenset(barn_ids)
         except Exception as ex:
             log.warning("world props: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
-            wrows = []
+            wrows, mapped_lamps = [], None
         # (on the graded ground, the one the terrain is drawn with: on the raw elevation a building beside a road's
         # cutting stood over the cut; hashk014's PR #69)
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
@@ -1012,7 +1014,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  clearance_out=clearance, towns=towns, de_on=de_junctions, de_routes=de_routes,
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
                                  mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
-                                               if props is not None else None))
+                                               if props is not None else None),
+                                 mapped_lamps=mapped_lamps)
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground

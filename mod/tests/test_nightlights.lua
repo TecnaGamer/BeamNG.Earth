@@ -27,6 +27,23 @@ core_environment = { getLightState = function() return { isNight = true } end }
 T.check(nl.isNight() == true, 'night from the stock environment')
 core_environment = nil
 T.check(nl.isNight() == nil, 'no environment (the menu): unknown')
+-- Dense mapped areas retain the exact nearest lights without sorting every lens.
+nl.reset()
+local stress = {}
+for i = 1000, 1, -1 do stress[#stress + 1] = { 0, i / 2, 0, 8 } end
+nl.onRows('stress', stress, { 'lamplens' })
+local sort, sorted = table.sort, 0
+table.sort = function(rows, compare) sorted = #rows; return sort(rows, compare) end
+local selected = nl.nearest(0, 0, 900, 7)
+table.sort = sort
+T.check(#selected == 7 and sorted == 7, 'candidate storage and sorting stay within the requested light count')
+for i, lens in ipairs(selected) do T.near(lens[1], i / 2, 1e-8, 'dense-area selection remains nearest first') end
+local providerCalls = 0
+nl.providers.stress = function() providerCalls = providerCalls + 1; return {} end
+T.check(#nl.nearest(0, 0, 900, 0) == 0 and providerCalls == 0, 'zero lights skips candidate and provider work')
+nl.providers.stress = nil
+nl.reset()
+
 -- Mixed profiles survive a shared pool slot being reused.
 nl.reset()
 local clock = 100
@@ -45,6 +62,23 @@ nl.dropKey('warm')
 nl.onRows('stock', { {0, 5, 0, 8, 0} }, {'lamplens'})
 clock = clock + 1; nl.update()
 T.check(light and light.id == id and light.fields.color == nl.LIGHT.color and light.fields.range == '36', 'same pool slot restores stock profile')
+nl.onRows('stock', { {0, 5, 0, 8, 0} }, {'lamplens'})
+clock = clock + 1; nl.update()
+local light
+for _,o in pairs(S.objects) do if o.class=='SpotLight' then light=o end end
+local id=light and light.id
+nl.dropKey('stock')
+nl.onRows('high-mast', { {0, 5, 0, 17.90, 0} }, {'high_mast_light'})
+clock = clock + 1; nl.update()
+T.check(nl.nearest(0,0,30,1)[1][6] == true, 'high-mast lighting profile retained')
+T.check(light and light.id == id and light.fields.range == '70' and light.fields.color == nl.HIGH_MAST.color,
+        'same bounded light pool serves high-mast floodlighting')
+nl.dropKey('high-mast')
+nl.onRows('double-arm', { {0, 4.9, 0, 12.62, 0}, {0, -4.9, 0, 12.62, 180} }, {'lamplens'})
+T.check(nl.status().lenses == 2, 'double-arm pole supplies two separately aimed lamps')
+clock = clock + 1; nl.update()
+T.check(light and light.fields.range == '36' and light.fields.color == nl.LIGHT.color,
+        'high-mast pool slot restores the ordinary lamp profile')
 core_environment.getLightState = function() return { isNight = false } end
 clock = clock + 2; nl.update()
 T.check(light and light.fields.isEnabled == 'false' and nl.status().errors == 0, 'day disables without errors')

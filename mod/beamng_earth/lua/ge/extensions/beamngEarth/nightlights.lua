@@ -106,6 +106,7 @@ M.MAKE_PER_STEP = 4
 -- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head.
 M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
 
+M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
 M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
 
 local lastCheck = -1e9
@@ -168,13 +169,13 @@ end
 function M.onRows(key, items, groups)
   local groupsById = {}
   for i, g in ipairs(type(groups) == 'table' and groups or {}) do
-    if g == 'lamplens' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
+    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
   end
   if type(items) ~= 'table' then lenses[key] = nil; return end
   local out = {}
   for _, r in ipairs(items) do
     if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
-      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light' }
+      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light' }
     end
   end
   lenses[key] = #out > 0 and out or nil
@@ -194,11 +195,36 @@ end
 -- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it.
 function M.nearest(x, y, r, n, fx, fy, around)
   local cand, r2 = {}, r * r
+  local limit = math.max(0, math.floor(n))
+  if limit == 0 then return cand end
   local a2 = (around or r) ^ 2
   local function consider(l)
     local dx, dy = l[1] - x, l[2] - y
     local d = dx * dx + dy * dy
-    if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then cand[#cand + 1] = { l, d } end
+    if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then
+      -- Retain only the pool's nearest lights in a max heap. Distant lenses
+      -- need no candidate allocation, and only pool-sized arrays are sorted.
+      local count = #cand
+      if count < limit then
+        local i, entry = count + 1, { l, d }
+        while i > 1 do
+          local parent = math.floor(i / 2)
+          if cand[parent][2] >= d then break end
+          cand[i] = cand[parent]; i = parent
+        end
+        cand[i] = entry
+      elseif d < cand[1][2] then
+        local i, entry = 1, cand[1]
+        entry[1], entry[2] = l, d
+        while i * 2 <= count do
+          local child = i * 2
+          if child < count and cand[child + 1][2] > cand[child][2] then child = child + 1 end
+          if cand[child][2] <= d then break end
+          cand[i] = cand[child]; i = child
+        end
+        cand[i] = entry
+      end
+    end
   end
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do consider(l) end
@@ -234,7 +260,7 @@ local function place(e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
   if l then
-    local L = l[5] and M.LANTERN or M.LIGHT
+    local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
     -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
     if e.profile ~= L then
       for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,

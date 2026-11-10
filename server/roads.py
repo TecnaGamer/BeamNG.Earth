@@ -9773,7 +9773,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None):
+               driveways_out=None, mapped_lamps=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -9794,7 +9794,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     furniture.place for the street trees, hydrants, benches and bins on these sidewalks. towns(roads, box,
     left_hand, rings) -> prop rows: the town entry and exit signs among props (townentry.Towns.maker; BNE_TOWNSIGNS;
     rings: the roundabout rings' ids, which have none). mapped_poles: furniture.place's (the mapped utility poles'
-    points: no guessed ones along them). de_on: Germany's junction signs (designs.context of these
+    points: no guessed ones along them); mapped_lamps its too (the mapped street lamps' rows). de_on: Germany's junction signs (designs.context of these
     cells, de_routes their road_routes layers for the ref ranks, road_towns' town, the map's stop and give-way signs:
     nodes' priority and the cells' lane shard sign nodes, railtags.sign_nodes) and their paint (designs.junction_paint
     in place of the US crosswalks and stop lines, one designs.decide per junction for both), and the line style by
@@ -10426,7 +10426,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      signals=signals, buried=buried, region=lamp_region, country=country,
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
-                                     defer_gore=detailed_signs, mapped_poles=mapped_poles,
+                                     defer_gore=detailed_signs, mapped_poles=mapped_poles, mapped_lamps=mapped_lamps,
                                      obstacles=railxing.rail_obstacles(frame, cells, own_box) if railxing.ENABLED else (),
                                      de_on=de_on, de_ctx=de_ctx, de_ctl=de_ctl,
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()

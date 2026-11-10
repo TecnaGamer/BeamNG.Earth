@@ -76,6 +76,7 @@ mod specs;
 mod gsrows;
 mod planends;
 mod wallsindex;
+mod mappedlamps;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6025,6 +6026,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // conversions without a broadcast array); lonlat_to_ecef / ecef_to_frame (a layer's ECEF kept, Features.xy_in in
     // another frame by the rotation alone); wallsindex (roadwidth.Walls' bucket index)
     // 197: building_walls' shop_band (an office tower's lobby sheet)
-    m.add("VERSION", 197)?;
+    m.add_function(wrap_pyfunction!(mappedlamps::lamp_road_yaw, m)?)?;
+    m.add_function(wrap_pyfunction!(mappedlamps::points_along, m)?)?;
+    // 199: mappedlamps (the mapped street lamps' arms toward their road, the mapped points along each road; 198 is
+    // another branch's)
+    m.add("VERSION", 199)?;
     Ok(())
 }
