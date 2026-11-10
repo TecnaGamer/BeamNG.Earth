@@ -610,3 +610,24 @@ class MappedPolesTest(unittest.TestCase):
         groups = [x[0] for x in rows]
         self.assertNotIn(furniture.G_POLE, groups)
         self.assertIn(furniture.G_LAMP, groups)
+
+
+class NordicJunctionTest(unittest.TestCase):
+    """GitHub #1064: Norway's minor junctions had STOP signs; there, as in Sweden, a lower road gives way."""
+
+    def test_norway_gives_way_instead_of_stop(self):
+        import numpy as np
+        from types import SimpleNamespace as NS
+        main = NS(cls="primary", urban=True, width=7.0, oneway=False, dir=0)
+        side = NS(cls="residential", urban=True, width=5.0, oneway=False, dir=0)
+        arms = [("m1", main, np.array([1.0, 0.0]), (0.0, 0.0), True),
+                ("m2", main, np.array([-1.0, 0.0]), (0.0, 0.0), False),
+                ("s1", side, np.array([0.0, 1.0]), (0.0, 0.0), True)]
+        us = furniture.junction_controls(arms, 0, country="US")
+        no = furniture.junction_controls(arms, 0, country="NO")
+        self.assertTrue(any(w == furniture.G_STOP for _a, w in us))
+        self.assertEqual([(a[0], w) for a, w in no], [("s1", furniture.G_YIELD)])
+        minors = [("a", side, np.array([1.0, 0.0]), (0.0, 0.0), True),
+                  ("b", side, np.array([-1.0, 0.0]), (0.0, 0.0), False),
+                  ("c", side, np.array([0.0, 1.0]), (0.0, 0.0), True)]
+        self.assertEqual(furniture.junction_controls(minors, 0, country="NO"), [])     # (the right-hand rule)

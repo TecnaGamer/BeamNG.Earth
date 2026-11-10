@@ -216,6 +216,13 @@ G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
+# The Nordic countries' junctions (Sweden's rule, junction_controls, the same in its neighbours): a lower road gives way
+# to the road through (a give-way triangle), roads of one class meet by the right-hand rule (no sign), a stop sign only
+# where the map has one. Norway: trafikkreglene §7 (vikeplikt for kjørende fra høyre; skilt 202 where a road joins a
+# main road), a stop sign (206) only where the view is poor (GitHub #1064: Harstad's minor junctions had STOP signs,
+# two back to back on one island); Finland's, Denmark's and Iceland's road traffic acts the same.
+GIVE_WAY_COUNTRIES = {"SE", "NO", "FI", "DK", "IS", "AX", "FO"}
+YELLOW_B1_COUNTRIES = {"SE", "FI", "AX"}       # (their give-way triangle is yellow inside: G_B1; Norway's white)
 JUNCTION_SNAP_M = 1.0       # road ends this close are one junction
 
 
@@ -287,7 +294,7 @@ def priority_stop_arms(arms, ring=None):
 
 def priority_controls(arms, ring=None, signals=None, country=None):
     """priority_stop_arms where the hierarchy decides the junction: not in Sweden, not at a mapped signal."""
-    if str(country or "").upper() == "SE":
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
         return []
     stops = priority_stop_arms(arms, ring)
     if stops and signals is not None and _is_signalled(arms, signals):
@@ -399,7 +406,7 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
-    if str(country or "").upper() == "SE":
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
         put = []
@@ -541,7 +548,8 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     designs.decide's decisions of the tile's junctions (made once for the signs and the paint, roads.build_tile); a
     junction of three arms or more it has not is decided here."""
     x0, y0, x1, y1 = box
-    sweden = str(country or "").upper() == "SE"
+    sweden = str(country or "").upper() in GIVE_WAY_COUNTRIES      # (the Nordic rules: GIVE_WAY_COUNTRIES)
+    yellow_b1 = str(country or "").upper() in YELLOW_B1_COUNTRIES   # (Sweden's and Finland's yellow give-way sign)
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -611,7 +619,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
         wide = max(a[1].width for a in arms) / 2
         for arm, what in put:
             side, yaw = approach_pose(arm[2], what, left_hand)
-            b1 = sweden and what == G_YIELD
+            b1 = yellow_b1 and what == G_YIELD
             group = G_B1 if b1 else what
             if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)
