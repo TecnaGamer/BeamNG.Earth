@@ -272,6 +272,86 @@ class MarkTest(IndexCase):
         self.assertEqual(len(self.index(md).query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
 
 
+class FakeShards:
+    """railtags.StationTags' answers: stations in a box, or None (unreachable)."""
+
+    def __init__(self, stations, down=False):
+        self.stations, self.down, self.asked = stations, down, 0
+
+    def stations_in(self, lat0, lon0, lat1, lon1):
+        self.asked += 1
+        if self.down:
+            return None
+        return [dict(s) for s in self.stations if lat0 <= s["lat"] <= lat1 and lon0 <= s["lon"] <= lon1]
+
+
+def shard_station(sid, lat, lon, kind="fuel", name="Sheetz", cap=None):
+    return {"id": sid, "kind": kind, "lat": lat, "lon": lon, "name": name, "brand": "", "cap": cap}
+
+
+class ShardTest(IndexCase):
+    """The weekly station shards where no map data is downloaded (Bauer33333's find on #716; the user, 2026-11-09:
+    the finder's map filled everywhere): the map lists them, Nearest reads them instead of downloading cells."""
+
+    def test_map_lists_a_shard_station_in_an_uncached_cell(self):
+        la, lo = centre(east(A, 3))
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo)])
+        items, partial = self.index(md).query(*centre(A), 15.0, ["fuel"], "map")
+        self.assertEqual([i["name"] for i in items], ["Sheetz"])
+        self.assertFalse(partial)
+        self.assertEqual(md.fetched, [], "no map data downloaded")
+
+    def test_places_on_disk_replace_the_shard_list(self):
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo, name="Sheetz")]}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la + 0.00005, lo)])
+        idx = self.index(md)
+        self.assertEqual(len(idx.query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
+        md.cached.add(A)                                    # (the player drove there: its places are on disk)
+        items = idx.query(la, lo, 5.0, ["fuel"], "map")[0]
+        self.assertEqual(len(items), 1, "one station, not the shard's and the places' both")
+        self.assertIn((A, "demand"), md.fetched, "built from the places once they are there")
+
+    def test_near_reads_shards_not_cells(self):
+        la, lo = centre(east(A, 8))                          # (~15 km east)
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo, kind="ev", name="Ionna", cap=6)])
+        items, partial = [], True
+        for _ in range(20):
+            items, partial = self.index(md).query(*centre(A), 25.0, ["ev"], "near")
+            if not partial:
+                break
+        self.assertFalse(partial)
+        self.assertEqual([i["name"] for i in items], ["Ionna"])
+        self.assertEqual(md.fetched, [], "no map data downloaded")
+
+    def test_unreachable_shards_download_as_before(self):
+        la, lo = centre(east(A, 2))
+        md = CellMD({A: [], east(A, 2): [place("far", la, lo)]}, cached=[A])
+        md.station_tags = FakeShards([], down=True)
+        idx = self.index(md)
+        items, partial = [], True
+        for _ in range(20):
+            items, partial = idx.query(*centre(A), 25.0, ["fuel"], "near")
+            if not partial:
+                break
+        self.assertEqual(len(items), 1)
+        self.assertIn((east(A, 2), "demand"), md.fetched)
+
+    def test_a_shard_station_reported_empty_is_hidden(self):
+        la, lo = centre(east(A, 3))
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo)])
+        idx = self.index(md)
+        self.assertEqual(len(idx.query(*centre(A), 15.0, ["fuel"], "map")[0]), 1)
+        idx.mark([("fuel", la, lo, False)])
+        self.assertEqual(idx.query(*centre(A), 15.0, ["fuel"], "map")[0], [])
+        # (after a restart: the report kept, the list read from the shards again, not from the cell's file)
+        md.station_tags = FakeShards([shard_station("n1", la, lo), shard_station("n2", la + 0.004, lo)])
+        self.assertEqual([i["name"] for i in self.index(md).query(*centre(A), 15.0, ["fuel"], "map")[0]], ["Sheetz"])
+
+
 import threading  # noqa: E402
 
 import test_server  # noqa: E402
