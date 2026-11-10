@@ -194,6 +194,46 @@ class OverpassIntegrationTest(unittest.TestCase):
         self.assertLess(np.abs(z - FLAT).max(), 0.05, "the motorway's approaches stay on the ground")
 
 
+class JunctionRaiseTest(unittest.TestCase):
+    """GitHub #1043 / #1045: an overpass over a freeway mapped right up to a junction at each end (an 8 m stub, then a
+    cross street): the junction's roads capped the stub's ramp to nothing and the deck stood 1-2 m over the interstate.
+    The junction rises with the approach and the roads leaving it ramp down (grading JUNCTION_RAISE_ON)."""
+
+    def deck_over_lanes(self, on):
+        old = grading.JUNCTION_RAISE_ON
+        grading.JUNCTION_RAISE_ON = on
+        try:
+            a, b = (43 - 35) / 86, (43 + 35) / 86
+            f = features([[(-43, 0), (43, 0)], [(-400, 0), (-43, 0)], [(43, 0), (400, 0)],
+                          [(-12, -500), (-12, 500)], [(12, 500), (12, -500)],
+                          [(43, -300), (43, 300)], [(-43, -300), (-43, 300)]],
+                         ["secondary", "secondary", "secondary", "motorway", "motorway", "tertiary", "tertiary"],
+                         flags=[(0, "is_bridge", a, b)], ids=["deck", "west", "east", "fwn", "fws", "xe", "xw"])
+            g = grading.Grader(FRAME, FakeMD(f), flat_elev)
+
+            def elev(la, lo):
+                return g.apply(la, lo, flat_elev(la, lo), grading.ROAD_LIFT)
+            bp = roads.BridgeProfiles(FRAME, lambda key: f, elev)
+            parts = bp.parts([f], (-100, -100, 100, 100))
+            _fid, _spec, xy, z, _lon = parts[0]
+            s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(np.asarray(xy)[:, :2], axis=0).T))]
+            at = [float(np.interp(x, np.asarray(xy)[:, 0], s)) for x in (-12.0, 12.0)]
+            lanes = elev(*FRAME.enu_to_geodetic(np.array([-12.0, 12.0]), np.array([30.0, -30.0]), 0.0)[:2])
+            return np.interp(at, s, z) - lanes, lanes - FLAT
+        finally:
+            grading.JUNCTION_RAISE_ON = old
+
+    def test_the_junction_rises_and_the_deck_clears_the_freeway(self):
+        before, _ = self.deck_over_lanes(False)
+        after, lanes = self.deck_over_lanes(True)
+        depth = roads.deck_depth(roads.geom_span([np.c_[np.linspace(-35, 35, 36), np.zeros(36)]]))
+        # (the real cases' slip lanes and twin carriageway capped the stub's ramp; this plain junction already
+        # clears without the raise: the raise must keep it so, and never lower it)
+        self.assertGreaterEqual(after.min(), roads.deck_road_clear(depth) - 0.3, (before, after))
+        self.assertGreaterEqual(after.min(), before.min() - 0.05)
+        self.assertLess(np.abs(lanes).max(), 0.2, "the freeway is not raised")
+
+
 class EmbankmentApproachTest(unittest.TestCase):
     """Kurna - Tuhala over Tallinna ringtee (59.3364 N 24.8239 E, GitHub #684): the road reaches the bridge on
     embankments 6 m over the ring road, but lidar ground has the bridge taken out and its map line ends down their

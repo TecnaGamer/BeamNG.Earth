@@ -40,6 +40,36 @@ import roadz                            # noqa: E402
 import grading as gradingmod            # noqa: E402
 
 lat, lon, R = args.lat, args.lon, args.r
+if os.environ.get("DP_CAPS"):          # (debug: which roads cap the approach ramps)
+    _aa = gradingmod.approach_add
+
+    def _logged(xy, at_end, lift, half, others=(), side_run=None, grade=None):
+        out = _aa(xy, at_end, lift, half, others, side_run, grade)
+        if lift > 3.0:
+            e = np.asarray(xy, np.float64)[-1 if at_end else 0, :2]
+            caps = []
+            for line, oh in others:
+                ln = np.asarray(line, np.float64)[:, :2]
+                if len(ln) >= 2:
+                    d = float(roads._seg_dist(e[None], ln[:-1], ln[1:]).min())
+                    caps.append((round(d, 1), round(float(oh), 1), round(max(0.0, (d - half - oh - gradingmod.APPROACH_GAP_M) / (side_run or gradingmod.SLOPE_RUN)), 2)))
+            caps.sort(key=lambda c: c[2])
+            print("approach_add lift %.1f at %s: raised %s; tightest caps (dist, half, cap) %s" % (lift, np.round(e, 1), None if out is None else round(float(out.max()), 2), caps[:4]))
+            P = np.asarray(xy, np.float64)[:, :2]
+            L = float(np.hypot(*np.diff(P, axis=0).T).sum())
+            bind = []
+            for line, oh in others:
+                ln = np.asarray(line, np.float64)[:, :2]
+                if len(ln) < 2:
+                    continue
+                dv = roads._seg_dist(P, ln[:-1], ln[1:]).min(1)
+                cv = np.maximum(0.0, (dv - half - oh - gradingmod.APPROACH_GAP_M) / (side_run or gradingmod.SLOPE_RUN))
+                j = int(np.argmin(cv))
+                bind.append((round(float(cv[j]), 2), j, round(float(dv[j]), 1), round(float(oh), 1), np.round(ln[0], 0).tolist(), np.round(ln[-1], 0).tolist()))
+            bind.sort()
+            print("   plan %d vertices, %.0f m, ends %s %s; binding (cap, vertex, dist, half, road ends): %s" % (len(P), L, np.round(P[0], 0).tolist(), np.round(P[-1], 0).tolist(), bind[:3]))
+        return out
+    gradingmod.approach_add = _logged
 blockworker.init(args.cache, False, True, True, True, False, multiprocessing.Queue(1), logging.DEBUG if os.environ.get("DP_DEBUG") else logging.ERROR, True, True)
 s = blockworker._s
 g, _ = s.anchor(1, lat, lon)
