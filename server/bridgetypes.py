@@ -962,8 +962,22 @@ def main_span(P, arcs, info, ground_fn, wet_fn=None):
     if not P:
         return None
     ins = _inside(P, info)
-    if ins is not None:         # a tagged bridge: on the part running furthest inside its outline
-        k = int(np.argmax([float(np.sum(np.diff(a)[m[1:] & m[:-1]])) for a, m in zip(arcs, ins)]))
+    if ins is not None:         # a tagged bridge: on the part running furthest inside its outline ...
+        held = [float(np.sum(np.diff(a)[m[1:] & m[:-1]])) for a, m in zip(arcs, ins)]
+        k = int(np.argmax(held))
+        if wet_fn is not None:  # ... over the water there, where one does (a record's circle round the Brooklyn
+            # Bridge also held the FDR and the Manhattan Bridge's approaches of its chain: its span went on the
+            # part longest in the circle, not the one over the river)
+            wet_held, near = [], []
+            ol = info.get("outline")
+            ctr = np.asarray(ol, np.float64).mean(0) if isinstance(ol, np.ndarray) else None    # (a record's circle)
+            for (xy_, _, _), a, m in zip(P, arcs, ins):
+                w_ = np.asarray(wet_fn(xy_), bool) & m
+                wet_held.append(float(np.sum(np.diff(a)[w_[1:] & w_[:-1]])))
+                near.append(float(np.min(np.hypot(*(xy_[w_] - ctr).T))) if ctr is not None and w_.any() else 0.0)
+            ok = [i for i, v in enumerate(wet_held) if v >= SPAN_MIN]
+            if ok:              # (a record's circle: the wet part passing nearest its point; an outline: the longest)
+                k = min(ok, key=lambda i: near[i]) if ctr is not None else max(ok, key=lambda i: wet_held[i])
         if not ins[k].any():
             return None
     else:
