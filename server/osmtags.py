@@ -417,9 +417,14 @@ class OsmTags:
                                    & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
                 rows.extend(_rows(t, m))
             extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
+            # the raceways inside the box of each one that may be a facility's outline (_outline_rows), from every row
+            # group under that box: the decision is the way's own, the same in every cell it reaches
+            inside = {r[_ROW_FRN]: self._inside_rows(con, uri, groups, remote, kind, r) for r in rows
+                      if r[1] and _maybe_outline(r)}
+            want = sorted(set(extra).union(*inside.values())) if extra else []
             got = []
             if extra:           # (rare: the raceways' and busways' own columns and geometry, of their row groups only)
-                hit = sorted({rg for r in extra for rg in cand
+                hit = sorted({rg for r in want for rg in groups
                               if groups[rg]["first"] <= r < groups[rg]["first"] + groups[rg]["n"]})
                 rd._fetch(files, {PATH: [r for rg in hit for c in RACEWAY_COLUMNS + ("geometry",)
                                          for r in groups[rg]["cols"].get(c, [])]}, kind)
@@ -428,9 +433,9 @@ class OsmTags:
                 except Exception:
                     pass
                 rcols = ", ".join(f'"{c}"' for c in RACEWAY_COLUMNS)
-                rows_in = ", ".join(str(int(r)) for r in extra)
-                got = con.execute(f"""SELECT {rcols}, geometry FROM read_parquet({uri}, file_row_number = true)
-                    WHERE file_row_number IN ({rows_in})""").fetchall()
+                rows_in = ", ".join(str(int(r)) for r in want)
+                got = con.execute(f"""SELECT file_row_number, {rcols}, geometry FROM read_parquet({uri},
+                    file_row_number = true) WHERE file_row_number IN ({rows_in})""").fetchall()
         except Exception:
             for e in errors:
                 if isinstance(e, rangeread.Changed):
@@ -440,17 +445,82 @@ class OsmTags:
             con.close()
         names = list(COLUMNS)
         tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
-        ways = []
+        lines = {}
         for row in got:
             coords = _linestring(bytes(row[-1]))
             if coords is None or len(coords) < 2:
                 continue
-            d = {c: v for c, v in zip(RACEWAY_COLUMNS, row[:-1]) if v is not None}
+            d = {c: v for c, v in zip(RACEWAY_COLUMNS, row[1:-1]) if v is not None}
             d["coords"] = coords
-            ways.append(d)
-        return tags, ways
+            lines[int(row[0])] = d
+        outlines = {f for f, ins in inside.items() if f in lines
+                    and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
+        if outlines:
+            log.info("osmtags: %d raceway(s) taken for a facility's outline, not drawn: %s", len(outlines),
+                     ", ".join(str(lines[f].get("id")) for f in sorted(outlines)))
+        return tags, [lines[f] for f in extra if f in lines and f not in outlines]
+
+    def _inside_rows(self, con, uri, groups, remote, kind, r):
+        """The file rows of the other raceways whose bbox lies inside raceway row r's (r: a _rows tuple)."""
+        x0, y0, x1, y1 = (r[_ROW_VAL + _NAMES.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
+        out = []
+        for rg in self._candidates(groups, (x0, y0, x1, y1)):
+            t = self._table(con, uri, groups, rg, remote, kind)
+            if not len(t["id"]):
+                continue
+            b = np.float32
+            m = (t["race"] & (t["frn"] != r[_ROW_FRN]) & (t["bx0"].astype(b) >= b(x0)) & (t["bx1"].astype(b) <= b(x1))
+                 & (t["by0"].astype(b) >= b(y0)) & (t["by1"].astype(b) <= b(y1)))
+            out.extend(int(f) for f in t["frn"][m])
+        return out
 
 _ROW_FRN = 3    # _rows: (id, raceway, busway, file row, COLUMNS...)
+_NAMES = list(COLUMNS)
+
+# A circuit's facility mapped on the track's tag (GitHub #1010: Tsukuba Circuit's leisure=sports_centre outline, way
+# 438021322, is also highway=raceway) was drawn as a 12 m track round the whole site, over the lanes along its fence.
+# Layercake's file has no leisure or area column, so it is told by its shape: a closed ring without a surface, width,
+# lane count or oneway round another raceway it never comes within OUTLINE_CLEAR_M of. (An oval keeps its infield course: the
+# course joins the oval.)
+OUTLINE_CLOSED_M = 1.0      # m between a ring's ends
+OUTLINE_CLEAR_M = 5.0       # m an enclosed raceway keeps from the outline
+
+
+def _maybe_outline(r):
+    """Whether raceway row r (a _rows tuple) has none of the tags a drawn track carries (surface, width, lanes, oneway:
+    Suzuka's ene-1 kart track, a closed ring round another kart track, has oneway=yes only)."""
+    return all(r[_ROW_VAL + _NAMES.index(c)] is None for c in ("osm_surface", "width", "lanes", "osm_oneway"))
+
+
+def is_outline(ring, others):
+    """Whether lon/lat line ring is closed and wholly encloses one of others (lon/lat lines) without coming within
+    OUTLINE_CLEAR_M of it. Pure."""
+    from polygon import Path
+    ring = np.asarray(ring, np.float64)
+    if len(ring) < 4:
+        return False
+    kx = 111320.0 * np.cos(np.radians(float(ring[:, 1].mean())))
+    scale = np.array([kx, 110540.0])
+    R = (ring - ring[0]) * scale
+    if np.hypot(*(R[-1] - R[0])) > OUTLINE_CLOSED_M:
+        return False
+    poly = Path(R)
+    for o in others:
+        P = (np.asarray(o, np.float64) - ring[0]) * scale
+        if len(P) and np.all(poly.contains_points(P)) and min(_seg_dist(P, R), _seg_dist(R, P)) > OUTLINE_CLEAR_M:
+            return True
+    return False
+
+
+def _seg_dist(pts, line):
+    """The least distance from points pts (k, 2) to polyline line (n, 2)."""
+    a, b = line[:-1], line[1:]
+    if not len(a):
+        return float(np.min(np.hypot(*(pts - line[0]).T)))
+    ab = b - a
+    t = np.clip(np.einsum("kij,ij->ki", pts[:, None, :] - a[None], ab) / np.maximum((ab * ab).sum(1), 1e-12), 0, 1)
+    d = pts[:, None, :] - (a[None] + t[..., None] * ab[None])
+    return float(np.sqrt((d * d).sum(-1)).min())
 _ROW_VAL = 4
 
 
