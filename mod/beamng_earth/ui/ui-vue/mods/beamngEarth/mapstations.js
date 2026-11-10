@@ -16,14 +16,18 @@ export function visible(items, { fuel, ev, z }) {
 }
 
 // The markers ({ sx, sy, name }) with showLabel: from LABEL_Z, the ones nearer the view's centre first, a name left out
-// where its box would overlap one already shown.
+// where its box (EarthMap.vue .marker-label: right of the icon, ~7 px a letter) would overlap a name already shown or
+// another station's icon (a 76's pump over "Tesla Supercharger", in game 2026-11-09).
+const ICON_R = 11                   // px: half the icon's size (.station-icon)
 export function labels(markers, z, w, h) {
   if (z < LABEL_Z) return markers.map(m => ({ ...m, showLabel: false }))
+  const hit = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1
+  const icons = markers.map(m => ({ x0: m.sx - ICON_R, x1: m.sx + ICON_R, y0: m.sy - ICON_R, y1: m.sy + ICON_R }))
   const order = markers.map((m, i) => ({ m, i, d: (m.sx - w / 2) ** 2 + (m.sy - h / 2) ** 2 })).sort((a, b) => a.d - b.d)
   const boxes = [], show = new Set()
   for (const { m, i } of order) {
-    const bw = 10 + 7 * String(m.name || "").length, box = { x0: m.sx - bw / 2, x1: m.sx + bw / 2, y0: m.sy + 6, y1: m.sy + 22 }
-    if (boxes.some(b => box.x0 < b.x1 && b.x0 < box.x1 && box.y0 < b.y1 && b.y0 < box.y1)) continue
+    const box = { x0: m.sx + ICON_R, x1: m.sx + ICON_R + 10 + 7 * String(m.name || "").length, y0: m.sy - 9, y1: m.sy + 9 }
+    if (boxes.some(b => hit(box, b)) || icons.some((b, j) => j !== i && hit(box, b))) continue
     boxes.push(box)
     show.add(i)
   }

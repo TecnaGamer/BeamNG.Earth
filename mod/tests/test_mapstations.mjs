@@ -15,10 +15,17 @@ assert.deepEqual(ms.visible(items, { fuel: false, ev: true, z: 13 }).map(i => i.
 
 // names from zoom 15, never two overlapping (the one nearer the centre kept)
 const W = 800, H = 600
-const a = { sx: 400, sy: 300, name: "Sheetz" }, b = { sx: 405, sy: 302, name: "Speedway" }, c = { sx: 100, sy: 100, name: "BP" }
+const a = { sx: 400, sy: 300, name: "Sheetz" }, b = { sx: 398, sy: 317, name: "Speedway" }, c = { sx: 100, sy: 100, name: "BP" }
 assert.ok(ms.labels([a, b, c], 14.9, W, H).every(m => !m.showLabel), "no names below zoom 15")
 const l = ms.labels([b, a, c], 15, W, H)
 assert.deepEqual(l.filter(m => m.showLabel).map(m => m.name).sort(), ["BP", "Sheetz"], "overlap: the nearer to the centre")
+
+// nor over another station's icon (a 76's pump over "Tesla Supercharger", in game 2026-11-09)
+const t = { sx: 400, sy: 300, name: "Tesla Supercharger" }, pump = { sx: 410, sy: 314, name: "" }
+const lt = ms.labels([t, pump], 15, W, H)
+assert.equal(lt[0].showLabel, false, "a name over another icon is left out")
+const far = ms.labels([t, { sx: 400, sy: 400, name: "" }], 15, W, H)
+assert.equal(far[0].showLabel, true, "an icon elsewhere does not hide it")
 
 // the radius asked: half the view's diagonal, at most 25 km
 const r = ms.radiusKm({ lat: 0, lon: 0, z: 15 }, 1280, 720)
