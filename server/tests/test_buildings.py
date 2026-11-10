@@ -1631,6 +1631,36 @@ class MappedRoofShapesTest(unittest.TestCase):
         self.assertAlmostEqual(top[1], 4.5, delta=0.01)
 
 
+class IndustrialLandTest(unittest.TestCase):
+    """Plain buildings on industrial / port land are industrial (a refinery's stores, not houses with porches)."""
+
+    def test_land_makes_plain_buildings_industrial(self):
+        ring = np.array([[0, 0], [14, 0], [14, 10], [0, 10]], float)
+        def pitched(attrs):
+            return sum(bld.plan(ring + k * 0.37, dict(attrs), 1, 51.88, 4.37).roof not in ("flat", "dome")
+                       for k in range(60))
+        self.assertGreater(pitched({}), 0, "a small unclassified building: some pitched roofs")
+        self.assertEqual(pitched({"_land": "industrial"}), 0, "on industrial land: flat, industrial")
+        self.assertGreater(pitched({"class": "house", "_land": "industrial"}), 0, "a mapped house stays a house")
+
+    def test_rings_and_tile_tagging(self):
+        class Land:
+            kind = np.array([3, 3])
+            ids = np.array([1, 2])
+            attrs = {"class": np.array(["industrial", "residential"], object)}
+            def parts(self, i):
+                return [[np.zeros((4, 2))]]
+        import mapgeom
+        sq = np.array([[-100, -100], [400, -100], [400, 400], [-100, 400]], float)
+        orig = mapgeom.enu_xy
+        mapgeom.enu_xy = lambda f, frame, pts: (sq[:, 0], sq[:, 1])
+        try:
+            rings = bld.industrial_rings(None, [Land()], 0.0, 0.0)
+        finally:
+            mapgeom.enu_xy = orig
+        self.assertEqual(len(rings), 1, "the industrial area only")
+
+
 if __name__ == "__main__":
     unittest.main()
 
@@ -1819,9 +1849,10 @@ class RealTagsTest(unittest.TestCase):
         s2 = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_color": "#10ee20"}, 0, 39.2, -76.6)
         mat_idx2 = bld._Looks(s2.seed)
         _, rgba2 = mat_idx2[s2.facade]
-        self.assertLess(rgba2[0], 50)
+        # (a saturated mapped colour muted toward its grey, facade_tone: still a strong green)
+        self.assertLess(rgba2[0], 90)
         self.assertGreater(rgba2[1], 200)
-        self.assertLess(rgba2[2], 50)
+        self.assertLess(rgba2[2], 90)
 
     def test_roof_material_and_color(self):
         # Metal roof
@@ -1877,11 +1908,11 @@ class RealTagsTest(unittest.TestCase):
         p1_spec, p2_spec = items[0][0], items[1][0]
         # P1 has red facade and blue roof (Overture's #ff0000: the muted red of "red")
         _, p1_rgba = bld._Looks(p1_spec.seed)[p1_spec.facade]
-        self.assertGreater(p1_rgba[0], 150)
+        self.assertGreater(p1_rgba[0], 130)     # (pure red muted toward its grey: facade_tone)
         self.assertLess(p1_rgba[1], 50)
         # P2 has green facade (overridden on the part) and yellow roof
         _, p2_rgba = bld._Looks(p2_spec.seed)[p2_spec.facade]
-        self.assertLess(p2_rgba[0], 50)
+        self.assertLess(p2_rgba[0], 90)         # (muted toward its grey: facade_tone)
         self.assertGreater(p2_rgba[1], 200)
         self.assertEqual(p2_spec.roof, "hipped")
 

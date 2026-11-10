@@ -392,6 +392,22 @@ def era(year):
     return "old" if y < 1930 else "postwar" if 1950 <= y < 1990 else "new" if y >= 2000 else None
 
 
+# A mapped facade colour is a name or a pure hex ("yellow": 0.92 / 0.82 / 0.20), a painted facade a muted one: a
+# yellow house in Findlay, OH (41.0441 -83.6501, the street photos: pale yellow clapboard) was drawn lime. Saturated
+# mapped colours are blended toward their own luminance's grey by up to FACADE_MUTE, by how saturated they are (toward
+# a light neutral, a red facade turned pink).
+FACADE_MUTE = 0.35
+
+
+def facade_tone(rgb):
+    """rgb (0..1) as a painted facade shows it: saturated colours muted toward their grey; muted ones as they are."""
+    r = [float(v) for v in rgb]
+    sat = max(r) - min(r)
+    k = FACADE_MUTE * min(1.0, max(0.0, (sat - 0.25) / 0.35))
+    lum = 0.2126 * r[0] + 0.7152 * r[1] + 0.0722 * r[2]
+    return tuple(v + (lum - v) * k for v in r)
+
+
 def custom_look(mat, rgb):
     """A look key in LOOKS for material mat with RGB tuple in [0, 1]."""
     key = f"{mat}|c_{rgb[0]:.3f}_{rgb[1]:.3f}_{rgb[2]:.3f}"
@@ -476,6 +492,8 @@ HOUSE_CLASSES = {"house", "detached", "semidetached_house", "bungalow", "residen
 ROW_CLASSES = {"terrace"}
 GARAGE_MIN_M2 = 400.0       # a "parking" building this big is a parking structure
 INDUSTRIAL_CLASSES = {"industrial", "warehouse", "manufacture", "factory", "hangar"}
+INDUSTRIAL_LAND = {"industrial", "port", "depot"}     # land-use classes whose plain buildings are industrial ...
+INDUSTRIAL_LAND_CLASSES = {"", "yes", "industrial", "commercial", "service", "warehouse", "office"}   # ... these
 
 
 def _hash01(*vals):
@@ -742,6 +760,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     shed = (cls in SHED_CLASSES and not garage) or (area < 40 and not row)
     shop = cls in SHOP_CLASSES
     industrial = cls in INDUSTRIAL_CLASSES or (area > 2500 and cls in ("", "commercial"))
+    # (on industrial land, industrial_rings: a refinery's or a port's control rooms and stores, not houses with porches
+    # and chimneys; Pernis, Rotterdam, against its aerial photo, 2026-11-10)
+    industrial = industrial or (attrs.get("_land") == "industrial" and cls in INDUSTRIAL_LAND_CLASSES)
     industrial = industrial and not (garage or terminal)
 
     h = attrs.get("height")
@@ -1035,6 +1056,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         facade, band, plain = SIDING, None, True
     fc = parse_color(attrs.get("facade_color"))
     if fc is not None and not attrs.get("bridge_part"):
+        fc = facade_tone(fc)
         if wall is not None:
             base = wall.split("|")[0]
             wall = custom_look(base, fc)
@@ -2589,6 +2611,30 @@ TANK_INFRA = {"storage_tank": "storage_tank", "silo": "silo", "gasometer": "gaso
               "slurry_tank": "slurry_tank"}
 
 
+def industrial_rings(frame, land_layers, x0, y0, margin=50.0, size=256.0):
+    """[ring (k, 2) relative to (x0, y0)] of the industrial, port and depot land (INDUSTRIAL_LAND) reaching the tile."""
+    out, seen = [], set()
+    for f in land_layers:
+        if f is None or len(f.kind) == 0 or f.attrs.get("class") is None:
+            continue
+        cs = f.attrs["class"].astype(str)
+        for i in np.flatnonzero(np.isin(cs, list(INDUSTRIAL_LAND)) & (f.kind == 3)):
+            fid = f.ids[i]
+            if fid in seen:
+                continue
+            seen.add(fid)
+            for part in f.parts(i):
+                if not part or len(part[0]) < 3:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, part[0])
+                xy = np.stack([e - x0, n - y0], 1)
+                if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
+                        or xy[:, 1].min() > size + margin:
+                    continue
+                out.append(xy)
+    return out
+
+
 def tank_rings(frame, infra_layers, x0, y0, margin=0.0, size=256.0):
     """[(ring (k, 2) relative to (x0, y0), attrs {class, height?})] of the mapped tanks and silos (TANK_INFRA) whose
     outline reaches the tile."""
@@ -3583,7 +3629,8 @@ def _tank_items(frame, x0, y0, x1, y1, elev, tanks, used, own=None):
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
-                   passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None):
+                   passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None,
+                   industrial=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3899,10 +3946,18 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         from polygon import Path
         tank_paths = [Path(np.asarray(r, np.float64)) for r, _a in tanks]
     tank_used = set()
+    land_paths = None
+    if industrial:
+        from polygon import Path
+        land_paths = [Path(np.asarray(r, np.float64)) for r in industrial]
     for k, (ring, at, sh, look, mh) in enumerate(zip(rings, attrs, shared, looks, mins)):
         if roof_rgb is not None and np.isfinite(roof_rgb[k]).all() and not at.get("roof_color"):
             at = dict(at, _roof_photo=tuple(float(v) for v in roof_rgb[k]))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
+        if land_paths is not None:
+            cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
+            if any(lp.contains_points(cxy[None])[0] for lp in land_paths):
+                at = dict(at, _land="industrial")
         if tank_paths is not None and look is None and str(at.get("class") or "") not in TANK_CLASSES:
             cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
             for t_, tp in enumerate(tank_paths):
@@ -4832,7 +4887,7 @@ def road_tile_items(
     cds = [
         md.cell(
             k,
-            layers=("buildings", "building_parts", "roads", "infrastructure", "water") + house_layers,
+            layers=("buildings", "building_parts", "roads", "infrastructure", "water", "land_use"),
             kind="demand",
         )
         for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)
@@ -4864,6 +4919,7 @@ def road_tile_items(
             frame, [c.layers.get("infrastructure") for c in cds], x0, y0
         ),
         tanks=tank_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
+        industrial=industrial_rings(frame, [c.layers.get("land_use") for c in cds], x0, y0),
         bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
         decks=[
@@ -4877,7 +4933,7 @@ def road_tile_items(
         if decks
         else None,
         skip=skip,
-        house_land_layers=[c.layers.get("land_use") for c in cds],
+        house_land_layers=[c.layers.get("land_use") for c in cds] if house_layers else (),
     )
     custom = []
     if cache_dir is not None:
