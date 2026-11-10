@@ -117,7 +117,9 @@ class SheetsTest(unittest.TestCase):
         sheets.later("k", job)
         sheets.later("k", job)
         go.set()
-        sheets._pool.shutdown(wait=True)
+        end = time.monotonic() + 5
+        while sheets._later and time.monotonic() < end:
+            time.sleep(0.01)
         self.assertEqual(ran, [1])
 
 

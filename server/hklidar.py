@@ -15,6 +15,7 @@ import contextlib
 import io
 import logging
 import os
+import queue
 import re
 import struct
 import threading
@@ -140,7 +141,7 @@ class Sheets:
         self._slots = threading.BoundedSemaphore(FETCH_THREADS)
         self._mem = OrderedDict()           # path -> Sheet, the most recently read last
         self._later = set()                 # keys of the background jobs queued or running
-        self._pool = None
+        self._queue = None
         self.stats = {"requests": 0, "bytes": 0}
 
     def path(self, layer, name):
@@ -241,11 +242,15 @@ class Sheets:
             if key in self._later:
                 return
             self._later.add(key)
-            if self._pool is None:
-                from runtimeprofiler import ThreadPoolExecutor
-                self._pool = ThreadPoolExecutor(BACKGROUND_THREADS, thread_name_prefix="hklidar-later")
+            if self._queue is None:
+                self._queue = queue.Queue()
+                for i in range(BACKGROUND_THREADS):     # (daemons: a server run that ends does not wait for them)
+                    threading.Thread(target=self._background, name=f"hklidar-later-{i}", daemon=True).start()
+        self._queue.put((key, fn))
 
-        def run():
+    def _background(self):
+        while True:
+            key, fn = self._queue.get()
             try:
                 fn()
             except Exception as e:          # (netfetch counts it; tried again when asked again)
@@ -253,7 +258,6 @@ class Sheets:
             finally:
                 with self._lock:
                     self._later.discard(key)
-        self._pool.submit(run)
 
     def trim(self):
         """The kept sheets cut back to SHEETS_MB, the least recently read first."""
