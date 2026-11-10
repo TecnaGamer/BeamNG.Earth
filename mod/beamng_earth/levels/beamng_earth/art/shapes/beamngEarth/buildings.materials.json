@@ -742,5 +742,31 @@
     ],
     "translucent": false,
     "castShadows": false
+  },
+  "bne_bld_glasshouse": {
+    "name": "bne_bld_glasshouse",
+    "mapTo": "bne_bld_glasshouse",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "dce44997-0a52-5fe1-9f33-df51bf19cb84",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_b.color.png",
+        "normalMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_nm.normal.png",
+        "roughnessMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_bld_glasshouse_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }

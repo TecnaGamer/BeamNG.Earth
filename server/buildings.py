@@ -81,6 +81,7 @@ STUCCO = "bne_bld_stucco"   # plain stucco walls (windows laid over them from th
 ROOF_METAL = "bne_bld_roof_metal"   # standing-seam metal (barns, sheds, farm buildings)
 PANEL = "bne_bld_panel"     # precast concrete panels (big-box stores, strip malls)
 METALWALL = "bne_bld_metalwall"     # corrugated metal walls (warehouses, factories)
+GLASSHOUSE = "bne_bld_glasshouse"   # greenhouse glazing in aluminium bars (tools/make_glasshouse.py)
 STONE = "bne_bld_stone"     # dressed stone (old villages and towns of southern and central Europe: Gordes came out as
                             # grey plaster, 2026-10-15)
 STONE_FLOORS = 4            # stone walls on buildings this low at most
@@ -100,7 +101,7 @@ LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosse
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS
+             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE,)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -480,6 +481,16 @@ TANK_MAX_M2 = 20000.0       # (the largest oil tanks: ~110 m across)
 TANK_H, TANK_SILO_H = 0.6, 1.6      # height over the diameter when not mapped
 TANK_RISE, TANK_SILO_RISE = 0.12, 0.2   # the dome's rise over the diameter
 TANK_PAINTS = ((0.92, 0.92, 0.90), (0.84, 0.85, 0.86), (0.90, 0.88, 0.80), (0.72, 0.76, 0.72))
+# A greenhouse (Westland, NL: 52.010 4.260, the aerial photo 2026-11-10): hectares of pale glass in aluminium bars, a
+# Venlo block 5-7 m to the gutter under a near-flat ridged roof; a garden one a small glass gable. Drawn in glazing
+# (GLASSHOUSE), clear, whitewashed (summer shading) or with the shade screens drawn (dark), or as the aerial shows it.
+GREENHOUSE_CLASSES = {"greenhouse", "glasshouse"}
+GREENHOUSE_H = 6.0          # m to the gutter of a commercial block (no height mapped)
+GREENHOUSE_SMALL_M2 = 150.0     # m2: a garden greenhouse this small at most ...
+GREENHOUSE_SMALL_H = 2.2        # ... its walls (m), under a glass gable of GREENHOUSE_PITCH
+GREENHOUSE_PITCH = 25.0
+GREENHOUSE_TINTS = (((0.98, 0.99, 0.99), 0.55), ((1.0, 1.0, 0.97), 0.25), ((0.62, 0.65, 0.66), 0.20))   # (tint, share)
+GREENHOUSE_TEX_MEAN = (0.815, 0.837, 0.841)     # the glazing texture's mean (make_glasshouse.py prints it)
 ELEVATOR_MAX_M2 = 1500.0
 ELEVATOR_SLENDER = 0.7      # height / sqrt(area) at least (11 x 11 m, 25 m: 2.3; 28 x 31 m, 23 m: 0.78; a 15 m motel: 0.4)
 GLASS_FLOORS = (20, 40)     # towers from 20 floors: glass, but for OLD_TOWER_GLASS of the old ones below 40 ...
@@ -810,6 +821,27 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                     roof_mat=look, facade=look, band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None,
                     windows=False, steeple=False, porch=False, cls="tank", deck=False,
                     pitch=math.degrees(math.atan2(rise, max(diam / 2, 0.1))))
+    if cls in GREENHOUSE_CLASSES and not attrs.get("building_part"):
+        small = area <= GREENHOUSE_SMALL_M2
+        if h is None or not np.isfinite(h) or h <= 0:
+            h = GREENHOUSE_SMALL_H if small else GREENHOUSE_H
+        h = float(np.clip(h, 1.8, 12.0))
+        ph = attrs.get("_roof_photo")
+        if ph is not None:      # (the aerial: whitewashed, clear or screened, as it is)
+            tint = tuple(round(min(1.0, max(0.2, c / m)) / ROOF_PHOTO_STEP) * ROOF_PHOTO_STEP
+                         for c, m in zip(ph, GREENHOUSE_TEX_MEAN))
+        else:
+            x, tint = _hash01(seed, "glass"), GREENHOUSE_TINTS[-1][0]
+            for t, share in GREENHOUSE_TINTS:
+                if x < share:
+                    tint = t
+                    break
+                x -= share
+        look = custom_look(GLASSHOUSE, tint)
+        return Spec(ring=ring, floors=1, floor_h=h, height=h, roof="gabled" if small and hw <= 6.0 else "flat",
+                    roof_mat=look, facade=look, band=None, shop=False, plain=True, seed=seed, min_h=0.0, wall=None,
+                    windows=False, steeple=False, porch=False, cls="greenhouse", deck=False,
+                    pitch=GREENHOUSE_PITCH if small else None)
     if attrs.get("bridge_part"):    # a mapped part of a bridge's tower (support_rings): a plain box of painted steel
         return Spec(ring=ring, floors=1, floor_h=h or BRIDGE_PIER_M, height=h or BRIDGE_PIER_M, roof="flat",
                     roof_mat=f"{STEEL}|{attrs['bridge_part']}", facade=f"{STEEL}|{attrs['bridge_part']}", band=None,

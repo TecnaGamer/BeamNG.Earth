@@ -1661,6 +1661,29 @@ class IndustrialLandTest(unittest.TestCase):
         self.assertEqual(len(rings), 1, "the industrial area only")
 
 
+class GreenhouseTest(unittest.TestCase):
+    """A greenhouse is glazing: a Venlo block 6 m to the gutter under a flat roof, a garden one a small glass gable."""
+
+    def test_venlo_block_and_garden_greenhouse(self):
+        big = np.array([[0, 0], [200, 0], [200, 120], [0, 120]], float)
+        sp = bld.plan(big, {"class": "greenhouse"}, 0, 52.01, 4.26)
+        self.assertEqual((sp.cls, sp.roof, sp.height), ("greenhouse", "flat", bld.GREENHOUSE_H))
+        self.assertTrue(sp.facade.startswith(bld.GLASSHOUSE) and sp.roof_mat == sp.facade)
+        self.assertFalse(sp.windows)
+        small = np.array([[0, 0], [6, 0], [6, 3.5], [0, 3.5]], float)
+        g = bld.plan(small, {"class": "greenhouse"}, 0, 52.01, 4.26)
+        self.assertEqual((g.roof, g.height), ("gabled", bld.GREENHOUSE_SMALL_H))
+        self.assertEqual(bld.plan(big, {"class": "greenhouse", "height": 7.5}, 0, 52.01, 4.26).height, 7.5)
+
+    def test_the_aerial_sets_the_tone(self):
+        big = np.array([[0, 0], [200, 0], [200, 120], [0, 120]], float)
+        dark = bld.plan(big, {"class": "greenhouse", "_roof_photo": (0.30, 0.32, 0.33)}, 0, 52.01, 4.26)
+        white = bld.plan(big, {"class": "greenhouse", "_roof_photo": (0.85, 0.86, 0.86)}, 0, 52.01, 4.26)
+        self.assertLess(bld.LOOKS[dark.facade][1][0], 0.5)
+        self.assertGreater(bld.LOOKS[white.facade][1][0], 0.95)
+        self.assertIn(bld.GLASSHOUSE, bld.MATERIALS)
+
+
 if __name__ == "__main__":
     unittest.main()
 
