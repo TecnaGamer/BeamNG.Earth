@@ -66,6 +66,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
   parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
   (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
+  A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
+  smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
+  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
+  crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
+  switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
+  collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
