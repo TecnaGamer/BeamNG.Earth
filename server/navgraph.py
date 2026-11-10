@@ -627,7 +627,16 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     # Give unsignalised approaches the same road-class priority as the stop signs
     # emitted below. Mapped signal junctions remain governed by their signals.
     import furniture
+    de_region = False
+    if de_on:
+        import designs
+        de_region = designs.reads_here(True, frame, (cx - window - 200, cy - window - 200,
+                                                       cx + window + 200, cy + window + 200))
     for junction, raw_arms in prop_arms.items():
+        # Germany's current graph mirrors the mapped StVO decisions below; do not
+        # overlay the generic inferred priority rule on those approaches.
+        if de_region:
+            break
         if junction not in pending or len(raw_arms) < 3:
             continue
         if sum(1 for arm in raw_arms if arm[0] in ring) >= 2:
@@ -679,12 +688,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 radius[nm] = max(radius.get(nm, 0.0), e[7])
         for nm, x, y, z in zip(used, X, Y, Z):
             nodes[nm] = [round(float(x), 2), round(float(y), 2), round(float(z), 2), radius[nm]]
-    de_ctx = None               # Germany's junctions (de_on, the window touching Germany): the road tiles' decision
-    if de_on:
-        import designs
-        if designs.reads_here(True, frame, (cx - window - 200, cy - window - 200, cx + window + 200,
-                                            cy + window + 200)):
-            de_ctx = _de_context(frame, feats_list, urban_fn, left_hand, de_routes, priority)
+    de_ctx = _de_context(frame, feats_list, urban_fn, left_hand, de_routes, priority) if de_region else None
     yields = []
     signals = _signals(prop_arms, approaches, nodes, left_hand, set(ring), carriage, signals, country, priority,
                        decks=signal_decks, ground=signal_ground, de_ctx=de_ctx, pieces=pieces, yields=yields)
@@ -950,7 +954,7 @@ def _signals(arms, approaches, nodes, left_hand=False, ring=None, lines=(), sign
         import designs
         german = _de_decide(farms, nodes, de_ctx, pieces or {}, link_ok, ring, signals, country, priority)
     for name, a in arms.items():
-        priority_controlled = bool(furniture.priority_stop_arms(farms[name], ring))
+        priority_controlled = de_ctx is None and bool(furniture.priority_stop_arms(farms[name], ring))
         if name not in nodes or len(a) < 3 or (name not in german
                                                and not furniture._controlled_here(farms[name], signals)
                                                and not priority_controlled):

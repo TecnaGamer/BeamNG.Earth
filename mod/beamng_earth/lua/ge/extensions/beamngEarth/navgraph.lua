@@ -939,8 +939,8 @@ function M.selectTrafficRoadSpeed(edges, nodes, x, y, headingX, headingY)
           local ex, ey = x - qx, y - qy
           local d2 = ex * ex + ey * ey
           if d2 <= maxDistance2 then
-            local error = 1 - alignment
-            local score = d2 + error * error * 1600
+            local alignmentError = 1 - alignment
+            local score = d2 + alignmentError * alignmentError * 1600
             if score < bestScore then
               bestScore, bestSpeed, bestClass, bestDistance, bestAlignment, bestEdge =
                 score, speed, edge[11], math.sqrt(d2), alignment, edge
