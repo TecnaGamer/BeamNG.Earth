@@ -1833,6 +1833,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
     except Exception as e:      # an unreachable source costs the stations, not the tile
         log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
+    chargers = _with_shard(frame, md, box, chargers)
     sites, owned = [], []
     for st in stations:
         r = reach_of(st)
@@ -1893,6 +1894,27 @@ def _ll_of(frame, x, y):
     """(lat, lon) of a frame position, as floats."""
     la, lo, _ = frame.enu_to_geodetic(x, y, 0.0)
     return float(la), float(lo)
+
+
+def _with_shard(frame, md, box, chargers):
+    """The chargers with OSM's capacity and charge points from the weekly shards (md.station_tags; evchargers.with_shard)
+    round the tile's box; as they were when the shards are off, not there or unreachable."""
+    import evchargers
+    st = getattr(md, "station_tags", None)
+    if st is None or not chargers:
+        return chargers
+    try:
+        r = max(evchargers.reach_of(ch) for ch in chargers) + MERGE_M
+        x0, y0, x1, y1 = box
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - r, x1 + r]), np.array([y0 - r, y1 + r]), 0.0)
+        box_ll = (float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
+        sts, pts = st.stations_in(*box_ll), st.points_in(*box_ll)
+        if sts is None or pts is None:
+            return chargers
+        return evchargers.with_shard(chargers, sts, pts, frame)
+    except Exception as e:      # (the shards cost their extras, never the chargers)
+        log.debug("station shards: %s: %s", type(e).__name__, e)
+        return chargers
 
 
 def _charger_site(frame, md, ch, stations):

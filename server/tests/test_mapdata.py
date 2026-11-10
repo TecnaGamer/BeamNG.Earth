@@ -540,6 +540,8 @@ class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
         import railtags
         md, _ = self.mapdata()
         self.assertIsInstance(md.station_tags, railtags.StationTags)
+        # (the road tiles' chargers take its capacity and charge points: their cache keys follow its weekly build)
+        self.assertIn("stations", md.versions())
 
 
 @needs_duckdb

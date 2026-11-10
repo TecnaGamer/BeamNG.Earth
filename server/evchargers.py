@@ -12,6 +12,7 @@ peer places the same site.
 import logging
 import math
 import re
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
@@ -37,6 +38,8 @@ class Charger:
     records: int        # Overture's and OSM's records merged into it
     big: bool           # a known fast network, or 2+ records: a row of chargers
     tesla: bool         # Tesla's own (a Supercharger's 8)
+    cap: int = None     # OSM's capacity=* of its charging station (the weekly shards, with_shard), when tagged
+    points: tuple = ()  # (x, y) of its mapped man_made=charge_point nodes (with_shard)
 
 
 def _charging(category, taxonomy):
@@ -155,8 +158,10 @@ ENERGY = ("electricEnergy",)
 
 
 def count_of(ch):
-    """Chargers wanted at a site: ROW_TESLA for Tesla's, 2 per record (ROW_BIG..ROW_MAX) for a big site, else
-    ROW_SMALL."""
+    """Chargers wanted at a site: OSM's capacity (at most CAP_MAX) when its station has one; else ROW_TESLA for
+    Tesla's, 2 per record (ROW_BIG..ROW_MAX) for a big site, else ROW_SMALL."""
+    if ch.cap is not None and ch.cap >= 1:
+        return min(int(ch.cap), CAP_MAX)
     if ch.tesla:
         return ROW_TESLA
     if ch.big:
@@ -166,7 +171,45 @@ def count_of(ch):
 
 def reach_of(ch):
     """How far from its position a site's chargers and stalls can reach (the road tiles that lay it out)."""
-    return AISLE_REACH_M + AISLE_HALF_M + STALL_M + CHARGER_BACK_M + ROW_MAX * CHARGER_GAP_M / 2
+    r = AISLE_REACH_M + AISLE_HALF_M + STALL_M + CHARGER_BACK_M + max(ROW_MAX, count_of(ch)) * CHARGER_GAP_M / 2
+    far = max((math.hypot(px - ch.x, py - ch.y) for px, py in ch.points), default=0.0)
+    return max(r, far + STALL_M + CHARGER_BACK_M)
+
+
+# --- the weekly OpenStreetMap station shards (railtags.StationTags; Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
+# `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`")
+CAP_MAX = 12                # chargers a site gets from its capacity at most (a big Supercharger has 12-40 stalls)
+POINTS_MAX = 16             # mapped charge points a site stands chargers at, at most
+
+
+def with_shard(chargers, stations, points, frame):
+    """The sites with OSM's capacity of the nearest shard charging station within gasstations.MERGE_M, and the charge
+    points (lat, lon) each nearest to it (to its matched station's position, else its own) within MERGE_M: a
+    neighbour's points stay the neighbour's. stations: railtags.StationTags.stations_in's; frame: the sites'."""
+    if not chargers:
+        return chargers
+    evs = [s for s in stations or () if s.get("kind") == "ev"]
+    sxy = np.array([frame.geodetic_to_enu(s["lat"], s["lon"], 0.0)[:2] for s in evs], np.float64).reshape(-1, 2)
+    caps, anchors = [], []
+    for ch in chargers:
+        cap, at = None, (ch.x, ch.y)
+        if len(sxy):
+            d = np.hypot(sxy[:, 0] - ch.x, sxy[:, 1] - ch.y)
+            k = int(np.argmin(d))
+            if d[k] <= gs.MERGE_M:
+                cap, at = evs[k].get("cap"), (float(sxy[k, 0]), float(sxy[k, 1]))
+        caps.append(cap)
+        anchors.append(at)
+    own = [[] for _ in chargers]
+    A = np.array(anchors, np.float64)
+    for la, lo in points or ():
+        x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
+        d = np.hypot(A[:, 0] - float(x), A[:, 1] - float(y))
+        k = int(np.argmin(d))
+        if d[k] <= gs.MERGE_M:
+            own[k].append((float(x), float(y)))
+    return [dataclasses.replace(ch, cap=cap, points=tuple(sorted(pts))[:POINTS_MAX])
+            for ch, cap, pts in zip(chargers, caps, own)]
 
 
 def _nearest(lines, p):
@@ -268,6 +311,31 @@ def _kerb_clear(pts, areas, blds, roads, service=()):
     return gs._clear(pts, blds, []) and gs._clear(areas, blds, [])
 
 
+def _at_points(ch, blds, roads, service, shape):
+    """A site with a charger at each mapped charge point, facing the nearest drive line within AISLE_REACH_M (else the
+    nearest public road), its stall in front; a point whose charger or stall is in a building or on a road dropped.
+    None when fewer than 2 stand (today's placements then). No pad: a mapped site's ground is there already."""
+    props, areas = [], []
+    for px, py in ch.points:
+        p = np.array([px, py], np.float64)
+        near = _nearest(service, p)
+        if near is None or near[2] > AISLE_REACH_M:
+            near = _nearest([r[0] for r in roads], p)
+        f = (near[0] - p) / near[2] if near is not None and near[2] > 1e-6 else np.array([0.0, 1.0])
+        stall = p + f * (CHARGER_BACK_M + STALL_M / 2.0)
+        if not gs._clear(np.array([p, stall]), blds, roads):
+            continue
+        yaw = gs._yaw(f)
+        props.append(dict(shape=shape, x=float(px), y=float(py), dz=0.0, yaw=(yaw + CHARGER_DYAW) % 360.0,
+                          scale=[1.0, 1.0, 1.0], collide=True))
+        areas.append(dict(x=float(stall[0]), y=float(stall[1]), dz=gs.AREA_DZ, yaw=yaw % 360.0,
+                          half=[STALL_M / 2, AREA_W_M / 2, 2.75], icon=gs.ICON_DZ))
+    if len(props) < 2:
+        return None
+    st = gs.Station(ch.id, ch.x, ch.y, ch.name or "EV charger", ch.brand, (ch.id,), True, True)
+    return gs.Site(st, props, areas, (), shop_id="ev:" + ch.id, pad=[])
+
+
 def layout(ch, blds, roads, service=(), style="default"):
     """A charger site (gasstations.Site): count_of(ch) chargers in a straight row CHARGER_GAP_M apart, each facing its
     stall STALL_M deep, along the nearest service line within AISLE_REACH_M (the stalls on the aisle's side) or at the
@@ -278,6 +346,10 @@ def layout(ch, blds, roads, service=(), style="default"):
     even one charger fits (a charger in a parking garage)."""
     shapes = CHARGER_SHAPES.get(style, CHARGER_SHAPES["default"])
     shape = shapes[0] if ch.big else shapes[1]
+    if len(ch.points) >= 2:
+        site = _at_points(ch, blds, roads, service, shape)
+        if site is not None:
+            return site
     tries = _placements(ch, roads, service)
     for n in range(count_of(ch), 0, -1):
         for kind, data in tries:
