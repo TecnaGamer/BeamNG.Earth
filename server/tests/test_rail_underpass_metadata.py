@@ -49,6 +49,7 @@ class UnderpassMetadataTest(unittest.TestCase):
                                         10.0 + railways.UNDERPASS_CLEAR_M - 1e-6)
             self.assertEqual(roads.raw_level_ranges(f, 1), [])
             self.assertEqual(roads.tunnel_parts(f, 1), [])
+            self.assertEqual(len(roads.removed_tunnel_parts(f, 1)), 1)
 
     def test_inferred_span_keeps_source_crossing_checks(self):
         cases = [(self.cell(), True), (self.cell(tunnel=False), False),
@@ -63,6 +64,7 @@ class UnderpassMetadataTest(unittest.TestCase):
     def test_retained_tunnel_uses_existing_portal_geometry_once(self):
         f = self.cell()
         with self.effective(f, road_ranges=[(0.0, 1.0, "tunnel")]):
+            self.assertEqual(roads.removed_tunnel_parts(f, 1), [])
             original = roads.tunnel_parts(f, 1)
             with mock.patch.object(roads, "_parts_by_level_new", wraps=roads._parts_by_level_new) as source:
                 got = railways.road_underpasses(FRAME, [f, f], roads.tile_bbox(0, 0))

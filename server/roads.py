@@ -1449,6 +1449,15 @@ def tunnel_parts(feats, i):
     return list(got)
 
 
+def removed_tunnel_parts(feats, i):
+    """Source tunnel pieces made ground by gradesep, for clearance rather than tunnel rendering.
+    Retained tunnels still use tunnel_parts, including its cleared portal ends."""
+    effective = [(a, b) for a, b, kind in raw_level_ranges(feats, i) if kind == "tunnel"]
+    missing = [(a, b, kind) for a, b, kind in tag_level_ranges(feats, i)
+               if kind == "tunnel" and not any(c <= a + MIN_PART and d >= b - MIN_PART for c, d in effective)]
+    return _parts_by_level_new(feats, i, "tunnel", rngs=missing) if missing else []
+
+
 PORTAL_CLEAR_M = 1.0        # m a tunnel's portal face keeps from the edge of a carriageway it passes under, its tube
 PORTAL_EXTEND_MAX_M = 25.0  # going on straight up to this far past the mapped end for it (an underpass mapped short: its
                             # portal face stood across the E6's lanes in Norway, GitHub #2)

@@ -294,19 +294,13 @@ def road_underpasses(frame, cells, box, reach=REACH_M):
             if not _box_hit(boxes[i], near):
                 continue
             rings = roads.tunnel_parts(feats, i) if sp is not None else []
-            # gradesep can turn a short road tunnel into ground and the tracks above it into bridges.
-            # Keep that source clearance evidence (Nashville, Carney Street), including when another
-            # tunnel on the same feature remains. Retained tunnels keep their cleared portal ends.
-            effective = [(a, b) for a, b, kind in roads.raw_level_ranges(feats, i) if kind == "tunnel"]
-            missing = [(a, b, kind) for a, b, kind in roads.tag_level_ranges(feats, i)
-                       if kind == "tunnel" and not any(c <= a + roads.MIN_PART and d >= b - roads.MIN_PART
-                                                       for c, d in effective)]
-            if missing:
+            source = roads.removed_tunnel_parts(feats, i)
+            if source:
                 if ground_specs is None:
                     ground_specs = roads.road_specs(feats)
                 sp = sp or ground_specs[i]
                 if sp is not None:
-                    rings += roads._parts_by_level_new(feats, i, "tunnel", rngs=missing)
+                    rings += source
             if sp is None:
                 continue
             for ring in rings:
