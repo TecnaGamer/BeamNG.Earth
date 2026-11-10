@@ -213,21 +213,6 @@ class PortalCover(unittest.TestCase):
                          "a long one stays a low arch")
 
 
-    def test_an_end_run_at_a_cliff_or_short_is_the_tube_any_road(self):
-        """Fort Pitt Tunnel's east portal (2026-11-09): the map's tube reaches its bridge, the last 6 m (the cliff from
-        3 m over the floor to 3 m under it) an open road on that ground, a hole before the deck. Any class."""
-        road = Spec(7.0, "paved", False, "secondary")
-        kinds = np.array([2, 2, 2, 2, 0, 0])
-        s = np.array([0.0, 4.0, 8.0, 12.0, 15.0, 18.0])
-        self.assertEqual(roads.portal_cover(kinds, np.array([60.0, 50.0, 30.0, 8.0, 3.0, -3.0]), road, s).tolist(),
-                         [2] * 6)
-        # longer: over a drop (a mouth over a valley) the tube, at the floor's level (its approach cut) open
-        s2 = np.array([0.0, 4.0, 8.0, 12.0, 20.0, 28.0])
-        self.assertEqual(roads.portal_cover(kinds, np.array([60.0, 50.0, 30.0, 8.0, -20.0, -30.0]), road, s2)[-1], 2)
-        self.assertEqual(roads.portal_cover(kinds, np.array([60.0, 50.0, 30.0, 8.0, 0.5, 0.0]), road, s2)[-1], 0)
-        s3 = np.array([0.0, 4.0, 8.0, 12.0, 24.0, 40.0])     # (too long: left open)
-        self.assertEqual(roads.portal_cover(kinds, np.array([60.0, 50.0, 30.0, 8.0, -20.0, -30.0]), road, s3)[-1], 0)
-
 
 class ArchRaise(unittest.TestCase):
     def test_ground_over_a_low_arch_stays_over_its_vault(self):

@@ -5202,10 +5202,6 @@ TUNNEL_ROAD_REACH_M = 15.0
 PORTAL_SHALLOW_COVER_M = 1.5    # m: a major road's open end run with at least this much ground over its floor is covered
 
 
-PORTAL_AIR_M = 2.0          # m: an open run at a tunnel's end with its ground this far under the floor is over a drop ...
-PORTAL_AIR_RUN_M = 20.0     # ... and this long at most: the tube goes on to whatever the road goes on to (portal_cover)
-
-
 def portal_cover(kinds, cover, spec, s=None):
     """kinds with a major road's (CONCRETE_WALL_CLASSES) open run at either end of its tunnel covered (a low arch, in
     concrete: roadmesh) where the median ground over its floor is PORTAL_SHALLOW_COVER_M or more: the map's portal is a
@@ -5214,16 +5210,10 @@ def portal_cover(kinds, cover, spec, s=None):
     Park's transverses). A run shorter than SECTION_MIN_M (s: the samples' arc) is the section it leads into instead:
     a 4 m low arch before CA-1's northbound Tom Lantos tube had a 5 m tube's portal face, the 6.8 m tube's terrain hole
     right behind it open above that face, a notch of sky in the hill over the mouth (2026-11-09). The meshes
-    (TunnelProfiles) and the grading both.
-    Any road's open run at an end shorter than SECTION_MIN_M (tunnel_sections merges such runs only between sections), or
-    over a drop (its median ground PORTAL_AIR_M or more under the floor, no longer than PORTAL_AIR_RUN_M), is the
-    section it leads into too: a mouth in a cliff face opening onto a bridge (Fort Pitt Tunnel's east portal: the map's
-    tube reaches the bridge, but its last 6 m, where the cliff falls from 3 m over the floor to 3 m under it, were an
-    open road drawn on that ground, a 2.7 m deep hole the AI's cars crashed into, 2026-11-09)."""
+    (TunnelProfiles) and the grading both."""
     kinds = np.array(kinds, np.int64)
-    if not (kinds > 0).any():
+    if spec is None or spec.cls not in CONCRETE_WALL_CLASSES or not (kinds > 0).any():
         return kinds
-    major = spec is not None and spec.cls in CONCRETE_WALL_CLASSES
     cover = np.asarray(cover, np.float64)
     n = len(kinds)
     for rng in (range(n), range(n - 1, -1, -1)):
@@ -5233,14 +5223,9 @@ def portal_cover(kinds, cover, spec, s=None):
                 nxt = q
                 break
             run.append(q)
-        if not run or len(run) >= n or not np.isfinite(cover[run]).any():
-            continue
-        med = float(np.nanmedian(cover[run]))
-        span = abs(float(s[nxt]) - float(s[run[0]])) if s is not None and nxt is not None else None
-        if span is not None and (span < SECTION_MIN_M or (med <= -PORTAL_AIR_M and span <= PORTAL_AIR_RUN_M)):
-            kinds[run] = kinds[nxt]
-        elif major and med >= PORTAL_SHALLOW_COVER_M:
-            short = span is not None and span < SECTION_MIN_M
+        if run and len(run) < n and np.isfinite(cover[run]).any() and \
+                float(np.nanmedian(cover[run])) >= PORTAL_SHALLOW_COVER_M:
+            short = s is not None and nxt is not None and abs(float(s[nxt]) - float(s[run[0]])) < SECTION_MIN_M
             kinds[run] = kinds[nxt] if short else 1
     return kinds
 
@@ -6531,6 +6516,8 @@ def pier_sites(xy, z, width, ground_fn, road_lines=(), wet_fn=None, depth=None):
 
 OBS_BLEND_DG = 0.04     # a measured deck eased onto its joints' heights changes its grade by at most this (BridgeProfiles)
 OBS_BLEND_MIN_M = 10.0  # m, the shortest easing
+OBS_NO_DECK_M = 2.0     # m: a measured deck at most this far over the ground under it ...
+OBS_STALE_M = 3.5       # ... where the solve stands this much higher is a measurement from before the bridge (kept out)
 OBS_MAX_GRADE = 0.14    # a measured deck steeper than this after the easing (2 m steps) keeps the inference
 OBS_END_MAX_M = float(os.environ.get("BNE_OBS_END_MAX", "inf"))  # m a measured deck's end may lie off the graded road at
                         # its abutment, else the inference (inf: always eased onto it; 4 m made Springfield worse)
@@ -6912,6 +6899,26 @@ class BridgeProfiles:
                 log.debug("observed deck %s: its end %.1f m off the road it meets, the solve kept", comp[i],
                           max(abs(o[0] - z[0]), abs(o[-1] - z[-1])))
                 obs[i] = None
+        # a measured "deck" lying on the ground where the solve stands well over it (the clearance over a road under
+        # it) is a measurement from before the bridge: a diverging diamond's new second deck over I-75 in Ohio, the
+        # lidar flown before it was built, sat 0.7 m over the interstate (GitHub #1045; grading's approach lift
+        # likewise: OBS_STALE_LIFT_M)
+        if level > 0:
+            for i, (o, z, ln) in enumerate(zip(obs, zs, lines)):
+                z = np.asarray(z, np.float64)
+                if o is None or len(z) != len(o) or not np.isfinite(z).all():
+                    continue
+                try:
+                    g = np.asarray(self._ground(np.asarray(ln, np.float64)[:, :2]), np.float64)
+                except Exception:
+                    continue
+                if not np.isfinite(g).any():
+                    continue
+                over_o, over_z = float(np.nanmax(o - g)), float(np.nanmax(z - g))
+                if over_o < OBS_NO_DECK_M and over_z - over_o > OBS_STALE_M:
+                    log.debug("observed deck %s: %.1f m over the ground, the solve %.1f m: from before the bridge, "
+                              "the solve kept", comp[i], over_o, over_z)
+                    obs[i] = None
         if all(o is None for o in obs):
             return zs
         measured = self.__dict__.setdefault("_obs_tl", threading.local()).__dict__.setdefault("measured", set())

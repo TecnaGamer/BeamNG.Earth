@@ -247,6 +247,8 @@ WATER_LIFT_ON = os.environ.get("BNE_WATER_FILL", "on") != "off"
 WATER_CURVE_M = 16.0        # m from an abutment a deck over water spends on its vertical curve before climbing ...
 WATER_MAX_LIFT = 2.0        # ... and its approach fill is raised at most this (any class: a motorway's too)
 OBS_HALF_M = 4.0            # m: the half width a bridge line is matched with when its abutment's lift is measured
+OBS_STALE_LIFT_M = 3.0      # m: a measured deck on the ground (OBS_NO_DECK_M) where the clearance rules need this
+OBS_NO_DECK_M = 2.0         # lift is stale: nowhere this far over the ground under it
 OBS_END_M = 12.0            # m from the end the measured deck's height is taken at most (its first measured station)
 APPROACH_GAP_M = 1.0        # m of flat ground kept between a ramp's fill slope and the road beside it
 ENU_CACHE_MAX = 512         # cells' road parts in the anchor frame kept (Grader._cell_enu; ~0.02-0.5 MB each)
@@ -2533,9 +2535,9 @@ class _Planner:
         return False
 
     def _observed_lift(self, bridge, xy, z_at):
-        """(m the abutment at bridge end xy is raised, the measured deck end's height) when a source measured the deck
-        (roadz.PROVIDER, level 1): the measured deck end over the ground there, 0 or more; None when none did (the
-        inference: bridge_lifts)."""
+        """(m the abutment at bridge end xy is raised, the measured deck end's height, the measured deck's most over the
+        ground under it) when a source measured the deck (roadz.PROVIDER, level 1): the measured deck end over the
+        ground there, 0 or more; None when none did (the inference: bridge_lifts)."""
         import roadz
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled:
@@ -2555,7 +2557,9 @@ class _Planner:
         if not len(near):
             return None
         k = int(near[np.argmin(d[near])])
-        return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k])
+        ok = np.isfinite(z)
+        over = float(np.nanmax(z[ok] - np.asarray(z_at(np.asarray(bridge, np.float64)[ok]), np.float64)))
+        return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k]), over
 
     def _coarse(self, key):
         """Is cell key's elevation only the coarse global model (dem.coarse_at its centre)? False without a DEM."""
@@ -2664,6 +2668,8 @@ class _Planner:
                 a = approach_add(p.xy, at_end, lift, p.half, others,
                                  MEASURED_SIDE_RUN if measured or solved else SLOPE_RUN,
                                  XS_FIXED_GRADE if solved and _never_raised(specs[i]) else None)
+                log.debug("grading: approach %s at %s: lift %.1f m, raised %s", fid, np.round(e[:2], 1), lift,
+                          None if a is None else round(float(np.max(a)), 2))
                 if a is not None:
                     add = a if add is None else np.maximum(add, a)
             if add is not None:
@@ -4201,8 +4207,16 @@ class _Planner:
                 best = lift
                 break
         seen = self._observed_lift(bridge, xy, z_at)
+        if seen is not None and seen[0] < APPROACH_MIN_LIFT and seen[2] < OBS_NO_DECK_M and best is not None \
+                and best >= OBS_STALE_LIFT_M:
+            # (a "deck" measured nowhere OBS_NO_DECK_M over the ground under it, where the clearance over the road under
+            # it needs this lift: a measurement from before the bridge was built: a diverging diamond's new deck over
+            # I-75 in Ohio sat 0.7 m over the interstate, GitHub #1045. A real deck over a road in a cutting stands
+            # high over the cut: trusted as before)
+            log.debug("grading: measured deck end at %s on the ground, %.1f m needed: from before the bridge", xy, best)
+            seen = None
         if seen is not None:            # (a measured deck: its own end, not what the clearance rules would need)
-            seen, target = seen
+            seen, target = seen[:2]
             return None if seen < APPROACH_MIN_LIFT else (min(seen, APPROACH_MAX_LIFT), others, approaches, False,
                                                           target)
         if sol is not None:             # (crossings.ON: the bridge and the roads under it solved together)
