@@ -215,12 +215,17 @@ LAYERS = {
                       bool=("is_underground", "has_parts")),
     # parts of buildings (towers on podiums, setbacks): each its own height range; buildings.py draws a
     # building's parts in place of its footprint (has_parts)
+    # (and their own materials and roof direction, research 2026-11-10: Manhattan's parts 40.6 % / 68.4 % with their
+    # own facade / roof material, drawn with the building's; no layer version bump: cells fetched from now on have
+    # them, the cached ones with the next release bump, buildings.PART_OWN reading what a cell has)
     "building_parts": dict(theme="buildings", type="building_part", clip=False,
                            cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
-                                "roof_height, facade_color, roof_color",
+                                "roof_height, facade_color, roof_color, facade_material, roof_material, "
+                                "roof_direction, roof_orientation",
                            text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
-                                 "roof_color"),
-                           float=("height", "min_height", "num_floors", "min_floor", "roof_height")),
+                                 "roof_color", "facade_material", "roof_material", "roof_orientation"),
+                           float=("height", "min_height", "num_floors", "min_floor", "roof_height",
+                                  "roof_direction")),
     "water": dict(theme="base", type="water", clip=True,
                   cols=f"subtype, class, {_NAME}, {_SRC}, level, is_salt, is_intermittent, {_TAGS}",
                   text=("subtype", "class", "name", "src_dataset", "src_record", "tags"),
