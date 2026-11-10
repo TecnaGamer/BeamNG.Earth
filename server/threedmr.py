@@ -1098,6 +1098,22 @@ def _texture_has_alpha(data):
     return img.convert("RGBA").getchannel("A").getextrema()[0] < 250
 
 
+def _trim_image(data):
+    """An embedded image's bytes without what follows its end: a GLB bufferView is padded to 4 bytes and some
+    exporters count the padding in the view, so 1-3 bytes trail the PNG's IEND chunk. Python's readers ignore them,
+    the game's does not: those slots drew BeamNG's orange "NO TEXTURE" (GitHub #1072, Perth's State War Memorial and
+    Central Park tower: 12 of 128 cached textures). PNG: up to the end of IEND; JPEG: up to its EOI marker."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        j = data.rfind(b"IEND")
+        if j >= 4:
+            return data[:j + 8]         # (type + CRC)
+    elif data[:2] == b"\xff\xd8":
+        j = data.rfind(b"\xff\xd9")
+        if j > 0:
+            return data[:j + 2]
+    return data
+
+
 def _resolve_texture(gltf, bin_chunk, mat_idx, cache):
     """(bytes, extension, factor, has_alpha, alpha_cutoff) of a material's baseColorTexture/baseColorFactor.
     bytes/extension are (None, None) if the material has no baseColorTexture (observed on 3dmr.eu ids 47/31:
@@ -1144,6 +1160,7 @@ def _resolve_texture(gltf, bin_chunk, mat_idx, cache):
             else:
                 data = None
             if data is not None:
+                data = _trim_image(data)
                 ext = {"image/jpeg": "jpeg", "image/png": "png"}.get(
                     image.get("mimeType")
                 )

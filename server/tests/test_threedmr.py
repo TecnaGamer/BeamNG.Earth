@@ -2137,6 +2137,24 @@ class LocalModelsTest(unittest.TestCase):
             self.assertEqual(threedmr.local_models(d), [])
 
 
+class TrimImageTest(unittest.TestCase):
+    """GitHub #1072: the GLB's bufferView padding after a PNG's IEND (1-3 bytes) made the game draw NO TEXTURE."""
+
+    def test_trailing_padding_trimmed(self):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "PNG")
+        png = buf.getvalue()
+        self.assertEqual(threedmr._trim_image(png + b"\x00\x00\x00"), png)
+        self.assertEqual(threedmr._trim_image(png), png)
+        buf = io.BytesIO()
+        Image.new("RGB", (4, 4), (10, 20, 30)).save(buf, "JPEG")
+        jpg = buf.getvalue()
+        self.assertEqual(threedmr._trim_image(jpg + b"\x00\x00"), jpg)
+        self.assertEqual(threedmr._trim_image(b"not an image"), b"not an image")
+
+
 if __name__ == "__main__":
     unittest.main()
 
