@@ -1237,7 +1237,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         nf, floor_h = 1, h
     spec = Spec(ring=ring, floors=nf, floor_h=floor_h, height=h, roof=roof, roof_mat=roof_mat, facade=facade,
                 band=band, shop=shop and not shed and nf >= 1, plain=plain, seed=seed, min_h=0.0, wall=wall,
-                windows=windows, steeple=church and area < 2500 and roof not in DOME_ROOFS, porch=porch, cls=cls,
+                windows=windows, steeple=(church and area < 2500 and roof not in DOME_ROOFS
+                                          and (STEEPLE_KIND.get(style.name, "spire") if
+                                               _hash01(seed, "tower") < STEEPLE_SHARE.get(style.name, 1.0) else False)),
+                porch=porch, cls=cls,
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
@@ -1661,8 +1664,20 @@ def _box_tiled(m, c, u, hx, hy, z0, z1, mat, tile=1.0):
     m.quad(*[(p[0], p[1], z1) for p in k], *[(p[0] / tile, p[1] / tile) for p in k], mat)
 
 
+# A church's tower by region (Rome's Trastevere, 2026-11-10: dozens of slate spires where the churches have Romanesque
+# campanili, Mapillary at Santa Maria in Trastevere: a square brick tower beside the front, three times the nave's
+# eaves, a low pyramid of clay tiles; many churches there have none): "spire" (northern Europe, the US: a tower with a
+# tall slate spire), "campanile" (the Mediterranean, Latin America, warm countries: a tall square tower, a low tiled
+# pyramid), on STEEPLE_SHARE of the churches.
+STEEPLE_KIND = {"mediterranean": "campanile", "latin_america": "campanile", "warm": "campanile"}
+STEEPLE_SHARE = {"mediterranean": 0.6, "warm": 0.6}
+
+
 def _steeple(m, spec, z_eave, mat_idx):
-    """A church's square tower with a pyramid spire, at one end of its nave (hashed)."""
+    """A church's square tower at one end of its nave (hashed): a slate spire on it, or a campanile (STEEPLE_KIND)."""
+    if spec.steeple == "campanile":
+        _campanile(m, spec, z_eave, mat_idx)
+        return
     c, u, hl, hw = oriented_box(spec.ring)
     if _hash01(spec.seed, "steeple") < 0.5:
         u = -u
@@ -1682,6 +1697,31 @@ def _steeple(m, spec, z_eave, mat_idx):
     for i in range(4):
         a, b = k[i], k[(i + 1) % 4]
         m.tri((a[0], a[1], top), (b[0], b[1], top), apex, (0, 0), (1, 0), (0.5, 2.0), rm)
+
+
+def _campanile(m, spec, z_eave, mat_idx):
+    """A Mediterranean bell tower: a tall square tower at one end of the nave, its own low pyramid of clay tiles."""
+    c, u, hl, hw = oriented_box(spec.ring)
+    if _hash01(spec.seed, "steeple") < 0.5:
+        u = -u
+    side = float(np.clip(1.0 * hw, 3.5, 7.0)) / 2
+    p = c + u * (hl - side)
+    for k in range(1, 12):
+        if _inside(spec.ring, p):
+            break
+        p = c + u * (hl - side) * (1 - k / 12)
+    rise = (min(hw, 12.0) + EAVE_M) * math.tan(math.radians(spec.pitch or PITCH["gabled"]))
+    top = z_eave + rise + max(8.0, 1.6 * float(spec.height or 8.0))
+    _box(m, p, u, side, side, z_eave - 1.0, top, mat_idx[spec.facade])
+    v = np.array([-u[1], u[0]])
+    o = side + 0.25                                 # (the roof's eaves past the walls)
+    k = [p + u * sx * o + v * sy * o for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+    apex = (float(p[0]), float(p[1]), top + 0.55 * o)
+    rm = mat_idx[f"{ROOF_TILES}|{int(_hash01(spec.seed, 'tower roof') * len(ROOF_TINTS[ROOF_TILES]))}"]
+    for i in range(4):
+        a, b = k[i], k[(i + 1) % 4]
+        m.tri((a[0], a[1], top), (b[0], b[1], top), apex, (0, 0), (2 * o / ROOF_UV_M, 0), (o / ROOF_UV_M, o / ROOF_UV_M),
+              rm)
 
 
 # What stands on a flat roof (the user, 2026-11-10: "apply high level of detail to all buildings and cities across the

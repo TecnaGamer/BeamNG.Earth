@@ -202,6 +202,21 @@ class PlanTest(unittest.TestCase):
         P = bld.build([(c, 0.0, 0.0)])[0]
         self.assertGreater(P[:, 2].max(), 25.0, "a spire over the nave")
 
+    def test_church_towers_by_region(self):
+        """Rome's churches: campanili (a tall square tower, a low tiled pyramid) on some, no slate spires; the US's
+        and northern Europe's: spires."""
+        kinds = set()
+        for k in range(40):
+            c = bld.plan(rect(37 * k, 11 * k, 30, 14), {"class": "church"}, 0, 41.889, 12.469)
+            kinds.add(c.steeple)
+            if c.steeple:
+                P, _UV, _T, M = bld.build([(c, 0.0, 0.0)])[:4]
+                self.assertIn(bld.MATERIALS.index(bld.ROOF_TILES), set(M.tolist()), "a tiled tower roof")
+        self.assertIn("campanile", kinds)
+        self.assertIn(False, kinds, "some without a tower")
+        self.assertNotIn("spire", kinds)
+        self.assertEqual(bld.plan(rect(0, 0, 30, 14), {"class": "church"}, 0, 39.28, -76.6).steeple, "spire")
+
     def test_dense_core_small_buildings_are_row_houses(self):
         s = bld.plan(rect(0, 0, 8, 12), {"class": "house"}, 0, 39.28, -76.59, dense=True)
         self.assertEqual(s.roof, "flat")
