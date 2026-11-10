@@ -2791,3 +2791,62 @@ class EraTest(unittest.TestCase):
         self.assertGreater(self.share(1890, brick), self.share(None, brick) + 0.1, "old: more brick")
         self.assertGreater(self.share(1970, lambda f: f.startswith(bld.PANEL)), 0.4, "post-war: panel slabs")
         self.assertEqual(self.share(None, lambda f: f.startswith(bld.PANEL)), 0.0)
+
+
+class TurbineBaseTest(unittest.TestCase):
+    """A wind turbine's base mapped as a building is left out (GitHub #1085: Herzogenrath's R90004, a 10 m round
+    building=yes round the tower, stood in the turbine)."""
+
+    def setUp(self):
+        import geotiles
+        self.f = geotiles.WorldFrame(50.8949989, 6.1405846)     # (OSM node 251685395, in the bundled index)
+
+    def ring(self, cx, cy, r, k):
+        a = np.linspace(0, 2 * np.pi, k, endpoint=False)
+        return np.c_[cx + r * np.cos(a), cy + r * np.sin(a)]
+
+    def feats(self, rings):
+        import mapgeom
+        coords, off = [], [0]
+        for r in rings:
+            r = np.vstack([r, r[:1]])
+            la, lo, _ = self.f.enu_to_geodetic(r[:, 0], r[:, 1], 0.0)
+            coords.extend(zip(lo, la))
+            off.append(len(coords))
+        k = len(rings)
+        return mapgeom.Features(layer="buildings", ids=np.array([f"w{i}" for i in range(k)]),
+                                kind=np.full(k, mapgeom.POLYGON, np.uint8),
+                                part_off=np.arange(k + 1, dtype=np.int64), ring_off=np.arange(k + 1, dtype=np.int64),
+                                coord_off=np.array(off, np.int64), lonlat=np.array(coords, np.float64),
+                                attrs={"height": np.full(k, np.nan)})
+
+    def kept(self, rings):
+        items = bld.tile_buildings(self.f, -128, -128, 128, 128, [self.feats(rings)],
+                                   lambda la, lo: np.zeros(np.shape(la)))
+        return len(items)
+
+    def test_the_base_round_the_tower_is_left_out_a_hut_beside_it_kept(self):
+        base = self.ring(0.0, 0.0, 4.8, 10)                 # (the mapped base: 10 nodes, 9.6 m across)
+        hut = self.ring(14.0, 6.0, 2.5, 4)                  # (a transformer hut beside it)
+        self.assertEqual(self.kept([base]), 0)
+        self.assertEqual(self.kept([hut]), 1)
+        self.assertEqual(self.kept([base, hut]), 1)
+
+    def test_a_large_footprint_round_a_turbine_and_the_switch_off_keep_it(self):
+        self.assertEqual(self.kept([self.ring(0.0, 0.0, 15.0, 4)]), 1)     # (450 m²: a building, not a base)
+        old = bld.TURBINE_BASE_ON
+        bld.TURBINE_BASE_ON = False
+        try:
+            self.assertEqual(self.kept([self.ring(0.0, 0.0, 4.8, 10)]), 1)
+        finally:
+            bld.TURBINE_BASE_ON = old
+
+    def test_a_small_turbine_on_a_house_leaves_the_house(self):
+        import windturbines
+        t = windturbines.Turbine("osm:node:1", 50.8949989, 6.1405846, {"rotor:diameter": "3"}, 0)
+        real = windturbines.near
+        windturbines.near = lambda *a: (t,)
+        try:
+            self.assertEqual(self.kept([self.ring(0.0, 0.0, 6.0, 4)]), 1)
+        finally:
+            windturbines.near = real
