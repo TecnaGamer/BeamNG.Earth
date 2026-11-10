@@ -309,6 +309,28 @@ class EverywhereTest(unittest.TestCase):
             pts = mappedpoles.road_points(Md(), self.frame, 0, 0)
         np.testing.assert_allclose(sorted(map(tuple, pts)), [(-20., 10.), (20., 10.)], atol=.01)
 
+    def test_poles_join_a_line_only_at_its_vertices(self):
+        """(PR #919 by wyo-backroads) A pole beside a line, or a crossing line's, is not on it; a telecom pole is not
+        on a power line; a power=tower point or a mast is not a pole; a pole mapped twice counts once."""
+        on = [pole("n1", -20.), pole("n2", 20.)]
+        self.assertEqual(len(self.build(on + [line([[-20., 10.], [20., 10.]])])[1]), len(furniture.WIRE_ARMS))
+        self.assertEqual(self.build(on + [line([[-20., 11.], [20., 11.]])])[1], [], "a metre beside: not its supports")
+        self.assertEqual(self.build(on + [line([[-40., 10.], [40., 10.]])])[1], [], "along a segment: not a vertex")
+        tel = [("n1", "communication_pole", [[-20., 10.]], {}), ("n2", "communication_pole", [[20., 10.]], {})]
+        self.assertEqual(self.build(tel + [line([[-20., 10.], [20., 10.]])])[1], [])
+        self.assertTrue(self.build(tel + [line([[-20., 10.], [20., 10.]], "communication_line",
+                                               location="overhead")])[1])
+        props, _ = self.build([pole("n1", -20., power="tower"), pole("n2", 20., man_made="mast"),
+                               pole("n3", 0., man_made="mast", power="pole")])
+        self.assertEqual(len(props), 1, "only the mast that is also tagged a power pole")
+        f = infrastructure(self.frame, [pole("n1", -20.), pole("n9", -20.), pole("n2", 20.)])
+
+        class Md:
+            def cell(self, key, layers=(), kind="demand"):
+                return SimpleNamespace(layers={"infrastructure": f})
+        with patch("roads.cells_of_tile", return_value=["a"]):
+            self.assertEqual(len(mappedpoles.road_points(Md(), self.frame, 0, 0)), 2)
+
     def test_field_lines_get_their_long_spans(self):
         """OpenStreetMap's minor_line is mostly the 10-30 kV line across the fields, 90-160 m between mapped poles:
         wired here (up to EVERYWHERE_MAX_SPAN_M), never past it."""

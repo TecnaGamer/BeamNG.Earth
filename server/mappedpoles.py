@@ -24,6 +24,9 @@ import poleprofiles
 POLES = {"power_pole", "utility_pole", "communication_pole"}
 LINES = {"minor_line", "cable", "communication_line"}
 MATCH_M = 1.5
+# everywhere: a pole is on a line only at one of its way's vertices (OpenStreetMap maps the supports as the way's
+# nodes): a pole beside a line, or one of a crossing line's, was wired into it (PR #919 by wyo-backroads)
+VERTEX_M = 0.25
 MAX_SPAN_M = 80.0                 # furniture.wire_lines' existing limit
 MARGIN_M = MAX_SPAN_M + 5.0
 # (everywhere: the lines OpenStreetMap calls minor_line are mostly the 10-30 kV ones across the fields, 90-160 m
@@ -49,6 +52,25 @@ def _active(tags):
         return False
     return not any(str(tags.get(k, "no")).lower() not in {"no", "false", "0", "", "none"}
                    for k in ("disused", "abandoned", "demolished", "razed", "construction", "proposed"))
+
+
+def _drawable_pole(cls, tags):
+    """Is a mapped pole point (POLES) drawn as a pole: active, not a power tower (powerlines' pylon), a mast or a
+    tower (a communications structure) unless also tagged power=pole, and a utility pole only of power or telecom
+    (PR #919 by wyo-backroads)."""
+    if not _active(tags) or tags.get("power") == "tower":
+        return False
+    if tags.get("man_made") in {"mast", "tower"} and tags.get("power") != "pole":
+        return False
+    return not (cls == "utility_pole" and tags.get("utility") and not (
+        set(str(tags["utility"]).split(";")) & {"power", "telecom"}))
+
+
+def _telecom_only(cls, tags):
+    """A pole that carries telecom lines only (a communication_pole, utility=telecom): on telecom lines only."""
+    if cls == "communication_pole":
+        return tags.get("utility") in (None, "", "telecom")
+    return cls == "utility_pole" and str(tags.get("utility", "")) == "telecom"
 
 
 def _wire_line(cls, tags):
@@ -131,7 +153,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     max_span = EVERYWHERE_MAX_SPAN_M if everywhere else MAX_SPAN_M
     margin = max_span + 5.
     x0, y0, x1, y1 = box
-    nodes, lines, high, supports = {}, [], [], []
+    nodes, lines, high, supports, telecom = {}, [], [], [], set()
     for key, f, i, cls, tags in _records(layers):
         if cls in POLES and int(f.kind[i]) == 1:
             ll = f.parts(i)[0][0][0]
@@ -144,18 +166,17 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
             if not (x0 - margin <= x <= x1 + margin and y0 - margin <= y <= y1 + margin):
                 continue
             supports.append([x, y])
-            if not _active(tags):
+            if not _drawable_pole(cls, tags):
                 continue
             if everywhere:
                 if skip_fr and index.at(lat, lon) == "FR":
                     continue
             elif index.at(lat, lon) != "FR":
                 continue
-            if cls == "utility_pole" and tags.get("utility") and not (
-                    set(str(tags["utility"]).split(";")) & {"power", "telecom"}):
-                continue
             height = f.attrs["height"][i] if "height" in f.attrs else None
             nodes[key] = (np.array([x, y], float), lat, lon, tags, height)
+            if _telecom_only(cls, tags):
+                telecom.add(key)
         elif int(f.kind[i]) == 2 and _active(tags) and (cls == "power_line" or _wire_line(cls, tags)):
             for part_index, part in enumerate(f.parts(i)):
                 for ring_index, ll in enumerate(part):
@@ -175,7 +196,7 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
                     # Separate runs avoid bridging an excursion outside the query.
                     starts = np.flatnonzero(near & ~np.r_[False, near[:-1]])
                     ends = np.flatnonzero(near & ~np.r_[near[1:], False]) + 2
-                    lines.extend(((key, part_index, ring_index, int(a)), xy[a:b]) for a, b in zip(starts, ends))
+                    lines.extend(((key, part_index, ring_index, int(a)), xy[a:b], cls) for a, b in zip(starts, ends))
     if not nodes:
         return
     if urban_fn is not None and not everywhere:
@@ -201,10 +222,15 @@ def place(frame, box, layers, elev, props, wires, pole_profile, urban_fn=None, e
     points = np.array([unique[key][0] for key in keys])
     yaw, spans = {}, {}
     supports = np.asarray(supports, float)
-    for line_key, line in sorted(lines, key=lambda r: r[0]):
+    for line_key, line, line_cls in sorted(lines, key=lambda r: r[0]):
         dist, station, segment = _project(points, line)
         all_dist, all_station, _ = _project(supports, line)
         matched = np.flatnonzero(dist <= MATCH_M)
+        if everywhere and len(matched):
+            # (on the line only at its way's vertices; a telecom pole only on a telecom line)
+            at_vertex = np.min(np.linalg.norm(points[matched][:, None, :] - line[None, :, :], axis=2), axis=1)
+            matched = matched[(at_vertex <= VERTEX_M) & np.array(
+                [line_cls == "communication_line" or keys[j] not in telecom for j in matched], bool)]
         for j in matched:
             d = line[segment[j] + 1] - line[segment[j]]
             yaw.setdefault(keys[j], furniture._yaw(-d[1], d[0]) % 180.)
@@ -282,12 +308,9 @@ def road_points(md, frame, tx, ty, pole_profile=None):
     import countrybounds
     index = countrybounds.bundled()
     skip_fr = _french_kit(pole_profile)
-    out = []
+    out, occupied = [], set()
     for _key, f, i, cls, tags in _records(_layers(md, frame, tx, ty)):
-        if cls not in POLES or int(f.kind[i]) != 1 or not _active(tags):
-            continue
-        if cls == "utility_pole" and tags.get("utility") and not (
-                set(str(tags["utility"]).split(";")) & {"power", "telecom"}):
+        if cls not in POLES or int(f.kind[i]) != 1 or not _drawable_pole(cls, tags):
             continue
         ll = f.parts(i)[0][0][0]
         if not np.isfinite(ll).all():
@@ -295,6 +318,10 @@ def road_points(md, frame, tx, ty, pole_profile=None):
         lon, lat = map(float, ll)
         if skip_fr and index.at(lat, lon) == "FR":
             continue
+        point = (round(lat, 7), round(lon, 7))      # (one pole mapped twice, as place draws it: once)
+        if point in occupied:
+            continue
+        occupied.add(point)
         x, y, _ = frame.geodetic_to_enu(lat, lon, 0.)
         out.append((x, y))
     return np.asarray(out, float).reshape(-1, 2)

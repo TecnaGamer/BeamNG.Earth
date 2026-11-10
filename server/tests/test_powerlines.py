@@ -268,6 +268,38 @@ class TowerFootprintTest(unittest.TestCase):
         self.assertEqual({r[0] for r in hv}, {powerlines.G_PYLON})
         self.assertEqual(len(hw), 6)
 
+    def test_mapped_pole_supports_put_a_high_voltage_line_on_poles(self):
+        """(PR #919 by wyo-backroads) A 115 kV line whose mapped supports (its way's nodes) are power=pole points: the
+        wooden poles; mostly power=tower points, or none mapped: the pylons."""
+        import mapgeom
+        from test_roads import FRAME
+        la, lo, _ = FRAME.enu_to_geodetic(np.array([100., 200.]), np.array([100., 100.]), 0.)
+
+        def run(classes):
+            n = 1 + len(classes)
+            infra = mapgeom.Features(
+                layer="infrastructure", ids=np.array(["line"] + [f"p{i}" for i in range(len(classes))]),
+                kind=np.array([mapgeom.LINE] + [mapgeom.POINT] * len(classes), np.uint8),
+                part_off=np.arange(n + 1, dtype=np.int64), ring_off=np.arange(n + 1, dtype=np.int64),
+                coord_off=np.r_[0, 2 + np.arange(n)].astype(np.int64),
+                lonlat=np.vstack([np.column_stack([lo, la]), np.column_stack([lo, la])[:len(classes)]]),
+                attrs={"class": np.array(["power_line"] + classes),
+                       "tags": np.array(['{"power":"line","voltage":"115000"}'] + ["{}"] * len(classes), object)},
+                rules={})
+
+            class Md:
+                def cell(self, key, layers, kind):
+                    from types import SimpleNamespace
+                    return SimpleNamespace(layers={"infrastructure": infra} if "infrastructure" in layers
+                                           else {"roads": None})
+            props, wires = [], []
+            powerlines.tile_lines(FRAME, 0, 0, Md(), lambda la, lo: np.zeros(np.shape(la)), props, wires)
+            return {r[0] for r in props}, len(wires)
+        self.assertEqual(run(["power_pole", "power_pole"]), ({powerlines.G_POLE}, 3))
+        self.assertEqual(run(["power_tower", "power_tower"]), ({powerlines.G_PYLON}, 6))
+        self.assertEqual(run([]), ({powerlines.G_PYLON}, 6))
+        self.assertEqual(run(["power_pole", "power_tower"]), ({powerlines.G_PYLON}, 6), "no majority: the towers")
+
     def test_uses_actual_mapped_width(self):
         # The pivot is outside the class-default 8 m road, but not a source-mapped 24 m carriageway.
         wide = (12., np.array([[110., 0., 0.], [110., 256., 0.]]))

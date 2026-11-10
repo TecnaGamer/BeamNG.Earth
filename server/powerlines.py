@@ -19,7 +19,9 @@ G_PYLON = "pylon"
 # Lines under HV_MIN_V stand on poles, not the 36 m lattice tower: a 66 kV line runs on poles along the street in town
 # (Shepparton, Victoria: MNA-STN on concrete poles down the main road, drawn as pylons over the houses; GitHub #787),
 # 69 kV in North America likewise; left out, they left empty cuttings hundreds of miles long through northern Michigan's
-# woods (GitHub #797). A line without a mapped voltage keeps its towers.
+# woods (GitHub #797). A line without a mapped voltage keeps its towers. So does one whose mapped supports (its way's
+# nodes, OpenStreetMap power=pole / power=tower points: Overture power_pole / power_tower) are mostly poles: a 115 kV
+# line across the plains on wooden poles was drawn as steel lattice (PR #919 by wyo-backroads, Warren AFB).
 HV_MIN_V = 100000.0
 G_POLE = "hvpole"           # the game's own wooden power pole (art/shapes/common/power_lines_procedural, trees.lua)
 POLE_SHAPE_H = 9.96         # m: its height as modelled ...
@@ -228,16 +230,54 @@ def tile_lines(frame, tx, ty, md, elev, props, wires, clearance=None):
     wires.extend(got_wires)
 
 
+def _support_keys(f):
+    """(pole keys, tower keys): the coordinate keys (_coord_keys) of a layer's mapped power_pole / power_tower points,
+    sorted (kept on the layer: shared, not to be changed)."""
+    got = f.__dict__.get("_pl_supports")
+    if got is None:
+        cls = f.attrs["class"].astype(str)
+        out = []
+        for name in ("power_pole", "power_tower"):
+            at = np.flatnonzero((cls == name) & (f.kind == 1))
+            pts = [f.parts(int(i))[0][0][0] for i in at]
+            out.append(np.unique(_coord_keys(np.asarray(pts, np.float64).reshape(-1, 2))))
+        got = f.__dict__["_pl_supports"] = tuple(out)
+    return got
+
+
+def _coord_keys(lonlat):
+    """int64 keys of lon/lat points at 1e-7 degree (a way's node and the point mapped at it: the same OSM node)."""
+    q = np.round(np.asarray(lonlat, np.float64) * 1e7).astype(np.int64)
+    return (q[:, 0] << 32) ^ (q[:, 1] & 0xFFFFFFFF)
+
+
+def on_poles(rings, pole_keys, tower_keys):
+    """Do a power line's mapped supports (its vertices that are mapped power_pole / power_tower points) run mostly on
+    poles?"""
+    if not len(pole_keys):
+        return False
+    keys = _coord_keys(np.concatenate([np.asarray(r, np.float64).reshape(-1, 2) for r in rings]))
+    n_pole = int(np.isin(keys, pole_keys).sum())
+    return n_pole > 0 and n_pole > int(np.isin(keys, tower_keys).sum())
+
+
 def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
     """tile_lines' layout, into props / wires (fresh lists: tile_lines adds them on success)."""
     import roads
     x0, y0, x1, y1 = roads.tile_bbox(tx, ty)
     cells = roads.cells_of_tile(frame, tx, ty, margin=MAX_SPAN_M / 4)
     lines, poles, seen = [], [], set()
+    layers = []
     for key in cells:
         f = md.cell(key, layers=("infrastructure",), kind="demand").layers.get("infrastructure")
         if f is None or not len(f.kind) or f.attrs.get("class") is None:
             continue
+        layers.append(f)
+    # (every cell's supports: a way crossing cells has its nodes' points in each)
+    sup = [_support_keys(f) for f in layers]
+    pole_keys = np.unique(np.concatenate([p for p, _ in sup])) if sup else np.zeros(0, np.int64)
+    tower_keys = np.unique(np.concatenate([t for _, t in sup])) if sup else np.zeros(0, np.int64)
+    for f in layers:
         cls, tags = f.attrs["class"].astype(str), f.attrs.get("tags")
         for i in np.flatnonzero((cls == "power_line") & (f.kind == 2)):
             fid = str(f.ids[i])
@@ -245,7 +285,8 @@ def _tile_lines(frame, tx, ty, md, elev, props, wires, clearance):
             if fid in seen or any(u in t for u in UNDERGROUND):
                 continue
             seen.add(fid)
-            into = poles if low_voltage(t) else lines
+            rings = [r for part in f.parts(i) for r in part if len(r)]
+            into = poles if low_voltage(t) or (rings and on_poles(rings, pole_keys, tower_keys)) else lines
             for part in f.parts(i):
                 for ring in part:
                     if len(ring) >= 2:
