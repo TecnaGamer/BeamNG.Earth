@@ -1595,6 +1595,14 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                     let t = if l2 > 1e-12 { ((qx * abx + qy * aby) / l2).clamp(0.0, 1.0) } else { 0.0 };
                     let (ddx, ddy) = (qx - t * abx, qy - t * aby);
                     let d = (ddx * ddx + ddy * ddy).sqrt();       // (not hypot: libm's is ~5x dearer, the pairs loop's main cost)
+                    // (the reach tests first, before the pair's target, banking and cutting lookups: nothing below changes
+                    // a pair past them; the same tests further down, which they were, read nothing computed between)
+                    if pass == 0 && d > far0 {
+                        continue;
+                    }
+                    if pass == 1 && d - h[s] > far1 {
+                        continue;
+                    }
                     let mut target = za[s] + (zb[s] - za[s]) * t;
                     if link[s] != 0 && l2 > 1e-12 {
                         let tu = (qx * abx + qy * aby) / l2;
