@@ -57,6 +57,7 @@ PORTAL_BAND_M = 24.0            # m across: tracks this close and parallel are o
 PORTAL_COS = 0.9
 PORTAL_MAX_W_M = 60.0           # a wider corridor (a yard's fan) gets none
 PORTAL_POST_OFF_M = 3.4         # m from the outer tracks' axes to the posts
+PORTAL_MERGE_M = 14.0          # m: a portal this close along the line to one already placed is merged into it (two overlapping girders, Vinnytsia)
 PORTAL_POST_CLEAR_M = 2.3       # m a post keeps off every track's axis (a post stood in the track bed beside a siding, Vinnytsia)
 PORTAL_Z = 8.0                  # m: the truss's lower chord over the tracks' bed (the contact wires hang from it)
 PORTAL_H = 1.0                  # m the truss girder is deep
@@ -243,6 +244,17 @@ def corridor(parts, arcs, i, p, u):
     return out
 
 
+def _overlaps(new, placed):
+    """Whether the portal entry `new` stands within PORTAL_MERGE_M of one of the placed portal entries (the midpoints of
+    their posts): two girders over the same tracks a few metres apart are one. Pure."""
+    c = (new["posts"][0][0] + new["posts"][1][0]) / 2.0
+    for m in placed:
+        c2 = (m["posts"][0][0] + m["posts"][1][0]) / 2.0
+        if float(np.hypot(*(c - c2))) < PORTAL_MERGE_M:
+            return True
+    return False
+
+
 def _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground):
     """The entries of a rigid portal at arc s0 of part pi: a "portal" entry (its two posts) and a virtual mast of each
     track of the corridor (its wires start over its axis from the girder); [] where its posts cannot stand (roads,
@@ -316,7 +328,9 @@ def masts_of(frame, cells, box, ground, rings=()):
             mates = corridor(parts, arcs, pi, p0, u0)
             if len(mates) + 1 >= PORTAL_MIN_TRACKS:          # side by side: a portal, from the corridor's first part
                 if all(pi < j for j, *_ in mates):
-                    out.extend(_portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground))
+                    ents = _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground)
+                    if ents and not _overlaps(ents[0], [m for m in out if m.get("portal")]):
+                        out.extend(ents)
                 continue                                      # (no cantilever masts between the tracks)
             side0, off = placed.get(k, (1 if _h01(fid, "side") < 0.5 else -1, MAST_OFF_M))
             got = None

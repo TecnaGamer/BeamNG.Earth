@@ -224,6 +224,8 @@ def wire_mesh(lines, origin, material_of=None, solid_of=None):
                 continue
             # (np.cross written out: the same products and differences, without its per-call cost)
             side = np.array([d[1] * 1.0 - d[2] * 0.0, d[2] * 0.0 - d[0] * 1.0, d[0] * 0.0 - d[1] * 0.0])
+            if abs(d[0]) + abs(d[1]) < 1e-6:        # (a vertical wire: d x z is zero, the ribbons had no width and a
+                side = np.array([0.0, 1.0, 0.0])    # catenary's droppers were never drawn)
             side = side / (np.linalg.norm(side) or 1.0) * r
             up = np.array([side[1] * d[2] - side[2] * d[1], side[2] * d[0] - side[0] * d[2],
                            side[0] * d[1] - side[1] * d[0]])

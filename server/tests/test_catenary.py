@@ -272,6 +272,21 @@ class CatenaryTest(unittest.TestCase):
             out += float(n @ (cen - mid)) > 0
         self.assertEqual(out, len(bars), "bars face outwards")
 
+    def test_a_vertical_wire_has_width(self):
+        import furniture
+        line = np.array([[10.0, 5.0, 6.3], [10.0, 5.0, 7.5]])
+        P, T, UV = furniture.wire_mesh([(line, 0.01)], (0.0, 0.0, 0.0))
+        self.assertGreater(float(np.ptp(P[:, 0]) + np.ptp(P[:, 1])), 0.03, "both crossed ribbons are as wide as the wire")
+        self.assertAlmostEqual(float(np.ptp(P[:, 0])), 0.02, places=6)
+        self.assertAlmostEqual(float(np.ptp(P[:, 1])), 0.02, places=6)
+
+    def test_overlapping_portals_are_merged(self):
+        a = {"portal": True, "posts": [(np.array([0.0, 0.0]), 0.0), (np.array([0.0, 20.0]), 0.0)]}
+        near = {"portal": True, "posts": [(np.array([6.0, 1.0]), 0.0), (np.array([6.0, 21.0]), 0.0)]}
+        far = {"portal": True, "posts": [(np.array([40.0, 0.0]), 0.0), (np.array([40.0, 20.0]), 0.0)]}
+        self.assertTrue(catenary._overlaps(near, [a]))
+        self.assertFalse(catenary._overlaps(far, [a]))
+
     def test_mapped_masts_are_used(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
         from test_roads import LAT, LON, M_LAT, M_LON
