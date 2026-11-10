@@ -2135,6 +2135,14 @@ class _Planner:
                         snap_junctions([p for _f, p in plans], pspecs)      # (the side roads meet it again)
                 except Exception as e:      # the plans as the passes left them rather than no grading
                     log.debug("grading: carriageway ends of %s: %s: %s", key, type(e).__name__, e)
+            with self.lock:
+                ctx = self.__dict__.setdefault("_ramp_ctx", {}).pop(str(key), None) if APPROACH_ON and plans else None
+            if ctx:                 # (the raised junctions' roads on ramps no steeper than RAMP_GRADE, after every snap)
+                log.debug("grading: ramp envelope of %s: %d raised, %d held", key, len(ctx[0]), len(ctx[1]))
+                try:
+                    ramp_envelope(plans, pspecs, *ctx)
+                except Exception as e:
+                    log.debug("grading: ramp envelope of %s: %s: %s", key, type(e).__name__, e)
             if GUARD_ON and plans:
                 try:            # the finished plans under the grade ceilings and the window rule (grade_guard)
                     st = grade_guard([p for _f, p in plans], pspecs, bases,
@@ -2641,6 +2649,9 @@ class _Planner:
         pe = np.array([[p.xy[0][:2], p.xy[-1][:2]] for _f, p in plans], np.float64).reshape(-1, 2)
         ok = np.repeat([s is not None for s in specs], 2)       # (a motorway's or trunk's: over water only, below)
         touch = self._abut_ends(key, pe, ok).reshape(-1, 2)
+        held = set()                    # (approaches onto a measured or solved deck: ramp_envelope leaves them be)
+        freeway_approach = set()        # (approaches onto a deck over a freeway: ramp_envelope's seeds with the junctions')
+        floor = [np.asarray(p.z, np.float64).copy() for _f, p in plans]     # (the plans before any ramp: its floor)
         for i, (fid, p) in enumerate(plans):
             if not touch[i].any():
                 continue
@@ -2660,6 +2671,10 @@ class _Planner:
                         if a is not None:
                             add = (a if gm > 0 else -a) if add is None else add + (a if gm > 0 else -a)
                     continue
+                if (len(got) > 4 and got[4] is not None) or (len(got) > 5 and got[5]):
+                    held.add(i)
+                elif JUNCTION_RAISE_ON and self._jr_at(e):
+                    freeway_approach.add(i)     # (an overpass over a freeway: its ramp smoothed, ramp_envelope)
                 if _never_raised(specs[i]) and not got[3] and not (len(got) > 5 and got[5]):
                     continue
                 lift, others = got[0], got[1]
@@ -2707,8 +2722,21 @@ class _Planner:
                 np_.steep = getattr(p, "steep", False)
                 set_widen(np_, getattr(p, "widen", None))
                 plans[i] = (fid, np_)
+        before = [np.asarray(p.z, np.float64).copy() for _f, p in plans]
         if JUNCTION_RAISE_ON and JR_RAISE:
             self._raise_junctions(plans, specs, touch)
+        if RAMP_ENVELOPE_ON:
+            # the roads a junction raise lifted and the approaches onto decks over a freeway, and the roads round them,
+            # on ramps no steeper than RAMP_GRADE (the user: "the ramp up to the bridges should be gradual and smooth";
+            # seeded from every approach, Los Angeles' and Baltimore's city overpasses near measured decks moved: p90
+            # deck error 0.30 -> 1.11 m)
+            changed = [i for i, (_f, p) in enumerate(plans) if len(before[i]) == len(p.z)
+                       and (np.abs(np.asarray(p.z, np.float64) - before[i]).max() > 0.05
+                            or (i in freeway_approach and np.abs(before[i] - floor[i]).max() > 0.05))]
+            if changed:             # (now, and once more after the junctions' last snap and the decks' pins: _plan_cell)
+                ramp_envelope(plans, specs, changed, held, floor)
+                with self.lock:
+                    self.__dict__.setdefault("_ramp_ctx", {})[str(key)] = (changed, held, floor)
 
     def _raise_junctions(self, plans, specs, touch):
         """The roads leaving a junction that a short approach (JUNCTION_STUB_M) runs into from a raised abutment, raised
@@ -2720,9 +2748,9 @@ class _Planner:
         for i, (fid, p) in enumerate(plans):
             # (an approach itself has its own ramp, its height from its abutment's rules: raised again from the other
             # bridge's junction it stood 8 m too high over I-75, a diverging diamond's two decks sharing the crossovers)
-            if specs[i] is None or _never_raised(specs[i]) or _is_link(specs[i]) or len(p.xy) < 2 or touch[i].any():
-                continue            # (nor a freeway's link: it runs down to its freeway, raised it lifted the ground at
-                                    # a freeway deck's abutment beside it, Charles Street over the JFX in Baltimore)
+            if specs[i] is None or _never_raised(specs[i]) or len(p.xy) < 2 or touch[i].any():
+                continue            # (a freeway's link does rise: its ramp climbs to the raised junction, left on the
+                                    # ground it ran into the junction's fill, Findlay's diverging diamond, the user)
             add = None
             for at_end in (False, True):
                 e = p.xy[-1] if at_end else p.xy[0]
@@ -5788,6 +5816,145 @@ def under_dip(d, depth, room=(math.inf, math.inf)):
     rr = np.where(d < 0, runs[0], runs[1])
     u = np.clip((np.abs(d) - UNDER_FLAT_M) / np.maximum(rr, 1e-9), 0.0, 1.0)
     return -depth * 0.5 * (1.0 + np.cos(math.pi * u))
+
+
+RAMP_ENVELOPE_ON = os.environ.get("BNE_RAMP_ENVELOPE", "on") != "off"
+RAMP_GRADE = 0.06            # the steepest a road is left climbing to a raised junction or approach (ramp_envelope)
+RAMP_NODE_M = 1.5           # m: road ends this close are one node
+RAMP_REACH_M = 400.0        # m along the roads from a raised one the envelope goes at most
+
+
+def ramp_envelope(plans, specs, seeds, held=(), floor=None):
+    """Raise, in place, the plans (fid, Plan) around the raised ones (indices seeds) so no road meets a higher one with a
+    step and none climbs to it steeper than RAMP_GRADE. Nodes: road ends within RAMP_NODE_M of each other, and where a
+    road's end meets another's middle (a side road joining it: the junction's snap tapered it over 40 m, a 16 % hump).
+    Each road's heights at least (a node's highest height there) - RAMP_GRADE x the distance along the road from it,
+    over the roads within RAMP_REACH_M of a raised one. A motorway or trunk (_never_raised), or an approach onto a
+    measured or solved deck (held: its height is the deck's), is never raised; a node one is at is held at its height,
+    and from those the roads around stand at most RAMP_GRADE x the distance over it (coming down where their own ramp
+    stood higher, never under their height before any ramp: floor). Per raised approach and junction its plans were
+    raised each on its own and met 2-7 m apart: 45-58 % steps at Findlay's diverging diamond (the user: "the ramp up to
+    the bridges should be gradual and smooth"). Pure in the plans."""
+    if not seeds:
+        return
+    n = len(plans)
+    held = set(held)
+    xys = [np.asarray(p.xy, np.float64)[:, :2] for _f, p in plans]
+    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] if len(xy) >= 2 else np.zeros(len(xy))
+            for xy in xys]
+    # nodes: clusters of road ends; members (plan, arc position, vertex index)
+    end_pts = np.array([[xy[0], xy[-1]] for xy in xys], np.float64).reshape(-1, 2, 2)
+    centres, members = [], []
+    for i in range(n):
+        for e in (0, 1):
+            q = end_pts[i, e]
+            for c, ms in zip(centres, members):
+                if np.hypot(*(c - q)) <= RAMP_NODE_M:
+                    ms.append((i, float(arcs[i][0 if e == 0 else -1]), 0 if e == 0 else len(xys[i]) - 1))
+                    break
+            else:
+                centres.append(q)
+                members.append([(i, float(arcs[i][0 if e == 0 else -1]), 0 if e == 0 else len(xys[i]) - 1)])
+    # a node on another road's middle: that road's nearest vertex joins it
+    for c, ms in zip(centres, members):
+        own = {i for i, _a, _v in ms}
+        for i in range(n):
+            if i in own or len(xys[i]) < 3:
+                continue
+            d = np.hypot(*(xys[i] - c).T)
+            v = int(np.argmin(d))
+            if 0 < v < len(xys[i]) - 1 and d[v] <= RAMP_NODE_M + float(plans[i][1].half):
+                ms.append((i, float(arcs[i][v]), v))
+    plan_nodes = [[] for _ in range(n)]
+    for k, ms in enumerate(members):
+        for i, a_, v in ms:
+            plan_nodes[i].append((k, a_, v))
+    fixed = {k for k, ms in enumerate(members)
+             if any((specs[i] is not None and _never_raised(specs[i])) or i in held for i, _a, _v in ms)}
+    # (only the roads within RAMP_REACH_M of a raised one, along the network)
+    dist = {i: 0.0 for i in seeds}
+    frontier = list(seeds)
+    while frontier:
+        nxt = []
+        for i in frontier:
+            for k, _a, _v in plan_nodes[i]:
+                for j, _a2, _v2 in members[k]:
+                    if j not in dist and dist[i] <= RAMP_REACH_M:
+                        dist[j] = dist[i] + float(arcs[j][-1])
+                        nxt.append(j)
+        frontier = nxt
+    scope = [i for i in dist if specs[i] is not None and not _never_raised(specs[i]) and i not in held
+             and len(arcs[i]) >= 2]
+    z = {i: np.asarray(plans[i][1].z, np.float64).copy() for i in scope}
+    log.debug("grading: ramp envelope: %d plans, %d seeds, %d in scope (rids %s), %d held, %d nodes (%d fixed)", n,
+              len(seeds), len(scope), sorted({getattr(plans[i][1], "rid", -1) for i in scope})[:40], len(held),
+              len(members), len(fixed))
+    fix_h = {}
+    for k in fixed:
+        hs = [float(np.asarray(plans[i][1].z, np.float64)[v]) for i, _a, v in members[k]
+              if (specs[i] is not None and _never_raised(specs[i])) or i in held]
+        if hs:
+            fix_h[k] = max(hs)
+    if fix_h:                   # (the ceiling from the fixed nodes)
+        up = {i: np.full(len(z[i]), np.inf) for i in scope}
+        for _round in range(12):
+            moved = False
+            node_up = dict(fix_h)
+            for i in scope:
+                for k, _a, v in plan_nodes[i]:
+                    if k not in fix_h and np.isfinite(up[i][v]):
+                        node_up[k] = min(node_up.get(k, np.inf), float(up[i][v]))
+            for i in scope:
+                cap = up[i]
+                for k, a_, _v in plan_nodes[i]:
+                    if k in node_up:
+                        cap = np.minimum(cap, node_up[k] + RAMP_GRADE * np.abs(arcs[i] - a_))
+                if np.isfinite(cap).any() and (up[i] - cap).max() > 0.01:
+                    up[i] = cap
+                    moved = True
+            if not moved:
+                break
+        for i in scope:
+            fl = np.asarray(floor[i], np.float64) if floor is not None and len(floor[i]) == len(z[i]) else z[i]
+            z[i] = np.maximum(fl, np.minimum(z[i], up[i]))
+    for _round in range(16):    # (the floor from every node: no road under a node's height - RAMP_GRADE x the way)
+        moved = False
+        node_h = {}
+        for i in scope:
+            for k, _a, v in plan_nodes[i]:
+                if k not in fixed:
+                    node_h[k] = max(node_h.get(k, -np.inf), float(z[i][v]))
+        for i in scope:
+            lo = z[i].copy()
+            for k, a_, _v in plan_nodes[i]:
+                if k in node_h:
+                    lo = np.maximum(lo, node_h[k] - RAMP_GRADE * np.abs(arcs[i] - a_))
+            # (and along the road itself: no stretch of it climbing faster than RAMP_GRADE, its lower side raised; a
+            # raised road's own ramp, capped by the roads beside, fell 15 % over its first 30 m)
+            ds = np.diff(arcs[i])
+            for q in range(1, len(lo)):
+                lo[q] = max(lo[q], lo[q - 1] - RAMP_GRADE * ds[q - 1])
+            for q in range(len(lo) - 2, -1, -1):
+                lo[q] = max(lo[q], lo[q + 1] - RAMP_GRADE * ds[q])
+            for k, _a, v in plan_nodes[i]:
+                if k in fixed:
+                    lo[v] = z[i][v]                 # (a fixed node keeps its height)
+            if (lo - z[i]).max() > 0.01:
+                z[i] = lo
+                moved = True
+        if not moved:
+            break
+    for i in scope:
+        p = plans[i][1]
+        if getattr(p, "rid", None) == int(os.environ.get("BNE_RAMP_DEBUG_RID", "-9")):
+            log.debug("grading: ramp envelope rid %s: %s -> %s, nodes %s", p.rid, np.round(np.asarray(p.z), 2).tolist(),
+                      np.round(z[i], 2).tolist(), [(k, round(a_, 1), v, k in fixed) for k, a_, v in plan_nodes[i]])
+        if np.abs(z[i] - np.asarray(p.z, np.float64)).max() > 0.01:
+            np_ = Plan(p.xy, z[i], p.half, p.abut, p.cut, p.road_half)
+            np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            np_.steep = getattr(p, "steep", False)
+            set_widen(np_, getattr(p, "widen", None))
+            plans[i] = (plans[i][0], np_)
 
 
 def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):
