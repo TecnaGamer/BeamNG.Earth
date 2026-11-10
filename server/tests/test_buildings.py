@@ -2378,3 +2378,29 @@ class ChimneyTest(unittest.TestCase):
             sp = bld.plan(ring + k * 0.37, {"class": "barn", "roof_shape": "gabled", "height": 7.0, "roof_height": 2.5})
             P = np.asarray(bld.build([(sp, 0.0, 0.0)])[0])
             self.assertLessEqual(P[:, 2].max(), 7.0 + 0.5)
+
+
+class TankInfraTest(unittest.TestCase):
+    """Storage tanks mapped as infrastructure (tank_rings, _tank_items)."""
+
+    def ring(self, r=10.0, n=24):
+        t = np.linspace(0, 2 * np.pi, n + 1)[:-1]
+        return np.c_[r * np.cos(t), r * np.sin(t)]
+
+    def test_a_mapped_tank_with_no_building_is_drawn(self):
+        # (tank_rings: a storage tank mapped as infrastructure; one a building stands over is that building's)
+        import geodesy
+        frame = geodesy.EnuFrame(51.884, 4.3765)
+        ring = self.ring(12.0) + [100.0, 100.0]
+        elev = lambda la, lo: np.full(np.shape(la), 2.0)
+        got = bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev, [(ring, {"class": "storage_tank", "height": 14.0})],
+                              set())
+        self.assertEqual(len(got), 1)
+        sp, g0, g1 = got[0]
+        self.assertEqual((sp.cls, sp.roof), ("tank", "dome"))
+        self.assertAlmostEqual(sp.height + 0.12 * 24.0, 14.0, delta=0.3)
+        self.assertEqual(bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev,
+                                         [(ring, {"class": "storage_tank"})], {0}), [], "used by a building: not again")
+        self.assertEqual(bld._tank_items(frame, 0.0, 0.0, 256.0, 256.0, elev,
+                                         [(ring + [300.0, 0.0], {"class": "storage_tank"})], set()), [],
+                         "another tile's")

@@ -2552,6 +2552,61 @@ def support_rings(frame, infra_layers, x0, y0, margin=50.0, size=256.0):
     return out
 
 
+# Storage tanks and silos mapped as infrastructure (Overture utility / storage_tank: OSM man_made=storage_tank / silo
+# areas; 896,945 storage tanks and 371,676 silos in OSM, most not tagged building=*): none were drawn, a refinery's tank
+# farm was bare ground (Pernis, Rotterdam: 77 in one map cell). Each one, as a tank (plan's TANK_CLASSES rule: round
+# ones painted steel under a shallow dome), or the building mapped over it given its class (tile_buildings).
+TANK_INFRA = {"storage_tank": "storage_tank", "silo": "silo", "gasometer": "gasometer", "digester": "digester",
+              "slurry_tank": "slurry_tank"}
+
+
+def tank_rings(frame, infra_layers, x0, y0, margin=0.0, size=256.0):
+    """[(ring (k, 2) relative to (x0, y0), attrs {class, height?})] of the mapped tanks and silos (TANK_INFRA) whose
+    outline reaches the tile."""
+    import json
+    out, seen = [], set()
+    for f in infra_layers:
+        if f is None or len(f.kind) == 0:
+            continue
+        a = f.attrs
+        cls, tags = a.get("class"), a.get("tags")
+        if cls is None:
+            continue
+        cs = cls.astype(str)
+        for i in np.flatnonzero(np.isin(cs, list(TANK_INFRA)) & (f.kind == 3)):
+            fid = f.ids[i]
+            if fid in seen:
+                continue
+            seen.add(fid)
+            at = {"class": TANK_INFRA[cs[i]]}
+            if tags is not None and tags[i]:
+                try:
+                    td = json.loads(str(tags[i]))
+                except ValueError:
+                    td = {}
+                if isinstance(td, dict):
+                    if td.get("man_made") == "silo" or td.get("silo"):
+                        at["class"] = "silo"
+                    for key in ("height", "est_height"):
+                        try:
+                            hv = float(str(td.get(key, "")).replace("m", "").strip())
+                        except ValueError:
+                            continue
+                        if 1.0 <= hv <= 120.0:
+                            at["height"] = hv
+                            break
+            for part in f.parts(i):
+                if not part or len(part[0]) < 8:
+                    continue
+                e, n = mapgeom.enu_xy(f, frame, part[0])
+                xy = np.stack([e - x0, n - y0], 1)
+                if xy[:, 0].max() < -margin or xy[:, 0].min() > size + margin or xy[:, 1].max() < -margin \
+                        or xy[:, 1].min() > size + margin:
+                    continue
+                out.append((xy, at))
+    return out
+
+
 def _on_support(ring, supports):
     """The paint of the bridge support (support_rings) holding the footprint's centre, else None."""
     if not supports:
@@ -3467,10 +3522,39 @@ def _outline_under_parts(at, bparts):
 
 
 @profile_step('Building site selection')
+def _tank_items(frame, x0, y0, x1, y1, elev, tanks, used, own=None):
+    """[(Spec, gmin, gmax)] of the mapped tanks (tank_rings) no building stands over, whose centre is the tile's."""
+    out = []
+    for t_, (ring, at) in enumerate(tanks):
+        if t_ in used:
+            continue
+        r = np.asarray(ring, np.float64)[:, :2]
+        if len(r) > 3 and np.allclose(r[0], r[-1]):
+            r = r[:-1]
+        c = r.mean(0) + [x0, y0]
+        mine = bool(np.asarray(own.owns(np.array([c[0]]), np.array([c[1]])), bool)[0]) if own is not None \
+            else (x0 <= c[0] < x1 and y0 <= c[1] < y1)
+        if not mine:
+            continue
+        la, lo, _ = frame.enu_to_geodetic(r[:, 0] + x0, r[:, 1] + y0, np.zeros(len(r)))
+        la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
+        g = np.asarray(elev(la, lo), np.float64)
+        if not np.isfinite(g).all():
+            continue
+        up = np.asarray(frame.geodetic_to_enu(la, lo, g)[2], np.float64)
+        spec = plan(r, dict(at), 0, float(la.mean()), float(lo.mean()))
+        if spec.cls != "tank":          # (not round: a tank of another shape is left to the map's buildings)
+            continue
+        spec.min_h = 0.0
+        spec.gring = up
+        out.append((spec, float(up.min()), float(up.max())))
+    return out
+
+
 def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=(), west_town=False, roads_xy=None,
                    tunnels_xy=None, garages_xy=None, supports=None, bridges_xy=None, water_xy=None, decks=None,
                    ml_roads_xy=None, ways_xy=None, skip=frozenset(), min_size=None, own=None, house_land_layers=(),
-                   passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None):
+                   passage_xy=None, rails_xy=None, roofs=None, photo=None, bag3d=None, tanks=None):
     """[(Spec, gmin, gmax)] of the buildings whose footprint centroid is in the tile [x0, x1) x [y0, y1) (own: the
     tile's box when it says which points are its own, roads.box_owns: a geotile's)
     (anchor frame), rings relative to (x0, y0). layers: mapgeom.Features of buildings (one per map cell; a
@@ -3780,10 +3864,25 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
         roof_rgb = None
     # (the Netherlands' measured roofs, threedbag.Fetch: the tile's squares, asked for as the tile started)
     bag_match = bag3d.index() if bag3d is not None else None
+    # (the mapped tanks, tank_rings: a building over one takes its class; the rest drawn after the loop)
+    tank_paths = None
+    if tanks:
+        from polygon import Path
+        tank_paths = [Path(np.asarray(r, np.float64)) for r, _a in tanks]
+    tank_used = set()
     for k, (ring, at, sh, look, mh) in enumerate(zip(rings, attrs, shared, looks, mins)):
         if roof_rgb is not None and np.isfinite(roof_rgb[k]).all() and not at.get("roof_color"):
             at = dict(at, _roof_photo=tuple(float(v) for v in roof_rgb[k]))
         i0, i1 = (ends[k - 1] if k else 0), ends[k]
+        if tank_paths is not None and look is None and str(at.get("class") or "") not in TANK_CLASSES:
+            cxy = np.asarray(ring, np.float64)[:, :2].mean(0)
+            for t_, tp in enumerate(tank_paths):
+                if tp.contains_points(cxy[None])[0]:
+                    tank_used.add(t_)
+                    t_at = tanks[t_][1]
+                    at = dict(at, **{k_: v_ for k_, v_ in t_at.items()
+                                     if k_ == "class" or at.get(k_) is None})
+                    break
         if bag_match is not None and look is None and mh <= 0.5 and ok[i0:i1].all():
             import threedbag
             at = threedbag.apply(at, bag_match.match(float(la_all[i0:i1].mean()), float(lo_all[i0:i1].mean()),
@@ -3822,6 +3921,8 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 g = np.full(len(g), got[1])     # its floor on the deck (a pier's bait shop stood on the seabed)
         spec.gring = g              # the ground at each corner (door_ground: the door's, not the footprint's highest)
         out.append((spec, float(g.min()), float(g.max())))
+    if tanks:
+        out += _tank_items(frame, x0, y0, x1, y1, elev, tanks, tank_used, own)
     lines = roads_xy if roads_xy else ml_roads_xy
     if lines and out:
         isl = _toll_islands(frame, layers, parts_of, lines, x0, y0)
@@ -4733,6 +4834,7 @@ def road_tile_items(
         supports=support_rings(
             frame, [c.layers.get("infrastructure") for c in cds], x0, y0
         ),
+        tanks=tank_rings(frame, [c.layers.get("infrastructure") for c in cds], x0, y0),
         bridges_xy=bridge_lines(frame, [c.layers.get("roads") for c in cds], x0, y0),
         water_xy=water_rings(frame, [c.layers.get("water") for c in cds], x0, y0),
         decks=[
