@@ -109,11 +109,12 @@ class CountryPolesTest(unittest.TestCase):
         self.assertFalse(pp.kit_enabled(profile))
         self.assertNotEqual(profile, pp.geographic_profile("europe"))
 
-    def test_the_server_default_is_off(self):
-        # (the parser is built inside main(): the option's text is what is checked)
+    def test_the_server_default_is_europe(self):
+        # (on by default since 2026-11-10, the user's call; the parser is built inside main(): the option's text is
+        # what is checked)
         src = (Path(__file__).resolve().parents[1] / "earthd.py").read_text(encoding="utf-8")
         i = src.index('"--regional-poles"')
-        self.assertIn('default=os.environ.get("BNE_REGIONAL_POLES", "off")', src[i:i + 400])
+        self.assertIn('default=os.environ.get("BNE_REGIONAL_POLES", "europe")', src[i:i + 400])
 
 
 class PlacementTest(unittest.TestCase):
