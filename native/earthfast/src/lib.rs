@@ -65,6 +65,7 @@ mod underdeck;
 mod railseam;
 mod classgrid;
 mod frontage;
+mod bdtopo;
 
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
 use pyo3::types::PyBytes;
@@ -5713,6 +5714,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 181: grade_points' road ranks (rk, rank_fade, rank_height_fade: PR #1050)
     m.add_function(wrap_pyfunction!(roofphoto::roof_photo_colours, m)?)?;
     // 182: roofphoto::roof_photo_colours (buildings.RoofPhoto: roof colours from the cached orthophoto)
-    m.add("VERSION", 182)?;
+    m.add_function(wrap_pyfunction!(bdtopo::bdtopo_points, m)?)?;
+    m.add_function(wrap_pyfunction!(bdtopo::bdtopo_match, m)?)?;
+    // 183: bdtopo::bdtopo_points,
+    // bdtopo::bdtopo_match (France's measured buildings, server/bdtopo.py: PR #456's BD TOPO join, ported)
+    m.add("VERSION", 183)?;
     Ok(())
 }

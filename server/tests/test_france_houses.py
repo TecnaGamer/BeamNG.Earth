@@ -282,14 +282,24 @@ class HouseTest(unittest.TestCase):
             s = b.plan(ring, dict(attrs, _fr_residential=True), lat=float(lat), lon=float(lon))
             self.assertEqual(s.fr_house is not None, cls == "yes")
 
-    def test_non_french_tiles_do_not_request_residential_land(self):
-        calls = []
+    def test_non_french_tiles_do_not_infer_french_houses(self):
+        # (land use is read everywhere now, already in the road tile's layers: industrial land, buildings.industrial_rings;
+        # the French house inference stays France's: no residential land handed to tile_buildings elsewhere)
+        seen = []
+        orig = b.tile_buildings
+        def spy(*a, **k):
+            seen.append(list(k.get("house_land_layers", ())))
+            return orig(*a, **k)
         class MD:
             def cell(self, key, layers=(), kind="demand"):
-                calls.append(layers)
                 return SimpleNamespace(layers={})
-        self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(), lambda la, lo: np.zeros(np.shape(la))), ([], []))
-        self.assertFalse(any("land_use" in ls for ls in calls))
+        b.tile_buildings = spy
+        try:
+            self.assertEqual(b.road_tile_items(geodesy.EnuFrame(39., -76.), 0, 0, MD(),
+                                               lambda la, lo: np.zeros(np.shape(la))), ([], []))
+        finally:
+            b.tile_buildings = orig
+        self.assertTrue(all(not ls for ls in seen))
 
     def test_mesh_builder_accepts_an_iterator_without_losing_buildings(self):
         item = (self.plan(), 0., 0.)

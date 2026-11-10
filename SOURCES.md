@@ -50,6 +50,7 @@ For the OpenStreetMap keys read by the server and weekly data builders, see the
 | NVDB (Statens vegvesen) | `nvdbapiles.atlas.vegvesen.no` | In Norway, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
 | 3DBAG (TU Delft 3D geoinformation, 3DGI) | `data.3dbag.nl` | In the Netherlands, each building's measured roof shape, heights and ridge direction (the WFS layer BAG3D:lod22, a request per 250 m square, kept on disk). Off with `BNE_3DBAG=off`. | Predicted roofs. | optional |
 | IGN BD TOPO roads | `data.geopf.fr` (WFS) | In France, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
+| IGN BD TOPO buildings | `data.geopf.fr` (WFS) | In France, the measured height, roof rise, storeys, wall and roof materials and use of each building, joined to the map's outlines (about 0.1-0.6 MB per map cell, once; kept as ~20-100 KB). Off with `BNE_BDTOPO=off`. | Heights, roofs and materials are predicted, as everywhere else. | optional |
 | LidarBC (Province of British Columbia) | `nrs.objectstore.gov.bc.ca` | British Columbia's 10-15 cm aerial photos (around Vancouver and Victoria); opt-in, its lidar terrain and measured tree heights. | Those places get the next photo source. | optional |
 
 ## Aerial and satellite photos (what the ground looks like)

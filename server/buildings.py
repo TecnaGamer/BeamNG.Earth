@@ -54,6 +54,7 @@ ROUND_SEGS = 10                 # its arc's segments across the width
 # out and the floors decide.
 ML_HEIGHT_SOURCES = {"Microsoft ML Buildings", "Google Open Buildings"}
 ML_FLOOR_M = (2.2, 6.0)
+RISE_FLAT_M = 0.8              # a measured roof rise (France's BD TOPO: bdtopo.py) below this: a flat roof
 SKILLION_PITCH = 12.0           # a lean-to: one shallow slope from wall to wall
 MANSARD_PITCHES = (68.0, 18.0)  # the steep lower slope, the shallow top
 MANSARD_INSET_M = 1.2           # how far the lower slope comes in, at most
@@ -894,6 +895,9 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # (Overture writes half_hipped: OSM's half-hipped never matched, its 133 k roofs came out predicted; its saltbox is
     # mostly OSM's double / quadruple saltbox, a gambrel's or a mansard's look: research 2026-11-10)
     roof_given = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
+    measured_rise = attrs.get("roof_rise")      # (France's BD TOPO: a measured roof rise; None elsewhere)
+    measured_rise = float(measured_rise) if measured_rise is not None and np.isfinite(measured_rise) else None
+    h_src = str(attrs.get("height_src") or "")
     holed = bool(attrs.get("_holes"))           # (a block round a yard: tile_buildings' inner rings)
     if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
@@ -905,7 +909,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof = "round"                              # (a barrel vault: hangars, halls; was drawn gabled)
     else:
         detached_house = (cls in HOUSE_CLASSES or (area < 260 and not shop)) and not industrial and not row
-        if church and neighbours == 0:
+        if measured_rise is not None and not church:
+            # France's measured roofs (bdtopo.py: IGN BD TOPO's roof rise, no shape): flat under RISE_FLAT_M, else a
+            # pitched roof of the region's forms (Aix-en-Provence's old town, rises of 1.2-4.5 m: attached houses
+            # under tiled pitched roofs, predicted flat as a block before)
+            roof = "flat" if measured_rise < RISE_FLAT_M else \
+                ("gabled" if seed < 1.0 - style.hipped else "hipped")
+        elif church and neighbours == 0:
             roof = "gabled"
         elif neighbours >= 1:
             # attached: flat in the US (a pitched roof would show its gable to the neighbour); old European towns
@@ -970,8 +980,13 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             h = max(2.5, h - dome_rise(roof, hw, attrs.get("roof_height")))
         elif attrs.get("roof_height") and np.isfinite(attrs["roof_height"]) and roof != "flat":
             h = max(2.5, h - float(attrs["roof_height"]))
-        elif roof != "flat":
+        elif roof != "flat" and h_src != "ign_bdtopo_eave":     # (BD TOPO's height without a rise: the eaves')
             h = max(2.5, h - roof_rise(roof, shw, style.pitch or PITCH.get(roof, PITCH["gabled"])))
+        elif roof == "flat" and h_src == "ign_bdtopo" and measured_rise is not None \
+                and measured_rise >= RISE_FLAT_M:
+            # a measured rise the outline cannot carry as a pitched roof (flattened above), or a block's lift housing:
+            # the walls to the eaves (BD TOPO's hauteur), not to the top
+            h = max(2.5, h - measured_rise)
         if nf is None:
             # a church: one tall storey (Cluj's St. Michael's, 25 m, came out as three 8 m floors)
             nf = 1 if church else max(1, int(round(h / floor_h)))
@@ -3728,7 +3743,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
             at = {k: (a[k][i] if k in a else None) for k in
                   ("class", "subtype", "height", "num_floors", "min_height", "roof_shape", "roof_height", "name",
                    "facade_material", "facade_color", "roof_material", "roof_color", "roof_orientation",
-                   "roof_direction", "height_src")}
+                   "roof_direction", "height_src", "roof_rise")}
             if key is not None:         # (plan's random choices keyed on the feature, not where the anchor puts it)
                 at["seed_id"] = str(key)
             if roofs is not None:
@@ -4916,13 +4931,15 @@ def road_tile_items(
     import threedbag
     bag3d = threedbag.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (the Dutch roofs, likewise)
     house_layers = ("land_use",) if francehouses.needs_residential_land(frame, box) else ()
+    keys = roads.cells_of_tile(frame, tx, ty, margin=0.0)
+    measured_wait(md, keys)
     cds = [
         md.cell(
             k,
             layers=("buildings", "building_parts", "roads", "infrastructure", "water", "land_use"),
             kind="demand",
         )
-        for k in roads.cells_of_tile(frame, tx, ty, margin=0.0)
+        for k in keys
     ]
     items = tile_buildings(
         frame,
@@ -5249,6 +5266,16 @@ BRIDGE_MIN_SPAN_M = 100.0  # ... and only once it also reaches this far (a narro
 FAR_LAYERS = ("buildings", "building_parts", "infrastructure", "roads", "water")
 
 
+def measured_wait(md, keys, wait=True):
+    """A building tile's wait for its cells' measured buildings that come per map cell (France's BD TOPO: MapData.cell
+    joins them once they are here), all together and bounded (bdtopo.WAIT_S): their downloads run beside the cells'
+    own from the tile's start (MapData.warm). wait=False: started, not waited for (the skyline's: render-only, built
+    again on a later visit). A map without them: nothing."""
+    w = getattr(md, "bdtopo_wait", None)
+    if w is not None:
+        w(keys, wait)
+
+
 def measured_roofs(md, frame, x0, y0, x1, y1):
     """The measured roofs (lod2roofs.Records) of a tile, or None: none there, or a map without them."""
     src = getattr(md, "lod2_roofs", None)
@@ -5272,6 +5299,7 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     x0, y0, x1, y1 = box
     own = box if hasattr(box, "owns") else None
     keys, layers = far_needs(frame, tile, ty)
+    measured_wait(md, keys)
     cds = [md.cell(k, layers=layers, kind="demand") for k in keys]
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds],
@@ -5521,6 +5549,7 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         # after another in the one far process they held the far buildings back, 2026-11-07)
         md.warm([(k, layer) for k in keys for layer in ("buildings", "roads")], kind="prefetch")
         return None
+    measured_wait(md, keys, wait=False)
     cds = [md.cell(k, layers=("buildings", "roads"), kind="background") for k in keys]
     layers = [c.layers.get("buildings") for c in cds]
     items = tile_buildings(frame, x0, y0, x1, y1, layers, ground, min_size=(1e9, SKY_MIN_AREA_M2), own=own)

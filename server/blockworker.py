@@ -2164,7 +2164,10 @@ def _far_cells_ready(tag, keys, layers):
     behind the slowest cell of a first visit (2026-11-07). Past FAR_CELLS_WAIT_S it is built anyway (its cell()
     calls fetch what is still missing, or fail as before)."""
     need = [(k, layer) for k in keys for layer in layers if not _s.md.has(k, layer)]
-    if not need:
+    # (France's measured buildings, bdtopo: their downloads started with the cells', the tile asked again until they
+    # are here like the cells themselves; a failed one is not waited for: built without, a revisit fault)
+    fr = "buildings" in layers and getattr(_s.md, "bdtopo", None) is not None and bool(_s.md.bdtopo.prefetch(keys))
+    if not need and not fr:
         _far_cells_miss.pop(tag, None)
         return True
     first = _far_cells_miss.setdefault(tag, time.monotonic())
@@ -2173,7 +2176,8 @@ def _far_cells_ready(tag, keys, layers):
         return True
     if len(_far_cells_miss) > 4096:
         _far_cells_miss.clear()
-    _s.md.warm(need, kind="demand")
+    if need:
+        _s.md.warm(need, kind="demand")
     return False
 
 

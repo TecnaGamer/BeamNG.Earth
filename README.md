@@ -151,6 +151,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
+- Measured buildings in France: each building's height to the eaves and roof rise, storeys, wall and roof materials
+  (stone, brick, render; tiles, slate, zinc) and use (houses, shops, sheds, churches) come from IGN BD TOPO and are
+  joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
+  buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
+  beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
