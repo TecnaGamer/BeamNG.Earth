@@ -335,3 +335,345 @@ pub fn triangulate_holes<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>
     (numpy::ndarray::Array2::from_shape_vec((pts.len(), 2), flat).unwrap().into_pyarray(py),
      numpy::ndarray::Array2::from_shape_vec((tris.len(), 3), ti).unwrap().into_pyarray(py))
 }
+
+// ------------------------------------------------------------------------------------------------ straight skeleton
+// A hipped roof over any outline (and its courtyards): the straight skeleton's wavefront (Felkel & Obdrzalek 1998,
+// written from the paper: every edge moving inward at unit speed, vertices along their bisectors; edge events where an
+// edge shrinks to nothing, split events where a reflex vertex runs into another edge). Each original edge's face is the
+// roof's slope over it; a point's height is the time the wavefront passed it times the slope. Small outlines only
+// (buildings): every candidate event is computed again each step (O(n^2) per event). Checked: the faces must cover the
+// outline's area, else None (the caller keeps its other roof).
+
+#[derive(Clone)]
+struct WV {
+    p: P,          // position at time t
+    t: f64,
+    v: P,          // velocity
+    prev: usize,
+    next: usize,
+    e_in: usize,   // original edge arriving (from prev)
+    e_out: usize,  // original edge leaving (to next)
+    node: usize,   // skeleton node it started from
+    alive: bool,
+}
+
+fn at_t(w: &WV, t: f64) -> P {
+    (w.p.0 + w.v.0 * (t - w.t), w.p.1 + w.v.1 * (t - w.t))
+}
+
+fn bisector(n1: P, n2: P) -> Option<P> {
+    let d = 1.0 + n1.0 * n2.0 + n1.1 * n2.1;
+    if d < 1e-9 {
+        return None;
+    }
+    Some(((n1.0 + n2.0) / d, (n1.1 + n2.1) / d))
+}
+
+/// The faces of the skeleton roof: per original edge a polygon of (x, y, time) points; None when it fails.
+fn skeleton_faces(loops: &[Vec<P>]) -> Option<Vec<Vec<(f64, f64, f64)>>> {
+    // original edges: (a, b, inward normal); the region is on each directed edge's left
+    let mut edges: Vec<(P, P, P)> = Vec::new();
+    let mut verts: Vec<WV> = Vec::new();
+    let mut nodes: Vec<(f64, f64, f64)> = Vec::new();
+    let mut arcs: Vec<(usize, usize, usize, usize)> = Vec::new(); // (node from, node to, edge left, edge right)
+    for lp in loops {
+        let n = lp.len();
+        if n < 3 { return None; }
+        let base = edges.len();
+        for i in 0..n {
+            let (a, b) = (lp[i], lp[(i + 1) % n]);
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l = (dx * dx + dy * dy).sqrt();
+            if l < 1e-6 { return None; }
+            edges.push((a, b, (-dy / l, dx / l)));
+        }
+        let vbase = verts.len();
+        for i in 0..n {
+            let e_in = base + (i + n - 1) % n;
+            let e_out = base + i;
+            let v = bisector(edges[e_in].2, edges[e_out].2)?;
+            nodes.push((lp[i].0, lp[i].1, 0.0));
+            verts.push(WV { p: lp[i], t: 0.0, v, prev: vbase + (i + n - 1) % n, next: vbase + (i + 1) % n,
+                            e_in, e_out, node: nodes.len() - 1, alive: true });
+        }
+    }
+    let ne = edges.len();
+    let mut now = 0.0f64;
+    let mut guard = 0;
+    loop {
+        guard += 1;
+        if guard > 20 * ne + 50 { return None; }
+        let alive: Vec<usize> = (0..verts.len()).filter(|&i| verts[i].alive).collect();
+        if alive.is_empty() { break; }
+        // a loop of two: the vertices meet where they are heading (a ridge's end)
+        let mut done2 = false;
+        for &i in &alive {
+            let w = &verts[i];
+            if verts[w.next].next == i && w.next != i {
+                // a loop of two: the wavefront is a doubled segment, the ridge between its ends
+                let j = w.next;
+                let mut ends = [0usize; 2];
+                for (q, k) in [i, j].into_iter().enumerate() {
+                    let pk = at_t(&verts[k], now);
+                    let nk = verts[k].node;
+                    let (x, y, _) = nodes[nk];
+                    if (x - pk.0).abs() > 1e-7 || (y - pk.1).abs() > 1e-7 {
+                        nodes.push((pk.0, pk.1, now));
+                        arcs.push((nk, nodes.len() - 1, verts[k].e_in, verts[k].e_out));
+                        ends[q] = nodes.len() - 1;
+                    } else {
+                        ends[q] = nk;
+                    }
+                    verts[k].alive = false;
+                }
+                if ends[0] != ends[1] {
+                    arcs.push((ends[0], ends[1], verts[i].e_out, verts[j].e_out));
+                }
+                done2 = true;
+                break;
+            }
+            if w.next == i { verts[i].alive = false; done2 = true; break; }
+        }
+        if done2 { continue; }
+        // the earliest event
+        let mut best: Option<(f64, u8, usize, usize, P)> = None;  // (time, kind 0 edge / 1 split, vertex, edge-vertex, point)
+        for &i in &alive {
+            let a = &verts[i];
+            let b = &verts[a.next];
+            let e = a.e_out;
+            let d = { let (p, q, _) = edges[e]; let l = ((q.0 - p.0).powi(2) + (q.1 - p.1).powi(2)).sqrt(); ((q.0 - p.0) / l, (q.1 - p.1) / l) };
+            let (pa, pb) = (at_t(a, now), at_t(b, now));
+            let len = (pb.0 - pa.0) * d.0 + (pb.1 - pa.1) * d.1;
+            let rate = (b.v.0 - a.v.0) * d.0 + (b.v.1 - a.v.1) * d.1;
+            if rate < -1e-9 {
+                let dt = (-len / rate).max(0.0);
+                let t = now + dt;
+                if best.map_or(true, |bb| t < bb.0 - 1e-9) {
+                    best = Some((t, 0, i, a.next, at_t(a, t)));
+                }
+            }
+            // a reflex vertex: its wavefront runs into another edge
+            let n1 = edges[a.e_in].2;
+            let n2 = edges[a.e_out].2;
+            let reflex = n1.0 * n2.1 - n1.1 * n2.0 < -1e-9;
+            if !reflex { continue; }
+            for &j in &alive {
+                let f = verts[j].e_out;
+                if j == i || verts[j].next == i || f == a.e_in || f == a.e_out { continue; }
+                let nf = edges[f].2;
+                let pj = at_t(&verts[j], now);
+                let s = (pa.0 - pj.0) * nf.0 + (pa.1 - pj.1) * nf.1;
+                let den = 1.0 - (a.v.0 * nf.0 + a.v.1 * nf.1);
+                if s < -1e-7 || den <= 1e-9 { continue; }
+                let dt = s / den;
+                let t = now + dt;
+                if best.map_or(false, |bb| t >= bb.0 - 1e-9) { continue; }
+                let hit = at_t(a, t);
+                let (qa, qb) = (at_t(&verts[j], t), at_t(&verts[verts[j].next], t));
+                let ed = (qb.0 - qa.0, qb.1 - qa.1);
+                let l2 = ed.0 * ed.0 + ed.1 * ed.1;
+                if l2 < 1e-12 { continue; }
+                let u = ((hit.0 - qa.0) * ed.0 + (hit.1 - qa.1) * ed.1) / l2;
+                if u <= 1e-6 || u >= 1.0 - 1e-6 { continue; }
+                best = Some((t, 1, i, j, hit));
+            }
+        }
+        let Some((t, kind, i, j, p)) = best else { return None };
+        now = t;
+        nodes.push((p.0, p.1, t));
+        let nn = nodes.len() - 1;
+        if kind == 0 {
+            // i and j (= i.next) meet: one vertex in their place
+            let (a, b) = (verts[i].clone(), verts[j].clone());
+            arcs.push((a.node, nn, a.e_in, a.e_out));
+            arcs.push((b.node, nn, b.e_in, b.e_out));
+            verts[i].alive = false;
+            verts[j].alive = false;
+            if a.prev == j {
+                continue;           // (a loop of two collapsed)
+            }
+            let v = bisector(edges[a.e_in].2, edges[b.e_out].2).unwrap_or((0.0, 0.0));
+            let k = verts.len();
+            verts.push(WV { p, t, v, prev: a.prev, next: b.next, e_in: a.e_in, e_out: b.e_out, node: nn, alive: true });
+            verts[a.prev].next = k;
+            verts[b.next].prev = k;
+            if a.prev == b.next {
+                // (a triangle: the last vertex arrives here too)
+                let c = verts[a.prev].clone();
+                arcs.push((c.node, nn, c.e_in, c.e_out));
+                verts[a.prev].alive = false;
+                verts[k].alive = false;
+            }
+        } else {
+            // i (reflex) splits edge j -> j.next
+            let r = verts[i].clone();
+            let (ja, jb) = (j, verts[j].next);
+            let f = verts[ja].e_out;
+            arcs.push((r.node, nn, r.e_in, r.e_out));
+            verts[i].alive = false;
+            // (between two opposite edges a vertex stays where it is: that arm has collapsed to a ridge, its loop
+            // closes as a pair below)
+            let v1 = bisector(edges[r.e_in].2, edges[f].2).unwrap_or((0.0, 0.0));
+            let v2 = bisector(edges[f].2, edges[r.e_out].2).unwrap_or((0.0, 0.0));
+            let c1 = verts.len();
+            verts.push(WV { p, t, v: v1, prev: r.prev, next: jb, e_in: r.e_in, e_out: f, node: nn, alive: true });
+            let c2 = verts.len();
+            verts.push(WV { p, t, v: v2, prev: ja, next: r.next, e_in: f, e_out: r.e_out, node: nn, alive: true });
+            verts[r.prev].next = c1;
+            verts[jb].prev = c1;
+            verts[ja].next = c2;
+            verts[r.next].prev = c2;
+        }
+    }
+    // each original edge's face: its base, then the arcs bounding it from its end back to its start
+    let mut faces = Vec::with_capacity(ne);
+    for e in 0..ne {
+        let mut adj: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
+        for (k, &(a, b, l, r)) in arcs.iter().enumerate() {
+            if l == e || r == e {
+                adj.entry(a).or_default().push(k);
+                adj.entry(b).or_default().push(k);
+            }
+        }
+        // the base's start and end nodes: the original vertices whose e_out / e_in is e
+        let start = (0..verts.len()).find(|&k| verts[k].t == 0.0 && verts[k].e_out == e).map(|k| verts[k].node)?;
+        let end = (0..verts.len()).find(|&k| verts[k].t == 0.0 && verts[k].e_in == e).map(|k| verts[k].node)?;
+        let mut poly = vec![nodes[start], nodes[end]];
+        let mut used = vec![false; arcs.len()];
+        let mut cur = end;
+        let mut steps = 0;
+        while cur != start {
+            steps += 1;
+            if steps > arcs.len() + 2 { return None; }
+            let nxt = adj.get(&cur).and_then(|v| v.iter().copied().find(|&k| !used[k]))?;
+            used[nxt] = true;
+            let (a, b, _, _) = arcs[nxt];
+            cur = if a == cur { b } else { a };
+            if cur != start {
+                poly.push(nodes[cur]);
+            }
+        }
+        faces.push(poly);
+    }
+    Some(faces)
+}
+
+/// buildings._roof's hipped roof over any outline (and its courtyards) by the straight skeleton: outer (n, 2), holes
+/// [(k, 2)] (any winding), slope k, eave e, cap: the most the roof rises (a flat top over it; <= 0: none). Returns
+/// (triangles (m * 3, 3) xyz, counter-clockwise from above; their slopes (m, 2)), or empty arrays when the skeleton
+/// failed (the caller's other roof).
+#[pyfunction]
+pub fn skeleton_roof<'py>(py: Python<'py>, outer: PyReadonlyArray2<'py, f64>, holes: Vec<PyReadonlyArray2<'py, f64>>,
+                          k: f64, e: f64, cap: f64) -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+    let rd = |a: &PyReadonlyArray2<'py, f64>| -> Vec<P> {
+        let v = a.as_array();
+        (0..v.nrows()).map(|i| (v[[i, 0]], v[[i, 1]])).collect()
+    };
+    let area = |r: &[P]| -> f64 { (0..r.len()).map(|i| r[i].0 * r[(i + 1) % r.len()].1 - r[(i + 1) % r.len()].0 * r[i].1).sum::<f64>() / 2.0 };
+    let mut o = rd(&outer);
+    let hs: Vec<Vec<P>> = holes.iter().map(|h| rd(h)).collect();
+    let (tri, grad) = py.detach(move || {
+        if area(&o) < 0.0 { o.reverse(); }
+        let mut loops = vec![o.clone()];
+        let mut want = area(&o);
+        for mut h in hs {
+            if h.len() < 3 { continue; }
+            if area(&h) > 0.0 { h.reverse(); }
+            want += area(&h);
+            loops.push(h);
+        }
+        let mut tri: Vec<f64> = Vec::new();
+        let mut grad: Vec<f64> = Vec::new();
+        let orig: Vec<P> = loops.iter().flatten().copied().collect();
+        // (a tenth of a millimetre's nudge per corner, the same every build: an L's arm walls meet at the very time
+        // its reflex corner reaches the far wall, and the vertex left between two opposite edges has no bisector;
+        // the eave's corners are put back on the outline below)
+        for (li, lp) in loops.iter_mut().enumerate() {
+            for (i, q) in lp.iter_mut().enumerate() {
+                let h = ((li * 7919 + i * 104729) as f64 * 12.9898).sin() * 43758.5453;
+                let (a, b) = (h.fract(), (h * 1.618).fract());
+                q.0 += (a - 0.5) * 2e-4;
+                q.1 += (b - 0.5) * 2e-4;
+            }
+        }
+        let Some(faces) = skeleton_faces(&loops) else { return (tri, grad) };
+        let zcap = if cap > 0.0 { e + cap } else { f64::INFINITY };
+        let mut got = 0.0;
+        let mut out: Vec<[(f64, f64, f64); 3]> = Vec::new();
+        for f0 in &faces {
+            // (simultaneous events leave a node twice: consecutive copies dropped)
+            let mut f: Vec<(f64, f64, f64)> = Vec::with_capacity(f0.len());
+            for q in f0 {
+                if f.last().map_or(true, |l: &(f64, f64, f64)| (l.0 - q.0).abs() > 1e-7 || (l.1 - q.1).abs() > 1e-7) {
+                    f.push(*q);
+                }
+            }
+            while f.len() > 1 && (f[0].0 - f[f.len() - 1].0).abs() <= 1e-7 && (f[0].1 - f[f.len() - 1].1).abs() <= 1e-7 {
+                f.pop();
+            }
+            if f.len() < 3 { continue; }
+            let xy: Vec<P> = f.iter().map(|q| (q.0, q.1)).collect();
+            if area(&xy) <= 1e-9 { continue; }
+            for t in ear_clip_bridged(&xy) {
+                let pts = [f[t[0] as usize], f[t[1] as usize], f[t[2] as usize]];
+                got += area(&[(pts[0].0, pts[0].1), (pts[1].0, pts[1].1), (pts[2].0, pts[2].1)]);
+                out.push([(pts[0].0, pts[0].1, e + k * pts[0].2), (pts[1].0, pts[1].1, e + k * pts[1].2),
+                          (pts[2].0, pts[2].1, e + k * pts[2].2)]);
+            }
+        }
+        if (got - want).abs() > 0.01 * want.abs() + 0.5 {
+            return (Vec::new(), Vec::new());       // (the skeleton did not cover the outline: the other roof)
+        }
+        for t3 in out.iter_mut() {
+            for q in t3.iter_mut() {
+                if (q.2 - e).abs() < 1e-9 {
+                    if let Some(o) = orig.iter().find(|o| (o.0 - q.0).abs() < 5e-4 && (o.1 - q.1).abs() < 5e-4) {
+                        q.0 = o.0;
+                        q.1 = o.1;
+                    }
+                }
+            }
+        }
+        for t3 in out {
+            // (cut at the cap: the part over it flat at zcap)
+            let below: Vec<(f64, f64, f64)> = clip_z(&t3, zcap, true);
+            let above: Vec<(f64, f64, f64)> = clip_z(&t3, zcap, false);
+            for (poly, flat) in [(below, false), (above, true)] {
+                if poly.len() < 3 { continue; }
+                for i in 1..poly.len() - 1 {
+                    let mut tr = [poly[0], poly[i], poly[i + 1]];
+                    if flat { for q in tr.iter_mut() { q.2 = zcap; } }
+                    // the triangle's slope: z = z0 + gx x + gy y
+                    let (a, b, c) = (tr[0], tr[1], tr[2]);
+                    let (ux, uy, uz) = (b.0 - a.0, b.1 - a.1, b.2 - a.2);
+                    let (vx, vy, vz) = (c.0 - a.0, c.1 - a.1, c.2 - a.2);
+                    let nz = ux * vy - uy * vx;
+                    if nz.abs() < 1e-9 { continue; }
+                    let gx = -(uy * vz - uz * vy) / nz;
+                    let gy = -(uz * vx - ux * vz) / nz;
+                    for q in tr { tri.extend_from_slice(&[q.0, q.1, q.2]); }
+                    grad.extend_from_slice(&[gx, gy]);
+                }
+            }
+        }
+        (tri, grad)
+    });
+    let m = grad.len() / 2;
+    (numpy::ndarray::Array2::from_shape_vec((m * 3, 3), tri).unwrap().into_pyarray(py),
+     numpy::ndarray::Array2::from_shape_vec((m, 2), grad).unwrap().into_pyarray(py))
+}
+
+/// A triangle's part under (below: true) or over z.
+fn clip_z(t: &[(f64, f64, f64); 3], z: f64, below: bool) -> Vec<(f64, f64, f64)> {
+    let inside = |q: &(f64, f64, f64)| if below { q.2 <= z } else { q.2 >= z };
+    let mut out = Vec::new();
+    for i in 0..3 {
+        let (p, q) = (t[i], t[(i + 1) % 3]);
+        if inside(&p) { out.push(p); }
+        if inside(&p) != inside(&q) {
+            let s = (z - p.2) / (q.2 - p.2);
+            out.push((p.0 + (q.0 - p.0) * s, p.1 + (q.1 - p.1) * s, z));
+        }
+    }
+    out
+}

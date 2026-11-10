@@ -5608,9 +5608,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
     // 176: roofs::heightfield_roof; 177: roofs::triangulate_holes; 178: frontage::FrontageCoverage (PR #505's paved
-    // frontages and European sidewalks: frontage_geometry.Coverage) beside them
-    m.add("VERSION", 178)?;
+    // frontages and European sidewalks: frontage_geometry.Coverage) beside them; 179: roofs::skeleton_roof
+    m.add("VERSION", 179)?;
     Ok(())
 }

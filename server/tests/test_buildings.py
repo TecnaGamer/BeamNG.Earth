@@ -2212,3 +2212,36 @@ class MlHeightTest(unittest.TestCase):
         ok = bld.plan(r, {"class": "apartments", "height": 19.0, "num_floors": 6,
                           "height_src": "Microsoft ML Buildings"}, 0, 40.7, -74.0)
         self.assertAlmostEqual(ok.height, 19.0, delta=0.01)         # (a plausible one kept)
+
+
+class SkeletonRoofTest(unittest.TestCase):
+    """The straight skeleton's roofs: an L house hipped over its own outline, a pitched block round its yard."""
+
+    def test_an_l_house_hipped_to_its_mapped_top(self):
+        L = np.array([[0, 0], [12, 0], [12, 8], [5, 8], [5, 14], [0, 14]], float)
+        s = bld.plan(L, {"class": "house", "roof_shape": "hipped", "height": 9.0, "roof_height": 3.0}, 0, 48.1, 11.5)
+        self.assertTrue(s.skel)
+        m = bld.Mesh()
+        bld._roof(m, s, np.asarray(s.ring, np.float64), s.height, bld._Looks(s.seed))
+        P = np.asarray(m.P).reshape(-1, 3)
+        self.assertAlmostEqual(s.height, 6.0, delta=0.01)               # (walls to the eave)
+        self.assertAlmostEqual(P[:, 2].max(), 9.0, delta=0.05)          # (the roof's top at the mapped height)
+        self.assertAlmostEqual(P[:, 2].min(), 6.0, delta=1e-6)
+
+    def test_a_pitched_block_keeps_its_yard(self):
+        import geodesy
+        f = geodesy.EnuFrame(52.52, 13.40)
+
+        def ll(pts):
+            pts = np.asarray(pts, float)
+            la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
+            return np.stack([lo, la], 1)
+        outer = ll([[20, 20], [60, 20], [60, 50], [20, 50], [20, 20]])
+        yard = ll([[30, 28], [50, 28], [50, 42], [30, 42], [30, 28]])
+        b = HoledFeats(["B"], [[outer, yard]], **{"class": ["apartments"], "height": [20.0], "roof_shape": ["hipped"]})
+        items = bld.tile_buildings(f, 0.0, 0.0, 256.0, 256.0, [b], lambda la_, lo_: np.zeros(np.shape(la_)))
+        spec = items[0][0]
+        self.assertTrue(spec.skel and spec.holes)
+        P = np.asarray(bld.build([(spec, 0.0, 0.0)])[0], np.float64).reshape(-1, 3)
+        self.assertGreater(P[:, 2].max(), spec.height + 1.0)             # (pitched)
+        self.assertFalse(((np.abs(P[:, 0] - 40.0) < 5) & (np.abs(P[:, 1] - 35.0) < 3)).any())     # (the yard open)

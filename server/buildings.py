@@ -366,7 +366,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes")
+                 "roof_h", "hf", "holes", "skel", "skel_cap")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -655,6 +655,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # (Overture writes half_hipped: OSM's half-hipped never matched, its 133 k roofs came out predicted; its saltbox is
     # mostly OSM's double / quadruple saltbox, a gambrel's or a mansard's look: research 2026-11-10)
     roof_given = ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower())
+    holed = bool(attrs.get("_holes"))           # (a block round a yard: tile_buildings' inner rings)
     if roof_given in ("gabled", "hipped", "flat", "pyramidal", "half-hipped", "mansard", "gambrel", "skillion"):
         roof = roof_given
     elif roof_given in DOME_ROOFS:
@@ -692,14 +693,28 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if roof in DOME_ROOFS:
         if hw < 1.0 or hw > DOME_MAX_HW:
             roof = "flat"
-    elif roof != "flat" and (shw < 2.0 or shw > (18.0 if barn else 20.0 if church else 14.0)):
-        roof = "flat"
+    elif roof != "flat" and (shw < 2.0 or shw > (18.0 if barn else 20.0 if church else 14.0)) \
+            and not (holed and roof in SKEL_FORMS):
+        roof = "flat"           # (a block round a yard: its wings' width counts, the skeleton's, not its box's)
     elif roof != "flat" and box_fill < (0.6 if church else 0.8):
         # (an L / T / U house: its roof on its own outline, heightfield_roof, where the box would add too much; a
         # church keeps its nave's box)
         roof = "flat" if (church or roof not in HF_FORMS or box_fill < HF_MIN_FILL or len(ring) > HF_MAX_VERTS) \
             else roof
-    hf = roof in HF_FORMS and not church and box_fill < HF_BOX_FILL and len(ring) <= HF_MAX_VERTS
+    hf = roof in HF_FORMS and not church and (box_fill < HF_BOX_FILL or (holed and roof in SKEL_FORMS)) \
+        and len(ring) <= HF_MAX_VERTS
+    # (a hipped-style roof over the outline and its yards by the straight skeleton: its rise from the skeleton itself,
+    # so the walls stop where the roof starts; a mapped roof height its slope; else the region's pitch, capped)
+    skel, skel_cap, skel_pitch = False, None, None
+    if hf and roof in SKEL_FORMS:
+        s1 = skeleton_rise(ring, attrs.get("_holes") if holed else ())
+        if s1 > 0.3:
+            rh_ = mapped_roof_h(roof, attrs.get("roof_height"))
+            k_ = rh_ / s1 if rh_ else math.tan(math.radians(style.pitch or PITCH.get(roof, PITCH["gabled"])))
+            k_ = min(max(k_, math.tan(math.radians(MAPPED_PITCH[0]))), math.tan(math.radians(MAPPED_PITCH[1])))
+            skel, skel_pitch = True, math.degrees(math.atan(k_))
+            skel_cap = None if rh_ else SKEL_CAP_M
+            shw = min(s1, (SKEL_CAP_M / k_) if skel_cap else s1)     # (the roof_rise below: the skeleton's)
     # a city tower's ground floor is shops or a lobby (Midtown, 2026-10-14: most towers have no class, and their
     # curtain wall came down to the pavement)
     tall = (nf or (h or 0) / FLOOR_M) >= TOWER_SHOP_FLOORS
@@ -913,7 +928,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 deck=garage and roof == "flat",
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
-                across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf)
+                across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
+                skel_cap=skel_cap)
+    if skel:
+        spec.pitch = skel_pitch
     return francehouses.adapt(spec, attrs, lat, lon)
 
 
@@ -1414,6 +1432,50 @@ def _holed_lid(m, ring, holes, z, mat, uv_on=True):
         m.tri(P[0], P[1], P[2], uv[0], uv[1], uv[2], mat)
 
 
+# The straight skeleton's roofs (earthfast skeleton_roof, research 2026-11-10): gabled, hipped, half-hipped and pyramidal
+# roofs on an outline that is no rectangle (Spec.hf) and over a block's yards are its hipped roof (each wall's slope
+# up to where the wavefront met; an L or a T house's wings each hipped), SKEL_CAP_M high at most without a mapped roof
+# height (a flat top over it: a wide city block's roof); a footprint it fails on (2 in 14,345 Munich / Berlin) keeps
+# heightfield_roof.
+SKEL_FORMS = {"gabled", "hipped", "half-hipped", "pyramidal"}
+SKEL_CAP_M = 5.0
+
+
+def skeleton_rise(ring, holes=()):
+    """The skeleton's highest point over ring (and its holes) at a slope of 1: the widest half span, m; 0 if it failed."""
+    fast.require(179, "skeleton_roof")
+    try:
+        tri, _g = fast._ef.skeleton_roof(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
+                                         [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in holes or ()],
+                                         1.0, 0.0, 0.0)
+    except Exception:
+        return 0.0
+    return float(tri[:, 2].max()) if len(tri) else 0.0
+
+
+def _skel_roof(m, spec, ring, z_eave, rm):
+    """A skeleton roof (Spec.skel) over ring and Spec.holes; False when the skeleton failed (the caller's other roof)."""
+    fast.require(179, "skeleton_roof")
+    k = math.tan(math.radians(roof_pitch(spec)))
+    tri, grad = fast._ef.skeleton_roof(np.ascontiguousarray(np.asarray(ring, np.float64)[:, :2]),
+                                       [np.ascontiguousarray(np.asarray(h, np.float64)[:, :2]) for h in spec.holes or ()],
+                                       float(k), float(z_eave), float(spec.skel_cap or 0.0))
+    if not len(grad):
+        return False
+    for j in range(len(grad)):
+        gx, gy = float(grad[j, 0]), float(grad[j, 1])
+        gm = math.hypot(gx, gy)
+        if gm < 1e-9:
+            d, a, f = (0.0, 1.0), (1.0, 0.0), 1.0
+        else:
+            d = (gx / gm, gy / gm)
+            a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
+        pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
+        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
+        m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
+    return True
+
+
 def _hf_roof(m, spec, ring, z_eave, rm, fac):
     """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
     fast.require(176, "heightfield_roof")
@@ -1521,6 +1583,11 @@ def _roof(m, spec, ring, z_eave, mat_idx, lite=False):
         pts = [(p[0], p[1], z_eave) for p in ring]
         uv = [(p[0] / ROOF_UV_M, p[1] / ROOF_UV_M) for p in ring]
         m.poly(pts, uv, rm)
+        return
+    if getattr(spec, "skel", False) and _skel_roof(m, spec, ring, z_eave, rm):
+        return
+    if getattr(spec, "holes", None) and spec.roof != "flat":      # (the skeleton failed over a yard: a flat lid)
+        _holed_lid(m, ring, spec.holes, z_eave, rm)
         return
     if getattr(spec, "hf", False) and spec.roof in HF_FORMS:
         _hf_roof(m, spec, ring, z_eave, rm, mat_idx[spec.facade])
@@ -3506,7 +3573,7 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                       _fr_residential=bool(house_res[k]) if house_res is not None else False)
         spec = plan(ring, at, int(sh) if look is None else 0, clat, clon, look, town, dense, west_town, alpine)
         spec.min_h = mh
-        if at.get("_holes") and spec.roof == "flat" and not spec.hf and spec.cls not in CANOPY_CLASSES \
+        if at.get("_holes") and ((spec.roof == "flat" and not spec.hf) or spec.skel) and spec.cls not in CANOPY_CLASSES \
                 and not spec.deck and not spec.fr_house and spec.cls != landmarks.LANDMARK:
             spec.holes = at["_holes"]
         spec.portal = bool(at.get("portal"))
