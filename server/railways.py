@@ -586,6 +586,9 @@ def drawn(feats, i, bridges=False):
             return ("tram", w) if bridges else None
         if v in OSM_RAILWAY_NOT:
             return None
+        hw = feats.attrs.get("osm_highway")
+        if v == "abandoned" and hw is not None and hw[i]:
+            return None             # a rail trail: the rails are gone, a road or path runs on the old bed (#1103)
         if v in OSM_RAILWAY_WEAR:
             w = OSM_RAILWAY_WEAR[v]
             return (c if c in DRAWN else "standard_gauge", w)

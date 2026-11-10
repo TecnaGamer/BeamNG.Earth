@@ -267,6 +267,17 @@ class RailwayTest(unittest.TestCase):
         self.assertEqual(railways.osm_kit_of({"crossing:barrier": "no", "crossing:light": "no"}), "cross")
         self.assertIsNone(railways.osm_kit_of({"railway": "level_crossing"}), "no word: the road class's")
 
+    def test_rail_trail_is_not_drawn(self):
+        """An abandoned line that is now a road or path (OSM railway=abandoned + highway=*: the Via Verda d'Alcoi,
+        GitHub #1103) has no rails; an abandoned line with no highway tag stays drawn, worn."""
+        f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 120.0), (250.0, 120.0)], [(0.0, 140.0), (250.0, 140.0)]],
+                     ["standard_gauge"] * 3, subtypes=["rail"] * 3)
+        f.attrs["osm_railway"] = np.array(["abandoned", "abandoned", "rail"], object)
+        f.attrs["osm_highway"] = np.array(["track", None, "service"], object)
+        self.assertIsNone(railways.drawn(f, 0))
+        self.assertEqual(railways.drawn(f, 1), ("standard_gauge", 2))
+        self.assertEqual(railways.drawn(f, 2), ("standard_gauge", 0), "a street running track in use is drawn")
+
     def test_proposed_and_unbuilt_lines_are_not_drawn(self):
         """Overture's "unknown" rail with no abandoned or disused flag is OpenStreetMap's railway=proposed or
         construction (Link Union Station across US-101, 2026-10-27); a line under construction neither."""
