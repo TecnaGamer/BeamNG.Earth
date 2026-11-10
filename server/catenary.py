@@ -41,8 +41,8 @@ Z_MESSENGER = 7.80
 RAIL_TOP_M = 0.58               # the rail head over the bed line (railways.RAIL_TOP_M's ballast + sleeper + rail)
 MAST_Z_BAND = (-0.5, 0.2)       # the mast's base over the track's bed at most this far off it
 MESSENGER_SAG_M = 1.12          # at mid-span: leaves 0.5 m between the messenger and the contact wire there (Z_MESSENGER - Z_CONTACT = 1.62)
-DROPPER_EVERY_M = 3.0           # m between droppers (the user, 2026-11-10: once a metre was too dense, "3 metres"; real lines: 4-6 m)
-DROPPER_FIRST_M = 1.5           # m from a mast to its first dropper
+DROPPER_EVERY_M = 6.0           # m between droppers (the user, 2026-11-10: a metre, then 3 m, then "6 m"; real lines: 4-6 m)
+DROPPER_FIRST_M = 3.0           # m from a mast to its first dropper
 DROPPER_MIN_GAP_M = 0.12        # a dropper shorter than this is not drawn
 CONTACT_R, MESSENGER_R, DROPPER_R = 0.016, 0.013, 0.010
 JOINT_M = 1.5                   # m: part ends this close are one line (a joint of two OSM ways, a switch's branch)
@@ -403,8 +403,10 @@ def _joints(parts, arcs, masts, ground):
             s, q, uj, d = _nearest(xyj, arcs[pj], ea)
             if d > JOINT_M * 2 or not 1.0 < s < arcs[pj][-1] - 1.0:
                 continue
-            z = float(np.asarray(ground(np.array([ea])), np.float64).ravel()[0])
-            end = {"fid": parts[pa][0], "part": pa, "s": 0.0 if ka == 0 else float(arcs[pa][-1]), "q": ea, "axis": ea,
+            z = float(np.asarray(ground(np.array([q])), np.float64).ravel()[0])
+            # (the anchor stands on the other track's axis, where its contact wire runs: the branch's end may be up to
+            # 2 * JOINT_M off it, and the wire then ended a metre short of the main wire, the user's shots 2026-11-10)
+            end = {"fid": parts[pa][0], "part": pa, "s": 0.0 if ka == 0 else float(arcs[pa][-1]), "q": q.copy(), "axis": q.copy(),
                    "z": z, "zax": z, "dir": np.zeros(2), "u": uj, "virtual": True, "end": True}
             out.append({"link": (ma, end)})
             used.add(i)
@@ -474,6 +476,10 @@ def span_wires(a, b):
     c0, c1 = _tip(a), _tip(b)
     m0, m1 = c0.copy(), c1.copy()
     m0[2], m1[2] = a["z"] + Z_MESSENGER, b["z"] + Z_MESSENGER
+    if b.get("end"):            # (a branch's wire ends on the main track's contact wire: its messenger comes down to it
+        m1[2] = c1[2]           # rather than ending in the air a metre and a half over it)
+    if a.get("end"):
+        m0[2] = c0[2]
     span = float(np.hypot(*(c1[:2] - c0[:2])))
     n = max(2, int(math.ceil(span / 10.0)))
     ts = np.linspace(0.0, 1.0, n + 1)

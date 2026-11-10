@@ -207,10 +207,15 @@ class CatenaryTest(unittest.TestCase):
         ends = [m for m in ms if "link" in m and m["link"][1].get("end")]
         self.assertTrue(ends, "the branch's end on the main track gets an anchor")
         e = ends[0]["link"][1]
-        self.assertAlmostEqual(float(e["q"][1]), 100.0, delta=0.5)
+        self.assertAlmostEqual(float(e["q"][1]), 100.0, delta=0.5, msg="on the main track's axis")
         rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
         starts = [w[0, :2] for w, r in wires if r == catenary.CONTACT_R] + [w[-1, :2] for w, r in wires if r == catenary.CONTACT_R]
         self.assertTrue(any(float(np.hypot(*(p - e["q"]))) < 0.05 for p in starts), "a contact wire ends at that anchor")
+        mess = [w for w, r in wires if r == catenary.MESSENGER_R and min(float(np.hypot(*(w[0, :2] - e["q"]))), float(np.hypot(*(w[-1, :2] - e["q"])))) < 0.05]
+        self.assertTrue(mess)
+        for w in mess:
+            k = 0 if float(np.hypot(*(w[0, :2] - e["q"]))) < 0.05 else -1
+            self.assertAlmostEqual(float(w[k, 2]), 10.0 + catenary.Z_CONTACT, delta=0.01, msg="the messenger comes down to the contact wire")
 
     def test_droppers_every_few_metres_and_the_gap_between_wires(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
