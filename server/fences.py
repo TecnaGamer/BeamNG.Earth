@@ -15,6 +15,7 @@ import numpy as np
 
 import mapcells
 import mapgeom
+from guardrails import _deck_level_hint, _surface_info
 
 log = logging.getLogger("earthd.fences")
 
@@ -420,7 +421,7 @@ def inferred_rows(frame, houses, rings, walks, carriageways, barriers, paved, gr
     return _forest_rows(pending, z_at(x, y))
 
 
-def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
+def rows(frame, infra_fn, box, elev, decks=(), *, french=False, carriageways=()):
     """Forest rows of mapped barriers whose centre is inside box (x0, y0, x1, y1)."""
     if infra_fn is None:
         return []
@@ -433,6 +434,7 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
     import geotiles
 
     pending, fr_pending, gates = [], [], []
+    deck_meta = []
     seen = set()
     for key in keys:
         try:
@@ -476,6 +478,16 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
             if group is None and style is None:
                 continue
             seen.add(fid)
+            hint = _deck_level_hint(feats, i) if decks else None
+            if hint is None and decks:
+                # Overture keeps a way's OSM layer in the feature's own level, not always in its tags
+                # (rail-viaduct noise walls seen with tags without layer, level=2.0): that counts as on a bridge.
+                try:
+                    lv = float(np.asarray(feats.attrs.get("level"))[i])
+                except (TypeError, ValueError, IndexError):
+                    lv = float("nan")
+                if lv == lv:
+                    hint = True if lv > 0 else (False if lv < 0 else None)
             length = CHAIN_LEN if group == G_CHAIN else WALL_LEN
             for part in feats.parts(i):
                 if not part or len(part[0]) < 2:
@@ -485,7 +497,7 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
                 if style is not None:
                     for centre, tangent, length_m in _french_panels(style, line):
                         if geotiles.box_owns(box, *centre):
-                            fr_pending.append((style, centre, tangent, length_m))
+                            fr_pending.append((style, centre, tangent, length_m, hint))
                     continue
                 for centre, tangent in _centres(line, length):
                     if not geotiles.box_owns(box, *centre):
@@ -493,6 +505,7 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
                     px, py, yaw = _place(group, centre, tangent)
                     height, lift = (CHAIN_H, CHAIN_LIFT) if group == G_CHAIN else (WALL_H, 0.)
                     pending.append((group, px, py, yaw, height, lift))
+                    deck_meta.append((float(centre[0]), float(centre[1]), hint))
     if fr_pending:
         import roads
         import streetfront
@@ -504,20 +517,26 @@ def rows(frame, infra_fn, box, elev, *, french=False, carriageways=()):
             cross = streetfront._road_overlap(np.stack((centres - offsets, centres + offsets), axis=1), bounds)
         else:
             cross = np.zeros(len(centres), bool)
-        drawn = [_french_panel_row(style, centre, direction, length) for style, centre, direction, length in fr_pending]
+        drawn = [_french_panel_row(style, centre, direction, length) for style, centre, direction, length, _hint in fr_pending]
         bands = [(line[:, :2], spec.width / 2) for _, spec, line, _ in carriageways]
-        for (style, _, _, length), bad, row in zip(fr_pending, cross, _clear_hedges(drawn, bands)):
+        for (style, _, _, length, hint), bad, row in zip(fr_pending, cross, _clear_hedges(drawn, bands)):
             if row is None or (bad and style != "hedge"):
                 continue
             clearance = (row[4] * HEDGE_CROWN_PER_M + .75) if style == "hedge" else 1.3 + length / 2
             if any(np.linalg.norm(np.array(row[1:3]) - gate) < clearance for gate in gates):
                 continue
             pending.append(row)
+            deck_meta.append((row[1], row[2], hint))
     if not pending:
         return []
     xy = np.array([[p[1], p[2]] for p in pending], np.float64)
     lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
     _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    z = np.asarray(z, np.float64)
+    if decks:
+        mid = np.array([[p[0], p[1]] for p in deck_meta], np.float64)
+        surf, ground, _wide = _surface_info(frame, mid, elev, decks, [p[2] for p in deck_meta])
+        z = np.where(np.abs(surf - ground) > 1e-6, surf, z)
     return _forest_rows(pending, z)
 
 

@@ -87,6 +87,11 @@ local function look(detail, dsize, macro, msize, strength)
   l.baseColorMacroStrength, l.normalMacroStrength, l.roughnessMacroStrength = '0.12 0.08', '0.5 0.3', '0 0.8'
   return l
 end
+local function golfLook(detail, dsize, macro, msize, near, far)
+  local l = look(detail, dsize, macro, msize, near)
+  l.baseColorDetailStrength = near .. ' ' .. far
+  return l
+end
 M.LOOKS = {
   bngEarthGroundAsphalt = look('asphalt/asphalt/t_asphalt', 4, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundGrass = look('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64),
@@ -97,6 +102,12 @@ M.LOOKS = {
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
   bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
+  -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
+  -- GroundCover layer, so the 3D grass does not grow on them.
+  bngEarthGroundGolfRough = golfLook('grass/t_grass_01/t_grass_01', 4, 'grass/t_macro_grass/t_macro_grass', 64, 0.72, 0.28),
+  bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
+  bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
+  bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
@@ -287,6 +298,24 @@ function M.applyBaseSize(n)
   return changed
 end
 
+-- The texture set's base slot and the layers' base maps must be at the size of the photos the server builds
+-- (BASE_TEX_SIZE). Our fields were set before the engine re-read the level's materials in some starts (a race at the
+-- level's start): the set and the maps went back to 2048 while the photos were 4096, and every block swap then packed
+-- its photo again once per material on the render thread (24 times, 2.6-3.5 s a swap; "dont have required size of
+-- 2048-2048", the game's log 2026-11-07). Cheap (one field read) at every block load and swap; sets it all again when it
+-- differs.
+-- Returns whether it had to.
+function M.checkBaseSize()
+  local set = scenetree.findObject(M.TEXTURE_SET)
+  if not set then return false end
+  local ok, cur = pcall(function() return set:getField('baseTexSize', 0) end)
+  if ok and tostring(cur) == tostring(M.BASE_TEX_SIZE) .. ' ' .. tostring(M.BASE_TEX_SIZE) then return false end
+  log('W', 'beamngEarth', string.format('terrain: texture set base size %s, the photos are %d px: set again', tostring(cur), M.BASE_TEX_SIZE))
+  M.applyBaseSize(M.BASE_TEX_SIZE)
+  pcall(function() set:postApply() end)
+  return true
+end
+
 -- Apply the render flag to the block. Terrain mode never calls the engine unless the flag was off
 -- before (keeps the v1.2 path untouched).
 local function applyRender(tb, force)
@@ -338,6 +367,7 @@ function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   if not FS:fileExists(path) then return false, 'heightmap not found: ' .. tostring(path) end
   M.square = tonumber(squareSize) or M.square
   local tb = getOrCreate()
+  M.checkBaseSize()
   if layers then
     local okL = type(layers.masks) == 'table' and type(layers.materials) == 'table' and #layers.masks == #layers.materials
       and #layers.masks > 0 and ensureSurfaceMaterials(layers.materials)
@@ -376,6 +406,7 @@ function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
   if not tb or not M.slots or not sq or math.abs(sq - M.square) > 1e-9 then return false end
   if type(terPath) ~= 'string' or not FS:fileExists(terPath) then return false end
   if tb:getField('terrainFile', 0) == terPath then return false end -- no reload: the caller must import/rebind
+  M.checkBaseSize()
   local slots = { M.MATERIAL }
   if layers then
     if type(layers.materials) ~= 'table' or #layers.materials == 0 or not ensureSurfaceMaterials(layers.materials) then

@@ -66,6 +66,14 @@ class RuleTable:
             self._major = maj
         return int(self._major[i]) if 0 <= i < len(self._major) else -1
 
+    def majors(self, n):
+        """major(i) of features 0 .. n - 1 as one int64 array."""
+        self.major(0)
+        out = np.full(n, -1, np.int64)
+        k = min(n, len(self._major))
+        out[:k] = self._major[:k]
+        return out
+
     def for_feature(self, i):
         r = self.rows(i)
         return list(zip(self.value[r].tolist(), self.start[r].tolist(), self.end[r].tolist()))
@@ -519,6 +527,37 @@ def clip_polygon_parts(parts, bounds):
                 new.append(c)
         out.append(new)
     return out, changed
+
+
+def simplify_ring(ring, tol):
+    """A closed ring (k, 2) with the vertices closer than tol to their neighbours' line dropped (Ramer-Douglas-Peucker,
+    iterative: sidewalks.simplify's), still closed; the ring itself when fewer than 4 vertices would be left. Pure."""
+    p = np.asarray(ring, np.float64)
+    k = len(p)
+    if k <= 4:
+        return p
+    keep = np.zeros(k, bool)
+    far = int(np.argmax(((p - p[0]) ** 2).sum(1)))      # (a closed ring's ends are one point: split it at the far one)
+    keep[[0, far, k - 1]] = True
+    stack = [(0, far), (far, k - 1)]
+    while stack:
+        a, b = stack.pop()
+        if b - a < 2:
+            continue
+        seg, rel = p[b] - p[a], p[a + 1:b] - p[a]
+        L2 = float(seg @ seg)
+        d = rel - np.clip(rel @ seg / L2, 0.0, 1.0)[:, None] * seg if L2 > 0 else rel
+        d2 = (d * d).sum(1)
+        i = int(np.argmax(d2))
+        if d2[i] > tol * tol:
+            keep[a + 1 + i] = True
+            stack += [(a, a + 1 + i), (a + 1 + i, b)]
+    return p[keep] if keep.sum() >= 4 else p
+
+
+def simplify_polygon_parts(parts, tol):
+    """Polygon parts with each ring simplify_ring'd at tol (the parts' own units). Pure."""
+    return [[simplify_ring(r, tol) for r in rings] for rings in parts]
 
 
 def _reduce(ufunc, v, a, b):

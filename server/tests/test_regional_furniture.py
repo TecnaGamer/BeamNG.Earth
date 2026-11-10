@@ -1,4 +1,6 @@
 """Regional kit: geometry, country gating, sign layout, placement and real serialization."""
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import json
 from pathlib import Path
 import sys

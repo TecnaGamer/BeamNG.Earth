@@ -114,6 +114,17 @@ class OpenPageTest(unittest.TestCase):
                     updates.PAGE_URL + '\" && rm -rf ~', "https://github.com/redthepro/Beam-Earth/releases"):
             self.assertFalse(updates.open_page(bad, popen=lambda *a, **k: calls.append(a)), bad)
 
+    def test_the_about_page_links(self):
+        """The settings page's About buttons and contributors (the game's openWebBrowser refuses other sites): the
+        Discord, Ko-fi, the project and a user's profile; nothing after a profile, nothing else on those sites."""
+        for ok in ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", "https://github.com/TecnaGamer/BeamNG.Earth",
+                   "https://github.com/brechtknecht", "https://github.com/wyo-backroads"):
+            self.assertTrue(updates.openable(ok), ok)
+        for bad in ("https://discord.gg/other", "https://ko-fi.com/someoneelse", "https://github.com/someone/repo",
+                    "https://github.com/a-", "https://github.com/x?y=1", "http://github.com/brechtknecht",
+                    "https://github.com.evil.example/x", "https://discord.gg/tgf/../x", "https://github.com/" + "a" * 40):
+            self.assertFalse(updates.openable(bad), bad)
+
     def test_downloads_stay_on_upstream(self):
         import selfupdate
         self.assertEqual(updates.REPO, "TecnaGamer/BeamNG.Earth")

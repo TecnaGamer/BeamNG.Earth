@@ -32,3 +32,10 @@ Sources:
 Build scripts: `tools/fetch_country_bounds.py`, `tools/build_country_bounds.py`.
 SHA-256: `9ef7540081e29fbb72dd69b74a44ec37cf87f5814866f7a97b85330ba9f8d846`.
 The old eleven-country `country_bounds.geojson.gz` is superseded and unused.
+
+## Distribution (merge of PR #505, 2026-11-06)
+
+This archive is no longer shipped inside BeamNG.Earth. `tools/build_regional_data.py` converts it (the borders
+as latitude band files simplified to about 10 m, the cell archives as one gzip file per cell) for
+BeamNG.Earth-data's GitHub Pages (`regional/`), and `server/regionaldata.py` fetches only what a player needs,
+only when the regional scenery is on. The source, licence and attribution above are unchanged.

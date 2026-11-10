@@ -80,9 +80,11 @@ lines(os.path.join(L, "main/MissionGroup/Sky/items.level.json"), [
      "skyBrightness": 40, "sunScale": [0.996078432, 0.811764717, 0.70588237, 1], "sunScaleGradientFile": "art/sky_gradients/default/gradient_sunscale.png",
      "useNightCubemap": True},
     # TimeOfDay.time: 0 = noon, 0.5 = midnight (ARCHITECTURE.md Phase 0). latitude/longitude are
-    # read by core/celestial.lua (readWhen) and follow the player at runtime.
+    # read by core/celestial.lua (readWhen) and follow the player at runtime. dayLength: a real day (GitHub #791: without
+    # it the engine's 30-minute day ran whenever the sky was set to Manual; the game's own day-length menu offers the
+    # level's authored value as its "level default").
     {"name": "tod", "class": "TimeOfDay", "persistentId": "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c07", "__parent": "Sky",
-     "position": [0, 0, 100], "axisTilt": 10, "play": False, "startTime": 0.1, "time": 0.1,
+     "position": [0, 0, 100], "axisTilt": 10, "play": False, "dayLength": 86400, "startTime": 0.1, "time": 0.1,
      "latitude": 36.5785, "longitude": -118.2923},
 ])
 
@@ -164,6 +166,17 @@ for i, args in enumerate((
         ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
     name, gm, detail, dsize, macro, msize, *st = args
     SURFACES.update(surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{30 + i}", detail, dsize, macro, msize, *st))
+
+# Golf (server/surface.py). The detail texture is painted over the photo; these are not GroundCover layers.
+for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
+        ("bngEarthGroundGolfRough", "GRASS", "grass/t_grass_01/t_grass_01", 2, "grass/t_macro_grass/t_macro_grass", 32, 0.72, 0.28),
+        ("bngEarthGroundGolfFairway", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.45, 0.18),
+        ("bngEarthGroundGolfGreen", "GRASS", "grass/t_grass_01/t_grass_01", 0.5, "grass/t_macro_grass/t_macro_grass", 32, 0.5, 0.2),
+        ("bngEarthGroundGolfBunker", "SAND", "sand/t_sand/t_sand", 1, "sand/t_macro_sand/t_macro_sand", 32, 0.95, 0.55))):
+    made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{50 + i}", detail, dsize, macro, msize, strength)
+    mat = made[name]
+    mat["baseColorDetailStrength"] = [strength, far]
+    SURFACES.update(made)
 
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {

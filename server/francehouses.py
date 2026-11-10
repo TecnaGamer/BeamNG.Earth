@@ -208,8 +208,7 @@ class ResidentialLand:
             "healthcare", "religious", "military", "cemetery", "railway", "prison", "construction"}
 
     def __init__(self, layers):
-        import countrybounds
-        self.areas = []
+        self.areas = []             # (label, outer (n, 2) lon/lat, [holes], bbox)
         seen = set()
         for f in layers:
             if f is None or "class" not in f.attrs:
@@ -222,22 +221,35 @@ class ResidentialLand:
                     continue
                 seen.add(str(f.ids[i]))
                 for p in f.parts(i):
-                    try:
-                        rings = tuple(countrybounds._Ring(r) for r in p)
-                    except ValueError:
+                    rings = [np.asarray(r, np.float64) for r in p]
+                    if not rings or any(r.ndim != 2 or r.shape[1] != 2 or len(r) < 4 or not np.isfinite(r).all()
+                                        for r in rings):
                         continue             # malformed land use cannot establish a house
-                    if rings:
-                        self.areas.append((label, rings))
+                    o = rings[0]
+                    self.areas.append((label, o, rings[1:], (*o.min(0), *o.max(0))))
+
+    def at_many(self, lats, lons):
+        """Per point: inside mapped residential land and no excluded land (the native ring test, PR #505's
+        per-point Python rings before)."""
+        import polygon
+        lats, lons = np.asarray(lats, np.float64).ravel(), np.asarray(lons, np.float64).ravel()
+        res = np.zeros(len(lats), bool)
+        deny = np.zeros(len(lats), bool)
+        pts = np.column_stack((lons, lats))
+        for label, outer, holes, (bx0, by0, bx1, by1) in self.areas:
+            near = np.flatnonzero((lons >= bx0) & (lons <= bx1) & (lats >= by0) & (lats <= by1))
+            if not len(near):
+                continue
+            q = pts[near]
+            inside = polygon.contains_points(outer, q)
+            for h in holes:
+                if inside.any():
+                    inside &= ~polygon.contains_points(h, q)
+            (res if label else deny)[near[inside]] = True
+        return res & ~deny
 
     def at(self, lat, lon):
-        residential = False
-        for label, rings in self.areas:
-            if rings[0].locate(lon, lat) != 1 or any(r.locate(lon, lat) >= 0 for r in rings[1:]):
-                continue
-            if not label:
-                return False
-            residential = True
-        return residential
+        return bool(self.at_many([lat], [lon])[0])
 
 
 def needs_residential_land(frame, box):
@@ -248,5 +260,5 @@ def needs_residential_land(frame, box):
     x = np.array([x0, x0, x1, x1, (x0 + x1) / 2])
     y = np.array([y0, y1, y0, y1, (y0 + y1) / 2])
     lat, lon, _ = frame.enu_to_geodetic(x, y, 0.)
-    return any(-5.3 < lo < 9.8 and 41.3 < la < 51.2 and countrybounds.bundled().at(float(la), float(lo)) == "FR"
-               for la, lo in zip(lat, lon))
+    pts = [(float(la), float(lo)) for la, lo in zip(lat, lon) if -5.3 < lo < 9.8 and 41.3 < la < 51.2]
+    return bool(pts) and "FR" in countrybounds.bundled().codes_at(pts)

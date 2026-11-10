@@ -871,7 +871,14 @@ end
 
 -- Each frame (core.lua) in a BeamMP session in our level: anchor (core's st.anchor), player { x, y, z } in its frame
 -- (the car; the camera when there is none).
+-- Hitch attribution inside the session's update (a 2 s "beammp" frame at 117 mph in a player's session,
+-- 2026-11-04, no part named): core hands its frame marker in, the parts show in the hitch line as "mp:<part>".
+local markFn, markClock = nil, nil
+function M.setMark(fn, clockFn) markFn, markClock = fn, clockFn end
+local function mk(name, t) if markFn and t then return markFn(name, t) end return t end
+
 function M.update(dt, anchor, player)
+  local t = markClock and markClock()
   if not handlers and rawget(_G, 'AddEventHandler') then
     AddEventHandler('bngeAnchors', onAnchors, 'beamngEarth')
     AddEventHandler('bngeGoTo', onGoTo, 'beamngEarth')
@@ -887,6 +894,7 @@ function M.update(dt, anchor, player)
   adoptNodes()
   applyPendingNodes()
   stepMorphs()
+  t = mk('mp:nodes', t)
   clock = clock + (dt or 0)
   statusIn = statusIn - (dt or 0)
   if statusIn <= 0 then
@@ -970,6 +978,7 @@ function M.update(dt, anchor, player)
       anchors = anchors, stats = stats, hidden = hidden, remote = remote, own = own, player = player and { x = player.x,
       y = player.y, z = player.z, camera = player.camera } or nil }, true)
   end
+  t = mk('mp:status', t)
   -- (shared world building, commented out 2026-10-27 (off since 2026-10-23; the user: not coming back for a while))
   -- configWait = configWait + (dt or 0)
   -- if share == nil and M.SHARE_GEN and (config or configWait >= M.CONFIG_WAIT_S) then
@@ -984,6 +993,7 @@ function M.update(dt, anchor, player)
   placeCamera(player)
   anchorRef = anchor
   testStep(dt)
+  t = mk('mp:camera', t)
   if not player then return end
   local lat, lon = anchor:worldToGeodetic(player.x, player.y, player.z or 0)
   poseIn = poseIn - (dt or 0)
@@ -1002,6 +1012,7 @@ function M.update(dt, anchor, player)
     if joined then log('I', 'beamngEarth', string.format('BeamMP: first pose sent (%.5f, %.5f)', lat, lon)) end
     joined = false
   end
+  t = mk('mp:pose', t)
   -- converge(dt, anchor, lat, lon)     -- (shared world building, commented out)
   hideIn = hideIn - (dt or 0)
   if hideIn > 0 then return end
@@ -1011,10 +1022,14 @@ function M.update(dt, anchor, player)
   for gid, sid in pairs(sids) do
     if mpanchor.isFar(sid) then hide[gid] = true end     -- (not placed: beyond our world)
   end
+  t = mk('mp:owners', t)
   M.sendDamage(lat, lon, M.HIDE_S)
+  t = mk('mp:sendDamage', t)
   local cam = rawget(_G, 'core_camera') and core_camera.getPosition and core_camera.getPosition() or player
   checkCopies(owners, M.HIDE_S, cam)
+  t = mk('mp:copies', t)
   M.restoreDeleted(lat, lon)
+  t = mk('mp:restore', t)
   for gid in pairs(hide) do
     if not deactivated[gid] then
       local veh = vehicle(gid)
@@ -1082,7 +1097,9 @@ function M.update(dt, anchor, player)
       end
     end
   end
+  t = mk('mp:hidden', t)
   updateFloating(owners)
+  mk('mp:floating', t)
 end
 
 -- Collision foci (collisionfoci.lua) where cars switched off here are coming back on (waitGround): their ground made

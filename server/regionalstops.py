@@ -1,22 +1,25 @@
 """Select the national face model without changing the junction's AI rules."""
 
 from functools import lru_cache
-import hashlib
 import json
 from pathlib import Path
 
-DATA_PATH = Path(__file__).with_name("data") / "quebec_bounds.zip"
-DATA_SHA256 = "becfdfb3fc08c1adb450e2f941aef41a83512f8cf84800f76002f60a30fe38ae"
-MODELS_PATH = DATA_PATH.with_name("eu_stop_models.json")
+MODELS_PATH = Path(__file__).with_name("data") / "eu_stop_models.json"
+VERSION = "regional-stops-2"     # 2: Quebec from the regional data's band file (regionaldata, quebec_bands.bin)
 
 
-@lru_cache(maxsize=1)
-def quebec():
+@lru_cache(maxsize=2)
+def _quebec(sig):
     import countrybounds
+    import regionaldata
+    path = regionaldata.file("quebec_bands.bin")
+    return countrybounds.BandIndex(path) if path else countrybounds.Absent()
 
-    if hashlib.sha256(DATA_PATH.read_bytes()).hexdigest() != DATA_SHA256:
-        raise ValueError("Quebec boundary checksum mismatch")
-    return countrybounds.WorldIndex(DATA_PATH)
+
+def quebec():
+    """Quebec's border (Statistics Canada, generalised 10 m): at(lat, lon) == "QC" inside."""
+    import regionaldata
+    return _quebec(regionaldata.signature())
 
 
 def style(country, lat, lon):

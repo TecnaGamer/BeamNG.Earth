@@ -103,5 +103,28 @@ class PriorityTest(unittest.TestCase):
             self.assertEqual(int(got[0]), min(3, 19 - int(got[1])))
 
 
+class RaiseThreadTest(unittest.TestCase):
+    """raise_thread: the event loop's thread one step above the process's others on Windows, nothing elsewhere."""
+
+    def test_raised(self):
+        if sys.platform != "win32":
+            self.assertIsNone(budget.raise_thread())
+            return
+        import threading
+        got = []
+
+        def run():          # (a thread of its own: the test runner's keeps its priority)
+            import ctypes
+            from ctypes import wintypes
+            k = ctypes.WinDLL("kernel32")
+            k.GetCurrentThread.restype = wintypes.HANDLE
+            k.GetThreadPriority.argtypes = (wintypes.HANDLE,)
+            got.append((budget.raise_thread(), k.GetThreadPriority(k.GetCurrentThread())))
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        self.assertEqual(got, [("thread above normal", 1)])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,7 +75,7 @@ def geographic_profile(mode):
         return None
     import countrybounds
     import townlayout
-    fingerprint = countrybounds.DATA_SHA256+":"+townlayout.VERSION
+    fingerprint = countrybounds.signature()+":"+townlayout.VERSION
     if mode in ("fr-varied", "europe"):
         import townsigns
         import directionsigns
@@ -92,7 +92,7 @@ def geographic_profile(mode):
         if mode=='europe':
             import regionalstops
             import delineatorprofiles
-            fingerprint += ':'+townsigns.EU_DATA_SHA256+':'+regionalstops.DATA_SHA256+':'+delineatorprofiles.VERSION
+            fingerprint += ':'+regionalstops.VERSION+':'+delineatorprofiles.VERSION    # (the places / Quebec data: countrybounds.signature)
     return (countrybounds.ALGORITHM, mode, fingerprint)
 
 

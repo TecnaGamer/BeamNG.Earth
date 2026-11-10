@@ -35,3 +35,10 @@ Raw extraction SHA-256: `80e050818eea8d6e605de382ce370a438652a3760d82f6fb7b6e156
 Naming and country assignment follow the source snapshot. Missing, duplicated,
 historical or disputed names remain possible. Scenery placement uses sustained
 built-up transitions; it is not an inventory of actual signs.
+
+## Distribution (merge of PR #505, 2026-11-06)
+
+This archive is no longer shipped inside BeamNG.Earth. `tools/build_regional_data.py` converts it (the borders
+as latitude band files simplified to about 10 m, the cell archives as one gzip file per cell) for
+BeamNG.Earth-data's GitHub Pages (`regional/`), and `server/regionaldata.py` fetches only what a player needs,
+only when the regional scenery is on. The source, licence and attribution above are unchanged.

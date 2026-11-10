@@ -39,7 +39,33 @@ import xproc
 log = logging.getLogger("earthd.mapdata")
 
 BLOCK = 256 * 1024          # bytes per cached block
-MAX_RUN = 64                # blocks per Range request (16 MiB)
+MAX_RUN = 64                # blocks per Range request (16 MiB) ...
+# ... but a read of more than PAR_BLOCKS blocks goes out as PAR_BLOCKS-block requests at once (RUN_THREADS, the mirrors
+# taking turns): a far host's single connection can be slow while the line is not (a player's large downloads at
+# ~1 MB/s each, 2026-11-04): a 10 MB row group was one 10 s request, its buildings' road tiles waited ~1 min.
+PAR_BLOCKS = int(os.environ.get("BNGE_RANGE_PAR_BLOCKS") or 8)
+RUN_THREADS = 8
+_pool = None
+_pool_lock = threading.Lock()
+
+
+def _run_pool():
+    global _pool
+    with _pool_lock:
+        if _pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+            _pool = ThreadPoolExecutor(RUN_THREADS, thread_name_prefix="range-run")
+        return _pool
+
+
+def _quiet_call(quiet, fn, *a):
+    """fn(*a) on a pool thread with the caller's netfetch "quiet" state (a predownload's errors are no build's)."""
+    prev = getattr(netfetch._quiet, "on", False)
+    netfetch._quiet.on = quiet
+    try:
+        return fn(*a)
+    finally:
+        netfetch._quiet.on = prev
 BLOCK_WAIT_S = 60.0         # a block another process is fetching is waited for this long (xproc.once)
 MEM_BYTES = 64 * 1024 * 1024    # in-memory block LRU shared by every RemoteFile of the process
 CONTENT_RANGE = re.compile(r"bytes\s+(\d+)-(\d+)/(\d+|\*)")
@@ -177,6 +203,31 @@ class RemoteFile:
         self._write(self._path(i), b)
         self._remember(i, b)
 
+    def _fetch_runs(self, runs, kind):
+        """{i: bytes} of the runs [(i0, i1)]: one alone here, several at once (PAR_BLOCKS). A failed one's error is
+        raised here once all are back, and counted a fault of this thread too (revisit: what was built from a
+        read that failed is not kept)."""
+        if len(runs) <= 1:
+            out = {}
+            for i0, i1 in runs:
+                out.update(self._fetch_run(i0, i1, kind))
+            return out
+        quiet = getattr(netfetch._quiet, "on", False)
+        futs = [_run_pool().submit(_quiet_call, quiet, self._fetch_run, i0, i1, kind) for i0, i1 in runs]
+        out, err = {}, None
+        for f in futs:
+            try:
+                out.update(f.result())
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            if not quiet and isinstance(err, netfetch.FetchError) and \
+                    not isinstance(err, (netfetch.NotFound, netfetch.Deferred)):
+                import revisit
+                revisit.fault()
+            raise err
+        return out
+
     def _fetch_run(self, i0, i1, kind):
         """Blocks i0..i1-1 in one Range request (mirrors in turn); stores and returns them."""
         start = i0 * self.block
@@ -294,13 +345,16 @@ class RemoteFile:
                         out[i] = b
                     else:
                         pending.append(i)
-                run = []
+                runs, run = [], []
+                # (split only with the file's size known: a first read learns it, its runs must not pass the end)
+                cap = MAX_RUN if (self.size is None or len(pending) <= PAR_BLOCKS) else PAR_BLOCKS
                 for i in pending + [None]:
-                    if run and (i is None or i != run[-1] + 1 or len(run) >= MAX_RUN):
-                        out.update(self._fetch_run(run[0], run[-1] + 1, kind))
+                    if run and (i is None or i != run[-1] + 1 or len(run) >= cap):
+                        runs.append((run[0], run[-1] + 1))
                         run = []
                     if i is not None:
                         run.append(i)
+                out.update(self._fetch_runs(runs, kind))
             finally:
                 for i in held:
                     xproc.release(self._lock_path(i))

@@ -30,6 +30,12 @@ class EuropeanSidewalksTest(unittest.TestCase):
         flags = mock.patch.dict(os.environ, {"BNE_EU_ROAD_DETAILS": "on"})
         flags.start()
         self.addCleanup(flags.stop)
+        # The upstream data fixture covers Alsace, not this English test town.
+        # Keep these geometry tests offline with an explicit country/locality.
+        for name, value in (("country_for", "GB"), ("_locality", ("", ""))):
+            patcher = mock.patch.object(europewalks, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     def features(self, lines, classes, **kwargs):
         with mock.patch.multiple(test_roads, LAT=LAT, LON=LON, M_LAT=M_LAT, M_LON=M_LON):

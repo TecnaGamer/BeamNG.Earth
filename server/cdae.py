@@ -282,7 +282,12 @@ def decode(b):
     if end != 8 + hsize or not isinstance(header, dict):
         raise CdaeError("bad header")
     if header.get("compression"):
-        raise CdaeError("compressed bodies are not supported")
+        fast.require(PACK_NATIVE, "compressed shapes (cdae_unpack)")
+        try:
+            b = fast._ef.cdae_unpack(bytes(b))
+        except ValueError as e:
+            raise CdaeError(f"compressed body: {e}")
+        header, end = unpack_one(b, 8)
     if header.get("bodysize") != len(b) - end:
         raise CdaeError(f"body size {len(b) - end} != header bodysize {header.get('bodysize')}")
     s = _Stream(b, end)
@@ -579,7 +584,43 @@ def encode(positions, tris, normals=None, uvs=None, material="bngEarthDae", uvs2
 
     header = packb({"info": INFO, "compression": False, "bodysize": len(out),
                     "objectNames": [object_name] + [f"Colmesh{k}" for k in range(len(cols))]})
-    return struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
+    data = struct.pack("<II", VERSION_WORD, len(header)) + header + bytes(out)
+    if PACKED:
+        fast.require(PACK_NATIVE, "compressed shapes (cdae_pack)")
+        data = fast._ef.cdae_pack(data)
+    return data
+
+
+# Shapes written with their body as one zstd frame (earthfast cdaez.rs: the game reads them as its own compressed
+# vehicle shapes): a far tile's ~62 %, a road / building tile's ~25 % of the plain file; the session's shapes were
+# ~1.5 GB of a warm 8 min drive at 150 mph (Discord 2026-11-04, "hard on the drive"). BNGE_CDAE_PLAIN=1: plain (A/B)
+PACKED = os.environ.get("BNGE_CDAE_PLAIN") != "1"
+PACK_NATIVE = 145
+
+
+def pack(data):
+    """A shape file's bytes as written (compressed with PACKED; one compressed already as it is)."""
+    if not PACKED:
+        return data
+    fast.require(PACK_NATIVE, "compressed shapes (cdae_pack)")
+    return fast._ef.cdae_pack(bytes(data))
+
+
+def is_packed(data):
+    """Is this shape file's body compressed? (False for anything that is not a shape file.)"""
+    try:
+        h, _ = unpack_one(data, 8)
+    except Exception:
+        return False
+    return isinstance(h, dict) and bool(h.get("compression"))
+
+
+def plain(data):
+    """A shape file's bytes with a plain body (one compressed or not; anything else as it is)."""
+    if not is_packed(data):
+        return data
+    fast.require(PACK_NATIVE, "compressed shapes (cdae_unpack)")
+    return fast._ef.cdae_unpack(bytes(data))
 
 
 def _primitives(TM, nmat):

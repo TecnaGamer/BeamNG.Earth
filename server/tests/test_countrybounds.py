@@ -2,6 +2,8 @@
 
 Offline tests, including real geographic controls. No BeamNG rendering claims.
 """
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import gzip
 import json
 from pathlib import Path
@@ -32,8 +34,22 @@ def square(x0, y0, x1, y1):
     return [[x0,y0], [x1,y0], [x1,y1], [x0,y1], [x0,y0]]
 
 
+sys.path.insert(0, str(ROOT / "tools"))
+import build_regional_data  # noqa: E402
+
+_TMP = tempfile.TemporaryDirectory()
+
+
 def index(*features):
-    return cb.CountryIndex({"features": list(features)})
+    """A band file (tools/build_regional_data.band_file, unsimplified) of the features, as the server reads it."""
+    parts = []
+    for f in features:
+        g = f["geometry"]
+        for poly in ([g["coordinates"]] if g["type"] == "Polygon" else g["coordinates"]):
+            parts.append((f["properties"]["country"], poly))
+    path = Path(_TMP.name, f"idx{len(list(Path(_TMP.name).iterdir()))}.bin")
+    path.write_bytes(build_regional_data.band_file(parts, sorted({c for c, _ in parts}), tol=0.0))
+    return cb.BandIndex(path)
 
 
 class PolygonTest(unittest.TestCase):
@@ -45,10 +61,11 @@ class PolygonTest(unittest.TestCase):
             self.assertEqual(idx.at(lat,lon), expected)
         self.assertIsNone(index(a).at(3,3))
 
-    def test_edges_vertices_overlap_and_input_order_are_unknown(self):
+    def test_overlap_and_input_order_are_unknown(self):
+        # (exact edges are no longer "unknown": the borders are simplified to ~10 m, a point on one is either side)
         a,b = feature("FR", [square(0,0,2,2)]), feature("DE", [square(1,0,3,2)])
         for idx in (index(a,b),index(b,a)):
-            for lat,lon in ((0,0),(1,0),(1,1.5),(2,3)):
+            for lat,lon in ((1,1.5),(2.5,3)):
                 self.assertIsNone(idx.at(lat,lon))
             self.assertEqual(idx.at(1,.5), "FR")
             self.assertEqual(idx.at(1,2.5), "DE")
@@ -57,13 +74,13 @@ class PolygonTest(unittest.TestCase):
         idx=index(feature("FR",[square(0,0,1,1)]),feature("DE",[square(1,0,2,1)]))
         self.assertEqual(idx.at(.5, 1-1e-7), "FR")
         self.assertEqual(idx.at(.5, 1+1e-7), "DE")
-        self.assertIsNone(idx.at(.5, 1))
+        self.assertIn(idx.at(.5, 1), ("FR", "DE"))
 
     def test_date_line_and_reversed_rings(self):
         ring=[[179,-1],[-179,-1],[-179,1],[179,1],[179,-1]]
         for r in (ring,list(reversed(ring))):
             idx=index(feature("FR",[r]))
-            for lon in (179.5,-179.5,180,-180): self.assertEqual(idx.at(0,lon),"FR")
+            for lon in (179.5,-179.5,180,-180): self.assertEqual(idx.at(.5,lon),"FR")
             self.assertIsNone(idx.at(0,0))
 
     def test_invalid_positions_and_missing_coverage(self):
@@ -71,13 +88,14 @@ class PolygonTest(unittest.TestCase):
         for lat,lon in ((float("nan"),0),(0,float("inf")),(91,0),(0,181),(-50,50)):
             self.assertIsNone(idx.at(lat,lon))
 
-    def test_corrupt_bundle_raises_without_geographic_guess(self):
-        cb.bundled.cache_clear()
+    def test_corrupt_data_is_unknown_without_geographic_guess(self):
+        import regionaldata
         with tempfile.TemporaryDirectory() as d:
-            p=Path(d,"bad.gz"); p.write_bytes(b"bad")
-            with mock.patch.object(cb,"DATA_PATH",p), self.assertRaisesRegex(ValueError,"checksum"):
-                cb.bundled()
-        cb.bundled.cache_clear()
+            Path(d, cb.FILE).write_bytes(b"bad")
+            Path(d, "manifest.json").write_text(json.dumps({"built": "corrupt", "files": {cb.FILE: "0" * 64}}))
+            with mock.patch.object(regionaldata, "LOCAL", d), mock.patch.dict(regionaldata._state, manifest=None):
+                self.assertIsInstance(cb.bundled(), cb.Absent)
+                self.assertIsNone(cb.bundled().at(48.8, 7.8))
 
 
 class GeographicTest(unittest.TestCase):
@@ -145,7 +163,7 @@ class GeographicTest(unittest.TestCase):
         old=pp.geographic_profile("fr-all")
         self.assertNotEqual(old,pp.FR_ALL)
         self.assertNotEqual(old,pp.geographic_profile("fr-demo"))
-        with mock.patch.object(cb,"DATA_SHA256","different"):
+        with mock.patch.object(cb,"signature",lambda:"different"):
             self.assertNotEqual(old,pp.geographic_profile("fr-all"))
         self.assertIsNone(pp.geographic_profile("off"))
         with self.assertRaisesRegex(ValueError,"ENU frame"):

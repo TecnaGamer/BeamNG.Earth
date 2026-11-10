@@ -1,5 +1,7 @@
 """Road detail regressions using generated assets and controlled junctions."""
 
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import hashlib
 import json
 import os

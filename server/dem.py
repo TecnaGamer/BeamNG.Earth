@@ -56,7 +56,24 @@ URGENT_WORKERS = 16         # Dem.urgent(): its own fetch threads (with the 16 s
 # pages shared, dropped instead of swapped under memory pressure. At most MIRROR_MB on disk (the oldest go first);
 # older than MIRROR_MAX_AGE_S it is made again (Mapterhorn adds lidar areas). DECODED_VERSION: raise it when what a
 # tile holds changes (the decoding, the ground filter).
-MIRROR_MB = 1024
+# (3 GB but on a small machine: one 30 km drive needs ~1.1 GB of decoded tiles, so at 1 GB the mirror cut back the
+# tiles of the same drive and wrote them again, and none of a previous drive's was left: ~1.2 GB of SSD writes in a
+# warm 8 min drive at 150 mph, 2026-11-04. BNGE_DEM_MIRROR_MB sets it.)
+def _mirror_mb():
+    v = os.environ.get("BNGE_DEM_MIRROR_MB")
+    if v:
+        return float(v)
+    import budget
+    return 1024 if budget.small() else 3072
+
+
+MIRROR_MB = _mirror_mb()
+# (an experiment, off: the mirror's tiles packed, earthfast f32z.rs, ~11 % of the .npy, ~3 ms to unpack, but each
+# process's own array instead of shared mapped pages: measure the memory on a Steam Deck before turning it on)
+MIRROR_ZSTD = os.environ.get("BNGE_DEM_MIRROR_ZSTD") == "1"
+if MIRROR_ZSTD:
+    fast.require(146, "the packed DEM mirror (f32_pack)")
+CLAIM_WAIT_S, CLAIM_POLL_S, CLAIM_STALE_S = 0.5, 0.01, 30.0     # (Dem._load_tile: another process making a tile)
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_MAX_AGE_S = 30 * 86400
 DECODED_VERSION = 4          # 2: tiles past the lidar's depth upsampled from its deepest tile, not z12; its holes
@@ -239,6 +256,11 @@ class Dem:
                                                   block=BIAS_BLOCK) if LIDARBC else None)
         self.hrdem_served = set()       # tile keys with HRDEM heights in them (the data credits)
 
+
+    def clear_memory(self):
+        """Drop the decoded tiles kept in memory (budget.maybe_shed)."""
+        with self._lock:
+            self._lru.clear()
     def _canada(self, key, a):
         """Tile key's heights a with Canada's lidar terrain (hrdem.py) put in where it has data (z13 and deeper)."""
         z, x, y = key
@@ -627,22 +649,28 @@ class Dem:
     def _mirror_path(self, key):
         z, x, y = key
         return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}", str(z),
-                            str(x), f"{y}.npy")
+                            str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
-    def _mirror_get(self, key):
-        """A tile from the decoded mirror (a read-only view of its memory map), or None."""
+    def _mirror_get(self, key, readback=False):
+        """A tile from the decoded mirror (a read-only view of its memory map), or None. readback: _mirror_put's
+        own read (not counted as a hit: dem:mirror counts the tiles another decode was saved for)."""
         if MIRROR_MB <= 0:
             return None
         path = self._mirror_path(key)
         try:
             if time.time() - os.path.getmtime(path) > MIRROR_MAX_AGE_S:
                 return None
-            a = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False))
+            if MIRROR_ZSTD:             # (packed: this process's own array, not a shared mapping)
+                with open(path, "rb") as fh:
+                    a = fast._ef.f32_unpack(fh.read()).reshape(TILE, TILE)
+            else:
+                a = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False))
         except (OSError, ValueError, EOFError):
             return None
         if a.shape != (TILE, TILE) or a.dtype != np.float32:
             return None
-        self._count("dem:mirror")
+        if not readback:
+            self._count("dem:mirror")
         return a
 
     def _mirror_put(self, key, a):
@@ -652,7 +680,10 @@ class Dem:
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             with open(tmp, "wb") as f:
-                np.save(f, np.ascontiguousarray(a, np.float32), allow_pickle=False)
+                if MIRROR_ZSTD:
+                    f.write(fast._ef.f32_pack(np.ascontiguousarray(a, np.float32).ravel()))
+                else:
+                    np.save(f, np.ascontiguousarray(a, np.float32), allow_pickle=False)
             staging.replace_cached(tmp, path)
         except OSError as e:
             log.debug("dem mirror %s: %s", path, e)
@@ -661,6 +692,7 @@ class Dem:
             except OSError:
                 pass
             return None
+        self._count("dem:mirror_put")
         with Dem._mirror_lock:
             Dem._mirror_written += TILE * TILE * 4
             # (and at most every MIRROR_PRUNE_S: each prune walks the whole mirror, ~28k folders; a fresh place's
@@ -675,7 +707,9 @@ class Dem:
         import multiprocessing
         if prune and multiprocessing.current_process().name == "MainProcess":
             threading.Thread(target=self._mirror_prune, daemon=True, name="dem-mirror-prune").start()
-        return self._mirror_get(key)
+        if MIRROR_ZSTD:                 # (its own array either way: not read back)
+            return np.ascontiguousarray(a, np.float32)
+        return self._mirror_get(key, readback=True)
 
     # (a process's first write prunes: the count of a session's own writes alone never reached the threshold when
     # each run wrote less, and the mirror grew past MIRROR_MB across sessions: 6.3 GB on a Steam Deck, 2026-10-23)
@@ -688,7 +722,7 @@ class Dem:
         files = []
         for dirpath, _, names in os.walk(os.path.join(self.cache_dir, "decoded")):
             for n in names:
-                if n.endswith(".npy"):
+                if n.endswith((".npy", ".f32z")):
                     p = os.path.join(dirpath, n)
                     try:
                         st = os.stat(p)
@@ -713,24 +747,63 @@ class Dem:
 
     def _load_tile(self, key):
         """A decoded tile: from the mirror, else made (_make_tile) and, when it is all Mapterhorn's data as it will
-        stay (no failover, no fetch failed on the way), written to the mirror."""
+        stay (no failover, no fetch failed on the way), written to the mirror. One process makes and writes a tile
+        (its claim, _mirror_claim); another one asking meanwhile waits for it at most CLAIM_WAIT_S, then makes it
+        without writing: the server's processes decoded and wrote the same tiles side by side, 3083 writes of 1 MB
+        for ~1144 tiles in a warm 8 min drive (2026-11-04: the mirror's SSD writes)."""
         got = self._mirror_get(key)
         if got is not None:
             self.served.setdefault(key, MAPTERHORN["name"])
             return got
+        claim = self._mirror_claim(key) if MIRROR_MB > 0 else False
+        if claim is None:               # another process is making it
+            end = time.monotonic() + CLAIM_WAIT_S
+            while time.monotonic() < end:
+                time.sleep(CLAIM_POLL_S)
+                got = self._mirror_get(key)
+                if got is not None:
+                    self._count("dem:mirror_waited")
+                    self.served.setdefault(key, MAPTERHORN["name"])
+                    return got
+            claim = False
         prev = getattr(self._local, "partial", False)
         self._local.partial = False
         partial = True
         try:
             a = self._make_tile(key)
             partial = self._local.partial
+            if claim and not partial and a is not None and self.served.get(key) == MAPTERHORN["name"]:
+                got = self._mirror_put(key, a)
+                if got is not None:
+                    return got
+            return a
         finally:
             self._local.partial = prev or partial
-        if not partial and a is not None and self.served.get(key) == MAPTERHORN["name"] and MIRROR_MB > 0:
-            got = self._mirror_put(key, a)
-            if got is not None:
-                return got
-        return a
+            if claim:
+                try:
+                    os.remove(self._mirror_path(key) + ".claim")
+                except OSError:
+                    pass
+
+    def _mirror_claim(self, key):
+        """True: this process makes key's tile (its claim file made); None: another one is (a claim younger than
+        CLAIM_STALE_S); False: no claims here (the folder cannot be written: made and not written, as before)."""
+        path = self._mirror_path(key) + ".claim"
+        for _ in range(2):
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return True
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(path) < CLAIM_STALE_S:
+                        return None
+                    os.remove(path)         # (a process that ended mid-tile)
+                except OSError:
+                    pass
+            except OSError:
+                return False
+        return None
 
     def _make_tile(self, key):
         return self._canada(key, self._make_tile0(key))

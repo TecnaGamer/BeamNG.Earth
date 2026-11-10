@@ -39,10 +39,12 @@ import staging
 
 log = logging.getLogger("earthd.placenames")
 
-PLACES_FORMAT = 1               # the cell files' format (bump when what a cell holds or how it is read changes)
+PLACES_FORMAT = 2               # the cell files' format (bump when what a cell holds or how it is read changes); 2: borders
 ZOOM = 9                        # the cells' Web-Mercator zoom up to 60 degrees of latitude (zoom_at)
 SEARCH_M = 25000.0              # towns this far around the player are read (the cells under that box)
 MEM_CELLS = 64                  # decoded cells kept in memory
+LABELS_MAX = 400                # the 3D map's labels: towns per answer (labels())
+LABELS_RADIUS_MAX_M = 150000.0  # ... and the farthest box asked (a few dozen cells at most)
 # reach of a town (km) = clamp(REACH_K * REACH_R_KM * (population / 1000) ** REACH_EXP, REACH_MIN_KM, REACH_MAX_KM):
 # REACH_R_KM * (pop / 1000) ** 0.4 is about a town's equivalent radius (Baltimore 585k: 8.7 km, its 238 km2;
 # Köln 1.07 M: 11 km, 405 km2; Leverkusen 163k: 5.2 km, 79 km2), REACH_K = 2: its edge with the outskirts
@@ -55,6 +57,7 @@ TOWN_COLS = ("subtype", "class", "country", "region", "name") + tuple(f"name_{la
 AREA_COLS = ("subtype", "country", "region", "division_id", "name") + tuple(
     f"name_{lang}" for lang in overture.DIVISION_LANGS)
 EMPTY = {"place": "", "region": "", "country": ""}
+BORDER_MARGIN_DEG = 0.5         # a cell keeps the country borders this far past its edges (a town's line to the player)
 
 
 def zoom_at(lat):
@@ -102,11 +105,36 @@ def _dist_km(lat, lon, lats, lons):
     return np.hypot(dx, dy) / 1000.0
 
 
-def pick(towns, areas, lat, lon):
+def _crossed(lat, lon, tlat, tlon, borders):
+    """Per town (tlat, tlon arrays): its straight line from the point crosses a border segment (borders (n, 2, 2) lon/lat
+    pairs). The test in earthfast.segment_crossings_g, in a local equirectangular km frame."""
+    m = len(tlat)
+    if borders is None or not len(borders) or not m:
+        return np.zeros(m, bool)
+    import fast
+    fast.require(76, "segment_crossings_g")
+    kx, ky = M_PER_DEG * math.cos(math.radians(lat)) / 1000.0, M_PER_DEG / 1000.0
+    dlon = ((np.asarray(tlon, np.float64) - lon + 180.0) % 360.0) - 180.0
+    lines = np.zeros((2 * m, 2))
+    lines[1::2, 0], lines[1::2, 1] = dlon * kx, (np.asarray(tlat, np.float64) - lat) * ky
+    b = np.asarray(borders, np.float64).reshape(-1, 2)
+    bxy = np.column_stack(((((b[:, 0] - lon + 180.0) % 360.0) - 180.0) * kx, (b[:, 1] - lat) * ky))
+    got = fast._ef.segment_crossings_g(np.ascontiguousarray(lines), np.arange(0, 2 * m + 1, 2, dtype=np.int64),
+                                       np.ascontiguousarray(bxy), np.arange(0, len(bxy) + 1, 2, dtype=np.int64))
+    out = np.zeros(m, bool)
+    for pi, _g, _arc, _x, _y in got:
+        out[pi] = True
+    return out
+
+
+def pick(towns, areas, lat, lon, borders=None):
     """{"place", "region", "country"} at (lat, lon) ("" each when unknown) from towns {"lat", "lon", "population",
     "id", "subtype", "class", "country", "region", "name", "name_<lang>"...} and areas {"subtype", "country",
     "region", "division_id", "x0", "y0", "x1", "y1", "name", "name_<lang>"...} (arrays of equal length within each;
-    either may be empty). Pure and deterministic (the same rows in any order give the same answer)."""
+    either may be empty). borders: the country borders around ((n, 2, 2) lon/lat segments): a town in reach across one
+    is left out while one on the point's side reaches (Windsor ON was "Detroit, Michigan", Belle Isle in Detroit and
+    each Niagara Falls the other's; Discord 2026-11-04). Pure and deterministic (the same rows in any order give the
+    same answer)."""
     out = dict(EMPTY)
     lat, lon = float(lat), float(lon)
     n = len(towns.get("lat", ())) if towns else 0
@@ -118,6 +146,10 @@ def pick(towns, areas, lat, lon):
         tier = np.array([0 if c in CLASS_POP else 1 for c in klass], np.int8)
         ids = _text(towns.get("id"), n)
         ok = np.flatnonzero(score <= 1.0)
+        if len(ok) and borders is not None and len(borders):
+            across = _crossed(lat, lon, np.asarray(towns["lat"])[ok], np.asarray(towns["lon"])[ok], borders)
+            if not across.all():
+                ok = ok[~across]
         if len(ok):
             best = int(ok[np.lexsort((ids[ok], score[ok], tier[ok]))[0]])
         near = int(np.lexsort((ids, d))[0])
@@ -159,6 +191,28 @@ def pick(towns, areas, lat, lon):
                 out["country"] = _name(areas, int(rows[np.argsort(a_id[rows], kind="stable")[0]]), lang)
                 break
     return out
+
+
+def _segments_near(feats, key):
+    """The (n, 2, 2) lon/lat segments of the border lines (feats: division_boundaries) that come within
+    BORDER_MARGIN_DEG of the cell (whole lines only where they pass: a country's border crosses the continent)."""
+    if feats is None or not len(feats):
+        return np.zeros((0, 2, 2))
+    w, s, e, n = key.bounds()
+    m = BORDER_MARGIN_DEG
+    segs = []
+    for i in range(len(feats)):
+        for part in feats.parts(i):
+            for ring in part:
+                r = np.asarray(ring, np.float64)
+                if len(r) < 2:
+                    continue
+                a, b = r[:-1], r[1:]
+                keep = ((np.maximum(a[:, 0], b[:, 0]) >= w - m) & (np.minimum(a[:, 0], b[:, 0]) <= e + m)
+                        & (np.maximum(a[:, 1], b[:, 1]) >= s - m) & (np.minimum(a[:, 1], b[:, 1]) <= n + m))
+                if keep.any():
+                    segs.append(np.stack((a[keep], b[keep]), 1))
+    return np.concatenate(segs) if segs else np.zeros((0, 2, 2))
 
 
 def _concat(tables):
@@ -204,10 +258,55 @@ class PlaceNames:
         """{"place", "region", "country"} at (lat, lon) (pick()); the cells missing are fetched with kind (netfetch
         errors raised: asked again later)."""
         cells = [self.cell(k, kind) for k in cells_for(lat, lon)]
-        return pick(_concat([c[0] for c in cells]), _concat([c[1] for c in cells]), lat, lon)
+        borders = [c[2] for c in cells if c[2] is not None and len(c[2])]
+        return pick(_concat([c[0] for c in cells]), _concat([c[1] for c in cells]), lat, lon,
+                    np.concatenate(borders) if borders else None)
+
+    def labels(self, lat, lon, radius_m, limit=LABELS_MAX, fetch=False, kind="background"):
+        """The towns within radius_m of (lat, lon) for the 3D map's labels: [(name, lat, lon, class, population)],
+        the largest first (classed towns ahead of districts), at most limit; names as lookup()'s (the local language
+        where Overture has it). Only the cells on disk / in memory unless fetch (then the missing ones with kind;
+        netfetch errors raised). Cells at zoom_at(lat), the box clamped to LABELS_RADIUS_MAX_M."""
+        radius_m = max(1000.0, min(float(radius_m), LABELS_RADIUS_MAX_M))
+        out = []
+        for key in cells_for(lat, lon, radius_m):
+            if fetch:
+                cell = self.cell(key, kind)
+            else:
+                with self._lock:
+                    cell = self._mem.get(key)
+                if cell is None:
+                    cell = self._load(self.path(key))
+                    if cell is None:
+                        continue
+                    with self._lock:
+                        self._mem[key] = cell
+                        while len(self._mem) > MEM_CELLS:
+                            self._mem.popitem(last=False)
+            t = cell[0]
+            n = len(t["lat"])
+            if not n:
+                continue
+            d = _dist_km(lat, lon, t["lat"], t["lon"]) * 1000.0
+            for i in np.flatnonzero(d <= radius_m):
+                cls = str(t["class"][i])
+                if str(t["subtype"][i]) not in ("locality", "localadmin"):
+                    continue
+                name = _name(t, i, geocode.lang_for(str(t["country"][i])))
+                if name:
+                    out.append((name, float(t["lat"][i]), float(t["lon"][i]), cls, float(t["population"][i])))
+        rank = {"megacity": 0, "city": 1, "town": 2, "village": 3, "hamlet": 4}
+        out.sort(key=lambda r: (rank.get(r[3], 5), -r[4], r[0]))
+        seen, uniq = set(), []
+        for r in out:                       # (a town in two cells' boxes once)
+            k = (r[0], round(r[1], 3), round(r[2], 3))
+            if k not in seen:
+                seen.add(k)
+                uniq.append(r)
+        return uniq[:limit]
 
     def cell(self, key, kind="background"):
-        """(towns, areas) of one cell: memory, disk, or fetched and written."""
+        """(towns, areas, borders) of one cell: memory, disk, or fetched and written."""
         with self._lock:
             got = self._mem.get(key)
             if got is not None:
@@ -219,9 +318,9 @@ class PlaceNames:
             with self._fetch_lock:
                 got = self._load(path)
                 if got is None:
-                    towns, areas, prov = self._fetch(key, kind)
-                    self._store(path, towns, areas, prov)
-                    got = towns, areas
+                    towns, areas, borders, prov = self._fetch(key, kind)
+                    self._store(path, towns, areas, prov, borders)
+                    got = towns, areas, borders
         with self._lock:
             self._mem[key] = got
             while len(self._mem) > MEM_CELLS:
@@ -232,6 +331,8 @@ class PlaceNames:
         r = self.reader()
         towns, ts = r.query("divisions", key, kind)
         areas, as_ = r.query("division_areas", key, kind)
+        bounds, bs = r.query("division_boundaries", key, kind)
+        borders = _segments_near(bounds, key)
         t = {"lat": np.asarray(towns.attrs["cy"], np.float64), "lon": np.asarray(towns.attrs["cx"], np.float64),
              "population": np.asarray(towns.attrs.get("population", np.zeros(len(towns))), np.float32),
              "id": _text(towns.ids, len(towns))}
@@ -240,9 +341,10 @@ class PlaceNames:
         a = {c: np.asarray(areas.attrs.get(c, np.zeros(len(areas))), np.float64) for c in ("x0", "y0", "x1", "y1")}
         for c in AREA_COLS:
             a[c] = _text(areas.attrs.get(c), len(areas))
-        prov = [overture.sources_provenance("divisions", self.release, s) for s in (ts, as_) if s]
-        log.info("place names: cell %s: %d towns, %d areas", key, len(towns), len(areas))
-        return t, a, prov
+        prov = [overture.sources_provenance("divisions", self.release, s) for s in (ts, as_, bs) if s]
+        log.info("place names: cell %s: %d towns, %d areas, %d border segments", key, len(towns), len(areas),
+                 len(borders))
+        return t, a, borders, prov
 
     @staticmethod
     def _load(path):
@@ -256,12 +358,13 @@ class PlaceNames:
             return None
         towns = {k[2:]: v for k, v in arrays.items() if k.startswith("t_")}
         areas = {k[2:]: v for k, v in arrays.items() if k.startswith("a_")}
-        return towns, areas
+        return towns, areas, arrays.get("borders", np.zeros((0, 2, 2)))
 
     @staticmethod
-    def _store(path, towns, areas, prov):
+    def _store(path, towns, areas, prov, borders=None):
         arrays = {f"t_{k}": v for k, v in towns.items()}
         arrays.update({f"a_{k}": v for k, v in areas.items()})
+        arrays["borders"] = np.zeros((0, 2, 2)) if borders is None else np.asarray(borders, np.float64)
         arrays["provenance"] = np.array(json.dumps(prov, sort_keys=True))
         try:
             os.makedirs(os.path.dirname(path), exist_ok=True)

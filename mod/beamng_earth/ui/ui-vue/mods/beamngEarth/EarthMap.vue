@@ -53,11 +53,23 @@
           <polyline v-for="(p, i) in stateLines" :key="'s' + i" class="layer-state" :points="p" />
           <polyline v-for="(p, i) in borderLines" :key="'b' + i" class="layer-border" :points="p" />
         </g>
+        <!-- the Highways layer: US routes, then the Interstates over them; under the GPS route -->
+        <g v-if="hwShown" :transform="lineTransform" :class="{ 'hw-far': hwFar }">
+          <polyline v-for="(p, i) in usRouteLines" :key="'u' + i" class="hw-us" :points="p" />
+          <polyline v-for="(p, i) in interstateLines" :key="'ic' + i" class="hw-i-casing" :points="p" />
+          <polyline v-for="(p, i) in interstateLines" :key="'i' + i" class="hw-i" :points="p" />
+        </g>
         <polyline v-for="r in areaRoutes" :key="'rt' + r.id" class="area-route" :class="r.cls" :points="r.points"
                   :style="{ strokeWidth: r.px + 'px' }" />
         <polyline v-if="routeDone" class="route-done" :points="routeDone" />
         <polyline v-if="routeAhead" class="route-line-casing" :points="routeAhead" />
         <polyline v-if="routeAhead" class="route-line" :points="routeAhead" />
+        <!-- route shields on the highways (over the GPS route, so its roads can be read off it) -->
+        <g v-for="s in hwShields" :key="s.key" :transform="s.transform" class="hw-shield">
+          <path :d="s.body" :class="s.kind === 'I' ? 'shield-i' : 'shield-us'" />
+          <path v-if="s.top" :d="s.top" class="shield-i-top" />
+          <text :y="s.kind === 'I' ? 6.5 : 3.5" class="shield-num" :class="[s.kind === 'I' ? 'num-i' : 'num-us', { small: s.small }]">{{ s.name }}</text>
+        </g>
         <g v-for="g in grid" :key="g.key">
           <line :x1="g.x1" :y1="g.y1" :x2="g.x2" :y2="g.y2" :class="g.cls" />
           <text v-if="g.label" :x="g.lx" :y="g.ly" class="grid-label">{{ g.label }}</text>
@@ -132,7 +144,10 @@
             <span class="result-name">{{ r.saved ? "★ " : "" }}{{ r.name }}</span>
             <span class="result-coords">{{ r.detail || fmtLatLon(r.lat, r.lon) }}</span>
           </div>
-          <div class="search-credit">Search: Photon by komoot, © OpenStreetMap contributors</div>
+          <div v-if="moreFor" class="search-result search-more" @mousedown.stop @click="liveSearch(true)">
+            <span class="result-name">Search streets and addresses too (Enter)</span>
+          </div>
+          <div class="search-credit">Search: © OpenStreetMap contributors (Nominatim, Photon), Wikipedia, Wikidata</div>
         </div>
         <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
         <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
@@ -182,15 +197,24 @@
           <label class="layer-opt"><input type="checkbox" v-model="labelsOn" /> Roads &amp; labels</label>
           <label class="layer-opt"><input type="checkbox" v-model="layersOn" /> Borders &amp; places
             <span class="layer-hint">(world to city zoom)</span></label>
+          <label class="layer-opt" title="The US Interstates and US routes with their shields, while zoomed out (Natural Earth; closer in, Roads &amp; labels shows every road)">
+            <input type="checkbox" v-model="highwaysOn" /> Highways <span class="layer-hint">(US, zoomed out)</span></label>
           <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
                      :config="cacheSelectConfig" @valueChanged="v => (cacheMode = v)" />
         </div>
       </div>
+      <button v-if="!embedded" class="map-btn" @click="open3d" title="The 3D map (experimental): fly over the real world like a map app">3D map</button>
       <button v-if="!embedded" class="map-btn close" @click="close" title="Close (Esc / M)">Close</button>
     </div>
 
+    <!-- fast pre-cache running (server areas.py fast mode): the game paused meanwhile -->
+    <div v-if="fastArea" class="fast-banner" @mousedown.stop @wheel.stop>
+      <span>Fast pre-cache: <b>{{ fastArea.name }}</b> &middot; {{ areaStateText(fastArea) }} &middot; the game is paused</span>
+      <div class="area-bar"><span class="area-bar-fill running" :style="{ width: areaPct(fastArea) + '%' }"></span></div>
+      <button class="map-btn small" @click="areaCmd(fastArea, 'slow')" title="Go on in the background as before, and unpause the game">Stop fast</button>
+    </div>
     <!-- the cache view's legend (bumpers: the next view) -->
     <div v-if="cacheOn" class="cache-legend" @mousedown.stop @wheel.stop>
       <div class="cache-legend-title">Cache: {{ mm.CACHE_MODE_NAMES[cacheMode] }}</div>
@@ -299,6 +323,9 @@
       <label class="layer-opt area-world" title="Also build the roads, sidewalks, bridges, buildings and street furniture ahead of time, so arriving there loads them instead of building them (more disk space and time; rebuilt after a BeamNG.Earth update)">
         <input type="checkbox" :checked="areaWorld" :disabled="areaAsk.busy" @change="setAreaWorld($event.target.checked)" />
         Build the world too <span class="layer-hint">(roads and buildings ready when you arrive)</span></label>
+      <label class="layer-opt area-world" title="Pauses the game and gives the download and the building every CPU core until it is done (minutes instead of an hour; each map host's own limits still apply). The game goes on by itself when it ends, or press Stop fast.">
+        <input type="checkbox" v-model="areaFast" :disabled="areaAsk.busy" />
+        Fast <span class="layer-hint">(pause the game, use every CPU core)</span></label>
       <div v-if="areaAsk.error" class="confirm-warn">{{ areaAsk.error }}</div>
       <div class="confirm-btns">
         <button class="map-btn primary" :disabled="!areaAsk.plan || !areaAsk.plan.ok || areaAsk.busy" @click="confirmArea">Pre-cache{{ padMode ? " (X)" : "" }}</button>
@@ -364,6 +391,8 @@
             <div class="area-bar"><span class="area-bar-fill" :class="a.state" :style="{ width: areaPct(a) + '%' }"></span></div>
           </div>
           <div class="item-btns">
+            <button v-if="a.state !== 'done' && areas.fast !== a.id" class="map-btn small" @click="areaCmd(a, 'fast')"
+                    title="Pause the game and finish this one on every CPU core">Fast</button>
             <button v-if="a.state !== 'done'" class="map-btn small" @click="areaCmd(a, a.state === 'paused' ? 'resume' : 'pause')">
               {{ a.state === "paused" ? "Resume" : "Pause" }}</button>
             <button class="map-btn small" :class="{ danger: confirmAreaId === a.id }" @click="deleteArea(a)"
@@ -400,7 +429,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
+import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } from "vue"
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
@@ -415,7 +444,8 @@ const w = ref(1280), h = ref(720)
 const view = ref({ lat: 20, lon: 0, z: 3 })
 // what the view follows until the user pans: true the car, a player's pid (the Players list) that player, false nothing
 const follow = ref(true)
-const state = ref({ places: [], recent: [] })
+// (loading: no answer from Lua yet: no "not connected" notice for that, the first open showed one for its first poll)
+const state = ref({ places: [], recent: [], loading: true })
 const target = ref(null)              // { lat, lon, name } waiting for "Teleport here?"
 const teleportMsg = ref("")
 const busy = ref(false)
@@ -550,6 +580,7 @@ function onTileError(ev, t) {
 
 const notice = computed(() => {
   const s = state.value
+  if (s.loading) return ""
   if (s.missing) return "BeamNG.Earth is not loaded"
   if (!s.connected) return "Companion server not connected: map tiles unavailable (places and the grid still work)"
   if (!s.mapPort) return "Map tiles unavailable (the companion server is older or has --map-tiles off)"
@@ -670,6 +701,52 @@ const placeLabels = computed(() => {
   // no z < 15 cap (the user, 2026-10-22: zoomed in past it, every place's name should stay, not just vanish):
   // placeMinZoom's highest value is ~9.7 (scalerank 8, not a capital), so nothing new appears past z ~10 anyway
   return layersOn.value ? mm.visibleLabels(placePoints, v.lat, v.lon, v.z, w.value, h.value, { max: 80, norm: placeNorm }) : []
+})
+
+// ---- the Highways layer: the US Interstates and US routes with their shields (maphighways.js, Natural Earth) -----
+// Zoomed out, the satellite map shows no roads at all, so a GPS route could not be seen to follow an Interstate
+// (Tann2019, 2026-11-05). Drawn up to HW_MAX_Z (Natural Earth's 1:10m lines are ~a pixel off there; closer in, the
+// Roads & labels overlay has the real roads); the data (~1.2 MB) is only loaded once the layer is on.
+const HW_MAX_Z = 10.5, HW_I_MIN_Z = 3.5, HW_US_MIN_Z = 6
+const highwaysOn = ref(stored("beamngEarthMapHighways", "0") === "1")     // (off by default: Layers > Highways)
+watch(highwaysOn, on => store("beamngEarthMapHighways", on ? "1" : "0"))
+const hw = shallowRef(null)               // { interstates, iBoxes, iNorm, us, usBoxes, usNorm, shields, shieldNorm }
+let hwLoading = false
+function loadHighways() {
+  if (hw.value || hwLoading) return
+  hwLoading = true
+  import("./maphighways.js").then(m => {
+    const d = m.default
+    hw.value = { interstates: d.interstates, iBoxes: mm.lineBoxes(d.interstates), iNorm: mm.normLines(d.interstates),
+                 us: d.us, usBoxes: mm.lineBoxes(d.us), usNorm: mm.normLines(d.us),
+                 shields: d.shields, shieldNorm: mm.normPoints(d.shields) }
+  }).catch(e => console.error("BeamNG.Earth: the Highways layer failed to load", e))
+    .finally(() => { hwLoading = false })
+}
+watch(highwaysOn, on => { if (on) loadHighways() }, { immediate: true })
+const hwShown = computed(() => highwaysOn.value && !!hw.value && view.value.z <= HW_MAX_Z)
+const hwFar = computed(() => view.value.z < 6)      // thinner lines while the whole country is in view
+const interstateLines = computed(() => {
+  const a = lineAnchor.value, d = hw.value
+  return highwaysOn.value && d && a && a.z >= HW_I_MIN_Z && a.z <= HW_MAX_Z ? anchoredLines(d.interstates, d.iBoxes, d.iNorm) : []
+})
+const usRouteLines = computed(() => {
+  const a = lineAnchor.value, d = hw.value
+  return highwaysOn.value && d && a && a.z >= HW_US_MIN_Z && a.z <= HW_MAX_Z ? anchoredLines(d.us, d.usBoxes, d.usNorm) : []
+})
+const SHIELDS = { I2: mm.shieldPath("I", 2), I3: mm.shieldPath("I", 3), US2: mm.shieldPath("US", 2), US3: mm.shieldPath("US", 3) }
+const hwShields = computed(() => {
+  const v = view.value, d = hw.value
+  if (!hwShown.value) return []
+  // points [number, lon, lat, minZoom, kind]: kind comes back as `rank`
+  return mm.visibleLabels(d.shields, v.lat, v.lon, v.z, w.value, h.value,
+                          { maxZoom: HW_MAX_Z + 0.01, max: 90, charW: 7, lineH: 18, pad: 26, norm: d.shieldNorm })
+    .map(s => {
+      const p = SHIELDS[s.rank + (s.name.length >= 3 ? "3" : "2")]
+      return { key: s.rank + s.name + "@" + s.x.toFixed(0) + "," + s.y.toFixed(0), kind: s.rank, name: s.name,
+               body: p.body, top: p.top, small: s.name.length >= 3,
+               transform: `translate(${s.x.toFixed(1)},${s.y.toFixed(1)})` }
+    })
 })
 
 // the lat/lon grid: a step that gives lines ~120-300 px apart
@@ -1035,8 +1112,9 @@ const cacheEl = ref(null)
 const cacheOn = ref(stored("beamngEarth.map.cache", "0") === "1")
 const storedCacheMode = stored("beamngEarth.map.cacheMode", "summary")
 const cacheMode = ref(mm.CACHE_MODES.includes(storedCacheMode) ? storedCacheMode : "summary")
-watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"))
-watch(cacheMode, v => store("beamngEarth.map.cacheMode", v))
+// Persist before a same-tick map close disposes the component's queued watchers.
+watch(cacheOn, on => store("beamngEarth.map.cache", on ? "1" : "0"), { flush: "sync" })
+watch(cacheMode, v => store("beamngEarth.map.cacheMode", v), { flush: "sync" })
 const cacheModeOptions = mm.CACHE_MODES.map(v => ({ label: mm.CACHE_MODE_NAMES[v], value: v }))
 const cacheSelectConfig = { value: o => o.value, label: o => o.label }
 const cacheGrid = ref(null)               // { z, x0, y0, w, h, cells: Uint8Array, mode }
@@ -1245,6 +1323,13 @@ const ROUTE_WIDTHS = [
 const routeHalf = ref(805)
 // "Build the world too" (server areas.py mode "world"): the estimate asked again with it
 const areaWorld = ref(false)
+// the fast pre-cache (server areas.py fast mode: the game paused, every CPU core; Tann2019 2026-11-05), remembered
+const areaFast = ref(stored("beamngEarthAreaFast", "0") === "1")
+watch(areaFast, on => store("beamngEarthAreaFast", on ? "1" : "0"))
+const fastArea = computed(() => {
+  const id = areas.value && areas.value.fast
+  return id ? toArray(areas.value.areas).find(a => a.id === id) || null : null
+})
 const areaMode = () => (areaWorld.value ? "world" : "data")
 function setAreaWorld(on) {
   areaWorld.value = !!on
@@ -1314,8 +1399,8 @@ function confirmArea() {
   areaAsk.value = { ...a, busy: true }
   const b = a.box
   const call = a.route
-    ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
-    : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())})`
+    ? `beamngEarth_settings.uiRouteAdd and beamngEarth_settings.uiRouteAdd(${a.half}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
+    : `beamngEarth_settings.uiAreaAdd and beamngEarth_settings.uiAreaAdd(${b.s}, ${b.w}, ${b.n}, ${b.e}, ${luaStr(areaName.value)}, ${luaStr(areaMode())}, ${areaFast.value ? "true" : "false"})`
   engineLua(`beamngEarth_settings and ${call} or nil`, r => {
     if (!r || r.error) { areaAsk.value = { ...a, busy: false, error: (r && r.error) || "BeamNG.Earth is not loaded" }; return }
     let tries = 0
@@ -1325,7 +1410,8 @@ function confirmArea() {
         if (!res.ok) { areaAsk.value = { ...a, busy: false, error: String(res.error || "Not saved") }; return }
         cancelSelect()
         panelOpen.value = true
-        areaMsg.value = a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
+        areaMsg.value = areaFast.value ? "Fast pre-cache: the game is paused until it is done"
+          : a.route ? "Downloading along the route in the background" : "Downloading the area in the background"
         areaMsgError.value = false
         pollAreas()
       })
@@ -1369,7 +1455,7 @@ function areaStateText(a) {
     waiting: "waiting", done: "downloaded" }[a.state] || a.state
   return a.msg ? `${pct} · ${what}: ${a.msg}` : `${pct} · ${what}`
 }
-areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value) pollAreas() }, 2000)
+areaTimer = setInterval(() => { if (panelOpen.value || cacheOn.value || selecting.value || fastArea.value) pollAreas() }, 2000)
 pollAreas()
 onUnmounted(() => { clearInterval(areaTimer); clearTimeout(confirmAreaTimer); areaSeq++ })
 
@@ -1485,6 +1571,10 @@ function onContext(ev) {
 function closeCtx() { ctx.value = null }
 // picked from the right-click menu: straight away (a second "Teleport here?" with the same choices was one click too
 // many, the user 2026-10-14); a failure shows in the confirmation box
+// the 3D map instead (settings.uiOpen3d: remembered as the map key's style)
+// (a statement: without a callback the game runs the text as a chunk, where a bare "a and b() or nil" expression is a
+// syntax error, the "fatal Lua error" of the 3D map button, 2026-11-08)
+function open3d() { engineLua("if beamngEarth_settings and beamngEarth_settings.uiOpen3d then beamngEarth_settings.uiOpen3d() end") }
 function ctxTeleport() {
   if (!ctx.value || state.value.cannotGo) return
   const c = ctx.value
@@ -1654,11 +1744,15 @@ function goTo(lat, lon, name) {
   askTeleport(lat, lon, name)
 }
 
-// Search as you type: saved / recent places at once, and addresses and places from the server (geocode.py:
-// Photon, OpenStreetMap) 300 ms after the last key, 3+ characters; a typed "lat, lon" on Enter.
+// Search as you type: saved / recent places at once, and places from the server (geocode.py) 300 ms after the last key,
+// 3+ characters. Enter: the full search too (streets and house numbers: Nominatim, which may not be asked while typing),
+// unless the server is sure of the list's first line (not a street, no house number); Enter on that answer takes its first line. A "lat, lon" on Enter.
+const MAP_WAIT_TRIES = 100      // x 150 ms: longer than the server's own limit (geocode.py ENTER_DEADLINE_S)
 const searching = ref(false)
 const resultIndex = ref(-1)
 let searchTimer = null, searchSeq = 0
+let fullText = ""               // the text the full search (Enter) last answered
+const moreFor = ref("")         // the text the list offers the full search for
 const LATLON_RE = /^[-+]?\d+(\.\d+)?[°\s]*[NSns]?\s*[,;\s]\s*[-+]?\d+(\.\d+)?/
 
 function typing(on) { engineLua(`if setCEFTyping then setCEFTyping(${on ? "true" : "false"}) end`) }
@@ -1667,16 +1761,18 @@ function localHits(text) {
   return mm.searchPlaces(allPlaces(), text).slice(0, 3).map(r => ({ ...r, saved: true }))
 }
 
-function liveSearch() {
+function liveSearch(full = false) {
   const text = query.value.trim()
   searchMsg.value = ""
   resultIndex.value = -1
+  fullText = ""
+  moreFor.value = ""
   const seq = ++searchSeq
   const local = text ? localHits(text) : []
-  results.value = local
+  if (!full) results.value = local
   if (text.length < 3 || LATLON_RE.test(text)) { searching.value = false; return }
   searching.value = true
-  engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}) or nil`, r => {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocode(${luaStr(text)}, ${full ? "true" : "false"}) or nil`, r => {
     if (seq !== searchSeq) return
     if (!r || r.error || !r.id) { searching.value = false; if (r && r.error && !local.length) searchMsg.value = r.error; return }
     let tries = 0
@@ -1685,14 +1781,20 @@ function liveSearch() {
       engineLua(`beamngEarth_settings and beamngEarth_settings.uiGeocodeResult(${r.id}) or nil`, res => {
         if (seq !== searchSeq) return
         if (!res) {
-          if (++tries < 40) setTimeout(poll, 150)
+          if (++tries < MAP_WAIT_TRIES) setTimeout(poll, 150)
           else { searching.value = false; if (!local.length) searchMsg.value = "No answer from the address search" }
           return
         }
         searching.value = false
         const online = toArray(res.results)
         results.value = [...local, ...online]
-        if (!results.value.length) searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)") : "Nothing found"
+        if (full) fullText = text
+        if (!results.value.length) {
+          searchMsg.value = res.error ? (res.text || "Address search unavailable (offline?)")
+            : full ? "Nothing found" : "Nothing yet: press Enter to search streets and addresses too"
+        } else if (!full && !results.value[0].sure) {
+          moreFor.value = text      // (a line in the list: a message under it would lie behind it)
+        }
       })
     }
     setTimeout(poll, 150)
@@ -1709,7 +1811,18 @@ function moveResult(d) {
 function onSearch() {
   const text = query.value.trim()
   if (!text) { results.value = []; return }
-  if (results.value.length) { pickResult(results.value[Math.max(0, resultIndex.value)]); return }
+  if (results.value.length && (resultIndex.value >= 0 || fullText === text || results.value[0].sure)) {
+    pickResult(results.value[Math.max(0, resultIndex.value)])
+    return
+  }
+  if (text.length >= 3 && !LATLON_RE.test(text) && fullText !== text) {
+    clearTimeout(searchTimer)
+    engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
+      if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")      // a map link
+      else liveSearch(true)
+    })
+    return
+  }
   // a typed latitude, longitude (places.lua parses every format the page accepts)
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapParse(${luaStr(text)}) or nil`, r => {
     if (r && typeof r.lat === "number") goTo(r.lat, r.lon, "")
@@ -1904,6 +2017,12 @@ const fmtLatLon = mm.fmtLatLon
   background: rgba(15, 18, 22, 0.88); border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 5px; cursor: default;
 }
 .cache-legend-title { font-weight: 600; margin-bottom: 4px; }
+.fast-banner {
+  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%); z-index: 12; display: flex; align-items: center;
+  gap: 10px; padding: 8px 12px; color: #fff; font-size: 13px; background: rgba(15, 18, 22, 0.92);
+  border: 1px solid rgba(54, 163, 255, 0.6); border-radius: 5px;
+}
+.fast-banner .area-bar { width: 160px; }
 .cache-legend-row { display: flex; align-items: center; gap: 6px; padding: 1px 0; white-space: nowrap; }
 .cache-swatch { width: 12px; height: 12px; border-radius: 2px; border: 1px solid rgba(255, 255, 255, 0.35); flex-shrink: 0; }
 .cache-legend-hint { margin-top: 3px; font-size: 11px; color: #9aa4ae; }
@@ -1919,6 +2038,21 @@ const fmtLatLon = mm.fmtLatLon
 /* layers (Natural Earth): borders with a dark casing so they read over any photo; names with a halo */
 .map-grid .layer-border { fill: none; stroke: rgba(255, 236, 170, 0.85); stroke-width: 1.6; stroke-dasharray: 6 3; }
 .map-grid .layer-state { fill: none; stroke: rgba(255, 255, 255, 0.45); stroke-width: 1; stroke-dasharray: 3 3; }
+/* the Highways layer: Interstates orange on a dark casing (apart from the blue GPS route and the dashed borders),
+   US routes thinner and pale; shields in the real signs' colours */
+.map-grid .hw-i-casing, .map-grid .hw-i, .map-grid .hw-us { fill: none; stroke-linejoin: round; stroke-linecap: round; }
+.map-grid .hw-i-casing { stroke: rgba(25, 18, 10, 0.75); stroke-width: 5; }
+.map-grid .hw-i { stroke: #ff8a3d; stroke-width: 2.8; }
+.map-grid .hw-us { stroke: rgba(255, 244, 214, 0.85); stroke-width: 1.5; }
+.map-grid .hw-far .hw-i-casing { stroke-width: 3.6; }
+.map-grid .hw-far .hw-i { stroke-width: 1.8; }
+.map-grid .shield-i { fill: #1d4f9e; stroke: #fff; stroke-width: 1.4; }
+.map-grid .shield-i-top { fill: #c8202f; }
+.map-grid .shield-us { fill: #fff; stroke: #111; stroke-width: 1.3; }
+.map-grid .shield-num { font-size: 10px; font-weight: 700; text-anchor: middle; font-family: Arial, Helvetica, sans-serif; }
+.map-grid .shield-num.small { font-size: 8.5px; }
+.map-grid .num-i { fill: #fff; }
+.map-grid .num-us { fill: #111; }
 .map-grid .layer-country { fill: #fff3d0; font-size: 15px; font-weight: 600; letter-spacing: 0.08em; text-anchor: middle;
   text-transform: uppercase; paint-order: stroke; stroke: rgba(0, 0, 0, 0.7); stroke-width: 3px; }
 .map-grid .layer-place { fill: #fff; font-size: 12px; paint-order: stroke; stroke: rgba(0, 0, 0, 0.75); stroke-width: 3px; }
@@ -2040,6 +2174,7 @@ const fmtLatLon = mm.fmtLatLon
 .item-btns { display: flex; gap: 4px; flex-shrink: 0; }
 .panel-empty { padding: 6px 4px; font-size: 12px; color: #9aa4ae; }
 .search-result.active { background: rgba(224, 118, 28, 0.6); }
+.search-more .result-name { color: #ff9a3c; }
 .search-credit { padding: 4px 10px; font-size: 10px; color: #8a949e; border-top: 1px solid rgba(255, 255, 255, 0.08); }
 
 .ctx-menu {

@@ -378,6 +378,8 @@ fn vert(b: &[u8], at: usize, k: usize) -> [f32; 3] {
 /// (0, 0, 0, 0) without vertices.
 #[pyfunction]
 pub fn cdae_zstats(data: &[u8]) -> PyResult<(usize, f64, f64, f64)> {
+    let plain = crate::cdaez::plain(data).map_err(PyValueError::new_err)?;     // (a compressed shape: cdaez.rs)
+    let data: &[u8] = &plain;
     let blocks = vert_blocks(data).map_err(PyValueError::new_err)?;
     let mut zs: Vec<f64> = Vec::new();
     for (at, n) in blocks {
@@ -401,6 +403,9 @@ pub fn cdae_zstats(data: &[u8]) -> PyResult<(usize, f64, f64, f64)> {
 #[pyfunction]
 pub fn cdae_shear<'py>(py: Python<'py>, data: &[u8], oz: f64, sx: f64, sy: f64, sz: f64, pz: f64)
                        -> PyResult<Bound<'py, PyBytes>> {
+    let was_packed = crate::cdaez::is_packed(data).map_err(PyValueError::new_err)?;
+    let plain = crate::cdaez::plain(data).map_err(PyValueError::new_err)?;     // (a compressed shape: cdaez.rs)
+    let data: &[u8] = &plain;
     let blocks = vert_blocks(data).map_err(PyValueError::new_err)?;
     let mut out = data.to_vec();
     for (at, n) in blocks {
@@ -413,6 +418,9 @@ pub fn cdae_shear<'py>(py: Python<'py>, data: &[u8], oz: f64, sx: f64, sy: f64, 
                 out[o + 4 * j..o + 4 * j + 4].copy_from_slice(&w[j].to_le_bytes());
             }
         }
+    }
+    if was_packed {         // (written as it came)
+        out = crate::cdaez::packed(&out, crate::cdaez::LEVEL).map_err(PyValueError::new_err)?;
     }
     Ok(PyBytes::new(py, &out))
 }

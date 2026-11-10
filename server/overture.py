@@ -18,7 +18,9 @@ their position), connectors (transportation/connector), buildings (buildings/bui
 min_height, floors, roof and facade fields, class), water and land_use (base: subtype, class,
 tags), infrastructure (base: power lines and plants, towers, barriers, bridges...), places (points of interest),
 divisions and division_areas (the status bar's towns, states and countries, placenames.py: a spec with "geometry":
-False reads no geometry column, its features are points at their bbox centres; "where" filters the rows). Rows are
+False reads no geometry column, its features are points at their bbox centres; "where" filters the rows),
+town_areas and town_points (the same theme's areas with their outlines and its villages: the town signs,
+townsigns.py; a layer's `simplify` thins the counties' outlines). Rows are
 deduplicated by id (highest version) and sorted by id, so a cell's content does not depend on
 which file or row group a feature came from, or in which order they were read. Water and land-use
 polygons are clipped to the cell (an ocean or a national park would otherwise repeat its whole
@@ -48,9 +50,15 @@ log = logging.getLogger("earthd.mapdata")
 # The pinned Overture release (update path: docs/ARCHITECTURE.md "Map data"; `mapdata.py --latest`
 # prints the newest one). Overture removes old releases from the buckets after some months: a
 # pinned release that is gone raises ReleaseGone for cells not cached yet.
-RELEASE = "2026-09-23.1"
+RELEASE = "2026-10-21.0"
 STAC_ROOT = "https://stac.overturemaps.org"
-DUCKDB_THREADS = 2              # DuckDB worker threads per query (the server is niced; the game comes first)
+# DuckDB worker threads per query (the server is niced; the game comes first). One: the server runs many queries side
+# by side on its few cores, where a query's second thread only cost CPU (a fresh place's 60 road cells on one core:
+# 7.0 -> 4.8 CPU-s, 2026-11-04). BNGE_DUCKDB_THREADS=2: as before
+DUCKDB_THREADS = int(os.environ.get("BNGE_DUCKDB_THREADS", "1") or 1)
+# Reader._run's dedup by id (highest version) only where an id repeats (_number_rows). BNGE_OVERTURE_DEDUP_ALWAYS=1:
+# always, as before
+DEDUP_IF_REPEATED = os.environ.get("BNGE_OVERTURE_DEDUP_ALWAYS", "0") == "0"
 REMOTE_FILES = 32               # open RemoteFiles kept (their blocks share rangeread's memory LRU)
 # DuckDB's own prefetching reads whole row groups one after the other; Reader._plan fetches what the
 # query needs in parallel first, so DuckDB reads lazily from the block cache
@@ -94,6 +102,10 @@ THEME_LICENCES = {
               "Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data "
               "was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. "
               "Available under CC0 1.0.",
+    # (read 2026-10-28)
+    "divisions": "ODbL. © OpenStreetMap contributors. Available under the Open Database License. geoBoundaries. "
+                 "Available under CC BY 4.0. Esri Community Maps contributors. Available under CC BY 4.0. Land "
+                 "Information New Zealand (LINZ). Available under CC BY 4.0.",
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
@@ -106,6 +118,28 @@ _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 DIVISION_LANGS = ("en", "de", "fr", "it")
+# the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
+# Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
+# language code)
+# (lb: Luxembourg's second line; dsb, hsb, frr: Lower and Upper Sorbian, North Frisian, Germany's; fur, sc: Friulian
+# and Sardinian, Italy's; fy: West Frisian, Friesland's; cy, gd: Welsh and Scottish Gaelic, Great Britain's; ga: Irish)
+REGIONAL_LANGS = ("ca", "oc", "eu", "br", "co", "gsw", "vls", "lb", "dsb", "hsb", "frr", "fur", "sc", "fy", "cy", "gd",
+                  "ga")
+# ... and the Latin forms of a Cyrillic or Greek name the signs write under it (townsigns.latin_name): Serbian's own
+# (sr-Latn: Beograd, not the English Belgrade), and the name's first alternate of no language (Sofia, Skopje, Štip,
+# Thessaloniki), as columns name_srlatn and name_alt
+_REGIONAL = ", ".join([f"map_extract(names.common, '{k}')[1] AS name_{k}" for k in REGIONAL_LANGS]
+                      + ["map_extract(names.common, 'sr-Latn')[1] AS name_srlatn",
+                         "list_filter(names.rules, r -> r.variant = 'alternate' AND r.language IS NULL)[1].value "
+                         "AS name_alt", "map_extract(names.common, 'en')[1] AS name_en"])
+# (name_en: a small place's English name is its transliteration, Kalabaka: when it has no alternate, Kalambaka
+# 2026-10-30)
+LATIN_COLS = ("name_srlatn", "name_alt", "name_en")
+# the countries whose communes are Overture counties or localadmins (Luxembourg, Portugal, Denmark, Estonia,
+# Lithuania, Romania, Bulgaria, Greece, Norway, Iceland, Albania, Kosovo, Belarus' cities; Switzerland's, Czechia's
+# and Slovakia's municipalities): their outlines are not simplified (a `simplify` layer's `whole`), they are where the
+# signs stand
+COUNTY_COMMUNES = ("LU", "PT", "CH", "CZ", "SK", "DK", "EE", "LT", "RO", "BG", "GR", "NO", "IS", "AL", "XK", "BY")
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
                   cols=f"subtype, class, subclass, {_NAME}, {_SRC_OWN}",
@@ -172,6 +206,11 @@ LAYERS = {
                       text=("subtype", "class", "country", "region", "name")
                            + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                       float=("population",)),
+    # ... and the countries' borders as lines (placenames.pick: a town across one is not the place, Windsor ON read
+    # "Detroit, Michigan"; Discord 2026-11-04), clipped to the cell by placenames
+    "division_boundaries": dict(theme="divisions", type="division_boundary", clip=False,
+                                cols=f"subtype, class, {_SRC}", where="subtype = 'country'",
+                                text=("subtype", "class", "src_dataset", "src_record")),
     "division_areas": dict(theme="divisions", type="division_area", clip=False, geometry=False,
                            cols=f"subtype, country, region, division_id, {_NAME}, "
                                 + ", ".join(f"names.common['{lang}'] AS name_{lang}" for lang in DIVISION_LANGS)
@@ -180,7 +219,65 @@ LAYERS = {
                            text=("subtype", "country", "region", "division_id", "name")
                                 + tuple(f"name_{lang}" for lang in DIVISION_LANGS) + ("src_dataset", "src_record"),
                            float=("x0", "y0", "x1", "y1")),
+    # the route numbers of the roads (direction signs, dirsigns.py): transportation/segment's `routes` (a road's route
+    # memberships: national / regional numbers, the European E-roads) flattened to one text column "network|ref|from|to;..."
+    # (from, to: the share of the segment a membership covers). Its own layer, joined to `roads` by id, so the roads
+    # layer (and every player's cached roads) is untouched. `where`: only the segments of the roads a sign names.
+    "road_routes": dict(theme="transportation", type="segment", clip=False,
+                        cols="subtype, class, array_to_string(list_transform(list_filter(routes, r -> r.ref IS NOT NULL), "
+                             "r -> lower(coalesce(r.network, '')) || '|' || r.ref || '|' || "
+                             "CAST(coalesce(r.\"between\"[1], 0.0) AS VARCHAR) || '|' || "
+                             "CAST(coalesce(r.\"between\"[2], 1.0) AS VARCHAR)), ';') AS routes_txt",
+                        text=("subtype", "class", "routes_txt"),
+                        where="subtype = 'road' AND class IN ('motorway', 'trunk', 'primary', 'secondary', 'tertiary') "
+                              "AND routes_txt <> ''"),
+    # the communes (France: OpenStreetMap's admin_level 8, Overture's `locality`; a `localadmin` there is an
+    # arrondissement, measured around Alès 2026-10-28) for the town entry signs (townsigns.py), with their names in
+    # the regional languages their signs may add (REGIONAL_LANGS), and the counties and localadmins around them (a
+    # French département, an arrondissement: which language a commune's signs add, townsigns.REGIONAL). `where`:
+    # only those rows, since a cell's bbox test also matches every country and region whose bbox covers it (France's
+    # outline alone is 75,000 vertices, the United States' 136,000 through their overseas territories). Whole, not
+    # clipped: a sign stands where a road crosses the real boundary, not a cell's edge; `simplify`: a county's or
+    # localadmin's rings to SIMPLIFY_DEG (Finistère's outline is 121,000 vertices, in every cell of the département;
+    # only which one a commune lies in is asked of them)
+    "town_areas": dict(theme="divisions", type="division_area", clip=False,
+                      cols=f"subtype, class, {_NAME}, {_REGIONAL}, country, region, division_id, {_SRC}",
+                      text=("subtype", "class", "name") + tuple(f"name_{k}" for k in REGIONAL_LANGS) + LATIN_COLS
+                           + ("country", "region", "division_id", "src_dataset", "src_record"),
+                      # (Slovenia's 212 občine, Latvia's novadi, Montenegro's opštine, Andorra's parishes,
+                      # Liechtenstein's Gemeinden, San Marino's castelli, Ireland's counties, Cyprus' districts and
+                      # Monaco, the islands' parishes, Puerto Rico's municipios, Libya's, Djibouti's, the
+                      # Seychelles' and Mayotte's districts, Bahrain's governorates and the Emirates are their
+                      # regions:
+                      # townsigns.VILLAGE_COUNTRIES)
+                      where="(subtype IN ('locality', 'county', 'localadmin') OR (subtype = 'region' AND country IN "
+                            "('SI', 'LV', 'ME', 'AD', 'LI', 'SM', 'IE', 'CY', 'MC', 'JM', 'PR', 'BS', 'TT', "
+                            "'BB', 'LC', 'VC', 'GD', 'DM', 'AG', 'KN', 'LY', 'DJ', 'SC', 'YT', 'BH', 'AE', 'BT', "
+                            "'MV', 'KP', 'SB', 'WS', 'GU', 'VN', 'IM', 'JE', 'GL', 'BM', 'KY', 'VG', 'TC', "
+                            "'PW', 'CX', 'MS', 'WF', 'MH')) OR (subtype IN ('country', 'dependency') AND country IN "
+                            "('AI', 'BQ', 'NF', 'GI', 'PN'))) AND class = 'land'",
+                      simplify=("subtype", ("county", "localadmin")), whole=COUNTY_COMMUNES),
+    # the villages (Overture divisions' `locality` points) for the town signs of the countries whose signs name a
+    # village within a commune (townsigns.VILLAGE_COUNTRIES: Luxembourg's 100 communes are Overture counties, its 682
+    # villages points only, 2026-10-29)
+    # (localities: the region, county and localities above and including the point in its first hierarchy,
+    # "subtype:id=name|...", outermost first: which town a German village is part of)
+    "town_points": dict(theme="divisions", type="division", clip=False,
+                            cols=f"subtype, {_NAME}, {_REGIONAL}, country, {_SRC}, "
+                                 "array_to_string(list_transform(list_filter(hierarchies[1], h -> h.subtype IN "
+                                 "('region', 'county', 'locality')), h -> h.subtype || ':' || h.division_id || '=' "
+                                 "|| h.name), '|') AS localities",
+                            text=("subtype", "name") + tuple(f"name_{k}" for k in REGIONAL_LANGS) + LATIN_COLS
+                                 + ("country", "src_dataset", "src_record", "localities"),
+                            where="subtype = 'locality'"),
+    # the 3D map's district names, as map apps write them close in ("FELLS POINT", "CANTON"; maplabels.hood_labels):
+    # the neighbourhoods' and macrohoods' points
+    "hoods": dict(theme="divisions", type="division", clip=False,
+                  cols=f"subtype, class, {_NAME}, country, {_SRC}",
+                  text=("subtype", "class", "name", "country", "src_dataset", "src_record"),
+                  where="subtype IN ('neighborhood', 'macrohood')"),
 }
+SIMPLIFY_DEG = 0.002            # degrees (~200 m): a `simplify` layer's tolerance
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344
@@ -316,6 +413,23 @@ def _wkb(spec):
 def _q(path):
     """A path in a DuckDB string literal."""
     return str(path).replace("'", "''")
+
+
+def _number_rows(con, dedup_if_repeated=None):
+    """Temp table t from s (Reader._run): one row per id (its highest version), numbered fi in id order. The window
+    dedup only where an id repeats (DEDUP_IF_REPEATED): none did in a fresh place's 60 road cells, and the window was
+    ~3/4 of the statement's ~33 ms a cell (2026-11-04). Without repeats both give the same rows."""
+    if dedup_if_repeated is None:
+        dedup_if_repeated = DEDUP_IF_REPEATED
+    dedup = not dedup_if_repeated or con.execute("SELECT count(*) > count(DISTINCT id) FROM s").fetchone()[0]
+    if not dedup:
+        con.execute("""CREATE TEMP TABLE t AS
+            SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * EXCLUDE (version) FROM s""")
+    else:
+        con.execute("""CREATE TEMP TABLE t AS
+            SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
+              SELECT * EXCLUDE (version) FROM s
+              QUALIFY row_number() OVER (PARTITION BY id ORDER BY version DESC, wkb) = 1)""")
 
 
 class Reader:
@@ -680,10 +794,7 @@ class Reader:
                          (bbox.xmin + bbox.xmax) / 2 AS cx, (bbox.ymin + bbox.ymax) / 2 AS cy,
                          sources{extra}
                   FROM {src} WHERE ({only}) AND {bbox}{where}""")
-        con.execute("""CREATE TEMP TABLE t AS
-            SELECT row_number() OVER (ORDER BY id) - 1 AS fi, * FROM (
-              SELECT * EXCLUDE (version) FROM s
-              QUALIFY row_number() OVER (PARTITION BY id ORDER BY version DESC, wkb) = 1)""")
+        _number_rows(con)
         names = ["id", "wkb", "cx", "cy"] + [c for k in ("text", "float", "bool") for c in spec.get(k, ())]
         rows = con.execute(f"SELECT {', '.join(names)} FROM t ORDER BY fi").fetchall()
         at = {c: i for i, c in enumerate(names)}
@@ -704,6 +815,12 @@ class Reader:
             keep = np.array(keep, bool)
         else:
             keep = np.ones(len(rows), bool)
+        if spec.get("simplify"):
+            col, values = spec["simplify"]
+            whole = spec.get("whole", ())
+            for i, r in enumerate(rows):
+                if r[at[col]] in values and geoms[i][0] == mg.POLYGON and r[at["country"]] not in whole:
+                    geoms[i] = (mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
         feats = mg.build(layer, ids[keep], [g for g, k in zip(geoms, keep) if k])
         feats.clipped = clipped[keep]
         fmap = np.cumsum(keep) - 1          # old feature index -> new (rows dropped by clipping: unused)
@@ -768,6 +885,36 @@ class Reader:
             ORDER BY fi, k""").fetchall()
         feats.rules["connectors"] = mg.rule_table(
             [(int(fmap[fi]), cid, [a, a]) for fi, cid, a in rows if keep[fi]], "text")
+        rows = con.execute("""SELECT fi, unnest(sources) AS s, generate_subscripts(sources, 1) AS k FROM t
+            ORDER BY fi, k""").fetchall()
+        by_feature = {}
+        for fi, s, _k in rows:
+            if keep[fi]:
+                by_feature.setdefault(int(fmap[fi]), []).append(s)
+        record, multi = list(feats.attrs["src_record"].tolist()), []
+        for f in sorted(by_feature):
+            ways = way_sources(by_feature[f])
+            if ways:
+                record[f] = max(ways, key=lambda w: _span(w[1]))[0]     # (the first of equals)
+            if len(ways) > 1:
+                multi += [(f, r, b) for r, b in ways]
+        feats.attrs["src_record"] = mg.text_column(record)
+        feats.rules["src_ways"] = mg.rule_table(multi, "text")
+
+
+def _span(between):
+    return 1.0 if not between else float(between[1]) - float(between[0])
+
+
+def way_sources(sources):
+    """[(record, between)] of the OpenStreetMap ways a road segment was made from, along it. A segment on a numbered
+    road lists the route's relation first (property "/routes", record "r67531@98": 130 of 155 main-road segments around
+    Sweden's väg 41, 351 of 1800 in Stockholm, 1820 of 3640 in Newark, Overture 2026-09-23.1, read 2026-11-01), and
+    Overture merges the ways between two junctions into one segment, each with its "between" (a fifth of main-road
+    segments have 2-14), so sources[1] alone is often no way at all. A relation's source carries a property: only the
+    feature's own (no property) count."""
+    return [(s["record_id"], s.get("between")) for s in sources or ()
+            if str(s.get("record_id") or "").startswith("w") and not s.get("property")]
 
 
 def empty(layer):
@@ -790,6 +937,7 @@ def empty(layer):
         f.rules["max_speed_kmh"] = mg.rule_table([], "float")
         f.rules["connectors"] = mg.rule_table([], "text")
         f.rules["oneway"] = mg.rule_table([], "float")
+        f.rules["src_ways"] = mg.rule_table([], "text")
     return f
 
 

@@ -233,7 +233,7 @@ def _access_chunks(walks, paved, green, carriageways):
         if not any(roads._seg_dist_min(walk, p) <= hw + spec.width / 2 + .5
                    for walk, hw in walks for p in access[:-1, :2]):
             continue
-        for run in roads.cut_outside(access, through, .5, min_piece_m=1.):
+        for run in roads.cut_outside(access, through, .5, min_piece=1.):
             chunks.append(roads._chunk(roads.look_of(spec, fid), spec.width, run))
     return chunks
 

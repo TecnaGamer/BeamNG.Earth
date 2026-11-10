@@ -236,5 +236,25 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(self.s.matslots.stats()["owned"], 0)
 
 
+
+class PackedReslotTest(unittest.TestCase):
+    """A compressed shape (cdae.PACKED) renamed by reslot: unpacked, its name restamped, packed again (the name lives
+    in the zstd body: 'material name not renewed' for every tile before, the gate's drives 2026-11-04)."""
+
+    def test_packed_shape_renamed(self):
+        import numpy as np
+        import cdae
+        P = np.array([[0, 0, 0], [10, 0, 0], [0, 10, 1]], float)
+        old = "bngEarthFar_edc9_00007"
+        data = cdae.encode(P, np.array([[0, 1, 2]]), uvs=np.zeros((3, 2)), material=old)
+        self.assertTrue(cdae.is_packed(data))
+        self.assertNotIn(old.encode(), data)
+        flat = cdae.plain(data)
+        new = old[:-5] + "00042"
+        again = cdae.pack(matslots.restamp(flat, old, new))
+        self.assertTrue(cdae.is_packed(again))
+        self.assertIn(new.encode(), cdae.plain(again))
+        self.assertNotIn(old.encode(), cdae.plain(again))
+
 if __name__ == "__main__":
     unittest.main()

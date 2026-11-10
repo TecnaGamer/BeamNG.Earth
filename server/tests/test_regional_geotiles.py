@@ -1,4 +1,6 @@
 """Regional furniture through the 1.7.2 retained-content, prebuild and native sidewalk paths."""
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import json
 import pickle
 import sys
@@ -140,7 +142,7 @@ class RegionalGeoTest(unittest.TestCase):
                 buildings=True, gas_stations=False, near_visual='off',
                 geo_rules=lambda gx, gy: (False, False, 0., None, 'FR', 15),
                 keep_fuel_pads=lambda pads: None, imagery=None, layout=None, tone=1.,
-                road_widths=None, sea=None)
+                road_widths=None, sea=None, fast_pool=None)
             expected = Server.geo_content_key(server, self.gx, self.gy)
             self.assertEqual(Server.prebuild_geo(server, self.gx, self.gy), expected)
             with patch.object(bw, '_tile_parts', side_effect=AssertionError('must reuse prebuild')):

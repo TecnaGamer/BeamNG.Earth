@@ -19,11 +19,12 @@ import mergesigns
 import roadmesh
 import roads
 import signstates
+import dirsigns
 import speedsigns
 import staging
 
 log = logging.getLogger('earthd.signs')
-KINDS = ('exits', 'mileposts', 'merges', 'speeds')
+KINDS = ('exits', 'mileposts', 'merges', 'speeds', 'dirs')
 WORKERS = 1                     # sign tiles in flight per connection (Tracker): a road tile waits behind one at most
 WORLD = os.environ.get("BNE_SIGNS_WORLD") == "1"
 
@@ -32,7 +33,7 @@ def shape_files(aid, tx, ty):
     return {kind: f'{kind}_{aid}_{tx}_{ty}.cdae' for kind in KINDS}
 
 
-def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
+def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes, dirs_faces=None):
     x, y, _, _ = roads.tile_bbox(tx, ty)
     data = {'v': roads.VERSION, 'chunks': []}
     for kind, mesh in zip(KINDS, meshes):
@@ -41,6 +42,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
         name = shape_files(aid, tx, ty)[kind]
         roadmesh.write(os.path.join(out_dir, name), mesh)
         data[kind] = {'shape': f'{vfs_dir}/{name}', 'pos': [x, y, 0.]}
+    if dirs_faces:                  # the direction boards' pictures: the mod makes their Materials first (dirsigns.lua)
+        data['dirs_faces'] = dirs_faces
     # An empty replacement is intentional: it retires signs from an older index.
     name = f'signs_{aid}_{tx}_{ty}.json'
     path = os.path.join(out_dir, name)
@@ -48,11 +51,11 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, meshes):
     with open(tmp, 'w', encoding='utf-8') as f:
         f.write(json.dumps(data, separators=(',', ':')))
     staging.replace(tmp, path)
-    return f'{vfs_dir}/{name}', len(data) - 2
+    return f'{vfs_dir}/{name}', sum(1 for kind in KINDS if kind in data)
 
 
 def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, widths=None,
-               left_hand=False, mph=True, country=None):
+               left_hand=False, mph=True, country=None, dirs=False):
     source = getattr(md, 'highway_signs', None)
     if source is None:
         return None
@@ -72,20 +75,22 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                 pts = np.column_stack(frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.))
                 decks.append({'deck': True, 'n': pts, 'w': spec.width})
     speeds = _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, speedsigns.style(country, us))
+    dir_mesh, dir_faces = _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir)         if dirs else (None, {})
     import euguardrails
-    french=False
+    french = False
     if euguardrails.enabled():
         import countrybounds
         # The anchor may be across the border: select the tile, then filter
         # every French assembly at its actual position in highwaysigns.
-        samples=[frame.enu_to_geodetic(x,y,0.) for x,y in
-                 ((x0,y0),(x0,y1),(x1,y0),(x1,y1),((x0+x1)/2,(y0+y1)/2))]
-        french=any(countrybounds.bundled().at(float(la),float(lo))=='FR'for la,lo,_ in samples)
+        samples = [frame.enu_to_geodetic(x, y, 0.) for x, y in
+                   ((x0, y0), (x0, y1), (x1, y0), (x1, y1), ((x0 + x1) / 2, (y0 + y1) / 2))]
+        french = 'FR' in countrybounds.bundled().codes_at([(la, lo) for la, lo, _ in samples])
     if not (WORLD or us or french):
-        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds))     # (not the US: no guide signs)
-    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths,french=french)
+        # (not the US: no guide signs)
+        return write_tile(out_dir, vfs_dir, aid, tx, ty, (None, None, None, speeds, dir_mesh), dir_faces)
+    exits, miles = highwaysigns.build_tile(md, frame, tx, ty, elev, decks, left_hand, mph, urban, widths, french=french)
     merges = None if french else mergesigns.build_tile(frame, tx, ty, [feats], elev, decks, urban, widths, left_hand, context)
-    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds))
+    return write_tile(out_dir, vfs_dir, aid, tx, ty, (exits, miles, merges, speeds, dir_mesh), dir_faces)
 
 
 _warned = -float('inf')
@@ -102,6 +107,23 @@ def _speeds(frame, tx, ty, elev, context, decks, left_hand, mph, face):
             _warned = now
             log.warning('Speed-limit signs unavailable; roads continue: %s: %s', type(error).__name__, error)
         return None
+
+
+def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir):
+    """dirsigns.build_tile: (mesh, faces) or (None, {}): optional scenery never stops the other signs."""
+    global _warned_dirs
+    try:
+        return dirsigns.build_tile(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_dirs >= 60.:
+            _warned_dirs = now
+            log.warning('Direction signs unavailable; roads continue: %s: %s', type(error).__name__, error,
+                        exc_info=True)
+        return None, {}
+
+
+_warned_dirs = -float('inf')
 
 
 class Tracker:
@@ -145,6 +167,10 @@ class Tracker:
             self.stale.clear()
             self.retry.clear()
         self.wanted = set(ready)
+        # Readiness gates the first build, not the lifetime of visible signs.
+        # A road retry/refresh temporarily loses readiness; keep its signs until
+        # the player leaves, with the same unloading margin as the roads.
+        self.wanted.update(k for k in self.sent if roads.tile_distance(*k, x, y) <= roads.DROP_M)
         for key in self.sent - self.wanted:
             conn.send({'type': 'roads_drop', 'anchorId': aid, 'key': f's{key[0]}_{key[1]}'})
         self.sent.intersection_update(self.wanted)

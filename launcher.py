@@ -28,6 +28,7 @@ terminal when started from a file manager (else it logs to ~/.cache/beamng-earth
 import argparse
 import multiprocessing
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -49,11 +50,15 @@ GCPATCH_NAME = "libbngearth_gcpatch.so"
 RECOMMENDED = ["--deshadow", "full", "--near-visual", "detail", "--airports", "on", "--sea", "on", "--trees", "on",
                "--buildings", "on", "--gas-stations", "on"]
 SERVER_PORT = 47613         # earthd's default
-GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game)
-WINDOWS_GAME_GONE_S = 3     # Windows has no Steam container restart gap; allow prompt relaunch
+GAME_GONE_S = 30            # no game process this long: the game closed (wait_for_game) ...
+GAME_RESTART_WINDOW_S = 120  # ... while it starts (Steam's container restarts it then); after that GAME_CLOSED_S:
+GAME_CLOSED_S = 5           # the launcher sat 30 s after the player closed the game (the user, 2026-11-04)
+WINDOWS_GAME_GONE_S = 8     # Windows has no Steam container restart gap; prompt, but a few queries long (a player's
+                            # launcher closed with the game still running, 2026-11-05: see game_pids)
 GAME_START_S = 180          # waiting for the game's process after asking Steam
 SERVER_START_S = 120        # imports/startup must finish before the game is launched
 PROCESS_QUERY_S = 3         # a stuck process query must not hang the launcher
+GAME_QUERY_S = 10           # tasklist for the game: slow on a loaded machine (the game and the server on 6 cores)
 DIRECT_FAIL_S = 20          # a direct start that ends this soon did not work (no Steam client): through Steam
 
 
@@ -154,6 +159,9 @@ def cache_dir_arg(given, dd=None):
         if given.strip().lower() in ("", "default"):
             save_app_settings(dd, cacheDir=None)
             return None
+        bad = apppaths.drive_relative_problem(given)
+        if bad:                         # (GitHub #895: not the current folder in silence)
+            raise OSError(bad)
         path = os.path.abspath(os.path.expanduser(given.strip().strip('"')))
         os.makedirs(path, exist_ok=True)
         save_app_settings(dd, cacheDir=path)
@@ -235,11 +243,40 @@ def run_server(argv):
     earthd.main()
 
 
+def run_addon(argv):
+    """--run-addon FILE ARGS: a companion add-on's Python file run with this app's own Python (addonrun.py: the packaged
+    app has no other), ended when the server that started it ends (BNGEARTH_PARENT: watch_parent)."""
+    watch_parent()
+    import runpy
+    script = argv[0]
+    sys.argv = [script] + list(argv[1:])
+    sys.path.insert(0, os.path.dirname(os.path.abspath(script)))
+    runpy.run_path(script, run_name="__main__")
+
+
+def telemetry_on():
+    """Anonymous usage reports (server/telemetry.py): on for players unless BNE_TELEMETRY=off; never under CI or a test
+    run (the first night's 'players' were mostly the release workflow's Windows test servers: each a new install)."""
+    if os.environ.get("CI") or "unittest" in sys.modules:
+        return False
+    return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
+    if telemetry_on() and "--offline" not in extra:
+        cmd += ["--telemetry", "on"]
     env = dict(os.environ)
     env["BNGEARTH_PARENT"] = str(os.getpid())      # the server ends when this launcher does (watch_parent)
+    if sys.platform.startswith("linux"):    # (gamescope's WSI layer aborted the server's GPU kernels: earthd.main)
+        env.setdefault("DISABLE_GAMESCOPE_WSI", "1")
+    try:            # (the game's own files: an add-on mod replacing one needs a restart, addonrun.mod_code)
+        gd = game_install_dir()
+        if gd:
+            env["BNGEARTH_GAME_DIR"] = str(gd)
+    except Exception:
+        pass
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
@@ -256,6 +293,7 @@ def start_server(user_dir, extra, log_path, game_running=None):
     # its full log to a file; the console shows only its warnings and errors (echo_server_log): the INFO lines
     # buried the launcher's own (the user, 2026-10-17: 'easier to read')
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+    keep_previous_log(log_path)
     with open(log_path, "w", encoding="utf-8") as out:
         kw.update(stdout=out, stderr=subprocess.STDOUT)
         proc = subprocess.Popen(cmd, **kw)
@@ -285,6 +323,21 @@ def echo_lines(lines, state):
     return out
 
 
+def keep_previous_log(path, keep=2):
+    """The last runs' logs as server.log.1 .. .<keep> (GitHub #687: a crashed session's log, with Python's fatal error
+    dump, was overwritten by the next start before the player could attach it)."""
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) == 0:
+            return
+        for i in range(keep, 1, -1):
+            older = f"{path}.{i - 1}"
+            if os.path.isfile(older):
+                os.replace(older, f"{path}.{i}")
+        os.replace(path, path + ".1")
+    except OSError:
+        pass                    # (still open somewhere on Windows: overwritten as before)
+
+
 def echo_server_log(path, proc):
     state = {}
     try:
@@ -311,6 +364,47 @@ def server_port_busy(port=SERVER_PORT):
         return False
 
 
+def _startup_tail(log_path):
+    """A bounded, complete-line tail: startup failures can produce very large tracebacks/logs."""
+    try:
+        with open(log_path, "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            start = max(0, stream.tell() - 65536)
+            stream.seek(start)
+            tail = stream.read(65536)
+        return tail.partition(b"\n")[2] if start else tail
+    except OSError:
+        return b""
+
+
+def _startup_phase(tail):
+    phase = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " INFO earthd: startup: " in line:
+            phase = line.split(" INFO earthd: startup: ", 1)[1][:180]
+    return phase
+
+
+def server_start_diagnostic(proc, log_path):
+    """Describe exit versus deadline and the last known step/error, without dumping the whole log."""
+    import re
+    tail = _startup_tail(log_path)
+    code = proc.poll()
+    text = (f"The companion stopped before it was ready (exit code {code})." if code is not None else
+            "The companion is still running but did not become ready before the startup deadline.")
+    phase = _startup_phase(tail)
+    if phase:
+        text += " Last startup step: " + phase + "."
+    error = None
+    for line in tail.decode("utf-8", errors="replace").splitlines():
+        if " ERROR " in line or " CRITICAL " in line or re.match(r"^[\w.]+(?:Error|Exception):", line):
+            error = line.split(": ", 1)[-1] if " ERROR " in line or " CRITICAL " in line else line
+    if error:
+        error = re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", error)[:400]
+        text += " Last error: " + error
+    return text
+
+
 def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """Read the owned child's post-bind marker from its freshly truncated startup log.
 
@@ -319,17 +413,16 @@ def wait_server_ready(proc, log_path, port=SERVER_PORT, timeout=SERVER_START_S):
     """
     marker = b"earthd listening on 127.0.0.1:"
     deadline = time.monotonic() + timeout
+    last_phase = None
     while time.monotonic() < deadline:
         if proc.poll() is not None:
             return False
         try:
-            with open(log_path, "rb") as log:
-                log.seek(0, os.SEEK_END)
-                start = max(0, log.tell() - 65536)
-                log.seek(start)
-                tail = log.read(65536)
-            if start:
-                tail = tail.partition(b"\n")[2]  # discard a potentially partial first line
+            tail = _startup_tail(log_path)
+            phase = _startup_phase(tail)
+            if phase and phase != last_phase:
+                row("World server", phase)
+                last_phase = phase
             for line in tail.splitlines():
                 if not line.startswith(marker):
                     continue
@@ -365,6 +458,25 @@ def stop_server(proc):
 
 
 # --- the game -------------------------------------------------------------------------------------
+
+def game_install_dir():
+    """The game's install folder (its shaders/, BinLinux/ ...), or None: the chosen one, Windows' registry / Steam
+    libraries, else the Steam libraries' BeamNG.drive (the Linux build or the Windows one under Proton)."""
+    import install
+    own = apppaths.saved_game_dir()
+    if own:
+        return own
+    if os.name == "nt":
+        try:
+            return windows_game_dir()
+        except Exception:
+            return None
+    for lib in install._steam_roots():
+        d = os.path.join(lib, "steamapps", "common", "BeamNG.drive")
+        if os.path.isdir(os.path.join(d, "shaders")):
+            return d
+    return None
+
 
 def linux_game_exe():
     import install
@@ -404,16 +516,21 @@ def windows_game_main_pids(pids):
 
 
 def game_pids():
-    """The game's main processes (not its CEF helpers)."""
+    """The game's main processes (not its CEF helpers); None when Windows could not be asked (unknown)."""
     if IS_WIN:
         # bytes, decoded leniently: on a non-English Windows tasklist's "no tasks" message is in the console's code
         # page (German "ü" = 0x81 in cp850), which text=True's cp1252 could not decode (a player's report,
         # 2026-10-17: the launcher stopped with UnicodeDecodeError and r.stdout None)
+        # (None, not []: a query that failed or ran out of time does not say the game is gone. A player's launcher,
+        # 1.8.1 on a French Windows 11, i5-8600K: it closed and stopped the world server a few minutes in with the
+        # game still running, the next start the same; one slow tasklist under load was "no game" for the 3 s grace)
         try:
             r = subprocess.run(["tasklist", "/FI", f"IMAGENAME eq {GAME_EXE_WIN}", "/FO", "CSV", "/NH"],
-                               capture_output=True, timeout=PROCESS_QUERY_S)
+                               capture_output=True, timeout=GAME_QUERY_S)
         except (OSError, subprocess.TimeoutExpired):
-            return []
+            return None
+        if r.returncode != 0:
+            return None
         text = (r.stdout or b"").decode("utf-8", errors="replace")
         out = []
         for line in text.splitlines():
@@ -468,7 +585,30 @@ def game_connected():
 
 
 def game_alive():
-    return bool(game_pids()) or game_connected()
+    """True / False, or None when it could not be told (a process query that failed: not "gone")."""
+    pids = game_pids()
+    if pids is None:
+        return True if game_connected() else None
+    return bool(pids) or game_connected()
+
+
+GAME_CLOSING_S = 8.0            # game_still_running: a game seen at the start is watched this long for closing
+
+
+def game_still_running(alive=None, wait_s=GAME_CLOSING_S, step_s=1.5, sleep=time.sleep):
+    """A game running when the launcher starts, still running a moment later: one that was closing (the app
+    started again right after the game was closed) is not "already running" (the launcher then waited for a game
+    that never came, telling the player to start it from Steam; seen 2026-11-05)."""
+    alive = alive or game_alive
+    if not alive():
+        return False
+    waited = 0.0
+    while waited < wait_s:
+        sleep(step_s)
+        waited += step_s
+        if not alive():
+            return False
+    return True
 
 
 def steam_running():
@@ -585,13 +725,24 @@ def _ini(path):
     """key = value lines of an ini file (BeamNG's own, with a BOM)."""
     out = {}
     try:
-        with open(path, encoding="utf-8-sig", errors="replace") as f:
-            for line in f:
-                if "=" in line and not line.lstrip().startswith((";", "#", "[")):
-                    k, v = line.split("=", 1)
-                    out[k.strip()] = os.path.expandvars(v.strip())
+        with open(path, "rb") as f:
+            raw = f.read()
     except OSError:
-        pass
+        return out
+    # UTF-8, else the Windows ANSI code page (a user folder named in it, "C:\Users\Mikołaj\..." in cp1250, read with
+    # errors="replace" named a folder that did not exist: GitHub #770)
+    for enc in ("utf-8-sig", "mbcs", "cp1252"):
+        try:
+            text = raw.decode(enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        text = raw.decode("utf-8", errors="replace")
+    for line in text.splitlines():
+        if "=" in line and not line.lstrip().startswith((";", "#", "[")):
+            k, v = line.split("=", 1)
+            out[k.strip()] = os.path.expandvars(v.strip())
     return out
 
 
@@ -798,6 +949,20 @@ def steam_launch_options(roots=None):
     return "" if seen else None
 
 
+def steam_user_path(line):
+    """The version folder of a -userpath in Steam's launch options line (quoted or not), or None: -userpath names the
+    folder the game puts its version folder in ("current"; a folder without one as it is)."""
+    import re
+    m = re.search(r'(?:^|\s)-userpath\s+(?:"([^"]+)"|(\S+))', line or "")
+    if not m:
+        return None
+    p = apppaths.clean(m.group(1) or m.group(2))
+    if not p or not os.path.isdir(p):
+        return None
+    cur = os.path.join(p, "current")
+    return cur if os.path.isdir(cur) else p
+
+
 def split_launch_options(line):
     """(env, wrapper, options) of Steam's launch options line: NAME=VALUE tokens before %command% are variables for
     the game's environment, other tokens before it are a command that wraps it (gamemoderun, mangohud), the tokens
@@ -909,7 +1074,8 @@ def start_game(use_gcpatch, build="native", gfx="", user_dir=None, steam_args=({
 # A game update turns every mod off (core_modmanager.getModsDisabledAfterUpdate: "Mods will be disabled after updating
 # from version ...") until the player turns them back on in the main menu; without that BeamNG.Earth is just not there
 # (BeamNG 0.40, 2026-10-19). The game's log is read while it starts and the player told what to do.
-MODS_OFF_LINE = "Mods will be disabled after updating"
+MODS_OFF_LINES = ("Mods will be disabled after updating",       # (the first start after the update)
+                  "Mods disabled by setting disableModsAfterUpdate")  # (each start while the setting is on)
 GAME_LOG_WATCH_S = 600       # s after the game's start the log is watched
 
 
@@ -932,10 +1098,11 @@ def watch_game_log(user_dir, since):
                     pos += len(data)
             except OSError:
                 continue
-            if MODS_OFF_LINE.encode() in data:
+            if any(line.encode() in data for line in MODS_OFF_LINES):
                 problem("BeamNG.drive was updated and turned all mods off, BeamNG.Earth too.",
                         "In the game's main menu, choose to enable your mods again (or Mods > Manage, turn "
-                        "BeamNG.Earth on), then pick Freeroam > BeamNG.Earth. The world server keeps running.")
+                        "BeamNG.Earth on), then pick Freeroam > BeamNG.Earth. The world server keeps running; "
+                        "from the next start BeamNG.Earth turns them back on itself.")
                 return
 
     threading.Thread(target=run, name="watch-game-log", daemon=True).start()
@@ -959,20 +1126,29 @@ def wait_for_game(proc, server=None):
     deadline = time.monotonic() + GAME_START_S
     grace = WINDOWS_GAME_GONE_S if IS_WIN else GAME_GONE_S
     started, dialog_seen, said = False, False, False
-    gone_since = dialog_closed_since = None
+    gone_since = dialog_closed_since = first_seen = None
     while True:
         if server is not None and server.poll() is not None:
             say("The world server stopped. See its log for details; restart BeamNG.Earth to reconnect.")
             return False
         now = time.monotonic()
         direct_alive = proc is not None and proc.poll() is None
-        if game_alive() or (not IS_WIN and direct_alive):
+        alive = game_alive()
+        if alive is None:               # (could not be told: neither seen nor gone, the clocks keep their state)
+            time.sleep(1 if IS_WIN else 3)
+            continue
+        if alive or (not IS_WIN and direct_alive):
             started = True
             gone_since = None
+            if first_seen is None:
+                first_seen = now
         elif started:
+            # (the long grace only while the game starts: Steam's container restarts it then; a game that ran a
+            # while and is gone was closed)
+            wait = grace if IS_WIN or now - first_seen < GAME_RESTART_WINDOW_S else min(grace, GAME_CLOSED_S)
             if gone_since is None:
                 gone_since = now
-            elif now - gone_since >= grace:
+            elif now - gone_since >= wait:
                 return True
         elif game_launcher_running() or (IS_WIN and direct_alive):
             # Never time out an open BeamNG launch dialog. Once the game has been seen, its bootstrap
@@ -1029,6 +1205,61 @@ def open_terminal():
     return False
 
 
+LOG_KEEP_BYTES = 512 * 1024     # launcher.log: the last starts kept (a start appends; trimmed at the next start)
+
+
+class _Tee:
+    """sys.stdout / stderr written to the console and to the log file too (attributes otherwise the console's)."""
+
+    def __init__(self, stream, log):
+        self._stream, self._log = stream, log
+
+    def write(self, text):
+        try:
+            self._log.write(text)
+            self._log.flush()
+        except (OSError, ValueError):
+            pass
+        return self._stream.write(text) if self._stream is not None else len(text)
+
+    def flush(self):
+        if self._stream is not None:
+            self._stream.flush()
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
+def tee_log(dd=None, windows=None):
+    """Windows: what the launcher prints also goes to <data dir>/logs/launcher.log (appended per start, the last
+    LOG_KEEP_BYTES kept), so a window that closed at once still leaves a log to send (a player's .exe opened "for a
+    split second then closes", Discord 2026-11-05). Linux without a terminal logs there already (main). The log
+    file's path, or None."""
+    if not (IS_WIN if windows is None else windows):
+        return None
+    try:
+        path = os.path.join(dd or data_dir(), "logs", "launcher.log")
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        try:
+            if os.path.getsize(path) > LOG_KEEP_BYTES:
+                with open(path, "rb") as f:
+                    f.seek(-LOG_KEEP_BYTES // 2, os.SEEK_END)
+                    tail = f.read()
+                with open(path, "wb") as f:
+                    f.write(tail)
+        except OSError:
+            pass
+        log = open(path, "a", encoding="utf-8", errors="replace")
+        import datetime
+        log.write(f"\n===== {datetime.datetime.now().isoformat(timespec='seconds')} {sys.executable} "
+                  f"{' '.join(sys.argv[1:])}\n")
+        log.flush()
+        sys.stdout, sys.stderr = _Tee(sys.stdout, log), _Tee(sys.stderr, log)
+        return path
+    except Exception:           # never a reason not to start
+        return None
+
+
 def windows_console():
     """Windows: a console window of our own when there is none (Wine / Proton started us without one)."""
     try:
@@ -1037,7 +1268,11 @@ def windows_console():
         if not k32.GetConsoleWindow():
             k32.FreeConsole()
             if k32.AllocConsole():
-                sys.stdout = sys.stderr = open("CONOUT$", "w", buffering=1, encoding="utf-8", errors="replace")
+                con = open("CONOUT$", "w", buffering=1, encoding="utf-8", errors="replace")
+                if isinstance(sys.stdout, _Tee):        # (tee_log: the log goes on)
+                    sys.stdout._stream = sys.stderr._stream = con
+                else:
+                    sys.stdout = sys.stderr = con
                 sys.stdin = open("CONIN$", "r", encoding="utf-8", errors="replace")
         k32.SetConsoleTitleW("BeamNG.Earth")
     except (OSError, AttributeError):
@@ -1161,6 +1396,11 @@ def linux_build(force=None):
 
 def user_folder():
     import install
+    # (first the folder the game itself said it uses, when it ever differed from ours: the world server saves it,
+    # apppaths.set_user_dir; GitHub #770: the game's user folder elsewhere, our files written where it never looked)
+    told = apppaths.saved_user_dir()
+    if told and os.path.isdir(os.path.join(told, "mods")):
+        return told
     if IS_WIN:
         uf = windows_beamng_ini().get("userFolder")       # a user folder moved in the game's launcher
         if uf and os.path.isdir(uf):
@@ -1192,14 +1432,140 @@ def hand_over():
         return False
     if not new:
         return False
-    env = {k: v for k, v in os.environ.items() if k not in ("APPDIR", "APPIMAGE", "ARGV0", "OWD")}
-    try:
-        subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
-                         **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if IS_WIN else {"start_new_session": True}))
-    except OSError:
-        return False
+    env = clean_env()                   # (the new copy without this one's AppImage variables and library path)
     print(f"Starting the updated BeamNG.Earth: {os.path.basename(new)}", flush=True)
-    return True
+    try:
+        proc = subprocess.Popen([new] + sys.argv[1:], env=env, cwd=os.path.dirname(new),
+                                **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if IS_WIN
+                                   else {"start_new_session": True}))
+    except OSError as e:
+        code = str(e)
+    else:
+        # (a new copy that dies at once, blocked or removed by an antivirus, or a damaged download, made every start
+        # of this one flash a window and close: "the .exe opens for a split second then closes", Discord 2026-11-05)
+        try:
+            code = proc.wait(timeout=HANDOVER_CHECK_S)
+        except subprocess.TimeoutExpired:
+            return True
+        if code == 0:
+            return True
+    sac = smart_app_control_on() or "4551" in str(code)
+    if sac:
+        problem(f"Windows Smart App Control blocked the updated BeamNG.Earth ({os.path.basename(new)}).",
+                "It only runs apps from a verified publisher, and BeamNG.Earth is not code-signed yet (it is "
+                "planned). This version keeps working, and that version will not be offered again.")
+    else:
+        problem(f"The updated BeamNG.Earth ({os.path.basename(new)}) closed right after starting ({code}).",
+                "Starting this version instead. An antivirus may have blocked it: the in-game Update now (Settings, "
+                "About) downloads it again.")
+    try:
+        selfupdate.drop_staged(blocked_by="smart_app_control" if sac else None)
+    except Exception:
+        pass
+    return False
+
+
+def smart_app_control_on():
+    """Is Windows 11's Smart App Control enforcing (it blocks unsigned apps without a "run anyway"; GitHub #823)?
+    HKLM\\SYSTEM\\CurrentControlSet\\Control\\CI\\Policy VerifiedAndReputablePolicyState: 0 off, 1 on, 2 evaluation."""
+    if not IS_WIN:
+        return False
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, r"SYSTEM\CurrentControlSet\Control\CI\Policy") as k:
+            return int(winreg.QueryValueEx(k, "VerifiedAndReputablePolicyState")[0]) == 1
+    except (OSError, ValueError):
+        return False
+
+
+HANDOVER_CHECK_S = 5.0          # hand_over: the new copy must still run this long after its start (else: this one)
+UPDATE_TITLE = "BeamNG.Earth update"
+
+
+def update_popup(text, run=None, which=None, windows=None):
+    """A pop-up the player sees before the game starts (yes / no): True, False, or None when none could be shown
+    (then the question goes to the console window). Windows: the system's message box, in front of everything;
+    Linux: zenity or kdialog when installed."""
+    windows = IS_WIN if windows is None else windows
+    if windows:
+        try:
+            import ctypes
+            # MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND | MB_TOPMOST; IDYES = 6
+            return ctypes.windll.user32.MessageBoxW(None, text, UPDATE_TITLE, 0x4 | 0x20 | 0x10000 | 0x40000) == 6
+        except Exception:
+            return None
+    which, run = which or shutil.which, run or subprocess.run
+    for cmd in (["zenity", "--question", "--title", UPDATE_TITLE, "--text", text, "--no-wrap"],
+                ["kdialog", "--title", UPDATE_TITLE, "--yesno", text]):
+        if not which(cmd[0]):
+            continue
+        try:
+            # (clean_env: under the AppImage's own library path kdialog could not load its Qt libraries and exited 1,
+            # read as "No": the update was never offered on KDE desktops, 2026-11-07)
+            r = run(cmd, timeout=600, env=clean_env(), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        err = r.stderr.decode("utf-8", "replace") if isinstance(r.stderr, bytes) else str(r.stderr or "")
+        if POPUP_BROKEN.search(err):
+            continue                    # (the tool did not start: not an answer)
+        if r.returncode in (0, 1):
+            return r.returncode == 0
+    return None
+
+
+# a pop-up tool that failed to load (the dynamic loader's own messages), not the player's "No"
+POPUP_BROKEN = re.compile(r"error while loading shared libraries|symbol lookup error|version `[^']*' not found")
+
+
+def update_at_start(args, ask=input, popup=update_popup, packaged=None, check=None, download=None, start=None):
+    """Before the game starts: when GitHub has a newer BeamNG.Earth, ask in a pop-up (update_popup; the console window
+    when no pop-up can be shown) whether to install it now; yes downloads it beside this file (selfupdate.download,
+    the same as the in-game "Update now") and starts it instead. True when the new copy was started. Offline, up to
+    date, a source copy, --no-update-check or nowhere to ask: False and nothing asked."""
+    packaged = (FROZEN or bool(os.environ.get("APPIMAGE"))) if packaged is None else packaged
+    if getattr(args, "no_update_check", False) or not packaged:
+        return False
+    try:
+        sys.path.insert(0, os.path.join(ROOT, "server"))
+        import install
+        import netfetch
+        import selfupdate
+        import updates
+        net = netfetch.default_fetcher()
+        current = install.version()
+        got = (check or updates.check)(current, net)
+    except Exception:                   # never a reason not to start
+        return False
+    if not got:
+        return False
+    row("Update", f"BeamNG.Earth {got['latest']} is out (you have {got['current']})")
+    yes = popup(f"BeamNG.Earth {got['latest']} is out (you have {got['current']}).\n\n"
+                "Install it now, before the game starts?\n\n"
+                "Yes downloads it and starts the new version.\nNo starts this version.")
+    if yes is None:
+        if not (sys.stdin and sys.stdin.isatty()):
+            return False
+        try:
+            yes = ask("Install it now, before the game starts? [Y/n] ").strip().lower() in ("", "y", "yes")
+        except (EOFError, OSError, KeyboardInterrupt):
+            return False
+    if not yes:
+        say("Starting this version. (The game offers the update too: Settings, About.)")
+        return False
+
+    def progress(done, total):
+        if total:
+            _out(f"\r  Downloading... {done * 100 // total}% ({done >> 20} of {total >> 20} MB)")
+
+    try:
+        version, _ = (download or selfupdate.download)(net, current, None, progress)
+    except Exception as e:              # selfupdate.UpdateError or anything else: this version starts
+        say()
+        problem(f"The update could not be downloaded: {e}", "Starting this version instead.")
+        return False
+    say()
+    row("Update", f"BeamNG.Earth {version} downloaded")
+    return (start or hand_over)()
 
 
 def beammp_wait_seconds(value):
@@ -1214,6 +1580,11 @@ def beammp_wait_seconds(value):
 
 
 def main():
+    if len(sys.argv) > 2 and sys.argv[1] == "--run-addon":     # (before tee_log: its output is its own run.log)
+        ensure_ca_certs()
+        run_addon(sys.argv[2:])
+        return
+    tee_log()
     ensure_ca_certs()
     if len(sys.argv) > 1 and sys.argv[1] == "--world-cache":
         from tools import world_cache
@@ -1254,6 +1625,8 @@ def main():
                          "integrated one), discrete forces that, off never steers; a GPU variable you or Steam's "
                          "launch options already set wins")
     ap.add_argument("--no-terminal", action="store_true", help="Linux: no terminal window (log to a file)")
+    ap.add_argument("--no-update-check", action="store_true",
+                    help="do not ask GitHub for a newer BeamNG.Earth before the game starts")
     ap.add_argument("extra", nargs=argparse.REMAINDER, help="after --: more options for the server")
     args = ap.parse_args()
     if IS_WIN:
@@ -1436,6 +1809,8 @@ def run(args):
     import install
     title(f"BeamNG.Earth {install.version()}")
     support_notice()
+    if update_at_start(args):           # the new copy runs now (in its own window)
+        return
     wine = under_wine()
     build = "native"
     if args.user_dir:
@@ -1446,6 +1821,14 @@ def run(args):
     else:
         user_dir = user_folder()
     tool = steam_compat_tool() if not IS_WIN and not args.user_dir else None
+    if not args.user_dir and build != "proton":
+        # the player's own -userpath in Steam's launch options: the game uses that folder whatever we pass, so the
+        # mod and the world's files go there too (GitHub #770; Discord 2026-11-05: "the fix was removing the custom
+        # launch option from steam")
+        own = steam_user_path(steam_launch_options())
+        if own and not apppaths.same_dir(own, user_dir):
+            row("Game folder", f"{own}  (your Steam launch options' -userpath)")
+            user_dir = own
     steam_args = ({}, [], [])
     if not IS_WIN:
         line = steam_launch_options()
@@ -1460,16 +1843,26 @@ def run(args):
             row("GPU", gpu_note)
     row("Game folder", user_dir + ("  (the Windows build, Proton)" if build == "proton" else "")
         + (f"  (Steam compatibility tool: {tool})" if tool else ""))       # (which was read: GitHub #56)
-    running = game_alive()
+    running = game_still_running()
     if not running:
         install.clear_reload_files(user_dir)
     reload_game = False
     if not args.keep_mod:
-        status = install.install_mod(user_dir, True, dry_run=False, quiet=True)
+        status = install.install_mod(user_dir, True, dry_run=False, quiet=True, game_running=running)
         # the game read its mod list without this copy: its Lua is reloaded once the server runs (install.py)
         reload_game = running and status in ("updated", "installed", "enabled")
         row("Mod", {"current": "up to date", "enabled": "turned back on", "updated": "updated",
                     "installed": "installed", "kept": "kept the installed copy"}.get(status, status or ""))
+        # the sky's haze from above the atmosphere (the 3D map from orbit; skypatch.py): from the game's own shader
+        try:
+            import skypatch
+            sky = skypatch.apply(game_install_dir(), os.path.join(user_dir, "mods", "unpacked", install.MOD_NAME),
+                                 os.path.join(apppaths.data_dir(), "skypatch"), user_dir)
+            if sky == "patched":
+                row("Sky", "the view from orbit fixed (two lines of the game's sky shader; original kept; the game "
+                           "builds its shaders again once)")
+        except Exception as e:      # (never in the way of a start)
+            row("Sky", f"not patched ({type(e).__name__}: {e})")
     if getattr(args, "game_dir", None):
         if args.game_dir.strip().strip('"').lower() == "default":
             apppaths.set_game_dir("default")
@@ -1506,9 +1899,11 @@ def run(args):
     try:
         row("World server", "starting")
         row("Server log", log_path)
+        row("Telemetry", "anonymous, no location: as chosen on the game's welcome page, nothing before that "
+            "(BNE_TELEMETRY=off turns it off)" if telemetry_on() else "off")
         if not wait_server_ready(server, log_path, port):
             problem("the world server did not start listening; the game was not started.",
-                    f"See {log_path} for the startup error, then try again.")
+                    server_start_diagnostic(server, log_path) + f"\nFull startup log: {log_path}")
             raise SystemExit(1)
         row("World server", "running")
         try:

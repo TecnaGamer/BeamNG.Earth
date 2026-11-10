@@ -15,6 +15,7 @@ from PIL import Image
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import bc7  # noqa: E402
 import earthd  # noqa: E402
+EXT = earthd.terraincache.PHOTO_EXT  # noqa: E305 (the base photos: .jpg, terraincache.stored_photo)
 import terraincache  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
@@ -86,7 +87,7 @@ class DetailServerTest(ServerHarness):
         self.assertEqual((tr["cx"], tr["cy"]), (128.0, -128.0))
         self.assertEqual(tr["baseSize"], 512 * 2.0)
         path = self.fs(tr["base"])
-        self.assertTrue(path.endswith("_base.png") and os.path.exists(path))
+        self.assertTrue(path.endswith("_base" + EXT) and os.path.exists(path))
         im = Image.open(path)
         self.assertEqual((im.size, im.mode), ((earthd.BASE_PX, earthd.BASE_PX), "RGB"))
         self.assertGreater(np.asarray(im).std(), 5.0, "a real photo, not a flat fill")
@@ -149,7 +150,7 @@ class DetailBaseRefreshTest(ServerHarness):
         m, _ = c.until(lambda m: m["type"] == "block_base", timeout=30)
         self.assertEqual((m["anchorId"], m["cx"], m["cy"], m["baseSize"]), (aid, 0.0, 0.0, 512 * 2.0))
         path = self.fs(m["base"])
-        self.assertTrue(path.endswith("_base_r1.png") and os.path.exists(path))
+        self.assertTrue(path.endswith("_base_r1" + EXT) and os.path.exists(path))
         self.assertEqual(self.server.hm[key]["base"], os.path.basename(path))
         self.assertNotEqual(os.path.basename(path), first)
         self.assertTrue(os.path.exists(os.path.join(self.tmp.name, "temp", "art", "terrainmaterialcache",
@@ -224,21 +225,21 @@ class DetailFastPhotoLaterTest(ServerHarness):
         """Slower than FAST_BASE_V a block waits BASE_WAIT_S at most for its photo (it held the blocks behind it), then
         goes with its stand-in."""
         aid, tr = self._slow_block(20.0, fast=False, photo_s=earthd.BASE_WAIT_S + 3, held_s=earthd.BASE_WAIT_S + 2)
-        self.assertTrue(tr.get("base", "").endswith("_base_q.png"), "sent with its stand-in")
+        self.assertTrue(tr.get("base", "").endswith("_base_q" + EXT), "sent with its stand-in")
         self._own_photo_follows(aid)
 
     def _own_photo_follows(self, aid):
         s = self.server
-        m, _ = self.c.until(lambda m: m["type"] == "block_base" and not m["base"].endswith("_base_q.png"), timeout=30)
+        m, _ = self.c.until(lambda m: m["type"] == "block_base" and not m["base"].endswith("_base_q" + EXT), timeout=30)
         self.assertEqual((m["anchorId"], m["cx"], m["cy"]), (aid, 512.0, 0.0))
         self.assertTrue(os.path.exists(self.fs(m["base"])))
         self.assertEqual(s.hm[(aid, 512.0, 0.0)]["base"], os.path.basename(m["base"]))
-        self.assertFalse(m["base"].endswith("_base_q.png"), "its own photo replaced the stand-in")
+        self.assertFalse(m["base"].endswith("_base_q" + EXT), "its own photo replaced the stand-in")
 
     def test_photo_follows_the_block(self):
         """Below QUICK_SYNC_MAX_V the block goes with its stand-in (the ground went to the flat base until it came)."""
         aid, tr = self._slow_block(0.0)
-        self.assertTrue(tr.get("base", "").endswith("_base_q.png"), "sent with its stand-in")
+        self.assertTrue(tr.get("base", "").endswith("_base_q" + EXT), "sent with its stand-in")
         self.assertTrue(os.path.exists(self.fs(tr["base"])))
         self._own_photo_follows(aid)
 
@@ -249,7 +250,7 @@ class DetailFastPhotoLaterTest(ServerHarness):
         aid, tr = self._slow_block(earthd.QUICK_SYNC_MAX_V + 10)
         self.assertNotIn("base", tr, "sent without its photo")
         q, _ = self.c.until(lambda m: m["type"] == "block_base", timeout=30)
-        self.assertTrue(q["base"].endswith("_base_q.png"), "a stand-in first")
+        self.assertTrue(q["base"].endswith("_base_q" + EXT), "a stand-in first")
         self.assertTrue(os.path.exists(self.fs(q["base"])))
         self.assertIn((aid, 512.0, 0.0), self.server.base_skipped, "its own photo not drawn at the request")
         self.pose(aid, 512.0, 0.0)

@@ -1,0 +1,554 @@
+{
+  "data_format": 1,
+  "data_url": "https://raw.githubusercontent.com/TecnaGamer/BeamNG.Earth/main/docs/taginfo.json",
+  "project": {
+    "name": "BeamNG.Earth",
+    "description": "A streamed Earth for BeamNG.drive, built from real elevation, imagery and map data.",
+    "project_url": "https://github.com/TecnaGamer/BeamNG.Earth",
+    "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md",
+    "contact_name": "TecnaGamer",
+    "contact_email": "doeringduo.d@gmail.com"
+  },
+  "tags": [
+    {
+      "key": "abandoned:railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "access",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "access:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "amenity",
+      "description": "Identify and name mapped fuel stations and EV charging stations. Identify mapped picnic tables and picnic sites.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "brand",
+      "description": "Identify and name mapped fuel stations and EV charging stations.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "bridge",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "building",
+      "description": "Identify and name mapped fuel stations and EV charging stations.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "bus:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "bus:lanes:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "bus:lanes:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "busway",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "busway:both",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "busway:left",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "busway:right",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "carriageway_ref",
+      "description": "Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "change:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "change:lanes:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "change:lanes:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "construction:railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing:barrier",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing:bell",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing:light",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing:saltire",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "crossing:supervision",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "cutting",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "cycleway:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:backward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:forward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:lanes",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:ref",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:ref:backward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:ref:forward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:ref:lanes",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:ref:to",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:street",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:street:backward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "destination:street:forward",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "direction",
+      "description": "Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "distance",
+      "description": "Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "disused:railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "divider",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "electrified",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "embankment",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "end_date",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "exit_to",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "frequency",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "gauge",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "generator:method",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "generator:source",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "generator:status",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "generator:type",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "height",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "height:hub",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "highspeed",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "highway",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs. Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "hov:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "junction",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "junction:ref",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lane_markings",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lanes",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lanes:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lanes:both_ways",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lanes:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "layer",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "leisure",
+      "description": "Identify mapped picnic tables and picnic sites.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "lit",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "maxspeed",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "milestone",
+      "description": "Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "name",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Identify and name mapped fuel stations and EV charging stations. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "network",
+      "description": "Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "noref",
+      "description": "Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "oneway",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "operator",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "overtaking",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "overtaking:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "overtaking:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "placement",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "placement:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "placement:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "power",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "proposed:railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "psv:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "razed:railway",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "ref",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs. Mapped highway milestones and route/direction references.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "rotor:diameter",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "service",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "sidewalk",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "site",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "smoothness",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "structure",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "surface",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "tourism",
+      "description": "Identify mapped picnic tables and picnic sites.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "tracks",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "tunnel",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "turn:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "turn:lanes:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "turn:lanes:both_ways",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "turn:lanes:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "type",
+      "description": "Select active individual wind turbines and determine their placement and dimensions.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "usage",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "voltage",
+      "description": "Railway ways and crossing/catenary nodes retained in the weekly OSM railway shards; not every retained value produces a distinct model.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "width",
+      "description": "Road widths, lanes, surface, sidewalks, lighting and raceways, read from OSM US Layercake. Exit destinations, road references and lane context used to lay out highway signs.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "width:lanes",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "width:lanes:backward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    },
+    {
+      "key": "width:lanes:forward",
+      "description": "Lane details and roundabout tags retained in the weekly OSM lane shards; individual values may have partial rendering support.",
+      "doc_url": "https://github.com/TecnaGamer/BeamNG.Earth/blob/main/docs/OSM_TAGS.md"
+    }
+  ]
+}

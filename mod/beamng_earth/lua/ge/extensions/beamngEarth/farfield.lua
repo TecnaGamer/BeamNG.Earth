@@ -649,6 +649,72 @@ end
 
 -- Every add loaded (or failed). An add never received makes the group wait (no hole); only once
 -- the server said far_done and nothing is loading does such a group run without it (server error).
+-- The 3D map (map3d.lua: setPreview): a waiting group's tiles shown as each one loads, lifted over the coarse tiles
+-- they will replace (the user, 2026-11-07: "it still takes way to long to load detailed terrain as i zoom in": a view's
+-- new tiles waited, loaded but hidden, for their whole group: ~125 of them for 15 s over Memphis, then one pop). The
+-- group then starts as always and takes them from there (their offset back to its own).
+M.PREVIEW_LIFT_MIN_M = 5
+-- (0.03 drew the lifted tiles' skirts as dark lines on hillsides as the 3D map's detail steps came, Rapid City
+-- 2026-11-07; a coarse tile showing through in places is the lesser evil)
+M.PREVIEW_LIFT_EYE_SHARE = 0.008    -- at most this share of the eye's height (never seen from up there)
+local preview = {on = false, eye = 0}
+
+function M.setPreview(on, eye)
+  on = on and true or false
+  preview.eye = tonumber(eye) or 0
+  if on == preview.on then return end
+  preview.on = on
+  if not on then          -- (back to the swap's own rule: previewed tiles hidden until their group starts)
+    for _, inst in pairs(pending) do
+      if inst.preview then
+        local o = getObj(inst)
+        if o then setHidden(o, true); writePos(o, inst, 0) end
+        inst.hidden, inst.off, inst.preview = true, 0, nil
+      end
+    end
+  end
+end
+
+local function previewGroup(g)
+  local lift = g.previewLift
+  if not lift then
+    local errO = 0
+    for _, key in ipairs(g.remove) do
+      local r = live[key]
+      if r and r.err then errO = max(errO, r.err) end
+    end
+    lift = max(M.PREVIEW_LIFT_MIN_M, min(2 * errO + M.PREVIEW_LIFT_MIN_M, preview.eye * M.PREVIEW_LIFT_EYE_SHARE))
+    g.previewLift = lift
+  end
+  for _, key in ipairs(g.add) do
+    local a = pending[key]
+    if a and a.loaded and not a.failed and not a.preview and visibleCover(coverOf(a)) then
+      local o = getObj(a)
+      if o then
+        writePos(o, a, lift)
+        setHidden(o, false)
+        a.off, a.hidden, a.preview = lift, false, true
+      end
+    end
+  end
+end
+
+-- (and the loaded tiles no group names yet: the server announces a group once all its tiles are sent, and over
+-- Manhattan ~420 loaded tiles waited for theirs, the view's ground missing under its buildings, 2026-11-07)
+local function previewPending()
+  local lift = max(M.PREVIEW_LIFT_MIN_M, min(200, preview.eye * M.PREVIEW_LIFT_EYE_SHARE * 0.5))
+  for _, a in pairs(pending) do
+    if a.loaded and not a.failed and not a.preview and not a.prefetch and visibleCover(coverOf(a)) then
+      local o = getObj(a)
+      if o then
+        writePos(o, a, lift)
+        setHidden(o, false)
+        a.off, a.hidden, a.preview = lift, false, true
+      end
+    end
+  end
+end
+
 local function groupReady(g)
   for _, key in ipairs(g.add) do
     local a = pending[key]
@@ -1089,7 +1155,7 @@ function M.anchorObj() return anchorObj end
 
 -- New committed anchor. keepOld=true (rebase): current tiles stay until the server removes them or
 -- the new far_done. keepOld=false (teleport): everything is hidden at once and deleted progressively.
--- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once.
+-- blk: the new anchor's terrain block {cx, cy}; the kept tiles' cover state follows it at once (false: none, nil: kept).
 -- newSession: the server session the new anchor belongs to (hello.sessionId; nil = unchanged). A
 -- resync with a restarted server keeps the old session's tiles like a rebase; its far_removes never
 -- come (the new server does not know them), so they go when covered (mesh) or at the new far_done.
@@ -1176,6 +1242,12 @@ switchAnchor = function(newAnchorId, keepOld, blk, newSession, newAnchor)
   if blk then
     setBlock(blk.cx, blk.cy)
     for _, inst in pairs(old) do applyCover(inst, false) end
+  elseif blk == false then
+    -- (no block in the new frame: the 3D map's view-only origin, core commitRebase 'view'; the car's block stays in
+    -- its own frame, hidden: nothing is covered here)
+    block = nil
+    for _, inst in pairs(old) do applyCover(inst, false) end
+    for _, inst in pairs(live) do applyCover(inst, false) end
   end
 end
 
@@ -1284,6 +1356,20 @@ end
 
 -- gov: governor instance (governor.lua); dt: s since the last frame (wall); cam: nil or
 -- {x,y,z,fx,fy,fz,fovDeg} for the off-screen test; player: nil or {x,y,z} (the exactMiss metric).
+-- A single unit (a swap group's start, a spawn, a material, a removal) this slow is logged, a few per session: the
+-- governor charges a unit after it ran, so one can take a whole frame ("far 78.9" ms in one hitch of a 150 mph NYC
+-- drive, 2026-11-05, with nothing saying which)
+M.SLOW_UNIT_MS = 30
+M.SLOW_UNIT_LOGS = 20
+local slowLogged = 0
+local function slowUnit(kind, ms, what)
+  if ms < M.SLOW_UNIT_MS then return end
+  counters.slowUnits = (counters.slowUnits or 0) + 1
+  if slowLogged >= M.SLOW_UNIT_LOGS then return end
+  slowLogged = slowLogged + 1
+  log('W', 'beamngEarth', string.format('far field: one %s took %.1f ms (%s)', kind, ms, what))
+end
+
 function M.update(gov, dt, cam, player)
   clock = clock + min(max(dt or 0, 0), M.MAX_DT)
   local now = gov.clock
@@ -1312,7 +1398,9 @@ function M.update(gov, dt, cam, player)
     end
   end
   local stop = false
+  if preview.on then previewPending() end
   for _, g in ipairs(groups) do
+    if g.state == 'wait' and preview.on then previewGroup(g) end
     if g.state == 'wait' then
       local blocked = stop or frozen
       if not blocked then
@@ -1325,7 +1413,9 @@ function M.update(gov, dt, cam, player)
         if gov:try('reveal') then
           local t1 = now()
           if startGroup(g, cam) then
-            gov:charge('reveal', now() - t1)
+            local ms = now() - t1
+            gov:charge('reveal', ms)
+            slowUnit('swap group start', ms, string.format('group %s: %d adds, %d removes', tostring(g.id), #g.add, #g.remove))
             units = units + 1
           end -- else: waits for a crossover slot; its keys stay busy, other groups go on
         else
@@ -1356,7 +1446,9 @@ function M.update(gov, dt, cam, player)
           live[r.inst.key] = nil
         end
         doom(r.inst, true)
-        gov:charge('reveal', now() - t1)
+        local ms = now() - t1
+        gov:charge('reveal', ms)
+        slowUnit('removal', ms, tostring(r.inst.key))
         units = units + 1
       end
       removals[rH] = nil
@@ -1378,7 +1470,9 @@ function M.update(gov, dt, cam, player)
         local t1 = now()
         local ok, err = pcall(satmat.create, inst.material, inst.texture, inst.detail)
         if not ok then log('E', 'beamngEarth', 'far tile material failed: ' .. tostring(err)) end
-        gov:charge('material', now() - t1)
+        local ms = now() - t1
+        gov:charge('material', ms)
+        slowUnit('material', ms, tostring(inst.material))
         units = units + 1
         if satmat.exists(inst.material) then counters.materials = counters.materials + 1 end
       end
@@ -1404,6 +1498,7 @@ function M.update(gov, dt, cam, player)
       nQueued = nQueued - 1
       inst.importMs = now() - t1 -- shown by the dev tools' mini-map
       gov:charge(kind, inst.importMs)
+      slowUnit('spawn', inst.importMs, string.format('%s %s, material %s', kind, tostring(inst.key), tostring(inst.mat or inst.material)))
       units = units + 1
       imported = true
     end

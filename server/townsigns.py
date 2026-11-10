@@ -15,51 +15,103 @@ from geotiles import box_owns
 import poleprofiles
 import signmesh
 import europeinfra
-import zipfile
 
-DATA_PATH=Path(__file__).with_name('data')/'fr_town_signs.json.gz'
-DATA_SHA256='3f3dde11f3f13b1226a8ce190ca57ff1f02b0cc241798604aafa52d84599495e'
+DATA_PATH=Path(__file__).with_name('data')/'fr_town_signs.cells'      # (pack_cells of the survey's fr_town_signs.json.gz)
+DATA_SHA256='c72a2a3690d00392973f2d02776abd6a8199bd4629323df1da2583ec3351205a'
 VERSION='town-signs-measured-v3'
-EU_DATA_PATH=Path(__file__).with_name('data')/'europe_places.zip'
-EU_DATA_SHA256='de04ae47eac96d7172fc9091219af0d742f8ec015bda04aec486aea6493372e3'
 CLASSES={'primary','secondary','tertiary','unclassified','residential','living_street'}
 ESTIMATED_CLASSES={'primary','secondary','tertiary','unclassified'}
 
+CELLS_MAGIC=b'TSC1'
+CELLS_KEEP=512          # decoded 0.1-degree cells kept per kind (a session's tiles touch a few dozen)
+
+
+def _cell_key(r):
+    return (math.floor(r['lon']*10),math.floor(r['lat']*10))
+
+
 class SignData:
-    def __init__(self,data):
-        self.signs=data['signs'];self.places=data['places'];self.metadata={k:v for k,v in data.items() if k not in ('signs','places')}
-        self.sign_grid=self._grid(self.signs);self.place_grid=self._grid(self.places)
-        self.mapped_places={s['place_id'] for s in self.signs if 'place_id' in s}
+    """Signs and places on a 0.1-degree grid. From a document (dict: small direction-sign sets, tests) the rows stay
+    as they are; from a cells file (pack_cells: the French survey) each cell stays compressed until a tile asks for
+    it: the survey's 84,000 rows decoded were 51 MB in every server process (77 MB at load), 2026-11-07."""
+    def __init__(self,data=None,cells=None):
+        self._lock=__import__('threading').Lock()
+        self._decoded={'s':{},'p':{}}
+        if cells is not None:
+            self.metadata,self._index,self._blob=cells
+            return
+        self.metadata={k:v for k,v in data.items() if k not in ('signs','places')}
+        self._index=None
+        self._grids={'s':self._grid(data['signs']),'p':self._grid(data['places'])}
+        self._rows={'s':data['signs'],'p':data['places']}
     @staticmethod
     def _grid(rows):
         grid={}
-        for r in rows:grid.setdefault((math.floor(r['lon']*10),math.floor(r['lat']*10)),[]).append(r)
+        for r in rows:grid.setdefault(_cell_key(r),[]).append(r)
         return grid
+    def _cell(self,kind,key):
+        if self._index is None:return self._grids[kind].get(key,())
+        got=self._decoded[kind].get(key)
+        if got is not None:return got
+        ref=self._index[kind].get(key)
+        if ref is None:return ()
+        import zlib
+        got=json.loads(zlib.decompress(self._blob[ref[0]:ref[0]+ref[1]]))
+        with self._lock:
+            d=self._decoded[kind]
+            d[key]=got
+            while len(d)>CELLS_KEEP:d.pop(next(iter(d)))
+        return got
+    def _all(self,kind):
+        if self._index is None:return self._rows[kind]
+        return [r for key in sorted(self._index[kind]) for r in self._cell(kind,key)]
+    @property
+    def signs(self):return self._all('s')
+    @property
+    def places(self):return self._all('p')
+    @property
+    def mapped_places(self):return {s['place_id'] for s in self.signs if 'place_id' in s}
     def nearby(self,bounds,places=False):
-        x0,y0,x1,y1=bounds;grid=self.place_grid if places else self.sign_grid
+        x0,y0,x1,y1=bounds;kind='p' if places else 's'
         return [r for x in range(math.floor(x0*10),math.floor(x1*10)+1)
-                for y in range(math.floor(y0*10),math.floor(y1*10)+1) for r in grid.get((x,y),())
+                for y in range(math.floor(y0*10),math.floor(y1*10)+1) for r in self._cell(kind,(x,y))
                 if x0<=r['lon']<=x1 and y0<=r['lat']<=y1]
+
+
+def pack_cells(doc):
+    """A survey document {"signs", "places", ...} as cells-file bytes: CELLS_MAGIC, a 4-byte header length, the header
+    JSON (metadata; per kind "x,y" -> [offset, length]), then each cell's rows as zlib-compressed JSON."""
+    import zlib
+    blobs,index,off=[],{'s':{},'p':{}},0
+    for kind,rows in (('s',doc['signs']),('p',doc['places'])):
+        for key,cell in sorted(SignData._grid(rows).items()):
+            b=zlib.compress(json.dumps(cell,separators=(',',':'),ensure_ascii=False).encode('utf-8'),9)
+            index[kind][f'{key[0]},{key[1]}']=[off,len(b)];blobs.append(b);off+=len(b)
+    header=json.dumps({'metadata':{k:v for k,v in doc.items() if k not in ('signs','places')},'cells':index},
+                      separators=(',',':'),ensure_ascii=False).encode('utf-8')
+    return CELLS_MAGIC+len(header).to_bytes(4,'little')+header+b''.join(blobs)
+
+
+def read_cells(raw):
+    """SignData's cells argument from cells-file bytes (pack_cells)."""
+    if raw[:4]!=CELLS_MAGIC:raise ValueError('not a town-sign cells file')
+    n=int.from_bytes(raw[4:8],'little');h=json.loads(raw[8:8+n])
+    index={kind:{tuple(int(v) for v in k.split(',')):tuple(ref) for k,ref in cells.items()} for kind,cells in h['cells'].items()}
+    return h['metadata'],index,memoryview(raw)[8+n:]
+
 
 @lru_cache(maxsize=1)
 def bundled():
     raw=DATA_PATH.read_bytes()
     if hashlib.sha256(raw).hexdigest()!=DATA_SHA256:raise ValueError('Town-sign data checksum mismatch')
-    return SignData(json.loads(gzip.decompress(raw)))
+    return SignData(cells=read_cells(raw))
 
 
 class EuropeanData:
-    """Shared French survey plus lazily read European locality cells."""
-    def __init__(self,path=EU_DATA_PATH):
-        self.path=Path(path)
-        if hashlib.sha256(self.path.read_bytes()).hexdigest()!=EU_DATA_SHA256:
-            raise ValueError('European place data checksum mismatch')
-        with zipfile.ZipFile(self.path) as z:self.metadata=json.loads(z.read('index.json'))
-        self.cells={tuple(c) for c in self.metadata['cells']}
-        self._load=lru_cache(maxsize=32)(self._load_cell)
-    def _load_cell(self,x,y):
-        with zipfile.ZipFile(self.path) as z:return json.loads(z.read(f'{x}_{y}.json'))
+    """Shared French survey plus lazily read European locality cells (regionaldata "places": Overture localities,
+    one degree cell each, fetched where needed)."""
     def nearby(self,bounds,places=False):
+        import regionaldata
         x0,y0,x1,y1=bounds
         # Avoid loading the entire French survey while driving in another region.
         rows=([dict(r,country='FR') for r in bundled().nearby(bounds,places)]
@@ -67,8 +119,7 @@ class EuropeanData:
         if not places:return rows
         for x in range(math.floor(x0),math.floor(x1)+1):
             for y in range(math.floor(y0),math.floor(y1)+1):
-                if (x,y) in self.cells:
-                    rows.extend(r for r in self._load(x,y) if x0<=r['lon']<=x1 and y0<=r['lat']<=y1)
+                rows.extend(r for r in (regionaldata.cell('places',x,y) or ()) if x0<=r['lon']<=x1 and y0<=r['lat']<=y1)
         return rows
 
 

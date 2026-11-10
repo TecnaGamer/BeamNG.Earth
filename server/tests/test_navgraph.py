@@ -2,6 +2,7 @@
 lanes, speed limits, clipped to the window."""
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -51,6 +52,30 @@ class GraphTest(unittest.TestCase):
             self.assertAlmostEqual(x, 0.0, delta=0.05, msg=order)
             self.assertAlmostEqual(y, 0.0, delta=0.05)
 
+    def test_a_median_crossover_is_kept_from_traffic(self):
+        """I-94 near Huntley MT (2026-11-05): a service road across the median between the two carriageways' connectors
+        took traffic across into the ditch: it has a track's drivability (below the stock traffic's minimum). A rest
+        area's service road between two ramps, and one from the motorway to a frontage road, stay service roads."""
+        lines = [[(0, 0), (500, 0)], [(500, 30), (0, 30)],                  # the two carriageways
+                 [(250, 0), (250, 30)],                                     # the crossover
+                 [(400, -10), (400, -60)],                                  # a ramp off the eastbound
+                 [(400, -60), (300, -60)],                                  # the rest area's road, ramp to ramp
+                 [(300, -60), (300, -10)],                                  # the ramp back
+                 [(100, 0), (100, -80)]]                                    # a service road to a frontage road
+        classes = ["motorway", "motorway", "service", "motorway", "service", "motorway", "service"]
+        con = [(0, "W", 0.0, 0.0), (0, "X1", 0.5, 0.5), (0, "E", 1.0, 1.0),
+               (1, "E2", 0.0, 0.0), (1, "X2", 0.5, 0.5), (1, "W2", 1.0, 1.0),
+               (2, "X1", 0.0, 0.0), (2, "X2", 1.0, 1.0),
+               (3, "R1", 0.0, 0.0), (3, "R2", 1.0, 1.0), (4, "R2", 0.0, 0.0), (4, "R3", 1.0, 1.0),
+               (5, "R3", 0.0, 0.0), (5, "R4", 1.0, 1.0),
+               (6, "F0", 0.0, 0.0), (6, "F1", 1.0, 1.0)]
+        g = graph(lines, classes, connectors=con, subclass=[(3, "link"), (5, "link")], oneway=[(0, 1.0), (1, 1.0)])
+        drive = {frozenset(e[:2]): e[6] for e in g["edges"]}
+        self.assertEqual(drive[frozenset(("cX1", "cX2"))], navgraph.DRIVE["track"][0])
+        rest = [e[6] for e in g["edges"] if any(n.startswith("s") for n in e[:2]) and {"cR2", "cR3"} & set(e[:2])]
+        self.assertTrue(rest and all(d == navgraph.DRIVE["service"][0] for d in rest), "a rest area's road")
+        self.assertIn(navgraph.DRIVE["service"][0], [d for k, d in drive.items() if "cF1" in k], "to a frontage road")
+
     def test_long_edges_split_and_oneway_against_the_geometry(self):
         g = graph([[(0, 0), (300, 0)]], ["secondary"], connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)],
                   oneway=[(0, -1.0)], speeds=[(0, 72.0)])
@@ -94,13 +119,14 @@ class GraphTest(unittest.TestCase):
         sp2 = roads.road_specs(__import__("test_roads").features([[(0, 0), (300, 0)]], ["secondary"]))[0]
         self.assertEqual({round(e[7], 2) for e in flat_["edges"]}, {round(navgraph.driving_width(sp2) / 2, 2)})
 
-    def test_rural_motorway_two_lanes(self):
+    def test_motorway_defaults_two_lanes(self):
         import roads
-        for urban, n in ((False, 2), (True, 3)):
+        for urban, n in ((False, 2), (True, 2)):
             sp = roads.Spec(roads.carriageway("motorway", "paved", urban, None, True), "paved", urban, "motorway", True)
             self.assertEqual(navgraph._lanes(navgraph.driving_width(sp), True), (n, 0), urban)
-        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True)
-        self.assertEqual(navgraph._lanes(navgraph.driving_width(ramp), True), (1, 0), "a ramp: one lane (GitHub #107)")
+        ramp = roads.Spec(roads.LINK_M[1], "paved", False, "motorway", True, link=True, lanes=1)
+        self.assertAlmostEqual(navgraph.driving_width(ramp), 4.8)
+        self.assertEqual(navgraph._lanes(navgraph.driving_width(ramp), True, ramp.lanes), (1, 0), "a ramp: one lane (GitHub #107)")
 
     def test_nodes_on_the_curve_of_the_earth(self):
         """10 km from the anchor the ground drawn lies ~7.8 m under the flat plane (the anchor frame's up): the nodes
@@ -111,6 +137,15 @@ class GraphTest(unittest.TestCase):
         drop = 10000.0 ** 2 / (2 * 6371000.0)
         np.testing.assert_allclose(zs, 10.0 - drop, atol=0.15)
 
+    def test_tracks_for_the_follow_ai_not_for_traffic(self):
+        """A track is in the graph (GitHub #756: an AI following the player down one drove into the trees) below the
+        stock traffic's spawn floor (0.5) and its cars' minimum (0.25), at a slow speed."""
+        f = features([[(0, 0), (300, 0)]], ["track"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0))
+        self.assertTrue(g["edges"])
+        self.assertTrue(all(e[6] < 0.25 and e[5] <= 15 * navgraph.MPH + 0.01 for e in g["edges"]), g["edges"][:2])
+
     def test_tunnel_stretch_left_out(self):
         f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
         f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
@@ -119,6 +154,58 @@ class GraphTest(unittest.TestCase):
             mid = (g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2
             self.assertFalse(130 < mid < 200, "an edge over the tunnel")
         self.assertTrue(g["edges"])
+        # ... but drawn on the minimap (its "lines"): the stretch from 120 to 210 m covered, end to end
+        xs = sorted(x for ln in g["lines"] for x in (ln[0], ln[2]))
+        self.assertTrue(g["lines"] and xs[0] <= 130 and xs[-1] >= 200, g["lines"])
+        self.assertTrue(all(len(ln) == 5 and abs(ln[1]) < 1 and abs(ln[3]) < 1 for ln in g["lines"]))
+
+    def test_a_built_tunnel_is_the_ais_at_its_floor(self):
+        """A tunnel the road tiles build (roads.TunnelProfiles' parts: tunnels=) is driven through, its nodes at the
+        tunnel's floor; one not built (none given) stays the minimap's line only."""
+        f = features([[(0, 0), (300, 0)]], ["primary"], levels=[(0, -1.0, 0.4, 0.7)])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        fid = str(f.ids[0])
+        floor = (np.array([[110.0, 0.0], [220.0, 0.0]]), np.array([3.0, 3.0]))
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), tunnels={fid: [floor]})
+        if not navgraph.AI_TUNNELS:     # (off until the portals fit their roads: the minimap's line only)
+            self.assertTrue(g["lines"])
+            with mock.patch.object(navgraph, "AI_TUNNELS", True):
+                g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), tunnels={fid: [floor]})
+        inside = [n for n in g["nodes"].values() if 130 < n[0] < 200]
+        self.assertTrue(inside, "nodes in the tunnel")
+        self.assertTrue(all(abs(n[2] - 3.0) < 0.05 for n in inside), [n[2] for n in inside])
+        mids = [(g["nodes"][e[0]][0] + g["nodes"][e[1]][0]) / 2 for e in g["edges"]]
+        self.assertTrue(any(130 < m < 200 for m in mids), "an edge through it")
+        self.assertFalse(g["lines"], "nothing left for the minimap alone")
+
+    def test_the_approach_narrows_to_the_tube_at_the_portal(self):
+        """A road wider than its tunnel's tube narrows to the tube's AI half width at the portal over PORTAL_LEAD_M
+        (Fort Pitt: the AI spread its lanes over the wide approach into the pier): the portal node's radius is the
+        tube's, the edges near it carry both ends' radii (edge[7] at edge[0], edge[8] at edge[1])."""
+        L = navgraph.PORTAL_LEAD_M
+        xs = [-200.0, -100.0, -L, -L / 2, 0.0, 50.0, 100.0]       # the portal at 0, the tube from 0 to 100
+        nodes = {f"n{k}": [x, 0.0, 0.0, 6.0] for k, x in enumerate(xs)}
+        edges = [[f"n{k}", f"n{k + 1}", 0, 2, 2, 25.0, 1.0, 6.0] for k in range(4)]
+        tube = [[f"n{k}", f"n{k + 1}", 0, 2, 2, 25.0, 1.0, 4.0] for k in (4, 5)]
+        side = ["n9", "n0", 0, 1, 1, 10.0, 1.0, 3.0]         # a narrower road: never widened
+        nodes["n9"] = [-200.0, 50.0, 0.0, 3.0]
+        navgraph.portal_taper(nodes, edges + tube + [side], {id(e) for e in tube}, {"n5"})
+
+        def r(e):
+            return e[7], (e[8] if len(e) > 8 else e[7])
+        self.assertEqual(r(edges[0]), (6.0, 6.0), "farther than PORTAL_LEAD_M: as it was")
+        self.assertEqual(r(edges[1]), (6.0, 6.0))
+        self.assertEqual(r(edges[2]), (6.0, 5.0), "a straight taper")
+        self.assertEqual(r(edges[3]), (5.0, 4.0), "the tube's at the portal")
+        self.assertEqual(nodes["n4"][3], 4.0, "the portal node's own radius")
+        self.assertEqual(nodes["n2"][3], 6.0)
+        self.assertEqual([r(e) for e in tube], [(4.0, 4.0)] * 2, "the tube's own edges as they were")
+        self.assertEqual(r(side), (3.0, 3.0))
+        # a road narrower than the tube: nothing changes
+        n2 = {k: list(v) for k, v in nodes.items()}
+        e2 = [[f"n{k}", f"n{k + 1}", 0, 1, 1, 25.0, 1.0, 3.0] for k in range(4)]
+        navgraph.portal_taper(n2, e2 + tube, {id(e) for e in tube}, {"n5"})
+        self.assertTrue(all(len(e) == 8 for e in e2))
 
     def test_nodes_on_a_bridge_take_its_deck(self):
         f = features([[(0, 0), (200, 0)]], ["primary"])
@@ -146,7 +233,7 @@ class SignalsTest(unittest.TestCase):
                       ("cJ", "e", 0): ("cE", True)}
         import furniture
         orig = furniture.junction_controls
-        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_STOP) for x in a]     # an all-way stop
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None, country=None, priority=None: [(x, furniture.G_STOP) for x in a]     # an all-way stop
         try:
             out = navgraph._signals(arms, approaches, nodes)
         finally:
@@ -168,7 +255,7 @@ class SignalsTest(unittest.TestCase):
         approaches = {("cJ", "n", 1): ("cN", True), ("cJ", "s", 0): ("cS", True), ("cJ", "w", 1): ("cW", True),
                       ("cJ", "e", 0): ("cE", True)}
         orig = furniture.junction_controls
-        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None: [(x, furniture.G_SIGNAL)
+        furniture.junction_controls = lambda a, k, link_ok=None, ring=None, signals=None, **_kw: [(x, furniture.G_SIGNAL)
                                                                                           for x in a]
         try:
             rh = {ap[0]: ap for ap in navgraph._signals(arms, approaches, nodes)[0]["app"]}
@@ -193,6 +280,61 @@ class RulesTest(unittest.TestCase):
         self.assertAlmostEqual(navgraph.road_mph(F, 0, town, mph=False), 35.0, msg="in town: the urban cap")
         res = roads.Spec(6.0, "paved", True, "residential", False)
         self.assertAlmostEqual(navgraph.road_mph(F, 0, res, mph=False), 25.0)
+
+    def test_us_motorways_default_to_their_states_limit(self):
+        # Tann2019 2026-11-05: Montana's I-94 near Huntley (no mapped limit) is 80, the traffic drove the flat 65
+        def at(lat, lon):
+            class F:
+                rules = {}
+                attrs = {"cx": np.array([lon]), "cy": np.array([lat])}
+            return F
+        rural = roads.Spec(11.0, "paved", False, "motorway", True)
+        urban = rural._replace(urban=True)
+        ramp = rural._replace(link=True)
+        huntley, billings = at(45.87295, -108.33252), at(45.7833, -108.5007)
+        self.assertEqual(navgraph.road_mph(huntley, 0, rural, country="US"), 80.0)
+        self.assertEqual(navgraph.road_mph(billings, 0, urban, country="US"), 65.0, "Montana's urban interstates")
+        self.assertEqual(navgraph.road_mph(huntley, 0, urban, country="US"), 80.0,
+                         "built up beside it past a small town (Huntley): still the rural limit, no city near")
+        self.assertEqual(navgraph.road_mph(huntley, 0, ramp, country="US"), 65.0, "a ramp: the class default")
+        self.assertEqual(navgraph.road_mph(at(39.2834, -76.5934), 0, rural, country="US"), 70.0, "Maryland")
+        self.assertEqual(navgraph.road_mph(at(31.0, -100.0), 0, rural, country="US"), 75.0, "Texas")
+        self.assertEqual(navgraph.road_mph(huntley, 0, rural), 65.0, "no country: as before")
+        self.assertEqual(navgraph.road_mph(at(49.5, -97.0), 0, rural, country="US"), 65.0, "outside the states: 65")
+        self.assertEqual(len(navgraph.US_MOTORWAY_MPH), 51)
+
+    def test_us_rural_highways_default_to_55(self):
+        """GitHub #888: a Texas farm-to-market road with no mapped limit was driven at town speeds; outside towns the
+        fast classes take the usual rural limit, in town (and anywhere outside the US) as before."""
+        class F:
+            rules = {}
+        rural = roads.Spec(7.0, "paved", False, "secondary", False)
+        self.assertEqual(navgraph.road_mph(F, 0, rural, country="US"), 55.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="tertiary"), country="US"), 45.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="trunk"), country="US"), 65.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(urban=True), country="US"), 35.0, "in town: the cap")
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(link=True), country="US"), 40.0, "a slip road")
+        self.assertEqual(navgraph.road_mph(F, 0, rural._replace(cls="unclassified"), country="US"), 30.0)
+        self.assertEqual(navgraph.road_mph(F, 0, rural), 40.0, "no country: as before")
+
+        class Mapped:
+            class _T:
+                start, end, value = [0.0], [1.0], [72.42]
+
+                def rows(self, i):
+                    return [0]
+            rules = {"max_speed_kmh": _T()}
+        self.assertAlmostEqual(navgraph.road_mph(Mapped, 0, rural, country="US"), 45.0, places=1, msg="mapped wins")
+
+    def test_swedish_defaults_are_the_law(self):
+        class F:
+            rules = {}
+        kmh = lambda spec: navgraph.road_mph(F, 0, spec, mph=False, country="SE") * 1.609344    # noqa: E731
+        self.assertAlmostEqual(kmh(roads.Spec(11.0, "paved", False, "motorway", True)), 110.0)
+        self.assertAlmostEqual(kmh(roads.Spec(9.0, "paved", False, "primary", False)), 70.0)
+        self.assertAlmostEqual(kmh(roads.Spec(9.0, "paved", True, "primary", False)), 50.0)
+        self.assertAlmostEqual(kmh(roads.Spec(6.0, "paved", True, "residential", False)), 50.0)
+        self.assertLess(kmh(roads.Spec(4.0, "paved", True, "service", False)), 25.0)
 
     def test_driving_side_and_signals_by_country(self):
         self.assertEqual(navgraph.road_rules("US"), {"rightHandDrive": False, "turnOnRed": True, "redYellow": False,

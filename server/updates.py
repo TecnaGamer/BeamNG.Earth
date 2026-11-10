@@ -133,14 +133,30 @@ def newest_release(net, fresh=False):
 # native Linux build (the user, 2026-10-18: "i clicked open releases page but it never opened my browser"). Only this
 # project's GitHub pages are opened (a message from the mod cannot open anything else).
 OPEN_PREFIX = f"https://github.com/{REPO}/"
+# ... and the settings page's About links (the game's openWebBrowser refuses every site outside its own domain filter:
+# "unable to open webpage due to domain filter", 2026-11-05): the project's Discord and Ko-fi, exactly, and a
+# contributor's GitHub profile (github.com/<login>, nothing after it)
+OPEN_EXACT = ("https://discord.gg/tgf", "https://ko-fi.com/tecnagamer", f"https://github.com/{REPO}")
+_PROFILE = re.compile(r"https://github\.com/[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?")
 
 
-def open_page(url, popen=None):
-    """Open url (this project's GitHub pages only) in the player's browser, without waiting. Returns True if a
-    browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
+def openable(url):
+    """Whether open_page may open url: this project's GitHub pages, OPEN_EXACT, or a GitHub user's profile."""
+    if not isinstance(url, str) or any(c in url for c in ' "\'<>`\\\n\r'):
+        return False
+    return url.startswith(OPEN_PREFIX) or url in OPEN_EXACT or _PROFILE.fullmatch(url) is not None
+
+
+def open_page(url, popen=None, allow=None):
+    """Open url (openable: this project's pages and the About page's links; or allow(url): the Add-ons page's links,
+    addons.Addons.openable) in the player's browser, without waiting.
+    Returns True if a browser was asked. On Linux xdg-open runs with the packaged app's library and Python paths taken out of its
     environment (the AppImage's own libraries broke the browser it starts)."""
     import subprocess
-    if not isinstance(url, str) or not url.startswith(OPEN_PREFIX) or any(c in url for c in ' "\'<>`\\\n\r'):
+    # (allow: https, or a companion add-on's own page on this computer: http://127.0.0.1 / localhost, addons.py)
+    local = isinstance(url, str) and url.startswith(("http://127.0.0.1:", "http://localhost:"))
+    if not openable(url) and not (allow is not None and isinstance(url, str) and (url.startswith("https://") or local)
+                                  and not any(c in url for c in ' "\'<>`\\\n\r') and allow(url)):
         return False
     popen = popen or subprocess.Popen
     try:

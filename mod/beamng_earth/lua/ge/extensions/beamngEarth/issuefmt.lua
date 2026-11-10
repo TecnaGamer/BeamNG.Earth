@@ -6,6 +6,9 @@ local M = {}
 
 M.REPO = 'TecnaGamer/BeamNG.Earth'
 M.URL_MAX = 7000        -- characters of the whole new-issue URL (GitHub refuses ~8 KB)
+-- ... on Windows less: the game opens the browser through the shell, which takes ~2083 characters of a URL; a longer
+-- one opened nothing (GitHub #743, Windows 11: neither the command nor the in-game report opened the issue)
+M.URL_MAX_WINDOWS = 2000
 
 -- The kinds the user picks from (order = the window's radio buttons). label = the GitHub label.
 M.KINDS = {
@@ -294,8 +297,13 @@ M.TRUNCATED = '\n\n_(Truncated: paste the rest from issue.md in the report folde
 
 -- The GitHub new-issue URL with title, body and label, the body cut (at a UTF-8 character boundary)
 -- so the whole URL stays under maxLen.
+function M.urlMax(os_)
+  os_ = os_ or (jit and jit.os)
+  return os_ == 'Windows' and M.URL_MAX_WINDOWS or M.URL_MAX
+end
+
 function M.issueUrl(title, body, label, maxLen, repo)
-  maxLen = maxLen or M.URL_MAX
+  maxLen = maxLen or M.urlMax()
   local base = 'https://github.com/' .. (repo or M.REPO) .. '/issues/new?title=' .. M.urlEncode(title)
     .. (label and ('&labels=' .. M.urlEncode(label)) or '') .. '&body='
   local enc = M.urlEncode(body)

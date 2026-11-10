@@ -5,60 +5,24 @@ Departments are a practical zoning approximation; the Basque Country and
 Toulouse use their own intercommunal areas, and Alpine presets require altitude.
 """
 from functools import lru_cache
-import hashlib
 import json
 import math
 from pathlib import Path
-import zipfile
 
 import countrybounds
 
-DATA = Path(__file__).with_name("data") / "fr_house_regions.zip"
-DATA_SHA256 = "18db140bedce39d9eef1dd9e899eee305dee5c823b9c3e792e1683969991e86c"
-VERSION = "fr-house-regions-v1"
-
-
-class AreaIndex:
-    def __init__(self, geojson, label=None):
-        self.parts, self.buckets = [], {}
-        for f in geojson["features"]:
-            tag = label or f["properties"]["code"]
-            geom = f["geometry"]
-            polygons = [geom["coordinates"]] if geom["type"] == "Polygon" else geom["coordinates"]
-            for polygon in polygons:
-                rings = tuple(countrybounds._Ring(r) for r in polygon)
-                i = len(self.parts)
-                self.parts.append((tag, rings))
-                for k in range(math.floor(rings[0].lo[1] * 4), math.floor(rings[0].hi[1] * 4) + 1):
-                    self.buckets.setdefault(k, []).append(i)
-
-    def at(self, lat, lon):
-        found, edge = set(), False
-        for i in self.buckets.get(math.floor(lat * 4), ()):
-            tag, rings = self.parts[i]
-            outer = rings[0].locate(lon, lat)
-            if outer < 0:
-                continue
-            holes = [r.locate(lon, lat) for r in rings[1:]]
-            edge |= outer == 0 or 0 in holes
-            if outer == 1 and not any(h >= 0 for h in holes):
-                found.add(tag)
-        return next(iter(found)) if len(found) == 1 and not edge else None
+DATA = Path(__file__).with_name("data")
+VERSION = "fr-house-regions-v2"     # 2: band files (tools/build_regional_data.py --house-regions), the native lookup
 
 
 @lru_cache(maxsize=1)
 def metadata():
-    if hashlib.sha256(DATA.read_bytes()).hexdigest() != DATA_SHA256:
-        raise ValueError("French house region data checksum mismatch")
-    with zipfile.ZipFile(DATA) as z:
-        return json.loads(z.read("sources.json"))
+    return json.loads((DATA / "fr_house_regions.json").read_text(encoding="utf-8"))
 
 
 @lru_cache(maxsize=3)
 def _index(member):
-    metadata()
-    with zipfile.ZipFile(DATA) as z:
-        return AreaIndex(json.loads(z.read(member + ".geojson")), None if member == "departments" else member)
+    return countrybounds.BandIndex(DATA / f"fr_house_{member}.bin")
 
 
 def profile(lat, lon, altitude=None):

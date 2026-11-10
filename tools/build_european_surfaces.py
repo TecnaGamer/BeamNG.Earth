@@ -74,6 +74,27 @@ def build(out=OUT):
           'persistentId':str(uuid.uuid5(uuid.NAMESPACE_URL,'beamng-earth:'+name)),
           'Stages':[{'baseColorMap':VFS+'/'+texture,'baseColorFactor':[1,1,1,1],
                      'metallicFactor':0,'roughnessFactor':.98}], 'doubleSided':False}
+    # Frontages reuse BeamNG's asphalt with a second-UV opacity fade.
+    materials['bne_eu_frontage_asphalt'] = {'Stages': [{'baseColorFactor': [0.35, 0.35, 0.35, 1],
+                 'detailBaseColorMapStrength': 1,
+                 'detailMap': '/assets/materials/terrain/asphalt/asphalt/t_asphalt_b.png',
+                 'detailMapUseUV': 0,
+                 'detailNormalMap': '/assets/materials/terrain/asphalt/asphalt/t_asphalt_nm.png',
+                 'detailNormalMapStrength': 0.8,
+                 'detailScale': [1, 1],
+                 'metallicFactor': 0,
+                 'normalDetailMapUseUV': 0,
+                 'opacityMap': '/levels/beamng_earth/art/shapes/beamngEarth/dirt_fade_o.data.png',
+                 'opacityMapUseUV': 1,
+                 'roughnessFactor': 0.9,
+                 'useAnisotropic': True}],
+     'class': 'Material',
+     'mapTo': 'bne_eu_frontage_asphalt',
+     'name': 'bne_eu_frontage_asphalt',
+     'persistentId': 'a0a8621b-4a8c-4f03-b894-978f1490662b',
+     'translucent': True,
+     'translucentZWrite': True,
+     'version': 1.5}
     (out/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n',encoding='utf-8')
 
 

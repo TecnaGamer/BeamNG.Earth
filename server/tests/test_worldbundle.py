@@ -161,7 +161,9 @@ class BundleTest(unittest.TestCase):
         self.addCleanup(md.close)
         self.addCleanup(missing.close)
         with mock.patch.object(net, "get", side_effect=AssertionError("No source download allowed")) as get:
-            self.assertIsNone(md.versions()["rails"])
+            # (the pinned build, read from disk without a download: the tiles' cache keys the same from a run's start,
+            # railtags.Shards.known, 2026-11-04)
+            self.assertEqual(md.versions()["rails"], "source-build-1")
             sources = md.bundle_versions()
             self.assertEqual(sources["rails"], "source-build-1")
             self.assertEqual(sources["lanes"], "source-build-1")

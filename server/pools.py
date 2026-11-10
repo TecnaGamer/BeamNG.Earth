@@ -7,7 +7,9 @@ tile while the terrain and the far buildings went on loading. RespawningPool mak
 """
 import collections
 import concurrent.futures
+import functools
 import logging
+import sys
 import runtimeprofiler
 import threading
 import time
@@ -37,10 +39,49 @@ def result_running(fut, timeout, waited=None):
     return fut.result(timeout=timeout)
 
 
+def proc_name(name):
+    """The worker's short process name ("bnge:roadtile"; Linux /proc/<pid>/comm, 15 bytes at most): top, htop and the
+    whole-system samplers tell the pools apart (every spawned worker's command line is the same multiprocessing one).
+    Nothing matches processes by this name (pgrep -f and the launcher read command lines)."""
+    return ("bnge:" + name.replace(" ", ""))[:15]
+
+
+def _named_init(name, init, *initargs):
+    """A pool's initializer, after naming its process (proc_name)."""
+    if sys.platform.startswith("linux"):
+        try:
+            import ctypes
+            ctypes.CDLL(None, use_errno=True).prctl(15, proc_name(name).encode(), 0, 0, 0)     # PR_SET_NAME
+        except (OSError, AttributeError):
+            pass
+    if init is not None:
+        init(*initargs)
+
+
+def _call(fn, args, kwargs):
+    """A job in the worker, then its memory ceiling (budget.maybe_shed: on a small machine a worker over it drops its
+    caches between jobs)."""
+    try:
+        return fn(*args, **kwargs)
+    finally:
+        try:
+            import budget
+            budget.maybe_shed()
+        except Exception:
+            pass
+
+
+def _shedding(submit):
+    """pool.submit with every job wrapped in _call."""
+    return lambda fn, *args, **kwargs: submit(_call, fn, args, kwargs)
+
+
 class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
     def __init__(self, name, *args, **kwargs):
+        kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
+                      initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
         self._lock = threading.Lock()
         self._pool = ProcessPoolExecutor(*args, **kwargs)
@@ -61,9 +102,9 @@ class RespawningPool:
         with self._lock:
             pool = self._pool
         try:
-            fut = runtimeprofiler.collector.submit(pool.submit, self.name, fn, args, kwargs)
+            fut = runtimeprofiler.collector.submit(_shedding(pool.submit), self.name, fn, args, kwargs)
         except BrokenProcessPool:
-            fut = runtimeprofiler.collector.submit(self._renew(pool).submit, self.name, fn, args, kwargs)
+            fut = runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
         fut.add_done_callback(self._done)
@@ -82,9 +123,17 @@ class RespawningPool:
         visit the roads were never ahead of a car at 100 mph, nyc_speed.py --cold 2026-11-02): the job goes to the
         processes when one is free of the other jobs, or when no low job runs (never starved). Its future is running
         once handed over (result_running)."""
+        return self._queue_low(fn, args, kwargs, None)
+
+    def submit_low_lazy(self, fn, make_args):
+        """submit_low with fn's arguments made at its handover: make_args() -> (args, kwargs). Jobs asked for while it
+        waits can join it (Server.build_veg_geo: the trees geotiles waiting together go in one job)."""
+        return self._queue_low(fn, (), {}, make_args)
+
+    def _queue_low(self, fn, args, kwargs, make_args):
         outer = concurrent.futures.Future()
         with self._low_cv:
-            self._low.append((outer, fn, args, kwargs))
+            self._low.append((outer, fn, args, kwargs, make_args))
             if self._low_thread is None:
                 self._low_thread = threading.Thread(target=self._low_loop, daemon=True, name=f"{self.name}-low")
                 self._low_thread.start()
@@ -96,11 +145,13 @@ class RespawningPool:
             with self._low_cv:
                 while not (self._low and (self.inflight < self.workers or self._low_active == 0)):
                     self._low_cv.wait(timeout=1.0)
-                outer, fn, args, kwargs = self._low.popleft()
+                outer, fn, args, kwargs, make_args = self._low.popleft()
                 if not outer.set_running_or_notify_cancel():
                     continue                # (cancelled while it waited)
                 self._low_active += 1
             try:
+                if make_args is not None:   # (outside _low_cv: it may take its caller's lock)
+                    args, kwargs = make_args()
                 inner = self.submit(fn, *args, **kwargs)
             except BaseException as e:
                 with self._low_cv:

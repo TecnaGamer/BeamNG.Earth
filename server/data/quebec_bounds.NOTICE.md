@@ -27,3 +27,10 @@ ZIP SHA-256: `becfdfb3fc08c1adb450e2f941aef41a83512f8cf84800f76002f60a30fe38ae`.
 Runtime requires country CA AND membership of the province polygon for ARRÊT.
 No rectangular latitude/longitude approximation is used. Unknown/ambiguous
 boundary positions keep the stock STOP model.
+
+## Distribution (merge of PR #505, 2026-11-06)
+
+This archive is no longer shipped inside BeamNG.Earth. `tools/build_regional_data.py` converts it (the borders
+as latitude band files simplified to about 10 m, the cell archives as one gzip file per cell) for
+BeamNG.Earth-data's GitHub Pages (`regional/`), and `server/regionaldata.py` fetches only what a player needs,
+only when the regional scenery is on. The source, licence and attribution above are unchanged.

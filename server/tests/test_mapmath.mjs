@@ -112,6 +112,36 @@ console.log("mapmath ok")
   console.log(`mapmath layers from normalised Mercator: identical; world borders ${slow.toFixed(1)} -> ${fast.toFixed(1)} ms a frame`)
 }
 
+// the Highways layer (maphighways.js, tools/build_map_highways.py): the same lines and shields from normalised
+// Mercator as projected; shields spaced out (pad) and none before its kind's lowest zoom; the shield shapes
+{
+  const d = (await import("../../mod/beamng_earth/ui/ui-vue/mods/beamngEarth/maphighways.js")).default
+  assert.ok(d.interstates.length > 300 && d.us.length > 1000 && d.shields.length > 1000, "US Interstates and routes")
+  assert.ok(d.shields.some(s => s[0] === "95" && s[4] === "I") && d.shields.some(s => s[0] === "1" && s[4] === "US"))
+  for (const s of d.shields) assert.ok(s[3] >= (s[4] === "I" && s[0].length < 3 ? 4.5 : 6.5) && s[3] <= 9.5, `shield ${s} zoom`)
+  for (let i = 1; i < d.shields.length; i++) assert.ok(d.shields[i - 1][3] <= d.shields[i][3], "lowest zoom first")
+  const ib = m.lineBoxes(d.interstates), inorm = m.normLines(d.interstates), snorm = m.normPoints(d.shields)
+  for (const [lat, lon, z] of [[39, -98, 4.8], [39.95, -75.16, 7.5], [34.05, -118.24, 10]]) {
+    assert.deepEqual(m.visibleLines(d.interstates, ib, lat, lon, z, 1920, 1080, 3000, inorm),
+                     m.visibleLines(d.interstates, ib, lat, lon, z, 1920, 1080), `interstates at ${lat},${lon} z${z}`)
+    const opts = { maxZoom: 10.51, max: 90, charW: 7, lineH: 18, pad: 26 }
+    const sh = m.visibleLabels(d.shields, lat, lon, z, 1920, 1080, { ...opts, norm: snorm })
+    assert.deepEqual(sh, m.visibleLabels(d.shields, lat, lon, z, 1920, 1080, opts), `shields at ${lat},${lon} z${z}`)
+    assert.ok(sh.length > 3, `shields shown at ${lat},${lon} z${z}`)
+    for (let i = 0; i < sh.length; i++)
+      for (let j = i + 1; j < sh.length; j++)
+        assert.ok(Math.abs(sh[i].x - sh[j].x) > 40 || Math.abs(sh[i].y - sh[j].y) > 40, "shields spaced out")
+    if (z < 6.5) assert.ok(sh.every(s => s.rank === "I"), "no US route shields zoomed far out")
+  }
+  // pad 0 is the labels as before
+  const pts = [["A", 0, 50, 2], ["B", 0.2, 50, 2]]
+  assert.equal(m.visibleLabels(pts, 50, 0, 8, 800, 600).length, 2)
+  assert.equal(m.visibleLabels(pts, 50, 0, 8, 800, 600, { pad: 200 }).length, 1)
+  const i2 = m.shieldPath("I", 2), i3 = m.shieldPath("I", 3), us = m.shieldPath("US", 3)
+  assert.ok(i3.w > i2.w && i2.body.startsWith("M") && i2.body.endsWith("Z") && i2.top && us.top === "")
+  console.log(`mapmath highways ok: ${d.interstates.length} Interstate lines, ${d.us.length} US route lines`)
+}
+
 // tile layers: file paths (server maptiles.tile_path), centre-first order, the EOX credit
 {
   assert.equal(m.tilePath("/t/", "sat", 3, 2, 1), "/t/3/2/1.jpg")

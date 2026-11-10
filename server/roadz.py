@@ -30,6 +30,7 @@ Malformed vector survey records are isolated: invalid XY splits a line into vali
 bridge/tunnel levels stay attached to each run. Cached invalid coordinates trigger a refetch; if unavailable, the
 existing inference remains the fallback. This validation does not smooth or alter finite surveyed heights.
 """
+import contextlib
 import gzip
 import json
 import logging
@@ -111,7 +112,32 @@ LIDAR_GAP_END_TOL_M = 1.5
 LIDAR_GAP_MISS = 1
 LIDAR_GAP_MIN_M = 8.0
 LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
+# once a cell's lidar has missed LIDAR_GAPS_WAIT_S in this process (a slow connection, a busy source), the next cells
+# wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
+# (2026-11-05); those left to the rule are faults (built again with their lidar on a later visit)
+LIDAR_GAPS_SLOW_WAIT_S = 1.0
+# Fast pre-cache's world builds (blockworker.prebuild_geo, its own road processes and the game paused) wait this long
+# for a cell's lidar instead of dropping it: the area's own lidar steps read only the cells round its box, and a
+# geotile's roads reach cells further out; dropping those made every geotile of a pre-cache fail without a sound reason
+# (2026-11-08: 9 of 16 at Lower Manhattan on a slow connection, each read cut off after 8 s). Live play, and the slow
+# pre-cache that shares the live road pool, keep LIDAR_GAPS_WAIT_S.
+PRECACHE_LIDAR_WAIT_S = float(os.environ.get("BNGE_PRECACHE_LIDAR_WAIT", "900"))
 GAP_NATIVE = 107            # earthfast.VERSION of lidar_gap_stretch
+
+
+@contextlib.contextmanager
+def precache_gaps_wait(seconds=None):
+    """Wait as long as a fast pre-cache's geotile build can for its cells' lidar (blockworker.prebuild_geo): its own
+    road processes, the game paused, no live tile waits on them. Restores the live values after."""
+    global LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
+    old = LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S
+    LIDAR_GAPS_WAIT_S = LIDAR_GAPS_SLOW_WAIT_S = float(PRECACHE_LIDAR_WAIT_S if seconds is None else seconds)
+    try:
+        yield
+    finally:
+        LIDAR_GAPS_WAIT_S, LIDAR_GAPS_SLOW_WAIT_S = old
+
+
 # The approaches (the user, 2026-10-31: "use the lidar data to improve how ramps connect"): every drawn road going on
 # from a measured deck end (the gap candidates) is measured too, from that end while its surface starts within
 # APPROACH_END_TOL_M of the deck's measured end, up to where it is back on our DTM (APPROACH_REJOIN_M, two stations
@@ -124,6 +150,10 @@ APPROACH_REJOIN_M = 0.3
 APPROACH_MIN_DEV_M = 0.5
 SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
 SESSION_KEEP_S = 86400.0
+
+class LidarDropped(Exception):
+    """A cell's lidar read stopped: this run goes without it (RoadZ._read)."""
+
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 _REF = re.compile(r"^([a-z]{0,3})(\d{1,4})([a-z]?)$")
@@ -480,6 +510,7 @@ class RoadZ:
         self._mem = OrderedDict()           # (source, cell) -> Lines
         self._enu = OrderedDict()           # (frame, source, cell) -> segment arrays
         self._off = {}                      # (source, cell) -> the cell's datum offset (None: none)
+        self._dropped = set()               # cells this run goes without the lidar of: their reads stop (_read)
         self._names = {}                    # (source, cell, map name) -> name_ok per line
         self._ept = {}                      # dataset name -> Ept
         self._lock = threading.Lock()
@@ -555,6 +586,10 @@ class RoadZ:
                                 json.dump([[f, list(a), list(b)] for f, a, b in getattr(got, "gaps", [])], fh)
                             staging.replace_cached(tmp, p + ".gaps.json")
                         got.save(p)
+                        if src == "lidar":      # (the cell whole on disk: its partial node reads have done their job)
+                            import shutil
+                            shutil.rmtree(os.path.join(self.dir, "eptparts", str(key).replace("/", "_")),
+                                          ignore_errors=True)
                     except Exception as e:
                         log.debug("roadz write %s: %s", p, e)
             with self._lock:
@@ -728,9 +763,11 @@ class RoadZ:
                               float(ys.max()) + pad))
         return boxes
 
-    def _read(self, name, nodes, boxes):
+    def _read(self, name, nodes, boxes, key=None):
         """(xyz (n, 3) Mercator / the dataset's heights, class (n,)) of the EPT nodes' points in boxes, LIDAR_FETCH_THREADS
-        reads at once, in node order."""
+        reads at once, in node order. Stops (LidarDropped) once this run goes without cell key's lidar (gap_answers):
+        the reads went on after the decision, ~1.2 GB in 78 s of a Seattle first visit beside everything the road
+        tiles waited for (2026-11-04)."""
         bb = [min(b[0] for b in boxes), min(b[1] for b in boxes), max(b[2] for b in boxes), max(b[3] for b in boxes)]
         # the boxes as a grid of MASK_M cells (the points kept: those in a box's cells)
         nx = int(math.ceil((bb[2] - bb[0]) / MASK_M)) + 1
@@ -740,13 +777,41 @@ class RoadZ:
             mask[int((b[1] - bb[1]) // MASK_M):int((b[3] - bb[1]) // MASK_M) + 1,
                  int((b[0] - bb[0]) // MASK_M):int((b[2] - bb[0]) // MASK_M) + 1] = True
 
+        # each node's points (the boxes' only) kept on disk as they come in: a read this run stops (LidarDropped) goes
+        # on from there on the next visit instead of from nothing (a busy cell's read was dropped at every visit and
+        # downloaded again: a Fells Point road tile 43 s warm, 2026-11-06); keyed by the boxes, so other bridges or a
+        # changed map read their own
+        part_dir = None
+        if self.dir and key is not None:
+            import hashlib
+            h = hashlib.sha1(np.round(np.asarray(boxes, np.float64), 1).tobytes()).hexdigest()[:16]
+            part_dir = os.path.join(self.dir, "eptparts", str(key).replace("/", "_"), name.replace("/", "_"), h)
+
         def read(k):
+            if key is not None and str(key) in self._dropped:
+                raise LidarDropped(str(key))
+            pp = os.path.join(part_dir, f"{k}.npz") if part_dir else None
+            if pp and os.path.exists(pp):
+                try:
+                    with np.load(pp) as z:
+                        return z["p"], z["c"]
+                except Exception as e:
+                    log.debug("roadz part %s: %s", pp, e)
             p, c = fast._ef.las_decode(self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz"), bb)
-            if not len(p):
-                return p, c
-            keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
-                        ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
-            return p[keep], c[keep]
+            if len(p):
+                keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
+                            ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
+                p, c = p[keep], c[keep]
+            if pp:
+                try:
+                    import staging
+                    os.makedirs(part_dir, exist_ok=True)
+                    tmp = f"{pp}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
+                    np.savez(tmp, p=p, c=c)
+                    staging.replace_cached(tmp, pp)
+                except Exception as e:
+                    log.debug("roadz part write %s: %s", pp, e)
+            return p, c
         from runtimeprofiler import ThreadPoolExecutor
         with ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept") as pool:
             got = list(pool.map(read, nodes))           # (in node order: the same points whichever came first)
@@ -778,7 +843,7 @@ class RoadZ:
             return None
         fast.require(NATIVE, "roadz lidar decks")
         # (the points of these nodes along every candidate kept too: a stretch's own nodes are partly the decks')
-        xyz, cls = self._read(name, nodes, boxes + self._boxes(frame, parts[nb:], local[nb:]))
+        xyz, cls = self._read(name, nodes, boxes + self._boxes(frame, parts[nb:], local[nb:]), key)
         if not len(xyz):
             return None
         la, lo = merc_ll(xyz[:, 0], xyz[:, 1])
@@ -811,7 +876,7 @@ class RoadZ:
             if len(more) + len(nodes) <= LIDAR_NODES_MAX:
                 extra = len(more)
                 if more:
-                    x2, c2 = self._read(name, more, cb)
+                    x2, c2 = self._read(name, more, cb, key)
                     if len(x2):
                         la2, lo2 = merc_ll(x2[:, 0], x2[:, 1])
                         pts = np.ascontiguousarray(np.vstack([pts, local_pts(x2, la2, lo2)]))
@@ -1025,18 +1090,34 @@ class RoadZ:
                 t = threading.Thread(target=build, args=(key,), name="roadz-gaps", daemon=True)
                 t.start()
                 threads.append(t)
-            end = time.monotonic() + LIDAR_GAPS_WAIT_S
+            end = time.monotonic() + (LIDAR_GAPS_SLOW_WAIT_S if getattr(self, "_gaps_slow", False) else LIDAR_GAPS_WAIT_S)
             for t in threads:
                 t.join(max(0.0, end - time.monotonic()))
+            if any(t.is_alive() for t in threads):
+                self._gaps_slow = True          # (LIDAR_GAPS_SLOW_WAIT_S from now on)
             for key in todo:
                 got = self._decide(key, done.get(str(key)))     # (not built in time: None, the rule)
                 if got is None:
                     import revisit
                     revisit.fault(lidar=True)
+                    self._dropped.add(str(key))     # (its read, still going, stops: _read)
                 with self._lock:
                     self._off[("gapans", str(key))] = got
                 out[key] = got
         return out
+
+    def _lidar_skipped(self, keys):
+        """Does this server run go without the lidar of one of these cells? Its decision for each (gap_answers, the cells
+        at once: the lidar built
+        within LIDAR_GAPS_WAIT_S, else the rule for the whole run, the same in every process), so a road tile never
+        waits for a cell's whole read: up to LIDAR_NODES_MAX nodes, ~50 MB a cell, ~1.5 GB of a 20 km drive through
+        Seattle, and its tiles waited 18 s on average, 86 s at most, on a slow connection (BNGE_NET_MBPS=1,
+        2026-11-04). The read goes on and is kept for the next run; a tile built without it is not cached."""
+        try:
+            return any(v is None for v in self.gap_answers(keys).values())
+        except Exception as e:
+            log.debug("roadz lidar decision %s: %s: %s", keys, type(e).__name__, e)
+            return False
 
     # ---- heights for a map road ----
     def _dem_raw(self, la, lo):
@@ -1117,6 +1198,8 @@ class RoadZ:
         qdir = np.ascontiguousarray(d / np.maximum(np.hypot(d[:, 0], d[:, 1]), 1e-9)[:, None])
         for src in srcs:
             segs, segz, oks, cells = [], [], [], []
+            if src == "lidar" and self._lidar_skipped(keys):
+                return None                 # (this run goes without a cell's lidar: the inference, every process)
             for k in keys:
                 ln = self.lines(src, k)
                 if ln is None:

@@ -1,4 +1,6 @@
 """Regression cases from the 1.7.1 European furniture field trial."""
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 from pathlib import Path
 import json
 import sys
@@ -114,6 +116,13 @@ class EuropeTest(unittest.TestCase):
         means={}
         for name,mat in materials.items():
             self.assertEqual(mat['mapTo'],name)
+            if name == 'bne_eu_frontage_asphalt':
+                stage = mat['Stages'][0]
+                self.assertTrue(mat['translucent'])
+                self.assertEqual(stage['opacityMapUseUV'], 1)
+                self.assertTrue((levels / stage['opacityMap'].lstrip('/')).is_file())
+                self.assertIn('/asphalt/', stage['detailMap'])
+                continue
             texture=mat['Stages'][0]['baseColorMap']
             self.assertTrue(texture.endswith('.color.png'))
             with Image.open(levels/texture.lstrip('/')) as im:

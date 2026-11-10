@@ -45,6 +45,8 @@ from typing import NamedTuple
 
 import numpy as np
 
+import fast
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from geodesy import A, F, B, E2, geodetic_to_ecef  # noqa: E402
 import netfetch  # noqa: E402
@@ -307,54 +309,17 @@ class GravityModel:
 
     def _row_sums(self, t, u, lam):
         """Per-degree sums over m (radius-independent): the (nmax+1, 2, ncol) matrices
-        [P cos m lam; P sin m lam] @ coef rows, and P_n0, P_n1 up to NZONAL (float64)."""
-        N = self.nmax
-        mm = np.arange(N + 1)
-        dt = self.dtype
-        cs = np.stack([np.cos(mm * lam), np.sin(mm * lam)])
-        log_s = self.log_sect + mm * math.log(u)        # u > 0: field() keeps off the pole
-        w = np.where(log_s > -650, np.exp(np.maximum(log_s, -650)), 0.0)
-        ws = w * cs              # column scale x cos/sin m lam (float64: w alone may be < 1e-38)
-        out = np.zeros((N + 1, 2, self.coef.shape[1]), dtype=dt)
-        zon = np.zeros((min(N, self.NZONAL) + 1, 2))
-        bufs = [np.zeros(N + 1) for _ in range(3)]
-        ybuf = np.zeros(2 * (N + 1), dtype=dt)
-        tmp = np.zeros(N + 1)
-        ra, rb, coef, off = self.ra, self.rb, self.coef, self.off
-        sect_next, nzon, every = self.sect_next, len(zon) - 1, self.check_every
-        p2, p1 = bufs[0], bufs[1]
-        for n in range(N + 1):
-            pn = bufs[(n + 2) % 3]
-            o, k = off[n], n + 1
-            if n >= 2:
-                j = n - 1
-                np.multiply(ra[o:o + j], p1[:j], out=pn[:j])
-                pn[:j] *= t
-                np.multiply(rb[o:o + j], p2[:j], out=tmp[:j])
-                pn[:j] -= tmp[:j]
-            if n >= 1:
-                pn[n - 1] = sect_next[n - 1] * t * p1[n - 1]
-            pn[n] = 1.0
-            if n and n % every == 0:
-                mag = np.abs(pn[:k])
-                np.maximum(mag[:n], np.abs(p1[:n]), out=mag[:n])
-                big = np.nonzero(mag > self.RESCALE)[0]
-                if len(big):
-                    sc = mag[big]
-                    pn[big] /= sc
-                    b1 = big[big < n]
-                    p1[b1] /= sc[:len(b1)]
-                    log_s[big] += np.log(sc)
-                    w[big] = np.where(log_s[big] > -650, np.exp(np.maximum(log_s[big], -650)), 0.0)
-                    ws[:, big] = w[big] * cs[:, big]
-            y = ybuf[:2 * k].reshape(2, k)
-            np.multiply(pn[:k], ws[:, :k], out=y)          # [P cos m lam; P sin m lam], true scale
-            np.matmul(y, coef[o:o + k], out=out[n])
-            if n <= nzon:
-                zon[n, 0] = pn[0] * w[0]
-                zon[n, 1] = pn[1] * w[1] if n else 0.0
-            p2, p1 = p1, pn
-        return out, zon
+        [P cos m lam; P sin m lam] @ coef rows, and P_n0, P_n1 up to NZONAL (float64). In Rust (earthfast 163,
+        gravity.rs: the same recursion and rescale points; the Python loop took 37.8 CPU-s of the server's interpreter
+        per 15 minutes, 2026-11-07)."""
+        fast.require(163, "gravity row sums")
+        fn = fast._ef.gravity_row_sums_f32 if self.coef.dtype == np.float32 else fast._ef.gravity_row_sums_f64
+        coef = self.coef if self.coef.dtype in (np.float32, np.float64) else self.coef.astype(np.float64)
+        return fn(float(t), float(u), float(lam), np.ascontiguousarray(self.ra, np.float64),
+                  np.ascontiguousarray(self.rb, np.float64), np.ascontiguousarray(coef),
+                  np.ascontiguousarray(self.off, np.int64), np.ascontiguousarray(self.sect_next, np.float64),
+                  np.ascontiguousarray(self.log_sect, np.float64), int(self.check_every), float(self.RESCALE),
+                  int(self.NZONAL), int(self.nmax))
 
     def _evaluate(self, lat, lon, h, msl):
         """Row sums along the direction of (lat, lon, h), then the radial factors at the final
@@ -568,13 +533,75 @@ def ensure_egm2008(cache_dir=CACHE_DIR, log=print, net=None):
     return npy
 
 
-def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, **kw):
-    """EGM2008 truncated to degree ``nmax`` (<= 2190)."""
+# The built model's tables kept on disk and memory-mapped (load_egm2008): kept in memory they were ~128 MB of the
+# server's main process for a value asked every 2 km (and building them peaked at ~380 MB); mapped, they are file pages
+# the system may drop and read again. DERIVED_V: raise it when GravityModel's tables change.
+DERIVED_V = 1
+_BIG = ("coef", "ra", "rb")
+_SMALL = ("zonal", "log_sect", "sect_next", "off")
+_SCALARS = ("nmax", "gm", "a", "name", "height_offset", "check_every")
+
+
+def _derived_dir(cache_dir, nmax, dtype):
+    return os.path.join(cache_dir, f"egm2008_model_v{DERIVED_V}_{nmax}_{np.dtype(dtype).name}")
+
+
+def _save_derived(model, d):
+    tmp = f"{d}.{os.getpid()}.{threading.get_ident()}.tmp"
+    try:
+        os.makedirs(tmp, exist_ok=True)
+        for k in _BIG + _SMALL:
+            np.save(os.path.join(tmp, k + ".npy"), getattr(model, k))
+        with open(os.path.join(tmp, "meta.json"), "w") as f:
+            json.dump({k: getattr(model, k) for k in _SCALARS} | {"dtype": model.dtype.name}, f)
+        if os.path.isdir(d):
+            import shutil
+            shutil.rmtree(d, ignore_errors=True)
+        os.rename(tmp, d)
+    except OSError:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _load_derived(d):
+    """The model from _save_derived's folder (big tables memory-mapped), or None."""
+    try:
+        with open(os.path.join(d, "meta.json")) as f:
+            meta = json.load(f)
+        model = GravityModel.__new__(GravityModel)
+        for k in _SCALARS:
+            setattr(model, k, meta[k])
+        model.dtype = np.dtype(meta["dtype"])
+        for k in _BIG:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy"), mmap_mode="r"))
+        for k in _SMALL:
+            setattr(model, k, np.load(os.path.join(d, k + ".npy")))
+        if model.coef.shape[0] != tri_len(model.nmax) or model.coef.dtype != model.dtype:
+            return None
+        return model
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def load_egm2008(nmax=DEFAULT_NMAX, cache_dir=CACHE_DIR, log=print, mapped=True, **kw):
+    """EGM2008 truncated to degree ``nmax`` (<= 2190); mapped: its tables memory-mapped from the cache (built and
+    written there the first time)."""
+    dtype = kw.get("dtype", np.float32)
+    d = _derived_dir(cache_dir, min(int(nmax), EGM2008_NMAX), dtype)
+    if mapped and set(kw) <= {"dtype"}:
+        model = _load_derived(d)
+        if model is not None:
+            return model
     arr = np.asarray(np.load(ensure_egm2008(cache_dir, log=log), mmap_mode="r"))   # read as needed (a plain view)
     L = tri_len(min(nmax, EGM2008_NMAX))
     model = GravityModel(arr[0, :L], arr[1, :L], nmax=nmax, corr_c=arr[2, :L], corr_s=arr[3, :L],
                          name=f"EGM2008/{nmax}", **kw)
     del arr
+    if mapped and set(kw) <= {"dtype"}:
+        _save_derived(model, d)
+        mm = _load_derived(d)
+        if mm is not None:
+            return mm           # (the built tables go: the mapped ones are the same bytes)
     return model
 
 

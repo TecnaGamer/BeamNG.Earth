@@ -13,11 +13,18 @@ def model_box(ring):
     return c, u, hl, hw
 
 
+_UV4 = ((0., 0.), (1., 0.), (1., 1.), (0., 1.))
+
+
 def face(m, pts, material, outward, uv=None):
-    """Convex 3D face, explicitly outward wound (including vertical gables)."""
-    p = np.asarray(pts, float)
-    uv = np.asarray(uv if uv is not None else [(0., 0.), (1., 0.), (1., 1.), (0., 1.)][:len(p)], float)
-    if np.dot(np.cross(p[1] - p[0], p[2] - p[0]), outward) < 0:
+    """Convex 3D face, explicitly outward wound (including vertical gables). (Plain floats: np.cross and asarray
+    on 3-4 points made up ~60 % of a French house tile's build, PR #505 merge profile.)"""
+    p = [(float(q[0]), float(q[1]), float(q[2])) for q in pts]
+    uv = [(float(t[0]), float(t[1])) for t in (uv if uv is not None else _UV4[:len(p)])]
+    (ax, ay, az), (bx, by, bz), (cx, cy, cz) = p[0], p[1], p[2]
+    ux, uy, uz, vx, vy, vz = bx - ax, by - ay, bz - az, cx - ax, cy - ay, cz - az
+    if ((uy * vz - uz * vy) * float(outward[0]) + (uz * vx - ux * vz) * float(outward[1])
+            + (ux * vy - uy * vx) * float(outward[2])) < 0:
         p, uv = p[::-1], uv[::-1]
     if len(p) == 4:
         m.quad(*p, *uv, material)
@@ -27,10 +34,12 @@ def face(m, pts, material, outward, uv=None):
 
 
 def panel(m, a, d, out, s0, s1, z0, z1, material, offset=.025, tile=2.4):
-    p, q = a + d * s0 + out * offset, a + d * s1 + out * offset
-    face(m, [(p[0], p[1], z0), (q[0], q[1], z0), (q[0], q[1], z1), (p[0], p[1], z1)],
-         material, (*out, 0.), [(s0 / tile, 0.), (s1 / tile, 0.),
-                               (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
+    ax, ay, dx, dy, ox, oy = float(a[0]), float(a[1]), float(d[0]), float(d[1]), float(out[0]), float(out[1])
+    px, py = ax + dx * s0 + ox * offset, ay + dy * s0 + oy * offset
+    qx, qy = ax + dx * s1 + ox * offset, ay + dy * s1 + oy * offset
+    face(m, [(px, py, z0), (qx, qy, z0), (qx, qy, z1), (px, py, z1)],
+         material, (ox, oy, 0.), [(s0 / tile, 0.), (s1 / tile, 0.),
+                                  (s1 / tile, (z1 - z0) / tile), (s0 / tile, (z1 - z0) / tile)])
 
 
 def box(m, c, u, hx, hy, z0, z1, material):
@@ -39,23 +48,31 @@ def box(m, c, u, hx, hy, z0, z1, material):
 
 
 def beam(m, a, d, out, s0, z0, s1, z1, material, width=.13, coarse=False):
-    p = np.array([*(a + d * s0), z0])
-    q = np.array([*(a + d * s1), z1])
-    n = np.array([*out, 0.])
-    axis = q - p
-    length = float(np.linalg.norm(axis))
+    ax, ay, dx, dy = float(a[0]), float(a[1]), float(d[0]), float(d[1])
+    p = (ax + dx * s0, ay + dy * s0, float(z0))
+    q = (ax + dx * s1, ay + dy * s1, float(z1))
+    n = (float(out[0]), float(out[1]), 0.)
+    axis = (q[0] - p[0], q[1] - p[1], q[2] - p[2])
+    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
     if length < .05:
         return
-    v = np.cross(axis / length, n) * width / 2
-    back = [p - v + n * .015, q - v + n * .015, q + v + n * .015, p + v + n * .015]
-    front = [r + n * .075 for r in back]
+    e = (axis[0] / length, axis[1] / length, axis[2] / length)
+    v = ((e[1] * n[2] - e[2] * n[1]) * width / 2, (e[2] * n[0] - e[0] * n[2]) * width / 2,
+         (e[0] * n[1] - e[1] * n[0]) * width / 2)
+
+    def at(r, sv, k):
+        return tuple(r[i] + sv * v[i] + n[i] * k for i in range(3))
+    back = [at(p, -1, .015), at(q, -1, .015), at(q, 1, .015), at(p, 1, .015)]
+    front = [tuple(r[i] + n[i] * .075 for i in range(3)) for r in back]
     face(m, front, material, n)
     if coarse:
         return
+    cx, cy, cz = (p[0] + q[0]) / 2, (p[1] + q[1]) / 2, (p[2] + q[2]) / 2
     for i in range(4):
         j = (i + 1) % 4
         pts = [back[i], back[j], front[j], front[i]]
-        mid = np.mean(pts, axis=0) - (p + q) / 2 - n * .05
+        mid = (sum(t[0] for t in pts) / 4 - cx - n[0] * .05, sum(t[1] for t in pts) / 4 - cy - n[1] * .05,
+               sum(t[2] for t in pts) / 4 - cz - n[2] * .05)
         face(m, pts, material, mid)
 
 

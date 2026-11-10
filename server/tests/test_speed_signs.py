@@ -1,7 +1,9 @@
 """Speed-limit signs (speedsigns.py, earthfast speed_sign_place / speed_sign_mesh): where they stand and how they look."""
+import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -161,6 +163,70 @@ class GlueTest(unittest.TestCase):
         self.assertEqual(speedsigns.style("CA", False), speedsigns.STYLE_CANADA)
         self.assertEqual(speedsigns.style("GB", False), speedsigns.STYLE_VIENNA)
         self.assertEqual(speedsigns.style(None, False), speedsigns.STYLE_VIENNA)
+        self.assertEqual(speedsigns.style("se", False), speedsigns.STYLE_SWEDEN)
+
+    def test_swedish_values_are_the_legal_steps(self):
+        posted = lambda kmh: speedsigns.posted(kmh / 1.609344, False, speedsigns.STYLE_SWEDEN)  # noqa: E731
+        self.assertEqual([posted(v) for v in (30, 35, 44, 50, 65, 74, 80, 95, 110, 120)],
+                         [30, 40, 40, 50, 70, 70, 80, 100, 110, 120])
+        self.assertEqual(posted(130), 120)
+        self.assertEqual(posted(20), 0, "slower than any step: no sign rather than a number above the limit")
+
+    def test_c31_materials_are_in_the_mod(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "roadside", "exit.materials.json")
+        with open(path, encoding="utf-8") as f:
+            self.assertLessEqual(set(speedsigns.MATERIALS_C31), set(json.load(f)))
+
+    @unittest.skipUnless(getattr(fast._ef, "VERSION", 0) >= speedsigns.KERNEL, "earthfast with the speed-sign kernels")
+    def test_c31_mesh_has_swedish_sizes_and_colours(self):
+        class Frame:
+            enu_to_geodetic = staticmethod(lambda x, y, z: (y, x, x * 0))
+            geodetic_to_enu = staticmethod(lambda la, lo, h: (lo, la, h))
+        widths = {}
+        for size, want in ((1, 0.60), (2, 0.90), (3, 0.90)):
+            sign = np.array([[0.0, 0.0, 0.0, 1.0, 70.0, size, 5.0, 0.0, 0.0]])
+            with mock.patch.object(speedsigns, "place", return_value=sign):
+                p, _, _, mats, mi = speedsigns.build_tile(Frame, 0, 0, lambda la, lo: la * 0, None,
+                                                          face=speedsigns.STYLE_SWEDEN)
+            self.assertEqual(mats, speedsigns.MATERIALS_C31)
+            widths[size] = p[:, 0].max() - p[:, 0].min()
+            self.assertAlmostEqual(widths[size], want, places=2)
+            self.assertIn(1, set(mi.tolist()))
+
+    def test_c31_face_is_the_artwork_the_right_way_round(self):
+        table = np.array([[0.0, 0.0, 10.0, 10.5, 0.0, 1.0, 70.0, 1.0, 0.0]])       # driving north
+        p, t, uv, mats, mi = speedsigns.sweden_mesh(table, (0.0, 0.0, 0.0))
+        face = t[mi == 0]
+        a, b, c = p[face[:, 0]], p[face[:, 1]], p[face[:, 2]]
+        self.assertTrue((np.cross(b - a, c - a)[:, 1] < 0).all(), "the face towards the driver")
+        used = np.unique(face)
+        for axis, along in ((0, 0), (2, 1)):                                        # east is the driver's right, up is up
+            self.assertGreater(np.corrcoef(p[used, axis], uv[used, along])[0, 1], 0.999)
+        low = p[used, 2].min()
+        self.assertAlmostEqual(low, 10.5 + 1.52, places=2)
+        self.assertGreater(p[:, 2].max() - p[:, 2].min(), 2.0, "with a pole to the ground and below it")
+        self.assertLess(p[:, 2].min(), 10.0)
+
+    def test_c31_cells_hold_their_signs(self):
+        from PIL import Image
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "mod", "beamng_earth", "levels",
+                            "beamng_earth", "art", "shapes", "beamngEarth", "bne_se_signs.png")
+        sheet = np.asarray(Image.open(path).convert("RGB")).astype(int)
+        self.assertEqual(sheet.shape[:2], (int(speedsigns.C31_SHEET),) * 2)
+        at = lambda value, c, s: sheet[(lambda uv: (int((1 - uv[1]) * 1024), int(uv[0] * 1024)))(   # noqa: E731
+            speedsigns.c31_uv(value, c, s))]
+        faces = set()
+        for value in range(30, 130, 10):
+            r, g, b = at(value, 0.92, 0.0)
+            self.assertTrue(r > 200 and g < 100 and b < 100, f"{value}: the red ring")
+            r, g, b = at(value, 0.0, 0.72)
+            self.assertTrue(r > 200 and g > 170 and b < 60, f"{value}: yellow inside it")
+            k = value // 10 - 3
+            cell = sheet[(k // 4) * 256: (k // 4) * 256 + 256, (k % 4) * 256: (k % 4) * 256 + 256]
+            faces.add(cell.tobytes())
+            self.assertLess(cell.sum(2).min(), 90, f"{value}: black digits")
+        self.assertEqual(len(faces), 10)
 
     def test_cell_specs_kept(self):
         class Feats:
@@ -178,6 +244,18 @@ class GlueTest(unittest.TestCase):
         finally:
             roads.road_specs = real
         self.assertEqual(Feats.calls, 1)
+
+
+
+class ClassTest(unittest.TestCase):
+    def test_tracks_are_never_signed(self):
+        """Tracks are in the AI's graph (navgraph.DRIVE, GitHub #756) but get no speed signs."""
+        from test_roads import features, FRAME
+        import navgraph
+        self.assertIn("track", navgraph.DRIVE)
+        f = features([[(0, 0), (400, 0)], [(0, 50), (400, 50)]], ["primary", "track"])
+        got = speedsigns._cell_rows(f, FRAME, None, None, False, True)
+        self.assertEqual(sorted(got), [str(f.ids[0])])
 
 
 if __name__ == "__main__":

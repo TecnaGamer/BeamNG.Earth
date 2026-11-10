@@ -1,13 +1,8 @@
 """French local direction signs tied to the roads and shoulders drawn in a tile."""
 
 from dataclasses import dataclass
-from functools import lru_cache
-import hashlib
-import json
 import math
-from pathlib import Path
 import unicodedata
-import zipfile
 
 import numpy as np
 
@@ -17,11 +12,7 @@ import geotiles
 import signplacement
 import townsigns
 
-DATA_PATH = Path(__file__).with_name('data') / 'fr_local_directions.zip'
-DATA_SHA256 = '60b6d6559a0f5ede340149835949d096dfa8fd010f0b753499c01a52470a6e2f'
-PRIORITY_PATH = DATA_PATH.with_name('fr_priority_directions.zip')
-PRIORITY_SHA256 = '3eb34ca7b4b483d5c1b820b418dd2085089c1cf85efb76fac957e112d6fa0ec7'
-SIGNATURE = 'fr-local-directions-4:' + DATA_SHA256 + ':' + PRIORITY_SHA256
+SIGNATURE = 'fr-local-directions-5'      # 4: the cells from the regional data (regionaldata fr_local / fr_priority)
 SOURCE_ORDER = {'relation': 0, 'road': 1, 'route': 2}
 LOCAL = frozenset(
     ('primary', 'secondary', 'tertiary', 'unclassified', 'residential', 'living_street')
@@ -35,38 +26,6 @@ THROUGH = LOCAL - {'residential', 'living_street'}
 PLACE_REACH = {'city': 3600.0, 'town': 2200.0, 'village': 1300.0, 'hamlet': 420.0}
 
 
-@lru_cache(maxsize=8)
-def _catalog(path, digest):
-    with path.open('rb') as data:
-        if hashlib.file_digest(data, 'sha256').hexdigest() != digest:
-            raise ValueError(f'French direction data checksum mismatch: {path.name}')
-    with zipfile.ZipFile(path) as archive:
-        index = json.loads(archive.read('index.json'))
-    if index['format'] != 1:
-        raise ValueError('Unsupported French local direction data format')
-    return index['cell'], frozenset(tuple(cell) for cell in index['cells'])
-
-
-@lru_cache(maxsize=16)
-def _cell(x, y, path=DATA_PATH):
-    with zipfile.ZipFile(path) as archive:
-        return tuple(json.loads(archive.read(f'{x}_{y}.json')))
-
-
-@lru_cache(maxsize=1)
-def _priority_catalogs(path, digest):
-    manifest = path.with_suffix('.json')
-    if not manifest.is_file():
-        return ((path, digest),)
-    info = json.loads(manifest.read_text(encoding='utf-8'))
-    if info['source_sha256'] != digest or not info['parts']:
-        raise ValueError('French priority direction catalog manifest mismatch')
-    return tuple(
-        (path.with_name(f'{path.stem}-{i:02d}.zip'), checksum)
-        for i, checksum in enumerate(info['parts'], 1)
-    )
-
-
 def nearby(frame, box, margin=0.0):
     x0, y0, x1, y1 = box
     x0, y0, x1, y1 = x0 - margin, y0 - margin, x1 + margin, y1 + margin
@@ -76,22 +35,21 @@ def nearby(frame, box, margin=0.0):
     lo, hi = np.floor(np.array([[min(lon), min(lat)], [max(lon), max(lat)]]) * 1.0e7).astype(int)
     if hi[0] < -55_000_000 or lo[0] > 100_000_000 or hi[1] < 410_000_000 or lo[1] > 515_000_000:
         return []
+    import regionaldata
     result = []
-    catalogs = (*_priority_catalogs(PRIORITY_PATH, PRIORITY_SHA256), (DATA_PATH, DATA_SHA256))
-    for path, digest in catalogs:
-        cell_size, cells = _catalog(path, digest)
-        for x in range(lo[0] // cell_size, hi[0] // cell_size + 1):
-            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1):
-                if (x, y) not in cells:
-                    continue
-                for row in _cell(x, y, path):
-                    px, py = row['at']
-                    if lo[0] <= px <= hi[0] + 1 and lo[1] <= py <= hi[1] + 1:
-                        # The former short-range estimates did not compare
-                        # competing turns. Keep the surveyed and tagged faces.
-                        panels = [p for p in row['panels'] if p['source'] != 'route' or p.get('checked_route')]
-                        if panels:
-                            result.append(dict(row, panels=panels))
+    for ds in ('fr_priority', 'fr_local'):
+        info = regionaldata.dataset(ds)
+        if info is None:
+            continue
+        cell_size = info['cell']
+        result.extend(
+            dict(row, panels=panels)
+            for x in range(lo[0] // cell_size, hi[0] // cell_size + 1)
+            for y in range(lo[1] // cell_size, hi[1] // cell_size + 1)
+            for row in (regionaldata.cell(ds, x, y) or ())
+            if (panels := [p for p in row['panels'] if p['source'] != 'route' or p.get('checked_route')])
+            and lo[0] <= row['at'][0] <= hi[0] + 1 and lo[1] <= row['at'][1] <= hi[1] + 1
+        )
     return result
 
 

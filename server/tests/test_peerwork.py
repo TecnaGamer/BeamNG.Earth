@@ -150,7 +150,8 @@ def far_geometry(*args):        # (the job's name is what the pool routes by)
 class FakeHelper:
     """A helper on a local port answering every job with a fixed Built (or refusing another code)."""
 
-    def __init__(self, code=None):
+    def __init__(self, code=None, hold=None):
+        self.hold = hold            # (an Event: no answer before it is set, so its slots stay busy)
         self.srv = socket.socket()
         self.srv.bind(("127.0.0.1", 0))
         self.srv.listen()
@@ -174,6 +175,8 @@ class FakeHelper:
             while True:
                 h, _ = peerwork.recv_msg(s)
                 self.jobs.append(h["tile"])
+                if self.hold is not None:
+                    self.hold.wait(10)
                 d, blobs = peerwork.built_msg(built(len(self.jobs)))
                 peerwork.send_msg(s, {"ok": True, "built": d}, blobs)
         except (ConnectionError, OSError, ValueError):
@@ -185,7 +188,10 @@ class PoolTest(unittest.TestCase):
         return (1, 39.28, -76.59, farfield.Tile(1, i, 0), 13, None, 14, True, farfield.Layout(64))
 
     def test_helper_used_then_local(self):
-        helper, local = FakeHelper(), LocalPool()
+        # (the helper answers once all four are in: on a slow Windows runner it finished its first before the fourth
+        # was asked and took three, CI 2026-11-05)
+        hold = threading.Event()
+        helper, local = FakeHelper(hold=hold), LocalPool()
         pool = peerwork.SharedFarPool(local, [("127.0.0.1", helper.port)], {"roads": True}, None)
         for _ in range(100):
             if pool.free.qsize() == 2:
@@ -193,6 +199,7 @@ class PoolTest(unittest.TestCase):
             threading.Event().wait(0.02)
         self.assertEqual(pool.remote_slots(), 2, "earthd keeps this many more far tiles in flight")
         futs = [pool.submit(far_geometry, *self.args(i)) for i in range(4)]
+        hold.set()
         out = [f.result(10) for f in futs]
         remote = [o for o in out if isinstance(o, farfield.Built)]
         self.assertEqual(len(remote), 2, "the helper's two slots")

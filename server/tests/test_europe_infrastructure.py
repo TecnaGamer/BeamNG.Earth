@@ -3,6 +3,8 @@
 Real offline boundaries/localities plus synthetic roads. These cannot replace
 an in-game Windows check of lighting, BeamNG importing and driving performance.
 """
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import hashlib
 import json
 from pathlib import Path
@@ -48,7 +50,7 @@ class GeographyTest(unittest.TestCase):
             self.assertEqual(pp.choose(pp.profile_for(code,mode),'x'),pp.STOCK)
     def test_cache_token_contains_all_geographic_sources(self):
         token=pp.geographic_profile('europe')
-        for text in (ei.VERSION,townsigns.EU_DATA_SHA256,regionalstops.DATA_SHA256,countrybounds.DATA_SHA256):
+        for text in (ei.VERSION,regionalstops.VERSION,countrybounds.signature()):
             self.assertIn(text,token[2])
         frame=geodesy.EnuFrame(52.5,13.4)
         with self.assertRaises(ValueError):pp.selector((token[0],token[1],token[2]+'old'),frame)
@@ -177,7 +179,8 @@ class TownTest(unittest.TestCase):
         for bounds,fragment in [((13.3,52.4,13.5,52.6),'Berlin'),((37.4,55.6,37.9,55.9),'Москва'),
                                 ((22.8,40.4,23.1,40.7),'Θεσσαλονίκη')]:
             self.assertIn(fragment,[r['name'] for r in data.nearby(bounds,True)])
-        self.assertGreater(sum(data.metadata['counts'].values()),300000)
+        import regionaldata
+        self.assertGreater(sum(regionaldata.dataset('places')['meta']['counts'].values()),300000)
     def test_shared_font_has_native_scripts_and_arret(self):
         glyphs=signmesh.font()['glyphs']
         for name in ('ARRÊT','DUR','МОСКВА','КИЇВ','ŁÓDŹ','ΘΕΣΣΑΛΟΝΊΚΗ','ČESKÝ KRUMLOV','თბილისი','Երևան'):

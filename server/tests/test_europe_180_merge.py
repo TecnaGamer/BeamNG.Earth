@@ -1,4 +1,6 @@
 """Regional scenery alongside 1.8's mountain roads and retained custom 3D models."""
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import json
 import sys
 import unittest

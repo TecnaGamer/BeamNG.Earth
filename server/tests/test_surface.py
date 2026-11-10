@@ -477,6 +477,16 @@ class LotTest(unittest.TestCase):
         self.assertTrue(np.array_equal(out[2, 2], [200, 200, 200]) and np.array_equal(rgb[30, 30], [200, 200, 200]))
 
 
+    def test_dirt_track_visible_on_pale_ground(self):
+        """A dirt track painted into a pale field photo stays clearly darker than it (a farm track near Suchy Dul read
+        as nothing at 0.45), yet keeps a trace of the photo: less opaque than gravel's and the asphalt's paint."""
+        r, g, b, op = sf.PHOTO_ROAD_RGBA["dirt"]
+        pale = 200.0
+        blended = [pale * (1 - op) + c * op for c in (r, g, b)]
+        self.assertTrue(all(pale - v >= 50.0 for v in blended), blended)
+        self.assertLess(op, sf.PHOTO_ROAD_RGBA["paved"][3])
+        self.assertTrue(r > b, "an earth brown, not grey")
+
     def test_square_painted_paving(self):
         """A land-use square (subtype pedestrian) is paving (the Zocalo read as dirt); a park is not."""
         lat0, lon0 = 19.43, -99.13
@@ -686,6 +696,96 @@ class FieldTest(unittest.TestCase):
         off = np.abs(out[30:50, 8:24].astype(np.int16) - rgb[30:50, 8:24].astype(np.int16)).sum()
         self.assertGreater(int(off), 0, "the field beside the road still has rows")
         self.assertTrue(np.array_equal(rgb, np.full((80, 80, 3), (40, 140, 50), np.uint8)))
+
+
+class GolfSurfaceTest(unittest.TestCase):
+    """Greens, fairways, rough and bunkers (Overture land_use class, subtype golf)."""
+
+    def grid(self):
+        lat0, lon0 = 40.0, -76.0
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+        return lat0, lon0, lat, lon
+
+    def ring(self, lon0, lat0, c0, c1, r0, r1):
+        a, b = lon0 + c0 * 2.6e-5, lon0 + c1 * 2.6e-5
+        c, d = lat0 + r0 * 2e-5, lat0 + r1 * 2e-5
+        return np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])
+
+    def test_layers_cover_in_order_and_skip_other_bunkers(self):
+        lat0, lon0, lat, lon = self.grid()
+        rings = [
+            self.ring(lon0, lat0, 5, 40, 5, 40),     # rough
+            self.ring(lon0, lat0, 10, 30, 10, 30),   # fairway
+            self.ring(lon0, lat0, 18, 26, 18, 26),   # green
+            self.ring(lon0, lat0, 20, 23, 20, 23),   # bunker
+            self.ring(lon0, lat0, 42, 48, 42, 48),   # military bunker
+        ]
+
+        class Land:
+            kind = np.array([3, 3, 3, 3, 3], np.uint8)
+            attrs = {
+                "class": np.array(["rough", "fairway", "green", "bunker", "bunker"], object),
+                "subtype": np.array(["golf", "golf", "golf", "golf", "military"], object),
+            }
+
+            def __len__(self):
+                return 5
+
+            def parts(self, i):
+                return [[rings[i]]]
+        idx = np.full((50, 50), sf.GRASS, np.uint8)
+        out = sf.paint_golf(idx, lat, lon, [Land()])
+        self.assertEqual(out[8, 8], sf.GOLF_ROUGH)
+        self.assertEqual(out[14, 14], sf.GOLF_FAIRWAY)
+        self.assertEqual(out[18, 18], sf.GOLF_GREEN)   # (pixel centres: the bunker ring paints rows 19-22)
+        self.assertEqual(out[21, 21], sf.GOLF_BUNKER)
+        self.assertEqual(out[45, 45], sf.GRASS, "a bunker that is not a golf bunker stays grass")
+        self.assertEqual(out[2, 2], sf.GRASS)
+        self.assertTrue(np.array_equal(idx, np.full((50, 50), sf.GRASS, np.uint8)))
+
+    def test_tee_is_fairway_and_a_course_outline_is_not(self):
+        lat0, lon0, lat, lon = self.grid()
+        rings = [self.ring(lon0, lat0, 8, 16, 8, 16), self.ring(lon0, lat0, 20, 40, 20, 40)]
+
+        class Land:
+            kind = np.array([3, 3], np.uint8)
+            attrs = {"class": np.array(["tee", "golf_course"], object),
+                     "subtype": np.array(["golf", "golf"], object)}
+
+            def __len__(self):
+                return 2
+
+            def parts(self, i):
+                return [[rings[i]]]
+        out = sf.paint_golf(np.full((50, 50), sf.GRASS, np.uint8), lat, lon, [Land()])
+        self.assertEqual(out[12, 12], sf.GOLF_FAIRWAY)
+        self.assertEqual(out[30, 30], sf.GRASS)
+
+    def test_photo_tints_the_green_and_leaves_the_rest(self):
+        import geodesy
+        frame = geodesy.EnuFrame(40.0, -76.0)
+        e = np.array([-15.0, 15.0, 15.0, -15.0, -15.0])
+        n = np.array([-10.0, -10.0, 10.0, 10.0, -10.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+
+        class Green:
+            kind = np.array([3], np.uint8)
+            attrs = {"class": np.array(["green"], object), "subtype": np.array(["golf"], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                return [[np.stack([lo, la], 1)]]
+        rgb = np.full((80, 80, 3), 40, np.uint8)
+        out = sf.photo_golf(rgb, frame, -40.0, -40.0, 80.0, [Green()])
+        colour = np.array(sf.GOLF_PHOTO[2][1][:3], np.float32)
+        op = float(sf.GOLF_PHOTO[2][1][3])
+        expect = np.round(40 * (1.0 - op) + colour * op).astype(np.uint8)
+        self.assertTrue(np.array_equal(out[40, 40], expect))
+        self.assertTrue(np.array_equal(out[2, 2], [40, 40, 40]))
+        self.assertTrue(np.array_equal(rgb[40, 40], [40, 40, 40]))
 
 
 if __name__ == "__main__":

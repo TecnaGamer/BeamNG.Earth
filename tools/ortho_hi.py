@@ -36,9 +36,10 @@ SOURCES = {
 # ... and the server's regional XYZ sources (imagery_regional.REGIONAL: Switzerland, France, the Netherlands, Japan,
 # New South Wales, US states...), read at z19
 import imagery_regional  # noqa: E402
+XYZ_MAX_ZOOM = {"japan": 18}        # (GSI's seamless photo stops at z18: z19 was all 404s, a black picture of Atami)
 for _n, _v in imagery_regional.REGIONAL.items():
     if _v[3] == "xyz" and _n not in SOURCES:
-        SOURCES[_n] = ("xyz", _v[0], _v[2], 19)
+        SOURCES[_n] = ("xyz", _v[0], _v[2], XYZ_MAX_ZOOM.get(_n, 19))
 ORDER = ("md3in", "penn", "virginia", "jeffco") + tuple(n for n in SOURCES if n not in
                                                         ("md3in", "penn", "virginia", "jeffco", "naip")) + ("naip",)
 

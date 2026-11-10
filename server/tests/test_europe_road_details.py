@@ -2,6 +2,8 @@
 
 Synthetic road geometry; these checks cannot validate BeamNG's importer or FPS.
 """
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import gzip
 import json
 import os

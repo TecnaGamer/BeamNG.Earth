@@ -42,7 +42,7 @@ class LayoutCache:
 
     def get(self, frame, cells, variant, build, size_of=_size):
         sources = tuple(f for f in cells if f is not None)
-        key = (frame.lat0, frame.lon0, frame.h0, tuple(map(id, sources)), variant)
+        key = (frame.lat0, frame.lon0, frame.h0, tuple((id(f), getattr(f, "_road_revision", 0)) for f in sources), variant)
         with self.lock:
             got = self.entries.get(key)
             if got is not None and all(ref() is f for ref, f in zip(got[0], sources)):

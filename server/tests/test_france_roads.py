@@ -1,4 +1,6 @@
 """French scenery: real boundary gates, directional paint, models and tile export."""
+import os
+os.environ.setdefault("BNE_REGIONAL_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "regional"))  # (PR #505's data: the tests' slice)
 import json
 import math
 import os
@@ -443,7 +445,7 @@ class RenderingRegressionTest(FrenchTest):
         self.assertEqual({lk["kind"] for lk, _, _ in out}, {"centre", "lane"})
         for lk, width, run in out:
             self.assertLessEqual(fr.stations(run)[-1], 1.50001)
-            kept = roads.cut_outside(run, [(np.array([[0., 250.], [150., 250.]]), 4.)], min_piece_m=.02)
+            kept = roads.cut_outside(run, [(np.array([[0., 250.], [150., 250.]]), 4.)], min_piece=.02)
             self.assertEqual(len(kept), 1)
 
     def test_short_urban_dashes_survive_the_complete_multi_road_tile(self):
