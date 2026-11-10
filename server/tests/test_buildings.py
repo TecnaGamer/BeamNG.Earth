@@ -1867,12 +1867,12 @@ class WaterTankTest(unittest.TestCase):
         self.assertFalse(bld.water_tank(low, 40.718, -73.999, 600.0), "two storeys: none")
         glass = bld.plan(ring, {"class": "office", "num_floors": 20, "facade_material": "glass"}, 0, 40.718, -73.999)
         self.assertFalse(bld.water_tank(glass, 40.718, -73.999, 600.0), "a curtain wall: none")
-        sp = specs[0]
+        sp = next(sp for sp in specs if bld.water_tank(sp, 40.718, -73.999, 600.0))
         sp.min_h, sp.tank = 0.0, True
-        top_with = float(np.max(np.asarray(bld.build([(sp, 0.0, 0.0)])[0])[:, 2]))
-        sp.tank = False
-        top_without = float(np.max(np.asarray(bld.build([(sp, 0.0, 0.0)])[0])[:, 2]))
-        self.assertGreater(top_with - top_without, 6.0, "legs + staves + cap over the roof")
+        (row,) = bld.tank_rows([(sp, 10.0, 10.5)], 100.0, 200.0)
+        self.assertEqual(row[0], "rooftank")
+        self.assertAlmostEqual(row[3], bld.base_z(sp, 10.0, 10.5) + sp.height, places=1)
+        self.assertTrue(100.0 < row[1] < 131.0 and 200.0 < row[2] < 221.0, row)
 
 
 if __name__ == "__main__":

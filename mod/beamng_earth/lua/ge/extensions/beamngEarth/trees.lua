@@ -52,7 +52,7 @@ M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
 M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_lemon = true, wallsign_turboburger = true }
+  wallsign_lemon = true, wallsign_turboburger = true, rooftank = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
 -- ~20 shapes among ~130k items cost ~100 ms. A frame touches shapes whose items add up to SHAPE_ITEMS_PER_FRAME at most
@@ -90,7 +90,7 @@ M.ONE_SPELLING = { door = true, hydrant = true, bin = true, bench = true, busshe
   rrcross = true, rrcross_eu = true, rrflash = true, rrflash_eu = true, rrgate = true, rrgate_eu = true,
   rrgate_eu_l = true, rrgate_l = true, catmast = true, catmast_eu = true, catpost = true, catpost_eu = true, sub_breaker = true, sub_fence = true, sub_mast = true, sub_support = true,
   sub_transformer = true, wallsign_lemon = true, wallsign_logistics = true, wallsign_rentabox = true,
-  wallsign_turboburger = true }
+  wallsign_turboburger = true, rooftank = true }
 
 local ECA = '/levels/east_coast_usa/art/shapes/'
 local WCA = '/levels/west_coast_usa/art/shapes/'
@@ -360,6 +360,10 @@ M.CATALOG.container = {
 }
 M.CATALOG.billboard = { { WCA .. 'objects/dragbillboard', 11.95 } }
 M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8.41 } }
+-- New York's rooftop water tanks (server buildings.tank_rows): Small Island's tank on legs (its materials with Small
+-- Island's buildings)
+M.CATALOG.rooftank = { { '/levels/small_island/art/shapes/buildings/si_water_tower', 6.1 } }
+M.GROUP_MAX_M.rooftank = 1500
 M.GROUP_MAX_M.celltower = 2500
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500
@@ -423,6 +427,7 @@ local MATERIALS = {
   JV .. 'misc',     -- the cell tower
   HIR .. 'groundcover',     -- the clover and daisy patches and ferns of a roundabout's island (server roundabouts.py)
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
+  '/levels/small_island/art/shapes/buildings',     -- the rooftop water tank
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',
   '/art/shapes/objects/windows_doors_reflective',

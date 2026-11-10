@@ -948,6 +948,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
             props.extend(wrows)
+        if props is not None:       # (New York's rooftop water tanks: the stock model, Forest rows)
+            props.extend(buildingsmod.tank_rows(items, box[0], box[1]))
         _cover = buildingsmod.coverage(items, side)
         town = _cover < buildingsmod.POLES_COVERAGE
         # (the tile's buildings and their footprint share: the mod's scene complexity for anonymous performance
