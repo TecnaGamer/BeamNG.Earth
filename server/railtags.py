@@ -672,6 +672,7 @@ class StationTags(Shards):
     def __init__(self, cache_dir, fetcher, local=None):
         super().__init__(cache_dir, fetcher, "stations")
         self.local = local if local is not None else STATIONS_DIR
+        self.by_cell = {}           # id(shard) -> {z14 cell: (records, points)}: a box reads only its own cells
 
     def version(self):
         if self.local is None:
@@ -717,17 +718,42 @@ class StationTags(Shards):
             out.append(sh)
         return out
 
-    def stations_in(self, lat0, lon0, lat1, lon1):
-        """[{"id", "kind" ("fuel" | "ev"), "lat", "lon", "name", "brand", "cap" (int or None)}] in the box, or None."""
+    def _cells(self, sh):
+        """The shard's records and points by map cell (z14), made once per shard (a city's 25 km map view asks ~800
+        cells of a 15,000-station shard: 1.2 s filtering the whole shard for each, instant by cell)."""
+        import mapcells
+        got = self.by_cell.get(id(sh))
+        if got is None or got[0] is not sh:
+            cells = {}
+            for r in sh.get("s") or ():
+                cells.setdefault(mapcells.cell_of(r[3], r[2]), ([], []))[0].append(r)
+            for p in sh.get("p") or ():
+                cells.setdefault(mapcells.cell_of(p[1], p[0]), ([], []))[1].append(p)
+            got = (sh, cells)
+            with self.lock:
+                self.by_cell[id(sh)] = got
+        return got[1]
+
+    def _in_box(self, lat0, lon0, lat1, lon1):
+        """[(records, points)] of the box's map cells, or None."""
+        import mapcells
         shards = self._shards(lat0, lon0, lat1, lon1)
         if shards is None:
             return None
+        keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+        return [c[k] for c in (self._cells(sh) for sh in shards) for k in keys if k in c]
+
+    def stations_in(self, lat0, lon0, lat1, lon1):
+        """[{"id", "kind" ("fuel" | "ev"), "lat", "lon", "name", "brand", "cap" (int or None)}] in the box, or None."""
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
+            return None
         return [{"id": r[0], "kind": r[1], "lat": r[3], "lon": r[2], "name": r[4], "brand": r[5], "cap": r[6]}
-                for sh in shards for r in sh.get("s") or () if lat0 <= r[3] <= lat1 and lon0 <= r[2] <= lon1]
+                for recs, _ in got for r in recs if lat0 <= r[3] <= lat1 and lon0 <= r[2] <= lon1]
 
     def points_in(self, lat0, lon0, lat1, lon1):
         """[(lat, lon)] of the charge points in the box, or None."""
-        shards = self._shards(lat0, lon0, lat1, lon1)
-        if shards is None:
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
             return None
-        return [(p[1], p[0]) for sh in shards for p in sh.get("p") or () if lat0 <= p[1] <= lat1 and lon0 <= p[0] <= lon1]
+        return [(p[1], p[0]) for _, pts in got for p in pts if lat0 <= p[1] <= lat1 and lon0 <= p[0] <= lon1]
