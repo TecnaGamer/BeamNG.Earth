@@ -3781,6 +3781,17 @@ def _measured_widths(feats, specs, widths):
                                       or any(w.setback for _, w in sp.street.walks())):
             continue        # (the walls beyond verges are not the carriageway's limits)
         m = widths(str(feats.ids[j]), feats.lonlat[a:b]) if b > a else None
+        import germanroads
+        if germanroads.surveyed_width(feats, j, sp) is not None:
+            # Germany's surveyed carriageway stands over the one between the buildings (GitHub #1079: Berlin's 10 m
+            # streets were drawn 17 m); the buildings still tell the sidewalks, the right-of-way less the survey's
+            if m is not None:
+                walk = (m[0] + 2. * m[1] - sp.width) / 2.
+                if sp.street is not None:
+                    out[j] = europewalks.finish_width(sp, sp.width, measured_walk=walk)
+                else:
+                    out[j] = sp._replace(walk=min(3., max(.85, walk)))
+            continue
         dflt = carriageway(sp.cls, sp.kind, True, None, sp.oneway, sp.lanes, link=sp.link)
         # Historic streets can be one shared lane between close building fronts. Rejecting these measurements
         # kept a default carriageway wider than the street itself.

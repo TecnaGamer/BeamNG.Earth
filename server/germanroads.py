@@ -16,6 +16,9 @@ direction, over MATCH_SHARE of its length) and takes from it what the map does n
     lanes    the surveyed lanes of motorways to tertiary roads, where OpenStreetMap has no lanes tag (its lanes win);
              the width follows the class's rule for that many lanes when none was surveyed
     surface  where OpenStreetMap and Overture say nothing: paved, setts, gravel or earth
+The surveyed width is the whole carriageway: a town street keeps its curbside parking inside it only where its lanes
+still fit beside it (_fit_parking), and it stands over the width measured between the buildings
+(roads._measured_widths, which then gives the sidewalks only). Checked on 2,300 roads in five cities (GitHub #1079).
 Driveways, parking aisles and living streets (SKIP) take nothing: they run beside a street, not along its axis.
 A divided road's two one-way halves on one two-way axis (a town avenue the survey keeps as one) take half its width
 each. Decks and tunnels (roads._bridge_specs) take the same as the road on the ground, so a bridge is as wide as its
@@ -36,7 +39,7 @@ import numpy as np
 log = logging.getLogger("earthd.germanroads")
 
 ON = os.environ.get("BNE_DE_ROADS", "on").lower() not in ("off", "0", "false")
-VERSION = "de-roads-v1"
+VERSION = "de-roads-v2"     # (v2: parking only where it fits, the survey over the buildings' width)
 ZOOM = 10
 BOX = (47.2, 5.8, 55.1, 15.1)   # south, west, north, east: Germany, so nowhere else asks for a shard
 RETRY_S = 3600                  # unreachable: asked again after this long
@@ -50,6 +53,8 @@ SAMPLE_M = 10.0                 # m between a road's samples
 CELL_M = 25.0                   # grid the axes' segments are looked up in
 WIDTH_M = (2.5, 40.0)           # a surveyed width outside this is not taken
 LANE_MIN_M = 2.4                # m per lane at least: a width narrower than its lanes need is not taken
+LANE_FIT_M = 2.75               # m per lane a main road keeps beside curbside parking, else no parking (_fit_parking)
+LANE_FIT_TOWN_M = 2.0           # the same for a town street (one shared lane between parked cars)
 # build_de_roads.py's surface codes -> OpenStreetMap surface values (roads.surface_kind reads them)
 SURFACES = {1: "asphalt", 2: "concrete", 3: "sett", 5: "compacted", 6: "ground", 7: "grass_paver",
             8: "paving_stones"}
@@ -381,5 +386,45 @@ def adjust_specs(feats, specs):
                 if new.median:
                     w = roads.dual_cap(new.median, w)
                 new = new._replace(width=float(w))
+                new = _fit_parking(new)
         out[i] = new
     return out
+
+
+def _fit_parking(sp):
+    """sp without its curbside parking where the surveyed width holds its lanes alone (GitHub #1079: a divided
+    avenue's 6 m half with two lanes kept 2.3 m of parking, lanes of 1.85 m). The survey's width is the whole
+    carriageway, parking included, so parking stays only where the lanes keep LANE_FIT_M beside it (a town street's
+    one shared lane between parked cars: LANE_FIT_TOWN_M)."""
+    import roads
+    park = roads.assumed_parking(sp)
+    if not park:
+        return sp
+    n = sp.lanes or (1 if sp.oneway else 2)
+    fit = LANE_FIT_M if sp.cls in LANE_CLASSES else LANE_FIT_TOWN_M
+    return sp if (sp.width - park) / n >= fit else sp._replace(parking=False)
+
+
+def surveyed_width(feats, i, sp):
+    """The surveyed width adjust_specs gave road i (its spec sp), None where it gave none (no axis, a mapped width,
+    a ramp): roads._measured_widths keeps it over the width measured between the buildings."""
+    if not ON or sp is None or sp.link or sp.cls in SKIP:
+        return None
+    memo = feats.__dict__.setdefault("_de_widths", {})
+    key = (i, bool(sp.oneway), sp.median)
+    if key in memo:
+        return memo[key]
+    import roads
+    ax = axes_for(feats)
+    if ax is False:
+        return None
+    got = None
+    a = feats.coord_off[feats.ring_off[feats.part_off[i]]]
+    b = feats.coord_off[feats.ring_off[feats.part_off[i + 1]]]
+    if ax is not None and b - a >= 2 and not roads.is_ring(feats, i):
+        r = surveyed(ax, feats.lonlat[a:b], bool(sp.oneway), sp.median)
+        if r is not None and r[0] is not None and WIDTH_M[0] <= r[0] <= WIDTH_M[1] \
+                and r[0] >= LANE_MIN_M * (sp.lanes or 1):
+            got = float(r[0])
+    memo[key] = got
+    return got
