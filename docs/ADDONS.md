@@ -172,6 +172,10 @@ end
 | `buildings(lat, lon, opts, callback)` | 1.4: the same with the buildings' footprints too (`result.buildings`) |
 | `on(event, fn)`, `off(handle)` | listeners for the events below |
 
+The session `navgraph_*.json` also keeps tunnel-only minimap stretches in `lines`; each entry is
+`[x1, y1, x2, y2, drivability, postedSpeedMs]`. The sixth field is the legal road speed in m/s (including the
+class default when no mapped limit is available). It does not change the AI graph or the physical streaming area.
+
 `pose()`: lat / lon in WGS84 degrees; `alt` m over the WGS84 ellipsoid; `heading` degrees clockwise from true north
 (the car's direction; nil with no car); `speed` m/s; `ve`, `vn`, `vu` m/s east, north, up (true north, not the
 world's frame: they differ by up to a degree or so far from the world's origin); `camera` true when there is no car

@@ -318,7 +318,9 @@ def _deck_z(decks, fid, x, y):
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
           mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=()):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
-    drivability, radius]]} of the drivable roads in the square of half size `window` around centre (x, y) of
+    drivability, radius]], `lines` for tunnel-only minimap stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
+    (the last field was added in 1.9 for add-ons that read legal limits). Of the roads in the square of half size
+    `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
     are taken once). elev(lat, lon) -> metres. decks: fid -> [(xy, z, structural depth)] of the bridge parts
     (roads.BridgeProfiles; existing (xy, z) entries leave the depth unknown). Nodes on a bridge take its deck height
@@ -515,8 +517,10 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 a, b = names[j], names[j + 1]
                 if a == b:
                     continue
+                at = (full[j] + full[j + 1]) / (2 * L)
+                legal = road_mph(feats, i, spec, mph, at=at, country=country, de_on=de_on) * MPH
                 in_tunnel = False
-                if tunnel_ranges and any(t0 <= (full[j] + full[j + 1]) / (2 * L) <= t1 for t0, t1 in tunnel_ranges):
+                if tunnel_ranges and any(t0 <= at <= t1 for t0, t1 in tunnel_ranges):
                     # each end inside the tunnel on its built floor (an end past a portal is on the ground)
                     ends_in = [(nm_, q_) for nm_, q_, at_ in ((a, deck_xy[j], full[j]), (b, deck_xy[j + 1], full[j + 1]))
                                if any(t0 * L < at_ < t1 * L for t0, t1 in tunnel_ranges)]
@@ -527,7 +531,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         in_tunnel = True
                     else:
                         lines.append([round(float(xy[j][0]), 1), round(float(xy[j][1]), 1),
-                                      round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv])
+                                      round(float(xy[j + 1][0]), 1), round(float(xy[j + 1][1]), 1), driv,
+                                      round(legal, 2)])
                         continue            # no tunnel built there: the minimap's line only
                 if direction < 0:
                     a, b = b, a
@@ -544,8 +549,6 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         node_fid[nm] = fid
                         deck_centres[nm] = deck_xy[dk]
                         pending_by[nm] = (-w, fid)
-                legal = road_mph(feats, i, spec, mph, at=(full[j] + full[j + 1]) / (2 * L), country=country,
-                                 de_on=de_on) * MPH
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
                 if in_tunnel:
