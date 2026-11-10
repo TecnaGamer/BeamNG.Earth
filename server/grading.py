@@ -94,6 +94,10 @@ PLAN_SETS_MAX = 16          # cell sets whose merged plans are kept (Grader._pla
 SPREAD_CELLS = 16           # plans(): more map cells in the points' bbox: only the cells around the points
 T_MIN, T_MAX = 5.0, 12.0    # m, transition back to the natural ground (5: roads close together meet gently)
 SLOPE_RUN = 2.0             # transition = SLOPE_RUN x the height difference (1:2 slope)
+RANK_SIDE_FADE_M = 20.0     # m past a higher road's core a lower road's ground still yields to it (grade_rank: a
+                            # dirt road beside a pavement eases onto it over this far, not a step at its shoulder)
+RANK_HEIGHT_FADE_M = 8.0    # m of height difference over which that ease fades out (a side road far above or below
+                            # is not pulled onto the higher one; a short 1 m fade cut a climbing side road to a step)
 VERTEX_STEP = 4.0           # m between the plan's vertices (segments for the grading pass; linear between: at 16 m a
                             # crest or a sag was a kink every 16 m, 'bumpy roads, worst uphill and at speed' on r/BeamNG,
                             # 2026-10-17: a San Francisco street's slope changed 4.4 % rms per 2 m, 1.2 % at 4 m;
@@ -599,7 +603,8 @@ def raceway_ground(e, n, base, zones, margin=None):
 class Plan:
     """One road's grading: vertices (n, 2) in the frame's ENU metres, their target heights, core half width; abut: does
     it lead onto a bridge at its (first, last) vertex (grade_points)."""
-    __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "max_wall", "bank", "steep", "widen")
+    __slots__ = ("xy", "z", "half", "bbox", "abut", "cut", "road_half", "rid", "rank", "max_wall", "bank", "steep",
+                 "widen")
 
     def __init__(self, xy, z, half, abut=(False, False), cut=None, road_half=None):
         self.xy, self.z, self.half, self.abut = xy, z, float(half), (bool(abut[0]), bool(abut[1]))
@@ -608,6 +613,7 @@ class Plan:
         self.cut = cut
         self.road_half = float(road_half) if road_half is not None else float(half)    # the carriageway's half width
         self.rid = -1           # the road (map feature) it is part of: _plan_cell (each cell plans its own stretch of it)
+        self.rank = -1          # grade_rank of its road: a lower one gives way over a higher one's core (-1: no road)
         self.max_wall = WALL_MAX_H_M    # its cuttings' walls at most this tall (wall_max_h)
         self.bank = None                # (n,) its cross slope (m per m toward its left: a banked curve, bank) or None
         self.steep = False              # a mountain pass road's: steep sides (STEEP_RUN, roads._mountain_roads)
@@ -1123,9 +1129,17 @@ def _plan(xy, z, spec, abut=(False, False), ext=(0, 0), step=PROFILE_STEP, bank_
     # (a mountain pass road its own: no town on a pass, roads._mountain_roads)
     width = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, True, None, spec.oneway)) \
         if built and not getattr(spec, "mountain", False) else spec.width
+    # the painted carriageway (the road's own urban / rural width), not the wider city-street grading core: the rank
+    # hold and the ground blend start at the asphalt's edge, not a parking lane or an edge strip out (a rural tertiary
+    # held 2.3 m of shoulder as carriageway, so a side road blended that far from the asphalt)
+    paint = max(spec.width, roadsmod.carriageway(spec.cls, spec.kind, bool(getattr(spec, "urban", False)), None,
+                                                  spec.oneway)) \
+        if built and not getattr(spec, "mountain", False) and spec.cls not in ("motorway", "trunk") else width
     if spec.median:             # a divided road's carriageway: never over the other one
         width = max(spec.width, roadsmod.dual_cap(spec.median, width))
-    plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=width / 2)
+        paint = max(spec.width, roadsmod.dual_cap(spec.median, paint))
+    plan = Plan(xy[keep], zs[keep], width / 2 + shoulder(spec), abut, road_half=paint / 2)
+    plan.rank = grade_rank(spec)
     plan.max_wall = wall_max_h(spec)
     plan.steep = bool(getattr(spec, "mountain", False))
     bext = ext if bank_ext is None else bank_ext
@@ -1239,6 +1253,20 @@ def road_rank(spec):
     base = cls.removesuffix("_link")
     r = JUNCTION_RANK.get(base, 0) * 2
     return r - 1 if cls != base else r
+
+
+# A road's rank in the ground blend (grade_points): a paved / cobbled road keeps its own ground where a lower-ranked
+# one runs beside or joins it, and the lower one adapts to it instead of pulling it down (the user, 2026-11-09: an
+# asphalt road dipped where a dirt track ran along its edge). A built surface outranks every unpaved one; among roads
+# of one surface the class decides (road_rank). Rust: grade_points' hrank / hid (a lower road gives way under a higher
+# one's ground: its carriageway held whole, easing over the shoulder from the painted edge out).
+GRADE_RANK_BUILT = 100      # added to a built (paved / cobble) road's class rank: above every unpaved road's
+GRADE_RANK_NONE = -1        # a plan that is no road (a railway's bed): gives way to none, holds none
+
+
+def grade_rank(spec):
+    """A road's rank in grade_points' blend: a built surface first, then its class (road_rank). Pure."""
+    return (GRADE_RANK_BUILT if spec.kind in roadsmod.BUILT else 0) + road_rank(spec)
 
 
 def _nearest_on(p, x, y):
@@ -1668,6 +1696,13 @@ def junction_pads(plans, specs, nodes=None):
         dirs = np.array([i[4] for i in info])
         dirs /= np.maximum(np.hypot(dirs[:, 0], dirs[:, 1]), 1e-12)[:, None]
         auth = pad_authority([i[7] for i in info], dirs)
+        # (only the node's highest-ranked branch(es) set the pad: a subordinate road's own height may not move the
+        # main road's surface at a junction; it lies on the pad and eases to its own profile after it)
+        top = max(rank[b[0]] for b in info)
+        auth = np.asarray(auth, np.float64).copy()
+        for n, b in enumerate(info):
+            if rank[b[0]] < top:
+                auth[n] = 0.0
         # each branch's tangent at the node: through a road (a branch facing it, PAD_FACE_DEG[1]) the central difference
         # of the two (a crest's or a sag's one-sided grades both lean the same way), else its own grade leaving it
         gr = np.array([i[6] for i in info])
@@ -2194,8 +2229,11 @@ class _Planner:
                 plans = kept
             portals = {}
             secs = self._tunnel_sections(feats, key, [p for _f, p in tplans], portals)
-            plans.extend((fid + TUNNEL_TAG, Plan(xy, z, spec.width / 2 + shoulder(spec)))
-                         for fid, spec, xy, z, k in secs if k == 0)
+            for fid, spec, xy, z, k in secs:
+                if k == 0:
+                    p = Plan(xy, z, spec.width / 2 + shoulder(spec))
+                    p.rank = grade_rank(spec)
+                    plans.append((fid + TUNNEL_TAG, p))
             plans.extend(self._mouth_plans(secs, portals))
             covers = [(xy, spec.width / 2 + TUNNEL_KEEP_M) for _f, spec, xy, _z, k in _twin_trimmed(secs) if k]
             opens = [(xy, spec) for _f, spec, xy, _z, k in secs if k == 0]
@@ -2692,6 +2730,7 @@ class _Planner:
             if add is not None:
                 np_ = Plan(p.xy, p.z + add, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
                 np_.steep = getattr(p, "steep", False)
                 set_widen(np_, getattr(p, "widen", None))
                 plans[i] = (fid, np_)
@@ -2972,6 +3011,7 @@ class _Planner:
                 z1 = np.where(z0 >= UNDER_POLDER_M, np.maximum(z1, np.minimum(z0, floor)), z1)
             np_ = Plan(p.xy, z1, p.half, p.abut, p.cut, p.road_half)
             np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
             np_.steep = getattr(p, "steep", False)
             set_widen(np_, getattr(p, "widen", None))
             plans[n] = (fid, np_)
@@ -3530,6 +3570,7 @@ class _Planner:
                 continue
             np_ = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
             np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+            np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
             np_.steep = getattr(p, "steep", False)
             plans[n] = (fid, np_)
 
@@ -3576,6 +3617,7 @@ class _Planner:
             if np.abs(out - z).max() > 1e-6:
                 np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
                 np_.steep = getattr(p, "steep", False)
                 set_widen(np_, getattr(p, "widen", None))
                 plans[n] = (fid, np_)
@@ -3604,6 +3646,7 @@ class _Planner:
             if np.abs(out - z).max() > 1e-6:
                 np_ = Plan(p.xy, out, p.half, p.abut, p.cut, p.road_half)
                 np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+                np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
                 np_.steep = getattr(p, "steep", False)
                 set_widen(np_, getattr(p, "widen", None))
                 plans[n] = (fid, np_)
@@ -4493,7 +4536,9 @@ class _Planner:
                 else:
                     pxy, pzz = np.r_[p[None], xy[m]], np.r_[pz, z[m]]
                 if len(pxy) >= 2:
-                    out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), Plan(pxy, pzz, hw)))
+                    mp = Plan(pxy, pzz, hw)
+                    mp.rank = grade_rank(spec)
+                    out.append((fid + TUNNEL_TAG + ("m0" if at_start else "m1"), mp))
         return out
 
     def _covered_tunnels(self, feats):
@@ -4507,8 +4552,13 @@ class _Planner:
         """(fid, Plan) of the tunnels' open sections (roads.TUNNEL_OPEN_COVER): the ground graded to the road's floor
         (the lower hull of the ground), as the road is drawn (roads._tunnel_chunks): over a footbridge's hump in the
         DEM the road climbed it, the ground over the road (Central Park's transverses, 2026-10-17)."""
-        return [(fid, Plan(xy, z, spec.width / 2 + shoulder(spec)))
-                for fid, spec, xy, z, kind in self._tunnel_sections(feats) if kind == 0]
+        out = []
+        for fid, spec, xy, z, kind in self._tunnel_sections(feats):
+            if kind == 0:
+                p = Plan(xy, z, spec.width / 2 + shoulder(spec))
+                p.rank = grade_rank(spec)
+                out.append((fid, p))
+        return out
 
     def planned(self, key):
         """True once cell key's plans exist (made, or failed recently)."""
@@ -4719,6 +4769,7 @@ def mapped_plan(p, fn):
     banking as they are (geodetic, or along / across the road)."""
     q = Plan(fn(p.xy), p.z, p.half, p.abut, p.cut, p.road_half)
     q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+    q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     q.steep = getattr(p, "steep", False)
     set_widen(q, getattr(p, "widen", None))
     return q
@@ -4973,6 +5024,7 @@ def trim_plan(p, box):
                      None if p.cut is None else np.asarray(p.cut)[i:j + 1].copy(), p.road_half)
             q.rid = getattr(p, "rid", -1)
             q.max_wall = getattr(p, "max_wall", WALL_MAX_H_M)
+            q.rank = getattr(p, "rank", GRADE_RANK_NONE)
             q.bank = pb
             q.steep = getattr(p, "steep", False)
             set_widen(q, pw)
@@ -5017,6 +5069,7 @@ def _dedupe_plan(p):
              p.abut, None if p.cut is None else np.ascontiguousarray(np.asarray(p.cut, np.float64)[seg_ok]),
              p.road_half)
     q.rid, q.max_wall = getattr(p, "rid", -1), getattr(p, "max_wall", q.max_wall)
+    q.rank = getattr(p, "rank", GRADE_RANK_NONE)
     bk = getattr(p, "bank", None)
     q.bank = None if bk is None else np.ascontiguousarray(np.asarray(bk, np.float64)[keep])
     q.steep = bool(getattr(p, "steep", False))
@@ -5071,6 +5124,8 @@ class PlanPack:
         rids = [getattr(p, "rid", -1) for _k, p in rows]
         self.rid = np.repeat(np.array([r if r is not None and r >= 0 else 2 ** 40 + k
                                        for (k, _p), r in zip(rows, rids)], np.int64), nseg)
+        # (each road's rank in the ground blend: a lower one gives way over a higher one's core, grade_rank)
+        self.rk = np.repeat(np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for _k, p in rows], np.int64), nseg)
         s0 = np.r_[0, np.cumsum(nseg)]
         # a pass road's legs between its hairpins' apexes (roads.hairpin_apex_rows) count as roads of their own: the
         # one leg's ground (its wall's strip, its sides) gives way over the other's carriageway at another level as
@@ -5188,12 +5243,12 @@ class PlanPack:
         if not keep.any():
             return None
         if keep.all():
-            return self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid, self.ab, self.cut, self.ba, self.bb, self.st, \
-                self.lk, self.abd
+            return self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid, self.rk, self.ab, self.cut, self.ba, \
+                self.bb, self.st, self.lk, self.abd
         sk = keep[self.of]
         return tuple(np.ascontiguousarray(v[sk]) for v in (self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid,
-                                                           self.ab, self.cut, self.ba, self.bb, self.st, self.lk,
-                                                           self.abd))
+                                                           self.rk, self.ab, self.cut, self.ba, self.bb, self.st,
+                                                           self.lk, self.abd))
 
 
 def grade_points(px, py, base, plans, lift=0.0):
@@ -5211,19 +5266,21 @@ def grade_points(px, py, base, plans, lift=0.0):
     got = pack.near(px.min(), py.min(), px.max(), py.max())
     if got is None:
         return out
-    A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK, ABD = got
+    A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
     import fast
-    fast.require(169, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
+    fast.require(176, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
-                                             # given way to whole: 134, no carriageway past an abutment end: 169)
+                                             # given way to whole: 134, no carriageway past an abutment end: 169,
+                                             # a lower road over a higher one's core, easing onto it: 177)
     f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
-                                 np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, AB, CUT, BA, BB, ST, LK,
+                                 np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK,
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
                                  float(STEEP_T_MIN), float(BLEND_R), float(BUCKET),
                                  float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M), float(WALL_AHEAD_M),
                                  bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
-                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(ABUT_UNDER_GRADE),
+                                 float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
+                                 float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE),
                                  np.ascontiguousarray(ABD, f64))
 
 

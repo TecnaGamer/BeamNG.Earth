@@ -190,6 +190,105 @@ class GradePointsTest(unittest.TestCase):
         self.assertTrue(np.allclose(lifted[far], base[far]), "untouched away from roads")
         self.assertTrue(((lifted - flat) <= grading.ROAD_LIFT + 1e-9).all() and ((lifted - flat) >= -1e-9).all())
 
+    def test_a_dirt_road_does_not_pull_a_paved_one_down(self):
+        # The user, 2026-11-09: a paved road dipped where a dirt track ran along its edge. A built surface outranks
+        # an unpaved one in grade_points' blend: the paved road's carriageway keeps its own height and the dirt road
+        # adapts, whatever the dirt's own profile is (grade_rank).
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5,
+                            road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        # (the plans are different roads: their rid keeps a road's own stretches from giving way to each other)
+        paved.rid, dirt.rid = 1, 2
+        xs = np.arange(-60.0, 60.1, 2.0)
+        ys = np.arange(-8.0, 30.01, 0.5)
+        px, py = np.meshgrid(xs, ys)
+        px, py = px.ravel(), py.ravel()
+        out = grading.grade_points(px, py, np.full(len(px), 99.0), [paved, dirt])
+        core = np.abs(py) <= paved.road_half - 0.01
+        self.assertTrue(np.allclose(out[core], 100.0, atol=0.01), "the paved road's carriageway holds its height")
+        # ... and the blend eases onto the side road: at its centre line the ground is still near the asphalt's height,
+        # then falls smoothly to the dirt's own over RANK_SIDE_FADE_M (not a step at the shoulder's edge)
+        on_dirt = out[np.abs(py - 10.5) < 0.01]
+        self.assertGreater(float(np.mean(on_dirt)), 99.5, "the side road eases onto the asphalt")
+        order = np.argsort(py)
+        s_y, s_z = py[order], out[order]
+        sel = (s_y >= paved.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
+        self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the side road eases down, no step")
+        self.assertAlmostEqual(float(s_z[-1]), 99.0, delta=0.02, msg="away from the asphalt the dirt keeps its ground")
+        # ... and the dirt road meets the paved road's height where it runs into its core, not the other way round.
+        # A dirt point inside the paved core takes the paved height.
+        dirtcase = grading.Plan(np.array([[0.0, 30.0], [0.0, -30.0]]), np.array([99.0, 99.0]), 2.5,
+                                road_half=1.5)
+        dirtcase.rank = dirt.rank
+        dirtcase.rid = 3
+        onpath = grading.grade_points(np.array([0.0]), np.array([4.0]), np.array([99.0]), [paved, dirtcase])
+        self.assertAlmostEqual(float(onpath[0]), 100.0, delta=0.01)
+
+    def test_a_subordinate_carriageway_does_not_move_the_main(self):
+        # A service driveway's carriageway overlapping a tertiary's: the higher-ranked road's surface must stay its
+        # own plan, not be pulled by the subordinate road's height (7 cm at a mapped junction was still visible).
+        main = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        main.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        side = grading.Plan(np.array([[-200.0, 3.0], [200.0, 3.0]]), np.array([99.0, 99.0]), 2.0, road_half=2.0)
+        side.rank = grading.grade_rank(roads.Spec(4.0, "paved", False, "service"))
+        main.rid, side.rid = 1, 2
+        out = grading.grade_points(np.array([0.0]), np.array([0.0]), np.array([99.0]), [main, side])
+        self.assertAlmostEqual(float(out[0]), 100.0, delta=1e-9, msg="the tertiary's carriageway is its own plan")
+
+    def test_a_built_side_road_eases_onto_a_higher_built_one(self):
+        # A service road / driveway joining a residential street: built vs built uses the same ease as a dirt road
+        # (the user's follow-up), so the side road climbs onto the main road's ground gently.
+        main = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55, road_half=5.55)
+        main.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "residential"))
+        side = grading.Plan(np.array([[-200.0, 10.55], [200.0, 10.55]]), np.array([99.0, 99.0]), 2.5, road_half=2.0)
+        side.rank = grading.grade_rank(roads.Spec(4.0, "paved", False, "service"))
+        main.rid, side.rid = 1, 2
+        xs = np.arange(-60.0, 60.1, 2.0)
+        ys = np.arange(-8.0, 30.01, 0.5)
+        px, py = np.meshgrid(xs, ys)
+        px, py = px.ravel(), py.ravel()
+        out = grading.grade_points(px, py, np.full(len(px), 99.0), [main, side])
+        core = np.abs(py) <= main.road_half - 0.01
+        self.assertTrue(np.allclose(out[core], 100.0, atol=0.01), "the main road's carriageway holds its height")
+        on_side = out[np.abs(py - 10.5) < 0.01]
+        self.assertGreater(float(np.mean(on_side)), 99.5, "the built side road eases onto the main road")
+        order = np.argsort(py)
+        s_y, s_z = py[order], out[order]
+        sel = (s_y >= main.road_half) & (s_y <= 10.55 + grading.RANK_SIDE_FADE_M)
+        self.assertTrue((np.diff(s_z[sel]) <= 1e-6).all(), "the built side road eases down, no step")
+
+    def test_a_deeper_dirt_road_still_leaves_the_paved_carriageway_whole(self):
+        # A dirt path 1.8 m under the asphalt's level beside it (the height rule's fade starts at 1.5 m): the paved
+        # carriageway is still held whole, and only the shoulder starts to fall toward the dirt.
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 4.5], [200.0, 4.5]]), np.array([98.2, 98.2]), 1.75,
+                            road_half=1.75)
+        dirt.rank = grading.grade_rank(roads.Spec(2.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 21, 22
+        ys = np.arange(0.0, 6.01, 0.5)
+        out = grading.grade_points(np.zeros_like(ys), ys, np.full(len(ys), 98.2), [paved, dirt])
+        inside = ys <= paved.road_half - 0.01
+        self.assertTrue(np.allclose(out[inside], 100.0, atol=0.01), "the asphalt's carriageway is whole")
+        self.assertGreater(float(out[-1]), 99.5, "the side road eases onto the asphalt, not a dip")
+
+    def test_a_dirt_road_gives_way_only_inside_a_paved_core(self):
+        # Outside the paved road's core the dirt road keeps its own profile, and its ground blends back to the
+        # natural one: the rule is no blanket lift of the unpaved road.
+        paved = grading.Plan(np.array([[-200.0, 0.0], [200.0, 0.0]]), np.array([100.0, 100.0]), 8.55,
+                             road_half=5.55)
+        paved.rank = grading.grade_rank(roads.Spec(11.1, "paved", False, "tertiary"))
+        dirt = grading.Plan(np.array([[-200.0, 40.0], [200.0, 40.0]]), np.array([95.0, 95.0]), 2.5,
+                            road_half=1.5)
+        dirt.rank = grading.grade_rank(roads.Spec(3.0, "gravel", False, "track"))
+        paved.rid, dirt.rid = 1, 2
+        out = grading.grade_points(np.array([0.0]), np.array([40.0]), np.array([95.0]), [paved, dirt])
+        self.assertAlmostEqual(float(out[0]), 95.0, delta=0.01)
+
     def test_junction_blends_and_deterministic(self):
         px, py, base = self.grid()
         a, _ = plan_line(-200, 200, 0.0)
