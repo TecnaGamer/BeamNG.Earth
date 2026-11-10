@@ -1875,6 +1875,20 @@ class WaterTankTest(unittest.TestCase):
         self.assertTrue(100.0 < row[1] < 131.0 and 200.0 < row[2] < 221.0, row)
 
 
+class TowerMetalTest(unittest.TestCase):
+    """A tower's metal is a curtain wall, a supertall with no material one too (New York by Gehry was a brown plaster
+    sheet and a corrugated shed); a shed's metal stays sheeting."""
+
+    def test_tower_metal(self):
+        ring = np.array([[0, 0], [40, 0], [40, 30], [0, 30]], float)
+        def look(**at):
+            return bld.plan(ring, dict(at, **{"class": "apartments"}), 0, 40.711, -74.0058, dense=True).facade
+        self.assertTrue(look(facade_material="metal", height=200.0).startswith(bld.OFFICE))
+        self.assertTrue(look(height=271.0).startswith(bld.OFFICE))
+        self.assertTrue(look(facade_material="metal", height=8.0).startswith(bld.METALWALL))
+        self.assertFalse(look(height=40.0).startswith(bld.OFFICE))
+
+
 if __name__ == "__main__":
     unittest.main()
 

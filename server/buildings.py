@@ -485,6 +485,8 @@ TANK_PAINTS = ((0.92, 0.92, 0.90), (0.84, 0.85, 0.86), (0.90, 0.88, 0.80), (0.72
 # A greenhouse (Westland, NL: 52.010 4.260, the aerial photo 2026-11-10): hectares of pale glass in aluminium bars, a
 # Venlo block 5-7 m to the gutter under a near-flat ridged roof; a garden one a small glass gable. Drawn in glazing
 # (GLASSHOUSE), clear, whitewashed (summer shading) or with the shade screens drawn (dark), or as the aerial shows it.
+TOWER_METAL_FLOORS = 8      # storeys (or that height): a building's mapped metal is its curtain wall, not sheeting
+SUPERTALL_M = 150.0         # m: a building this tall with no material mapped has a curtain wall
 MAST_MAX_M2 = 100.0         # m2: a mast's footprint at most ...
 MAST_MIN_H = 20.0           # ... this tall ...
 MAST_MATERIALS = ("metal", "steel")     # ... of steel, or slender past MAST_SLENDER (height / sqrt(area))
@@ -1097,6 +1099,16 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # the mapped facade material (OSM building:material, Overture facade_material) over the guesses (Tower Bridge's
     # stone towers came out as glass towers, 2026-10-18)
     fm = str(attrs.get("facade_material") or "").lower()
+    # a tower's metal is its curtain wall (high-rise metal panels and glass), not a shed's corrugated sheet; a
+    # supertall with no material mapped is one too, not plaster or brick (New York by Gehry, 8 Spruce St: 271 m of
+    # steel, its parts "metal" or nothing, drawn as a corrugated shed and a brown plaster sheet; the Brooklyn Bridge
+    # view against a 360 photo and Google Earth, 2026-11-10)
+    top_ = max(float(h or 0.0), float(attrs.get("building_height") or 0.0))
+    tall_ = (nf or 0) >= TOWER_METAL_FLOORS or top_ >= TOWER_METAL_FLOORS * FLOOR_M
+    if not fm and top_ >= SUPERTALL_M and not (church or barn or shed or industrial):
+        fm = "glass"
+    if fm in ("metal", "steel", "aluminium") and tall_ and not (barn or shed or industrial):
+        fm = "glass"
     if fm in STONE_FACADES and not (barn or shed):
         wall = f"{STONE}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[STONE]))}"
         facade, plain = wall, False
@@ -3910,6 +3922,12 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                 fill = float(bh) if bh is not None and np.isfinite(bh) and bh > 0 else \
                     min(p[1][0] + p[1][1] for p in bparts if p[1] is not None)
                 top = max([fill] + [p[1][0] + p[1][1] for p in bparts if p[1] is not None])
+                # (a part with no material or colour of its own takes its siblings' most common: half of New York by
+                # Gehry's parts are "metal", the others mapped bare)
+                sib = {}
+                for k_ in ("facade_material", "facade_color"):
+                    vals = [str(p[2].get(k_)) for p in bparts if len(p) > 2 and p[2].get(k_)]
+                    sib[k_] = max(set(vals), key=vals.count) if vals else None
                 for ppart in bparts:
                     pring, hh = ppart[0], ppart[1]
                     pat = ppart[2] if len(ppart) > 2 else {}
@@ -3921,12 +3939,13 @@ def tile_buildings(frame, x0, y0, x1, y1, layers, elev, water=None, part_layers=
                         continue
                     rings.append(r)
                     p_rshape = str(pat.get("roof_shape") or "").lower() or "flat"
-                    p_fcol = pat.get("facade_color") or at.get("facade_color")
+                    p_fcol = pat.get("facade_color") or at.get("facade_color") or sib["facade_color"]
                     p_rcol = pat.get("roof_color") or at.get("roof_color")
                     attrs.append({"class": at["class"], "height": ph, "num_floors": None,
                                   "roof_shape": p_rshape,
                                   "building_height": top,
-                                  "facade_material": pat.get("facade_material") or at.get("facade_material"),
+                                  "facade_material": pat.get("facade_material") or at.get("facade_material")
+                                  or sib["facade_material"],
                                   "facade_color": p_fcol,
                                   "roof_material": pat.get("roof_material") or at.get("roof_material"),
                                   "roof_height": pat.get("roof_height"),
