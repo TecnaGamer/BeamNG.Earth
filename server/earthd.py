@@ -279,6 +279,8 @@ ROUTE_DOWNLOAD_MODES = ("off", "ahead", "route")
 ROUTE_429_TRIES = 3              # a route answered 429 (routing.openstreetmap.de's fair use) is asked again while it is
 ROUTE_429_WAIT_S = 3.0           # the latest destination, after the host's Retry-After or this x the try ...
 ROUTE_429_MAX_WAIT_S = 20.0      # ... at most this
+ROUTE_SAME_DEST_DEG = 1e-5       # destinations this close (about a metre) are the same route planned again: the mod
+                                 # re-sends its destination unchanged and a re-plan moves only the start
 ROUTE_WHOLE_MAX_M = 500000.0
 ROUTE_IMG_TRIES = 5               # a route download's ground-photo tile the limiter deferred: asked this often
 ROUTE_RETRY_S = 2.0               # a deferred tile/cell backs off this long before the next one in the corridor
@@ -5433,6 +5435,18 @@ def route_profile_smooth(z):
     return (q[:-2] + q[1:-1] + q[2:]) / 3.0
 
 
+def same_route_dest(dest, msg):
+    """Is route request msg bound for dest ((lat, lon): the saved route's destination, or None)? Within
+    ROUTE_SAME_DEST_DEG: a re-plan of the saved route (off route, a retried 429) moves only its start. Pure."""
+    if dest is None:
+        return False
+    try:
+        lat, lon = float(msg["lat1"]), float(msg["lon1"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    return abs(lat - dest[0]) <= ROUTE_SAME_DEST_DEG and abs(lon - dest[1]) <= ROUTE_SAME_DEST_DEG
+
+
 class Connection:
     """One mod connection. Far-field state for the active anchor A:
         desired  D: the selected tiles (farfield.select)
@@ -5546,6 +5560,8 @@ class Connection:
         self.ground_busy = False                # a groundahead job is running (one at a time)
         self.route_dl_version = 0               # bumped by every route(): supersedes a running route_download job
         self.route_points = []                  # the last planned route's points ([lat, lon]: a saved route's)
+        self.route_dest = None                  # that route's asked destination (lat, lon): a failed re-plan toward
+                                                # it keeps route_points (the mod keeps drawing the route it has)
         self.sea_busy = False                   # a water-tile plan is running (sea_tiles)
         self.sea_checked = None                 # (anchor id, 512 m square, monotonic, complete) of the last plan
         self.sea_sent = None                    # (anchor id, tiles) of the last "sea" message
@@ -5600,7 +5616,8 @@ class Connection:
         "dist", "dur", "legs": [[dist_m, dur_s], ...]?, "elev": [[dist_m, elev_m], ...]?, "error"?} (via: [[lat, lon],
         ...] the route passes through in order, routing.MAX_VIA at most; legs: with via, each leg's). Also (re)starts this route's corridor prefetch
         (route_download, routeahead.py; download: "off", "ahead" (ROUTE_AHEAD_MAX_M, the default) or "route" (the
-        whole route, up to ROUTE_WHOLE_MAX_M))."""
+        whole route, up to ROUTE_WHOLE_MAX_M)). A failed plan toward the saved route's destination (a re-plan)
+        keeps the saved points; toward a new destination it drops them (same_route_dest)."""
         self.route_dl_version += 1
         version = self.route_dl_version
         out = {"type": "route_result", "id": msg.get("id"), "points": [], "dist": 0.0, "dur": 0.0}
@@ -5634,9 +5651,16 @@ class Connection:
                  msg.get("lon0"), msg.get("lat1"), msg.get("lon1"), len(out["points"]), out["dist"] / 1000,
                  (" (" + out["error"] + ")") if "error" in out else "")
         self.send(out)
-        self.route_points = out["points"] if "error" not in out else []
+        if "error" not in out:
+            self.route_points, self.route_dest = out["points"], (float(msg["lat1"]), float(msg["lon1"]))
+        elif not same_route_dest(self.route_dest, msg):
+            # a failed plan toward a NEW destination: the mod draws no route (gps.lua setDestination dropped its
+            # own), so pre-cache must see none either; a failed RE-plan of the saved destination keeps the points
+            # instead (the mod keeps drawing the route it has, and "Pre-cache route" answered "no route: plan one
+            # with the GPS first" while the map drew one, every rate-limited off-route re-plan having wiped them)
+            self.route_points, self.route_dest = [], None
         mode = msg.get("download")
-        self.route_download(version, out["points"], mode if mode in ROUTE_DOWNLOAD_MODES else "ahead")
+        self.route_download(version, self.route_points, mode if mode in ROUTE_DOWNLOAD_MODES else "ahead")
 
     def _route_elevation(self, points):
         """The route's elevation profile for the map (routing.resample onto even steps, dem.sample): [[dist_m,
