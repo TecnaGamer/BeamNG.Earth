@@ -31,6 +31,11 @@ class Source:
         self.shields = legacyshields.Source(getattr(md, 'cache_dir', None))
         self.repeaters = routerepeaters.Source(md.raw_dir, md.fetcher) if hasattr(md, 'raw_dir') else None
         self.contexts = {}
+        if hasattr(md, 'raw_dir') and getattr(md, 'fetcher', None) is not None:
+            from frmotorway_layout import MainlineTags
+            self.french_mainlines = MainlineTags(md.raw_dir, md.fetcher)
+        else:
+            self.french_mainlines = None
         self.lock = threading.Lock()
         self.warned = -float('inf')
 
@@ -91,7 +96,7 @@ def tile_objects(source, frame, tx, ty):
     return source.objects(frame, (x0 - m, y0 - m, x1 + m, y1 + m))
 
 
-def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False, mph=True):
+def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False, mph=True, french=False):
     """Plan neighbouring panels together, then give each final assembly one owner."""
     pad = signlayout.MARGIN
     area = (box[0]-pad, box[1]-pad, box[2]+pad, box[3]+pad)
@@ -110,9 +115,14 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
             paired.extend(throughsigns.place(frame, [obj], pavements, area, elev, chunks, mph,
                                              allow_outside=replaces))
         replaced = set()
+        if french:
+            import frmotorway_layout
+            overheads.extend(frmotorway_layout.add_overheads(
+                frame, roadside, by_id, contexts, area, elev, chunks, replaced))
         stations = sorted({(s['kind'], s['distance']) for s in roadside if s['kind'] != 'ramp' and s['style'] == 'exit'})
         for kind, distance in stations:
-            panels = [s for s in roadside if s['kind'] == kind and s['distance'] == distance and s['style'] == 'exit']
+            panels = [s for s in roadside if s['kind'] == kind and s['distance'] == distance
+                      and s['style'] == 'exit' and (s['id'], kind, distance) not in replaced]
             if len(panels) < 2:
                 continue
             first = min(panels, key=lambda s: (s['side'], signlayout.label_key(s['label']), s['id']))
@@ -145,8 +155,10 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
         objects = list({obj['id']: obj for obj in objects}.values())
         if not objects:
             return None, None
+        if french and getattr(source, 'french_mainlines', None) is not None:
+            objects = source.french_mainlines.enrich(objects)
         context = source.context(urban, widths)
-        exits, overheads = guide_layout(frame, objects, context, box, elev, chunks, left_hand, mph)
+        exits, overheads = guide_layout(frame, objects, context, box, elev, chunks, left_hand, mph, french=french)
         miles = []
         for obj in milemarkers.unique_objects(objects):
             pavements = milemarkers.source_pavements(frame, obj, context, left_hand)

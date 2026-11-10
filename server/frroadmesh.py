@@ -335,7 +335,7 @@ def guide_panel(mesh,content,w,h,z,exit=False,distance='',side=1):
     else:arrow(mesh,0,z-h/2+(1.03 if not exit else .40),.65,exit,side)
     if distance:lettering(mesh,distance,z-h/2+.22,.20,w-.40,bg!=sm.WHITE,mixed=True)
     # Route cartouches above each block; uniformly sized, never US shields.
-    valid=[r for r in refs[:2] if re.fullmatch(r'[ADNME]\s*\d{1,4}[A-Z]?',sm.clean(r))]
+    valid=[] if content.get('route_only') else [r for r in refs[:2] if re.fullmatch(r'[ADNME]\s*\d{1,4}[A-Z]?',sm.clean(r))]
     sizes=[max(.55,sm.measure(sm.clean(r),'l1')[0]*.15+.14)for r in valid]
     cursor=-(sum(sizes)+.045*max(0,len(sizes)-1))/2
     for ref,rw in zip(valid,sizes):
@@ -371,7 +371,7 @@ def build_highways(exits,overheads,origin):
             h=max(2.45,1.65+.62*min(3,len(panel['label'].get('names',()))))
             maxh=max(maxh,h);x=cursor+w/2;cursor+=w+.25
             mesh.offset=anchor+np.array([x,0,0])@mesh.axes
-            guide_panel(mesh,panel['label'],w,h,bottom+h/2,panel['exit'],sign.get('distance','')if panel['exit']else'',sign.get('side',1))
+            guide_panel(mesh,panel['label'],w,h,bottom+h/2,panel['exit'],sign.get('distance','')if panel['exit']else'',panel.get('side',sign.get('side',1)))
         mesh.offset=anchor
         # Columns retain the generated assembly's off-carriageway positions.
         beam=bottom+maxh-.25;left,right=sign['poles']

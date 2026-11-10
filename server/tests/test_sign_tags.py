@@ -95,7 +95,7 @@ class SignTagsTest(unittest.TestCase):
             want = found[0]["ways"][0]
             np.testing.assert_allclose(exit_["approach"][0], want["approach"][0], atol=1e-6)
             np.testing.assert_allclose(exit_["approach"][-1], want["approach"][-1], atol=1e-6)
-            self.assertNotIn("main_tags", exit_)
+            self.assertEqual(exit_["main_tags"], {"highway": "motorway", "ref": "I 95"})
             self.assertEqual(tags.query(LON + 1, LAT + 1, LON + 1.1, LAT + 1.1), [])
             # the same input gives the same shard bytes
             again = os.path.join(tmp, "again")
