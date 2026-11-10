@@ -56,7 +56,12 @@ class PlatformMeshTest(unittest.TestCase):
         st = stations_of("kalynivka")[0]
         st.country = "UA"
         slope = bm.DrawnGround(lambda xy: 100.0 + 0.01 * xy[:, 0])        # (a 1 % grade along x)
-        m = rm.mesh(None, BIG, [st], slope, (0.0, 0.0, 0.0))
+        keep = rm._ramps
+        rm._ramps = lambda *a, **k: None                                   # (the slab alone: the ramps run down on purpose)
+        try:
+            m = rm.mesh(None, BIG, [st], slope, (0.0, 0.0, 0.0))
+        finally:
+            rm._ramps = keep
         V = tops(m, rm.CONCRETE[0])
         top = V[V[:, 2] > 100.5]                                           # (the slab's top, not its foot)
         self.assertGreater(len(top), 20)
@@ -72,7 +77,7 @@ class PlatformMeshTest(unittest.TestCase):
         self.assertGreater(V[:, 2].max(), 100.0 + rm.RAIL_TOP_M)
 
     def test_strips_only_on_the_track_edge(self):
-        st = stations_of("vinnytsia")[0]
+        st = no_links(stations_of("vinnytsia")[0])
         st.country = "UA"
         m = rm.mesh(None, BIG, [st], FLAT, (0.0, 0.0, 0.0))
         V = tops(m, rm.LINE[0])
@@ -400,3 +405,36 @@ class UnderpassTest(unittest.TestCase):
 def rb_steel():
     import railbridges as rb
     return rb.STEEL[0]
+
+
+class RampTest(unittest.TestCase):
+    def test_ramps_run_down_to_the_ground_at_one_in_eight(self):
+        st = no_links(stations_of("vinnytsia")[0])
+        st.country = "UA"
+        pl = max(st.platforms, key=lambda p: rm._runs(p.snapped, p.ring, p.tidx) and len(max(rm._runs(p.snapped, p.ring, p.tidx), key=len)))
+        h = rm.platform_height(pl, "UA", len(st.platforms))
+        ref = rm.reference(None, FLAT, pl)
+        m = bm._Mesh()
+        rm._ramps(m, None, FLAT, ref, pl, h)
+        got = m.result(BIG, (0.0, 0.0, 0.0))
+        self.assertIsNotNone(got)
+        V = got[0]
+        top = 100.0 + rm.RAIL_TOP_M + h
+        self.assertAlmostEqual(V[:, 2].max(), top, delta=0.05)           # (starts at the platform's top)
+        self.assertLessEqual(V[:, 2].min(), 100.0 + 0.03 - 0.3 + 0.01)    # (the slab's underside reaches under the ground)
+        # the top of the ramp's surface drops by RAMP_SLOPE a metre
+        zs = np.unique(np.round(V[:, 2], 3))
+        steps = np.diff(zs[(zs > 100.2) & (zs <= top)])
+        self.assertTrue((steps[steps > 0.02] <= rm.RAMP_SLOPE + 0.02).all())
+
+    def test_low_platform_has_no_ramp(self):
+        st = no_links(stations_of("hk_hln")[0])
+        st.country = "CZ"
+        pl = st.platforms[0]
+        m = bm._Mesh()
+        low = bm.DrawnGround(lambda xy: np.full(len(xy), 100.0))
+        rm._ramps(m, None, low, rm.reference(None, low, pl), pl, 0.1)         # (0.58 + 0.1 over the ground: still a ramp)
+        self.assertIsNotNone(m.result(BIG, (0.0, 0.0, 0.0)))
+        m2 = bm._Mesh()
+        rm._ramps(m2, None, low, rm.reference(None, low, pl), pl, -0.5)       # (below the ground: none)
+        self.assertIsNone(m2.result(BIG, (0.0, 0.0, 0.0)))

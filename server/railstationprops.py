@@ -30,7 +30,7 @@ def _run_points(pl, step, inset, start=0.0):
     """[(x, y, tx, ty, nx, ny)] every `step` m along each run of the platform's track edge, `inset` m in: the point, the
     run's direction and the inward normal; only where the far side is at least FAR_EDGE_M further."""
     out = []
-    for run in rm._runs(pl.snapped, pl.ring):
+    for run in rm._runs(pl.snapped, pl.ring, pl.tidx):
         if len(run) < 3:
             continue
         pts = pl.ring[run]
@@ -57,7 +57,7 @@ def _run_points(pl, step, inset, start=0.0):
 def _length(pl):
     """The platform's length: the longest run of its track edge, else the bounding box's long side."""
     best = 0.0
-    for run in rm._runs(pl.snapped, pl.ring):
+    for run in rm._runs(pl.snapped, pl.ring, pl.tidx):
         pts = pl.ring[run]
         best = max(best, float(np.hypot(*np.diff(pts, axis=0).T).sum()))
     return best if best > 0.0 else float(np.ptp(pl.ring, axis=0).max())

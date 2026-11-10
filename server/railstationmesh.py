@@ -16,6 +16,7 @@ import numpy as np
 import busstationmesh as bm
 import busstations as bs
 import railbridges
+import railcrossings
 import railunderpass
 import railstations as rs
 
@@ -38,8 +39,13 @@ KERB = bm.KERB
 LINE = bm.TACTILE
 
 
-def _runs(snapped, ring):
-    """[[index, ...]] the runs of consecutive snapped ring points (the ring is closed: a run may wrap)."""
+TURN_BREAK_DEG = 35.0       # a run of the track edge ends at a corner this sharp (a platform's end)
+
+
+def _runs(snapped, ring, tidx=None):
+    """[[index, ...]] the runs of consecutive snapped ring points (the ring is closed: a run may wrap), split at corners
+    sharper than TURN_BREAK_DEG and where the track the edge was put by changes (tidx): an island platform's two edges
+    and the corners between them are not one run."""
     n = len(ring)
     idx = np.flatnonzero(snapped)
     if not len(idx):
@@ -56,7 +62,25 @@ def _runs(snapped, ring):
     runs.append(cur)
     if len(runs) > 1 and runs[0][0] == 0 and runs[-1][-1] == n - 1 and             float(np.hypot(*(ring[0] - ring[-1]))) < RUN_BREAK_M:
         runs[0] = runs.pop() + runs[0]
-    return runs
+    out = []
+    cos_max = np.cos(np.radians(TURN_BREAK_DEG))
+    for run in runs:
+        cut = [0]
+        for k in range(1, len(run) - 1):
+            a = ring[run[k]] - ring[run[k - 1]]
+            b = ring[run[k + 1]] - ring[run[k]]
+            la, lb = float(np.hypot(*a)), float(np.hypot(*b))
+            sharp = la > 1e-6 and lb > 1e-6 and float(np.dot(a, b)) / (la * lb) < cos_max
+            moved = tidx is not None and int(tidx[run[k]]) != int(tidx[run[k - 1]])
+            if sharp or moved:
+                cut.append(k if sharp else k)
+        cut.append(len(run))
+        for a, b in zip(cut[:-1], cut[1:]):
+            # (a sharp corner point belongs to neither side: it is the end's)
+            part = run[a + (1 if a > 0 and a in cut[1:-1] else 0):b]
+            if len(part) >= 2:
+                out.append(part)
+    return out
 
 
 def _smooth(z, n):
@@ -159,7 +183,7 @@ def _strips(mesh, ref, pl, height, frame, elev):
     fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
     ring = pl.ring
     n = len(ring)
-    for run in _runs(pl.snapped, ring):
+    for run in _runs(pl.snapped, ring, pl.tidx):
         if len(run) < 3:
             continue
         pts = ring[run]
@@ -255,6 +279,47 @@ def _link_near(ln, box, margin=LINK_MARGIN_M):
     return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
 
 
+RAMP_SLOPE = 0.125          # 1:8, a ramp's rise over its run
+RAMP_W_M = 2.0
+RAMP_IN_M = 1.5             # the ramp's centre line stands this far in from the track edge
+RAMP_MIN_H_M = 0.25         # a platform lower than this over the ground at its end has no ramp
+RAMP_MAX_M = 24.0
+RAMP_MIN_RUN_M = 30.0       # only the ends of a run of the track edge at least this long
+
+
+def _ramps(mesh, frame, elev, ref, pl, height):
+    """A ramp past each end of each long run of the platform's track edge: down to the ground, 1:8, RAMP_W_M wide, on the
+    run's direction, standing RAMP_IN_M in from the edge."""
+    fb = lambda xy: bm.ground(frame, elev, xy) + RAIL_TOP_M
+    for run in _runs(pl.snapped, pl.ring, pl.tidx):
+        pts = pl.ring[run]
+        if len(pts) < 3 or float(np.hypot(*np.diff(pts, axis=0).T).sum()) < RAMP_MIN_RUN_M:
+            continue
+        for end, away in ((0, -1.0), (-1, 1.0)):
+            a, b = (pts[0], pts[1]) if end == 0 else (pts[-1], pts[-2])
+            d = (a - b)
+            dl = float(np.hypot(*d))
+            if dl < 1e-6:
+                continue
+            t = d / dl                                   # (out of the platform along the edge)
+            run_dir = (pts[1] - pts[0]) if end == 0 else (pts[-1] - pts[-2])
+            n = np.array([-run_dir[1], run_dir[0]])
+            n = n / max(float(np.hypot(*n)), 1e-9)       # (inward: the platform is to the left of the run's direction)
+            start = a + n * RAMP_IN_M
+            z0 = float(top_z(ref, start[None], fb)[0]) + height
+            g0 = float(bm.ground(frame, elev, start[None])[0])
+            if z0 - g0 < RAMP_MIN_H_M:
+                continue
+            length = min(RAMP_MAX_M, (z0 - g0) / RAMP_SLOPE)
+            line = np.c_[start[0] + t[0] * np.arange(0.0, length + 0.5, 1.0), start[1] + t[1] * np.arange(0.0, length + 0.5, 1.0)]
+            line = line[:max(2, int(length) + 1)]
+            s_ = np.arange(len(line)) * 1.0
+            z = z0 - s_ * RAMP_SLOPE
+            gg = bm.ground(frame, elev, line)
+            z = np.maximum(z, gg + 0.03)
+            railbridges._strip(mesh, line, z, RAMP_W_M, 0.4, CONCRETE, KERB)
+
+
 def _near(pl, box, margin=TILE_MARGIN_M):
     lo, hi = pl.ring.min(0), pl.ring.max(0)
     return not (hi[0] < box[0] - margin or lo[0] > box[2] + margin or hi[1] < box[1] - margin or lo[1] > box[3] + margin)
@@ -272,12 +337,16 @@ def build(frame, box, stations, elev, mesh, tactile=True, collide=False):
             _slab(mesh, frame, elev, ref, pl.ring, h)
             if tactile and ref is not None:
                 _strips(mesh, ref, pl, h, frame, elev)
+            if ref is not None:
+                _ramps(mesh, frame, elev, ref, pl, h)
         _roofs(mesh, frame, elev, st, box, columns_only=collide)
         for ln in st.links:
             if ln.kind == "over" and _link_near(ln, box):
                 railbridges.add(mesh, frame, elev, st, ln, collide=collide)
             elif ln.kind == "under" and _link_near(ln, box):
                 railunderpass.add(mesh, frame, elev, st, ln, collide=collide)
+            elif ln.kind == "level" and _link_near(ln, box, 6.0):
+                railcrossings.add(mesh, frame, elev, st, ln, collide=collide)
 
 
 def mesh(frame, box, stations, elev, origin, overlap=False):

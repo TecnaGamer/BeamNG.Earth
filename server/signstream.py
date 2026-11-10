@@ -90,6 +90,11 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
                                     vfs_dir, country)
     if bus_mesh is not None:
         dir_mesh, dir_faces = busstationsign.merge(dir_mesh, bus_mesh), {**dir_faces, **bus_faces}
+    import railstationsign              # the railway stations' name boards, platform plates and halls' names
+    rail_mesh, rail_faces = _optional('Rail station signs', railstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
+                                      vfs_dir, country)
+    if rail_mesh is not None:
+        dir_mesh, dir_faces = busstationsign.merge(dir_mesh, rail_mesh), {**dir_faces, **rail_faces}
     import euguardrails
     french = False
     if euguardrails.enabled():
