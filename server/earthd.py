@@ -1875,7 +1875,8 @@ class Server:
         features = tuple(windturbines.keep(
             [f for f in windturbines.near(south, west, north, east)
              if geotiles.tile_of(f.lat, f.lon, TURBINE_Z) == (gx, gy)],
-            windturbines.worldcover_built_fn(self.mapdata) if self.mapdata is not None else None))
+            windturbines.worldcover_built_fn(getattr(self, "mapdata", None))
+            if getattr(self, "mapdata", None) is not None else None))
         rows = []
         if features:
             zoom = demmod.zoom_for(clat, 1.25, demmod.FINE_ZOOM)
