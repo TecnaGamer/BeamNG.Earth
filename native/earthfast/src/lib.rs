@@ -68,6 +68,7 @@ mod classgrid;
 mod frontage;
 mod bdtopo;
 mod nycmassing;
+mod rooftop;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5819,6 +5820,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(nycmassing::nyc_massing_match, m)?)?;
     // 186: nycmassing::nyc_massing_match (New York's measured massing, server/nycmassing.py: the 2014 3-D Building
     // Model's records joined to the map's footprints)
-    m.add("VERSION", 186)?;
+    m.add_function(wrap_pyfunction!(rooftop::roof_kit, m)?)?;
+    // 187: rooftop::roof_kit (buildings._clutter: penthouses, stair / lift bulkheads and rooftop units on flat roofs)
+    m.add("VERSION", 187)?;
     Ok(())
 }

@@ -1669,26 +1669,57 @@ def _steeple(m, spec, z_eave, mat_idx):
         m.tri((a[0], a[1], top), (b[0], b[1], top), apex, (0, 0), (1, 0), (0.5, 2.0), rm)
 
 
-ROOF_CLUTTER_M2 = 250.0     # flat roofs this large get boxes: air-conditioning units, stair bulkheads
+# What stands on a flat roof (the user, 2026-11-10: "apply high level of detail to all buildings and cities across the
+# world"): earthfast's rooftop.rs plans it from aerial photos of flat roofs (Chicago's Loop, Berlin-Kreuzberg, Towson MD,
+# Midtown): a tower's mechanical penthouse (louvred metal, a third of the roof or so), a mid-rise block's stair / lift
+# bulkhead (the facade's colour), rooftop air-conditioning units by the roof's area (shops and warehouses: fields of
+# them). Each box inside the outline (clear of its parapet, of each other and of a water tank's spot).
+ROOF_KIT_INDUSTRIAL = ("industrial", "warehouse", "manufacture", "factory", "depot", "storage", "hangar", "service")
+ROOF_KIT_COMMERCIAL = ("commercial", "retail", "office", "offices", "supermarket", "shop", "mall", "hotel", "hospital",
+                       "school", "university", "college", "public", "civic", "government", "train_station",
+                       "transportation", "parking", "sports_hall", "stadium", "kindergarten")
+ROOF_KIT_LOUVRE_TILE_M = 3.0
+
+
+def _roof_kit_kind(spec):
+    cls = str(spec.cls or "")
+    if cls in ROOF_KIT_INDUSTRIAL or str(spec.facade or "").startswith(METALWALL):
+        return 2
+    if cls in ROOF_KIT_COMMERCIAL or spec.shop or str(spec.facade or "").startswith(OFFICE):
+        return 1
+    return 0
 
 
 def _clutter(m, spec, ring, z_eave, mat_idx):
-    area = _area2(ring) / 2
-    if spec.roof != "flat" or spec.plain or area < ROOF_CLUTTER_M2 or spec.cls in CHURCH_CLASSES:
+    if spec.roof != "flat" or spec.plain or spec.cls in CHURCH_CLASSES or len(ring) < 3 \
+            or spec.cls in ("mast", "tank", "greenhouse"):
         return
+    import fast
+    fast.require(187, "roof_kit")
+    ring = np.asarray(ring, np.float64)[:, :2]
     c, u, hl, hw = oriented_box(ring)
     v = np.array([-u[1], u[0]])
-    n = min(6, 1 + int(area / 600.0))
-    mat = mat_idx["bne_bld_fac_grey"]
-    for k in range(n):
-        s = (_hash01(spec.seed, "cx", k) * 2 - 1) * (hl - 3.0)
-        t = (_hash01(spec.seed, "cy", k) * 2 - 1) * (hw - 3.0)
+    excl = (0.0, 0.0, 0.0)
+    if spec.tank:                       # (the water tank's spot, tank_rows': kept clear)
+        got = _tank_spot(spec)
+        if got is not None:
+            d = got[0] - c
+            excl = (float(d @ u), float(d @ v), got[1] * 1.5 + 0.5)
+    top = float(spec.min_h or 0.0) + float(spec.height or 0.0)
+    boxes = fast._ef.roof_kit(np.ascontiguousarray(ring), float(c[0]), float(c[1]), float(u[0]), float(u[1]),
+                              float(hl), float(hw), int(spec.seed * (1 << 53)) if spec.seed is not None else 0,
+                              top, _roof_kit_kind(spec), excl)
+    if not len(boxes):
+        return
+    unit = mat_idx["bne_bld_fac_grey"]
+    louvre = mat_idx[f"{METALWALL}|{int(_hash01(spec.seed, 'louvre') * len(WALL_TINTS[METALWALL]))}"]
+    own = mat_idx[spec.facade]
+    for s, t, hs, ht, h, mat in boxes:
         p = c + u * s + v * t
-        if not _inside(ring, p):
-            continue
-        big = _hash01(spec.seed, "cb", k) < 0.25
-        hx, hy, h = (2.0, 1.6, 2.6) if big else (1.1, 0.7, 1.1)
-        _box(m, p, u, hx, hy, z_eave, z_eave + h, mat)
+        if mat == 1:
+            _box_tiled(m, p, u, hs, ht, z_eave - 0.3, z_eave + h, louvre, ROOF_KIT_LOUVRE_TILE_M)
+        else:
+            _box(m, p, u, hs, ht, z_eave - 0.1, z_eave + h, own if mat == 0 else unit)
 
 
 # Rooftop water tanks: New York's buildings of six storeys or more keep their water in a cedar tank on steel legs on
@@ -1734,6 +1765,27 @@ def water_tank(spec, lat, lon, area, era_=None, floors=None):
     return _hash01(spec.seed, "water tank") < WATER_TANK_SHARE
 
 
+def _tank_spot(spec):
+    """(centre, half size, scale, axis u) of the building's water tank on its roof (tank_rows; _clutter keeps clear of
+    it), None where none fits."""
+    ring = np.asarray(spec.ring, np.float64)[:, :2]
+    if len(ring) < 3:
+        return None
+    c, u, hl, hw = oriented_box(ring)
+    v = np.array([-u[1], u[0]])
+    sc = WATER_TANK_SCALE[0] + (WATER_TANK_SCALE[1] - WATER_TANK_SCALE[0]) * _hash01(spec.seed, "tank s")
+    half = WATER_TANK_HALF_M * sc
+    if hw < half + 1.0:
+        return None
+    for k in range(6):              # (a spot inside the roof, clear of its edges)
+        sx = (_hash01(spec.seed, "tank x", k) * 2 - 1) * max(hl - half - 1.0, 0.0)
+        sy = (_hash01(spec.seed, "tank y", k) * 2 - 1) * max(hw - half - 1.0, 0.0)
+        p = c + u * sx + v * sy
+        if all(_inside(ring, p + d) for d in (u * (half + .5), -u * (half + .5), v * (half + .5), -v * (half + .5))):
+            return p, half, sc, u
+    return None
+
+
 def tank_rows(items, x0, y0):
     """Forest rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's rooftank: Small Island's rooftop water tank,
     the stock model) of the items' water tanks (spec.tank: water_tank), on their roofs, in the frame (x0, y0: the
@@ -1745,20 +1797,10 @@ def tank_rows(items, x0, y0):
         ring = np.asarray(spec.ring, np.float64)[:, :2]
         if len(ring) < 3:
             continue
-        c, u, hl, hw = oriented_box(ring)
-        v = np.array([-u[1], u[0]])
-        sc = WATER_TANK_SCALE[0] + (WATER_TANK_SCALE[1] - WATER_TANK_SCALE[0]) * _hash01(spec.seed, "tank s")
-        half = WATER_TANK_HALF_M * sc
-        if hw < half + 1.0:
+        got = _tank_spot(spec)
+        if got is None:
             continue
-        for k in range(6):              # (a spot inside the roof, clear of its edges)
-            sx = (_hash01(spec.seed, "tank x", k) * 2 - 1) * max(hl - half - 1.0, 0.0)
-            sy = (_hash01(spec.seed, "tank y", k) * 2 - 1) * max(hw - half - 1.0, 0.0)
-            p = c + u * sx + v * sy
-            if all(_inside(ring, p + d) for d in (u * (half + .5), -u * (half + .5), v * (half + .5), -v * (half + .5))):
-                break
-        else:
-            continue
+        p, half, sc, u = got
         z = base_z(spec, gmin, gmax) + float(spec.min_h or 0.0) + float(spec.height or 0.0)
         yaw = math.degrees(math.atan2(u[1], u[0])) + 90.0 * int(_hash01(spec.seed, "tank yaw") * 4)
         rows.append(["rooftank", round(float(p[0] + x0), 2), round(float(p[1] + y0), 2), round(z, 2),
