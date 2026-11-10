@@ -89,12 +89,26 @@ ROOF_SLATE = "bne_bld_roof_slate"
 # survey 2026-11-10): the clay roofs of the regional styles and of roof:material=roof_tiles, which were the slate texture
 # tinted orange. Its repeat is ROOF_TILES_UV_M (about four tiles across), not the other roofs' ROOF_UV_M
 ROOF_TILES = "bne_bld_roof_tiles"
+ROOF_TILES_UV_M = 1.2
 # an office tower's street floor: a lobby of glass doors (the stock corporate facade sheet,
 # assets/materials/trim/metal/m_facade_corporate: its lower half, the asset survey 2026-11-10), not a shopfront
 LOBBY = "bne_bld_lobby"
+# more stock roofs and walls (the asset survey 2026-11-10; the user: "use as many assets as needed to give this world
+# detail and variety"): fish-scale slate (central Europe), dark slate courses (Britain, northern France, mapped slate),
+# wooden shingles (Alpine chalets, roof:material=wood), rough rubble stone (Mediterranean villages), cinder block
+# (building:material=cement_block)
+ROOF_SLATE_ROUND = "bne_bld_roof_slate_round"
+ROOF_SLATE_DARK = "bne_bld_roof_slate_dark"
+ROOF_WOOD = "bne_bld_roof_wood"
+STONE_RUBBLE = "bne_bld_stone_rubble"
+CINDER = "bne_bld_cinder"
+# the textures' own repeats (m): the roofs' UVs are made at ROOF_UV_M and the walls' at SIDING_UV_M, Mesh.arrays
+# scales these materials' vertices
+OWN_UV_M = {ROOF_TILES: (ROOF_TILES_UV_M, ROOF_UV_M), ROOF_SLATE_ROUND: (1.2, ROOF_UV_M),
+            ROOF_SLATE_DARK: (1.6, ROOF_UV_M), ROOF_WOOD: (0.9, ROOF_UV_M), STONE_RUBBLE: (2.4, SIDING_UV_M),
+            CINDER: (2.8, SIDING_UV_M)}
 LOBBY_BAND = (0.004, 0.496, 6.8)      # its rows (v, Collada: the sheet's lower half) and m per repeat (three bays)
 LOBBY_NOT = {"retail", "supermarket", "kiosk", "restaurant", "commercial"}
-ROOF_TILES_UV_M = 1.2
 ROOF_SHINGLE = "bne_bld_roof_shingle"
 SIDING = "bne_bld_siding"
 FACADE = "bne_bld_facade"    # the plaster window sheet, tinted per building by vertex colour
@@ -122,7 +136,8 @@ LANDMARK_LAMP = "bne_lm_lamp"   # ... its lamps (the Eiffel Tower's, the Colosse
 LANDMARK_DIAL = "bne_lm_dial"   # ... a clock's dials (Big Ben's), lit from behind at night
 MATERIALS = (FACADE, SHOP, OFFICE, ROOF_FLAT, ROOF_SLATE, ROOF_SHINGLE, SIDING, STUCCO, ROOF_METAL, PANEL, METALWALL,
              STONE, MARBLE, BRICK_WALL, CONCRETE, SKY_WALL, LANDMARK_IRON, LANDMARK_STONE, LANDMARK_LAMP,
-             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY)
+             LANDMARK_FLOODLIT, LANDMARK_DIAL) + francehouses.MATERIALS + (GLASSHOUSE, ROOF_TILES, LOBBY, ROOF_SLATE_ROUND,
+                                                                  ROOF_SLATE_DARK, ROOF_WOOD, STONE_RUBBLE, CINDER)
 LOOKS = {
     "bne_bridge_steel": (METALWALL, (0.50, 0.52, 0.54)),
     "bne_marble": (MARBLE, (1.0, 1.0, 1.0)),
@@ -151,6 +166,9 @@ ROOF_TINTS = {               # per roof material: the colours a building's roof 
     ROOF_METAL: ((0.85, 0.86, 0.88), (0.55, 0.57, 0.60), (0.45, 0.58, 0.48), (0.62, 0.30, 0.26), (0.40, 0.42, 0.48)),
     # the texture is terracotta already: as it is, weathered paler / darker, a redder brown
     ROOF_TILES: ((1.0, 1.0, 1.0), (1.0, 0.95, 0.9), (0.86, 0.84, 0.82), (0.92, 0.82, 0.76), (0.75, 0.72, 0.70)),
+    ROOF_SLATE_ROUND: ((1.0, 1.0, 1.0), (0.80, 0.80, 0.82), (0.62, 0.62, 0.64)),           # blue-grey, grey, dark
+    ROOF_SLATE_DARK: ((1.0, 1.0, 1.0), (1.25, 1.22, 1.20), (0.85, 0.85, 0.88)),
+    ROOF_WOOD: ((0.55, 0.42, 0.30), (0.45, 0.36, 0.28), (0.58, 0.55, 0.50), (0.40, 0.33, 0.26)),  # larch, weathered grey
 }
 WALL_TINTS = {               # houses with plain walls and laid-over windows: their colours (hashed)
     SIDING: ((0.96, 0.95, 0.92), (0.90, 0.86, 0.76), (0.78, 0.84, 0.90), (0.95, 0.92, 0.74), (0.78, 0.84, 0.74),
@@ -165,6 +183,8 @@ WALL_TINTS = {               # houses with plain walls and laid-over windows: th
     METALWALL: ((0.88, 0.89, 0.90), (0.72, 0.74, 0.77), (0.84, 0.80, 0.72), (0.66, 0.72, 0.78)),
     # limestone, honey, ochre and grey stone (the texture is a light ashlar: tinted down)
     STONE: ((1.0, 0.93, 0.80), (0.98, 0.86, 0.66), (0.95, 0.80, 0.60), (0.86, 0.85, 0.82), (0.92, 0.88, 0.80)),
+    STONE_RUBBLE: ((1.0, 1.0, 1.0), (1.05, 0.98, 0.90), (0.92, 0.90, 0.88)),
+    CINDER: ((1.0, 1.0, 1.0), (0.92, 0.90, 0.86), (1.05, 1.04, 1.02)),
     # curtain walls (the user, 2026-10-14: "the skyscrapers all use the same texture and look the same colour"):
     # silver, blue, green, bronze, charcoal and steel-blue glass, the common tints of real towers
     OFFICE: ((1.0, 1.0, 1.0), (0.74, 0.84, 0.98), (0.76, 0.92, 0.86), (0.98, 0.84, 0.66), (0.56, 0.58, 0.62),
@@ -274,7 +294,9 @@ ROOF_PHOTO_PX = 512                 # the tile's photo (0.6 m per pixel over a 2
 ROOF_PHOTO_STEP = 0.02              # tints rounded to this (fewer distinct looks)
 ROOF_TEX_MEAN = {"bne_bld_roof_flat": (0.432, 0.431, 0.430), "bne_bld_roof_slate": (0.359, 0.361, 0.388),
                  "bne_bld_roof_shingle": (0.585, 0.577, 0.571), "bne_bld_roof_metal": (0.64, 0.64, 0.64),
-                 "bne_bld_panel": (0.815, 0.815, 0.815), "bne_bld_roof_tiles": (0.625, 0.465, 0.361)}
+                 "bne_bld_panel": (0.815, 0.815, 0.815), "bne_bld_roof_tiles": (0.625, 0.465, 0.361),
+                 "bne_bld_roof_slate_round": (0.473, 0.484, 0.522), "bne_bld_roof_slate_dark": (0.157, 0.155, 0.136),
+                 "bne_bld_roof_wood": (0.897, 0.889, 0.886)}
 # a flat roof brighter in the photo than the asphalt roof's texture can show (a white membrane: 0.9 in the photo, the
 # asphalt texture's 0.43 at most) takes the precast concrete's plain light texture instead
 ROOF_BRIGHT_MAT = "bne_bld_panel"
@@ -631,6 +653,9 @@ class Style:
 
 _US_ROOFS = ((ROOF_SLATE, (0, 1, 2, 3)), (ROOF_SHINGLE, (0, 1, 2, 3)))
 _CLAY = (ROOF_TILES, (0, 1, 2, 3, 4))
+_FISH = (ROOF_SLATE_ROUND, (0, 1, 2))
+_COURSES = (ROOF_SLATE_DARK, (0, 1, 2))
+_SHAKES = (ROOF_WOOD, (0, 1, 2, 3))
 _DARK = (ROOF_SLATE, (7, 8, 9))
 STYLES = {
     "us_east": Style("us_east", 0.75, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
@@ -638,14 +663,15 @@ STYLES = {
     "us_plains": Style("us_plains", 0.15, ((SIDING, 0.75),), 0.55, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     "us_west": Style("us_west", 0.15, ((STUCCO, 0.65), (SIDING, 0.25)), 0.25, 0.0, 0.4, _US_ROOFS, barn_red=0.5),
     # Alpine villages: white plaster ground floors, dark wooden chalets, low wide gables of dark or brown roofs
-    "alpine": Style("alpine", 0.05, ((SIDING, 0.45),), 0.0, 0.03, 0.15, (_DARK, (ROOF_SLATE, (9, 5))), pitch=24.0,
+    "alpine": Style("alpine", 0.05, ((SIDING, 0.45),), 0.0, 0.03, 0.15, (_DARK, (ROOF_SLATE, (9, 5)), _SHAKES, _FISH), pitch=24.0,
                     paint=0.05, wood=True, attached=0.85, stone=0.15),
     # north-west / central Europe: brick (Low Countries, northern Germany, Britain) or plaster, steep tiled or
     # slate roofs
-    "europe_north": Style("europe_north", 0.5, (), 0.02, 0.05, 0.3, (_CLAY, _DARK, (ROOF_SLATE, (5,))), pitch=42.0,
+    "europe_north": Style("europe_north", 0.5, (), 0.02, 0.05, 0.3, (_CLAY, _DARK, (ROOF_SLATE, (5,)), _FISH, _COURSES, _CLAY),
+                          pitch=42.0,
                           paint=0.15, attached=0.75, stone=0.12),
     # Scandinavia and Finland: painted wooden houses (siding), little brick, dark or tiled roofs, falu-red barns
-    "nordic": Style("nordic", 0.12, ((SIDING, 0.65),), 0.0, 0.08, 0.2, (_DARK, _CLAY), pitch=35.0, paint=0.2,
+    "nordic": Style("nordic", 0.12, ((SIDING, 0.65),), 0.0, 0.08, 0.2, (_DARK, _CLAY, _COURSES), pitch=35.0, paint=0.2,
                     attached=0.3, barn_red=0.7),
     "mediterranean": Style("mediterranean", 0.08, ((STUCCO, 0.85),), 0.0, 0.35, 0.5, (_CLAY,), pitch=22.0,
                            paint=0.1, wall_tints=(0, 1, 2, 3, 4, 5), attached=0.8, stone=0.4),
@@ -705,6 +731,15 @@ def brick_share(lat, lon):
     if lat is None:
         return 0.4
     return region_style(lat, lon).brick
+
+
+RUBBLE_STYLES = {"mediterranean": 0.6, "warm": 0.6, "latin_america": 0.3}
+
+
+def stone_kind(style, seed):
+    """A stone wall's material: rough rubble in the Mediterranean's and warm countries' villages (RUBBLE_STYLES of
+    them), dressed stone elsewhere."""
+    return STONE_RUBBLE if _hash01(seed, "rubble") < RUBBLE_STYLES.get(style.name, 0.0) else STONE
 
 
 def roof_pitch(spec):
@@ -1122,7 +1157,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
             and not (shop or industrial or terminal or garage or shed or barn or church) \
             and cls not in ("apartments", "office", "commercial", "hotel", "retail") \
             and _hash01(seed, "stone") < style.stone:
-        wall = f"{STONE}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[STONE]))}"
+        smat = stone_kind(style, seed)
+        wall = f"{smat}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[smat]))}"
         facade = wall
     # the mapped facade material (OSM building:material, Overture facade_material) over the guesses (Tower Bridge's
     # stone towers came out as glass towers, 2026-10-18)
@@ -1138,7 +1174,8 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     if fm in ("metal", "steel", "aluminium") and tall_ and not (barn or shed or industrial):
         fm = "glass"
     if fm in STONE_FACADES and not (barn or shed):
-        wall = f"{STONE}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[STONE]))}"
+        smat = stone_kind(style, seed) if fm in ("stone", "masonry", "tuff") else STONE
+        wall = f"{smat}|{int(_hash01(seed, 'stc') * len(WALL_TINTS[smat]))}"
         facade, plain = wall, False
     elif fm == "brick" and not (barn or shed):
         facade, band, plain, wall = BRICK_TINTS[int(seed * 7919) % len(BRICK_TINTS)], BAND_BRICK, False, None
@@ -1148,7 +1185,10 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     elif fm in ("wood", "timber", "log", "wood_boards", "timber_framing") and not (barn or shed):
         wall = f"{SIDING}|w{int(_hash01(seed, 'wc') * len(WOOD_TINTS))}"
         facade, plain = wall, False
-    elif fm in ("concrete", "cement", "precast", "cement_block") and not (barn or shed):
+    elif fm in ("cement_block", "cinder_block", "concrete_block", "block") and not (barn or shed):
+        wall = f"{CINDER}|{int(_hash01(seed, 'wc') * len(WALL_TINTS[CINDER]))}"
+        facade, plain = wall, False
+    elif fm in ("concrete", "cement", "precast") and not (barn or shed):
         wall = f"{CONCRETE}|0"
         facade, plain = wall, False
     elif fm in ("plaster", "stucco", "render", "clay") and not (barn or shed):
@@ -1191,9 +1231,12 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
         roof_mat = custom_look(ROOF_METAL, COLOR_NAMES["copper"])
     elif rmat in ("tile", "tiles", "roof_tiles", "clay", "terracotta"):
         roof_mat = f"{ROOF_TILES}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_TILES]))}"
-    elif rmat in ("slate", "stone"):
-        roof_mat = f"{ROOF_SLATE}|{int(_hash01(seed, 'roof') * 4)}"
-    elif rmat in ("shingle", "shingles", "wood"):
+    elif rmat in ("slate", "stone"):            # (dark slate courses or fish-scale slate)
+        mat = ROOF_SLATE_DARK if _hash01(seed, "slate kind") < 0.6 else ROOF_SLATE_ROUND
+        roof_mat = f"{mat}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[mat]))}"
+    elif rmat in ("wood", "wooden", "shakes", "wood_shingle"):
+        roof_mat = f"{ROOF_WOOD}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_WOOD]))}"
+    elif rmat in ("shingle", "shingles"):
         roof_mat = f"{ROOF_SHINGLE}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_SHINGLE]))}"
     elif rmat in ("concrete", "cement", "tar_paper", "bitumen", "asphalt", "felt", "gravel"):
         roof_mat = f"{ROOF_FLAT}|{int(_hash01(seed, 'roof') * len(ROOF_TINTS[ROOF_FLAT]))}"
@@ -1338,9 +1381,10 @@ class Mesh:
     def arrays(self):
         P, UV = np.array(self.P, np.float64).reshape(-1, 3), np.array(self.UV, np.float64).reshape(-1, 2)
         T, M = np.array(self.T, np.int64).reshape(-1, 3), np.array(self.M, np.int64)
-        tiles = M == _TILES_MI
-        if tiles.any():             # (the roof tiles' own repeat: every roof's UVs are made at ROOF_UV_M)
-            UV[np.unique(T[tiles])] *= ROOF_UV_M / ROOF_TILES_UV_M
+        for mi, f in _OWN_UV_SCALE:     # (textures with their own repeat: OWN_UV_M)
+            sel = M == mi
+            if sel.any():
+                UV[np.unique(T[sel])] *= f
         return P, UV, T, M, np.array(self.C, np.uint8).reshape(-1, 4)
 
 
@@ -1410,6 +1454,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
 WIN_CELLS = [(53 / 1024, 154 / 1024), (459 / 1024, 562 / 1024), (663 / 1024, 764 / 1024)]  # the sash band's good bays
 _FACADE_MI = MATERIALS.index(FACADE)
 _TILES_MI = MATERIALS.index(ROOF_TILES)
+_OWN_UV_SCALE = tuple((MATERIALS.index(m), base / own) for m, (own, base) in OWN_UV_M.items())
 _SHEET_MI = (_FACADE_MI, MATERIALS.index(OFFICE))  # (the plaster sheet's band 0, BAND_TALL, has bays of uneven width:
                                                    # a floor shifted by a bay would cut its windows; left as it was)
 
@@ -6076,7 +6121,9 @@ MAT_MEAN = {"bne_bld_facade": (0.679, 0.676, 0.683), "bne_bld_shop": (0.669, 0.6
             "bne_bld_roof_metal": (0.642, 0.642, 0.642), "bne_bld_panel": (0.815, 0.815, 0.814),
             "bne_bld_metalwall": (0.841, 0.841, 0.841), "bne_bld_stone": (0.83, 0.818, 0.803),
             "bne_bld_marble": (0.978, 0.978, 0.978), "bne_bld_brick": (0.717, 0.569, 0.513),
-            "bne_bld_roof_tiles": (0.625, 0.465, 0.361)}
+            "bne_bld_roof_tiles": (0.625, 0.465, 0.361), "bne_bld_roof_slate_round": (0.473, 0.484, 0.522),
+            "bne_bld_roof_slate_dark": (0.157, 0.155, 0.136), "bne_bld_roof_wood": (0.897, 0.889, 0.886),
+            "bne_bld_stone_rubble": (0.649, 0.608, 0.541), "bne_bld_cinder": (0.63, 0.627, 0.621)}
 SKY_UV = (0.5, 0.5)
 # the skyline walls' windows (tools/build_sky_windows.py: SKY_WIN_BAYS x SKY_WIN_FLOORS of them in its map), lit at
 # night (nightlights.lua; the user, 2026-10-27: "extend the street and window lights as far as the buildings render")

@@ -84,7 +84,24 @@ class RegionStyleTest(unittest.TestCase):
         self.assertTrue(all(h.pitch == 24.0 for h in hs))
         for h in pitched:
             mat, k = h.roof_mat.split("|")
+            if mat in (bld.ROOF_WOOD, bld.ROOF_SLATE_ROUND):     # (wooden shingles, fish-scale slate)
+                continue
             self.assertIn(int(k), (5, 7, 8, 9))     # dark or brown roofs
+
+    def test_more_stock_roofs_and_walls(self):
+        """Mapped slate: dark courses or fish-scale; mapped wood: shingles; cement block: cinder block; the stock
+        textures' own repeats."""
+        kinds = {bld.plan(rect(13 * k, 0, 10, 10), {"class": "house", "roof_material": "slate"}, 0, 51.5,
+                          -0.1).roof_mat.split("|")[0] for k in range(30)}
+        self.assertEqual(kinds, {bld.ROOF_SLATE_DARK, bld.ROOF_SLATE_ROUND})
+        w = bld.plan(rect(0, 0, 10, 10), {"class": "house", "roof_material": "wood"}, 0, 46.6, 7.9)
+        self.assertTrue(w.roof_mat.startswith(bld.ROOF_WOOD + "|"))
+        c = bld.plan(rect(0, 0, 10, 10), {"class": "house", "facade_material": "cement_block"}, 0, 39.3, -76.6)
+        self.assertTrue(str(c.wall).startswith(bld.CINDER + "|"))
+        rubble = [bld.plan(rect(13 * k, 0, 9, 8), {"class": "house", "facade_material": "stone"}, 0, 43.9,
+                           5.2).wall.split("|")[0] for k in range(30)]
+        self.assertIn(bld.STONE_RUBBLE, rubble, "Provence's stone houses: some rubble")
+        self.assertEqual(bld.stone_kind(bld.STYLES["europe_north"], 0.1), bld.STONE)
 
     def test_mediterranean_and_latin_houses(self):
         med = self.houses(40.42, -3.70)

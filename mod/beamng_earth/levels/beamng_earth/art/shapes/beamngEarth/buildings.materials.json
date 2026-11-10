@@ -820,5 +820,135 @@
       {}
     ],
     "translucent": false
+  },
+  "bne_bld_roof_slate_round": {
+    "name": "bne_bld_roof_slate_round",
+    "mapTo": "bne_bld_roof_slate_round",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "860764d2-c0dc-5970-9328-ac1d1427a789",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/roofing/m_roof_slates_rounded/t_roof_slates_rounded_b.color.png",
+        "normalMap": "/assets/materials/tileable/roofing/m_roof_slates_rounded/t_roof_slates_rounded_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/roofing/m_roof_slates_rounded/t_roof_slates_rounded_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_roof_slate_dark": {
+    "name": "bne_bld_roof_slate_dark",
+    "mapTo": "bne_bld_roof_slate_dark",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "883a74cb-d43a-50c7-bbf2-b42f8eb94f5e",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/roofing/t_slate_rooftiles_01/t_slate_rooftiles_01_b.color.png",
+        "normalMap": "/assets/materials/tileable/roofing/t_slate_rooftiles_01/t_slate_rooftiles_01_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/roofing/t_slate_rooftiles_01/t_slate_rooftiles_01_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_roof_wood": {
+    "name": "bne_bld_roof_wood",
+    "mapTo": "bne_bld_roof_wood",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0133907e-a891-5cdc-9a8d-26d97e7739bf",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/roofing/eca_bld_wood_rooftiles/t_eca_bld_wood_rooftiles_b.color.png",
+        "normalMap": "/assets/materials/tileable/roofing/eca_bld_wood_rooftiles/t_eca_bld_wood_rooftiles_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/roofing/eca_bld_wood_rooftiles/t_eca_bld_wood_rooftiles_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_stone_rubble": {
+    "name": "bne_bld_stone_rubble",
+    "mapTo": "bne_bld_stone_rubble",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "6703c3e0-6ab3-5b67-a517-d918f0806966",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/stone/m_stonebrick_eroded_01/t_stonebrick_eroded_01_b.color.png",
+        "normalMap": "/assets/materials/tileable/stone/m_stonebrick_eroded_01/t_stonebrick_eroded_01_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/stone/m_stonebrick_eroded_01/t_stonebrick_eroded_01_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
+  },
+  "bne_bld_cinder": {
+    "name": "bne_bld_cinder",
+    "mapTo": "bne_bld_cinder",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "7356b094-6fb5-5cef-bd55-f07025e43319",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/tileable/brick/m_concrete_cinderblock_01/t_concrete_cinderblock_01_b.color.png",
+        "normalMap": "/assets/materials/tileable/brick/m_concrete_cinderblock_01/t_concrete_cinderblock_01_nm.normal.png",
+        "roughnessMap": "/assets/materials/tileable/brick/m_concrete_cinderblock_01/t_concrete_cinderblock_01_r.data.png",
+        "metallicFactor": 0,
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "vertColor": true
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": false
   }
 }
