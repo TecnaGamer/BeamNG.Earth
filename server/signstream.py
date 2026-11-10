@@ -163,6 +163,21 @@ def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_
 
 
 _warned_dirs = -float('inf')
+
+def _optional(what, build, *args, **kw):
+    """build(*args, **kw), or (None, {}) when it fails: a station's signs never cost a road tile its other signs."""
+    global _warned_optional
+    try:
+        return build(*args, **kw)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_optional >= 60.:
+            _warned_optional = now
+            log.warning('%s unavailable; roads continue: %s: %s', what, type(error).__name__, error, exc_info=True)
+        return None, {}
+
+
+_warned_optional = -float('inf')
 _warned_de = -float('inf')
 
 
