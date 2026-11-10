@@ -127,12 +127,16 @@ class IslandTest(unittest.TestCase):
         f.rules["oneway"] = rules([(0, 1.0)], "float")
         walks = []
         roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
-        islands_w = [w for w in walks if w.get("fid") == "island"]
+        # (a roundabout's island is layered, plan 038: the paved apron outside, the planter's curb inside it)
+        layers = [w for w in walks if w.get("fid") == "island"]
+        self.assertEqual(sorted(("disc" in w, w.get("mat", 0) == 7) for w in layers), [(False, False), (False, True), (True, False)],
+                         "an apron, the planting's curb band and its fan")
+        islands_w = [w for w in layers if w.get("mat", 0) == 7]
         self.assertEqual(len(islands_w), 1, "one continuous island curb owned by the centre's tile")
         L = float(np.hypot(*np.diff(islands_w[0]["pts"][:, :2], axis=0).T).sum())
         self.assertGreater(L, 2 * math.pi * (R - 4) * 0.85, "the curb goes most of the way round")
         for w in walks:
-            if "corner" in w or w.get("fid") == "island":
+            if "corner" in w or w.get("fid") in ("island", "ringcurb"):
                 continue
             mid = w["pts"][len(w["pts"]) // 2, :2]
             self.assertGreater(float(np.hypot(mid[0] - cx, mid[1] - cy)), R - 1.0,
@@ -158,7 +162,7 @@ class IslandTest(unittest.TestCase):
             walks = []
             roads.build_tile(FRAME, tx, ty, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
             for w in walks:
-                if w.get("fid") == "island":
+                if w.get("fid") == "island" and w.get("mat") == 7:
                     total += float(np.hypot(*np.diff(w["pts"][:, :2], axis=0).T).sum())
                     pts.append(w["pts"][:, :2])
         self.assertGreaterEqual(len(pts), 4, "a piece in each tile")

@@ -365,11 +365,13 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
     sizes = tables()[1]["sizes"]["default"]
     poi = np.vstack([pois(frame, infra)] + portals)
-    return fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
+    got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),
                                     params(sys_row), speed_signs(frame, box, context, left_hand, mph), pole_params(sys_row),
                                     np.ascontiguousarray(poi, np.float64))
+    import roundabouts
+    return roundabouts.drop_on_islands(got, list(rows.values()))      # (none on a roundabout's island, plan 038)
 
 
 def table(signs, z_ground, z_road, sys_row):

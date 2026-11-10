@@ -122,11 +122,13 @@ def nodes(frame, infra_list):
         ll = np.array([q[1] for q in found], np.float64)
         e, n, _ = frame.geodetic_to_enu(ll[:, 1], ll[:, 0], 0.0)
         xy = np.column_stack([np.asarray(e), np.asarray(n)])
-    crossings, lines, priority, zebras, signals, de = [], [], [], [], [], []
+    crossings, lines, priority, zebras, signals, de, refuges = [], [], [], [], [], [], []
     for (cls, _, tag), p in zip(found, xy if found else ()):
         if cls == "crossing":
             crossings.append((float(p[0]), float(p[1]), paint(tag)))
             de.append((float(p[0]), float(p[1]), de_paint(tag)))
+            if str(tag.get("crossing:island", "")).lower() == "yes":      # (a refuge in the road: a splitter island, plan 038)
+                refuges.append((float(p[0]), float(p[1])))
             if paint(tag) & M15 and tag.get("crossing") != "traffic_signals":
                 zebras.append((float(p[0]), float(p[1])))
         elif cls == "traffic_signals":
@@ -140,7 +142,7 @@ def nodes(frame, infra_list):
         return any(math.hypot(z[0] - q[0], z[1] - q[1]) < SIGNALS_NEAR_M for q in signals)
     zebras = [z for z in zebras if not lit(z)]
     de = [(x, y, 0 if w and lit((x, y)) else w) for x, y, w in de]
-    return {"crossings": crossings, "zebras": zebras, "de_crossings": de,
+    return {"crossings": crossings, "zebras": zebras, "de_crossings": de, "islands": refuges,
             "stop_lines": np.array(lines, np.float64).reshape(-1, 2),
             "priority": np.array(priority, np.float64).reshape(-1, 3)}
 

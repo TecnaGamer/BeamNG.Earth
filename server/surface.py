@@ -582,6 +582,8 @@ def photo_ghosts(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=Non
 # Roundabout island fill (Chavagnes-en-Paillers 2026-10-28): the photo often still shows the old through-road
 # across the grass and as a dark E–W band on the approaches; carriageway paint leaves gaps so the scar stays visible.
 ISLAND_GRASS = (76, 98, 58)     # muted grass when the photo's own greens are too few to sample
+ISLAND_LAWN = (86, 116, 54)     # a mown lawn's green: an island's photo fill is pulled this far (plan 038: the pale grey-green
+ISLAND_LAWN_SHARE = 0.55        # of Nachod's, stones and shrubs in the picture, read as sand under the engine's grass)
 # Outset past the ring centreline so the fill covers the whole roundabout footprint (island + carriageways); paint_lines
 # then redraws the asphalt on top and only the island centre stays grass.
 ISLAND_OUTSET_M = 8.0
@@ -715,6 +717,7 @@ def _fill_island_photos(rgb, polys):
             fill = tuple(int(x) for x in np.median(out[sel], axis=0))
         else:
             fill = ISLAND_GRASS
+        fill = tuple(int(round(f * (1 - ISLAND_LAWN_SHARE) + c * ISLAND_LAWN_SHARE)) for f, c in zip(fill, ISLAND_LAWN))
         draw.polygon(poly, fill=fill)
     return np.asarray(im)
 

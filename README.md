@@ -51,7 +51,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
   and a light skyline beyond that; bridges show out to about 3 miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
-  traffic islands, roundabouts, rural motorways with shoulders and toll booths; the ground graded under them, with
+  traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
+  give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
   retaining walls where a road is cut into a hill (dry stone in the mountains and towns, concrete along major roads)
   and stone parapets along mountain roads' drops; switchback mountain pass roads (the Stelvio) narrow, between their
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
