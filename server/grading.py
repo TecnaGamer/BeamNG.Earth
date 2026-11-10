@@ -2535,9 +2535,9 @@ class _Planner:
         return False
 
     def _observed_lift(self, bridge, xy, z_at):
-        """(m the abutment at bridge end xy is raised, the measured deck end's height, the measured deck's most over the
-        ground under it) when a source measured the deck (roadz.PROVIDER, level 1): the measured deck end over the
-        ground there, 0 or more; None when none did (the inference: bridge_lifts)."""
+        """(m the abutment at bridge end xy is raised, the measured deck end's height) when a source measured the deck
+        (roadz.PROVIDER, level 1): the measured deck end over the ground there, 0 or more; None when none did (the
+        inference: bridge_lifts)."""
         import roadz
         prov = roadz.PROVIDER
         if prov is None or not prov.enabled:
@@ -2557,9 +2557,26 @@ class _Planner:
         if not len(near):
             return None
         k = int(near[np.argmin(d[near])])
+        return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k])
+
+    def _measured_over(self, bridge, z_at):
+        """The measured deck's most over the ground under it (m), along the bridge every DECK_STEP (a straight overpass is
+        often mapped as two points, both on the ground); None when nothing is measured."""
+        import roadz
+        prov = roadz.PROVIDER
+        try:
+            line = roadsmod.densify(np.asarray(bridge, np.float64)[:, :2], roadsmod.DECK_STEP)
+            z = prov.observed(self.frame, line, OBS_HALF_M, 1)
+        except Exception as e:
+            log.debug("grading: measured deck over the ground: %s: %s", type(e).__name__, e)
+            return None
+        if z is None:
+            return None
+        z = np.asarray(z, np.float64)
         ok = np.isfinite(z)
-        over = float(np.nanmax(z[ok] - np.asarray(z_at(np.asarray(bridge, np.float64)[ok]), np.float64)))
-        return max(0.0, float(z[k]) - float(z_at(np.asarray([xy], np.float64))[0])), float(z[k]), over
+        if not ok.any():
+            return None
+        return float(np.nanmax(z[ok] - np.asarray(z_at(line[ok]), np.float64)))
 
     def _coarse(self, key):
         """Is cell key's elevation only the coarse global model (dem.coarse_at its centre)? False without a DEM."""
@@ -4207,8 +4224,8 @@ class _Planner:
                 best = lift
                 break
         seen = self._observed_lift(bridge, xy, z_at)
-        if seen is not None and seen[0] < APPROACH_MIN_LIFT and seen[2] < OBS_NO_DECK_M and best is not None \
-                and best >= OBS_STALE_LIFT_M:
+        if seen is not None and seen[0] < APPROACH_MIN_LIFT and best is not None and best >= OBS_STALE_LIFT_M \
+                and (self._measured_over(bridge, z_at) or 0.0) < OBS_NO_DECK_M:
             # (a "deck" measured nowhere OBS_NO_DECK_M over the ground under it, where the clearance over the road under
             # it needs this lift: a measurement from before the bridge was built: a diverging diamond's new deck over
             # I-75 in Ohio sat 0.7 m over the interstate, GitHub #1045. A real deck over a road in a cutting stands
@@ -4216,7 +4233,7 @@ class _Planner:
             log.debug("grading: measured deck end at %s on the ground, %.1f m needed: from before the bridge", xy, best)
             seen = None
         if seen is not None:            # (a measured deck: its own end, not what the clearance rules would need)
-            seen, target = seen[:2]
+            seen, target = seen
             return None if seen < APPROACH_MIN_LIFT else (min(seen, APPROACH_MAX_LIFT), others, approaches, False,
                                                           target)
         if sol is not None:             # (crossings.ON: the bridge and the roads under it solved together)
