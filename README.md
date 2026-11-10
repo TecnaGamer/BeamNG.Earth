@@ -156,6 +156,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
   buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
   beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
+- Measured massing in New York City: the setbacks, wedding-cake towers and crowns of the city's 3-D Building Model
+  (NYC Open Data, 2014) as building parts on the map's outlines, downloaded per map cell from BeamNG.Earth's data site
+  (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
+- Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
+  air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
   `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
   and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
 - Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
