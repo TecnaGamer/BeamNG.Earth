@@ -246,6 +246,19 @@ class StationTagsTest(unittest.TestCase):
             st = railtags.StationTags(None, None, local=d)
             self.assertEqual([r["cap"] for r in st.stations_in(52.51, 13.40, 52.53, 13.42)], [2])
 
+    def test_shed_lets_go_of_the_shards(self):
+        # Codex on #1111 (2026-11-10): the budget's shedder must let go of the decoded shards, and the per-shard cell
+        # index (by_cell) holds each shard, so it goes too
+        xy = _shard_xy(34.849, -117.085)
+        sh = {"s": [["n1", "fuel", -117.085, 34.849, "Arco", "", None]], "p": [[-117.0853, 34.8492]]}
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xy: sh}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1)
+            self.assertTrue(st.shards and st.by_cell)
+            st.clear_memory()
+            self.assertEqual((st.shards, st.by_cell), ({}, {}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1, "read again when asked")
+
 
 if __name__ == "__main__":
     unittest.main()

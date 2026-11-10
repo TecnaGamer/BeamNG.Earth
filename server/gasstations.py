@@ -1903,7 +1903,9 @@ def _with_shard(frame, md, box, chargers):
     if st is None or not chargers:
         return chargers
     try:
-        r = max(evchargers.reach_of(ch) for ch in chargers) + MERGE_M
+        # (a pin's shard station up to MERGE_M away, and that station's charge points up to MERGE_M from it: two
+        # MERGE_M round the reach, Codex on #1111, 2026-11-10)
+        r = max(evchargers.reach_of(ch) for ch in chargers) + 2 * MERGE_M
         x0, y0, x1, y1 = box
         la, lo, _ = frame.enu_to_geodetic(np.array([x0 - r, x1 + r]), np.array([y0 - r, y1 + r]), 0.0)
         box_ll = (float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))

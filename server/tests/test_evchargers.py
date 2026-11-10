@@ -363,6 +363,24 @@ class ShardTest(unittest.TestCase):
         md.station_tags = SimpleNamespace(stations_in=lambda *a: None, points_in=lambda *a: None)
         self.assertEqual(gs.tile_sites(FRAME, 0, 0, md, flat)[0], before, "shards unreachable: as before")
 
+    def test_shard_box_reaches_a_stations_points(self):
+        # Codex on #1111 (2026-11-10): a pin matches a shard station up to MERGE_M away, and that station's charge points
+        # up to MERGE_M from it, so the tile asks the shards for 2 MERGE_M round the sites' reach, not one
+        box = roads.tile_bbox(0, 0)
+        x0, y0 = box[0], (box[1] + box[3]) / 2
+        ch = charger(big=True, x=x0, y=y0)
+        r, m = ev.reach_of(ch), gs.MERGE_M
+        sx = x0 - (m - 2.0)
+        px = [x0 - min(r + m + 3.0, (m - 2.0) + (m - 1.0)), x0 - min(r + m + 2.0, (m - 2.0) + (m - 1.5))]
+        self.assertTrue(all(sx - p <= m and x0 - p > r + m for p in px), "the points: the station's, past one MERGE_M")
+        stations, points = [sh_station(sx, y0, 6)], [ll(p, y0) for p in px]
+        inb = lambda b, la, lo: b[0] <= la <= b[2] and b[1] <= lo <= b[3]
+        md = SimpleNamespace(station_tags=SimpleNamespace(
+            stations_in=lambda *b: [s for s in stations if inb(b, s["lat"], s["lon"])],
+            points_in=lambda *b: [p for p in points if inb(b, *p)]))
+        got = gs._with_shard(FRAME, md, box, [ch])
+        self.assertEqual((got[0].cap, len(got[0].points)), (6, 2))
+
 
 class LevelGroundTest(unittest.TestCase):
     """A row stays on level ground (the user in game, 2026-11-09, Barstow's Supercharger as 12: "some of them are

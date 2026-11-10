@@ -705,6 +705,12 @@ class StationTags(Shards):
                 self.shards[(x, y)] = got
         return got
 
+    def clear_memory(self):
+        """The shards and their cell indexes (each index holds its shard: Codex on #1111, 2026-11-10)."""
+        with self.lock:
+            self.shards.clear()
+            self.by_cell.clear()
+
     def _shards(self, lat0, lon0, lat1, lon1):
         """The box's shards, or None when one of them cannot be had."""
         import mapcells
