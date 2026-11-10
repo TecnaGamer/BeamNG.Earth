@@ -401,10 +401,11 @@ class RoadWidths:
                 if hit is not None and hit[0] is w:
                     sg = hit[1]
                 else:
-                    pts = sg.reshape(-1, 2)
-                    la, lo, _ = f.enu_to_geodetic(pts[:, 0], pts[:, 1], 0.0)
-                    e, n, _ = frame.geodetic_to_enu(np.asarray(la), np.asarray(lo), 0.0)
-                    sg = np.stack([np.asarray(e), np.asarray(n)], -1).reshape(-1, 4)
+                    # (through lon / lat at the ground in one pass: earthfast.reframe_segs, the conversions' maths)
+                    import fast
+                    fast.require(198, "reframe_segs")
+                    sg = fast._ef.reframe_segs(np.ascontiguousarray(sg, np.float64), f.origin, f.rot, frame.origin,
+                                               frame.rot)
                     with self.lock:
                         self.reframed[rk] = (w, sg)
                         while len(self.reframed) > REFRAMED:

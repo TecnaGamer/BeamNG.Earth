@@ -748,54 +748,92 @@ pub(crate) fn ends_near_core(p: &[[f64; 2]], t: &[[f64; 2]], tx: f64, ty: f64) -
 }
 
 /// roads._deck_crossings: (i, j, arc on i, arc on j) where polylines i < j cross away from their end points.
-/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n).
+/// pts (n, 2) all lines one after another, starts (L + 1,) where each begins (the last: n). The pairs whose boxes
+/// meet by a sweep along x (each line's boxes against all others' was the pool's square: BridgeProfiles._resolve asks
+/// it again as each chain's pool grows, ~1.4 % of a cold Manhattan build, 2026-11-10), and of such a pair only the
+/// segments within DECK_X_PAD_M of the other line's box; the same tests and the same order of hits, without the GIL.
 #[pyfunction]
-fn deck_crossings(pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>) -> Vec<(usize, usize, f64, f64)> {
-    let p = pts.as_array();
+fn deck_crossings(py: Python<'_>, pts: PyReadonlyArray2<f64>, starts: PyReadonlyArray1<i64>)
+                  -> Vec<(usize, usize, f64, f64)> {
+    let pa = pts.as_array();
     let st = starts.as_array();
     let nl = st.len().saturating_sub(1);
     let rng: Vec<(usize, usize)> = (0..nl).map(|i| (st[i] as usize, st[i + 1] as usize)).collect();
+    let p: Vec<[f64; 2]> = (0..pa.nrows()).map(|k| [pa[[k, 0]], pa[[k, 1]]]).collect();
+    release(py, p.len() * 4, move || deck_crossings_core(&p, &rng))
+}
+
+/// m a segment may lie off the other line's box and still be tried (far more than any rounding of the crossing test:
+/// a segment that far off cannot meet the line inside both segments).
+const DECK_X_PAD_M: f64 = 1.0;
+
+fn deck_crossings_core(p: &[[f64; 2]], rng: &[(usize, usize)]) -> Vec<(usize, usize, f64, f64)> {
+    let nl = rng.len();
     let mut boxes = Vec::with_capacity(nl);
     let mut arcs: Vec<Vec<f64>> = Vec::with_capacity(nl);
-    for &(a, b) in &rng {
+    for &(a, b) in rng {
         let (mut lo, mut hi) = ([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]);
         let mut arc = Vec::with_capacity(b - a);
         let mut acc = 0.0;
         for k in a..b {
             for c in 0..2 {
-                lo[c] = lo[c].min(p[[k, c]]);
-                hi[c] = hi[c].max(p[[k, c]]);
+                lo[c] = lo[c].min(p[k][c]);
+                hi[c] = hi[c].max(p[k][c]);
             }
             if k > a {
-                acc += (p[[k, 0]] - p[[k - 1, 0]]).hypot(p[[k, 1]] - p[[k - 1, 1]]);
+                acc += (p[k][0] - p[k - 1][0]).hypot(p[k][1] - p[k - 1][1]);
             }
             arc.push(acc);
         }
         boxes.push((lo, hi));
         arcs.push(arc);
     }
-    let mut out = Vec::new();
-    for i in 0..nl {
-        let (ai, bi) = rng[i];
-        if bi - ai < 2 {
-            continue;
-        }
-        for j in (i + 1)..nl {
-            let (aj, bj) = rng[j];
-            if bj - aj < 2 {
-                continue;
+    // (the lines with 2 points or more, by their boxes' west edge: each one's candidates are the lines starting west
+    // of its east edge after it in that order; a NaN box meets nothing, as the comparisons below)
+    let mut order: Vec<usize> = (0..nl).filter(|&i| rng[i].1 - rng[i].0 >= 2 && !boxes[i].0[0].is_nan()
+                                               && !boxes[i].1[0].is_nan()).collect();
+    order.sort_by(|&a, &b| boxes[a].0[0].total_cmp(&boxes[b].0[0]).then(a.cmp(&b)));
+    let mut cand: Vec<Vec<usize>> = vec![Vec::new(); nl];
+    for (oi, &i) in order.iter().enumerate() {
+        let (alo, ahi) = boxes[i];
+        for &j in &order[oi + 1..] {
+            let (blo, bhi) = boxes[j];
+            if blo[0] > ahi[0] {
+                break;
             }
-            let ((alo, ahi), (blo, bhi)) = (boxes[i], boxes[j]);
             if ahi[0] < blo[0] || bhi[0] < alo[0] || ahi[1] < blo[1] || bhi[1] < alo[1] {
                 continue;
             }
+            if i < j { cand[i].push(j); } else { cand[j].push(i); }
+        }
+    }
+    let seg_near = |a: usize, b: usize, lo: [f64; 2], hi: [f64; 2]| -> Vec<usize> {
+        (0..(b - a - 1)).filter(|&q| {
+            let (x0, y0, x1, y1) = (p[a + q][0], p[a + q][1], p[a + q + 1][0], p[a + q + 1][1]);
+            !(x0.max(x1) < lo[0] - DECK_X_PAD_M || x0.min(x1) > hi[0] + DECK_X_PAD_M
+              || y0.max(y1) < lo[1] - DECK_X_PAD_M || y0.min(y1) > hi[1] + DECK_X_PAD_M)
+        }).collect()
+    };
+    let mut out = Vec::new();
+    for i in 0..nl {
+        if cand[i].is_empty() {
+            continue;
+        }
+        cand[i].sort_unstable();
+        let (ai, bi) = rng[i];
+        for &j in &cand[i] {
+            let (aj, bj) = rng[j];
             let (si_end, sj_end) = (arcs[i][bi - ai - 1], arcs[j][bj - aj - 1]);
-            for q in 0..(bj - aj - 1) {
-                let (ax, ay) = (p[[aj + q, 0]], p[[aj + q, 1]]);
-                let (d0, d1) = (p[[aj + q + 1, 0]] - ax, p[[aj + q + 1, 1]] - ay);
-                for k in 0..(bi - ai - 1) {
-                    let (px, py) = (p[[ai + k, 0]], p[[ai + k, 1]]);
-                    let (r0, r1) = (p[[ai + k + 1, 0]] - px, p[[ai + k + 1, 1]] - py);
+            let ks = seg_near(ai, bi, boxes[j].0, boxes[j].1);
+            if ks.is_empty() {
+                continue;
+            }
+            for q in seg_near(aj, bj, boxes[i].0, boxes[i].1) {
+                let (ax, ay) = (p[aj + q][0], p[aj + q][1]);
+                let (d0, d1) = (p[aj + q + 1][0] - ax, p[aj + q + 1][1] - ay);
+                for &k in &ks {
+                    let (px, py) = (p[ai + k][0], p[ai + k][1]);
+                    let (r0, r1) = (p[ai + k + 1][0] - px, p[ai + k + 1][1] - py);
                     let den = r0 * d1 - r1 * d0;
                     if den.abs() <= 1e-12 {
                         continue;
@@ -1073,6 +1111,37 @@ fn ecef_to_frame<'py>(py: Python<'py>, xyz: PyReadonlyArray2<'py, f64>, origin: 
         out
     });
     let arr = numpy::ndarray::Array2::from_shape_vec((n, 2), out)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    Ok(arr.into_pyarray(py))
+}
+
+/// (n, 4) segments x0 y0 x1 y1 (segs, in the frame (o1, r1)) in the frame (o2, r2) at the ground: each point through
+/// enu_to_geodetic (up 0) and back by geodetic_to_enu (height 0) with those kernels' very operations, one pass, no
+/// GIL (roadwidth.RoadWidths._near_walls: a cell's walls in a neighbour's frame, two conversion calls and their
+/// arrays per set of cells; ~1.2 % of a cold Manhattan road tile build, 2026-11-10).
+#[pyfunction]
+fn reframe_segs<'py>(py: Python<'py>, segs: PyReadonlyArray2<'py, f64>, o1: PyReadonlyArray1<'py, f64>,
+                     r1: PyReadonlyArray2<'py, f64>, o2: PyReadonlyArray1<'py, f64>, r2: PyReadonlyArray2<'py, f64>)
+                     -> PyResult<Bound<'py, PyArray2<f64>>> {
+    let (oa, ra) = frame_of(&o1, &r1)?;
+    let (ob, rb) = frame_of(&o2, &r2)?;
+    let s = segs.as_array();
+    let n = s.nrows();
+    if n > 0 && s.ncols() != 4 {
+        return Err(pyo3::exceptions::PyValueError::new_err("reframe_segs: (n, 4) segments"));
+    }
+    let flat: Vec<f64> = s.iter().copied().collect();
+    let out = release(py, n * 200, move || {
+        let mut out = Vec::with_capacity(n * 4);
+        for p in flat.chunks_exact(2) {
+            let (la, lo, _) = e2g_one(p[0], p[1], 0.0, &oa, &ra);
+            let (e, nn, _) = g2e_one(la, lo, 0.0, &ob, &rb);
+            out.push(e);
+            out.push(nn);
+        }
+        out
+    });
+    let arr = numpy::ndarray::Array2::from_shape_vec((n, 4), out)
         .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
     Ok(arr.into_pyarray(py))
 }
@@ -5809,6 +5878,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(enu_to_geodetic_c, m)?)?;
     m.add_function(wrap_pyfunction!(lonlat_to_ecef, m)?)?;
     m.add_function(wrap_pyfunction!(ecef_to_frame, m)?)?;
+    m.add_function(wrap_pyfunction!(reframe_segs, m)?)?;
     m.add_function(wrap_pyfunction!(bc7_encode, m)?)?;
     m.add_function(wrap_pyfunction!(inside_blockers, m)?)?;
     m.add_function(wrap_pyfunction!(densify, m)?)?;
@@ -6030,6 +6100,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(mappedlamps::points_along, m)?)?;
     // 199: mappedlamps (the mapped street lamps' arms toward their road, the mapped points along each road; 198 is
     // another branch's)
+    // 198: reframe_segs (roadwidth's walls in another cell's frame in one pass)
     m.add("VERSION", 199)?;
     Ok(())
 }

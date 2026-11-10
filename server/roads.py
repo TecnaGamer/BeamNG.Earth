@@ -715,9 +715,16 @@ def _cell_ranges(feats, load_only=False):
         answers = _lidar_answers(feats) if LIDAR_GAPS_ON else {}
         lvl_memo = st.setdefault("_level_ranges", {})
         todo, ruled = [], False
+        # (the pre-check and the answered rows as plain Python once: a numpy scalar and an id's str per feature were
+        # ~0.5 % of a cold build's samples)
+        near_l = near.tolist() if near is not None else None
+        answered = set()
+        if answers:
+            ids = feats.ids.tolist() if hasattr(feats.ids, "tolist") else list(feats.ids)
+            answered = {i for i, fid in enumerate(ids) if answers.get(str(fid))}
         for i in range(len(feats)):
-            if (near is not None and not raw[i] and not near[i] and i not in lvl_memo
-                    and not (answers and answers.get(str(feats.ids[i])))):
+            if (near_l is not None and not raw[i] and not near_l[i] and i not in lvl_memo
+                    and i not in answered):
                 lvl_memo[i] = []
             else:
                 ruled = True
@@ -746,14 +753,20 @@ def _cell_ranges(feats, load_only=False):
                               "until": None if clean else time.monotonic() + FACTS_SHORT_S}
             while len(_FACTS_MEM) > FACTS_MEM_KEPT:
                 _FACTS_MEM.popitem(last=False)
-    data = {"raw": [[[float(a), float(b), k] for a, b, k in r] for r in raw],
-            "lvl": [[[float(a), float(b), k] for a, b, k in r] for r in lvl]}
-    if clean and run_path is not None:
+    # (the stored form only where something keeps it: every feature's lists again, ~1 % of a cold build's samples
+    # with nothing kept)
+    keep_run = clean and run_path is not None
+    keep_facts = clean and not st.get("_lidar_rule") and _facts_key(feats, "ranges", None) is not None
+    data = None
+    if keep_run or keep_facts:
+        data = {"raw": [[[float(a), float(b), k] for a, b, k in r] for r in raw],
+                "lvl": [[[float(a), float(b), k] for a, b, k in r] for r in lvl]}
+    if keep_run:
         _run_facts_store(run_path, dict(data, rule=bool(st.get("_lidar_rule"))))
     if mine:
         import xproc
         xproc.release(run_path + ".lock")
-    if clean and not st.get("_lidar_rule"):
+    if keep_facts:
         _facts_store(feats, "ranges", None, data)
 
 
@@ -1441,6 +1454,8 @@ def _bridge_level_spans(feats, i, rngs=None):
     """(start, end, level) of each bridge part, split at mapped local level transitions in Rust."""
     import fast
     rngs = level_ranges(feats, i) if rngs is None else rngs
+    if not any(k == "bridge" for _a, _b, k in rngs):
+        return []           # (no bridge range: no span, whatever the level rule; most roads, asked per piece)
     memo = feats.__dict__.setdefault("_bridge_level_spans", {})
     key = (i, tuple(map(tuple, rngs)))
     if key in memo:
@@ -2002,7 +2017,8 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
             got = (_road_specs(feats, urban_fn, left_hand, towns) if widths is None else
                    _measured_widths(feats, road_specs(feats, urban_fn, None, left_hand), widths))
             clean = revisit.thread_faults() == f0
-            if urban_fn is None and clean:
+            if urban_fn is None and clean and _facts_key(feats, "specs", extra) is not None:
+                # (their stored form only where it is kept)
                 _facts_store(feats, "specs", extra, [None if sp is None else _spec_json(sp) for sp in got])
             keep = clean
             if clean:
@@ -2708,7 +2724,10 @@ class Placement:
                     rows = _end_index(f)[0].get(k)
                     if not rows:
                         continue
-                    specs, bspecs, tspecs = road_specs(f, *self.args), bridge_specs(f), tunnel_specs(f)
+                    # (whether a road: the specs without the measured widths, None where those are None: the
+                    # widths only change a spec's numbers, and neighbour cells' decks asked their walls for nothing)
+                    specs = _road_specs_kept(f, self.args[0], None, self.args[2])
+                    bspecs, tspecs = bridge_specs(f), tunnel_specs(f)
                     cid = f.__dict__.get("_bnge_cell")
                     for j, e in rows:
                         if specs[j] is None and bspecs[j] is None and tspecs[j] is None:
@@ -2753,11 +2772,20 @@ class Placement:
         if got is not None:
             return got
         out = ()
-        for deck, spec in ((False, road_specs(f, *self.args)[i]), (True, bridge_specs(f)[i])):
-            if spec is not None:
-                out += self._joints(f, i, fid, spec, deck)
+        if self._may_join(f, i):        # (its specs only then: the widths measured between the walls cost)
+            for deck, spec in ((False, road_specs(f, *self.args)[i]), (True, bridge_specs(f)[i])):
+                if spec is not None:
+                    out += self._joints(f, i, fid, spec, deck)
         self._jmemo[key] = out
         return out
+
+    def _may_join(self, f, i):
+        """_joints' first test, the same for both kinds of end: an end of feature i where a placed road's lies."""
+        ends = _end_index(f)[1][i]
+        if ends is None or ends[0] == ends[1]:
+            return False
+        index = self._ends()
+        return any(k in index for k in ends)
 
     def _joints(self, f, i, fid, spec, deck):
         """joints' of one kind of end (deck: its deck's ends, spec its bridge spec; else its ground ends)."""
