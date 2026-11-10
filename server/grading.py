@@ -5819,6 +5819,8 @@ def under_dip(d, depth, room=(math.inf, math.inf)):
 
 
 RAMP_ENVELOPE_ON = os.environ.get("BNE_RAMP_ENVELOPE", "on") != "off"
+BREAK_STEP_M = 0.3          # m: roads meeting this far apart at a node are a break (ramp_envelope) ...
+BREAK_GRADE = 0.12          # ... and a raised road climbing faster than this (and than before the passes)
 RAMP_GRADE = 0.06            # the steepest a road is left climbing to a raised junction or approach (ramp_envelope)
 RAMP_NODE_M = 1.5           # m: road ends this close are one node
 RAMP_REACH_M = 400.0        # m along the roads from a raised one the envelope goes at most
@@ -5889,8 +5891,25 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
     log.debug("grading: ramp envelope: %d plans, %d seeds, %d in scope (rids %s), %d held, %d nodes (%d fixed)", n,
               len(seeds), len(scope), sorted({getattr(plans[i][1], "rid", -1) for i in scope})[:40], len(held),
               len(members), len(fixed))
+    # (only where the geometry breaks, the user: "we should only use this road smoothing whenever the road geometry
+    # breaks": a step where roads meet, BREAK_STEP_M or more apart, and a road the passes raised that now climbs past
+    # BREAK_GRADE, steeper than before them (a real steep street left as it is); none of either: nothing changes)
+    def spread(k):
+        hs = [float(z[i][v]) if i in z else float(np.asarray(plans[i][1].z, np.float64)[v]) for i, _a, v in members[k]
+              if specs[i] is not None]
+        return (max(hs) - min(hs)) if len(hs) > 1 else 0.0
+
+    def too_steep(i, zz):
+        ds = np.maximum(np.diff(arcs[i]), 1e-6)
+        g = np.abs(np.diff(zz)) / ds
+        g0 = np.abs(np.diff(np.asarray(floor[i], np.float64))) / ds if floor is not None and len(floor[i]) == len(zz) else g
+        return (g > BREAK_GRADE) & (g > g0 + 0.02)
+    broken = {k for k in range(len(members)) if spread(k) >= BREAK_STEP_M}
+    steep = {i for i in scope if too_steep(i, z[i]).any()}
+    if not broken and not steep:
+        return
     fix_h = {}
-    for k in fixed:
+    for k in fixed & broken:       # (a fixed node only bounds the roads round it where they break there)
         hs = [float(np.asarray(plans[i][1].z, np.float64)[v]) for i, _a, v in members[k]
               if (specs[i] is not None and _never_raised(specs[i])) or i in held]
         if hs:
@@ -5917,25 +5936,27 @@ def ramp_envelope(plans, specs, seeds, held=(), floor=None):
         for i in scope:
             fl = np.asarray(floor[i], np.float64) if floor is not None and len(floor[i]) == len(z[i]) else z[i]
             z[i] = np.maximum(fl, np.minimum(z[i], up[i]))
-    for _round in range(16):    # (the floor from every node: no road under a node's height - RAMP_GRADE x the way)
+    for _round in range(16):    # (the floor from the broken nodes: no road under its height - RAMP_GRADE x the way)
         moved = False
         node_h = {}
+        broken = {k for k in range(len(members)) if spread(k) >= BREAK_STEP_M}
         for i in scope:
             for k, _a, v in plan_nodes[i]:
-                if k not in fixed:
+                if k not in fixed and k in broken:
                     node_h[k] = max(node_h.get(k, -np.inf), float(z[i][v]))
         for i in scope:
             lo = z[i].copy()
             for k, a_, _v in plan_nodes[i]:
                 if k in node_h:
                     lo = np.maximum(lo, node_h[k] - RAMP_GRADE * np.abs(arcs[i] - a_))
-            # (and along the road itself: no stretch of it climbing faster than RAMP_GRADE, its lower side raised; a
-            # raised road's own ramp, capped by the roads beside, fell 15 % over its first 30 m)
-            ds = np.diff(arcs[i])
-            for q in range(1, len(lo)):
-                lo[q] = max(lo[q], lo[q - 1] - RAMP_GRADE * ds[q - 1])
-            for q in range(len(lo) - 2, -1, -1):
-                lo[q] = max(lo[q], lo[q + 1] - RAMP_GRADE * ds[q])
+            # (and along a road the passes made too steep: no stretch climbing faster than RAMP_GRADE, its lower side
+            # raised; a raised road's own ramp, capped by the roads beside, fell 15 % over its first 30 m)
+            if i in steep or too_steep(i, lo).any():
+                ds = np.diff(arcs[i])
+                for q in range(1, len(lo)):
+                    lo[q] = max(lo[q], lo[q - 1] - RAMP_GRADE * ds[q - 1])
+                for q in range(len(lo) - 2, -1, -1):
+                    lo[q] = max(lo[q], lo[q + 1] - RAMP_GRADE * ds[q])
             for k, _a, v in plan_nodes[i]:
                 if k in fixed:
                     lo[v] = z[i][v]                 # (a fixed node keeps its height)
