@@ -24,7 +24,9 @@ import mapcells
 log = logging.getLogger("earthd.stationindex")
 
 INDEX_VERSION = 2           # this file's rules (an index made by other rules is not read: built again)
-MAX_ITEMS = 50              # the nearest this many in an answer
+MAX_ITEMS = 50              # the nearest this many in a Nearest ("near") answer
+MAP_MAX_ITEMS = 300         # ... in a map view's: with the weekly shards a zoomed-out city view has hundreds (the user,
+                            # 2026-11-10: "does it only show a certain amount of symbols?"; 50 left the view's edges bare)
 R_KM_MAX = 25.0             # the farthest a query looks
 MAP_BUILD_MAX = 16          # cells' indexes built per map query (more: partial, asked again on the map's next poll)
 NEAR_FETCH_MAX = 4          # cells without places data downloaded per Nearest query (more: partial)
@@ -230,7 +232,7 @@ class StationIndex:
             found, partial = self._near(lat, lon, r_km, kinds)
         else:
             found, partial = self._map(lat, lon, r_km, kinds)
-        return self._finish(found, lat, lon, r_km), partial
+        return self._finish(found, lat, lon, r_km, MAX_ITEMS if mode == "near" else MAP_MAX_ITEMS), partial
 
     def _take(self, key, kinds, out):
         e = self._entry(key)
@@ -299,7 +301,7 @@ class StationIndex:
         return out, False
 
     @staticmethod
-    def _finish(found, lat, lon, r_km):
+    def _finish(found, lat, lon, r_km, cap):
         items = []
         for it in found:
             km = _km(lat, lon, it["lat"], it["lon"])
@@ -311,6 +313,6 @@ class StationIndex:
             if any(k["kind"] == it["kind"] and _m(k, it) <= DEDUP_M for k in kept):
                 continue
             kept.append(it)
-            if len(kept) >= MAX_ITEMS:
+            if len(kept) >= cap:
                 break
         return kept

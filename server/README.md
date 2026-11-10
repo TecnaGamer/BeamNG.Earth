@@ -749,8 +749,8 @@ POI (the charge prompt, the bolt icon). They come and go with the gas stations; 
 
 The world map's "Gas stations" and "EV chargers" layers, its Nearest button, the radial menu's "Nearest station" and the
 low fuel prompt (the mod's `finder.lua`) ask `stations {id, lat, lon, r_km, kinds, mode}` and get `stations_result {id,
-items: [{lat, lon, name, brand, kind, km}], partial, error?}`: up to 50 stations of the kinds asked (`fuel`, `ev`)
-within `r_km` (at most 25), nearest first. The index keeps each map cell's stations in a small JSON file under
+items: [{lat, lon, name, brand, kind, km}], partial, error?}`: up to 300 stations (mode `map`) or 50 (mode `near`)
+of the kinds asked (`fuel`, `ev`) within `r_km` (at most 25), nearest first. The index keeps each map cell's stations in a small JSON file under
 `<cache>/mapdata/raw/stationindex/`, built from the lists the road tiles lay out (Overture's places and OpenStreetMap's
 fuel and charging stations, merged as the layouts merge them). Mode `map` reads only the cells whose places data is on
 disk already (no download for a map view, up to 16 new cells a call, `partial` for more); mode `near` searches rings of

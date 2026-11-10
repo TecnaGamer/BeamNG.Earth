@@ -148,11 +148,29 @@ class QueryTest(IndexCase):
         self.assertFalse(partial)
         self.assertEqual(items, [])
 
-    def test_query_sorted_capped_dedup(self):
+    def test_map_answers_more_than_nearest(self):
+        # the user, 2026-11-10: "does it only show a certain amount of symbols?" (a zoomed-out view of Berlin from the
+        # shards: 50 icons round the centre, none towards the edges). The map's cap is MAP_MAX_ITEMS, Nearest's MAX_ITEMS.
         la, lo = centre(A)
         rows = [place(f"p{i:02d}", la + (i // 8) * 0.0015 - 0.005, lo + (i % 8) * 0.002 - 0.008) for i in range(60)]
         md = CellMD({A: rows})
         items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "map")
+        self.assertEqual(len(items), 60)
+        self.assertEqual([i["km"] for i in items], sorted(i["km"] for i in items))
+        old = si.MAP_MAX_ITEMS
+        si.MAP_MAX_ITEMS = 40
+        try:
+            items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "map")
+        finally:
+            si.MAP_MAX_ITEMS = old
+        self.assertEqual(len(items), 40)
+        self.assertGreater(si.MAP_MAX_ITEMS, si.MAX_ITEMS)
+
+    def test_query_sorted_capped_dedup(self):
+        la, lo = centre(A)
+        rows = [place(f"p{i:02d}", la + (i // 8) * 0.0015 - 0.005, lo + (i % 8) * 0.002 - 0.008) for i in range(60)]
+        md = CellMD({A: rows})
+        items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "near")
         self.assertEqual(len(items), si.MAX_ITEMS)
         self.assertEqual([i["km"] for i in items], sorted(i["km"] for i in items))
         # one station seen from two cells' indexes (its pins either side of the edge): one item
