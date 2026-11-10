@@ -1475,14 +1475,17 @@ def _foot_limits(xy, side, foot, others, crossers):
     return np.maximum(lim, BALLAST_TOP_M + 0.01)
 
 
-def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False):
+def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, return_decks=False, under=None):
     """The road tile (tx, ty)'s railway mesh (roadmesh.write's (positions, tris, uvs, materials, tri material)) or
     None. cells: the roads layers of the cells within REACH_M of the tile (cells_of_tile(..., margin=REACH_M));
     ground(xy (n, 2)) -> z: the drawn ground in the frame. far_ground: the natural ground, read beyond GRADED_NEAR_M
     of the tile (the lines REACH_M round it only smooth the track and carry its ramps: the graded ground there made the
     grader plan the cells round every tile, and the railways doubled a tile's time, 2026-10-25). return_decks: also
     return the bridge decks' centrelines ([{"n": xy+z line, "w": width}], the bed plus its ballast), for mapped
-    furniture (fences.py) to stand on: the profile is already made here, no second pass."""
+    furniture (fences.py) to stand on: the profile is already made here, no second pass. under(xy (k, 2)) -> mask: the
+    points a 3dmr model bridge stands over (buildings.bridge_footprints'): a railway's or a walkway's bridge mostly
+    under one is not drawn (the model carries it: Perth's Narrows and Mount Henry bridges' rail decks, the Elizabeth
+    Quay footbridge, GitHub #1071); the track's profile still runs over it."""
     cells = list(cells)
     box = roads.tile_bbox(tx, ty)
     tunnels = road_underpasses(frame, cells, box)
@@ -1495,12 +1498,16 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     if not any(_box_hit((xy[:, 0].min(), xy[:, 1].min(), xy[:, 0].max(), xy[:, 1].max()), exs) for *_, xy in rails):
         rails = []
     walk = [w for w in walk if _box_hit((w[1][:, 0].min(), w[1][:, 1].min(), w[1][:, 0].max(), w[1][:, 1].max()), exs)]
+    if under is not None:
+        walk = [w for w in walk if not np.asarray(under(w[1]), bool).mean() >= 0.5]
     if not rails and not walk:
         return (None, []) if return_decks else None
     prof = profile(rails, ground, tunnels + coarse_underpasses(frame, cells, box, rails)) if rails else []
+    carried = [under is not None and kind == "bridge" and np.asarray(under(xy), bool).mean() >= 0.5
+               for _f, _c, kind, xy in rails]
     decks = ([{"n": np.column_stack((xy, zb + BALLAST_H)),
                "w": 2 * (TRAM_DECK_HALF_M if cls == "tram" else DECK_HALF_M)}
-              for (_, cls, kind, xy), (zb, _zg) in zip(rails, prof) if kind == "bridge"]
+              for (_, cls, kind, xy), (zb, _zg), gone in zip(rails, prof, carried) if kind == "bridge" and not gone]
              if return_decks else [])
     cr = crossings(frame, cells, box, reach=50.0) + tunnels
     crossers = []
@@ -1514,10 +1521,10 @@ def tile_mesh(frame, tx, ty, cells, ground, sign_style=None, far_ground=None, re
     ballast, concrete, steel = mesh.mat(BALLAST), mesh.mat(CONCRETE), mesh.mat(STEEL)
     up = np.array([0.0, 0.0, 1.0])
     small = []                                      # sleepers and piers: drawn last, as room allows
-    for (fid, cls, kind, xy), (zb, zg) in zip(rails, prof):
+    for (fid, cls, kind, xy), (zb, zg), gone in zip(rails, prof, carried):
         inside = (xy[:, 0] >= ex[0] - STEP_M) & (xy[:, 0] <= ex[2] + STEP_M) & \
                  (xy[:, 1] >= ex[1] - STEP_M) & (xy[:, 1] <= ex[3] + STEP_M)
-        if not inside.any():
+        if gone or not inside.any():
             continue
         u = _left(xy)
         s = _arc(xy)

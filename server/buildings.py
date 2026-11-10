@@ -4828,11 +4828,19 @@ def _model_mesh(c, cache_dir):
     return pos, uvs, tris, nrm, textures, tri_materials
 
 
-def _is_bridge(pos):
-    """A model whose horizontal bbox is a bridge deck's shape (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M)."""
-    dx = float(pos[:, 0].max() - pos[:, 0].min()) if len(pos) else 0.0
-    dy = float(pos[:, 1].max() - pos[:, 1].min()) if len(pos) else 0.0
-    return (dx > BRIDGE_ASPECT * dy or dy > BRIDGE_ASPECT * dx) and max(dx, dy) > BRIDGE_MIN_SPAN_M
+def _is_bridge(pos, info=None):
+    """A model bridge: its 3dmr.eu record says so (info: threedmr.model_info's; threedmr.info_says_bridge) and it
+    reaches BRIDGE_MIN_TAGGED_M, or its smallest bounding rectangle seen from above (threedmr.deck_axis: whatever way
+    it runs - an axis-aligned box missed Perth's diagonal Mount Henry Bridge, GitHub #1071) is a bridge deck's shape
+    (BRIDGE_ASPECT, BRIDGE_MIN_SPAN_M)."""
+    import threedmr
+
+    if not len(pos):
+        return False
+    _ang, major, minor = threedmr.deck_axis(np.asarray(pos, np.float64)[:, :2])
+    if info is not None and threedmr.info_says_bridge(info) and major >= BRIDGE_MIN_TAGGED_M:
+        return True
+    return major > BRIDGE_ASPECT * minor and major > BRIDGE_MIN_SPAN_M
 
 
 def _centred(pos):
@@ -4921,8 +4929,12 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
             if max(dx, dy) > MODEL_MAX_M:
                 log.warning("3dmr model %s: %.0f x %.0f m, wider than %.0f m: not placed", cid, dx, dy, MODEL_MAX_M)
                 continue
+            # (a bridge stands where bridge_footprints puts it, onto its mapped bridge: every tile round it leaves
+            # its procedural bridge out there, so no building footprint moves it)
+            is_bridge = "local" not in c and _is_bridge(pos, threedmr.cached_info(cid, cache_dir))
             if (
-                items is not None
+                not is_bridge
+                and items is not None
                 and origin is not None
                 and "local" not in c
                 and c.get("source") == "api"
@@ -4938,7 +4950,6 @@ def _custom_tile_entries(frame, custom, ground, out_dir, vfs_dir, road_ends=None
                         cid, c["xy"][0], c["xy"][1],
                     )
                     c = dict(c, xy=fp)
-            is_bridge = _is_bridge(pos) and "local" not in c
             la, lo, _ = frame.enu_to_geodetic(
                 np.array([c["xy"][0]]), np.array([c["xy"][1]]), np.zeros(1)
             )
@@ -5227,12 +5238,13 @@ def near_rings(frame, tx, ty, md, margin=2.0, skip=frozenset()):
     return out
 
 
-def bridge_footprints(frame, tx, ty, cache_dir):
+def bridge_footprints(frame, tx, ty, cache_dir, cell_fn=None):
     """[(footprint, (x, y) of its model in frame, model id)] of the 3dmr model bridges whose deck reaches road tile
     (tx, ty) (threedmr.bridge_footprint: every tile reads the same per-model answer, the one the model is baked in
     or not), found as road_tile_items finds models (threedmr.region_ids, model_position)
-    within threedmr.BRIDGE_REACH_M of the tile. [] without cache_dir. A model it could not read marks the build
-    incomplete (revisit.fault: tried again next visit)."""
+    within threedmr.BRIDGE_REACH_M of the tile. cell_fn (map cell key -> its roads layer): each model moved onto its
+    mapped bridge (bridge_align: every tile the same, place_bridge_models bakes it there). [] without cache_dir. A
+    model it could not read marks the build incomplete (revisit.fault: tried again next visit)."""
     import logging
     import revisit
     import roads
@@ -5258,9 +5270,11 @@ def bridge_footprints(frame, tx, ty, cache_dir):
 
             def mesh(_c=c):
                 pos, _uvs, tris, _nrm, _tex, _tm = _model_mesh(_c, cache_dir)
-                return _centred(pos), tris, _is_bridge(pos)
+                return _centred(pos), tris, _is_bridge(pos, threedmr.cached_info(_c["id"], cache_dir))
 
             fp = threedmr.bridge_footprint(mid, cache_dir, mesh)
+            if fp.get("bridge") and cell_fn is not None:
+                mx, my = bridge_align(frame, fp, (mx, my), (mid, mlat, mlon), cell_fn)
         except threedmr.UnsupportedModelError:
             continue
         except Exception:
@@ -5270,6 +5284,151 @@ def bridge_footprints(frame, tx, ty, cache_dir):
         if fp.get("bridge"):
             out.append((fp, (mx, my), mid))
     return out
+
+
+def place_bridge_models(custom, fps):
+    """custom (road_tile_items') with each model bridge of fps (bridge_footprints') standing where that put it (onto
+    its mapped bridge): the model baked over the very spot the procedural bridge is left out of."""
+    at = {mid: centre for _fp, centre, mid in fps}
+    return [dict(c, xy=tuple(at[c["id"]])) if c.get("id") in at and "local" not in c else c for c in custom]
+
+
+BRIDGE_ALIGN_MAX_M = 40.0  # m a model bridge is moved at most, along its deck and across it, onto its mapped bridge
+BRIDGE_ALIGN_NEAR_M = 15.0  # m beside its deck (and past its ends, plus the above) a mapped bridge is taken as its own
+BRIDGE_ALIGN_STEP_M = 4.0  # m between the mapped bridges' points weighed
+BRIDGE_ALIGN_POINTS = 600  # ... at most this many of them
+BRIDGE_ALIGN_GRID_M = (1.0, 0.5)  # m: the moves tried along / across
+_ALIGN_MEMO = {}            # (model id, its position) -> its aligned (lat, lon) (per process: every tile the same)
+
+
+def mapped_bridge_lines(frame, road_layers, box):
+    """[xy (k, 2) every BRIDGE_ALIGN_STEP_M] of the mapped bridges (any road, railway or walkway's bridge level
+    ranges: roads.level_ranges via railways._pieces) of road_layers coming within box (x0, y0, x1, y1), each feature
+    once."""
+    import railways
+
+    out, seen = [], set()
+    for feats in road_layers:
+        if feats is None or len(feats) == 0:
+            continue
+        fb = feats.boxes(frame)
+        hit = (fb[:, 0] <= box[2]) & (fb[:, 2] >= box[0]) & (fb[:, 1] <= box[3]) & (fb[:, 3] >= box[1])
+        for i in np.nonzero(hit)[0]:
+            i = int(i)
+            fid = str(feats.ids[i])
+            if fid in seen:
+                continue
+            seen.add(fid)
+            for kind, rings in railways._pieces(feats, i):
+                if kind != "bridge":
+                    continue
+                for ring in rings:
+                    e, n = mapgeom.enu_xy(feats, frame, ring)
+                    if len(e) >= 2:
+                        out.append(railways._resample(np.c_[e, n], BRIDGE_ALIGN_STEP_M))
+    return out
+
+
+def bridge_shift(fp, centre, lines):
+    """(du, dv): the move along / across a model bridge's deck (threedmr.bridge_footprint's fp, its model at centre)
+    that lays it over its mapped bridge (lines: mapped_bridge_lines', in centre's frame), or (0, 0): a 3dmr.eu upload's
+    point is often tens of metres off (Perth's Narrows and Mount Henry bridges, GitHub #1071: ~18 m along, their decks
+    ending short of the roads that leave them, a gap into the river). Of the moves within BRIDGE_ALIGN_MAX_M (on
+    BRIDGE_ALIGN_GRID_M), those that put the most of the lines' points (BRIDGE_ALIGN_STEP_M apart, those within
+    BRIDGE_ALIGN_NEAR_M of the deck) on the deck (within threedmr.BRIDGE_FOOT_MARGIN_M of its sides, where the
+    procedural bridge is left out); of them the one that leaves the lines on it (half their points or more: not a
+    ramp alongside) as far past one end as past the other (a mapped bridge longer than the deck: its middle), then the
+    least move."""
+    import threedmr
+
+    cols = fp["cols"]
+    have = np.array([i for i, c in enumerate(cols) if c], np.int64)
+    if not len(have) or not lines:
+        return 0.0, 0.0
+    lo = np.full(len(cols), np.nan)
+    hi = np.full(len(cols), np.nan)
+    for i in have:
+        lo[i], hi[i] = cols[i]
+    ua, ub = fp["u0"] + fp["du"] * have[0], fp["u0"] + fp["du"] * have[-1]
+    span = np.arange(have[0], have[-1] + 1)          # (the gaps inside the deck: its neighbours' widths)
+    ok = np.isfinite(lo[span])
+    lo[span] = np.interp(span, span[ok], lo[span][ok])
+    hi[span] = np.interp(span, span[ok], hi[span][ok])
+    reach = BRIDGE_ALIGN_MAX_M + BRIDGE_ALIGN_NEAR_M
+    pts, owner = [], []
+    for xy in lines:
+        u, v = threedmr.deck_uv(fp, np.asarray(xy, np.float64)[:, :2] - np.asarray(centre, np.float64))
+        i = np.clip(np.rint((u - fp["u0"]) / fp["du"]).astype(np.int64), have[0], have[-1])
+        near = (u >= ua - reach) & (u <= ub + reach) & (v >= lo[i] - BRIDGE_ALIGN_NEAR_M) \
+            & (v <= hi[i] + BRIDGE_ALIGN_NEAR_M)
+        if near.mean() >= 0.5:
+            pts.append(np.c_[u[near], v[near]])
+            owner.append(np.full(int(near.sum()), len(owner)))
+    if not pts:
+        return 0.0, 0.0
+    P, line = np.concatenate(pts), np.concatenate(owner)
+    if len(P) > BRIDGE_ALIGN_POINTS:
+        keep = slice(None, None, int(np.ceil(len(P) / BRIDGE_ALIGN_POINTS)))
+        P, line = P[keep], line[keep]
+    nl = len(pts)
+    hot = (line[None, :] == np.arange(nl)[:, None]).astype(np.float64)
+    per = hot.sum(1)
+    gu, gv = BRIDGE_ALIGN_GRID_M
+    dus = np.arange(-BRIDGE_ALIGN_MAX_M, BRIDGE_ALIGN_MAX_M + gu / 2, gu)
+    dvs = np.arange(-BRIDGE_ALIGN_MAX_M, BRIDGE_ALIGN_MAX_M + gv / 2, gv)
+    m = threedmr.BRIDGE_FOOT_MARGIN_M
+    onto = np.empty((len(dus), len(dvs)))
+    lean = np.empty((len(dus), len(dvs)))
+    for a, du in enumerate(dus):
+        u = P[:, 0] - du                            # (the points in the deck's frame once it has moved by du)
+        i = np.clip(np.rint((u - fp["u0"]) / fp["du"]).astype(np.int64), have[0], have[-1])
+        v = P[:, 1][:, None] - dvs[None, :]
+        beside = (v >= lo[i][:, None] - m) & (v <= hi[i][:, None] + m)     # (past the ends: the end's width)
+        on = beside & ((u >= ua) & (u <= ub))[:, None]
+        onto[a] = on.sum(0)
+        frac = (hot @ on) / per[:, None]            # (nl, dvs): each line's share on the deck
+        mine = frac[line] >= 0.5                    # (each point: its line lies on the deck)
+        past_a = np.where(mine, np.maximum(ua - u, 0.0)[:, None], 0.0).max(0)
+        past_b = np.where(mine, np.maximum(u - ub, 0.0)[:, None], 0.0).max(0)
+        lean[a] = np.abs(past_a - past_b)
+    a, b = np.nonzero(onto >= onto.max())
+    k = int(np.lexsort((np.hypot(dus[a], dvs[b]), np.round(lean[a, b])))[0])     # (centred, then the least move)
+    return float(dus[a[k]]), float(dvs[b[k]])
+
+
+def bridge_align(frame, fp, centre, key, cell_fn):
+    """centre (x, y) of a model bridge (bridge_footprints') moved onto its mapped bridge (bridge_shift, over the mapped
+    bridges of the map cells under its deck: cell_fn(key) -> their roads layer), the same in every tile (kept per
+    model: _ALIGN_MEMO)."""
+    import logging
+    import mapcells
+    import threedmr
+
+    mid, mlat, mlon = key
+    k = (int(mid), threedmr.FEATURE_VERSION, round(float(mlat), 7), round(float(mlon), 7))
+    got = _ALIGN_MEMO.get(k)
+    if got is None:
+        cols = [(i, c) for i, c in enumerate(fp["cols"]) if c]
+        us = [fp["u0"] + fp["du"] * i for i, _c in cols]
+        u = np.r_[us, us]
+        v = np.r_[[c[0] for _i, c in cols], [c[1] for _i, c in cols]]
+        x, y = threedmr.deck_xy(fp, u, v)
+        m = BRIDGE_ALIGN_MAX_M + BRIDGE_ALIGN_NEAR_M
+        box = (centre[0] + x.min() - m, centre[1] + y.min() - m, centre[0] + x.max() + m, centre[1] + y.max() + m)
+        la, lo, _ = frame.enu_to_geodetic(np.array([box[0], box[2]]), np.array([box[1], box[3]]), np.zeros(2))
+        layers = [cell_fn(c) for c in mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()),
+                                                               float(lo.max()))]
+        du, dv = bridge_shift(fp, centre, mapped_bridge_lines(frame, layers, box))
+        dx, dy = threedmr.deck_xy(fp, du, dv)
+        nla, nlo, _ = frame.enu_to_geodetic(centre[0] + float(dx), centre[1] + float(dy), 0.0)
+        got = (float(nla), float(nlo))
+        if all(layer is not None for layer in layers):      # (a cell not had: asked again by the next tile)
+            _ALIGN_MEMO[k] = got
+        if du or dv:
+            logging.getLogger("earthd.buildings").info(
+                "3dmr model %s: moved %.1f m along / %.1f m across its deck onto its mapped bridge", mid, du, dv)
+    x, y, _ = frame.geodetic_to_enu(got[0], got[1], 0.0)
+    return float(x), float(y)
 
 
 def _under_bridges(fps, xy):
@@ -5308,10 +5467,13 @@ def bridge_stub_parts(fps, parts):
     return [p for p in parts if not _mostly_under(fps, p[2])]
 
 
-def bridge_road_ends(fps, bridges, cells):
+def bridge_road_ends(fps, bridges, cells, frame=None, ground_xy=None):
     """{model id: [(x, y, z)]}: the ends of the mapped bridges (roads.BridgeProfiles.parts: whole, with their deck
     heights - the ground road's where they leave the bridge) under each model bridge of fps, in the tile's frame:
-    where the model's deck is to meet the road network (threedmr.bridge_tilt road_ends)."""
+    where the model's deck is to meet the road network (threedmr.bridge_tilt road_ends). A model with no road bridge
+    under it (a footbridge: Perth's Elizabeth Quay Bridge, GitHub #1071, its ends sank into the inlet off the deck's
+    own ends; a railway's bridge), given frame and ground_xy(x (k,), y (k,)) -> z: the ends of the walkway's or the
+    railway's bridge under it (mapped_bridge_lines) on the ground there."""
     import threedmr
 
     out = {}
@@ -5319,17 +5481,25 @@ def bridge_road_ends(fps, bridges, cells):
         cols = [(i, c) for i, c in enumerate(fp["cols"]) if c]
         if not cols:
             continue
-        u0, u1 = fp["u0"] + fp["du"] * cols[0][0], fp["u0"] + fp["du"] * cols[-1][0]
-        v0, v1 = min(c[0] for _i, c in cols), max(c[1] for _i, c in cols)
-        lo = (u0, v0) if fp["ax"] == 0 else (v0, u0)
-        hi = (u1, v1) if fp["ax"] == 0 else (v1, u1)
-        box = (centre[0] + lo[0], centre[1] + lo[1], centre[0] + hi[0], centre[1] + hi[1])
+        us = np.array([fp["u0"] + fp["du"] * i for i, _c in cols])
+        x, y = threedmr.deck_xy(fp, np.r_[us, us], np.r_[[c[0] for _i, c in cols], [c[1] for _i, c in cols]])
+        box = (centre[0] + float(x.min()), centre[1] + float(y.min()), centre[0] + float(x.max()),
+               centre[1] + float(y.max()))
         ends = []
         for _fid, _spec, xy, z, _lon in bridges.parts(cells, box):
             xy = np.asarray(xy, np.float64)[:, :2]
             if len(xy) and threedmr.under_footprint(fp, centre, xy).mean() >= 0.5:
                 ends += [(float(xy[0, 0]), float(xy[0, 1]), float(z[0])),
                          (float(xy[-1, 0]), float(xy[-1, 1]), float(z[-1]))]
+        if not ends and frame is not None and ground_xy is not None:
+            tips = []
+            for xy in mapped_bridge_lines(frame, cells, box):
+                if len(xy) >= 2 and threedmr.under_footprint(fp, centre, xy).mean() >= 0.5:
+                    tips += [xy[0], xy[-1]]
+            if tips:
+                tips = np.asarray(tips, np.float64)
+                z = np.asarray(ground_xy(tips[:, 0], tips[:, 1]), np.float64).reshape(-1)
+                ends = [(float(x), float(y), float(zz)) for (x, y), zz in zip(tips, z)]
         if ends:
             out[mid] = ends
     return out
@@ -5436,6 +5606,7 @@ MODEL_MAX_M = 1000.0  # a model wider than this is not placed: a district or str
 SUPPORT_DZ_WARN_M = 30.0  # threedmr.write_model's own support_dz past this is only logged, never dropped -
 # an author's own legitimate elevated deck (a bridge, a viewing platform) is also a large support_dz
 BRIDGE_ASPECT = 3.0  # a model's horizontal bbox this much longer one way than the other is a bridge deck
+BRIDGE_MIN_TAGGED_M = 10.0  # a model its 3dmr.eu record calls a bridge is one from this long (_is_bridge)
 BRIDGE_MIN_SPAN_M = 100.0  # ... and only once it also reaches this far (a narrow wall or jetty is not a bridge
 # deck's stand-in, whatever its own aspect ratio): only a model this shape gets its road-surface triangles
 # carved out (_custom_tile_entries, threedmr.carve_bridge_deck_mask) so it stands as pure decoration over the

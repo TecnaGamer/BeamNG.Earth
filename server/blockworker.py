@@ -940,10 +940,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         items, _custom = buildingsmod.road_tile_items(frame, tx, ty, _s.md, elev,
                                                       decks=_tile_decks(bridges, cells, tx, ty) + _tile_decks(tunnels, cells, tx, ty),
                                                       skip=skip, cache_dir=cache_dir)
-        _bridge_fps = buildingsmod.bridge_footprints(frame, tx, ty, cache_dir)
+        _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
+            frame, tx, ty, cache_dir,
+            cell_fn=lambda key: _s.md.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
+        _custom = buildingsmod.place_bridge_models(_custom, _bridge_fps)
         if any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
             try:            # (the tile that bakes the model: where the mapped bridge meets the roads)
-                _bridge_ends = buildingsmod.bridge_road_ends(_bridge_fps, bridges, cells)
+                _bridge_ends = buildingsmod.bridge_road_ends(
+                    _bridge_fps, bridges, cells, frame,
+                    lambda x, y: elev(*frame.enu_to_geodetic(x, y, np.zeros(len(x)))[:2]))
             except Exception as ex:
                 log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
         if wrows:
@@ -1154,7 +1159,9 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  far_ground=railways.point_ground(
                                      frame, lambda la, lo: ground(frame, la, lo, _s.dem.sample(la, lo, zoom)),
                                      ("raw",) + tuple(rkey)),
-                                 return_decks=True)
+                                 return_decks=True,
+                                 under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                        if _bridge_fps else None))
     mark("railways")
     bld = None
     garage_sound = ()

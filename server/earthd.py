@@ -2506,10 +2506,15 @@ class Server:
             items, _custom = buildingsmod.road_tile_items(anchor.frame, tx, ty, self.mapdata, elev,
                                                  decks=blockworker._tile_decks(anchor.bridges, cells, tx, ty), skip=skip,
                                                  cache_dir=os.path.dirname(self.out_dir))
-            _bridge_fps = buildingsmod.bridge_footprints(anchor.frame, tx, ty, os.path.dirname(self.out_dir))
+            _bridge_fps = buildingsmod.bridge_footprints(     # (each laid onto its mapped bridge, baked there)
+                anchor.frame, tx, ty, os.path.dirname(self.out_dir),
+                cell_fn=lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads"))
+            _custom = buildingsmod.place_bridge_models(_custom, _bridge_fps)
             if anchor.bridges is not None and any(m in {c["id"] for c in _custom} for _fp, _c, m in _bridge_fps):
                 try:
-                    _bridge_ends = buildingsmod.bridge_road_ends(_bridge_fps, anchor.bridges, cells)
+                    _bridge_ends = buildingsmod.bridge_road_ends(
+                        _bridge_fps, anchor.bridges, cells, anchor.frame,
+                        lambda x, y: elev(*anchor.frame.enu_to_geodetic(x, y, np.zeros(len(x)))[:2]))
                 except Exception as ex:
                     log.warning("3dmr: mapped bridge ends: %s: %s", type(ex).__name__, ex)
             if wrows:
@@ -2692,7 +2697,9 @@ class Server:
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True)
+                                   return_decks=True,
+                                   under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
+                                          if _bridge_fps else None))
         bld = None
         garage_sound = ()
         oil_wells = []

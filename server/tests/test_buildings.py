@@ -2242,6 +2242,111 @@ class ModelBridgeTest(unittest.TestCase):
         self.assertEqual(got, {22: [(-80.0, 2.0, 1.0), (90.0, 2.0, 2.0)]})
 
 
+def _turn(xy, deg):
+    a = math.radians(deg)
+    xy = np.asarray(xy, np.float64)
+    return np.c_[xy[:, 0] * math.cos(a) - xy[:, 1] * math.sin(a), xy[:, 0] * math.sin(a) + xy[:, 1] * math.cos(a)]
+
+
+class ModelBridgeAlignTest(unittest.TestCase):
+    """GitHub #1071 (Perth): a model bridge is told by its 3dmr.eu record or its turned bounding box, laid onto its
+    mapped bridge (its upload's point ~18 m off along it: the deck ended short of the road leaving it), and baked
+    where every tile round it leaves the procedural bridge out."""
+
+    FP = {"bridge": True, "ax": 0, "u0": -100.0, "du": 2.0, "cols": [[-10.0, 10.0]] * 101}    # (u -100..100)
+
+    def test_a_bridge_by_its_record_or_its_turned_box(self):
+        box = lambda w, h, deg=0.0: np.c_[_turn([[x, y] for x in (-w / 2, w / 2) for y in (-h / 2, h / 2)], deg),
+                                          np.zeros(4)]
+        s_curve = box(88.0, 60.0)               # (Elizabeth Quay Bridge, id 55: an S, its box no deck's shape)
+        self.assertFalse(bld._is_bridge(s_curve))
+        self.assertTrue(bld._is_bridge(s_curve, {"tags": {"bridge": "yes", "highway": "cycleway"}}))
+        self.assertTrue(bld._is_bridge(s_curve, {"tags": {}, "categories": ["Bridge", "Foot Bridge"]}))
+        self.assertFalse(bld._is_bridge(s_curve, {"tags": {"building": "office"}}))
+        self.assertTrue(bld._is_bridge(box(690.0, 45.0, 63.0)), "Mount Henry Bridge (id 53): 28 degrees off north")
+        self.assertTrue(bld._is_bridge(box(370.0, 65.0, 81.0)))
+        self.assertFalse(bld._is_bridge(box(200.0, 150.0, 30.0)), "a building")
+        self.assertFalse(bld._is_bridge(box(60.0, 8.0, 10.0)), "a wall (short)")
+
+    def test_shift_along_onto_the_mapped_bridge(self):
+        line = np.c_[np.arange(-82.0, 119.0, 4.0), np.zeros(51)]          # (the mapped bridge: 18 m on)
+        du, dv = bld.bridge_shift(self.FP, (0.0, 0.0), [line, line + [0.0, 6.0]])
+        self.assertAlmostEqual(du, 18.0, delta=1.0)
+        self.assertAlmostEqual(dv, 0.0, delta=0.5)
+
+    def test_no_shift_when_the_deck_covers_it(self):
+        line = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 3.0)]
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), [line]), (0.0, 0.0))
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), []), (0.0, 0.0))
+        far = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 60.0)]     # (another bridge, 50 m beside it)
+        self.assertEqual(bld.bridge_shift(self.FP, (0.0, 0.0), [far]), (0.0, 0.0))
+
+    def test_shift_across_and_a_longer_mapped_bridge_centred(self):
+        line = np.c_[np.arange(-90.0, 91.0, 4.0), np.full(46, 16.0)]      # (its deck's side at 10)
+        du, dv = bld.bridge_shift(self.FP, (0.0, 0.0), [line])
+        self.assertAlmostEqual(du, 0.0, delta=1.0)
+        self.assertAlmostEqual(dv, 6.0 - threedmr.BRIDGE_FOOT_MARGIN_M, delta=0.6)   # (onto its side)
+        longer = np.c_[np.arange(-106.0, 127.0, 4.0), np.zeros(59)]       # (232 m: past both ends)
+        du, _dv = bld.bridge_shift(self.FP, (0.0, 0.0), [longer])
+        self.assertAlmostEqual(du, 10.0, delta=2.5)
+
+    def test_shift_of_a_turned_deck(self):
+        fp = dict(self.FP, ang=math.radians(63.0))
+        line = _turn(np.c_[np.arange(-83.0, 118.0, 4.0), np.zeros(51)], 63.0) + [500.0, 200.0]
+        du, dv = bld.bridge_shift(fp, (500.0, 200.0), [line])
+        self.assertAlmostEqual(du, 17.0, delta=1.0)
+        self.assertAlmostEqual(dv, 0.0, delta=0.5)
+
+    def test_align_moves_the_centre_once_per_model_and_place_bakes_it_there(self):
+        import geodesy
+        f = geodesy.EnuFrame(-31.9635, 115.8469)
+        line = np.c_[np.arange(-82.0, 119.0, 4.0) + 100.0, np.full(51, 50.0)]
+        bld._ALIGN_MEMO.clear()
+        key = (54, -31.9631, 115.8479)
+        with mock.patch.object(bld, "mapped_bridge_lines", return_value=[line]) as lines:
+            x, y = bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: None)
+            self.assertAlmostEqual(x, 118.0, delta=1.0)
+            self.assertAlmostEqual(y, 50.0, delta=0.5)
+            self.assertEqual(bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: []), (x, y))
+            self.assertEqual(lines.call_count, 2, "a map cell not had: asked again")
+            self.assertEqual(bld.bridge_align(f, self.FP, (100.0, 50.0), key, lambda k: []), (x, y))
+            self.assertEqual(lines.call_count, 2, "the other tiles take the same answer")
+        bld._ALIGN_MEMO.clear()
+        custom = [{"id": 54, "xy": (100.0, 50.0), "source": "api"}, {"id": 52, "xy": (0.0, 0.0)},
+                  {"id": 54, "xy": (1.0, 1.0), "local": {"file": "x.stl"}}]
+        got = bld.place_bridge_models(custom, [(self.FP, (x, y), 54)])
+        self.assertEqual(got[0]["xy"], (x, y))
+        self.assertEqual(got[0]["source"], "api")
+        self.assertIs(got[1], custom[1])
+        self.assertIs(got[2], custom[2], "a player's own model stays where they put it")
+
+    def test_a_footbridge_s_ends_on_the_ground_when_no_road_crosses(self):
+        """Perth's Elizabeth Quay Bridge (id 55): no road bridge under it, its deck was leaned onto the ground at its
+        own ends (the inlet's water); now onto the walkway's ends on the quays."""
+        from test_roads import FRAME, features
+
+        class NoRoads:
+            def parts(self, cells, box):
+                return []
+        walk = features([[(-90.0, 0.0), (90.0, 0.0)]], ["footway"], subtypes=["road"], flags=[(0, "is_bridge")])
+        got = bld.bridge_road_ends([(self.FP, (0.0, 0.0), 55)], NoRoads(), [walk], FRAME,
+                                   lambda x, y: 2.0 + 0.01 * np.asarray(x))
+        self.assertEqual(sorted((round(x), round(z, 1)) for x, _y, z in got[55]), [(-90, 1.1), (90, 2.9)])
+        self.assertEqual(bld.bridge_road_ends([(self.FP, (0.0, 0.0), 55)], NoRoads(), [walk]), {},
+                         "without a ground: none (the deck's own ends then)")
+
+    def test_mapped_bridge_lines_of_roads_rails_and_walkways(self):
+        from test_roads import FRAME, features
+        roads_ = features([[(0.0, 0.0), (100.0, 0.0)], [(0.0, 30.0), (100.0, 30.0)], [(0.0, 60.0), (100.0, 60.0)],
+                           [(0.0, 90.0), (100.0, 90.0)]], ["primary", "standard_gauge", "footway", "primary"],
+                          subtypes=["road", "rail", "road", "road"], flags=[(0, "is_bridge"), (1, "is_bridge"),
+                                                                            (2, "is_bridge")])
+        got = bld.mapped_bridge_lines(FRAME, [roads_, roads_], (-10.0, -10.0, 110.0, 100.0))
+        self.assertEqual(sorted(round(float(xy[:, 1].mean())) for xy in got), [0, 30, 60],
+                         "the bridges of a road, a railway and a walkway, once each; no ground road")
+        self.assertEqual(bld.mapped_bridge_lines(FRAME, [roads_], (500.0, 500.0, 600.0, 600.0)), [])
+
+
 class RoadPassageTest(unittest.TestCase):
     """A road mapped inside a building with no tunnel tag is a passage through it (Ülemiste keskus, Tallinn: the
     service roads at the back of the mall run in under it, and the wall stood across them)."""
