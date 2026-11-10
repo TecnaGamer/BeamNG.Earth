@@ -345,39 +345,6 @@ def guide_panel(mesh,content,w,h,z,exit=False,distance='',side=1):
 
 
 def build_highways(exits,overheads,origin):
-    mesh=sm.Mesh(origin)
-    for sign in exits:
-        travel=np.asarray(sign['travel']);p=np.asarray(sign['centre'],float)
-        mesh.transform(p,travel)
-        label=sign['label'];kind=sign['kind']
-        if kind=='ramp':
-            w,h=1.55,.65;bottom=2.1
-            board(mesh,w,h,bottom+h/2,sm.WHITE)
-            lettering(mesh,'SORTIE '+label.get('ref',''),bottom+h/2,.19,w-.2)
-        else:
-            w=min(6.,max(2.7,max((sm.measure(n,'l1')[0]*.42+.65 for n in label.get('names',())),default=2.7)))
-            h=max(2.45,1.65+min(3,len(label.get('names',())))*.62);bottom=2.2
-            guide_panel(mesh,label,w,h,bottom+h/2,True,sign.get('distance',''),sign.get('side',1))
-        for x in (-w*.30,w*.30):mesh.box(sm.METAL,(x,.12,(bottom+h)/2),(.045,.045,(bottom+h)/2))
-    for sign in overheads:
-        p=np.asarray(sign['centre'],float);mesh.transform(p,np.asarray(sign['travel']))
-        bottom=float(sign['bottom']-p[2]);panels=sorted(sign['panels'],key=lambda v:v.get('offset',0.))
-        # Keep the source placement's pavement clearance, but use compact FR faces.
-        widths=[min(6.,max(3.,max((sm.measure(n,'l1')[0]*.42+.7 for n in v['label'].get('names',())),default=3.))) for v in panels]
-        total=sum(widths)+.25*(len(widths)-1);cursor=-total/2
-        maxh=0.
-        anchor=mesh.offset.copy()
-        for panel,w in zip(panels,widths):
-            h=max(2.45,1.65+.62*min(3,len(panel['label'].get('names',()))))
-            maxh=max(maxh,h);x=cursor+w/2;cursor+=w+.25
-            mesh.offset=anchor+np.array([x,0,0])@mesh.axes
-            guide_panel(mesh,panel['label'],w,h,bottom+h/2,panel['exit'],sign.get('distance','')if panel['exit']else'',panel.get('side',sign.get('side',1)))
-        mesh.offset=anchor
-        # Columns retain the generated assembly's off-carriageway positions.
-        beam=bottom+maxh-.25;left,right=sign['poles']
-        for x,base in zip((left,right),sign['bases']):
-            start=float(base-p[2]);height=beam+.5-start
-            mesh.box(sm.METAL,(x,.55,start+height/2),(.16,.16,height/2))
-        mesh.box(sm.METAL,((left+right)/2,.55,beam),((right-left)/2,.25,.20))
-    if not mesh.t:return None
-    return np.asarray(mesh.p),np.asarray(mesh.t),np.asarray(mesh.uv),sm.MATERIALS,np.asarray(mesh.tm)
+    # The motorway compositor owns the same envelopes used by placement.
+    import frhighwaysigns
+    return frhighwaysigns.build(exits,overheads,origin)

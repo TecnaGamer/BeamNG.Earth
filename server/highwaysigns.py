@@ -107,19 +107,25 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
             by_id[obj['id']] = obj
             pavements, mains = exitsigns.source_pavements(frame, obj, context, left_hand)
             contexts[obj['id']] = pavements
+            kwargs = {}
+            if french:
+                import frmotorway_layout
+                kwargs = dict(profile=frmotorway_layout.roadside_size,
+                              advance_stations=((1000., '1000 m'), (500., '500 m')))
             placed = exitsigns.place(frame, [obj], (), area, elev, chunks, left_hand, mph,
-                                      pavements=pavements, ramp_mains=mains)
+                                      pavements=pavements, ramp_mains=mains, **kwargs)
             roadside.extend(placed)
             distance = '1/2 MILE' if mph else '500 m'
             replaces = any(s['kind'] == 'advance' and s['distance'] == distance for s in placed)
-            paired.extend(throughsigns.place(frame, [obj], pavements, area, elev, chunks, mph,
-                                             allow_outside=replaces))
+            if not french:
+                paired.extend(throughsigns.place(frame, [obj], pavements, area, elev, chunks, mph,
+                                                 allow_outside=replaces))
         replaced = set()
         if french:
             import frmotorway_layout
             overheads.extend(frmotorway_layout.add_overheads(
-                frame, roadside, by_id, contexts, area, elev, chunks, replaced))
-        stations = sorted({(s['kind'], s['distance']) for s in roadside if s['kind'] != 'ramp' and s['style'] == 'exit'})
+                frame, roadside, {o['id']: o for o in group}, contexts, area, elev, chunks, replaced))
+        stations = [] if french else sorted({(s['kind'], s['distance']) for s in roadside if s['kind'] != 'ramp' and s['style'] == 'exit'})
         for kind, distance in stations:
             panels = [s for s in roadside if s['kind'] == kind and s['distance'] == distance
                       and s['style'] == 'exit' and (s['id'], kind, distance) not in replaced]
@@ -139,7 +145,13 @@ def guide_layout(frame, objects, context, box, elev, chunks=(), left_hand=False,
     for obj in sorted({o['id']: o for o in objects if o.get('through')}.values(), key=lambda o: o['id']):
         pavements = throughsigns.source_pavements(frame, obj, context, left_hand)
         contexts[obj['id']], by_id[obj['id']] = pavements, obj
-        overheads.extend(throughsigns.place(frame, [obj], pavements, area, elev, chunks, mph))
+        if french:
+            import frmotorway_layout
+            sides, raised = frmotorway_layout.place_through(frame, obj, pavements, area, elev, chunks)
+            exits.extend(sides)
+            overheads.extend(raised)
+        else:
+            overheads.extend(throughsigns.place(frame, [obj], pavements, area, elev, chunks, mph))
     exits, overheads = signlayout.arrange(frame, exits, overheads, contexts, by_id, elev, chunks)
     return ([s for s in exits if signlayout.owns(box, s)], [s for s in overheads if signlayout.owns(box, s)])
 
@@ -155,8 +167,11 @@ def build_tile(md, frame, tx, ty, elev, chunks=(), left_hand=False, mph=True, ur
         objects = list({obj['id']: obj for obj in objects}.values())
         if not objects:
             return None, None
-        if french and getattr(source, 'french_mainlines', None) is not None:
-            objects = source.french_mainlines.enrich(objects)
+        if french:
+            import frhighway_refs
+            objects = frhighway_refs.enrich(objects)
+            if getattr(source, 'french_mainlines', None) is not None:
+                objects = source.french_mainlines.enrich(objects)
         context = source.context(urban, widths)
         exits, overheads = guide_layout(frame, objects, context, box, elev, chunks, left_hand, mph, french=french)
         miles = []

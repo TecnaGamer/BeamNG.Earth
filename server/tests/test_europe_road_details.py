@@ -161,7 +161,8 @@ class SignsTest(unittest.TestCase):
             with mock.patch.dict(os.environ,{'BNE_EU_ROAD_DETAILS':'on'}):
                 mesh,miles=highwaysigns.build_tile(md,frame,0,0,flat,mph=False,french=True)
                 self.assertIsNotNone(mesh);self.assertIsNone(miles)
-                self.assertEqual(mesh[3],signmesh.MATERIALS)
+                self.assertEqual(mesh[3][:len(signmesh.MATERIALS)],signmesh.MATERIALS)
+                self.assertIn('bne_fr_highway_blue',mesh[3])
                 signstream.build_tile(md,frame,1,0,0,flat,d,'/temp',mph=False,country='DE')
                 doc=json.loads((Path(d)/'signs_1_0_0.json').read_text())
                 self.assertIn('exits',doc);self.assertNotIn('mileposts',doc);self.assertNotIn('merges',doc)

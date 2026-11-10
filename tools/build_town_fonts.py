@@ -7,7 +7,9 @@ labels retain their original metrics within the repacked shared atlas.
 from pathlib import Path
 import hashlib
 import json
-from PIL import Image,ImageDraw,ImageFont
+from PIL import Image,ImageDraw,ImageFont,ImageFilter,ImageOps
+import copy
+import uuid
 from fontTools.ttLib import TTFont
 ROOT=Path(__file__).resolve().parents[1]
 SOURCES=ROOT/'tools/fonts/town'
@@ -27,6 +29,7 @@ SPECS={
  'ccrige':(SOURCES/'CCRIGE.otf',56,1.,0.,'CCRIGE (Javi Casas, Spanish drawing reconstruction)'),
  'trafikk':(SOURCES/'Trafikk-regular.ttf',56,1.,.015,'Trafikk Regular (Aitor, Norwegian specification interpretation)'),
  'l1':(SOURCES/'Typoroute2002-L1_100.ttf',96,1.,0.,'Typoroute 2002 L1 100 (Gwenaël Jouvin, French L1 digitization)'),
+ 'fr_motorway':(SOURCES/'Typoroute2002-L1_100.ttf',96,.94,.015,'BNE motorway light (raster illustration derived from Typoroute L1, not an official L2 font)'),
 }
 
 def l1_positioning(tt,chars,cap,size):
@@ -67,15 +70,17 @@ def build():
  for a,b in RANGES:allchars.update(chr(i)for i in range(a,b))
  for key,(path,size,scale,spacing,label)in SPECS.items():
   font=ImageFont.truetype(str(path),size);tt=TTFont(path);cmap=tt.getBestCmap();cap=font.getbbox('H',anchor='ls')[3]-font.getbbox('H',anchor='ls')[1]
-  chars=sorted(chr(cp)for cp in cmap)if key=='l1'else sorted(c for c in allchars if ord(c)in cmap and (key in ('legacy','fallback')or ord(c)<592))
+  chars=sorted(chr(cp)for cp in cmap)if key in ('l1','fr_motorway')else sorted(c for c in allchars if ord(c)in cmap and (key in ('legacy','fallback')or ord(c)<592))
   glyphs={};fonts[key]={'font':label,'horizontal_scale':scale,'letter_spacing':spacing,'glyphs':glyphs,'sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
-  if key=='l1':fonts[key].update(l1_positioning(tt,chars,cap,size))
+  if key in ('l1','fr_motorway'):fonts[key].update(l1_positioning(tt,chars,cap,size))
   for ch in chars:
    l,t,r,b=font.getbbox(ch,anchor='ls');w,h=r-l,b-t
    g={'advance':font.getlength(ch)/cap,'bounds':[l/cap,-b/cap,r/cap,-t/cap],'uv':[0,0,0,0]};glyphs[ch]=g
    if w>0 and h>0:
     im=Image.new('L',(w,h));ImageDraw.Draw(im).text((-l,-t),ch,font=font,fill=255,anchor='ls')
-    if key=='l1':
+    if key=='fr_motorway':
+     im=ImageOps.expand(im,2,0).filter(ImageFilter.MinFilter(3)).crop((2,2,w+2,h+2))
+    if key in ('l1','fr_motorway'):
      # Typoroute has deliberate side bearings. Pillow's getbbox includes the
      # advance box; trim to visible ink while retaining the original advance.
      bounds=im.getbbox()
@@ -104,6 +109,16 @@ def build():
  for key in ('glyph','glyph_white'):
   m=materials['bne_sign_'+key];m['Stages'][0]['baseColorMap']=VFS+('/sign_font_white.png'if key=='glyph_white'else'/sign_font.png')
   m['Stages'][0]['opacityMap']=VFS+'/sign_font_opacity.data.png'
+ for name,srgb in [('blue',(12,67,180)),('green',(0,126,86))]:
+  m=copy.deepcopy(materials['bne_sign_'+name]);key='bne_fr_highway_'+name
+  m['name']=m['mapTo']=key;m['persistentId']=str(uuid.uuid5(uuid.NAMESPACE_URL,key))
+  values=[v/255 for v in srgb]
+  m['Stages'][0]['baseColorFactor']=[v/12.92 if v<=.04045 else ((v+.055)/1.055)**2.4 for v in values]+[1.]
+  materials[key]=m
+ m=copy.deepcopy(materials['bne_sign_glyph_white']);key='bne_fr_highway_glyph_yellow'
+ m['name']=m['mapTo']=key;m['persistentId']=str(uuid.uuid5(uuid.NAMESPACE_URL,key))
+ m['Stages'][0]['baseColorFactor']=[((v/255+.055)/1.055)**2.4 for v in (250,220,35)]+[1.]
+ materials[key]=m
  (OUT/'main.materials.json').write_text(json.dumps(materials,indent=2)+'\n')
  (OUT/'TOWN-FONTS-NOTICE.md').write_text((SOURCES/'NOTICE.md').read_text(),encoding='utf-8')
  (OUT/'Typoroute-LICENSE.md').write_bytes((SOURCES/'Typoroute-LICENSE.md').read_bytes())

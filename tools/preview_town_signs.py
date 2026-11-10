@@ -66,13 +66,18 @@ def render(mesh,size=(560,240),folder=ART,atlas=None):
         dst=canvas[low[1]:high[1]+1,low[0]:high[0]+1];db=depth[low[1]:high[1]+1,low[0]:high[0]+1]
         visible=(a>=-1e-9)&(b>=-1e-9)&(c>=-1e-9)&(z<db-1e-10)
         alpha=np.ones(xx.shape)
-        if material in (signmesh.GLYPH,signmesh.GLYPH_WHITE):
+        stage=materials[signmesh.MATERIALS[material]]['Stages'][0]
+        if material in (signmesh.GLYPH,signmesh.GLYPH_WHITE) or stage.get('opacityMap'):
             u=a*uv[indices[0],0]+b*uv[indices[1],0]+c*uv[indices[2],0]
             vv=a*uv[indices[0],1]+b*uv[indices[1],1]+c*uv[indices[2],1]
             tx=np.clip((u*opacity.shape[1]).astype(int),0,opacity.shape[1]-1)
             ty=np.clip(((1-vv)*opacity.shape[0]).astype(int),0,opacity.shape[0]-1)
             alpha=opacity[ty,tx];visible&=alpha>=80/255
-            rgb=np.array([255,255,255]if material==signmesh.GLYPH_WHITE else [0,0,0])
+            if material in (signmesh.GLYPH,signmesh.GLYPH_WHITE):
+                rgb=np.array([255,255,255]if material==signmesh.GLYPH_WHITE else [0,0,0])
+            else:
+                linear=np.array(stage.get('baseColorFactor',[1.,1.,1.,1.])[:3])
+                rgb=np.where(linear<=.0031308,12.92*linear,1.055*linear**(1/2.4)-.055)*255
         else:
             linear=np.array(materials[signmesh.MATERIALS[material]]['Stages'][0]['baseColorFactor'][:3])
             rgb=np.where(linear<=.0031308,12.92*linear,1.055*linear**(1/2.4)-.055)*255

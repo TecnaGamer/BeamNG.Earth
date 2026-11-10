@@ -1,0 +1,193 @@
+{
+  "format": 1,
+  "source": "Transcribed destination/register observations from user-supplied Street View screenshots, November 2026. Junction coordinates and directional matching checked against the 2026-11-07 OSM sign shards. Not surveyed support positions.",
+  "junctions": [
+    {
+      "id": "a6-26-north",
+      "route": "A6",
+      "exit_ref": "26",
+      "junction": [
+        4.8326921,
+        46.7482658
+      ],
+      "travel": [
+        -0.15,
+        0.9887
+      ],
+      "lanes": 3,
+      "main": {
+        "ref": "",
+        "names": [
+          "PARIS",
+          "BESANÇON",
+          "DIJON",
+          "CHALON S/ S.-CENTRE",
+          "CHALON S/ S.-NORD"
+        ],
+        "routes": [
+          "E15",
+          "E21",
+          "A6"
+        ],
+        "fr_blocks": [
+          {
+            "colour": "blue",
+            "names": [
+              "PARIS",
+              "BESANÇON",
+              "DIJON",
+              "CHALON S/ S.-CENTRE"
+            ]
+          },
+          {
+            "colour": "blue",
+            "names": [
+              "CHALON S/ S.-NORD"
+            ]
+          }
+        ]
+      },
+      "exit": {
+        "routes": [
+          "E607",
+          "N80"
+        ],
+        "fr_blocks": [
+          {
+            "colour": "green",
+            "names": [
+              "AUTUN",
+              "MONTCEAU LES M.",
+              "LE CREUSOT"
+            ]
+          },
+          {
+            "colour": "white",
+            "names": [
+              "CHALON S/ S.-SUD"
+            ],
+            "italic": true
+          },
+          {
+            "colour": "white",
+            "names": [
+              "Z.I. SUD"
+            ],
+            "italic": true
+          },
+          {
+            "colour": "yellow",
+            "names": [
+              "S10"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "id": "a4-18-west",
+      "route": "A4",
+      "exit_ref": "18",
+      "junction": [
+        3.0445962,
+        48.9532185
+      ],
+      "travel": [
+        -0.651,
+        -0.759
+      ],
+      "lanes": 2,
+      "main": {
+        "ref": "",
+        "names": [
+          "PARIS",
+          "MEAUX-CENTRE",
+          "MARNE LA VALLÉE"
+        ],
+        "routes": [
+          "A4",
+          "E50"
+        ]
+      },
+      "exit": {
+        "routes": [],
+        "fr_blocks": [
+          {
+            "colour": "white",
+            "names": [
+              "MEAUX-EST",
+              "TRILPORT"
+            ]
+          }
+        ]
+      },
+      "support": "cantilever"
+    },
+    {
+      "id": "a355-2-northeast",
+      "route": "A355",
+      "exit_ref": "2",
+      "junction": [
+        7.6136878,
+        48.5949383
+      ],
+      "travel": [
+        0.826,
+        0.564
+      ],
+      "lanes": 2,
+      "main": {
+        "ref": "",
+        "names": [
+          "PARIS",
+          "METZ-NANCY",
+          "KARLSRUHE"
+        ],
+        "routes": [
+          "E25",
+          "A355"
+        ],
+        "fr_blocks": [
+          {
+            "colour": "blue",
+            "names": [
+              "PARIS",
+              "METZ-NANCY"
+            ]
+          },
+          {
+            "colour": "blue",
+            "names": [
+              "KARLSRUHE"
+            ]
+          }
+        ]
+      },
+      "exit": {
+        "routes": [],
+        "fr_blocks": [
+          {
+            "colour": "green",
+            "names": [
+              "METZ-NANCY",
+              "STRASBOURG"
+            ]
+          },
+          {
+            "colour": "white",
+            "names": [
+              "SAVERNE"
+            ]
+          },
+          {
+            "colour": "white",
+            "names": [
+              "ECKBOLSHEIM"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "license": "Junction coordinates: (c) OpenStreetMap contributors, ODbL 1.0. Text and colour observations transcribed from the user-supplied reference images; no image/vector artwork is redistributed."
+}

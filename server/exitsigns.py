@@ -384,13 +384,14 @@ def _make_sign(obj, kind, centre, travel, road_point, frame, elev, side, width, 
 
 
 def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True, link_ids=(),
-          pavements=None, ramp_mains=None):
+          pavements=None, ramp_mains=None, profile=None, advance_stations=None):
     """Place OSM destination signs along the generated mainline and in clear exit gores.
 
     Choose one clear gore on the full generated pavement, then test tile ownership.
     Searching farther along the ramp for each tile produces duplicate small panels.
     """
     import signroads as roadlanes
+    size = dimensions if profile is None else profile
     x0, y0, x1, y1 = box
     links = set(link_ids)
     if pavements is None:
@@ -429,7 +430,8 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
         if full is None or ramp_end is None:
             continue
         label, side = extra['label'], int(extra['side'])
-        stations = (ADVANCE_MPH_STATIONS if mph else ((ADVANCE_METRIC, '500 m'),)) + ((DECISION_M, ''),)
+        stations = ((ADVANCE_MPH_STATIONS if mph else ((ADVANCE_METRIC, '500 m'),))
+                    if advance_stations is None else advance_stations) + ((DECISION_M, ''),)
         for distance, text in stations:
             if full[2] < distance + 20.:
                 continue
@@ -444,7 +446,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
             la, lo, _ = frame.enu_to_geodetic(float(at[0]), float(at[1]), 0.)
             import signstates
             state = str(signstates.states(la, lo).item())
-            width, height = dimensions(label, kind, state)
+            width, height = size(label, kind, state)
             right = np.array([travel[1], -travel[0]])
             cross = roadlanes.cross(line)
             # The fourth row value is its generated ribbon width. Its cross-section can
@@ -465,7 +467,7 @@ def place(frame, objects, roads, box, elev, chunks=(), left_hand=False, mph=True
                 continue
             out.append(_make_sign(obj, kind, centre, travel, at, frame, elev, side, width, height, text, distance, state))
 
-        width, height = dimensions(label, 'ramp')
+        width, height = size(label, 'ramp')
         candidate = _gore(extra, approach, ramp, pavements, ramp_mains, width)
         if candidate is None:
             continue

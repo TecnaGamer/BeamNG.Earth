@@ -18,6 +18,8 @@ WAY_KEYS = tuple(dict.fromkeys(signs.WAY_KEYS + (
     'destination:direction:forward', 'destination:direction:backward',
     'destination:lanes:forward', 'destination:lanes:backward',
     'destination:ref:lanes:forward', 'destination:ref:lanes:backward',
+    'destination:distance', 'destination:distance:forward', 'destination:distance:backward',
+    'int_ref',
 )))
 SPACING_M = 5000.
 QUERY_MARGIN = signs.QUERY_MARGIN
@@ -73,7 +75,20 @@ def label(tags, relations=()):
     posted = cardinal(get('destination:direction')) or cardinal(tags.get('direction'))
     if not posted and len(directions) == 1:
         posted = next(iter(directions))
-    return dict(ref='', names=names[:3], routes=routes[:3], direction=posted)
+    content = dict(ref='', names=names[:3], routes=routes[:3], direction=posted)
+    if len(names) > 3:
+        content['fr_full_names'] = names[:6]
+    # Optional explicit kilometre distances support French D61 confirmation
+    # faces; missing/mixed units never turn into guessed distances.
+    import re
+    distances = [d.strip() for d in str(get('destination:distance') or '').split(';')]
+    if len(distances) == len(names) and all(re.fullmatch(r'\d+(?:[.,]\d+)?(?:\s*km)?', d) for d in distances):
+        content['distances'] = [re.sub(r'\s*km$', '', d) for d in distances[:3]]
+        if len(names) > 3:
+            content['fr_full_distances'] = [re.sub(r'\s*km$', '', d) for d in distances[:6]]
+    if tags.get('int_ref'):
+        content['routes'] = list(dict.fromkeys(content['routes']+values(tags['int_ref'])))[:4]
+    return content
 
 
 def annotate_exits(objects, relations=None):
@@ -227,11 +242,18 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
     state = str(signstates.states(lat, lon).item())
     if branch_panels is not None:
         panels = [dict(p) for p in branch_panels]
-        total = sum(p['width'] for p in panels)+.4*(len(panels)-1)
-        cursor = -total/2.
-        for panel in panels:
-            panel['offset'] = cursor+panel['width']/2.
-            cursor += panel['width']+.4
+        if panels and all(p.get('fr_plan') for p in panels):
+            import frhighwaysigns
+            arranged = frhighwaysigns.finalize(dict(panels=panels, side=side, distance=distance))
+            if arranged is None:
+                return None
+            panels = arranged['panels']
+        else:
+            total = sum(p['width'] for p in panels)+.4*(len(panels)-1)
+            cursor = -total/2.
+            for panel in panels:
+                panel['offset'] = cursor+panel['width']/2.
+                cursor += panel['width']+.4
     else:
         w, h = dimensions(content)
         panels = [dict(label=content, width=w, height=h, offset=0., exit=False)]
@@ -246,7 +268,10 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
     polygons = signs._outlines(pavements)
     poles = []
     for side_pole in (-1., 1.):
-        offset = max(edge+2., extent+1.)*side_pole
+        reach = extent
+        if panels and all(p.get('fr_plan') for p in panels):
+            reach = max(side_pole*p['offset']+p['width']/2 for p in panels)
+        offset = max(edge+2., reach+1.)*side_pole
         for _ in range(45):
             point = at_xy+right*offset
             if signs._clear(point, .65, polygons) and not signs._on_deck(point, chunks, 1.):
@@ -261,10 +286,13 @@ def _assembly(frame, obj, pavements, q, direction, box, elev, chunks, content,
     bases = [signs._ground_z(frame, elev, point) for _, point in poles]
     # Entire underside clears the rendered carriageway; columns stand off pavement.
     bottom = max(road_z+6., max(bases)+.6)
-    return dict(id=obj['id'], kind='through', centre=[*map(float, at_xy), road_z],
+    result = dict(id=obj['id'], kind='through', centre=[*map(float, at_xy), road_z],
                 travel=travel.tolist(), panels=panels, bottom=bottom, bases=bases,
                 poles=[v[0] for v in poles], side=side, distance=distance,
                 state=state)
+    if any(p.get('fr_support') == 'cantilever' for p in panels):
+        result['fr_support'] = 'cantilever'
+    return result
 
 
 def branches(frame, objects, panels, pavements, box, elev, chunks=()):

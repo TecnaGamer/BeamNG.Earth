@@ -17,3 +17,10 @@ Trafikk Regular: Aitor (2021), unmodified file from https://aitor.online/media/d
 Modern Austrian/Slovak TERN and Swiss ASTRA Frutiger are not included. The Polish Drogowskaz digitization found during research has additional author-notification conditions; no such notification has been sent, and the file is not bundled. A generic repository licence is not used to override conflicting embedded font copyright notices.
 
 Typoroute 2002 L1 100: Copyright (c) 2023 Gwenaël Jouvin, Reserved Font Name Typoroute. Unmodified TTF from https://framagit.org/gwenj/typoroute at commit d608a3c993f6692312b1b87ecb71d3a4cff1be84. SIL OFL 1.1; see Typoroute-LICENSE.md, Typoroute-README.md and Typoroute-SOURCE.md. This font digitizes the French regulatory L1 alphabet. Its built-in kerning and contextual internal hyphen are retained. It replaces the previous D-DIN Condensed choice for French town-entry faces and D-road cartouches. The author describes it as a test release with small geometric adjustments; it is not an official ministry font binary.
+
+BNE motorway light: additional raster illustration derived from the same OFL
+Typoroute L1 source, with a one-pixel inset of the 96 px glyph mask and a 0.94
+horizontal scale. Used only for white motorway lettering on dark faces; it is
+an approximation of the lighter L2 appearance, not a digitization of L2. The
+source TTF is unmodified. The original L1 town-face metrics are unchanged.
+Italic secondary motorway legends are a geometric slant, not an official L4.

@@ -245,7 +245,7 @@ def exit_records(found):
              "through_label": e.get("through_label")}
         # Keep the current mainline identity even without destination names.
         # French portiques can then show A4 without borrowing an exit's cities.
-        d["main_tags"] = {k: e.get("main_tags", {})[k] for k in ("highway", "ref")
+        d["main_tags"] = {k: e.get("main_tags", {})[k] for k in ("highway", "ref", "lanes", "int_ref")
                           if k in e.get("main_tags", {})}
         out.append(_record("exit", obj["id"], obj["lon"], obj["lat"], d))
     return out

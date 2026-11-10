@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import exitsigns
 import frmotorway_layout
 import frroadmesh
+import frhighwaysigns
 import highwaysigns
 import roads
 import throughsigns
@@ -101,11 +102,12 @@ class FrenchMotorwayTest(unittest.TestCase):
     def layout(self, objects, context, **kw):
         return highwaysigns.guide_layout(FRAME, objects, context, BOX, flat, mph=False, french=True, **kw)
 
-    def test_advance_and_decision_share_mainline_and_exit_boards_with_clear_columns(self):
+    def test_advance_stays_roadside_and_decision_shares_boards_with_clear_columns(self):
         objects, rows, context = french_fixture()
         roadside, overheads = self.layout(objects, context)
-        self.assertEqual({s['distance'] for s in overheads}, {'500 m', ''})
-        self.assertTrue(all(s['kind'] == 'ramp' for s in roadside))
+        self.assertEqual({s['distance'] for s in overheads}, {''})
+        self.assertEqual({s['distance'] for s in roadside if s['kind'] == 'advance'}, {'1000 m', '500 m'})
+        self.assertFalse(any(s['kind'] == 'decision' for s in roadside))
         for sign in overheads:
             main, exit_panel = sign['panels']
             self.assertFalse(main['exit'])
@@ -123,36 +125,35 @@ class FrenchMotorwayTest(unittest.TestCase):
         self.assertEqual(uv.shape, (len(p), 2))
         self.assertLess(t.max(), len(p))
         self.assertLess(mi.max(), len(materials))
-        self.assertIn('bne_sign_blue', materials)
-        blue = materials.index('bne_sign_blue')
+        self.assertIn('bne_fr_highway_blue', materials)
+        blue = materials.index('bne_fr_highway_blue')
         self.assertTrue(np.any(mi == blue))
         self.assertGreater(p[t[mi == blue]].min(axis=(0, 1))[2], 5.9)
 
-    def test_missing_mainline_destinations_use_only_current_motorway_reference(self):
+    def test_missing_destinations_do_not_create_a_square_route_only_mainline_board(self):
         objects, _, context = french_fixture(dict(highway='motorway', oneway='yes', ref='A4'))
         roadside, overheads = self.layout(objects, context)
-        self.assertEqual(len(overheads), 2)
-        self.assertTrue(all(s['kind'] == 'ramp' for s in roadside))
-        for s in overheads:
-            self.assertEqual(s['panels'][0]['label']['names'], ['A4'])
-            self.assertTrue(s['panels'][0]['label']['route_only'])
-            self.assertNotIn('Meaux-Est', s['panels'][0]['label']['names'])
+        self.assertEqual(len(overheads), 1)
+        self.assertEqual(len(overheads[0]['panels']), 1)
+        self.assertTrue(overheads[0]['panels'][0]['exit'])
+        self.assertTrue(any(s['kind'] == 'advance' for s in roadside))
         # Neither the ramp nor its destinations describe the continuing road.
         self.assertIsNone(frmotorway_layout.through_content(dict(
             main_tags={'destination:ref': 'A35'}, ramp_tags={'ref': 'A355'},
             label={'names': ['Paris'], 'routes': ['A4']})))
 
-    def test_no_mainline_information_retains_existing_roadside_signs(self):
+    def test_no_mainline_names_keep_exit_information_without_inventing_cities(self):
         objects, _, context = french_fixture({})
         roadside, overheads = self.layout(objects, context)
-        self.assertFalse(overheads)
-        self.assertEqual({s['kind'] for s in roadside}, {'advance', 'decision', 'ramp'})
+        self.assertEqual(len(overheads), 1)
+        self.assertTrue(all(p['exit'] for p in overheads[0]['panels']))
+        self.assertEqual({s['kind'] for s in roadside}, {'advance', 'ramp'})
 
     def test_blue_exit_can_be_overhead_without_fabricating_a_mainline_board(self):
         objects, _, context = french_fixture({})
         objects[0]['exit']['label']['routes'] = ['A35']
         _, overheads = self.layout(objects, context)
-        self.assertEqual(len(overheads), 2)
+        self.assertEqual(len(overheads), 1)
         self.assertTrue(all(len(s['panels']) == 1 and s['panels'][0]['exit'] for s in overheads))
 
     def test_failed_support_planning_keeps_the_roadside_information(self):
@@ -168,14 +169,14 @@ class FrenchMotorwayTest(unittest.TestCase):
         _, overheads = self.layout(objects, context, chunks=[deck])
         self.assertFalse(overheads)
 
-    def test_other_country_layout_and_non_motorway_roads_are_unchanged(self):
+    def test_other_countries_retain_their_layout_and_trunks_are_not_promoted(self):
         objects, _, context = french_fixture()
         roadside, overheads = highwaysigns.guide_layout(FRAME, objects, context, BOX, flat, mph=False)
         self.assertEqual(len(overheads), 1)
         self.assertTrue(any(s['kind'] == 'decision' for s in roadside))
         objects[0]['exit']['main_tags']['highway'] = 'trunk'
         roadside, overheads = self.layout(objects, context)
-        self.assertEqual(len(overheads), 1)
+        self.assertEqual(len(overheads), 0)
         self.assertTrue(any(s['kind'] == 'decision' for s in roadside))
 
     def test_duplicates_and_adjacent_tiles_own_each_assembly_once(self):
@@ -198,15 +199,16 @@ class FrenchMotorwayTest(unittest.TestCase):
             obj['exit']['main_tags'] = dict(highway='motorway', oneway='yes', ref='A4', destination='Paris')
             obj['exit']['label']['routes'] = []
         roadside, overheads = self.layout(objects, context)
-        self.assertEqual(len(overheads), 2)
-        self.assertTrue(all(s['kind'] == 'ramp' for s in roadside))
+        self.assertEqual(len(overheads), 1)
+        self.assertTrue(any(s['kind'] == 'advance' for s in roadside))
         for sign in overheads:
             self.assertEqual(len([p for p in sign['panels'] if not p['exit']]), 1)
             self.assertEqual({p['side'] for p in sign['panels'] if p['exit']}, {-1, 1})
         sign = next(s for s in overheads if not s['distance'])
-        with mock.patch.object(frroadmesh, 'guide_panel', wraps=frroadmesh.guide_panel) as draw:
+        with mock.patch.object(frhighwaysigns, 'arrow', wraps=frhighwaysigns.arrow) as draw:
             frroadmesh.build_highways([], [sign], (0., 0., 0.))
-        self.assertEqual({c.args[-1] for c in draw.call_args_list if c.args[5]}, {-1, 1})
+        self.assertEqual({c.args[4] for c in draw.call_args_list if len(c.args) > 4}, {-1, 1})
+
 
 
 if __name__ == '__main__':

@@ -221,5 +221,73 @@
       {},
       {}
     ]
+  },
+  "bne_fr_highway_blue": {
+    "name": "bne_fr_highway_blue",
+    "mapTo": "bne_fr_highway_blue",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.003676507324047436,
+          0.05612849004960009,
+          0.45641102318040466,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "636b5a1c-8741-5ed2-b31c-614f1bb9cb19",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_fr_highway_green": {
+    "name": "bne_fr_highway_green",
+    "mapTo": "bne_fr_highway_green",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.0,
+          0.20863687014525575,
+          0.09305896284668745,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      }
+    ],
+    "persistentId": "90f95f90-9018-5232-9410-05ad3a74ed7f",
+    "doubleSided": false,
+    "translucent": false
+  },
+  "bne_fr_highway_glyph_yellow": {
+    "name": "bne_fr_highway_glyph_yellow",
+    "mapTo": "bne_fr_highway_glyph_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.9559733532492861,
+          0.7156935005064807,
+          0.016807375752887384,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45,
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_white.png",
+        "opacityMap": "/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/sign_font_opacity.data.png"
+      }
+    ],
+    "persistentId": "aec922dd-c99a-59e8-adee-09ef4d6cefca",
+    "doubleSided": false,
+    "translucent": false,
+    "alphaTest": true,
+    "alphaRef": 80,
+    "castShadows": false
   }
 }

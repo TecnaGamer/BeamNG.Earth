@@ -153,7 +153,10 @@ def arrange(frame, roadside, overheads, contexts, objects, elev, chunks):
                 if (not exitsigns._clear(centre, sign['width']/2.+.5, exitsigns._outlines(pavements))
                         or exitsigns._on_deck(centre, chunks, sign['width']/2.+1.)):
                     continue
-                trial = exitsigns._make_sign(objects[sign['id']], sign['kind'], centre,
+                source = objects[sign['id']]
+                if sign['kind'] == 'confirmation':
+                    source = dict(source, exit=dict(label=sign['label']))
+                trial = exitsigns._make_sign(source, sign['kind'], centre,
                     np.asarray(sign['travel']), np.r_[centre, exitsigns._ground_z(frame, elev, centre)],
                     frame, elev, sign['side'], sign['width'], sign['height'],
                     sign['distance'], sign['advance_m'], sign['state'])
