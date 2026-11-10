@@ -575,7 +575,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -1319,7 +1319,7 @@ WIN_OUT_M = 0.03            # m the window stands proud of its wall
 _WALL_CONSTS = None
 
 
-def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
+def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False, hole=False):
     """Each wall of the ring, floor by floor: one band of the window sheet, a whole number of bays; a plain wall with
     sash windows laid over it for a plain tileable material (spec.wall; a big box's storefront band); a plain plinth
     under the floors on a slope; a shopfront ground floor; the good bays only where a band has some; the front door's
@@ -1330,7 +1330,7 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         _WALL_CONSTS = [float(v) for v in (SIDING_UV_M, TILE_PX_M, FOUNDATION_M, BANDS, BAND_SHOP[0], BAND_SHOP[1],
                                            DOOR_GAP_M, PLAIN_STRIP, GROUND_FLOOR_SHOP_M, WIN_OUT_M, HOUSE_BAY_M,
                                            *WIN_UV, WIN_W, WIN_H, WIN_SILL)]
-    fast.require(184, "building_walls")
+    fast.require(191, "building_walls")
     band = spec.band or (0, 1)
     good = list(band[2]) if len(band) > 2 else []
     door = spec.door
@@ -1349,7 +1349,8 @@ def _walls(m, spec, ring, z0, z_eave, mat_idx, lite=False):
         bool(spec.shop), int(door[0]) if door else -1, float(door[1]) if door else 0.0, spec.roof == "flat",
         float(spec.seed) if isinstance(spec.seed, float) else 0.0, spec.windows is False,
         int(spec.front) if spec.front is not None else -1, bool(lite), _WALL_CONSTS, vary,
-        WIN_CELLS if spec.wall else [])
+        WIN_CELLS if spec.wall else [],
+        [-1] if hole else [int(e) for e in (spec.street or ())])     # (a shop's ground floor on its street walls: doors())
     if mid:
         m.quads(P, UV, mid, mats)
 
@@ -2598,7 +2599,7 @@ def build(specs_and_ground, lite=False):
         z_eave = base_z(spec, gmin, gmax) + mh + spec.height
         _walls(m, spec, ring, z0, z_eave, mat_idx, lite)
         for hole in (spec.holes or ()):               # (a courtyard's walls, facing the yard: the hole clockwise)
-            _walls(m, spec, hole, z0, z_eave, mat_idx, lite)
+            _walls(m, spec, hole, z0, z_eave, mat_idx, lite, hole=True)
         if mh > 0.5:                                  # a part standing on another / over a street: its underside
             m.poly([(p[0], p[1], z0) for p in ring[::-1]], [(0.002, 0.995)] * len(ring), mat_idx[spec.facade])
         _roof(m, spec, ring, z_eave, mat_idx, lite)
@@ -4647,6 +4648,19 @@ def doors(items, lines, x0, y0, drives=None, infer_fences=True):
         Q = A[None] + T[..., None] * D[None]
         DIST = np.hypot(*(Q - MID[:, None, :]).transpose(2, 0, 1))
         K = DIST.argmin(1)
+        # the walls facing a road near them (a shop's ground floor is a shopfront there only: _walls' street edges;
+        # its back and side walls are drawn as its upper floors)
+        if spec.shop or storefront or not no_door:
+            street = []
+            for i in range(len(ring)):
+                k = int(K[i])
+                Le = float(math.hypot(*E[i]))
+                if Le < 1.0 or DIST[i][k] > DOOR_ROAD_M:
+                    continue
+                out = np.array([E[i][1], -E[i][0]]) / Le
+                if float(np.dot(Q[i, k] - MID[i], out)) > 0:
+                    street.append(i)
+            spec.street = tuple(street) if street else None
         for i in range(len(ring)):
             a = ring[i]
             e = E[i]

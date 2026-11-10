@@ -469,6 +469,26 @@ class NightWindowsTest(unittest.TestCase):
             True, 0.37, False, 0, lite, bld._WALL_CONSTS, [], [])
         return np.array(P).reshape(-1, 4, 3), np.array(UV).reshape(-1, 8), list(mid)
 
+    def test_shop_front_on_street_walls_only(self):
+        """A shop's ground floor is a shopfront on the walls facing a street (spec.street: doors()), its other walls
+        drawn as its upper floors; no street known: every wall, as before."""
+        shop = bld.MATERIALS.index(bld.SHOP)
+
+        def shop_tris(street):
+            m = self._wall(shop=True, street=street, door=None)
+            M = np.asarray(m.M)
+            P = np.asarray(m.P, np.float64).reshape(-1, 3)
+            T = np.asarray(m.T).reshape(-1, 3)
+            return P[T[M == shop]].reshape(-1, 3)
+        every = shop_tris(None)
+        front = shop_tris((0,))
+        self.assertGreater(len(every), len(front))
+        self.assertGreater(len(front), 0)
+        e0 = rect(0, 0, 30.0, 14)[:2]                   # (edge 0 of the ring)
+        d = e0[1] - e0[0]
+        n = np.array([-d[1], d[0]]) / np.hypot(*d)
+        self.assertLess(float(np.abs((front[:, :2] - e0[0]) @ n).max()), 1e-6, "shopfronts only on edge 0")
+
     @staticmethod
     def _area(P):
         q = np.asarray(P).reshape(-1, 4, 3)

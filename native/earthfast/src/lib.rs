@@ -3203,13 +3203,16 @@ fn py_floordiv(x: f64, y: f64) -> f64 {
 /// quads, in the Python's order and float arithmetic (math.hypot: py_hypot, round(): half to even, _hash01: blake2b of
 /// the repr). Returns (positions: 12 per quad, uvs: 8 per quad, material per quad: 0 the facade, 1 the shopfront,
 /// 2 the window white). c: the constants (see buildings._walls). door_edge / front: -1 for none. vary / win_cells:
-/// the night windows' cells (wall_cells).
+/// the night windows' cells (wall_cells). shop_edges: the walls (ring edges) a shop's ground floor faces a street on,
+/// the others drawn as its upper floors (empty: every wall, as before 191; [-1]: none, a courtyard's).
 #[pyfunction]
+#[pyo3(signature = (ring, z0, z_eave, wall, plain, band_k, bpt, good, floors, floor_h, shop, door_edge, door_pos,
+                    roof_flat, seed, windows_false, front, lite, c, vary, win_cells, shop_edges=Vec::new()))]
 #[allow(clippy::too_many_arguments)]
 fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_eave: f64, wall: bool, plain: bool,
                   band_k: i64, bpt: i64, good: Vec<i64>, floors: i64, floor_h: f64, shop: bool, door_edge: i64,
                   door_pos: f64, roof_flat: bool, seed: f64, windows_false: bool, front: i64, lite: bool, c: Vec<f64>,
-                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>)
+                  vary: Vec<(u8, i64, i64, i64)>, win_cells: Vec<(f64, f64)>, shop_edges: Vec<i64>)
                   -> PyResult<(Vec<f64>, Vec<f64>, Vec<u8>)> {
     if c.len() != 18 {
         return Err(pyo3::exceptions::PyValueError::new_err("building_walls: 18 constants"));
@@ -3347,7 +3350,7 @@ fn building_walls(py: Python<'_>, ring: PyReadonlyArray2<'_, f64>, z0: f64, z_ea
                 cur_floor.set(f);
                 let zb = if f == floors - 1 { z_eave } else { base + (f + 1) as f64 * floor_h };
                 let (m, bk, uu);
-                if f == 0 && shop {
+                if f == 0 && shop && (shop_edges.is_empty() || shop_edges.contains(&(i as i64))) {
                     m = 1u8;
                     bk = shop_k;
                     let nbs = rnd(l / (tile_px / shop_bpt as f64)).max(1);
@@ -5862,6 +5865,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(deckground::deck_ground_apply, m)?)?;
     // 190: deckground (grading.DECK_GROUND_*: a bridge the elevation holds under a mapped deck taken out of the ground,
     // GitHub #1098)
-    m.add("VERSION", 190)?;
+    // 191: building_walls' shop_edges (a shop's ground floor on its street walls only)
+    m.add("VERSION", 191)?;
     Ok(())
 }
