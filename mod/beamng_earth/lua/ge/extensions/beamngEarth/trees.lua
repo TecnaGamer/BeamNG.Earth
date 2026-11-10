@@ -31,7 +31,7 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
 -- ridges and a rock placed on the real ground floated over the drawn one (Stelvio pass, the user's report 2026-10-17)
-M.GROUP_MAX_M = { shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
+M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock = 400, desert_rock = 400, cliff = 1500, pylon = 1500, hvpole = 1000, gantry = 800, sub_breaker = 400, sub_mast = 1000, sub_support = 300,
   sub_transformer = 500, sub_fence = 200, lamplens = 800, fr_lantern_light = 800, fr_wood_pole = 800, eu_wood_pole = 800, fr_lantern = 500, fr_j1 = 300, fr_j3 = 300, fr_j6 = 300, fr_j4_l = 400, fr_j4_r = 400, fr_signpost = 500, lampglow = 6000, rrcross = 300, rrcross_eu = 300, rrflash = 400,
   rrflash_eu = 400, rrgate = 400, rrgate_l = 400, rrgate_eu = 400, rrgate_eu_l = 400, catmast = 700, catmast_eu = 700, catpost = 700, catpost_eu = 700, door = 120, hydrant = 200, bin = 200, bench = 200, polelamp = 400,
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
@@ -51,7 +51,7 @@ M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('b
 M.SOLID_M = 200       -- (was 300 + 100: up to ~20k solid trees in a forest, and every terrain block move rebuilt all their
                       -- collision, a ~30 ms physics frame; 200 + 50 is still 5 s ahead at 100 mph, 2026-10-15)
 M.SOLID_HYST_M = 50
-M.NO_COLLIDE = { fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
+M.NO_COLLIDE = { tuft = true, fern = true, fr_j1 = true, fr_j3 = true, fr_j6 = true, shrub = true, desert_shrub = true, door = true, lamplens = true, fr_lantern_light = true, lampglow = true, wallsign_logistics = true, wallsign_rentabox = true,
   wallsign_lemon = true, wallsign_turboburger = true }
 -- The 100 mph stutter (2026-10-15 probes): a frame that adds or removes Forest items costs the engine's tick ~0.5 us
 -- for every item in the level of each SHAPE touched (whatever its item type or Forest), so a frame making 300 items of
@@ -97,6 +97,7 @@ local WCA = '/levels/west_coast_usa/art/shapes/'
 local UT = '/levels/Utah/art/shapes/'
 local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
+local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
@@ -113,6 +114,11 @@ M.CATALOG = {
     { ECA .. 'trees/trees_beech/tree_beech_large_c', 17.4 }, { ECA .. 'trees/trees_aspen/tree_aspen_forest_b', 18.5 },
     { ECA .. 'trees/trees_beech/tree_beech_forest_a', 20.2 }, { ECA .. 'trees/trees_beech/tree_beech_large_b', 21.1 },
   },
+  -- low ground plants of a roundabout island's planting (server roundabouts.plant_rows): patches of clover and daisies, ferns
+  -- (Hirochi's groundcover shapes, measured 2026-11-10: a patch 2.3 / 1.45 m wide, 0.17 / 0.11 high; ferns 0.62 .. 1.49 high)
+  tuft = { { HIR .. 'groundcover/daisies_closetop', 0.11 }, { HIR .. 'groundcover/Clover_closetop', 0.17 } },
+  fern = { { HIR .. 'groundcover/lush_ferns_02_a', 0.62 }, { HIR .. 'groundcover/lush_ferns_02_b', 0.75 },
+           { HIR .. 'groundcover/lush_ferns_01_a', 1.0 }, { HIR .. 'groundcover/lush_ferns_01_b', 1.49 } },
   conifer = {
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_b', 11.2 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_small_a', 13.4 },
     { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_c', 18.9 }, { ECA .. 'trees/trees_douglasfir/tree_douglasfir_large_a', 19.6 },
@@ -396,6 +402,7 @@ local MATERIALS = {
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
   JV .. 'misc',     -- the cell tower
+  HIR .. 'groundcover',     -- the clover and daisy patches and ferns of a roundabout's island (server roundabouts.py)
   '/levels/hirochi_raceway/art/shapes/buildings',     -- the stock barn
   -- the toll booth's (its kerbs, glass, trim and lamps)
   '/art/shapes/garage_and_dealership/garage', '/art/shapes/garage_and_dealership', '/art/shapes/race/dragstrip',

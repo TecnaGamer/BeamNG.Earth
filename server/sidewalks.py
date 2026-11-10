@@ -36,7 +36,12 @@ CROSS_SLOPE = 0.015     # sidewalk cross slope, rising away from the road
 CURB_REPEAT_M = 9.0     # m of curb per texture width (3 joints of 3 m)
 SLAB_REPEAT_M = 45.0    # m of sidewalk per texture width (4096 px, a 205 px strip ~ 2.25 m)
 MATERIALS = ("curbs", "sidewalk1", "tactile_indicator",  # West Coast USA (art/shapes/roads), loaded by the mod
-             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile")
+             "bne_sidewalk_brick", "bne_eu_curb", "bne_eu_asphalt_walk", "bne_eu_tactile",
+             "bne_sidewalk_sett",        # (7: a roundabout's paved apron, plan 038: the brick slab's UVs, its own look)
+             "bne_island_lawn", "bne_island_shrubs", "bne_island_gravel", "bne_island_mulch")    # (8-11: its planting)
+SETT = 7
+PLANTINGS = (8, 9, 10, 11)      # (lawn, shrub bed, gravel, bark mulch)
+PLANT_REPEAT_M = (3.0, 3.0, 2.0, 3.0)    # m per repeat of each planting texture (planar UVs: no sidewalk strip)
 BRICK = 3
 BRICK_REPEAT_M = 1.2        # m per repeat of the brick paver texture
 
@@ -63,6 +68,14 @@ def _normals_2d(xy):
         m = m / ml[:, None]
         cos = np.clip((m * nseg[1:]).sum(1), 0.5, 1.0)          # miter at most 2x
         n[1:-1] = m / cos[:, None]
+    if len(xy) > 3 and float(np.hypot(*(xy[0] - xy[-1]))) < 1e-6:
+        # a closed loop (an island's curb band): its ends are one vertex, mitred across the seam like any other, else the two
+        # one-sided ends leave a wedge between them (a segment's turn wide at a wide band: the roundabout's apron, 2026-11-10)
+        m = nseg[-1] + nseg[0]
+        ml = float(np.hypot(*m))
+        if ml > 1e-9:
+            m = m / ml
+            n[0] = n[-1] = m / max(float(np.dot(m, nseg[0])), 0.5)
     return n
 
 
@@ -157,9 +170,10 @@ class Builder:
         self.origin = np.asarray(origin, np.float64)
         self.pieces = []            # (kind 0 run / 1 corner, points (k, 3), dirs (k, 2), outer (m, 3), ramps, w, h, caps,
         self._built = None          # slab, europe); the Rust meshes once built (full, lean)
+        self.discs = []             # island plantings (add_disc)
         self.col = _Lean(self) if collision else None
 
-    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False):
+    def add_run(self, curb, toward_out, w, h=CURB_H, caps=(True, True), ramps=(), slab=1, europe=False, mat=0):
         """One sidewalk run: curb (k, 3) the curb line (z = the road there), toward_out (k, 2) unit
         vectors from the curb outwards (scaled by the miter), w its width; caps: end caps at the
         (start, end) (not where the run goes on in the next tile or meets a corner piece); ramps:
@@ -168,7 +182,7 @@ class Builder:
         if len(curb) < 2:
             return
         self.pieces.append((0, curb[:, :3], np.asarray(toward_out, np.float64)[:, :2], None, list(ramps), float(w),
-                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe)))
+                            float(h), (bool(caps[0]), bool(caps[1])), int(slab), bool(europe), int(mat)))
         self._built = None
 
     def add_corner(self, arc, inward, outer, h=CURB_H, ramps=(), europe=False):
@@ -182,8 +196,35 @@ class Builder:
                             1, bool(europe)))
         self._built = None
 
+    def add_disc(self, ring, apex, mat, h, dome):
+        """An island's planting: a fan of triangles from the closed ring (k, 3), counter-clockwise, to the apex (3,), in slab
+        material mat (planar UVs); z are the ground's: the ring is lifted h and the apex h + dome (a gentle mound)."""
+        ring = np.asarray(ring, np.float64)[:, :3]
+        if len(ring) > 1 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        if len(ring) < 3:
+            return
+        self.discs.append((ring, np.asarray(apex, np.float64)[:3], int(mat), float(h), float(dome)))
+        self._built = None
+
+    def _disc_mesh(self):
+        """(positions, tris, uvs, materials) of the fans, relative to the origin, or None."""
+        if not self.discs:
+            return None
+        parts, base = [], 0
+        for ring, apex, mat, h, dome in self.discs:
+            n = len(ring)
+            P = np.vstack([ring + (0.0, 0.0, h), apex + (0.0, 0.0, h + dome)]) - np.asarray(self.origin, np.float64)
+            i = np.arange(n)
+            T = np.stack([i, (i + 1) % n, np.full(n, n)], 1) + base
+            scale = PLANT_REPEAT_M[PLANTINGS.index(mat)] if mat in PLANTINGS else 3.0
+            parts.append((P, T, P[:, :2] / scale, np.full(n, mat, np.int64)))
+            base += n + 1
+        return (np.concatenate([p[0] for p in parts]), np.concatenate([p[1] for p in parts]),
+                np.concatenate([p[2] for p in parts]), np.concatenate([p[3] for p in parts]))
+
     def empty(self):
-        return not self.pieces
+        return not self.pieces and not self.discs
 
     def _native(self, ps):
         """Unmodified 1.7.2 native geometry, for a batch of pieces with one palette."""
@@ -218,11 +259,11 @@ class Builder:
             # Keep contiguous batches: one native call in the usual single-country case,
             # identical vertex/triangle order even where a tile straddles a border.
             from itertools import groupby
-            batches = [(flag, list(ps)) for flag, ps in groupby(self.pieces, key=lambda p: p[9])]
+            batches = [(flag, list(ps)) for flag, ps in groupby(self.pieces, key=lambda p: (p[9], p[10] if len(p) > 10 else 0))]
             if not batches:
-                batches = [(False, [])]
+                batches = [((False, 0), [])]
             full, lean = [], []
-            for european, ps in batches:
+            for (european, mat), ps in batches:
                 drawn, collision = self._native(ps)
                 if european:
                     P, T, UV, M = drawn
@@ -234,8 +275,19 @@ class Builder:
                     UV[curb, 0] *= CURB_REPEAT_M
                     UV[slab] = P[slab, :2] / 2.0
                     drawn = P, T, UV, np.take((4, 5, 6, 3), M)
+                if mat:                      # an island's apron or planting: its slab in its own material (plan 038)
+                    P, T, UV, M = drawn
+                    if mat in PLANTINGS:         # (planar UVs: a planting is no row of pavers)
+                        UV = UV.copy()
+                        slab = np.setdiff1d(np.unique(T[M == BRICK]), np.unique(T[M != BRICK]))
+                        UV[slab] = P[slab, :2] / PLANT_REPEAT_M[PLANTINGS.index(mat)]
+                    drawn = P, T, UV, np.where(M == BRICK, mat, M)
                 full.append(drawn)
                 lean.append(collision)       # palette never changes collision geometry/materials
+            disc = self._disc_mesh()
+            if disc is not None:
+                full.append(disc)
+                lean.append(disc[:3] + (np.zeros(len(disc[3]), np.int64),))
             self._built = self._join(full), self._join(lean)
         return self._built
 

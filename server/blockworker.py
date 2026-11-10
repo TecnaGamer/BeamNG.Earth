@@ -1582,7 +1582,12 @@ def _map_walks(src, dst, walks):
     out = []
     for wk in walks:
         wk = dict(wk)
-        if "corner" in wk:
+        if "disc" in wk:
+            d = dict(wk["disc"])
+            d["ring"] = mp(d["ring"])
+            d["apex"] = mp(np.asarray(d["apex"], np.float64).reshape(1, 3))[0]
+            wk["disc"] = d
+        elif "corner" in wk:
             c = dict(wk["corner"])
             c["arc"] = mp(c["arc"])
             c["outer"] = [tuple(v) for v in mp(np.asarray(c["outer"], np.float64).reshape(-1, 3))]
@@ -1681,14 +1686,19 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
         mark("drape")
         b = sidewalksmod.Builder(origin, collision=True)
         for wk in walks:
+            if "disc" in wk:
+                d = wk["disc"]
+                b.add_disc(d["ring"], d["apex"], d["mat"], d["h"], d["dome"])
+                continue
             if "corner" in wk:
                 c = wk["corner"]
                 b.add_corner(c["arc"], c["inward"], c["outer"], ramps=c.get("ramps", ()), europe=wk.get("europe", False))
                 continue
             ww = wk.get("w", roadsmod.SIDEWALK["w"])
             curb, outv = sidewalksmod.run_geometry(wk["pts"], wk["side"], ww)
-            b.add_run(curb, outv, ww, caps=wk["caps"], ramps=wk.get("ramps", ()),
-                      slab=sidewalksmod.BRICK if wk.get("brick") else 1, europe=wk.get("europe", False))
+            b.add_run(curb, outv, ww, h=wk.get("h", sidewalksmod.CURB_H), caps=wk["caps"], ramps=wk.get("ramps", ()),
+                      slab=sidewalksmod.BRICK if wk.get("brick") else 1, europe=wk.get("europe", False),
+                      mat=int(wk.get("mat", 0)))
         mark("walks")
         if not b.empty():
             P_, T_, UV_, M_ = b.arrays()

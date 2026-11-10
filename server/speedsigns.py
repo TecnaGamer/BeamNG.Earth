@@ -217,8 +217,10 @@ def place(frame, box, context, left_hand=False, mph=True, face=STYLE_VIENNA):
         return np.zeros((0, 12))
     cla, clo, _ = frame.enu_to_geodetic(np.array([x0, x1, x0, x1]), np.array([y0, y0, y1, y1]), 0.0)
     poly, poly_off = _outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
-    return fast._ef.speed_sign_place(*arrays, poly, poly_off, [float(v) for v in box], _kernel_style(face),
-                                     bool(left_hand), [float(v) for v in REPEAT_M])
+    import roundabouts
+    got = fast._ef.speed_sign_place(*arrays, poly, poly_off, [float(v) for v in box], _kernel_style(face),
+                                    bool(left_hand), [float(v) for v in REPEAT_M])
+    return roundabouts.drop_on_islands(got, rows)          # (none on a roundabout's island, plan 038)
 
 
 def _kernel_style(face):
