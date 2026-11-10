@@ -1096,6 +1096,45 @@ def region_near(db, lat, lon):
     return getattr(ap, "region", None) or None
 
 
+def border_country(lat, lon):
+    """The territory at (lat, lon) by real borders (countrybounds: Overture's divisions, ~10 m), upper case, or None:
+    no single territory there (the sea, a gap, two overlapping), no border data (countrybounds.Absent), or a lookup
+    that raised (germany's back-off: one retry clock for every border lookup of the process). Never raises."""
+    import germany
+    idx = germany._index()
+    if idx is None:
+        return None
+    try:
+        c = idx.at(float(lat), float(lon))
+    except Exception as e:
+        germany._fail(e)
+        return None
+    return str(c).upper() if c else None
+
+
+def country_at(db, lat, lon, borders=False):
+    """The country of (lat, lon): with borders (the server fetched the border data anyway: its regional scenery is
+    on), the real border's territory where there is one, else the nearest airport's (country_near). The airport alone
+    is wrong at border towns: in British Columbia's Lower Mainland the nearest airport can be in Washington, so the
+    speed signs read mph on a Vienna-style disc (GitHub #1046); Kehl gets Strasbourg's, Windsor Detroit's."""
+    if borders:
+        c = border_country(lat, lon)
+        if c:
+            return c
+    return country_near(db, lat, lon)
+
+
+def region_at(db, lat, lon, borders=False):
+    """region_near, None where its airport is in another country than country_at's (a US state's rules don't reach a
+    Canadian town whose nearest airport is in that state)."""
+    r = region_near(db, lat, lon)
+    if r and borders:
+        c = border_country(lat, lon)
+        if c and not str(r).upper().startswith(c + "-"):
+            return None
+    return r
+
+
 def part_fid(pid):
     """The road feature's id of a chain part's id (roads.ChainView: "<fid>.<part>#<section>")."""
     return re.sub(r"(\.\d+)?(#\d+)?$", "", str(pid))
