@@ -127,7 +127,11 @@ local collisionDirty = false
 local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
 local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
-local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
+local deletesDirty = false  -- only far colliders deleted (and far ghosts dropped) since the last rebuild (RELOAD_DELETES_S)
+local dirtyAt = {}          -- far spots where another module changed colliders (markCollisionDirty with a position):
+                            -- square "gx_gy" (TILE_M, so far churn stays bounded) -> { solid once reloads reaches,
+                            -- square centre x, y } (the centre, not the last spot: collideNear's TILE_M * 0.71
+                            -- half-diagonal then covers the whole square, wherever in it the spots fell)
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
 -- unloading the extensions, so nothing deletes the old objects: 2026-10-11, after a few reloads, 3,558
@@ -466,6 +470,18 @@ end
 -- Other vehicles' collision foci (collisionfoci.lua, through core.lua): their tiles' colliders are made too.
 function M.setFoci(f) foci = f or {} end
 
+-- A colliding object of tile t was made or swapped in: the prompt rebuild flag (collisionDirty) only when the tile
+-- can matter to a collision island now (M.collideNear: the player's COLLIDE_M reach and the foci, a tile of margin).
+-- Far road geotiles churn (the server rebuilds them; parked at 0 mph for an hour at dev.212, 1,489 rebuilt tiles,
+-- most 7-15 km out, kept something dirty in every RELOAD_EVERY_S window: a 70-640 ms `slow unit reloadCollision`
+-- every 6.1 s with nothing near the car changed). Their dirt waits on the tile instead (t.colDirty: solid once
+-- `reloads` reaches it) and is promoted when the player comes near (updateCollideRange, the COLLIDE_CHECK_S poll);
+-- any rebuild before that makes the collider solid anyway, be:reloadCollision being global.
+local function markTileCollider(t)
+  if not t or M.collideNear(t, M.TILE_M) then collisionDirty = true
+  else t.colDirty = reloads + 1 end
+end
+
 -- Every COLLIDE_CHECK_S: parked colliders whose tile came near queued; far tiles' colliders dropped.
 local function updateCollideRange()
   if sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
@@ -486,7 +502,15 @@ local function updateCollideRange()
     end
     parked = keep
   end
+  for sq, d in pairs(dirtyAt) do      -- other modules' deferred spots (markCollisionDirty with a position)
+    if reloads >= d[1] then dirtyAt[sq] = nil
+    elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; collisionDirty = true end
+  end
   for key, t in pairs(tiles) do
+    if t.colDirty then      -- deferred collider dirt (markTileCollider): solid after any rebuild, promoted near
+      if reloads >= t.colDirty then t.colDirty = nil
+      elseif M.collideNear(t, M.TILE_M) then t.colDirty = nil; collisionDirty = true end
+    end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
         if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
@@ -544,7 +568,7 @@ local function spawnCustom(key, shape, pos, rot, col)
   local id = createWalk(walk, collide)
   t.custom = t.custom or {}
   t.custom[#t.custom + 1] = id
-  if collide then collisionDirty = true end
+  if collide then markTileCollider(t) end
   return id
 end
 
@@ -1597,8 +1621,20 @@ function M.onDrop(msg)
   sinceChange = stopwatch.new()
 end
 
--- A gas station's colliding props were made (gasstations.lua): rebuilt with the roads' next collision rebuild.
-function M.markCollisionDirty() collisionDirty = true end
+-- Another module made, moved or removed colliding objects for the roads (gas stations' props, pump jacks, wind
+-- turbines: core.lua wires their onCollide here): rebuilt with the roads' next collision rebuild. With the spot's
+-- world (x, y) the prompt flag follows markTileCollider's rule: far from every island the dirt waits (dirtyAt) and
+-- is promoted by updateCollideRange's poll when the player comes near, any rebuild in between having made the
+-- objects solid. Without a position: prompt, as before (rebases, level end, third-party callers).
+function M.markCollisionDirty(x, y)
+  if type(x) ~= 'number' or type(y) ~= 'number' then collisionDirty = true; return end
+  if M.collideNear({ cx = x, cy = y }, M.TILE_M) then collisionDirty = true; return end
+  local gx, gy = math.floor(x / M.TILE_M), math.floor(y / M.TILE_M)
+  local sq = gx .. '_' .. gy
+  local d = dirtyAt[sq]
+  if d then d[1] = reloads + 1
+  else dirtyAt[sq] = { reloads + 1, (gx + 0.5) * M.TILE_M, (gy + 0.5) * M.TILE_M } end
+end
 
 -- Origin rebase (core.lua finishRebase): the shown tiles move into the new frame (p_new = R*p + t: their TSStatics
 -- turned by R, as farfield.transform) and stay as "ghosts" until the new anchor's tiles over them are made
@@ -1740,7 +1776,11 @@ local function releaseGhosts(player)
         and M.boxGap(p.x, p.y, t.cx, t.cy, M.TILE_M / 2) > M.GHOST_FAR_M
       if all or far or (t.cx and (t.signOnly and covered0(signsDone, t.cx, t.cy) or (not t.signOnly and covered(done, t.cx, t.cy, busyKeys)))) then
         dropTile(key)
-        if not t.signOnly then collisionDirty = true end
+        -- a ghost dropped far from every island: its stale collision harms nobody out there, so it rides the lazy
+        -- RELOAD_DELETES_S rebuild (its colliders' deletes classify themselves the same way, the deleteQ above)
+        if not t.signOnly then
+          if M.collideNear(t, M.TILE_M) then collisionDirty = true else deletesDirty = true end
+        end
       else left = true end
     end
   end
@@ -1873,7 +1913,7 @@ function M.update(gov, currentAnchor, player, view, a)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
-          t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
+          t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
@@ -2214,7 +2254,7 @@ function M.reset()
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ = {}, {}
-  collisionDirty, deletesDirty = false, false
+  collisionDirty, deletesDirty, dirtyAt = false, false, {}
 end
 
 -- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles
