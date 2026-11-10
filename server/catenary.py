@@ -57,13 +57,16 @@ PORTAL_BAND_M = 24.0            # m across: tracks this close and parallel are o
 PORTAL_COS = 0.9
 PORTAL_MAX_W_M = 60.0           # a wider corridor (a yard's fan) gets none
 PORTAL_POST_OFF_M = 3.4         # m from the outer tracks' axes to the posts
+PORTAL_POST_CLEAR_M = 2.3       # m a post keeps off every track's axis (a post stood in the track bed beside a siding, Vinnytsia)
 PORTAL_Z = 8.0                  # m: the truss's lower chord over the tracks' bed (the contact wires hang from it)
 PORTAL_H = 1.0                  # m the truss girder is deep
 PORTAL_PANEL_M = 1.0            # m of a diagonal's panel
 POST_H = 10.4                   # m (the post models' height)
 CHORD_R, DIAG_R = 0.05, 0.025
 HOLDER_INS_M = 0.4             # m a rod insulator is long (two of them with a gap hold a contact wire to the girder)
-INS_R, CLAMP_R = 0.035, 0.03   # their half widths   # the girder's bars' half widths (drawn as the tile's wire ribbons)
+INS_R, CLAMP_R = 0.035, 0.03   # their half widths
+HANGER_R = 0.022               # the holder's hanger rod (a 2 cm ribbon vanished at a distance and left the insulators floating)
+PORTAL_VERT_M = 2.0            # m between the girder's verticals (no diagonals: the user, 2026-11-10, "remove the triangles")   # the girder's bars' half widths (drawn as the tile's wire ribbons)
 ELECTRIC = {"contact_line", "yes"}     # (not "rail": a third rail has no overhead line)
 MIN_SPAN_DRAWN_M = 0.3         # (a portal and a mast may stand close: the wire must still join them)
 MAX_SPAN_DRAWN_M = 200.0
@@ -250,13 +253,18 @@ def _portal(parts, arcs, pi, s0, p0, u0, mates, roads, rings, ground):
     lo, hi = min(lat) - PORTAL_POST_OFF_M, max(lat) + PORTAL_POST_OFF_M
     if hi - lo > PORTAL_MAX_W_M + 2 * PORTAL_POST_OFF_M:
         return []
-    got = None
-    for shift in SHIFT_M:
+    got, fallback = None, None
+    every = [xy for _f, xy in parts]
+    for shift in SHIFT_M + (12.0, -12.0, 15.0, -15.0):
         c = p0 + u0 * shift
         a, b = c + n * lo, c + n * hi
         if all(_clear_of_roads(q, roads) and not (rings and near_ring(q, rings)) for q in (a, b)):
-            got = (a, b)
-            break
+            if all(_dist_to_lines(q, every) >= PORTAL_POST_CLEAR_M for q in (a, b)):
+                got = (a, b)
+                break
+            if fallback is None:
+                fallback = (a, b)         # (clear of roads but on a track: used when no shift is clear of both)
+    got = got or fallback
     if got is None:
         return []
 
@@ -397,12 +405,12 @@ def portal_wires(pt):
     zbot = pt["z"] + PORTAL_Z
     ztop = zbot + PORTAL_H
     L = float(np.hypot(*(b - a)))
-    n = max(2, int(round(L / PORTAL_PANEL_M)))
+    n = max(2, int(round(L / PORTAL_VERT_M)))
     ts = np.linspace(0.0, 1.0, n + 1)
     xy = np.array([a + (b - a) * t for t in ts])
     wires = [(np.c_[xy[[0, -1]], [zbot, zbot]], CHORD_R), (np.c_[xy[[0, -1]], [ztop, ztop]], CHORD_R)]
-    zz = np.where(np.arange(n + 1) % 2 == 0, zbot, ztop)
-    wires.append((np.c_[xy, zz], DIAG_R))
+    for q in xy[1:-1]:           # (verticals flush with the chords: the bars meet at their ends and run into them)
+        wires.append((np.array([[q[0], q[1], zbot - CHORD_R], [q[0], q[1], ztop + CHORD_R]]), DIAG_R))
     u = (b - a) / max(L, 1e-9)
     for q, z in pt["tracks"]:
         zc = z + Z_CONTACT
@@ -410,11 +418,11 @@ def portal_wires(pt):
         # chord, the hanger, and the registration arm (a short clamp along the girder at the contact wire)
         zi = zbot - HOLDER_INS_M
         wires.append((np.array([[q[0], q[1], zbot], [q[0], q[1], zi]]), INS_R))
-        wires.append((np.array([[q[0], q[1], zi - 0.08], [q[0], q[1], zi - 0.08 - HOLDER_INS_M * 0.6]]), INS_R))
-        wires.append((np.array([[q[0], q[1], zi - 0.08 - HOLDER_INS_M * 0.6], [q[0], q[1], zc + 0.12]]), DROPPER_R))
+        wires.append((np.array([[q[0], q[1], zi], [q[0], q[1], zi - HOLDER_INS_M * 0.6]]), INS_R))
+        wires.append((np.array([[q[0], q[1], zi - HOLDER_INS_M * 0.6], [q[0], q[1], zc + 0.12]]), HANGER_R))
         for sgn in (-1.0, 1.0):          # (the clamp's two arms, under the girder's axis)
             e = q + u * (0.3 * sgn)
-            wires.append((np.array([[q[0], q[1], zc + 0.12], [e[0], e[1], zc + 0.05]]), DROPPER_R))
+            wires.append((np.array([[q[0], q[1], zc + 0.12], [e[0], e[1], zc + 0.05]]), HANGER_R))
         wires.append((np.array([[q[0] - u[0] * 0.15, q[1] - u[1] * 0.15, zc], [q[0] + u[0] * 0.15, q[1] + u[1] * 0.15, zc]]), CLAMP_R))
     # a stub of the girder's end plate where each post meets the chords
     for (pq, _pz) in pt["posts"]:
@@ -433,7 +441,7 @@ def wire_material(r, default="bne_wire"):
         return MAT_COPPER
     if r in (MESSENGER_R, DROPPER_R):
         return MAT_BRONZE
-    if r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R):
+    if r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, HANGER_R):
         return MAT_STEEL
     if r == INS_R:
         return MAT_INSULATOR
@@ -443,7 +451,7 @@ def wire_material(r, default="bne_wire"):
 def wire_solid(r):
     """Whether a wire ribbon of half width r is drawn as a four-sided bar: the girder's bars, the insulators and clamps
     (the thin wires stay ribbons)."""
-    return r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, INS_R)
+    return r in (CHORD_R, DIAG_R, CHORD_R * 1.6, CLAMP_R, INS_R, HANGER_R)
 
 
 def span_wires(a, b):

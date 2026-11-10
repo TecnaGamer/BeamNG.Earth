@@ -120,8 +120,10 @@ class CatenaryTest(unittest.TestCase):
         ow = lambda x, y: True    # noqa: E731
         rows, wires = catenary.rows_and_wires(ms, ow, "su")
         self.assertEqual(sorted(r[0] for r in rows), ["catpost"] * (2 * len(portals)))
-        bars = [w for w, r in wires if r in (catenary.CHORD_R, catenary.DIAG_R)]
-        self.assertEqual(len(bars), 3 * len(portals))
+        chords = [w for w, r in wires if r == catenary.CHORD_R]
+        self.assertEqual(len(chords), 2 * len(portals))
+        self.assertFalse([w for w, r in wires if r == catenary.DIAG_R and abs(w[0, 0] - w[-1, 0]) + abs(w[0, 1] - w[-1, 1]) > 1e-6],
+                         "no diagonals: the girder's bars between the chords are verticals")
         for w, r in wires:
             if r == catenary.CHORD_R:
                 self.assertIn(round(float(w[0, 2]), 1), (10.0 + catenary.PORTAL_Z, 10.0 + catenary.PORTAL_Z + catenary.PORTAL_H))
@@ -229,6 +231,14 @@ class CatenaryTest(unittest.TestCase):
         wires = catenary.portal_wires(pt)
         ins = [w for w, r in wires if r == catenary.INS_R]
         self.assertEqual(len(ins), 2 * 3, "two rod insulators on each of the three tracks")
+        for w, r in wires:
+            pass
+        hang = [w for w, r in wires if r == catenary.HANGER_R]
+        self.assertTrue(hang)
+        tops = sorted(round(float(w[0, 2]), 2) for w in ins)
+        self.assertTrue(all(abs(a[1, 2] - b[0, 2]) < 1e-6 for a in ins for b in ins
+                            if np.allclose(a[1, :2], b[0, :2]) and a is not b and abs(a[1, 2] - b[0, 2]) < 0.2),
+                        "the two insulators of a holder touch")
         clamps = [w for w, r in wires if r == catenary.CLAMP_R]
         self.assertEqual(len(clamps), 3)
 
