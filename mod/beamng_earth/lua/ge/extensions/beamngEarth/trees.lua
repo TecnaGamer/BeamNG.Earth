@@ -396,6 +396,30 @@ M.CATALOG.picnictable = { { UT .. 'buildings/ut_picnic_table_a', 0.85 } }
 M.CATALOG.picnicgrill = { { ECA .. 'buildings/eca_BBQ', 1.48 } }
 M.GROUP_MAX_M.picnictable = 400
 M.GROUP_MAX_M.picnicgrill = 400
+-- Local POIs outside the parks (server localpoi.py, tools/make_localpoi_models.py): a forest table with benches, a picnic
+-- hut (open at its local +Y end), a fire ring. Centred on the footprint, ground at z 0; their materials load from the folder.
+local LP = '/levels/beamng_earth/art/shapes/beamngEarth/localpoi/'
+M.CATALOG.lp_table = { { LP .. 'bne_lp_table_forest', 0.77 } }
+M.CATALOG.lp_altan = { { LP .. 'bne_lp_altan', 3.2 } }
+M.CATALOG.lp_firepit = { { LP .. 'bne_lp_firepit', 0.3 } }
+M.CATALOG.lp_cross_stone = { { LP .. 'bne_lp_cross_stone', 3.76 } }       -- roadside crosses, the front towards local -Y
+M.CATALOG.lp_cross_wood = { { LP .. 'bne_lp_cross_wood', 3.78 } }
+M.CATALOG.lp_cross_metal = { { LP .. 'bne_lp_cross_metal', 2.65 } }
+M.CATALOG.lp_shrine = { { LP .. 'bne_lp_shrine_column', 3.35 } }          -- a "Boží muka" column
+M.GROUP_MAX_M.lp_cross_stone = 700
+M.GROUP_MAX_M.lp_cross_wood = 700
+M.GROUP_MAX_M.lp_cross_metal = 600
+M.GROUP_MAX_M.lp_shrine = 700
+M.ONE_SPELLING.lp_cross_stone = true
+M.ONE_SPELLING.lp_cross_wood = true
+M.ONE_SPELLING.lp_cross_metal = true
+M.ONE_SPELLING.lp_shrine = true
+M.GROUP_MAX_M.lp_table = 350
+M.GROUP_MAX_M.lp_altan = 600
+M.GROUP_MAX_M.lp_firepit = 250
+M.ONE_SPELLING.lp_table = true
+M.ONE_SPELLING.lp_altan = true
+M.ONE_SPELLING.lp_firepit = true
 -- Bus shelters (server shelters.py): East Coast's glass stop. Its signed face is local +x, its long
 -- side local y, and it sits 0.2 m below its origin.
 M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }
