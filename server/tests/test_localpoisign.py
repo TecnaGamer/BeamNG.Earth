@@ -71,31 +71,62 @@ class TargetsTest(unittest.TestCase):
 
 
 class HangTest(unittest.TestCase):
-    """The rows of boards hung on a tube, through the kernel's mesh: where the picture lands."""
+    """The guidepost boards (localpoisign.Boards): joined to the tube, the picture on both faces, an arrow's pointed end."""
 
-    def picture(self, bearing, w=0.4, h=0.2):
-        fast.require(localpoisign.KERNEL, "test")
+    def board(self, bearing, arrow=True, w=0.4, h=0.12, z0=2.0):
         b = (math.cos(math.radians(bearing)), math.sin(math.radians(bearing)))
-        f = (b[1], -b[0])
-        row = localpoisign.hang_row((0.0, 0.0), f, w / 2.0, w, h, 1, 2.0, 0.0)
-        p, t, uv, mi = fast._ef.dirsign_mesh(np.ascontiguousarray([row], np.float64), [0.0, 0.0, 0.0])
-        p, t, uv, mi = np.asarray(p), np.asarray(t), np.asarray(uv), np.asarray(mi)
-        face = [k for k in range(len(t)) if mi[k] == 1]
-        tri = p[t[face]]
-        n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0]).mean(0)
-        n = n[:2] / np.linalg.norm(n[:2])
-        pts = tri.reshape(-1, 3)
-        uvs = uv[t[face]].reshape(-1, 2)
-        return b, f, n, pts[np.argmin(uvs[:, 0])][:2], pts[np.argmax(uvs[:, 0])][:2]
+        f = (b[1], -b[0])                       # the picture faces the reader, who stands to the right of the bearing
+        m = localpoisign.Boards((0.0, 0.0), 0)
+        m.board((0.0, 0.0, 0.0), f, arrow, w, h, 5, z0)
+        return b, f, m
 
-    def test_the_picture_starts_at_the_tube_and_reaches_to_the_target(self):
+    def triangles(self, m, mat):
+        p = np.array(m.p)
+        t = np.array(m.t)
+        sel = [k for k in range(len(t)) if m.m[k] == mat]
+        return p[t[sel]]
+
+    def test_the_picture_is_on_both_faces_and_faces_out(self):
         for bearing in (0, 35, 90, 200, 300):
-            b, f, n, left, right = self.picture(bearing)
-            self.assertLess(float(np.dot(n, f)), 1.0 + 1e-6)
-            self.assertGreater(float(np.dot(n, f)), 0.99, f"faces the reader at {bearing}")
-            reach = np.array(right) - np.array(left)
-            self.assertGreater(float(np.dot(reach, b)), 0.35, f"reaches along the bearing at {bearing}")
-            self.assertLess(abs(float(np.dot(left, b))), 0.08, f"its left end is at the tube at {bearing}")
+            b, f, m = self.board(bearing)
+            tri = self.triangles(m, 5)
+            n = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
+            n = n[:, :2] / np.maximum(np.linalg.norm(n[:, :2], axis=1), 1e-9)[:, None]
+            along = n @ np.array(f)
+            self.assertGreater(int((along > 0.99).sum()), 0, f"front at {bearing}")
+            self.assertGreater(int((along < -0.99).sum()), 0, f"back at {bearing}")
+            self.assertEqual(int((np.abs(along) < 0.99).sum()), 0)
+
+    def test_an_arrow_points_along_its_bearing_and_a_plate_is_centred(self):
+        for bearing in (0, 35, 90, 200, 300):
+            b, f, m = self.board(bearing)
+            p = np.array(m.p)[:, :2]
+            reach = p @ np.array(b)
+            self.assertGreater(reach.max(), 0.4 - localpoisign.ARROW_CUT_M, f"reaches along the bearing at {bearing}")
+            self.assertGreater(reach.max(), -reach.min() + 0.2, f"the tail is short at {bearing}")
+            _, _, plate = self.board(bearing, arrow=False)
+            pr = np.array(plate.p)[:, :2] @ np.array(b)
+            self.assertAlmostEqual(float(pr.max() + pr.min()), 0.0, delta=0.02)
+
+    def test_the_arrow_tip_is_a_point_and_the_board_is_joined_to_the_tube(self):
+        b, f, m = self.board(90)
+        p = np.array(m.p)
+        reach = p[:, :2] @ np.array(b)
+        tip = p[np.argmax(reach)]
+        self.assertAlmostEqual(float(tip[2]), 2.0 + 0.06, delta=0.001)       # the apex is at the board's middle height
+        self.assertGreater(len(m.t), 20)
+        # a bracket touches both the tube (radius 0.03 about the axis) and the board's back
+        brackets = [k for k in range(len(m.t)) if m.m[k] == 0]
+        near = np.array(m.p)[np.array(m.t)[brackets]].reshape(-1, 3)
+        across = np.abs(near[:, :2] @ np.array(f))
+        self.assertLess(float(across.min()), 0.03)
+        self.assertGreater(float(across.max()), localpoisign.SLAB_OFF_M - localpoisign.SLAB_T_M)
+
+    def test_nothing_floats_over_the_tube_height(self):
+        _, _, m = self.board(10, z0=2.22)
+        z = np.array(m.p)[:, 2]
+        self.assertGreaterEqual(float(z.min()), 2.22 - 1e-9)
+        self.assertLessEqual(float(z.max()), 2.22 + 0.12 + 1e-9)
 
 
 class MemorialTest(unittest.TestCase):

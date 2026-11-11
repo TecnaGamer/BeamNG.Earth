@@ -387,12 +387,18 @@ def taper(m, mat, cx, cy, z0, z1, r0, r1, sides=8, turn=0.0):
 
 
 def gp_post(far=False):
-    """A hiking guidepost's galvanised tube (2.6 m, 60 mm) with a cap and a clamp under the plate."""
-    m = Mesh(segs=8 if far else 12)
+    """A hiking guidepost's galvanised tube (2.6 m, 60 mm): a domed cap, collars where the boards' brackets sit (the sign tile hangs
+    them at 1.4-2.4 m), a foot flange on the ground and the tube sunk below it. The boards themselves are the sign tile's."""
+    m = Mesh(segs=8 if far else 14)
     m.cylinder("bne_lp_galv", 0.0, 0.0, -0.3, 2.60, 0.03, caps=True)
-    if not far:
-        m.cylinder("bne_lp_galv", 0.0, 0.0, 2.60, 2.64, 0.036, caps=True)
-        m.cylinder("bne_lp_galv", 0.0, 0.0, 0.0, 0.05, 0.042, caps=True)
+    m.cylinder("bne_lp_galv", 0.0, 0.0, 0.0, 0.03, 0.062, caps=True)               # the foot flange
+    if far:
+        return m
+    for r, z0, z1 in ((0.036, 2.60, 2.625), (0.026, 2.625, 2.645), (0.014, 2.645, 2.66)):    # a domed cap in three steps
+        m.cylinder("bne_lp_galv", 0.0, 0.0, z0, z1, r, caps=True)
+    m.cylinder("bne_lp_galv", 0.0, 0.0, 0.03, 0.06, 0.04, caps=True)
+    for z in (1.30, 1.58, 1.86, 2.14, 2.42):                                        # clamp rings: a place for each board
+        m.cylinder("bne_lp_galv", 0.0, 0.0, z, z + 0.012, 0.037, caps=True)
     return m
 
 

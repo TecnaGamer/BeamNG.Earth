@@ -2,7 +2,7 @@
 
 Made in the sign tile (signstream.build_tile) beside the direction boards, the stations' name signs and the town signs: one
 mesh, one set of pictures (the tile's "dirs_faces"; the mod makes their Materials: dirsigns.lua). The pictures and the boards
-are the kernel's (earthfast.dirsign_town_face, dirsign_mesh), as busstationsign.py's.
+are the kernel's (earthfast.dirsign_town_face, dirsign_mesh), as busstationsign.py's; the guideposts' boards are built here.
 
 A guidepost (Overture infrastructure, OpenStreetMap information=guidepost) is the galvanised tube localpoi.py draws as a prop
 (lp_gp). Here it gets, hung on that tube:
@@ -45,10 +45,16 @@ MAX_POSTS = 30                  # guideposts a tile gets plates for
 MAX_BOARDS = 20
 PLATE_Z_M = 2.22                # the plate's bottom over the ground (the tube is 2.6 m)
 STACK_GAP_M = 0.02
-HOLD_M = 0.17                   # a board's row point is this far behind the tube's axis (dirsign_mesh mode 0 hangs the board
-                                # 0.22 m in front of it)
-PLATE_CAP_M, ARROW_CAP_M, SUB_SHARE = 0.055, 0.05, 0.8
-PLATE_W_M, ARROW_W_M = (0.36, 0.46), (0.40, 0.62)
+# the boards on the tube are made here (not by dirsign_mesh: its hung board floats 0.22 m off its wall and is blank behind):
+# a thin slab with the picture on both faces, bracketed to the tube; an arrow has a pointed end
+SLAB_T_M = 0.014                # the board's thickness
+SLAB_OFF_M = 0.052              # its middle's distance from the tube's axis (the tube's radius is 0.03)
+ARROW_TAIL_M = 0.05             # an arrow starts this far behind the tube's axis
+ARROW_CUT_M = 0.025             # the picture's right edge (border and margin) is replaced by the tip
+ARROW_TIP = 0.55                # the tip's length, in board heights
+BRACKET_HALF = (0.017, 0.02)    # a bracket's half width along the board and half height
+PLATE_CAP_M, ARROW_CAP_M, SUB_SHARE = 0.048, 0.042, 0.8
+PLATE_W_M, ARROW_W_M = (0.34, 0.44), (0.38, 0.60)
 BOARD_CAP_M, BOARD_SUB_SHARE, BOARD_W_M = 0.11, 0.55, (1.0, 1.4)
 BOARD_MOUNT_M = 1.0
 HIKE_BG, BIKE_BG, INK = (250, 250, 248), (250, 200, 0), (22, 22, 22)
@@ -123,15 +129,81 @@ def _ele_text(ele):
         return ""
 
 
-def hang_row(post, f, along, w, h, material, mount, z):
-    """A dirsign_mesh row (mode 0, on clamps) for a board on a tube at post (x, y): the picture faces f (a unit vector, towards
-    the reader), the board reaches `along` m along the reader's right from the tube (w/2: starting at it; 0: centred on it)."""
-    fx, fy = f
-    ux, uy = -fx, -fy                           # (the picture faces against the row's direction)
-    rx, ry = -fy, fx                            # the reader's right (looking along -f)
-    px = post[0] + ux * HOLD_M + rx * along
-    py = post[1] + uy * HOLD_M + ry * along
-    return [px, py, z, z, ux, uy, w, h, material, mount, 0.0, 1.0]
+class Boards:
+    """The guidepost boards' triangles in the sign mesh's form (positions in the tile's frame, triangles, uvs, a material per
+    triangle). Every face is wound to look outwards."""
+
+    def __init__(self, origin, metal):
+        self.origin = np.array([origin[0], origin[1], 0.0])
+        self.metal = metal
+        self.p, self.uv, self.t, self.m = [], [], [], []
+
+    def face(self, mat, pts, uvs, outward):
+        pts = [np.asarray(q, np.float64) - self.origin for q in pts]
+        n = np.cross(pts[1] - pts[0], pts[2] - pts[0])
+        if float(np.dot(n, outward)) < 0.0:
+            pts, uvs = pts[::-1], list(uvs)[::-1]
+        k = len(self.p)
+        self.p.extend(pts)
+        self.uv.extend(uvs)
+        for i in range(1, len(pts) - 1):
+            self.t.append((k, k + i, k + i + 1))
+            self.m.append(mat)
+
+    def box(self, c, half, axes):
+        """A metal box at c, half sizes `half` along the three unit vectors `axes`."""
+        c = np.asarray(c, np.float64)
+        for i in range(3):
+            j, k = (i + 1) % 3, (i + 2) % 3
+            for sign in (-1.0, 1.0):
+                mid = c + sign * half[i] * axes[i]
+                pts = [mid + a * half[j] * axes[j] + b * half[k] * axes[k] for a, b in ((-1, -1), (1, -1), (1, 1), (-1, 1))]
+                self.face(self.metal, pts, [(0, 0)] * 4, sign * axes[i])
+
+    def board(self, post, f, arrow, w, h, mat, mount):
+        """One board on the tube at post (x, y, ground z): its picture (material `mat`, w x h m) faces f (a unit vector
+        towards the reader). A plate is centred on the tube; an arrow reaches from it along the reader's right
+        (-fy, fx), with a pointed end. The picture is on both faces (the back mirrored, so it reads from behind too)."""
+        fx, fy = f
+        rx, ry = -fy, fx
+        px, py, pz = post
+        up = np.array([0.0, 0.0, 1.0])
+        F = np.array([fx, fy, 0.0])
+        R = np.array([rx, ry, 0.0])
+        at = lambda xr, off, z: np.array([px, py, pz]) + R * xr + F * off + up * z
+        zb, zt = mount, mount + h
+        xl = -ARROW_TAIL_M if arrow else -w / 2.0
+        xr = xl + w
+        xe = xr - ARROW_CUT_M if arrow else xr          # (where the body's picture ends)
+        u1 = (xe - xl) / w
+        half = SLAB_T_M / 2.0
+        for off, outward, mirror in ((SLAB_OFF_M + half, F, False), (SLAB_OFF_M - half, -F, True)):
+            if mirror:
+                corners = [(xe, zb, 1.0 - u1, 0.0), (xl, zb, 1.0, 0.0), (xl, zt, 1.0, 1.0), (xe, zt, 1.0 - u1, 1.0)]
+            else:
+                corners = [(xl, zb, 0.0, 0.0), (xe, zb, u1, 0.0), (xe, zt, u1, 1.0), (xl, zt, 0.0, 1.0)]
+            self.face(mat, [at(x, off, z) for x, z, _, _ in corners], [(u, v) for _, _, u, v in corners], outward)
+        outline = [(xl, zb), (xe, zb), (xe, zt), (xl, zt)]
+        if arrow:
+            apex = (xr + ARROW_TIP * h, (zb + zt) / 2.0)
+            flat = (0.05, 0.5)                          # (the picture's plain background: the tip's colour)
+            for off, outward in ((SLAB_OFF_M + half, F), (SLAB_OFF_M - half, -F)):
+                self.face(mat, [at(xe, off, zb), at(apex[0], off, apex[1]), at(xe, off, zt)], [flat] * 3, outward)
+            outline = [(xl, zb), (xe, zb), apex, (xe, zt), (xl, zt)]
+        for (ax, az), (bx, bz) in zip(outline, outline[1:] + outline[:1]):      # the edges, metal, facing out of the outline
+            dx, dz = bx - ax, bz - az
+            out = R * dz + up * (-dx)                    # (the outline runs anticlockwise seen from the front)
+            self.face(self.metal, [at(ax, SLAB_OFF_M - half, az), at(bx, SLAB_OFF_M - half, bz),
+                                   at(bx, SLAB_OFF_M + half, bz), at(ax, SLAB_OFF_M + half, az)], [(0, 0)] * 4, out)
+        for zc in (zb + h * 0.25, zt - h * 0.25):       # two brackets from the tube to the board's back
+            depth = (SLAB_OFF_M - half) / 2.0
+            self.box(at(0.0, depth, zc), (BRACKET_HALF[0], depth, BRACKET_HALF[1]), (R, F, up))
+
+    def mesh(self, materials):
+        if not self.t:
+            return None
+        return (np.array(self.p, np.float64), np.array(self.t, np.int64), np.array(self.uv, np.float64), list(materials),
+                np.array(self.m, np.int64))
 
 
 def _unit(v):
@@ -188,6 +260,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
     hz = np.asarray(elev(la, lo), np.float64).ravel()
     z = np.asarray(frame.geodetic_to_enu(la, lo, hz)[2], np.float64).ravel()
     materials, faces, rows = [dirsigns.METAL], {}, []
+    hung = Boards(box, 0)                               # (the guideposts' plates and arrows: made here)
 
     def use(face):
         name, tex, w, h = face
@@ -204,12 +277,12 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
         plate_sub = _ele_text(g["ele"])
         if not plate_text and plate_sub:
             plate_text, plate_sub = plate_sub, ""
-        post = (g["x"], g["y"])
+        post = (g["x"], g["y"], z[i])
         if plate_text:
             fx, fy = (targets[0][2][1], -targets[0][2][0]) if targets else (0.0, -1.0)
             mi, w, h = use(_face(out_dir, vfs_dir, plate_text, plate_sub, bg, INK, PLATE_CAP_M, SUB_SHARE, *PLATE_W_M,
                                  "bne_lpp"))
-            rows.append(hang_row(post, (fx, fy), 0.0, w, h, mi, PLATE_Z_M, z[i]))
+            hung.board(post, (fx, fy), False, w, h, mi, PLATE_Z_M)
             top = PLATE_Z_M - STACK_GAP_M
         else:
             top = PLATE_Z_M + 0.1
@@ -217,7 +290,7 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
             mi, w, h = use(_face(out_dir, vfs_dir, name, distance_text(metres, country), bg, INK, ARROW_CAP_M, SUB_SHARE,
                                  *ARROW_W_M, "bne_lpa"))
             top -= h
-            rows.append(hang_row(post, (b[1], -b[0]), w / 2.0, w, h, mi, top, z[i]))
+            hung.board(post, (b[1], -b[0]), True, w, h, mi, top)
             top -= STACK_GAP_M
     base = len(posts)
     for j, g in enumerate(boards):
@@ -229,12 +302,13 @@ def sign_tile(md, frame, tx, ty, elev, out_dir, vfs_dir, country=None):
         mi, w, h = use(_face(out_dir, vfs_dir, text, sub, bg, BOARD_INK, BOARD_CAP_M, BOARD_SUB_SHARE, *BOARD_W_M,
                              "bne_lpb", BOARD_PX_PER_M))
         rows.append([g["x"], g["y"], z[base + j], z[base + j], -f[0], -f[1], w, h, mi, BOARD_MOUNT_M])
-    if not rows:
+    mesh = hung.mesh(materials)
+    if rows:
+        import busstationsign
+        p, t, uv, mi = fast._ef.dirsign_mesh(np.ascontiguousarray([r + [-1.0, 1.0] for r in rows], np.float64),
+                                             [float(box[0]), float(box[1]), 0.0])
+        if len(t):
+            mesh = busstationsign.merge(mesh, (p, t, uv, materials, mi))
+    if mesh is None:
         return None, {}
-    if any(len(r) == 12 for r in rows):
-        rows = [r if len(r) == 12 else r + [-1.0, 1.0] for r in rows]
-    x0, y0 = box[0], box[1]
-    p, t, uv, mi = fast._ef.dirsign_mesh(np.ascontiguousarray(rows, np.float64), [float(x0), float(y0), 0.0])
-    if not len(t):
-        return None, {}
-    return (p, t, uv, materials, mi), faces
+    return mesh, faces
