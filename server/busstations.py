@@ -839,10 +839,29 @@ def _group_stations(md, frame, group):
     return found
 
 
-def stations_near(md, frame, box):
+def group_frame(group):
+    """A frame of a station group's own, at its first seed point (lon, lat): a group laid out in it is the same for
+    every tile that asks (tile_skip), where in each tile's frame it was laid out again for each tile."""
+    import geodesy
+    return geodesy.EnuFrame(float(group[0][1]), float(group[0][0]), 0.0)
+
+
+def to_frame(src, dst, xy):
+    """Points (n, 2) of frame src in frame dst (through their lat / lon)."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    if src is dst:
+        return xy
+    la, lo, _ = src.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    e, n, _ = dst.geodetic_to_enu(la, lo, np.zeros(len(xy)))
+    return np.column_stack((np.asarray(e, np.float64), np.asarray(n, np.float64)))
+
+
+def stations_near(md, frame, box, shared=False):
     """The confident stations within REACH_M of the tile box (x0, y0, x1, y1) of frame, [] almost always: one pass over
     the infrastructure cells for a bus_station feature, and only then the other layers. md: mapdata.MapData. Errors cost
-    the stations, not the tile."""
+    the stations, not the tile. shared: each group laid out in its own frame (group_frame: the same stations for every
+    tile, their geometry not in frame; tile_skip, which wants only their claimed ids: a group laid out for each of a
+    city's road tiles was 2.5-6 s of each, Lower Manhattan 2026-11-11)."""
     if not ON:
         return []
     x0, y0, x1, y1 = (float(v) for v in box)
@@ -863,18 +882,20 @@ def stations_near(md, frame, box):
                 groups.append([s])
         found = []
         for g in groups:
-            found += _group_stations(md, frame, tuple(g))
+            gf = group_frame(g) if shared else frame
+            found += [(st, gf) for st in _group_stations(md, gf, tuple(g))]
     except Exception as ex:         # (offline, a cell unreadable: no stations here)
         log.warning("bus stations of the tile at %s: %s: %s", tuple(round(float(v)) for v in box[:2]),
                     type(ex).__name__, ex)
         return []
     out, seen = [], set()
-    for st in found:
+    for st, gf in found:
         if st.fid in seen:
             continue
         seen.add(st.fid)
-        rx0, ry0 = st.region.min(0)
-        rx1, ry1 = st.region.max(0)
+        reg = to_frame(gf, frame, st.region)
+        rx0, ry0 = reg.min(0)
+        rx1, ry1 = reg.max(0)
         if rx0 - REACH_M <= x1 and rx1 + REACH_M >= x0 and ry0 - REACH_M <= y1 and ry1 + REACH_M >= y0:
             out.append(st)
     return out
@@ -886,4 +907,4 @@ def tile_skip(frame, tx, ty, md):
     if not ON:
         return frozenset()
     import roads
-    return frozenset().union(*(st.claimed for st in stations_near(md, frame, roads.tile_bbox(tx, ty))))
+    return frozenset().union(*(st.claimed for st in stations_near(md, frame, roads.tile_bbox(tx, ty), shared=True)))

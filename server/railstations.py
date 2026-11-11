@@ -869,9 +869,10 @@ def _group(md, frame, group):
     return found
 
 
-def stations_near(md, frame, box):
+def stations_near(md, frame, box, shared=False):
     """The RailStations within TILE_REACH_M of the tile box (x0, y0, x1, y1) of frame, [] almost always (one pass over the
-    infrastructure cells for a railway station point). Errors cost the stations, not the tile."""
+    infrastructure cells for a railway station point). Errors cost the stations, not the tile. shared: each group laid
+    out in its own frame (busstations.group_frame: the same for every tile, its geometry not in frame; tile_skip)."""
     if not ON or md is None:
         return []
     import logging
@@ -895,18 +896,21 @@ def stations_near(md, frame, box):
                 groups.append([s])
         found = []
         for g in groups:
-            found += _group(md, frame, tuple(g))
+            gf = bs.group_frame(g) if shared else frame
+            found += [(st, gf) for st in _group(md, gf, tuple(g))]
     except Exception as ex:
         logging.getLogger("earthd.railstations").warning("rail stations of the tile at %s: %s: %s",
                                                          tuple(round(float(v)) for v in box[:2]), type(ex).__name__, ex)
         return []
     out, seen = [], set()
-    for st in found:
-        fid = tuple(np.round(st.hub, 1))
+    for st, gf in found:
+        hub = bs.to_frame(gf, frame, [st.hub])[0]
+        fid = tuple(np.round(hub, 1))
         if fid in seen:
             continue
         seen.add(fid)
-        pts = np.vstack([p.ring for p in st.platforms] + [np.asarray([st.hub])])
+        pts = bs.to_frame(gf, frame, np.vstack([np.asarray(p.ring, np.float64)[:, :2] for p in st.platforms]
+                                               + [np.asarray([st.hub], np.float64)]))
         lo_, hi_ = pts.min(0), pts.max(0)
         if lo_[0] - TILE_REACH_M <= x1 and hi_[0] + TILE_REACH_M >= x0 and lo_[1] - TILE_REACH_M <= y1 and hi_[1] + TILE_REACH_M >= y0:
             out.append(st)
@@ -919,4 +923,4 @@ def tile_skip(frame, tx, ty, md):
     if not ON:
         return frozenset()
     import roads
-    return frozenset().union(*(st.claimed for st in stations_near(md, frame, roads.tile_bbox(tx, ty))))
+    return frozenset().union(*(st.claimed for st in stations_near(md, frame, roads.tile_bbox(tx, ty), shared=True)))

@@ -1263,5 +1263,24 @@ class MeshTest(unittest.TestCase):
         self.assertIsNone(m)
 
 
+class SharedGroupFrameTest(unittest.TestCase):
+    """tile_skip lays a station group out once in the group's own frame (group_frame) and moves only its region into
+    each tile's frame (to_frame): the same group was laid out again for each of a city's road tiles."""
+
+    def test_to_frame_matches_the_tiles_own_metres(self):
+        import geodesy
+        g = ((-73.9910, 40.7570), (-73.9905, 40.7572))
+        gf = bs.group_frame(g)
+        self.assertAlmostEqual(gf.lat0, 40.7570)
+        self.assertAlmostEqual(gf.lon0, -73.9910)
+        tile = geodesy.EnuFrame(40.7520, -73.9990, 0.0)
+        pts = np.array([[0.0, 0.0], [120.0, -45.0], [-300.0, 260.0]])
+        got = bs.to_frame(gf, tile, pts)
+        la, lo, _ = gf.enu_to_geodetic(pts[:, 0], pts[:, 1], np.zeros(3))
+        e, n, _ = tile.geodetic_to_enu(la, lo, np.zeros(3))
+        np.testing.assert_allclose(got, np.column_stack((e, n)), atol=1e-6)
+        np.testing.assert_allclose(bs.to_frame(tile, tile, pts), pts)
+
+
 if __name__ == "__main__":
     unittest.main()
