@@ -263,7 +263,7 @@ function setTarget(t) {
   msg.value = ""
   engineLua(t ? `beamngEarth_map3d.setMarker(${num(t.lat)}, ${num(t.lon)})` : "beamngEarth_map3d.setMarker(nil)")
   // (the place loads while the box is open: earthd preload_place)
-  if (t) engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapPreload and beamngEarth_settings.uiMapPreload(${num(t.lat)}, ${num(t.lon)}) or nil`)
+  if (t) engineLua(`if beamngEarth_settings and beamngEarth_settings.uiMapPreload then beamngEarth_settings.uiMapPreload(${num(t.lat)}, ${num(t.lon)}) end`)
 }
 function setGps(lat, lon, name) {
   engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapGps(${num(lat)}, ${num(lon)}, ${luaStr(name || "")}) or nil`, r => {

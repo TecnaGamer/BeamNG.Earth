@@ -1957,7 +1957,7 @@ function askTeleport(lat, lon, name) {
   teleportMsg.value = ""
   target.value = { lat, lon: mm.wrapLon(lon), name: name || "" }
   // (the place loads while the box is open: earthd preload_place)
-  engineLua(`beamngEarth_settings and beamngEarth_settings.uiMapPreload and beamngEarth_settings.uiMapPreload(${Number(lat)}, ${Number(target.value.lon)}) or nil`)
+  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiMapPreload then beamngEarth_settings.uiMapPreload(${Number(lat)}, ${Number(target.value.lon)}) end`)
 }
 
 // The GPS box's Teleport (a search result) and the right-click menu: straight away, no "Teleport here?" (the user
