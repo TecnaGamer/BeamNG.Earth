@@ -13,12 +13,15 @@ M.EDGE_RESET_M = 1.55
 M.COOLDOWN_S = 0.45
 M.SOUND_LENGTH_S = 0.65
 M.SOUND_FILE = '/levels/beamng_earth/art/sound/rumble_strip.wav'
-M.VOLUME = 0.42
+-- This is a driver cue, not a world-space sound. A positional emitter at the vehicle becomes inaudible from
+-- exterior cameras because BeamNG attenuates from the camera/listener position.
+M.VOLUME = 0.7
 
 local sample = 0
 local lastHit = -math.huge
 local centreActive, edgeActive = false, false
 local emitters = {}
+local warnedMissingSound, warnedEmitter = false, false
 
 function M.hitZones(lateral, halfWidth, oneWay)
   local d = math.abs(tonumber(lateral) or math.huge)
@@ -32,26 +35,34 @@ local function clearState()
 end
 
 local function play(pos, now)
-  if not (FS and FS.fileExists and FS:fileExists(M.SOUND_FILE)) then return false end
+  if not (FS and FS.fileExists and FS:fileExists(M.SOUND_FILE)) then
+    if not warnedMissingSound then
+      log('W', 'beamngEarth', 'rumble sound file is not available: ' .. M.SOUND_FILE)
+      warnedMissingSound = true
+    end
+    return false
+  end
   local ok, emitter = pcall(function()
     local e = Sim.upcast(createObject('SFXEmitter'))
     if not e then return nil end
     e:setTransform(MatrixF(true))
     e:setField('fileName', 0, M.SOUND_FILE)
-    e:setField('is3D', 0, 'true')
-    e:setField('isLooping', 0, 'false')
+    e:setField('playOnAdd', 0, '1')
+    e:setField('is3D', 0, '0')
+    e:setField('isLooping', 0, '0')
     e:setField('volume', 0, tostring(M.VOLUME))
-    e:setField('referenceDistance', 0, '1')
-    e:setField('maxDistance', 0, '8')
     e.canSave = false
     e:registerObject('bngEarthRumble_' .. (Engine and Engine.generateUUID and Engine.generateUUID() or tostring(now)))
-    e:setPosition(vec3(pos.x, pos.y, pos.z + 0.7))
     e:play()
     return e
   end)
   if ok and emitter then
     emitters[#emitters + 1] = { object = emitter, expires = now + M.SOUND_LENGTH_S }
     return true
+  end
+  if not warnedEmitter then
+    log('W', 'beamngEarth', 'could not create rumble sound emitter: ' .. tostring(emitter))
+    warnedEmitter = true
   end
   return false
 end
