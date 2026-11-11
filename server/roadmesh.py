@@ -28,12 +28,14 @@ DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's l
 LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03,
         # road wear (roadwear.py): its materials write no depth (roadwear.materials.json), so their order in the mesh,
         # not their height, decides what lies on top: the strips (fade materials) first, the paint over them
-        "wear": 0.03, "wear2": 0.031, "spot": 0.006, "wline": 0.032}
+        # (2026-11-11, the user: "can we make the road decals even closer to the ground?": 3-3.2 cm -> 1.2-1.4 cm, the
+        # crack lines on the paint's own tight ground following)
+        "wear": 0.012, "wear2": 0.013, "spot": 0.006, "wline": 0.014}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
-WEAR_STRIPS = ("wear", "wear2", "wline")
-WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.04"))
+WEAR_STRIPS = ("wear", "wear2")
+WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.02"))
 FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
 FRONTAGE_REPEAT_M = 5.
 FRONTAGE_TERRAIN_REPEAT_M = 4.
