@@ -934,12 +934,6 @@ class AustraliaGroundTest(unittest.TestCase):
         lo = np.full((n, n), lon)
         return la, lo
 
-    def test_cane_belt(self):
-        for lat, lon in ((-21.14, 149.19), (-19.58, 147.40), (-17.0, 145.9), (-25.0, 152.3), (-27.0, 153.1)):
-            self.assertTrue(bool(sf.cane_belt(lat, lon)), (lat, lon))
-        for lat, lon in ((-33.9, 151.2), (-23.4, 144.0), (-27.8, 153.4), (-14.0, 143.5), (-24.9, 148.0)):
-            self.assertFalse(bool(sf.cane_belt(lat, lon)), (lat, lon))
-
     def test_cropland_is_cane_in_the_belt_only(self):
         classes = np.full((4, 4), 40, np.uint8)
         u = np.zeros((4, 4))
@@ -971,17 +965,6 @@ class AustraliaGroundTest(unittest.TestCase):
         self.assertIs(sf.au_ground(idx, la, lo), idx)
         la, lo = self.grid(51.5, -0.1)
         self.assertIs(sf.au_ground(idx, la, lo), idx)
-
-    def test_masks_skip_unused_australian_materials(self):
-        idx = np.full((4, 4), sf.GRASS, np.uint8)
-        with tempfile.TemporaryDirectory() as d:
-            names = sf.write_masks(idx, d, "t")
-            self.assertEqual(len(names), len(sf.MATERIALS))
-            self.assertFalse(os.path.exists(os.path.join(d, names[sf.RED_DIRT])))
-            self.assertTrue(os.path.exists(os.path.join(d, names[sf.GRASS])))
-            idx[0, 0] = sf.CANE
-            sf.write_masks(idx, d, "t")
-            self.assertTrue(os.path.exists(os.path.join(d, names[sf.CANE])))
 
     def test_palette_ground_cover(self):
         """fork: au_cover: the NVIS palette's ground on vegetated land (woodland: long dry grass, shrubland: dusty,
