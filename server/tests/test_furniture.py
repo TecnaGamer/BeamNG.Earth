@@ -405,7 +405,8 @@ class JunctionTest(unittest.TestCase):
         for rs, what in ((cross, furniture.G_SIGNAL), (tee, furniture.G_STOP)):
             for lh in (False, True):
                 rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=lh)
-                self.assertTrue(rows and all(r[0] == what for r in rows), (what, lh))
+                group = furniture.G_SIGNAL_LEFT if lh and what == furniture.G_SIGNAL else what
+                self.assertTrue(rows and all(r[0] == group for r in rows), (what, lh))
                 for r in rows:
                     # the arm it stands at: the one whose direction from the junction is nearest the prop's
                     away = np.array([r[1] - 100.0, r[2] - 100.0])
@@ -414,13 +415,17 @@ class JunctionTest(unittest.TestCase):
                                        f"{what} at {r[1:3]} (left-hand: {lh}) faces the drivers coming in")
 
     def test_left_hand_signals_keep_their_boom_over_the_road(self):
-        """The stock boom's arm reaches to the drivers' left from its pole (a turn cannot mirror it): facing them, its
-        pole stands on their right in left-hand traffic too, so the arm hangs over the road, not the pavement. The signs
-        stand on the left (test_left_hand_traffic_stands_them_on_the_left)."""
+        """The reflected model stands on the left kerb, facing the same way, with its arm reaching over the road."""
         rs = [self.arm(f"a{i}", "tertiary", dx, dy) for i, (dx, dy) in enumerate([(1, 0), (-1, 0), (0, 1), (0, -1)])]
-        key = lambda r: (r[1], r[2], r[4])
-        self.assertEqual(sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True))),
-                         sorted(map(key, furniture.junction_props(rs, (0, 0, 256, 256)))))
+        rows = furniture.junction_props(rs, (0, 0, 256, 256), left_hand=True)
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r[0] == furniture.G_SIGNAL_LEFT for r in rows))
+        for r in rows:
+            away = np.array(r[1:3]) - 100.0
+            u = np.asarray(max(([1, 0], [-1, 0], [0, 1], [0, -1]), key=lambda v: float(np.dot(v, away))))
+            right = np.array([-u[1], u[0]])
+            self.assertLess(float(away @ right), 0, "pole on the driver's left kerb")
+            self.assertGreater(float(self.front(r[4]) @ u), .99, "head still faces incoming traffic")
 
     def test_approach_pose(self):
         u = np.array([0.0, -1.0])           # the arm to the south: northbound drivers come in
@@ -428,7 +433,7 @@ class JunctionTest(unittest.TestCase):
             rh, lh = furniture.approach_pose(u, what), furniture.approach_pose(u, what, left_hand=True)
             self.assertEqual(rh[1], lh[1], f"{what}: one yaw on either side of the road")
             np.testing.assert_allclose(rh[0], [1.0, 0.0], err_msg="right-hand: the east kerb")
-            np.testing.assert_allclose(lh[0], [1.0, 0.0] if what == furniture.G_SIGNAL else [-1.0, 0.0])
+            np.testing.assert_allclose(lh[0], [-1.0, 0.0])
 
     def test_stop_on_the_stem_of_a_minor_t(self):
         rs = [self.arm("e", "residential", 1, 0), self.arm("w", "residential", -1, 0), self.arm("s", "residential", 0, -1)]

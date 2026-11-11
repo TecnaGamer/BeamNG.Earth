@@ -309,7 +309,7 @@ def _near_node_pairs(pos, radius):
 
 
 def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False, debug=None, pavement=False,
-         pavement_bounds=None):
+         pavement_bounds=None, left_hand=False):
     """Corners, cuts and crosswalks of the junctions among `roads` [(fid, spec, pts (k, 3), lon)].
     has_walk(spec) -> bool; walk_w: sidewalk width. Returns
         corners: [dict(arc (n, 3) curb points, inward (n, 2) unit vectors toward the sidewalk,
@@ -643,12 +643,14 @@ def find(roads, has_walk, walk_w, parking_m=0.0, has_parking=lambda spec: False,
                 cw_grid.setdefault((gi, gj), []).append(crosswalks[-1])
                 cw_half[0] = max(cw_half[0], hl)
                 # the stop line: across the half of the road whose traffic comes into the junction
-                # (right-hand traffic heading along -u drives on u's left), 1 m before the crosswalk
+                # (right-hand traffic heading along -u drives on u's left; left-hand on its right), 1 m before the crosswalk
                 ts = t + CROSSWALK["w"] / 2 + STOP_GAP + STOP_LINE["w"] / 2
                 if _branch_len(roads[ri][2], vi, si) > ts + 2.0:
                     cs = Pi + ui * ts
                     zs = _z_along(roads[ri][2], vi, si, ts)
-                    stops.append({"a": np.r_[cs + nl * 0.2, zs], "b": np.r_[cs + nl * (dw - 0.3), zs], "w": STOP_LINE["w"]})
+                    incoming = -nl if left_hand else nl
+                    stops.append({"a": np.r_[cs + incoming * 0.2, zs],
+                                  "b": np.r_[cs + incoming * (dw - 0.3), zs], "w": STOP_LINE["w"]})
                 t0, t1 = t - CROSSWALK["w"] / 2, t + CROSSWALK["w"] / 2
                 for key, side in (((i, "L"), li), ((i, "R"), -li)):
                     tt, corner, (how, s0, tref), bulb = side_t[key]

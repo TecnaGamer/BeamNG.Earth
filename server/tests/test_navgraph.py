@@ -372,7 +372,11 @@ class SignalsTest(unittest.TestCase):
             furniture.junction_controls = orig
         self.assertEqual(set(rh), {"cN", "cS", "cW", "cE"})
         for nb in rh:
-            self.assertEqual(lh[nb][7:11], rh[nb][7:11], f"{nb}: the head's transform")
+            self.assertEqual(len(rh[nb]), 11, "right-hand layout unchanged")
+            self.assertEqual(lh[nb][11], 1, "left-hand shape marker")
+            self.assertEqual(lh[nb][10], rh[nb][10], f"{nb}: both heads face incoming drivers")
+        self.assertLess(lh["cS"][7], 0.0, "northbound head on the left kerb")
+        self.assertGreater(rh["cS"][7], 0.0, "right-hand head on the right kerb")
         self.assertLess(lh["cS"][1], 0.0, "northbound stop point on the west (left) half")
         self.assertGreater(rh["cS"][1], 0.0, "and on the east half for right-hand traffic")
 

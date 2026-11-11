@@ -10226,7 +10226,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 de_signs = [s for f in cells if f is not None for s in railtags.sign_nodes(f)]
                 de_ctx = designs.context(frame, cells, de_routes, priority, de_signs, towns=de_towns)
     corners, jcuts, crosswalks, jramps, jlines, jinternal = ({}, {}, [], {}, {}, set()) if walks is None else \
-        junctions.find(roads, has_sidewalks, None)
+        junctions.find(roads, has_sidewalks, None, left_hand=left_hand)
     teeth = []                                  # Sweden's give-way lines (markings.give_way_lines), M16's squares;
                                                 # Germany's Wartelinie (markings.wait_lines)
     zebras = []                                 # ... and its crossings, which a road's lines stop at (secrossings.place)
