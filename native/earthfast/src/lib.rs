@@ -79,6 +79,7 @@ mod planends;
 mod wallsindex;
 mod mappedlamps;
 mod vegclumps;
+mod roadwear;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6152,6 +6153,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     m.add_function(wrap_pyfunction!(places::roof_corners, m)?)?;
     m.add_function(wrap_pyfunction!(places::grid_marks, m)?)?;
-    m.add("VERSION", 201)?;
+    m.add_function(wrap_pyfunction!(roadwear::wear_plan, m)?)?;
+    // 202: roadwear (wear_plan: tyre polish, concrete joints, cracks, patches, manholes, oil spots along a tile's roads)
+    m.add("VERSION", 202)?;
     Ok(())
 }

@@ -171,6 +171,9 @@ MOD_TO_SERVER = {
     "german_junctions": {"on": F(bool)},
     # town signs (townentry.py; additive): the settings page's switch, sent after every hello and on a change
     "town_signs": {"on": F(bool)},
+    # road wear (roadwear.py; additive): the settings page's Road surface detail ('off' / 'basic' / 'full'), sent
+    # after every hello and on a change
+    "road_wear": {"value": F(str)},
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
     # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),

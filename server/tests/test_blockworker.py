@@ -71,7 +71,9 @@ class RoadsTileTest(unittest.TestCase):
             elev = lambda la, lo: blockworker.ground(FRAME, la, lo, FakeDem().sample(la, lo, 15))   # noqa: E731
             walks = []
             bridges = roads.BridgeProfiles(FRAME, lambda k: md.cell(k).layers.get("roads"), elev)
-            chunks = roads.build_tile(FRAME, 0, 0, cells, elev, None, walks=walks, bridges=bridges)
+            import roadwear       # (the worker's default road wear)
+            chunks = roads.build_tile(FRAME, 0, 0, cells, elev, None, walks=walks, bridges=bridges,
+                                      wear=roadwear.tier_of(None))
             x0, y0, _, _ = roads.tile_bbox(0, 0)
             want = roads.write_tile(b, "/temp/x", 1, 0, 0, chunks, walks,
                                     roadmesh.build(FRAME, chunks, elev, (x0, y0, 0.0), 0.05, clip=roads.tile_bbox(0, 0),

@@ -9801,7 +9801,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                signals=None, marks=None, roads_out=None, skin_margin=0.0, walks_raw=None, nodes=None,
                clearance_out=None, development=None, pole_profile=None, signs=None,
                sign_obstacles=None, roadside_jobs=None, towns=None, mapped_poles=None, de_on=False, de_routes=(),
-               driveways_out=None, mapped_lamps=None):
+               driveways_out=None, mapped_lamps=None, wear=None):
     """The chunks of one tile. cells: the mapgeom.Features of the "roads" layer of every cell touching
     the tile; elev(lat, lon) -> metres (the DEM); urban_fn: as road_specs. Features in several cells are
     taken once (by id). The carriageways, then each road's sidewalks / gutters / markings (extras), cut
@@ -9826,7 +9826,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     cells, de_routes their road_routes layers for the ref ranks, road_towns' town, the map's stop and give-way signs:
     nodes' priority and the cells' lane shard sign nodes, railtags.sign_nodes) and their paint (designs.junction_paint
     in place of the US crosswalks and stop lines, one designs.decide per junction for both), and the line style by
-    Germany's border (markings.style of germany.effective_country at the tile's middle).
+    Germany's border (markings.style of germany.effective_country at the tile's middle). wear: the road wear's
+    tier (roadwear.py: tyre polish, concrete joints, cracks, patches, manholes, oil spots as chunks of the road mesh;
+    None or 0: none).
     Pure given its inputs (sorted by feature id)."""
     own_box = tile_bbox(tx, ty)                 # (a geotile's knows its own points: box_owns)
     x0, y0, x1, y1 = own_box
@@ -10369,6 +10371,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                     for c in split(densify(simplify(run))):
                         if len(c) >= 2:
                             chunks.append(_chunk(look, w, c))
+    if wear and roads:                          # road wear (roadwear.py): pieces of the road mesh, cut at the other
+        import roadwear                         # carriageways but a road's straight continuation and a ramp's merge
+        spec_of = {f: sp for f, sp, _, _ in roads}
+        chunks.extend(roadwear.tile_chunks(
+            roads, seen, (min(box[0], wexact[0]), min(box[1], wexact[1]), max(box[2], wexact[2]), max(box[3], wexact[3])),
+            int(wear), aisles=lot_aisles, skip=jinternal,
+            exclude=lambda a, b: ((a, b) in straight or rampmerges.related(a, b, merge_layouts)
+                                  or rampmerges.continuation(a, spec_of[a], b, spec_of[b], paint_joins))))
     if walks is not None:
         runs_near = join_walk_ends(runs_near, [(p2[:, :2], s2.width / 2) for _, s2, p2, _ in roads]
                                    + list(walk_cuts) + rail_cuts    # (a cut's gap stays open: a driveway, a railway)
@@ -11304,7 +11314,8 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     # (from PR #41, Madderose) with a road mesh the mod makes no DecalRoads: their chunks were ~36 % of the file it
     # parses on its main thread
     data = {"v": VERSION, "chunks": [] if road_mesh is not None or not decals else
-            [{k: v for k, v in c.items() if k != "waterguard"} for c in chunks if not c.get("tube_only")]}
+            [{k: v for k, v in c.items() if k != "waterguard"} for c in chunks
+             if not c.get("tube_only") and not c.get("wear")]}     # (road wear: a mesh's only, roadwear.py)
     guards = {c["waterguard"]["id"]: c["waterguard"] for c in chunks if c.get("waterguard")}
     if guards:
         data["waterguard"] = [guards[k] for k in sorted(guards)]

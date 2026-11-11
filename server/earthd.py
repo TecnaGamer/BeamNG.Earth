@@ -113,6 +113,7 @@ import pools as poolsmod  # noqa: E402
 import plancache as plancachemod  # noqa: E402
 import grading as gradingmod  # noqa: E402
 import roadmesh as roadmeshmod  # noqa: E402
+import roadwear  # noqa: E402
 import roadwidth as roadwidthmod  # noqa: E402
 import revisit as revisitmod  # noqa: E402
 import signstream  # noqa: E402
@@ -1222,6 +1223,8 @@ class Server:
         self.dirs_on = False        # the settings page's Direction signs (dirsigns.enabled; BNE_DIRSIGNS=on forces it)
         self.towns_on = True        # the settings page's Town signs (townentry.enabled; BNE_TOWNSIGNS=on / off forces it;
                                     # on by default since 2026-11-10, the user's call)
+        self.road_wear = None       # the settings page's Road detail (roadwear.tier_of: 'off' / 'basic' / 'full', the
+                                    # quality presets'; None: roadwear.DEFAULT_TIER; BNE_ROAD_WEAR forces it)
         if self.gas_stations and surface is not None and hasattr(surface, "gas_pads"):
             surface.gas_pads = True     # their forecourts painted asphalt (surface.Surface.fuel_pads)
         self.traffic = bool(traffic) and mapdata is not None   # the AI road graph around the player (navgraph.py)
@@ -2347,7 +2350,7 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self))
+            Server.towns_enabled(self), Server.wear_tier(self))
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
@@ -2388,7 +2391,7 @@ class Server:
                                             self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
-                                            towns_on=Server.towns_enabled(self))
+                                            towns_on=Server.towns_enabled(self), wear=Server.wear_tier(self))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker; no network but Germany's border data
@@ -2439,7 +2442,7 @@ class Server:
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
             wait_gaps=fast is not None, de_junctions=designsmod.enabled(self.dej_on),
-            towns_on=Server.towns_enabled(self)), timeout)
+            towns_on=Server.towns_enabled(self), wear=Server.wear_tier(self)), timeout)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -2455,7 +2458,7 @@ class Server:
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
                 self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor), Server.pole_profile(self, anchor),
-                designsmod.enabled(self.dej_on), Server.towns_enabled(self))
+                designsmod.enabled(self.dej_on), Server.towns_enabled(self), Server.wear_tier(self))
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -2590,7 +2593,8 @@ class Server:
                                      driveways_out=mapped_drives,
                                      nodes=sign_nodes, clearance_out=clearance,
                                      development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns,
-                                     de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps)
+                                     de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps,
+                                     wear=Server.wear_tier(self))
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
         if self.airports is not None:   # runway markings, drawn by the road mesh like the lane lines
@@ -2828,6 +2832,21 @@ class Server:
         Called as Server.towns_enabled(self), as pole_profile (the tests' servers are namespaces)."""
         return townentrymod.enabled(self.towns_on) and bool(self.buildings)
 
+    def wear_tier(self):
+        """The road wear's tier the road tiles are built with (roadwear.tier_of of the settings page's Road detail).
+        Called as Server.wear_tier(self) (the tests' servers are namespaces)."""
+        return roadwear.tier_of(getattr(self, "road_wear", None))
+
+    def set_road_wear(self, value):
+        """The settings page's Road detail (message road_wear {value: 'off' / 'basic' / 'full'}): True when the tier
+        changed (the road tiles are then sent again)."""
+        before = Server.wear_tier(self)
+        self.road_wear = value
+        changed = Server.wear_tier(self) != before
+        if changed:
+            log.info("road wear tier %d (settings)", Server.wear_tier(self))
+        return changed
+
     def set_towns(self, on):
         """The settings page's Town signs switch (message town_signs): True when it changed (the road tiles and the
         sign tiles are then sent again, as the gas stations' and the direction signs' are)."""
@@ -2912,6 +2931,7 @@ class Server:
             "pole_profile": Server.pole_profile(self),
             "de_junctions": designsmod.enabled(self.dej_on),
             "towns_on": Server.towns_enabled(self),
+            "road_wear": Server.wear_tier(self),
             # every kind: the map data's versions (Overture release, layer versions, the weekly rail / lane builds)
             "md": md,
             # far tiles' geometry and texture (blockworker._far_key, far_tile): the layout (quality: cells, texture px)
@@ -6911,6 +6931,10 @@ class Connection:
                 self.roads.close()
                 self.roads = road_tracker(self)
                 self.signs.refresh()
+        elif kind == "road_wear":               # the settings page's Road detail: the road tiles again, worn or not
+            if self.s.set_road_wear(msg.get("value")):
+                self.roads.close()
+                self.roads = road_tracker(self)
         elif kind == "graphics":                # the settings page's graphics knobs (set_graphics)
             self.set_graphics(msg)
         elif kind == "german_junctions":        # the settings page's switch: the road and sign tiles again, with or without

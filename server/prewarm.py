@@ -70,6 +70,8 @@ def materials():
                  "TUNNEL_LIGHT"):
         out.add(getattr(roadmesh, name))
     out |= set(roads.DIRT_MATERIALS)            # (the dirt and gravel strips: roads.DIRT_LOOK, one variation per road)
+    import roadwear
+    out |= set(roadwear.MATERIALS)              # (the road wear's: roadwear.LOOKS)
     import rails
     import railways
     # (not buildings / ships: their "bne_bld_fac_..." / "bne_precast" names are looks, a base material and a tint)
@@ -89,7 +91,8 @@ def road_materials():
     import plazas
     import roadmesh
     import roads
-    out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS)
+    import roadwear
+    out = set(EXTRA[:2]) | set(roads.DIRT_MATERIALS) | set(roadwear.MATERIALS)     # (a worn road's mesh: second uv)
     for mod in (roads, roadmesh, junctions, airportgrade, plazas):
         for name, v in vars(mod).items():
             if name.isupper():

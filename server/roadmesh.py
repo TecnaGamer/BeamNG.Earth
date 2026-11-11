@@ -17,6 +17,7 @@ terrain, whose surface masks carry the asphalt / dirt ground models. Pure given 
 """
 from runtimeprofiler import step as profile_step
 import math
+import os
 
 import numpy as np
 
@@ -24,7 +25,15 @@ import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
-LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03}
+LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03,
+        # road wear (roadwear.py): its materials write no depth (roadwear.materials.json), so their order in the mesh,
+        # not their height, decides what lies on top: the strips (fade materials) first, the paint over them
+        "wear": 0.03, "wear2": 0.031, "spot": 0.006, "wline": 0.032}
+# The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
+# as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
+# at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
+WEAR_STRIPS = ("wear", "wear2", "wline")
+WEAR_TOL = float(os.environ.get("BNE_WEAR_TOL", "0.04"))
 FRONTAGE_ASPHALT = "bne_eu_frontage_asphalt"
 FRONTAGE_REPEAT_M = 5.
 FRONTAGE_TERRAIN_REPEAT_M = 4.
@@ -49,7 +58,7 @@ DIRT_EDGE_SLACK = 12.0
 # from END_FADE_M in (at most END_FADE_SHARE of a short road), the map's own ramps in FADE_V_BAND of each end. An end
 # where the road joins another strip or goes on over a bridge does not fade (roads._strip_open_ends). Anything else in
 # a mesh that has a strip samples the solid middle.
-FADE_PREFIX = "bne_dirt_"   # the materials that fade (dirtroad.materials.json)
+FADE_PREFIX = ("bne_dirt_", "bne_wear_")   # the materials that fade (dirtroad.materials.json, roadwear.materials.json)
 EDGE_FADE_M = 1.2
 EDGE_FADE_SHARE = 0.38
 END_FADE_M = 14.0
@@ -1078,7 +1087,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
         tu = float(c.get("tu") or 1.0)          # ("tu": the texture's repeats across, else once)
         fu = 0.0                                # a strip's feather: this share of its width each side (EDGE_FADE_M)
         slen = c.get("slen")
-        if slen and fz is None:
+        if slen and fz is None and c.get("feather", 1):      # ("feather": 0, a wear strip whose texture is soft)
             w = float(c.get("w") or 0.0)
             feather = min(EDGE_FADE_M, EDGE_FADE_SHARE * w)
             if feather > 0.05 and w > 2.0 * feather:
@@ -1165,6 +1174,9 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 batches = [(dr & ~asphalt, .002), (asphalt, .004)]
             else:
                 batches = [(dr & ~front, None), (front, .004)]
+            wear = np.isin(TL, [LIFT[k] + lift for k in WEAR_STRIPS]) & dr
+            if wear.any():                          # (the wear strips: their own looser batch, WEAR_TOL)
+                batches = [(m & ~wear, t) for m, t in batches] + [(wear, WEAR_TOL)]
             points, uvs, tris, materials, ribbons = [P], [UV], [T[~dr]], [M[~dr]], [RI[~dr]]
             n0 = len(P)
             for mask, tol in batches:

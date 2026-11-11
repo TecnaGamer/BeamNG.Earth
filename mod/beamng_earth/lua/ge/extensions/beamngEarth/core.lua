@@ -1163,6 +1163,13 @@ local function onMessage(msg)
       M.townSigns = v ~= false
       net.send({ type = 'town_signs', on = M.townSigns })
     end
+    -- the road surface's wear (settings roadDetail: the quality presets'; server roadwear.py)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadDetail')
+      M.roadWear = type(v) == 'string' and v or M.roadWear
+      if M.roadWear then net.send({ type = 'road_wear', value = M.roadWear }) end
+    end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
     M.sendGraphics()
@@ -3369,6 +3376,14 @@ function M.setGermanJunctionSigns(on)
   if M.germanJunctionSigns == on then return end
   M.germanJunctionSigns = on
   net.send({ type = 'german_junctions', on = on })
+end
+
+-- The road surface's wear (settings roadDetail: 'off' / 'basic' / 'full'): the server builds the road tiles again with
+-- or without it (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setRoadWear(v)
+  if type(v) ~= 'string' or M.roadWear == v then return end
+  M.roadWear = v
+  if net.isConnected() then net.send({ type = 'road_wear', value = v }) end
 end
 
 -- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
