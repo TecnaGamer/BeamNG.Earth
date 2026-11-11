@@ -17,11 +17,13 @@ the model falls back to the mapped road network.
 the graph's centre, a few ms per graph, built every 400 m in the navgraph worker thread). The density profile itself
 does not alter edge speeds.
 
-For traffic AI speed targets, a mapped OSM `smoothness` value can also cap speed on rough sections: `bad` 60 km/h,
-`very_bad` 40, `horrible` 20, `very_horrible` 10, and `impassable` 5. These are cautious AI ceilings, not replacements
-for the posted speed: the graph's legal-speed metadata remains unchanged. Missing, unknown, `excellent`, `good`, and
-`intermediate` values do not add a cap. OSM describes smoothness as physical passability for wheeled vehicles; the
-speed ceilings are BeamNG.Earth's traffic-driving heuristic.
+Standard traffic gets a per-vehicle speed target from the current navigation graph. On normal roads, it adds a
+randomized 3–5 km/h to the curve-aware target. On roads tagged with OSM `smoothness=bad` or worse
+(`very_bad`, `horrible`, `very_horrible`, `impassable`), it applies no overspeed and follows the legal limit; a lower
+curve target remains a safety cap. Missing, unknown, `excellent`, `good`, and `intermediate` values use the normal
+overspeed profile. Roughness is metadata, not a fabricated speed limit, and posted limits shown by the game are
+unchanged. The AI uses the currently streamed graph near each car, so this depends on a usable graph edge being
+available beneath that car.
 
 In the game (`navgraph.lua`, `M.ADAPTIVE`, Settings > World > Adaptive traffic amount) the stock traffic's active
 amount (`gameplay_traffic.setActiveAmount`) moves toward the profile's target by one car at most every 5 s, never above
