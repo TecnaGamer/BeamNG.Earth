@@ -332,25 +332,31 @@ class Set:
         return px
 
     def _screen_px(self, bbox, level, size, full, top=None):
-        if level < SLOPE_MIN_LEVEL or self.eye_top is None:
+        top = top or full
+        if self.eye_top is None:
             return full
         x0, y0, x1, y1 = bbox
         dx = max(x0 - (self.cx + self.half), (self.cx - self.half) - x1, 0.0)
         dy = max(y0 - (self.cy + self.half), (self.cy - self.half) - y1, 0.0)
         d = math.hypot(dx, dy)
-        if d < SLOPE_NEAR_M:
+        # (the near rings, under SLOPE_MIN_LEVEL or within SLOPE_NEAR_M: never smaller, larger where the screen resolves
+        # more of them: the slopes 1-2 km round a valley road were 2 m texels, Ouray 2026-11-11)
+        near = level < SLOPE_MIN_LEVEL or d < SLOPE_NEAR_M
+        if near and top <= full:
             return full
-        g = self.field.rings.tile_ground(bbox)
-        if g is None:
-            return full
-        zmin, slope = g
-        sin_a = min(1.0, max(0.0, (self.eye_top - zmin) / d) + d / (2 * R_OCC) + slope)
-        need = d / (self.ppr * OVERSAMPLE) * max(1.0, 1.0 / (ANISO * max(sin_a, 1e-6)))
+        if near:
+            need = d / (self.ppr * OVERSAMPLE)
+        else:
+            g = self.field.rings.tile_ground(bbox)
+            if g is None:
+                return full
+            zmin, slope = g
+            sin_a = min(1.0, max(0.0, (self.eye_top - zmin) / d) + d / (2 * R_OCC) + slope)
+            need = d / (self.ppr * OVERSAMPLE) * max(1.0, 1.0 / (ANISO * max(sin_a, 1e-6)))
         px = full
-        top = top or full
         while px * 2 <= top and size / px > need:       # (coarser than the screen resolves: larger, up to top)
             px *= 2
-        while px > SLOPE_PX_MIN and size / (px // 2) <= need:
+        while not near and px > SLOPE_PX_MIN and size / (px // 2) <= need:
             px //= 2
         return px
 
