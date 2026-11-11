@@ -1030,7 +1030,8 @@ def unghost_square(rgb, frame, x0, y0, size, surface, widths=None):
 
 def _square_pads(frame, x0, y0, size, surface):
     """The gas station pads (Surface.fuel_pads) of the cells around [x0, x0 + size]² of frame (never waits)."""
-    if not getattr(surface, "gas_pads", False) and getattr(surface, "extra_pads", None) is None:
+    if not (getattr(surface, "gas_pads", False) or getattr(surface, "bus_pads", False)) \
+            and getattr(surface, "extra_pads", None) is None:
         return []
     gx = x0 + np.array([0.0, size, 0.0, size, size / 2])
     gy = y0 + np.array([0.0, 0.0, size, size, size / 2])
@@ -1701,6 +1702,7 @@ class Surface:
         self._pending = set()
         self._pending_layers = set()    # (key, layers) queued
         self._last = None           # (lat, lon) of the last prefetch
+        self.bus_pads = False       # bus station yards painted (busyard.tile_pads: the road tiles' pads, kept as the gas stations')
         self.gas_pads = False       # gas station forecourts painted asphalt (earthd --gas-stations on: fuel_pads)
         self.extra_pads = None      # (lat, lon) -> more pads painted the same (airportgrade's runway_pads)
         self._fuel_pads = {}        # station id -> (rings [(lat (k,), lon (k,))], bbox), the last FUEL_PAD_STATIONS
@@ -1855,7 +1857,8 @@ class Surface:
     def clear_fuel_pads(self, *, all_road_pads=False):
         """A gas toggle keeps frontage pads. A terrain worker starts each job with the server's pads."""
         with self._lock:
-            self._fuel_pads.clear()
+            for sid in [k for k in self._fuel_pads if not str(k).startswith("bus:")]:     # (the bus yards stay)
+                del self._fuel_pads[sid]
             if all_road_pads:
                 self._frontage_pads.clear()
 
@@ -1869,8 +1872,16 @@ class Surface:
                     if a1 >= la0 and a0 <= la1 and b1 >= lo0 and b0 <= lo1]
 
     def fuel_pad_items(self, lat, lon):
-        """[(station id, rings)] within the points' bounding box, when gas stations are on."""
-        return self._pad_items(self._fuel_pads, lat, lon) if self.gas_pads else []
+        """[(station id, rings)] of the kept pads within the points' bounding box (gas stations', bus station yards',
+        walkways' loose pads); [] when neither gas_pads nor bus_pads is on."""
+        return self._pad_items(self._fuel_pads, lat, lon) if (self.gas_pads or self.bus_pads) else []
+
+    def bus_pad_items(self, lat, lon):
+        """[(station id, rings)] of the kept bus station yards ("bus:" ids) within the points' bounding box (busyard.YardGrader
+        levels the ground there); [] when bus_pads is off."""
+        if not self.bus_pads:
+            return []
+        return [(sid, rings) for sid, rings in self._pad_items(self._fuel_pads, lat, lon) if str(sid).startswith("bus:")]
 
     def frontage_pad_items(self, lat, lon):
         return self._pad_items(self._frontage_pads, lat, lon)

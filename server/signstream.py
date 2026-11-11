@@ -85,6 +85,16 @@ def build_tile(md, frame, aid, tx, ty, elev, out_dir, vfs_dir, urban=None, width
     dir_mesh, dir_faces = (_dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_dir, aid,
                                  autobahn=german) if dirs else (None, {}))
     rsign_mesh = _rsigns(md, frame, tx, ty, elev, context, decks, left_hand, mph, country) if rsigns else None
+    import busstationsign               # the bus stations' name signs (on whether or not the direction boards are)
+    bus_mesh, bus_faces = _optional('Bus station signs', busstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
+                                    vfs_dir, country)
+    if bus_mesh is not None:
+        dir_mesh, dir_faces = busstationsign.merge(dir_mesh, bus_mesh), {**dir_faces, **bus_faces}
+    import railstationsign              # the railway stations' name boards, platform plates and halls' names
+    rail_mesh, rail_faces = _optional('Rail station signs', railstationsign.sign_tile, md, frame, tx, ty, elev, out_dir,
+                                      vfs_dir, country)
+    if rail_mesh is not None:
+        dir_mesh, dir_faces = busstationsign.merge(dir_mesh, rail_mesh), {**dir_faces, **rail_faces}
     import euguardrails
     french = False
     if euguardrails.enabled():
@@ -153,6 +163,21 @@ def _dirs(md, frame, tx, ty, elev, context, decks, left_hand, mph, out_dir, vfs_
 
 
 _warned_dirs = -float('inf')
+
+def _optional(what, build, *args, **kw):
+    """build(*args, **kw), or (None, {}) when it fails: a station's signs never cost a road tile its other signs."""
+    global _warned_optional
+    try:
+        return build(*args, **kw)
+    except Exception as error:
+        now = time.monotonic()
+        if now - _warned_optional >= 60.:
+            _warned_optional = now
+            log.warning('%s unavailable; roads continue: %s: %s', what, type(error).__name__, error, exc_info=True)
+        return None, {}
+
+
+_warned_optional = -float('inf')
 _warned_de = -float('inf')
 
 

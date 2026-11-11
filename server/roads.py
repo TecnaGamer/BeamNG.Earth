@@ -1701,6 +1701,9 @@ def _map_surface_value(feats, i):
     """Feature i's surface value: OpenStreetMap's own (osm_surface, joined by way id: osmtags.py), else Overture's
     rule. Overture keeps a short list and folds OSM's compacted / fine_gravel into "unpaved" (drawn as dirt): Finland's
     compacted-gravel forest roads came out as dirt tracks (the user 2026-11-03: players asking for gravel roads)."""
+    import busstations
+    if busstations.PASSAGE_IDS and str(feats.ids[i]) in busstations.PASSAGE_IDS:
+        return "asphalt"            # a bus station's drive lane (Hradec: the map says paving_stones for the whole yard)
     osm = feats.attrs.get("osm_surface")
     if osm is not None and i < len(osm):
         v = str(osm[i]).strip()
@@ -2036,7 +2039,24 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
             got = memo.setdefault(k, got)
             if towns is not None and len(towns) == len(feats):
                 memo.setdefault(tk, towns)
-    return got
+    return _passage_widths(feats, list(got))
+
+
+def _passage_widths(feats, specs):
+    """specs with a bus station's drive lanes (busstations.PASSAGE_IDS) wide enough for a 12 m bus to turn and pass. Done
+    on the way out, not inside the remembered specs: those are kept (in memory and on disk) from before the station was
+    found, and a lane made 4 m once stayed 4 m (the user 2026-11-09: Vinnytsia's and Nachod's lanes too narrow)."""
+    import busstations
+    if not busstations.PASSAGE_IDS:
+        return specs
+    for j, sp in enumerate(specs):
+        if sp is not None and sp.cls == "service" and str(feats.ids[j]) in busstations.PASSAGE_IDS:
+            kw = {}
+            if sp.kind == "cobble":             # (the map's paving_stones for the whole yard: asphalt, _map_surface_value)
+                kw = {"kind": "paved", "surf": "asphalt"}
+            specs[j] = sp._replace(width=max(sp.width, busstations.PASSAGE_W_ONEWAY_M if sp.oneway
+                                             else busstations.PASSAGE_W_TWOWAY_M), **kw)
+    return specs
 
 
 def road_towns(feats, urban_fn=None, left_hand=False):
@@ -8157,9 +8177,10 @@ def block_arch_raise(tunnels, cell_fn, frame, la, lo, z, box):
         return z
 
 
-def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
+def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square, rail_parts=None):
     """tunnel_hole_mask for a terrain block being built (heightmap.generate's keep: lat, lon, u), its tunnels from
-    the map cells under it (cell_fn(key) -> roads Features) through the anchor's TunnelProfiles."""
+    the map cells under it (cell_fn(key) -> roads Features) through the anchor's TunnelProfiles. rail_parts: box ->
+    railways.tunnel_hole_parts, the railway tunnels' portals cut as well (BNE_RAIL_TUNNELS)."""
     lat, lon, u = keep["lat"], keep["lon"], keep["u"]
     keys = mapcells.cells_for_points(lat, lon)
     cells = []
@@ -8170,17 +8191,32 @@ def block_tunnel_holes(tunnels, cell_fn, frame, keep, cx, cy, square):
             log.debug("tunnel holes: cell %s: %s: %s", k, type(e).__name__, e)
             cells.append(None)
     half = u.shape[0] * square / 2
+    box = (cx - half, cy - half, cx + half, cy + half)
+    rail = []
+    if rail_parts is not None:
+        try:
+            rail = rail_parts(box)
+        except Exception as e:      # no railway tunnels' holes rather than no block
+            log.warning("rail tunnel holes: %s: %s", type(e).__name__, e)
     try:
-        parts = tunnels.parts(cells, (cx - half, cy - half, cx + half, cy + half))
+        parts = tunnels.parts(cells, box)
     except Exception as e:          # a chain's other cells not at hand (offline): no holes this time
         (log.debug if isinstance(e, OSError) else log.warning)("tunnel holes: %s: %s", type(e).__name__, e)
+        parts = []
+        if not rail:
+            return None
+    if not parts and not rail:
         return None
-    if not parts:
-        return None
-    mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
-                            getattr(tunnels, "mouths", None))
-    if mask is not None and mask.any():
-        mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    mask = None
+    if parts:
+        mask = tunnel_hole_mask(parts, u, cx, cy, square, getattr(tunnels, "heights", None),
+                                getattr(tunnels, "mouths", None))
+        if mask is not None and mask.any():
+            mask = spare_carriageways(mask, parts, cells, frame, cx, cy, square)
+    if rail:
+        import railways
+        rm = railways.tunnel_hole_mask(rail, u, cx, cy, square)
+        mask = rm if mask is None else (mask | rm)
     return mask
 
 
@@ -10865,6 +10901,7 @@ TILE_RETRY_S = 3.0              # s before a road tile whose build failed is bui
 TILE_STUCK_S = 90.0             # s a road tile's build may take before the log says it may be stuck
 TILE_FAILS_WARN = 5             # a tile's builds failed in a row before an expected kind of failure is logged as a warning
 _FAILS_SEEN = set()             # the kinds of road tile failures logged in full (Tracker._built)
+RAIL_PARTS_MAX = 3              # track meshes per road tile ("rail", "rail2", "rail3", and "railcol".."railcol3": the mod's list)
 BLD_PARTS_MAX = 4               # building meshes per road tile ("bld", "bld2".."bld4": the mod's list)
 
 
@@ -11249,9 +11286,12 @@ def shape_files(aid, tx, ty):
            "bldcol": f"bldcol_{aid}_{tx}_{ty}.cdae", "wire": f"wire_{aid}_{tx}_{ty}.cdae",
            "bld": f"bld_{aid}_{tx}_{ty}.cdae", "tunnel": f"tunnel_{aid}_{tx}_{ty}.cdae",
            "rail": f"rail_{aid}_{tx}_{ty}.cdae", "signs": f"signs_{aid}_{tx}_{ty}.cdae", "railcol": f"railcol_{aid}_{tx}_{ty}.cdae",
-           "barrier": f"barrier_{aid}_{tx}_{ty}.cdae"}
+           "barrier": f"barrier_{aid}_{tx}_{ty}.cdae", "buscol": f"buscol_{aid}_{tx}_{ty}.cdae"}
     for k in range(2, BLD_PARTS_MAX + 1):
         out[f"bld{k}"] = f"bld_{aid}_{tx}_{ty}_{k}.cdae"
+    for k in range(2, RAIL_PARTS_MAX + 1):
+        out[f"rail{k}"] = f"rail_{aid}_{tx}_{ty}_{k}.cdae"
+        out[f"railcol{k}"] = f"railcol_{aid}_{tx}_{ty}_{k}.cdae"
     return out
 
 
@@ -11322,7 +11362,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
                props=None, wires=None, park=None, tunnel_mesh=None, fuel=None,
                rail_mesh=None, garage_sound=(), wells=(), guardrail_rows=None, custom_entries=None, decals=True,
                bld_none=False, barrier_mesh=None, barrier_chunks=(), turbines=(), signs=None, towns=None,
-               walk_ground=None, speed_traps=()):
+               walk_ground=None, speed_traps=(), bus_col=None):
     """Write a tile's chunks (atomically), its sidewalk mesh (walks: build_tile's runs, if any:
     `walks_<a>_<tx>_<ty>.cdae`, announced in the tile as "walk": {shape, pos}) and its road mesh
     (road_mesh: roadmesh.build's result: `road_<a>_<tx>_<ty>.cdae`, "road": {shape, pos}; the mod then
@@ -11376,15 +11416,19 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import cdae
         import railways
         x0, y0, _, _ = tile_bbox(tx, ty)
-        shape = f"rail_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), rail_mesh)
-        data["rail"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        for k, part in enumerate(railways.split_mesh(railways.render_mesh(rail_mesh), parts_max=RAIL_PARTS_MAX)):
+            what = "rail" if k == 0 else f"rail{k + 1}"
+            shape = shape_files(aid, tx, ty)[what]
+            roadmesh.write(os.path.join(out_dir, shape), part)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         col = railways.collision_mesh(rail_mesh)
-        if col is not None:         # the lean physics-only mesh (the mod then only draws "rail"): its bed and decks
-            shape = f"railcol_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), col[0], col[1], uvs=col[2], material=col[3],
-                       tri_materials=col[4], collision_only=True)
-            data["railcol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        for k, part in enumerate(railways.split_mesh(col, parts_max=RAIL_PARTS_MAX)):
+            # the lean physics-only meshes (the mod then only draws "rail"): the bed and decks
+            what = "railcol" if k == 0 else f"railcol{k + 1}"
+            shape = shape_files(aid, tx, ty)[what]
+            cdae.write(os.path.join(out_dir, shape), part[0], part[1], uvs=part[2], material=part[3],
+                       tri_materials=part[4], collision_only=True)
+            data[what] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if signs:
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"signs_{aid}_{tx}_{ty}.cdae"
@@ -11411,6 +11455,16 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         roadmesh.write(os.path.join(out_dir, shape), barrier_mesh)
         data["barrier"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
         boxes["barrier"] = medianbarriers.collider_boxes(barrier_chunks)
+    if bus_col is not None and bus_col[0] is not None:     # the bus stations' lean collision (busstationmesh.collision)
+        import cdae
+        x0, y0, _, _ = tile_bbox(tx, ty)
+        V, T, UV, mats, idx = bus_col[0][:5]
+        shape = shape_files(aid, tx, ty)["buscol"]
+        cdae.write(os.path.join(out_dir, shape), np.asarray(V, np.float64), np.asarray(T, np.int64),
+                   uvs=np.asarray(UV, np.float64), material=list(mats), tri_materials=np.asarray(idx, np.int64),
+                   collision_only=True)
+        data["buscol"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
+        boxes["buscol"] = bus_col[1]
     if "walk" in boxes and data.get("walkcol"):
         boxes["walkcol"] = boxes["walk"]
     if bld is None and bld_none:
@@ -11436,10 +11490,12 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
         import cdae
         import furniture
         x0, y0, _, _ = tile_bbox(tx, ty)
-        wm = furniture.wire_mesh(wires, (x0, y0, 0.0))
+        import catenary
+        wm = furniture.wire_mesh(wires, (x0, y0, 0.0), catenary.wire_material, catenary.wire_solid)    # (copper / bronze / steel / dark by class)
         if wm is not None:
             shape = f"wire_{aid}_{tx}_{ty}.cdae"
-            cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material="bne_wire", object_name="wires")
+            cdae.write(os.path.join(out_dir, shape), wm[0], wm[1], uvs=wm[2], material=wm[3], tri_materials=wm[4],
+                       object_name="wires")
             data["wire"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if props:                       # furniture.place's rows: Forest items (trees.lua), groups by index
         groups = sorted({r[0] for r in props})

@@ -69,6 +69,7 @@ import netfetch
 import overture
 import rangeread
 import revisit
+import levelways
 import roadsmooth
 import staging
 import xproc
@@ -461,6 +462,8 @@ class MapData:
             v["roadsmooth"] = roadsmooth.VERSION
         if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
             v["street_edges"] = europewalks.VERSION
+        if levelways.ON:
+            v["levelways"] = levelways.VERSION
         return v
 
     def bundle_versions(self):
@@ -899,6 +902,7 @@ class MapData:
                 self._rails(key, layer, f)
                 self._lanes(key, layer, f)
                 if layer == "roads":
+                    f = levelways.promote(f, frame)         # (a street mapped as a footway over a level crossing: a road)
                     f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)

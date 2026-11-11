@@ -46,6 +46,8 @@ MATS = {
     "galv": mat("bne_cat_galv", (0.62, 0.64, 0.65), 0.85, 0.45),
     "insulator": mat("bne_cat_insulator", (0.03, 0.03, 0.035), 0.0, 0.3),   # black: composite / glazed holders
     "plate": mat("bne_cat_plate", (0.9, 0.85, 0.1), 0.0, 0.5),
+    "paint": mat("bne_cat_paint", (0.44, 0.48, 0.45), 0.3, 0.7),          # 4: the EU masts' painted steel
+    "foundation": mat("bne_cat_foundation", (0.54, 0.53, 0.5), 0.0, 0.95),   # 5: the cast foundation blocks
 }
 
 
@@ -122,10 +124,37 @@ def joint_rings(bm, seg):
         frustum(bm, Vector((0, 0, z - 0.06)), Vector((0, 0, z + 0.06)), radius_at(z) + 0.03, radius_at(z) + 0.03, seg, 0,
                 uv_len=1.1)
 
+
+def mast_details(bm, ts, x_face, z_top, attach_r):
+    """Details common to every mast with a cantilever (detail level only): an earthing conductor down the track-side
+    face to a foot clamp, bolted flange bands at the cantilever's three clamps, a saddle (a cradle) for the messenger
+    over the tube's tip, and a drip collar under each insulator."""
+    # earthing conductor: a thin galvanised rod from the top clamp to a clamp at the foot, on the field-side face
+    frustum(bm, Vector((-x_face, 0.0, 0.5)), Vector((-x_face, 0.0, z_top)), 0.009, 0.009, 4, 1)
+    for z in (0.5, 1.8, 3.6, 5.6, 7.4):           # (stand-off clips)
+        frustum(bm, Vector((-x_face + 0.012, 0.0, z)), Vector((-x_face - 0.01, 0.0, z)), 0.022, 0.022, 4, 1)
+    frustum(bm, Vector((-x_face, 0.0, 0.42)), Vector((-x_face, 0.0, 0.58)), 0.04, 0.04, 6, 1)     # the foot clamp
+    # bolted flange bands around the mast at the three clamps
+    for z in (Z_MESS, Z_REG, Z_TIE):
+        for dz in (-0.07, 0.07):
+            frustum(bm, Vector((0, 0, z + dz - 0.012)), Vector((0, 0, z + dz + 0.012)), attach_r + 0.035, attach_r + 0.035, 8, 1)
+    # the messenger's saddle: a cradle (two cheeks and a base) on the tube's tip
+    tip = Vector((ARM_X + 0.15, 0, Z_MESS + 0.30))
+    box(bm, tip + Vector((0, 0, 0.05)), 0.035, 0.05, 0.012, 1)
+    for sy in (-1, 1):
+        box(bm, tip + Vector((0, sy * 0.045, 0.085)), 0.03, 0.008, 0.04, 1)
+    # a hook-bolt under the registration arm's tip and a stay bracket from the arm to the tie
+    br0, br1 = Vector((ARM_X - 1.2, 0, Z_REG)), Vector((ARM_X - 0.15, 0, Z_MESS - 0.02))
+    frustum(bm, br0, br1, 0.014, 0.014, 4, 1)
+    box(bm, br0, 0.03, 0.04, 0.03, 1)
+    # drip collars under the two tie insulators and a bolted flange at the tube's tip
+    box(bm, Vector((ARM_X + 0.15, 0, Z_MESS)), 0.025, 0.06, 0.06, 1)
+
+
 def build(seg, detail):
     bm = bmesh.new()
     # the mast: foot collar (concrete foundation) and the tapered pole
-    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
+    frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 5)
     frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, H)), R0, R1, seg, 0, uv_len=1.1)
     ts = max(5, seg // 2)
     # the cantilever: the horizontal tube, the registration arm (thinner), the inclined tie
@@ -156,6 +185,7 @@ def build(seg, detail):
         hold = Vector((ARM_X + 0.10, 0, Z_REG))
         frustum(bm, hold + Vector((0, 0, 0.0)), hold - Vector((0, 0, 0.16)), 0.016, 0.016, ts, 2)     # the hanger
         frustum(bm, hold - Vector((0.04, 0, 0.17)), hold - Vector((-0.04, 0, 0.17)), 0.028, 0.028, ts, 2)  # the wire's clip
+        mast_details(bm, ts, radius_at(4.0), H - 0.3, R0)
     return bm
 
 
@@ -199,15 +229,16 @@ def cantilever(bm, ts, detail, attach_r):
     hold = Vector((ARM_X + 0.10, 0, Z_REG))
     frustum(bm, hold, hold - Vector((0, 0, 0.16)), 0.016, 0.016, ts, 2)
     frustum(bm, hold - Vector((0.04, 0, 0.17)), hold - Vector((-0.04, 0, 0.17)), 0.028, 0.028, ts, 2)
+    mast_details(bm, ts, 0.17, 8.8, 0.15)
 
 
 def build_steel(seg, detail):
     """A steel H-beam mast (0.30 x 0.20 section, 9.3 m, a base plate with bolts) with the cantilever."""
     bm = bmesh.new()
     ts = max(5, seg // 2)
-    box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)    # the foundation's head
+    box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 5)    # the foundation's head
     box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)                       # the base plate
-    ibeam(bm, 0.38, 9.3, 1)
+    ibeam(bm, 0.38, 9.3, 4)
     if detail:
         for sx in (-1, 1):
             for sy in (-1, 1):
@@ -222,25 +253,34 @@ def build_post(kind, seg, detail):
     """A portal's post: concrete (kind "su": the tapered mast, 10.4 m) or steel (an I-beam), with a top seat for the truss."""
     bm = bmesh.new()
     if kind == "su":
-        frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 0)
+        frustum(bm, Vector((0, 0, -SINK)), Vector((0, 0, 0.35)), 0.30, 0.27, max(8, seg), 5)
         frustum(bm, Vector((0, 0, 0.35)), Vector((0, 0, 10.4)), 0.19, 0.12, seg, 0, uv_len=1.1)
         if detail:
             joint_rings(bm, seg)
         box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
     else:
-        box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 0)
+        box(bm, Vector((0, 0, (0.34 - SINK) / 2)), 0.30, 0.30, (SINK + 0.34) / 2, 5)
         box(bm, Vector((0, 0, 0.36)), 0.22, 0.22, 0.02, 1)
-        ibeam(bm, 0.38, 10.4, 1, depth=0.36, width=0.24)
+        ibeam(bm, 0.38, 10.4, 4, depth=0.36, width=0.24)
         box(bm, Vector((0, 0, 10.4)), 0.14, 0.30, 0.05, 1)
     if detail:
         plate(bm, Vector((0.0, 0.20 if kind == "su" else 0.13, 2.2)), Vector((0, 1, 0)), 0.30, 3)
+        # the truss's bearing: a bolted plate with four anchor bolts and a stiffening bracket on each side, an earthing rod
+        box(bm, Vector((0, 0, 10.47)), 0.18, 0.34, 0.02, 1)
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                frustum(bm, Vector((sx * 0.12, sy * 0.28, 10.49)), Vector((sx * 0.12, sy * 0.28, 10.58)), 0.016, 0.016, 6, 1)
+        for sy in (-1, 1):
+            box(bm, Vector((0, sy * 0.2, 10.2)), 0.025, 0.012, 0.22, 1)
+        frustum(bm, Vector((0.0, -0.2 if kind == "su" else -0.14, 0.5)), Vector((0.0, -0.2 if kind == "su" else -0.14, 10.3)),
+                0.009, 0.009, 4, 1)
     return bm
 
 def make(name, bm, parent):
     ob = new_object(name, parent)
     bm.to_mesh(ob.data)
     bm.free()
-    for k in ("concrete", "galv", "insulator", "plate"):
+    for k in ("concrete", "galv", "insulator", "plate", "paint", "foundation"):
         ob.data.materials.append(MATS[k])
     return ob
 
