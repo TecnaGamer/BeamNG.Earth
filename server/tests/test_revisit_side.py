@@ -18,6 +18,7 @@ class SideTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
+        self.addCleanup(revisitpack.reset)  # LIFO: release pack handles before deleting the cache
         self.cache = os.path.join(self.tmp.name, "cache")
         self.session = os.path.join(self.tmp.name, "user", "current", "temp", "beamngEarth", "s1")   # (staging: links)
         os.makedirs(self.session)
