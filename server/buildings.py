@@ -2123,6 +2123,28 @@ def _slope_dir(roof, direction):
     return d % 360.0 if math.isfinite(d) else None
 
 
+def skillion_rise(spec, ring):
+    """The rise (m, per point of ring (k, 2)) of a skillion roof over its eaves: along a mapped roof:direction
+    (Spec.slope_dir) over the outline's extent that way, else across its box toward Spec.hi, as _hf_roof draws it
+    (the skyline's sloped tops: sky_items keeps skillions, streets.gl study 2026-11-11)."""
+    r = np.asarray(ring, np.float64)[:, :2]
+    rh = getattr(spec, "roof_h", None)
+    sd = getattr(spec, "slope_dir", None)
+    if sd is not None:
+        up = np.array([-math.sin(math.radians(sd)), -math.cos(math.radians(sd))])
+        t = r @ up
+        k = rh / max(float(t.max() - t.min()), 0.5) if rh else math.tan(math.radians(SKILLION_PITCH))
+    else:
+        c, u, hl, hw = oriented_box(r)
+        if getattr(spec, "across", False):
+            u, hl, hw = np.array([-u[1], u[0]]), hw, hl
+        v = np.array([-u[1], u[0]])
+        hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
+        t = hi * ((r - c) @ v)
+        k = rh / (2.0 * max(hw, 0.5)) if rh else math.tan(math.radians(SKILLION_PITCH))
+    return k * (t - t.min())
+
+
 def _hf_roof(m, spec, ring, z_eave, rm, fac):
     """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
     fast.require(176, "heightfield_roof")
@@ -6199,6 +6221,8 @@ def _sky_mesh(items):
         if z1 <= z0 + 0.5:
             continue
         n = len(ring)
+        # (a skillion: each corner's top on its plane, sky_items; else one height)
+        zt = z1 + skillion_rise(spec, ring) if spec.roof == "skillion" else np.full(n, z1)
         # (windows: u along the walls in bays, v up in storeys from the ground, both over the map's count)
         zb = gmin
         fh = float(spec.floor_h or FLOOR_M) * SKY_WIN_FLOORS
@@ -6210,14 +6234,15 @@ def _sky_mesh(items):
         u = int(_hash01(spec.seed, "sky u") * SKY_WIN_BAYS) / SKY_WIN_BAYS
         for i in range(n):
             a, b = ring[i], ring[(i + 1) % n]
+            za, zb_ = float(zt[i]), float(zt[(i + 1) % n])
             if windows:
                 du = float(math.hypot(*(b - a))) / bw
-                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1),
-                       (u, v0), (u + du, v0), (u + du, v1), (u, v1), wall)
+                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], zb_), (a[0], a[1], za),
+                       (u, v0), (u + du, v0), (u + du, v0 + (zb_ - z0) / fh), (u, v0 + (za - z0) / fh), wall)
                 u += du
             else:
-                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], z1), (a[0], a[1], z1), uv, uv, uv, uv, wall)
-        m.poly([(p[0], p[1], z1) for p in ring], [uv] * n, roof)
+                m.quad((a[0], a[1], z0), (b[0], b[1], z0), (b[0], b[1], zb_), (a[0], a[1], za), uv, uv, uv, uv, wall)
+        m.poly([(p[0], p[1], float(z)) for p, z in zip(ring, zt)], [uv] * n, roof)
         if spec.roof == "pyramidal":    # (a tower's crown or a spire: its apex over the middle, sky_items)
             c = ring.mean(0)
             top = (c[0], c[1], z1 + oriented_box(ring)[3] * math.tan(math.radians(roof_pitch(spec))))
@@ -6263,7 +6288,8 @@ def sky_items(frame, box, keys, md, ground, lamp_region=None, own=None):
         elif len(ring) > SKY_MAX_CORNERS:     # (rings are open: the last corner is not the first again)
             ring = ring[::int(np.ceil(len(ring) / SKY_MAX_CORNERS))]
         spec.ring = ring
-        keep = spec.roof if spec.roof == "pyramidal" and len(ring) <= SKY_MAX_CORNERS else "flat"   # (a crown, a spire)
+        # (a crown, a spire; a skillion's sloped top: One World Trade Center's taper from afar, streets.gl study)
+        keep = spec.roof if spec.roof in ("pyramidal", "skillion") and len(ring) <= SKY_MAX_CORNERS else "flat"
         spec.roof, spec.steeple, spec.stoop, spec.porch, spec.sign, spec.door = keep, None, None, None, None, None
     items.sort(key=lambda it: (-(float(it[0].height or 0.0) + float(it[0].min_h or 0.0)), str(it[0].seed)))
     picked, n = [], 0

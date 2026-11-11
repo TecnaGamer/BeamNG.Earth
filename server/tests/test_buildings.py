@@ -2958,3 +2958,16 @@ class MappedRoofTest(unittest.TestCase):
         spec = bld.plan(fin, attrs, lat=40.75, lon=-73.98, dense=True)
         self.assertEqual(spec.roof, "skillion")
         self.assertNotEqual(spec.cls, "mast")
+
+    def test_skyline_keeps_the_skillion_slope(self):
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])
+        attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                 "roof_direction": 225.0, "seed_id": 7}
+        spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+        rise = bld.skillion_rise(spec, tri)
+        self.assertAlmostEqual(float(rise.min()), 0.0)
+        self.assertAlmostEqual(float(rise.max()), 362.0, delta=0.5)
+        self.assertAlmostEqual(float(rise[0]), 0.0, msg="low at the corner it faces (south-west)")
+        mesh = bld._sky_mesh([(spec, 0.0, 0.0)])
+        P = mesh[0]
+        self.assertAlmostEqual(float(P[:, 2].max() - spec.height - spec.min_h), 362.0, delta=1.5)
