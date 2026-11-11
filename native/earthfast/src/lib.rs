@@ -73,6 +73,7 @@ mod railseam;
 mod classgrid;
 mod frontage;
 mod furnstations;
+mod stationgeom;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -5934,6 +5935,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // surface.fold_layers: fewer terrain materials per .ter, a cheaper texture-array rebuild at the swap)
     m.add_function(wrap_pyfunction!(layerfold::layer_stats, m)?)?;
     m.add_function(wrap_pyfunction!(layerfold::layer_fold, m)?)?;
-    m.add("VERSION", 220)?;
+    // 221: the stations' small geometry (busstations.contains / dist_to_path, railstations._crossings): stationgeom (that branch's 222)
+    m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
+    m.add("VERSION", 221)?;
     Ok(())
 }
