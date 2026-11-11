@@ -261,16 +261,62 @@ def _rows(cells, specs, frame, bounds=None, anchor=True):
 
 def source(cells, urban=None, widths=None, frame=None, left_hand=False, bounds=None):
     """(frame, rows, corners) of road Features cells."""
-    return tuple(_entry(cells, urban, widths, frame, left_hand, bounds=bounds))
+    return tuple(_entry(cells, urban, widths, frame, left_hand, bounds=bounds)[:3])
 
 
 def pads(cells, urban=None, widths=None, frame=None, bounds=None, lonlat_bounds=None, grow=0.0):
     """The corners' fills as (lat (k,), lon (k,)) pads (surface.paint_pads / photo_pads / pads_mask), their arcs grown
     outward by grow m (the roads' own paint reaches past their edges). bounds (x0, y0, x1, y1) in frame or lonlat_bounds
     (lon0, lat0, lon1, lat1): the corners that may reach it (more may come)."""
-    frame, _rows_, corners = _entry(cells, urban, widths, frame, bounds=bounds, lonlat_bounds=lonlat_bounds)
+    frame, _rows_, corners = _entry(cells, urban, widths, frame, bounds=bounds, lonlat_bounds=lonlat_bounds)[:3]
     out = []
     for c in corners:
+        for poly in polygons(c, grow):
+            la, lo, _ = frame.enu_to_geodetic(poly[:, 0], poly[:, 1], np.zeros(len(poly)))
+            out.append((np.asarray(la), np.asarray(lo)))
+    return out
+
+
+def curb_corners(entry):
+    """The curb returns (junctions.find(has_sidewalks), as roads.build_tile makes them) of an _entry's rows: their fills,
+    the asphalt between the arc and the old square corner, belong to the road's paint (the user, 2026-11-11: "side walk
+    corners still need improvment, you can tell because the road paint is a diffrent shape": with the roads painted
+    into the ground the fills were drawn by nothing, the photo's own ground showing between the sharp paint corner and
+    the curb). Kept in the entry (computed once, under its lock); none inside an island or at a round ring (as
+    build_tile)."""
+    import roads
+    import islands
+    with _LOCK:
+        if len(entry) > 3:
+            return entry[3]
+    rows = entry[1]
+    out = []
+    if rows:
+        corners = junctions.find(rows, roads.has_sidewalks, None)[0]
+        isl = islands.find(rows) if corners else []
+        for c in corners:
+            p = np.asarray(c["arc"], np.float64)[len(c["arc"]) // 2]
+            if isl and islands.in_island(isl, p[:2]):
+                continue
+            if any(float(np.hypot(*(p[:2] - f["poly"].mean(0))))
+                   < float(np.max(np.hypot(*(f["poly"] - f["poly"].mean(0)).T))) + islands.ENTRY_CLEAR_M
+                   for f in isl if f.get("round")):
+                continue
+            out.append(c)
+    with _LOCK:
+        if len(entry) == 3:
+            entry.append(out)
+        return entry[3]
+
+
+def curb_pads(cells, urban=None, widths=None, frame=None, bounds=None, lonlat_bounds=None, grow=0.0):
+    """pads' (lat, lon) fills of the curb returns (curb_corners) that may reach bounds."""
+    entry = _entry(cells, urban, widths, frame, bounds=bounds, lonlat_bounds=lonlat_bounds)
+    if entry[0] is None:
+        return []
+    frame = entry[0]
+    out = []
+    for c in curb_corners(entry):
         for poly in polygons(c, grow):
             la, lo, _ = frame.enu_to_geodetic(poly[:, 0], poly[:, 1], np.zeros(len(poly)))
             out.append((np.asarray(la), np.asarray(lo)))

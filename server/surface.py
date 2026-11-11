@@ -808,29 +808,36 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
     if simple:
         filled = np.ascontiguousarray(rgb, np.uint8)
     else:
-        # the rounded corners of curbless junctions (roadcorners.py) in the asphalt's colour, under the roads
-        rgb = photo_corners(rgb, frame, x0, y0, size, corner_pads(frame, x0, y0, size, feats_list, urban_fn, widths))
         filled = _fill_island_photos(np.ascontiguousarray(rgb, np.uint8),
                                      _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths))
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
-        return filled
-    colors = np.array([PHOTO_ROAD_RGBA[k] for k in PHOTO_ROAD_RGBA], np.float32)
-    fast.require(203, "roads in the photo's own tone")
-    tone = np.array([PHOTO_ROAD_TONE[k] for k in PHOTO_ROAD_RGBA], np.float32)
-    radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
-    return fast._ef.paint_lines_toned(np.ascontiguousarray(filled, np.uint8), *got, colors, tone, radius,
-                                      PHOTO_TONE_SAMPLE_LUMA, PHOTO_TONE_SAMPLE_SAT, PHOTO_TONE_GREEN)
+        out = filled
+    else:
+        colors = np.array([PHOTO_ROAD_RGBA[k] for k in PHOTO_ROAD_RGBA], np.float32)
+        fast.require(203, "roads in the photo's own tone")
+        tone = np.array([PHOTO_ROAD_TONE[k] for k in PHOTO_ROAD_RGBA], np.float32)
+        radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
+        out = fast._ef.paint_lines_toned(np.ascontiguousarray(filled, np.uint8), *got, colors, tone, radius,
+                                         PHOTO_TONE_SAMPLE_LUMA, PHOTO_TONE_SAMPLE_SAT, PHOTO_TONE_GREEN)
+    if simple:
+        return out
+    # the rounded corners (roadcorners.py: curbless junctions and the curb returns' fills) over the roads, in the tone
+    # of the painted road around each (the paint's corner follows the curb's arc)
+    return photo_corners(out, frame, x0, y0, size, corner_pads(frame, x0, y0, size, feats_list, urban_fn, widths),
+                         before=filled)
 
 
 def corner_pads(frame, x0, y0, size, feats_list, urban_fn=None, widths=None):
-    """The rounded corners (roadcorners.pads) that may reach a photo square [x0, x0 + size]² of frame, their arcs grown
-    by PHOTO_ROAD_EDGE_M as the roads' paint (a few metres of margin: the bounds are rounded out anyway)."""
+    """The rounded corners (roadcorners.pads: curbless; roadcorners.curb_pads: the curb returns' fills) that may reach a
+    photo square [x0, x0 + size]² of frame, their arcs grown by PHOTO_ROAD_EDGE_M as the roads' paint (a few metres of
+    margin: the bounds are rounded out anyway)."""
     import roadcorners
     if not feats_list:
         return []
-    return roadcorners.pads(feats_list, urban_fn, widths, frame, bounds=(x0 - 4.0, y0 - 4.0, x0 + size + 4.0,
-                                                                          y0 + size + 4.0), grow=PHOTO_ROAD_EDGE_M)
+    bounds = (x0 - 4.0, y0 - 4.0, x0 + size + 4.0, y0 + size + 4.0)
+    return (roadcorners.pads(feats_list, urban_fn, widths, frame, bounds=bounds, grow=PHOTO_ROAD_EDGE_M)
+            + roadcorners.curb_pads(feats_list, urban_fn, widths, frame, bounds=bounds, grow=PHOTO_ROAD_EDGE_M))
 
 
 PHOTO_ROADS_PENDING = ("surface_roads",)
@@ -1305,19 +1312,26 @@ def _windows_px(frame, x0, y0, size, w, h, pads):
     return out
 
 
-def photo_corners(rgb, frame, x0, y0, size, pads):
+def photo_corners(rgb, frame, x0, y0, size, pads, before=None):
     """photo_pads for many small pads spread over the photo (the rounded junction corners), each in its own window.
-    Pure."""
+    before: the photo before the roads were painted into rgb: each corner then takes the colour of the painted road
+    pixels in its window (their median; the roads are toned, photo_roads), else the flat paved colour. Pure."""
     if not pads:
         return rgb
     h, w = rgb.shape[:2]
     r_, g_, b_, op = PHOTO_ROAD_RGBA["paved"]
-    colour = np.array([r_, g_, b_], np.float32)
+    flat = np.array([r_, g_, b_], np.float32)
     out = None
     for r0, c0, a in _windows_px(frame, x0, y0, size, w, h, pads):
         if out is None:
             out = rgb.copy()
         r1, c1 = r0 + a.shape[0], c0 + a.shape[1]
+        colour = flat
+        if before is not None:
+            win = rgb[r0:r1, c0:c1]
+            painted = np.any(win != before[r0:r1, c0:c1], axis=2) & (a < 0.5)
+            if painted.sum() >= 6:
+                colour = np.median(win[painted].astype(np.float32), axis=0)
         sub = (a * op)[..., None]
         out[r0:r1, c0:c1] = np.clip(np.round(out[r0:r1, c0:c1].astype(np.float32) * (1.0 - sub) + colour * sub),
                                     0, 255).astype(np.uint8)
