@@ -193,7 +193,10 @@ BUILD_WAIT_S = 180.0        # a cell layer another process is building is waited
 MIRROR_MB = 2048
 MIRROR_PRUNE_S = 120.0  # the mirror pruned at most this often per process (each prune walks it all)
 MIRROR_SMALL = 65536    # bytes: an array this small is read into memory (no mapping)
-MEM_MB = 192        # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by
+MEM_MB = 256        # (192 before 2026-11-10: with places slimmed, a Manhattan 3x3 build still reads ~97 roads layers,
+                    # ~341 MB: 256 cut cold road tiles' instructions 3.7 / 2.5 / 1.7 % at Manhattan / Munich / Fells Point
+                    # for +45-57 MB peak RSS; budget.py's small machines keep SMALL_MAPDATA_MB)
+                    # decoded cell layers kept in memory per process (a road tile reads its ~4 cells, each read by
                     # its neighbours too: ~8 ms of decompression and a coordinate transform each time, 2026-10-15).
                     # A road tile's layers of Baltimore's 4 cells are ~124 MB by _nbytes (the infrastructure 65):
                     # at 64 every tile decoded them again, 446 loads for 36 tiles (7.5 s of 87 on a Steam Deck)

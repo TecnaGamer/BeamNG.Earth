@@ -19,7 +19,7 @@ SMALL_GB = 20.0             # below this much RAM: the small profile (a Steam De
 # decoding them again (sampled on a Steam Deck, 2026-10-20)
 SMALL_DEM_TILES = 192       # decoded 512² float32 DEM tiles (1 MB each)
 SMALL_WALL_CELLS = 12       # cells of building walls for the street widths (roadwidth.WALL_CELLS, 48)
-SMALL_MAPDATA_MB = 160      # decoded map data layers (mapdata.MEM_MB, 192): a road tile's cells still fit
+SMALL_MAPDATA_MB = 160      # decoded map data layers (mapdata.MEM_MB, 256): a road tile's cells still fit
 SMALL_ROAD_PROCESSES = 2    # road-tile processes (earthd ROAD_PROCESSES; with one the road tiles never caught up)
 # A desktop's road-tile processes by its threads and memory (each ~1-1.5 GB): driving off right after a teleport into
 # Manhattan at 50 mph, 2 had the road under the car for the first ~15 s and solid ~27 s after, 4 at ~6 s and ~15 s,
