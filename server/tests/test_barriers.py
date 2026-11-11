@@ -303,7 +303,9 @@ class CurrentPipelineTest(unittest.TestCase):
         for cls in ("cycleway", "footway", "path", "steps", "bridleway", "pedestrian"):
             with self.subTest(cls=cls):
                 path = [(np.array([[50., 0.], [50., 100.]]), 1.25, cls)]
-                b = barriers.tile_meshes(planned, (0, 0, 256, 256), ground, path)["boundary"][0]
+                # An overlapping contribution may add a pedestrian style; it is still not a vehicle footprint.
+                with patch.dict(roads.STYLE, {cls: (3., True)}):
+                    b = barriers.tile_meshes(planned, (0, 0, 256, 256), ground, path)["boundary"][0]
                 for before, after in zip(a, b):
                     np.testing.assert_array_equal(before, after)
 
