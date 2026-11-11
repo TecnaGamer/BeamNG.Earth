@@ -160,6 +160,24 @@ do
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0 and f.modes[#f.modes] == 'stop',
     'an outer lane on the intended wide edge still waits at a graph cut, even over 25 m from its centre')
+  f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.x, f.speed = 95, 0
+    f.nodes.j.links.k = nil
+    f.route.points = { { -0.0018, 0 }, { -0.0018, 0.1 } }
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a route-line offset beside a junction does not turn a graph cut into recovery')
+  f = fixture({ 'j', 'k' }, 2, 6, function(f)
+    diversionRoads(f)
+    f.x, f.z, f.speed = 195, 12, 0
+    for _, id in ipairs({ 'w', 'j', 'k' }) do f.nodes[id].pos.z = 12 end
+    f.nodes.lower = { pos = { x = 0, y = 2, z = 0 }, links = { lowerEnd = {} }, radius = 6 }
+    f.nodes.lowerEnd = { pos = { x = 1000, y = 2, z = 0 }, links = {}, radius = 6 }
+    f.route.points = { { 0.0002, 0 }, { 0.0002, 0.1 } }
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0, 'a bridge graph cut does not recover onto the loaded road below')
   f = fixture(nil, 20, 6, function(f) f.speed = 0 end)
   f:step(35); f:step(35); f:step(35)
   T.check(recoveries == 1, 'an off-road car still recovers when its intended route has a usable graph')
@@ -176,14 +194,17 @@ do
   end }
   quatFromDir = function(d) return d end
   log = function() end
-  local function parallel(loaded)
-    return fixture({ 'a', 'b' }, 40, 6, function(f)
+  local function parallel(loaded, offset, deadEnd)
+    offset = offset or 40
+    return fixture({ 'a', 'b' }, offset, 6, function(f)
       local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
       f.speed = 0
-      f.nodes = { w = n(0, 40, { j = {} }), j = n(500, 40, {}) }
+      if deadEnd then f.x = 95 end
+      f.nodes = { w = n(0, offset, { j = {} }), j = n(deadEnd and 100 or 500, offset, {}) }
       if loaded then
         f.nodes.a, f.nodes.b = n(0, 0, { b = {} }), n(1000, 0, {})
-        f.nodes.j.links.b = {} -- the only junction is far beyond the local projection limit
+        -- The only connection is behind the dead end, or far ahead on the longer parallel road.
+        if deadEnd then f.nodes.w.links.a = {} else f.nodes.j.links.b = {} end
       end
       f.map.nodes = f.nodes
       f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 50 }
@@ -194,8 +215,13 @@ do
   T.check(recoveries > 0 and f.gps.autodrive() and f.gps.status().off == 40,
     'an unreachable loaded route 40 m away retains recovery despite being inside the reroute threshold')
   T.check(#f.drives == 0, 'recovery does not hand the AI a disconnected path or a destination-nearest fallback')
+  recoveries = 0
+  f = parallel(true, 20, true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries > 0 and f.gps.status().off == 20 and #f.drives == 0,
+    'a dead end only 20 m from a loaded route retains recovery without an unsafe fallback')
   recoveries, moveOnRecovery = 0, true
-  f = parallel(true)
+  f = parallel(true, 20, true)
   for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
   f:step()
   T.check(recoveries == 1 and f.y == 0 and f.x > 40 and #f.drives > 0 and f.gps.status().off == 0,
@@ -205,6 +231,10 @@ do
   for _ = 1, 350 do f:step() end
   T.check(recoveries == 0 and #f.drives == 0 and f.modes[#f.modes] == 'stop',
     'a parallel road alone is not evidence that the intended route graph has loaded')
+  f = parallel(false, 20, true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and #f.drives == 0,
+    'a nearby dead end still waits when the intended route itself has not loaded')
   spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
 end
 

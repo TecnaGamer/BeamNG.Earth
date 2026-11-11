@@ -397,16 +397,23 @@ local function routeTarget(e, nodes, i, t)
   local segs = segCache.segs
   local n = #e.x
   local s0 = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
-  local d0, _, previous = M.nearestEdge(segs, e.x[i] + t * (e.x[i + 1] - e.x[i]),
-    e.y[i] + t * (e.y[i + 1] - e.y[i]), e.x[i + 1] - e.x[i], e.y[i + 1] - e.y[i])
+  local hx, hy = e.x[i + 1] - e.x[i], e.y[i + 1] - e.y[i]
+  local rx, ry = e.x[i] + t * hx, e.y[i] + t * hy
+  local d0, _, previous = M.nearestEdge(segs, rx, ry, hx, hy)
   if d0 > M.ON_GRAPH_M then previous = nil end
-  local routeEdge = previous and previous.segment
+  local differentRoadLoaded = false
   if auto then
     -- On-road, start on the car's actual edge, including elevation: the route line may be nearer a parallel road.
     local veh = playerVeh()
     local p, h = veh and veh:getPosition(), veh and veh:getDirectionVector()
-    local a, b
-    if p and h then a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z) end
+    local a, b, routeA, routeB
+    if p and h then
+      a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z)
+      local length = math.sqrt(hx * hx + hy * hy)
+      if length > 0.1 then routeA, routeB = M.edgeUnder(nodes, rx, ry, hx / length, hy / length, p.z) end
+    end
+    -- Match the route's heading and elevation too: an offset line near a junction or over a lower road is ambiguous.
+    differentRoadLoaded = b and routeB and not ((a == routeA and b == routeB) or (a == routeB and b == routeA))
     for _, seg in ipairs(segs) do
       if b and ((seg.a == a and seg.b == b) or (seg.a == b and seg.b == a)) then
         _, _, previous = M.nearestEdge({ seg }, p.x, p.y)
@@ -414,7 +421,6 @@ local function routeTarget(e, nodes, i, t)
       end
     end
   end
-  local differentRoadLoaded = routeEdge and previous and previous.segment ~= routeEdge
   local previousS = s0
   local best = nil
   local via, lastVia, misses = {}, s0, 0
@@ -1045,7 +1051,7 @@ function M.update(anchor, player)
         local veh = playerVeh()
         if veh then holdAutodrive(veh) end
         -- A graph cut needs time to load. On another road beside an already loaded route, retain recovery.
-        if not differentRoadLoaded or off <= M.ON_GRAPH_M then
+        if not differentRoadLoaded then
           progRemaining, progAt, stuckTries = nil, nil, 0
           return
         end
