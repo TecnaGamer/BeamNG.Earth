@@ -68,7 +68,7 @@ MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}))     # (prewarm.py)
 # opacity maps did not shape them (whole bright bands across each lane; darkened, uniform brown bands like rails).
 # BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
 STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
-STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS)
+STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS, K_MANHOLE)   # (the manhole covers too: bright white discs in game)
 
 
 def _grid(cols, rows):
