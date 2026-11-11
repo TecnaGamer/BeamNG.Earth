@@ -183,12 +183,12 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
 # size (the large grey slabs of West Coast USA's brutalist plazas; the red herringbone brick); their roughness and
 # ao maps are 512 (a slot-size mismatch costs a resize at every material rebuild), so the asphalt's, ao off. A 2 m
 # repeat: 1 m slabs, 0.25 m bricks. The detail colour shows over the photo (pavers' joints, brick's red).
-TL_ = "/assets/materials/tileable/"
+# The terrain packing reads no DDS (GBitmap) and these ship as DDS only: the server writes PNG copies from the
+# player's game files under /temp/beamngEarth/terraintex/ (server/terraintex.py).
+TL_ = "/temp/beamngEarth/terraintex/"
 for i, (name, gm, color, normal, dsize, strength, far) in enumerate((
-        ("bngEarthGroundPavers", "ASPHALT_OLD", "concrete/slabs_brutalist/t_slabs_brutalist_b.color.png",
-         "concrete/slabs_brutalist/t_slabs_brutalist_nm.normal.png", 1, 0.5, 0.15),
-        ("bngEarthGroundBrick", "COBBLESTONE", "brick/t_bricks_herringbone_01/t_bricks_herringbone_01_b.color.png",
-         "brick/t_bricks_herringbone_01/t_bricks_herringbone_01_nm.normal.png", 1, 0.85, 0.3))):
+        ("bngEarthGroundPavers", "ASPHALT_OLD", "bne_pavers_b.png", "bne_pavers_nm.png", 1, 0.5, 0.15),
+        ("bngEarthGroundBrick", "COBBLESTONE", "bne_brick_b.png", "bne_brick_nm.png", 1, 0.85, 0.3))):
     made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}", "asphalt/asphalt/t_asphalt", dsize,
                    "asphalt/macro_asphalt/t_macro_asphalt", 16, strength)
     mat = made[name]

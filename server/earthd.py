@@ -84,6 +84,7 @@ import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
 import blockworker  # noqa: E402
+import terraintex as terraintexmod  # noqa: E402
 import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
@@ -941,6 +942,9 @@ class Server:
         self.orphan_s = SESSION_ORPHAN_S
         self.heartbeat_at = time.monotonic()
         self._scan_sessions()
+        # the squares' layer textures as PNG (the terrain packing reads no DDS: terraintex.py), off the start's path
+        threading.Thread(target=terraintexmod.ensure, args=(user_dir, os.environ.get("BNGEARTH_GAME_DIR")),
+                         name="terraintex", daemon=True).start()
         self.out_dir = os.path.join(root, self.sid)
         self.cdae_dir = os.path.join(user_dir, *CDAE_ROOT, self.sid.lower())
         self.vfs_dir = f"/temp/beamngEarth/{self.sid}"

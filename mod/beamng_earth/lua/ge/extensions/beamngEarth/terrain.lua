@@ -93,8 +93,9 @@ local function golfLook(detail, dsize, macro, msize, near, far)
   return l
 end
 -- Squares (server/surface.py PAVERS / BRICK; tools/make_level_assets.py has the same): building tileables at the
--- 1024 detail size, the asphalt's roughness (theirs are 512: a resize at every rebuild), ao off
-local TL = '/assets/materials/tileable/'
+-- 1024 detail size as PNG copies the server makes from the game's DDS (server/terraintex.py: the terrain packing reads
+-- no DDS), the asphalt's roughness, ao off
+local TL = '/temp/beamngEarth/terraintex/'
 local function tileLook(color, normal, dsize, near, far)
   local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
   l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
@@ -117,10 +118,8 @@ M.LOOKS = {
   bngEarthGroundGolfFairway = golfLook('grass/t_grass_01/t_grass_01', 2, 'grass/t_macro_grass/t_macro_grass', 64, 0.45, 0.18),
   bngEarthGroundGolfGreen = golfLook('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.5, 0.2),
   bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
-  bngEarthGroundPavers = tileLook('concrete/slabs_brutalist/t_slabs_brutalist_b.color.png',
-    'concrete/slabs_brutalist/t_slabs_brutalist_nm.normal.png', 2, 0.5, 0.15),
-  bngEarthGroundBrick = tileLook('brick/t_bricks_herringbone_01/t_bricks_herringbone_01_b.color.png',
-    'brick/t_bricks_herringbone_01/t_bricks_herringbone_01_nm.normal.png', 2, 0.85, 0.3),
+  bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
+  bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
