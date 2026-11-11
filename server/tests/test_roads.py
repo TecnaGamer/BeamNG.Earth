@@ -60,6 +60,27 @@ def flat(lat, lon):
 
 
 
+def _seg_dist(p, line):
+    """Distance from points p (m, 2) to a polyline (k, 2)."""
+    a, b = line[:-1], line[1:]
+    ab = b - a
+    L2 = np.maximum((ab ** 2).sum(1), 1e-12)
+    t = np.clip(((p[:, None, :] - a[None]) * ab[None]).sum(2) / L2[None], 0, 1)
+    q = a[None] + t[..., None] * ab[None]
+    return np.hypot(*(p[:, None, :] - q).transpose(2, 0, 1)).min(axis=1)
+
+
+def _crosses(a, b, line):
+    """Whether segment a-b crosses the polyline (k, 2)."""
+    P, Q = line[:-1], line[1:]
+
+    def side(p, q, x):
+        return (q[..., 0] - p[..., 0]) * (x[..., 1] - p[..., 1]) - (q[..., 1] - p[..., 1]) * (x[..., 0] - p[..., 0])
+    d1, d2 = side(P, Q, a), side(P, Q, b)
+    d3, d4 = side(a, b, P), side(a, b, Q)
+    return bool(((d1 * d2 < 0) & (d3 * d4 < 0)).any())
+
+
 class WalkLevelTest(unittest.TestCase):
     def test_sidewalk_stops_at_a_wall(self):
         """A sidewalk along y = 6 at the road's level 10 m: where the ground under it climbs a wall (x 30..50) it stops."""
@@ -689,7 +710,7 @@ class BuildTileTest(unittest.TestCase):
         wd = roads.carriageway("residential", "paved", True) / 2
         cls_ = [np.array(c["n"])[:, :2] for c in chunks if c["m"] == roads.LOOK["paved"]["m"] and c["n"]]
         for c in corners:
-            d = np.min([junctions._seg_dist(c["arc"][:, :2], ln) for ln in cls_], axis=0)
+            d = np.min([_seg_dist(c["arc"][:, :2], ln) for ln in cls_], axis=0)
             self.assertGreater(float(d.min()), wd - 0.1, "the curb never on the parking lane")
             self.assertEqual(len(c["ramps"]), 0, "the crosswalks land on the sidewalk runs, not the corners")
         for c in chunks:
@@ -757,13 +778,13 @@ class BuildTileTest(unittest.TestCase):
         for c in [wk["corner"] for wk in walks if "corner" in wk]:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
             for ln in lines:
-                self.assertGreater(junctions._seg_dist(probe, ln).min(), w - 0.5)
+                self.assertGreater(_seg_dist(probe, ln).min(), w - 0.5)
         for c in chunks:
             if c["m"] == junctions.CROSSWALK["m"]:
                 a, b = np.array(c["n"][0][:2]), np.array(c["n"][-1][:2])
                 for ln in lines:
-                    if junctions._seg_dist(np.array([(a + b) / 2]), ln)[0] > 1.0:
-                        self.assertFalse(junctions._crosses(a, b, ln))
+                    if _seg_dist(np.array([(a + b) / 2]), ln)[0] > 1.0:
+                        self.assertFalse(_crosses(a, b, ln))
 
     def test_offset_junction_corners_across_the_connector(self):
         import junctions
@@ -782,7 +803,7 @@ class BuildTileTest(unittest.TestCase):
         for c in corners:
             probe = c["arc"][:, :2] + c["inward"] * 1.0
             for ln in lines:
-                self.assertGreater(junctions._seg_dist(probe, ln).min(), w - 0.5 - roads.PARKING_M)
+                self.assertGreater(_seg_dist(probe, ln).min(), w - 0.5 - roads.PARKING_M)
         mid = np.array([(A[0] + B[0]) / 2, (A[1] + B[1]) / 2])
         for r in [wk for wk in walks if "pts" in wk]:
             self.assertGreater(np.hypot(*(r["pts"][:, :2] - mid).T).min(), w, "no sidewalk along the connector")
@@ -1450,19 +1471,6 @@ class DirtStripTest(unittest.TestCase):
         self.assertNotIn("slen", ch[0])
         x0, y0, x1, y1 = roads.tile_bbox(0, 0)
         self.assertEqual(len(roadmesh.build(FRAME, ch, flat, (x0, y0, 0.0), clip=(x0, y0, x1, y1))), 5)
-
-
-class NearNodePairsTest(unittest.TestCase):
-    def test_the_grid_gives_the_all_pairs_scans_pairs_in_its_order(self):
-        import math
-        import junctions
-        rng = np.random.default_rng(3)
-        pos = rng.uniform(0.0, 200.0, (500, 2))
-        r = junctions.MERGE_M
-        scan = [(a, b) for a in range(len(pos)) for b in range(a + 1, len(pos))
-                if math.hypot(*(pos[a] - pos[b])) < r]
-        self.assertTrue(scan)
-        self.assertEqual(list(junctions._near_node_pairs(pos, r)), scan)
 
 
 class RingWidthTest(unittest.TestCase):

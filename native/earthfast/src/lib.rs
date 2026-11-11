@@ -78,6 +78,7 @@ mod gsrows;
 mod places;
 mod planends;
 mod planset;
+mod junctions;
 mod wallsindex;
 mod mappedlamps;
 mod vegclumps;
@@ -6192,8 +6193,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
+    m.add_function(wrap_pyfunction!(junctions::junctions_find, m)?)?;
     // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
     // 212: planset::plan_merge (_plan_set's weld, trim and pack at once, one reading of the plans)
-    m.add("VERSION", 212)?;
+    // 214: junctions::junctions_find (junctions.find: corners, cuts, crosswalks, ramps in one call)
+    m.add("VERSION", 214)?;
     Ok(())
 }

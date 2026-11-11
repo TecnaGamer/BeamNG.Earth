@@ -2,7 +2,7 @@
 T or crossroads the asphalt had square corners and the gravel edge decals stopped square, Carroll County MD).
 
 Where two paved roads without sidewalks meet, the asphalt between their edges is rounded off: junctions.find(pavement=
-True) gives each corner an arc tangent to both carriageway edges (junctions.pave_radius) and the fill between it and the
+True) gives each corner an arc tangent to both carriageway edges (junctions.PAVE_RADIUS) and the fill between it and the
 edges' old square corner. That corner is
     - painted into the ground (surface.paint_roads: the asphalt material; surface.photo_roads / road_mask: the photo's
       asphalt colour and the near tiles' asphalt mask), or drawn as a fill polygon when the roads are meshes (tile);
