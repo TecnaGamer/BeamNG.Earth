@@ -394,6 +394,38 @@ class UnderpassTest(unittest.TestCase):
         self.assertIsNone(ru.holes(None, None, {}, 0, 0, 1.0, FLAT))
         self.assertEqual(ru.hole_parts(None, FLAT, stations_of("kalynivka")[0], rs.Link("under", np.zeros((1, 2)), [], -1.0, [])), [])
 
+    def test_block_holes_ask_no_ground_for_an_underpass_out_of_reach(self):
+        """railunderpass.holes: an underpass whose holes cannot fall in the block is not given its levels (the graded
+        ground there: cells the block never plans); the mask is the one of the links that reach it."""
+        import railunderpass as ru
+        st, links = self.under("vinnytsia")
+        asked = []
+
+        def at(xy):
+            asked.append(np.asarray(xy, np.float64).reshape(-1, 2).copy())
+            return np.full(len(asked[-1]), 100.0)
+        ground = bm.DrawnGround(at)
+        path = np.asarray(links[0].xy, np.float64)
+        n, sq = 600, 1.0
+        mid = path.mean(axis=0)
+        u = np.full((n, n), 100.0)
+        keep = {"u": u}
+        orig = rs.stations_near
+        try:
+            rs.stations_near = lambda md, frame, box, shared=False: [st]
+            # (the block round the passage: its holes as hole_parts gives them)
+            want = ru.hole_mask([p for ln in links for p in ru.hole_parts(None, FLAT, st, ln)], u, mid[0], mid[1], sq)
+            got = ru.holes(object(), None, keep, mid[0], mid[1], sq, ground)
+            self.assertTrue(want.any())
+            self.assertTrue(np.array_equal(got, want))
+            self.assertTrue(asked)
+            # (a block 5 km away: no ground asked, no holes)
+            asked.clear()
+            self.assertIsNone(ru.holes(object(), None, keep, mid[0] + 5000.0, mid[1], sq, ground))
+            self.assertEqual(asked, [])
+        finally:
+            rs.stations_near = orig
+
     def test_collider_has_no_lights_and_no_rails(self):
         import railunderpass as ru
         st, links = self.under("vinnytsia")

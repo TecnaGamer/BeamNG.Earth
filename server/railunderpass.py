@@ -163,6 +163,21 @@ def hole_parts(frame, elev, st, link):
     return out
 
 
+def _reaches(link, box, square):
+    """Can the underpass link's holes (hole_parts: its passage and its pits' flights, half width plus the wall and side,
+    the kernel's squares reaching in from beyond) fall in box (x0, y0, x1, y1)? From its plan alone: its levels (the
+    graded ground at its crossings and pit tops) are not asked for a link that cannot (a station within reach of a
+    block reaches cells the block never plans: Dijon's ~4.6 s of a warm block's 15 s planning them, 2026-11-11)."""
+    path = rb.resample(link.xy)
+    if len(path) < 2:
+        return False
+    import roads as roadsmod
+    pts = np.vstack([path] + list(flights(link, path).values()))
+    pad = width_of(link) / 2.0 + WALL_T + HOLE_SIDE_M + roadsmod.TUNNEL_HOLE_MARGIN + 3.0 * square
+    lo, hi = pts.min(axis=0) - pad, pts.max(axis=0) + pad
+    return not (hi[0] < box[0] or lo[0] > box[2] or hi[1] < box[1] or lo[1] > box[3])
+
+
 def hole_mask(parts, u, cx, cy, square):
     """Where the terrain block (heights u [iy, ix], roads.tunnel_hole_mask's grid) is a hole for the underpasses `parts`."""
     import fast
@@ -195,7 +210,7 @@ def holes(md, frame, keep, cx, cy, square, elev):
         parts = []
         for st in railstations.stations_near(md, frame, box):
             for ln in st.links:
-                if ln.kind == "under":
+                if ln.kind == "under" and _reaches(ln, box, square):
                     parts += hole_parts(frame, elev, st, ln)
         if not parts:
             return None
