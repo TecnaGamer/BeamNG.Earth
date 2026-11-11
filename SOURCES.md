@@ -83,8 +83,9 @@ Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`),
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders
 (`geo.api.vlaanderen.be`), Bavaria (`geoservices.bayern.de`), North Rhine-Westphalia (`www.wms.nrw.de`),
 Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersachsen.de`), Berlin
-(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), New South Wales
-(`maps.six.nsw.gov.au`), Tasmania (`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
+(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), Hong Kong
+(`mapapi.hkmapservice.gov.hk`), New South Wales (`maps.six.nsw.gov.au`), Tasmania
+(`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
 
 ## Land cover, trees and water
 
