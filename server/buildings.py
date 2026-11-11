@@ -623,7 +623,7 @@ class Spec:
     """What is built for one footprint (decided by plan())."""
     __slots__ = ("ring", "floors", "floor_h", "height", "roof", "roof_mat", "facade", "band", "shop", "plain", "min_h", "wall", "door", "windows", "front", "steeple", "stoop",
                  "sign", "porch", "cls", "seed", "deck", "pitch", "portal", "gring", "ship", "fr_house", "across", "hi",
-                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street")
+                 "roof_h", "hf", "holes", "skel", "skel_cap", "tank", "street", "slope_dir")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -914,7 +914,11 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                     pitch=GREENHOUSE_PITCH if small else None)
     # a mast or a spire's shaft: a very slender part or building of steel (One World Trade Center's 5 x 5 m, 121 m mast
     # was siding with 14 storeys of windows): plain steel, no windows, its mapped roof kept (mapped_pitch: a spire)
+    # (not a slender part the map gives a sloped roof: a tower's crown fins, Manhattan's 133 mapped skillions drawn as
+    # flat steel masts, streets.gl study 2026-11-11)
     if area <= MAST_MAX_M2 and h is not None and np.isfinite(h) and h >= MAST_MIN_H and not attrs.get("bridge_part") \
+            and ROOF_ALIASES.get((attrs.get("roof_shape") or "").lower(), (attrs.get("roof_shape") or "").lower()) \
+            not in ("skillion", "gabled", "hipped", "half-hipped") \
             and (str(attrs.get("facade_material") or "").lower() in MAST_MATERIALS
                  or h / math.sqrt(max(area, 1.0)) >= MAST_SLENDER):
         look = custom_look(METALWALL, MAST_RGB)
@@ -1021,19 +1025,27 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
     # pitched roofs only on near-rectangular footprints (a church's nave keeps its gable beside a tower or an apse)
     # (a mapped dome follows its own outline: round parts and the largest domes keep it; a sliver or a dome over
     # DOME_MAX_HW is more likely a mapping slip: flat)
+    # A roof shape the map gives on its own outline is never downgraded (streets.gl study, 2026-11-11: One World Trade
+    # Center's four corner triangles are skillions 362 m tall, two of them drawn as flat 417 m prisms; of Manhattan's
+    # 1,431 pitched parts 447 came out flat, 210 skillions by the half-span rule alone): a mapped skillion, or a mapped
+    # pitched roof with its mapped height, is drawn over its own outline (heightfield_roof) whatever its box
+    mapped_hf = (roof == roof_given and roof in HF_FORMS and len(ring) <= HF_MAX_VERTS and hw >= 0.5
+                 and (roof == "skillion" or mapped_roof_h(roof, attrs.get("roof_height")) is not None))
     if roof in DOME_ROOFS:
         if hw < 1.0 or hw > DOME_MAX_HW:
             roof = "flat"
     elif roof != "flat" and (shw < 2.0 or shw > (18.0 if barn else 20.0 if church else 14.0)) \
-            and not (holed and roof in SKEL_FORMS):
+            and not (holed and roof in SKEL_FORMS) and not mapped_hf:
         roof = "flat"           # (a block round a yard: its wings' width counts, the skeleton's, not its box's)
     elif roof != "flat" and box_fill < (0.6 if church else 0.8):
         # (an L / T / U house: its roof on its own outline, heightfield_roof, where the box would add too much; a
         # church keeps its nave's box)
-        roof = "flat" if (church or roof not in HF_FORMS or box_fill < HF_MIN_FILL or len(ring) > HF_MAX_VERTS) \
-            else roof
+        roof = "flat" if (church or roof not in HF_FORMS or (box_fill < HF_MIN_FILL and not mapped_hf)
+                          or len(ring) > HF_MAX_VERTS) else roof
     hf = roof in HF_FORMS and not church and (box_fill < HF_BOX_FILL or (holed and roof in SKEL_FORMS)) \
         and len(ring) <= HF_MAX_VERTS
+    if mapped_hf and roof in HF_FORMS and (shw < 2.0 or shw > 14.0 or box_fill < HF_BOX_FILL):
+        hf = True               # (its box's span says nothing of it: the slopes over the outline itself)
     # (a hipped-style roof over the outline and its yards by the straight skeleton: its rise from the skeleton itself,
     # so the walls stop where the roof starts; a mapped roof height its slope; else the region's pitch, capped)
     skel, skel_cap, skel_pitch = False, None, None
@@ -1309,7 +1321,7 @@ def plan(ring, attrs, neighbours=0, lat=None, lon=None, look=None, town=False, d
                 pitch=math.degrees(math.atan2(dome_rise(roof, hw, rh), max(float(hw), 0.1))) if roof in DOME_ROOFS
                 else (mapped_pitch(roof, shw, attrs.get("roof_height")) or style.pitch),
                 across=across, hi=hi, roof_h=mapped_roof_h(roof, attrs.get("roof_height")), hf=hf, skel=skel,
-                skel_cap=skel_cap)
+                skel_cap=skel_cap, slope_dir=_slope_dir(roof, attrs.get("roof_direction")))
     if skel:
         spec.pitch = skel_pitch
     return francehouses.adapt(spec, attrs, lat, lon)
@@ -2100,6 +2112,17 @@ def _skel_roof(m, spec, ring, z_eave, rm, fac):
     return True
 
 
+def _slope_dir(roof, direction):
+    """A mapped skillion's roof:direction (compass degrees its slope faces, down toward), else None."""
+    if roof != "skillion":
+        return None
+    try:
+        d = float(direction)
+    except (TypeError, ValueError):
+        return None
+    return d % 360.0 if math.isfinite(d) else None
+
+
 def _hf_roof(m, spec, ring, z_eave, rm, fac):
     """A heightfield roof (Spec.hf) over ring and the walls' tops up to it (fast.heightfield_roof): no overhang."""
     fast.require(176, "heightfield_roof")
@@ -2113,11 +2136,20 @@ def _hf_roof(m, spec, ring, z_eave, rm, fac):
     if getattr(spec, "across", False):
         u, hl, hw = np.array([-u[1], u[0]]), hw, hl
     rh = getattr(spec, "roof_h", None)
-    if spec.roof == "skillion":
+    hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
+    sd = getattr(spec, "slope_dir", None)
+    if spec.roof == "skillion" and sd is not None:
+        # (a mapped roof:direction: the plane rises straight against it, over the outline's own extent that way, not
+        # its box's axis: One World Trade Center's corner triangles, streets.gl study 2026-11-11)
+        up = np.array([-math.sin(math.radians(sd)), -math.cos(math.radians(sd))])
+        u, hi = np.array([up[1], -up[0]]), 1.0
+        t = r @ up
+        span = float(t.max() - t.min())
+        k = rh / max(span, 0.5) if rh else math.tan(math.radians(SKILLION_PITCH))
+    elif spec.roof == "skillion":
         k = rh / (2.0 * max(hw, 0.5)) if rh else math.tan(math.radians(SKILLION_PITCH))
     else:
         k = math.tan(math.radians(roof_pitch(spec)))
-    hi = getattr(spec, "hi", None) or (1.0 if spec.seed < 0.5 else -1.0)
     tri, grad, walls = fast._ef.heightfield_roof(r, HF_FORMS[spec.roof], float(c[0]), float(c[1]), float(u[0]),
                                                  float(u[1]), float(k), float(z_eave), HALF_HIP, float(hi))
     for j in range(len(grad)):

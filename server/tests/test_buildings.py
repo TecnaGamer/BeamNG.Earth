@@ -2925,3 +2925,36 @@ class TurbineBaseTest(unittest.TestCase):
             self.assertEqual(self.kept([self.ring(0.0, 0.0, 6.0, 4)]), 1)
         finally:
             windturbines.near = real
+
+
+class MappedRoofTest(unittest.TestCase):
+    """A roof shape the map gives on a part is drawn, not downgraded (streets.gl study, 2026-11-11: One World Trade
+    Center's corner triangles, skillions 362 m tall facing roof:direction)."""
+
+    def test_triangle_skillion_kept_and_sloped_along_its_direction(self):
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])          # a right triangle, legs along the axes
+        for d in (225.0, 45.0):
+            attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                     "roof_direction": d, "seed_id": 7}
+            spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+            self.assertEqual(spec.roof, "skillion", d)
+            self.assertTrue(spec.hf)
+            self.assertAlmostEqual(spec.slope_dir, d)
+            m = bld.Mesh()
+            bld._hf_roof(m, spec, tri, 55.0, (0, (255, 255, 255, 255)), (1, (255, 255, 255, 255)))
+            P = m.arrays()[0]
+            top = P[np.argmax(P[:, 2])]
+            self.assertAlmostEqual(float(P[:, 2].max()), 55.0 + 362.0, delta=0.5, msg="the mapped rise")
+            # (faces 225, south-west: high at the north-east corner(s), the hypotenuse; faces 45: high at the origin)
+            if d == 225.0:
+                self.assertGreater(float(top[0] + top[1]), 30.0)
+            else:
+                self.assertLess(float(top[0] + top[1]), 2.0)
+
+    def test_slender_crown_fin_keeps_its_skillion(self):
+        fin = np.array([(0.0, 0.0), (18.0, 0.0), (18.0, 2.6), (0.0, 2.6)])
+        attrs = {"class": "", "height": 40.0, "roof_shape": "skillion", "roof_height": 6.0, "roof_direction": 119.0,
+                 "seed_id": 3}
+        spec = bld.plan(fin, attrs, lat=40.75, lon=-73.98, dense=True)
+        self.assertEqual(spec.roof, "skillion")
+        self.assertNotEqual(spec.cls, "mast")
