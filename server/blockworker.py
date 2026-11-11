@@ -44,6 +44,8 @@ import xproc
 log = logging.getLogger("earthd.blockworker")
 
 _s = None       # this process's state (init)
+_TRACE = os.environ.get("BNGE_FARTRACE") == "1"
+_dem_t = threading.local()
 
 
 class _State:
@@ -58,6 +60,16 @@ class _State:
         self.imagery = None         # (its settings, imagery.Imagery from the disk alone): far_tile's textures
         net = netfetch.Fetcher(offline=offline)
         self.dem = demmod.Dem(os.path.join(cache_dir, "dem"), fetcher=net)
+        if _TRACE:          # (BNGE_FARTRACE: the DEM's share of a far tile's time, _far_tile)
+            _orig = self.dem.tiles
+
+            def _timed(keys, progress=None, _o=_orig):
+                t0 = time.perf_counter()
+                try:
+                    return _o(keys, progress)
+                finally:
+                    _dem_t.v = getattr(_dem_t, "v", 0.0) + time.perf_counter() - t0
+            self.dem.tiles = _timed
         import railways as _railways    # (coarse elevation: rail decks raised over the roads under them)
         _railways.COARSE_AT = self.dem.coarse_at
         # (and no separation in the ground under a rail bridge: railways.flat_rail_crossing)
@@ -2265,7 +2277,13 @@ def far_global_tile(z, x, y, zoom, ref_zoom, layout, tex):
     import geotiles
     import imagery as imagerymod
     import rockface as rockfacemod
+    if _TRACE:
+        t0, c0 = time.perf_counter(), time.process_time()
+        _dem_t.v = 0.0
     built = far_global_geometry(z, x, y, zoom, ref_zoom, layout)
+    if _TRACE:
+        log.info("fartrace worker global %s: geometry %.0f ms (cpu %.0f, dem %.0f)", (z, x, y),
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _dem_t.v)
     im = _imagery(tex)
     px = tex["px"]
     try:
@@ -2433,9 +2451,28 @@ def far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex):
 
 
 def _far_tile(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
+    if not _TRACE:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    t0, c0 = time.perf_counter(), time.process_time()
+    _dem_t.v = 0.0
+    _geo_t.v = 0.0
+    try:
+        return _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask)
+    finally:
+        log.info("fartrace worker L%d %s: %.0f ms (cpu %.0f), geometry %.0f ms (dem %.0f)", tile.level, tile.key,
+                 1000 * (time.perf_counter() - t0), 1000 * (time.process_time() - c0), 1000 * _geo_t.v,
+                 1000 * _dem_t.v)
+
+
+_geo_t = threading.local()
+
+
+def _far_tile_(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout, tex, mask):
     import imagery as imagerymod
     import rockface as rockfacemod
+    tg = time.perf_counter()
     built = _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout)    # (its CPU counted here)
+    _geo_t.v = time.perf_counter() - tg
     im = _imagery(tex)
     frame = geodesy.EnuFrame(lat, lon)
     x0, y0, _, _ = tile.bbox
