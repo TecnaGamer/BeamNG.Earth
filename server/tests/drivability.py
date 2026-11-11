@@ -1,7 +1,9 @@
 """Drivability of the roads round reported places: the heights a car's wheels meet, measured offline on the replays
 (fixtures/drive_*.npz and fixtures/interchange_*.npz, tools/capture_interchange_fixture.py; interchanges.load).
 
-    python server/tests/drivability.py [NAME ...]             # one JSON line per site
+    python server/tests/drivability.py [NAME ...]             # each site's score against the baseline's
+    python server/tests/drivability.py --baseline [NAME ...]  # the baseline's scores, without measuring
+    python server/tests/drivability.py --json [NAME ...]      # one JSON line per site
     python server/tests/drivability.py --update [NAME ...]    # write those sites' measurements to the baseline
     (--jobs N or BNE_DRIVE_JOBS: sites measured at once, each in its own process; default: one per CPU)
 
@@ -20,12 +22,16 @@ three wheel tracks; a bridge deck or a tunnel floor on its profile (centre line)
 and after: the deck or tunnel that meets it there, else the road on the ground; a deck where the ground is higher on
 that ground (the car meets the higher surface).
 
+score(): how far a site's roads are from drivable, one number: per bad part and metric log2(value / limit), so halving
+a defect takes a point off and fixing it takes all of its points; 0 when every road is within the limits.
+
 test_drivability.py holds every site to fixtures/drivability_baseline.json (steps and each part's metrics): no part may
 get worse and no part may become bad, and an improvement must be written back (--update) so that it cannot get worse
 again. The fixtures never change, so a part's id names the same road in every run.
 """
 import argparse
 import json
+import math
 from concurrent.futures import ProcessPoolExecutor
 import os
 import re
@@ -300,6 +306,32 @@ def _measure_structure(report, st, structures, ground):
     report.add({"part": st.fid, "class": st.spec.cls, "surface": st.surface}, path, profile, _inside(path), centre=True)
 
 
+def score(entry):
+    """The module's docstring; entry: a measurement or a baseline entry."""
+    return sum(math.log2(part[m] / limit) for part in entry["parts"].values()
+               for m, (limit, *_r) in METRICS.items() if part.get(m, 0.0) > limit)
+
+
+def _bad(entry):
+    return sum(part.get(m, 0.0) > limit for part in entry["parts"].values() for m, (limit, *_r) in METRICS.items())
+
+
+def score_table(rows):
+    """Lines of a table of (site, entry, baseline entry or None) and their total."""
+    lines = [f"{'site':28} {'score':>7} {'baseline':>9} {'change':>7} {'steps':>6} {'bad':>4}"]
+    total, total_was = 0.0, 0.0
+    for name, entry, was in rows:
+        now = score(entry)
+        total += now
+        if was is None:
+            lines.append(f"{name:28} {now:7.1f} {'':>9} {'':>7} {entry['steps']:6} {_bad(entry):4}")
+            continue
+        total_was += score(was)
+        lines.append(f"{name:28} {now:7.1f} {score(was):9.1f} {now - score(was):+7.1f} {entry['steps']:6} {_bad(entry):4}")
+    lines.append(f"{'total':28} {total:7.1f}" + (f" {total_was:9.1f} {total - total_was:+7.1f}" if total_was else ""))
+    return lines
+
+
 def load_baseline():
     return json.loads(BASELINE.read_text()) if BASELINE.exists() else {}
 
@@ -321,15 +353,24 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("names", nargs="*", help="sites (default: all)")
     ap.add_argument("--update", action="store_true", help="write the measurements to the baseline")
+    ap.add_argument("--baseline", action="store_true", help="the baseline's scores, without measuring")
+    ap.add_argument("--json", action="store_true", help="one JSON line per site instead of the scores")
     ap.add_argument("--jobs", type=int, help="sites measured at once (default: BNE_DRIVE_JOBS, else one per CPU)")
     a = ap.parse_args()
     unknown = sorted(set(a.names) - set(SITES))
     if unknown:
         ap.error(f"unknown sites: {', '.join(unknown)} (known: {', '.join(SITES)})")
+    names, baseline = a.names or list(SITES), load_baseline()
+    if a.baseline:
+        print("\n".join(score_table((n, baseline[n], None) for n in names if n in baseline)))
+        return
     results = []
-    for result in measure_all(a.names or SITES, a.jobs):
+    for result in measure_all(names, a.jobs):
         results.append(result)
-        print(json.dumps(result), flush=True)
+        if a.json:
+            print(json.dumps(result), flush=True)
+    if not a.json:
+        print("\n".join(score_table((r["site"], r, baseline.get(r["site"])) for r in results)))
     if a.update:
         write_baseline(results)
 

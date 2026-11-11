@@ -37,8 +37,9 @@ class DrivabilityTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn(name, baseline, f"{name} has no baseline: {UPDATE.format(name)}")
                 worse, better = compare(result, baseline[name])
-                self.assertFalse(worse, f"{name} got worse ({dv.SITES[name][1]}):\n  " + "\n  ".join(worse))
-                self.assertFalse(better, f"{name} improved: lock it in with {UPDATE.format(name)}\n  "
+                scores = f"score {dv.score(baseline[name]):.1f} -> {dv.score(result):.1f}"
+                self.assertFalse(worse, f"{name} got worse ({dv.SITES[name][1]}), {scores}:\n  " + "\n  ".join(worse))
+                self.assertFalse(better, f"{name} improved, {scores}: lock it in with {UPDATE.format(name)}\n  "
                                  + "\n  ".join(better))
 
 
@@ -64,6 +65,15 @@ class IndependenceTest(unittest.TestCase):
                 with self.subTest(name, **{k: str(x) for k, x in variant.items()}):
                     worse, better = compare(run.result(), dv.baseline_entry(pinned[name].result()))
                     self.assertFalse(worse + better, f"{name} with {variant}:\n  " + "\n  ".join(worse + better))
+
+
+class ScoreTest(unittest.TestCase):
+    def test_a_point_per_doubling_over_the_limit(self):
+        entry = {"parts": {"ground:a": {"step_m": 0.4, "grade": 0.15}, "bridge:b": {"lift_g": 0.4, "step_m": 0.05}}}
+        self.assertAlmostEqual(dv.score(entry), 3.0)
+
+    def test_drivable_is_zero(self):
+        self.assertEqual(dv.score({"parts": {}}), 0)
 
 
 class CompareTest(unittest.TestCase):
