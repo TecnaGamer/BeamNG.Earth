@@ -71,11 +71,24 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
     A feature that several cells list is taken once (by id)."""
     out, seen = [], set()
     hx, hy = float(hub_xy[0]), float(hub_xy[1])
+    # (only the features whose lon / lat box comes within radius of the hub (a box no farther than its points, the
+    # degrees taken generously), their rings alone into frame: every feature of a group's cells, each to metres through
+    # its whole cell in each road tile's frame (Features.xy_in), was 2.5-6 s of each Lower Manhattan tile, 2026-11-11)
+    hla, hlo, _ = frame.enu_to_geodetic(np.array([hx]), np.array([hy]), np.zeros(1))
+    hla, hlo = float(np.asarray(hla)[0]), float(np.asarray(hlo)[0])
+    rla = 1.02 * radius / 110540.0 + 1e-7
+    rlo = 1.02 * radius / (111320.0 * max(math.cos(math.radians(min(abs(hla) + rla, 89.0))), 1e-3)) + 1e-7
     for name, cells in layers.items():
         for feats in cells:
             if feats is None or not len(feats):
                 continue
-            for i in range(len(feats)):
+            b = feats.lonlat_boxes() if hasattr(feats, "lonlat_boxes") else None
+            if b is not None and len(b) == len(feats):
+                idx = np.flatnonzero((b[:, 0] <= hlo + rlo) & (b[:, 2] >= hlo - rlo)
+                                     & (b[:, 1] <= hla + rla) & (b[:, 3] >= hla - rla)).tolist()
+            else:
+                idx = range(len(feats))
+            for i in idx:
                 fid = str(feats.ids[i])
                 if (name, fid) in seen:
                     continue
@@ -83,7 +96,8 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
                 parts = feats.parts(i)
                 if kind is None or not parts or not parts[0] or len(parts[0][0]) < 1:
                     continue
-                e, n = mapgeom.enu_xy(feats, frame, np.asarray(parts[0][0], np.float64))
+                ring = np.asarray(parts[0][0], np.float64)
+                e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
                 xy = np.column_stack((e, n)).astype(np.float64)
                 if float(np.hypot(xy[:, 0] - hx, xy[:, 1] - hy).min()) > radius:
                     continue
@@ -848,7 +862,8 @@ def group_frame(group):
 
 def to_frame(src, dst, xy):
     """Points (n, 2) of frame src in frame dst (through their lat / lon)."""
-    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    xy = np.asarray(xy, np.float64)
+    xy = xy.reshape(-1, xy.shape[-1] if xy.ndim else 2)[:, :2]
     if src is dst:
         return xy
     la, lo, _ = src.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
@@ -860,8 +875,9 @@ def stations_near(md, frame, box, shared=False):
     """The confident stations within REACH_M of the tile box (x0, y0, x1, y1) of frame, [] almost always: one pass over
     the infrastructure cells for a bus_station feature, and only then the other layers. md: mapdata.MapData. Errors cost
     the stations, not the tile. shared: each group laid out in its own frame (group_frame: the same stations for every
-    tile, their geometry not in frame; tile_skip, which wants only their claimed ids: a group laid out for each of a
-    city's road tiles was 2.5-6 s of each, Lower Manhattan 2026-11-11)."""
+    tile, their geometry in st.group_frame, not in frame; tile_skip, which wants only their claimed ids, busyard.tile_pads
+    their yards' lat / lon: a group laid out for each of a city's road tiles was 2.5-6 s of each, Lower Manhattan
+    2026-11-11)."""
     if not ON:
         return []
     x0, y0, x1, y1 = (float(v) for v in box)
@@ -883,7 +899,10 @@ def stations_near(md, frame, box, shared=False):
         found = []
         for g in groups:
             gf = group_frame(g) if shared else frame
-            found += [(st, gf) for st in _group_stations(md, gf, tuple(g))]
+            for st in _group_stations(md, gf, tuple(g)):
+                if shared:
+                    st.group_frame = gf         # (the frame its geometry is in: the same object for every tile)
+                found.append((st, gf))
     except Exception as ex:         # (offline, a cell unreadable: no stations here)
         log.warning("bus stations of the tile at %s: %s: %s", tuple(round(float(v)) for v in box[:2]),
                     type(ex).__name__, ex)

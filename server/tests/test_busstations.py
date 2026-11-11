@@ -158,7 +158,7 @@ class FurnitureTest(unittest.TestCase):
         x0, y0 = pts.min(0) - 5.0
         x1, y1 = pts.max(0) + 5.0
         x, y = got[0][1], got[0][2]
-        busfurniture.bs.stations_near = lambda md, frame, box: [st]                         # (no cells in a unit test)
+        busfurniture.bs.stations_near = lambda md, frame, box, **kw: [st]                         # (no cells in a unit test)
         try:
             frame = geodesy.EnuFrame(49.23703, 28.40386, 0.0)
             elev = lambda la, lo: np.full(np.shape(la), 100.0)                              # noqa: E731
@@ -246,7 +246,7 @@ class QualityTest(unittest.TestCase):
                     if bs.contains(ring, (x, y)))
         frame = geodesy.EnuFrame(49.23703, 28.40386, 0.0)
         rows = [["shelter", float(roof[0]), float(roof[1]), 0.0], ["shelter", float(roof[0]) + 400.0, float(roof[1]), 0.0]]
-        busfurniture.bs.stations_near = lambda md, fr, box: [st]
+        busfurniture.bs.stations_near = lambda md, fr, box, **kw: [st]
         try:
             got = busfurniture.clear_of_stations(rows, frame, object(), (-1e4, -1e4, 1e4, 1e4))
         finally:
@@ -577,7 +577,7 @@ class RoofsAndLampsTest(unittest.TestCase):
                 ["streetlight", float(far[0]), float(far[1]), 0, 0, 1, 9, 0],
                 ["bench", float(inside[0]), float(inside[1]), 0, 0, 1, 1, 0]]
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             got = self.bf.drop_stock_lamps(rows, None, object(), (0, 0, 1, 1))
         finally:
@@ -598,7 +598,7 @@ class RoofsAndLampsTest(unittest.TestCase):
         wires = [(np.array([[inside[0] + 0.5, inside[1], 8.0], [inside[0] + 30, inside[1], 8.0]]), 0.02),
                  (np.array([[far[0], far[1], 8.0], [far[0] + 30, far[1], 8.0]]), 0.02)]
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             got = self.bf.drop_stock_lamps(rows, None, object(), (0, 0, 1, 1), wires)
         finally:
@@ -617,7 +617,7 @@ class RoofsAndLampsTest(unittest.TestCase):
         box = (x - 5, y - 5, x + 5, y + 5)
         import busstations
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, b: [st]
+        busstations.stations_near = lambda md, frame, b, **kw: [st]
         try:
             rows = self.bf.rows(fr, None, box, lambda a, b: np.full(np.shape(a), 230.0), lambda x, y, z: "CZ")
         finally:
@@ -684,7 +684,7 @@ class KeepoutTest(unittest.TestCase):
         rows = [["busshelter", float(x), float(y), 0.0, 0.0, 1.0, 1.0, 0.0],
                 ["busshelter", float(st.hub[0] + 900), float(st.hub[1]), 0.0, 0.0, 1.0, 1.0, 0.0]]
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             got = busfurniture.clear_of_stations(rows, None, None, (0, 0, 1, 1))
         finally:
@@ -810,7 +810,7 @@ class AdditionsTest(unittest.TestCase):
         x, y, _yaw = self.bf.exit_signs(st)[0]
         fr = geodesy.EnuFrame(50.4, 16.2, 0.0)
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             box = (x - 1, y - 1, x + 1, y + 1)
             ours = self.bf.rows(fr, None, box, lambda a, b: np.zeros(np.shape(a)))
@@ -854,7 +854,7 @@ class AdditionsTest(unittest.TestCase):
         st = only("nachod")
         x, y, _ux, _uy = bs.board_spot(st)
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             rows = self.bf.rows(None, None, (x - 2, y - 2, x + 2, y + 2), lambda a, b: np.zeros(np.shape(a)))
         finally:
@@ -956,7 +956,7 @@ class BusParkTest(unittest.TestCase):
         st = only("trutnov")
         fr = geodesy.EnuFrame(50.4, 16.2, 0.0)
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             rows = bp.rows(fr, object(), (-1e4, -1e4, 1e4, 1e4), lambda a, b: np.full(np.shape(a), 300.0))
             none = bp.rows(fr, object(), (5e3, 5e3, 6e3, 6e3), lambda a, b: np.full(np.shape(a), 300.0))
@@ -1019,7 +1019,7 @@ class SignSpotTest(unittest.TestCase):
         st.name = st.name or "x"
         x, y, _ux, _uy = bs.sign_spot(st)
         orig = busstations.stations_near
-        busstations.stations_near = lambda md, frame, box: [st]
+        busstations.stations_near = lambda md, frame, box, **kw: [st]
         try:
             rows = busfurniture.rows(None, None, (x - 3, y - 3, x + 3, y + 3), lambda a, b: np.zeros(np.shape(a)))
         finally:
@@ -1132,7 +1132,7 @@ class YardTest(unittest.TestCase):
         import geodesy
         st = only("vin_west")
         frame = geodesy.EnuFrame(49.23703, 28.40386, 0.0)
-        self.by.bs.stations_near = lambda md, fr, box: [st]                   # (no cells in a unit test)
+        self.by.bs.stations_near = lambda md, fr, box, shared=False: [st]                  # (no cells in a unit test)
         try:
             pads = []
             self.by.tile_pads(frame, 0, 0, object(), pads)

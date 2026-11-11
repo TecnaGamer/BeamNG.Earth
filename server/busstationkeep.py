@@ -107,16 +107,20 @@ def keepout(md, frame, box):
     the features are off. Errors cost the keepout, never the tile."""
     import logging
     rings = []
+    # (the stations as laid out once per group, their rings moved into frame: a group laid out again for each road
+    # tile was ~2 s of each in Lower Manhattan, 2026-11-11; busstations.stations_near's shared)
     if md is not None and bs.ON:
         try:
-            rings += of_stations(bs.stations_near(md, frame, box)).rings
+            for st in bs.stations_near(md, frame, box, shared=True):
+                rings += [bs.to_frame(getattr(st, "group_frame", None) or frame, frame, r) for r in of_stations([st]).rings]
         except Exception:
             logging.getLogger(__name__).exception("bus station keepout")
     if md is not None:
         try:
             import railstations
             if railstations.ON:
-                rings += of_rail_stations(railstations.stations_near(md, frame, box)).rings
+                for st in railstations.stations_near(md, frame, box, shared=True):
+                    rings += [bs.to_frame(getattr(st, "group_frame", None) or frame, frame, r) for r in of_rail_stations([st]).rings]
         except Exception:
             logging.getLogger(__name__).exception("rail station keepout")
     return Keepout(rings)

@@ -188,8 +188,8 @@ def tile_pads(frame, tx, ty, md, pads):
         return
     import roads
     try:
-        for st in bs.stations_near(md, frame, roads.tile_bbox(tx, ty)):
-            pads.append(("bus:" + st.fid, station_rings(st, frame)))
+        for st in bs.stations_near(md, frame, roads.tile_bbox(tx, ty), shared=True):    # (lat / lon out: any frame)
+            pads.append(("bus:" + st.fid, station_rings(st, getattr(st, "group_frame", None) or frame)))
     except Exception as ex:                             # no yard paint rather than no road tile
         log.warning("bus station yards of tile (%s, %s): %s: %s", tx, ty, type(ex).__name__, ex)
 

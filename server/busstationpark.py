@@ -89,12 +89,22 @@ def rows(frame, md, box, elev):
     import busstationmesh
     x0, y0, x1, y1 = (float(v) for v in box)
     pend = []
-    for st in bs.stations_near(md, frame, box):
+    # (the stations as laid out once per group, the bays moved into frame: laid out again for each road tile they were
+    # ~3 s of each in Lower Manhattan, 2026-11-11; and the bays a hash of their centre picks are the same in every tile)
+    for st in bs.stations_near(md, frame, box, shared=True):
         if not st.confident():
             continue
-        for b, heading in station_bays(st):
-            if x0 <= b.c[0] < x1 and y0 <= b.c[1] < y1:
-                pend.append((float(b.c[0]), float(b.c[1]), heading))
+        bays = station_bays(st)
+        if not bays:
+            continue
+        gf = getattr(st, "group_frame", None) or frame
+        c = np.array([np.asarray(b.c, float)[:2] for b, _h in bays])
+        hr = np.radians([h for _b, h in bays])
+        cc = bs.to_frame(gf, frame, c)
+        tip = bs.to_frame(gf, frame, c + np.column_stack((np.cos(hr), np.sin(hr))))
+        for (x, y), (tx_, ty_) in zip(cc.tolist(), tip.tolist()):
+            if x0 <= x < x1 and y0 <= y < y1:
+                pend.append((x, y, float(math.degrees(math.atan2(ty_ - y, tx_ - x)) % 360.0)))
     if not pend:
         return []
     z = busstationmesh.ground(frame, elev, np.array([[p[0], p[1]] for p in pend]))

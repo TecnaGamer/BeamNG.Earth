@@ -204,6 +204,28 @@ class Features:
             got = memo[key] = got
         return got
 
+    def lonlat_boxes(self):
+        """(n, 4): per feature the [min lon, min lat, max lon, max lat] of all its coordinates (+inf / -inf without
+        any). Frame-free, kept: a test against a few points in many frames (busstations.items_from_layers) without
+        every coordinate of the cell in each frame (xy_in)."""
+        got = self.__dict__.get("_ll_boxes")
+        if got is None:
+            n = len(self.part_off) - 1
+            got = np.empty((max(n, 0), 4))
+            got[:, :2], got[:, 2:] = np.inf, -np.inf
+            if n > 0 and len(self.lonlat):
+                c = self.coord_off[self.ring_off[self.part_off]]
+                c0, c1 = c[:-1], c[1:]
+                ll = np.asarray(self.lonlat, np.float64)
+                has = c1 > c0
+                if has.any():
+                    got[has, 0] = _reduce(np.minimum, ll[:, 0], c0[has], c1[has])
+                    got[has, 1] = _reduce(np.minimum, ll[:, 1], c0[has], c1[has])
+                    got[has, 2] = _reduce(np.maximum, ll[:, 0], c0[has], c1[has])
+                    got[has, 3] = _reduce(np.maximum, ll[:, 1], c0[has], c1[has])
+            self.__dict__["_ll_boxes"] = got
+        return got
+
     def localize(self, frame):
         """Fill `en` from `lonlat` with an EnuFrame (the cell's)."""
         if len(self.lonlat):
