@@ -471,6 +471,18 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # change, the user 2026-11-11: "the textures dont seem to match the border of the paint collor")
 PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (128, 125, 120, 0.9),
                    "paved": (95, 95, 94, 1.0)}
+# The painted roads in the photo's own tone (earthfast.paint_lines_toned; the user, 2026-11-11: "look into other ways to
+# get the ground collor, and material to be right" -> "start with 1"): a kind's colour at a pixel is the mean of the
+# photo's pavement under it within PHOTO_TONE_RADIUS_M (markings over the sample luma, shadow under it, greenery and
+# saturated pixels, cars, left out), pulled to the kind's (luma min, luma max, saturation max), then `share` of it over
+# the flat PHOTO_ROAD_RGBA colour (fewer than `least` samples in the box: the flat colour). Old asphalt, patches and
+# concrete keep their shade; one road's tone is the same either side of a tile edge (the same photo pixels).
+PHOTO_TONE_RADIUS_M = 6.0
+PHOTO_TONE_SAMPLE_LUMA = (40.0, 185.0)
+PHOTO_TONE_SAMPLE_SAT = 0.30
+PHOTO_TONE_GREEN = 10.0
+PHOTO_ROAD_TONE = {"dirt": (70.0, 150.0, 0.45, 0.6, 12.0), "gravel": (110.0, 190.0, 0.30, 0.6, 12.0),
+                   "cobble": (80.0, 150.0, 0.22, 0.75, 12.0), "paved": (55.0, 135.0, 0.14, 0.75, 12.0)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
                                 # antialiased rim left a pale hair between the edge line and the decal)
@@ -643,6 +655,10 @@ ISLAND_LAWN_SHARE = 0.55        # of Nachod's, stones and shrubs in the picture,
 # Outset past the ring centreline so the fill covers the whole roundabout footprint (island + carriageways); paint_lines
 # then redraws the asphalt on top and only the island centre stays grass.
 ISLAND_OUTSET_M = 8.0
+# ... only where the photo shows the island green: a footprint with less of its pixels green than this is a paved
+# circle (Baltimore's Washington Monument, a stone plaza round the column: 0.1 % green, drawn as a lawn; a grass
+# island's share of its footprint, the ring road included, is about 20-25 %)
+ISLAND_MIN_GREEN = 0.05
 
 
 def _outset_poly(xy, metres):
@@ -754,7 +770,8 @@ def _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn=None, wi
 
 def _fill_island_photos(rgb, polys):
     """rgb with each roundabout footprint filled: median of its greener photo pixels, else ISLAND_GRASS. Covers the
-    old through-road scar; carriageways paint over the ring afterwards."""
+    old through-road scar; carriageways paint over the ring afterwards. A footprint the photo shows paved (under
+    ISLAND_MIN_GREEN of it green) is left as it is."""
     if not polys:
         return rgb
     out = rgb.copy()
@@ -769,6 +786,8 @@ def _fill_island_photos(rgb, polys):
         if not m.any():
             continue
         sel = m & green
+        if sel.sum() < ISLAND_MIN_GREEN * m.sum():    # (a paved island: its photo as it is)
+            continue
         if sel.sum() >= 8:
             fill = tuple(int(x) for x in np.median(out[sel], axis=0))
         else:
@@ -797,7 +816,11 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
     if got is None:
         return filled
     colors = np.array([PHOTO_ROAD_RGBA[k] for k in PHOTO_ROAD_RGBA], np.float32)
-    return fast._ef.paint_lines(np.ascontiguousarray(filled, np.uint8), *got, colors)
+    fast.require(203, "roads in the photo's own tone")
+    tone = np.array([PHOTO_ROAD_TONE[k] for k in PHOTO_ROAD_RGBA], np.float32)
+    radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
+    return fast._ef.paint_lines_toned(np.ascontiguousarray(filled, np.uint8), *got, colors, tone, radius,
+                                      PHOTO_TONE_SAMPLE_LUMA, PHOTO_TONE_SAMPLE_SAT, PHOTO_TONE_GREEN)
 
 
 def corner_pads(frame, x0, y0, size, feats_list, urban_fn=None, widths=None):

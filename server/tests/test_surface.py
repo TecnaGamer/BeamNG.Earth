@@ -575,6 +575,48 @@ class LotTest(unittest.TestCase):
         self.assertEqual(grey[10, 10], sf.PAVERS)
 
 
+class IslandFillTest(unittest.TestCase):
+    def test_paved_island_left_to_its_photo(self):
+        """A roundabout footprint the photo shows paved (Baltimore's Washington Monument circle) is not grassed over;
+        a green one is."""
+        poly = [(20, 20), (80, 20), (80, 80), (20, 80)]
+        paved = np.full((100, 100, 3), (170, 165, 155), np.uint8)
+        self.assertTrue(np.array_equal(sf._fill_island_photos(paved, [poly]), paved))
+        grass = paved.copy()
+        grass[30:70, 30:70] = (70, 120, 50)
+        out = sf._fill_island_photos(grass, [poly])
+        self.assertGreater(int(out[25, 25, 1]) - int(out[25, 25, 0]), 20, "the island grassed over")
+
+
+class RoadToneTest(unittest.TestCase):
+    """The roads painted in the photo's own pavement tone (earthfast.paint_lines_toned; the user, 2026-11-11: "start
+    with 1")."""
+
+    def test_tone_from_the_photo_not_the_cars(self):
+        import fast
+        rgb = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # grass
+        rgb[80:120, :] = (150, 148, 140)                                    # a pale concrete road across
+        rgb[95:105, 20:40] = (20, 20, 25)                                   # a black car on it
+        rgb[95:105, 120:126] = (250, 250, 250)                              # a marking
+        segs = np.array([[0.0, 100.0, 200.0, 100.0]])
+        cols = np.array([sf.PHOTO_ROAD_RGBA[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        tone = np.array([sf.PHOTO_ROAD_TONE[k] for k in sf.PHOTO_ROAD_RGBA], np.float32)
+        paved = np.array([list(sf.PHOTO_ROAD_RGBA).index("paved")], np.uint8)
+        out = fast._ef.paint_lines_toned(rgb, segs, np.array([18.0]), paved, cols, tone, 12,
+                                         sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        road = out[85:115, 5:195].reshape(-1, 3).astype(float)
+        flat = np.array(sf.PHOTO_ROAD_RGBA["paved"][:3])
+        self.assertGreater(road.mean(0)[0], flat[0] + 15, "lighter than the flat grey: the photo's concrete")
+        self.assertLess(road.std(0).max(), 6.0, "even: no car or marking left in it")
+        self.assertTrue((out[20, 20] == rgb[20, 20]).all(), "off the road: the photo")
+        lum = road @ [0.299, 0.587, 0.114]
+        self.assertLessEqual(lum.max(), sf.PHOTO_ROAD_TONE["paved"][1] + 1.0, "within the kind's range")
+        bare = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # no pavement in the photo: the flat colour
+        flat_out = fast._ef.paint_lines_toned(bare, segs, np.array([18.0]), paved, cols, tone, 12,
+                                              sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        self.assertTrue(np.allclose(flat_out[100, 100], flat, atol=1))
+
+
 def plazas_mod():
     import plazas
     return plazas
