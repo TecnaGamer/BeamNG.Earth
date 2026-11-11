@@ -110,6 +110,25 @@ do
   T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
 end
 
+-- Stacked roads can share a heading and be closer in XY on the wrong level.
+do
+  local stacked = {
+    a = { pos = { x = 0, y = 1, z = 10 }, radius = 6, links = { b = {} } },
+    b = { pos = { x = 100, y = 1, z = 20 }, radius = 6, links = {} },
+    c = { pos = { x = 0, y = 0, z = 0 }, radius = 6, links = { d = {} } },
+    d = { pos = { x = 100, y = 0, z = 0 }, radius = 6, links = {} },
+  }
+  local a, b = G.edgeUnder(stacked, 50, 0, 1, 0, 15)
+  T.check(a == 'a' and b == 'b', 'bridge height beats a horizontally closer road below')
+  a, b = G.edgeUnder(stacked, 50, 1, 1, 0, 0)
+  T.check(a == 'c' and b == 'd', 'the road below beats a horizontally closer bridge above')
+  a, b = G.edgeUnder(stacked, 50, 0, -1, 0, 15)
+  T.check(a == 'b' and b == 'a', 'interpolated bridge height also works in the reverse direction')
+  stacked.c.pos.z, stacked.d.pos.z = 14, 14
+  T.check(G.edgeUnder(stacked, 75, 0, 1, 0, 17.5) == 'a',
+    'sloping edges are compared at the car position, not at an endpoint')
+end
+
 -- the AI's path across a road-graph change: from the edge under the car, as far as every step is an edge in both graphs
 do
   local function n(x, links) return { pos = { x = x, y = 0 }, links = links } end

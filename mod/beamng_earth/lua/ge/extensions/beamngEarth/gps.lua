@@ -493,8 +493,9 @@ local function drivable(e, a)
 end
 
 -- Pure: the nearest graph edge (from id, to id) running the car's way, within its local half-width
--- or the existing 8 m matching tolerance. Wide carriageways must include their outer lanes.
-function M.edgeUnder(nodes, px, py, hx, hy)
+-- or the existing 8 m horizontal tolerance. Rank by distance including the edge's interpolated height when
+-- pz is supplied, so an overlapping road above/below cannot win just because its centreline is closer in XY.
+function M.edgeUnder(nodes, px, py, hx, hy, pz)
   local best, bd = nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
@@ -513,7 +514,9 @@ function M.edgeUnder(nodes, px, py, hx, hy)
         ra, rb = rIn or ra, rOut or rb
       end
       local reach = math.max(8, ra + t * (rb - ra))
-      if d < reach and d < bd then best, bd = { from, to }, d end
+      local dz = pz and a.z and b.z and (a.z + t * (b.z - a.z) - pz) or 0
+      local distanceSq = d * d + dz * dz
+      if d < reach and distanceSq < bd then best, bd = { from, to }, distanceSq end
     end
   end
   for id, n in pairs(nodes or {}) do
@@ -625,10 +628,10 @@ local function driveArrowsPath(gm, nodes)
   local a, b
   if hl > 0.1 then
     -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
-    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl)
+    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
   end
   ids = M.connectedStart(ids, a, b, nodes)
-  if not ids or #ids < 2 then holdAutodrive(veh); return end
+  if not ids or #ids == 0 then holdAutodrive(veh); return end
   veh:queueLuaCommand(M.aiCommand(ids))
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
@@ -753,7 +756,7 @@ local function setArrows(key, target, tail, nodes)
     local p, d = veh and veh:getPosition(), veh and veh:getDirectionVector()
     local hl = d and math.sqrt(d.x * d.x + d.y * d.y) or 0
     local a, b
-    if hl > 0.1 then a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl) end
+    if hl > 0.1 then a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z) end
     if not b then if veh then holdAutodrive(veh) end; return end
     -- Pin the planner to the forward junction before the distant route waypoints. Otherwise it can choose a
     -- parallel road as its start, even though that road cannot be reached from the vehicle's current segment.

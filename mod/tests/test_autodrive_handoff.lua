@@ -46,4 +46,18 @@ mapmgr.mapData.graph.c.d = {oneWay=true,inNode='d'}
 T.check(A.drive({'c','d'}, 2, false, nil, .3) == 'waiting', 'vehicle-side validation rejects reverse one-way steps')
 A.stop('disabled')
 T.check(ai.mode == 'disabled', 'disable clears helper state and disables AI')
+
+mapmgr.mapData = graph()
+T.check(A.drive({'b'}, 3, false, nil, .3) == 'start' and same(starts[#starts].wpTargetList, 'b'),
+  'one forward waypoint starts through the stock waypoint API')
+local count = #starts
+T.check(A.drive({'b'}, 3, false, nil, .3) == 'keep' and #starts == count,
+  'an unchanged single waypoint preserves the active plan')
+T.check(A.drive({'b','c'}, 3, false, nil, .3) == 'extend' and same(suffixes[#suffixes], 'b,c'),
+  'a single waypoint can extend through its endpoint')
+T.check(A.drive({'c'}, 3, false, nil, .3) == 'keep', 'a live path can reduce to its last waypoint')
+mapmgr.mapData = graph()
+T.check(A.drive({'c'}, 3, false, nil, .3) == 'start', 'one waypoint restarts after map replacement')
+T.check(A.drive({}, 3, false, nil, .3) == 'waiting', 'an empty waypoint list still holds')
+T.check(A.drive({'missing'}, 3, false, nil, .3) == 'waiting', 'an unknown single waypoint still holds')
 T.done('test_autodrive_handoff')

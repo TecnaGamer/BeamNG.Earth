@@ -35,7 +35,8 @@ function M.extension(old, new)
 end
 
 local function valid(ids, md)
-  if not md or not md.graph or #ids < 2 then return false end
+  -- One forward waypoint is sufficient: the stock waypoint API builds the approach from the car's position.
+  if not md or not md.graph or #ids == 0 then return false end
   for i, id in ipairs(ids) do
     if not md.graph[id] then return false end
     if i > 1 then

@@ -8,10 +8,10 @@ for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_gro
 end
 local savedClock, savedNav = os.clock, package.loaded['beamngEarth/navgraph']
 
-local function fixture(path, y, radius)
+local function fixture(path, y, radius, configure)
   local G = dofile(dir .. '/../beamng_earth/lua/ge/extensions/beamngEarth/gps.lua')
   local f = { gps = G, now = 0, serial = 1, drives = {}, extensions = {}, modes = {}, arrows = 0, requests = 0,
-    healthy = true, speed = 20, x = 40, y = y or 2, path = path or { 'j', 's', 't' } }
+    healthy = true, speed = 20, x = 40, y = y or 2, z = 0, path = path or { 'j', 's', 't' } }
   local function node(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links, radius = radius } end
   f.nodes = { w = node(0, 0, { j = {} }), j = node(100, 0, { s = {} }),
     s = node(160, -60, { t = {} }), t = node(400, -60, {}) }
@@ -40,6 +40,7 @@ local function fixture(path, y, radius)
   end
   f.route = { points = { { 0, 0 }, { 0, 0.01 }, { -0.006, 0.016 }, { -0.006, 0.04 } },
     dist = 425, dur = 30 }
+  if configure then configure(f) end
   f.anchor = { geodeticToEnu = function(_, lat, lon) return lon * 10000, lat * 10000, 0 end }
   os.clock = function() return f.now end
   package.loaded['beamngEarth/navgraph'] = { applies = function() return f.serial end }
@@ -47,7 +48,7 @@ local function fixture(path, y, radius)
   map = { getMap = function() return f.map end }
   getPlayerVehicle = function() return {
     getId = function() return 1 end,
-    getPosition = function() return { x = f.x, y = f.y, z = 0 } end,
+    getPosition = function() return { x = f.x, y = f.y, z = f.z } end,
     getDirectionVector = function() return { x = 1, y = 0, z = 0 } end,
     getVelocity = function() return { x = f.speed, y = 0, z = 0 } end,
     queueLuaCommand = function(_, command)
@@ -69,7 +70,7 @@ local function fixture(path, y, radius)
   end }
   function f:step(seconds)
     self.now = self.now + (seconds or 1)
-    G.update(self.anchor, { x = self.x, y = self.y, lat = self.y / 10000, lon = self.x / 10000,
+    G.update(self.anchor, { x = self.x, y = self.y, z = self.z, lat = self.y / 10000, lon = self.x / 10000,
       vx = self.speed, vy = 0 })
   end
   local goal = f.route.points[#f.route.points]
@@ -107,6 +108,31 @@ do
   T.check(#f.drives == 2 and #f.modes == 0, 'a graph handoff in the outer lane resumes without a stop')
   f = fixture(nil, 14, 12)
   T.check(#f.drives == 0 and f.modes[#f.modes] == 'stop', 'a position beyond the wide carriageway still holds')
+end
+
+do
+  local f = fixture(nil, 2, 6, function(f)
+    f.z = 12
+    for _, n in pairs(f.nodes) do n.pos.z = 12 end
+    f.nodes.lowerA = { pos = { x = 0, y = 2, z = 0 }, radius = 6, links = { lowerB = {} } }
+    f.nodes.lowerB = { pos = { x = 100, y = 2, z = 0 }, radius = 6, links = {} }
+  end)
+  T.check(f.target[1] == 'j' and #f.drives == 1 and #f.modes == 0,
+    'both planner anchoring and handoff select the bridge instead of the road directly below')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and #f.modes == 0, 'bridge route resumes after map replacement without stopping')
+end
+
+do
+  local f = fixture({ 'w', 'j' }, 2, 6, function(f)
+    f.route = { points = { { 0, 0 }, { 0, 0.01 } }, dist = 100, dur = 10 }
+  end)
+  T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j' and #f.modes == 0,
+    'a final-edge route drives to its single forward waypoint after removing the rear node')
+  f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.drives == 1 and #f.modes == 0, 'an unchanged final waypoint keeps the active plan')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and #f.modes == 0, 'a final waypoint restarts on a replacement vehicle map')
 end
 
 do
