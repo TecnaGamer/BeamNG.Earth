@@ -450,12 +450,11 @@ end
 -- trailer parks' homes and caravan sites' caravans (Utah's caravan, its length along local y)
 M.CATALOG.caravan = { { UT .. 'buildings/ut_caravan_a', 2.85 } }
 M.GROUP_MAX_M.caravan = 700
--- a construction site's tower crane (Italy's: its mast, and its top set on the mast's top)
-M.CATALOG.towercrane_base = { { IT .. 'buildings/ind_bld_crane_bottom_10x10', 41.74 } }
-M.CATALOG.towercrane_top = { { IT .. 'buildings/ind_bld_crane_top', 53.21 } }
-M.GROUP_MAX_M.towercrane_base = 3000
-M.GROUP_MAX_M.towercrane_top = 3000
-for _, g in ipairs({ 'portcrane', 'caravan', 'towercrane_base', 'towercrane_top' }) do M.ONE_SPELLING[g] = true end
+-- a construction site's tower crane (West Coast USA's s_crane_tower: its materials in WCA objects, loaded; the user
+-- 2026-11-11 asked for a better one than Italy's low-poly pieces)
+M.CATALOG.towercrane = { { WCA .. 'objects/s_crane_tower', 38.98 } }
+M.GROUP_MAX_M.towercrane = 3000
+for _, g in ipairs({ 'portcrane', 'caravan', 'towercrane' }) do M.ONE_SPELLING[g] = true end
 -- mapped street furniture (server places.street_rows; the benches, bins and North America's hydrants are the groups
 -- above): Europe's pillar hydrant and post box (Italy's, global materials), the US post box, a bicycle stand (4.2 m of
 -- hoops along local x), a recycling bin

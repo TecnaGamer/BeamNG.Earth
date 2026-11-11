@@ -99,12 +99,13 @@ TRAILER_BLD_M = 1.5
 TRAILER_MIN_M2 = 2000.0
 NA = {"US", "CA"}
 
-# --- construction sites: the stock chain-link panel (2.04 m, origin at its forward end); Italy's tower crane, its
-# mast (x/y -5..5, its top at z 41.3) and its top (its mast 27 m more and the jib) on it, scaled to CRANE_SCALE
+# --- construction sites: the stock chain-link panel (2.04 m, origin at its forward end); a tower crane (G_TC)
 G_HOARD, HOARD_LEN, HOARD_H, HOARD_LIFT = "chainlink", 2.04, 1.76, 0.16
-G_TC_BASE, TC_BASE_H, TC_BASE_TOP = "towercrane_base", 41.74, 41.3
-G_TC_TOP, TC_TOP_H = "towercrane_top", 53.21
-TC_SCALE = 0.62
+# (2026-11-11, the user in game: "do we have a better crane model or textures?": West Coast USA's s_crane_tower, a
+# yellow lattice tower crane, 39 m to its jib, the jib 64 m, origin at the mast's foot; Italy's two low-poly pieces
+# stood as a thin grey tripod with an angled arm)
+G_TC, TC_H = "towercrane", 38.98
+TC_SCALE = (0.85, 1.15)         # (by the hash: cranes of a site not all one height)
 SITE_MIN_M2 = 400.0
 SITE_MAX_M2 = 200000.0          # bigger "construction" areas are a whole new district (fenced in parts)
 TC_MIN_M2 = 2500.0              # a site this big gets a crane
@@ -791,10 +792,8 @@ def construction_rows(frame, places, box, elev, seg):
                     continue
                 zz = float(_z(frame, elev, [x], [y])[0])
                 yaw = 360.0 * _h01(fid, k, "jib")
-                rows.append([G_TC_BASE, round(x, 2), round(y, 2), round(zz, 2), round(yaw, 1), 1.0,
-                             round(TC_BASE_H * TC_SCALE, 3), 0.0])
-                rows.append([G_TC_TOP, round(x, 2), round(y, 2), round(zz + TC_BASE_TOP * TC_SCALE, 2), round(yaw, 1),
-                             1.0, round(TC_TOP_H * TC_SCALE, 3), 0.0])
+                sc = TC_SCALE[0] + (TC_SCALE[1] - TC_SCALE[0]) * _h01(fid, k, "tc h")
+                rows.append([G_TC, round(x, 2), round(y, 2), round(zz, 2), round(yaw, 1), 1.0, round(TC_H * sc, 3), 0.0])
     return rows
 
 

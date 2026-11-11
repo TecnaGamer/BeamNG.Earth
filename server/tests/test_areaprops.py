@@ -184,8 +184,9 @@ class PlacesTest(unittest.TestCase):
         got = self.rows(md)
         fence = [r for r in got if r[0] == places.G_HOARD]
         self.assertGreater(len(fence), (2 * 120 + 2 * 80) / places.HOARD_LEN - 8)
-        self.assertEqual(len([r for r in got if r[0] == places.G_TC_BASE]), 1)
-        self.assertEqual(len([r for r in got if r[0] == places.G_TC_TOP]), 1)
+        cranes = [r for r in got if r[0] == places.G_TC]
+        self.assertEqual(len(cranes), 1)
+        self.assertTrue(places.TC_H * places.TC_SCALE[0] - 1e-6 <= cranes[0][6] <= places.TC_H * places.TC_SCALE[1] + 1e-6)
 
     def test_mapped_street_furniture(self):
         pt = mapgeom.POINT
