@@ -110,6 +110,7 @@ def tier_of(setting):
 
 
 FALL_STEP = 0.25            # the fall amount's quantum (the revisit keys change at most four times a season)
+WINTER_LEAVES = 0.5         # the fallen leaves in a bare winter, of a full fall's
 
 
 def fall_of(wear, lat):
@@ -119,7 +120,9 @@ def fall_of(wear, lat):
     if mode in (None, "off", "summer"):
         return 0.0
     import season
-    f = float(season.amounts_for(mode, float(lat))["fall"])
+    a = season.amounts_for(mode, float(lat))
+    # (the fallen leaves lie on into the bare winter, fewer: the canopy turned bare by late November at 40 N)
+    f = max(float(a["fall"]), WINTER_LEAVES * float(a["winter"]))
     return round(f / FALL_STEP) * FALL_STEP
 
 
