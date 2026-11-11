@@ -552,12 +552,14 @@ class LotTest(unittest.TestCase):
                          "unpaved: the land cover")
 
     def test_us_square_by_the_photo(self):
-        """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers; brick
-        without a photo (Fells Point's rule)."""
+        """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers, also
+        without a photo."""
         import plazas
         lat, lon, land = self._square(40.71, -74.01, "paving_stones")
         idx = np.full((50, 50), sf.DIRT, np.uint8)
-        self.assertEqual(sf.paint_lots(idx, lat, lon, land)[10, 10], sf.BRICK)
+        self.assertEqual(sf.paint_lots(idx, lat, lon, land)[10, 10], sf.PAVERS, "no photo read: grey")
+        red = sf.paint_lots(idx, lat, lon, land, lambda rings: [(plazas.BRICK, plazas.BRICK_REPEAT_M)] * len(rings))
+        self.assertEqual(red[10, 10], sf.BRICK)
         grey = sf.paint_lots(idx, lat, lon, land, lambda rings: [plazas.PAVERS] * len(rings))
         self.assertEqual(grey[10, 10], sf.PAVERS)
 

@@ -376,9 +376,10 @@ def _photo_sources(frame, x0, y0, x1, y1):
                  if s_ <= lat <= n_ and w_ <= lon <= e_)
 
 
-def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False):
+def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None):
     """RoofPhoto of the tile's box from the regional orthophoto (online: fetching what is missing; else what is
-    on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off)."""
+    on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off). px: its size (default
+    ROOF_PHOTO_PX; coarser is cheaper: the squares' colour votes)."""
     if not ROOF_PHOTO_ON or cache_dir is None:
         return None
     try:
@@ -389,7 +390,7 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False):
             return None
         pad = 8.0
         size = max(x1 - x0, y1 - y0) + 2 * pad
-        px = ROOF_PHOTO_PX
+        px = int(px or ROOF_PHOTO_PX)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
         rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)

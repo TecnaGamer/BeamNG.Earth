@@ -1122,8 +1122,8 @@ def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
     """idx with the squares and pedestrian areas of feats_list painted by their mapped surface (plazas.paving,
     PLAZA_LAYER), their holes (a fountain, a lawn) left as they were, a smaller square over a larger one; unpaved
     ones (sand, gravel, grass) left to the land cover. A US square mapped paving_stones or nothing: us_looks(outer
-    rings lon/lat) -> looks (plazas.us_looks: red brick where the photo shows it), None: red brick. Pure given
-    us_looks."""
+    rings lon/lat) -> looks (plazas.us_looks: red brick where the photo shows it), None: plazas.US_UNREAD_BRICK's.
+    Pure given us_looks."""
     import plazas
     h, w = idx.shape
     to_px = grid_affine(lat, lon)
@@ -1155,7 +1155,7 @@ def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
     if amb:
         looks = us_looks([items[k][1] for k in amb]) if us_looks is not None else None
         for j, k in enumerate(amb):
-            look = looks[j] if looks is not None and j < len(looks) else (plazas.BRICK, plazas.BRICK_REPEAT_M)
+            look = looks[j] if looks is not None and j < len(looks) else plazas.us_looks([None], None)[0]
             items[k] = items[k][:3] + (look,)
     im = Image.new("L", (w, h), 255)    # (255: not a square)
     draw = ImageDraw.Draw(im)

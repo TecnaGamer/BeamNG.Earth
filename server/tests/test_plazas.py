@@ -50,7 +50,7 @@ class PavingTest(unittest.TestCase):
 class PlazaMeshTest(unittest.TestCase):
     def test_us_squares_by_the_photo(self):
         """A US square mapped paving_stones is red brick where the orthophoto shows brick red (Fells Point), stone where
-        it shows grey or tan (the World Trade Center's granite, warm in the NYS photo); with no photo, brick."""
+        it shows grey or tan (the World Trade Center's granite, warm in the NYS photo); with no photo, grey pavers."""
         sq = (ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)]), [], "paving_stones")
         flat = lambda la, lo: np.full(np.shape(la), 5.0)     # noqa: E731
 
@@ -66,7 +66,7 @@ class PlazaMeshTest(unittest.TestCase):
                          [plazas.PAVERS[0]])
         self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.68, 0.58, 0.40)))[3],
                          [plazas.PAVERS[0]], "the WTC's granite, warm tan in the photo")
-        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.BRICK], "no photo: the US rule, brick")
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.PAVERS[0]], "no photo: grey pavers")
 
     def test_paved_and_draped(self):
         sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
@@ -83,6 +83,33 @@ class PlazaMeshTest(unittest.TestCase):
         n = np.cross(e[:, 1] - e[:, 0], e[:, 2] - e[:, 0])
         self.assertTrue((n[:, 2] > 0).all(), "faces up")
         self.assertGreater(P[:, 2].max() - P[:, 2].min(), 1.0, "draped on the slope")
+
+    def test_block_looks_kept_once_read(self):
+        """blockworker._us_square_looks (the side agent's note, 2026-11-11: the photo reads slowed the blocks): a read
+        square's answer is kept for the process; one the photo could not read (not fetched yet) is read again later."""
+        import buildings
+        import blockworker
+
+        class Red:
+            def colours(self, rings):
+                return np.array([(0.62, 0.42, 0.36)] * len(rings))
+        sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
+        calls = []
+        orig = buildings.roof_photo
+        blockworker._us_looks_kept.clear()
+        try:
+            buildings.roof_photo = lambda *a, **k: calls.append(1)        # (None: nothing on disk)
+            looks = blockworker._us_square_looks(FRAME)
+            self.assertEqual(looks([sq]), [plazas.PAVERS], "unread: grey")
+            self.assertEqual(looks([sq]), [plazas.PAVERS])
+            self.assertEqual(len(calls), 2, "unread: asked again")
+            buildings.roof_photo = lambda *a, **k: calls.append(1) or Red()
+            self.assertEqual(looks([sq]), [(plazas.BRICK, plazas.BRICK_REPEAT_M)])
+            self.assertEqual(looks([sq]), [(plazas.BRICK, plazas.BRICK_REPEAT_M)])
+            self.assertEqual(len(calls), 3, "read once, then kept")
+        finally:
+            buildings.roof_photo = orig
+            blockworker._us_looks_kept.clear()
 
     def test_off_the_humps(self):
         """The user, 2026-11-11 at the WTC ("the texture mesh is very broken"): the elevation's hump where a building

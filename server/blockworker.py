@@ -2013,6 +2013,13 @@ PLAZA_GEO_MARGIN_M = 12.0    # m past a geotile's quad its skin's plazas are mad
 
 
 US_LOOK_CELL_M = 256.0      # m: a block's US squares are read from the photo by cells of this size (a road tile's)
+# The colour vote reads the photo at the roofs' resolution (buildings.ROOF_PHOTO_PX over a road tile and its margin:
+# the zoom on disk; a coarser read asked for tiles never fetched and read nothing), and each square's answer is kept for
+# this process (blocks overlap and are rebuilt as the player moves: a WTC block's paint 0.85 s first, 0.37 s again; the
+# side agent's note, 2026-11-11, "Picking brick or slabs for US plazas makes the ground take about 0.8 s longer")
+US_LOOK_M_PER_PX = (256.0 + 16.0) / 512
+US_LOOK_KEEP = 50000
+_us_looks_kept = {}         # (outer ring's first point and size) -> brick red (the photo read it)
 
 
 def _us_square_looks(frame):
@@ -2032,17 +2039,37 @@ def _us_square_looks(frame):
             c = np.floor(xy.mean(0) / US_LOOK_CELL_M).astype(np.int64)
             cells.setdefault((int(c[0]), int(c[1])), []).append(k)
         out = [None] * len(xys)
+        keys = [(round(float(r[0, 0]), 7), round(float(r[0, 1]), 7), len(r)) for r in rings]
         for ks in cells.values():
-            allxy = np.concatenate([xys[k] for k in ks])
-            photo = None
-            try:
-                photo = buildings.roof_photo(frame, float(allxy[:, 0].min()), float(allxy[:, 1].min()),
-                                             float(allxy[:, 0].max()), float(allxy[:, 1].max()),
-                                             getattr(_s, "cache_dir", None), online=False)
-            except Exception:
+            todo = [k for k in ks if keys[k] not in _us_looks_kept]
+            if todo:
+                allxy = np.concatenate([xys[k] for k in todo])
+                x0, y0 = float(allxy[:, 0].min()), float(allxy[:, 1].min())
+                x1, y1 = float(allxy[:, 0].max()), float(allxy[:, 1].max())
+                px = int(np.clip(np.ceil((max(x1 - x0, y1 - y0) + 16.0) / US_LOOK_M_PER_PX), 32, 1024))
                 photo = None
-            for k, look in zip(ks, plazas.us_looks([xys[k] for k in ks], photo)):
-                out[k] = look
+                try:
+                    photo = buildings.roof_photo(frame, x0, y0, x1, y1, getattr(_s, "cache_dir", None), online=False,
+                                                 px=px)
+                except Exception:
+                    photo = None
+                cols = None
+                if photo is not None:
+                    try:
+                        cols = photo.colours([xys[k] for k in todo])
+                    except Exception:
+                        cols = None
+                if len(_us_looks_kept) > US_LOOK_KEEP:
+                    _us_looks_kept.clear()
+                for j, k in enumerate(todo):     # (an unread square is not kept: a later build may find its photo)
+                    if cols is not None and j < len(cols) and np.all(np.isfinite(cols[j])):
+                        _us_looks_kept[keys[k]] = plazas.is_brick_red(cols[j])
+            # (an unread square: the cell's read squares' majority, none read: plazas.us_looks' rule)
+            votes = [_us_looks_kept[keys[k]] for k in ks if keys[k] in _us_looks_kept]
+            default = (sum(votes) * 2 >= len(votes)) if votes else plazas.US_UNREAD_BRICK
+            for k in ks:
+                red = _us_looks_kept.get(keys[k], default)
+                out[k] = (plazas.BRICK, plazas.BRICK_REPEAT_M) if red else plazas.PAVERS
         return out
     return looks
 

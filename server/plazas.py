@@ -107,11 +107,17 @@ def paving(surface_value, lat, lon):
     return PAVING.get(surface_value, PAVERS) if surface_value is not None else PAVERS
 
 
+# No photo read for a cell's squares (on a first visit the photos are fetched later, by the road tiles' roofs: 7 of a
+# WTC block's 8 cells read nothing): grey pavers, the common US square (granite, concrete), not the red brick that
+# covered the World Trade Center
+US_UNREAD_BRICK = False
+
+
 def us_looks(xys, photo):
     """The looks of US squares mapped paving_stones or nothing (paving's US_AMBIGUOUS), their outer rings xys [(k, 2)
     in the photo's frame]: red brick where the photo shows the area brick red, grey pavers otherwise; an area the
-    photo cannot read (a thin footway, shade) takes the read areas' majority, none read (or no photo): red brick, the
-    US rule before the photo. photo: buildings.roof_photo's (colours(rings) -> (n, 3) sRGB 0..1, nan unread) or None."""
+    photo cannot read (a thin footway, shade) takes the read areas' majority, none read (or no photo):
+    US_UNREAD_BRICK. photo: buildings.roof_photo's (colours(rings) -> (n, 3) sRGB 0..1, nan unread) or None."""
     cols = None
     if photo is not None and len(xys):
         try:
@@ -122,7 +128,7 @@ def us_looks(xys, photo):
     for j in range(len(xys)):
         if cols is not None and j < len(cols) and np.all(np.isfinite(cols[j])):
             votes[j] = is_brick_red(cols[j])
-    default = (sum(votes.values()) * 2 >= len(votes)) if votes else True
+    default = (sum(votes.values()) * 2 >= len(votes)) if votes else US_UNREAD_BRICK
     return [(BRICK, BRICK_REPEAT_M) if votes.get(j, default) else PAVERS for j in range(len(xys))]
 
 
