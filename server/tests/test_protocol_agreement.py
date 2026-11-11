@@ -65,7 +65,8 @@ import cache as cachemod  # noqa: E402
 import cdae  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import earthd  # noqa: E402
-import farfield as ff  # noqa: E402
+import farfield as ff
+import farpvs  # noqa: E402
 import heightmap  # noqa: E402
 import imagery  # noqa: E402
 import modsim  # noqa: E402
@@ -1014,7 +1015,10 @@ class ServerMessagesTest(test_server.ServerHarness):
             # M1: the texture size with FORMAT 4 (the governor kind), never with FORMAT 3
             self.assertEqual("tex" in m, self.with_imagery and self.cells == 64, m)
             if "tex" in m:
-                self.assertEqual(m["tex"], self.server.tex_size(m["level"]))
+                # (the level's size, or less where the far PVS hides the tile or the screen needs less of it: at least
+                # farpvs.TEX_PX, a power of two)
+                full = self.server.tex_size(m["level"])
+                self.assertTrue(farpvs.TEX_PX <= m["tex"] <= full and m["tex"] & (m["tex"] - 1) == 0, (m, full))
                 self.assertGreaterEqual(m["level"], ff.MESH_MIN_LEVEL[64])
             self.assertEqual(m["key"], ff.tile_of(m["key"]).key)
         if kind in ("anchor_ready", "terrain_ready"):
@@ -1142,7 +1146,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         until(lambda m: m["type"] == "far_done" and m["anchorId"] == b["anchorId"], 120)
         seen += c.drain(0.3)
         kinds = {m["type"] for m in seen}
-        self.assertEqual(kinds, set(SERVER_TO_MOD) - EXERCISED_ELSEWHERE,
+        # (far_retex may come here too: the far PVS sharpens a tile it hid once the anchor moves on; checked below)
+        self.assertEqual(kinds - {"far_retex"}, set(SERVER_TO_MOD) - EXERCISED_ELSEWHERE,
                          "a message type was not exercised or is not in the table")
         for m in seen:
             self.check(m)
