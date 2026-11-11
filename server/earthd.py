@@ -410,10 +410,12 @@ MAP_OUT_OF_VIEW_K = 3.0          # the 3D map: tiles off the screen chosen as if
 FIRST_RAMP = os.environ.get("BNGE_FIRST_RAMP", "1") != "0"
 FIRST_RAMP_K = 0.25
 FIRST_RAMP_MIN_LEVEL = 3        # (= farfield.GLOBAL_MIN_LEVEL: the anchor's own levels, sea-carved and graded, below)
-# ... their textures at most this many px (their photos one zoom coarser: a quarter of the requests; at 512 px the
-# coarse step waited 10-15 s on its photos at a cold Twin Falls, 2026-11-11); a coarse tile the full selection keeps is
-# rendered again at its own size (Connection._stream: stale when sent smaller than tile_tex_px)
-FIRST_RAMP_TEX_PX = int(os.environ.get("BNGE_FIRST_RAMP_PX", "256"))
+# ... their textures at most this many px (FIRST_RAMP_NEAR_PX at level 3, the nearest; their photos two zooms coarser
+# than at 512 px: a sixteenth of the requests). EOX allows ~40 requests a second (eox-rate-limit): at 256 px the
+# coarse cover's ~300 photo tiles were most of its 7 s at a cold Powell, 2026-11-11. A coarse tile the full selection
+# keeps is rendered again at its own size (Connection._stream: stale when sent after the coarse step).
+FIRST_RAMP_TEX_PX = int(os.environ.get("BNGE_FIRST_RAMP_PX", "128"))
+FIRST_RAMP_NEAR_PX = 256
 FIRST_RAMP_CHAIN = ("eox2023", "eox2016")     # ... from these photos alone (Server.coarse_texture)
 FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
@@ -4079,7 +4081,8 @@ class Server:
             tile = tile.base                # (a piece takes its node's texture: the same size)
         px = self.tex_size(tile.level)
         if isinstance(tile, farfield.GTile) and tile.key in self.coarse_keys:
-            px = min(px, FIRST_RAMP_TEX_PX)  # (a teleport's coarse cover: a quarter of the photos, sharpened later)
+            # (a teleport's coarse cover: a few photos, sharpened later)
+            px = min(px, FIRST_RAMP_NEAR_PX if tile.level <= farfield.GLOBAL_MIN_LEVEL else FIRST_RAMP_TEX_PX)
         conn = None
         for c in self.connections:
             if c.active != anchor.id or not isinstance(getattr(c, "cam", None), dict):

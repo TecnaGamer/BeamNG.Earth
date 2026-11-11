@@ -117,8 +117,12 @@ class FarFirstTest(unittest.TestCase):
         self.assertFalse(a.ramp, "once per anchor")
         self.assertTrue(all(ff.is_global_key(k) for k in c.desired))
         self.assertTrue(self.s.coarse_keys >= set(c.desired), "their textures FIRST_RAMP_TEX_PX")
-        t = next(iter(c.desired.values()))
-        self.assertLessEqual(self.s.tile_tex_px(a, t), earthd.FIRST_RAMP_TEX_PX)
+        for t in c.desired.values():
+            self.assertLessEqual(self.s.tile_tex_px(a, t), earthd.FIRST_RAMP_NEAR_PX if t.level <= 3
+                                 else earthd.FIRST_RAMP_TEX_PX)
+        self.s.coarse_keys.clear()
+        t = min(c.desired.values(), key=lambda u: u.level)
+        self.assertGreater(self.s.tile_tex_px(a, t), earthd.FIRST_RAMP_TEX_PX, "its own size after the coarse step")
         self.assertIsNone(c2.first_ramp, "without global far tiles (an older mod): as before")
 
     def test_global_coarse_cover_built_ahead(self):
