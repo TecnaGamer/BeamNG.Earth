@@ -1546,3 +1546,52 @@ class CoarseEaseTest(unittest.TestCase):
     def test_equal_ranks_meet_halfway(self):
         main, side = self.run_ease(100.0, 104.0, 7.0, rank_side=7)
         self.assertLess(float(np.median(side) - np.median(main)), 2.5)
+
+
+class ContinuationHoldTest(unittest.TestCase):
+    """PlanPack: one road planned in pieces is one road in grade_points' ranks (the user, 2026-11-10: a dip in a
+    primary where its short piece between two junctions let the side roads pull its painted edge down)."""
+
+    def plan(self, xy, z, rank, rid, half=7.0, road_half=5.0):
+        p = grading.Plan(np.asarray(xy, np.float64), np.asarray(z, np.float64), half, road_half=road_half)
+        p.rank, p.rid = rank, rid
+        return p
+
+    def test_pieces_that_carry_straight_on_share_one_road(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 101)
+        b = self.plan([[50.0, 0.0], [100.0, 0.0]], [100.15, 100.15], 114, 102)   # 15 cm at the joint
+        c = self.plan([[50.0, 20.0], [50.0, 0.0]], [99.0, 99.0], 108, 103, half=8.0, road_half=2.8)  # a side road
+        pack = grading.PlanPack([a, b, c])
+        ra, rb, rc = (np.unique(pack.rid[pack.of == n]) for n in range(3))
+        self.assertEqual(ra.tolist(), rb.tolist(), "the two pieces are one road")
+        self.assertNotEqual(ra.tolist(), rc.tolist(), "a side road is not")
+
+    def test_the_side_road_does_not_move_the_split_main(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 111)
+        b = self.plan([[50.0, 0.0], [100.0, 0.0]], [100.15, 100.15], 114, 112)
+        c = self.plan([[50.0, 20.0], [50.0, 0.0]], [99.0, 99.0], 108, 113, half=8.0, road_half=2.8)
+        x = np.arange(35.0, 49.1, 1.0)
+        for y in (0.0, 3.0, 4.8):
+            pts = np.array([x, np.full_like(x, y)])
+            base = np.full(len(x), 100.0)
+            alone = grading.grade_points(pts[0], pts[1], base, [a, b])
+            with_side = grading.grade_points(pts[0], pts[1], base, [a, b, c])
+            np.testing.assert_allclose(with_side, alone, atol=1e-9, err_msg=f"y={y}: the main's carriageway held")
+
+    def test_a_true_equal_rank_crossing_is_not_one_road(self):
+        a = self.plan([[0.0, 0.0], [100.0, 0.0]], [100.0, 100.0], 114, 201)
+        b = self.plan([[50.0, -50.0], [50.0, 50.0]], [100.0, 100.0], 114, 202)
+        pack = grading.PlanPack([a, b])
+        ra, rb = (np.unique(pack.rid[pack.of == n]) for n in range(2))
+        self.assertNotEqual(ra.tolist(), rb.tolist(), "a crossing with no shared end is two roads")
+
+    def test_a_fork_at_another_level_is_not_one_road(self):
+        a = self.plan([[0.0, 0.0], [50.0, 0.0]], [100.0, 100.0], 114, 301)
+        b = self.plan([[50.0, 0.0], [100.0, 5.0]], [100.8, 100.8], 114, 302)     # 0.8 m step: a real fork
+        pack = grading.PlanPack([a, b])
+        ra, rb = (np.unique(pack.rid[pack.of == n]) for n in range(2))
+        self.assertNotEqual(ra.tolist(), rb.tolist())
+
+
+if __name__ == "__main__":
+    unittest.main()

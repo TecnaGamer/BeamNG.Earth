@@ -3140,7 +3140,8 @@ class Server:
                 # (every anchor's view of one store: the plans are the planning regions', whatever the anchor)
                 if getattr(self, "plan_store", None) is None:
                     self.plan_store = gradingmod.PlanStore(
-                        self.mapdata, self._plan_elev, self.road_widths)
+                        self.mapdata, self._plan_elev if getattr(self, "lids", None) is not None
+                        else (lambda la, lo: self.dem.sample(la, lo, gradingmod.PROFILE_ZOOM)), self.road_widths)
                 grader = gradingmod.Grader(anchor.frame, self.mapdata, self.plan_store.elev, self.road_widths,
                                           store=self.plan_store)
                 grader.wet = self.sea.depth if self.sea is not None else None    # (no dams: underwater tunnels)
