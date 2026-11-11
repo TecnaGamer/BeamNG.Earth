@@ -116,7 +116,12 @@ VERTEX_STEP = 4.0           # m between the plan's vertices (segments for the gr
                             # crest or a sag was a kink every 16 m, 'bumpy roads, worst uphill and at speed' on r/BeamNG,
                             # 2026-10-17: a San Francisco street's slope changed 4.4 % rms per 2 m, 1.2 % at 4 m;
                             # grading a 1 km block 0.06 -> 0.14 s)
-BUCKET = 32.0               # m, query-point buckets
+BUCKET = 32.0               # m, query-point buckets (grade_points' pairs: a point meets a segment where its bucket does)
+# grade_points by fine bins (earthfast grade_points_binned, gradebins.rs: each bin's points against the few segments
+# reaching it, without the GIL, no copies of the plan set's arrays per call): bit for bit the bucket walk's heights,
+# 2.2-2.8x less CPU (a 2048² block at Roswell NM 2.6 -> 1.1 s, 2026-11-11). BNE_GRADE_BINNED=off: the bucket walk
+GRADE_BINNED_ON = os.environ.get("BNE_GRADE_BINNED", "on") != "off"
+GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bins (grown where the points are sparse)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
@@ -6164,6 +6169,17 @@ class PlanPack:
         self.box = np.array([p.bbox for _k, p in rows], f64).reshape(-1, 4)
         self.of = np.repeat(np.arange(self.n), nseg)
 
+    def seg_keep(self, x0, y0, x1, y1):
+        """(segments,) uint8: 1 for the segments of the plans whose boxes meet (x0, y0, x1, y1) (near's, without
+        copying the arrays), or None when none do."""
+        if not self.n:
+            return None
+        bx = self.box
+        keep = ~((bx[:, 2] < x0) | (bx[:, 0] > x1) | (bx[:, 3] < y0) | (bx[:, 1] > y1))
+        if not keep.any():
+            return None
+        return np.ascontiguousarray(keep[self.of]).view(np.uint8)
+
     def near(self, x0, y0, x1, y1):
         """The segment arrays of the plans whose boxes meet (x0, y0, x1, y1), or None."""
         if not self.n:
@@ -6192,17 +6208,31 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
+    import fast
+    f64 = np.float64
+    if GRADE_BINNED_ON:
+        keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
+        if keep is None:
+            return out
+        fast.require(211, "grade_points_binned")    # (gradebins.rs)
+        return fast._ef.grade_points_binned(
+            np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
+            pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
+            pack.lk, float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
+            float(STEEP_T_MIN), float(BLEND_R), float(BUCKET), float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M),
+            float(WALL_AHEAD_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
+            float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
+            float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
+            float(GRADE_BIN_M))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
     got = pack.near(px.min(), py.min(), px.max(), py.max())
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    import fast
     fast.require(181, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181)
-    f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK,
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
