@@ -110,17 +110,29 @@ def _alive_windows(pid):
 
 
 _cancel = threading.local()
+_cancel_proc = [None]           # a worker process's job-wide check (its planning threads have no thread-local one)
 
 
 def set_cancel(check):
     """This thread's cancel check while it waits in once() (None: none): check() true raises pools.Abandoned (a
-    block or road tile of a place a teleport left, waiting for another process's road plans: blockworker)."""
+    block or road tile of a place a teleport left, waiting for another process's road plans: blockworker). In a
+    worker process (one job at a time) the check is the process's too: the job's planning threads see it."""
     _cancel.check = check
+    import multiprocessing
+    if multiprocessing.current_process().name != "MainProcess":
+        _cancel_proc[0] = check
 
 
 def _cancelled():
-    check = getattr(_cancel, "check", None)
+    check = getattr(_cancel, "check", None) or _cancel_proc[0]
     return check is not None and check()
+
+
+def check_cancel():
+    """Raise pools.Abandoned when this thread's (or worker process's) job is no longer wanted (set_cancel)."""
+    if _cancelled():
+        import pools
+        raise pools.Abandoned()
 
 
 def once(lock, ready, wait_s, kind="demand", on_wait=None):
