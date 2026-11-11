@@ -25,8 +25,11 @@ class PreloadPlaceTest(unittest.TestCase):
         def warm_place(spot, x, y):
             calls["warm"].append((round(spot.frame.lat0, 5), round(spot.frame.lon0, 5), x, y))
             return 7
-        s = SimpleNamespace(dem=Dem(), mapdata=object(), warm_place=warm_place,
-                            layout=SimpleNamespace(block=1024))
+        class Imagery:
+            def render(self, frame, x0, y0, size, px, pending):
+                calls.setdefault("photo", []).append(px)
+        s = SimpleNamespace(dem=Dem(), mapdata=object(), warm_place=warm_place, imagery=Imagery(),
+                            near_visual="detail", layout=SimpleNamespace(block=1024))
         return SimpleNamespace(s=s), calls
 
     def _wait(self, conn):
@@ -41,6 +44,7 @@ class PreloadPlaceTest(unittest.TestCase):
         self._wait(conn)
         self.assertEqual(len(calls["dem"]), 1)
         self.assertEqual(calls["warm"], [(40.7116, -74.0127, 0.0, 0.0)])
+        self.assertEqual(calls["photo"], [earthd.QUICK_BASE_PX, earthd.BASE_PX], "the stand-in's and the block's photo")
         preload(conn, {"lat": 40.71161, "lon": -74.01271})      # (the same spot again: nothing new)
         self._wait(conn)
         self.assertEqual(len(calls["warm"]), 1)

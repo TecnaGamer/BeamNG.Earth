@@ -7259,11 +7259,21 @@ class Connection:
                         zoom = demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM)
                         reach = s.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
                         dem_n, _ = s.dem.prefetch(s.dem.keys_around(la, lo, reach, zoom))
+                    spot = SimpleNamespace(frame=geodesy.EnuFrame(la, lo))
                     if s.mapdata is not None:
-                        spot = SimpleNamespace(frame=geodesy.EnuFrame(la, lo))
                         cells_n = s.warm_place(spot, 0.0, 0.0)
-                    log.info("preload %.5f, %.5f: %d elevation tiles, %d map cells queued (%.1f s)", la, lo, dem_n,
-                             cells_n, time.monotonic() - t0)
+                    photo = 0
+                    if s.imagery is not None and s.near_visual == "detail":
+                        # (the first block's photos: the stand-in's, then its own, so their aerial tiles are on disk
+                        # when the teleport asks: a cold Paducah block waited 2.7 s for its stand-in, 2026-11-11)
+                        size = s.layout.block * heightmap.SQUARE
+                        for px in (QUICK_BASE_PX, BASE_PX):
+                            if st["next"] is not None:
+                                break           # (a newer pick: that one now)
+                            s.imagery.render(spot.frame, -size / 2, -size / 2, size, px, set())
+                            photo += 1
+                    log.info("preload %.5f, %.5f: %d elevation tiles, %d map cells queued, %d photos (%.1f s)", la,
+                             lo, dem_n, cells_n, photo, time.monotonic() - t0)
             except Exception as e:          # (only the head start is lost)
                 log.info("preload: %s: %s", type(e).__name__, e)
             finally:
