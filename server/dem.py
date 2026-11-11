@@ -39,10 +39,13 @@ from PIL import Image
 import cache as cachemod
 import dsmground
 import fast
+import hkdtm as hkdtmmod
+import hklidar
 import hrdem as hrdemmod
 import lidarbc as lidarbcmod
 import netfetch
 import polardem
+import revisit
 import staging
 
 log = logging.getLogger("earthd.dem")
@@ -256,6 +259,10 @@ class Dem:
         self.lidarbc_sparse = (lidarbcmod.LidarBC(os.path.join(cache_dir, "lidarbc-sparse"), self.fetcher,
                                                   block=BIAS_BLOCK) if LIDARBC else None)
         self.hrdem_served = set()       # tile keys with HRDEM heights in them (the data credits)
+        # (the LiDAR sheets the road heights read too: <cache>/hklidar)
+        self.hkdtm = (hkdtmmod.HkDtm(hklidar.at(os.path.dirname(cache_dir), self.fetcher)) if hkdtmmod.ON
+                      else None)
+        self.hkdtm_served = set()       # tile keys with Hong Kong's LiDAR heights in them
 
 
     def clear_memory(self):
@@ -392,21 +399,44 @@ class Dem:
                 h[fill] = gh[fill]
                 ok |= fill
             used.append(name)
-        if h is None:
+        out = a if h is None else self._blend(key, a, h, ok)
+        if out is a:
             return a
-        sea = a == 0.0                      # Mapterhorn's sea reads exactly 0: it stays the sea
-        ok = ok & ~sea
+        for name in used:
+            self._count(name + ":tile")
+        with self._lock:
+            for name in used:
+                (self.lidarbc_served if name == "lidarbc" else self.hrdem_served).add(key)
+        return out
+
+    def _hongkong(self, key, a):
+        """Tile key's heights a with Hong Kong's lidar terrain (hkdtm.py) put in where this run reads its sheets (the
+        near terrain). Where it goes without one it has, the tile is not mirrored and nothing built on it kept."""
+        if a is None or self.hkdtm is None or not hkdtmmod.covers(*key):
+            return a
+        h, ok, short = self.hkdtm.tile(*key)
+        if short:
+            self._count("hkdtm:short")
+            self._partial()
+            revisit.fault()
+        out = self._blend(key, a, h, ok)
+        if out is not a:
+            self._count("hkdtm:tile")
+            with self._lock:
+                self.hkdtm_served.add(key)
+        return out
+
+    def _blend(self, key, a, h, ok):
+        """Tile key's heights a with lidar heights h put in where ok, their edges feathered into a over
+        HRDEM_FEATHER_M (a new array; a itself where there are none off its sea)."""
+        z, x, y = key
+        ok = ok & (a != 0.0)                # Mapterhorn's sea reads exactly 0: it stays the sea
         if not ok.any():
             return a
         n = 2 ** z
         lat = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (y + 0.5) / n))))
         px = 40075016.686 * math.cos(math.radians(lat)) / n / TILE
         w = hrdemmod.feather(ok, min(HRDEM_FEATHER_MAX_PX, max(2, round(HRDEM_FEATHER_M / px))))
-        for name in used:
-            self._count(name + ":tile")
-        with self._lock:
-            for name in used:
-                (self.lidarbc_served if name == "lidarbc" else self.hrdem_served).add(key)
         return (a * (1.0 - w) + h * w).astype(np.float32)
 
     def polar(self):
@@ -471,7 +501,9 @@ class Dem:
     def coarse_at(self, lat, lon):
         """Is the elevation at (lat, lon) only the coarse global model (Mapterhorn's file list has nothing deeper than
         GLOBAL_ZOOM under its z6 tile: no lidar, ~30 m Copernicus and the like)? False when unknown (no list yet) or
-        where the opt-in Canadian lidar reads. grading.ease_coarse (GitHub #414)."""
+        where the opt-in Canadian lidar reads. grading.ease_coarse (GitHub #414). True over Hong Kong's DTM (hkdtm.py)
+        too: the grading's lidar-terrain underpass rules dug Sha Tin's roads 4-6 m under its unmeasured viaducts there
+        (ground roads p90 4.8 m off the DTM, 0.2 m with the coarse rules)."""
         idx = self._coverage()
         if idx is None:
             return False
@@ -646,7 +678,8 @@ class Dem:
     # --- the decoded mirror (MIRROR_MB) ----------------------------------------------------------
     def _mirror_path(self, key):
         z, x, y = key
-        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}", str(z),
+        hk = "h" if self.hkdtm is not None and hkdtmmod.covers(z, x, y) else ""     # (made with Hong Kong's DTM)
+        return os.path.join(self.cache_dir, "decoded", f"v{DECODED_VERSION}", f"g{int(self.ground_filter)}{hk}", str(z),
                             str(x), f"{y}{'.f32z' if MIRROR_ZSTD else '.npy'}")
 
     def _mirror_get(self, key, readback=False):
@@ -804,7 +837,7 @@ class Dem:
         return None
 
     def _make_tile(self, key):
-        return self._canada(key, self._make_tile0(key))
+        return self._hongkong(key, self._canada(key, self._make_tile0(key)))
 
     def _make_tile0(self, key):
         z, x, y = key

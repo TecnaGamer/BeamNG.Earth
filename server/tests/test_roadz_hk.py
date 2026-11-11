@@ -2,85 +2,34 @@
 lines' levels / route numbers / names, ground from the DTM and decks from the DSM (none under a higher deck), the
 source's bounds and off switch, the sheets kept on disk, and plans with its heights kept out of every share. Synthetic
 fixtures only: a generated tiled TIFF in a zip and hand-written ArcGIS answers."""
-import io
 import json
 import os
-import struct
 import sys
 import tempfile
 import threading
 import time
 import unittest
 import urllib.parse
-import zipfile
 from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import fast  # noqa: E402
 import geodesy  # noqa: E402
+import hklidar  # noqa: E402
 import mapcells  # noqa: E402
 import plancache  # noqa: E402
 import roadz  # noqa: E402
 import roadzhk  # noqa: E402
+from hklidarfixtures import tiff_zip  # noqa: E402
 
 NATIVE = fast.AVAILABLE and getattr(fast._ef, "VERSION", 0) >= roadz.NATIVE
 KEY = mapcells.cell_of(22.383, 114.208)         # Shek Mun, Sha Tin
 LAT0, LON0 = KEY.center()
 X0, Y0 = 840000.0, 826000.0                     # the fixture's HK1980 Grid origin
-
-
-def tiff_zip(a, x0, y0, px=1.0, tile=16, compression=1):
-    """A sheet as CEDD ships it: a zip of a little-endian GeoTIFF, float32, uncompressed tiles, top-left at x0, y0."""
-    h, w = a.shape
-    across, down = -(-w // tile), -(-h // tile)
-    full = np.full((down * tile, across * tile), -9999.0, "<f4")
-    full[:h, :w] = a
-    tiles = [full[r * tile:(r + 1) * tile, c * tile:(c + 1) * tile].tobytes()
-             for r in range(down) for c in range(across)]
-    n = len(tiles)
-    entries = [(256, 3, 1, w), (257, 3, 1, h), (258, 3, 1, 32), (259, 3, 1, compression), (277, 3, 1, 1),
-               (322, 3, 1, tile), (323, 3, 1, tile), (324, 4, n, None), (325, 4, n, None), (339, 3, 1, 3),
-               (33550, 12, 3, None), (33922, 12, 6, None)]
-    ifd = 8
-    extra = ifd + 2 + 12 * len(entries) + 4
-    blobs = {324: None, 325: struct.pack(f"<{n}I", *[len(t) for t in tiles]),
-             33550: struct.pack("<3d", px, px, 0.0), 33922: struct.pack("<6d", 0.0, 0.0, 0.0, x0, y0, 0.0)}
-    data_at = extra + 4 * n + 4 * n + 24 + 48
-    blobs[324] = struct.pack(f"<{n}I", *[data_at + i * len(tiles[0]) for i in range(n)])
-    out, at, tail = bytearray(b"II*\x00" + struct.pack("<I", ifd)), extra, b""
-    out += struct.pack("<H", len(entries))
-    for tag, typ, cnt, val in entries:
-        if val is not None:
-            out += struct.pack("<HHIHH", tag, typ, cnt, val, 0)
-        else:
-            out += struct.pack("<HHII", tag, typ, cnt, at)
-            at += len(blobs[tag])
-            tail += blobs[tag]
-    out += struct.pack("<I", 0) + tail + b"".join(tiles)
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
-        z.writestr("SHEET.tif", bytes(out))
-    return buf.getvalue()
-
-
-class SheetTest(unittest.TestCase):
-    def test_reads_its_pixels_across_tiles(self):
-        a = np.arange(40 * 24, dtype=np.float32).reshape(24, 40)      # (partial tiles on both edges)
-        a[5, 7] = -9999.0
-        s = roadzhk.Sheet(tiff_zip(a, X0, Y0, px=0.5))
-        self.assertEqual(s.box, (X0, Y0 - 12.0, X0 + 20.0, Y0))
-        cols, rows = np.array([0, 39, 17, 7, 3]), np.array([0, 23, 20, 5, 30])
-        got = s.sample(X0 + cols * 0.5 + 0.25, Y0 - rows * 0.5 - 0.25)
-        np.testing.assert_array_equal(got[:3], a[rows[:3], cols[:3]])
-        self.assertTrue(np.isnan(got[3]), "nodata")
-        self.assertTrue(np.isnan(got[4]), "outside the sheet")
-
-    def test_refuses_what_it_cannot_read(self):
-        with self.assertRaises(ValueError):
-            roadzhk.Sheet(tiff_zip(np.zeros((4, 4), np.float32), X0, Y0, compression=8))
 
 
 def feature(oid, level, ref, name, xy):
@@ -212,7 +161,7 @@ class LinesTest(unittest.TestCase):
         self.assertEqual(len(self.fetcher.downloads), n, "read from the kept sheets")
 
     def test_kept_sheets_capped(self):
-        with tempfile.TemporaryDirectory() as d, mock.patch.object(roadz, "HK_SHEETS_MB", 0.0):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(hklidar, "SHEETS_MB", 0.0):
             roadz.RoadZ(d, FakeFetcher(), None)._hk(KEY)
             left = [f for _dp, _dn, fs in os.walk(d) for f in fs if f.endswith(".zip")]
         self.assertEqual(left, [])
@@ -226,7 +175,7 @@ class SourceTest(unittest.TestCase):
         self.assertFalse(roadz.hk_cell(mapcells.cell_of(48.85, 2.35)))
         with mock.patch.object(roadz, "HK_ON", False):
             self.assertNotIn("hk", roadz.sources_at(22.38, 114.2))
-            self.assertFalse(roadz.hk_cell(KEY))
+            self.assertNotIn("hk1", roadz.hk_tags(KEY))
 
     def test_credited_where_its_lines_are_kept(self):
         import credits
@@ -265,23 +214,6 @@ class SlowFetcher(FakeFetcher):
         if urllib.parse.urlsplit(url).hostname == "bulkdata.csdi.gov.hk":
             time.sleep(0.5)
         return super().get(url, **kw)
-
-
-class SheetOnceTest(unittest.TestCase):
-    """Two processes (two RoadZ: no lock in common but the disk) after one sheet: one download."""
-
-    def test_a_sheet_another_process_reads_is_waited_for(self):
-        fetcher = SlowFetcher()
-        with tempfile.TemporaryDirectory() as d:
-            sheet = fetcher.sheets[0][0]["attributes"]
-            a, b = roadz.RoadZ(d, fetcher, None), roadz.RoadZ(d, fetcher, None)
-            ta = threading.Thread(target=a._hk_sheet, args=("dtm", sheet["TILE_NAME"], sheet["URL"]))
-            ta.start()
-            time.sleep(0.1)
-            got = b._hk_sheet("dtm", sheet["TILE_NAME"], sheet["URL"])
-            ta.join()
-        self.assertEqual(got.w, 100)
-        self.assertEqual(len(fetcher.downloads), 1)
 
 
 @unittest.skipUnless(NATIVE, "earthfast roadz kernels")

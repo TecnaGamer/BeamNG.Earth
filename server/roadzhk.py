@@ -5,9 +5,6 @@ them).
 
 The centrelines come twice from the same service, in lon/lat (EPSG:4326, for the map) and in HK1980 Grid metres
 (EPSG:2326, the LiDAR's grid): the server projects them, so no projection is written here."""
-import io
-import struct
-import zipfile
 from typing import NamedTuple
 
 import numpy as np
@@ -25,7 +22,6 @@ DECK_PCT = 50.0
 DECK_MIN_READS = 3
 # a deck under a higher tier's line reads that one in the DSM; the ground under a deck keeps its DTM (no decks in it)
 OCCLUDE_M = 8.0
-NODATA = -9000.0            # the sheets' nodata is -9999
 GRID_M = 64.0               # m, the cells _near buckets segments by
 
 
@@ -70,58 +66,6 @@ def parse_td(feats_ll, feats_xy):
                     and (np.abs(p) <= [180.0, 90.0]).all()):
                 out.append(TdLine(level, _text(a.get("ROUTE_NUM")), _text(a.get("STREET_ENAME")), p, q))
     return out
-
-
-class Sheet:
-    """One CEDD LiDAR sheet: a zip holding a classic little-endian GeoTIFF, one float32 band in uncompressed tiles,
-    HK1980 Grid. sample(x, y): its heights at those points, NaN outside it or where it has none."""
-
-    _TYPES = {3: ("H", 2), 4: ("I", 4), 12: ("d", 8)}
-
-    def __init__(self, zipped):
-        with zipfile.ZipFile(io.BytesIO(zipped)) as z:
-            names = [n for n in z.namelist() if n.lower().endswith((".tif", ".tiff"))]
-            if len(names) != 1:
-                raise ValueError(f"a LiDAR sheet holds one TIFF, not {len(names)}")
-            d = z.read(names[0])
-        if d[:4] != b"II*\x00":
-            raise ValueError("not a classic little-endian TIFF")
-        ifd = struct.unpack_from("<I", d, 4)[0]
-        tags = {}
-        for k in range(struct.unpack_from("<H", d, ifd)[0]):
-            e = ifd + 2 + 12 * k
-            tag, typ, cnt = struct.unpack_from("<HHI", d, e)
-            if typ in self._TYPES:
-                fmt, size = self._TYPES[typ]
-                at = e + 8 if cnt * size <= 4 else struct.unpack_from("<I", d, e + 8)[0]
-                tags[tag] = struct.unpack_from(f"<{cnt}{fmt}", d, at)
-        one = lambda t, default=None: tags[t][0] if t in tags else default
-        if (one(259) != 1 or one(258) != 32 or one(339, 3) != 3 or one(277, 1) != 1
-                or not {322, 323, 324, 33550, 33922} <= set(tags)):
-            raise ValueError("a LiDAR sheet is one float32 band in uncompressed tiles, georeferenced")
-        self.w, self.h, self.tw, self.th = one(256), one(257), one(322), one(323)
-        self.across = -(-self.w // self.tw)
-        self.offs = np.asarray(tags[324], np.int64)
-        if len(self.offs) != self.across * -(-self.h // self.th) or self.offs.max() + self.tw * self.th * 4 > len(d):
-            raise ValueError("a LiDAR sheet's tiles do not fit it")
-        self.dx, self.dy = tags[33550][:2]
-        tie = tags[33922]
-        self.x0, self.y0 = tie[3] - tie[0] * self.dx, tie[4] + tie[1] * self.dy
-        self.box = (self.x0, self.y0 - self.h * self.dy, self.x0 + self.w * self.dx, self.y0)
-        self.raw = np.frombuffer(d, np.uint8)
-
-    def sample(self, x, y):
-        x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
-        out = np.full(x.shape, np.nan)
-        col = np.floor((x - self.x0) / self.dx)
-        row = np.floor((self.y0 - y) / self.dy)
-        ok = (col >= 0) & (col < self.w) & (row >= 0) & (row < self.h)
-        col, row = col[ok].astype(np.int64), row[ok].astype(np.int64)
-        at = (self.offs[(row // self.th) * self.across + col // self.tw]
-              + ((row % self.th) * self.tw + col % self.tw) * 4)
-        v = self.raw[at[:, None] + np.arange(4)].view("<f4").ravel().astype(np.float64)
-        out[ok] = np.where(v > NODATA, v, np.nan)
-        return out
 
 
 def stations(lines, inside):

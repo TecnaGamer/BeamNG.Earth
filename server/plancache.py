@@ -175,9 +175,9 @@ class PlanCache:
         import revisit
         import roadz
         # (by PLANS_FORMAT, not the code: kept across updates, the user, 2026-11-02; a cell with Hong Kong's measured
-        # heights its own: the plans made there before, or with BNE_ROADZ_HK=off, are not those)
+        # heights or terrain its own: the plans made there before, or with BNE_ROADZ_HK / BNE_HKDTM off, are not those)
         return revisit.format_key("plans", plans_format(), *self.persist[1],
-                                  (int(key[0]), int(key[1]), int(key[2])), *(("hk1",) if roadz.hk_cell(key) else ()))
+                                  (int(key[0]), int(key[1]), int(key[2])), *roadz.hk_tags(key))
 
     def _where(self, key):
         """revisit.where of cell key's plans (the map's cache view), or None."""
@@ -213,7 +213,7 @@ class PlanCache:
     def _baked(self, key):
         """A baked pack's plans of cell key (bakepack.py: made offline for this map data and signature), or None."""
         import roadz
-        if self.persist is None or roadz.hk_cell(key):     # (packs are made without Hong Kong's heights)
+        if self.persist is None or roadz.hk_cell(key):     # (packs are made without Hong Kong's data)
             return None
         import io
         import bakepack

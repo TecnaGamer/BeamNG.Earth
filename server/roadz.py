@@ -13,7 +13,7 @@ Sources, each per z14 map-data cell, kept on disk under <cache>/roadz/v<VERSION>
   decks, -1 / -2 tunnels; ROUTE_NUM; STREET_ENAME) with heights from CEDD's 2020 airborne LiDAR (0.5 m DTM and DSM, a
   750 x 600 m sheet a zip): ground roads the DTM, decks the DSM's median across the carriageway, none in a tunnel
   or on a deck under a higher one (roadzhk.py). From the CSDI Portal (DATA.GOV.HK terms: free use with attribution).
-  The sheets a cell reads are kept in a size-capped folder (BNE_ROADZ_HK_SHEETS_MB) for its neighbours; a road build
+  The sheets a cell reads are kept (hklidar.py, shared with the terrain) for its neighbours; a road build
   waits for a cell as for the lidar's (gap_answers), the read going on for the next run. Its heights
   are the HK government's: plans made with them stay on this computer (hk_cell: no world bundle, BeamMP share or
   baked pack).
@@ -49,15 +49,16 @@ import re
 import threading
 import time
 import unicodedata
-import urllib.parse
-import zipfile
 from collections import OrderedDict
 
 import numpy as np
 
 import fast
+import hkdtm
+import hklidar
 import mapcells
 import roadzhk
+import xproc
 
 log = logging.getLogger("earthd.roadz")
 
@@ -72,7 +73,7 @@ PROVIDER = None             # the server's RoadZ (MapData makes it): BridgeProfi
 
 FR_BOUNDS = (41.3, -5.2, 51.2, 9.7)         # lat0, lon0, lat1, lon1: metropolitan France (PR #456's box)
 NO_BOUNDS = (57.9, 4.0, 71.3, 31.3)         # mainland Norway
-HK_BOUNDS = (22.13, 113.82, 22.57, 114.45)  # the Hong Kong SAR
+HK_BOUNDS = hklidar.BOUNDS
 US_BOUNDS = ((24.0, -125.0, 49.5, -66.5), (51.0, -170.0, 71.5, -129.0), (18.5, -161.0, 22.5, -154.5))
 WFS_URL = "https://data.geopf.fr/wfs/ows"
 WFS_LANE = "ign_wfs"
@@ -84,15 +85,7 @@ NVDB_PAGE = 1000
 NVDB_PAGES = 40
 HK_TD_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/td_rcd_1638949160594_2844/FeatureServer/10/"
              "query")
-HK_SHEETS_URL = ("https://portal.csdi.gov.hk/server/rest/services/common/cedd_rcd_1629267205233_87895/FeatureServer/"
-                 "{}/query")
-HK_LAYERS = {"dtm": 0, "dsm": 1}            # the sheet index's layers: DTM_2020, DSM_2020
-HK_SHEET_HOST = "bulkdata.csdi.gov.hk"
-HK_PAGE = 2000              # (the service's maxRecordCount: 3000)
-HK_PAGES = 20
 HK_IDS = 200                # OBJECTIDs a request (its URL under the service's limit: 2.4 kB answered 404, 1.8 kB not)
-HK_FETCH_THREADS = 4        # sheets downloaded at once a process (bulkdata.csdi.gov.hk's policy: 4)
-HK_SHEETS_MB = float(os.environ.get("BNE_ROADZ_HK_SHEETS_MB", "2048"))   # (one Sha Tin place: 240 sheets, 1.3 GB)
 EPT_BASE = "https://s3-us-west-2.amazonaws.com/usgs-lidar-public/"
 EPT_R = 6378137.0           # EPSG:3857's sphere
 
@@ -140,7 +133,7 @@ LIDAR_GAPS_WAIT_S = float(os.environ.get("BNE_LIDAR_GAPS_WAIT", "8"))
 # the sources a road build waits that long at most for a cell of, the inference for the rest of the run meanwhile
 # (gap_answers). Hong Kong's read goes on where the lidar's stops (_read): its heights apply only once each sheet of the
 # cell is kept, 167 MB in 62 s for a dense one (a cold place planned in 647 s, 115 s with it off; 2026-11-10), and the
-# server's processes read each sheet once (_hk_sheet)
+# server's processes read each sheet once (hklidar)
 DEFERRED = ("lidar", "hk")
 # once a cell's lidar has missed LIDAR_GAPS_WAIT_S in this process (a slow connection, a busy source), the next cells
 # wait this long at most: each call of a road tile's cells waited 8 s anew, 43 s of one cold Denver road tile's 132 s
@@ -178,8 +171,7 @@ def precache_gaps_wait(seconds=None):
 APPROACH_END_TOL_M = 1.0
 APPROACH_REJOIN_M = 0.3
 APPROACH_MIN_DEV_M = 0.5
-SESSION_ENV = "BNGE_ROADZ_SESSION"      # (not BNE_: those are part of the revisit cache's code key)
-SESSION_KEEP_S = 86400.0
+SESSION_ENV = xproc.RUN_ENV
 
 class LidarDropped(Exception):
     """A cell's lidar read stopped: this run goes without it (RoadZ._read)."""
@@ -209,17 +201,23 @@ def sources_at(lat, lon, lidar=None):
     return out
 
 
-def hk_cell(key):
-    """Does map cell key (z, x, y) take Hong Kong's measured heights (the source on, the cell's box meeting HK_BOUNDS
-    with CLIP_PAD_M to spare)? Its road plans are then kept on this computer only: the HK government's terms allow
-    redistribution, but with an indemnity and terms that may change without notice, so they never go into a world
-    bundle (plancache: no .complete marker), a BeamMP share (mpshare.note_built) or a baked pack (made with it off)."""
-    if not (ON and HK_ON):
-        return False
+def hk_tags(key):
+    """The Hong Kong government data map cell key's road plans are made with, when its box meets HK_BOUNDS with
+    CLIP_PAD_M to spare: "hk1", its measured road heights (this source on), "hkdtm1", its terrain (hkdtm.py on)."""
     lon0, lat0, lon1, lat1 = mapcells.CellKey(int(key[0]), int(key[1]), int(key[2])).bounds()
     pad = CLIP_PAD_M / 111320.0
-    return (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
-            and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad)
+    if not (lat0 - pad <= HK_BOUNDS[2] and HK_BOUNDS[0] <= lat1 + pad
+            and lon0 - pad <= HK_BOUNDS[3] and HK_BOUNDS[1] <= lon1 + pad):
+        return ()
+    return (("hk1",) if ON and HK_ON else ()) + (("hkdtm1",) if hkdtm.ON else ())
+
+
+def hk_cell(key):
+    """Are map cell key's road plans made with Hong Kong's measured heights or terrain (hk_tags)? They are then kept on
+    this computer only: the HK government's terms allow redistribution, but with an indemnity and terms that may change
+    without notice, so they never go into a world bundle (plancache: no .complete marker), a BeamMP share
+    (mpshare.note_built) or a baked pack (made with both off)."""
+    return bool(hk_tags(key))
 
 
 _HK_LINES = {}          # path -> (mtime, has lines) of the Hong Kong cells hk_credited_near looked at
@@ -585,7 +583,7 @@ class RoadZ:
         self._ept = {}                      # dataset name -> Ept
         self._lock = threading.Lock()
         self._cell_locks = {}
-        self._hk_slots = threading.BoundedSemaphore(HK_FETCH_THREADS)
+        self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
         self.enabled = ON                   # (the probes measure with it on whatever BNE_ROADZ says)
         self.lidar = LIDAR_ON
@@ -731,19 +729,6 @@ class RoadZ:
             start = nxt
         return Lines.build(rows)
 
-    def _arcgis(self, url, params):
-        """The features of an ArcGIS REST query, every page (ordered by OBJECTID: the same pages each time)."""
-        feats = []
-        for page in range(HK_PAGES):
-            q = dict(params, f="json", resultOffset=page * HK_PAGE, resultRecordCount=HK_PAGE)
-            d = self._get_json(f"{url}?{urllib.parse.urlencode(q, safe=',')}")
-            if "error" in d:            # (ArcGIS answers its errors with a 200)
-                raise ValueError(f"ArcGIS {url}: {d['error']}")
-            feats += d.get("features") or []
-            if not d.get("exceededTransferLimit"):
-                return feats
-        raise ValueError(f"ArcGIS {url}: over {HK_PAGES} pages")
-
     def _hk(self, key):
         lon0, lat0, lon1, lat1 = key.bounds()
         k = 1.0 / max(0.05, math.cos(math.radians((lat0 + lat1) / 2)))
@@ -753,16 +738,17 @@ class RoadZ:
         qlat = (CLIP_PAD_M + roadzhk.OCCLUDE_M) / 111320.0
         env = f"{lon0 - qlat * k:.6f},{lat0 - qlat:.6f},{lon1 + qlat * k:.6f},{lat1 + qlat:.6f}"
         fields = "OBJECTID,ELEVATION,ROUTE_NUM,STREET_ENAME"
-        feats = self._arcgis(HK_TD_URL, {"where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope",
-                                         "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outSR": 4326,
-                                         "outFields": fields, "orderByFields": "OBJECTID"})
+        feats = hklidar.arcgis(self._get_json, HK_TD_URL, {
+            "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope", "inSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects", "outSR": 4326, "outFields": fields, "orderByFields": "OBJECTID"})
         # the same features in HK1980 Grid by their ids: the envelope query with outSR 2326 answers another set of
         # lines (2026-11-10: 89 for 84 at Shek Mun, some 50 m outside the box), the vertices themselves agree to 0.4 mm
         ids = sorted({(f.get("attributes") or {}).get("OBJECTID") for f in feats} - {None})
         grid = []
         for i in range(0, len(ids), HK_IDS):
-            grid += self._arcgis(HK_TD_URL, {"objectIds": ",".join(str(int(v)) for v in ids[i:i + HK_IDS]),
-                                             "outSR": 2326, "outFields": "OBJECTID", "orderByFields": "OBJECTID"})
+            grid += hklidar.arcgis(self._get_json, HK_TD_URL, {
+                "objectIds": ",".join(str(int(v)) for v in ids[i:i + HK_IDS]), "outSR": 2326, "outFields": "OBJECTID",
+                "orderByFields": "OBJECTID"})
         lines = roadzhk.parse_td(feats, grid)
 
         def inside(ll):
@@ -773,111 +759,29 @@ class RoadZ:
 
     def _hk_reader(self, layer):
         """(x, y) -> the LiDAR layer's ("dtm" / "dsm") heights at those HK1980 Grid points, NaN where it has none: the
-        sheets under them, one at a time."""
+        sheets under them (hklidar: kept, or downloaded)."""
         def read(x, y):
             out = np.full(len(x), np.nan)
             if not len(x):
                 return out
-            env = f"{x.min() - 1:.1f},{y.min() - 1:.1f},{x.max() + 1:.1f},{y.max() + 1:.1f}"
-            sheets = self._arcgis(HK_SHEETS_URL.format(HK_LAYERS[layer]), {
-                "where": "1=1", "geometry": env, "geometryType": "esriGeometryEnvelope", "inSR": 2326,
-                "spatialRel": "esriSpatialRelIntersects", "outSR": 2326, "outFields": "TILE_NAME,URL",
-                "orderByFields": "TILE_NAME"})
             todo, taken = [], np.zeros(len(x), bool)
-            for f in sheets:
-                a = f.get("attributes") or {}
-                ring = np.asarray(((f.get("geometry") or {}).get("rings") or [[]])[0], np.float64).reshape(-1, 2)
-                if not len(ring):
-                    continue
-                m = ((x >= ring[:, 0].min()) & (x < ring[:, 0].max()) & (y >= ring[:, 1].min())
-                     & (y < ring[:, 1].max()) & ~taken)
+            for name, url, (x0, y0, x1, y1) in self.sheets.index(layer, (x.min() - 1, y.min() - 1, x.max() + 1,
+                                                                          y.max() + 1)):
+                m = (x >= x0) & (x < x1) & (y >= y0) & (y < y1) & ~taken
                 if m.any():
                     taken |= m
-                    todo.append((m, str(a.get("TILE_NAME") or ""), str(a.get("URL") or "")))
+                    todo.append((m, name, url))
 
             def one(t):
                 m, name, url = t
-                return m, self._hk_sheet(layer, name, url).sample(x[m], y[m])
+                return m, self.sheets.get(layer, name, url).sample(x[m], y[m])
             from runtimeprofiler import ThreadPoolExecutor
-            # (one sheet in memory a thread: ~7 MB; the host serves ~0.8 MB/s a connection)
-            with ThreadPoolExecutor(HK_FETCH_THREADS, thread_name_prefix="roadz-hk") as pool:
+            # (the host serves ~0.8 MB/s a connection)
+            with ThreadPoolExecutor(hklidar.FETCH_THREADS, thread_name_prefix="roadz-hk") as pool:
                 for m, got in pool.map(one, todo):
                     out[m] = got
             return out
         return read
-
-    def _hk_sheet(self, layer, name, url):
-        """The roadzhk.Sheet of a LiDAR sheet: from the kept sheets (the least recently read of them dropped past
-        HK_SHEETS_MB) or downloaded, by one of the server's processes (xproc: the others read it when it is kept)."""
-        u = urllib.parse.urlsplit(url)
-        if u.scheme != "https" or u.hostname != HK_SHEET_HOST or not re.fullmatch(r"[0-9A-Z]{4,8}", name):
-            raise ValueError(f"LiDAR sheet {name!r}: {url!r}")
-        p = os.path.join(self.dir, "hksheets", layer, f"{name}.zip") if self.dir else None
-        with self._lock:
-            lock = self._cell_locks.setdefault(("hksheet", layer, name), threading.Lock())
-        with lock:
-            got = self._hk_kept(p) if p else None
-            if got is not None:
-                return got
-            # (HK_FETCH_THREADS downloads a process: the cells built side by side (gap_answers) queued past netfetch's
-            # max_wait for the host's request slots, and their builds failed)
-            with self._hk_slots:
-                mine = False
-                if p:
-                    import xproc
-                    got, mine = xproc.once(p + ".lock", lambda: self._hk_kept(p), xproc.STALE_S)
-                    if got is not None:
-                        return got
-                try:
-                    body = self._fetch(urllib.parse.urlunsplit(u._replace(path=urllib.parse.quote(u.path))))
-                    got = roadzhk.Sheet(body)
-                    if p:
-                        import staging
-                        os.makedirs(os.path.dirname(p), exist_ok=True)
-                        tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
-                        with open(tmp, "wb") as fh:
-                            fh.write(body)
-                        staging.replace_cached(tmp, p)
-                finally:
-                    if mine:
-                        xproc.release(p + ".lock")
-            if p:
-                self._hk_trim()
-            return got
-
-    @staticmethod
-    def _hk_kept(p):
-        """The kept sheet at p (its use noted for _hk_trim), or None."""
-        try:
-            with open(p, "rb") as fh:
-                got = roadzhk.Sheet(fh.read())
-            os.utime(p)
-            return got
-        except FileNotFoundError:
-            return None
-        except (OSError, ValueError, zipfile.BadZipFile) as e:
-            log.debug("roadz hk sheet %s: %s", p, e)
-            return None
-
-    def _hk_trim(self):
-        """The kept LiDAR sheets cut back to HK_SHEETS_MB, the least recently read first."""
-        root = os.path.join(self.dir, "hksheets")
-        files = []
-        for dp, _dn, fns in os.walk(root):
-            for fn in fns:
-                if fn.endswith(".zip"):
-                    try:
-                        st = os.stat(os.path.join(dp, fn))
-                    except OSError:
-                        continue
-                    files.append((st.st_mtime, st.st_size, os.path.join(dp, fn)))
-        total = sum(f[1] for f in files)
-        for _t, size, path in sorted(files):
-            if total <= HK_SHEETS_MB * 1e6:
-                break
-            with contextlib.suppress(OSError):
-                os.remove(path)
-                total -= size
 
     def _ept_of(self, name):
         with self._lock:
@@ -1224,27 +1128,12 @@ class RoadZ:
 
     # ---- the elevated ground stretches, one answer per cell and session ----
     def _session_dir(self):
-        """The folder this server run's decisions are kept in (its processes share BNGE_ROADZ_SESSION; a process alone:
-        its own), older runs' cleared out once. None without a cache."""
+        """The folder this server run's decisions are kept in (xproc.run_dir). None without a cache."""
         if not self.dir:
             return None
         got = getattr(self, "_sdir", None)
-        if got is not None:
-            return got
-        sid = re.sub(r"[^A-Za-z0-9_.-]", "_", os.environ.get(SESSION_ENV) or f"p{os.getpid()}.{int(time.time())}")
-        root = os.path.join(self.dir, "gapsession")
-        got = os.path.join(root, sid)
-        os.makedirs(got, exist_ok=True)
-        try:
-            now = time.time()
-            for name in os.listdir(root):
-                q = os.path.join(root, name)
-                if name != sid and now - os.path.getmtime(q) > SESSION_KEEP_S:
-                    import shutil
-                    shutil.rmtree(q, ignore_errors=True)
-        except OSError:
-            pass
-        self._sdir = got
+        if got is None:
+            got = self._sdir = xproc.run_dir(os.path.join(self.dir, "gapsession"))
         return got
 
     def _decision(self, src, key):
@@ -1253,28 +1142,15 @@ class RoadZ:
 
     def _decide(self, key, gaps, src="lidar"):
         """This session's decision for cell key's source src: gaps (a list, or None: the rule) unless a process decided
-        first, whose decision is taken (a file made once: os.link fails when it is there)."""
+        first, whose decision is taken (xproc.decide)."""
         p = self._decision(src, key)
         if p is None:
             return gaps
-        if not os.path.exists(p):
-            tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump({"gaps": None if gaps is None else [[f, list(a), list(b)] for f, a, b in gaps]}, fh)
-            try:
-                os.link(tmp, p)
-            except OSError:
-                pass                        # (decided by another process meanwhile)
-            finally:
-                try:
-                    os.remove(tmp)
-                except OSError:
-                    pass
+        got = xproc.decide(p, {"gaps": None if gaps is None else [[f, list(a), list(b)] for f, a, b in gaps]})
         try:
-            with open(p, encoding="utf-8") as fh:
-                got = json.load(fh)["gaps"]
+            got = got["gaps"]
             return None if got is None else [(str(f), tuple(a), tuple(b)) for f, a, b in got]
-        except (OSError, ValueError, KeyError, TypeError):
+        except (KeyError, TypeError, ValueError):
             return gaps
 
     def gap_answers(self, keys, src="lidar"):
