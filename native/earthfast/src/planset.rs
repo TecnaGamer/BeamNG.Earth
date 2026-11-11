@@ -12,7 +12,7 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
 
 use numpy::ndarray::Array2;
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
@@ -360,73 +360,55 @@ fn plan_bbox(xy: &[[f64; 2]], half: f64, wmax: Option<f64>, t_max: f64) -> [f64;
     [x0 - pad, y0 - pad, x1 + pad, y1 + pad]
 }
 
-/// grading.trim_side_mouths: a side road's end inside a higher road's carriageway moved out to that road's painted
-/// edge, at its height there, eased onto its own profile over ramp_m. Plans (xy, off, z) in order, trimmed in turn
-/// (a later one sees an earlier one's trimmed line); half / road_half (plans,); abut (plans, 2); rank (plans,);
-/// bbox (plans, 4): their boxes; widened (plans,): a plan with a widen (grading.set_widen), wmax (plans,): the most it
-/// widens. Returns
-/// (trimmed plans, the end trimmed of each, their new xy (k, 2) and z (k,), offsets).
-#[pyfunction]
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub fn plan_trim_mouths<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyReadonlyArray1<'py, i64>,
-                             z: PyReadonlyArray1<'py, f64>, half: PyReadonlyArray1<'py, f64>,
-                             road_half: PyReadonlyArray1<'py, f64>, abut: PyReadonlyArray2<'py, bool>,
-                             rank: PyReadonlyArray1<'py, i64>, bbox: PyReadonlyArray2<'py, f64>,
-                             widened: PyReadonlyArray1<'py, bool>, wmax: PyReadonlyArray1<'py, f64>, reach: f64,
-                             ramp_m: f64, t_max: f64)
-                             -> PyResult<(Vec<usize>, Vec<usize>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray1<f64>>,
-                                          Bound<'py, PyArray1<i64>>)> {
-    let p = Plans::read(&xy, &off, &z, "plan_trim_mouths")?;
-    let n = p.n();
-    let (half, road_half, abut, rank, bbox, wmax) = (half.as_array(), road_half.as_array(), abut.as_array(),
-                                                     rank.as_array(), bbox.as_array(), wmax.as_array());
-    if half.len() != n || road_half.len() != n || abut.nrows() != n || abut.ncols() != 2 || rank.len() != n
-        || bbox.nrows() != n || bbox.ncols() != 4 || wmax.len() != n || widened.as_array().len() != n {
-        return Err(PyValueError::new_err("plan_trim_mouths: mismatched plan arrays"));
-    }
-    let half: Vec<f64> = half.iter().copied().collect();
-    let road_half: Vec<f64> = road_half.iter().copied().collect();
-    let abut: Vec<[bool; 2]> = (0..n).map(|j| [abut[[j, 0]], abut[[j, 1]]]).collect();
-    let rank: Vec<i64> = rank.iter().copied().collect();
-    let mut boxes: Vec<[f64; 4]> = (0..n).map(|j| [bbox[[j, 0]], bbox[[j, 1]], bbox[[j, 2]], bbox[[j, 3]]]).collect();
-    let widened = widened.as_array();
-    let wmax: Vec<Option<f64>> = wmax.iter().zip(widened.iter()).map(|(&w, &on)| if on { Some(w) } else { None })
-        .collect();
-    let (idx, ends, nxy, nz, noff) = py.detach(|| {
-        let (out_i, out_e, over) = trim_core(&p, &half, &road_half, &abut, &rank, &mut boxes, &wmax, reach, ramp_m,
-                                             t_max);
-        let mut nxy: Vec<f64> = Vec::new();
-        let mut nz: Vec<f64> = Vec::new();
-        let mut noff = vec![0i64];
-        for &i in &out_i {
-            let (a, b) = over[i].as_ref().unwrap();
-            for q in a {
-                nxy.push(q[0]);
-                nxy.push(q[1]);
-            }
-            nz.extend_from_slice(b);
-            noff.push(nz.len() as i64);
-        }
-        (out_i, out_e, nxy, nz, noff)
-    });
-    let k = nz.len();
-    Ok((idx, ends, Array2::from_shape_vec((k, 2), nxy).unwrap().into_pyarray(py), nz.into_pyarray(py),
-        noff.into_pyarray(py)))
+/// Where trim_core cut a plan: its line taken in the order of the end trimmed (rev: its last end), the new first
+/// vertex f of the way from vertex j - 1 to j, then vertices k0.. (of n0).
+#[derive(Clone, Copy)]
+struct TrimAt {
+    rev: bool,
+    j: usize,
+    f: f64,
+    k0: usize,
+    n0: usize,
 }
 
-/// A plan's new line and heights (None: as it was).
-type Over = Vec<Option<(Vec<[f64; 2]>, Vec<f64>)>>;
+/// A per-vertex array of a plan (its bank, its widen) cut as trim_core cut its line (None: not as long as the line
+/// was, left as it is).
+fn trim_vals(v: &[f64], at: &TrimAt) -> Option<Vec<f64>> {
+    if v.len() != at.n0 {
+        return None;
+    }
+    let q: Vec<f64> = if at.rev { v.iter().rev().copied().collect() } else { v.to_vec() };
+    let (a, b) = (q[at.j - 1], q[at.j]);
+    let mut out = Vec::with_capacity(q.len() - at.k0 + 1);
+    out.push(a + (b - a) * at.f);
+    out.extend_from_slice(&q[at.k0..]);
+    if at.rev {
+        out.reverse();
+    }
+    Some(out)
+}
+
+/// The most a widen widens (None: no widen, an empty one).
+fn widen_max(w: &Option<Vec<f64>>) -> Option<f64> {
+    match w {
+        Some(w) if !w.is_empty() => Some(w.iter().copied().fold(f64::NEG_INFINITY, f64::max)),
+        _ => None,
+    }
+}
+
+/// A plan's new line and heights and where it was cut (None: as it was).
+type Over = Vec<Option<(Vec<[f64; 2]>, Vec<f64>, TrimAt)>>;
 
 /// plan_trim_mouths' work: (trimmed plans, the end trimmed of each, every plan's new line and heights); boxes updated.
 #[allow(clippy::too_many_arguments)]
 fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], rank: &[i64], boxes: &mut [[f64; 4]],
-             wmax: &[Option<f64>], reach: f64, ramp_m: f64, t_max: f64) -> (Vec<usize>, Vec<usize>, Over) {
+             widens: &[Option<Vec<f64>>], reach: f64, ramp_m: f64, t_max: f64) -> (Vec<usize>, Vec<usize>, Over) {
     let n = p.n();
     {
         let longs: Vec<bool> = (0..n).map(|j| p.xy(j).len() >= 2).collect();
         let mut grid = BoxGrid::new(boxes, &longs);
         // (a trimmed plan's new line and heights)
-        let mut over: Vec<Option<(Vec<[f64; 2]>, Vec<f64>)>> = vec![None; n];
+        let mut over: Over = vec![None; n];
         let mut out_i = Vec::new();
         let mut out_e = Vec::new();
         let mut cand: Vec<u32> = Vec::new();
@@ -450,7 +432,7 @@ fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], ran
                         continue;
                     }
                     let (kxy, kz) = match &over[k] {
-                        Some((a, b)) => (a.as_slice(), b.as_slice()),
+                        Some((a, b, _)) => (a.as_slice(), b.as_slice()),
                         None => (p.xy(k), p.z(k)),
                     };
                     let (d, zq, _, _) = nearest(kxy, kz, q[0], q[1]);
@@ -464,7 +446,7 @@ fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], ran
                     continue;
                 }
                 let (kxy, kz) = match &over[k] {
-                    Some((a, b)) => (a.as_slice(), b.as_slice()),
+                    Some((a, b, _)) => (a.as_slice(), b.as_slice()),
                     None => (p.xy(k), p.z(k)),
                 };
                 let (qq, zs): (Vec<[f64; 2]>, Vec<f64>) = if e == 0 {
@@ -531,13 +513,22 @@ fn trim_core(p: &Plans, half: &[f64], road_half: &[f64], abut: &[[bool; 2]], ran
                     nxy.reverse();
                     nz.reverse();
                 }
-                let nb = plan_bbox(&nxy, half[i], wmax[i], t_max);
+                let at = TrimAt { rev: e == 1, j, f, k0, n0: qq.len() };
+                // (its box as set_widen makes it from the cut widen)
+                let wm = match &widens[i] {
+                    Some(w) => match trim_vals(w, &at) {
+                        Some(tw) => widen_max(&Some(tw)),
+                        None => widen_max(&widens[i]),
+                    },
+                    None => None,
+                };
+                let nb = plan_bbox(&nxy, half[i], wm, t_max);
                 let inside = (0..4).all(|c| if c < 2 { nb[c] >= boxes[i][c] } else { nb[c] <= boxes[i][c] });
                 boxes[i] = nb;
                 if !inside {
                     grid.add(i, &nb);
                 }
-                over[i] = Some((nxy, nz));
+                over[i] = Some((nxy, nz, at));
                 out_i.push(i);
                 out_e.push(e);
                 break;
@@ -1134,8 +1125,8 @@ pub fn plan_merge<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyR
         let (mut out_i, mut out_e) = (Vec::new(), Vec::new());
         let mut q = None;
         if trim {
-            let (oi, oe, over) = trim_core(&p, &inp.half, &inp.road_half, &inp.abut, &inp.rank, &mut inp.bbox, &wmax,
-                                           reach, ramp_m, t_max);
+            let (oi, oe, over) = trim_core(&p, &inp.half, &inp.road_half, &inp.abut, &inp.rank, &mut inp.bbox,
+                                           &inp.widens, reach, ramp_m, t_max);
             if !oi.is_empty() {
                 // (the trimmed plans' lines in the plans packed; their cuttings dropped)
                 let mut xy2 = Vec::with_capacity(p.xy.len());
@@ -1143,10 +1134,18 @@ pub fn plan_merge<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyR
                 let mut off2 = vec![0usize];
                 for j in 0..n {
                     match &over[j] {
-                        Some((a, b)) => {
+                        Some((a, b, at)) => {
                             xy2.extend_from_slice(a);
                             z2.extend_from_slice(b);
                             inp.cuts[j] = None;
+                            // (its bank and widen cut with its line: a longer one read the next plans' vertices'
+                            // values in the pack, 289 of 905 banked plans in 87 captured sets, 2026-11-11)
+                            if let Some(v) = inp.banks[j].as_ref().and_then(|v| trim_vals(v, at)) {
+                                inp.banks[j] = Some(v);
+                            }
+                            if let Some(v) = inp.widens[j].as_ref().and_then(|v| trim_vals(v, at)) {
+                                inp.widens[j] = Some(v);
+                            }
                         }
                         None => {
                             xy2.extend_from_slice(p.xy(j));
@@ -1165,17 +1164,20 @@ pub fn plan_merge<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyR
             None => (pack_core(&p, &inp, &k)?, None),
         };
         let (mut txy, mut tz, mut toff) = (Vec::new(), Vec::new(), vec![0i64]);
+        let (mut tbank, mut twiden) = (Vec::new(), Vec::new());
         if let Some(over) = over {
             for &i in &out_i {
-                let (a, b) = over[i].as_ref().unwrap();
+                let (a, b, _) = over[i].as_ref().unwrap();
                 txy.extend(a.iter().flat_map(|q| [q[0], q[1]]));
                 tz.extend_from_slice(b);
                 toff.push(tz.len() as i64);
+                tbank.push(inp.banks[i].clone());
+                twiden.push(inp.widens[i].clone());
             }
         }
-        Ok((weld_err, welded, wz, out_i, out_e, txy, tz, toff, packed))
+        Ok((weld_err, welded, wz, out_i, out_e, txy, tz, toff, tbank, twiden, packed))
     }).map_err(PyValueError::new_err)?;
-    let (weld_err, welded, wz, out_i, out_e, txy, tz, toff, packed) = res;
+    let (weld_err, welded, wz, out_i, out_e, txy, tz, toff, tbank, twiden, packed) = res;
     let d = PyDict::new(py);
     d.set_item("weld_err", weld_err)?;
     d.set_item("welded", welded.into_pyarray(py))?;
@@ -1186,6 +1188,11 @@ pub fn plan_merge<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, off: PyR
     d.set_item("txy", Array2::from_shape_vec((kk, 2), txy).unwrap().into_pyarray(py))?;
     d.set_item("tz", tz.into_pyarray(py))?;
     d.set_item("toff", toff.into_pyarray(py))?;
+    // (the trimmed plans' banks and widens, cut with their lines; None: none)
+    let tb: Vec<Option<Bound<'_, PyArray1<f64>>>> = tbank.into_iter().map(|v| v.map(|v| v.into_pyarray(py))).collect();
+    let tw: Vec<Option<Bound<'_, PyArray1<f64>>>> = twiden.into_iter().map(|v| v.map(|v| v.into_pyarray(py))).collect();
+    d.set_item("tbank", tb)?;
+    d.set_item("twiden", tw)?;
     d.set_item("pack", pack_dict(py, packed)?)?;
     Ok(d)
 }

@@ -116,7 +116,12 @@ VERTEX_STEP = 4.0           # m between the plan's vertices (segments for the gr
                             # crest or a sag was a kink every 16 m, 'bumpy roads, worst uphill and at speed' on r/BeamNG,
                             # 2026-10-17: a San Francisco street's slope changed 4.4 % rms per 2 m, 1.2 % at 4 m;
                             # grading a 1 km block 0.06 -> 0.14 s)
-BUCKET = 32.0               # m, query-point buckets
+BUCKET = 32.0               # m, query-point buckets (grade_points' pairs: a point meets a segment where its bucket does)
+# grade_points by fine bins (earthfast grade_points_binned, gradebins.rs: each bin's points against the few segments
+# reaching it, without the GIL, no copies of the plan set's arrays per call): bit for bit the bucket walk's heights,
+# 2.2-2.8x less CPU (a 2048² block at Roswell NM 2.6 -> 1.1 s, 2026-11-11). BNE_GRADE_BINNED=off: the bucket walk
+GRADE_BINNED_ON = os.environ.get("BNE_GRADE_BINNED", "on") != "off"
+GRADE_BIN_M = float(os.environ.get("BNE_GRADE_BIN_M", "8"))    # m, the fine bins (grown where the points are sparse)
 ROAD_LIFT = 0.04            # m the physics ground is raised under roads (see Grader.apply)
 BLEND_R = 4.0               # m: roads near each other blend their targets by 1 / (1 + (d / BLEND_R)^2)
 PROFILE_ZOOM = int(os.environ.get("BNE_DEM_ZOOM", "16"))   # DEM zoom of the profiles (one zoom for every caller)
@@ -5971,7 +5976,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(212, "plan_merge")
+    fast.require(217, "plan_merge")     # (217: the trimmed plans' banks / widens)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -5999,7 +6004,10 @@ def merge_plan_set(plans):
         p = plans[i]
         abut = list(p.abut)
         abut[e] = False
-        plans[i] = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+        q = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+        q.bank = got["tbank"][r]            # (its bank and widen cut with its line: planset::trim_vals)
+        set_widen(q, got["twiden"][r])
+        plans[i] = q
     pack = PlanPack.__new__(PlanPack)
     pack.__dict__.update(got["pack"])
     return pack
@@ -6067,6 +6075,17 @@ class PlanPack:
             float(roadsmod.MOUNTAIN_TURN_DEG))
         self.__dict__.update(got)
 
+    def seg_keep(self, x0, y0, x1, y1):
+        """(segments,) uint8: 1 for the segments of the plans whose boxes meet (x0, y0, x1, y1) (near's, without
+        copying the arrays), or None when none do."""
+        if not self.n:
+            return None
+        bx = self.box
+        keep = ~((bx[:, 2] < x0) | (bx[:, 0] > x1) | (bx[:, 3] < y0) | (bx[:, 1] > y1))
+        if not keep.any():
+            return None
+        return np.ascontiguousarray(keep[self.of]).view(np.uint8)
+
     def near(self, x0, y0, x1, y1):
         """The segment arrays of the plans whose boxes meet (x0, y0, x1, y1), or None."""
         if not self.n:
@@ -6092,17 +6111,31 @@ def grade_points(px, py, base, plans, lift=0.0):
     if not len(px):
         return out
     pack = plans if isinstance(plans, PlanPack) else PlanPack(plans)
+    import fast
+    f64 = np.float64
+    if GRADE_BINNED_ON:
+        keep = pack.seg_keep(px.min(), py.min(), px.max(), py.max())
+        if keep is None:
+            return out
+        fast.require(216, "grade_points_binned")    # (gradebins.rs)
+        return fast._ef.grade_points_binned(
+            np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64), np.ascontiguousarray(base, f64), pack.a,
+            pack.b, pack.za, pack.zb, pack.h, pack.rh, pack.rid, pack.rk, pack.ab, pack.cut, pack.ba, pack.bb, pack.st,
+            pack.lk, float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
+            float(STEEP_T_MIN), float(BLEND_R), float(BUCKET), float(WALL_CUT_M), float(WALL_T_M), float(WALL_FLAT_M),
+            float(WALL_AHEAD_M), bool(SEP_ON), float(SEP_FROM_M), float(SEP_FULL_M), float(CORE_FADE_M),
+            float(SIDE_FADE_M), float(SHARP_STEP_M), float(YIELD_RAMP_M), float(RANK_SIDE_FADE_M),
+            float(RANK_HEIGHT_FADE_M), float(ABUT_UNDER_GRADE), np.ascontiguousarray(pack.abd, f64), keep,
+            float(GRADE_BIN_M))
     # every segment of the plans near the points: ends, end heights, reach (core half width + T_MAX)
     got = pack.near(px.min(), py.min(), px.max(), py.max())
     if got is None:
         return out
     A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK, ABD = got
-    import fast
     fast.require(181, "grade_points")        # (the Rust loop: native/earthfast; its segments' links: 125, yield_ramp: 126,
                                              # legs blend over each other's bands: 133, a pass road's core
                                              # given way to whole: 134, no carriageway past an abutment end: 169,
                                              # a lower road over a higher one's core, easing onto it: 181)
-    f64 = np.float64
     return fast._ef.grade_points(np.ascontiguousarray(px, f64), np.ascontiguousarray(py, f64),
                                  np.ascontiguousarray(base, f64), A, B, ZA, ZB, H, RH, RID, RK, AB, CUT, BA, BB, ST, LK,
                                  float(EXTRAP_M), float(lift), float(SLOPE_RUN), float(T_MIN), float(T_MAX), float(STEEP_RUN),
@@ -6716,38 +6749,6 @@ def weld_continuations(plans, specs=None):
 
 TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
 TRIM_RAMP_M = 20.0          # m from the main's painted edge a trimmed side road eases to its own profile
-
-
-def trim_side_mouths(plans, specs=None):
-    """A side road's centreline ends at the *painted edge* of the higher road it joins, not at its centreline:
-    the stretch inside that carriageway is the main road's surface. The new end takes the higher road's height
-    there, the side road's own profile carries on from it (so a steep approach stays steep, without a flat lip
-    under the hold): a Hermite from the edge to its own profile over TRIM_RAMP_M. plans: [(fid, Plan)] or a plain
-    [Plan], in place, in order (a later plan sees an earlier one trimmed); one end a plan. In Rust (native/earthfast
-    planset.rs: the higher roads' boxes against every end and the nearest points on them were ~57 CPU-s of a cold
-    teleport to Santa Fe NM in numpy, 2026-11-11). A trimmed plan keeps its untrimmed plan's bank / widen arrays."""
-    if not plans:
-        return
-    import fast
-    fast.require(211, "plan_trim_mouths")
-    f64 = np.float64
-    plain = not isinstance(plans[0], tuple)
-    ps = list(plans) if plain else [p for _f, p in plans]
-    xy, off, z = _plan_lines(ps)
-    wds = [getattr(p, "widen", None) for p in ps]
-    widened = np.array([w is not None and len(w) > 0 for w in wds], bool)
-    wmax = np.array([float(np.max(w)) if on else 0.0 for w, on in zip(wds, widened)], f64)
-    idx, ends, nxy, nz, noff = fast._ef.plan_trim_mouths(
-        xy, off, z, np.array([p.half for p in ps], f64), np.array([p.road_half for p in ps], f64),
-        np.array([p.abut for p in ps], bool).reshape(-1, 2), _plan_ranks(ps, specs),
-        np.array([p.bbox for p in ps], f64).reshape(-1, 4), widened, wmax, float(JUNCTION_REACH_M),
-        float(TRIM_RAMP_M), float(T_MAX))
-    for r, (i, e) in enumerate(zip(idx, ends)):
-        p = ps[i]
-        abut = list(p.abut)
-        abut[e] = False
-        q = _replan(p, nxy[noff[r]:noff[r + 1]].copy(), nz[noff[r]:noff[r + 1]].copy(), abut=tuple(abut))
-        plans[i] = q if plain else (plans[i][0], q)
 
 
 def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):
