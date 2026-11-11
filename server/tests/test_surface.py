@@ -551,6 +551,17 @@ class LotTest(unittest.TestCase):
         self.assertEqual(sf.paint_lots(np.full((50, 50), sf.GRASS, np.uint8), lat, lon, land)[10, 10], sf.GRASS,
                          "unpaved: the land cover")
 
+    def test_square_by_its_own_tags(self):
+        """surface:colour / paving_stones:material over the photo's vote and the surface rule (plazas.tag_look)."""
+        import json
+        for tags, want in (({"surface:colour": "red"}, sf.BRICK), ({"paving_stones:material": "concrete"}, sf.PAVERS),
+                           ({"colour": "#b04a3a"}, sf.BRICK), ({"colour": "#9a9a9a"}, sf.PAVERS), ({}, sf.PAVERS)):
+            lat, lon, land = self._square(48.86, 2.32, "paving_stones")
+            land[0].attrs["tags"] = np.array([json.dumps(tags)], object)
+            out = sf.paint_lots(np.full((50, 50), sf.DIRT, np.uint8), lat, lon, land,
+                                lambda rings: [(plazas_mod().BRICK, 1.2)] * len(rings))
+            self.assertEqual(out[10, 10], want, tags)
+
     def test_us_square_by_the_photo(self):
         """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers, also
         without a photo."""
@@ -562,6 +573,11 @@ class LotTest(unittest.TestCase):
         self.assertEqual(red[10, 10], sf.BRICK)
         grey = sf.paint_lots(idx, lat, lon, land, lambda rings: [plazas.PAVERS] * len(rings))
         self.assertEqual(grey[10, 10], sf.PAVERS)
+
+
+def plazas_mod():
+    import plazas
+    return plazas
 
 
 class PhotoRoadsTest(unittest.TestCase):

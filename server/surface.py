@@ -1120,11 +1120,13 @@ PLAZA_LAYER = {"road_asphalt_2lane": ASPHALT, "italy_cobblestone": COBBLE, "ital
 
 def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
     """idx with the squares and pedestrian areas of feats_list painted by their mapped surface (plazas.paving,
-    PLAZA_LAYER), their holes (a fountain, a lawn) left as they were, a smaller square over a larger one; unpaved
+    PLAZA_LAYER; a square's own paving material / colour tags first: plazas.tag_look), their holes (a fountain, a
+    lawn) left as they were, a smaller square over a larger one; unpaved
     ones (sand, gravel, grass) left to the land cover. A US square mapped paving_stones or nothing: us_looks(outer
     rings lon/lat) -> looks (plazas.us_looks: red brick where the photo shows it), None: plazas.US_UNREAD_BRICK's.
     Pure given us_looks."""
     import plazas
+    import streetfront
     h, w = idx.shape
     to_px = grid_affine(lat, lon)
     items = []                          # (area px, outer ring lon/lat, holes, look)
@@ -1147,6 +1149,8 @@ def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
                 look = plazas.paving(sv or None, float(ring[:, 1].mean()), float(ring[:, 0].mean()))
                 if look is None:
                     continue
+                if look == plazas.US_AMBIGUOUS or sv in ("paving_stones", ""):    # (its own tags first: tag_look)
+                    look = plazas.tag_look(streetfront.tags_of(feats, i)) or look
                 area = 0.5 * abs(float(np.dot(c, np.roll(r, 1)) - np.dot(r, np.roll(c, 1))))
                 items.append((area, ring, part[1:], look))
     if not items:

@@ -94,6 +94,43 @@ def is_brick_red(rgb):
 US_AMBIGUOUS = "us_ambiguous"
 
 
+# Tags that name a square's paving better than surface=paving_stones (rare: 40 surface:colour and 5
+# paving_stones:material among 4,942 cached squares, but exact where set; the ground-sources survey, 2026-11-11)
+TAG_BRICK_MATERIALS = {"brick", "bricks", "clay", "clinker", "terracotta"}
+TAG_GREY_MATERIALS = {"concrete", "stone", "granite", "basalt", "limestone", "sandstone", "marble", "slate"}
+TAG_RED_COLOURS = {"red", "brown", "darkred", "maroon", "orange", "terracotta", "brick"}
+TAG_GREY_COLOURS = {"grey", "gray", "white", "black", "silver", "lightgrey", "darkgrey", "lightgray", "darkgray",
+                    "beige"}
+
+
+def tag_look(tags):
+    """The look an OSM square's own tags give it (paving_stones:material / material, then surface:colour / colour:
+    red brick or grey pavers), None when they say nothing about it. tags: {key: value} (streetfront.tags_of)."""
+    if not tags:
+        return None
+    for key in ("paving_stones:material", "material"):
+        v = str(tags.get(key) or "").strip().lower()
+        if v in TAG_BRICK_MATERIALS:
+            return (BRICK, BRICK_REPEAT_M)
+        if v in TAG_GREY_MATERIALS:
+            return PAVERS
+    for key in ("surface:colour", "surface:color", "colour", "color"):
+        v = str(tags.get(key) or "").strip().lower()
+        if not v:
+            continue
+        if v in TAG_RED_COLOURS:
+            return (BRICK, BRICK_REPEAT_M)
+        if v in TAG_GREY_COLOURS:
+            return PAVERS
+        if v.startswith("#") and len(v) == 7:
+            try:
+                rgb = tuple(int(v[k:k + 2], 16) / 255.0 for k in (1, 3, 5))
+            except ValueError:
+                continue
+            return (BRICK, BRICK_REPEAT_M) if is_brick_red(rgb) else PAVERS
+    return None
+
+
 def paving(surface_value, lat, lon):
     """(material, m per repeat) of a square with this mapped surface at (lat, lon), None for an unpaved one."""
     if surface_value in UNPAVED:
