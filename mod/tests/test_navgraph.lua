@@ -220,10 +220,12 @@ do
     'adaptive step: one car at a time')
   local jd, rf = rawget(_G, 'jsonDecode'), rawget(_G, 'readFile')
   jsonDecode = function() return { nodes = { a = { 0, 0, 5, 3 }, b = { 50, 0, 5, 3 } },
-    edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3 } }, trafficProfile = { target = 6.5, band = 'suburban' } } end
+    edges = { { 'a', 'b', 0, 1, 1, 13, 1, 3, nil, nil, true } }, trafficProfile = { target = 6.5, band = 'suburban' } } end
   readFile = function() return '{}' end
   T.check(N.onMessage({ anchorId = 3, path = 'x', serial = 2 }, 3) and N.currentGraph().trafficProfile.target == 6.5,
     'the graph keeps its traffic profile')
+  local roughNodes = N.toNodes(jsonDecode(), nil, 60, false)
+  T.check(roughNodes.a.links.b.rough == true, 'the graph keeps the rough-road traffic speed flag')
   N.transform({ apply = function(_, x, y, z) return x, y, z end }, 4)
   T.check(N.currentGraph().trafficProfile.band == 'suburban', '... through a rebase')
   local st = N.trafficStatus()

@@ -224,7 +224,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
           inRadius = e[8], outRadius = e[9] or e[8],      -- (e[9]: a road narrowing to a tunnel's portal)
-          posted = e[10] }      -- (the posted limit where speedLimit is not it, negative: the class's default; api)
+          posted = e[10], rough = e[11] == true } -- (posted/legal speed and OSM rough-road metadata)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -606,7 +606,16 @@ local function closestRoad(x, y, z)
   -- (findClosestRoad's distance is 3D, the probe at the player's height: measured in the plane here)
   local t = math.max(0, math.min(1, ((x - i.pos.x) * ex + (y - i.pos.y) * ey) / (l * l)))
   local qx, qy = i.pos.x + t * ex, i.pos.y + t * ey
-  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay }
+  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay,
+    speedLimit = e.speedLimit, posted = e.posted, rough = e.rough == true }
+end
+
+-- Local road speed metadata for traffic drivers. The graph is the current streamed graph; a generous distance gate
+-- avoids applying an adjacent road's speed profile when the vehicle is off-road or the graph is still rebuilding.
+function M.speedProfileAt(x, y, z)
+  local r = closestRoad(x, y, z)
+  if not r or r.dist > 35 then return nil end
+  return { target = r.speedLimit, posted = r.posted, rough = r.rough, distance = r.dist }
 end
 local oncomingTurn = false
 

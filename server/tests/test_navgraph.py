@@ -63,6 +63,21 @@ class GraphTest(unittest.TestCase):
         self.assertIn("target", p)
         self.assertTrue(all(len(e) == 8 for e in g["edges"]), "the edges as before")
 
+    def test_rough_osm_smoothness_marks_road_without_changing_speed_targets(self):
+        """Roughness is metadata for the traffic driver profile, not a fabricated speed limit."""
+        f = features([[(0, 0), (500, 0)]], ["primary"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        f.rules["max_speed_kmh"] = rules([(0, 110.0)], "float")
+        f.attrs["osm_smoothness"] = np.array(["bad"], dtype=object)
+        g = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False)
+        self.assertTrue(g["edges"])
+        self.assertTrue(all(abs(e[5] - 110.0 / 3.6) < 0.1 for e in g["edges"]), g["edges"])
+        self.assertTrue(all(len(e) > 10 and e[10] is True for e in g["edges"]), "rough flag follows optional edge metadata")
+        f.attrs["osm_smoothness"] = np.array(["good"], dtype=object)
+        smooth = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False)
+        self.assertTrue(all(len(e) <= 10 or e[10] is not True for e in smooth["edges"]),
+                        "good/unknown smoothness does not mark the road rough")
+
     def test_priority_stops_in_the_graph(self):
         """furniture.PRIORITY_STOPS: a residential crossing a primary stops (a stop junction for the AI), its approaches
         below the primary's in drivability, the primary's a little slower than with it off."""

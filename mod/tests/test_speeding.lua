@@ -35,6 +35,20 @@ T.check(#sent == 2 and sent[2]:find('legal') ~= nil and S._cars()[5] == nil, 'an
 veh.role.actionName = 'none'
 S.update(1.0, { rules = { country = 'US' } })
 T.check(#sent == 3 and S._cars()[5] ~= nil, 'free again: a new habit')
+-- a rough road (OSM smoothness=bad or worse, navgraph's edge flag): a speeder keeps to the limit there (PR #1122)
+local c5 = S._cars()[5]
+c5.fast, c5.street, c5.sent = 0.10, 0.05, nil
+obj.getPosition = function() return { x = 0, y = 0, z = 0 } end
+package.loaded['beamngEarth/navgraph'] = { speedProfileAt = function() return { target = 29.06, rough = false } end }
+S.update(1.0, { rules = { country = 'US' } })
+T.near(tonumber(sent[#sent]:match('ai.setSpeed%(([%d%.]+)%)')), 29.06 * 1.10, 0.01, 'a smooth road: its habit')
+package.loaded['beamngEarth/navgraph'].speedProfileAt = function() return { target = 29.06, rough = true } end
+S.update(1.0, { rules = { country = 'US' } })
+T.near(tonumber(sent[#sent]:match('ai.setSpeed%(([%d%.]+)%)')), 29.06, 0.01, 'a rough road: the limit, no speeding')
+package.loaded['beamngEarth/navgraph'].speedProfileAt = function() error('no graph') end
+T.check(S._rough(obj) == false, 'navgraph failing: not rough')
+package.loaded['beamngEarth/navgraph'] = nil
+T.check(S._rough(obj) == false, 'no navgraph: not rough')
 S.reset()
 T.check(next(S._cars()) == nil and sent[#sent]:find('legal') ~= nil, 'reset: all back to legal')
 
