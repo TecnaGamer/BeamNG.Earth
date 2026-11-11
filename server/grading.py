@@ -285,7 +285,11 @@ OBS_NO_DECK_M = 2.0         # lift is stale: nowhere this far over the ground un
 OBS_END_M = 12.0            # m from the end the measured deck's height is taken at most (its first measured station)
 APPROACH_GAP_M = 1.0        # m of flat ground kept between a ramp's fill slope and the road beside it
 ENU_CACHE_MAX = 512         # cells' road parts in the anchor frame kept (Grader._cell_enu; ~0.02-0.5 MB each)
-ENU_AHEAD_ON = os.environ.get("BNGE_ENU_AHEAD", "on") != "off"     # the deck cells' tables made side by side (_enu_ahead)
+# the deck cells' tables made side by side (_enu_ahead). Off by default: cold A/B on the PC 2026-11-11 (one pair each, side
+# by side, load 8-22): prep wall 51.6 -> 46.0 s Grand Island, 75.3 -> 72.7 Lower Manhattan, 72.0 -> 41.9 Plano, 36.4 ->
+# 36.0 Boulder, but process CPU 19.1 -> 28.5, 102 -> 127, 44.5 -> 50.6, 26.8 -> 32.0 (lidar reads finished rather than
+# dropped at the wait's end); BNGE_ENU_AHEAD=on for an A/B (the Steam Deck's CPU first)
+ENU_AHEAD_ON = os.environ.get("BNGE_ENU_AHEAD", "off") == "on"
 ENU_AHEAD_THREADS = 6       # ... this many at once (each mostly waiting: its map data, its lidar's answer)
 APPROACH_CELL_M = 450.0     # m: a plan's end this far from a cell cannot raise what that cell's queries see
 # A ramp the lidar measured (its deck end's height, roadz) rises that high beside a road at grade on a steep side (the

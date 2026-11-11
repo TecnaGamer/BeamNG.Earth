@@ -47,8 +47,12 @@ class Planner:
 
 
 class EnuAheadTest(unittest.TestCase):
+    def setUp(self):
+        self.was = grading.ENU_AHEAD_ON
+        grading.ENU_AHEAD_ON = True         # (off by default: BNGE_ENU_AHEAD=on)
+
     def tearDown(self):
-        grading.ENU_AHEAD_ON = True
+        grading.ENU_AHEAD_ON = self.was
 
     def test_same_decks_side_by_side(self):
         grading.ENU_AHEAD_ON = False
