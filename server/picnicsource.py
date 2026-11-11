@@ -174,26 +174,8 @@ class Source:
             got = self._meta
         if got is not None and got[0] is remote:
             return got[1]
-        tail = remote.read(max(0, remote.size - overture.FOOTER_GUESS), remote.size, kind)
-        n = int.from_bytes(tail[-8:-4], "little")
-        if n + 8 > len(tail):
-            remote.read(remote.size - n - 8, remote.size, kind)
-        meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
-            dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
-            ORDER BY row_group_id, column_id""").fetchall()
-        groups, first = {}, 0
-        for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
-            g = groups.get(rg)
-            if g is None:
-                g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
-                first += nrows
-            offs = [o for o in (dict_off, data_off) if o]
-            if not offs:
-                continue
-            top, leaf = col.split(", ")[0], col.split(", ")[-1]
-            g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
-            if top == "bbox":
-                g["bbox"][leaf] = (smin, smax)
+        # (parsed once per version on disk, as osmtags does: each server process parsed the planet file's footer)
+        groups = overture.parquet_row_groups(con, uri, remote, kind)
         with self._lock:
             self._meta = (remote, groups)
         return groups

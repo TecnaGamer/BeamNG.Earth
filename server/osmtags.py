@@ -70,7 +70,7 @@ COLUMNS = {
 }
 TEXT_COLUMNS = {"sidewalk", "lit", "smoothness", "osm_surface", "osm_oneway", "name", "osm_highway", "lane_hw"}
 INT_COLUMNS = {"lanes", "osm_layer"}
-GROUPS_FILE = "groups.json"     # the version's parsed row groups (OsmTags._groups)
+GROUPS_FILE = overture.GROUPS_FILE     # the version's parsed row groups (OsmTags._groups)
 TABLE_DIR = "rg"        # a row group's decoded ways (OsmTags._table), in the version's folder
 TABLE_MEM = 6           # decoded row groups kept in memory (~6 MB each; a place's cells share 3-5)
 EXACT32 = {"bx0", "by0", "bx1", "by1", "lanes", "osm_layer"}   # float32 (the file's bbox; small integers)
@@ -232,46 +232,7 @@ class OsmTags:
         if got is not None and got[0] is remote:
             return got[1]
         # parsed once per version on disk too (0.8 s of every server process's first cell, the footer's ~84k rows)
-        saved = os.path.join(remote.cache_dir, GROUPS_FILE)
-        try:
-            with open(saved, encoding="utf-8") as f:
-                groups = {int(rg): {"first": g["first"], "n": g["n"],
-                                    "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
-                                    "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
-                          for rg, g in json.load(f).items()}
-            with self._lock:
-                self._meta = (remote, groups)
-            return groups
-        except (OSError, ValueError, KeyError, TypeError):
-            pass
-        tail = remote.read(max(0, remote.size - overture.FOOTER_GUESS), remote.size, kind)
-        n = int.from_bytes(tail[-8:-4], "little")
-        if n + 8 > len(tail):
-            remote.read(remote.size - n - 8, remote.size, kind)
-        meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
-            dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
-            ORDER BY row_group_id, column_id""").fetchall()
-        groups, first = {}, 0
-        for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
-            g = groups.get(rg)
-            if g is None:
-                g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
-                first += nrows
-            offs = [o for o in (dict_off, data_off) if o]
-            if not offs:
-                continue
-            top, leaf = col.split(", ")[0], col.split(", ")[-1]
-            g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
-            if top == "bbox":
-                g["bbox"][leaf] = (smin, smax)
-        try:
-            os.makedirs(remote.cache_dir, exist_ok=True)
-            tmp = f"{saved}.{os.getpid()}.{threading.get_ident()}.tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump({str(rg): g for rg, g in groups.items()}, f)
-            os.replace(tmp, saved)
-        except (OSError, TypeError, ValueError) as e:
-            log.debug("osmtags: row groups not saved: %s", e)
+        groups = overture.parquet_row_groups(con, uri, remote, kind)
         with self._lock:
             self._meta = (remote, groups)
         return groups

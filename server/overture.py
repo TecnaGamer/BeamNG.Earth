@@ -560,7 +560,9 @@ class Reader:
                 self._box_rows -= len(old[0])
 
     def _connect(self, files, kind):
-        """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`."""
+        """A DuckDB connection whose filesystem serves `files` ({path: RemoteFile}) with `kind`. (Not one database a
+        process with DuckDB's parquet_metadata_cache: it saved ~0.3 CPU-s of a route shield query's 0.65-1.05 s, the
+        OSM tags footer parsed once, but held ~150 MB more in every process using it, 2026-11-11.)"""
         duckdb = _duckdb()
         errors = []
 
@@ -1007,3 +1009,52 @@ def sources_provenance(theme, release, sources):
             "attribution": ATTRIBUTION, "licence": THEME_LICENCES.get(theme, "ODbL"),
             "url": "https://docs.overturemaps.org/attribution/",
             "datasets": [{"dataset": d, "license": l, "features": n} for (d, l), n in sorted(sources.items())]}
+
+
+GROUPS_FILE = "groups.json"     # a remote parquet's parsed row groups in its version's folder (parquet_row_groups)
+
+
+def parquet_row_groups(con, uri, remote, kind):
+    """{row group: {"first", "n", "bbox": {leaf: (min, max)}, "cols": {column: [byte ranges]}}} of the remote parquet
+    (rangeread.RemoteFile) at uri on DuckDB connection con, parsed from its footer once per version and kept in its
+    folder (GROUPS_FILE): every server process read the whole footer of a planet-wide file (osmtags: ~84k rows, 0.8 s;
+    picnicsource's POIs the same, ~1.4 % of a cold teleport's CPU, 2026-11-11)."""
+    saved = os.path.join(remote.cache_dir, GROUPS_FILE)
+    try:
+        with open(saved, encoding="utf-8") as f:
+            groups = {int(rg): {"first": g["first"], "n": g["n"],
+                                "bbox": {k: tuple(v) for k, v in g["bbox"].items()},
+                                "cols": {k: [tuple(r) for r in v] for k, v in g["cols"].items()}}
+                      for rg, g in json.load(f).items()}
+        return groups
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    tail = remote.read(max(0, remote.size - FOOTER_GUESS), remote.size, kind)
+    n = int.from_bytes(tail[-8:-4], "little")
+    if n + 8 > len(tail):
+        remote.read(remote.size - n - 8, remote.size, kind)
+    meta = con.execute(f"""SELECT row_group_id, row_group_num_rows, path_in_schema, stats_min, stats_max,
+        dictionary_page_offset, data_page_offset, total_compressed_size FROM parquet_metadata({uri})
+        ORDER BY row_group_id, column_id""").fetchall()
+    groups, first = {}, 0
+    for rg, nrows, col, smin, smax, dict_off, data_off, size in meta:
+        g = groups.get(rg)
+        if g is None:
+            g = groups[rg] = {"first": first, "n": nrows, "bbox": {}, "cols": {}}
+            first += nrows
+        offs = [o for o in (dict_off, data_off) if o]
+        if not offs:
+            continue
+        top, leaf = col.split(", ")[0], col.split(", ")[-1]
+        g["cols"].setdefault(top, []).append((min(offs), min(offs) + size))
+        if top == "bbox":
+            g["bbox"][leaf] = (smin, smax)
+    try:
+        os.makedirs(remote.cache_dir, exist_ok=True)
+        tmp = f"{saved}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({str(rg): g for rg, g in groups.items()}, f)
+        os.replace(tmp, saved)
+    except (OSError, TypeError, ValueError) as e:
+        log.debug("parquet row groups not saved: %s", e)
+    return groups
