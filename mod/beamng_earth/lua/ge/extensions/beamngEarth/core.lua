@@ -579,6 +579,7 @@ local function commitTeleport(msg)
   -- (no car, or the free camera: the camera over the target too, as the car)
   if not veh or M.freeCamera() then M.moveCamera(st.placeX, st.placeY, st.placeZ + PRE_LIFT) end
   be:reloadCollision()
+  M._psum.mod.note('collision')
 
   st.anchor, st.anchorId, st.anchorKey = geodesy.newAnchor(msg.lat, msg.lon), msg.anchorId, msg.anchorKey
   trees.reanchor(st.anchor)       -- (the geotiles it has: placed into the new world; the server drops the far ones)
@@ -855,6 +856,7 @@ local function commitTerrain(msg)
   table.insert(st.commits, c)
   if #st.commits > COMMIT_LOG then table.remove(st.commits, 1) end
   st.commitFrames = c
+  M._psum.mod.note('swap')
   st.block = { cx = msg.cx, cy = msg.cy }
   net.send({ type = 'commit_terrain', anchorId = st.anchorId, cx = msg.cx, cy = msg.cy })
   st.lastFollowMs = sw()
@@ -1342,6 +1344,8 @@ local function onMessage(msg)
     farfield.onDone(msg)
   elseif t == 'far_retex' then
     farfield.onRetex(msg) -- a shown tile's re-rendered texture (--colormatch / --deshadow)
+  elseif t == 'catchup' then            -- the server's catch-up boost (a slow frame's context: perfsummary.lua)
+    st.catchupOn = msg.on == true
   elseif t == 'weather' then
     -- real weather (server weather.py): applied by the separate beamngEarth_weather extension
     local w = rawget(_G, 'beamngEarth_weather')
@@ -2410,12 +2414,69 @@ function M._psum.sample()
   s.loading = st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil
   local m3 = rawget(_G, 'beamngEarth_map3d')
   s.mapOpen = (m3 and m3.isActive and m3.isActive()) or false
+  -- the machine's memory every MACHINE_S (engine calls: the game's own hardware page and metrics use them; bytes)
+  if st.clock >= (M._psum.machineAt or 0) then
+    M._psum.machineAt = st.clock + M._psum.MACHINE_S
+    local okM, mem = pcall(function() return Engine.Platform.getMemoryInfo() end)
+    if okM and type(mem) == 'table' then
+      if tonumber(mem.processPhysUsed) then s.gameMB = mem.processPhysUsed / 1048576 end
+      local free = tonumber(mem.availableBytes)
+      if not free and tonumber(mem.osPhysAvailable) and tonumber(mem.osPhysUsed) then
+        free = mem.osPhysAvailable - mem.osPhysUsed       -- (osPhysAvailable is the total: ge_utils.lua's RAM size)
+      end
+      if free then s.freeMB = free / 1048576 end
+    end
+    local okV, vram = pcall(function() return Engine.Render.getVRAMUsage() end)
+    if okV and tonumber(vram) and vram > 0 then s.vramMB = vram / 1048576 end
+  end
+  -- (activity: the car's speed and the camera; idle frames are counted apart)
+  local p = st.player
+  s.mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
+  s.cam = st.cam
   return s
+end
+M._psum.MACHINE_S = 5
+-- What else was going on in a slow frame (perfsummary.TAGS; the events themselves are noted where they happen: block
+-- swap, collision rebuilds, tree shapes, vehicles): the governor's units of the frame (roads, far tiles, retextures,
+-- distant traffic), the server's messages, our UI or the map, the catch-up boost, a rebase, a garbage sweep, the hold.
+function M._psum.tags(gc)
+  local note = M._psum.mod.note
+  if gc then note('gc') end
+  if st.catchupOn then note('catchup') end
+  if st.rebasing then note('rebase') end
+  if (marks.net or 0) >= 5 then note('decode') end
+  if (marks.draw or 0) >= 5 then note('ui') end
+  local m3 = rawget(_G, 'beamngEarth_map3d')
+  if m3 and m3.isActive and m3.isActive() then note('ui') end
+  local held = M.heldReason()
+  if held == 'edge' or held == 'ground' then note('held') end     -- ('loading' is its own tag: perfsummary.frame)
+  for _, u in ipairs(gov.frameLog or {}) do
+    local k = type(u) == 'string' and u:match('^([^:]+)')
+    if k then
+      if k:sub(1, 4) == 'road' then note('roads')
+      elseif k == 'retex' then note('retex')
+      elseif k == 'trafficVisuals' then note('traffic')
+      elseif k ~= 'fuel' then note('far') end
+    end
+  end
+end
+-- Why the car is held still while the world loads, or nil: 'edge' (the edge guard holding it back at the ground's
+-- edge), 'ground' (held until the ground under a dropped car loads), 'loading' (loading after a teleport). Frames then
+-- may be smooth: the profiler and the issue report tell this apart from slow frames.
+function M.heldReason()
+  if not st then return nil end
+  if st.guard and (st.guard.mode == 'hold' or st.guard.pausedByUs) then return 'edge' end
+  if dropHold.active then return 'ground' end
+  if st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil then return 'loading' end
+  return nil
 end
 function M._psum.frame(ms, hrec)
   local ps = M._psum
-  if not net.isConnected() then ps.setupSent = false; return end
-  if not ps.on() then return end
+  local kb = collectgarbage('count')
+  local gc = ps.kb ~= nil and kb < ps.kb - 1024          -- (the heap fell a MB or more since the last frame: a sweep)
+  ps.kb = kb
+  if not net.isConnected() then ps.setupSent = false; ps.mod.dropNotes(); return end
+  if not ps.on() then ps.mod.dropNotes(); return end
   local p = st.player
   local mph = p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 or 0
   local cause = ms >= ps.mod.CAUSE_MS and perflog.cause(ms, hrec) or nil
@@ -2423,8 +2484,11 @@ function M._psum.frame(ms, hrec)
   -- not in the background, where the game slows its own frames down (the game's lowPerformance sampler does the same)
   local focused = not Engine.isProgramFocused or Engine.isProgramFocused()
   if focused and not simPaused() then
+    if ms >= ps.mod.HITCH_MS[1] then pcall(ps.tags, gc) end
     ps.mod.frame(ms, mph, cause ~= perflog.UNMEASURED and cause or nil,
       st.clock < (st.loadingUntil or 0) or st.placeFrames ~= nil)
+  else
+    ps.mod.dropNotes()
   end
   if st.clock < ps.sampleAt then return end
   ps.sampleAt = st.clock + 1
@@ -2491,7 +2555,10 @@ local function onUpdate(dtReal, dtSim)
     end
     return
   end
-  require('beamngEarth/profiler').update(frameMs0, marks, st.inOurLevel, net.isConnected(), net.send)
+  do
+    local prof = require('beamngEarth/profiler')
+    prof.update(frameMs0, marks, st.inOurLevel, net.isConnected(), net.send, prof.enabled and M.heldReason() or nil)
+  end
   local hrec = nil
   if frameMs0 > M.HITCH_MS and st.inOurLevel then
     local okH, h = pcall(noteHitch, frameMs0)
@@ -2669,8 +2736,15 @@ local function onUpdate(dtReal, dtSim)
     sea.update(st.anchorId, st.player)
     -- the trees' own Lua time a frame (trees.lua FRAME_MS), more while the world loads, none in a heavy frame or the
     -- quiet frames round it (governor.lua: a heavy frame stays a lone spike)
-    trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
-      or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+    do
+      local m0, r0 = trees.made, trees.removed
+      trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
+        or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+      if trees.made ~= m0 or trees.removed ~= r0 then           -- (a slow frame's context: perfsummary.lua)
+        M._psum.mod.note('trees')
+        if trees.passNew and trees.passNew() > 0 then M._psum.mod.note('treeShapes') end
+      end
+    end
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
     pcall(nightlights.update)
@@ -3429,6 +3503,11 @@ M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
 end
+-- (vehicles spawned / removed, traffic's pooled ones shown / hidden: a slow frame's context in the anonymous summary;
+-- GitHub #594, freezes as traffic despawns)
+M.onVehicleSpawned = function() M._psum.mod.note('spawn') end
+M.onVehicleDestroyed = function() M._psum.mod.note('despawn') end
+M.onVehicleActiveChanged = function(_, active) M._psum.mod.note(active and 'spawn' or 'despawn') end
 M.onClientEndMission = onClientEndMission
 M.onExit = function() notePlayerPos(true) end           -- the game closing (a crash or a kill: the last periodic one)
 M.onClientPostStartMission = onClientPostStartMission

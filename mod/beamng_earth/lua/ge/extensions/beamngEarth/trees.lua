@@ -1634,6 +1634,9 @@ function M.update(anchorId, player, view, frameMs)
     pool[#pool + 1] = newForest():getID()
   end
 end
+-- New tree shapes and Forests of the current pass (core.lua: a slow frame's context in the anonymous summary, when the
+-- pass changed items: M.made / M.removed)
+function M.passNew() return newShapes + newForests end
 
 -- Disconnect, a new server session, mod unload: every item removed.
 function M.clear()

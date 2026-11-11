@@ -170,7 +170,7 @@ PROTOCOL = 4
 SEND_BUFFER_MAX = 32 * 1024 * 1024  # pending JSON control bytes per transport; reconcile on reconnect (PR #817 had 8 MiB:
                                     # more room for a teleport's burst before a reconnect)
 WATERGUARD_VERSION = 1
-TELEMETRY_CONSENT = 2           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
+TELEMETRY_CONSENT = 3           # telemetry.CONSENT_VERSION (the hello tells the welcome page; kept equal by a test)
 _NO_PERF = perfstats.Collector()    # (a server object without one: tests' stand-ins)
 
 
@@ -183,6 +183,15 @@ def _borders(server):
 
 def _perf(server):
     return getattr(server, "perf", None) or _NO_PERF
+
+
+def _catchup_note(conn, on):
+    """A connection's catch-up boost came on / went off: counted for the anonymous performance data (perfstats) and told
+    to the mod ('catchup'), which tags its slow frames with it (perfsummary.lua: does lending cores cost the game frames?)."""
+    _perf(conn.s).catchup(on)
+    send = getattr(conn, "send", None)
+    if send is not None:
+        send({"type": "catchup", "on": bool(on)})
 
 
 # The BeamNG.Earth server list (native/serverlist behind Caddy on the project's mini PC): server_list()
@@ -8426,7 +8435,7 @@ class Connection:
             return
         if self.catchup and not self.s.boost_on:
             self.catchup = False            # (ended elsewhere: free to start again)
-            _perf(self.s).catchup(False)
+            _catchup_note(self, False)
         if self.s.boost_on and not self.catchup:
             return
         behind = speed > CATCHUP_MIN_MS and self.behind()
@@ -8438,7 +8447,7 @@ class Connection:
                 self.catchup = self.s.boost_on
                 self.catchup_since, self.catchup_more = now, False
                 if self.catchup:
-                    _perf(self.s).catchup(True)
+                    _catchup_note(self, True)
                     log.info("catch-up boost on (%.0f mph; next block asked %.1f s ago)", speed * 2.237,
                              now - self.pending_at if self.pending_at else -1)
             elif not getattr(self, "catchup_more", False) and now - getattr(self, "catchup_since", now) > CATCHUP_MORE_S \
@@ -8459,7 +8468,7 @@ class Connection:
             elif now - self.caught_up_at > CATCHUP_CALM_S:
                 self.s.load_boost(False, "caught up")
                 self.catchup, self.catchup_more = False, False
-                _perf(self.s).catchup(False)
+                _catchup_note(self, False)
                 log.info("catch-up boost off (caught up)")
 
     def commit_terrain(self, msg):

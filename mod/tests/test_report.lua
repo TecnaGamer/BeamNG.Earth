@@ -77,4 +77,12 @@ T.check(lines == 1, 'one index line (' .. lines .. ')')
 T.check(report.status().lastFolder == '/u/' .. folder, 'the saved window names the folder')
 T.check(report.benchmark == report.profiler, 'the old benchmark entry point stays')
 
+
+-- the car held while the world loads, apart from slow frames (2026-11-11)
+local hs = report.stats({ 16, 16, 120, 300, 16 }, { false, false, false, 'edge', 'edge' })
+T.check(hs.held and hs.held.frames == 2 and math.abs(hs.held.s - 0.316) < 1e-9 and hs.held.over50 == 1
+  and math.abs(hs.held.why.edge - 0.316) < 1e-9, 'held frames summed apart with their reason')
+T.check(hs.playing.frames == 3 and hs.playing.over50 == 1 and hs.over50 == 2, 'frames while playing apart; all as before')
+T.check(report.stats({ 16, 16 }, { false, false }).held == nil, 'never held: no held part')
+
 T.done('test_report')
