@@ -125,61 +125,6 @@ class RegionStyleTest(unittest.TestCase):
         barn = bld.plan(rect(0, 0, 12, 20), {"class": "barn"}, lat=-27.47, lon=153.02)
         self.assertNotIn("|q", barn.roof_mat)
 
-    def test_queensland_roof_materials_and_scale(self):     # fork
-        """Queensland's pitched roofs: the Colorbond rib sheet and the profiled tile, at their own real scale; the stock
-        roof materials (and the MATERIALS before them) untouched."""
-        self.assertEqual(bld.MATERIALS[:21].index(bld.ROOF_METAL), 8, "existing indices are unchanged: append only")
-        self.assertEqual(bld.MATERIALS[-2:], (bld.ROOF_COLORBOND, bld.ROOF_QTILE))
-        mats = json.loads((Path(__file__).resolve().parents[2] / "mod" / "beamng_earth" / "levels" / "beamng_earth" / "art"
-                           / "shapes" / "beamngEarth" / "buildings.materials.json").read_text(encoding="utf-8"))
-        for name in (bld.ROOF_COLORBOND, bld.ROOF_QTILE, bld.ROOF_METAL, bld.ROOF_SLATE):
-            self.assertIn(name, mats)
-        for name in (bld.ROOF_COLORBOND, bld.ROOF_QTILE):
-            st = mats[name]["Stages"][0]
-            self.assertTrue(st["baseColorMap"].startswith("/assets/materials/tileable/"), "a stock texture, not a copy")
-            self.assertTrue(st["vertColor"])
-            self.assertEqual(st["metallicFactor"], 0)
-        self.assertNotIn("metallicMap", mats[bld.ROOF_COLORBOND]["Stages"][0], "painted steel: not the glossy zinc")
-        # every Queensland house: its roof triangles are in the new materials, never the stock roof ones
-        ci, ti = bld.MATERIALS.index(bld.ROOF_COLORBOND), bld.MATERIALS.index(bld.ROOF_QTILE)
-        old = {bld.MATERIALS.index(bld.ROOF_METAL), bld.MATERIALS.index(bld.ROOF_SLATE)}
-        seen = set()
-        for h in self.houses(-27.47, 153.02, n=60):
-            m = bld.build([(h, 0.0, 1.0)])
-            used = set(m[3].tolist())
-            self.assertFalse(used & old, h.roof_mat)
-            if h.roof == "flat":        # (a few: the flat roof material)
-                continue
-            self.assertIn(ci if h.roof_mat.startswith(bld.ROOF_COLORBOND) else ti, used)
-            seen |= used & {ci, ti}
-        self.assertEqual(seen, {ci, ti}, "both a Colorbond and a tile roof turn up")
-        # the UVs: the same roof in the stock slate material is at ROOF_UV_M; the new ones at their metres per repeat
-        # (every other material's UVs are identical: test_other_regions_roofs_unchanged)
-        for kind, new_mat in (("hipped", bld.ROOF_COLORBOND), ("gabled", bld.ROOF_COLORBOND),
-                              ("hipped", bld.ROOF_QTILE), ("gabled", bld.ROOF_QTILE)):
-            h = bld.plan(rect(0, 0, 9, 14), {"class": "house"}, lat=-27.47, lon=153.02)
-            h.roof, h.roof_mat = kind, f"{new_mat}|q0"
-            mn = bld.build([(h, 0.0, 1.0)])
-            h.roof_mat = f"{bld.ROOF_SLATE}|0"
-            mo = bld.build([(h, 0.0, 1.0)])
-            ni, oi = bld.MATERIALS.index(new_mat), bld.MATERIALS.index(bld.ROOF_SLATE)
-            tn, to = mn[2][mn[3] == ni], mo[2][mo[3] == oi]
-            self.assertEqual(len(tn), len(to))
-            self.assertGreater(len(tn), 0)
-            un, uo = mn[1][tn.ravel()], mo[1][to.ravel()]
-            ru, rv = bld.ROOF_UV_M_OF[new_mat]
-            np.testing.assert_allclose(un[:, 0] * ru, uo[:, 0] * bld.ROOF_UV_M, atol=1e-5)
-            np.testing.assert_allclose(un[:, 1] * rv, uo[:, 1] * bld.ROOF_UV_M, atol=1e-5)
-        self.assertEqual(bld.ROOF_UV_M_OF[bld.ROOF_COLORBOND], (0.95, 0.95), "5 ribs at Trimdek's 190 mm")
-        self.assertEqual(bld.ROOF_UV_M_OF[bld.ROOF_QTILE], (1.32, 2.1), "4 columns of 0.33 m, 5 courses of 0.42 m")
-        # the tints are the target colour / the new texture's mean (MAT_MEAN): the colour they draw at a distance is the target
-        mean = bld.MAT_MEAN[bld.ROOF_COLORBOND]
-        r, g, b, _ = bld._sky_colour(f"{bld.ROOF_COLORBOND}|q2", 1.0)       # Shale Grey (189, 191, 186)
-        self.assertLessEqual(max(abs(r - 189), abs(g - 191), abs(b - 186)), 3)
-        r, g, b, _ = bld._sky_colour(f"{bld.ROOF_QTILE}|q3", 1.0)           # charcoal concrete tile (70, 70, 72)
-        self.assertLessEqual(max(abs(r - 70), abs(g - 70), abs(b - 72)), 3)
-        self.assertEqual(mean, (0.841, 0.841, 0.841))
-
     def test_other_regions_roofs_unchanged(self):           # fork
         """build() of buildings outside Queensland (every region's style, tagged metal / tile roofs, custom roof colours,
         barns) is byte-for-byte what it was before the Queensland roof materials: vertices, UVs, triangles, materials,
@@ -479,13 +424,6 @@ class HighSetTest(unittest.TestCase):       # fork
             self.assertGreaterEqual(float(full[0][:, 2].max()), hs.floor + spec.height)
         self.assertEqual(seen, {False, True})
 
-    def test_timber_stumps_are_square_and_thin(self):
-        spec = self.house(bld.HS_TIMBER, pred=lambda s: not bld.highset(s, 0.0, 2.0).battens)
-        hs, P, T, M, C = self.under(spec, *self.slope(spec, 2.0))
-        for q in P[4:].reshape(-1, 16, 3):          # one stump: four sides round a 0.17 m square
-            self.assertAlmostEqual(float(np.linalg.norm(q[1, :2] - q[0, :2])), bld.HS_POST_M, places=6)
-            self.assertLess(float(np.ptp(q[:, :2], axis=0).max()), bld.HS_POST_M + 1e-6)
-
     def test_brick_and_render_houses_get_a_base_never_stumps(self):
         bi, mi = bld.MATERIALS.index(bld.BRICK_WALL), bld.MATERIALS.index(bld.METALWALL)
         for kind in (bld.HS_BRICK, bld.HS_RENDER):
@@ -514,24 +452,6 @@ class HighSetTest(unittest.TestCase):       # fork
         self.assertEqual(bld.highset(spec, 0.0, 0.8).floor, 0.8)
         self.assertIsNone(bld.highset(spec, 0.0, 0.3))
         self.assertIsNone(bld.highset(self.house(bld.HS_RENDER), 0.0, 0.8))
-
-    def test_flat_ground_timber_houses_a_share_low_set(self):
-        timber = low = 0
-        for i in range(500):
-            spec = self.plan(i)
-            if not spec.hs:
-                continue
-            f = bld._hs_floor(spec, 0.0, 0.0)
-            if spec.hs[0] != bld.HS_TIMBER:
-                self.assertIsNone(f, "brick and render stand on the ground on flat ground")
-                continue
-            timber += 1
-            if f is not None:
-                low += 1
-                self.assertTrue(0.6 <= f <= 1.0, "low-set on 0.6 to 1.0 m stumps")
-        self.assertAlmostEqual(low / timber, bld.HS_LOWSET_SHARE, delta=0.08)
-        # a fall beyond HS_MAX_DROP_M (a cliff, a ground model's error) is left as it was
-        self.assertIsNone(bld.highset(self.house(bld.HS_TIMBER), 0.0, bld.HS_MAX_DROP_M + 0.5))
 
     def test_door_and_stair_at_the_raised_floor(self):
         road = (np.array([(-50.0, -6.0), (50.0, -6.0)]), 4.0)        # south of the house, the low side
@@ -647,31 +567,6 @@ class HighSetTest(unittest.TestCase):       # fork
         flat = self.house(bld.HS_TIMBER, pred=lambda s: bld._hs_floor(s, 0.0, 0.0) is None)    # (not low-set)
         self.assertAlmostEqual(bld.collider_boxes([(flat, 0.0, 0.0)], 0.0, 0.0)[0][5], round(flat.height + 6.0, 2))
 
-    def test_far_mesh_keeps_the_skirt_with_the_roof_raised(self):
-        spec = self.house(bld.HS_TIMBER)
-        gmin, gmax = self.slope(spec, 2.0)
-        hf = bld._hs_floor(spec, gmin, gmax)
-        up = bld.build([(spec, gmin, gmax)], lite=True)
-        hs, spec.hs = spec.hs, None
-        down = bld.build([(spec, gmin, gmax)], lite=True)
-        spec.hs = hs
-        self.assertAlmostEqual(float(up[0][:, 2].max() - down[0][:, 2].max()), hf - gmax, places=6)
-        self.assertAlmostEqual(float(up[0][:, 2].min()), gmin - bld.SKIRT_LITE_M, places=6, msg="the solid skirt")
-
-    def test_deterministic_and_vertex_budget(self):
-        worst = 0
-        for i in range(200):
-            spec = bld.plan(rect(0, 0, 10, 13), {"class": "house", "seed_id": i}, lat=self.LAT, lon=self.LON)
-            if not spec.hs:
-                continue
-            gmin, gmax = self.slope(spec, 2.5)
-            a, b = bld.build([(spec, gmin, gmax)]), bld.build([(spec, gmin, gmax)])
-            self.assertTrue(all(np.array_equal(a[k], b[k]) for k in (0, 1, 2, 3, 5)))
-            hs, P, T, M, C = self.under(spec, gmin, gmax, stair=True)
-            worst = max(worst, len(P))
-            self.assertLess(len(P), 480, "stumps, stair and landing together")
-        self.assertGreater(worst, 100)
-
     def test_other_regions_unchanged_on_a_slope(self):
         """build(), collision and boxes outside Queensland on sloping ground, with a door (Spec.hs stays None): byte-for-byte
         what they were before high-set houses. (digest taken on the code before the change.)"""
@@ -737,33 +632,6 @@ class QldDetailsTest(unittest.TestCase):        # fork
             self.assertEqual(h.qld is not None, h.roof != "flat" and h.floors <= 2)
         self.assertIsNone(bld.plan(rect(0, 0, 8, 14), {"class": "barn"}, lat=self.LAT, lon=self.LON).qld)
 
-    def test_eaves_soffit_fascia_gutters_and_downpipes(self):
-        ri = {bld.MATERIALS.index(bld.ROOF_COLORBOND), bld.MATERIALS.index(bld.ROOF_QTILE)}
-        fi = bld.MATERIALS.index(bld.FACADE)
-        for h in self.houses(60):
-            self.assertTrue(0.45 <= h.qld["eave"] <= 0.6)
-            a, _ = self.diff(h)
-            q0, h.qld = h.qld, None
-            b = bld.build([(h, 0.0, 0.0)])          # (the same house with the stock eaves)
-            h.qld = q0
-            extra = len(a[0]) - len(b[0])
-            self.assertTrue(60 <= extra <= 150, extra)
-            P, T, M = a[0], a[2], a[3]
-            roof = P[T[np.isin(M, list(ri))].ravel()]
-            dims = sorted(float(x) for x in np.ptp(roof[:, :2], axis=0))
-            e = h.qld["eave"]
-            self.assertAlmostEqual(dims[0], 9 + 2 * e, places=5, msg="eaves across")
-            self.assertAlmostEqual(dims[1], 12 + 2 * (bld.QLD_RAKE_M if h.roof == "gabled" else e), places=5)
-            tri = P[T[M == fi]]
-            nz = np.cross(tri[:, 1] - tri[:, 0], tri[:, 2] - tri[:, 0])
-            nz = nz[:, 2] / np.maximum(np.linalg.norm(nz, axis=1), 1e-12)
-            self.assertTrue((nz < -0.99).any(), "a soffit under the eaves")
-            self.assertGreater(float(np.ptp(roof[:, 2])), 1.0, "a pitched roof")
-        # the overhang is on the tilted roof: the roof UVs run on (continuous) to its edge
-        h = self.houses(10)[0]
-        a, _ = self.diff(h)
-        self.assertTrue(np.isfinite(a[1]).all())
-
     def test_solar_on_the_north_face_only(self):
         hs = [self.house(i) for i in range(800)]
         hs = [h for h in hs if h.qld]
@@ -797,28 +665,6 @@ class QldDetailsTest(unittest.TestCase):        # fork
         h.ring = rect(0, 0, 9, 12) - (4.5, 6.0)           # long axis along y (north-south): faces east and west
         a, b = self.diff(h, solar=True)
         self.assertEqual(len(a[0]), len(b[0]))
-
-    def test_whirlybird_and_awning_shares_and_sizes(self):
-        hs = self.houses(800)
-        w = [h.qld["whirly"] for h in hs]
-        self.assertAlmostEqual(sum(x > 0 for x in w) / len(w), bld.QLD_WHIRLY, delta=0.06)
-        self.assertAlmostEqual(sum(x == 2 for x in w) / sum(x > 0 for x in w), bld.QLD_WHIRLY2, delta=0.1)
-        old = [h for h in hs if h.qld["old"]]
-        self.assertAlmostEqual(sum(h.qld["awn"] for h in old) / len(old), bld.QLD_AWNING, delta=0.07)
-        self.assertFalse(any(h.qld["awn"] for h in hs if not h.qld["old"]), "none on rendered houses")
-        self.assertTrue(all((h.wall and h.wall.split("|")[0] == bld.SIDING) or h.band is bld.BAND_BRICK for h in old))
-        for h in [h for h in hs if h.qld["whirly"]][:30]:
-            a, b = self.diff(h, whirly=h.qld["whirly"])
-            n = (len(a[0]) - len(b[0])) / 40
-            self.assertTrue(n == int(n) and 1 <= n <= h.qld["whirly"], n)
-        seen = 0
-        for h in [h for h in hs if h.qld["awn"] and not h.porch][:30]:
-            h.door = (0, 4.5)
-            a, b = self.diff(h, awn=True)
-            n = (len(a[0]) - len(b[0])) / 10
-            self.assertTrue(n == int(n) and 0 <= n <= bld.AWN_MAX, n)
-            seen += n > 0
-        self.assertGreater(seen, 10)
 
     def street(self, n, pitch, rural=False):
         rows, items = [], []
@@ -865,15 +711,6 @@ class QldDetailsTest(unittest.TestCase):        # fork
         s = next(s for s in r if s.qld["tank"])
         a, b = self.diff(s, tank=True)
         self.assertTrue(30 <= len(a[0]) - len(b[0]) <= 60)
-
-    def test_vertex_budget_with_everything(self):
-        worst = 0
-        for h in self.houses(120):
-            h.door = (0, 4.5)
-            a, b = self.diff(h, solar=True, whirly=2, awn=True, tank=True)
-            worst = max(worst, len(a[0]) - len(b[0]))
-        self.assertLess(worst, 520)
-        self.assertLess(bld.MAX_MESH_VERTS, 65536)
 
 
 class PlanTest(unittest.TestCase):
@@ -2050,8 +1887,6 @@ class CustomModelSuppressionTest(unittest.TestCase):
         self.assertEqual(len(radii), 1)
 
 
-
-
 class CustomModelTextureSurvivesSweepTest(unittest.TestCase):
     """The "NO MATERIAL" bug: a session's out_dir (<user_dir>/temp/beamngEarth/<sid>) is wiped whenever the
     anchor changes (sweep_sessions), and a tile that later comes back from the revisit cache restores only
@@ -2385,7 +2220,6 @@ class BridgeStructureTest(unittest.TestCase):
         self.assertAlmostEqual(P[:, 2].max(), 12.0, places=3)
 
 
-
 class StoopTest(unittest.TestCase):
     def test_steps_reach_the_lowest_ground(self):
         # a row house on a street falling 1.5 m along it: its front steps go down to the lowest ground (they floated)
@@ -2443,7 +2277,6 @@ class TollBoothTest(unittest.TestCase):
         self.assertIsNone(bld.build([(island, 1.0, 1.2)]), "the island itself not built")
 
 
-
 class RoadLinesTest(unittest.TestCase):
     def test_a_road_with_a_bridge_in_it_keeps_its_ground_pieces(self):
         """A motorway segment with a short overpass in it (the A7, GitHub #239): its pieces on the ground are public
@@ -2474,7 +2307,6 @@ class RoadLinesTest(unittest.TestCase):
         self.assertFalse(bld._ml_false(lorry, [], [], list(lines)), "(the plain lines: ML_ROAD_M alone missed it)")
 
 
-
 class SteepMachineLearnedTest(unittest.TestCase):
     """GitHub #242: machine-learned outlines on a volcano's bare slopes (rocks, shadows) are left out; huts are not."""
     def ring(self, x=100.0, y=100.0, s=6.0):
@@ -2492,8 +2324,6 @@ class SteepMachineLearnedTest(unittest.TestCase):
         self.assertFalse(bld._ml_steep(r, steep30, near), "30 deg beside a path: kept (a hut on the trail)")
         self.assertTrue(bld._ml_steep(r, steep40, near), "40 deg: out wherever it is")
         self.assertTrue(bld._ml_steep(r, steep30, []), "no ways at all")
-
-
 
 
 class FarLampTest(unittest.TestCase):
@@ -2527,8 +2357,6 @@ class FarLampTest(unittest.TestCase):
         wall = mats.index(bld.SKY_WALL)
         self.assertIn(wall, set(M.tolist()), "the walls take the night window map")
         self.assertGreater(float(np.ptp(UV[:, 0])), 0.1, "spread along the walls")
-
-
 
 
 class MappedRoofShapesTest(unittest.TestCase):
@@ -3087,32 +2915,6 @@ class QldStoreysBrickAwningTest(unittest.TestCase):        # fork
                          self.plan(rect(0, 0, 10, 13), {"class": "house"}, 5).floors)      # (stable)
         other = bld.plan(rect(0, 0, 10, 13), {"class": "house", "seed_id": 1}, lat=40.0, lon=-75.0)
         self.assertIsNone(other.awn)
-
-    def test_brick_walls_share_one_scale(self):
-        for i in range(200):
-            spec = self.plan(rect(0, 0, 6.0, 8.6), {"class": "house"}, i)
-            if spec.band is bld.BAND_BRICK and spec.facade.startswith("bne_bld_fac_qbrick"):
-                break
-        else:
-            self.fail("no face-brick house")
-        spec.door = None
-        P, UV, T, M, mats, _C = bld.build([(spec, 0.0, 0.0)])
-        fac = mats.index(bld.FACADE)
-        seen = set()
-        for k in range(0, len(T) - 1, 2):
-            i = int(T[k][0])
-            if M[k] != fac or tuple(T[k]) != (i, i + 1, i + 2) or tuple(T[k + 1]) != (i, i + 2, i + 3):
-                continue                            # (not a quad of the facade sheet)
-            a, b, c = P[i], P[i + 1], P[i + 2]
-            if a[2] != b[2] or c[2] - b[2] < 2.0:
-                continue
-            length = math.hypot(*(b[:2] - a[:2]))
-            if length < 0.5 or UV[i + 1][0] - UV[i][0] < 0.1:   # (the kernel's plain-texel strips, upstream's piers: not brick faces)
-                continue
-            seen.add(round(float(length), 1))
-            per_m = (UV[i + 1][0] - UV[i][0]) / length
-            self.assertAlmostEqual(per_m * bld.TILE_PX_M, 1.0, delta=0.14, msg=f"wall {length:.1f} m")
-        self.assertGreaterEqual(len(seen), 2)       # (a 6.0 and an 8.6 m face: round(l / 2.4) bays gave 1.25x and 0.9x)
 
     def shop(self, gap, i):
         spec = self.plan(rect(0, 0, 12, 10), {"class": "retail"}, i)

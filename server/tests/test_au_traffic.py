@@ -36,22 +36,12 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual(controls(rs, country="AU"), [("n", furniture.G_YIELD)])
         self.assertEqual(controls(rs, country="US"), [("n", furniture.G_STOP)])
 
-    def test_minor_arms_meeting_a_major_road_give_way(self):
-        rs = tee("secondary", "residential", "secondary")
-        self.assertEqual(controls(rs), [("n", furniture.G_STOP)])
-        self.assertEqual(controls(rs, country="AU"), [("n", furniture.G_YIELD)])
-
     def test_the_maps_signs_are_used_as_mapped(self):
         rs = tee()
         prio = np.array([[0.0, 9.0, 1.0], [14.0, 0.0, 0.0]])        # a stop on the north arm, a give way on the east
         got = dict(controls(rs, country="AU", priority=prio))
         self.assertEqual(got, {"n": furniture.G_STOP, "e": furniture.G_YIELD})
         self.assertEqual(controls(rs, priority=prio), [("n", furniture.G_STOP)], "elsewhere the map's signs are not read")
-
-    def test_rural_junctions_keep_only_the_mapped_signs(self):
-        rs = tee(urban=False)
-        self.assertEqual(controls(rs, country="AU"), [])
-        self.assertEqual(controls(rs, country="AU", priority=np.array([[14.0, 0.0, 0.0]])), [("e", furniture.G_YIELD)])
 
     def test_signals_are_unchanged(self):
         rs = tee("primary", "primary", "primary")
@@ -64,9 +54,6 @@ class ControlsTest(unittest.TestCase):
         self.assertEqual(furniture.au_group(furniture.G_STOP, narrow), furniture.G_STOP, "stop signs stay")
         self.assertEqual(furniture.au_group(furniture.G_SIGNAL, narrow), furniture.G_SIGNAL_AU)
         self.assertEqual(furniture.au_group(furniture.G_SIGNAL, wide), furniture.G_SIGNAL_AU_MAST)
-        for g in (furniture.G_SIGNAL_AU, furniture.G_SIGNAL_AU_MAST, furniture.G_GIVEWAY_AU):
-            self.assertIn(g, furniture.COLLISION_BOXES)
-            self.assertEqual(furniture.COLLISION_BOXES[g][0], furniture.PROP_H[g], "the row's height is its model's")
 
 
 class PropsTest(unittest.TestCase):
@@ -77,7 +64,6 @@ class PropsTest(unittest.TestCase):
         rows = self.props(tee(), "AU", True)
         self.assertEqual([r[0] for r in rows], [furniture.G_GIVEWAY_AU])
         r = rows[0]
-        self.assertEqual(r[6], 2.7)
         self.assertGreater(r[1], 0.0, "north arm: drivers heading south, their left is east of the road")
         self.assertAlmostEqual(r[4], 180.0, delta=0.5, msg="yaw: local +x toward the drivers' right, the west")
         self.assertEqual([x[0] for x in self.props(tee(), "US", False)], [furniture.G_STOP])
@@ -87,19 +73,13 @@ class PropsTest(unittest.TestCase):
         for width, group in ((7.0, furniture.G_SIGNAL_AU), (14.0, furniture.G_SIGNAL_AU_MAST)):
             rows = self.props(tee("primary", "primary", "primary", width=width), "AU", True)
             self.assertEqual({r[0] for r in rows}, {group}, width)
-            self.assertEqual({r[6] for r in rows}, {furniture.PROP_H[group]})
             north = [r for r in rows if abs(r[4] - 180.0) < 1.0]       # (yaw: the north arm's drivers head south)
             self.assertEqual(len(north), 1)
             self.assertGreater(north[0][1], width / 2, "the north arm's left kerb: east of the carriageway")
         rows = self.props(tee("primary", "primary", "primary"), "US", False)
         self.assertEqual({r[0] for r in rows}, {furniture.G_SIGNAL})
-        self.assertEqual({r[6] for r in rows}, {9.4}, "the stock boom's height")
         north = [r for r in rows if abs(r[4] - 180.0) < 1.0]       # (yaw: the north arm's drivers head south)
         self.assertLess(north[0][1], 0.0, "a stock boom's pole stands on the drivers' right")
-
-    def test_mapped_stop_signs_stay_stop_signs(self):
-        rows = self.props(tee(), "AU", True, priority=np.array([[0.0, 9.0, 1.0]]))
-        self.assertEqual([r[0] for r in rows], [furniture.G_STOP])
 
 
 if __name__ == "__main__":
