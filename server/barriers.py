@@ -25,6 +25,7 @@ PARTS = 4                        # as for buildings: each shape stays under the 
 FIELDS = tuple(f"{kind}{n if n > 1 else ''}" for kind in ("boundary", "hedge", "hedgeStock") for n in range(1, PARTS + 1))
 KINDS = {"fence", "wall", "hedge"}
 GATES = {"gate", "lift_gate", "entrance"}
+PATH_CLASSES = {"footway", "path", "cycleway", "bridleway", "pedestrian", "steps"}
 DEFAULTS = {"fence": (1.3, 0.12), "wall": (1.5, 0.3), "hedge": (1.8, 0.8)}
 WOOD = "bne_boundary_wood"
 WALL_NEUTRAL = "bne_wall_neutral"
@@ -524,7 +525,7 @@ def tile_meshes(runs, box, ground, road_lines=(), hedge_props=None):
         hedge_props.extend(rows)
     # Only drawn vehicle-road classes clear boundaries; untyped legacy footprints still count.
     others = {n: (xy, half) for n, (xy, half, *extra) in enumerate(road_lines)
-              if not extra or not extra[0] or extra[0] in roads.STYLE}
+              if not extra or not extra[0] or (extra[0] in roads.STYLE and extra[0] not in PATH_CLASSES)}
     conflicts = 0
     def blocked(xy, gap):
         return roads._on_carriageways(xy, others, gap) if others else np.zeros(len(xy), bool)
