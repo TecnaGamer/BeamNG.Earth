@@ -245,6 +245,24 @@ class PartsTest(unittest.TestCase):
             provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
             self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
 
+    def test_a_node_two_cells_share_is_read_once(self):
+        """Neighbouring cells' boxes share EPT nodes: a node this process read for one cell is not downloaded again for
+        the next (RoadZ._node_bytes), each cell's points its own boxes'."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            a = rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1010.0, 2010.0)],
+                         mapcells.CellKey(14, 4683, 6266))
+            b = rz._read("USGS_X", ["1-0-0-0", "2-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)],
+                         mapcells.CellKey(14, 4684, 6266))
+            self.assertEqual(sorted(u.rsplit("/", 1)[-1] for u in asked), ["0-0-0-0.laz", "1-0-0-0.laz", "2-0-0-0.laz"])
+            self.assertEqual(rz.stats.get("shared"), 1)
+            self.assertEqual(len(a[0]), 2)              # (one point a node in the first cell's box)
+            self.assertEqual(len(b[0]), 4)              # (both in the second's)
+
     def _parts(self, d, key, name="USGS_X"):
         import glob
         return sorted(glob.glob(os.path.join(d, "roadz", f"v{roadz.VERSION}", "eptparts", str(key).replace("/", "_"),
@@ -283,6 +301,7 @@ class PartsTest(unittest.TestCase):
             t.start()
             import xproc
             xproc._cancel_proc[0] = lambda: True    # (a job's cancel check: not the read's business)
+            rz._raw.clear()                         # (as another process: nothing of this one's memory)
             try:
                 b = rz._read("USGS_X", nodes, boxes, key)
             finally:
@@ -298,6 +317,7 @@ class PartsTest(unittest.TestCase):
             with open(p1 + ".lock", "w") as fh:
                 fh.write(f"1 0 {dead.pid}")
             t0 = time.monotonic()
+            rz._raw.clear()
             c = rz._read("USGS_X", nodes, boxes, key)
             self.assertLess(time.monotonic() - t0, 5.0)
             self.assertEqual(len(asked), 4)
