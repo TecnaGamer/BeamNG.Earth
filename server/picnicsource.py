@@ -102,7 +102,11 @@ class Source:
             if cached is not None:
                 return cached
             try:
-                feats = features_of(self._query(remote, key.bounds(), kind))
+                rows = _rows_load(remote, key)
+                if rows is None:
+                    rows = self._query(remote, key.bounds(), kind)
+                    _rows_save(remote, key, rows)
+                feats = features_of(rows)
             except rangeread.Changed:
                 if attempt:
                     raise
@@ -232,6 +236,33 @@ class Source:
                 continue
             out.append((int(fid), leisure, amenity, tourism, bytes(geom)))
         return out
+
+
+def _rows_path(remote, key):
+    return os.path.join(remote.cache_dir, "cells", str(key.z), str(key.x), f"{key.y}.json")
+
+
+def _rows_load(remote, key):
+    """A cell's picnic rows kept from an earlier read of this version (_rows_save), or None. Every server process
+    queried each cell's row groups again (a scan of the POI file's few columns per cell, ~1.3 CPU-s of a warm Le Mans
+    block + 4 road tiles, 2026-11-11), and every run after the first."""
+    try:
+        with open(_rows_path(remote, key), encoding="utf-8") as f:
+            return [(int(fid), le, am, to, bytes.fromhex(g)) for fid, le, am, to, g in json.load(f)]
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _rows_save(remote, key, rows):
+    path = _rows_path(remote, key)
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump([[int(fid), le, am, to, bytes(g).hex()] for fid, le, am, to, g in rows], f)
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError) as e:
+        log.debug("picnic rows of %s not kept: %s", key, e)
 
 
 def _candidates(groups, bounds):
