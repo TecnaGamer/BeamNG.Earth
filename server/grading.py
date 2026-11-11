@@ -285,6 +285,8 @@ OBS_NO_DECK_M = 2.0         # lift is stale: nowhere this far over the ground un
 OBS_END_M = 12.0            # m from the end the measured deck's height is taken at most (its first measured station)
 APPROACH_GAP_M = 1.0        # m of flat ground kept between a ramp's fill slope and the road beside it
 ENU_CACHE_MAX = 512         # cells' road parts in the anchor frame kept (Grader._cell_enu; ~0.02-0.5 MB each)
+ENU_AHEAD_ON = os.environ.get("BNGE_ENU_AHEAD", "on") != "off"     # the deck cells' tables made side by side (_enu_ahead)
+ENU_AHEAD_THREADS = 6       # ... this many at once (each mostly waiting: its map data, its lidar's answer)
 APPROACH_CELL_M = 450.0     # m: a plan's end this far from a cell cannot raise what that cell's queries see
 # A ramp the lidar measured (its deck end's height, roadz) rises that high beside a road at grade on a steep side (the
 # lower road then cut into the raised ground, its retaining wall: WALL_CUT_M), as a real approach's walls stand: with
@@ -4489,9 +4491,44 @@ class _Planner:
             out.append((deck_key(line, half), line, float(half)))
         return out
 
+    def _enu_ahead(self, keys):
+        """_cell_enu(k, ground=False) of the cells of keys not made yet, made side by side (up to ENU_AHEAD_THREADS):
+        each one's level ranges can wait up to roadz.LIDAR_GAPS_WAIT_S for its lidar's answer, and one after another a
+        cold first block's deck patches (_cell_deck_patches, before its cell's plans) waited 28 of its 42 s on them
+        at Grand Island (py-spy, 2026-11-11). The same tables as one by one (the callers read them in their order);
+        the helper threads' revisit faults go to the caller's thread (what is planned on a table made short is not
+        kept), and a failed one is left to the caller (made again there, its error handled as before)."""
+        with self.lock:
+            cache = self.__dict__.get("enu_cache") or {}
+            now = time.monotonic()
+            todo = [k for k in keys if (str(k), False) not in cache and (str(k), True) not in cache
+                    and not (self.failed.get(k) is not None and now - self.failed[k] < RETRY_S)]
+        if len(todo) < 2:
+            return
+        import revisit
+        dem = getattr(self, "dem", None)
+        urgent = dem is not None and getattr(dem, "is_urgent", lambda: False)()
+
+        def one(k):
+            f0, l0 = revisit.thread_faults(), revisit.thread_lidar_faults()
+            try:
+                if urgent:
+                    with dem.urgent():
+                        self._cell_enu(k, ground=False)
+                else:
+                    self._cell_enu(k, ground=False)
+            except Exception as e:      # (the caller makes it again and handles it)
+                log.debug("grading: bridges of %s ahead: %s: %s", k, type(e).__name__, e)
+            return revisit.thread_faults() - f0, revisit.thread_lidar_faults() - l0
+        with ThreadPoolExecutor(min(len(todo), ENU_AHEAD_THREADS), thread_name_prefix="enu-ahead") as ex:
+            got = list(ex.map(one, todo))
+        revisit.carry(sum(n for n, _ in got), sum(m for _, m in got))
+
     def _decks_in(self, keys):
         """({key: (line, half width)} of the decks of cells keys, each once; whether a cell was missing)."""
         out, short = {}, False
+        if ENU_AHEAD_ON:
+            self._enu_ahead(keys)
         for k in keys:
             with self.lock:
                 failed = self.failed.get(k)

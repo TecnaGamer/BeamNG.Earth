@@ -63,6 +63,15 @@ def fault(lidar=False):
         _tl.lidar = getattr(_tl, "lidar", 0) + 1
 
 
+def carry(n, lidar=0):
+    """This thread takes the faults (thread_faults, thread_lidar_faults) a helper thread counted for work it did for it
+    (grading's cells' bridge tables made side by side): the process's count has them already."""
+    if n:
+        _tl.n = getattr(_tl, "n", 0) + n
+    if lidar:
+        _tl.lidar = getattr(_tl, "lidar", 0) + lidar
+
+
 def faults():
     return _faults[0]
 
