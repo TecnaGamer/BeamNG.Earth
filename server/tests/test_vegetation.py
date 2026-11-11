@@ -531,6 +531,45 @@ class OrchardTest(unittest.TestCase):
         self.assertFalse(bool(half[r, c].any()))
 
 
+class VineyardTest(unittest.TestCase):
+    def _field(self, e, n, cls="vineyard"):
+        import mapgeom
+        frame = geodesy.EnuFrame(44.9, -0.15)
+        la, lo, _ = frame.enu_to_geodetic(np.asarray(e, float), np.asarray(n, float), np.zeros(len(e)))
+        ring = np.stack([lo, la], 1)
+        feats = mapgeom.build("land_use", np.array(["vy-1"]), [(mapgeom.POLYGON, [[ring]])])
+        feats.attrs["class"] = np.array([cls], object)
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        pad, dx = 40.0, 2.0
+        x0, y1 = float(x.min()) - pad, float(y.max()) + pad
+        cols = int(np.ceil((float(x.max()) + pad - x0) / dx))
+        rows = int(np.ceil((y1 - float(y.min()) + pad) / dx))
+        return frame, feats, ring, Raster(np.zeros((rows, cols), np.uint8), x0, y1, dx), np.zeros((rows, cols), bool)
+
+    def test_rows_along_the_long_sides_inside_the_field(self):
+        # a parallelogram 200 m along x with 45-degree ends: its principal axis is skewed, its rows run along x
+        frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
+        it = veg.vineyard_items(feats, chm, clear, None)
+        self.assertGreater(len(it), 60)
+        self.assertTrue(np.all(it.group == veg.G_VINE))
+        yaw = np.asarray(it.yaw) % 180.0
+        self.assertTrue(np.all(np.minimum(yaw, 180.0 - yaw) < 0.5), "rows along the long sides")
+        from polygon import Path
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        path = Path(np.column_stack([x, y]))
+        cx, cy = veg._to3857(it.lon, it.lat)
+        k = (veg.VINE_ALONG_M / 2 - 1.0) / np.cos(np.radians(44.9))
+        for s in (-1, 1):
+            self.assertTrue(np.all(path.contains_points(np.column_stack([cx + s * k, cy]))), "both ends inside")
+        again = veg.vineyard_items(feats, chm, clear, None)
+        self.assertTrue(np.array_equal(again.lon, it.lon) and np.array_equal(again.yaw, it.yaw), "deterministic")
+        self.assertEqual(len(veg.vineyard_items(feats, chm, np.ones_like(clear), None)), 0, "roads / buildings: none")
+
+    def test_only_vineyards(self):
+        frame, feats, ring, chm, clear = self._field([0, 100, 100, 0, 0], [0, 0, 50, 50, 0], cls="orchard")
+        self.assertEqual(len(veg.vineyard_items(feats, chm, clear, None)), 0)
+
+
 class FarmFoliageTest(unittest.TestCase):
     def test_shrubs_line_the_gaps_between_rows(self):
         import mapgeom

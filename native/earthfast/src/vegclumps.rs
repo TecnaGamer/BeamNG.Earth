@@ -189,6 +189,64 @@ pub fn field_lattice<'py>(py: Python<'py>, rings: PyReadonlyArray2<'py, f64>, ri
              jj.into_pyarray(py))))
 }
 
+/// The direction a field's rows run along (vineyards, hay windrows): its dominant edge direction, the angle (mod 180
+/// degrees, 1-degree bins) whose edges within +-window_deg add up to the most length, refined to their length-weighted
+/// mean (doubled angles); a rectangle's long side, a trapezoid's parallel sides, where the principal axis of an odd
+/// shape ran across its rows (Saint-Emilion's parcels, 2026-11-10 aerial). ring: (k, 2) vertices (open or closed).
+/// Returns a unit (ux, uy) pointing east, or north when it runs north-south; (1, 0) for a degenerate ring.
+#[pyfunction]
+pub fn edge_axis(ring: PyReadonlyArray2<'_, f64>, window_deg: f64) -> (f64, f64) {
+    let r = ring.as_array();
+    let pts: Vec<[f64; 2]> = (0..r.nrows()).map(|i| [r[[i, 0]], r[[i, 1]]]).collect();
+    edge_axis_core(&pts, window_deg)
+}
+
+pub(crate) fn edge_axis_core(r: &[[f64; 2]], window_deg: f64) -> (f64, f64) {
+    let k = r.len();
+    let mut bins = [0.0f64; 180];
+    let mut edges: Vec<(f64, f64)> = Vec::with_capacity(k);       // (angle deg in [0, 180), length)
+    for i in 0..k {
+        let j = (i + 1) % k;
+        let (dx, dy) = (r[j][0] - r[i][0], r[j][1] - r[i][1]);
+        let l = dx.hypot(dy);
+        if !(l > 0.0) || !l.is_finite() {
+            continue;
+        }
+        let a = dy.atan2(dx).to_degrees().rem_euclid(180.0);
+        edges.push((a, l));
+        bins[(a as usize).min(179)] += l;
+    }
+    if edges.is_empty() {
+        return (1.0, 0.0);
+    }
+    let w = window_deg.max(0.0).round() as i64;
+    let (mut best, mut best_l) = (0i64, f64::NEG_INFINITY);
+    for b in 0..180i64 {
+        let s: f64 = (-w..=w).map(|d| bins[(b + d).rem_euclid(180) as usize]).sum();
+        if s > best_l {
+            best_l = s;
+            best = b;
+        }
+    }
+    let centre = best as f64 + 0.5;
+    let (mut sx, mut sy) = (0.0f64, 0.0f64);
+    for &(a, l) in &edges {
+        let d = (a - centre + 90.0).rem_euclid(180.0) - 90.0;      // signed difference mod 180
+        if d.abs() <= w as f64 + 0.5 {
+            let t = (2.0 * (centre + d)).to_radians();              // doubled: a direction, not a heading
+            sx += l * t.cos();
+            sy += l * t.sin();
+        }
+    }
+    let a = if sx == 0.0 && sy == 0.0 { centre.to_radians() } else { 0.5 * sy.atan2(sx) };
+    let (mut ux, mut uy) = (a.cos(), a.sin());
+    if ux < -1e-9 || (ux.abs() <= 1e-9 && uy < 0.0) {
+        ux = -ux;
+        uy = -uy;
+    }
+    (ux, uy)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,6 +258,16 @@ mod tests {
         assert!(!inside_ring(&sq, 15.0, 5.0));
         assert!(!inside_ring(&sq, 5.0, 10.0));       // (the top edge: hi excluded)
         assert!(inside_ring(&sq, 5.0, 0.0));         // (the bottom edge: lo included)
+    }
+
+    #[test]
+    fn edge_axis_of_a_skewed_parcel_is_its_long_sides() {
+        // a parallelogram: long sides along +x (100 m), short ones slanted 45 degrees: its principal axis is skewed
+        let (ux, uy) = edge_axis_core(&[[0.0, 0.0], [100.0, 0.0], [160.0, 60.0], [60.0, 60.0]], 8.0);
+        assert!((ux - 1.0).abs() < 1e-9 && uy.abs() < 1e-9, "{ux} {uy}");
+        let (ux, uy) = edge_axis_core(&[[0.0, 0.0], [0.0, 100.0], [-10.0, 100.0], [-10.0, 0.0]], 8.0);
+        assert!(ux.abs() < 1e-9 && (uy - 1.0).abs() < 1e-9, "north-south: {ux} {uy}");
+        assert_eq!(edge_axis_core(&[[1.0, 1.0]], 8.0), (1.0, 0.0));
     }
 
     #[test]

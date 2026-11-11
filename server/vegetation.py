@@ -43,17 +43,18 @@ VERSION = 26          # (the cached cells hold their groups: 14 for the regional
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
-                      # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF)
+                      # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
+                      # vineyards' rows, vineyard_items)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
-          "mediterranean_clump")
+          "mediterranean_clump", "vine")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
- G_MEDITERRANEAN_CLUMP) = range(16)
+ G_MEDITERRANEAN_CLUMP, G_VINE) = range(17)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -445,6 +446,7 @@ class Vegetation:
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
         orchard = np.zeros(h.shape, bool)
+        vines = np.zeros(h.shape, bool)
         lu = None
         try:
             cl = self.md.cell((mapcells.ZOOM, x, y), layers=("land_use", "infrastructure"))
@@ -454,18 +456,25 @@ class Vegetation:
             if inf is not None and len(inf) and inf.attrs.get("class") is not None:
                 _mask_polys(inf, paved, chm, 0.0, select=inf.attrs["class"].astype(str) == "parking")
             if lu is not None and len(lu) and lu.attrs.get("class") is not None:
-                _mask_polys(lu, orchard, chm, 0.0, select=lu.attrs["class"].astype(str) == "orchard")
+                lclass = lu.attrs["class"].astype(str)
+                _mask_polys(lu, orchard, chm, 0.0, select=lclass == "orchard")
+                _mask_polys(lu, vines, chm, 0.0, select=lclass == "vineyard")
         except Exception as e:                  # not at hand: scattered as before
             log.debug("vegetation: land use of %s: %s", (x, y), e)
         if orchard.any():
             keep = _keep_off_mask(tree, orchard, chm)
             tree, lcls = tree.take(keep), lcls[keep]
+        if vines.any():             # (the vines' own canopy read as bushes all over a vineyard: its rows stand there)
+            keep = _keep_off_mask(tree, vines, chm) | (tree.height >= VINE_TREE_M)
+            tree, lcls = tree.take(keep), lcls[keep]
         tree = clumps(tree, lcls, (lat0 + lat1) / 2)
-        scatter = self._scatter(cd, lc, blocked | paved | orchard, chm, hs)
-        edge = self._edge(cd, lc, blocked | orchard, road, chm, hs)
-        planted = orchard_items(lu, chm, blocked, (lon0, lat0, lon1, lat1))
-        hedges = farm_foliage(lu, chm, blocked, (lon0, lat0, lon1, lat1))
-        return _concat(_concat(_concat(_concat(tree, scatter), edge), planted), hedges)
+        scatter = self._scatter(cd, lc, blocked | paved | orchard | vines, chm, hs)
+        edge = self._edge(cd, lc, blocked | orchard | vines, road, chm, hs)
+        bounds = (lon0, lat0, lon1, lat1)
+        planted = orchard_items(lu, chm, blocked, bounds)
+        hedges = farm_foliage(lu, chm, blocked, bounds)
+        rows = vineyard_items(lu, chm, blocked, bounds)
+        return _concat_all([tree, scatter, edge, planted, hedges, rows])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -710,6 +719,22 @@ def _fid_key(fid):
     return x
 
 
+def _lattice(xy, holes, u, along, across, phase_a, phase_b, max_steps=300):
+    """The points (i along + phase_a) u + (j across + phase_b) v (Web Mercator m, v = u turned left) inside ring xy
+    and outside holes (lon / lat rings), i-major (earthfast.field_lattice); None when a side would take more than
+    max_steps."""
+    rings = [np.asarray(xy, np.float64)]
+    for hole in holes:
+        hole = np.asarray(hole, np.float64)
+        if len(hole) >= 3:
+            rings.append(np.column_stack(_to3857(hole[:, 0], hole[:, 1])))
+    off = np.cumsum([0] + [len(r) for r in rings]).astype(np.int64)
+    fast.require(201, "field_lattice")
+    got = fast._ef.field_lattice(np.ascontiguousarray(np.concatenate(rings)), off, (float(u[0]), float(u[1])),
+                                 float(along), float(across), float(phase_a), float(phase_b), int(max_steps))
+    return None if got is None else np.asarray(got[0])
+
+
 def orchard_items(feats, chm, blocked, bounds=None):
     """Trees in lines on land_use class orchard: along the long side, one line every ORCHARD_ACROSS_M.
     blocked is the canopy grid's buildings, roads and water. bounds (lon0, lat0, lon1, lat1) keeps a tree
@@ -748,23 +773,9 @@ def orchard_items(feats, chm, blocked, bounds=None):
             along, across = ORCHARD_ALONG_M * factor, ORCHARD_ACROSS_M * factor
         phase_a = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([1], np.uint64), 11)[0]) * along
         phase_b = float(_hash01(np.array([_fid_key(fid)], np.uint64), np.array([2], np.uint64), 11)[0]) * across
-        amin, amax = float((xy @ u).min()), float((xy @ u).max())
-        bmin, bmax = float((xy @ v).min()), float((xy @ v).max())
-        i0, i1 = math.floor((amin - phase_a) / along), math.ceil((amax - phase_a) / along)
-        j0, j1 = math.floor((bmin - phase_b) / across), math.ceil((bmax - phase_b) / across)
-        if i1 - i0 > 300 or j1 - j0 > 300:
+        pts = _lattice(xy, parts[0][1:], u, along, across, phase_a, phase_b)
+        if pts is None:
             continue
-        ii, jj = np.meshgrid(np.arange(i0, i1 + 1), np.arange(j0, j1 + 1), indexing="ij")
-        pts = (ii.ravel() * along + phase_a)[:, None] * u + (jj.ravel() * across + phase_b)[:, None] * v
-        from polygon import Path
-        inside = np.asarray(Path(xy).contains_points(pts), bool)
-        for hole in parts[0][1:]:
-            hole = np.asarray(hole, np.float64)
-            if len(hole) < 3:
-                continue
-            hx, hy = _to3857(hole[:, 0], hole[:, 1])
-            inside &= ~np.asarray(Path(np.column_stack([hx, hy])).contains_points(pts), bool)
-        pts = pts[inside]
         if len(pts) == 0:
             continue
         key = np.uint64(_fid_key(fid))
@@ -811,6 +822,115 @@ def orchard_items(feats, chm, blocked, bounds=None):
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
     return Items(lon, lat, height, (0.12 * height + 1.0).astype(np.float32),
                  np.full(len(lon), KIND_TREE, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+# Vineyards (Overture land_use class vineyard; the asset survey's #11): Italy's grape_vine_group, three rows 2.45 m
+# apart and 15.9 m long, end to end along the field's dominant edge (_edge_axis; aerials of Saint-Emilion and Napa,
+# 2026-11-10: the rows run along the parcel's sides, 1.5-3 m apart), an item's ends inside the field and off its
+# roads and buildings. The
+# canopy's "bushes" inside a vineyard (the vines themselves, read from the canopy heights) are left out.
+VINE_ALONG_M = 15.9
+VINE_ACROSS_M = 7.35
+VINE_H_M = 2.6              # the shape's height (trees.lua CATALOG.vine)
+VINE_MIN_M2 = 300.0
+VINE_CELL_MAX = 40000
+VINE_TREE_M = 4.0           # a canopy top this tall in a vineyard is a tree, kept
+EDGE_AXIS_DEG = 8.0         # _edge_axis: edges this near a direction count for it
+
+
+def _blocked_at(pts, chm, blocked):
+    """Per Web Mercator point (m, 2): on a set pixel of the canopy-grid mask blocked."""
+    c = np.floor((pts[:, 0] - chm.x0) / chm.dx).astype(np.int64)
+    r = np.floor((chm.y0 - pts[:, 1]) / chm.dy).astype(np.int64)
+    n_r, n_c = blocked.shape
+    ok = (r >= 0) & (r < n_r) & (c >= 0) & (c < n_c)
+    bad = np.zeros(len(pts), bool)
+    bad[ok] = blocked[r[ok], c[ok]]
+    return bad
+
+
+def _field_rings(feats, cls_name, min_m2):
+    """(fid, ring (Web Mercator m, open), its holes (lon / lat rings), area m2 (Web Mercator)) of each land use
+    polygon of class cls_name, once per id."""
+    if feats is None or len(getattr(feats, "kind", ())) == 0 or feats.attrs.get("class") is None:
+        return
+    cls = np.asarray(feats.attrs["class"]).astype(str)
+    ids = getattr(feats, "ids", None)
+    seen = set()
+    for i in np.flatnonzero((np.asarray(feats.kind) == 3) & (cls == cls_name)):
+        fid = ids[i] if ids is not None else i
+        if str(fid) in seen:
+            continue
+        seen.add(str(fid))
+        parts = feats.parts(int(i))
+        if not parts or not parts[0] or len(parts[0][0]) < 3:
+            continue
+        ring = np.asarray(parts[0][0], np.float64)
+        if len(ring) >= 2 and np.allclose(ring[0], ring[-1]):
+            ring = ring[:-1]
+        x, y = _to3857(ring[:, 0], ring[:, 1])
+        area = abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))) * 0.5
+        if area >= min_m2:
+            yield fid, np.column_stack([x, y]), parts[0][1:], area
+
+
+def vineyard_items(feats, chm, blocked, bounds=None):
+    """The rows of vines of land_use class vineyard (VINE_*): G_VINE items, yaw along the rows. blocked: the canopy
+    grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps an item in this cell."""
+    from polygon import Path
+    xs, ys, yaws, us = [], [], [], []
+    for fid, xy, holes, area in _field_rings(feats, "vineyard", VINE_MIN_M2):
+        u = _edge_axis(xy)
+        key = np.uint64(_fid_key(fid))
+        sec = 1.0 / max(math.cos(math.radians(float(_to4326(xy[:1, 0], xy[:1, 1])[1][0]))), 0.05)   # (merc m / m)
+        along, across = VINE_ALONG_M * sec, VINE_ACROSS_M * sec
+        phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 31)[0]) * along
+        phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 31)[0]) * across
+        pts = _lattice(xy, holes, u, along, across, phase_a, phase_b)
+        if pts is None or len(pts) == 0:
+            continue
+        # the item's ends (a metre in from them) in the field too, and every one of its three points free
+        k = (0.5 * VINE_ALONG_M - 1.0) * sec
+        ends = [pts + k * u, pts - k * u]
+        ok = np.ones(len(pts), bool)
+        path = Path(xy)
+        for e in ends:
+            ok &= np.asarray(path.contains_points(e), bool)
+        for hole in holes:
+            hole = np.asarray(hole, np.float64)
+            if len(hole) >= 3:
+                hp = Path(np.column_stack(_to3857(hole[:, 0], hole[:, 1])))
+                for e in ends:
+                    ok &= ~np.asarray(hp.contains_points(e), bool)
+        if blocked is not None and np.any(blocked):
+            for p in [pts] + ends:
+                ok &= ~_blocked_at(p, chm, blocked)
+        pts = pts[ok]
+        if bounds is not None and len(pts):
+            ex0, ey0 = _to3857(bounds[0], bounds[1])
+            ex1, ey1 = _to3857(bounds[2], bounds[3])
+            pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+        if len(pts) == 0:
+            continue
+        uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 32)
+        yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+        xs.append(pts[:, 0])
+        ys.append(pts[:, 1])
+        yaws.append(yaw0 + 180.0 * (uh < 0.5))
+        us.append(uh)
+    if not xs:
+        return _empty()
+    x, y, yaw, u = np.concatenate(xs), np.concatenate(ys), np.concatenate(yaws), np.concatenate(us)
+    rank = (u * 0.15).astype(np.float32)
+    if len(x) > VINE_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, VINE_CELL_MAX - 1)[:VINE_CELL_MAX])
+        x, y, yaw, u, rank = x[keep], y[keep], yaw[keep], u[keep], rank[keep]
+    lon, lat = _to4326(x, y)
+    n = len(lon)
+    h = (VINE_H_M * (0.95 + 0.1 * _hash01(np.arange(n, dtype=np.uint64), np.full(n, 7, np.uint64), 33))).astype(
+        np.float32)
+    return Items(lon, lat, h, np.full(n, 1.2, np.float32), np.full(n, KIND_BUSH, np.uint8),
+                 np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
 
 
 def farm_foliage(feats, chm, blocked, bounds=None):
@@ -913,6 +1033,14 @@ def farm_foliage(feats, chm, blocked, bounds=None):
     group = regional(group, height, lat, lon, np.full(len(lon), WC["crop"], np.uint8), u)
     return Items(lon, lat, height, (0.4 * height).astype(np.float32),
                  np.full(len(lon), KIND_BUSH, np.uint8), group, rank, yaw, np.ones(len(lon), np.float32))
+
+
+def _edge_axis(xy):
+    """The way a field's rows run (vineyards, hay windrows): its dominant edge direction, a unit vector pointing east
+    (north when north-south); earthfast.edge_axis (the principal axis of an odd shape ran across its rows:
+    Saint-Emilion's parcels, 2026-11-10 aerial)."""
+    fast.require(201, "edge_axis")
+    return np.array(fast._ef.edge_axis(np.ascontiguousarray(xy, np.float64), EDGE_AXIS_DEG))
 
 
 def _orchard_axis(xy):
@@ -1081,7 +1209,7 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK) + CLUMP_GROUPS]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):

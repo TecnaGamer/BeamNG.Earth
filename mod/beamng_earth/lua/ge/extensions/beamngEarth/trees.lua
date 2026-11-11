@@ -45,6 +45,7 @@ M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock 
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
+M.GROUP_MAX_M.vine = 450
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -273,6 +274,9 @@ M.CATALOG = {
     { ECA .. 'trees/trees_oak/tree_oak_forest_group', 18.4 }, { ECA .. 'trees/trees_beech/tree_beech_forest_group', 23.8 },
   },
   oak_west_clump = { { WCA .. 'trees/trees_oak/oak_a_distant', 9.8 } },
+  -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
+  -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
+  vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
   mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },

@@ -6115,8 +6115,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 198: reframe_segs (roadwidth's walls in another cell's frame in one pass)
     m.add_function(wrap_pyfunction!(vegclumps::veg_clumps, m)?)?;
     m.add_function(wrap_pyfunction!(vegclumps::field_lattice, m)?)?;
+    m.add_function(wrap_pyfunction!(vegclumps::edge_axis, m)?)?;
     // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
-    // orchards', vineyards' and hay bales' rows)
+    // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run)
     m.add("VERSION", 201)?;
     Ok(())
 }
