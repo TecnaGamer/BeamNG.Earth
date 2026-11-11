@@ -31,8 +31,9 @@ class PavingTest(unittest.TestCase):
         self.assertEqual(plazas.paving("sett", 48.86, 2.32)[0], plazas.STONE[0])
         self.assertIsNone(plazas.paving("compacted", 48.86, 2.32), "the Tuileries' sand: the terrain's photo")
         self.assertEqual(plazas.paving(None, 48.86, 2.32)[0], plazas.STONE[0], "not mapped, in Europe: stone")
-        self.assertEqual(plazas.paving(None, 39.28, -76.59)[0], plazas.BRICK, "... in the US: brick")
-        self.assertEqual(plazas.paving("paving_stones", 39.28, -76.59)[0], plazas.BRICK, "Fells Point's squares")
+        self.assertEqual(plazas.paving(None, 39.28, -76.59), plazas.US_AMBIGUOUS, "... in the US: by the photo")
+        self.assertEqual(plazas.paving("paving_stones", 39.28, -76.59), plazas.US_AMBIGUOUS, "Fells Point's squares")
+        self.assertEqual(plazas.paving("bricks", 40.71, -74.01)[0], plazas.BRICK, "mapped brick stays brick")
 
     def test_holes_left_out(self):
         outer = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
@@ -46,6 +47,24 @@ class PavingTest(unittest.TestCase):
 
 
 class PlazaMeshTest(unittest.TestCase):
+    def test_us_squares_by_the_photo(self):
+        """A US square mapped paving_stones is red brick where the orthophoto shows red (Fells Point), grey stone where
+        it shows grey (the World Trade Center's plaza) and where no photo covers it."""
+        sq = (ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)]), [], "paving_stones")
+        flat = lambda la, lo: np.full(np.shape(la), 5.0)     # noqa: E731
+
+        class Photo:
+            def __init__(self, rgb):
+                self.rgb = rgb
+
+            def colours(self, rings):
+                return np.array([self.rgb] * len(rings), np.float64)
+        box, o = (0.0, 0.0, 256.0, 256.0), (0.0, 0.0, 0.0)
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.62, 0.42, 0.36)))[3], [plazas.BRICK])
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.55, 0.54, 0.52)))[3],
+                         [plazas.STONE[0]])
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.STONE[0]], "no photo: grey")
+
     def test_paved_and_draped(self):
         sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
         elev = lambda la, lo: 5.0 + (np.asarray(lo) - (-76.5929)) * 10000.0    # noqa: E731 (a slope east)

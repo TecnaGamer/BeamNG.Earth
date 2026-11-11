@@ -68,14 +68,23 @@ def polygons(feats_list):
     return out
 
 
+# A US square mapped paving_stones (or nothing) was red brick (Fells Point's squares); New York's are mostly grey granite
+# and concrete pavers (the user, 2026-11-11 in game: "several parts of new york get covered in this red brick
+# texture": the World Trade Center's plaza and streets, 475 paving_stones pieces). Now red brick only where the tile's
+# orthophoto shows the area reddish (BRICK_REDNESS: red over the mean of green and blue), grey stone otherwise and
+# where no photo covers it.
+BRICK_REDNESS = 0.06
+US_AMBIGUOUS = "us_ambiguous"
+
+
 def paving(surface_value, lat, lon):
     """(material, m per repeat) of a square with this mapped surface at (lat, lon), None for an unpaved one."""
     if surface_value in UNPAVED:
         return None
     import buildings
     us = buildings.region_style(lat, lon).name.startswith("us_")
-    if us and surface_value in (None, "paving_stones"):     # (Fells Point's squares, mapped paving_stones: red brick)
-        return BRICK, BRICK_REPEAT_M
+    if us and surface_value in (None, "paving_stones"):     # (red brick or grey stone by the photo: mesh's photo)
+        return US_AMBIGUOUS
     return PAVING.get(surface_value, STONE)
 
 
@@ -87,7 +96,7 @@ def _covered(cover, pts):
                                                np.ascontiguousarray(pts, np.float64), 8.0))
 
 
-def mesh(frame, box, rings, elev, origin, cover=None):
+def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
     """The paved mesh of the plaza rings (lon/lat) in the tile box (x0, y0, x1, y1) of the anchor frame:
     (positions relative to origin (k, 3), tris, uvs, [material], tri material index) or None. elev(lat, lon) -> m
     (the graded ground the physics block has). cover: the road mesh's triangles in the frame (n, 6: x0 y0 x1 y1 x2
@@ -115,6 +124,20 @@ def mesh(frame, box, rings, elev, origin, cover=None):
         if area2 < 0:
             xy = xy[::-1]
         areas.append((abs(area2) / 2, xy, holes, look))
+    amb = [k for k, a in enumerate(areas) if a[3] == US_AMBIGUOUS]
+    if amb:                             # (US squares: red brick where the photo shows red, grey stone otherwise)
+        cols = None
+        if photo is not None:
+            try:
+                cols = photo.colours([areas[k][1] for k in amb])
+            except Exception:
+                cols = None
+        for j, k in enumerate(amb):
+            red = False
+            if cols is not None and j < len(cols) and np.all(np.isfinite(cols[j])):
+                r, g, b = (float(v) for v in cols[j][:3])
+                red = r - (g + b) / 2 > BRICK_REDNESS
+            areas[k] = areas[k][:3] + (((BRICK, BRICK_REPEAT_M) if red else STONE),)
     areas.sort(key=lambda a: a[0])
     done = []                           # (ring xy, its box) of the areas paved so far (smaller ones)
     for _, xy, holes, look in areas:

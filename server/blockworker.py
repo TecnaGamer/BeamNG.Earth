@@ -2029,7 +2029,13 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
         if mesh is not None and len(mesh[1]):
             P, T = np.asarray(mesh[0], np.float64), np.asarray(mesh[1], np.int64)
             cover = (P[T][:, :, :2] + np.asarray(origin, np.float64)[:2]).reshape(-1, 6)
-        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover)
+        photo = None                    # (US squares' brick or stone by the orthophoto, already on disk: never waits)
+        try:
+            import buildings as _bld
+            photo = _bld.roof_photo(frame, box[0], box[1], box[2], box[3], getattr(_s, "cache_dir", None), online=False)
+        except Exception:
+            photo = None
+        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover, photo=photo)
         if quad is not None:
             pm = _clip_mesh(pm, origin, quad)
         return plazas.merge(mesh, pm)
