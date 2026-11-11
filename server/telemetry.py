@@ -32,8 +32,10 @@ log = logging.getLogger("earthd.telemetry")
 URL = os.environ.get("BNE_TELEMETRY_URL", "https://earth.tgforever.net/telemetry")
 ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 # the welcome page's choice this version asks for (settings telemetryChoice): nothing is sent before it. 2: the
-# performance data is sent (from development builds first), everyone who chose under 1 is asked again
-CONSENT_VERSION = 2
+# performance data is sent (from development builds first), everyone who chose under 1 is asked again. 3 (2026-11-11):
+# new kinds of performance data (each slow frame's context, time since a teleport, idle time, the game's and the system's
+# memory and VRAM in use, the server's memory and worker count: TELEMETRY.md), everyone asked again
+CONSENT_VERSION = 3
 # The performance section (perfstats.py; the collector reads it: native/serverlist perf.rs) is sent by development
 # builds (the user, 2026-11-08: "start sending performance data on the dev builds. No release tonight") and, from the
 # release after that, releases too (the user, 2026-11-08: "releases should be the same as dev"): True = every build,

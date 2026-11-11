@@ -11,6 +11,7 @@ changed mod can put a position, a path or free text into a report.
 import logging
 import re
 import os
+import sys
 import threading
 import time
 
@@ -18,7 +19,10 @@ import fast
 
 # the names a summary and a setup may carry (perfsummary.lua's; a settings table only its fixed lists' names)
 SUMMARY_NAMES = dict.fromkeys(("v", "s", "fh", "hit", "hitLoad", "causes", "teleports", "blocks", "mapOpen", "bands", "scene",
-                               "loaded", "lua", "held", "roadsQueuedP90", "drops", "age"))
+                               "loaded", "lua", "held", "roadsQueuedP90", "drops", "age",
+                               # version 2 (2026-11-11): the window's own percentiles, the fine histogram (sparse), a
+                               # slow frame's context, the 1 s+ causes, time since teleport, idle, the machine's memory
+                               "ft", "p50", "p99", "p999", "over2x", "over4x", "ctx", "cause1s", "tp", "idle", "mach"))
 GAME_SETTINGS = ["GraphicOverallQuality", "GraphicMeshQuality", "GraphicTextureQuality", "GraphicTerrainQuality",
                  "GraphicLightingQuality", "GraphicShadowsQuality", "GraphicAnisotropic", "GraphicAntialiasType",
                  "GraphicAntialias", "vsync", "PostFXDOFGeneralEnabled", "PostFXSSAOGeneralEnabled",
@@ -26,13 +30,14 @@ GAME_SETTINGS = ["GraphicOverallQuality", "GraphicMeshQuality", "GraphicTextureQ
 MOD_SETTINGS = ["quality", "trees", "treeDistance", "groundCover", "groundCoverDensity", "grassDistance", "rocks",
                 "nightLights", "distantTraffic", "distantTrafficQuality", "viewDistanceMode", "viewDistanceKm",
                 "terrainDetail", "buildingDistance", "groundPhoto", "objectDetail", "roads", "clouds", "skyMode",
-                "mapStyle"]
+                "mapStyle", "framePacing", "teleportPriority"]
 SETUP_NAMES = {**dict.fromkeys(("v", "cpu", "cores", "threads", "gpu", "vramGB", "ramGB", "api", "os",
                                 "windowSystem", "res", "hz", "game", "otherMods")),
                "gameSettings": GAME_SETTINGS, "modSettings": MOD_SETTINGS}
 KEEP_SUMMARIES = 4              # the mod's windows kept between reports (one a report at 5 minutes each)
 MEMORY_STEPS = (0, 512, 1024, 2048, 3072, 4096, 6144, 8192, 12288, 16384, 24576, 32768)
 CORE_STEPS = (0, 0.25, 0.5, 1, 1.5, 2, 3, 4, 6, 8, 12, 16)
+WORKER_STEPS = (0, 1, 2, 4, 6, 8, 12, 16, 24, 32)
 FINGERPRINTS = 24               # distinct error fingerprints a report carries
 
 
@@ -119,10 +124,94 @@ class ErrorPrints(logging.Handler):
         return out, codes
 
 
+def _workers():
+    """This server's worker processes' pids (multiprocessing's children: no scan of every process, cpupin.pin_tree)."""
+    import multiprocessing
+    try:
+        return [p.pid for p in multiprocessing.active_children() if p.pid]
+    except Exception:
+        return []
+
+
+def _pss_mb(pid):
+    """A Linux process's proportional memory (Pss + SwapPss, MB: shared pages split between the processes sharing them,
+    so the tree's sum is what it really holds, not RSS's double count), or None."""
+    try:
+        total = 0
+        with open(f"/proc/{pid}/smaps_rollup") as f:
+            for line in f:
+                if line.startswith("Pss:") or line.startswith("SwapPss:"):
+                    total += int(line.split()[1])
+        return total / 1024.0
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _win_proc(pid):
+    """(CPU seconds, private MB) of a Windows process, or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PMC(ctypes.Structure):
+        _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD)] + [
+            (n, ctypes.c_size_t) for n in ("PeakWorkingSetSize", "WorkingSetSize", "QuotaPeakPagedPoolUsage",
+                                           "QuotaPagedPoolUsage", "QuotaPeakNonPagedPoolUsage",
+                                           "QuotaNonPagedPoolUsage", "PagefileUsage", "PeakPagefileUsage",
+                                           "PrivateUsage")]
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    k32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    k32.K32GetProcessMemoryInfo.argtypes = (wintypes.HANDLE, ctypes.c_void_p, wintypes.DWORD)
+    h = k32.OpenProcess(0x1000 | 0x0010, False, int(pid))      # PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ
+    if not h:
+        return None
+    try:
+        t = [wintypes.FILETIME() for _ in range(4)]
+        cpu = None
+        if k32.GetProcessTimes(h, *[ctypes.byref(x) for x in t]):
+            cpu = sum((x.dwHighDateTime << 32 | x.dwLowDateTime) for x in t[2:]) / 1e7     # kernel + user, 100 ns
+        c = PMC()
+        c.cb = ctypes.sizeof(c)
+        mem = c.PrivateUsage / 2 ** 20 if k32.K32GetProcessMemoryInfo(h, ctypes.byref(c), c.cb) else None
+        return cpu, mem
+    finally:
+        k32.CloseHandle(h)
+
+
+def tree_stats():
+    """(CPU seconds, memory MB, workers) of this server and its worker processes, or None: on Linux the CPU of the whole
+    process tree (native proc_tree) and the main process's and workers' PSS; on Windows their CPU times and private
+    bytes (the reports had no server numbers from Windows, 99 % of the players, before 2026-11-11)."""
+    kids = _workers()
+    pids = [os.getpid()] + kids
+    if sys.platform == "win32":
+        cpu = mem = 0.0
+        got = False
+        for pid in pids:
+            try:
+                r = _win_proc(pid)
+            except Exception:
+                r = None
+            if r:
+                got = True
+                cpu += r[0] or 0.0
+                mem += r[1] or 0.0
+        return (cpu, mem, len(kids)) if got else None
+    t = fast.proc_tree(os.getpid())
+    pss = [_pss_mb(p) for p in pids]
+    pss = [x for x in pss if x is not None]
+    if not t and not pss:
+        return None
+    cpu, rss = t if t else (None, None)
+    return cpu, (sum(pss) if pss else rss), len(kids)
+
+
 class Collector:
     def __init__(self, clock=time.monotonic, tree=None):
         self.clock = clock
-        self.tree = tree or (lambda: fast.proc_tree(os.getpid()))
+        self.tree = tree or tree_stats
         self._lock = threading.Lock()
         self.setup = self.setup_sent = None
         self.summaries = []
@@ -176,12 +265,16 @@ class Collector:
             srv = {"catchupS": round(cs / 5) * 5, "catchups": self.catchups}
             self.catchup_s, self.catchups = 0.0, 0
         if t:
-            cpu, mem = t
-            if self._cpu_last and now > self._cpu_last[1]:
-                srv["cores"] = fast.perf_step(max(0.0, (cpu - self._cpu_last[0]) / (now - self._cpu_last[1])),
-                                              CORE_STEPS)
-            self._cpu_last = (cpu, now)
-            srv["memMB"] = fast.perf_step(mem, MEMORY_STEPS)
+            cpu, mem = t[0], t[1]
+            if cpu is not None:
+                if self._cpu_last and now > self._cpu_last[1]:
+                    srv["cores"] = fast.perf_step(max(0.0, (cpu - self._cpu_last[0]) / (now - self._cpu_last[1])),
+                                                  CORE_STEPS)
+                self._cpu_last = (cpu, now)
+            if mem is not None:
+                srv["memMB"] = fast.perf_step(mem, MEMORY_STEPS)
+            if len(t) > 2 and t[2] is not None:     # (the worker processes running: the server's size on this machine)
+                srv["workers"] = fast.perf_step(t[2], WORKER_STEPS)
         errs, codes = self.errors.take()
         if errs:
             srv["errors"] = errs

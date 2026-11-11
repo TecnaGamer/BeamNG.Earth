@@ -68,7 +68,7 @@ Sent once per session, and again only when something changes.
 | graphics API | DX11 / DX12 / Vulkan | driver-specific problems |
 | game version | `0.40.5` | engine changes between updates |
 | game graphics settings | preset, mesh, textures, terrain, lighting, shadows, anisotropic, AA, vsync, depth of field, SSAO, motion blur, reflections, grass, display mode | to compare like with like |
-| BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style | which of our options cost the most |
+| BeamNG.Earth settings | quality preset, trees and their distance, ground cover, grass distance, rocks, night lights, distant traffic, view distance, terrain detail, building distance, ground photo size, object detail, roads, clouds, sky mode, map style, frame pacing, full-priority loading | which of our options cost the most |
 | other mods (rounded) | 0, 1, 2-4, 5-9, ... | other mods can slow the game too |
 
 Amounts are rounded into steps, so they describe a class of machine rather than one machine. Only the settings named
@@ -85,6 +85,8 @@ We never send where you are. To know how demanding the scene was, a report says 
 | how you moved | seconds stopped and in speed bands (under 30, 30-60, 60-100, 100-150, over 150 mph), seconds with the 3D map open | high speed is where world generation falls behind |
 | teleports | how many | each teleport loads a new place |
 | session length | how long the game had been running, as one of: under 30 min / 30-60 min / 1-2 h / 2-4 h / over 4 h | to see whether long sessions get slower |
+| time since a teleport | seconds and hitches in steps: under 10 s / 10-30 s / 30 s-2 min / later | whether the stutter comes with loading a new place |
+| idle | seconds and hitches while the car has not moved and the camera has not changed for 2 minutes (away from the keyboard) | a game left running is not how it plays |
 
 ## 4. Performance and world-generation speed (Performance data)
 
@@ -93,10 +95,12 @@ Over each 5 minutes:
 | field | example | why |
 |---|---|---|
 | frame times | how many frames fell into fixed steps (gives average fps, 1% low, 95th / 99th percentile); frames while the game is paused or in the background are left out | how smooth the game was |
+| this window's own lows | the median, 99th and 99.9th percentile frame time of the 5 minutes (one number each, rounded to 0.25 ms) and how many frames took over 2x and 4x the median | a true 1% low per window, so one slow machine does not set everyone's figure |
 | the same per speed band | the steps for town speeds vs the highway | so fast driving is not hidden in an average |
-| hitches | how many frames over 50 / 100 / 250 / 1000 ms (and how many of those while loading after a teleport), and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both) | which part to fix first |
+| hitches | how many frames over 50 / 100 / 250 / 1000 ms (and how many of those while loading after a teleport, and per speed band), and for the slow ones the name of the part that took longest (a BeamNG.Earth part such as `roads`, or an engine subsystem such as `RenderShadows`, or "outside" both), the frames over 1 s counted apart | which part to fix first |
+| what was going on in slow frames | counts by fixed names only: ground block swap, collision rebuild, far tiles imported or retextured, roads built, distant traffic, trees placed or new tree shapes, server messages handled, a vehicle spawned or removed, the catch-up boost, the map or a menu open, the world origin moving, a Lua garbage sweep, loading after a teleport, the car held for the ground | which of our jobs makes the stutter |
 | fps drops | how many, how long, the lowest (rounded) | stutter you notice |
-| memory (rounded) | the game's Lua memory and its garbage per minute; the BeamNG.Earth server's memory | running out of memory on 16 GB machines and the Steam Deck |
+| memory (rounded) | the game's Lua memory and its garbage per minute; the game's own memory (the most in the 5 minutes), the computer's free memory (the least), the graphics memory in use (the most); the BeamNG.Earth server's memory and how many worker processes it runs | running out of memory on 16 GB machines and the Steam Deck; long sessions filling the graphics memory |
 | terrain blocks | how long each new ground block was waited for, in steps | whether the world keeps up with you |
 | keeping up | seconds held at the edge of the ground, seconds held until the ground loads, seconds loading after a teleport, how many times and how long the server borrowed extra CPU cores | the "world can't keep up" problem |
 | road tiles | how many were waiting (rounded) | roads appearing late |
@@ -162,6 +166,9 @@ before any of it is sent.
   only while Performance data is ticked. The welcome screen asks everyone again first (also those who chose before).
 - **Releases**: from the release after 1.8.2, sections 2-5 are sent as on the development builds, only while
   Performance data is ticked. (Earlier releases measured them and kept them next to the last report without sending.)
+- **From the release after 1.9.1** (and the development builds before it): the window's own lows, what was going
+  on in slow frames, time since a teleport, idle time, the game's, the system's and the graphics memory and the server's
+  worker count (consent version 3: the welcome screen asks everyone again first).
 - **Being added**: a **What is sent** button that shows the last report exactly as it left your computer, and the
   public performance page.
 

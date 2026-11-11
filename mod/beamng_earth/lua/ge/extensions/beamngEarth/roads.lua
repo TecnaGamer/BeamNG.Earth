@@ -1963,6 +1963,7 @@ function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
     local t0 = now()
     noteNewColliders()
     be:reloadCollision()
+    require('beamngEarth/perfsummary').note('collision')
     lastReloadAt, reloads = now(), reloads + 1
     collisionDirty, deletesDirty, sinceReload = false, false, stopwatch.new()
     local ms = now() - t0
@@ -2230,6 +2231,7 @@ function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ 
 
 -- Somebody else just ran be:reloadCollision() (the terrain commit): the sidewalks made so far collide.
 function M.collisionRebuilt()
+  require('beamngEarth/perfsummary').note('collision')     -- (a slow frame's context in the anonymous summary)
   -- that rebuild already made them solid: one held now leaves the physics at the next one
   local removed = noteNewColliders()
   lastReloadAt, reloads = now(), reloads + 1

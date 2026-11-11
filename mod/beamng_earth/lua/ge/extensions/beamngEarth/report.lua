@@ -37,6 +37,7 @@ local form = nil        -- the open report window: { dir, data, kind, titleBuf, 
 local prof = nil        -- the running profiler: { t0, dur, dts, track, hitches, dir, start, form }
 local saved = nil       -- the "report saved" window: { folder, dir, url, untilT }
 local ring, ringN = {}, 0
+local heldRing = {}     -- (beside ring: why the car was held in that frame, or false: stats)
 local toast, toastUntil = nil, 0
 local count = 0
 local indexed = {}      -- report folders already in index.jsonl (a re-save rewrites the files only)
@@ -46,7 +47,10 @@ local lastKind = 'map'
 local wallMs = require('beamngEarth/stopwatch').clock()
 local function now() return wallMs() / 1000 end
 
-local function stats(dts)
+-- dts: frame ms; held (optional, beside dts): why the car was held still while the world loaded in that frame ('edge',
+-- 'ground', 'loading': core.heldReason) or false. The held frames are summed apart (res.held: seconds, why, slow ones)
+-- and res.playing gives the frames while not held: a car held at the ground's edge is waiting, not a slow game.
+local function stats(dts, held)
   local n = #dts
   if n == 0 then return { frames = 0 } end
   local s = {}
@@ -62,7 +66,34 @@ local function stats(dts)
     for i = 1, n do if dts[i] > o then c = c + 1 end end
     res['over' .. o] = c
   end
+  if type(held) == 'table' then
+    local h = { s = 0, frames = 0, over50 = 0, why = {} }
+    local pn, psum, pover = 0, 0, 0
+    for i = 1, n do
+      local why = held[i]
+      if why then
+        h.frames, h.s = h.frames + 1, h.s + dts[i] / 1000
+        h.why[why] = (h.why[why] or 0) + dts[i] / 1000
+        if dts[i] > 50 then h.over50 = h.over50 + 1 end
+      else
+        pn, psum = pn + 1, psum + dts[i]
+        if dts[i] > 50 then pover = pover + 1 end
+      end
+    end
+    if h.frames > 0 then
+      res.held = h
+      res.playing = { frames = pn, fps = psum > 0 and pn / (psum / 1000) or nil, over50 = pover }
+    end
+  end
   return res
+end
+
+-- Why the car is held still while the world loads now (core.heldReason), or false.
+local function heldNow()
+  local core = rawget(_G, 'beamngEarth_core')
+  if not (core and core.heldReason) then return false end
+  local ok, why = pcall(core.heldReason)
+  return ok and why or false
 end
 M.stats = stats
 
@@ -162,8 +193,9 @@ local function capture()
   d.fpsLimit = safe(function() return Engine.getCurrentFpsLimitReason and Engine.getCurrentFpsLimitReason() end)
   d.vram = safe(function() return Engine.Render and Engine.Render.getVRAMUsage and Engine.Render.getVRAMUsage() end)
   local recent = {}
-  for i = 1, math.min(ringN, M.RING) do recent[#recent + 1] = ring[i] end
-  d.recentFrames = stats(recent)
+  local recentHeld = {}
+  for i = 1, math.min(ringN, M.RING) do recent[#recent + 1] = ring[i]; recentHeld[#recentHeld + 1] = heldRing[i] or false end
+  d.recentFrames = stats(recent, recentHeld)
   return d
 end
 
@@ -243,7 +275,7 @@ function M.profiler(seconds)
     start = capture()
     start.screenshot = screenshot(rel)
   end
-  prof = { t0 = now(), dur = tonumber(seconds) or M.BENCH_S, dts = {}, track = {}, hitches = {}, dir = rel,
+  prof = { t0 = now(), dur = tonumber(seconds) or M.BENCH_S, dts = {}, held = {}, track = {}, hitches = {}, dir = rel,
     lastSample = -1, start = start, form = pending }
   toast, toastUntil = string.format('Performance profiler: recording %d s (keep driving)', prof.dur), now() + 3
 end
@@ -258,12 +290,14 @@ end
 local function profFrame(dtMs)
   local b = prof
   b.dts[#b.dts + 1] = dtMs
+  local why = heldNow()
+  b.held[#b.held + 1] = why
   local t = now() - b.t0
   local core = rawget(_G, 'beamngEarth_core')
   if dtMs > 50 then
     local veh = getPlayerVehicle and getPlayerVehicle(0)
     local p = veh and veh:getPosition()
-    b.hitches[#b.hitches + 1] = { t = t, ms = dtMs, pos = p and { p.x, p.y, p.z } or nil }
+    b.hitches[#b.hitches + 1] = { t = t, ms = dtMs, pos = p and { p.x, p.y, p.z } or nil, held = why or nil }
   end
   if math.floor(t) > b.lastSample then
     b.lastSample = math.floor(t)
@@ -288,7 +322,7 @@ local function profFrame(dtMs)
   if t >= b.dur then
     local data = b.start
     data.kind = 'perf'
-    data.bench = stats(b.dts)
+    data.bench = stats(b.dts, b.held)
     data.bench.seconds = t
     data.bench.hitches = b.hitches
     data.track = b.track
@@ -335,6 +369,7 @@ function M.onPreRender(dtReal)
   local ms = dtReal * 1000
   ringN = ringN + 1
   ring[(ringN - 1) % M.RING + 1] = ms
+  heldRing[(ringN - 1) % M.RING + 1] = heldNow()
   if prof then profFrame(ms) end
 end
 
