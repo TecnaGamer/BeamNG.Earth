@@ -402,11 +402,12 @@ MAP_OUT_OF_VIEW_K = 3.0          # the 3D map: tiles off the screen chosen as if
 # L1-L2, carve the sea floor and waited for the water's map data) and 45-90 s to the horizon, built last (nearest
 # first). Now the first selection is the coarse one: K x FIRST_RAMP_K and nothing finer than the global far tiles
 # (farfield.select_global's anchor_nodes off; FIRST_RAMP_MIN_LEVEL without them): no map data waited for, no forced
-# block ring, no screen-space split, ~100 tiles one level or two coarser than the final ones at each distance (a
-# quarter of the photo tiles or less), the same for every anchor (kept: a later teleport near it has them at once).
-# Once they are all shown (or after FIRST_RAMP_MAX_S) the full selection, its swap groups each a coarse tile and the
-# finer ones under it. The block (1 km) covers the ground round the car meanwhile (the coarse tile under it sinks:
-# farfield.lua 'partial').
+# block ring, no screen-space split; ~80 tiles about two levels coarser than the final ones at each distance, the same
+# for every anchor, built while the first block is (Connection.prebuild_coarse). Once they are all shown (or after
+# FIRST_RAMP_MAX_S) the full selection, its swap groups each a coarse tile and the finer ones under it. The block
+# (1 km) covers the ground round the car meanwhile (the coarse tile under it sinks: farfield.lua 'partial'). Cold
+# Rock Springs / Laramie / Cody / Sheridan (tools/farprobe.py): half the horizon shown 1.8-3.4 s after the request,
+# 90 % 3.3-5.9 s (31-45 s and 42-61 s before); a revisit 1.3 s / 1.6 s (5.8 / 8.0 s); CPU the same or +7 %.
 FIRST_RAMP = os.environ.get("BNGE_FIRST_RAMP", "1") != "0"
 FIRST_RAMP_K = 0.25
 FIRST_RAMP_MIN_LEVEL = 3        # (= farfield.GLOBAL_MIN_LEVEL: the anchor's own levels, sea-carved and graded, below)
@@ -668,7 +669,7 @@ class Anchor:
     tunnels: object = None                         # roads.TunnelProfiles: floor heights per chain
     first_base: tuple = None                       # ((cx, cy), Future): a provisional first block's photo, reused
     zf: int = 14                                   # far level 3's Web-Mercator zoom here (farfield.global_zoom)
-    ramp: bool = False                             # a teleport's: its far field coarse first (FIRST_RAMP, commit_anchor)
+    ramp: bool = False                             # a teleport's: its far field coarse first (FIRST_RAMP)
 
 
 PIECE_PARTS = 24            # nodes whose geometry and texture the server keeps for their other pieces (Server.piece_parts)
@@ -4774,8 +4775,9 @@ class Server:
             zoom = (farfield.global_dem_zoom(tile.z, self.layout.cells) if isinstance(tile, farfield.GTile)
                     else anchor.zooms[max(tile.level, 0)])
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
-        return replace(prev, texture=texture, tex_bytes=tex_bytes, coarse=False, tex_seconds=time.perf_counter() - t0,
-                       cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px)
+        return replace(prev, texture=texture, tex_bytes=tex_bytes, tex_seconds=time.perf_counter() - t0,
+                       cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px,
+                       coarse=False)
 
     def start_world_warm(self, anchor):
         """The rough earth (the user, 2026-11-07: "keep a very rough version of earth that we can easaly load at all times
@@ -8460,7 +8462,8 @@ class Connection:
                     break
                 g_n += self.graded(t)
                 self.inflight[self.ck(t.key)] = (self.s.tile(anchor, t), t)
-            if anchor is not None and self.s.imagery is not None and not self.teleport_pending:
+            if anchor is not None and self.s.imagery is not None and not self.teleport_pending and \
+                    self.first_ramp is None:    # (the coarse cover fetches its few satellite photos itself)
                 # a tile at most every PREFETCH_AGAIN_S (a prefetch skips sources short of request tokens): the
                 # loop wakes on every tile done and every message from the game, and asking again for the same 40
                 # tiles each time kept the event loop busy (~22 s of a teleport on a Steam Deck, 2026-10-20)

@@ -1,8 +1,8 @@
-"""A teleport's far field coarse first (earthd FIRST_RAMP, the user's goal 2026-11-11: the whole horizon within seconds of
-a teleport to a place never seen, then refined): the first selection is the coarse cover (K x FIRST_RAMP_K, nothing
-finer than FIRST_RAMP_MIN_LEVEL, no forced block ring), the full one after it refines it (every full tile inside one
-coarse tile, so each swap group is one coarse tile and the finer ones under it); and the graded tiles' cap
-(GRADED_SHARE: at a new place their road plans held every far worker for 15-25 s)."""
+"""A teleport's far field coarse first (earthd FIRST_RAMP, the user's goal 2026-11-11: the whole horizon within seconds
+of a teleport to a place never seen, then refined): the first selection is the coarse cover (global tiles alone, K x
+FIRST_RAMP_K, no forced block ring), built ahead while the first block is; the full one after it refines it (every full
+tile inside one coarse tile, so each swap group is one coarse tile and the finer ones under it); and the cap on the far
+tiles that wait for the map data (GRADED_SHARE: at a new place their road plans held every far worker for 15-25 s)."""
 import asyncio
 import os
 import sys
