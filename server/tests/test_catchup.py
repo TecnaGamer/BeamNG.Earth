@@ -12,7 +12,7 @@ import earthd  # noqa: E402
 
 
 def conn(behind=True):
-    s = types.SimpleNamespace(boost_on=False, calls=[])
+    s = types.SimpleNamespace(boost_on=False, calls=[], below_game=True)
 
     def load_boost(on, why, half_only=False):
         s.calls.append((on, why))
