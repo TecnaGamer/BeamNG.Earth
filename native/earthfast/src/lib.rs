@@ -6079,6 +6079,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(gradeguard::grade_guard, m)?)?;
     m.add_function(wrap_pyfunction!(railseam::rail_seam_couple, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::heightfield_roof, m)?)?;
+    m.add_function(wrap_pyfunction!(roofs::slope_wall_floors, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::triangulate_holes, m)?)?;
     m.add_function(wrap_pyfunction!(roofs::skeleton_roof, m)?)?;
     m.add_class::<frontage::FrontageCoverage>()?;
@@ -6174,6 +6175,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // tiles, server/pmtiles.py; 205 left to another branch)
     // 207: farglobal::far_normal_err and far_global_mesh's 11th value err_n (the far terrain's pixel-error LOD, the
     // lodPx setting; another branch's 206)
-    m.add("VERSION", 207)?;
+    // 208: roofs::slope_wall_floors (the walls above a heightfield roof's eave in floor bands of the window sheet)
+    m.add("VERSION", 208)?;
     Ok(())
 }

@@ -158,6 +158,109 @@ fn cut_edge(pl: &[Plane], a: (f64, f64), b: (f64, f64), depth: u32, out: &mut Ve
     cut_edge(pl, x, b, depth + 1, out);
 }
 
+/// The walls above a heightfield roof's eave (heightfield_roof's walls (w, 6): ax ay za bx by zb) cut into floor bands
+/// of the window sheet, as the floors under the eave are drawn (streets.gl study 2026-11-11, proposal 3: One World
+/// Trade Center's sloped corner walls rise 360 m over their eave as a plain sliver). Each wall piece rising at least
+/// min_rise: the trapezoid between the eave and its top cut by each floor's slab [e + f h, e + (f + 1) h] (a convex
+/// polygon, fanned), its uv: along the edge from the edge's start / sheet_m (a sheet of bays per sheet_m; pieces of
+/// one straight edge carry on), up the slab over band band_k of bands (rows from the sheet's top, the floors' v).
+/// Returns (triangles (m * 3, 3) xyz, counter-clockwise seen from outside as the walls' quads; their uvs (m * 3, 2)).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn slope_wall_floors<'py>(py: Python<'py>, walls: PyReadonlyArray2<'py, f64>, e: f64, floor_h: f64, sheet_m: f64,
+                              band_k: i64, bands: f64, min_rise: f64)
+                              -> (Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>) {
+    let w = walls.as_array();
+    let rows: Vec<[f64; 6]> = (0..w.nrows()).map(|i| [w[[i, 0]], w[[i, 1]], w[[i, 2]], w[[i, 3]], w[[i, 4]], w[[i, 5]]])
+        .collect();
+    let (pts, uvs) = py.detach(|| slope_wall_floors_core(&rows, e, floor_h, sheet_m, band_k, bands, min_rise));
+    let n = pts.len();
+    let p = numpy::ndarray::Array2::from_shape_vec((n, 3), pts.into_iter().flat_map(|q| [q.0, q.1, q.2]).collect())
+        .expect("shape");
+    let t = numpy::ndarray::Array2::from_shape_vec((n, 2), uvs.into_iter().flat_map(|q| [q.0, q.1]).collect()).expect("shape");
+    (p.into_pyarray(py), t.into_pyarray(py))
+}
+
+#[allow(clippy::type_complexity)]
+pub fn slope_wall_floors_core(rows: &[[f64; 6]], e: f64, floor_h: f64, sheet_m: f64, band_k: i64, bands: f64,
+                              min_rise: f64) -> (Vec<(f64, f64, f64)>, Vec<(f64, f64)>) {
+    let mut pts = Vec::new();
+    let mut uvs = Vec::new();
+    if floor_h <= 0.1 || sheet_m <= 0.0 || bands <= 0.0 {
+        return (pts, uvs);
+    }
+    let eps = 1.5 / 1024.0;
+    let (v0, v1) = (1.0 - (band_k + 1) as f64 / bands + eps, 1.0 - band_k as f64 / bands - eps);
+    let mut s0 = 0.0f64;                    // (the edge's length before this piece)
+    let mut prev: Option<(f64, f64, f64, f64)> = None;    // (the last piece's end and direction)
+    for r in rows {
+        let [ax, ay, za, bx, by, zb] = *r;
+        let l = (bx - ax).hypot(by - ay);
+        if l < 1e-6 {
+            continue;
+        }
+        let d = ((bx - ax) / l, (by - ay) / l);
+        s0 = match prev {
+            Some((px, py_, dx, dy)) if (px - ax).hypot(py_ - ay) < 1e-6 && dx * d.0 + dy * d.1 > 0.9999 => s0,
+            _ => 0.0,
+        };
+        prev = Some((bx, by, d.0, d.1));
+        let s_here = s0;
+        s0 += l;
+        if za.max(zb) - e < min_rise {
+            continue;
+        }
+        // (the trapezoid in (t, z), counter-clockwise: t along the piece)
+        let quad = [(0.0, e), (1.0, e), (1.0, zb.max(e)), (0.0, za.max(e))];
+        let floors = ((za.max(zb) - e) / floor_h).ceil() as i64;
+        for f in 0..floors {
+            let (z0, z1) = (e + f as f64 * floor_h, e + (f + 1) as f64 * floor_h);
+            let poly = clip_floor_z(&clip_floor_z(&quad, z0, true), z1, false);
+            if poly.len() < 3 {
+                continue;
+            }
+            let corner = |q: (f64, f64)| {
+                ((ax + (bx - ax) * q.0, ay + (by - ay) * q.0, q.1),
+                 ((s_here + q.0 * l) / sheet_m, v0 + (q.1 - z0) / floor_h * (v1 - v0)))
+            };
+            let c0 = corner(poly[0]);
+            for j in 1..poly.len() - 1 {
+                let (c1, c2) = (corner(poly[j]), corner(poly[j + 1]));
+                // (a sliver left by the slope: no triangle)
+                let area = (poly[j].0 - poly[0].0) * (poly[j + 1].1 - poly[0].1)
+                    - (poly[j + 1].0 - poly[0].0) * (poly[j].1 - poly[0].1);
+                if area.abs() * l < 1e-4 {
+                    continue;
+                }
+                for c in [c0, c1, c2] {
+                    pts.push(c.0);
+                    uvs.push(c.1);
+                }
+            }
+        }
+    }
+    (pts, uvs)
+}
+
+/// The part of the polygon (t, z) above (keep_above) or below the level z (Sutherland-Hodgman, one plane).
+fn clip_floor_z(poly: &[(f64, f64)], z: f64, keep_above: bool) -> Vec<(f64, f64)> {
+    let inside = |p: &(f64, f64)| if keep_above { p.1 >= z } else { p.1 <= z };
+    let mut out = Vec::new();
+    let n = poly.len();
+    for i in 0..n {
+        let (p, q) = (poly[i], poly[(i + 1) % n]);
+        let (ip, iq) = (inside(&p), inside(&q));
+        if ip {
+            out.push(p);
+        }
+        if ip != iq {
+            let s = (z - p.1) / (q.1 - p.1);
+            out.push((p.0 + (q.0 - p.0) * s, z));
+        }
+    }
+    out
+}
+
 /// buildings._roof's heightfield roof over the counter-clockwise ring (n, 2): kind 0 gabled, 1 hipped / pyramidal,
 /// 2 half-hipped (hip: its hip share of the rise), 3 lean-to (hi: its high side along v = (-uy, ux)); the ridge along
 /// (ux, uy) through (cx, cy), slope k (m per m), eave e. Returns (triangles (m * 3, 3) xyz, counter-clockwise from
@@ -723,4 +826,34 @@ fn clip_z(t: &[(f64, f64, f64); 3], z: f64, below: bool) -> Vec<(f64, f64, f64)>
         }
     }
     out
+}
+
+#[cfg(test)]
+mod slope_wall_tests {
+    use super::*;
+
+    #[test]
+    fn slope_wall_floors_cut_by_floor() {
+        // a 30 m wall rising from the eave (10 m) at a to 10 + 9 m at b, 3 m floors: 3 floors, the slab triangles
+        // under the slope; a low wall (rise 1 m) left out
+        let rows = [[0.0, 0.0, 10.0, 30.0, 0.0, 19.0], [30.0, 0.0, 10.5, 30.0, 10.0, 11.0]];
+        let (p, uv) = slope_wall_floors_core(&rows, 10.0, 3.0, 12.0, 1, 4.0, 2.0);
+        assert!(!p.is_empty() && p.len() % 3 == 0);
+        assert!(p.iter().all(|q| q.1 == 0.0), "only the tall wall");
+        let top = p.iter().map(|q| q.2).fold(f64::MIN, f64::max);
+        assert!((top - 19.0).abs() < 1e-9);
+        // every vertex under the slope line
+        assert!(p.iter().all(|q| q.2 <= 10.0 + 9.0 * q.0 / 30.0 + 1e-9));
+        // area: the triangle 30 x 9 / 2
+        let mut area = 0.0;
+        for t in p.chunks(3) {
+            let (a, b, c) = (t[0], t[1], t[2]);
+            area += ((b.0 - a.0) * (c.2 - a.2) - (c.0 - a.0) * (b.2 - a.2)) / 2.0;
+        }
+        assert!((area - 135.0).abs() < 1e-6, "{area}");      // (counter-clockwise from outside: positive)
+        // u along the wall per 12 m, v in band 1's rows
+        let eps = 1.5 / 1024.0;
+        assert!(uv.iter().all(|q| q.0 >= -1e-9 && q.0 <= 2.5 + 1e-9));
+        assert!(uv.iter().all(|q| q.1 >= 0.5 + eps - 1e-9 && q.1 <= 0.75 - eps + 1e-9));
+    }
 }

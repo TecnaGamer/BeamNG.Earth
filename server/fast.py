@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 207 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 208 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):

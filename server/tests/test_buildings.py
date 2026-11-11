@@ -2943,6 +2943,29 @@ class MappedRoofTest(unittest.TestCase):
     """A roof shape the map gives on a part is drawn, not downgraded (streets.gl study, 2026-11-11: One World Trade
     Center's corner triangles, skillions 362 m tall facing roof:direction)."""
 
+    def test_tall_walls_above_a_sloped_eave_have_floors_of_windows(self):
+        # One World Trade Center's corner walls rise 362 m over their eave: floors of the window sheet, not the plain
+        # sliver (streets.gl study proposal 3); a house's gable stays plain
+        tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])
+        attrs = {"class": "", "height": 417.0, "roof_shape": "skillion", "roof_height": 362.0,
+                 "roof_direction": 225.0, "seed_id": 7}
+        spec = bld.plan(tri, attrs, lat=40.713, lon=-74.013, dense=True)
+        spec.plain, spec.wall = False, False
+        fac = (bld._FACADE_MI, (255, 255, 255, 255))
+        m = bld.Mesh()
+        bld._hf_roof(m, spec, tri, 55.0, (bld._TILES_MI, (255, 255, 255, 255)), fac)
+        P, UV = m.arrays()[:2]
+        T, M = np.asarray(m.T).reshape(-1, 3), np.asarray(m.M)
+        wall = np.zeros(len(P), bool)
+        wall[T[M == bld._FACADE_MI].ravel()] = True
+        high = wall & (P[:, 2] > 55.0 + 10.0)
+        self.assertTrue(high.any())
+        self.assertFalse(np.any(UV[high, 1] > 0.99), "no sliver strip up the tall walls")
+        self.assertGreater(np.ptp(UV[high, 0]), 1.0, "bays along the wall")
+        house = bld.plan(rect(0, 0, 12, 8), {"class": "house", "roof_shape": "skillion", "roof_direction": 180.0},
+                         0, 48.1, 11.5)
+        self.assertFalse(bld._slope_floors(bld.Mesh(), house, np.zeros((1, 6)), 6.0, fac))
+
     def test_triangle_skillion_kept_and_sloped_along_its_direction(self):
         tri = np.array([(0.0, 0.0), (32.0, 0.0), (0.0, 32.0)])          # a right triangle, legs along the axes
         for d in (225.0, 45.0):

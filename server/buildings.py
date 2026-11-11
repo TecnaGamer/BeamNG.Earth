@@ -2185,10 +2185,34 @@ def _hf_roof(m, spec, ring, z_eave, rm, fac):
         pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
         uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
         m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
+    tall = _slope_floors(m, spec, walls, z_eave, fac)
     for ax, ay, za, bx, by, zb in walls.tolist():
-        if za - z_eave > 0.02 or zb - z_eave > 0.02:
+        if (za - z_eave > 0.02 or zb - z_eave > 0.02) and not (tall and max(za, zb) - z_eave >= SLOPE_WALL_RISE_M):
             m.quad((ax, ay, z_eave), (bx, by, z_eave), (bx, by, zb), (ax, ay, za),
                    (0, 0.995), (0.02, 0.995), (0.02, 0.999), (0, 0.999), fac)
+
+
+# The walls above a tall building's sloped roof in floors of its window sheet (streets.gl study 2026-11-11, proposal 3:
+# One World Trade Center's corner walls rise 360 m over their eave, a plain sliver of the facade's colour): a wall piece
+# rising SLOPE_WALL_RISE_M over the eave, on a building of SLOPE_WALL_FLOORS floors or more with a window sheet (a
+# house's gable stays plain, as real ones mostly are)
+SLOPE_WALL_RISE_M = 6.0
+SLOPE_WALL_FLOORS = 4
+
+
+def _slope_floors(m, spec, walls, z_eave, fac):
+    """Draw the tall walls above the eave as floors of the window sheet (earthfast.slope_wall_floors). -> drawn?"""
+    if spec.plain or spec.wall or (spec.floors or 0) < SLOPE_WALL_FLOORS or fac[0] not in _SHEET_MI or not len(walls):
+        return False
+    fast.require(208, "windows above a sloped roof's eave")
+    band = spec.band or (0, 1)
+    P, UV = fast._ef.slope_wall_floors(np.ascontiguousarray(walls, np.float64), float(z_eave),
+                                       float(spec.floor_h), float(TILE_PX_M), int(band[0]), float(BANDS),
+                                       float(SLOPE_WALL_RISE_M))
+    for k in range(0, len(P), 3):
+        m.tri(tuple(P[k].tolist()), tuple(P[k + 1].tolist()), tuple(P[k + 2].tolist()),
+              tuple(UV[k].tolist()), tuple(UV[k + 1].tolist()), tuple(UV[k + 2].tolist()), fac)
+    return True
 
 
 # the roof shapes as Overture spells some (OSM's spellings kept)
