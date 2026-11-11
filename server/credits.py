@@ -118,10 +118,14 @@ FEATURES = {
     "roof:3dbag": "3DBAG (tudelft3d, 3DGI)",
     "bld:bdtopo-fr": "IGN BD TOPO",
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
+    "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
+    "roadz:hk": "Road and bridge heights in Hong Kong: Road Network of the Transport Department and 2020 LiDAR of the "
+                "Civil Engineering and Development Department, (c) Government of the Hong Kong SAR, from DATA.GOV.HK "
+                "and the CSDI Portal, data changed",
     "roof:3dbag": "Roof shapes and heights in the Netherlands: \u00a9 3DBAG by tudelft3d and 3DGI (CC BY 4.0), "
                   "data changed",
     "bld:bdtopo-fr": "Building heights, storeys, materials and use: IGN, BD TOPO (Licence Ouverte / Etalab 2.0), "
@@ -148,6 +152,7 @@ GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
           ("roof", "Roofs", "Far roofs"), ("bld", "Buildings", "Far buildings"),
+          ("roadz", "Road heights", "Far road heights"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
           ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
 # Display order of the ids (unknown ones follow, by name)
@@ -288,6 +293,12 @@ def feature_ids(conn):
             if getattr(md, "bdtopo", None) is not None and bdtopo.credited_near(getattr(md, "cache_dir", None),
                                                                                 lat, lon, FEATURE_NEAR_M):
                 ids.add("bld:bdtopo-fr")
+        except Exception:
+            pass
+        try:                        # (a Hong Kong road heights cell on disk near: roadz)
+            import roadz
+            if roadz.hk_credited_near(getattr(md, "cache_dir", None), lat, lon, FEATURE_NEAR_M):
+                ids.add("roadz:hk")
         except Exception:
             pass
         try:                        # (a 3dmr.eu model near: threedmr's cached answers only)

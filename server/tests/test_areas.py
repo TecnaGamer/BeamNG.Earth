@@ -476,6 +476,9 @@ class AreasTest(unittest.TestCase):
             def lidar_wanted(self, key):
                 return key[1] % 2 == 0          # (only some cells lie in lidar's country)
 
+            def lidar_sources(self, key):
+                return ["lidar"] if self.lidar_wanted(key) else []
+
             def lidar_on_disk(self, key):
                 return tuple(key) in self.have
 

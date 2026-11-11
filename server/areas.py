@@ -963,7 +963,8 @@ class Areas:
                 self._write_world(a["id"], world)
             return
         if kind == "lidar":
-            if roadz.PROVIDER is not None and roadz.PROVIDER.lines("lidar", st[1:4]) is None:
+            if roadz.PROVIDER is not None and any(roadz.PROVIDER.lines(src, st[1:4]) is None
+                                                  for src in roadz.PROVIDER.lidar_sources(st[1:4])):
                 raise RuntimeError("road height lidar not had")         # (the next pass tries again)
             return
         if kind == "fuel":
