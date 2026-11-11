@@ -610,7 +610,7 @@ def navgraph(aid, lat, lon, zoom, x, y, out_dir, vfs_dir, serial, left_hand, mph
     w = navgraphmod.WINDOW_M + 200.0
     la, lo, _ = frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
     keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
-    feats = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+    feats = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, keys, ("roads",))]
 
     def elev(la_, lo_):         # the physics ground, lifted under roads (as the road tiles'); past their reach
         z = ground(frame, la_, lo_, _s.dem.sample(la_, lo_, zoom))     # (NAV_GRADED_M) only under cells planned already
@@ -986,7 +986,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("warm")
     cell_keys = roadsmod.cells_of_tile(frame, tx, ty,
                                        200 if poleprofiles.kit_enabled(pole_profile) else roadsmod.OVERLAP)
-    cells = [_s.md.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in cell_keys]
+    import mapcells
+    cells = [cd.layers.get("roads") for cd in mapcells.load_cells(_s.md, cell_keys, ("roads",))]
     de_routes = ()
     if de_junctions:                # (the German junction signs' ref ranks: only near Germany)
         import designs

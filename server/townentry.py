@@ -2902,7 +2902,8 @@ class Towns:
     def communes(self, frame, keys):
         """[Commune] of the map cells keys with their agglomerations, or None when some land cover is not cached yet
         (the tile is then built without town signs and not kept: surface.classes marked it for a rebuild)."""
-        feats = [self.md.cell(k, layers=("town_areas",), kind="demand").layers.get("town_areas") for k in keys]
+        import mapcells
+        feats = [cd.layers.get("town_areas") for cd in mapcells.load_cells(self.md, keys, ("town_areas",))]
         ready = [True]
 
         # (the cells' box: PICTOGRAMS' squares over it, the villages' points near it)

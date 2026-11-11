@@ -1150,3 +1150,20 @@ class ShedTest(unittest.TestCase):
                              rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
         mapdata.MapData.clear_memory(md)
         self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
+
+
+class StoreLevelTest(unittest.TestCase):
+    def test_a_cell_file_holds_the_same_arrays_as_savez_compressed(self):
+        # MapData._store writes at STORE_LEVEL (cheaper than numpy's level 6): the same members and arrays
+        arrays = {"ids": np.array(["a", "bb", ""]), "xy": np.arange(3000, dtype=np.float64).reshape(-1, 2) * 0.37,
+                  "kind": np.array([1, 2, 3], np.uint8), "provenance": np.array(json.dumps({"id": "x"})),
+                  "empty": np.zeros(0, np.int32)}
+        with tempfile.TemporaryDirectory() as d:
+            a, b = os.path.join(d, "a.npz"), os.path.join(d, "b.npz")
+            mapdata._savez_deflated(a, arrays, mapdata.STORE_LEVEL)
+            np.savez_compressed(b, **arrays)
+            with np.load(a, allow_pickle=False) as za, np.load(b, allow_pickle=False) as zb:
+                self.assertEqual(za.files, zb.files)
+                for k in za.files:
+                    self.assertEqual(za[k].dtype, zb[k].dtype)
+                    np.testing.assert_array_equal(za[k], zb[k])

@@ -97,6 +97,10 @@ _CPUS = os.cpu_count() or 4
 WARM_THREADS = min(8, _CPUS // 2) if _CPUS > 8 else 0
 BUILDING_MAX_M2 = 2.0e6     # m2: a building footprint larger than this is a mapping error (the largest real ones are
                             # ~1 km2; an OpenStreetMap one of 15.8 km2 roofed a city in Egypt, GitHub #413)
+# The deflate level a cell's layer file is written at: np.savez_compressed's (zlib's default, 6) cost ~1.3 CPU-s of a
+# cold place's ~300 files (Lawrence KS, 2026-11-11), level 3 half of it for files ~12 % larger (13.6 MB for 12.2). The
+# same .npz (np.load reads any level), the same arrays.
+STORE_LEVEL = 3
 VERSION = 2                     # pipeline version: bump when what a cell's layers contain changes
 # per layer, on top of VERSION (a layer's own change without re-fetching the others): roads 2 adds
 # the "oneway" rule (Overture access_restrictions by heading)
@@ -330,6 +334,16 @@ def _raster_from(arrays):
     return maprasters.Raster(arrays["data"], meta["crs"], meta["x0"], meta["y0"], meta["dx"], meta["dy"],
                              meta["nodata"], list(meta["files"]))
 
+
+
+def _savez_deflated(path, arrays, level):
+    """np.savez_compressed(path, **arrays) at deflate level `level` (numpy's own writer: each array an .npy member of a
+    zip64 archive)."""
+    import zipfile
+    with zipfile.ZipFile(path, mode="w", compression=zipfile.ZIP_DEFLATED, allowZip64=True, compresslevel=level) as zf:
+        for key, val in arrays.items():
+            with zf.open(key + ".npy", "w", force_zip64=True) as fh:
+                np.lib.format.write_array(fh, np.asanyarray(val), allow_pickle=True)
 
 class MapData:
     """See the module docstring. fetcher: the server's netfetch.Fetcher (None: one of its own);
@@ -631,7 +645,7 @@ class MapData:
     def _store(self, path, arrays):
         os.makedirs(os.path.dirname(path), exist_ok=True)
         tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp.npz"
-        np.savez_compressed(tmp, **arrays)
+        _savez_deflated(tmp, arrays, STORE_LEVEL)
         staging.replace_cached(tmp, path)
 
     def _build(self, key, layer, kind):
@@ -1043,12 +1057,31 @@ class MapData:
 
     def cell(self, key, layers=LAYERS, kind="demand"):
         """CellData of one cell with the given layers (fetched / built / cached as needed)."""
+        return self._cell_collect(self._cell_submit(key, layers, kind))
+
+    def cells(self, keys, layers=LAYERS, kind="demand"):
+        """[cell(key, layers, kind) for key in keys], their layers loaded side by side: the loops that asked for a
+        list of cells one after another waited for each cell's download and decode before asking for the next (a cold
+        place's railway station group, 3 layers of its cells one at a time: ~5 s of a block's last stage at Lawrence
+        KS, 2026-11-11). The same CellData in the same order; an error is raised once every cell has finished (the
+        first in keys' order)."""
+        pending = [self._cell_submit(k, layers, kind) for k in keys]
+        out, err = [], None
+        for st in pending:
+            try:
+                out.append(self._cell_collect(st))
+            except Exception as e:
+                err = err or e
+        if err is not None:
+            raise err
+        return out
+
+    def _cell_submit(self, key, layers, kind):
+        """cell()'s first half: the layers not in memory submitted (or joined); (key, cd, mem, futs, layers)."""
         key = _key(key)
         lat_c, lon_c = key.center()
         frame = geodesy.EnuFrame(lat_c, lon_c, 0.0)
         cd = CellData(key, key.bounds(), (lat_c, lon_c), frame, self.versions())
-        provs = {}
-
         mem, futs = {}, []
         with self._mem_lock:
             for layer in layers:
@@ -1077,6 +1110,12 @@ class MapData:
                         if cur is not None:
                             self._cell_stats["urgent_over"] = self._cell_stats.get("urgent_over", 0) + 1
                     futs.append((layer, fut, shared))
+        return key, cd, mem, futs, layers
+
+    def _cell_collect(self, state):
+        """cell()'s second half: the CellData once its layers are in (an error raised once all have finished)."""
+        key, cd, mem, futs, layers = state
+        provs = {}
         results = {}
         err = None
         for layer, fut, shared in futs:     # all finish before an error is raised (no stray fetches)
