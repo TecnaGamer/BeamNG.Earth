@@ -282,17 +282,24 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             width += 2 * AISLE_STALLS_M         # the stalls either side (parking.aisle_spots): no grass under cars
         walks = roadsmod.has_sidewalks(spec)
         street = getattr(spec, "street", None)
+        band = 0.0
         if walks and street is None:
-            width += 2 * (spec.walk + square)   # the sidewalks (+ a sample: tufts at the outer edge): grass grew up
+            band = 2 * (spec.walk + square)     # the sidewalks (+ a sample: tufts at the outer edge): grass grew up
                                                 # through them (ground cover is the terrain's: Lauterbrunnen, Baltimore
-                                                # 2026-10-15)
+                                                # 2026-10-15); paved (footpaths), not the road's own material: a
+                                                # cobbled road's setts lay a metre past its sidewalks on the lawn (the
+                                                # user, 2026-11-11 at Washington Place: "the textures dont seem to
+                                                # match the border of the paint collor")
         c, r = to_px(x, y)
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
         edge_reach = max((walk.setback + walk.width for _, walk in street.walks()), default=0.) if street else 0.
-        reach = (float(np.max(width)) / 2 + ROAD_EDGE_M + max(edge_reach, 0 if walks else VERGE_M)) / square + 2
+        reach = (float(np.max(width)) / 2 + band / 2 + ROAD_EDGE_M + max(edge_reach, 0 if walks else VERGE_M)) \
+            / square + 2
         if c.max() < -reach or c.min() > w + reach or r.max() < -reach or r.min() > h + reach:
             return
         add(segs[kind], c, r, width / 2 + ROAD_EDGE_M)
+        if band:
+            add(footpaths, c, r, (width + band) / 2 + ROAD_EDGE_M)
         if street is not None:
             for side, walk in street.walks():
                 # Independent strips leave the setback to the original ground.
@@ -459,7 +466,10 @@ def _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, shape, grow
 # visible; the rest of the photo's own grain still shows through, so it does not read as a flat stripe
 # gravel: the light grey-beige gravel roads are from above (Iowa's NAIP ~200/200/195, Estonia's near white; the old
 # 128/118/102 at 0.6 drew them mid brown, 2026-11-03), less of it: the photo shows a gravel road well
-PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (112, 104, 96, 0.85),
+# (cobble: the setts' own mean colour, bne_cobble_b 135 132 127, a touch darker for the joints at a distance: the
+# drawn block's detail texture lies over this paint, and a darker brown showed the texture's 1 m-stepped edge as a tone
+# change, the user 2026-11-11: "the textures dont seem to match the border of the paint collor")
+PHOTO_ROAD_RGBA = {"dirt": (112, 92, 68, 0.70), "gravel": (188, 182, 168, 0.5), "cobble": (128, 125, 120, 0.9),
                    "paved": (95, 95, 94, 1.0)}
 PHOTO_ROADS_MAX_TEXEL = 2.0     # m per texel: coarser far tiles keep the photo's own roads (far, under a pixel wide)
 PHOTO_ROAD_EDGE_M = 0.2         # m the photo's asphalt reaches past the drawn edge, under the edge decal's inner sliver (its
