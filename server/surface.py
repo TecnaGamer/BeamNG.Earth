@@ -1350,17 +1350,19 @@ def corners_mask(frame, x0, y0, size, px, pads):
 
 
 def photo_pads(rgb, frame, x0, y0, size, pads):
-    """The photo rgb (H x W x 3, row 0 north, over [x0, x0 + size]² of frame) with the pads painted in the paved
-    roads' colour (PHOTO_ROAD_RGBA). Pure."""
+    """The photo rgb (H x W x 3, row 0 north, over [x0, x0 + size]² of frame) with the pads painted as the paved roads
+    (PHOTO_ROAD_RGBA, in the photo's own pavement tone under them: earthfast.paint_cover_toned, PHOTO_ROAD_TONE; the
+    user, 2026-11-11: "utiluze and revfine this method of texturing the ground more"). Pure."""
     h, w = rgb.shape[:2]
-    polys = _pads_photo_px(frame, x0, y0, size, w, h, pads) if pads else []
-    if not polys:
+    cov = _pads_px(frame, x0, y0, size, w, h, pads) if pads else None
+    if cov is None:
         return rgb
-    fast.require(140, "pad painting")
-    r, g, b, op = PHOTO_ROAD_RGBA["paved"]
-    out = np.array(rgb, np.uint8, copy=True, order="C")
-    fast._ef.paint_pads(out, polys, [float(r), float(g), float(b)], float(np.float32(op)))
-    return out
+    fast.require(204, "pads in the photo's own tone")
+    radius = max(1, int(round(PHOTO_TONE_RADIUS_M * w / size)))
+    return fast._ef.paint_cover_toned(np.ascontiguousarray(rgb, np.uint8), np.ascontiguousarray(cov, np.float32),
+                                      np.array(PHOTO_ROAD_RGBA["paved"], np.float32),
+                                      np.array(PHOTO_ROAD_TONE["paved"], np.float32), radius,
+                                      PHOTO_TONE_SAMPLE_LUMA, PHOTO_TONE_SAMPLE_SAT, PHOTO_TONE_GREEN)
 
 
 def pads_mask(frame, x0, y0, size, px, pads):

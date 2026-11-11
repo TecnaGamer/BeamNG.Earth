@@ -611,6 +611,18 @@ class RoadToneTest(unittest.TestCase):
         self.assertTrue((out[20, 20] == rgb[20, 20]).all(), "off the road: the photo")
         lum = road @ [0.299, 0.587, 0.114]
         self.assertLessEqual(lum.max(), sf.PHOTO_ROAD_TONE["paved"][1] + 1.0, "within the kind's range")
+        cover = np.zeros((200, 200), np.float32)                            # a lot: paint_cover_toned
+        cover[60:140, 60:140] = 1.0
+        lot = rgb.copy()
+        lot[60:140, 60:140] = (140, 138, 132)
+        lot[90:100, 70:80] = (15, 15, 20)                                   # a parked car
+        painted = fast._ef.paint_cover_toned(lot, cover, np.array(sf.PHOTO_ROAD_RGBA["paved"], np.float32),
+                                             np.array(sf.PHOTO_ROAD_TONE["paved"], np.float32), 12,
+                                             sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)
+        inside = painted[65:135, 65:135].reshape(-1, 3).astype(float)
+        self.assertGreater(inside.mean(0)[0], flat[0] + 15, "the lot's own pale asphalt")
+        self.assertLess(inside.std(0).max(), 6.0, "no car left in it")
+        self.assertTrue((painted[20, 20] == lot[20, 20]).all())
         bare = np.full((200, 200, 3), (60, 110, 50), np.uint8)              # no pavement in the photo: the flat colour
         flat_out = fast._ef.paint_lines_toned(bare, segs, np.array([18.0]), paved, cols, tone, 12,
                                               sf.PHOTO_TONE_SAMPLE_LUMA, sf.PHOTO_TONE_SAMPLE_SAT, sf.PHOTO_TONE_GREEN)

@@ -6158,6 +6158,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 202: roadwear (wear_plan: tyre polish, concrete joints, cracks, patches, manholes, oil spots along a tile's roads)
     m.add_function(wrap_pyfunction!(roadtone::paint_lines_toned, m)?)?;
     // 203: roadtone (paint_lines_toned: the roads painted into the photo in its own pavement's tone)
-    m.add("VERSION", 203)?;
+    m.add_function(wrap_pyfunction!(roadtone::paint_cover_toned, m)?)?;
+    // 204: paint_cover_toned (lots and pads in the photo's own tone)
+    m.add("VERSION", 204)?;
     Ok(())
 }
