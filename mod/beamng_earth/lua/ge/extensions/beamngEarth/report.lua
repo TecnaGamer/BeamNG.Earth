@@ -362,7 +362,9 @@ local function drawSaved()
     if saved.url then
       im.SameLine()
       if im.Button('Open GitHub issue page') then
-        pcall(openWebBrowser, saved.url)
+        local core = rawget(_G, 'beamngEarth_core')
+        if core and core.openPage then pcall(core.openPage, saved.url)
+        else pcall(openWebBrowser, saved.url) end
         saved.untilT = now() + M.SAVED_S
       end
     end
