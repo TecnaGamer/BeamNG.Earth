@@ -3099,7 +3099,8 @@ def _skel_roof(m, spec, ring, z_eave, rm, fac):
             d = (gx / gm, gy / gm)
             a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
         pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
-        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
+        ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # AU roofs: their own repeat
+        uvs = [((p[0] * a[0] + p[1] * a[1]) / ru, (p[0] * d[0] + p[1] * d[1]) * f / rv) for p in pts]
         m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
     return True
 
@@ -3175,7 +3176,8 @@ def _hf_roof(m, spec, ring, z_eave, rm, fac):
             d = (gx / gm, gy / gm)                  # (up the slope)
             a, f = (-d[1], d[0]), math.sqrt(1.0 + gm * gm)
         pts = [tuple(float(x) for x in tri[3 * j + i]) for i in range(3)]
-        uvs = [((p[0] * a[0] + p[1] * a[1]) / ROOF_UV_M, (p[0] * d[0] + p[1] * d[1]) * f / ROOF_UV_M) for p in pts]
+        ru, rv = ROOF_UV_M_OF.get(spec.roof_mat.split("|")[0], (ROOF_UV_M, ROOF_UV_M))     # AU roofs: their own repeat
+        uvs = [((p[0] * a[0] + p[1] * a[1]) / ru, (p[0] * d[0] + p[1] * d[1]) * f / rv) for p in pts]
         m.tri(pts[0], pts[1], pts[2], uvs[0], uvs[1], uvs[2], rm)
     tall = _slope_floors(m, spec, walls, z_eave, fac)
     for ax, ay, za, bx, by, zb in walls.tolist():
