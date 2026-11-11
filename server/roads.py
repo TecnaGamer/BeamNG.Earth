@@ -1997,8 +1997,10 @@ def _road_specs_kept(feats, urban_fn=None, widths=None, left_hand=False):
     got = memo.get(k)
     if got is None:             # (the measured widths on the specs without them: those are asked for too, _bridge_reach)
         keep = True             # (specs made while a download failed are not remembered: asked again, PR #634)
+        import germanroads
         extra = (widths is not None, bool(left_hand)) + ((franceroads.VERSION,) if franceroads.ON else ()) + (
-            (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ())
+            (photosurface.TAG,) if photosurface.ON else ()) + ((europewalks.VERSION,) if europewalks.enabled() else ()) + (
+            (germanroads.VERSION,) if germanroads.ON else ())
         cid = feats.__dict__.get("_bnge_cell")
         # (the land cover's too, by this process's urban_fn: its own Surface, the same all along; a city layer's
         # specs with its parking widths were ~0.37 s of each of its road tiles after every reload, 2026-11-02)
@@ -2991,7 +2993,10 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
     out = _specs_of(d, inp, _marking_states(feats))
     if towns is not None:
         towns[:] = d["towns"].tolist()
-    out = franceroads.adjust_specs(feats, out)
+    import germanroads          # (Germany's surveyed widths, lanes and surfaces where the map has none)
+    de = germanroads.adjust_specs(feats, out)
+    surveyed = {i for i, (x, y) in enumerate(zip(out, de)) if x is not None and y is not None and x.width != y.width}
+    out = franceroads.adjust_specs(feats, de)
     if european:
         rules = feats.rules
         names = feats.attrs.get("name")
@@ -3012,6 +3017,8 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
             width = _rule_value(rules.get("width"), i)
             if width is None or not 1.0 <= float(width) <= 40.0:
                 width = _osm(feats, "width", i, *OSM_WIDTH_M)
+            if width is None and i in surveyed:     # (Germany's surveyed paved width stands as a mapped one)
+                width = spec.width
             # France's rural experiment already has its own narrower widths.
             if width is None and franceroads.enabled(spec) and not spec.urban:
                 width = spec.width
@@ -3471,12 +3478,17 @@ def _measured_widths(feats, specs, widths):
             continue        # (a roundabout: _rings' circulatory width; the buildings stand round the whole circle)
         a = feats.coord_off[feats.ring_off[feats.part_off[j]]]
         b = feats.coord_off[feats.ring_off[feats.part_off[j + 1]]]
-        if _osm(feats, "width", j, *OSM_WIDTH_M) is not None or sp.lanes:
-            continue        # (OpenStreetMap's own width, or its lane count's)
+        import germanroads
+        if _osm(feats, "width", j, *OSM_WIDTH_M) is not None or (sp.lanes and not germanroads.gave_lanes(feats, j, sp)):
+            continue        # (OpenStreetMap's own width, or its lane count's; Germany's surveyed lanes are no width)
         if sp.street is not None and (not sp.urban or not has_sidewalks(sp)
                                       or any(w.setback for _, w in sp.street.walks())):
             continue        # (the walls beyond verges are not the carriageway's limits)
         m = widths(str(feats.ids[j]), feats.lonlat[a:b]) if b > a else None
+        import germanroads
+        floor = germanroads.surveyed_width(feats, j, sp)
+        if m is not None and floor is not None and m[0] < floor:
+            m = (floor, m[1])       # (Germany's survey: the width driven between parked cars, a lower bound in towns)
         dflt = carriageway(sp.cls, sp.kind, True, None, sp.oneway, sp.lanes, link=sp.link)
         # Historic streets can be one shared lane between close building fronts. Rejecting these measurements
         # kept a default carriageway wider than the street itself.
@@ -3548,7 +3560,9 @@ def _bridge_specs(feats, want="bridge"):
     gdir = np.fromiter((g.dir if g is not None else 0 for g in ground), np.int64, n)
     d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, lambda: lane_flow(feats),
                                    _spec_prm())
-    return _specs_of(d, inp, _marking_states(feats))
+    out = _specs_of(d, inp, _marking_states(feats))
+    import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m Kreisstraße's
+    return germanroads.adjust_specs(feats, out)     # bridge stayed at its class's 8 m, stepping at both ends)
 
 
 class _EndJoin:
