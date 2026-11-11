@@ -100,6 +100,26 @@ do
     'without a nearby matching segment, hold rather than drive toward an unrelated road')
 end
 
+-- Existing route loops are valid, including after removing the rear endpoint.
+for _, path in ipairs({ { 'j', 's', 't', 'w', 'j' }, { 'w', 'j', 's', 't', 'w', 'j' } }) do
+  local f = fixture(path, 2, 6, function(f)
+    f.nodes.t.links.w = {}
+    f.route = { points = { { 0, 0 }, { 0, 0.01 }, { -0.006, 0.016 }, { -0.006, 0.04 },
+      { 0, 0 }, { 0, 0.01 } }, dist = 900, dur = 90 }
+  end)
+  T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j,s,t,w,j' and #f.modes == 0,
+    'a planned loop through the starting edge drives without stopping')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and table.concat(f.drives[2], ',') == 'j,s,t,w,j' and #f.modes == 0,
+    'a planned loop restarts intact after map replacement')
+end
+
+do
+  local f = fixture({ 's', 'j' })
+  T.check(#f.drives == 0 and f.modes[#f.modes] == 'stop',
+    'joining a path must still reject a new loop through the forward junction')
+end
+
 do
   local f = fixture(nil, 10, 12)
   T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j,s,t',

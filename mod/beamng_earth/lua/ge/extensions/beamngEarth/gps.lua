@@ -555,7 +555,7 @@ function M.connectedStart(ids, a, b, nodes)
   if not a or not b then return nil end
   local joined = M.joinStart(ids, a, b, nodes)
   if joined[1] ~= b then return nil end
-  for i = 2, #joined do if joined[i] == a or joined[i] == b then return nil end end
+  -- joinStart guards against added loops; revisiting these nodes in the planned route is valid.
   return joined
 end
 
