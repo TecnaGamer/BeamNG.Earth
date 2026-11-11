@@ -1623,8 +1623,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
     tile_key = geotiles.geobox(gx, gy).key
     k = _geo_content_key(tile_key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country,
                          pole_profile=pole_profile, models_dir=os.path.dirname(scratch), de_junctions=de_junctions, towns_on=towns_on, wear=wear)
-    path = revisit._path(_s.cache_dir, "roadsg", k)
-    if not os.path.exists(path):
+    if not revisit.has(_s.cache_dir, "roadsg", k):
         os.makedirs(scratch, exist_ok=True)
         try:
             if wait_gaps:       # (the fast mode's own road processes, the game paused: no live tile waits on them)
@@ -1645,7 +1644,7 @@ def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations,
                     pass
             with _geo_lock:
                 _geo_inputs.pop(tile_key, None)
-    return k if os.path.exists(path) else None
+    return k if revisit.has(_s.cache_dir, "roadsg", k) else None
 
 
 @profile_step('Road geometry')
