@@ -1347,17 +1347,43 @@ def grade_rank(spec):
 
 
 def _nearest_on(p, x, y):
-    """(distance, height, arc position from p's nearer end) of the point of Plan p's centreline nearest (x, y)."""
-    a, b = p.xy[:-1, :2], p.xy[1:, :2]
-    d = b - a
-    ll = np.maximum((d * d).sum(1), 1e-12)
-    t = np.clip(((x - a[:, 0]) * d[:, 0] + (y - a[:, 1]) * d[:, 1]) / ll, 0.0, 1.0)
-    q = a + d * t[:, None]
-    dist = np.hypot(q[:, 0] - x, q[:, 1] - y)
-    i = int(dist.argmin())
-    seg = np.sqrt(ll)
-    s = float(seg[:i].sum() + seg[i] * t[i])
-    return float(dist[i]), float(p.z[i] + (p.z[i + 1] - p.z[i]) * t[i]), min(s, float(seg.sum()) - s)
+    """(distance, height, arc position from p's nearer end) of the point of Plan p's centreline nearest (x, y)
+    (native/earthfast planset.rs)."""
+    import fast
+    fast.require(211, "plan_nearest_on")
+    return fast._ef.plan_nearest_on(np.asarray(p.xy, np.float64), np.asarray(p.z, np.float64), float(x), float(y))
+
+
+def _plan_lines(ps):
+    """(xy (n, 2), off (plans + 1,), z (n,)): the Plans ps' vertices one after another, plan j's from off[j] to
+    off[j + 1] (the planset kernels' plans)."""
+    f64 = np.float64
+    off = np.zeros(len(ps) + 1, np.int64)
+    if not ps:
+        return np.zeros((0, 2)), off, np.zeros(0)
+    xys = [np.asarray(p.xy, f64)[:, :2] for p in ps]
+    np.cumsum([len(a) for a in xys], out=off[1:])
+    xy = np.ascontiguousarray(np.concatenate(xys), f64)
+    z = np.ascontiguousarray(np.concatenate([np.asarray(p.z, f64).reshape(-1) for p in ps]), f64)
+    return xy, off, z
+
+
+def _plan_ranks(ps, specs):
+    """(plans,) int64: each plan's grade_rank (from its Spec, -10**9 where none) or, without specs, its own rank."""
+    if specs is not None:
+        return np.array([grade_rank(sp) if sp is not None else -10 ** 9 for sp in specs], np.int64)
+    return np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for p in ps], np.int64)
+
+
+def _replan(p, xy, z, abut=None, cut=False):
+    """A new Plan of p's road on line xy / heights z (abut: its ends' abutments, p's by default; cut: p's cuttings
+    kept, else none), p's other attributes carried over."""
+    q = Plan(xy, z, p.half, p.abut if abut is None else abut, p.cut if cut else None, p.road_half)
+    q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
+    q.rank = getattr(p, "rank", GRADE_RANK_NONE)
+    q.steep = bool(getattr(p, "steep", False))
+    set_widen(q, getattr(p, "widen", None))
+    return q
 
 
 def couple_neighbours(plans, specs, trend):
@@ -5478,17 +5504,9 @@ class _Planner:
         # in the order of their keys: grade_points' sums run in plan order, so every caller (the block, a road
         # tile, a far tile) gets the same heights at a point whatever other cells its points reached
         plans = [got[k] for k in sorted(got)]
-        if WELD_ON:
-            try:            # (the pieces of one road a cell edge cut apart meet at one height too)
-                weld_continuations(plans)
-            except Exception as e:
-                log.debug("grading: welded plan set: %s: %s", type(e).__name__, e)
-        if TRIM_SIDE_MOUTHS_ON:
-            try:            # (a side road starts at the main's painted edge, not in its middle)
-                trim_side_mouths(plans)
-            except Exception as e:
-                log.debug("grading: trimmed side mouths: %s: %s", type(e).__name__, e)
-        out = (plans, PlanPack(plans))
+        # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
+        # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
+        out = (plans, merge_plan_set(plans))
         with self.lock:
             if all(k in self.cells for k in keys):      # (not while a cell's fetch failed: it is asked again)
                 if len(memo) >= PLAN_SETS_MAX:
@@ -5936,38 +5954,6 @@ DUPE_XY_M = 0.05             # consecutive plan vertices this close are one vert
                             # and a pit beside it from 1.5 cm for 5.8 m)
 
 
-def _dedupe_plan(p):
-    """A plan without its zero-length segments (None: nothing left), its other arrays carried along (a run of
-    duplicates keeps the last height: a junction snap's). The input plan is never changed."""
-    xy = np.asarray(p.xy, np.float64)[:, :2]
-    n = len(xy)
-    if n < 2:
-        return None
-    if bool((np.hypot(*np.diff(xy, axis=0).T) > DUPE_XY_M).all()):
-        return p
-    keep = [0]
-    for i in range(1, n):
-        if float(np.hypot(*(xy[i] - xy[keep[-1]]))) > DUPE_XY_M:
-            keep.append(i)
-        else:
-            keep[-1] = i
-    keep = np.array(keep, np.int64)
-    if len(keep) < 2:
-        return None
-    seg_ok = np.hypot(*np.diff(xy, axis=0).T) > DUPE_XY_M
-    q = Plan(np.ascontiguousarray(xy[keep]), np.ascontiguousarray(np.asarray(p.z, np.float64)[keep]), p.half,
-             p.abut, None if p.cut is None else np.ascontiguousarray(np.asarray(p.cut, np.float64)[seg_ok]),
-             p.road_half)
-    q.rid, q.max_wall = getattr(p, "rid", -1), getattr(p, "max_wall", q.max_wall)
-    q.rank = getattr(p, "rank", GRADE_RANK_NONE)
-    bk = getattr(p, "bank", None)
-    q.bank = None if bk is None else np.ascontiguousarray(np.asarray(bk, np.float64)[keep])
-    q.steep = bool(getattr(p, "steep", False))
-    wd = getattr(p, "widen", None)
-    q.widen = None if wd is None else np.ascontiguousarray(np.asarray(wd, np.float64)[keep])
-    return q
-
-
 def rail_plan(fid, xy, z):
     """The Plan of a railway's bed line (railways.grade_plans' fid, xy (k, 2), z (k,)): the ground flat to the bed
     GRADE_HALF_M either side of the track, its carriageway (grade_points' rh: what never gives way) the ballast's top.
@@ -5980,207 +5966,119 @@ def rail_plan(fid, xy, z):
     return p
 
 
+def merge_plan_set(plans):
+    """A plan set's merge as _Planner._plan_set makes it, in one Rust call (planset::plan_merge, one reading of the
+    plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
+    (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
+    import fast
+    fast.require(212, "plan_merge")
+    f64 = np.float64
+    xy, off, z = _plan_lines(plans)
+    wds = [getattr(p, "widen", None) for p in plans]
+    rids = [getattr(p, "rid", -1) for p in plans]
+    got = fast._ef.plan_merge(
+        xy, off, z, *_per_plan([getattr(p, "bank", None) for p in plans]), *_per_plan(wds),
+        np.array([p.half for p in plans], f64), np.array([getattr(p, "road_half", p.half) for p in plans], f64),
+        np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64), _plan_ranks(plans, None),
+        np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
+        np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
+        np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+        *_per_plan([getattr(p, "cut", None) for p in plans], 6),
+        np.array([float(np.max(w)) if w is not None and len(w) else 0.0 for w in wds], f64), bool(WELD_ON),
+        bool(TRIM_SIDE_MOUTHS_ON), float(CHAIN_JOIN_M), float(WELD_MAX_STEP_M), float(WELD_TAPER_M),
+        float(JUNCTION_REACH_M), float(TRIM_RAMP_M), float(DUPE_XY_M), -math.cos(math.radians(CONT_TURN_DEG)),
+        float(CONT_JOIN_M), -math.cos(math.radians(LINK_TURN_DEG)), float(ABUT_NEAR_M), float(T_MAX),
+        int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M), float(roadsmod.MOUNTAIN_TURN_DEG))
+    if got["weld_err"] is not None:
+        log.debug("grading: welded plan set: %s", got["weld_err"])
+    wz = got["wz"]
+    for i in np.flatnonzero(got["welded"]).tolist():
+        plans[i] = _replan(plans[i], plans[i].xy, wz[off[i]:off[i + 1]].copy(), cut=True)
+    txy, tz, toff = got["txy"], got["tz"], got["toff"]
+    for r, (i, e) in enumerate(zip(got["trimmed"], got["ends"])):
+        p = plans[i]
+        abut = list(p.abut)
+        abut[e] = False
+        plans[i] = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+    pack = PlanPack.__new__(PlanPack)
+    pack.__dict__.update(got["pack"])
+    return pack
+
+
+def _per_plan(vs, width=None):
+    """(values, offsets (plans + 1,), has (plans,)): the arrays vs (None: none) one after another, each as long as it
+    is (rows of width values when width)."""
+    f64 = np.float64
+    has = np.array([v is not None for v in vs], bool)
+    arrs = [np.asarray(v, f64).reshape(-1) if width is None else np.asarray(v, f64).reshape(-1, width)
+            for v in vs if v is not None]
+    o = np.zeros(len(vs) + 1, np.int64)
+    if len(vs):
+        it = iter(arrs)
+        np.cumsum([len(next(it)) if h else 0 for h in has], out=o[1:])
+    empty = np.zeros(0) if width is None else np.zeros((0, width))
+    return np.ascontiguousarray(np.concatenate(arrs) if arrs else empty, f64), o, has
+
+
 class PlanPack:
     """Plans (a list, in grade_points' order) as grade_points takes them: every segment's arrays concatenated once, with
     each plan's box; a call keeps the segments of the plans whose boxes meet its points', in the same order (built per
-    call, the plans' Python loop cost a Canton tile set ~1 s, 2026-10-25)."""
+    call, the plans' Python loop cost a Canton tile set ~1 s, 2026-10-25). Built in Rust (native/earthfast planset.rs;
+    ~21 CPU-s of a cold teleport to Santa Fe NM in numpy, 2026-11-11):
+    - each plan without its zero-length segments (DUPE_XY_M: a run of duplicates keeps the last height, a junction
+      snap's); plans under 2 vertices left out;
+    - a road planned in pieces (an OSM way cut at a junction, or a road renamed at a point) is one road in the blend:
+      two of its pieces whose ends meet and which carry straight on through that point (outward directions within
+      CONT_TURN_DEG of opposite, the heights they meet at within CONT_JOIN_M) share one id, so an equal-ranked
+      continuation never turns the higher road's own hard hold off (a primary's short piece between two junctions let
+      the side roads pull its painted edge down 0.4-0.8 m). A true equal-ranked junction (a crossing, a T's stem, a
+      fork whose branches meet at another level) keeps its pieces apart;
+    - a pass road's legs between its hairpins' apexes (roads.hairpin_apex_rows) count as roads of their own (rid + leg
+      << LEG_RID_SHIFT): the one leg's ground gives way over the other's carriageway at another level as another
+      road's does, not the same road's own (a 30 cm step across a hairpin's narrow middle, the Stelvio, 2026-11-01);
+    - a plan's end where another plan's end lies and the road carries straight on (LINK_TURN_DEG) goes on (lk: bit 0
+      its plan goes on before the segment, bit 1 after it, grade_points' EXTRAP_M);
+    - per segment near a bridge abutment (ab, abd): the distance along its road back to a start abutment and on to an
+      end abutment within ABUT_NEAR_M, NaN if none, through the plans it goes on into too (the piece a map cell's edge
+      cut a few metres short of an abutment; Codex's review of PR #920, GitHub #909): the ground past the abutment
+      falls away at ABUT_UNDER_GRADE (grade_points);
+    - a plan widened in places (Plan.widen): each segment by the more of its ends'.
+    Its arrays: a, b (segments, 2), za, zb, ba, bb, h, rh, rid, rk, ab, abd (segments, 2), cut (segments, 6), st, lk;
+    box (plans, 4); of: each segment's plan; s0 (plans + 1,): each plan's first segment."""
 
     def __init__(self, plans):
-        rows = [(k, q) for k, p in enumerate(plans) if (q := _dedupe_plan(p)) is not None and len(q.xy) >= 2]
-        self.n = len(rows)
-        if not self.n:
-            return
+        import fast
+        fast.require(211, "plan_pack")
         f64 = np.float64
-        npts = np.array([len(p.xy) for _k, p in rows], np.int64)
-        nseg = npts - 1
-        xy = np.concatenate([np.asarray(p.xy, f64)[:, :2] for _k, p in rows])
-        z = np.concatenate([np.asarray(p.z, f64) for _k, p in rows])
-        last = np.cumsum(npts) - 1
-        ia = np.delete(np.arange(len(xy)), last)            # each segment's first point (not a plan's last point)
-        self.a, self.b = np.ascontiguousarray(xy[ia]), np.ascontiguousarray(xy[ia + 1])
-        self.za, self.zb = np.ascontiguousarray(z[ia]), np.ascontiguousarray(z[ia + 1])
-        bk = np.concatenate([np.asarray(p.bank, f64) if getattr(p, "bank", None) is not None else np.zeros(len(p.xy))
-                             for _k, p in rows])
-        self.ba, self.bb = np.ascontiguousarray(bk[ia]), np.ascontiguousarray(bk[ia + 1])
-        self.h = np.repeat(np.array([p.half for _k, p in rows], f64), nseg)
-        self.rh = np.repeat(np.array([getattr(p, "road_half", p.half) for _k, p in rows], f64), nseg)
-        # (a plan widened in places, Plan.widen: each segment by the more of its ends')
-        wd = np.concatenate([np.asarray(p.widen, f64) if getattr(p, "widen", None) is not None else np.zeros(len(p.xy))
-                             for _k, p in rows])
-        if wd.any():
-            ws = np.maximum(wd[ia], wd[ia + 1])
-            self.h = self.h + ws
-            self.rh = self.rh + ws
-        rids = [getattr(p, "rid", -1) for _k, p in rows]
-        rid = np.array([r if r is not None and r >= 0 else 2 ** 40 + k
-                        for (k, _p), r in zip(rows, rids)], np.int64)
-        # A road planned in pieces (an OSM way cut at a junction, or a road renamed at a point) is one road in the
-        # blend: two of its pieces whose ends meet and which carry straight on through that point (outward directions
-        # within LINK_TURN_DEG of opposite, the heights they meet at within CONT_JOIN_M) share one id here, so an
-        # equal-ranked continuation never turns the higher road's own hard hold off (a primary's short piece between
-        # two junctions let the side roads pull its painted edge down 0.4-0.8 m). A true equal-ranked junction (a
-        # crossing, a T's stem, a fork whose branches meet at another level) keeps its pieces apart.
-        at = {}
-        for n, (_k, p) in enumerate(rows):
-            if nseg[n] <= 0 or int(getattr(p, "rank", GRADE_RANK_NONE)) < 0:
-                continue
-            P = np.asarray(p.xy, f64)[:, :2]
-            for e, (q, nb) in enumerate(((P[0], P[1]), (P[-1], P[-2]))):
-                d = q - nb
-                ln = float(np.hypot(*d))
-                if ln > 1e-9:
-                    zq = float(p.z[0] if e == 0 else p.z[-1])
-                    at.setdefault((round(float(q[0]), 1), round(float(q[1]), 1)), []).append(
-                        (n, e, d / ln, zq, int(getattr(p, "rank", GRADE_RANK_NONE))))
-        parent = list(range(len(rows)))
-
-        def find(i):
-            while parent[i] != i:
-                parent[i] = parent[parent[i]]
-                i = parent[i]
-            return i
-
-        cos_min = -math.cos(math.radians(CONT_TURN_DEG))
-        for group in at.values():
-            for i, (n, _e, d, zq, rk) in enumerate(group):
-                for m, _e2, d2, z2, rk2 in group[i + 1:]:
-                    if rk != rk2 or float(d @ d2) > cos_min or abs(zq - z2) > CONT_JOIN_M:
-                        continue
-                    a, b = find(n), find(m)
-                    if a != b:
-                        parent[b] = a
-        roots = {}
-        for n in range(len(rows)):
-            roots.setdefault(find(n), []).append(n)
-        for r, members in roots.items():
-            if len(members) > 1:
-                rid[members] = 2 ** 41 + r
-        self.rid = np.repeat(rid, nseg)
-        # (each road's rank in the ground blend: a lower one gives way over a higher one's core, grade_rank)
-        self.rk = np.repeat(np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for _k, p in rows], np.int64), nseg)
-        s0 = np.r_[0, np.cumsum(nseg)]
-        # a pass road's legs between its hairpins' apexes (roads.hairpin_apex_rows) count as roads of their own: the
-        # one leg's ground (its wall's strip, its sides) gives way over the other's carriageway at another level as
-        # another road's does (grade_points), not the same road's own (a leg's strip behind its wall reached the leg
-        # above's lane across a hairpin's narrow middle: a 30 cm step in it, the Stelvio, 2026-11-01)
-        for n, (_k, p) in enumerate(rows):
-            if getattr(p, "steep", False) and nseg[n] >= 2:
-                apex = roadsmod.hairpin_apex_rows(p.xy)
-                if apex:
-                    leg = np.searchsorted(np.asarray(apex), np.arange(nseg[n]), side="right")
-                    self.rid[s0[n]:s0[n + 1]] += leg.astype(np.int64) << LEG_RID_SHIFT
-        # a plan's end where another plan's end lies and the road carries straight on through it (outward directions
-        # within LINK_TURN_DEG of opposite) goes on: one road planned per map cell, a road renamed at a point. Per
-        # (plan, end) the (plan, end)s it goes on into
-        at = {}
-        for n, (_k, p) in enumerate(rows):
-            if nseg[n] <= 0:
-                continue
-            P = np.asarray(p.xy, f64)[:, :2]
-            for e, (q, nb) in enumerate(((P[0], P[1]), (P[-1], P[-2]))):
-                d = q - nb
-                ln = float(np.hypot(*d))
-                if ln > 1e-9:
-                    at.setdefault((round(float(q[0]), 1), round(float(q[1]), 1)), []).append((n, e, d / ln))
-        cos_min = -math.cos(math.radians(LINK_TURN_DEG))
-        goes_on = {}
-        for group in at.values():
-            if len(group) < 2:
-                continue
-            for n, e, d in group:
-                into = [(m, e2) for m, e2, d2 in group if m != n and float(d @ d2) <= cos_min]
-                if into:
-                    goes_on[(n, e)] = into
-        flags = [getattr(p, "abut", (False, False)) for _k, p in rows]
-        lens = {}
-
-        def beyond(n, e):
-            # m along the road from plan n's end e, through the plans it goes on into, to an abutment within
-            # ABUT_NEAR_M, or NaN (the nearest, every way it goes on; a ring road's links come round to it)
-            import heapq
-            best, todo, done = math.inf, [(0.0, n, e)], set()
-            while todo:
-                acc, a, ea = heapq.heappop(todo)
-                if acc >= best:
-                    break
-                if (a, ea) in done:
-                    continue
-                done.add((a, ea))
-                for m, e2 in goes_on.get((a, ea), ()):
-                    if flags[m][e2]:
-                        best = min(best, acc)
-                        continue
-                    if m not in lens:
-                        lens[m] = float(np.hypot(*np.diff(np.asarray(rows[m][1].xy, f64)[:, :2], axis=0).T).sum())
-                    far = acc + lens[m]
-                    if far >= ABUT_NEAR_M:
-                        continue
-                    if flags[m][1 - e2]:
-                        best = min(best, far)
-                    else:
-                        heapq.heappush(todo, (far, m, 1 - e2))
-            return best if best < ABUT_NEAR_M else math.nan
-
-        ab = np.zeros(int(s0[-1]), bool)
-        # per segment near a bridge abutment: the distance along its road from its start back to a start abutment
-        # (column 0) and from its end on to an end abutment (column 1), NaN if none: the ground past the abutment,
-        # over the deck, falls away at ABUT_UNDER_GRADE (grade_points), whichever of its road's segments reaches it.
-        # The road's own abutment through the plans it goes on into too: the piece a map cell's edge cuts a few
-        # metres short of an abutment (trim_plan: no abutment end of its own) reached over the deck with its
-        # carriageway's round end, and a railway's bed under it gave way to it (Codex's review of PR #920, GitHub #909)
-        abd = np.full((int(s0[-1]), 2), np.nan)
-        cut = np.full((int(s0[-1]), 6), np.nan)
-        for n, (_k, p) in enumerate(rows):
-            off = [0.0 if flags[n][e] else beyond(n, e) if (n, e) in goes_on else math.nan for e in (0, 1)]
-            if (math.isfinite(off[0]) or math.isfinite(off[1])) and s0[n + 1] > s0[n]:
-                arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(p.xy[:, :2], axis=0).T))]
-                if math.isfinite(off[0]):
-                    to = arc[:-1] + off[0]
-                    near = to < ABUT_NEAR_M
-                    ab[s0[n]:s0[n + 1]] |= near
-                    abd[s0[n]:s0[n + 1], 0] = np.where(near, to, np.nan)
-                if math.isfinite(off[1]):
-                    to = arc[-1] - arc[1:] + off[1]
-                    near = to < ABUT_NEAR_M
-                    ab[s0[n]:s0[n + 1]] |= near
-                    abd[s0[n]:s0[n + 1], 1] = np.where(near, to, np.nan)
-            c = getattr(p, "cut", None)
-            if c is not None:
-                cut[s0[n]:s0[n + 1]] = c
-        self.ab = ab.astype(np.uint8)
-        self.abd = abd
-        self.cut = cut
-        self.st = np.repeat(np.array([bool(getattr(p, "steep", False)) for _k, p in rows], np.uint8), nseg)
-        # each segment's link: bit 0 its plan goes on before it, bit 1 after it (grade_points' EXTRAP_M)
-        first = np.zeros(int(nseg.sum()), bool)
-        last = np.zeros(int(nseg.sum()), bool)
-        ends = np.cumsum(nseg)
-        first[(ends - nseg)[nseg > 0]] = True
-        last[(ends - 1)[nseg > 0]] = True
-        for n, e in goes_on:
-            if e == 0:
-                first[ends[n] - nseg[n]] = False
-            else:
-                last[ends[n] - 1] = False
-        self.lk = ((~first).astype(np.uint8) | ((~last).astype(np.uint8) << 1)).astype(np.uint8)
-        self.box = np.array([p.bbox for _k, p in rows], f64).reshape(-1, 4)
-        self.of = np.repeat(np.arange(self.n), nseg)
+        xy, off, z = _plan_lines(plans)
+        rids = [getattr(p, "rid", -1) for p in plans]
+        got = fast._ef.plan_pack(
+            xy, off, z, *_per_plan([getattr(p, "bank", None) for p in plans]),
+            *_per_plan([getattr(p, "widen", None) for p in plans]), np.array([p.half for p in plans], f64),
+            np.array([getattr(p, "road_half", p.half) for p in plans], f64),
+            np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64),
+            np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for p in plans], np.int64),
+            np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
+            np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
+            np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+            *_per_plan([getattr(p, "cut", None) for p in plans], 6), float(DUPE_XY_M),
+            -math.cos(math.radians(CONT_TURN_DEG)), float(CONT_JOIN_M), -math.cos(math.radians(LINK_TURN_DEG)),
+            float(ABUT_NEAR_M), float(T_MAX), int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M),
+            float(roadsmod.MOUNTAIN_TURN_DEG))
+        self.__dict__.update(got)
 
     def near(self, x0, y0, x1, y1):
         """The segment arrays of the plans whose boxes meet (x0, y0, x1, y1), or None."""
         if not self.n:
             return None
-        bx = self.box
-        keep = ~((bx[:, 2] < x0) | (bx[:, 0] > x1) | (bx[:, 3] < y0) | (bx[:, 1] > y1))
-        if not keep.any():
-            return None
-        if keep.all():
+        import fast
+        got = fast._ef.plan_pack_near(self.box, self.s0, float(x0), float(y0), float(x1), float(y1), self.a, self.b,
+                                      self.za, self.zb, self.h, self.rh, self.rid, self.rk, self.ab, self.cut,
+                                      self.ba, self.bb, self.st, self.lk, self.abd)
+        if got is True:
             return self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid, self.rk, self.ab, self.cut, self.ba, \
                 self.bb, self.st, self.lk, self.abd
-        sk = keep[self.of]
-        return tuple(np.ascontiguousarray(v[sk]) for v in (self.a, self.b, self.za, self.zb, self.h, self.rh, self.rid,
-                                                           self.rk, self.ab, self.cut, self.ba, self.bb, self.st,
-                                                           self.lk, self.abd))
+        return got
 
 
 def grade_points(px, py, base, plans, lift=0.0):
@@ -6796,80 +6694,24 @@ def weld_continuations(plans, specs=None):
     """One road planned in pieces (an OSM way cut at its side roads) meets itself at one height at each shared end:
     the higher end's, eased over WELD_TAPER_M along the lower piece. The pieces of a primary 10-26 cm apart made a
     dip across its whole width at a junction (the user, 2026-11-10). Never lowers a piece; a step over
-    WELD_MAX_STEP_M, a true junction of different classes, or a bridge end is left alone. plans in place."""
+    WELD_MAX_STEP_M, a true junction of different classes, or a bridge end is left alone. plans ([(fid, Plan)] or a
+    plain [Plan]) in place; specs: their Specs (their grade_rank), else each plan's own rank. The ends within
+    CHAIN_JOIN_M found through a grid of CHAIN_JOIN_M cells (every pair of ends compared was 85 s of a 126 s cold plan
+    of 16 Fells Point road tiles), in Rust (native/earthfast planset.rs: in numpy it was ~12 CPU-s of a cold teleport
+    to Santa Fe NM, 2026-11-11)."""
     if not plans:
         return
+    import fast
+    fast.require(211, "plan_weld")
     plain = not isinstance(plans[0], tuple)
-    orig = plans
-    if plain:
-        plans = [(str(i), p) for i, p in enumerate(plans)]
-    n = len(plans)
-    rank = np.array([grade_rank(sp) if sp is not None else -10 ** 9 for sp in specs], np.int64) if specs is not None \
-        else np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for _f, p in plans], np.int64)
-    xys = [np.asarray(p.xy, np.float64)[:, :2] for _f, p in plans]
-    arcs = [np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))] if len(xy) >= 2 else np.zeros(1)
-            for xy in xys]
-    ends = []
-    for i, (_fid, p) in enumerate(plans):
-        if len(xys[i]) < 2:
-            continue
-        for e in (0, 1):
-            if p.abut[e]:
-                continue
-            q = xys[i][0 if e == 0 else -1]
-            ends.append((i, e, q, float(p.z[0 if e == 0 else -1])))
-    # (the ends within CHAIN_JOIN_M of each other found through a grid of CHAIN_JOIN_M cells, its 3 x 3 cells round
-    # an end: every pair of ends compared was 85 s of a 126 s cold plan of 16 Fells Point road tiles)
-    grid = {}
-    for a, (_i, _e, q, _z) in enumerate(ends):
-        grid.setdefault((math.floor(q[0] / CHAIN_JOIN_M), math.floor(q[1] / CHAIN_JOIN_M)), []).append(a)
-    target = {}
-    for a, (i, e, q, z) in enumerate(ends):
-        if rank[i] < 0:
-            continue
-        hi = z
-        gx, gy = math.floor(q[0] / CHAIN_JOIN_M), math.floor(q[1] / CHAIN_JOIN_M)
-        for cx in (gx - 1, gx, gx + 1):
-            for cy in (gy - 1, gy, gy + 1):
-                for b in grid.get((cx, cy), ()):
-                    j, _f, q2, z2 = ends[b]
-                    if i == j or rank[j] != rank[i]:
-                        continue
-                    if np.hypot(q[0] - q2[0], q[1] - q2[1]) > CHAIN_JOIN_M or abs(z2 - z) > WELD_MAX_STEP_M:
-                        continue
-                    hi = max(hi, z2)
-        if hi > z + 1e-6:
-            target[(i, e)] = hi
-    if not target:
-        return
-    add = {}                # plan -> its vertices' added heights (summed in the targets' order, as one by one)
-    for (i, e), hi in target.items():
-        p = plans[i][1]
-        z_end = float(p.z[0 if e == 0 else -1])
-        d = arcs[i] if e == 0 else arcs[i][-1] - arcs[i]
-        u = np.clip(d / WELD_TAPER_M, 0.0, 1.0)
-        w = 1.0 - u * u * (3.0 - 2.0 * u)
-        delta = (hi - z_end) * w
-        big = np.abs(delta) > 1e-6
-        if not big.any():
-            continue
-        acc = add.get(i)
-        if acc is None:
-            acc = add[i] = [np.zeros(len(delta)), np.zeros(len(delta), bool)]
-        acc[0] += np.where(big, delta, 0.0)
-        acc[1] |= big
-    for i, (acc, hit) in add.items():
-        fid, p = plans[i]
-        z = np.array(p.z, np.float64)
-        z[hit] += acc[hit]
-        q = Plan(p.xy, z, p.half, p.abut, p.cut, p.road_half)
-        q.rid, q.max_wall, q.bank = p.rid, p.max_wall, getattr(p, "bank", None)
-        q.rank = getattr(p, "rank", GRADE_RANK_NONE)
-        q.steep = bool(getattr(p, "steep", False))
-        set_widen(q, getattr(p, "widen", None))
-        plans[i] = (fid, q)
-    if plain:
-        orig[:] = [p for _f, p in plans]
+    ps = list(plans) if plain else [p for _f, p in plans]
+    xy, off, z = _plan_lines(ps)
+    abut = np.array([p.abut for p in ps], bool).reshape(-1, 2)
+    zn, changed = fast._ef.plan_weld(xy, off, z, abut, _plan_ranks(ps, specs), float(CHAIN_JOIN_M),
+                                     float(WELD_MAX_STEP_M), float(WELD_TAPER_M))
+    for i in np.flatnonzero(changed).tolist():
+        q = _replan(ps[i], ps[i].xy, zn[off[i]:off[i + 1]].copy(), cut=True)
+        plans[i] = q if plain else (plans[i][0], q)
 
 
 TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
@@ -6880,101 +6722,32 @@ def trim_side_mouths(plans, specs=None):
     """A side road's centreline ends at the *painted edge* of the higher road it joins, not at its centreline:
     the stretch inside that carriageway is the main road's surface. The new end takes the higher road's height
     there, the side road's own profile carries on from it (so a steep approach stays steep, without a flat lip
-    under the hold). plans: [(fid, Plan)] or a plain [Plan], in place."""
+    under the hold): a Hermite from the edge to its own profile over TRIM_RAMP_M. plans: [(fid, Plan)] or a plain
+    [Plan], in place, in order (a later plan sees an earlier one trimmed); one end a plan. In Rust (native/earthfast
+    planset.rs: the higher roads' boxes against every end and the nearest points on them were ~57 CPU-s of a cold
+    teleport to Santa Fe NM in numpy, 2026-11-11). A trimmed plan keeps its untrimmed plan's bank / widen arrays."""
     if not plans:
         return
+    import fast
+    fast.require(211, "plan_trim_mouths")
+    f64 = np.float64
     plain = not isinstance(plans[0], tuple)
-    orig = plans
-    if plain:
-        plans = [(str(i), p) for i, p in enumerate(plans)]
-    rank = np.array([grade_rank(sp) if sp is not None else -10 ** 9 for sp in specs], np.int64) if specs is not None \
-        else np.array([int(getattr(p, "rank", GRADE_RANK_NONE)) for _f, p in plans], np.int64)
-    # (the higher roads' boxes tested against an end all at once, kept current as plans are trimmed: every plan's box
-    # tested in Python for every end was 22 s of a 126 s cold plan of 16 Fells Point road tiles)
-    boxes = np.array([pk.bbox for _fk, pk in plans], np.float64).reshape(-1, 4)
-    longs = np.array([len(pk.xy) >= 2 for _fk, pk in plans], bool)
-    for i, (fid, p) in enumerate(plans):
-        if rank[i] < 0 or len(p.xy) < 2:
-            continue
-        for e in (0, 1):
-            if p.abut[e]:
-                continue
-            q = np.asarray(p.xy[0 if e == 0 else -1, :2], np.float64)
-            best = None
-            cand = longs & (rank > rank[i]) & (boxes[:, 0] <= q[0]) & (q[0] <= boxes[:, 2]) \
-                & (boxes[:, 1] <= q[1]) & (q[1] <= boxes[:, 3])
-            cand[i] = False
-            for k in np.flatnonzero(cand).tolist():
-                pk = plans[k][1]
-                d, zq, _from_end = _nearest_on(pk, q[0], q[1])
-                if d <= pk.half + JUNCTION_REACH_M and (best is None or d < best[0]):
-                    best = (d, zq, k)
-            if best is None:
-                continue
-            d0, zq, k = best
-            pk = plans[k][1]
-            if d0 > pk.road_half + 0.25 or abs(float(p.z[0 if e == 0 else -1]) - zq) > 0.05:
-                continue
-            xy = np.asarray(p.xy[:, :2], np.float64)
-            zz = np.asarray(p.z, np.float64)
-            orient = slice(None) if e == 0 else slice(None, None, -1)
-            qq = xy[orient]
-            zq_side = zz[orient]
-            rh = float(pk.road_half)
-            dist, j = [], -1               # (up to the first vertex out of the carriageway: the rest unused)
-            for a in qq:
-                dist.append(_nearest_on(pk, a[0], a[1])[0])
-                if dist[-1] >= rh:
-                    j = len(dist) - 1
-                    break
-            if j <= 0:
-                continue                    # already outside / no crossing
-            a, b = qq[j - 1], qq[j]
-            da, db = dist[j - 1], dist[j]
-            f = 0.0 if db == da else (rh - da) / (db - da)
-            c = a + (b - a) * f
-            z_edge = _nearest_on(pk, c[0], c[1])[1]
-            keep = qq[j:]
-            zkeep = zq_side[j:]
-            if np.hypot(*(keep[0] - c)) < 0.05:
-                keep, zkeep = keep[1:], zkeep[1:]
-            if len(keep) < 1:
-                continue
-            nxy = np.vstack([c[None, :], keep])
-            nz = np.r_[z_edge, zkeep]
-            # (Hermite from the edge to its own profile over TRIM_RAMP_M: its own grade at the far end, so no
-            # kink where the ramp meets the profile; the asphalt only, not the ground beside it)
-            sr = np.r_[0.0, np.cumsum(np.hypot(*np.diff(nxy, axis=0).T))]
-            ramp = min(TRIM_RAMP_M, float(sr[-1]))
-            if ramp > 1.0:
-                z1 = float(np.interp(ramp, sr, nz))
-                z_a = float(np.interp(max(0.0, ramp - 0.5), sr, nz))
-                slope = (z1 - z_a) / 0.5
-                t = np.clip(sr / ramp, 0.0, 1.0)
-                h00 = 2.0 * t ** 3 - 3.0 * t ** 2 + 1.0
-                h10 = t ** 3 - 2.0 * t ** 2 + t
-                h01 = -2.0 * t ** 3 + 3.0 * t ** 2
-                h11 = t ** 3 - t ** 2
-                nz = nz.copy()
-                inside = sr <= ramp
-                nz[inside] = (h00[inside] * z_edge + h10[inside] * 0.0 * ramp
-                              + h01[inside] * z1 + h11[inside] * slope * ramp)
-            if e == 1:
-                nxy = nxy[::-1].copy()
-                nz = nz[::-1].copy()
-            abut = list(p.abut)
-            abut[e] = False
-            np_ = Plan(np.ascontiguousarray(nxy), np.ascontiguousarray(nz), p.half, tuple(abut), None, p.road_half)
-            np_.rid, np_.max_wall, np_.bank = p.rid, p.max_wall, getattr(p, "bank", None)
-            np_.rank = getattr(p, "rank", GRADE_RANK_NONE)
-            np_.steep = bool(getattr(p, "steep", False))
-            set_widen(np_, getattr(p, "widen", None))
-            plans[i] = (fid, np_)
-            boxes[i] = np_.bbox
-            longs[i] = len(np_.xy) >= 2
-            break
-    if plain:
-        orig[:] = [p for _f, p in plans]
+    ps = list(plans) if plain else [p for _f, p in plans]
+    xy, off, z = _plan_lines(ps)
+    wds = [getattr(p, "widen", None) for p in ps]
+    widened = np.array([w is not None and len(w) > 0 for w in wds], bool)
+    wmax = np.array([float(np.max(w)) if on else 0.0 for w, on in zip(wds, widened)], f64)
+    idx, ends, nxy, nz, noff = fast._ef.plan_trim_mouths(
+        xy, off, z, np.array([p.half for p in ps], f64), np.array([p.road_half for p in ps], f64),
+        np.array([p.abut for p in ps], bool).reshape(-1, 2), _plan_ranks(ps, specs),
+        np.array([p.bbox for p in ps], f64).reshape(-1, 4), widened, wmax, float(JUNCTION_REACH_M),
+        float(TRIM_RAMP_M), float(T_MAX))
+    for r, (i, e) in enumerate(zip(idx, ends)):
+        p = ps[i]
+        abut = list(p.abut)
+        abut[e] = False
+        q = _replan(p, nxy[noff[r]:noff[r + 1]].copy(), nz[noff[r]:noff[r + 1]].copy(), abut=tuple(abut))
+        plans[i] = q if plain else (plans[i][0], q)
 
 
 def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):
