@@ -385,10 +385,11 @@ UNDER_POLDER_M = -1.0       # m: a road this far under the sea is behind dikes (
 # Avenue 3 m into a walled trench (the user's report, 2026-10-29). (Not on the coarse models: no cutting there, BR-381.)
 UNDER_LIDAR_ON = os.environ.get("BNE_UNDER_LIDAR", "on") != "off"
 # A deck a source measured (roadz) is as high as measured over the road under it, not its ends' straight line, and the
-# road under it needs only real headroom under it (UNDER_MEASURED_HEADROOM_M, not MIN_BRIDGE_HEADROOM_M's guess for an
-# unmeasured deck): I-75 dipped 1.5 m under a measured overpass at Findlay, Ohio, flat in the photos, its deck 6.7 m
-# over the road (about 5 m under its girders, the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the
-# ends' line or over it (lower is the ground under a removed deck, not a deck).
+# road under it needs only real headroom under it (UNDER_MEASURED_HEADROOM_M; MIN_BRIDGE_HEADROOM_M gives every road that
+# now, the 6 m guess having raised approaches and dug roads under overpasses the data has lower): I-75 dipped 1.5 m under
+# a measured overpass at Findlay, Ohio, flat in the photos, its deck 6.7 m over the road (about 5 m under its girders,
+# the US interstate's 16 ft). Measured within UNDER_MEASURED_TOL_M of the ends' line or over it (lower is the ground
+# under a removed deck, not a deck).
 UNDER_MEASURED_ON = os.environ.get("BNE_UNDER_MEASURED", "on") != "off"
 UNDER_MEASURED_HEADROOM_M = 4.5     # m: Europe's least on main roads; the game's tallest trucks are about 4 m
 UNDER_MEASURED_TOL_M = 0.5
@@ -3404,8 +3405,8 @@ class _Planner:
                 # (a rail deck's height is its bed: its own depth under the ballast's top, railways.DECK_D)
                 depth = railwaysmod.DECK_D - railwaysmod.BALLAST_H if rail else \
                     roadsmod.deck_depth(roadsmod.geom_span([b]))
-                clear = roadsmod.deck_road_clear(depth) + ROAD_LIFT
-                if measured:                    # (its real headroom, not the one a guessed deck is given)
+                clear = roadsmod.deck_road_clear(depth, roadsmod.RAIL_BRIDGE_HEADROOM_M if rail else None) + ROAD_LIFT
+                if measured:                    # (its real headroom: MIN_BRIDGE_HEADROOM_M is that now)
                     clear -= roadsmod.MIN_BRIDGE_HEADROOM_M - UNDER_MEASURED_HEADROOM_M
                 cands.append((i, float(s[j] + t[j] * (s[j + 1] - s[j])), deck - clear))
                 decks.append((deck, fixed))
@@ -3805,12 +3806,14 @@ class _Planner:
             parts = ch[0]
             for i, p_ in enumerate(parts):
                 clear = CW_HEADROOM_M + roadsmod.deck_depth(roadsmod.geom_span([p_[1]])) + ROAD_LIFT
+                clear_rail = roadsmod.RAIL_BRIDGE_HEADROOM_M + roadsmod.BRIDGE_HEADROOM_MARGIN_M \
+                    + roadsmod.deck_depth(roadsmod.geom_span([p_[1]])) + ROAD_LIFT
                 rails_n = [rails[m] for m in near_of(rl_lo, rl_hi, p_[1])] if p_[2] and rails else []
                 streets_n = [streets[m] for m in near_of(st_lo, st_hi, p_[1])] if p_[2] and streets else []
                 if p_[2] and rails_n:
                     for c in roadsmod._crossings([p_[1]], rails_n):
                         j = nearest(n, i, np.asarray(c[2], f64))
-                        data[n]["lo"][j] = max(data[n]["lo"][j], zraw(c[2]) + clear)
+                        data[n]["lo"][j] = max(data[n]["lo"][j], zraw(c[2]) + clear_rail)
                 if p_[2] and streets_n:
                     for c in roadsmod._crossings([p_[1]], [st[0] for st in streets_n]):
                         L = float(np.hypot(*np.diff(p_[1], axis=0).T).sum())
@@ -6365,8 +6368,11 @@ def bridge_lifts(line, all_bridges, ground_lines, z_at, chain=None, rail_lines=(
         far = (d >= APPROACH_MIN_CROSS_M) | rail     # (a road meeting the abutment itself: a junction at grade)
         if not far.any():
             continue
-        d, zu_e = d[far], zu[far]
-        need = zu_e + roadsmod.deck_road_clear(roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ()))))             + APPROACH_MARGIN_M \
+        d, zu_e, rail_e = d[far], zu[far], rail[far]
+        depth_c = roadsmod.deck_depth(roadsmod.geom_span([line] + list(chain or ())))
+        clear = np.where(rail_e, roadsmod.deck_road_clear(depth_c, roadsmod.RAIL_BRIDGE_HEADROOM_M),
+                         roadsmod.deck_road_clear(depth_c))
+        need = zu_e + clear + APPROACH_MARGIN_M \
             - roadsmod.DECK_GRADE * np.maximum(d - APPROACH_FLAT_M, 0.0)
         lift = float(need.max() - z_at(end[None])[0])
         if lift >= APPROACH_MIN_LIFT:

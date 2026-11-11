@@ -1082,16 +1082,24 @@ class WallHeightTest(unittest.TestCase):
 
 
 class UnderpassTest(unittest.TestCase):
+    @staticmethod
+    def _under_clear(line):
+        """m a dip under a deck line (k, 2) ENU is measured from: the deck's depth from its span, the real road
+        headroom (roads.MIN_BRIDGE_HEADROOM_M) and ROAD_LIFT, as grading._lower_underpasses has it."""
+        return float(roads.deck_road_clear(roads.deck_depth(roads.geom_span([np.asarray(line, np.float64)])))
+                     + grading.ROAD_LIFT)
+
     def test_road_dips_under_a_motorway_overpass(self):
         """A local road crossing under a short motorway bridge whose terrain was interpolated at deck height (lidar
-        with the bridge removed) dips to the deck minus UNDER_CLEAR_M; a road crossing nothing is left alone."""
+        with the bridge removed) dips to the deck minus its clearance; a road crossing nothing is left alone."""
         f = features([[(-200, 0), (200, 0)], [(0, -20), (0, 20)], [(-200, 300), (200, 300)]],
                      ["residential", "motorway", "residential"], flags=[(1, "is_bridge")])
         g = grading.Grader(FRAME, FakeMD(f), lambda la, lo: np.full(np.shape(la), 10.0))
         la, lo, _ = FRAME.enu_to_geodetic(np.array([0.0, 195.0, 0.0]), np.array([0.0, 0.0, 300.0]), 0.0)
         out = g.apply(la, lo, np.full(3, 10.0))
-        self.assertAlmostEqual(float(out[0]), 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M),
-                               delta=0.3, msg="under the deck, within the maximum excavation depth")
+        clear = self._under_clear(np.array([[0.0, -20.0], [0.0, 20.0]]))
+        self.assertAlmostEqual(float(out[0]), 10.0 - min(clear, grading.UNDER_MAX_DROP_M),
+                               delta=0.05, msg="under the deck, within the maximum excavation depth")
         self.assertAlmostEqual(float(out[1]), 10.0, delta=0.1, msg="back up past the ramp")
         # the ramp: no steeper than UNDER_GRADE, and no kinks (the grade changes smoothly)
         xs = np.arange(0.0, 200.0, 2.0)
@@ -1112,7 +1120,7 @@ class UnderpassTest(unittest.TestCase):
     def test_an_overpass_mapped_in_parts_is_one_span(self):
         """An overpass mapped as two ways end to end, or ending on the carriageways' fork (3 m stubs: the M1 near
         Dundalk, GitHub #960): the road under dips as under one part; off, it kept its ground (the bug)."""
-        deep = 10.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
+        deep = 10.0 - min(self._under_clear(np.array([[0.0, -20.0], [0.0, 20.0]])), grading.UNDER_MAX_DROP_M)
         halves = [[(5, -20), (5, 3)], [(5, 3), (5, 20)]]
         fork = [[(5, -20), (5, 20)], [(5, 20), (3, 23)], [(5, 20), (7, 23)]]
         for name, lines in (("two halves", halves), ("a fork at its end", fork)):
@@ -1169,13 +1177,14 @@ class UnderpassTest(unittest.TestCase):
         UNDER_SEA_M over the sea's surface, whose water tiles flood any ground under it; higher up it is as deep as
         before, and ground already under the sea (a polder) is dug as before."""
         floor = grading.seatiles.SEA_E + grading.UNDER_SEA_M
-        self.assertGreater(min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M), 3.0 - floor, "(the case digs)")
+        clear = self._under_clear(np.array([[0.0, -20.0], [0.0, 20.0]]))
+        self.assertGreater(min(clear, grading.UNDER_MAX_DROP_M), 3.0 - floor, "(the case digs)")
         self.assertAlmostEqual(self._dip_at(3.0), floor, delta=0.1, msg="by the sea: dug to the floor, not under it")
         self.assertLess(self._dip_at(3.0), 3.0 - 1.0, "still dug where there is room")
-        deep = 30.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
-        self.assertAlmostEqual(self._dip_at(30.0), deep, delta=0.3, msg="high ground: as deep as before")
-        polder = -4.0 - min(grading.UNDER_CLEAR_M, grading.UNDER_MAX_DROP_M)
-        self.assertAlmostEqual(self._dip_at(-4.0), polder, delta=0.3, msg="a polder: as before")
+        deep = 30.0 - min(clear, grading.UNDER_MAX_DROP_M)
+        self.assertAlmostEqual(self._dip_at(30.0), deep, delta=0.05, msg="high ground: as deep as before")
+        polder = -4.0 - min(clear, grading.UNDER_MAX_DROP_M)
+        self.assertAlmostEqual(self._dip_at(-4.0), polder, delta=0.05, msg="a polder: as before")
         with unittest.mock.patch.object(grading, "UNDER_SEA_ON", False):
             self.assertLess(self._dip_at(3.0), grading.seatiles.SEA_E, "(off: under the sea, the reported bug)")
 

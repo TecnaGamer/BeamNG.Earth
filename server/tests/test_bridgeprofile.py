@@ -42,7 +42,7 @@ def flat(h=10.0):
 class CurveProfile(unittest.TestCase):
 
     def test_overpass_holds_clearance_and_is_smooth(self):
-        # (320 m: upstream's road clearance, 6.15 m of headroom + the slab and girders, needs ~140 m at the 6 % cap)
+        # (320 m: upstream's road clearance, 4.65 m of headroom + the slab and girders, needs ~140 m at the 6 % cap)
         ln = line(0, 320)
         road_z = 10.0
         zs = roads.deck_curve([ln], flat(10.0), crossings=[(0, 160.0, road_z)])

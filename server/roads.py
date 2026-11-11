@@ -6470,9 +6470,13 @@ DECK = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}      # bridge decks (roa
 DECK_STEP = 4.0         # m between deck profile points
 DECK_CLEAR = 0.05       # m a deck stays above the ground under it (no z-fighting where it rests on it)
 # Usable space below the lowest structural girder, not merely to the road surface.
-# Six metres accommodates tall road vehicles such as semi-trucks; unlimited-height
-# modded vehicles and raised equipment cannot have a finite universal guarantee.
-MIN_BRIDGE_HEADROOM_M = 6.0
+# 4.5 m is the real minimum on main roads in Europe, and the game's tallest trucks are about 4 m; the 6 m this stood at
+# was a guess for unlimited-height vehicles, and every overpass lower than it had its approach fill raised and the road
+# under it dug to make the guess true (an 85 m farm bridge 6.0 m over a motorway: its approach rose 1.1 m and the
+# motorway dropped 0.5 m under it, 2026-11-11). A deck the elevation or a survey measured keeps its real headroom, as
+# grading.UNDER_MEASURED_* has it. Unlimited-height modded vehicles still cannot have a finite guarantee.
+MIN_BRIDGE_HEADROOM_M = 4.5
+RAIL_BRIDGE_HEADROOM_M = 6.0      # m: a deck over a railway clears the trains and their catenary, not a road's trucks
 BRIDGE_HEADROOM_MARGIN_M = 0.15   # mesh simplification/float and vehicle clearance tolerance
 DECK_ROAD_CLEAR = MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + roadmesh.DECK_DEPTH + roadmesh.GIRDER_D
 DECK_FULL_DEPTH = roadmesh.DECK_DEPTH + roadmesh.GIRDER_D    # m of slab and girders under a long span's road
@@ -6493,9 +6497,11 @@ def deck_split(depth):
     return slab, float(depth) - slab
 
 
-def deck_road_clear(depth=None):
-    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. Pure."""
-    return MIN_BRIDGE_HEADROOM_M + BRIDGE_HEADROOM_MARGIN_M + (DECK_FULL_DEPTH if depth is None else float(depth))
+def deck_road_clear(depth=None, headroom=None):
+    """m a deck's road stands over a road under it: the headroom, its margin and the deck's depth. headroom: a
+    railway's RAIL_BRIDGE_HEADROOM_M where the crossing under is a track, else MIN_BRIDGE_HEADROOM_M. Pure."""
+    return (MIN_BRIDGE_HEADROOM_M if headroom is None else float(headroom)) + BRIDGE_HEADROOM_MARGIN_M \
+        + (DECK_FULL_DEPTH if depth is None else float(depth))
 
 
 def geom_span(lines):
@@ -7015,7 +7021,7 @@ class BridgeProfiles:
         water = self._water(lines, nav, depth, channel)
         if not water and nav > 0 and bridge_profile_mode() == "curve":
             water = self._gap(lines, nav, depth)
-        rails = [(c[0], c[1], z, deck_road_clear(depth)) for c, z in zip(rcr, rail_z)]
+        rails = [(c[0], c[1], z, deck_road_clear(depth, RAIL_BRIDGE_HEADROOM_M)) for c, z in zip(rcr, rail_z)]
         levels = [pool[k][3] for k in comp]
         pins = _ground_pins(lines, gl)          # (once: pure in lines and gl, which stay)
 
