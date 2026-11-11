@@ -395,8 +395,17 @@ class WinProcess:
         return _S()
 
 
+def pick_main(procs):
+    """The main game among [(pid, parent pid)] of BeamNG.drive.x64.exe processes: its CEF helpers (GPU, renderers,
+    network: the same executable, seen 2026-11-11 on Windows) are its children; the one whose parent is not another
+    of them. None if none or more than one."""
+    pids = {pid for pid, _ in procs}
+    roots = [pid for pid, parent in procs if parent not in pids]
+    return roots[0] if len(roots) == 1 else None
+
+
 def game_pid():
-    """The pid of the running BeamNG.drive.x64.exe (Windows / Wine), or None."""
+    """The pid of the running main BeamNG.drive.x64.exe (Windows / Wine; pick_main), or None."""
     import ctypes
     from ctypes import wintypes as w
 
@@ -407,20 +416,23 @@ def game_pid():
                     ("szExeFile", ctypes.c_char * 260)]
     k = ctypes.WinDLL("kernel32", use_last_error=True)
     k.CreateToolhelp32Snapshot.restype = w.HANDLE
+    k.CreateToolhelp32Snapshot.argtypes = [w.DWORD, w.DWORD]
+    k.CloseHandle.argtypes = [w.HANDLE]
     snap = k.CreateToolhelp32Snapshot(0x2, 0)
     if not snap or snap == w.HANDLE(-1).value:
         return None
+    procs = []
     try:
         pe = PE32()
         pe.dwSize = ctypes.sizeof(PE32)
         ok = k.Process32First(snap, ctypes.byref(pe))
         while ok:
             if pe.szExeFile.decode("mbcs", "replace").lower() == GAME_EXE.lower():
-                return pe.th32ProcessID
+                procs.append((pe.th32ProcessID, pe.th32ParentProcessID))
             ok = k.Process32Next(snap, ctypes.byref(pe))
     finally:
         k.CloseHandle(snap)
-    return None
+    return pick_main(procs)
 
 
 class DtSmoothWin:

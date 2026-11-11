@@ -118,6 +118,16 @@ class Block(unittest.TestCase):
         self.assertEqual(j + 6 + struct.unpack_from("<i", tr, j + 2)[0], ep.BLOCK_ORIG)
 
 
+class MainProcess(unittest.TestCase):
+    def test_cef_helpers_are_not_the_game(self):
+        # (2026-11-11 on Windows: the main game 5812 and five CEF helpers of the same executable, its children)
+        procs = [(13280, 5812), (5812, 5032), (14732, 5812), (1692, 5812), (9508, 5812), (12896, 5812)]
+        self.assertEqual(ep.pick_main(procs), 5812)
+        self.assertEqual(ep.pick_main([(5812, 5032)]), 5812)
+        self.assertIsNone(ep.pick_main([]))
+        self.assertIsNone(ep.pick_main([(1, 100), (2, 200)]), "two games: neither")
+
+
 class Switches(unittest.TestCase):
     def test_env(self):
         env = dict(os.environ)
