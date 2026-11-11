@@ -3339,7 +3339,7 @@ end
 function M.setRoadsEnabled(on)
   if roads.setEnabled(on) then net.send({ type = 'roads_reset' }) end
 end
--- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, treeScale, buildingScale,
+-- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, lodPx, treeScale, buildingScale,
 -- photoPx, viewM }), after every hello and when one changes (sent only when it differs from the last one sent: applyAll
 -- runs every knob at a level's start). Whether it went out.
 M.graphicsSent = nil          -- (a field: core.lua is near Lua's 200-local limit)
@@ -3347,11 +3347,11 @@ function M.sendGraphics()
   local settings = rawget(_G, 'beamngEarth_settings')
   local g = settings and settings.serverGraphics and settings.serverGraphics()
   if type(g) ~= 'table' or not net.isConnected() or not st.sessionId then return false end
-  local sig = string.format('%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
-    tostring(g.photoPx), tostring(g.viewM))
+  local sig = string.format('%s/%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
+    tostring(g.photoPx), tostring(g.viewM), tostring(g.lodPx))
   if sig == M.graphicsSent then return false end
   net.send({ type = 'graphics', lodScale = g.lodScale, treeScale = g.treeScale, buildingScale = g.buildingScale,
-    photoPx = g.photoPx, viewM = g.viewM })
+    photoPx = g.photoPx, viewM = g.viewM, lodPx = g.lodPx })
   M.graphicsSent = sig
   return true
 end

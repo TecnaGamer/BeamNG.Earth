@@ -360,6 +360,14 @@ def base_ao_vfs(px):
     return BASE_AO_VFS if px == BASE_PX else f"{BASE_AO_VFS[:-4]}_{px}.png"
 BASE_AO = 251                   # its flat value (tools/make_level_assets.py)
 GRAPHICS_SCALE = (0.5, 3.0)     # the 'graphics' message's scales are clamped to this (Connection.set_graphics)
+# Screen-space LOD (the mod's lodPx setting, the 'graphics' message; Connection.view): tau is clamped to LOD_PX_MAX; the
+# pixels per radian are the most of the last LOD_PPR_WINDOW_S seconds (a zoom out does not merge the ground at once)
+# and at most LOD_PPR_ZOOM times those of a LOD_BASE_FOV_DEG camera (a zoomed-in camera does not pull in the world)
+LOD_PX_MAX = 8.0
+LOD_PPR_WINDOW_S = 5.0
+LOD_BASE_FOV_DEG = 60.0
+LOD_PPR_ZOOM = 2.0
+LOD_ERRS_MAX = 400000           # known tile errors kept (Server.lod_errs / glod_errs, oldest dropped first)
 VIEW_CAP_MIN_M = 10000.0        # ... and its fixed view distance (viewM, the far field's radius cap) to at least this
 DETAIL_ROAD_LIFT = 0.025        # detail mode: road surfaces over the drawn block, within roadmesh.FOLLOW_TOL of it (0.05
                                 # before, over a coarser surface it still cut through on hills: the tyres sank into it,
@@ -703,6 +711,7 @@ class TileInfo:
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
+    err_n: float | None = None  # its error along the normal (farfield.Built.lod_err: the screen-space LOD's)
 
 
 def predict_centre(px, py, vx, vy, lead, reach=FOLLOW_REACH, grid=heightmap.GRID_BY_M[2048.0], min_lead=0.0,
@@ -954,7 +963,13 @@ class Server:
         self.reslot_serial = itertools.count(1)
         self.slot_serial = itertools.count(1)      # far_tile slotSerial (matslots.py)
         self.base_px = BASE_PX              # detail mode: the ground photo's size (px), the mod's graphics.photoPx
-        self.lod_px = farfield.SSE_TAU_PX   # screen-space LOD: the largest split pop allowed on screen (px; 0: off)
+        self.lod_px = farfield.SSE_TAU_PX   # screen-space LOD: the largest split pop allowed on screen (px; 0: off;
+                                            # --lod-px; a mod's lodPx setting overrides it for its connection)
+        # the built far tiles' errors along the normal (m), what the screen-space LOD knows (Connection.view): anchor
+        # nodes {(anchorId, (L, i, j)): e} (a piece's: its node's) and global tiles {(z, x, y): e}; kept past the tile
+        # cache (a node's error is the same each time it is built), the oldest dropped past LOD_ERRS_MAX
+        self.lod_errs = {}
+        self.glod_errs = {}
         self.update_check = False       # ask GitHub for a newer version after a hello (main_async turns it on; tests
                                         # never reach GitHub: its small daily budget ran out over a day of test runs)
         os.makedirs(self.out_dir, exist_ok=True)
@@ -4819,7 +4834,7 @@ class Server:
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom,
                                               used if material is not None else None)
         info = TileInfo(built.pos, built.err, built.sink, built.skirt, built.grid, size, dt,
-                        material, texture, tex_bytes, tex_s, credits=sources)
+                        material, texture, tex_bytes, tex_s, credits=sources, err_n=built.lod_err)
         info.tile = tile
         info.tex_px = px_t
         if is_global:
@@ -5146,12 +5161,36 @@ class Server:
         out.discard(GLOBAL_AID)
         return out
 
+    def note_lod_err(self, ck, info):
+        """Keep a built far tile's normal error for the screen-space LOD (lod_errs / glod_errs)."""
+        e = getattr(info, "err_n", None)
+        if e is None:
+            e = info.err
+        if e is None:
+            return
+        g = farfield.parse_global(ck[1])
+        if g is not None:
+            d, k = self.glod_errs, g
+        else:
+            t = getattr(info, "tile", None)
+            node = t.node if t is not None else farfield.tile_of(ck[1]).node if not farfield.is_piece_key(ck[1]) \
+                else None
+            if node is None:
+                return
+            d, k = self.lod_errs, (ck[0], node)
+        d.pop(k, None)
+        d[k] = float(e)
+        if len(d) > LOD_ERRS_MAX:
+            for old in list(itertools.islice(d, len(d) - LOD_ERRS_MAX * 3 // 4)):
+                del d[old]
+
     def _tile_done(self, ck, fut):
         self.tile_inflight.pop(ck, None)
         if fut.cancelled() or fut.exception() is not None:
             return
         before = self.tiles.get(ck)
         info = self.tiles[ck] = fut.result()
+        self.note_lod_err(ck, info)
         if before is not None and info.texture != before.texture:
             self._send_retex(ck, info)      # a re-rendered texture: the mods showing the tile switch to it
         for rk in sorted(info.cm_pending, key=str):     # regions it was rendered without
@@ -5453,6 +5492,8 @@ class Server:
             self.horizon_failed.pop(aid, None)
             for ck in [k for k in self.tiles if k[0] == aid]:
                 del self.tiles[ck]
+            for k in [k for k in self.lod_errs if k[0] == aid]:
+                del self.lod_errs[k]
             for ck in [k for k in self.matslots.holders() if k[0] == aid]:
                 self.matslots.release(ck)
             for ck in [ck for ck in list(self.degraded) if ck[0] == aid]:     # list(): workers add meanwhile
@@ -5705,6 +5746,10 @@ class Connection:
         # (treeScale) and the far buildings', skyline's and far bridges' (buildingScale); 1 = the defaults
         self.lod_scale = self.tree_scale = self.building_scale = 1.0
         self.view_cap = None                    # the far field's radius at most (m): the mod's fixed view distance
+        # the mod's screen-space LOD (lodPx: the largest pop allowed on screen, px; 0: the distance rule alone; None:
+        # not sent, the server's --lod-px) and the recent pixels per radian [(time, ppr)] (view)
+        self.lod_px = None
+        self.ppr_hist = deque()
 
     async def map_tiles(self, msg):
         """The world map's tiles {"tiles": [[z, x, y, layer?], ...]} (layer "sat" by default, "map", "labels"; the
@@ -7025,7 +7070,8 @@ class Connection:
     def set_graphics(self, msg):
         """The settings page's graphics (the user, 2026-10-28: "give player much more control in the graphics settings
         (view distance, LOD quality, ETC."), message 'graphics' {lodScale, treeScale, buildingScale, photoPx}, each
-        optional (viewM: the fixed view distance in m, the far field's radius at most; 0 = the real horizon):
+        optional (viewM: the fixed view distance in m, the far field's radius at most; 0 = the real horizon; lodPx:
+        the screen-space LOD's largest pop on screen, px, 0 = the distance rule alone, clamped to LOD_PX_MAX):
         lodScale times the K table (the far field's terrain detail: >1 splits each level farther out, finer
         ground to the horizon; Baltimore's first selection, 64 cells: 0.75 -> 0.78x the tiles, 1.3 -> ~1.3x, 2 ->
         2.1x), treeScale the tree tiles' reach (vegetation.SEND_M times it), buildingScale the far buildings', the
@@ -7058,14 +7104,20 @@ class Connection:
                 self.brfar.drop_m = self.brfar.send_m + (buildingsmod.BRIDGE_FAR_DROP_M - buildingsmod.BRIDGE_FAR_SEND_M)
         if msg.get("photoPx") is not None:
             self.s.set_base_px(msg.get("photoPx"))
+        v = msg.get("lodPx")
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
+            v = min(LOD_PX_MAX, max(0.0, float(v)))
+            far = far or v != self.lod_px_now()
+            self.lod_px = v
         v = msg.get("viewM")
         if isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v):
             cap = max(VIEW_CAP_MIN_M, float(v)) if v > 0 else None
             far = far or cap != self.view_cap
             self.view_cap = cap
-        log.info("graphics: terrain detail x%.2f, trees to %.0f m, far buildings to %.0f m, ground photo %d px, view %s",
-                 self.lod_scale, self.veg.send_m, self.bldfar.send_m, self.s.base_px,
-                 "to the horizon" if self.view_cap is None else f"{self.view_cap / 1000:.0f} km")
+        log.info("graphics: terrain detail x%.2f, trees to %.0f m, far buildings to %.0f m, ground photo %d px, view %s, "
+                 "pixel error %s", self.lod_scale, self.veg.send_m, self.bldfar.send_m, self.s.base_px,
+                 "to the horizon" if self.view_cap is None else f"{self.view_cap / 1000:.0f} km",
+                 f"{self.lod_px_now():g} px" if self.lod_px_now() > 0 else "off")
         if far and self.active is not None:
             self.update_far()
 
@@ -8639,12 +8691,33 @@ class Connection:
             return q
         return self.ppolys.get(key)
 
+    def lod_px_now(self):
+        """This connection's screen-space LOD tau (px; 0: off): the mod's lodPx, else the server's --lod-px."""
+        v = getattr(self, "lod_px", None)
+        return self.s.lod_px if v is None else v
+
+    def lod_ppr(self, h, fov, now=None):
+        """The pixels per radian the screen-space LOD goes by: this pose's (h / (2 tan(vfov / 2))), at most
+        LOD_PPR_ZOOM times a LOD_BASE_FOV_DEG camera's, the most of the last LOD_PPR_WINDOW_S seconds."""
+        now = time.monotonic() if now is None else now
+        ppr = h / (2 * math.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
+        ppr = min(ppr, LOD_PPR_ZOOM * h / (2 * math.tan(math.radians(LOD_BASE_FOV_DEG) / 2)))
+        hist = self.__dict__.setdefault("ppr_hist", deque())     # (a sliding maximum: decreasing pprs)
+        while hist and hist[-1][1] <= ppr:
+            hist.pop()
+        hist.append((now, ppr))
+        while now - hist[0][0] > LOD_PPR_WINDOW_S:
+            hist.popleft()
+        return hist[0][1]
+
     def view(self):
         """The camera for screen-space LOD (farfield.View) from pose.cam (x, y, z, fovDeg, h: the screen's height px),
-        or None: no camera yet, an older mod without h, a camera of another anchor's frame, or --lod-px 0. The
-        tile errors are the built tiles' (a node never built splits by the distance rule only)."""
+        or None: no camera yet, an older mod without h, a camera of another anchor's frame, or tau 0 (lod_px_now). The
+        tile errors are the built tiles' along the normal (Server.lod_errs / glod_errs; a node never built goes by the
+        distance rule only)."""
         c = self.cam
-        if not isinstance(c, dict) or self.s.lod_px <= 0 or getattr(self, "cam_aid", None) != self.active:
+        tau = self.lod_px_now()
+        if not isinstance(c, dict) or not tau > 0 or getattr(self, "cam_aid", None) != self.active:
             return None
         try:
             cx, cy, cz = float(c["x"]), float(c["y"]), float(c["z"])
@@ -8653,20 +8726,17 @@ class Connection:
             return None
         if not (h > 0 and 1 < fov < 170 and math.isfinite(cx) and math.isfinite(cy) and math.isfinite(cz)):
             return None
-        ppr = h / (2 * math.tan(math.radians(fov) / 2))     # BeamNG's fov: vertical
-        aid, tiles = self.active, self.s.tiles
+        ppr = self.lod_ppr(h, fov)
+        aid, errs = self.active, self.s.lod_errs
 
         def err(node):
-            if len(node) != 3:
-                return None
-            info = tiles.get((aid, farfield.Tile(*node).key))
-            return None if info is None else info.err
+            return errs.get((aid, node)) if len(node) == 3 else None
         reach, cap = farfield.SSE_REACH, farfield.SSE_SPACING_CAP
         tune = os.environ.get("BNGE_LOD")      # experiments: "reach,cap"
         if tune:
             reach, cap = (float(v) for v in tune.split(","))
-        return farfield.View(cx, cy, cz - getattr(self, "pz", cz), ppr, err, tau=self.s.lod_px, reach=reach,
-                             cells=self.s.layout.cells, cap=cap)
+        return farfield.View(cx, cy, cz - getattr(self, "pz", cz), ppr, err, tau=tau, reach=reach,
+                             cells=self.s.layout.cells, cap=cap, gerr=self.s.glod_errs)
 
     def _regroup(self):
         aid = self.active
@@ -9676,8 +9746,9 @@ def main():
                     help="re-send the last status with the current far-tile backlog at most every S seconds "
                          "while it changes (0 = status on events only, as v1.3.1; tools/drive.py runs use 1)")
     ap.add_argument("--lod-px", type=float, default=farfield.SSE_TAU_PX,
-                    help="screen-space LOD: far tiles also split while their split would pop more than this many "
-                         "pixels on the player's screen (camera, field of view, resolution; 0: distance rule only)")
+                    help="screen-space LOD: far tiles split while their split would pop more than this many pixels "
+                         "on the player's screen and merge while it would pop less (camera, field of view, "
+                         "resolution; 0: distance rule only; a mod's lodPx setting overrides it)")
     ap.add_argument("--update-check", choices=("on", "off"), default="on",
                     help="ask GitHub for a newer version after a game connects (updates.py; off: tests)")
     ap.add_argument("--weather", choices=("on", "off"), default="on",

@@ -997,9 +997,11 @@ three days of testing: dem 741 MB / 7.5k files, imagery 1.4 GB / 35k, deshadow 7
   `direction_signs` {on}: the sign tiles carry the direction boards (server/dirsigns.py) only while it is on (on by default since 2026-11-05).
   `road_signs` {on}: the sign tiles carry the ordinary road signs (server/roadsigns.py, native roadsigns.rs) only while it is on and the server has BNE_ROADSIGNS=on.
 - Graphics settings (2026-10-28; settings.lua PRESETS low / medium / high / ultra / extreme): the mod sends
-  `graphics` {lodScale, treeScale, buildingScale, photoPx} after every hello and on a change (core.sendGraphics):
-  the far field's K times lodScale, the tree tiles' and the far buildings' / skyline's / far bridges' reach times
-  their scales, the block photo's size (terrain.lua points the texture set and every layer's flat base maps at that
+  `graphics` {lodScale, treeScale, buildingScale, photoPx, viewM, lodPx} after every hello and on a change
+  (core.sendGraphics): the far field's K times lodScale, the tree tiles' and the far buildings' / skyline's / far
+  bridges' reach times their scales, the screen-space LOD's tau (lodPx px, 0 = off: farfield.View; the built tiles'
+  errors along the normal decide splits and merges, at most one level coarser than the distance rule), the block
+  photo's size (terrain.lua points the texture set and every layer's flat base maps at that
   size before a level's first block). Mod-only knobs: tree density (trees.lua QUALITY_LEVELS), grass distance
   (groundcover.lua DISTANCE), object detail ($pref::TS::detailAdjust in our level, enginepref.lua).
 - Every reach that decides what is loaded or shown is a disc (2026-10-28): roads.tiles_near / tile_distance and the

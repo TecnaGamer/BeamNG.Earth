@@ -282,6 +282,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     fps against 94), and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
+  - **Terrain pixel error** (0 = off, the default; 0.5 to 8 px; advanced): picks the distant ground's detail by what
+    your screen shows: the largest jump in pixels allowed when a piece switches detail (your resolution and field
+    of view count), so flat land stays coarser and mountains finer.
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).

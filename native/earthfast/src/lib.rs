@@ -6031,6 +6031,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_normal_err, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
@@ -6164,6 +6165,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
     // railway stations' signs; PR #1106 / #1023, their 188)
     // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
-    m.add("VERSION", 205)?;
+    m.add("VERSION", 206)?;
     Ok(())
 }
