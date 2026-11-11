@@ -203,6 +203,25 @@ class LockTest(unittest.TestCase):
         self.assertLess(time.monotonic() - t0, 1.0)
         xproc.release(self.lock)
 
+    def test_a_holder_that_dies_while_waited_for_is_noticed(self):
+        # a holder alive when first looked at that dies later (a road tile's worker killed, a process ended mid-build):
+        # its lock was waited out to wait_s (BUILD_WAIT_S, 180 s), its pid never looked at again
+        import subprocess
+        import threading
+        p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(0.6)"])
+        reaper = threading.Thread(target=p.wait)        # (reaped at once, as the server's pools do: no zombie)
+        reaper.start()
+        with open(self.lock, "w") as f:
+            f.write(f"{xproc.KIND_RANK['demand']} 0 {p.pid}")
+        t0 = time.monotonic()
+        try:
+            got, mine = xproc.once(self.lock, lambda: None, 20.0, "demand")
+        finally:
+            reaper.join()
+        self.assertEqual((got, mine), (None, True), "taken over")
+        self.assertLess(time.monotonic() - t0, 0.6 + xproc.ALIVE_RECHECK_S + 1.0)
+        xproc.release(self.lock)
+
     def test_alive(self):
         self.assertTrue(xproc.alive(os.getpid()))
         self.assertTrue(xproc.alive(None))

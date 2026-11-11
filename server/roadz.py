@@ -97,6 +97,7 @@ LIDAR_PAD_M = 2.0           # m beyond the carriageway's half width a deck's poi
 LIDAR_MAX_GRADE = 0.10
 LIDAR_DATASETS = 2          # the newest datasets tried at a place
 LIDAR_FETCH_THREADS = int(os.environ.get("BNGE_LIDAR_THREADS", "16"))     # node reads at once (the host's policy: 16)
+RAW_NODES_MB = 48            # nodes' .laz kept in memory per process (RoadZ._node_bytes; ~0.25 MB a node)
 BOX_STEP_M = 40.0           # m of a bridge's line per box its nodes are picked by
 MASK_M = 8.0                # m, the cells of the boxes' mask the points are kept by
 DATUM_MIN_PTS = 50
@@ -198,6 +199,7 @@ def _await_part(lock, pp, wait_s=None):
     the rule for the session through its read's wait)."""
     end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
     seen = None
+    pid, recheck = None, 0.0
     while True:
         if os.path.exists(pp):
             return pp, False
@@ -214,7 +216,14 @@ def _await_part(lock, pp, wait_s=None):
         if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
             seen = now
             h = xproc._holder(lock)
+            pid, recheck = (h[2] if h is not None else None), time.monotonic() + xproc.ALIVE_RECHECK_S
             if h is not None and not xproc.alive(h[2]):
+                xproc.release(lock)
+                seen = None
+                continue
+        elif seen is not None and now == seen and pid is not None and time.monotonic() >= recheck:
+            recheck = time.monotonic() + xproc.ALIVE_RECHECK_S       # (one that died since: xproc.once's)
+            if not xproc.alive(pid):
                 xproc.release(lock)
                 seen = None
                 continue
@@ -631,6 +640,10 @@ class RoadZ:
         self._cell_locks = {}
         self.sheets = hklidar.at(cache_dir, fetcher)     # (Hong Kong's LiDAR sheets: the terrain reads them too)
         self.stats = {"cells": 0, "requests": 0, "bytes": 0, "seconds": 0.0}     # (built here, not read from disk)
+        self._raw = OrderedDict()           # (dataset, node) -> its .laz bytes (_node_bytes; RAW_NODES_MB kept)
+        self._raw_bytes = 0
+        self._raw_flight = {}               # (dataset, node) -> threading.Event of the read under way
+        self._pool = None                   # the node reads' FIFO pool (_node_pool)
         self.enabled = ON                   # (the probes measure with it on whatever BNE_ROADZ says)
         self.lidar = LIDAR_ON
 
@@ -731,6 +744,50 @@ class RoadZ:
             self.stats["requests"] += 1
             self.stats["bytes"] += len(res.body)
         return res.body
+
+    def _node_bytes(self, name, k):
+        """Node k's .laz of dataset name: read once in this process while RAW_NODES_MB of them are kept. Neighbouring
+        cells' boxes share nodes (~7 % of a fresh place's node reads were a node this process had read for another
+        cell, 2026-11-11); two cells asking at once wait for the one read."""
+        key = (name, k)
+        while True:
+            with self._lock:
+                got = self._raw.get(key)
+                if got is not None:
+                    self._raw.move_to_end(key)
+                    self.stats["shared"] = self.stats.get("shared", 0) + 1
+                    return got
+                ev = self._raw_flight.get(key)
+                if ev is None:
+                    ev = self._raw_flight[key] = threading.Event()
+                    break
+            ev.wait(60.0)
+            with self._lock:
+                if key not in self._raw and self._raw_flight.get(key) is ev:
+                    return self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz")    # (the reader hangs: our own read)
+        try:
+            body = self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz")
+            with self._lock:
+                self._raw[key] = body
+                self._raw_bytes += len(body)
+                while self._raw_bytes > RAW_NODES_MB * 1e6 and len(self._raw) > 1:
+                    _, old = self._raw.popitem(last=False)
+                    self._raw_bytes -= len(old)
+            return body
+        finally:
+            with self._lock:
+                self._raw_flight.pop(key, None)
+            ev.set()
+
+    def _node_pool(self):
+        """The process's pool of node reads (LIDAR_FETCH_THREADS), first asked first read: each cell's read had a pool
+        of its own and the cells' reads went side by side through the host's slots, every cell of a block finishing
+        at the end; in turn, the first asked has its points first."""
+        with self._lock:
+            if self._pool is None:
+                from runtimeprofiler import ThreadPoolExecutor
+                self._pool = ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept")
+            return self._pool
 
     def warm(self, keys):
         """Fetch / build the sources' cells of keys (in that order) in a background thread, so the road processes find
@@ -1022,7 +1079,7 @@ class RoadZ:
                     xproc.release(lock)
 
         def fetch(k, pp):
-            p, c = fast._ef.las_decode(self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz"), bb)
+            p, c = fast._ef.las_decode(self._node_bytes(name, k), bb)
             if len(p):
                 keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
                             ((p[:, 0] - bb[0]) // MASK_M).astype(int).clip(0, nx - 1)]
@@ -1037,11 +1094,12 @@ class RoadZ:
                 except Exception as e:
                     log.debug("roadz part write %s: %s", pp, e)
             return p, c
-        from runtimeprofiler import ThreadPoolExecutor
-        with ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept") as pool:
-            got = list(pool.map(read, nodes))           # (in node order: the same points whichever came first)
-            later = [i for i, g in enumerate(got) if g is ELSEWHERE]
-            if later:
+        got = list(self._node_pool().map(read, nodes))   # (in node order: the same points whichever came first)
+        later = [i for i, g in enumerate(got) if g is ELSEWHERE]
+        if later:
+            # (the nodes another process reads: waited for on threads of this read's own, not the shared pool's)
+            from runtimeprofiler import ThreadPoolExecutor
+            with ThreadPoolExecutor(min(LIDAR_FETCH_THREADS, len(later)), thread_name_prefix="roadz-ept-wait") as pool:
                 for i, g in zip(later, pool.map(lambda i: read(nodes[i], True), later)):
                     got[i] = g
         xyz = [p for p, _c in got if len(p)]

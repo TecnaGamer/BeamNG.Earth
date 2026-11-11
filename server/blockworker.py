@@ -15,6 +15,7 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 from runtimeprofiler import step as profile_step
 import collections
 import json
+import math
 import logging
 import os
 import queue
@@ -1988,6 +1989,21 @@ def _geo_exact(aid, lat, lon, gx, gy, out_dir, vfs_dir, parts):
     return out
 
 
+URGENT_PHOTO_M = 500.0      # a road geotile whose centre is this near its anchor's place: its roof photo fetched urgent
+
+
+def _geo_near(gx, gy, lat, lon):
+    """Is geotile (gx, gy)'s centre within URGENT_PHOTO_M of (lat, lon) (the anchor's place: the car's)?"""
+    try:
+        import geotiles
+        la, lo = geotiles.centre(gx, gy)
+        dy = (float(la) - float(lat)) * 111320.0
+        dx = (float(lo) - float(lon)) * 111320.0 * math.cos(math.radians(float(lat)))
+        return math.hypot(dx, dy) <= URGENT_PHOTO_M
+    except Exception:           # (no urgency rather than no tile)
+        return False
+
+
 def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, lift, buildings, left_hand, mph, q,
               gas_stations, buried=0.0, lamp_region=None, country=None, content=True, skin=True, exact=None, pole_profile=None,
               de_junctions=False, towns_on=False, wear=None):
@@ -2004,9 +2020,14 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
         t0 = time.perf_counter()
         c0 = time.process_time()
 
+        near = _geo_near(gx, gy, lat, lon)
+
         def build_content():
-            return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
-                                lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on, wear=wear)
+            import buildings as buildingsmod
+            with buildingsmod.urgent_photos(near):      # (the tiles round the car: their roof photos first)
+                return _geo_content(gx, gy, gzoom, out_dir, vfs_dir, buildings, left_hand, mph, gas_stations, buried,
+                                    lamp_region, country, pole_profile, de_junctions=de_junctions, towns_on=towns_on,
+                                    wear=wear)
         if content:
             out["content"] = build_content()
             out["stages"]["content"] = last_tile_stages()

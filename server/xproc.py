@@ -21,6 +21,7 @@ import threading
 import time
 
 STALE_S = 120.0
+ALIVE_RECHECK_S = 1.0       # s between looks at whether a lock's holder still runs (once, _await_part)
 POLL_S = 0.05
 PRIORITY = 0                # this process's niceness above the server's (blockworker.init's nice)
 KIND_RANK = {"urgent": 0, "demand": 1, "prefetch": 2, "background": 3, "predownload": 4}
@@ -84,10 +85,14 @@ def alive(pid):
             return True
     try:
         os.kill(int(pid), 0)
-        return True
     except ProcessLookupError:
         return False
     except OSError:
+        return True
+    try:                                # (ended but not reaped yet by its parent, the server's main process: gone)
+        with open(f"/proc/{int(pid)}/stat", "rb") as fh:
+            return fh.read().rsplit(b")", 1)[1].split()[0] != b"Z"
+    except (OSError, IndexError):
         return True
 
 
@@ -145,6 +150,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
     t0 = time.monotonic()
     waited = False
     holder = None
+    pid, recheck = None, 0.0
     while True:
         if take(lock, kind):
             got = ready()                   # (written by the process whose lock we just followed)
@@ -162,6 +168,7 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
         if now_holder is not None and now_holder[1] > 0 and now_holder != holder:
             holder = now_holder
             h = _holder(lock)
+            pid, recheck = (h[2] if h is not None else None), time.monotonic() + ALIVE_RECHECK_S
             if h is not None and not alive(h[2]):
                 # its process is gone (the game closed mid-download: the server's processes end with it); the
                 # lock was waited out for STALE_S before, a minute a block after a quick restart
@@ -170,6 +177,15 @@ def once(lock, ready, wait_s, kind="demand", on_wait=None):
                 continue
             if h is not None and h[:2] > _rank(kind):
                 return None, False          # do it here, not wait
+        elif holder is not None and holder == now_holder and pid is not None and time.monotonic() >= recheck:
+            # (the same holder, looked at again now and then: one that died after we first looked, a road tile's
+            # worker killed or a process ended mid-build, kept its lock to the end of wait_s, BUILD_WAIT_S 180 s of
+            # a road tile's cells, 2026-11-11)
+            recheck = time.monotonic() + ALIVE_RECHECK_S
+            if not alive(pid):
+                release(lock)
+                holder = None
+                continue
         if not waited:
             waited = True
             if on_wait is not None:

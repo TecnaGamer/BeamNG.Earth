@@ -1352,6 +1352,10 @@ class WarmPlaceTest(unittest.TestCase):
         self.assertEqual(got[0], (own, "roads"), "the anchor's own cell first")
         self.assertNotIn((own, "water"), got, "the tiles' own buildings and water: when each starts")
         self.assertIn((own, "infrastructure"), got)
+        # the town signs' communes of the cells under the car (the first road tile waited for them), those alone
+        towns = [k for k, ly in got if ly == "town_areas"]
+        self.assertIn(own, towns)
+        self.assertLessEqual(len(towns), 9)
         self.assertEqual(earthd.Server.warm_place(SimpleNamespace(mapdata=None), anchor, 0.0, 0.0), 0)
 
 

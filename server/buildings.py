@@ -340,6 +340,23 @@ def _photo_reader_live(cache_dir, sources):
         return got
 
 
+_URGENT = __import__("threading").local()
+
+
+@__import__("contextlib").contextmanager
+def urgent_photos(on=True):
+    """Within (the thread building a road tile): its roof photo fetched as netfetch "urgent", ahead of the far field's
+    photos from the same host (blockworker.roads_geo: the tiles round the car). A fresh French place's first road tiles
+    waited out ROOF_PHOTO_WAIT_S behind the far field's ~2000 IGN tile requests (its 25/s): ~8 s each, then the
+    procedural roofs, a revisit fault and the tile built again later (2026-11-11)."""
+    prev = getattr(_URGENT, "on", False)
+    _URGENT.on = bool(on)
+    try:
+        yield
+    finally:
+        _URGENT.on = prev
+
+
 class RoofPhotoFuture:
     """roof_photo on a thread (started when the tile starts): colours() waits for it ROOF_PHOTO_WAIT_S at most."""
 
@@ -352,7 +369,8 @@ class RoofPhotoFuture:
             if _PHOTO_POOL is None:
                 from concurrent.futures import ThreadPoolExecutor
                 _PHOTO_POOL = ThreadPoolExecutor(max_workers=2, thread_name_prefix="roofphoto")
-        self.fut = _PHOTO_POOL.submit(roof_photo, frame, x0, y0, x1, y1, cache_dir, True)
+        self.fut = _PHOTO_POOL.submit(roof_photo, frame, x0, y0, x1, y1, cache_dir, True, None,
+                                      getattr(_URGENT, "on", False))
 
     def colours(self, rings):
         if self.fut is None:
@@ -376,10 +394,11 @@ def _photo_sources(frame, x0, y0, x1, y1):
                  if s_ <= lat <= n_ and w_ <= lon <= e_)
 
 
-def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None):
+def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None, urgent=False):
     """RoofPhoto of the tile's box from the regional orthophoto (online: fetching what is missing; else what is
     on disk), or None (none covers it, it could not be had, or ROOF_PHOTO_ON is off). px: its size (default
-    ROOF_PHOTO_PX; coarser is cheaper: the squares' colour votes)."""
+    ROOF_PHOTO_PX; coarser is cheaper: the squares' colour votes). urgent: fetched as netfetch "urgent"
+    (urgent_photos)."""
     if not ROOF_PHOTO_ON or cache_dir is None:
         return None
     try:
@@ -393,7 +412,11 @@ def roof_photo(frame, x0, y0, x1, y1, cache_dir, online=False, px=None):
         px = int(px or ROOF_PHOTO_PX)
         reader = _photo_reader_live(cache_dir, sources) if online else streetfront._photo_reader(os.fspath(cache_dir),
                                                                                                  sources)
-        rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
+        if urgent and online:
+            with reader.urgent():
+                rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
+        else:
+            rgb, used = reader.render(frame, x0 - pad, y0 - pad, size, px)
         if sum(used.get(name, 0) for name in sources) < px * px * 0.95:
             return None
         return RoofPhoto(rgb, x0 - pad, y0 - pad, size)

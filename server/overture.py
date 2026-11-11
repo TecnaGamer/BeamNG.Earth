@@ -70,6 +70,11 @@ META_FILE = "rowgroups.json"     # a file's parsed row groups, beside its cached
 BOX_ROWS = 2_000_000           # row groups' bbox rows kept per Reader (_plan: ~16 B a row as float32)
 FETCH_THREADS = 8               # parallel range requests per Reader (Overture's hosts allow 8 at once each)
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
+FOOTER_MAX = 4 * 1024 * 1024    # (a learned footer size is used up to this)
+FOOTER_HINTS = "footers.json"   # the largest footer seen per theme/type (Reader._footer_guess), under raw/overture
+# (the footers of release 2026-10-21.0's files, the first guess before one is seen: bytes)
+FOOTER_KNOWN = {"base/infrastructure": 1_320_000, "base/water": 600_000, "base/land_use": 615_000,
+                "divisions/division_area": 267_000}
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
 _PLAN = threading.local()           # (_plan's last: the top-level columns its matched row groups hold, for tolerant)
@@ -454,6 +459,7 @@ class StacIndex:
         return out
 
 
+_WHERE_UNUSABLE = set()     # layers' `where`s that name the query's own expressions (_plan: boxes of every row)
 META_FILES = 2048        # files whose parsed Parquet metadata Reader keeps (a few hundred row groups each)
 
 
@@ -500,6 +506,7 @@ class Reader:
         self._meta = OrderedDict()
         self._boxes = OrderedDict()     # (path, row group) -> its rows' bbox (x0, x1, y0, y1) arrays (_plan)
         self._box_rows = 0
+        self._hints = None              # "theme/type" -> the largest footer seen (_footer_guess)
 
     def close(self):
         self.pool.shutdown(wait=False)
@@ -541,6 +548,43 @@ class Reader:
             os.replace(tmp, path)
         except (OSError, TypeError, ValueError, AttributeError) as e:
             log.debug("overture: row groups not saved: %s", e)
+
+    def _footer_path(self, theme, typ):
+        return os.path.join(self.raw_dir, "overture", FOOTER_HINTS)
+
+    def _footer_guess(self, theme, typ):
+        """Bytes read from a file's end first: the largest footer seen of the type's files (kept on disk, FOOTER_HINTS)
+        or FOOTER_GUESS. The infrastructure files' footers are ~1.25 MB, the division areas' ~260 KB: the first read
+        of a fresh file came short and the rest was a second request after it (a fresh place's first infrastructure
+        cell waited on three files' footers, 2026-11-11)."""
+        with self._lock:
+            hints = self._hints
+            if hints is None:
+                try:
+                    with open(self._footer_path(theme, typ), encoding="utf-8") as f:
+                        hints = {str(k): int(v) for k, v in json.load(f).items()}
+                except (OSError, ValueError, TypeError, AttributeError):
+                    hints = {}
+                self._hints = hints
+            n = hints.get(f"{theme}/{typ}", FOOTER_KNOWN.get(f"{theme}/{typ}", 0))
+            return max(FOOTER_GUESS, min(FOOTER_MAX, n + n // 8))     # (an eighth more: its files' footers vary)
+
+    def _footer_learn(self, theme, typ, n):
+        with self._lock:
+            hints = dict(self._hints or {})
+            if hints.get(f"{theme}/{typ}", 0) >= n:
+                return
+            hints[f"{theme}/{typ}"] = int(n)
+            self._hints = hints
+        try:
+            path = self._footer_path(theme, typ)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(hints, f, sort_keys=True)
+            os.replace(tmp, path)
+        except OSError as e:
+            log.debug("overture: footer sizes not saved: %s", e)
 
     def _box_get(self, k):
         with self._lock:
@@ -675,12 +719,19 @@ class Reader:
         lon0, lat0, lon1, lat1 = bounds
         t0 = time.perf_counter()
 
+        guess = self._footer_guess(spec["theme"], spec["type"])
+        sizes = []
+
         def footer(r):                  # the last 8 bytes: footer length + "PAR1"
-            tail = r.read(max(0, r.size - FOOTER_GUESS), r.size, kind)
+            tail = r.read(max(0, r.size - guess), r.size, kind)
             n = int.from_bytes(tail[-8:-4], "little")
             if n + 8 > len(tail):
                 r.read(r.size - n - 8, r.size, kind)
+            sizes.append(n + 8)
         self._parallel([lambda r=files[p]: footer(r) for p in paths])
+        if sizes and max(sizes) > guess:
+            self._footer_learn(spec["theme"], spec["type"], max(sizes))
+        tf = time.perf_counter()
         uris = ", ".join(f"'{proto}://{p}'" for p in paths)
         with self._lock:
             new = [p for p in paths if p not in self._meta]
@@ -742,33 +793,63 @@ class Reader:
             return []
         # each row group's boxes decoded once (BOX_ROWS kept): a place's cells share their row groups (a fresh
         # place's first block: 69 queries over 210 row groups of 19, 2026-10-30), and the bbox pass was ~13 s of its
-        # layer threads; compared in the column's own type, as DuckDB compares it
-        need = [k for k in cand if self._box_get(k) is None]
-        if need:
+        # layer threads; compared in the column's own type, as DuckDB compares it.
+        # A layer with a `where` keeps the boxes of the rows that pass it (its columns read with the boxes), so a row
+        # group whose rows in the cell all fail it is not fetched: the town signs' division areas matched the row
+        # groups of the United States' and Russia's country outlines (their boxes span the world), 2 of 5 row groups
+        # and ~35 MB of a French cell's 84 MB (Tours, 2026-11-11); the query drops those rows anyway
+        where = spec.get("where")
+        wkey = where if where and where not in _WHERE_UNUSABLE else None
+
+        def bk(k):
+            return (wkey,) + k if wkey else k
+        while True:
+            need = [k for k in cand if self._box_get(bk(k)) is None]
+            if not need:
+                break
+            wcols = set(re.findall(r"[A-Za-z_]+", wkey)) if wkey else set()
             wanted = {}
             for path, rg in need:
-                wanted.setdefault(path, []).extend(groups[(path, rg)]["cols"].get("bbox", []))
+                for top, chunks in groups[(path, rg)]["cols"].items():
+                    if top == "bbox" or top in wcols:
+                        wanted.setdefault(path, []).extend(chunks)
             self._fetch(files, wanted, kind)
             by_path = {}
             for path, rg in need:
                 by_path.setdefault(path, []).append(rg)
-            for path, rgs in by_path.items():   # (a file at a time, by row number only: DuckDB skips the other row
-                # groups then; with the files' names in the filter it read every row group's boxes, block by block)
-                only = " OR ".join(f"file_row_number BETWEEN {groups[(path, rg)]['first']} AND "
-                                   f"{groups[(path, rg)]['first'] + groups[(path, rg)]['n'] - 1}" for rg in rgs)
-                got = con.execute(f"""SELECT file_row_number, bbox.xmin AS x0, bbox.xmax AS x1, bbox.ymin AS y0,
-                    bbox.ymax AS y1 FROM read_parquet('{proto}://{path}', file_row_number = true)
-                    WHERE {only}""").fetchnumpy()
-                fr = np.asarray(got["file_row_number"], np.int64)
-                cols = [np.ma.filled(np.ma.asarray(got[c]).astype(np.float64), np.nan).astype(np.asarray(got[c]).dtype)
-                        for c in ("x0", "x1", "y0", "y1")]
-                for rg in rgs:
-                    g = groups[(path, rg)]
-                    sel = (fr >= g["first"]) & (fr < g["first"] + g["n"])
-                    self._box_put((path, rg), tuple(c[sel] for c in cols))
+            try:
+                for path, rgs in by_path.items():   # (a file at a time, by row number only: DuckDB skips the other
+                    # row groups then; with the files' names in the filter it read every row group's boxes, block by
+                    # block)
+                    only = " OR ".join(f"file_row_number BETWEEN {groups[(path, rg)]['first']} AND "
+                                       f"{groups[(path, rg)]['first'] + groups[(path, rg)]['n'] - 1}" for rg in rgs)
+                    # (the `where` as a column, not in the filter: there DuckDB read a piece of every row group's
+                    # columns it names, ~60 requests one after another)
+                    w = f", coalesce(({wkey}), false) AS w" if wkey else ""
+                    got = con.execute(f"""SELECT file_row_number, bbox.xmin AS x0, bbox.xmax AS x1, bbox.ymin AS y0,
+                        bbox.ymax AS y1{w} FROM read_parquet('{proto}://{path}', file_row_number = true)
+                        WHERE {only}""").fetchnumpy()
+                    fr = np.asarray(got["file_row_number"], np.int64)
+                    cols = [np.ma.filled(np.ma.asarray(got[c]).astype(np.float64), np.nan).astype(
+                        np.asarray(got[c]).dtype) for c in ("x0", "x1", "y0", "y1")]
+                    if wkey:
+                        keep = np.asarray(np.ma.filled(np.ma.asarray(got["w"]), False), bool)
+                        fr, cols = fr[keep], [c[keep] for c in cols]
+                    for rg in rgs:
+                        g = groups[(path, rg)]
+                        sel = (fr >= g["first"]) & (fr < g["first"] + g["n"])
+                        self._box_put(bk((path, rg)), tuple(c[sel] for c in cols))
+            except _duckdb().BinderException as e:
+                if not wkey:
+                    raise
+                # (a `where` on the query's own expressions, road_routes' routes_txt: the boxes of every row, as before)
+                log.debug("mapdata plan %s/%s: its where not on the files' columns (%s): every row's box",
+                          spec["theme"], spec["type"], e)
+                _WHERE_UNUSABLE.add(wkey)
+                wkey = None
         matched = set()
         for k in cand:
-            x0, x1, y0, y1 = self._box_get(k)
+            x0, x1, y0, y1 = self._box_get(bk(k))
             t = x0.dtype.type
             if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
                 matched.add(k)
@@ -782,9 +863,9 @@ class Reader:
                     wanted.setdefault(path, []).extend(chunks)
         t2 = time.perf_counter()
         self._fetch(files, wanted, kind)
-        log.debug("mapdata plan %s/%s: %d files, %d row groups, %d candidates, %d matched; footers %.2f s, "
+        log.debug("mapdata plan %s/%s: %d files, %d row groups, %d candidates, %d matched; footers %.2f s (fetch %.2f), "
                   "bbox %.2f s, data %.2f s (%.1f MB)", spec["theme"], spec["type"], len(paths), len(groups),
-                  len(cand), len(matched), t1 - t0, t2 - t1, time.perf_counter() - t2,
+                  len(cand), len(matched), t1 - t0, tf - t0, t2 - t1, time.perf_counter() - t2,
                   sum(b - a for c in wanted.values() for a, b in self._ranges(c)) / 1e6)
         rows = []
         for path, rg in sorted(matched):
@@ -800,7 +881,12 @@ class Reader:
         extra = f", {spec['extra']}" if spec.get("extra") else ""
         proj = (f"id, version, {spec['cols']}, {_wkb(spec)} AS wkb, (bbox.xmin + bbox.xmax) / 2 AS cx, "
                 f"(bbox.ymin + bbox.ymax) / 2 AS cy, sources{extra}, bbox")
-        tag = hashlib.sha1(proj.encode()).hexdigest()[:12]
+        # (only the rows the layer's `where` keeps, when it is on the files' columns: the town signs' copies held every
+        # country's and region's outline, ~100 MB written for a French place's 8 communes, 2026-11-11; _run filters
+        # the copy by it anyway)
+        where = spec.get("where")
+        cond = f" AND ({where})" if where and where not in _WHERE_UNUSABLE else ""
+        tag = hashlib.sha1((proj + (" WHERE" + cond if cond else "")).encode()).hexdigest()[:12]
         out = []
         for u, a, b in rows:
             path = u.split("://", 1)[-1]
@@ -813,7 +899,7 @@ class Reader:
                         os.makedirs(d, exist_ok=True)
                         tmp = f"{f}.{os.getpid()}.{threading.get_ident()}.tmp"
                         con.execute(f"""COPY (SELECT {proj} FROM read_parquet('{_q(u)}', file_row_number = true)
-                            WHERE file_row_number BETWEEN {int(a)} AND {int(b)}) TO '{_q(tmp)}' (FORMAT parquet, ROW_GROUP_SIZE {RG_ROWS})""")
+                            WHERE file_row_number BETWEEN {int(a)} AND {int(b)}{cond}) TO '{_q(tmp)}' (FORMAT parquet, ROW_GROUP_SIZE {RG_ROWS})""")
                         os.replace(tmp, f)
                     finally:
                         if mine:
