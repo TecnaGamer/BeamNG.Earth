@@ -165,6 +165,9 @@ def code_key():
             for k in sorted(os.environ):                # (the build switches: BNE_*)
                 if k.startswith("BNE_") and k not in NOT_SWITCHES:
                     h.update(f"{k}={os.environ[k]}".encode())
+            import heightmap        # (the lighter ground's 2 m squares: road tiles drape on its lattice; 1 m keys as before)
+            if heightmap.SQUARE != 1.0:
+                h.update(f"square={heightmap.SQUARE:g}".encode())
             _code.append(h.hexdigest()[:16])
         return _code[0]
 

@@ -22,6 +22,7 @@ import os
 import numpy as np
 
 import cdae
+import heightmap
 import shells
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
@@ -742,7 +743,7 @@ def _reach_past(c, box):
     return out
 
 
-GRID_M = 1.0            # the terrain block's square (heightmap.SQUARE): its samples on multiples of it, each square cut
+GRID_M = heightmap.SQUARE  # the terrain block's square (1 m; 2 m on the lighter ground): its samples on multiples of it, each square cut
                         # from its south-west corner to its north-east one (probed in-game 2026-10-20)
 
 
@@ -837,7 +838,7 @@ def drawn_ground(frame, drawn, xy, q=None, cell=GRID_M):
     return np.where(ok, z, np.nan)
 
 
-FOLLOW_STEP_M = 0.45    # a terrain cell whose corners are further apart holds a step (a cutting's wall, the lattice's
+FOLLOW_STEP_M = 0.45 * GRID_M  # a terrain cell whose corners are further apart holds a step (a cutting's wall, the lattice's
 FOLLOW_MAX_UP = 0.1     # teeth): a draped surface goes at most this over its lowest corner there (the McGraw-Graben's
                         # edge lines climbed the teeth as white tents up to 1.3 m, 2026-10-22). A road would need a
                         # ~32 % grade along a cell's diagonal (GRID_M 1 m) to count as a step.

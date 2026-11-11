@@ -227,7 +227,7 @@ def _lonlat_boxes(feats):
     return got
 
 
-ROAD_EDGE_M = 0.5    # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
+ROAD_EDGE_M = 0.5 * heightmap.SQUARE  # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
                      # is road (a 1 m square reaches back up to 0.7 m; at 2 m squares this was 1.0: at 0.5 a wheel 0.2 m
                      # inside a 9 m road's edge was on dirt; the grain beyond lies under the edge decal, roads.EDGE_DECAL)
 
@@ -1098,7 +1098,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 # A road without sidewalks gets a verge of VERGE_M a side painted bare where the ground would carry grass or shrubs:
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
-VERGE_M = 1.5
+VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
 VERGE_FROM = (GRASS, LAWN, DUSTY)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
@@ -1703,6 +1703,105 @@ def used_materials(idx):
     if SNOW in u:
         u.add(LOOSE)
     return sorted(u) or [DIRT]
+
+
+# Fewer ground layers per block (the user, 2026-11-11: "combine the ground layers and reduce them without reducing
+# quality"). Every material a .ter lists costs the engine's texture-array rebuild at the swap (used_materials), and most
+# blocks list one or two that only specks and thin lines use: rock along a city's piers, banks and kerbs (Fells Point,
+# Lower Manhattan: 100-170 bits, 0.2-0.6 % of the block, 1-4 m wide), a gravel speck in a suburb, a lawn or two in the
+# mountains (offline survey 2026-11-11). Such a land-cover layer is folded into the layers around it (each of its
+# samples takes its nearest kept neighbour's material, the land cover's before a painted one: earthfast.layer_fold),
+# when it is
+#   - a land-cover layer that a few samples may give up (FOLD_FROM: no road, paving, plaza, golf or water bed layer,
+#     and none of its samples painted over the land cover: roads, lots, fields, mapped lawns, pads),
+#   - at most FOLD_SHARE of the block's samples, with at most FOLD_CORE_M2 of it farther than FOLD_CORE_R_M from any
+#     other material (its "core": the part seen as an area of its own; specks and lines up to ~4 m wide have none). Over
+#     the aerial photo the only difference is the detail texture's grain there, under a wheel its ground model.
+# A block listing more than LAYER_CAP materials after that (golf courses, squares and sea in one block; none of the
+# surveyed ones) then merges its look-alike layers (LOOKALIKE: the same grass at another grain or stone paving, each
+# pair one ground model), then folds its least used land-cover layers whatever their size: a visible but rare loss,
+# against a 250-560 ms swap with ten materials (in-game probes 2026-10-18). BNE_LAYER_FOLD=off: every layer kept.
+FOLD_ON = os.environ.get("BNE_LAYER_FOLD", "on").lower() not in ("off", "0", "false", "no")
+FOLD_FROM = (GRASS, LAWN, DUSTY, ROCK, SNOW)
+FOLD_SHARE = 0.01
+FOLD_CORE_R_M = 2.0
+FOLD_CORE_M2 = 256.0
+LAYER_CAP = 9
+# (dropped, kept): golf greens and fairways are the same grass at another grain, fairways mown lawns, a rough long
+# grass; brick and setts both stone paving; pavers the asphalt's ground model
+LOOKALIKE = ((GOLF_GREEN, GOLF_FAIRWAY), (BRICK, COBBLE), (GOLF_FAIRWAY, LAWN), (GOLF_ROUGH, GRASS), (PAVERS, ASPHALT))
+
+
+def core_radius(square):
+    """FOLD_CORE_R_M in samples `square` m apart (at least 1)."""
+    return max(1, int(round(FOLD_CORE_R_M / square)))
+
+
+def fold_policy(counts, painted, core, n, square, cap=LAYER_CAP):
+    """Which MATERIALS indices a block gives up (fold_layers' rules) from its layer statistics (earthfast.layer_stats:
+    samples, painted samples and core samples per index, n² samples `square` m apart). Returns (folded: indices whose
+    samples take their neighbours' materials, merged: [(dropped, kept)] whose samples become `kept`)."""
+    folded, merged = [], []
+    max_n = FOLD_SHARE * n * n
+    max_core = FOLD_CORE_M2 / (square * square)
+    for m in FOLD_FROM:
+        if counts[m] and not painted[m] and counts[m] <= max_n and core[m] <= max_core:
+            folded.append(m)
+
+    def listed():
+        live = [i for i in range(len(MATERIALS))
+                if counts[i] and i not in folded and all(i != a for a, _ in merged)]
+        return set(used_materials(np.array(live, np.uint8))) if live else set()
+    if len(listed()) > cap:
+        for a, b in LOOKALIKE:
+            now = listed()
+            if len(now) <= cap:
+                break
+            if a in now and b in now:
+                merged.append((a, b))
+        rest = sorted((m for m in FOLD_FROM if counts[m] and m not in folded and not painted[m]),
+                      key=lambda m: counts[m])
+        for m in rest:
+            if len(listed()) <= cap:
+                break
+            folded.append(m)
+    return folded, merged
+
+
+def fold_layers(idx, land, square, stages=None):
+    """The block's layer map (idx: MATERIALS indices, rows as written, row 0 = south) with fold_policy's layers given
+    up; land: the same map before anything was painted over the land cover (classify and the water bed). Returns the
+    new map (idx itself when nothing changes). stages (optional): gets "layersFolded" (how many listed materials fewer)
+    and the time."""
+    if not FOLD_ON or idx is None:
+        return idx
+    import fast
+    fast.require(220, "ground layer fold")
+    t0 = time.perf_counter()
+    idx = np.ascontiguousarray(idx, np.uint8)
+    painted = np.ascontiguousarray(idx != np.asarray(land, np.uint8), np.uint8)
+    n = idx.shape[0]
+    counts, paint, core = fast._ef.layer_stats(idx, painted, int(FOLD_SHARE * n * n), core_radius(square))
+    folded, merged = fold_policy(counts, paint, core, n, square)
+    if not folded and not merged:
+        return idx
+    out = idx
+    if merged:
+        lut = np.arange(256, dtype=np.uint8)
+        for a, b in merged:
+            lut[lut == a] = b
+        out = lut[out]
+    if folded:
+        drop = np.zeros(256, np.uint8)
+        drop[folded] = 1
+        out = fast._ef.layer_fold(np.ascontiguousarray(out), drop, painted)
+    if stages is not None:
+        live = [i for i in range(len(MATERIALS)) if counts[i]]
+        gone = set(folded) | {a for a, _ in merged}
+        stages["layersFolded"] = len(used_materials(np.array(live, np.uint8))) - len(
+            used_materials(np.array([i for i in live if i not in gone], np.uint8)))
+        stages["layerFold"] = time.perf_counter() - t0
+    return out
 
 
 def write_ter(out_dir, name, qgrid, idx):

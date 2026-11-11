@@ -8237,7 +8237,7 @@ def wet_run_inside(xy, wet):
 
 TUNNEL = {"m": "road_asphalt_2lane", "tl": 11.0, "p": 20}     # the road surface in a tunnel (a deck: collides)
 LOW_HOLE_M = 3.0            # m from a low arch's ends: its mouths, flat at its floor (arch_raise) and cut away ...
-LOW_HOLE_STEP = 1.5         # ... the cut a terrain grid step (1 m) further (the squares from the floor up to the soil)
+LOW_HOLE_STEP = roadmesh.GRID_M + 0.5  # ... the cut a terrain grid step further (the squares from the floor up to the soil)
 TUNNEL_HOLE_MARGIN = 0.5    # m around the tube a portal's terrain hole reaches (above, below and sideways)
 
 
@@ -8471,7 +8471,7 @@ WALL_TAPER_M = 8.0      # m at each end of a wall over which it comes down ...
 WALL_TAPER_LOW_M = 0.6  # ... to this over the road
 WALL_SLAB_DZ = 0.8      # m the ground behind a wall may fall under its top before the top ends there ...
 WALL_COPING_MIN_M = 0.5  # ... at least its coping
-WALL_DIAG_M = 1.45      # the terrain lattice's diagonal (heightmap.SQUARE 1 m)
+WALL_DIAG_M = 1.45 * roadmesh.GRID_M  # the terrain lattice's diagonal (heightmap.SQUARE)
 # a major road's cutting is walled in concrete (Munich's McGraw-Graben, Mapillary 2026-10-21), a smaller road's in stone
 # (Central Park's transverses)
 CONCRETE_WALL_CLASSES = {"motorway", "motorway_link", "trunk", "trunk_link", "primary", "primary_link"}

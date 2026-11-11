@@ -161,9 +161,43 @@ local function baseFields(path, size)
   return path or M.LEVEL_BASE.tex, tostring(toSamples(path and (size or 1024) or M.LEVEL_BASE.sizeM))
 end
 
+-- The level's materials (main.materials.json, tools/make_level_assets.py) give their detail and macro texture sizes in
+-- samples of LEVEL_SQUARE m. On another square (the lighter 2 m ground of the Low and Medium presets: the server's
+-- hello.squareSize) the same repeat in metres is that many samples fewer: set once per square, from the level's values.
+M.LEVEL_SQUARE = 1.0
+M.levelSizes = {}       -- material name -> { field = the level's value }
+local SIZE_FIELDS = { 'baseColorDetailTexSize', 'normalDetailTexSize', 'roughnessDetailTexSize', 'aoDetailTexSize',
+  'heightDetailTexSize', 'baseColorMacroTexSize', 'normalMacroTexSize', 'roughnessMacroTexSize', 'aoMacroTexSize',
+  'heightMacroTexSize' }
+-- Pure-ish: the level value v (samples at LEVEL_SQUARE) at the square sq.
+function M.levelSizeAt(v, sq)
+  v = tonumber(v)
+  if not v or v <= 0 then return nil end
+  return math.max(1, math.floor(v * M.LEVEL_SQUARE / sq + 0.5))
+end
+local function rescaleLevel(m, name)
+  local orig = M.levelSizes[name]
+  if not orig then
+    orig = {}
+    for _, f in ipairs(SIZE_FIELDS) do
+      local ok, v = pcall(function() return m:getField(f, 0) end)
+      if ok and tonumber(v) then orig[f] = tonumber(v) end
+    end
+    M.levelSizes[name] = orig
+  end
+  for f, v in pairs(orig) do
+    local nv = M.levelSizeAt(v, M.square)
+    if nv then pcall(function() m:setField(f, 0, tostring(nv)) end) end
+  end
+end
+
 local function setMaterialBase(m, name, path, tex, size)
-  -- Runtime-made layers need their look once per square size. Level materials carry theirs.
+  -- Runtime-made layers need their look once per square size. Level materials carry theirs, at LEVEL_SQUARE.
   if path and M.runtimeMade[name] and M.looked[name] ~= M.square then applyLook(m, name); M.looked[name] = M.square end
+  if not M.runtimeMade[name] and M.looked[name] ~= M.square and (M.levelSizes[name] or M.square ~= M.LEVEL_SQUARE) then
+    rescaleLevel(m, name)
+    M.looked[name] = M.square
+  end
   m:setField('baseColorBaseTex', 0, tex)
   m:setField('baseColorBaseTexSize', 0, size)
 end

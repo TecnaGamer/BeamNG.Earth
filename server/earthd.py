@@ -623,10 +623,10 @@ FOLLOW_RULES = {
 }
 BLOCK_SIZES = tuple(int(m / heightmap.SQUARE) for m in sorted(FOLLOW_RULES))    # samples per edge (1024, 2048)
 TERRAIN_BLOCK = farfield.TERRAIN_BLOCK     # terrain mode's frozen 2 km block
-BLOCK_DEFAULT = 1024        # Server()'s block (test_v131_default.py pins the library default)
+BLOCK_DEFAULT = heightmap.SIZE  # Server()'s block (1 km) (test_v131_default.py pins the library default)
 # The command line's block in mesh mode: 1 km (M4: in-game 2026-10-10, the 512² block at 2 m; since 2026-11-01 the
 # same kilometre at 1 m, 1024² samples: the stock maps' resolution, a .ter swap of ~29 ms on the Stelvio)
-CLI_BLOCK_MESH = 1024
+CLI_BLOCK_MESH = heightmap.SIZE     # (512² at 2 m: BNGE_GROUND_SQUARE, the lighter ground)
 # |cx|,|cy| of an anchor's first terrain. A rebase hint stays within ~512 m of the new origin, but
 # a resync (same origin, after a server restart) asks for the block around the player, which can be
 # up to the mod's maximum rebase distance (16 km) away, plus however far the player got past it.
@@ -3840,6 +3840,7 @@ class Server:
             idx = surfacemod.classify(classes, keep["u"], heightmap.SQUARE, keep["lat"], keep["lon"])
             if self.sea is not None and not provisional:    # under water: the bed (no grass through the surface)
                 idx[self.sea.depth(keep["lat"], keep["lon"]) > blockworker.WATER_BED_M] = surfacemod.MUD
+            land = idx.copy()           # (the land cover before the paint: surface.fold_layers)
             road_feats, roads_complete = self.surface.roads(keep["lat"], keep["lon"])
             stages["landcover"] = time.perf_counter() - t1
             t1 = time.perf_counter()
@@ -3857,6 +3858,7 @@ class Server:
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
             stages["roadPaint"] = time.perf_counter() - t1
+            idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
             complete = complete and roads_complete
             info["layers"] = surfacemod.write_masks(idx[::-1], self.out_dir, self.hm_name((anchor.id, cx, cy))[:-4])
             info["surfaceComplete"] = complete

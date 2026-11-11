@@ -63,6 +63,7 @@ def split(share=SERVER_SHARE):
 # seconds): the mod writes them to its settings file in the game's user folder (settings.lua M.FILE, as bmplaunch reads
 # beammpOnLaunch), read when the server starts. "auto" / "low": the defaults above.
 MOD_SETTINGS = ("settings", "beamngEarth.json")
+LIGHT_GROUND_PRESETS = ("low", "medium")   # the mod's quality presets whose groundGrid is "2" (settings.lua PRESETS)
 CORE_CHOICES = ("1", "2", "3", "4", "6", "8")
 PRIORITIES = ("low", "normal")
 
@@ -107,6 +108,13 @@ def player_settings(user_dir):
         out["teleport_full"] = env == "1"
     if d.get("models3dmr") is False:
         out["models3dmr"] = False
+    # the Low / Medium presets' lighter ground (heightmap.ground_square); a file from before the setting existed follows
+    # its quality preset, as the mod's settings do (settings.lua: a knob a file lacks takes its preset's value)
+    grid = d.get("groundGrid")
+    if grid is None and str(d.get("quality", "")) in LIGHT_GROUND_PRESETS:
+        grid = "2"
+    if str(grid) == "2":
+        out["ground_square"] = "2"
     return out
 
 

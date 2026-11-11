@@ -2,6 +2,7 @@
 import argparse
 from contextlib import ExitStack
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -184,6 +185,21 @@ class ServerReadinessTest(unittest.TestCase):
                     mock.patch.object(launcher.time, "sleep", side_effect=clock.sleep):
                 self.assertFalse(launcher.wait_server_ready(proc, log, timeout=1))
         self.assertEqual(clock.now, 1)
+
+    def test_ground_grid_reaches_the_server(self):
+        # the settings page's ground grid (the Low / Medium presets: 2 m, GitHub #943) as BNGE_GROUND_SQUARE
+        for grid, want in (("2", "2"), ("1", None), (None, None)):
+            with self.subTest(grid=grid), tempfile.TemporaryDirectory() as folder:
+                os.makedirs(os.path.join(folder, "settings"))
+                with open(os.path.join(folder, "settings", "beamngEarth.json"), "w") as f:
+                    json.dump({} if grid is None else {"groundGrid": grid}, f)
+                proc = mock.Mock()
+                with mock.patch.object(launcher.subprocess, "Popen", return_value=proc) as popen, \
+                        mock.patch.object(launcher.threading, "Thread"), \
+                        mock.patch.dict(launcher.os.environ, {}, clear=False) as env:
+                    env.pop("BNGE_GROUND_SQUARE", None)
+                    launcher.start_server(folder, [], os.path.join(folder, "server.log"))
+                self.assertEqual(popen.call_args.kwargs["env"].get("BNGE_GROUND_SQUARE"), want)
 
 
 class BeammpStartupTest(unittest.TestCase):

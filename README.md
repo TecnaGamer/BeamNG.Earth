@@ -164,7 +164,7 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Drive anywhere: the physics ground follows the car at 100+ mph, the world origin moves with you
   (floating origin), and the world streams ahead of you; you never fall out of the world.
 - The ground around the car is a 1 km terrain block at 1 m (3 ft) resolution, the stock maps' own detail, so road
-  edges, ditches and the ground at walls follow the map closely.
+  edges, ditches and the ground at walls follow the map closely (the Low and Medium presets use a lighter 2 m grid).
 - Buildings, sidewalks, curbs and bridge decks are solid (lean collision meshes near the car keep the
   physics' collision rebuilds cheap).
 - Real bridge and tunnel heights where open data measures them: in the US, bridge decks follow the USGS 3DEP lidar
@@ -306,6 +306,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     of view count), so flat land stays coarser and mountains finer.
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
+  - **Ground grid** (1 m / 2 m): how fine the ground you drive on is. 2 m (the Low and Medium presets) loads a
+    quarter of the data each time the ground moves with you: shorter hitches while driving, at the cost of softer
+    small bumps and road edges; from the next start of BeamNG.Earth.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
   - **Building draw distance**: the simple far buildings, the skyline and far bridges (Near to Max, twice Normal's 1
     and 3 miles).

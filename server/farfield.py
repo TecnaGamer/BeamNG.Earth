@@ -93,11 +93,11 @@ CONTENT_FORMAT = {32: 3, 64: 4}     # the protocol's FORMAT (hello.format) of ea
 # v1.3.1 rule (two finest levels tex_near, the rest tex_far; both 256). 64 (§3.1; P8 may change it):
 # 256 to L1, 512 from L2 (keeps today's texel density at distance).
 TEX_DEFAULT = {32: (256, 256, 256), 64: (256, 256, 256, 512)}
-BLOCK_SIZES = (1024, 2048)  # terrain block samples per edge (heightmap.SQUARE apart: 1 km, 2 km)
+BLOCK_SIZES = tuple(int(m / heightmap.SQUARE) for m in (1024, 2048))  # terrain block samples per edge (1 km, 2 km)
 # Terrain mode's block: frozen at the v1.3.1 layout's 2 km on its 256 m grid, its L0 floor's tiles aligned with the
 # block's edges (a 1 km block on the 128 m grid always straddles 256 m tiles: the uncover gate closed, 2026-11-01):
 # 2048 samples at 1 m
-TERRAIN_BLOCK = 2048
+TERRAIN_BLOCK = int(2048 / heightmap.SQUARE)
 # Triangles per tile shape: 8192 + 512 at 64 cells. The old 8192 was the ProceduralMesh rule;
 # .cdae has no such cliff (§3.1): its limit is the engine's 16-bit vertex indices (VERTS_MAX), which the fine near
 # tiles (NEAR_FINE_M, up to ~2x the grid's triangles at a cutting) keep under.
