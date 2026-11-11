@@ -52,6 +52,14 @@ SETS = {
         {"name": "pacer-p70", "ctl": ctl(1), "pacer": {"PERCENTILE": 0.70}},
         {"name": "pacer-p50", "ctl": ctl(1), "pacer": {"PERCENTILE": 0.50}},
     ],
+    # before / after: the 1.9 default (stock filter + percentile pacer) against the new filter with and without pacing
+    "final": [
+        {"name": "1.9: stock+p70", "ctl": ctl(0), "pacer": {"PERCENTILE": 0.70}},
+        {"name": "stock, no pacer", "ctl": ctl(0), "pacer": "off"},
+        {"name": "new, no pacer", "ctl": ctl(1), "pacer": "off"},
+        {"name": "new+p70", "ctl": ctl(1), "pacer": {"PERCENTILE": 0.70}},
+        {"name": "new+p50", "ctl": ctl(1), "pacer": {"PERCENTILE": 0.50}},
+    ],
     # stock engine filter with the shipped pacer vs nothing (the 1.9 default against bare)
     "base": [
         {"name": "stock+p70", "ctl": ctl(0), "pacer": {"PERCENTILE": 0.70}},
@@ -125,11 +133,31 @@ def analyze(path, variants, mph=None, skip=1.5, win=0.25):
     t = [float(r["t_ms"]) for r in rows]
     # (the physics of frame k advance by the dtReal of frame k - 2, measured 2026-11-11: dtSim[k] follows dtReal[k-2],
     # correlation 0.998; so the game time of the interval ending at frame k is dtSim[k + LAG])
-    ds = [float(r["dtSim"]) for r in rows][LAG:] + [0.0] * LAG
-    v = [float(r["speed"]) for r in rows]
+    ds0 = [float(r["dtSim"]) for r in rows]
+    ds = ds0[LAG:] + [0.0] * LAG
     var = [int(r["variant"]) for r in rows]
-    # (a frame without game time: the mod's edge-guard hold or a pause, not the filter's doing; a break like a slow car)
-    v = [x if d > 0 else 0.0 for x, d in zip(v, ds)]
+    # moving: the speed averaged over ~61 frames (the scripted driver's ball reads +-20 % frame to frame when dtSim
+    # varies: it places the prop by the dtSim it is handed, physics runs another; an artifact of the test driver)
+    v0 = [float(r["speed"]) for r in rows]
+    acc, v = [0.0], []
+    for x in v0:
+        acc.append(acc[-1] + x)
+    for k in range(len(v0)):
+        a, b = max(0, k - 30), min(len(v0), k + 31)
+        v.append((acc[b] - acc[a]) / (b - a))
+    # a hold (the mod's edge guard pauses physics while the world loads: 3+ frames without game time) is a break too,
+    # with 0.5 s either side
+    hold = [False] * len(rows)
+    k = 0
+    while k < len(rows):
+        j = k
+        while j < len(rows) and ds0[j] == 0:
+            j += 1
+        if j - k >= 3:
+            for m in range(max(0, k - 30), min(len(rows), j + 30 + LAG)):
+                hold[m] = True
+        k = j + 1
+    v = [0.0 if h else x for x, h in zip(v, hold)]
     nominal = mph * MPH if mph else max(v) * 0.95
     # segments: runs of one variant; frames kept from `skip` s after its start, moving at >= 90 % of nominal
     segs, i = [], 1
@@ -141,7 +169,7 @@ def analyze(path, variants, mph=None, skip=1.5, win=0.25):
         i = j + 1
     out = {}
     for vi, vdef in enumerate(variants, 1):
-        gaps, sp, steps, game, wall = [], [], [], 0.0, 0.0
+        gaps, sp, steps, judder, game, wall = [], [], [], [], 0.0, 0.0
         for (s0, s1) in segs:
             if var[s0] != vi:
                 continue
@@ -149,7 +177,7 @@ def analyze(path, variants, mph=None, skip=1.5, win=0.25):
             while k0 <= s1 and t[k0] - t[s0] < skip * 1000:
                 k0 += 1
             # frames of this segment at speed
-            ks = [k for k in range(max(k0, 1), s1 + 1) if v[k] >= 0.9 * nominal]
+            ks = [k for k in range(max(k0, 2), s1 + 1) if v[k] >= 0.8 * nominal]
             if len(ks) < 10:
                 continue
             ks_set = set(ks)
@@ -160,6 +188,8 @@ def analyze(path, variants, mph=None, skip=1.5, win=0.25):
                 wall += g
                 if k - 1 in ks_set:
                     steps.append(abs(g - (t[k - 1] - t[k - 2])))
+                if g < 40:          # judder: what the rendered frame advanced against the time it stood for
+                    judder.append(ds0[k] - g)
             # 0.25 s windows wholly inside the kept run of frames (consecutive)
             run_ = []
             for k in ks:
@@ -177,6 +207,7 @@ def analyze(path, variants, mph=None, skip=1.5, win=0.25):
             "speed_p99": r3(pct(sp, 0.99)), "game_real": round(game / wall, 4),
             "ft_p50": r2(pct(gaps, 0.5)), "ft_p90": r2(pct(gaps, 0.9)), "ft_p99": r2(pct(gaps, 0.99)),
             "ft_p999": r2(pct(gaps, 0.999)), "jitter_p95": r2(pct(steps, 0.95)),
+            "judder_rms": r2((sum(x * x for x in judder) / len(judder)) ** 0.5) if judder else None,
             "over33_pm": round(sum(g > 33.3 for g in gaps) / mins, 1),
             "over50_pm": round(sum(g > 50 for g in gaps) / mins, 1),
             "over100_pm": round(sum(g > 100 for g in gaps) / mins, 1),
@@ -211,7 +242,7 @@ def r3(x):
 
 def table(res):
     cols = ["minutes", "fps", "speed_p1", "speed_p5", "speed_p95", "speed_p99", "game_real", "ft_p50", "ft_p90",
-            "ft_p99", "ft_p999", "jitter_p95", "over33_pm", "over50_pm", "over100_pm"]
+            "ft_p99", "ft_p999", "jitter_p95", "judder_rms", "over33_pm", "over50_pm", "over100_pm"]
     lines = ["| variant | " + " | ".join(cols) + " |", "|" + "---|" * (len(cols) + 1)]
     for name, m in res.items():
         lines.append(f"| {name} | " + " | ".join(str(m.get(c)) for c in cols) + " |")
