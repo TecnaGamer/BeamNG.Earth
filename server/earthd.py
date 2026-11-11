@@ -326,6 +326,7 @@ BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this l
 # A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
 # stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
 PROVISIONAL_BASE_WAIT_S = 0.3
+PROVISIONAL_Q_WAIT_S = 1.0      # ... and this long for the anchor's height survey (else its own finest quantum)
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -3465,13 +3466,16 @@ class Server:
             from worldbundle import BundleError
             raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
-        # (the anchor's height quantum when surveyed, else the finest step, which heightmap.block_params coarsens for
-        # this block alone as its own relief needs: the survey (+-15 km of DEM z10) was 3.6 s of a fresh Spokane's 5.2 s
-        # first block, 2026-11-11; it goes on beside it for the graded blocks)
+        # (the anchor's height quantum, surveyed for PROVISIONAL_Q_WAIT_S at most; else the finest step, which
+        # heightmap.block_params coarsens for this block alone as its own relief needs, a step of at most Q/2 at its
+        # seams until the graded block replaces it: the survey (+-15 km of DEM z10) was 3.6 s of a fresh Spokane's
+        # 5.2 s first block, 2026-11-11; it goes on beside it for the graded blocks)
         q = anchor.q
         if q is None:
-            q = heightmap.Q_LADDER[0]
-            threading.Thread(target=self.anchor_q, args=(anchor,), daemon=True, name="survey-q").start()
+            sv = threading.Thread(target=self.anchor_q, args=(anchor,), daemon=True, name="survey-q")
+            sv.start()
+            sv.join(PROVISIONAL_Q_WAIT_S)
+            q = anchor.q if anchor.q is not None else heightmap.Q_LADDER[0]
         base = None
         if self.near_visual == "detail" and self.imagery is not None:
             # (here, not in a block process: the other lane's process can still be busy with the old place's block,
