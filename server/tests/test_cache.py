@@ -576,6 +576,7 @@ class ThreadTest(Base):
         self.assertTrue(os.path.exists(os.path.join(self.root, cachemod.INDEX_FILE)), "SAVE_S passed: saved")
 
     def test_background_thread(self):
+        self.enterContext(mock.patch.object(cachemod, "WALK_DELAY_S", 0.0))     # (its start-up walk at once)
         put(self.root, "imagery/usgs/16/1/0.jpg", MB, T0 - DAY)
         c = cachemod.Cache(self.root, 0.0001, now=self.clock)
         self.assertTrue(c._ready_ev.wait(10))

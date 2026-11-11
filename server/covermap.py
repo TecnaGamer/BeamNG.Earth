@@ -339,6 +339,8 @@ class CoverMap:
         import math
 
         import dem as demmod
+        if self.cache is not None and hasattr(self.cache, "walk_soon"):
+            self.cache.walk_soon()              # (the view needs the cache's walk: it waits WALK_DELAY_S otherwise)
         if isinstance(z, bool) or not isinstance(z, int) or not GRID_MIN_Z <= z <= GRID_MAX_Z:
             raise ValueError(f"cache map zoom {z!r}: {GRID_MIN_Z}..{GRID_MAX_Z}")
         m = MODES.get(mode or "summary")
