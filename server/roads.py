@@ -2098,6 +2098,10 @@ def road_tapers(feats, urban_fn=None, widths=None, left_hand=False):
                 hp = hairpin_tapers(feats.lonlat[a:b], sp.width)
                 if hp:
                     got[i] = tuple(got[i] or ()) + hp
+        if flares_enabled():                    # (a service way's entrance into a bigger road: entrance_flares)
+            for i, fl in enumerate(entrance_flares(feats, specs, got)):
+                if fl:
+                    got[i] = tuple(got[i] or ()) + fl
         memo[k] = got
     return got
 
@@ -3366,6 +3370,115 @@ def hairpin_tapers(lonlat, width):
     return tuple((lo, la, float(width) + HAIRPIN_WIDEN_M, HAIRPIN_SPAN_M) for lo, la in hairpin_apexes(lonlat))
 
 
+# Entrance flares (the user's screenshot, 2026-11-10: the gas station on CA-76 at Pala CA, ~33.3643, -117.0870, sits
+# behind a ribbon the width of one car): a lot's or a station's entrance is mapped as highway=service (often
+# service=driveway / parking_aisle) and drawn at STYLE's flat 4 m (3.5 one-way), while a real entrance opens into its
+# junction (driveway design guides: ~7-9 m throats where trucks or two-way traffic turn in). Where an asphalt service
+# way's end lies on a road of a bigger class (FLARE_CLASSES; a vertex of that road counts: a through road is not
+# always split at the joint), the service way runs to FLARE_THROAT_M at the joint over FLARE_SPAN_M, as a taper of
+# the road (road_tapers, like a pass road's hairpins: its paint, markings, curbs and edge decals follow,
+# taper_widths); FLARE_LOT_THROAT_M where it serves a mapped lot (its subclass parking_aisle, or an aisle way on one
+# of its ends: these serve two-way entry). A mapped width stands (no flare: an explicit mapped width always wins); none between two
+# service ways, none on a way with a bridge part, none into a curbed street (a joined road with sidewalks: its curb
+# returns and crosswalks own the mouth, junctions.py), and the throat never exceeds the joined road's own
+# carriageway (the mouth stays within the junction's footprint, off the joined road's lanes) nor flares a way
+# already that wide (TAPER_MIN_DW). An end the taper kernel already tapers (one road going on as another) keeps
+# that taper. BNE_ENTRANCE_FLARES=on turns them on (off by default until they are checked in game); a build switch
+# (revisit.code_key / switches_key): every tile, skin and plan built without them keeps its key.
+FLARE_THROAT_M = 6.5
+FLARE_LOT_THROAT_M = 7.5
+FLARE_SPAN_M = 15.0
+# motorways left out: a service way on a motorway's own line is a mapping error, not an entrance
+FLARE_CLASSES = {"trunk", "primary", "secondary", "tertiary", "residential", "living_street", "unclassified",
+                 "unknown"}
+
+
+def flares_enabled():
+    return os.environ.get("BNE_ENTRANCE_FLARES", "off").lower() in {"1", "on", "true"}
+
+
+def _flare_joins(feats, specs):
+    """{vertex key (1e-6 degrees, _end_key's) of a road of FLARE_CLASSES: (the widest such carriageway there m,
+    whether any has sidewalks there)}: every vertex, not only ends (junctions.py reads nodes the same way; a
+    through road is not always split at a driveway's joint). One numpy pass over the qualifying roads' vertices."""
+    co, ro, po = feats.coord_off, feats.ring_off, feats.part_off
+    spans, w, walks = [], [], []
+    for j, sp in enumerate(specs):
+        if sp is None or sp.cls not in FLARE_CLASSES:
+            continue
+        a, b = int(co[ro[po[j]]]), int(co[ro[po[j + 1]]])
+        if b > a:
+            spans.append((a, b))
+            w.append(float(sp.width))
+            walks.append(has_sidewalks(sp))
+    if not spans:
+        return {}
+    counts = np.array([b - a for a, b in spans])
+    keys = np.round(np.concatenate([feats.lonlat[a:b] for a, b in spans]) * 1e6).astype(np.int64)
+    uniq, first, inv = np.unique(keys[:, 0] * 4294967296 + keys[:, 1],                  # (lon, lat < 2^28: one int)
+                                 return_index=True, return_inverse=True)
+    wmax = np.zeros(len(uniq))
+    np.maximum.at(wmax, inv, np.repeat(np.asarray(w), counts))
+    wk = np.zeros(len(uniq), bool)
+    np.logical_or.at(wk, inv, np.repeat(np.asarray(walks, bool), counts))
+    return {(int(k[0]), int(k[1])): (float(wmax[i]), bool(wk[i]))
+            for i, k in enumerate(keys[first].tolist())}
+
+
+def entrance_flares(feats, specs, tapers=None):
+    """Per feature: the entrance-flare tapers of its service ways ((lon, lat, width there m, length m), as
+    road_tapers'; () none), by FLARE_*. specs: road_specs'; tapers: the features' tapers so far (the kernel's and
+    the hairpins': an end among them keeps its taper). Pure."""
+    out = [()] * len(feats)
+    if not any(sp is not None and sp.cls == "service" for sp in specs):
+        return out
+    rules = feats.rules
+    sub = rules.get("subclass")
+    bridges = bridge_specs(feats)
+    _, keys = _end_index(feats)
+    joins = aisle_keys = lens = None
+    for i, sp in enumerate(specs):
+        if sp is None or sp.cls != "service" or sp.kind != "paved" or keys[i] is None or bridges[i] is not None:
+            continue                            # (asphalt only: a cobble way is drawn as fixed-width strips)
+        if joins is None:
+            joins = _flare_joins(feats, specs)
+            if not joins:
+                return out
+        ends = [k for k in dict.fromkeys(keys[i]) if k in joins]    # (a loop's two ends are one joint)
+        if not ends:
+            continue
+        if _rule_value(rules.get("width"), i) is not None or _osm(feats, "width", i, *OSM_WIDTH_M) is not None:
+            continue                            # (a mapped width stands)
+        if aisle_keys is None:
+            aisle_keys = set()
+            for j, s2 in enumerate(specs):
+                if (s2 is not None and s2.cls == "service" and keys[j] is not None
+                        and _rule_value(sub, j) == "parking_aisle"):
+                    aisle_keys.update(keys[j])
+        lot = _rule_value(sub, i) == "parking_aisle" or any(k in aisle_keys for k in keys[i])
+        done = {_end_key(t[0], t[1]) for t in (tapers[i] if tapers is not None else ()) or ()}
+        got = []
+        for k in ends:
+            if k in done:
+                continue                        # (one road going on as another: the kernel's taper stands)
+            w2, walks = joins[k]
+            if walks:
+                continue                        # (a curbed street: its curb returns and crosswalks own the mouth)
+            throat = min(FLARE_LOT_THROAT_M if lot else FLARE_THROAT_M, w2)
+            if throat - sp.width < TAPER_MIN_DW:
+                continue
+            if lens is None:
+                lens = _lengths(feats)
+            length = float(lens[i])
+            if not math.isfinite(length):
+                continue
+            span = min(FLARE_SPAN_M, TAPER_SHARE * length)      # (both ends flared never overlap: TAPER_SHARE < 0.5)
+            if span < 1.0:
+                continue
+            got.append((k[0] / 1e6, k[1] / 1e6, float(throat), float(span)))
+        if got:
+            out[i] = tuple(got)
+    return out
 
 
 SE_TOWN_MAX_KMH = 70.0      # Trafikförordningen 3 kap. 17 §: 50 km/h in a built-up area, 70 outside; so a road of 70 or

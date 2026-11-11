@@ -35,7 +35,7 @@ def rules(entries, kind="text"):
     return mapgeom.RuleTable(f, v, a, b)
 
 
-def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=None, subtypes=None):
+def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=None, subtypes=None, subclasses=()):
     """Features of LINE roads; lines: list of [(east m, north m), ...] around (LAT, LON)."""
     coords, part_off, ring_off, coord_off = [], [0], [0], [0]
     for ln in lines:
@@ -51,7 +51,8 @@ def features(lines, classes, surfaces=(), widths=(), levels=(), flags=(), ids=No
         coord_off=np.array(coord_off, np.int64), lonlat=np.array(coords, np.float64),
         attrs={"class": np.array(classes), "subtype": np.array(subtypes or ["road"] * n)},
         rules={"surface": rules(list(surfaces)), "width": rules(list(widths), "float"),
-               "level": rules(list(levels), "float"), "flags": rules(list(flags))})
+               "level": rules(list(levels), "float"), "flags": rules(list(flags)),
+               "subclass": rules(list(subclasses))})
 
 
 def flat(lat, lon):
@@ -1955,6 +1956,124 @@ class MountainRoadTest(unittest.TestCase):
         self.assertLess(at(steep, -5.0), -3.0, "the fill side falls away")
         self.assertLess(abs(at(wide, -5.0)), abs(at(steep, -5.0)) - 1.0, "without the flag: a wider bench")
         self.assertLess(at(wide, 7.0), at(steep, 7.0) - 1.0)
+
+
+class EntranceFlareTest(unittest.TestCase):
+    """Entrance flares (roads.entrance_flares, BNE_ENTRANCE_FLARES; the gas station on CA-76 at Pala CA): a paved
+    service way's end into a road of a bigger class runs to the throat width over its last metres through its tapers;
+    not between service ways, not over a mapped width, never past the joined road's own carriageway."""
+
+    ON = {"BNE_ENTRANCE_FLARES": "on"}
+
+    @staticmethod
+    def tee(cls="primary", **kw):
+        """A 40 m service driveway east off a road of class cls running north through its start."""
+        return features([[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0), (30.0, 0.0), (40.0, 0.0)],
+                         [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)]], ["service", cls], **kw)
+
+    @staticmethod
+    def widths_at(f, i=0):
+        sp = roads.road_specs(f)[i]
+        ll = f.lonlat[f.coord_off[f.ring_off[f.part_off[i]]]:f.coord_off[f.ring_off[f.part_off[i] + 1]]]
+        return roads.taper_widths(sp.width, roads.road_tapers(f)[i], ll[:, 0], ll[:, 1]), sp
+
+    def test_service_into_primary_flares(self):
+        """The joint end runs to FLARE_THROAT_M (the primary is wider), the far end stays the class's 4 m; the joined
+        road is a vertex joint (the through road is not split there), and its own tapers are untouched."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee()
+            ws, sp = self.widths_at(f)
+            self.assertEqual(sp.width, 4.0)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[-1]), 4.0, delta=0.01)
+            self.assertGreater(float(ws[1]), 4.0, "eased, not a step (10 m into the 15 m span)")
+            self.assertLess(float(ws[1]), float(ws[0]))
+            self.assertEqual(roads.road_tapers(f)[1], (), "the primary keeps its own width")
+
+    def test_off_by_default(self):
+        with mock.patch.dict(os.environ):       # (restored whole on exit)
+            os.environ.pop("BNE_ENTRANCE_FLARES", None)
+            self.assertFalse(roads.flares_enabled())
+            ws, _ = self.widths_at(self.tee())
+            self.assertIsNone(ws, "no tapers: BNE_ENTRANCE_FLARES is off")
+
+    def test_two_service_ways_no_flare(self):
+        with mock.patch.dict(os.environ, self.ON):
+            ws, _ = self.widths_at(self.tee(cls="service"))
+            self.assertIsNone(ws)
+
+    def test_mapped_width_stands(self):
+        with mock.patch.dict(os.environ, self.ON):
+            ws, sp = self.widths_at(self.tee(widths=[(0, 5.0)]))
+            self.assertEqual(sp.width, 5.0)
+            self.assertIsNone(ws, "a mapped width stands, over and under the throat")
+            self.assertIsNone(self.widths_at(self.tee(widths=[(0, 9.0)]))[0])
+
+    def test_throat_capped_at_the_joined_road(self):
+        """Into a rural unclassified (5.5 m) the throat is its width, not FLARE_THROAT_M: the mouth stays within the
+        junction's own footprint."""
+        with mock.patch.dict(os.environ, self.ON):
+            ws, _ = self.widths_at(self.tee(cls="unclassified"))
+            self.assertAlmostEqual(float(ws[0]), 5.5, delta=0.01)
+
+    def test_lot_entrance_minimum(self):
+        """A driveway with a parking aisle on its far end serves a mapped lot: FLARE_LOT_THROAT_M (two-way entry);
+        the aisle itself, ending between service ways, is not flared."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)], [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)],
+                          [(40.0, 0.0), (40.0, 30.0), (40.0, 60.0)]],
+                         ["service", "primary", "service"], subclasses=[(2, "parking_aisle")])
+            ws, _ = self.widths_at(f)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_LOT_THROAT_M, delta=0.01)
+            self.assertEqual(roads.road_tapers(f)[2], ())
+
+    def test_curbed_street_keeps_its_corners(self):
+        """A joined road with sidewalks (a curbed town street): no flare, its curb returns own the mouth."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee(cls="residential")
+            specs = [sp if sp is None or sp.cls != "residential" else sp._replace(urban=True)
+                     for sp in roads.road_specs(f)]
+            self.assertTrue(roads.has_sidewalks(specs[1]))
+            self.assertEqual(roads.entrance_flares(f, specs), [(), ()])
+            self.assertTrue(roads.entrance_flares(f, roads.road_specs(f))[0], "rural: flared")
+
+    def test_going_on_runs_to_the_joined_width(self):
+        """A service way going straight on as an unclassified road (the taper kernel joins same-class roads only:
+        a 1.5 m step today) runs to the joined road's width — one taper, not a flare stacked on a kernel one."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)], [(-80.0, 0.0), (-40.0, 0.0), (0.0, 0.0)]],
+                         ["service", "unclassified"])
+            tp = roads.road_tapers(f)[0]
+            self.assertEqual(len(tp), 1)
+            self.assertAlmostEqual(tp[0][2], 5.5, delta=0.01)
+
+    def test_same_class_mapped_width_keeps_the_kernel_taper(self):
+        """Two service ways, one with a mapped width: the kernel's taper to the mean stands alone (no flare:
+        service ways and mapped widths are left out)."""
+        fixture = lambda: features([[(0.0, 0.0), (20.0, 0.0), (40.0, 0.0)],      # noqa: E731
+                                    [(-80.0, 0.0), (-40.0, 0.0), (0.0, 0.0)]],
+                                   ["service", "service"], widths=[(0, 8.0)])
+        before = roads.road_tapers(fixture())
+        self.assertAlmostEqual(before[0][0][2], 6.0, delta=0.01)
+        with mock.patch.dict(os.environ, self.ON):
+            self.assertEqual(roads.road_tapers(fixture()), before)
+
+    def test_deck_end_no_flare(self):
+        """A service way with a bridge part is not flared (its deck's width is its own)."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = self.tee(levels=[(0, 1.0, 0.5, 1.0)])
+            self.assertEqual(roads.entrance_flares(f, roads.road_specs(f)), [(), ()])
+
+    def test_both_ends_short_way(self):
+        """A short connector between two bigger roads flares at both ends; the spans never overlap (TAPER_SHARE)."""
+        with mock.patch.dict(os.environ, self.ON):
+            f = features([[(0.0, 0.0), (10.0, 0.0), (20.0, 0.0)], [(0.0, -100.0), (0.0, 0.0), (0.0, 100.0)],
+                          [(20.0, -100.0), (20.0, 0.0), (20.0, 100.0)]],
+                         ["service", "primary", "secondary"])
+            ws, sp = self.widths_at(f)
+            self.assertAlmostEqual(float(ws[0]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[-1]), roads.FLARE_THROAT_M, delta=0.01)
+            self.assertAlmostEqual(float(ws[1]), 4.0, delta=0.01, msg="the middle its own width: the spans do not meet")
 
 
 class GravelTest(unittest.TestCase):
