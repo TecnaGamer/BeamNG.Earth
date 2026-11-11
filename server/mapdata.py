@@ -89,6 +89,8 @@ OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fue
                                 # user, 2026-10-28: "lets test OSM if it is too laggy we will revert")
 OSM_POI_VERSION = 2             # the cells' rows: 2 = fuel and charging stations, with their amenity (EV chargers,
                                 # 2026-10-29); a new version is a new folder, and part of versions()
+OSM_STREET_VERSION = 1          # Australian cells' payphone and post box rows (streetamenities.py): their own folder, read
+                                # only for cells in Australia, so no other cell's rows or cache key changes
 # (cell, layer)s built ahead at once by warm() (a fresh place's first road tile asked for ~70 of them one after another:
 # 56 s in Marseille, GitHub #241): half the CPUs, at most 8, and none on 8 or fewer: each is a DuckDB query and a
 # decode of its own, and on a Steam Deck (4 cores, 8 threads) the work done ahead kept the CPUs from the road tiles
@@ -963,6 +965,47 @@ class MapData:
             self._osm_pruned = now                  # (its blocks under a cap)
             _, remote = self.osmfuel.version(kind)
             osmfuel.prune_blocks(remote.cache_dir, remote.size)
+        return rows
+
+    def osm_street_path(self, key):
+        return os.path.join(self.raw_dir, "osmstreet_cells", f"v{OSM_STREET_VERSION}", f"{_key(key)}.json")
+
+    def osm_street_cached(self, key):
+        """The Australian cell's OpenStreetMap payphones and post boxes (osmfuel rows) as fetched by osm_street_fetch, or None
+        when not fetched yet (like osm_fuel_cached). [] for a cell outside Australia (never fetched: climate.au_cell) or when off."""
+        if not OSM_FUEL:
+            return []
+        import climate
+        if not climate.au_cell(_key(key).bounds()):
+            return []
+        try:
+            with open(self.osm_street_path(key), encoding="utf-8") as f:
+                rows = json.load(f)
+        except (OSError, ValueError):
+            return None
+        for r in rows:
+            r["bbox"] = tuple(r["bbox"])
+        return rows
+
+    def osm_street_fetch(self, key, kind="prefetch"):
+        """Worker thread: an Australian cell's payphones and post boxes fetched (the fuel rows' file, other amenities) and kept
+        on disk; [] for a cell outside Australia (no request), when off or without a fetcher. Errors are raised (asked again)."""
+        import climate
+        import osmfuel
+        if not OSM_FUEL or self.fetcher is None or not climate.au_cell(_key(key).bounds()):
+            return []
+        with self._lock:
+            if getattr(self, "osmfuel", None) is None:
+                self.osmfuel = osmfuel.OsmFuel(self.raw_dir, self.fetcher)
+        if not osmfuel.budget_ok(self.fetcher):
+            raise osmfuel.OverShare(f"OSM street amenities: past {osmfuel.OSM_FUEL_SHARE:.0%} of {osmfuel.HOST}'s daily budget")
+        rows = self.osmfuel.cell(_key(key).bounds(), kind, osmfuel.STREET_AMENITIES)
+        path = self.osm_street_path(key)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp = f"{path}.{os.getpid()}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(rows, f)
+        os.replace(tmp, path)
         return rows
 
     def osm_fuel_warm(self, kind="prefetch"):

@@ -1,0 +1,68 @@
+{
+  "bne_au_warn_yellow": {
+    "name": "bne_au_warn_yellow",
+    "mapTo": "bne_au_warn_yellow",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "2d07a605-5218-5067-891e-28f70a6c1619",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.96,
+          0.74,
+          0.04,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_warn_black": {
+    "name": "bne_au_warn_black",
+    "mapTo": "bne_au_warn_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "120776ff-4097-585f-8bf7-0f18f39c6c5b",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.02,
+          0.02,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_warn_steel": {
+    "name": "bne_au_warn_steel",
+    "mapTo": "bne_au_warn_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0bc5fba3-bafd-56a2-9fd3-fba7b819a8dc",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

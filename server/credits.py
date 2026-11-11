@@ -124,6 +124,7 @@ FEATURES = {
     "bld:nyc-3d": "NYC 3-D Building Model (OTI)",
     "roadz:hk": "HK Gov TD and CEDD (DATA.GOV.HK, CSDI)",
     "air:ourairports": "OurAirports", "grav:egm2008": "NGA EGM2008", "climate:beck-kg": "Beck et al. (Koppen-Geiger)",
+    "veg:nvis": "NVIS Version 7.0, (c) Commonwealth of Australia (DCCEEW), CC BY 4.0, resampled",     # vegclass.py
 }
 # (the full wordings of features whose licences name each provider: hello.attribution / CREDITS.md)
 LONG = {
@@ -152,13 +153,15 @@ LONG = {
                       "Dachmodell LOD2.1, CC BY 4.0), data changed",
 }
 SHORT.update(FEATURES)
+SHORT["veg:nvis"] = "NVIS 7.0 (DCCEEW, CC BY 4.0)"        # (the overlay trims; the wording of record is full_label)
 GROUPS = [("img", "Imagery", "Far imagery"), ("dem", "Elevation", "Far elevation"), ("map", "Map", "Far map"),
           ("land", "Land cover", "Far land cover"), ("canopy", "Trees", "Far trees"), ("sea", "Sea depth", "Far sea"),
           ("bridge", "Bridges", "Far bridges"), ("model", "3D models", "Far 3D models"),
           ("roof", "Roofs", "Far roofs"), ("bld", "Buildings", "Far buildings"),
           ("roadz", "Road heights", "Far road heights"),
           ("air", "Airports", "Far airports"), ("wx", "Weather", "Far weather"),
-          ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate")]
+          ("grav", "Gravity", "Far gravity"), ("climate", "Climate", "Far climate"),
+          ("veg", "Vegetation", "Far vegetation")]     # veg
 # Display order of the ids (unknown ones follow, by name)
 ORDER = ([f"img:{n}" for n in IMAGERY] + [f"dem:{n}" for n in ELEVATION] + list(FEATURES) + [WEATHER_ID])
 
@@ -324,6 +327,12 @@ def feature_ids(conn):
         ids.add("grav:egm2008")
     if veg_on:                      # (the trees' tiles carry the forest ambience's set: climate.koppen_at)
         ids.add("climate:beck-kg")
+        try:                        # Australia's vegetation palettes (vegclass: NVIS) once the trees are shown there
+            import climate
+            if climate.in_australia(lat, lon):
+                ids.add("veg:nvis")
+        except Exception:
+            pass
     return ids
 
 

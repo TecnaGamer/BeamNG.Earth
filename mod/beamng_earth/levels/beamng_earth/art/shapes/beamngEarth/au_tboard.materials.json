@@ -1,0 +1,85 @@
+{
+  "bne_au_tboard_white": {
+    "name": "bne_au_tboard_white",
+    "mapTo": "bne_au_tboard_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b9530d2f-add0-5ee1-9d68-3f350be42af2",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.92,
+          0.92,
+          0.9,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_tboard_black": {
+    "name": "bne_au_tboard_black",
+    "mapTo": "bne_au_tboard_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b8a711e1-2368-5785-83f8-302ae0eff845",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.02,
+          0.02,
+          0.02,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_tboard_steel": {
+    "name": "bne_au_tboard_steel",
+    "mapTo": "bne_au_tboard_steel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "0ad7b6f6-f774-50e6-80e2-a6e6b6cd320c",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.7,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_tboard_face": {
+    "name": "bne_au_tboard_face",
+    "mapTo": "bne_au_tboard_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a4e9b0a9-8ecc-5660-8a38-d1c507e49573",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_tboard.dds",
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.3
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

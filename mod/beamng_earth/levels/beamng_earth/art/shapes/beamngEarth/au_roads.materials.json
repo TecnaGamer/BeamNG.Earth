@@ -1,0 +1,26 @@
+{
+  "bne_au_channel": {
+    "name": "bne_au_channel",
+    "mapTo": "bne_au_channel",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "02a1c25b-2993-52e1-8cef-6831bf83fa44",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.68,
+          0.68,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.88
+      },
+      {},
+      {},
+      {}
+    ],
+    "translucent": true,
+    "castShadows": false
+  }
+}

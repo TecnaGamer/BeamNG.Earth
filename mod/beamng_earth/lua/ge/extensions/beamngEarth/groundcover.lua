@@ -23,8 +23,9 @@
 -- material is missing when it is first drawn stays "no material"), then each GroundCover is recreated
 -- with its plant types' layer pointed at ours and its element count scaled by `share`. Green Hirochi
 -- Raceway grass with a little of West Coast USA's dry grass on grassland, West Coast scrub with sparse
--- green grass between on dusty ground. Generic: one rule for every place; per-biome / per-climate /
--- per-season variants are a later step. Console: beamngEarth_groundcover.setEnabled(bool), .status()
+-- green grass between on dusty ground. One rule for every place, except the grass layer's dry / green mix:
+-- the share of dry grass follows the climate and, in the southern hemisphere, the season (see "regional mix"
+-- below). Console: beamngEarth_groundcover.setEnabled(bool), .status()
 
 local M = {}
 
@@ -55,9 +56,10 @@ M.SOURCES = {
 -- +30 ms; the dense near grass costs most, the long grass is kept close, radius 70 m instead of 120).
 local LONG_NEAR = { radius = 70, dissolveRadius = 45 }
 M.DEFS = {
-  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25 },
-  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, fields = LONG_NEAR },
-  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05 },
+  -- (`mix` marks the grass layer's green / dry grass: their shares trade off at a constant total, M.mixFactors)
+  { source = 'hirochi', src = 'small_grass_close', layer = 'bngEarthGroundGrass', share = 0.25, mix = 'green' },
+  { source = 'hirochi', src = 'long_grass_distant', layer = 'bngEarthGroundGrass', share = 0.17, fields = LONG_NEAR, mix = 'green' },
+  { source = 'wcusa', src = 'grass_dry_1', layer = 'bngEarthGroundGrass', share = 0.05, mix = 'dry' },
   -- mown town yards: a little short grass, nothing long (server/surface.py LAWN)
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_lawn', layer = 'bngEarthGroundLawn', share = 0.1 },
   { source = 'wcusa', src = 'shrubs_near', layer = 'bngEarthGroundDusty', share = 0.15 },
@@ -65,8 +67,86 @@ M.DEFS = {
   { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_scrub', layer = 'bngEarthGroundDusty', share = 0.08 },
   { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_scrub', layer = 'bngEarthGroundDusty', share = 0.05,
     fields = LONG_NEAR },
+  -- sugarcane (server/surface.py CANE: WorldCover cropland in Queensland's coastal belt): the stock long grass, dense, its
+  -- plants `typeScale` times as tall, over the whole layer (no short grass between: a cane field is a wall of leaf)
+  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_cane', layer = 'bngEarthGroundCane', share = 0.45,
+    fields = LONG_NEAR, typeScale = 2.4 },
+  { source = 'hirochi', src = 'small_grass_close', name = 'small_grass_close_cane', layer = 'bngEarthGroundCane', share = 0.1,
+    typeScale = 1.6 },
+  -- long grass (server/surface.py DRY_LONG: the NVIS palettes' woodlands, forests and grasslands): the stock long dry grasses
+  -- (West Coast USA's grass_dry_1 and weed1, the Johnson Valley dry grass texture) and Hirochi's long green grass, their shares
+  -- trading off by the dry share at a constant total (`mix2`, M.longMix): brown most of the year, green in the palette's wet months
+  { source = 'wcusa', src = 'grass_dry_1', name = 'grass_dry_1_long', layer = 'bngEarthGroundDryLong', share = 0.27, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'wcusa', src = 'weed1', name = 'weed1_long', layer = 'bngEarthGroundDryLong', share = 0.11, mix2 = 'dry', typeScale = 1.3 },
+  { source = 'hirochi', src = 'long_grass_distant', name = 'long_grass_distant_long', layer = 'bngEarthGroundDryLong', share = 0.38,
+    fields = LONG_NEAR, mix2 = 'green', typeScale = 1.3 },
 }
 M.PREFIX = 'bngEarthGC_'
+
+-- regional mix. Stock: the dry grass is ~11 % of the grass layer's elements. Where the climate is dry (Australia,
+-- the arid and savanna classes) a larger share of the same total is dry grass: the green shares scale down by as much
+-- as the dry one scales up, so the element count (the block-move rebuild frame, see DEFS) stays where it was.
+-- With no climate (anchor_ready.koppen is sent only for Australian anchors: any other place, and a server without it) nothing changes.
+M.AU = { latMin = -44, latMax = -10, lonMin = 112, lonMax = 154 }  -- mainland + Tasmania (server/climate.py AU_*)
+M.AU_GREEN = { [1] = true, [2] = true, [15] = true, [16] = true }  -- Af Am Cfb Cfc: no dry-grass floor (server AU_GREEN)
+M.AU_DRY = 0.5                  -- the dry share in Australia where the Koppen class gives none (or none known)
+-- Koppen-Geiger class (Beck et al. 2023, server/climate.py) -> dry share of the grass: BWh BWk BSh BSk, Aw, Csa Csb, Cwa
+M.KOPPEN_DRY = { [3] = 0.55, [4] = 0.7, [5] = 0.7, [6] = 0.65, [7] = 0.6, [8] = 0.4, [9] = 0.35, [11] = 0.5 }
+M.SEASON_AMP = 0.12             -- southern dry season: +/- this on the dry share, most on 1 Aug (doy 213), least on 30 Jan
+M.SEASON_PEAK_DOY = 213
+M.SUMMER_DRY = { [8] = true, [9] = true, [10] = true }   -- Csa Csb Csc: their dry season is the summer (no winter swing)
+M.DRY_STEP = 20                 -- the dry share in steps of 1/20: the objects are remade when it moves one (a few times a year)
+M.CHECK_S = 30                  -- the date is looked at this often (os.clock)
+
+local function stockDry()
+  local g, d = 0, 0
+  for _, e in ipairs(M.DEFS) do
+    if e.mix == 'dry' then d = d + e.share elseif e.mix == 'green' then g = g + e.share end
+  end
+  return d / (g + d)
+end
+M.STOCK_DRY = stockDry()
+
+-- Pure: the dry share of the grass layer's elements (0..1, in DRY_STEP steps) at a place, or nil for the stock mix.
+-- koppen: the anchor's class (nil = unknown); doy: day of the year when the season counts (nil = no season).
+function M.dryShare(koppen, lat, lon, doy, months)
+  if not (lat and lon) then return nil end
+  if type(months) == 'table' and #months == 12 then      -- the vegetation palette's own month by month shares (server season.grass_dry_months)
+    local v = 0
+    if doy then          -- between the months' middles (a month's value is at its centre)
+      local x = (doy - 1) / 365 * 12 - 0.5
+      local i = math.floor(x)
+      local a, b = months[i % 12 + 1], months[(i + 1) % 12 + 1]
+      v = a + (b - a) * (x - i)
+    else
+      for i = 1, 12 do v = v + months[i] / 12 end
+    end
+    return math.floor(math.min(math.max(v, 0), 0.9) * M.DRY_STEP + 0.5) / M.DRY_STEP
+  end
+  -- (the box alone is not Australia: Timor and New Guinea lie in it; the server sends a class only for an Australian anchor)
+  local au = koppen ~= nil and lat >= M.AU.latMin and lat <= M.AU.latMax and lon >= M.AU.lonMin and lon <= M.AU.lonMax
+  local base = koppen and M.KOPPEN_DRY[koppen]
+  if au and not (koppen and M.AU_GREEN[koppen]) then base = math.max(base or 0, M.AU_DRY) end
+  if not base then return nil end
+  if doy and lat < 0 and not (koppen and M.SUMMER_DRY[koppen]) then
+    base = base + M.SEASON_AMP * math.cos(2 * math.pi * (doy - M.SEASON_PEAK_DOY) / 365)
+  end
+  base = math.min(math.max(base, 0), 0.9)
+  return math.floor(base * M.DRY_STEP + 0.5) / M.DRY_STEP
+end
+
+-- Pure: the factors (green, dry) on the stock shares for a dry share (nil: 1, 1).
+function M.mixFactors(dry)
+  if not dry then return 1, 1 end
+  local sd = M.STOCK_DRY
+  return (1 - dry) / (1 - sd), dry / sd
+end
+-- the factors (green, dry) on the shares of the DRY_LONG layer's `mix2` entries for a dry share (nil: the Australian default):
+-- they trade at a constant total, each entry's own share being its share at a dry share of 1/2.
+function M.longMix(dry)
+  local d = dry or M.AU_DRY
+  return 2 * (1 - d), 2 * d
+end
 -- set on every object after the stock fields (see the header)
 M.PLACEMENT = { { 'useNewPlacement', '1' }, { 'useNewPlacementGpu', '0' } }
 M.enabled = true
@@ -85,6 +165,11 @@ local layered = false     -- a block with surface layers was loaded this level (
 local defsCache = {}      -- source -> stock definitions by name (read once per level)
 local loadedMaterials = {} -- source -> true
 local lastError = nil
+local climate = {}            -- the anchor's koppen class, lat, lon (setClimate)
+local seasonal = false        -- the dry share follows today's date (the server's --season auto)
+local wantDry = nil           -- the dry share a build would use now (nil: the stock mix)
+local builtDry = nil          -- the one the objects were made with
+local lastCheck = -math.huge
 
 local SKIP = { name = true, class = true, persistentId = true, __parent = true, position = true, Types = true,
   internalName = true, canSave = true }
@@ -117,8 +202,8 @@ local function readDefs(source)
 end
 
 -- Pure: the setField calls (name, index, value) that recreate a stock definition on `layer`, its
--- element count scaled by `share`, its radii by `dist` (default 1).
-function M.fieldsFor(def, layer, share, dist)
+-- element count scaled by `share`, its radii by `dist` (default 1); typeScale (default 1) multiplies each plant type's size.
+function M.fieldsFor(def, layer, share, dist, typeScale)
   local calls = {}
   dist = dist or 1
   for k, v in pairs(def) do
@@ -133,6 +218,7 @@ function M.fieldsFor(def, layer, share, dist)
       for k, v in pairs(t) do
         if v ~= nil and v ~= jsonNull then
           if k == 'layer' then v = (v ~= '' and layer or '') end
+          if typeScale and (k == 'sizeMin' or k == 'sizeMax') and tonumber(v) then v = tonumber(v) * typeScale end
           calls[#calls + 1] = { k, i - 1, fieldValue(v) }
         end
       end
@@ -177,7 +263,11 @@ function M.ensure()
         do
           local gc = createObject('GroundCover')
           local dist = M.distance
-          for _, c in ipairs(M.fieldsFor(def, d.layer, d.share * M.density * dist * dist, dist)) do
+          local fg, fd = M.mixFactors(wantDry)      -- the grass layer's green / dry mix
+          local lg, ld = M.longMix(wantDry)         -- and the long grass layer's
+          local share = d.share * (d.mix == 'dry' and fd or d.mix == 'green' and fg or d.mix2 == 'dry' and ld
+            or d.mix2 == 'green' and lg or 1)
+          for _, c in ipairs(M.fieldsFor(def, d.layer, share * M.density * dist * dist, dist, d.typeScale)) do
             gc:setField(c[1], c[2], c[3])
           end
           for k, v in pairs(d.fields or {}) do
@@ -200,7 +290,40 @@ function M.ensure()
     log('W', 'beamngEarth', 'ground cover: ' .. lastError)
     removeAll()
   end
+  builtDry = wantDry
   return #created > 0
+end
+
+-- the day of the year (a test replaces it)
+function M.today() return tonumber(os.date('*t').yday) end
+
+local function refreshDry()
+  wantDry = M.dryShare(climate.koppen, climate.lat, climate.lon, seasonal and M.today() or nil, climate.months)
+end
+
+-- where the grass is (core, at each anchor commit: the anchor_ready's koppen class, absent from an older server,
+-- and its lat / lon). Sets what the next build (the teleport's / rebase's rebuild, the level's first block) uses.
+function M.setClimate(koppen, lat, lon, months)
+  climate.koppen, climate.lat, climate.lon = tonumber(koppen), tonumber(lat), tonumber(lon)
+  climate.months = type(months) == 'table' and months or nil      -- (anchor_ready.grassDry: the 12 monthly dry shares, if any)
+  refreshDry()
+end
+
+-- the dry share follows the date (hello.season == 'auto', the imagery's season; seasonlook.lua)
+function M.setSeasonal(on)
+  seasonal = on and true or false
+  refreshDry()
+end
+
+-- every frame in our level: the grass made again when the season moved the dry share a step (a few times a year).
+function M.update(inOurLevel)
+  if not inOurLevel or not seasonal or #created == 0 then return false end
+  local now = os.clock()
+  if now - lastCheck < M.CHECK_S then return false end
+  lastCheck = now
+  refreshDry()
+  if wantDry == builtDry then return false end
+  return M.rebuild()
 end
 
 -- The physics block was just imported or moved (core, same tick): regenerate all the grass before
@@ -263,7 +386,8 @@ function M.rebuild()
 end
 
 function M.status()
-  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError }
+  return { enabled = M.enabled, density = M.density, distance = M.distance, objects = #created, materialsLoaded = next(loadedMaterials) ~= nil, error = lastError,
+           dryShare = builtDry }   -- the dry-grass share the objects were made with (nil: the stock mix)
 end
 
 return M

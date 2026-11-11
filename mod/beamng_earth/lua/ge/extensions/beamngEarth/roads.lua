@@ -40,6 +40,7 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
   '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
+  '/levels/beamng_earth/art/shapes/beamngEarth/au_roads.materials.json',   -- Australia's kerb channel (roads.AU_CHANNEL_M)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadwear.materials.json',   -- road wear and spots (server roadwear.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',

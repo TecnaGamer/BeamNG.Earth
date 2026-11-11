@@ -75,7 +75,7 @@ class GuardrailStockAssetTest(unittest.TestCase):
         self.assertIn("local isGuardrail = M.isBarrier(g)", source)
         # the median barriers' and mapped jersey / cable barriers' groups (guardrails.GROUPS)
         for g in guardrails.GROUPS:
-            if not g.startswith("se_"):     # (a table's, test_sesigns)
+            if not g.startswith(("se_", "au_chevron_", "au_wrongway", "au_gravel")):     # (a table's, test_sesigns; the AU road signs' loop, test_au_roadsigns)
                 self.assertIn("M.CATALOG." + g + " = ", source)
         self.assertIn("/art/shapes/objects/jerseybarrier_3m", source)
         self.assertTrue(os.path.isfile(os.path.join(root, "mod", "beamng_earth", "levels", "beamng_earth", "art", "shapes",

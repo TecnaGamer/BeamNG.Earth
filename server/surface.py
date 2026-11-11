@@ -30,6 +30,8 @@ from runtimeprofiler import ThreadPoolExecutor
 import numpy as np
 from PIL import Image, ImageDraw
 
+import climate      # Australian lawns (dry_australia)
+import vegclass     # the palettes' ground cover (au_cover)
 import beaches
 import fast
 import mapgeom
@@ -67,9 +69,13 @@ MATERIALS = (
     ("bngEarthGroundPavers", "ASPHALT_OLD"),
     ("bngEarthGroundBrick", "COBBLESTONE"),
     ("beamngEarthDirt", "DIRT"),
+    # Australia (after the default dirt, so no existing mask changes its name; masks written only where a sample uses them)
+    ("bngEarthGroundRedDirt", "DIRT_DUSTY"),      # the red / ochre soil of the dry inland and the west (au_ground)
+    ("bngEarthGroundCane", "GRASS"),              # sugarcane: Queensland's coastal cropland (cane_belt; groundcover.lua)
+    ("bngEarthGroundDryLong", "GRASS"),           # long dry grass, green in the wet season: the woodlands' and grasslands' ground (au_cover)
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT = range(len(MATERIALS))
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT, RED_DIRT, CANE, DRY_LONG = range(len(MATERIALS))   # + RED_DIRT, CANE, DRY_LONG
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -82,6 +88,7 @@ CLASS_MATERIAL = {0: DIRT, 10: GRASS, 20: DUSTY, 30: GRASS, 40: DIRT, 50: DIRT, 
 # of gravel and dirt there). The rest stays dirt (lots, gravel, bare yards); roads and lots paint over both.
 LAWN_SHARE_HUMID = 0.9
 LAWN_SHARE_DRY = 0.75
+LAWN_SHARE_AU = 0.6     # Australia's towns (climate.dry_australia): more bare, brown yards than the humid 90 %
 LAWN_PATCH_M = 30.0
 # Past Web Mercator's limit (+-85.05 deg) there are no map cells: all of it is ice, Antarctica's ice sheet and the
 # Arctic Ocean's year-round sea ice (the user, 2026-10-22: "add polar support"), WorldCover's "snow and ice".
@@ -101,6 +108,91 @@ for _c, _m in CLASS_MATERIAL.items():
     _LUT[_c] = _m
 
 
+# Australian soils and sugarcane. Both are pure functions of the world position (the Koppen class of the 0.1 degree grid,
+# a coastline polyline), so blocks agree along their shared samples, and both do nothing outside Australia.
+RED_KOPPEN = (4, 5, 6, 7)       # BWh BWk BSh BSk: red soil
+RED_SAVANNA_LON = 144.5         # Aw (3) is red west of this (the Gulf, Cape York, the Top End), brown on the Queensland coast
+# Queensland's mainland coast (lat ascending, lon): Moreton Bay, Hervey Bay, Bundaberg, Gladstone, Yeppoon, Mackay, Bowen,
+# Townsville, Ingham, Cairns, Port Douglas
+CANE_COAST = ((-27.0, -25.3, -24.8, -23.85, -23.1, -21.1, -20.0, -19.25, -18.6, -16.9, -16.0),
+              (153.4, 152.9, 152.45, 151.3, 150.8, 149.2, 148.25, 146.8, 146.3, 145.8, 145.5))
+CANE_LAT = (-27.0, -16.0)
+CANE_COAST_KM = 60.0            # cropland this near the coast is cane ...
+CANE_NORTH = (-21.0, 145.5)     # ... and so is all of it north of this latitude and east of this longitude
+
+
+def cane_belt(lat, lon):
+    """True where cropland is sugarcane country: Queensland's coastal belt (CANE_LAT; within CANE_COAST_KM of the coast, or
+    east of CANE_NORTH's longitude north of its latitude). Pure."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    inside = (lat >= CANE_LAT[0]) & (lat <= CANE_LAT[1]) & (lon <= 154.0)
+    coast = np.interp(lat, CANE_COAST[0], CANE_COAST[1])
+    km = (coast - lon) * 111.32 * np.cos(np.radians(lat))       # inland of the coast: > 0
+    near = (km <= CANE_COAST_KM) & (km >= -10.0)
+    north = (lat > CANE_NORTH[0]) & (lon > CANE_NORTH[1])
+    return inside & (near | north)
+
+
+def _may_be_cane(lat, lon):
+    """whether a block (its sample positions) can reach the cane belt: a scalar test on its middle, with a margin."""
+    la, lo = float(np.mean(lat)), float(np.mean(lon))
+    return CANE_LAT[0] - 0.1 <= la <= CANE_LAT[1] + 0.1 and 140.0 <= lo <= 154.5
+
+
+def red_soil(lat, lon):
+    """True where Australian bare ground is red or ochre: the arid classes and the savanna west of RED_SAVANNA_LON; the
+    coast and the south-east stay brown. Pure; False outside Australia."""
+    lat = np.asarray(lat, np.float64)
+    lon = np.asarray(lon, np.float64)
+    out = np.zeros(lat.shape, bool)
+    box = climate.in_australia(lat, lon)
+    if box.any():
+        k = climate.koppen_grid(lat[box], lon[box])
+        out[box] = np.isin(k, RED_KOPPEN) | ((k == 3) & (lon[box] < RED_SAVANNA_LON))
+    return out
+
+
+def au_ground(idx, lat, lon):
+    """idx with Australia's bare ground (DIRT, and the bare land's and gravel roads' LOOSE) red or ochre (RED_DIRT) where
+    red_soil says, after the roads and lots are painted (unsealed roads and their verges are DIRT). A new array only where
+    something changed; outside Australia idx itself. Pure."""
+    if not climate.in_australia(float(np.mean(lat)), float(np.mean(lon))):
+        return idx
+    bare = (idx == DIRT) | (idx == LOOSE)
+    if not bare.any():
+        return idx
+    sel = bare & red_soil(lat, lon)
+    if not sel.any():
+        return idx
+    out = idx.copy()
+    out[sel] = np.uint8(RED_DIRT)
+    return out
+
+
+COVER_CLASSES = (10, 20, 30, 100)       # WorldCover tree, shrub, grass, moss: the land au_cover regrounds
+GROUND_LAYER = np.array([255, DRY_LONG, DUSTY, 255, DIRT], np.uint8)    # by vegclass.GROUND (255: as it is)
+
+
+def au_cover(idx, classes, lat, lon):
+    """idx with the ground of vegetated land (COVER_CLASSES) set by its vegetation palette (vegclass.py: NVIS in
+    Australia): long dry grass (DRY_LONG), the shrubland's dusty ground (DUSTY: its shrubs and sparse grass), or none
+    under rainforest and mangroves (DIRT, red where au_ground says); "green" and every point without a palette stay
+    as they are. A new array only where something changed. Pure."""
+    sel = np.isin(classes, COVER_CLASSES)
+    if not sel.any():
+        return idx
+    new = GROUND_LAYER[vegclass.ground_codes(np.asarray(lat, np.float64)[sel], np.asarray(lon, np.float64)[sel])]
+    hit = new != 255
+    if not hit.any():
+        return idx
+    out = idx.copy()
+    sub = out[sel]
+    sub[hit] = new[hit]
+    out[sel] = sub
+    return out
+
+
 def dry_west(lat, lon):
     """The arid West (a coarse climate stand-in, vegetation.regional's): its towns have fewer lawns."""
     lat, lon = np.asarray(lat), np.asarray(lon)
@@ -116,6 +208,7 @@ def lawns(lat, lon):
     n = 0.65 * _value_noise(xm / LAWN_PATCH_M, ym / LAWN_PATCH_M, 5) \
         + 0.35 * _value_noise(xm / (LAWN_PATCH_M / 3), ym / (LAWN_PATCH_M / 3), 6)
     share = np.where(dry_west(lat, lon), LAWN_SHARE_DRY, LAWN_SHARE_HUMID)
+    share = np.where(climate.dry_australia(lat, lon), LAWN_SHARE_AU, share)
     # threshold near the noise sum's share quantile (see the test)
     return n > (0.5 - share) * 1.1
 
@@ -127,6 +220,14 @@ def classify(classes, u, square, lat=None, lon=None):
     classes = np.asarray(classes, np.uint8)
     idx = _LUT[classes]
     if lat is not None and lon is not None:
+        # sugarcane on WorldCover cropland in Queensland's coastal belt (only the cropland samples are tested)
+        crop = classes == 40
+        if crop.any() and _may_be_cane(lat, lon):
+            cane = np.zeros(idx.shape, bool)
+            cane[crop] = cane_belt(np.asarray(lat, np.float64)[crop], np.asarray(lon, np.float64)[crop])
+            if cane.any():
+                idx = idx.copy()
+                idx[cane] = np.uint8(CANE)
         # (KyzoFox 1.5.4: lawns() only at the built-up samples, the only ones it can change: on rural ground
         # that is almost none of a block)
         urban = classes == 50
@@ -135,6 +236,7 @@ def classify(classes, u, square, lat=None, lon=None):
             sub = idx[urban]
             sub[lawns(np.asarray(lat, np.float64)[urban], np.asarray(lon, np.float64)[urban])] = np.uint8(LAWN)
             idx[urban] = sub
+        idx = au_cover(idx, classes, lat, lon)      # the vegetation palettes' ground cover
     sand = beaches.sand_grid(classes, square)      # a beach's grassland pixels: bare sand, no grass (GitHub #578)
     if sand.any():
         idx = np.where(sand, np.uint8(LOOSE), idx)
@@ -266,6 +368,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     lawn, verge, grass_verge = ([], []), ([], []), ([], [])
     footpaths = ([], [])
     seen = set()
+    au = bool(climate.in_australia(la_c, lo_c))     # Australia's nature strips (roads.au_verge)
     # The rural grass treatment is local to Romania and Hungary.
     eastern = european and 43. < la_c < 50. and 15. < lo_c < 31.
 
@@ -275,7 +378,31 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
             half = np.asarray(half, np.float64)         # (per point where the road tapers: each segment's mean)
             dst[1].append(np.full(len(c) - 1, half / square) if half.ndim == 0 else (half[:-1] + half[1:]) / 2 / square)
 
-    def line(x, y, spec, aisle, tapers=()):
+    def au_bands(x, y, width, v):
+        """the grass of an Australian verge (v: roads.au_verge) as lawn bands and each footpath's ground as asphalt
+        (nothing grows through a slab): [(cols, rows, half width m, is lawn)], each band's middle line in the samples.
+        x, y: the road's line (lon, lat); width: the carriageway's (a scalar, or per point)."""
+        hw = np.asarray(width, np.float64) / 2
+        lat0 = float(np.mean(y))
+        sc = np.array([111320.0 * math.cos(math.radians(lat0)), 110540.0])
+        xy = (np.c_[x, y] - np.array([x[0], y[0]])) * sc
+        base = np.c_[xy, np.zeros(len(xy))]
+        out = []
+        for side in v["sides"]:
+            if side in v["foot"]:
+                bands = [(roadsmod.AU_KERB_W, v["strip"], True), (v["strip"], v["total"], False)]
+            else:
+                bands = [(roadsmod.AU_KERB_W, v["total"], True)]
+            for a, b, is_lawn in bands:
+                # (lawn a sample wider each way than its edges: the road's asphalt, painted after it, trims it)
+                pad = square if is_lawn else 0.25
+                mid, half = (a + b) / 2, (b - a) / 2 + pad
+                off = roadsmod.offset_polyline(base, side * (hw + mid))[:, :2] / sc + np.array([x[0], y[0]])
+                c, r = to_px(off[:, 0], off[:, 1])
+                out.append((np.asarray(c, np.float64), np.asarray(r, np.float64), half, is_lawn))
+        return out
+
+    def line(x, y, spec, aisle, tapers=(), fid=None):
         width, kind = spec.width, roadsmod.surface_material_kind(spec)
         ws = roadsmod.taper_widths(spec.width, tapers, x, y)     # (its width along it where it tapers: road_tapers)
         if ws is not None:
@@ -285,7 +412,11 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         walks = roadsmod.has_sidewalks(spec)
         street = getattr(spec, "street", None)
         band = 0.0
-        if walks and street is None:
+        au_v = roadsmod.au_verge(spec, "AU", fid) if au and walks and fid is not None and street is None else None
+        if au_v:
+            width0 = width              # (the asphalt only under the kerb; the strip is lawn, the footpath asphalt)
+            width = width + 2 * roadsmod.AU_KERB_W
+        elif walks and street is None:
             band = 2 * (spec.walk + square)     # the sidewalks (+ a sample: tufts at the outer edge): grass grew up
                                                 # through them (ground cover is the terrain's: Lauterbrunnen, Baltimore
                                                 # 2026-10-15); paved (footpaths), not the road's own material: a
@@ -295,11 +426,14 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
         c, r = to_px(x, y)
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
         edge_reach = max((walk.setback + walk.width for _, walk in street.walks()), default=0.) if street else 0.
-        reach = (float(np.max(width)) / 2 + band / 2 + ROAD_EDGE_M + max(edge_reach, 0 if walks else VERGE_M)) \
-            / square + 2
+        reach = (float(np.max(width)) / 2 + band / 2 + ROAD_EDGE_M
+                 + (au_v["total"] + square if au_v else max(edge_reach, 0 if walks else VERGE_M))) / square + 2
         if c.max() < -reach or c.min() > w + reach or r.max() < -reach or r.min() > h + reach:
             return
         add(segs[kind], c, r, width / 2 + ROAD_EDGE_M)
+        if au_v:                                # the nature strip's lawn, the footpath's asphalt
+            for bc, br, half, is_lawn in au_bands(x, y, width0, au_v):
+                add(lawn if is_lawn else segs[kind], bc, br, half)
         if band:
             add(footpaths, c, r, (width + band) / 2 + ROAD_EDGE_M)
         if street is not None:
@@ -365,7 +499,7 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                 if pfr is not None:
                     ring = placement.ring(pfr, feats, i, ring, specs[i], fid)
                 line(ring[:, 0], ring[:, 1], specs[i], aisle,
-                     () if quick else roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
+                     () if quick else roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of), fid)
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
                     # the median's ground: lawn (report #48, Boston Street, 2026-10-17)
                     sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
@@ -673,6 +807,7 @@ def photo_ghosts(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=Non
 # Roundabout island fill (Chavagnes-en-Paillers 2026-10-28): the photo often still shows the old through-road
 # across the grass and as a dark E–W band on the approaches; carriageway paint leaves gaps so the scar stays visible.
 ISLAND_GRASS = (76, 98, 58)     # muted grass when the photo's own greens are too few to sample
+ISLAND_GRASS_AU = (98, 120, 64)  # mown couch / kikuyu, the colour of Australia's roundabout lawns (2g - r - b = 78)
 ISLAND_LAWN = (86, 116, 54)     # a mown lawn's green: an island's photo fill is pulled this far (plan 038: the pale grey-green
 ISLAND_LAWN_SHARE = 0.55        # of Nachod's, stones and shrubs in the picture, read as sand under the engine's grass)
 # Outset past the ring centreline so the fill covers the whole roundabout footprint (island + carriageways); paint_lines
@@ -797,12 +932,20 @@ def _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn=None, wi
     return out
 
 
-def _fill_island_photos(rgb, polys):
-    """rgb with each roundabout footprint filled: median of its greener photo pixels, else ISLAND_GRASS. Covers the
-    old through-road scar; carriageways paint over the ring afterwards. A footprint the photo shows paved (under
-    ISLAND_MIN_GREEN of it green) is left as it is."""
+def _fill_island_photos(rgb, polys, au=False):
+    """rgb with each roundabout footprint filled: median of its greener photo pixels, else ISLAND_GRASS (au: always
+    ISLAND_GRASS_AU, mown green: Queensland's dry, brown or bare island photos made a bare island, photo_lawns turning
+    its lawn to dirt). Covers the old through-road scar; carriageways paint over the ring afterwards. A footprint the
+    photo shows paved (under ISLAND_MIN_GREEN of it green) is left as it is."""
     if not polys:
         return rgb
+    if au:
+        out = rgb.copy()
+        im = Image.fromarray(out)
+        draw = ImageDraw.Draw(im)
+        for poly in polys:
+            draw.polygon(poly, fill=ISLAND_GRASS_AU)
+        return np.asarray(im)
     out = rgb.copy()
     im = Image.fromarray(out)
     draw = ImageDraw.Draw(im)
@@ -838,7 +981,8 @@ def photo_roads(rgb, frame, x0, y0, size, feats_list, urban_fn=None, widths=None
         filled = np.ascontiguousarray(rgb, np.uint8)
     else:
         filled = _fill_island_photos(np.ascontiguousarray(rgb, np.uint8),
-                                     _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths))
+                                     _island_pixel_polys(frame, x0, y0, size, w, h, feats_list, urban_fn, widths),
+                                     au=bool(climate.in_australia(frame.lat0, frame.lon0)))
     got = _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn, widths)
     if got is None:
         out = filled
@@ -1046,13 +1190,21 @@ def paint_square(rgb, frame, x0, y0, size, surface, widths=None, simple=False, p
     roads = _square_roads(frame, x0, y0, size, surface, pending)
     if not simple:          # (simple, a stand-in's: the carriageways alone, photo_roads)
         feats = _square_lots(frame, x0, y0, size, surface)
-        rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
+        # no dirt furrows over sugarcane (the belt's crop is green and tall: classify's CANE)
+        if not _cane_square(frame, x0, y0, size):
+            rgb = photo_fields(rgb, frame, x0, y0, size, feats, roads, getattr(surface, "urban", None), widths)
         rgb = photo_golf(rgb, frame, x0, y0, size, feats)
         rgb = photo_lots(rgb, frame, x0, y0, size, feats)
         rgb = photo_pads(rgb, frame, x0, y0, size, _square_pads(frame, x0, y0, size, surface))     # (under the roads)
     if not roads:
         return rgb
     return photo_roads(rgb, frame, x0, y0, size, roads, surface.urban, widths, simple=simple)
+
+
+def _cane_square(frame, x0, y0, size):
+    """whether the middle of [x0, x0 + size]² of frame lies in the sugarcane belt (cane_belt)."""
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0 + size / 2]), np.array([y0 + size / 2]), np.zeros(1))
+    return bool(_may_be_cane(la, lo) and cane_belt(la, lo).any())
 
 
 def unghost_square(rgb, frame, x0, y0, size, surface, widths=None):
@@ -1118,7 +1270,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
 VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
-VERGE_FROM = (GRASS, LAWN, DUSTY)
+VERGE_FROM = (GRASS, LAWN, DUSTY, DRY_LONG)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
 PARKING_CLASSES = {"parking"}     # Overture infrastructure (transit) polygons drawn as asphalt: no grass on a lot
@@ -1140,7 +1292,11 @@ FARM_ROAD_CLEAR_M = 4.0     # furrows stop this far short of a dirt road's edge
 
 def paint_fields(idx, lat, lon, feats_list):
     """idx with farmland polygons drawn as dirt (the whole field: the furrows are only in the photo). Pure."""
-    return _paint(idx, lat, lon, feats_list, _farmland, DIRT)
+    out = _paint(idx, lat, lon, feats_list, _farmland, DIRT)
+    cane = idx == CANE            # a field over sugarcane stays cane (WorldCover cropland in the belt, classify)
+    if out is not idx and cane.any():
+        out = np.where(cane, np.uint8(CANE), out)
+    return out
 
 
 def paint_grass(idx, lat, lon, feats_list):
@@ -1634,6 +1790,8 @@ def write_masks(idx, out_dir, stem):
     atomically. Returns the file names (in out_dir), in MATERIALS order."""
     names = mask_names(stem)
     for i, name in enumerate(names):
+        if i >= RED_DIRT and not (idx == i).any():
+            continue            # Australia's materials only where a sample uses them (terrain_msg sends the .ter's own)
         path = os.path.join(out_dir, name)
         tmp = staging.tmp_for(path)
         Image.fromarray(np.where(idx == i, 255, 0).astype(np.uint8), "L").save(tmp, format="PNG", compress_level=1)

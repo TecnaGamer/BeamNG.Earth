@@ -39,6 +39,8 @@ PRUNE_EVERY_S = 30.0                # (MapData.osm_fuel_fetch prunes at most thi
 # the amenities kept: fuel stations, and EV charging stations (the user, 2026-10-29: "real life ev stations mapped like
 # the gas stations are"), found in the same pass: the same columns, no more requests
 AMENITIES = ("fuel", "charging_station")
+# Australia's street furniture (streetamenities.py), read only for Australian cells (MapData.osm_street_fetch) into their own files
+STREET_AMENITIES = ("telephone", "post_box")
 FIND = ("bbox", "amenity")                              # step 1: the cell's fuel rows (no id: a third of
                                                         # the bytes; ids with the names in step 2)
 DETAIL = ("id", "brand", "name", "building")           # step 2: of the row groups that have any (no geometry:
@@ -53,14 +55,14 @@ class OsmFuel(osmtags.OsmTags):
     def __init__(self, raw_dir, fetcher, url=URL):
         super().__init__(raw_dir, fetcher, url)
 
-    def cell(self, bounds, kind="demand"):
+    def cell(self, bounds, kind="demand", amenities=AMENITIES):
         """[{"id", "amenity", "brand", "name", "building", "bbox": (lon0, lat0, lon1, lat1)}] of the fuel and
-        charging stations (AMENITIES) whose bbox touches bounds (lon0, lat0, lon1, lat1). A version that changed under the reads is dropped
+        charging stations (AMENITIES; or the other `amenities` given) whose bbox touches bounds (lon0, lat0, lon1, lat1). A version that changed under the reads is dropped
         and the cell asked once more on the new one."""
         for attempt in (0, 1):
             etag, remote = self.version(kind)
             try:
-                return self._fuel(remote, bounds, kind)
+                return self._fuel(remote, bounds, kind, amenities)
             except rangeread.Changed:
                 if attempt:
                     raise
@@ -78,7 +80,7 @@ class OsmFuel(osmtags.OsmTags):
         finally:
             con.close()
 
-    def _fuel(self, remote, bounds, kind):
+    def _fuel(self, remote, bounds, kind, amenities=AMENITIES):
         lon0, lat0, lon1, lat1 = bounds
         rd = self._reader
         files = {PATH: remote}
@@ -97,7 +99,7 @@ class OsmFuel(osmtags.OsmTags):
             # amenity compared here, not in the query: amenity = 'fuel' there made DuckDB read the amenity bloom filter
             # of each of the file's 509 row groups, block by block (2026-10-29: 133 of a cell's 144 requests, 35 MB)
             hits = [int(r[0]) for r in con.execute(f"""SELECT file_row_number, amenity FROM read_parquet({uri},
-                file_row_number = true) WHERE ({only}) AND {box}""").fetchall() if r[1] in AMENITIES]
+                file_row_number = true) WHERE ({only}) AND {box}""").fetchall() if r[1] in amenities]
             if not hits:
                 return []
             hit = sorted({rg for r in hits for rg in cand

@@ -90,9 +90,11 @@ import cdae  # noqa: E402
 import colormatch as colormatchmod  # noqa: E402
 import credits as creditsmod  # noqa: E402
 import secrossings  # noqa: E402
+import season as seasonmod  # noqa: E402
 import covermap as covermapmod  # noqa: E402
 import areas as areasmod  # noqa: E402
 import surface as surfacemod  # noqa: E402
+import climate as climatemod  # noqa: E402  # anchor_ready.koppen
 import navgraph as navgraphmod  # noqa: E402
 import distanttraffic          # noqa: E402
 import prewarm as prewarmmod  # noqa: E402
@@ -1055,6 +1057,29 @@ def road_tracker(conn):
 OSM_FUEL_THREADS = 2     # OpenStreetMap fuel cells fetched at once (Server.osm_fuel_want)
 OSM_FUEL_WARM_TRIES = 10    # the start's index read tried this often (Server._osm_fuel_warm) ...
 OSM_FUEL_WARM_WAIT_S = 30.0  # ... this far apart
+
+
+def au_ready_fields(lat, lon):
+    """The optional anchor_ready fields of an anchor in Australia (climate.in_australia), {} anywhere else: elsewhere the mod
+    keeps its own leaf look and stock grass mix, as before. evergreen: no autumn colour in the trees' leaves
+    (seasonlook.setEvergreen); koppen: the Koppen-Geiger class (1-30, 0 = sea), for the grass mix (groundcover.setClimate);
+    grassDry: the grass's dry share by month where a vegetation palette covers the anchor."""
+    out = {}
+    if not climatemod.in_australia(lat, lon):
+        return out
+    if seasonmod.evergreen(lat, lon):
+        out["evergreen"] = True
+    try:
+        out["koppen"] = int(climatemod.koppen_at(lat, lon))
+    except Exception as e:      # (the mod behaves as before without it)
+        log.debug("anchor (%.4f, %.4f): no climate class: %s: %s", lat, lon, type(e).__name__, e)
+    try:
+        months = seasonmod.grass_dry_months(lat, lon)
+        if months:
+            out["grassDry"] = months
+    except Exception as e:
+        log.debug("anchor (%.4f, %.4f): no grass months: %s: %s", lat, lon, type(e).__name__, e)
+    return out
 
 
 def osm_fuel_cells(frame, tile, geo=False):
@@ -3283,14 +3308,21 @@ class Server:
                 fut.add_done_callback(lambda f, k=k, key=key: loop.call_soon_threadsafe(self._osm_fuel_got, k, key, f))
 
     def _osm_fuel_cell(self, key):
-        """Worker thread: the cell's OSM fuel stations, from the disk when fetched before."""
+        """Worker thread: the cell's OSM fuel stations, from the disk when fetched before. An Australian cell's payphones and
+        post boxes follow (their own file: MapData.osm_street_cached / osm_street_fetch; [] elsewhere, nothing asked)."""
         rows = self.mapdata.osm_fuel_cached(key)
-        if rows is not None:
-            return rows, False
-        t0 = time.perf_counter()
-        rows = self.mapdata.osm_fuel_fetch(key)
-        log.debug("osm fuel: cell %s, %d stations in %.2f s", key, len(rows), time.perf_counter() - t0)
-        return rows, True
+        fetched = rows is None
+        if fetched:
+            t0 = time.perf_counter()
+            rows = self.mapdata.osm_fuel_fetch(key)
+            log.debug("osm fuel: cell %s, %d stations in %.2f s", key, len(rows), time.perf_counter() - t0)
+        cached = getattr(self.mapdata, "osm_street_cached", None)
+        if cached is not None:
+            street = cached(key)
+            if street is None:
+                street, fetched = self.mapdata.osm_street_fetch(key), True
+            rows = rows + street
+        return rows, fetched
 
     def _osm_fuel_got(self, k, key, fut):
         waiting = self.osm_fuel_wait.pop(k, set())
@@ -3966,6 +3998,7 @@ class Server:
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
+            idx = surfacemod.au_ground(idx, keep["lat"], keep["lon"])     # red soil in dry Australia
             stages["roadPaint"] = time.perf_counter() - t1
             idx = surfacemod.fold_layers(idx, land, heightmap.SQUARE, stages)   # (fewer layers: a cheaper swap)
             complete = complete and roads_complete
@@ -8005,7 +8038,7 @@ class Connection:
                "q": info["q"]}
         if info.get("layers"):      # --surface on: one mask per material, MATERIALS order
             # only the .ter's own materials, in its order (surface.write_ter; all of them for an older block)
-            use = info.get("mats") or range(len(surfacemod.MATERIALS))
+            use = info.get("mats") or range(len(info["layers"]))     # (MATERIALS grew; a block lists its own masks)
             out["layers"] = [f"{self.s.vfs_dir}/{info['layers'][i]}" for i in use]
             out["materials"] = [list(surfacemod.MATERIALS[i]) for i in use]
         if info.get("base"):        # detail mode: the base photo over the block's world size
@@ -8266,6 +8299,9 @@ class Connection:
             ready["px"], ready["py"] = place
         if self.s.gas_stations:         # the shapes of the region's gas stations, preloaded (only that region's)
             ready["fuelShapes"] = gasstationsmod.style_shapes(gasstationsmod.style_of(lat, lon))
+            import streetamenities       # AU payphones and post boxes
+            ready["fuelShapes"] = ready["fuelShapes"] + streetamenities.shapes_at(lat, lon)
+        ready.update(au_ready_fields(lat, lon))     # (Australia only: nothing is added elsewhere)
         progress["done"] = True
         self.send(ready)
         self.status(f"Terrain ready ({time.perf_counter() - t0:.1f} s)")

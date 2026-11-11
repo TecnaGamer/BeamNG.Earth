@@ -6037,6 +6037,81 @@ def sidewalk_stop(spec, fid, other, ofid):
     return other.width / 2
 
 
+# Australian nature strips (Brisbane's streets): kerb and channel at the road's
+# edge, a grass verge ("nature strip") between it and the concrete footpath, which lies near the property line; on many
+# minor streets there is no footpath at all, grass from the kerb to the fence. Only the drawing moves (extras, build_tile,
+# surface.paint_roads): the specs, the plans and the junction corners are untouched, so the cached facts / plans are too.
+AU_STRIP_CLASSES = {"residential", "living_street", "unclassified"}
+AU_OMIT_CLASSES = {"residential", "living_street"}   # ... of which these may have no footpath where the map is silent
+AU_CORRIDOR_M = 3.9         # m from the road's edge to the footpath's back where the corridor is not measured
+                            # (roadwidth.py measures it between the buildings, spec.walk): a 2.5 m strip and a footpath
+AU_FOOT_W = 1.4             # m: the footpath (the standard 1.2-1.5 m)
+AU_FOOT_SHARE = 0.45        # ... at most this share of a tight corridor, the strip taking the rest (it never leaves it)
+AU_MIN_CORRIDOR_M = 2.6     # a measured corridor narrower than this keeps the footpath against the kerb (as elsewhere)
+AU_KERB_W = 0.3             # m: the kerb's concrete band at the road's edge (its top 0.15 m, the grass rising to it)
+AU_KERB_H = 0.10            # m: a low roll-over kerb on residential streets (the US curb: sidewalks.CURB_H 0.15)
+AU_FOOT_H = 0.03            # m: the footpath's slab above the grass (nearly flush: footpaths are poured level)
+AU_CORNER_NEAR_M = 12.0     # a curb return this near only roads with verges has the low kerb too
+# Australia's kerb and channel: the kerb band above (the stock curb sheet's light concrete: the layback kerb 0.10 m on
+# a residential street, the barrier kerb 0.15 m elsewhere, sidewalks.CURB_H) and, in front of it on the carriageway, a flat
+# concrete channel (the gutter strip, 0.45 m: Brisbane's 450 mm kerb and channel) in the mod's own light grey concrete
+# (au_roads.materials.json) instead of the US gutter decal. Only the chunk's material and width change (_chunk, _gutter:
+# the look keeps GUTTER's "m", so every cut and clip rule keyed on it still applies).
+AU_CHANNEL_M = "bne_au_channel"
+AU_CHANNEL_W = 0.45
+NOSTOP_INSET_M = 0.2           # m of road between a yellow no-stopping line's middle and the channel's inner edge
+WALK_LOOK_KEYS = ("foot", "h", "strip")   # the keys of a sidewalk look that its run and its walks entry carry on
+
+
+def _gutter(side, pts, wv, au=False):
+    """The gutter row (look, width, line) of one side of a carriageway of width wv (a scalar, or an array where it
+    tapers) with centreline pts: Australia's concrete channel (AU_CHANNEL_W wide, look key "au_m") where au, else the
+    usual decal, exactly as extras wrote it."""
+    w = AU_CHANNEL_W if au else GUTTER["w"]
+    look = {**GUTTER, "side": side, "au_m": AU_CHANNEL_M} if au else {**GUTTER, "side": side}
+    return look, w, offset_polyline(pts, side * (wv / 2 - w / 2))
+AU_FOOT_BOTH, AU_FOOT_ONE = 0.4, 0.7    # no tag: a hash under the first has a footpath each side, under the second
+                                        # one side, else none (~40 % / 30 % / 30 %)
+
+
+def au_verge(spec, country, fid=None):
+    """The layout of an Australian street's verge, or None where the usual sidewalk stays (any other country, a
+    class outside AU_STRIP_CLASSES, no sidewalks, a divided road, a measured corridor too tight for a strip):
+    {"total": m from the road's edge to the footpath's back, "strip": m of grass between the edge and the footpath,
+    "foot_w": the footpath's width, "foot": the sides (+1 left / -1 right) that have a footpath, "sides": those with a kerb and grass, "kerb_h": m}.
+    The kerb and the grass are on every side that has a sidewalk (walk_sides); the footpath only where OpenStreetMap's
+    sidewalk tag gives one (spec.sides, always kept), else on a residential / living street by a hash of its id (fid:
+    both, one or no side; none known, both). Pure."""
+    if str(country or "").upper() != "AU" or spec.cls not in AU_STRIP_CLASSES or not has_sidewalks(spec) \
+            or has_median(spec):
+        return None
+    total = AU_CORRIDOR_M if abs(float(spec.walk) - SIDEWALK["w"]) < 1e-6 else float(spec.walk)
+    if total < AU_MIN_CORRIDOR_M:
+        return None
+    sides = tuple(walk_sides(spec))
+    foot = sides
+    if getattr(spec, "sides", None) is None and fid is not None and spec.cls in AU_OMIT_CLASSES:
+        import furniture
+        u = furniture._h01(fid, "au_footpath")
+        if u >= AU_FOOT_ONE:
+            foot = ()
+        elif u >= AU_FOOT_BOTH:
+            foot = tuple(s for s in sides if s == (1 if furniture._h01(fid, "au_footpath_side") < 0.5 else -1))
+    foot_w = min(AU_FOOT_W, AU_FOOT_SHARE * total)
+    return {"total": total, "strip": total - foot_w, "foot_w": foot_w, "foot": foot, "sides": sides,
+            "kerb_h": AU_KERB_H}
+
+
+def au_foot_stop(spec, fid, other, ofid, verge_o, base):
+    """How far from the centreline of a crossing road (other, its verge verge_o) an Australian footpath of road
+    spec stops (base: the sidewalk's own distance, where the other has no verge). Like sidewalk_stop: no gap and no
+    overlap. The wider road's (then the smaller id) footpath runs on to the inner edge of the other's, which stops
+    against its outer edge: the two meet as an L round the corner square. Pure."""
+    if not verge_o:
+        return base
+    return other.width / 2 + (verge_o["total"] if (-other.width, ofid) < (-spec.width, fid) else verge_o["strip"])
+
+
 def _motesfri_section(spec, osm):
     import motesfri
     return motesfri.is_section(spec, osm)
@@ -6126,14 +6201,15 @@ def section_lines(ex, feats, i, spec, pts, frame, lon, left_hand, country, ws):
 
 
 def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shift=None, defer_dashes=False, phase=0.,
-           lane_growth=None):
+           lane_growth=None, fid=None):
     """The sidewalk / gutter / marking polylines of one road: [(look dict with m / tl / p, width, pts)].
     pts: its centreline (k, 3) in the anchor frame (a whole ground part: its broken lines' dashes start their cycle at
     its start, so they meet across tiles); lon: its longitude; country: ISO code (markings.style: the country's line
     colours, widths and dash patterns; by longitude when unknown); osm: OpenStreetMap's lane tags of the road
     (railtags.LANE_COLUMNS: the lines lane by lane, markings.lane_plan); ws: its width at each point of pts where
     it tapers (taper_widths: its edges, curbs and lane lines follow); shift: its lines' shift (m, + left) at
-    each point at a merge or split (shift_at: its markings only). Pure."""
+    each point at a merge or split (shift_at: its markings only); fid: its id (Australia's footpaths by hash,
+    au_verge). Pure."""
     import markings
     from europewalks import LOW_EDGE_HEIGHT
     out = []
@@ -6144,10 +6220,23 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
     wv = w if ws is None else np.asarray(ws, np.float64)     # (offsets: tapered; decisions: its width)
     if kind not in BUILT:
         return out
+    au = str(country or "").upper() == "AU"         # Australia's kerb and channel (_gutter)
     street = getattr(spec, "street", None)
+    verge = au_verge(spec, country, fid) if street is None and has_sidewalks(spec) else None     # Australia's nature strip, else None
     if street is not None or has_sidewalks(spec):
         layouts = street.walks() if street is not None else ((side, None) for side in walk_sides(spec, left_hand))
         for side, footway in layouts:
+            if verge:
+                # the kerb alone at the road's edge (a narrow band, low kerb), the grass beyond it (painted: surface.
+                # paint_roads), the footpath set back to the verge's far side ("foot": build_tile cuts it at crossings
+                # by au_foot_stop, furniture and parking skip it); no footpath on a side the hash leaves without
+                out.append(({**SIDEWALK, "side": side, "h": verge["kerb_h"], "strip": verge["strip"]}, AU_KERB_W,
+                            offset_polyline(pts, side * (wv / 2 + AU_KERB_W / 2))))
+                if side in verge["foot"]:
+                    out.append(({**SIDEWALK, "side": side, "foot": True, "h": AU_FOOT_H}, verge["foot_w"],
+                                offset_polyline(pts, side * (wv / 2 + verge["total"] - verge["foot_w"] / 2))))
+                out.append(_gutter(side, pts, wv, au))      # Australia's concrete channel
+                continue
             width = footway.width if footway is not None else spec.walk
             setback = footway.setback if footway is not None else 0.
             look = {**SIDEWALK, "side": side}
@@ -6155,9 +6244,12 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 look["footway"] = footway
             out.append((look, width, offset_polyline(pts, side * (wv / 2 + setback + width / 2))))
             if not setback:
-                gutter = LOW_GUTTER if footway is not None and footway.height <= LOW_EDGE_HEIGHT else GUTTER
-                out.append(({**gutter, "side": side}, gutter["w"],
-                            offset_polyline(pts, side * (wv / 2 - gutter["w"] / 2))))
+                if footway is None:
+                    out.append(_gutter(side, pts, wv, au))      # Australia's concrete channel, else the usual decal
+                else:
+                    gutter = LOW_GUTTER if footway.height <= LOW_EDGE_HEIGHT else GUTTER
+                    out.append(({**gutter, "side": side}, gutter["w"],
+                                offset_polyline(pts, side * (wv / 2 - gutter["w"] / 2))))
         ms = median_side(spec, left_hand)
         if ms is not None:
             # the median: a curbed band, lawn beyond it (two sidewalks back to back made a concrete strip, the user's
@@ -6173,7 +6265,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
                 for k in ((0,) if st.centre == "line_white" else (0, 1)):
                     out.append((look, st.w, offset_polyline(
                         pts, ms * (wv / 2 - EDGE_LINE["inset"] - k * (st.w + st.double_gap)))))
-            out.append(({**GUTTER, "side": ms}, GUTTER["w"], offset_polyline(pts, ms * (wv / 2 - GUTTER["w"] / 2))))
+            out.append(_gutter(ms, pts, wv, au))
     base = pts                              # (the asphalt's own line: its edge decal)
     if shift is not None:                   # (the markings from here on: shifted at a merge / split)
         pts = offset_polyline(pts, shift)
@@ -6261,7 +6353,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
             elif how == "double" or (sweden and lanes >= 4 and how is None):     # (TSFS 2010:171 2 kap. 17 §)
                 if st.warning and w < markings.WARNING_BELOW_M:
                     mark("centre", st.centre, lw_, at(off), st.warning)
-                elif st.centre == "line_yellow" or sweden or st is markings.STYLES.get("GB"):
+                elif st.double_barrier:         # (was yellow / SE / GB here; now the Style's, AU too)
                     for sd in (1, -1):
                         mark("centre", st.centre, lw_, at(off + sd * d))
                 else:
@@ -6279,7 +6371,7 @@ def extras(spec, pts, lon, left_hand=False, country=None, osm=None, ws=None, shi
         # more get a solid line (the Americas: double solid yellow), and in the US a town's street a double solid one;
         # otherwise one broken line in the country's colour and town / country pattern
         solid = lanes >= 4 or (st.double_centre_urban and urban)
-        if solid and (st.centre == "line_yellow" or sweden):
+        if solid and st.double_multilane:       # (was yellow / SE here; now the Style's, AU too)
             for side in (1, -1):
                 mark("centre", st.centre, lw_, offset_polyline(pts, side * (st.double_gap + lw_) / 2))
         elif solid:
@@ -6420,7 +6512,7 @@ def join_walk_ends(runs, carriageways):
         for b in range(a + 1, len(ends)):
             ki, ei, qi, di = ends[a]
             kj, ej, qj, dj = ends[b]
-            if ki == kj:
+            if ki == kj or bool(runs[ki].get("foot")) != bool(runs[kj].get("foot")):    # a footpath joins footpaths only
                 continue
             gap = qj[:2] - qi[:2]
             L = math.hypot(*gap)
@@ -6467,7 +6559,8 @@ def join_walk_ends(runs, carriageways):
         runs[ki] = {"pts": densify(simplify(pts)), "side": si, "w": ri["w"], "fid": ri["fid"], "j": (j0, j1),
                     "open": (o0, o1), "median": bool(ri.get("median")),
                     "ramp_keys": sorted(set(ri.get("ramp_keys", [(ri["fid"], ri["side"])])
-                                                               + rj.get("ramp_keys", [(rj["fid"], rj["side"])])))}
+                                                               + rj.get("ramp_keys", [(rj["fid"], rj["side"])]))),
+                    **{k: ri[k] for k in WALK_LOOK_KEYS if k in ri}}
         if "footway" in ri:
             runs[ki]["footway"] = ri["footway"]
         runs[kj] = None
@@ -6834,8 +6927,10 @@ def mark_poly(pts):
 
 
 def _chunk(look, w, c):
-    out = {"m": look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],
+    out = {"m": look.get("au_m") or look["m"], "w": round(float(w), 2), "tl": look["tl"], "p": look["p"],     # au_m
            "n": [[round(float(v), 3) for v in p] for p in c]}
+    if look.get("au_m"):
+        out["layer"] = "gutter"        # (layer_of: the channel is a gutter, whatever its material's name)
     if look.get("layer"):
         out["layer"] = look["layer"]
     if isinstance(look.get("dash"), tuple):
@@ -11309,6 +11404,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     import roundabouts
     isl = islands.find(roads, structures=structures) if walks is not None else []
     inner = islands.inner_sides(isl)
+    if props is not None and isl and str(country or "").upper() == "AU":     # Australia's roundabout gardens
+        import furniture as _furniture
+        props.extend(islands.au_garden_rows(isl, own_box, ground, _furniture._owns))
     if walks is not None:
         for f in isl:
             # the ring's outside curb between its entries (towns: roundabouts.outer_curbs)
@@ -11360,6 +11458,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 walks.append({"disc": {"ring": inner_, "apex": inner_.mean(0), "mat": 7,
                                        "h": roundabouts.SPLIT_CURB_H + roundabouts.SPLIT_CURB_W * 0.015, "dome": 0.0},
                               "fid": "splitter"})
+    verges = {f: au_verge(s_, country, f) for f, s_, _, _ in roads}     # Australia's nature strips (else all None)
     cornered = set()                            # road pairs whose sidewalks meet at a curb return
     if walks is not None:
         for (fid, side), cl in jcuts.items():
@@ -11378,9 +11477,15 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                    for f in isl if f.get("round")):
                 continue
             if skin_own(p[0], p[1]):
+                near_v = [verges.get(f2) for f2, s2, p2, _ in roads
+                          if has_sidewalks(s2) and float(np.hypot(*(p2[:, :2] - p[:2]).T).min()) < AU_CORNER_NEAR_M]
+                corner_h = min(v["kerb_h"] for v in near_v) if near_v and all(near_v) else None   # a corner of Australian verge streets only: their low kerb
                 style = c.pop("footway", None)
-                walks.append({"corner": c, **({"surface": style.surface, "height": style.height, "europe": True}
-                                               if style is not None else {})})
+                if corner_h is not None:
+                    c = {**c, "h": corner_h}
+                walks.append({"corner": c,
+                              **({"surface": style.surface, "height": style.height, "europe": True}
+                                 if style is not None else {})})
                 fill_look = _corner_look(p, roads)
                 for fill in ([] if ROADS_IN_GROUND else ([c["fill"]] if c["fill"] is not None else []) + c.get("fills", [])):
                     chunks.append({"m": fill_look["m"], "w": 0.0, "tl": fill_look["tl"], "p": fill_look["p"],
@@ -11451,6 +11556,10 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
     stems |= sec_stems
     whole |= sec_whole
     going_on |= sec_straight
+    nostop = {}                                 # Australia's yellow no-stopping lines before signalised junctions
+    if str(country or "").upper() == "AU" and signals is not None:
+        import nostopping
+        nostop = nostopping.approaches(roads, signals, has_sidewalks, islands.ring_fids(roads))
     traffic_lines = []
     import franceroads
     paint_continuations = franceroads.continuations(roads) if franceroads.ON else set()
@@ -11496,9 +11605,14 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import lanesections
         phase = lanesections.phase(*seen[fid][:2]) if fid in seen else 0.
         ex = extras(spec, pts, lon, left_hand, line_country, lane_tags(*seen[fid][:2]) if fid in seen else None, ws,
-                    sh, defer_dashes=True, phase=phase) if fid not in jinternal or fid in whole else []    # inside a junction: none
+                    sh, defer_dashes=True, phase=phase, fid=fid) if fid not in jinternal or fid in whole else []    # inside a junction: none
         if fid in jinternal:                    # (a through road's piece between two close junctions: its lines only)
             ex = [e for e in ex if e[0].get("kind")]
+        elif fid in nostop:                     # a solid yellow line just inside the kerb's channel (AU_CHANNEL_W)
+            ex = ex + [({"m": "line_yellow", "tl": EDGE_LINE["tl"], "p": CENTRE["p"], "kind": "edge", "side": side},
+                        markings.STYLES["AU"].edge,
+                        offset_polyline(piece, side * (spec.width / 2 - AU_CHANNEL_W - NOSTOP_INSET_M)))
+                       for side, piece in nostop[fid]]
         if not ex:
             continue
         if fid in seen:
@@ -11538,6 +11652,12 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
             if rampmerges.related(fid, fids_l[j], merge_layouts) or \
                     rampmerges.continuation(fid, spec, fids_l[j], roads[j][1], paint_joins):
                 line_ok[j] = False
+        foot_blockers = walk_blockers
+        if any(e[0].get("foot") for e in ex):   # an Australian footpath stops at the crossing roads' footpaths
+            fhw = np.array(walk_blockers.hw, np.float64)
+            for j in np.flatnonzero(walk_blockers.keep).tolist():
+                fhw[j] = au_foot_stop(spec, fid, roads[j][1], fids_l[j], verges.get(fids_l[j]), float(fhw[j]))
+            foot_blockers = _RoadCuts(tr, walk_blockers.keep, fhw, walk_blockers.extra)
         for look, w, line in ex:
             french_paint = franceroads.enabled(spec) and look["m"] == franceroads.PAINT_MATERIAL
             paint_cuts = paint_blockers if french_paint else blockers
@@ -11568,7 +11688,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 keep = tr.mask({fid: protected}, fid, line_ok)
                 line_blockers = lb_memo[lb_key] = _RoadCuts(
                     tr, tr.mask(stems_of, fid, keep) if centre_kind else keep, hw_cut, zebras)
-            wb = curb_blockers if look.get("median") else walk_blockers
+            wb = curb_blockers if look.get("median") else foot_blockers if look.get("foot") else walk_blockers     # foot
             if (walk or gutter) and (fid, side) in inner:
                 continue                        # facing a traffic island: no sidewalk there
             if walk and walks is not None:
@@ -11581,7 +11701,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 wb = wb + path_cuts
                 # whole runs near the tile first (joined across tile borders below), clipped to the tile after
                 for piece in clip_polyline(line, *near):
-                    for cpiece, (j0, j1) in junctions.apply_cuts(piece, [] if detached else jcuts.get((fid, side), [])):
+                    # (an Australian footpath is not cut at the kerb return: au_foot_stop ends it)
+                    cuts = [] if detached or look.get("foot") else jcuts.get((fid, side), [])
+                    for cpiece, (j0, j1) in junctions.apply_cuts(piece, cuts):
                         pieces = (densify(simplify(r0)) for r0 in cut_outside(cpiece, wb, 0.5))
                         for run in (pieces if detached else (r for p in pieces for r in _on_level(frame, elev, p))):
                             if len(run) < 2:
@@ -11591,7 +11713,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                             runs_near.append({"pts": run, "side": side, "w": w, "fid": fid, "j": (at_j0, at_j1),
                                               "median": bool(look.get("median")),
                                               "open": (not _on_box(run[0], near), not _on_box(run[-1], near)),
-                                              **({"footway": footway} if footway is not None else {})})
+                                              **({"footway": footway} if footway is not None else {}),
+                                              **{k: look[k] for k in WALK_LOOK_KEYS if k in look}})
                 continue
             if walks is not None and gutter:     # gutters end where their curb turns
                 gcuts = jcuts.get((fid, side), [])
@@ -11671,11 +11794,11 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                 at_j1 = last and rn["j"][1]
                 caps = (first and not at_j0 and not _on_box(run[0], wexact),
                         last and not at_j1 and not _on_box(run[-1], wexact))
-                rl = [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]
+                rl = [] if rn.get("foot") else [r for key in rn.get("ramp_keys", [(fid, side)]) for r in jramps.get(key, [])]   # no kerb ramps on a footpath
                 ramps = [] if detached else junctions.ramp_ranges(run, rl)
                 walks.append({"pts": run, "side": side, "caps": caps, "ramps": ramps, "w": w, "fid": fid,
-                              "median": rn.get("median", False), **style})
-                if not rn.get("median") and not detached:
+                              "median": rn.get("median", False), **style, **{k: rn[k] for k in WALK_LOOK_KEYS if k in rn}})
+                if not rn.get("median") and not detached and not rn.get("foot"):     # (nor a footpath)
                     walks[-1]["drain_ends"] = (caps[0] or at_j0, caps[1] or at_j1)
         if walks is not None and pole_profile is not None:
             import poleprofiles

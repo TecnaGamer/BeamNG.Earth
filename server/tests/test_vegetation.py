@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import geodesy  # noqa: E402
 import mapcells  # noqa: E402
+import vegclass  # noqa: E402
 import vegetation as veg  # noqa: E402
 
 LAT, LON = 39.29, -76.58
@@ -308,6 +309,87 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_SHRUB, 1, 22.3, -4.6, 60), veg.G_DESERT_SHRUB, "the Sahara")
         self.assertEqual(self.g(veg.G_ROCK, 1, -25.0, 133.0, 20), veg.G_DESERT_ROCK, "inner Australia")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 52.0, 5.0, 20), veg.G_SHRUB, "Dutch shrubland: no desert")
+
+
+class AustralianTreesTest(unittest.TestCase):
+    """australian_trees, the eucalypt / rainforest / palm mix inside Australia (regional() is North America's)."""
+    N = 20000
+
+    def run_at(self, generic, h, lat, lon, lcls=10, seed=1):
+        u = np.random.default_rng(seed).random((self.N, 3))
+        gen = np.full(self.N, generic, np.uint8)
+        height = np.full(self.N, float(h))
+        la, lo = np.full(self.N, lat), np.full(self.N, lon)
+        cl = np.full(self.N, lcls, np.uint8)
+        reg = veg.regional(gen, height, la, lo, cl, u[:, 0])
+        return veg.australian_trees(gen, reg, height, la, lo, cl, u), reg
+
+    def share(self, out, group):
+        return float((out == group).mean())
+
+    def test_group_ids_unchanged_eucalypt_last(self):
+        self.assertEqual(veg.GROUPS[:11], ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper",
+                                           "desert_shrub", "desert_rock", "oak_west", "tropical"))
+        # (the merge with upstream dev: its 25 groups are the Rust kernel's ids; the Australian ones follow them, Python only)
+        # (the merge with upstream dev: its 25 groups are the Rust kernel's ids, eucalyptus among them; the palettes' follow)
+        self.assertEqual(veg.GROUPS[25:], ("dry_rainforest", "mallee", "scrub", "mangrove"), "the palettes' groups follow it")
+
+    def test_brisbane_keeps_regional_eucalypts(self):
+        for generic in (veg.G_DECIDUOUS, veg.G_CONIFER):
+            out, _ = self.run_at(generic, 15.0, -27.47, 153.03)
+            _, reg = self.run_at(generic, 15.0, -27.47, 153.03)
+            self.assertTrue((out == reg).all(), "outside the tropics and towns: regional()'s own (its eucalypts)")
+            self.assertGreater(self.share(out, veg.G_EUCALYPTUS), 0.5, msg=veg.GROUPS[generic])
+            self.assertEqual(self.share(out, veg.G_PALM) + self.share(out, veg.G_TROPICAL), 0.0, "Cfa, not in town")
+
+    def test_cairns_tall_trees_partly_tropical(self):
+        out, _ = self.run_at(veg.G_DECIDUOUS, 20.0, -16.92, 145.77)
+        self.assertGreaterEqual(self.share(out, veg.G_TROPICAL), 0.58)      # (ours 0.6, regional()'s own on top)
+
+        low, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -16.92, 145.77)
+        self.assertEqual(self.share(low, veg.G_TROPICAL), 0.0, "under 12 m: no rainforest tree")
+        self.assertGreater(self.share(low, veg.G_EUCALYPTUS), 0.5)
+        dry, _ = self.run_at(veg.G_DECIDUOUS, 20.0, -23.7, 133.88)      # Alice Springs (arid): none
+        self.assertEqual(self.share(dry, veg.G_TROPICAL), 0.0)
+
+    def test_queensland_towns_have_palms(self):
+        wc_built = veg.WC["built"]
+        out, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -27.47, 153.03, wc_built)
+        self.assertAlmostEqual(self.share(out, veg.G_PALM), 0.15, delta=0.02)
+        south, _ = self.run_at(veg.G_DECIDUOUS, 8.0, -33.87, 151.2, wc_built)        # Sydney, south of -29: none
+        self.assertEqual(self.share(south, veg.G_PALM), 0.0)
+        self.assertGreater(self.share(south, veg.G_EUCALYPTUS), 0.5)
+
+    def test_shrubs_and_rocks_keep_regional(self):
+        for generic in (veg.G_SHRUB, veg.G_ROCK):
+            for lat, lon, lcls in ((-27.47, 153.03, 20), (-25.0, 133.0, 20), (-25.0, 133.0, 60)):
+                out, reg = self.run_at(generic, 1.0, lat, lon, lcls)
+                self.assertTrue((out == reg).all(), (generic, lat, lon))
+
+    def test_outside_australia_unchanged(self):
+        # London, Seattle, Baltimore, Miami, Auckland, Jakarta: byte-identical to regional()
+        for lat, lon in ((51.5, -0.12), (47.6, -122.3), (39.29, -76.58), (25.8, -80.2), (-36.85, 174.76), (-6.2, 106.8)):
+            for generic in (veg.G_DECIDUOUS, veg.G_CONIFER, veg.G_SHRUB):
+                for lcls in (10, veg.WC["built"]):
+                    out, reg = self.run_at(generic, 15.0, lat, lon, lcls)
+                    self.assertEqual(out.tobytes(), reg.tobytes(), (lat, lon, generic, lcls))
+                    self.assertEqual(int((out == veg.G_EUCALYPTUS).sum()), 0)
+
+    def test_mixed_batch_and_deterministic(self):
+        lat = np.array([-27.47, 51.5, -16.92, 47.6]).repeat(1000)
+        lon = np.array([153.03, -0.12, 145.77, -122.3]).repeat(1000)
+        n = len(lat)
+        u = np.random.default_rng(3).random((n, 3))
+        gen = np.full(n, veg.G_DECIDUOUS, np.uint8)
+        h = np.full(n, 15.0)
+        cl = np.full(n, 10, np.uint8)
+        reg = veg.regional(gen, h, lat, lon, cl, u[:, 0])
+        a = veg.australian_trees(gen, reg, h, lat, lon, cl, u)
+        self.assertEqual(a.tobytes(), veg.australian_trees(gen, reg, h, lat, lon, cl, u).tobytes())
+        self.assertEqual(a[1000:2000].tobytes(), reg[1000:2000].tobytes(), "London in the same batch: unchanged")
+        self.assertEqual(a[3000:].tobytes(), reg[3000:].tobytes(), "Seattle")
+        self.assertGreater(float((a[:1000] == veg.G_EUCALYPTUS).mean()), 0.8)
+        self.assertGreater(float((a[2000:3000] == veg.G_TROPICAL).mean()), 0.5)
 
 
 class DilateTest(unittest.TestCase):
@@ -706,3 +788,173 @@ class FarmFoliageTest(unittest.TestCase):
         self.assertLessEqual(nlines, 14)
         blocked = np.ones((rows, cols), bool)
         self.assertEqual(len(veg.farm_foliage(feats, chm, blocked, None)), 0)
+
+
+# the NVIS palettes (vegclass.py, data/veg_palettes.json, vegetation.apply_palette)
+MT_ARCHER, DAINTREE, ALICE, DANDENONG = (-23.31, 150.60), (-16.17, 145.40), (-23.70, 133.88), (-37.85, 145.35)
+QLD_GRAZING, MELBOURNE, TOKYO = (-23.38, 150.51), (-37.81, 144.96), (35.68, 139.69)     # (the two cities: cleared land)
+
+
+class VegClassTest(unittest.TestCase):
+    def test_lookup_by_place(self):
+        self.assertEqual(vegclass.at(*MT_ARCHER), "woodland")
+        self.assertEqual(vegclass.at(*DAINTREE), "rainforest")
+        self.assertEqual(vegclass.at(*ALICE), "shrubland")
+        self.assertEqual(vegclass.at(*DANDENONG), "open_forest")
+        self.assertEqual(vegclass.at(*QLD_GRAZING), "cleared")     # grazing land: scattered eucalypts, long dry grass
+        self.assertEqual(vegclass.at(*MELBOURNE), "cleared")
+        for place in (TOKYO, (51.5, -0.12), (0.0, 0.0), (-23.5, 160.0)):
+            self.assertEqual(vegclass.at(*place), "", place)        # the sea, other countries: none
+        got = vegclass.at(np.array([MT_ARCHER[0], TOKYO[0], DAINTREE[0]]), np.array([MT_ARCHER[1], TOKYO[1], DAINTREE[1]]))
+        self.assertEqual(list(got), ["woodland", "", "rainforest"])
+        self.assertEqual(vegclass.at(np.zeros((2, 3)), np.zeros((2, 3))).shape, (2, 3))
+
+    def test_palettes_are_consistent(self):
+        names = vegclass.palette_names()
+        self.assertEqual(names[0], "")
+        for name in names[1:]:
+            p = vegclass.palette(name)
+            self.assertAlmostEqual(sum(s for _, s in p["trees"]), 1.0, 6, name)
+            self.assertLessEqual(sum(s for _, s in p["shrubs"]), 1.0 + 1e-9, name)
+            for g, _ in p["trees"] + p["shrubs"]:
+                self.assertIn(g, veg.GROUPS, name)
+            self.assertIn(p["ground"], vegclass.GROUND)
+            self.assertTrue(0.0 < p["density"] <= 1.0 and 0.0 < p["scale"][0] <= p["scale"][1], name)
+        for code in range(1, 33):       # every NVIS group but water, bare, sea, unclassified and unknown has one (cleared too)
+            self.assertEqual(f"au_mvg:{code}" in vegclass._load_palettes()[0]["classes"],
+                             code not in (24, 26, 27, 28, 30), code)
+
+    def test_finest_layer_wins(self):
+        class Fake:
+            name = "au_mvg"
+
+            def covers(self, lat, lon):
+                return True
+
+            def codes(self, lat, lon):
+                return np.where(lat > -20, 23, 0).astype(np.uint8)      # mangroves north of 20 S; no class elsewhere
+
+        old = vegclass.LAYERS
+        try:
+            vegclass.LAYERS = [Fake()] + old
+            self.assertEqual(vegclass.at(*DAINTREE), "mangrove")
+            self.assertEqual(vegclass.at(*MT_ARCHER), "woodland", "no class in the finer layer: the next one answers")
+        finally:
+            vegclass.LAYERS = old
+
+    def test_nvis_grid_read_only_for_points_inside_its_box(self):
+        old = vegclass.LAYERS
+        layer = vegclass.GridLayer("au_mvg", vegclass.LAYERS[0].path, vegclass.LAYERS[0].box)       # (a fresh one: unread)
+        try:
+            vegclass.LAYERS = [layer]
+            self.assertEqual(vegclass.at(*TOKYO), "")
+            self.assertEqual(vegclass.at(51.5, -0.12), "")
+            self.assertTrue((vegclass.palette_ids(np.array([35.0, 51.5, -34.5]), np.array([139.0, -0.1, 80.0])) == 0).all())
+            self.assertIsNone(layer._g, "no point inside the grid's box: the file is not read")
+            self.assertEqual(vegclass.wet_months(*TOKYO), [])
+            self.assertIsNone(layer._g)
+            self.assertNotEqual(vegclass.at(*MT_ARCHER), "")
+            self.assertIsNotNone(layer._g, "read on the first query inside the box")
+            s, n, w, e = layer.box                      # the given box is the file's extent
+            self.assertEqual(layer.box, (layer.lat0 - layer._g.shape[0] * layer.res, layer.lat0, layer.lon0,
+                                         layer.lon0 + layer._g.shape[1] * layer.res))
+        finally:
+            vegclass.LAYERS = old
+
+    def test_wet_months_and_digest(self):
+        self.assertEqual(vegclass.wet_months(*MT_ARCHER), [12, 1, 2, 3])
+        self.assertEqual(vegclass.wet_months(*DANDENONG), [6, 7, 8, 9, 10], "the south: winter and spring")
+        self.assertEqual(vegclass.wet_months(*TOKYO), [])
+        self.assertEqual(vegclass.digest(), vegclass.digest())
+
+
+class PaletteTest(unittest.TestCase):
+    N = 20000
+
+    def apply(self, group, place, cls=10, seed=3):
+        u = np.random.default_rng(seed).random(self.N)
+        la, lo = np.full(self.N, place[0]), np.full(self.N, place[1])
+        g = np.full(self.N, group, np.uint8)
+        return g, veg.apply_palette(g, la, lo, np.full(self.N, cls, np.uint8), u)
+
+    def share(self, out, group):
+        return float((out == group).mean())
+
+    def test_woodland_is_eucalypt_only(self):
+        for generic in (veg.G_DECIDUOUS, veg.G_CONIFER, veg.G_OAK_WEST, veg.G_EUCALYPTUS, veg.G_TROPICAL):
+            _, out = self.apply(generic, MT_ARCHER)
+            self.assertTrue((out == veg.G_EUCALYPTUS).all(), veg.GROUPS[generic])
+
+    def test_rainforest_mix(self):
+        _, out = self.apply(veg.G_DECIDUOUS, DAINTREE)
+        self.assertAlmostEqual(self.share(out, veg.G_DRY_RAINFOREST), 0.55, delta=0.02)
+        self.assertAlmostEqual(self.share(out, veg.G_TROPICAL), 0.45, delta=0.02)
+        _, out = self.apply(veg.G_SHRUB, DAINTREE)         # bushes: the palette's shrub share, the rest keep their group
+        self.assertAlmostEqual(self.share(out, veg.G_SCRUB), 0.3, delta=0.02)
+        self.assertAlmostEqual(self.share(out, veg.G_SHRUB), 0.7, delta=0.02)
+
+    def test_shrubland_trees_are_scrub_and_mallee(self):
+        _, out = self.apply(veg.G_DECIDUOUS, ALICE)
+        self.assertEqual(self.share(out, veg.G_SCRUB) + self.share(out, veg.G_MALLEE), 1.0)
+
+    def test_untouched(self):
+        for place in (TOKYO, (47.6, -122.3), (-36.85, 174.76)):      # other countries
+            for generic in (veg.G_DECIDUOUS, veg.G_CONIFER, veg.G_SHRUB, veg.G_ROCK, veg.G_PALM):
+                g, out = self.apply(generic, place)
+                self.assertEqual(out.tobytes(), g.tobytes(), (place, generic))
+        for generic in (veg.G_ROCK, veg.G_PALM, veg.G_DESERT_ROCK):             # rocks and palms in the bush
+            g, out = self.apply(generic, MT_ARCHER)
+            self.assertEqual(out.tobytes(), g.tobytes(), generic)
+        for cls in (veg.WC["built"], veg.WC["crop"]):                          # towns and farmland keep the old mix
+            g, out = self.apply(veg.G_DECIDUOUS, MT_ARCHER, cls)
+            self.assertEqual(out.tobytes(), g.tobytes(), cls)
+
+    def test_items_density_and_size(self):
+        n = 4000
+        rng = np.random.default_rng(5)
+
+        def items(place):
+            la, lo = np.full(n, place[0]) + rng.random(n) * 1e-3, np.full(n, place[1]) + rng.random(n) * 1e-3
+            return veg.Items(lo, la, np.full(n, 10.0, np.float32), np.full(n, 2.2, np.float32),
+                             np.full(n, veg.KIND_TREE, np.uint8), np.full(n, veg.G_DECIDUOUS, np.uint8),
+                             rng.random(n).astype(np.float32), np.zeros(n, np.float32), np.ones(n, np.float32))
+        cls = np.full(n, 10, np.uint8)
+        far = items(TOKYO)
+        self.assertIs(veg.palette_items(far, cls), far, "no palette here: the same items")
+        bush = items(MT_ARCHER)                                                 # woodland: density 1, heights 0.75 .. 1.25
+        out = veg.palette_items(bush, cls)
+        self.assertEqual(len(out), n)
+        self.assertTrue((out.group == veg.G_EUCALYPTUS).all())
+        self.assertGreaterEqual(float(out.height.min()), 7.5 - 1e-3)
+        self.assertLessEqual(float(out.height.max()), 12.5 + 1e-3)
+        self.assertGreater(float(out.height.max() - out.height.min()), 3.0)
+        self.assertTrue(np.array_equal(out.rank, bush.rank))
+        self.assertEqual(vegclass.at(-19.0, 136.5), "tussock")                    # the Barkly Tableland: density 0.45
+        grass = veg.palette_items(items((-19.0, 136.5)), cls)
+        self.assertAlmostEqual(len(grass) / n, 0.45, delta=0.03)
+        self.assertLess(float(grass.rank.max()), 1.0)
+
+    def test_cache_keys_only_australian_cells(self):
+        """global cells keep upstream's path and are never deleted; Australian ones sit in their own palette-keyed folder."""
+        import os
+        import tempfile
+        import mapcells
+        self.assertEqual(veg.VERSION, 27, "upstream dev's: the shared folder is not renamed")
+        bx, by = (int(v) for v in mapcells.tile_xy(-27.47, 153.03))         # Brisbane
+        lx, ly = (int(v) for v in mapcells.tile_xy(51.5, -0.12))            # London
+        with tempfile.TemporaryDirectory() as d:
+            v = veg.Vegetation(None, d)
+            self.assertEqual(v._path(lx, ly), os.path.join(v.dir, "x", str(lx), f"{ly}.npz"), "outside Australia: as upstream")
+            self.assertIsNone(v._au_key, "no digest (no 15 MB read) until an Australian cell is asked")
+            au = v._path(bx, by)
+            tag = "au%d-%s" % (veg.AU_VERSION, vegclass.digest())
+            self.assertEqual(au, os.path.join(v.dir, tag, "x", str(bx), f"{by}.npz"))
+            glob = os.path.join(v.dir, "x", str(lx), f"{ly}.npz")
+            old = os.path.join(v.dir, "au28-oldpalettes", "x", "1", "2.npz")
+            for f in (glob, old):
+                os.makedirs(os.path.dirname(f))
+                open(f, "wb").close()
+            v2 = veg.Vegetation(None, d)
+            v2._path(bx, by)
+            self.assertTrue(os.path.exists(glob), "the shared folder is never emptied")
+            self.assertFalse(os.path.exists(old), "Australian cells of other palettes are dropped")

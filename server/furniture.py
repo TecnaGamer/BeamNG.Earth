@@ -35,7 +35,15 @@ LAMP_SPACING_NA = {"trunk": (70.0, True), "primary": (70.0, True), "secondary": 
 # Washington DC 60-150 ft (DDOT), Columbus' post tops 150-170 ft, Chicago's davits opposite or staggered
 LAMP_SPACING_NA_DENSE = dict(LAMP_SPACING_NA, residential=(46.0, False), unclassified=(50.0, False),
                              living_street=(40.0, False))
-LAMP_REGIONS = {"US": "na", "CA": "na"}
+LAMP_REGIONS = {"US": "na", "CA": "na", "AU": "au"}      # AU
+# Australia (LAMP_REGIONS "au"; Energex / Brisbane City Council practice, AS/NZS 1158): arterials lit both sides
+# (staggered, ~35-40 m between lamps), collectors one side 45-50 m, local streets 60 m on the street's utility poles (every
+# other pole, pole_lamp) or on posts where the lines are underground; the shapes stay the stock cobra-head arm and post.
+LAMP_SPACING_AU = {"trunk": (70.0, True), "primary": (70.0, True), "secondary": (45.0, False), "tertiary": (50.0, False),
+                   "residential": (60.0, False), "unclassified": (70.0, False), "living_street": (50.0, False)}
+# ... and the concrete / steel poles (AU_POLE_CONC, a mod shape: tools/build_au_streetscape.py) of the main roads' lines, where
+# the suburbs' are timber (the stock pole)
+AU_CONC_POLE_CLASSES = {"trunk", "primary", "secondary"}
 # US states' own practice (the state DOTs' lighting policies and their largest cities' design manuals, researched
 # 2026-10-27: .claude/work/street_lighting_research.md):
 # - the Mountain West and Oklahoma light single-family local streets at their intersections, mid-block only past
@@ -76,6 +84,8 @@ def _na(region):
 
 def lamp_spacing(region, dense=False):
     """The class -> (spacing, both) table of a lamp region (dense: a city's core)."""
+    if region == "au":
+        return LAMP_SPACING_AU
     if region == "na:sparse":
         return LAMP_SPACING_NA_SPARSE_DENSE if dense else LAMP_SPACING_NA_SPARSE
     if _na(region):
@@ -100,6 +110,13 @@ MAPPED_ALONG_M = 15.0
 END_CLEAR_M = 4.0           # m kept clear of a run's ends (corners, crosswalk ramps)
 CLEAR_OTHER_M = 1.5         # m kept off another road's carriageway
 G_LAMP, G_POLE = "streetlight", "pole"
+G_POLE_CONC = "au_pole_conc"        # a concrete pole (Australia's main roads); the stock timber pole elsewhere
+
+
+def pole_group(region, cls):
+    """the group of a utility pole along a road of class cls: Australia's main roads' concrete pole, else the stock
+    pole (G_POLE)."""
+    return G_POLE_CONC if region == "au" and cls in AU_CONC_POLE_CLASSES else G_POLE
 
 
 def _h01(*vals):
@@ -251,6 +268,23 @@ MINOR = {"residential", "unclassified", "living_street"}
 G_SIGNAL, G_STOP, G_YIELD = "signal", "stop", "giveway"
 G_SIGNAL_LEFT = "signal_left"
 G_B1, B1_TOP = "giveway_b1", 2.30       # Sweden's yellow give-way sign (tools/build_median_props.py: its height)
+# Australia's junction props (tools/build_au_traffic.py): AS 1742.2's red Give Way (R1-2) on a galvanised post, and the
+# traffic signals AS 1742.14 / Queensland TMR: 3-aspect 300 mm lanterns with black target boards on a galvanised pole, on a
+# mast arm over a wide road. The controls stay G_SIGNAL / G_YIELD (au_group maps them at placement); heights are the
+# catalog's (trees.lua).
+G_SIGNAL_AU, G_SIGNAL_AU_MAST, G_GIVEWAY_AU = "au_signal", "au_signal_mast", "au_giveway"
+AU_PROP_H = {G_SIGNAL_AU: 4.0, G_SIGNAL_AU_MAST: 7.0, G_GIVEWAY_AU: 2.7}
+AU_MAST_WIDTH_M = 9.0       # m: an approach this wide (a carriageway of three lanes or more) gets a mast arm over it
+PROP_H = {G_SIGNAL: 9.4, **AU_PROP_H}      # the catalog's height of a junction prop, else 3.0 (signs)
+
+
+def au_group(what, spec):
+    """the prop group (trees.lua) of control what (G_SIGNAL | G_STOP | G_YIELD) on an arm of spec in Australia: a
+    signal on a pole, or on a mast arm where the approach is wide (AU_MAST_WIDTH_M), and the red Give Way sign; the
+    stop sign stays the stock one (the same red octagon)."""
+    if what == G_SIGNAL:
+        return G_SIGNAL_AU_MAST if spec.width >= AU_MAST_WIDTH_M else G_SIGNAL_AU
+    return G_GIVEWAY_AU if what == G_YIELD else what
 _SE_RANK = {"trunk": 4, "primary": 3, "secondary": 2, "tertiary": 1, "unclassified": 0, "residential": 0,
             "living_street": 0}         # which arm gives way at a Swedish junction
 # The Nordic countries' junctions (Sweden's rule, junction_controls, the same in its neighbours): a lower road gives way
@@ -343,7 +377,7 @@ def priority_stop_arms(arms, ring=None):
 
 def priority_controls(arms, ring=None, signals=None, country=None):
     """priority_stop_arms where the hierarchy decides the junction: not in Sweden, not at a mapped signal."""
-    if str(country or "").upper() in GIVE_WAY_COUNTRIES:
+    if str(country or "").upper() in GIVE_WAY_COUNTRIES or str(country or "").upper() == "AU":     # (Australia's stop signs are only the map's)
         return []
     stops = priority_stop_arms(arms, ring)
     if stops and signals is not None and _is_signalled(arms, signals):
@@ -443,11 +477,10 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
     arms lower than the road through and nothing between roads of a class, as trafikförordningen (1998:1276): the
     right-hand rule is 3 kap. 18 §, give-way entering a main road 21 §, and a stop sign is a local exception "där väjningsplikt
     inte fungerar" (Transportstyrelsen's decision TSV 2011-1541, 2012-01-09); priority: the signs the map has
-    (secrossings.nodes), on top of those, as a stop sign is only ever the map's."""
+    (secrossings.nodes), on top of those, as a stop sign is only ever the map's. Australia: the map's signs on any arm
+    and, in town and with none, Give Way where the other countries guess a stop sign (_guessed_stops)."""
     if ring and sum(1 for a in arms if a[0] in ring) >= 2:
         return [(a, G_YIELD) for a in arms if a[0] not in ring and not _outbound(a)]
-    major = [a for a in arms if a[1].cls in MAJOR]
-    minor = [a for a in arms if a[1].cls in MINOR and not _outbound(a)]    # (no stop sign on a one-way out of it)
     stops = priority_controls(arms, ring, signals, country)
     if not stops and _is_signalled(arms, signals):
         # one head per way in: none on a one-way arm leaving it, none on a short link to the next signalled
@@ -455,6 +488,14 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
         # Boston St, "way too many traffic lights"); link_ok(arm) says whether that link's far end is signalled
         return [(a, G_SIGNAL) for a in arms if a[1].cls in MAJOR | MINOR and not _outbound(a)
                 and not (link_ok is not None and len(a) >= 6 and a[5] < LINK_M and link_ok(a))]
+    if str(country or "").upper() == "AU":
+        # Australia: the signs the map has (highway=give_way and stop, on any arm), and with none, in town, a Give Way
+        # where the code would guess a stop sign (AS 1742.2: an untagged minor T-junction there is Give Way or unsigned;
+        # a stop sign is only ever the map's)
+        mapped = [(a, w) for a in arms for w in (_mapped_priority(a, priority),) if w is not None and not _outbound(a)]
+        if mapped or not all(a[1].urban for a in arms):
+            return mapped
+        return [(a, G_YIELD) for a, _ in _guessed_stops(arms) if not _outbound(a)]
     if str(country or "").upper() in GIVE_WAY_COUNTRIES:
         # the two highest arms are the main road through; a lower one gives way, a road of its own class does not
         ranks = sorted((_SE_RANK.get(a[1].cls, 0) for a in arms), reverse=True)
@@ -468,6 +509,14 @@ def junction_controls(arms, k, link_ok=None, ring=None, signals=None, country=No
         return put
     if stops:
         return [(a, G_STOP) for a in stops]
+    return _guessed_stops(arms)
+
+
+def _guessed_stops(arms):
+    """[(arm, G_STOP)] of a junction's guessed stop signs (junction_controls): the minor arms meeting a major road, the
+    stem of a minor T, half the minor four-ways (hashed)."""
+    major =[a for a in arms if a[1].cls in MAJOR]
+    minor = [a for a in arms if a[1].cls in MINOR and not _outbound(a)]    # (no stop sign on a one-way out of it)
     if major:
         return [(a, G_STOP) for a in minor]
     if len(arms) == 3:
@@ -598,6 +647,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
     x0, y0, x1, y1 = box
     sweden = str(country or "").upper() in GIVE_WAY_COUNTRIES      # (the Nordic rules: GIVE_WAY_COUNTRIES)
     yellow_b1 = str(country or "").upper() in YELLOW_B1_COUNTRIES   # (Sweden's and Finland's yellow give-way sign)
+    au = str(country or "").upper() == "AU"        # mapped give-way and stop signs anywhere; au_group props
     rows = []
     junctions = _arms(roads)
     link_ok = _link_check(junctions, signals)
@@ -654,22 +704,23 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
                 continue
         on_ring = sum(1 for a in arms if a[0] in ring) >= 2
         here = _controlled_here(arms, signals)
-        if len(arms) < 3 or not (on_ring or here or sweden or priority_stop_arms(arms, ring)):
+        if len(arms) < 3 or not (on_ring or here or sweden or au or priority_stop_arms(arms, ring)):
             continue
         if not (_owns(box, p[0], p[1])):
             continue
         if put is None:
             put = junction_controls(arms, k, link_ok, ring, signals, country, priority)
-        if sweden and not here:
+        if (sweden or au) and not here:       # (au)
             put = [c for c in put if c[1] != G_SIGNAL]      # (no signals guessed out here)
         if not put:
             continue
         wide = max(a[1].width for a in arms) / 2
         for arm, what in put:
-            side, yaw = approach_pose(arm[2], what, left_hand)
+            prop = au_group(what, arm[1]) if au else what      # Australia's pole / mast head
+            side, yaw = approach_pose(arm[2], prop, left_hand)
             b1 = yellow_b1 and what == G_YIELD
-            group = G_B1 if b1 else G_SIGNAL_LEFT if left_hand and what == G_SIGNAL else what
-            if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1:
+            group = G_B1 if b1 else prop if prop != what else G_SIGNAL_LEFT if left_hand and what == G_SIGNAL else what
+            if sign_obstacles is not None and what in (G_STOP, G_YIELD) and not b1 and not au:
                 # (PR #505: the sign where an approaching driver sees it, clear of the mapped obstacles)
                 import signplacement
                 if paved is None:
@@ -687,7 +738,7 @@ def junction_props(roads, box, curb_h=0.15, left_hand=False, decks=(), signals=N
                 at = spot(arm, group, side, yaw, wide=wide)
             if at is None or not (x0 - 20 <= at[0] < x1 + 20 and y0 - 20 <= at[1] < y1 + 20):
                 continue
-            rows.append([group, *at, yaw, 1.0, B1_TOP if b1 else 9.4 if what == G_SIGNAL else 3.0, 0.0])
+            rows.append([group, *at, yaw, 1.0, B1_TOP if b1 else PROP_H.get(group, 3.0), 0.0])
     return rows
 
 
@@ -737,7 +788,9 @@ G_POLELAMP = "polelamp"     # a cobra-head arm on a utility pole (East Coast USA
 # 2009-12-31, 78,837 km of low-voltage cable (network level 7) to 12,720 km of low-voltage overhead line, 0.86; ElCom's
 # "ElCom in 2024, a brief overview": 90 % of the distribution network underground.
 BURIED_LV = {"NL": 1.0, "CH": 0.86, "GB": 0.81, "DE": 0.75, "DK": 0.65, "BE": 0.44, "NO": 0.38, "IT": 0.30,
-             "FR": 0.27, "PT": 0.19, "AT": 0.15, "ES": 0.14}
+             "FR": 0.27, "PT": 0.19, "AT": 0.15, "ES": 0.14,
+             "AU": 0.25}    # an estimate: Australia's older suburbs are overhead on timber poles, its newer estates
+                            # underground (Energex and Ergon report roughly a quarter to a third of their LV network)
 
 
 def buried_share(country):
@@ -771,6 +824,8 @@ POLE_LAMP_EVERY = {"trunk", "primary", "secondary"}
 
 def pole_lamp(cls, k, region):
     """Does the k-th utility pole along a road of class cls carry a lamp? (the sparse states: every third)"""
+    if region == "au":      # Australia: a lamp on every second pole of the local streets (60-80 m), every one on main roads
+        return cls in POLE_LAMP_EVERY or k % 2 == 0
     if cls in POLE_LAMP_EVERY or not _na(region):
         return True
     return k % (3 if region == "na:sparse" else 2) == 0
@@ -809,11 +864,20 @@ COLLISION_BOXES = {
                    (-0.203, -0.200, 7.124, 1.775, 0.201, 8.271))),
     G_POLE: (9.2, ((-0.260, -0.300, -1.000, 0.260, 0.300, 7.772),
                    (-0.900, -0.348, 7.772, 0.901, 0.300, 8.000))),
+    # the concrete pole's own (tools/build_au_streetscape.py: a 0.17 m shaft tapering to 0.095 m, a 1.9 m cross-arm at 7.7 m)
+    G_POLE_CONC: (9.2, ((-0.200, -0.200, -0.300, 0.200, 0.200, 7.600),
+                        (-0.950, -0.200, 7.600, 0.950, 0.200, 9.200))),
     G_POLELAMP: (1.1, ((-2.891, -0.110, -0.365, 0.039, 0.110, 0.699),)),
     G_SIGNAL: (9.4, ((-0.277, -0.327, -0.397, 0.263, 0.296, 9.365),)),
     G_SIGNAL_LEFT: (9.4, ((-0.263, -0.327, -0.397, 0.277, 0.296, 9.365),)),
     G_STOP: (3.0, ((-0.460, -0.028, -0.987, 0.436, 0.029, 3.004),)),
     G_YIELD: (3.0, ((-0.356, -0.042, -0.075, 0.357, 0.032, 3.336),)),
+    # Australia's (tools/build_au_traffic.py): the signal's pole and its lantern in front of it (target board 0.62 m
+    # wide, lens faces to y -0.31); the mast's pole and its pole lantern, its arm overhead (above 6.3 m: not a box here)
+    G_SIGNAL_AU: (4.0, ((-0.320, -0.430, -0.300, 0.320, 0.100, 3.950),)),
+    G_SIGNAL_AU_MAST: (7.0, ((-0.110, -0.110, -0.300, 0.110, 0.110, 7.000),
+                             (-0.320, -0.450, 2.400, 0.320, -0.100, 4.000))),
+    G_GIVEWAY_AU: (2.7, ((-0.400, -0.075, -0.300, 0.400, 0.030, 2.650),)),
     G_HYDRANT: (1.5, ((-0.327, -0.377, -0.145, 0.327, 0.377, 1.324),)),
     G_BENCH: (0.9, ((-1.000, -0.329, 0.000, 1.000, 0.205, 0.850),)),
     # Both catalog variants: each is scaled against its own catalog height (both 1.1 m).
@@ -1177,8 +1241,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         fid = wk.get("fid")
         if fid is None or "pts" not in wk or fid not in by_fid:
             continue
-        if wk.get("median"):        # a divided road's median: no lamps, poles, benches or bins on it (Boston
-            continue                # Street's is a bare curb, Mapillary 2026-10-17)
+        if wk.get("median") or wk.get("foot"):   # a divided road's median: no lamps, poles, benches or bins on it
+            continue                # (Boston Street's is a bare curb, Mapillary 2026-10-17); nor on an Australian
+                                    # footpath (roads.au_verge): all of it stands on the kerb run, in the grass strip
         spec, line = by_fid[fid]
         run = np.asarray(wk["pts"], np.float64)
         if len(run) < 2:
@@ -1233,8 +1298,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
                         continue
                     yaw = _yaw(out[0], out[1])
                     pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
-                    pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                            round(yaw, 1), 1.0, pole_style.height, 0.0]
+                    grp = pole_group(region, spec.cls) if pole_style.group == G_POLE else pole_style.group      # Australia's concrete pole
+                    pole = [grp, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                            round(yaw, 1), 1.0, (9.2 if grp == G_POLE_CONC else pole_style.height), 0.0]
                     if not clearance.clear(pole):
                         if wires is not None and len(run_poles) > 1:
                             wires.extend(_own_spans(run_poles, box))
@@ -1264,7 +1330,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             # model has few there): small broadleaves, both sides, clear of the junctions
             tph = _h01(fid, side, "tph") * STREET_TREE_SPACING
             for p, out, s_line in _stations(run, line, STREET_TREE_SPACING, tph, END_CLEAR_M + 4.0, side):
-                q = p[:2] - out * (w / 2 - STREET_TREE_CURB_M)
+                # (an Australian street's trees in the middle of the nature strip, roads.au_verge)
+                q = p[:2] - out * (w / 2 - (min(1.5, wk["strip"] / 2) if wk.get("strip") else STREET_TREE_CURB_M))
                 if _owns(box, q[0], q[1]):
                     # (each tree's size, turn and rank keyed on its station along the road, not on where the anchor's
                     # frame puts it: the same tree from every anchor, geotiles 2026-10-29)
@@ -1342,8 +1409,9 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
             # the cross-arm (local x) across the road, the wires (local y) along it
             yaw = _yaw(n[0], n[1])
             pole_style = pole_at(fid, float(q[0]), float(q[1]), float(p[2]))
-            pole = [pole_style.group, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
-                    round(yaw, 1), 1.0, pole_style.height, 0.0]
+            grp = pole_group(region, spec.cls) if pole_style.group == G_POLE else pole_style.group      # Australia's concrete pole
+            pole = [grp, round(float(q[0]), 2), round(float(q[1]), 2), round(float(p[2]), 2),
+                    round(yaw, 1), 1.0, (9.2 if grp == G_POLE_CONC else pole_style.height), 0.0]
             if not clearance.clear(pole):
                 if len(run) > 1 and wires is not None:
                     wires.extend(_own_spans(run, box))
@@ -1358,7 +1426,8 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
         if len(run) > 1 and wires is not None:
             wires.extend(_own_spans(run, box))
     # Poles were checked before joining their wire runs; signs before selecting their relocated spot.
-    rows = [r for r in rows if r[0] in (G_POLE, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD) or clearance.clear(r)]
+    rows = [r for r in rows if r[0] in (G_POLE, G_POLE_CONC, G_SIGNAL, G_SIGNAL_LEFT, G_STOP, G_YIELD, G_SIGNAL_AU,
+                                        G_SIGNAL_AU_MAST, G_GIVEWAY_AU) or clearance.clear(r)]
     if poleprofiles.kit_enabled(pole_profile):
         import regionalmarkers
         country_at=poleprofiles.country_selector(pole_profile,pole_frame)

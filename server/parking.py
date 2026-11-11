@@ -51,7 +51,7 @@ def curb_spots(roads, walks, box, left_hand=False, directions=None):
     out = []
     for wk in walks:
         fid = wk.get("fid")
-        if fid is None or "pts" not in wk or fid not in by_fid:
+        if fid is None or "pts" not in wk or fid not in by_fid or wk.get("foot"):   # not an Australian footpath
             continue
         spec, line = by_fid[fid]
         if not spec.urban or spec.cls not in PARK_CLASSES or spec.width < MIN_WIDTH_M:

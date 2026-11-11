@@ -848,14 +848,21 @@ def _walled(c, q, blds):
 # italy assets for europe") ---------------------------------------------------------------------------------------
 EUROPE = {"alpine", "europe_north", "nordic", "mediterranean"}    # buildings.region_style's names
 US_EAST = {"us_east", "us_south"}       # East Coast USA's units (the user, 2026-10-23: "check the east coast etc.")
+# Australia and New Zealand ("queensland", "oceania"): a servo (Ampol, BP, Shell, 7-Eleven) is a broad flat canopy
+# over the pumps, a small shop and a price pylon, so West Coast's kit (a flat 14 x 17.2 m slab roof on pillars, stretched
+# over the islands, plus the pump pairs) is the closest stock one: Italy's awning is a European roadside look and East
+# Coast's unit a US convenience-store forecourt. It is the "default" kit's code path under its own style name, so a
+# real Australian kit (new .dae assets) has one place to hook in; that kit has no US-only prop (flag, diner) to filter.
+OCEANIA = {"australia", "australia_south", "australia_west", "oceania"}
 
 
 def style_of(lat, lon):
-    """"europe" (Italy's petrol station set), "us_east" (East Coast USA's) or "default" (West Coast USA's) for a
-    station at (lat, lon)."""
+    """"europe" (Italy's petrol station set), "us_east" (East Coast USA's), "oceania" (Australia and New Zealand;
+    West Coast USA's kit, see OCEANIA) or "default" (West Coast USA's) for a station at (lat, lon)."""
     import buildings
     name = buildings.region_style(lat, lon).name
-    return "europe" if name in EUROPE else "us_east" if name in US_EAST else "default"
+    return ("europe" if name in EUROPE else "us_east" if name in US_EAST else "oceania" if name in OCEANIA
+            else "default")
 
 
 _ITA = "/levels/italy/art/shapes/buildings/italy_petrolstation_"
@@ -996,7 +1003,7 @@ def style_shapes(style):
         return [ITA_AWNING, *ITA_PUMPS, ITA_SIGN, BOLLARD, *ev]
     if style == "us_east":
         return [ECA_UNIT, *west, *ev]           # (West Coast's islands under a small canopy, and the pump pairs)
-    return west + ev
+    return west + ev                            # (and "oceania", West Coast's kit: OCEANIA)
 
 
 def _lanes_box(lanes):
@@ -1820,7 +1827,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
         import mapdata              # (the rows read here only: mapdata.places_slim)
         places = [mapdata.places_of(md, k) for k in keys]
         stations = merge(pins(frame, places))
-        osm = []
+        osm, street = [], []
         osm_cached = getattr(md, "osm_fuel_cached", None)       # (OpenStreetMap's: cached cells only, never waited for)
         if osm_cached is not None:
             osm = [osm_cached(k) for k in keys]
@@ -1828,6 +1835,12 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
                 import revisit                      # and this build is not kept for the next visit)
                 revisit.fault()
             stations = with_osm(stations, _osm_points(frame, osm))
+        street_cached = getattr(md, "osm_street_cached", None)  # (Australian cells' payphones and post boxes: [] elsewhere)
+        if street_cached is not None:
+            street = [street_cached(k) for k in keys]
+            if any(rows is None for rows in street):
+                import revisit
+                revisit.fault()
         chargers = evchargers.merge(evchargers.charger_pins(frame, places),
                                     _osm_points(frame, osm, amenity="charging_station"))
     except Exception as e:      # an unreachable source costs the stations, not the tile
@@ -1887,7 +1900,30 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
         recs.append(rec)
         if pads is not None and site.pad:
             pads.append((site.station.id, _pad_ll(site.pad, frame)))
+    recs.extend(_amenity_records(frame, md, box, street, elev))     # AU payphones and post boxes
     return recs, frozenset(skip)
+
+
+def _amenity_records(frame, md, box, street, elev):  # AU payphones and post boxes (streetamenities.py)
+    """The records of the OSM payphones and post boxes (the cached Australian cells' rows: street) this tile owns: one prop each, no areas. [] outside
+    a region with models (nothing else is read), and on any failure (the stations' records are never lost to them)."""
+    import roads
+    import streetamenities
+    try:
+        mine = [p for p in streetamenities.points(frame, street) if roads.box_owns(box, p["x"], p["y"])]
+        if not mine:
+            return []
+        xs, ys = [p["x"] for p in mine], [p["y"] for p in mine]
+        cx, cy = (min(xs) + max(xs)) / 2, (min(ys) + max(ys)) / 2
+        r = float(np.hypot(max(xs) - min(xs), max(ys) - min(ys))) / 2 + 40.0
+        layers = [md.cell(k, layers=("buildings", "roads"), kind="demand") for k in _cells_near(frame, cx, cy, r)]
+        rls = [c.layers.get("roads") for c in layers]
+        sites = streetamenities.sites(mine, box, drive_lines(frame, rls, cx, cy, r),
+                                      buildings_touching(frame, [c.layers.get("buildings") for c in layers], cx, cy, r))
+        return [_record(site, frame, elev) for site in sites]
+    except Exception as e:
+        log.debug("street amenities of road tile: %s: %s", type(e).__name__, e)
+        return []
 
 
 def _ll_of(frame, x, y):
