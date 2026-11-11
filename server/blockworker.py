@@ -103,7 +103,8 @@ class _State:
             if self.airports is not None:   # ... and the runways (GitHub #337)
                 self.surface.extra_pads = self.airports.runway_pads
             import busstations              # ... and the bus stations' yards (task 020: the jobs bring them)
-            self.surface.bus_pads = busstations.ON          # (the road tiles keep the yards' pads)
+            import walkways
+            self.surface.bus_pads = busstations.ON or walkways.ON    # (the road tiles keep pads: yards, park paths)
         self.graders = {}           # anchor id -> grading.Grader
         self.chunks = {}            # anchor id -> heightmap.ChunkCache
         self.bridges = {}           # (unused since the chain stores: _chain_store)
@@ -1014,6 +1015,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         import railstations
         skip = skip | railstations.tile_skip(frame, tx, ty, _s.md)      # (and the railway stations' roofs over platforms)
         busyard.tile_pads(frame, tx, ty, _s.md, fuel_pads)      # ... and their yards painted in (earthd keeps them)
+    import walkways
+    walkways.tile_pads(frame, tx, ty, _s.md, fuel_pads)        # the ground under the park paths (no grass through them)
     mark("fuel")
     props = [] if buildings else None
     lines = [] if buildings else None
@@ -1171,6 +1174,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
     mark("doors_park")
     chunks += parkingmod.finish_markings(frame, tx, ty, _s.md, elev, items, marks, separate_bays=bool(frontage_country))
     chunks += _bay_lines(frame, tx, ty, _s.md)
+    chunks += _pitch_lines(frame, tx, ty, _s.md)
     mark("markings")
     if _bridge_fps:                 # (the model bridge is the road there: its deck slab, threedmr.write_bridge_deck)
         _n0 = len(chunks)
@@ -1366,6 +1370,11 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             props.extend(railstationprops.rows(frame, _s.md, box, elev, poleprofiles.lamp_country_selector(pole_profile, frame)))
         except Exception as ex:
             log.warning("rail station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        try:
+            import walkways
+            props.extend(walkways.rows(frame, _s.md, box, elev))        # lamps, benches and bins along the park alleys
+        except Exception as ex:
+            log.warning("walkway furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import industry
         garage_sound = (garage_sound + industry.refinery_sound_rows(frame, tx, ty, _s.md, elev)
                         + industry.power_plant_sound_rows(frame, tx, ty, _s.md, elev))
@@ -1416,6 +1425,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mark("mesh")
     if not lift:                    # (detail mode, the road lift over the drawn block: the block draws the squares)
         mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
+    mesh = _with_walkways(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None))
     mesh = _with_stations(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None),
                           drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, P.drawn, xy, q), dem=_s.dem)
     mesh = _with_rail_stations(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "md", None),
@@ -1893,6 +1903,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     mark("mesh")
     if not lift:                    # (detail mode, the road lift over the drawn block: the block draws the squares)
         mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad)
+    mesh = _with_walkways(mesh, frame, bbox, elev, origin, getattr(_s, "md", None), quad=quad)
     mesh = _with_rail_stations(mesh, frame, bbox, elev, origin, getattr(_s, "md", None), quad=quad,
                                drawn_fn=lambda xy: roadmeshmod.drawn_ground(frame, drawn, xy, q))
     mark("plazas")
@@ -2239,6 +2250,49 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
     except Exception:                   # no plazas rather than no road tile
         log.exception("plazas of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
         return mesh
+
+
+def _with_walkways(mesh, frame, box, elev, origin, md, quad=None):
+    """The road mesh with the tile's park alleys, footpaths and cycleways drawn (walkways.py, task 029), the tile's own
+    triangles only, none on the road mesh or a drive road. quad as _with_plazas'. No path: the mesh as it was."""
+    import walkways
+    if md is None or not walkways.ON:
+        return mesh
+    try:
+        if quad is not None:
+            m = PLAZA_GEO_MARGIN_M
+            box = (box[0] - m, box[1] - m, box[2] + m, box[3] + m)
+        t0 = time.perf_counter()
+        data, walks = walkways.tile_data(md, frame, box)
+        t1 = time.perf_counter()
+        if not any(w.meshed for w in walks):
+            return mesh
+        cover = None
+        if mesh is not None and len(mesh[1]):
+            P, T = np.asarray(mesh[0], np.float64), np.asarray(mesh[1], np.int64)
+            cover = (P[T][:, :, :2] + np.asarray(origin, np.float64)[:2]).reshape(-1, 6)
+        import plazas
+        wm = walkways.mesh(frame, tuple(box), walks, elev, origin, cover, data.drives)
+        log.info("walkways: %s in the tile at %s: %d triangles (read %.2f s, mesh %.2f s)",
+                 {r: sum(1 for w in walks if w.role == r and w.meshed) for r in sorted({w.role for w in walks})},
+                 tuple(round(float(v)) for v in box[:2]), 0 if wm is None else len(wm[1]),
+                 t1 - t0, time.perf_counter() - t1)
+        if quad is not None:
+            wm = _clip_mesh(wm, origin, quad)
+        return plazas.merge(mesh, wm)
+    except Exception:                   # no paths rather than no road tile
+        log.exception("walkways of the tile at %s", tuple(round(float(v), 1) for v in box[:2]))
+        return mesh
+
+
+def _pitch_lines(frame, tx, ty, md):
+    """The white lines of the mapped sports pitches in road tile (tx, ty) as road mesh line chunks (pitches.py)."""
+    try:
+        import pitches
+        return pitches.lines(frame, tx, ty, md)
+    except Exception:                   # no lines rather than no road tile
+        log.exception("pitch markings of the tile (%s, %s)", tx, ty)
+        return []
 
 
 def _bay_lines(frame, tx, ty, md):

@@ -1314,7 +1314,8 @@ class Server:
             surface.extra_pads = self.airports.runway_pads
         if surface is not None and hasattr(surface, "bus_pads"):    # the bus stations' yards painted in as well (task 020)
             import busstations
-            surface.bus_pads = busstations.ON           # (the road tiles keep the yards' pads)
+            import walkways
+            surface.bus_pads = busstations.ON or walkways.ON    # (the road tiles keep pads: yards, park paths)
         self.mapdata = mapdata      # mapdata.MapData for the roads (--roads on), else None
         if mapdata is not None and getattr(mapdata, "dem", 0) is None:
             mapdata.dem = self.dem  # (gradesep's ground)
@@ -2787,6 +2788,7 @@ class Server:
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks,
                                              separate_bays=bool(frontage_country))
         chunks += blockworker._bay_lines(anchor.frame, tx, ty, self.mapdata)
+        chunks += blockworker._pitch_lines(anchor.frame, tx, ty, self.mapdata)
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
             chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
             ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
@@ -2854,6 +2856,8 @@ class Server:
         if self.near_visual != "detail":        # (detail mode: the drawn block paints the squares)
             mesh = blockworker._with_plazas(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
                                             self.surface)
+        mesh = blockworker._with_walkways(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
+                                          self.mapdata)
         _piers, _beams = buildingsmod.bridge_stub_piers(
             _bridge_fps,
             anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
@@ -2965,6 +2969,11 @@ class Server:
                     Server.pole_profile(self, anchor), anchor.frame)))
             except Exception as ex:
                 log.warning("rail station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            try:
+                import walkways
+                props.extend(walkways.rows(anchor.frame, self.mapdata, box, elev))   # lamps, benches and bins along park alleys
+            except Exception as ex:
+                log.warning("walkway furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
@@ -10587,7 +10596,8 @@ def prune_own_caches(cache_dir, started=None):
     for sub, version in (("vegetation", vegetationmod.VERSION), ("seacarve", seacarvemod.VERSION),
                          ("roadwidth", roadwidthmod.WALLS_VERSION)):
         try:
-            n, freed = cachemod.prune_versions(os.path.join(cache_dir, sub), f"v{version}")
+            keep = (f"v{version}", f"v{version}{vegetationmod.PARKS_KEY}") if sub == "vegetation" else f"v{version}"
+            n, freed = cachemod.prune_versions(os.path.join(cache_dir, sub), keep)
             if n:
                 log.info("cache: %s: %d older version folders removed (%.2f GB)", sub, n, freed / 1e9)
         except Exception as e:

@@ -918,6 +918,16 @@ class PruneVersionsTest(unittest.TestCase):
         self.assertEqual(sorted(os.listdir(root)), ["notes", "v18", "v2x"])
         self.assertEqual(cachemod.prune_versions(os.path.join(root, "missing"), "v1"), (0, 0))
 
+    def test_suffixed_folders_and_several_keeps(self):
+        import shutil
+        root = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, root, True)
+        for d in ("v24", "v24+parks", "v25", "v23+parks", "v9+x y"):
+            os.makedirs(os.path.join(root, d))
+        n, _ = cachemod.prune_versions(root, ("v24", "v24+parks"))
+        self.assertEqual(n, 2)
+        self.assertEqual(sorted(os.listdir(root)), ["v24", "v24+parks", "v9+x y"])
+
 
 class HeldReadTest(unittest.TestCase):
     """A file another process is replacing on Windows (PermissionError for a moment): read again, then a miss."""

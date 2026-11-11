@@ -1,0 +1,23 @@
+{
+  "bne_park_pavers_cz": {
+    "name": "bne_park_pavers_cz",
+    "mapTo": "bne_park_pavers_cz",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "5156ede7-2a1f-577c-aeb8-43bd4c37cd2e",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/park_pavers/bne_park_pavers_cz.color.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ],
+        "metallicFactor": 0,
+        "roughnessFactor": 0.92
+      }
+    ],
+    "doubleSided": false
+  }
+}
