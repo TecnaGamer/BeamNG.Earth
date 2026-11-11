@@ -83,6 +83,7 @@ mod vegclumps;
 mod roadwear;
 mod roadtone;
 mod railbeds;
+mod osmtagshards;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6181,6 +6182,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(railbeds::rail_join_beds, m)?)?;
     // 209: railbeds (railprofile.smooth / join_beds: a node window's ground beds smoothed and its switches joined, in
     // one call each; that branch's 206)
-    m.add("VERSION", 209)?;
+    m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
+    // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
+    // server/osmtagshards.py; that branch's 207)
+    m.add("VERSION", 210)?;
     Ok(())
 }

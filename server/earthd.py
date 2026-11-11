@@ -1239,6 +1239,8 @@ class Server:
         # OpenStreetMap's fuel stations (osmfuel.py, the OSM test: the user, 2026-10-28, "lets test OSM if it is too laggy
         # we will revert"): fetched in the background per cell around the road tiles the car wants, never waited for; a
         # cell with stations that came after its tiles were sent sends them again (osm_fuel_want)
+        if hasattr(mapdata, "osm_tags_warm"):       # (the OSM road tag shards' manifest and head: osmtagshards.py)
+            threading.Thread(target=self._osm_tags_warm, name="osmtags-warm", daemon=True).start()
         self.osm_fuel = None
         if self.gas_allowed and mapdatamod.OSM_FUEL and hasattr(mapdata, "osm_fuel_fetch"):
             self.osm_fuel = ThreadPoolExecutor(OSM_FUEL_THREADS, thread_name_prefix="osm-fuel")
@@ -3027,6 +3029,13 @@ class Server:
             self.base_stale.update(k for k in self.hm if k[0] in self.anchors)
         log.info("ground photo %d px (settings)", px)
         return True
+
+    def _osm_tags_warm(self):
+        """Thread: the OSM road tag shards' manifest and archive head read at the start (MapData.osm_tags_warm)."""
+        try:
+            self.mapdata.osm_tags_warm()
+        except Exception as e:      # (the first cell reads them, or the Layercake file stands in)
+            log.info("osm tags: the shards' head: %s: %s", type(e).__name__, e)
 
     def _osm_fuel_warm(self, sleep=time.sleep):
         """Worker thread: the OSM fuel file's index read at the start, tried again every OSM_FUEL_WARM_WAIT_S when the
