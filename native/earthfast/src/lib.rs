@@ -14,6 +14,7 @@ mod spaceclouds;
 mod cdaez;
 mod clearance;
 mod f32z;
+mod packz;
 mod gpu;
 mod traffic;
 mod dsm;
@@ -6041,6 +6042,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_unpack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_pack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::cdae_zstats, m)?)?;
@@ -6194,6 +6197,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
     // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
     // 212: planset::plan_merge (_plan_set's weld, trim and pack at once, one reading of the plans)
-    m.add("VERSION", 212)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
+    // 213: packz::zstd_pack / zstd_unpack (the revisit cache's pack records, server/revisitpack.py; that branch's 171)
+    m.add("VERSION", 213)?;
     Ok(())
 }
