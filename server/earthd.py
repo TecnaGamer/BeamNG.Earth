@@ -4592,9 +4592,6 @@ class Server:
         if fut.exception() is not None:
             self.pvs_failed[aid] = time.monotonic()
             log.warning("anchor %d: far PVS rings failed (%r)", aid, fut.exception())
-            for c in list(self.connections):
-                if c.active == aid:
-                    c.wake.set()            # (a teleport's coarse cover waiting for it goes on)
             return
         if aid not in self.anchors and aid not in self.anchors_preparing:
             return                          # pruned meanwhile
@@ -8907,15 +8904,8 @@ class Connection:
                      "horizon": None if grid is None else farfield.Horizon(eye, grid)}
         if self.view_cap is not None:
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
-        grid = self.s.horizon_grids.get(anchor.id) if self.s.horizon else None
-        if grid is not None and self.view_cap is None:
-            # the far PVS's rings meanwhile too (the full selection waits for them), for the radius of an eye on the
-            # highest ground of the place's horizon cell: the eye here is still the last place's (made again at the
-            # commit if short of the real one)
-            s6 = farfield.level_size(farfield.HORIZON_GRID_LEVEL)
-            z6 = grid.zmax(farfield.HORIZON_GRID_LEVEL, int(math.floor(focus[0] / s6)), int(math.floor(focus[1] / s6)))
-            if math.isfinite(z6):
-                self.s.pvs_field(anchor, grid.radius(*focus, max(z6, 0.0) + farpvsmod.EYE_CLASSES[0])[0])
+        # (the far PVS's rings are made at the commit, not here: beside the first block they held it 2.3 -> 7 s at a
+        # cold Zermatt, their DEM fetches and this interpreter, 2026-11-11)
         if not self.global_on(anchor, radius):
             return 0
         k0 = self.kfun()
@@ -9099,22 +9089,8 @@ class Connection:
                 log.info("far PVS: square %.0f, %.0f +- %.0f m, eye class %d, %d viewpoints; %d of %d far tiles hidden",
                          new.cx, new.cy, new.half, new.eye_class, new.viewpoints, hid, len(self.desired))
             self.pvs_reveal()
-            self.wake.set()                 # (a teleport's coarse cover waits for the first one: Conn._stream)
             self.pvs_tick()                 # (the player may have moved on meanwhile)
         fut.add_done_callback(done)
-
-    def _ramp_woken(self):
-        self._ramp_wake = None
-        self.wake.set()
-
-    def pvs_pending(self):
-        """This connection's first far PVS is on its way (its rings or the set being made): a teleport's full far
-        field waits for it (at most FIRST_RAMP_MAX_S), so its hidden tiles are not built at full size first."""
-        if self.pvs is not None or not self.s.pvs_on or self.active is None or self.map_view or self.map_open \
-                or getattr(self, "eye_now", None) is None:
-            return False
-        return self.pvs_job is not None or self.active in self.s.pvs_building or (
-            self.s.horizon and self.active in self.s.horizon_inflight and self.active not in self.s.horizon_grids)
 
     def pvs_ppr(self):
         """The screen's pixels per radian for the far PVS's texture sizes (pose.cam h / fovDeg), up to the next half
@@ -9479,15 +9455,10 @@ class Connection:
                          time.perf_counter() - self.batch[0])
                 self.update_far()
                 continue
-            # (the coarse cover shown, the full selection waits for the first far PVS on its way: its hidden tiles
-            # small from the start, not built at full size and sharpened back; pvs_tick wakes this loop)
-            ramp_hold = self.first_ramp is not None and self.pvs_pending()
-            if ramp_hold and not getattr(self, "_ramp_wake", None):
-                # (woken at the coarse cover's time limit at the latest: nothing else may come meanwhile)
-                self._ramp_wake = asyncio.get_running_loop().call_later(
-                    max(0.0, self.first_ramp + FIRST_RAMP_MAX_S - time.monotonic()) + 0.05, self._ramp_woken)
+            # (the full selection does not wait for the first far PVS: built nearest first, its far tiles come after the
+            # set is there; held for it, a cold Zermatt's whole horizon was 10 s later, 2026-11-11)
             if anchor is not None and self.first_ramp is not None and (
-                    (not self.inflight and self.dirty and len(self.groups) == len(self._blocked()) and not ramp_hold)
+                    (not self.inflight and self.dirty and len(self.groups) == len(self._blocked()))
                     or time.monotonic() - self.first_ramp > FIRST_RAMP_MAX_S):
                 # (the coarse cover is shown, or it took too long: the full selection now, refined group by group)
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
@@ -9503,7 +9474,7 @@ class Connection:
                 self.update_far()
                 self.pvs_reveal()               # (coarse tiles the full selection keeps, in sight: sharpened)
                 continue
-            if (not self.inflight and self.dirty and anchor is not None and not ramp_hold
+            if (not self.inflight and self.dirty and anchor is not None
                     and len(self.groups) == len(self._blocked())):
                 self.dirty = False
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)

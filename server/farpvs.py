@@ -124,7 +124,7 @@ class Rings:
             k = (np.arange(n) + 0.5) * cell - half
             E, N = np.meshgrid(k, k)                      # [j north, i east], row 0 south
             lat, lon, _ = frame.enu_to_geodetic(E, N, 0.0)
-            z = demmod.zoom_for(lat0, cell / 2, 14)
+            z = demmod.zoom_for(lat0, cell, 14)    # (pixels at most a cell: z10 / z8 / z6 at 46 N, the far field's own)
             a = np.asarray(dem.sample(lat, lon, z), np.float32).reshape(n, n)
             # (each cell's centre sampled, then its 3 x 3 neighbourhood's least / most: the ground between samples
             # within a cell of one; the pad for summits finer than the samples)
