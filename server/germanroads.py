@@ -278,7 +278,22 @@ class Axes:
 
 def axes_for(feats):
     """The Axes round feats' roads, None where there are none (outside Germany, no shard), False while a shard could
-    not be had (the specs made now are then not kept: revisit.fault)."""
+    not be had (the specs made now are then not kept: revisit.fault). Kept on feats once known (surveyed_width asks it
+    for every road of a cell: the whole cell's coordinates were scanned per road, 3.3 s of a cold block's 10 in Boise,
+    Idaho, 2026-11-11); a False is asked again."""
+    memo = feats.__dict__.get("_de_axes", _UNSET)
+    if memo is not _UNSET:
+        return memo
+    got = _axes_for(feats)
+    if got is not False:
+        feats.__dict__["_de_axes"] = got
+    return got
+
+
+_UNSET = object()
+
+
+def _axes_for(feats):
     ll = np.asarray(feats.lonlat, np.float64)
     if not len(ll) or not np.isfinite(ll).all():
         return None
