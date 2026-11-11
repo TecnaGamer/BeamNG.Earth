@@ -9,25 +9,34 @@ sys.path.insert(0, str(Path(__file__).parent))
 import drivability as dv  # noqa: E402
 
 STEPS_TOL = 2           # metres of wheel track over the limit (a sample beside the limit on another platform)
+REL_TOL = 0.05          # of a value already over its limit, when more than the absolute tolerance: a crest of 22 g
+                        # becoming 22.1 g is a road already broken shifting a little, not a new defect
 UPDATE = "python server/tests/drivability.py --update {}"
 
 
 def compare(result, base):
     """([worse], [better]) of a measurement against its baseline entry, each a line for whoever reads the failure."""
     worse, better = [], []
-    if result["steps"] > base["steps"] + STEPS_TOL:
+    steps_tol = _tolerance(base["steps"], 0, STEPS_TOL)
+    if result["steps"] > base["steps"] + steps_tol:
         worse.append(f"steps {base['steps']} -> {result['steps']}")
-    elif result["steps"] < base["steps"] - STEPS_TOL:
+    elif result["steps"] < base["steps"] - steps_tol:
         better.append(f"steps {base['steps']} -> {result['steps']}")
     for key in sorted(set(result["parts"]) | set(base["parts"])):
         now, was = result["parts"].get(key), base["parts"].get(key)
-        for m, (limit, tol, *_rest) in dv.METRICS.items():
+        for m, (limit, abs_tol, *_rest) in dv.METRICS.items():
             was_m, now_m = (was or {}).get(m, 0.0), (now or {}).get(m, 0.0)
+            tol = _tolerance(was_m, limit, abs_tol)
             if now_m > max(was_m, limit) + tol:
                 worse.append(f"{key} ({now['class']}, at {now.get(m + '_at')}): {m} {was_m if was else 'ok'} -> {now_m}")
             elif was_m > limit and now_m < was_m - tol:
                 better.append(f"{key}: {m} {was_m} -> {now_m if now_m > limit else 'ok'}")
     return worse, better
+
+
+def _tolerance(was, limit, abs_tol):
+    """How far a value may move before it counts: abs_tol, or REL_TOL of a value already over its limit."""
+    return max(abs_tol, REL_TOL * was) if was > limit else abs_tol
 
 
 class DrivabilityTest(unittest.TestCase):
@@ -88,6 +97,15 @@ class CompareTest(unittest.TestCase):
     def test_a_worse_part_and_a_new_bad_part_fail(self):
         worse, _ = compare(self.result(**{"ground:a": {"step_m": 1.2}, "bridge:b": {"step_m": 0.5}}), self.base)
         self.assertEqual(len(worse), 2)
+
+    def test_a_bad_part_may_shift_within_the_relative_tolerance(self):
+        self.assertEqual(compare(self.result(steps=10, **{"ground:a": {"step_m": 1.04}}), self.base), ([], []))
+        self.assertEqual(len(compare(self.result(**{"ground:a": {"step_m": 1.06}}), self.base)[0]), 1)
+        self.assertEqual(len(compare(self.result(**{"ground:a": {"step_m": 0.94}}), self.base)[1]), 1)
+
+    def test_a_new_bad_part_gets_only_the_absolute_tolerance(self):
+        worse, _ = compare(self.result(**{"ground:a": {"step_m": 1.0}, "bridge:b": {"step_m": 0.13}}), self.base)
+        self.assertEqual(len(worse), 1)
 
     def test_a_fixed_part_must_be_locked_in(self):
         worse, better = compare(self.result(steps=0), self.base)
