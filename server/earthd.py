@@ -326,7 +326,6 @@ BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this l
 # A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
 # stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
 PROVISIONAL_BASE_WAIT_S = 0.3
-PROVISIONAL_Q_WAIT_S = 1.0      # ... and this long for the anchor's height survey (else its own finest quantum)
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -3466,16 +3465,13 @@ class Server:
             from worldbundle import BundleError
             raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
-        # (the anchor's height quantum, surveyed for PROVISIONAL_Q_WAIT_S at most; else the finest step, which
-        # heightmap.block_params coarsens for this block alone as its own relief needs, a step of at most Q/2 at its
-        # seams until the graded block replaces it: the survey (+-15 km of DEM z10) was 3.6 s of a fresh Spokane's
-        # 5.2 s first block, 2026-11-11; it goes on beside it for the graded blocks)
-        q = anchor.q
-        if q is None:
-            sv = threading.Thread(target=self.anchor_q, args=(anchor,), daemon=True, name="survey-q")
-            sv.start()
-            sv.join(PROVISIONAL_Q_WAIT_S)
-            q = anchor.q if anchor.q is not None else heightmap.Q_LADDER[0]
+        # (the anchor's height quantum, its survey's DEM reads at the urgent priority as the block's own: queued behind
+        # the teleport's other downloads, the survey (+-15 km of DEM z10, 0.1-0.6 s alone cold) was 3.6 s of a fresh
+        # Spokane's 5.2 s first block, 2026-11-11. A quantum of the block's own instead (block_params) made the far
+        # tiles over it two steps off the graded block, test_integration_drive's l2 check)
+        urgent = getattr(self.dem, "urgent", None)     # (test DEMs have no lane)
+        with urgent() if urgent is not None else contextlib.nullcontext():
+            q = self.anchor_q(anchor)
         base = None
         if self.near_visual == "detail" and self.imagery is not None:
             # (here, not in a block process: the other lane's process can still be busy with the old place's block,
@@ -3720,10 +3716,14 @@ class Server:
         t1 = time.perf_counter()
         photo = []
         plain = URGENT_ELSEWHERE and urgent       # (analyses on: its photo without them at once, then refreshed)
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain) if pool is not None else None
+        # (a block in use built again (gas station pads, a refresh): its photo under a new name, as base_refresh's. The
+        # engine watches the photo it shows: written over in place, it reloaded it and froze for good in its
+        # TextureCooker (Billings and Fargo, 2026-11-11, both right after "built again with its gas station pads")
+        rev = next(self.base_rev) if (anchor.id, cx, cy) in self.hm_committed else 0
+        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, rev) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick)
+                name = self.write_base(anchor, cx, cy, rev=rev, photo=photo, quick=quick)
         return name, photo, time.perf_counter() - t1
 
     def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):

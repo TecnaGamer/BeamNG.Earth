@@ -22,5 +22,17 @@ class PhotoLawnsInUseTest(unittest.TestCase):
             pl.assert_called_once()
 
 
+    def test_a_block_in_use_built_again_gets_a_new_photo_name(self):
+        import contextlib
+        import itertools
+        got = []
+        fake = SimpleNamespace(hm_committed=deque([(1, 0.0, 384.0)]), base_rev=itertools.count(1),
+                               imagery=SimpleNamespace(urgent=contextlib.nullcontext),
+                               write_base=lambda a, cx, cy, rev=0, photo=None, quick=False: got.append(rev) or "x")
+        earthd.Server._base_photo(fake, SimpleNamespace(id=1), 0.0, 384.0)       # in use: a new revision
+        earthd.Server._base_photo(fake, SimpleNamespace(id=1), 0.0, 0.0)         # not: r0
+        self.assertEqual(got, [1, 0])
+
+
 if __name__ == "__main__":
     unittest.main()
