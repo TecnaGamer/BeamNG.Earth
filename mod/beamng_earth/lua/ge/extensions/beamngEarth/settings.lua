@@ -124,6 +124,8 @@ M.SCHEMA = {
   germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
   -- approximation: the mapped rumble-strip installation corridors are not available globally
   rumbleStrips = { kind = 'bool', default = true, label = 'Rumble strip sound' },
+  -- GTA-style: a little drag instead of the edge guard's stop when the world is behind (softdrag.lua; off by default)
+  softDrag = { kind = 'bool', default = false, label = 'Soft slow-down when the world is behind' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -169,7 +171,7 @@ M.SCHEMA = {
 M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'lodPx', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'townSigns', 'adaptiveTraffic', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'townSigns', 'adaptiveTraffic', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -544,6 +546,7 @@ M.APPLY = {
   end,
   adaptiveTraffic = function(v) require('beamngEarth/navgraph').setAdaptive(v) end,
   rumbleStrips = function(v) require('beamngEarth/rumble').setEnabled(v) end,
+  softDrag = function(v) require('beamngEarth/softdrag').setEnabled(v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end

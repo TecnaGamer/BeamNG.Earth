@@ -23,14 +23,22 @@ RESPAWN_S = 10.0
 QUEUED_POLL_S = 1.0
 
 
-def result_running(fut, timeout, waited=None):
+class Abandoned(Exception):
+    """A queued job its caller no longer wants (result_running's abandon: a teleport left its place), cancelled."""
+
+
+def result_running(fut, timeout, waited=None, abandon=None):
     """fut's result, its timeout counted from when it left the pool's queue (running: in the executor's call queue,
     at most the pool's size + 1 jobs before the worker takes it), not from its submit: a road tile behind a long
     queue (a first visit's backlog, a slow machine) was taken for a hung worker after 300 s of waiting and the pool
     restarted, failing every tile in flight (GitHub #663). TimeoutError (concurrent.futures') when it runs longer.
-    waited (a list): its time in the queue appended (to QUEUED_POLL_S) when it ran past it."""
+    waited (a list): its time in the queue appended (to QUEUED_POLL_S) when it ran past it. abandon (a callable): while
+    the job is still queued, abandon() true cancels it and raises Abandoned (a teleport left its place: the user,
+    2026-11-11, "if the server is still building one city but initiates a teleport, stop generating the old city")."""
     t0 = time.perf_counter()
     while not fut.running() and not fut.done():
+        if abandon is not None and abandon() and fut.cancel():
+            raise Abandoned()
         try:
             return fut.result(timeout=QUEUED_POLL_S)
         except concurrent.futures.TimeoutError:

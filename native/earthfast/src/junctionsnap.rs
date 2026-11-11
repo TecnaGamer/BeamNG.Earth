@@ -8,7 +8,7 @@ use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 /// numpy's sum of a float64 array (pairwise: blocks of 8 accumulators up to 128 values, halves above).
-fn np_sum(a: &[f64]) -> f64 {
+pub(crate) fn np_sum(a: &[f64]) -> f64 {
     fn pw(a: &[f64]) -> f64 {
         let n = a.len();
         if n < 8 {

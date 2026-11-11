@@ -1972,6 +1972,12 @@ local function updateGuard()
     guardFailed, g.mode = true, 'off'
     pcall(edgeguard.release, g)
     log('E', 'beamngEarth', 'edge guard turned off: ' .. tostring(err))
+    return
+  end
+  -- (the setting's soft slow-down while the next block is late: softdrag.lua; never during the guard's own pause)
+  if g.healthy and not g.pausedByUs and g.mode ~= 'hold' then
+    local okd, errd = pcall(require('beamngEarth/softdrag').update, veh, box, g.warnCap, st.clock)
+    if not okd then log('W', 'beamngEarth', 'soft drag: ' .. tostring(errd)) end
   end
 end
 

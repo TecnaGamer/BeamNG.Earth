@@ -61,6 +61,11 @@ log = logging.getLogger("earthd.cache")
 LAYOUT_VERSION = 1
 VERSION_FILE = "VERSION"
 INDEX_FILE = "index.tsv"
+# The start-up walk waits this long after the server starts and yields the interpreter every WALK_YIELD_N files: it
+# only readies eviction, and over a 672k-file cache it was ~19 CPU-s in the server's process during the first place's
+# loading (py-spy, a cold teleport 2026-11-11), beside the far textures and plans that share the interpreter
+WALK_DELAY_S = float(os.environ.get("BNGE_CACHE_WALK_DELAY_S", "90"))
+WALK_YIELD_N = 500
 INDEX_HEADER = "# beamng-earth cache index 1"
 # evicted and cleared. The app's built caches too (2026-11-03, a player's cache 25 GB under a 20 GB cap: they were
 # left out of the count and of "Clear cache"): a missing file of theirs is a miss, made again; their own limits stay
@@ -172,6 +177,7 @@ class Cache(NoCache):
         self._disk_warned = False
         self._dirty = False
         self.ready = False          # the start-up walk is done
+        self._walk_now = threading.Event()      # the start-up walk wanted now (walk_soon), not after WALK_DELAY_S
         self._ready_ev = threading.Event()
         self._last_evict = None
         self._last_save = self.started
@@ -390,6 +396,7 @@ class Cache(NoCache):
         """Walk the tracked directories once: sizes, and the mtime as the last use of files the index
         does not know; index entries without a file are dropped; files past their LIFETIMES go."""
         found = {}
+        n_seen = 0
         legacy = {}             # folder -> its old <y>.404 marker files (migrate_misses)
         for top in MANAGED + MIRRORED + KEPT:
             stack = [os.path.join(self.root, top)]
@@ -401,6 +408,9 @@ class Cache(NoCache):
                     continue
                 with it:
                     for de in it:
+                        n_seen += 1
+                        if n_seen % WALK_YIELD_N == 0:
+                            time.sleep(0.001)       # (the interpreter to the world's threads: WALK_YIELD_N)
                         try:
                             if de.is_dir(follow_symlinks=False):
                                 stack.append(de.path)
@@ -555,11 +565,16 @@ class Cache(NoCache):
                 self.on_change(key, False)
             return e[0] or 0
 
+    def walk_soon(self):
+        """Start the start-up walk now instead of after WALK_DELAY_S (a clear, the map's cache view: they wait for it)."""
+        self._walk_now.set()
+
     def clear(self, wait=60.0):
         """"Clear cache": every MANAGED (and MIRRORED) file but the ones used within CLEAR_KEEP_S (the place around the
         player; a file still in a producer's memory is fetched or built again if it is needed after all; gravity/,
         airports/ and netstats/ stay). Waits up to `wait` s for the start-up walk. Returns
         (files, bytes)."""
+        self.walk_soon()
         if not self.managed or not self._ready_ev.wait(wait):
             return 0, 0
         # (only the last CLEAR_KEEP_S: everything this session had used stayed, and after a long drive "Clear cache"
@@ -673,6 +688,9 @@ class Cache(NoCache):
         return n
 
     def _run(self):
+        self._walk_now.wait(WALK_DELAY_S)       # (at once when something needs it: walk_soon)
+        if self._closed:
+            return
         try:
             self.scan()
         except Exception:
@@ -706,6 +724,7 @@ class Cache(NoCache):
         """Stop the thread and save the index (the server's shutdown)."""
         self._closed = True
         self._wake.set()
+        self._walk_now.set()
         if self._thread is not None:
             self._thread.join(5.0)
         if self.ready:

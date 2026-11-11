@@ -22,6 +22,7 @@ import worldbundle as wb
 import plancache
 import grading
 import geodesy
+import revisitpack
 from test_grading import FakeMD
 from test_roads import features, FRAME, LAT, LON
 
@@ -33,6 +34,7 @@ class BundleTest(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
+        self.addCleanup(revisitpack.reset)
         self.root = Path(temp.name)
         self.pc = plancache.PlanCache(str(self.root / "plans"), "w0s0")
         self.bundle = self.root / "bundle"

@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devctx;
+mod reach;
 mod devraster;
 mod roofs;
 mod roofphoto;
@@ -14,6 +15,7 @@ mod spaceclouds;
 mod cdaez;
 mod clearance;
 mod f32z;
+mod packz;
 mod gpu;
 mod traffic;
 mod dsm;
@@ -55,6 +57,7 @@ mod sidewalks;
 mod roadz;
 mod fartex;
 mod farglobal;
+mod farpvs;
 mod dirtsteps;
 mod gridinterp;
 mod dejunction;
@@ -77,6 +80,8 @@ mod specs;
 mod gsrows;
 mod places;
 mod planends;
+mod planset;
+mod junctions;
 mod wallsindex;
 mod mappedlamps;
 mod vegclumps;
@@ -84,6 +89,9 @@ mod roadwear;
 mod roadtone;
 mod railbeds;
 mod osmtagshards;
+mod gradebins;
+mod l0roads;
+mod groundphoto;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -1663,20 +1671,26 @@ fn bank_profile<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, e_max: f64
     out.into_pyarray(py)
 }
 
-/// grade_points: a road's own rid of its rid (grading.PlanPack: a pass road's legs carry their leg in the bits from 44)
-const LEG_ROAD_MASK: i64 = (1i64 << 44) - 1;
-/// a built road's grade rank (grading.GRADE_RANK_BUILT): only these reach past their core over rank_fade (the side
-/// road's ease; an unpaved road's rank is below it)
-const RANK_BUILT: i64 = 100;
-/// grade ranks within this of the higher road's take the same side ease (a service road or driveway beside a
-/// residential street); a bigger class gap (a residential approach to a primary) keeps the old blend, whose side
-/// ease cut that approach to a 67 % step
-const RANK_SIDE_MAX_DIFF: i64 = 6;
-/// the hard hold of a road's own carriageway applies to primary and below; a motorway or trunk keeps the old blend
-/// (its split parts' seams are their own road, not a subordinate one, and the seam regression test needs the old
-/// smoothness there)
-const RANK_HOLD_MAX: i64 = 114;
+/// The grade_points arrays as gradebins takes them.
+macro_rules! grade_segs {
+    ($a:expr, $b:expr, $za:expr, $zb:expr, $h:expr, $rh:expr, $rid:expr, $rk:expr, $abut:expr, $cut:expr, $ba:expr,
+     $bb:expr, $steep:expr, $link:expr, $abut_d:expr) => {
+        gradebins::Segs { a: $a.as_array(), b: $b.as_array(), za: $za.as_array(), zb: $zb.as_array(),
+                          h: $h.as_array(), rh: $rh.as_array(), rid: $rid.as_array(), rk: $rk.as_array(),
+                          abut: $abut.as_array(), cut: $cut.as_array(), ba: $ba.as_array(), bb: $bb.as_array(),
+                          steep: $steep.as_array(), link: $link.as_array(), abut_d: $abut_d.as_array() }
+    };
+}
 
+/// grading.grade_points by the reference traversal (gradebins::bucketed: segments outer, the points in BUCKET m
+/// squares): the binned one's twin for the identity tests and BNE_GRADE_BINNED=off. cut (segments, 6): a cutting's
+/// wall, top and top offset, left then right; ba / bb: the cross slope at each segment's ends (m per m toward its left:
+/// a banked curve, grading.bank); steep: a mountain pass road's (grading.Plan.steep: its sides fall to the natural
+/// ground at steep_run, from steep_t_min, between its retaining wall and its parapet); link: bit 0 the plan goes on
+/// before it, bit 1 after it (a point past such an end takes the segment's line carried on, up to extrap m, not its
+/// end height: on a grade the ends' heights blended in made a washboard of the plan's vertex step, the Stelvio
+/// 2026-11-01); rk: a road's grading rank (grading.grade_rank: a lower one gives way over a higher one's core);
+/// abut_d (segments, 2): along its road to a start / end abutment, NaN: none.
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
 fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
@@ -1692,349 +1706,48 @@ fn grade_points<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyRea
                      yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
                      abut_d: PyReadonlyArray2<'py, f64>)
                      -> Bound<'py, PyArray1<f64>> {
-    let abut_d = abut_d.as_array();         // (segments, 2): along its road to a start / end abutment, NaN: none
+    let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
+                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               yield_ramp, rank_fade, rank_height_fade, abut_under };
+    let segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
     let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
-    let (a, b, za, zb, h) = (a.as_array(), b.as_array(), za.as_array(), zb.as_array(), h.as_array());
-    let (rh, rid) = (rh.as_array(), rid.as_array());
-    // (segments): a road's grading rank (grading.grade_rank): a lower one gives way over a higher one's core, so a
-    // dirt track beside a paved road no longer pulls the asphalt down
-    let rk = rk.as_array();
-    let abut = abut.as_array();
-    let cut = cut.as_array();               // (segments, 6): a cutting's wall, top and top offset, left then right
-    // (segments): the cross slope at each segment's ends (m per m toward its left: a banked curve, grading.bank)
-    let (ba, bb) = (ba.as_array(), bb.as_array());
-    // (segments): a mountain pass road's (grading.Plan.steep): its sides fall to the natural ground at steep_run, from
-    // steep_t_min, between its retaining wall and its parapet
-    let steep = steep.as_array();
-    // (segments): bit 0 the plan goes on before it, bit 1 after it. A point past such an end takes the segment's line
-    // carried on (up to extrap m), not its end height: on a grade the ends' heights blended in, before and after, made
-    // a washboard of the plan's vertex step (4 m, +-3.5 cm on the Stelvio's 10 %; the user, 2026-11-01: "the road
-    // still feels bumpy"). A plan's own end (a dead end, a cell's edge) keeps its end height.
-    let link = link.as_array();
-    let banked: Vec<bool> = (0..h.len()).map(|s| ba[s] != 0.0 || bb[s] != 0.0).collect();
-    let sharp = cut.iter().any(|v| v.is_finite());
-    let has_cut: Vec<bool> = (0..h.len()).map(|s| (0..6).any(|k| cut[[s, k]].is_finite())).collect();
-    let cut_reach: Vec<f64> = (0..h.len()).map(|s| {
-        let r = cut[[s, 2]].max(cut[[s, 5]]).max(cut[[s, 0]]).max(cut[[s, 3]]);
-        if r.is_finite() { r + 0.5 + 2.0 * sharp_step } else { 0.0 }
-    }).collect();
-    let n = px.len();
-    let mut out: Vec<f64> = base.iter().copied().collect();
-    if n == 0 {
-        return out.into_pyarray(py);
+    py.detach(|| gradebins::bucketed(px, pyy, base, &segs, &prm, None)).into_pyarray(py)
+}
+
+/// grading.grade_points (the default): grade_points' heights bit for bit by fine bins (gradebins::binned), without the
+/// GIL. keep (segments,): 1 for the segments taking part (the plans whose boxes meet the points': PlanPack.near's,
+/// without copying the arrays); bin_m: the fine bins' size (m).
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+fn grade_points_binned<'py>(py: Python<'py>, px: PyReadonlyArray1<'py, f64>, pyy: PyReadonlyArray1<'py, f64>,
+                            base: PyReadonlyArray1<'py, f64>, a: PyReadonlyArray2<'py, f64>,
+                            b: PyReadonlyArray2<'py, f64>, za: PyReadonlyArray1<'py, f64>,
+                            zb: PyReadonlyArray1<'py, f64>, h: PyReadonlyArray1<'py, f64>,
+                            rh: PyReadonlyArray1<'py, f64>, rid: PyReadonlyArray1<'py, i64>,
+                            rk: PyReadonlyArray1<'py, i64>, abut: PyReadonlyArray1<'py, u8>,
+                            cut: PyReadonlyArray2<'py, f64>, ba: PyReadonlyArray1<'py, f64>,
+                            bb: PyReadonlyArray1<'py, f64>, steep: PyReadonlyArray1<'py, u8>,
+                            link: PyReadonlyArray1<'py, u8>, extrap: f64,
+                            lift: f64, slope_run: f64, t_min: f64, t_max: f64, steep_run: f64, steep_t_min: f64,
+                            blend_r: f64, bucket: f64, wall_cut: f64, wall_t: f64, wall_flat: f64, wall_ahead: f64,
+                            sep: bool, sep_from: f64, sep_full: f64, core_fade: f64, side_fade: f64, sharp_step: f64,
+                            yield_ramp: f64, rank_fade: f64, rank_height_fade: f64, abut_under: f64,
+                            abut_d: PyReadonlyArray2<'py, f64>, keep: PyReadonlyArray1<'py, u8>, bin_m: f64)
+                            -> PyResult<Bound<'py, PyArray1<f64>>> {
+    let prm = gradebins::Prm { extrap, lift, slope_run, t_min, t_max, steep_run, steep_t_min, blend_r, bucket, wall_cut,
+                               wall_t, wall_flat, wall_ahead, sep, sep_from, sep_full, core_fade, side_fade, sharp_step,
+                               yield_ramp, rank_fade, rank_height_fade, abut_under };
+    let segs = grade_segs!(a, b, za, zb, h, rh, rid, rk, abut, cut, ba, bb, steep, link, abut_d);
+    let keep = keep.as_array();
+    if keep.len() != segs.h.len() {
+        return Err(pyo3::exceptions::PyValueError::new_err("grade_points_binned: keep is not one per segment"));
     }
-    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for i in 0..n {
-        x0 = x0.min(px[i]); x1 = x1.max(px[i]);
-        y0 = y0.min(pyy[i]); y1 = y1.max(pyy[i]);
-    }
-    let bxs: Vec<i64> = (0..n).map(|i| ((px[i] - x0) / bucket).floor() as i64).collect();
-    let bys: Vec<i64> = (0..n).map(|i| ((pyy[i] - y0) / bucket).floor() as i64).collect();
-    let nbx = bxs.iter().copied().max().unwrap() + 1;
-    let keys: Vec<i64> = (0..n).map(|i| bys[i] * nbx + bxs[i]).collect();
-    let mut order: Vec<usize> = (0..n).collect();
-    order.sort_by_key(|&i| keys[i]);                    // stable, as argsort(kind="stable")
-    let sk: Vec<i64> = order.iter().map(|&i| keys[i]).collect();
-    // the points and their state in that order (the pairs loop reads them in runs: px[order[j]] and the state arrays
-    // indexed at random were most of its time, 2026-10-26); each point's sums in the same segment order as before
-    let xs: Vec<f64> = order.iter().map(|&i| px[i]).collect();
-    let ys: Vec<f64> = order.iter().map(|&i| pyy[i]).collect();
-    let bs: Vec<f64> = order.iter().map(|&i| base[i]).collect();
-    let mut num = vec![0.0f64; n];
-    let mut den = vec![0.0f64; n];
-    let mut wmax = vec![0.0f64; n];
-    // two passes: the highest core of a road's last stretch before a bridge (abut) over each point, then the blend
-    // without the roads more than wall_cut under it beside them, outside their own cores (grading.grade_points, #38)
-    let mut top = vec![f64::NEG_INFINITY; n];
-    // (sep) how much each point is in a core, and that core's height: other roads beside it count less (#92)
-    let mut cmax = vec![0.0f64; n];
-    let mut csum = vec![0.0f64; n];
-    let mut cz = vec![0.0f64; n];
-    let mut raised = vec![f64::NEG_INFINITY; n];    // (sharp) the cuttings' tops over the points beside them
-    let mut beff: Vec<f64> = bs.clone();
-    // the carriageway each point is deepest in (d - rh, most negative) and its height there
-    let mut cdeep = vec![0.0f64; n];
-    let mut carz = vec![f64::NAN; n];
-    let mut carid = vec![-1i64; n];
-    // the cutting band each point is deepest in (d - its far edge) and its road and height
-    let mut bdeep = vec![0.0f64; n];
-    let mut bz = vec![f64::NAN; n];
-    let mut bid = vec![-1i64; n];
-    // (rank) the highest-ranked road whose core each point lies in (d - its core half width, negative inside), its
-    // road, its surface height there, and how much of its ground it holds (1 across the carriageway, easing to 0
-    // over its shoulder: a lower road's ground blends in from the painted edge out): see pass 1
-    let mut hdeep = vec![f64::INFINITY; n];
-    let mut hrank = vec![i64::MIN; n];
-    // (the second-highest rank there: equal to hrank when another road of its rank is at the point, so its carriageway
-    // is not held over that one's)
-    let mut hrank2 = vec![i64::MIN; n];
-    let mut hid = vec![-1i64; n];
-    let mut hz = vec![f64::NAN; n];
-    let mut hyield = vec![0.0f64; n];
-    let mut hcar = vec![0u8; n];            // (the point is within the higher road's own carriageway)
-    let smooth = |v: f64| { let v = v.clamp(0.0, 1.0); v * v * (3.0 - 2.0 * v) };
-    // pass 1: a pair with d - h past this has u >= 1 (its core hs <= h, its ramp tt <= t_max, a wall's flat and ramp
-    // wall_flat + wall_t), so w = 0: skipped (a margin for the rounding)
-    let far1 = t_max.max(wall_flat + wall_t) + 1e-6;
-    for pass in 0..2 {
-        if pass == 1 && sharp {
-            for i in 0..n {
-                beff[i] = bs[i].max(raised[i]);
-            }
-        }
-        for s in 0..h.len() {
-            // (pass 0 within the blend's reach too: the Python loop pairs the points with a segment once, at h + t_max)
-            // (and a built road's rank to rank_fade past its core: every point that far, not those a bucket of the
-            // batch's grid happened to take in, or the result depended on the batch, test_smooth_road_collision)
-            let reach = if pass == 0 { (h[s] + if sep { core_fade } else { 0.0 }).max(cut_reach[s]).min(h[s] + t_max)
-                                       .max(if rk[s] >= RANK_BUILT { h[s] + rank_fade } else { 0.0 }) }
-                        else { h[s] + t_max };
-            let (ax, ay, bx, by) = (a[[s, 0]], a[[s, 1]], b[[s, 0]], b[[s, 1]]);
-            let (lo_x, hi_x) = (ax.min(bx) - reach, ax.max(bx) + reach);
-            let (lo_y, hi_y) = (ay.min(by) - reach, ay.max(by) + reach);
-            if hi_x < x0 || lo_x > x1 || hi_y < y0 || lo_y > y1 {
-                continue;
-            }
-            let cx0 = 0i64.max(((lo_x - x0) / bucket).floor() as i64);
-            let cx1 = (nbx - 1).min(((hi_x - x0) / bucket).floor() as i64);
-            let cy0 = 0i64.max(((lo_y - y0) / bucket).floor() as i64);
-            let cy1 = ((hi_y - y0) / bucket).floor() as i64;
-            let (abx, aby) = (bx - ax, by - ay);
-            let l2 = abx * abx + aby * aby;
-            // pass 0's farthest effect: a carriageway (rh), an abutment (h), a cutting's band (h + wall_flat) and top
-            // (cut_reach: its side and ahead limits), a core (h + core_fade), a higher road's rank influence
-            // (h + rank_fade: the side road's ease onto it); a margin for the rounding
-            let far0_base = rh[s].max(h[s] + if has_cut[s] { wall_flat.max(0.0) } else { 0.0 }).max(cut_reach[s])
-                .max(h[s] + if sep { core_fade } else { 0.0 }) + 1e-6;
-            let far0 = far0_base.max(h[s] + if rk[s] >= RANK_BUILT { rank_fade } else { 0.0 } + 1e-6);
-            for row in cy0..=cy1 {
-                let i0 = sk.partition_point(|&k| k < row * nbx + cx0);
-                let i1 = sk.partition_point(|&k| k <= row * nbx + cx1);
-                for idx in i0..i1.max(i0) {
-                    let (qx, qy) = (xs[idx] - ax, ys[idx] - ay);
-                    let t = if l2 > 1e-12 { ((qx * abx + qy * aby) / l2).clamp(0.0, 1.0) } else { 0.0 };
-                    let (ddx, ddy) = (qx - t * abx, qy - t * aby);
-                    let d = (ddx * ddx + ddy * ddy).sqrt();       // (not hypot: libm's is ~5x dearer, the pairs loop's main cost)
-                    // (the reach tests first, before the pair's target, banking and cutting lookups: nothing below changes
-                    // a pair past them; the same tests further down, which they were, read nothing computed between)
-                    if pass == 0 && d > far0 {
-                        continue;
-                    }
-                    if pass == 1 && d - h[s] > far1 {
-                        continue;
-                    }
-                    let mut target = za[s] + (zb[s] - za[s]) * t;
-                    if link[s] != 0 && l2 > 1e-12 {
-                        let tu = (qx * abx + qy * aby) / l2;
-                        let e = extrap / l2.sqrt();
-                        let lo = if link[s] & 1 != 0 { -e } else { 0.0 };
-                        let hi = if link[s] & 2 != 0 { 1.0 + e } else { 1.0 };
-                        target = za[s] + (zb[s] - za[s]) * tu.clamp(lo, hi);
-                    }
-                    // m past a bridge abutment's end (abut_d: how far along the road it lies from this segment): over
-                    // the deck
-                    let mut past = 0.0f64;
-                    if abut[s] != 0 && l2 > 1e-12 {
-                        let len = l2.sqrt();
-                        let along = (qx * abx + qy * aby) / len;        // (from the segment's start, along it)
-                        let (da, db) = (abut_d[[s, 0]], abut_d[[s, 1]]);
-                        if da.is_finite() {
-                            past = past.max(-along - da);
-                        }
-                        if db.is_finite() {
-                            past = past.max(along - len - db);
-                        }
-                    }
-                    // there falling away at abut_under, not held at the end's height (the core's round end reached
-                    // half its width back over the deck; a deck climbing to its end stood under that ground: a 35 cm
-                    // ledge at the I-405's overpass ends, Discord 2026-11-05)
-                    if abut_under > 0.0 {
-                        target -= past * abut_under;
-                    }
-                    if banked[s] && l2 > 1e-12 {    // (a banked curve: tilted across the carriageway, its edge height past)
-                        let off = ((qy * abx - qx * aby) / l2.sqrt()).clamp(-rh[s], rh[s]);
-                        target += (ba[s] + (bb[s] - ba[s]) * t) * off;
-                    }
-                    let left = (qx * aby - qy * abx) < 0.0;
-                    let co = if left { 0 } else { 3 };
-                    let (cwall, ctop, creach) = (cut[[s, co]], cut[[s, co + 1]], cut[[s, co + 2]]);
-                    if pass == 0 {
-                        if d > far0 {
-                            continue;       // (nothing below reaches this far: the box's corners)
-                        }
-                        // (a pass road's whole core, its shoulder too: the leg above's fill reached onto the strip
-                        // between its lanes and its wall and stood there as a jagged fin, 2026-11-01)
-                        let cr = if steep[s] != 0 { h[s] } else { rh[s] };
-                        // (and none past its abutment end, over the deck, from yield_ramp on: the round end of an
-                        // approach's carriageway reached over the railway under a short bridge, and the track's bed
-                        // gave way to it there; GitHub #909)
-                        let car = past <= yield_ramp.max(1e-6);
-                        if car && (d - cr < cdeep[idx] || (d <= cr && carz[idx].is_nan())) {
-                            cdeep[idx] = d - cr;
-                            carz[idx] = target;
-                            carid[idx] = rid[s];
-                        }
-                        // (rank) the highest-ranked road whose core holds the point (equal ranks: the deeper core); a
-                        // plan leading onto a bridge (abut) is taken as beside it, not over the point's ground, and a
-                        // cutting's core ends at its wall (as pass 1's hs / drop: the same ground reaches there)
-                        let hs0 = if cwall.is_finite() { h[s].min(cwall) } else { h[s] };
-                        let drop0 = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-                        if rk[s] >= 0 && abut[s] == 0 && !drop0 && d - hs0 < rank_fade
-                            && (rk[s] > hrank[idx] || (rk[s] == hrank[idx] && d - hs0 < hdeep[idx])) {
-                            hdeep[idx] = d - hs0;
-                            if rk[s] > hrank[idx] || (hid[idx] != rid[s] && rk[s] == hrank[idx]) {
-                                hrank2[idx] = hrank[idx];
-                            }
-                            hrank[idx] = rk[s];
-                            hid[idx] = rid[s];
-                            hz[idx] = target;
-                            // (its ground is held across the carriageway; the blend starts at the painted edge, reaches
-                            // the lower road's full weight its shoulder plus rank_fade out: gentle on the side road too,
-                            // not a step at the shoulder's edge)
-                            let shoulder = (hs0 - rh[s]).max(0.0);
-                            let reach = shoulder + rank_fade;
-                            hyield[idx] = 1.0 - smooth(((d - rh[s]) / reach).clamp(0.0, 1.0));
-                            hcar[idx] = (d <= rh[s]) as u8;
-                        }
-                        // (past the other effects' reach only the rank's own: the rest of pass 0 changes nothing
-                        // there, and running it for the rank's wider reach cost ~10 % of a city block's grading)
-                        if d > far0_base {
-                            continue;
-                        }
-                        if abut[s] != 0 && d <= h[s] && target > top[idx] {
-                            top[idx] = target;
-                        }
-                        if has_cut[s] && ctop.is_finite() {     // the ground raised to a cutting's top past its wall
-                            let lab0 = l2.max(1e-24).sqrt();
-                            let al0 = (qx * abx + qy * aby) / lab0;
-                            let ahead0 = (-al0).max(al0 - lab0).max(0.0);
-                            let side0 = (qx * aby - qy * abx).abs() / lab0;
-                            let bend = h[s].min(cwall) + wall_flat;     // the band behind its wall
-                            if side0 > rh[s] && ahead0 < side0 && d - bend < bdeep[idx] {
-                                bdeep[idx] = d - bend;
-                                bz[idx] = target;
-                                bid[idx] = rid[s];
-                            }
-                            if side0 > cwall && side0 <= creach + 0.5 && ahead0 < sharp_step * 2.0 && ctop > raised[idx] {
-                                raised[idx] = ctop;
-                            }
-                        }
-                        if sep {
-                            let cn = 1.0 - smooth((d - h[s]) / core_fade);
-                            if cn > 0.0 {
-                                if cn > cmax[idx] {
-                                    cmax[idx] = cn;
-                                }
-                                csum[idx] += cn;
-                                cz[idx] += cn * target;
-                            }
-                        }
-                        continue;
-                    }
-                    // (past every blend's reach: no weight, nothing changes; the box's corners, ~half the pairs)
-                    if d - h[s] > far1 {
-                        continue;
-                    }
-                    // a cut deeper than wall_cut: a retaining wall at the core's edge, the ground right behind it
-                    // (for a point more beside the segment than ahead of it: ahead, the road's own next segments blend
-                    // in along it, and cutting those off made a kink on every crest)
-                    let side = if l2 > 1e-12 { (qx * aby - qy * abx).abs() / l2.sqrt() } else { d };
-                    let ahead = if l2 > 1e-12 {
-                        let along = (qx * abx + qy * aby) / l2.sqrt();
-                        (-along).max(along - l2.sqrt()).max(0.0)
-                    } else { 0.0 };
-                    // (and not far past a road's end: beside a tunnel the approach's last segment flattened a strip
-                    // 10 m along it, a pit beside the arch, 2026-10-17)
-                    // (on a cutting's side the core ends at its wall; where the ground falls away there the road ends)
-                    let hs = if cwall.is_finite() { h[s].min(cwall) } else { h[s] };
-                    let drop = cwall.is_finite() && !ctop.is_finite() && d > cwall;
-                    let wall = beff[idx] - target > wall_cut && ahead < side && ahead < wall_ahead;
-                    let tt = if wall { wall_t }
-                             else if steep[s] != 0 { (steep_run * (target - beff[idx]).abs()).clamp(steep_t_min, t_max) }
-                             else { (slope_run * (target - beff[idx]).abs()).clamp(t_min, t_max) };
-                    // a wall: flat on one terrain step behind it (no slope in front of its face), then up
-                    let u = ((d - hs - if wall { wall_flat } else { 0.0 }) / tt).clamp(0.0, 1.0);
-                    let w = 1.0 - u * u * (3.0 - 2.0 * u);
-                    // (another road's carriageway here, at another level: this road gives way past its own carriageway)
-                    // (a road's own carriageway never gives way: a hairpin's band over the leg above sank its lanes
-                    // under the terrain, the Stelvio Pass, the user's report 2026-10-21)
-                    // (a carriageway first: a road's cutting band reaching over another road's carriageway at another level
-                    // (its "climb" was that road's embankment) does not pull that road's ground; a bridge's abutment sank
-                    // 2.5 m under the deck into the street below, a wall cars hit, GitHub #108 Meppen)
-                    // (by how much: fully from wall_cut apart and yield_ramp past its carriageway, none from yield_ramp
-                    // less and at its edge; giving way at once there stepped a hairpin's lane 27 cm where its other leg
-                    // crossed wall_cut, the Stelvio, 2026-11-01)
-                    let ramp = yield_ramp.max(1e-6);
-                    let apart = |dz: f64| smooth((dz.abs() - wall_cut + ramp) / ramp);
-                    let mut yf = 0.0f64;
-                    if carid[idx] >= 0 && carid[idx] != rid[s] {
-                        yf = apart(target - carz[idx]);
-                    }
-                    // (a cutting's band: another road's alone; a pass road's legs (grading.LEG_RID_SHIFT: the same road)
-                    // blend over each other's bands, the ground between them a slope: giving way there drew a 5 m step
-                    // along the band's edge, which notches at every vertex: spikes between a hairpin's legs, the user's
-                    // report 2026-11-01. On each other's lanes they still give way, above)
-                    if bid[idx] >= 0 && bid[idx] & LEG_ROAD_MASK != rid[s] & LEG_ROAD_MASK {
-                        yf = yf.max(apart(target - bz[idx]));
-                    }
-                    yf *= smooth((d - rh[s]) / ramp);
-                    // (a lower-ranked road gives way over a higher-ranked one's ground (grading.grade_rank): a built
-                    // (paved / cobble) road keeps its own ground where an unpaved dirt road or track runs beside it,
-                    // and a built side road eases onto a higher built one the same way. On the higher road's
-                    // carriageway the lower one gives way whole; past its painted edge the lower road's own target is
-                    // eased onto the higher road's ground over its shoulder plus rank_fade, so the side road ramps
-                    // gently instead of stepping at the shoulder's edge. Only roads at grade count (an abutment or
-                    // bridge is not on the point's ground), and a road's own other stretches never give way: hairpins
-                    // as before)
-                    let mut tgt = target;
-                    let side_ease = rk[s] < RANK_BUILT || hrank[idx] - rk[s] <= RANK_SIDE_MAX_DIFF;
-                    if rk[s] >= 0 && hrank[idx] > rk[s] && side_ease && abut[s] == 0 && hid[idx] != rid[s] {
-                        // (on the higher road's own carriageway its ground is held whole, whatever the height
-                        // difference: a dirt path 1-2 m lower beside the asphalt still left a dip in it. Past the
-                        // painted edge the height fade decides: a road far above or below is not on its ground)
-                        let rf = if hcar[idx] != 0 { 1.0 } else {
-                            let dz = (target - hz[idx]).abs();
-                            1.0 - smooth((dz - wall_cut).max(0.0) / rank_height_fade)
-                        };
-                        let raise = hyield[idx] * rf;
-                        if hcar[idx] != 0 {
-                            yf = yf.max(raise);
-                        } else {
-                            tgt = target + (hz[idx] - target) * raise;
-                        }
-                    }
-                    if w > 0.0 && !drop && yf < 1.0 && !(d > hs && ahead < side && target < top[idx] - wall_cut) {
-                        let w = w * (1.0 - yf);
-                        let r = d / blend_r;
-                        let mut wb = w / (1.0 + r * r);
-                        if sep {
-                            let rf = cz[idx] / csum[idx].max(1e-12);
-                            let f = cmax[idx] * smooth(((target - rf).abs() - sep_from) / (sep_full - sep_from))
-                                * smooth((d - hs) / core_fade) * smooth((side - ahead) / side_fade);
-                            wb *= 1.0 - f;
-                        }
-                        num[idx] += wb * tgt;
-                        den[idx] += wb;
-                        if w > wmax[idx] {
-                            wmax[idx] = w;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for j in 0..n {
-        let i = order[j];
-        out[i] = beff[j];
-        // (a road whose rank is the point's highest, with no equal-ranked road there, holds its own carriageway whole:
-        // a subordinate road's carriageway, cutting band or ground may not move it, not even by centimetres)
-        if hcar[j] != 0 && hrank[j] > hrank2[j] && hrank[j] <= RANK_HOLD_MAX {
-            out[i] = hz[j] + lift;
-        } else if den[j] > 0.0 {
-            out[i] = beff[j] + wmax[j] * (num[j] / den[j] - beff[j] + lift);
-        }
-    }
-    out.into_pyarray(py)
+    let (px, pyy, base) = (px.as_array(), pyy.as_array(), base.as_array());
+    let out = py.detach(|| {
+        let kv: Vec<bool> = keep.iter().map(|&k| k != 0).collect();
+        gradebins::binned(px, pyy, base, &segs, &prm, Some(&kv), bin_m)
+    });
+    Ok(out.into_pyarray(py))
 }
 
 /// roads.tunnel_sections: a tunnel's road level and its sections from the ground over it, sampled at arc lengths s.
@@ -5926,6 +5639,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(measure_row, m)?)?;
     m.add_function(wrap_pyfunction!(measure_row32, m)?)?;
     m.add_function(wrap_pyfunction!(grade_points, m)?)?;
+    m.add_function(wrap_pyfunction!(grade_points_binned, m)?)?;
     m.add_function(wrap_pyfunction!(bank_profile, m)?)?;
     m.add_function(wrap_pyfunction!(resample, m)?)?;
     m.add_function(wrap_pyfunction!(tunnel_sections, m)?)?;
@@ -6040,6 +5754,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_unpack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_pack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::cdae_zstats, m)?)?;
@@ -6185,6 +5901,34 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
     // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
     // server/osmtagshards.py; that branch's 207)
-    m.add("VERSION", 210)?;
+    m.add_function(wrap_pyfunction!(planset::plan_nearest_on, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_weld, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
+    m.add_function(wrap_pyfunction!(junctions::junctions_find, m)?)?;
+    // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
+    // 212: planset::plan_merge (_plan_set's weld, trim and pack at once, one reading of the plans)
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
+    // 213: packz::zstd_pack / zstd_unpack (the revisit cache's pack records, server/revisitpack.py; that branch's 171)
+    // 214: junctions::junctions_find (junctions.find: corners, cuts, crosswalks, ramps in one call)
+    m.add_class::<reach::RoadReach>()?;
+    m.add_function(wrap_pyfunction!(reach::reach_tile_keys, m)?)?;
+    // 215: reach (RoadReach: the drivable roads near a fast car as a graph and its time-to-reach tree;
+    // reach_tile_keys: the geotiles along a tree in its order; server/reach.py; that branch's 211)
+    // 216: gradebins (grade_points_binned: the corridor apply by fine bins, bit for bit grade_points' heights,
+    // without the GIL; grade_points itself on the same pair arithmetic, without the GIL too; that branch's 211)
+    // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
+    // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
+    // texture, earthd FAR_PVS; that branch's 212)
+    // 219: l0roads / groundphoto (that branch's 171)
+    // (L0 roads: a provisional block's road corridors flattened before any road plan, l0roads.py)
+    m.add_function(wrap_pyfunction!(l0roads::l0_flatten, m)?)?;
+    // (L0 ground: a teleport's first block's stand-in photo from its own ground layers, earthd.write_ground_base)
+    m.add_function(wrap_pyfunction!(groundphoto::ground_photo, m)?)?;
+    m.add("VERSION", 219)?;
     Ok(())
 }
