@@ -656,6 +656,8 @@ class Vegetation:
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
         tree = palette_items(tree, lcls)       # fork: the NVIS palette's trees, size and density
         tree = _crown_clear(tree, curb, mx, my, chm)     # fork: palette crowns overhang a road by OVERHANG_M at most
+        if len(lcls) != len(tree):              # fork: the palette thinned / cleared some: their land cover read again
+            lcls = lc.sample(tree.lon, tree.lat) if lc is not None else np.zeros(len(tree), np.uint8)
         # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
