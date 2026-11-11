@@ -200,6 +200,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
   behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
   `0.5` borrows half).
+- New places' roads, buildings and places come from Overture's own map tiles: one small download per area instead
+  of reading the large map data files, a few seconds sooner on a first visit (the same data; road lines within about
+  a quarter of a metre of the files'). Water, land use and the other map layers still come from the files, and the
+  files stand in whenever the tiles do not answer (`BNGE_MAP_SOURCE=parquet` uses the files for everything, as before).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the

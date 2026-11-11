@@ -44,6 +44,16 @@ except ImportError:
     HAVE_DUCKDB = False
 needs_duckdb = unittest.skipUnless(HAVE_DUCKDB, "duckdb / fsspec not installed (server/requirements.txt)")
 REPO = Path(__file__).resolve().parents[2]
+# (these tests are the parquet path's: Overture's tiles have their own, tests/test_pmtiles.py)
+_SOURCE = mock.patch.object(mapdata, "MAP_SOURCE", "parquet")
+
+
+def setUpModule():
+    _SOURCE.start()
+
+
+def tearDownModule():
+    _SOURCE.stop()
 
 
 class SmallBlocks:

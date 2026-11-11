@@ -63,6 +63,7 @@ mod perfclean;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
+mod pmtiles;
 mod underdeck;
 mod deckground;
 mod railseam;
@@ -6164,6 +6165,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
     // railway stations' signs; PR #1106 / #1023, their 188)
     // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
-    m.add("VERSION", 205)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_tile_id, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_header, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
+    // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
+    // tiles, server/pmtiles.py; 205 left to another branch)
+    m.add("VERSION", 206)?;
     Ok(())
 }

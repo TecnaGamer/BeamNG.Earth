@@ -1254,6 +1254,32 @@ CLI). The only change to an existing module: host policies in `netfetch.POLICIES
   in one statement with many columns (read every row group between the matches: +12 MB, +9 s for a
   city cell), so the scan and the dedup are two statements. The Azure mirror is asked when AWS
   cannot deliver (same bytes, same block cache).
+- **Overture's own vector tiles** (`server/pmtiles.py` + earthfast `pmtiles.rs`, 2026-11-11; `BNGE_MAP_SOURCE=pmtiles`,
+  the default, `parquet` as before): roads, connectors, route numbers, buildings, building parts and places come from
+  Overture's PMTiles archives (`tiles.overturemaps.org/<release>/<theme>.pmtiles`, Planetiler z0-14 gzip MVT; z14 is
+  one of our cells), one ~0.1-1 MB range read per cell instead of the parquet row groups. The network stays in
+  netfetch (three mirrors with their own limits: the CDN, the bucket's regional and global names; their order
+  measured at a process's first read and kept on disk 6 h, a failing one last for 5 min); header, root and leaf
+  directories and tiles are kept on disk under `mapdata/raw/overture-pmtiles/<release>/<theme>/`, a read whose ETag
+  differs from the header's drops them. The native side decodes the tiles and gives the parquet path's columns and
+  rule tables (nested values are JSON strings in the tiles). Features stay whole: a line or polygon that crosses
+  tile edges is rebuilt from its pieces (each clipped to its tile's own square, joined where one piece ends on an edge
+  and the next starts; Planetiler simplifies a feature once, before slicing, so the pieces share their vertices); the
+  tiles still needed are fetched through a callback, round after round, inside the one native call (the cell's 3x3
+  first, then straight on past each cut, at most 6 rings out; each tile decompressed once per call, the last 64 MB per
+  process). A feature listed by a cell is one whose geometry reaches the cell (the parquet query also lists those whose
+  bbox alone touches it: no build reads them there). A line is owned by the cell holding its first vertex (not its
+  bbox centre): every cell that lists it agrees, also where a very long one (a rail line through Manhattan) is cut at
+  the 6-ring cap; a polygon keeps its bbox centre, or its first vertex when it does not reach that cell. Junction
+  vertices Planetiler's simplification dropped from straight roads (2 of 3 mid-segment junctions) are put back from
+  the connectors layer. Accuracy against the parquet cells (3x3 cells at Fells Point, Midtown, Colmar, Paducah,
+  Bozeman, 2026-11-11): every attribute and rule table equal; road vertices 0.11-0.12 m from the parquet line p50,
+  <= 0.27 m p95, 0.66 m max (the 4096 grid of a z14 tile: ~0.45 m); buildings the same; missing only sub-metre
+  degenerate segments and parts and, in Midtown, 4 real building parts of 10,030 the tiles do not have. The base theme
+  stays on parquet: its archive stops at z13, where polygons under ~30 m and short lines are left out
+  (`BNGE_PMT_BASE=1` reads it anyway). Cells from the tiles live in their own folder (`overture-pmt<FORMAT>`) and
+  `versions()["mapsrc"]` keys every plan, cell fact and tile built from them; when the tiles fail, the layer is built
+  from parquet, kept with the parquet cells and marked a revisit fault.
 - **Rasters**: COG range reads with `cog.py` (classic/BigTIFF, Deflate/PackBits/none, predictor
   2, sparse tiles; no GDAL, no tifffile). A missing file (open ocean for WorldCover, no CHM
   coverage) is a 404 remembered by a marker; the cell gets class 0 / no canopy layer. (Checked

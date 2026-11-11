@@ -34,6 +34,10 @@ png = "0.17"
 # The Add-ons page's README and release notes as safe HTML (mdhtml.rs: our own tags from the parser's events, no raw
 # HTML passed through); pulldown-cmark, pure Rust, MIT
 pulldown-cmark = { version = "0.13", default-features = false }
+# Overture's PMTiles (pmtiles.rs): gzip directories and tiles (flate2's pure-Rust miniz_oxide backend, MIT / Apache-2.0)
+# and the tiles' JSON-string properties (serde_json, MIT / Apache-2.0); both were in the lock file already (png, clarabel)
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
+serde_json = "1"
 
 [profile.release]
 opt-level = 3

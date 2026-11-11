@@ -67,6 +67,7 @@ import mapgeom
 import maprasters
 import netfetch
 import overture
+import pmtiles
 import rangeread
 import revisit
 import levelways
@@ -76,7 +77,11 @@ import xproc
 
 log = logging.getLogger("earthd.mapdata")
 
-LAYER_THREADS = 12              # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
+# Where the Overture layers that Overture's own vector tiles hold whole (pmtiles.LAYERS: roads, buildings, places...)
+# come from: "pmtiles" (the default: a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its
+# parquet row groups, 3-25 s) or "parquet" (as before; also every layer's fallback when the tiles fail)
+MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "pmtiles").strip().lower()
+LAYER_THREADS = 12             # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
                                 # user, 2026-10-28: "lets test OSM if it is too laggy we will revert")
@@ -335,6 +340,8 @@ class MapData:
         self.release = release
         self.raw_dir = os.path.join(cache_dir, "mapdata", "raw")
         self.overture = overture.Reader(self.raw_dir, self.fetcher, release, threads)
+        # Overture's own vector tiles for the layers they hold whole (pmtiles.LAYERS), the parquet files the fallback
+        self.pmtiles = pmtiles.Reader(self.raw_dir, self.fetcher, release) if MAP_SOURCE == "pmtiles" else None
         import picnicsource            # (OSM picnic tables: Overture's picnic_table class is unpopulated)
         self.picnic_osm = picnicsource.Source(self.overture, self.fetcher)
         import billboardsource         # (OSM billboards: Overture does not keep advertising=billboard)
@@ -380,6 +387,8 @@ class MapData:
         if self._warm_ex is not None:
             self._warm_ex.shutdown(wait=False, cancel_futures=True)
         self.overture.close()
+        if getattr(self, "pmtiles", None) is not None:
+            self.pmtiles.close()
 
     def _rails(self, key, layer, feats):
         """The roads layer's rail segments with OSM's railway tags (railtags.py), once per build of them."""
@@ -463,6 +472,10 @@ class MapData:
         st = getattr(self, "station_tags", None)
         if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
             v["stations"] = st.known()
+        if getattr(self, "pmtiles", None) is not None:
+            # (the cells from Overture's tiles: their own key, so plans, cell facts and tiles built from them never mix
+            # with the parquet cells'; BNGE_MAP_SOURCE=parquet keeps the keys as before)
+            v["mapsrc"] = pmtiles.source_key()
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
         if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
@@ -493,8 +506,16 @@ class MapData:
             versions[name] = built
         return versions
 
-    def path(self, key, layer):
+    def _pmt(self, layer):
+        """Does this layer come from Overture's tiles (pmtiles.py; BNGE_MAP_SOURCE)?"""
+        return getattr(self, "pmtiles", None) is not None and layer in pmtiles.LAYERS
+
+    def path(self, key, layer, parquet=False):
+        """The cell layer's file. A layer from Overture's tiles has a folder of its own (overture-pmt<FORMAT>): the
+        parquet cells (parquet=True: where the parquet path keeps them) are never read for it, nor written over."""
         source, release = _source(layer, self.release)
+        if not parquet and MapData._pmt(self, layer):
+            source = f"overture-pmt{pmtiles.FORMAT}"
         lv = LAYER_VERSIONS.get(layer)
         name = layer if lv is None else f"{layer}.{lv}"
         return os.path.join(self.cache_dir, "mapdata", f"v{VERSION}", source, release, name,
@@ -616,7 +637,30 @@ class MapData:
         if layer in VECTOR_LAYERS:
             # the roads' OpenStreetMap tags are read alongside Overture's (each half a fresh cell's wait)
             osm = self._osm_pool().submit(self._osm_cell, key, kind) if layer == "roads" else None
-            feats, sources = self.overture.query(layer, key, kind)
+            feats = fell = None
+            if self._pmt(layer):
+                try:
+                    feats, sources = self.pmtiles.query(layer, key, kind)
+                except Exception as e:      # (any: the parquet files have the same layer, slower)
+                    if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+                        if osm is not None:
+                            osm.cancel()
+                        raise               # (a prefetch the hosts had no room for: as the parquet path's)
+                    fell = e
+                    log.warning("mapdata %s %s: Overture's tiles failed (%s: %s): from its parquet files", key, layer,
+                                type(e).__name__, e)
+            if fell is not None:
+                # what is built from the parquet cell is not kept (revisit) and the cell is stored with the parquet
+                # ones (layer_arrays): the two sources never share a file or a cache key
+                revisit.fault()
+                got = self._load(self.path(key, layer, parquet=True))
+                if got is not None:
+                    if osm is not None:
+                        osm.cancel()
+                    got["_fallback"] = np.array(True)
+                    return got
+            if feats is None:
+                feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
                 feats = self._osm(feats, osm.result(),
                                   lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
@@ -628,6 +672,10 @@ class MapData:
                 feats.own |= feats.clipped
             arrays = _layer_arrays(feats)
             prov = overture.sources_provenance(THEME_OF[layer], self.release, sources) if len(feats) else None
+            if prov is not None and self._pmt(layer):
+                prov["format"] = "parquet" if fell is not None else "pmtiles"
+            if fell is not None:
+                arrays["_fallback"] = np.array(True)
         elif layer == "landcover":
             r = self.rasters.worldcover(key, kind)
             arrays = _layer_arrays(r)
@@ -762,6 +810,13 @@ class MapData:
                 return self._mirrored(key, layer, path, arrays), True
             try:
                 arrays = self._build(key, layer, kind)
+                if arrays.pop("_fallback", None) is not None:
+                    # (the tiles failed: the parquet cell, kept with the parquet ones; asked of the tiles again next
+                    # time it is not in memory)
+                    ppath = self.path(key, layer, parquet=True)
+                    if not os.path.exists(ppath):
+                        self._store(ppath, arrays)
+                    return self._mirrored(key, layer, ppath, arrays), False
                 self._store(path, arrays)
             finally:
                 if mine:
@@ -1139,7 +1194,13 @@ class MapData:
             if got is not None:
                 return False
             try:
-                self._store(path, self._build(key, layer, "predownload"))
+                arrays = self._build(key, layer, "predownload")
+                dest = path
+                if arrays.pop("_fallback", None) is not None:
+                    dest = self.path(key, layer, parquet=True)      # (as layer_arrays: with the parquet cells)
+                    if os.path.exists(dest):
+                        return False
+                self._store(dest, arrays)
             finally:
                 if mine:
                     xproc.release(path + ".lock")
