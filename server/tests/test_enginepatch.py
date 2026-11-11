@@ -135,7 +135,11 @@ class Switches(unittest.TestCase):
             for k in ("BNGEARTH_DTSMOOTH_OFF", "BNGEARTH_DTSMOOTH", "BNGEARTH_DTSMOOTH_WIN", "BNGEARTH_DTSMOOTH_REPAY"):
                 os.environ.pop(k, None)
             self.assertFalse(ep.env_off())
-            self.assertFalse(ep.env_on_windows(), "off on Windows by default until tested there")
+            self.assertTrue(ep.env_on_windows(), "on by default since the Windows check (2026-11-11)")
+            os.environ["BNGEARTH_DTSMOOTH_WIN"] = "0"
+            self.assertFalse(ep.env_on_windows(), "the Windows rollback switch")
+            self.assertIsNone(ep.attach(None, wait_s=0, log=lambda s: None))
+            os.environ.pop("BNGEARTH_DTSMOOTH_WIN")
             os.environ["BNGEARTH_DTSMOOTH"] = "0"
             self.assertTrue(ep.env_off())
             os.environ["BNGEARTH_DTSMOOTH_REPAY"] = "0"

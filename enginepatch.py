@@ -14,8 +14,8 @@ addresses, and patched with the game's threads suspended for the 4-byte write. W
 (<user>/temp/beamngearth_gcpatch_on, written by the mod) exists the filter runs; otherwise the block leaves dtReal as
 the engine made it. Status: <user>/temp/beamngEarth_dtsmooth.txt (as the Linux library).
 
-Off unless BNGEARTH_DTSMOOTH_WIN=1 until checked on a Windows PC (tools/gcpatch/README.md "Windows" has the steps);
-BNGEARTH_DTSMOOTH_OFF=1 / BNGEARTH_DTSMOOTH=0 always win.
+On by default since the check on the Windows test PC (2026-11-11; tools/gcpatch/README.md "Windows"). Off with
+BNGEARTH_DTSMOOTH_WIN=0 (Windows only) or BNGEARTH_DTSMOOTH_OFF=1 / BNGEARTH_DTSMOOTH=0 (as on Linux).
 
   python enginepatch.py --scan PATH\\TO\\BeamNG.drive.x64.exe     (offline: does this build match?)
   python enginepatch.py --attach --user-dir DIR                   (Windows: patch the running game, follow the flag)
@@ -177,7 +177,8 @@ def env_off():
 
 
 def env_on_windows():
-    return os.environ.get("BNGEARTH_DTSMOOTH_WIN") == "1"
+    """On unless BNGEARTH_DTSMOOTH_WIN=0 (the Windows-only rollback switch; on since 2026-11-11)."""
+    return os.environ.get("BNGEARTH_DTSMOOTH_WIN") != "0"
 
 
 def report(user_dir, msg, log=None):
@@ -532,7 +533,9 @@ class DtSmoothWin:
                 except OSError:
                     break
                 mode = self.mode
-                if want:
+                if want and on:
+                    pass            # (a test control file's mode change: no new status line)
+                elif want:
                     report(self.user_dir, "applied: steady game speed (BeamNG.Earth level; launcher patch)", self.log)
                 elif on is not None:
                     try:
@@ -552,7 +555,7 @@ def attach(user_dir, wait_s=600.0, log=None, block=True):
         report(user_dir, "off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)", log)
         return None
     if not env_on_windows():
-        report(user_dir, "off on Windows until tested there (BNGEARTH_DTSMOOTH_WIN=1 turns it on)", log)
+        report(user_dir, "off (BNGEARTH_DTSMOOTH_WIN=0)", log)
         return None
     t0 = time.monotonic()
     pid = None
