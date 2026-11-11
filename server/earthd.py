@@ -128,6 +128,7 @@ import pacer  # noqa: E402
 import peerwork as peerworkmod  # noqa: E402
 import deshadow as deshadowmod  # noqa: E402
 import farfield  # noqa: E402
+import farpvs as farpvsmod  # noqa: E402
 import bc7  # noqa: E402
 import terraincache  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
@@ -1195,6 +1196,16 @@ class Server:
         self.ahead_stats = {"dem": 0, "cells": 0, "deferred": 0}
         self.route_pool = ThreadPoolExecutor(1, thread_name_prefix="route-download")   # Connection.route_download
         self.horizon_grids = {}             # anchorId -> farfield.HorizonGrid
+        # the far field's potentially visible set (farpvs.py): far tiles hidden behind terrain from where the player
+        # can be soon get a small texture; per anchor its elevation rings and viewpoints (one worker), per connection
+        # its set (Connection.pvs_tick)
+        self.pvs_on = farpvsmod.available() and self.horizon      # (the camera's height: horizon mode's update_eye)
+        self.pvs_pool = ThreadPoolExecutor(1, thread_name_prefix="far-pvs") if self.pvs_on else None
+        self.pvs_fields = {}                # anchorId -> farpvs.Field
+        self.pvs_building = {}              # anchorId -> (future, radius)
+        self.pvs_failed = {}                # anchorId -> monotonic time of a failed ring build
+        self.pvs_stats = {"hidden": 0, "screen": 0, "texels_saved_M": 0.0, "revealed": 0, "sets": 0, "viewpoints": 0,
+                          "set_s": 0.0, "rings_s": 0.0}
         self.anchors_preparing = {}     # id -> Anchor whose first block is building (prepare_anchor: its grid early)
         self.coarse_keys = set()        # global far tiles of a teleport's coarse cover: FIRST_RAMP_TEX_PX (tile_tex_px)
         self.horizon_inflight = {}          # anchorId -> (future, half-size)
@@ -4441,12 +4452,16 @@ class Server:
         tiles): one off the screen (behind the camera, outside its view cone) MAP_TEX_OFF_PX, else at most
         MAP_TEX_OVERSAMPLE x its edge in screen pixels (at MAP_SCREEN_H px for the field of view), never under
         MAP_TEX_MIN_PX. Retextured as the camera turns (a texture's size may change, its UVs go by its own)."""
+        orig = tile
         if isinstance(tile, farfield.Piece):
             tile = tile.base                # (a piece takes its node's texture: the same size)
         px = self.tex_size(tile.level)
         if isinstance(tile, farfield.GTile) and tile.key in self.coarse_keys:
             # (a teleport's coarse cover: a few photos, sharpened later)
             px = min(px, FIRST_RAMP_NEAR_PX if tile.level <= farfield.GLOBAL_MIN_LEVEL else FIRST_RAMP_TEX_PX)
+        # (the far PVS, farpvs.py: behind terrain from everywhere the player can be soon, a few photos until it is not;
+        # in sight, what the screen resolves of it from there)
+        px = self.pvs_px(anchor, orig, px)
         conn = None
         for c in self.connections:
             if c.active != anchor.id or not isinstance(getattr(c, "cam", None), dict):
@@ -4540,6 +4555,106 @@ class Server:
                     c.update_far()
                 elif getattr(self.anchors_preparing.get(aid), "prep_req", (None,))[0] == id(c):
                     c.prebuild_coarse(self.anchors_preparing[aid])  # (its first block still building: to the horizon)
+
+    # --- the far field's potentially visible set (farpvs.py) -----------------------------------------------------------
+    def pvs_field(self, anchor, radius):
+        """The anchor's PVS rings and viewpoints (farpvs.Field) when built and reaching `radius`, else None; starts a
+        build (its worker: the coarse DEM's rings) when there is none, or the one there is too small."""
+        if not self.pvs_on or self.dem is None:
+            return None
+        have = self.pvs_fields.get(anchor.id)
+        if have is not None and have.rings.radius >= radius:
+            return have
+        busy = self.pvs_building.get(anchor.id)
+        failed = self.pvs_failed.get(anchor.id)
+        if (busy is None or busy[1] < radius) and (failed is None or time.monotonic() - failed > HORIZON_RETRY):
+            # (with room: the radius follows the eye's height in steps, the rings are not made again for each)
+            r = max(radius * farpvsmod.RADIUS_ROOM, have.rings.radius * 1.25 if have is not None else 0.0)
+
+            def build():
+                t0 = time.perf_counter()
+                rings = farpvsmod.Rings(anchor.frame, self.dem, r)
+                self.pvs_stats["rings_s"] += time.perf_counter() - t0
+                log.info("anchor %d far PVS rings: radius %.0f km in %.2f s", anchor.id, r / 1000,
+                         time.perf_counter() - t0)
+                return farpvsmod.Field(anchor.id, anchor.frame, rings)
+            fut = asyncio.get_running_loop().run_in_executor(self.pvs_pool, build)
+            self.pvs_building[anchor.id] = (fut, r)
+            fut.add_done_callback(lambda f, aid=anchor.id: self._pvs_field_done(aid, f))
+        return have
+
+    def _pvs_field_done(self, aid, fut):
+        cur = self.pvs_building.get(aid)
+        if cur is not None and cur[0] is fut:
+            del self.pvs_building[aid]
+        if fut.cancelled():
+            return
+        if fut.exception() is not None:
+            self.pvs_failed[aid] = time.monotonic()
+            log.warning("anchor %d: far PVS rings failed (%r)", aid, fut.exception())
+            for c in list(self.connections):
+                if c.active == aid:
+                    c.wake.set()            # (a teleport's coarse cover waiting for it goes on)
+            return
+        if aid not in self.anchors and aid not in self.anchors_preparing:
+            return                          # pruned meanwhile
+        field = fut.result()
+        have = self.pvs_fields.get(aid)
+        if have is None or have.rings.radius < field.rings.radius:
+            self.pvs_fields[aid] = field
+            self.pvs_failed.pop(aid, None)
+            for c in list(self.connections):
+                if c.active == aid:
+                    c.pvs_tick()
+
+    def pvs_px(self, anchor, tile, full):
+        """The texture px far tile `tile` (shown under `anchor`) needs for the connections that want it (each one's far
+        PVS, farpvs.Set.tex_px: hidden behind terrain, or what its screen resolves of the tile from where its player can
+        be soon; the most any of them needs), `full` at most; `full` when one of them has no set. A piece goes by its
+        node."""
+        if not self.pvs_on or not self.pvs_fields:
+            return full
+        key = tile.key
+        glob = isinstance(tile, farfield.GTile)
+        best = None
+        for c in self.connections:
+            if c.active is None or (not glob and c.active != anchor.id):
+                continue
+            t = c.desired.get(key)
+            if t is None:
+                continue                    # (not this connection's: no say)
+            s = getattr(c, "pvs", None)
+            if s is None or s.aid != c.active:
+                return full
+            node = t.base if isinstance(t, farfield.Piece) else t
+            px = s.tex_px(key, node.bbox, t.level, node.size, full)
+            best = px if best is None else max(best, px)
+            if best >= full:
+                return full
+        return full if best is None else best
+
+    def pvs_hidden(self, anchor, tile):
+        """Is far tile `tile` (shown under `anchor`) hidden behind terrain for every connection that wants it (each
+        one's PVS, farpvs.Set, valid and hiding it; at least one)? A piece goes by its node."""
+        if not self.pvs_on or not self.pvs_fields:
+            return False
+        key = tile.key
+        glob = isinstance(tile, farfield.GTile)
+        judged = False
+        for c in self.connections:
+            if c.active is None or (not glob and c.active != anchor.id):
+                continue
+            t = c.desired.get(key)
+            if t is None:
+                continue                    # (not this connection's: no say)
+            s = getattr(c, "pvs", None)
+            if s is None or s.aid != c.active:
+                return False
+            node = t.base if isinstance(t, farfield.Piece) else t
+            if not s.hidden(key, node.bbox, t.level):
+                return False
+            judged = True
+        return judged
 
     def prefetch_imagery(self, anchor, tile):
         """Start downloading a queued tile's imagery (fire and forget), so tile workers rarely
@@ -4745,6 +4860,11 @@ class Server:
         t0 = time.perf_counter()
         lvl = tile.level
         px_t = self.tile_tex_px(anchor, tile)       # (the 3D map: as fine as it is on screen)
+        full_px = self.tex_size(lvl)
+        if self.pvs_fields and px_t < full_px and tile.key not in self.coarse_keys and not self.map_on():
+            # (a smaller texture by the far PVS, farpvs.py: behind terrain, or all the screen resolves of it)
+            self.pvs_stats["hidden" if self.pvs_hidden(anchor, tile) else "screen"] += 1
+            self.pvs_stats["texels_saved_M"] += (full_px * full_px - px_t * px_t) / 1e6
         is_global = isinstance(tile, farfield.GTile)
         node = tile.base if isinstance(tile, farfield.Piece) else tile
         ck = self.far_ck(anchor.id, tile.key)
@@ -5084,7 +5204,10 @@ class Server:
         t0 = time.perf_counter()
         px = self.tile_tex_px(anchor, tile)
         pending = set()
-        if self.worker_retex() and self.far_pool is not None and self.imagery is not None and \
+        # (a global tile sharpened from a small texture, the coarse cover's or a hidden one's (farpvs.py): in a far-tile
+        # process like its first build, not in this interpreter)
+        upgrade = isinstance(tile, farfield.GTile) and (prev.coarse or 0 < (prev.tex_px or 0) < px)
+        if (self.worker_retex() or upgrade) and self.far_pool is not None and self.imagery is not None and \
                 isinstance(tile, farfield.GTile):
             ck = self.far_ck(anchor.id, tile.key)
             texture = self.texture_name(*ck, prev.rev + 1)
@@ -5092,10 +5215,15 @@ class Server:
             tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
                    "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
                    "season_mode": im.season_mode}
-            got = self.far_pool.submit(blockworker.far_global_tile, tile.z, tile.x, tile.y,
-                                       farfield.global_dem_zoom(tile.z, self.layout.cells),
-                                       farfield.global_dem_zoom(tile.z + 1, self.layout.cells), self.layout,
-                                       tex).result()[1]
+            args = (blockworker.far_global_tile, tile.z, tile.x, tile.y,
+                    farfield.global_dem_zoom(tile.z, self.layout.cells),
+                    farfield.global_dem_zoom(tile.z + 1, self.layout.cells), self.layout, tex)
+            got = self.far_pool.submit(*args).result()[1]
+            if got is None and upgrade and not self.worker_retex():
+                # (its photos not on disk yet: fetched here, rendered there, as its first build: _make_tile)
+                frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
+                if im.fetch_needed(frame_q, *imagerymod.gutter_square(x0q, y0q, size_q, px), px):
+                    got = self.far_pool.submit(*args).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
                                cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px, coarse=False)
@@ -5635,6 +5763,8 @@ class Server:
             del self.anchors[aid]
             self.horizon_grids.pop(aid, None)
             self.horizon_failed.pop(aid, None)
+            self.pvs_fields.pop(aid, None)      # (its rings and viewpoints: ~15 MB)
+            self.pvs_failed.pop(aid, None)
             for ck in [k for k in self.tiles if k[0] == aid]:
                 del self.tiles[ck]
             for k in [k for k in self.lod_errs if k[0] == aid]:
@@ -5773,6 +5903,9 @@ class Connection:
 
     first_ramp = None               # (the coarse cover's start, set per connection: __init__ / commit_anchor)
     teleport_pending = False
+    pvs = None                      # the far PVS in effect (farpvs.Set), or None: every far tile visible (pvs_tick)
+    pvs_key = None                  # ... what it was made for (anchor, centre, half-size, eye class, ground step)
+    pvs_job = None                  # ... the next one being made (its future)
 
     def __init__(self, server, reader, writer):
         self.s = server
@@ -8167,6 +8300,7 @@ class Connection:
                 self.lod_ramp, self.zoom_ref = MAP_RAMP_START, self.eye
                 log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
         self.update_far()
+        self.pvs_tick()                     # (the far PVS for where the player is now; after the selection: its radius)
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
             self.wake.set()
@@ -8637,6 +8771,7 @@ class Connection:
         else:
             z = _num(msg, "z", 0.0) + EYE_ABOVE_PLAYER
         h = float(frame.enu_to_geodetic(x, y, z)[2])
+        self.eye_now = h                    # (exact: the far PVS's eye check, pvs_tick)
         if self.eye is None or abs(h - self.eye) > max(EYE_STEP, EYE_STEP_REL * abs(self.eye)):
             self.eye = h
 
@@ -8772,6 +8907,15 @@ class Connection:
                      "horizon": None if grid is None else farfield.Horizon(eye, grid)}
         if self.view_cap is not None:
             radius, extra = min(radius, self.view_cap), dict(extra, disc=True)
+        grid = self.s.horizon_grids.get(anchor.id) if self.s.horizon else None
+        if grid is not None and self.view_cap is None:
+            # the far PVS's rings meanwhile too (the full selection waits for them), for the radius of an eye on the
+            # highest ground of the place's horizon cell: the eye here is still the last place's (made again at the
+            # commit if short of the real one)
+            s6 = farfield.level_size(farfield.HORIZON_GRID_LEVEL)
+            z6 = grid.zmax(farfield.HORIZON_GRID_LEVEL, int(math.floor(focus[0] / s6)), int(math.floor(focus[1] / s6)))
+            if math.isfinite(z6):
+                self.s.pvs_field(anchor, grid.radius(*focus, max(z6, 0.0) + farpvsmod.EYE_CLASSES[0])[0])
         if not self.global_on(anchor, radius):
             return 0
         k0 = self.kfun()
@@ -8879,6 +9023,138 @@ class Connection:
             return None
         c = farfield.view_cone(self.cam)
         return list(c) + [MAP_OUT_OF_VIEW_K] if c is not None and len(c) == 8 else None
+
+    # --- the far PVS (farpvs.py) ------------------------------------------------------------------------------------
+    def tex_short(self, info, t):
+        """A built far tile's texture is less than it should have now: smaller than tile_tex_px, or the coarse cover's
+        few photos (FIRST_RAMP) where the tile is not hidden behind terrain (pvs_hidden: those may keep them)."""
+        anchor = self.s.anchors.get(self.active)
+        if anchor is None or not info.tex_px:
+            return bool(info.coarse)
+        need = self.s.tile_tex_px(anchor, t)
+        return info.tex_px < need or (bool(info.coarse) and not self.s.pvs_hidden(anchor, t))
+
+    def pvs_tick(self):
+        """Keep this connection's far PVS (farpvs.Set) current (every pose): drop it when it no longer holds (the
+        player out of its square, the camera too high, the 3D map, another anchor), and make the next one in its worker
+        when the player's square, eye class or ground step changed. Every change that un-hides tiles re-renders theirs
+        (pvs_reveal)."""
+        s = self.s
+        anchor = s.anchors.get(self.active) if self.active is not None else None
+        if not s.pvs_on or anchor is None or self.map_view or self.map_open or s.imagery is None \
+                or getattr(self, "eye_now", None) is None:
+            self._pvs_drop()
+            return
+        if s.horizon and anchor.id not in s.horizon_grids and anchor.id not in s.pvs_fields:
+            return                          # (its far radius not known yet: rings for the 80 km disc made twice)
+        field = s.pvs_field(anchor, self.radius or s.radius)
+        if field is None:
+            self._pvs_drop()
+            return
+        x, y = self.view_focus              # (the camera's place when it is away from the car)
+        g = field.rings.ground_hi(x, y)
+        eye = self.eye_now
+        cls = farpvsmod.eye_class_for(eye - g) if g is not None else None
+        if cls is None:
+            self._pvs_drop()                # (flying, or past the rings: everything visible)
+            return
+        p = self.pvs
+        if p is not None and p.aid == anchor.id and p.eye_class > cls and \
+                eye - g > farpvsmod.EYE_CLASSES[cls] / 2:
+            cls = p.eye_class               # (down a class only well under it: a camera bobbing at the line)
+        if self.pvs is not None and not self.pvs.valid_at(anchor.id, x, y, eye):
+            self._pvs_drop()
+        cx, cy, half = farpvsmod.region(x, y, *self.vel)
+        ppr = self.pvs_ppr()
+        key = (anchor.id, cx, cy, half, cls, int(round(g / farpvsmod.GROUND_STEP_M)), ppr)
+        if key == self.pvs_key or self.pvs_job is not None:
+            return
+        self.pvs_key = key
+
+        def make():
+            t0 = time.perf_counter()
+            n0 = field.computed
+            got = farpvsmod.Set(field, cx, cy, half, cls, x, y, g, ppr=ppr)
+            s.pvs_stats["sets"] += 1
+            s.pvs_stats["viewpoints"] += field.computed - n0
+            s.pvs_stats["set_s"] += time.perf_counter() - t0
+            return got
+        fut = self.pvs_job = asyncio.get_running_loop().run_in_executor(s.pvs_pool, make)
+
+        def done(f):
+            if self.pvs_job is f:
+                self.pvs_job = None
+            if f.cancelled() or f.exception() is not None:
+                if not f.cancelled():
+                    log.warning("far PVS failed: %r", f.exception())
+                self.pvs_key = None
+                return
+            new = f.result()
+            if self.active != new.aid or self.map_view or self.map_open:
+                self.pvs_key = None
+                return
+            old, self.pvs = self.pvs, new
+            if FAR_TRACE or old is None:
+                hid = sum(1 for k, t in self.desired.items() if s.pvs_hidden(anchor, t))
+                log.info("far PVS: square %.0f, %.0f +- %.0f m, eye class %d, %d viewpoints; %d of %d far tiles hidden",
+                         new.cx, new.cy, new.half, new.eye_class, new.viewpoints, hid, len(self.desired))
+            self.pvs_reveal()
+            self.wake.set()                 # (a teleport's coarse cover waits for the first one: Conn._stream)
+            self.pvs_tick()                 # (the player may have moved on meanwhile)
+        fut.add_done_callback(done)
+
+    def _ramp_woken(self):
+        self._ramp_wake = None
+        self.wake.set()
+
+    def pvs_pending(self):
+        """This connection's first far PVS is on its way (its rings or the set being made): a teleport's full far
+        field waits for it (at most FIRST_RAMP_MAX_S), so its hidden tiles are not built at full size first."""
+        if self.pvs is not None or not self.s.pvs_on or self.active is None or self.map_view or self.map_open \
+                or getattr(self, "eye_now", None) is None:
+            return False
+        return self.pvs_job is not None or self.active in self.s.pvs_building or (
+            self.s.horizon and self.active in self.s.horizon_inflight and self.active not in self.s.horizon_grids)
+
+    def pvs_ppr(self):
+        """The screen's pixels per radian for the far PVS's texture sizes (pose.cam h / fovDeg), up to the next half
+        power of two (a set is made again when it grows past it: a zoomed-in camera), at least farpvs.PPR_MIN."""
+        c = self.cam if isinstance(self.cam, dict) else {}
+        try:
+            h, fov = float(c.get("h") or 0.0), float(c.get("fovDeg") or 60.0)
+        except (TypeError, ValueError):
+            h, fov = 0.0, 60.0
+        ppr = h / (2 * math.tan(math.radians(fov) / 2)) if h > 0 and 1.0 < fov < 170.0 else 0.0
+        ppr = max(ppr, farpvsmod.PPR_MIN)
+        return 2.0 ** (math.ceil(math.log2(ppr) * 2) / 2)
+
+    def _pvs_drop(self):
+        if self.pvs is not None:
+            self.pvs = None
+            self.pvs_reveal()
+        self.pvs_key = None
+
+    def pvs_reveal(self):
+        """Far tiles shown (or sent) with less texture than they should have now (a PVS that no longer hides them):
+        stale, re-rendered live nearest first (far_retex)."""
+        anchor = self.s.anchors.get(self.active) if self.active is not None else None
+        if anchor is None or self.first_ramp is not None or not self.s.pvs_on:
+            return                          # (a teleport's coarse cover: sharpened as the full selection replaces it)
+        n = 0
+        for key, t in list(self.desired.items()):
+            ck = self.ck(key)
+            if ck not in self.shown and key not in self.sent:
+                continue
+            info = self.s.tiles.get(ck)
+            if info is None or info.material is None or info.stale or not self.tex_short(info, t):
+                continue
+            info.stale = True
+            self.s.retex_request(ck, pump=False)
+            n += 1
+        if n:
+            self.s.pvs_stats["revealed"] += n
+            log.info("far PVS: %d far tiles in sight now, sharpened", n)
+            self.s._retex_pump()
 
     def ck(self, key):
         """The server's key of far tile `key` under the active anchor (Server.far_ck: a global tile's names none)."""
@@ -9203,8 +9479,15 @@ class Connection:
                          time.perf_counter() - self.batch[0])
                 self.update_far()
                 continue
+            # (the coarse cover shown, the full selection waits for the first far PVS on its way: its hidden tiles
+            # small from the start, not built at full size and sharpened back; pvs_tick wakes this loop)
+            ramp_hold = self.first_ramp is not None and self.pvs_pending()
+            if ramp_hold and not getattr(self, "_ramp_wake", None):
+                # (woken at the coarse cover's time limit at the latest: nothing else may come meanwhile)
+                self._ramp_wake = asyncio.get_running_loop().call_later(
+                    max(0.0, self.first_ramp + FIRST_RAMP_MAX_S - time.monotonic()) + 0.05, self._ramp_woken)
             if anchor is not None and self.first_ramp is not None and (
-                    (not self.inflight and self.dirty and len(self.groups) == len(self._blocked()))
+                    (not self.inflight and self.dirty and len(self.groups) == len(self._blocked()) and not ramp_hold)
                     or time.monotonic() - self.first_ramp > FIRST_RAMP_MAX_S):
                 # (the coarse cover is shown, or it took too long: the full selection now, refined group by group)
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
@@ -9218,8 +9501,9 @@ class Connection:
                 self.s.coarse_keys.clear()      # (their own size from here on: those kept are rendered again)
                 self.node_changed, self.desired = {}, {}
                 self.update_far()
+                self.pvs_reveal()               # (coarse tiles the full selection keeps, in sight: sharpened)
                 continue
-            if (not self.inflight and self.dirty and anchor is not None
+            if (not self.inflight and self.dirty and anchor is not None and not ramp_hold
                     and len(self.groups) == len(self._blocked())):
                 self.dirty = False
                 n = sum(1 for k in self.desired if self.ck(k) in self.shown)
@@ -9249,6 +9533,9 @@ class Connection:
                                  "%d base photos", self.s.imagery_worker, self.s.refetched, self.s.base_worker)
                 if self.s.retex_stats["started"]:
                     log.info("live retexture: %s, %d waiting", self.s.retex_stats, len(self.s.retex_todo))
+                if self.s.pvs_stats["sets"]:
+                    log.info("far PVS: %s", {k: round(v, 2) if isinstance(v, float) else v
+                                             for k, v in self.s.pvs_stats.items()})
                 if not any(ck[0] != anchor.id and ck[0] != GLOBAL_AID for ck in self.shown):
                     self.s.schedule_prune(anchor.id)
             await self.writer.drain()
@@ -9294,8 +9581,7 @@ class Connection:
                         self.queue.append(t)
                         continue
                 self.sent[t.key] = t
-                if info.material is not None and not info.stale and self.first_ramp is None and (info.coarse or (
-                        info.tex_px and info.tex_px < self.s.tile_tex_px(self.s.anchors[self.active], t))):
+                if info.material is not None and not info.stale and self.first_ramp is None and self.tex_short(info, t):
                     info.stale = True   # (a coarse cover's texture: rendered again, the whole chain at its own size)
                 if info.stale:          # a region turned ready since: re-rendered live, then far_retex
                     self.s.retex_request(ck)

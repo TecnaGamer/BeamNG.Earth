@@ -55,6 +55,7 @@ mod sidewalks;
 mod roadz;
 mod fartex;
 mod farglobal;
+mod farpvs;
 mod dirtsteps;
 mod gridinterp;
 mod dejunction;
@@ -6185,6 +6186,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
     // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
     // server/osmtagshards.py; that branch's 207)
-    m.add("VERSION", 210)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    // 212: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
+    // texture, earthd FAR_PVS; another branch has 211)
+    m.add("VERSION", 212)?;
     Ok(())
 }
