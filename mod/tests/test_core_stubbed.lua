@@ -791,6 +791,35 @@ drawnCredits = {}
 frames(3)
 T.check(drawnCredits[#drawnCredits] == 'Elevation: s11', 'credits: a new session shows its attribution line until its credits arrive')
 
+-- the trees' fill argument (new shapes unbounded, trees.lua newShapeCap) follows the far cap: a stop (the governor's
+-- loading mode through st.slowFor) is not a fill with the cap on, and is one again with it off (settings farCapMs 0:
+-- the pre-cap behaviour as a whole); a teleport's fill fills either way
+do
+  local settings = require('beamngEarth/settings')
+  local trees = require('beamngEarth/trees')
+  local stC = core._state()
+  local realUpdate, realGet, lastFill = trees.update, settings.get, nil
+  trees.update = function(a, p, v, ms, fill) lastFill = fill; return realUpdate(a, p, v, ms, fill) end
+  stC.placeFrames, stC.loadingUntil = nil, 0
+  stC.slowFor = 10                       -- parked past SLOW_S: loading mode without a teleport
+  frame()
+  T.check(core._governor().loading and core._governor().farCap ~= nil, 'standing: loading mode, the cap on (default)')
+  T.check(lastFill == false, 'cap on: a stop is no fill (new shapes one a frame)')
+  settings.get = function(k) if k == 'farCapMs' then return 0 end return realGet(k) end
+  stC.slowFor = 10
+  frame()
+  T.check(core._governor().farCap == nil, 'farCapMs 0: the cap is off')
+  T.check(lastFill == true, 'cap off: a stop fills as before (the old behaviour, both halves)')
+  settings.get = realGet
+  stC.slowFor = 10
+  stC.loadingUntil = stC.clock + 5       -- a teleport's fill
+  frame()
+  T.check(core._governor().farCap ~= nil and lastFill == true, 'cap on: a teleport still fills')
+  stC.loadingUntil = 0
+  frames(2)                              -- (loading mode off again before the next sections)
+  trees.update = realUpdate
+end
+
 -- the download cache (server cache.py) for the settings page: hello sends the page's cap, the
 -- server's 'cache' is kept (outliving levels) and a clear's answer counts; the requests go out only
 -- with a server session; a disconnect or a new session forgets the numbers

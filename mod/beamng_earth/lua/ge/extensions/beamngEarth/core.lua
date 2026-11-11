@@ -2555,6 +2555,7 @@ local function onUpdate(dtReal, dtSim)
     if not st.anchor then defaultStart() end
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
+  gov:setFarCap(settings.get('farCapMs'))    -- (0: off - the pre-cap behaviour, for A/B)
   gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
   gov:beginFrame(farfield.hasWork() or roads.hasWork() or M._trafficvisuals.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
@@ -2661,9 +2662,12 @@ local function onUpdate(dtReal, dtSim)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)
     -- the trees' own Lua time a frame (trees.lua FRAME_MS), more while the world loads, none in a heavy frame or the
-    -- quiet frames round it (governor.lua: a heavy frame stays a lone spike)
+    -- quiet frames round it (governor.lua: a heavy frame stays a lone spike). fill (every new shape at once): only
+    -- the real fills - a teleport, the level's start - not a stop, where the player sees each first load's frame
+    -- (trees.lua NEW_SHAPES_PER_FRAME); with the far cap off, a stop fills as before (A/B)
     trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
-      or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+      or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS),
+      st.placeFrames ~= nil or st.clock < st.loadingUntil or (not gov.farCap and gov.loading))
     pcall(ambience.update, st.anchorId, sea)      -- (sound never stops the world's updates)
     pcall(pumpjacks.update)
     pcall(nightlights.update)

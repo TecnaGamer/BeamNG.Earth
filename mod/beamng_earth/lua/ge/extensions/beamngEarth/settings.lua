@@ -25,6 +25,7 @@
 local M = {}
 
 local rebase = require('beamngEarth/rebase')
+local governor = require('beamngEarth/governor')
 local ui = require('beamngEarth/ui')
 local net = require('beamngEarth/net')
 local credits = require('beamngEarth/credits')
@@ -146,6 +147,10 @@ M.SCHEMA = {
   cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
   -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
   framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
+  -- the far scenery's per-frame cap (governor.lua FAR_CAP_MS: after its first streaming unit a frame plans at
+  -- most this much; trees.lua: standing still no longer loads new shapes unbounded). 0: off, the old behaviour (A/B)
+  farCapMs = { kind = 'number', default = governor.FAR_CAP_MS, min = 0, max = 200,
+    label = 'Far scenery frame cap (ms, 0: off)' },
   -- the world server's share of the CPU (server cpupin.player_settings reads them from this file when it starts;
   -- GitHub #529: an i5-3470 loaded the map in a few seconds instead of 10-20 with 2 of its 4 cores at normal priority)
   serverCores = { kind = 'enum', default = 'auto', values = { 'auto', '1', '2', '3', '4', '6', '8' },
@@ -166,7 +171,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'lodPx', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'framePacing', 'farCapMs', 'terrainDetail', 'lodPx', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'townSigns', 'adaptiveTraffic', 'models3dmr',
