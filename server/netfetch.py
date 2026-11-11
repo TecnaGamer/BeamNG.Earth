@@ -696,15 +696,59 @@ def windows_ssl_context():
     return truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
+def default_ssl_context():
+    """The TLS context http.client makes for an HTTPS connection it is not handed one (certificates verified, ALPN
+    http/1.1), made once: each connection made its own, the system's certificate store read again every time (~3 ms of
+    CPU idle, far more on a loaded machine; ~1 CPU-s of a cold place's ~250 connections, py-spy 2026-11-11)."""
+    make = getattr(http.client, "_create_https_context", None)
+    try:
+        return make(11) if make is not None else ssl.create_default_context()
+    except (TypeError, ValueError, ssl.SSLError):
+        return None
+
+
 class HttpsTransport:
-    """GET over one persistent HTTP(S) connection per thread and host (a fresh TLS handshake per tile
-    roughly doubled the latency). No redirects are followed. Honours HTTP_PROXY / HTTPS_PROXY / NO_PROXY
-    (and urllib.request.getproxies() as a fallback) so users behind a corporate proxy can reach the
-    data sources; SOCKS proxies are not supported (PySocks is not a dependency)."""
+    """GET over persistent HTTP(S) connections shared by the threads (a fresh TLS handshake per tile roughly doubled
+    the latency): a request takes an idle connection to its host (and proxy) or opens one, and gives it back once its
+    answer is read. Each thread had its own, so the short-lived pools' threads (a lidar cell's node reads, a cell's
+    tile reads) opened ~250 connections for ~800 requests of a cold place, ~170 ms each (Salina KS, 2026-11-11). Idle
+    ones are kept POOL_IDLE_MAX per host, POOL_IDLE_S at most. No redirects are followed. Honours HTTP_PROXY /
+    HTTPS_PROXY / NO_PROXY (and urllib.request.getproxies() as a fallback) so users behind a corporate proxy can reach
+    the data sources; SOCKS proxies are not supported (PySocks is not a dependency)."""
+
+    POOL_IDLE_MAX = 16          # idle connections kept per host (and proxy)
+    POOL_IDLE_S = 30.0          # s an idle connection is kept (hosts close theirs after ~20-60 s idle: a request on an
+                                # older one would likely cost a failed send and a fresh connection anyway)
 
     def __init__(self):
-        self._local = threading.local()
-        self._tls_context = windows_ssl_context()
+        self._idle = {}             # (scheme, netloc, proxy...) -> [(connection, monotonic time it was given back)]
+        self._idle_lock = threading.Lock()
+        self._tls_context = windows_ssl_context() or default_ssl_context()
+
+    def _take(self, key):
+        """An idle connection to key's host (the most recently used), or None; older ones are closed."""
+        now = time.monotonic()
+        stale, got = [], None
+        with self._idle_lock:
+            idle = self._idle.get(key)
+            while idle:
+                conn, at = idle.pop()
+                if now - at <= self.POOL_IDLE_S:
+                    got = conn
+                    break
+                stale.append(conn)
+        for conn in stale:
+            conn.close()
+        return got
+
+    def _give(self, key, conn):
+        """conn (its answer read) kept for the next request to its host, or closed when enough are kept."""
+        with self._idle_lock:
+            idle = self._idle.setdefault(key, [])
+            if len(idle) < self.POOL_IDLE_MAX:
+                idle.append((conn, time.monotonic()))
+                return
+        conn.close()
 
     # --- proxy helpers ---------------------------------------------------------------
     SYSTEM_PROXIES_S = 60.0     # the system's proxy settings (getproxies: the registry on Windows) read at most this often
@@ -802,17 +846,25 @@ class HttpsTransport:
     def _request_once(self, url, headers, timeout, proxy):
         """request's one connection: url as given (proxy: _resolve_proxy's for it, or None)."""
         u = urlsplit(url)
-        conns = self._local.__dict__.setdefault("conns", {})
         path = (u.path or "/") + (f"?{u.query}" if u.query else "")
         if proxy is None:
             key = (u.scheme, u.netloc, None)
         else:
             log.debug("net: %s -> proxy %s:%d", url, proxy[0], proxy[1])
             key = (u.scheme, u.netloc, proxy[0], proxy[1])
+        fresh = False                   # (once a reused connection failed: a new one)
         while True:
-            conn = conns.get(key)
+            conn = None if fresh else self._take(key)
             reused = conn is not None
-            if conn is None:
+            if reused:                  # (this request's timeout, not the one the connection was opened with)
+                conn.timeout = timeout
+                sock = getattr(conn, "sock", None)
+                if sock is not None:
+                    try:
+                        sock.settimeout(timeout)
+                    except OSError:
+                        pass
+            else:
                 if proxy is not None and u.scheme == "https":
                     phost, pport, puser, ppass = proxy
                     kwargs = {"timeout": timeout}
@@ -825,22 +877,20 @@ class HttpsTransport:
                                        headers={"Proxy-Authorization": f"Basic {creds}"})
                     else:
                         conn.set_tunnel(u.hostname, u.port or 443)
-                    conn = conns[key] = conn
                 elif proxy is not None:
                     phost, pport, puser, ppass = proxy
                     conn = http.client.HTTPConnection(phost, pport, timeout=timeout)
                     if puser is not None:
                         creds = base64.b64encode(f"{puser}:{ppass or ''}".encode()).decode()
                         conn._proxy_auth = f"Basic {creds}"
-                    conn = conns[key] = conn
                 else:
                     if u.scheme == "https":
                         kwargs = {"timeout": timeout}
                         if self._tls_context is not None:
                             kwargs["context"] = self._tls_context
-                        conn = conns[key] = http.client.HTTPSConnection(u.netloc, **kwargs)
+                        conn = http.client.HTTPSConnection(u.netloc, **kwargs)
                     else:
-                        conn = conns[key] = http.client.HTTPConnection(u.netloc, timeout=timeout)
+                        conn = http.client.HTTPConnection(u.netloc, timeout=timeout)
             try:
                 req_headers = dict(headers, Connection="keep-alive")
                 if proxy is not None and u.scheme == "http":
@@ -855,13 +905,18 @@ class HttpsTransport:
                 r = conn.getresponse()
                 ioprofiler.headers_received()
                 body = r.read()
-                return r.status, {k.lower(): v for k, v in r.getheaders()}, body
+                out = r.status, {k.lower(): v for k, v in r.getheaders()}, body
             except (http.client.HTTPException, OSError):
                 conn.close()
-                del conns[key]
                 if not reused:          # a fresh connection failed: that is the attempt's result (the
                     raise               # Fetcher retries through the bucket, with backoff)
-                # else: the server may have closed the idle keep-alive connection; reconnect once
+                fresh = True            # the server may have closed the idle keep-alive connection: reconnect once
+                continue
+            except BaseException:       # (not given back half read)
+                conn.close()
+                raise
+            self._give(key, conn)
+            return out
 
 
 # IPv6-only networks (GitHub #763): the public S3 hosts that answered "no route" over IPv4 this run, used through
