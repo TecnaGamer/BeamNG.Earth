@@ -233,6 +233,14 @@ function M.gpsClear()
   if gps then gps.clear() end
 end
 
+-- Route legs are pairs of distance/time. Neither public read may hand an add-on the GPS's own rows.
+local function copyLegs(legs)
+  if type(legs) ~= 'table' then return nil end
+  local out = {}
+  for i, leg in ipairs(legs) do out[i] = { leg[1], leg[2] } end
+  return out
+end
+
 -- The GPS destination and the way there: { lat, lon, name, remaining (m), eta (s), planning, waypoints, legs }, or
 -- nil without one (waypoints: those still ahead, { { lat, lon, name }... }; legs: the planned route's { { dist m,
 -- dur s }... } from the start through each waypoint, with waypoints only).
@@ -241,7 +249,7 @@ function M.gps()
   local s = gps and gps.status and gps.status()
   if type(s) ~= 'table' then return nil end
   return { lat = s.lat, lon = s.lon, name = s.name, remaining = s.remaining, eta = s.eta, planning = s.planning == true,
-           waypoints = s.waypoints or {}, legs = s.legs, off = s.off, routeVersion = s.routeVersion }
+           waypoints = s.waypoints or {}, legs = copyLegs(s.legs), off = s.off, routeVersion = s.routeVersion }
 end
 
 -- The planned route (1.6, has('routeGeometry'); GitHub #1075): { version, points = { { lat, lon }... }, dist (m),
@@ -258,7 +266,7 @@ function M.gpsRoute()
     elev = {}
     for i, e in ipairs(r.elev) do elev[i] = { e[1], e[2] } end
   end
-  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = r.legs }
+  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = copyLegs(r.legs) }
 end
 
 ------------------------------------------------------------------------------------------
