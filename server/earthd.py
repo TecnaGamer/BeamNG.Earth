@@ -406,8 +406,9 @@ MAP_OUT_OF_VIEW_K = 3.0          # the 3D map: tiles off the screen chosen as if
 # for every anchor, built while the first block is (Connection.prebuild_coarse). Once they are all shown (or after
 # FIRST_RAMP_MAX_S) the full selection, its swap groups each a coarse tile and the finer ones under it. The block
 # (1 km) covers the ground round the car meanwhile (the coarse tile under it sinks: farfield.lua 'partial'). Cold
-# Rock Springs / Laramie / Cody / Sheridan (tools/farprobe.py): half the horizon shown 1.8-3.4 s after the request,
-# 90 % 3.3-5.9 s (31-45 s and 42-61 s before); a revisit 1.3 s / 1.6 s (5.8 / 8.0 s); CPU the same or +7 %.
+# Missoula / Rock Springs / Laramie / Cody / Sheridan (tools/farprobe.py): half the horizon shown 1.8-3.4 s after
+# the request, 90 % 3.3-5.9 s (31-62 s and 42-77 s before); a revisit 1.3 s / 1.6 s (5.8 / 8.0 s); far_done and CPU
+# about the same (the full far field's photos: USGS's ~1900 requests at our 50 a second).
 FIRST_RAMP = os.environ.get("BNGE_FIRST_RAMP", "1") != "0"
 FIRST_RAMP_K = 0.25
 FIRST_RAMP_MIN_LEVEL = 3        # (= farfield.GLOBAL_MIN_LEVEL: the anchor's own levels, sea-carved and graded, below)
@@ -4175,8 +4176,8 @@ class Server:
             for c in list(self.connections):
                 if c.active == aid:
                     c.update_far()
-                elif aid in self.anchors_preparing:     # (its first block still building: the cover to the horizon)
-                    c.prebuild_coarse(self.anchors_preparing[aid])
+                elif getattr(self.anchors_preparing.get(aid), "prep_req", (None,))[0] == id(c):
+                    c.prebuild_coarse(self.anchors_preparing[aid])  # (its first block still building: to the horizon)
 
     def prefetch_imagery(self, anchor, tile):
         """Start downloading a queued tile's imagery (fire and forget), so tile workers rarely
