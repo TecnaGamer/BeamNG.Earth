@@ -2734,6 +2734,43 @@ class SkeletonGableTest(unittest.TestCase):
 class RoofPhotoTest(unittest.TestCase):
     """Roof colours from the aerial photo (RoofPhoto, native roof_photo_colours)."""
 
+    def test_a_tile_near_the_car_fetches_its_photo_urgent(self):
+        # the road tiles round the car (blockworker.roads_geo: urgent_photos) ask for their roof photo ahead of the far
+        # field's photos from the same host; the others as before
+        import geodesy
+        asked = []
+
+        class Reader:
+            @staticmethod
+            def urgent():
+                import contextlib
+                asked.append("urgent")
+                return contextlib.nullcontext()
+
+            @staticmethod
+            def render(frame, x0, y0, size, px):
+                asked.append("render")
+                return np.zeros((px, px, 3), np.uint8), {"france": px * px}
+
+        frame = geodesy.EnuFrame(46.17, 1.87)
+        with mock.patch.object(bld, "_photo_sources", return_value=("france",)), \
+                mock.patch.object(bld, "_photo_reader_live", return_value=Reader()):
+            with bld.urgent_photos(True):
+                f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+            self.assertIsNotNone(f.fut.result(5))
+            self.assertEqual(asked, ["urgent", "render"])
+            asked.clear()
+            f = bld.RoofPhotoFuture(frame, 0.0, 0.0, 100.0, 100.0, tempfile.gettempdir())
+            self.assertIsNotNone(f.fut.result(5))
+            self.assertEqual(asked, ["render"])
+
+    def test_which_geotiles_are_near_the_car(self):
+        import blockworker
+        import geotiles
+        gx, gy = geotiles.tile_of(46.1714, 1.8714)
+        self.assertTrue(blockworker._geo_near(gx, gy, 46.1714, 1.8714))
+        self.assertFalse(blockworker._geo_near(gx + 4, gy, 46.1714, 1.8714))
+
     def photo(self, roof=(180, 70, 50), tree=None):
         rgb = np.full((100, 100, 3), (90, 90, 90), np.uint8)           # 1 m pixels over [0, 100] x [0, 100]
         rgb[40:60, 30:70] = roof                                       # a 40 x 20 m roof: x 30..70, y 40..60
