@@ -1181,7 +1181,9 @@ class ServerMessagesTest(test_server.ServerHarness):
         with open(self.fs(m["texture"]), "rb") as f:
             data = f.read()
         w, h, mips, fourcc, sizes = imagery.read_dds_info(data)
-        self.assertEqual((w, h, fourcc), (self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
+        # FORMAT 4 advertises the actual size, which the far PVS may reduce below the level's default.
+        expected_px = m.get("tex", self.server.tex_size(m["level"]))
+        self.assertEqual((w, h, fourcc), (expected_px,) * 2 + (b"DXT1",))
         self.assertEqual(mips, w.bit_length())                 # full chain down to 1 x 1
         self.assertEqual(len(data), imagery.DDS_HEADER + sum(sizes))
 
