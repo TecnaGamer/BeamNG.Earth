@@ -378,7 +378,7 @@ def _seed(it):
 
 
 def _centre(it):
-    return bs.centroid(it["xy"])
+    return bs.item_centroid(it)
 
 
 def find(items):
@@ -720,7 +720,7 @@ def assemble(items, seeds, country=None, hubs=None, me=0):
     # the hall(s), and the roofs over the platforms
     st.buildings = [(it["id"], bs._open(it["xy"]), float(it.get("height") or 0.0)) for it in near
                     if it["layer"] == "buildings" and it["cls"] in BUILDING_CLASSES and it["kind"] == "polygon"
-                    and float(np.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.area(it["xy"]) > 60.0]
+                    and float(np.hypot(*(_centre(it) - st.hub))) < BUILDING_NEAR_M and bs.item_area(it) > 60.0]
     for it in sorted((i for i in near if i["layer"] == "buildings" and i["cls"] in ROOF_CLASSES and i["kind"] == "polygon"),
                      key=lambda i: i["id"]):
         ring = bs._open(it["xy"])
@@ -838,8 +838,9 @@ def _group(md, frame, group):
     lons = np.array([g[0] for g in group])
     lats = np.array([g[1] for g in group])
     cells = mapcells.cells_for_points(lats, lons, pad_lat=GROUP_PAD_DEG[1], pad_lon=GROUP_PAD_DEG[0], max_cells=64)
-    layers = {name: [md.cell(k, layers=(name,), kind="demand").layers.get(name) for k in cells]
-              for name in ("infrastructure", "buildings", "roads")}
+    names = ("infrastructure", "buildings", "roads")
+    cds = mapcells.load_cells(md, cells, names)
+    layers = {name: [cd.layers.get(name) for cd in cds] for name in names}
     e, n, _ = frame.geodetic_to_enu(lats, lons, np.zeros(len(lats)))
     centre = (float(np.mean(e)), float(np.mean(n)))
     items = bs.items_from_layers(frame, layers, centre, REACH_M + 90.0)
@@ -869,9 +870,8 @@ def stations_near(md, frame, box, shared=False):
         la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
         import mapcells
         keys = mapcells.cells_for_points(la, lo, pad_lat=PAD_DEG, pad_lon=PAD_DEG, max_cells=64)
-        seeds = sorted({(round(a, 5), round(b, 5)) for k in keys
-                        for a, b in _seed_points(md.cell(k, layers=("infrastructure",), kind="demand")
-                                                 .layers.get("infrastructure"))})
+        seeds = sorted({(round(a, 5), round(b, 5)) for cd in mapcells.load_cells(md, keys, ("infrastructure",))
+                        for a, b in _seed_points(cd.layers.get("infrastructure"))})
         if not seeds:
             return []
         groups = []

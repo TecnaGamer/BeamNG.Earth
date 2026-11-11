@@ -289,3 +289,12 @@ def owner(lon_c, lat_c, z=ZOOM):
         oy.flat[i] = _exact_row(float(y.flat[i]), float(np.clip(lat.flat[i], -MAX_LAT, MAX_LAT)), n)
     ox = np.where(ox == n, n - 1, ox)                       # 180 E: the last column
     return ox % n, oy
+
+
+def load_cells(md, keys, layers, kind="demand"):
+    """[md.cell(key, layers, kind) for key in keys] with the cells' layers loaded side by side (MapData.cells); one
+    after another for a map data without it (the tests' stand-ins)."""
+    many = getattr(md, "cells", None)
+    if many is None:
+        return [md.cell(k, layers=layers, kind=kind) for k in keys]
+    return many(list(keys), layers, kind)

@@ -6028,7 +6028,8 @@ def far_items(frame, tile, ty, md, ground, lamp_region=None):
     keys, layers = far_needs(frame, tile, ty)
     nyc = nycmassing.Fetch(frame, x0, y0, x1, y1, getattr(md, "cache_dir", None))   # (New York's setbacks)
     measured_wait(md, keys)
-    cds = [md.cell(k, layers=layers, kind="demand") for k in keys]
+    import mapcells
+    cds = mapcells.load_cells(md, keys, layers)
     items = tile_buildings(frame, x0, y0, x1, y1, [c.layers.get("buildings") for c in cds], ground, own=own,
                            part_layers=[c.layers.get("building_parts") for c in cds], nyc=nyc,
                            house_land_layers=[c.layers.get("land_use") for c in cds],

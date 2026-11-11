@@ -1926,7 +1926,8 @@ def _charger_site(frame, md, ch, stations, elev=None):
     beside = _beside_station(ch, stations)
     at, pads = (beside if beside is not None else (ch, []))
     r = evchargers.reach_of(at)
-    cds = [md.cell(k, layers=("buildings", "roads"), kind="demand") for k in _cells_near(frame, at.x, at.y, r)]
+    import mapcells
+    cds = mapcells.load_cells(md, _cells_near(frame, at.x, at.y, r), ("buildings", "roads"))
     rls = [c.layers.get("roads") for c in cds]
     blds = buildings_touching(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
     la, lo, _ = frame.enu_to_geodetic(at.x, at.y, 0.0)

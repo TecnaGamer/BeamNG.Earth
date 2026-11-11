@@ -599,20 +599,32 @@ def _underpass_distance(xy, line):
     return dist, along
 
 
-def _underpass_masks(rails, line, half, margin):
+def _rail_boxes(rails):
+    """(n, 4) the boxes (x0, y0, x1, y1) of the rails' parts, for _underpass_masks (made once for every tunnel of a
+    call: each tunnel took every part's min and max again, ~6 of a cold Le Mans block + 4 tiles' ~50 CPU-s)."""
+    out = np.zeros((len(rails), 4))
+    for n, (*_, xy) in enumerate(rails):
+        out[n, :2] = xy.min(0)
+        out[n, 2:] = xy.max(0)
+    return out
+
+
+def _underpass_masks(rails, line, half, margin, boxes=None):
     """Points near a tunnel, connected locally to a track that actually crosses it.
 
     A crossing on one track must not qualify a neighbouring track. Connect only
     the runs inside the tunnel's padded footprint: this preserves source-feature
     splits without following a turnout or a returning track far outside it.
+    boxes: _rail_boxes(rails), made once by a caller with several tunnels.
     """
     masks = [np.zeros(len(xy), bool) for *_, xy in rails]
     candidates, runs, owners = [], [], []
     pad = half + margin
     near = (*(line.min(0) - pad), *(line.max(0) + pad))
     direction = line[-1] - line[0]
+    hit = set(_box_hits(_rail_boxes(rails) if boxes is None else boxes, near))
     for n, (*_, xy) in enumerate(rails):
-        if not _box_hit((*xy.min(0), *xy.max(0)), near):
+        if n not in hit:
             candidates.append(masks[n])         # (nothing near: no run; the zeros mask, never written to)
             continue
         tangent = np.gradient(xy, axis=0)
@@ -653,8 +665,9 @@ def _span_underpasses(rails, tunnels):
     if not tunnels:
         return rails
     covered = [np.zeros(len(xy), bool) for *_, xy in rails]
+    boxes = _rail_boxes(rails)
     for line, half in tunnels:
-        for keep, mask in zip(covered, _underpass_masks(rails, line, half, FOOT_MAX_M + STEP_M)):
+        for keep, mask in zip(covered, _underpass_masks(rails, line, half, FOOT_MAX_M + STEP_M, boxes)):
             keep |= mask
     out = []
     for (fid, cls, kind, xy), mask in zip(rails, covered):
@@ -1166,7 +1179,8 @@ def profile(rails, ground, underpasses=()):
                 lifted = np.where(dist <= reach + STEP_M, np.maximum(lifted, lv), lifted)
         zb.append(bed_heights(lifted))
     # Read the lower road at its mouths, not on the filled railway bed above it.
-    crossings = [(line, half, _underpass_masks(rails, line, half, DECK_HALF_M + STEP_M))
+    boxes = _rail_boxes(rails) if underpasses else None
+    crossings = [(line, half, _underpass_masks(rails, line, half, DECK_HALF_M + STEP_M, boxes))
                  for line, half in underpasses]
     crossings = [(line, half, masks) for line, half, masks in crossings if any(m.any() for m in masks)]
     mouths = np.concatenate([ln[[0, -1]] for ln, _hw, _masks in crossings]) if crossings else np.empty((0, 2))

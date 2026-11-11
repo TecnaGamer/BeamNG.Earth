@@ -2130,7 +2130,7 @@ class Server:
         w = navgraphmod.WINDOW_M + 200.0
         la, lo, _ = anchor.frame.enu_to_geodetic(np.array([x - w, x + w]), np.array([y - w, y + w]), 0.0)
         keys = mapcells.cells_for_bbox(float(la.min()), float(lo.min()), float(la.max()), float(lo.max()))
-        feats = [self.mapdata.cell(k, layers=("roads",), kind="demand").layers.get("roads") for k in keys]
+        feats = [cd.layers.get("roads") for cd in mapcells.load_cells(self.mapdata, keys, ("roads",))]
         zoom = anchor.zooms[0]
         urban = self.surface.urban if self.surface is not None else None
         g = self.grader_for(anchor)

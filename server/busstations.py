@@ -151,8 +151,8 @@ def _spans(feats, i):
 
 def items_to_json(items):
     """JSON-able copy of items (arrays -> lists, rounded to 1 cm): a test fixture."""
-    return [{k: (np.round(v, 2).tolist() if isinstance(v, np.ndarray) else v) for k, v in it.items()}
-            for it in items]
+    return [{k: (np.round(v, 2).tolist() if isinstance(v, np.ndarray) else v) for k, v in it.items()
+             if not k.startswith("_")} for it in items]
 
 
 def items_from_json(rows):
@@ -312,13 +312,31 @@ def _is_place(it):
 def _real_seed(group):
     """Is this group of mapped seeds a station: one with a mapped area, or a bare node that is not named after a carrier
     (a node named "Green Line Coaches" or "Автоперевізник ..." is a ticket office; "ZOB Hamburg" or no name is a station)."""
-    if any(s["kind"] == "polygon" and area(s["xy"]) >= 400.0 for s in group):
+    if any(s["kind"] == "polygon" and item_area(s) >= 400.0 for s in group):
         return True
     return any(not s["name"] or name_matches(s["name"], ()) for s in group)
 
 
 def _centre(it):
-    return centroid(it["xy"]) if it["kind"] != "point" else it["xy"][0]
+    return item_centroid(it) if it["kind"] != "point" else it["xy"][0]
+
+
+def item_centroid(it):
+    """centroid(it["xy"]) of an item, kept on it ("_c"; a copy returned): a group's layout asks for each item's centre
+    and area again and again (every station's region, buildings, halls, obstacles, greens: ~35,000 numpy centroids of
+    a few thousand items for Angers' stations, half the layout's CPU, 2026-11-11)."""
+    c = it.get("_c")
+    if c is None:
+        c = it["_c"] = centroid(it["xy"])
+    return c.copy()
+
+
+def item_area(it):
+    """area(it["xy"]) of an item, kept on it ("_a")."""
+    a = it.get("_a")
+    if a is None:
+        a = it["_a"] = area(it["xy"])
+    return a
 
 
 def _bus_platform(it):
@@ -406,8 +424,8 @@ def find(items):
 
 def assemble(items, seeds):
     st = Station()
-    polys = sorted((s for s in seeds if s["kind"] == "polygon" and area(s["xy"]) >= 400.0),
-                   key=lambda s: -area(s["xy"]))
+    polys = sorted((s for s in seeds if s["kind"] == "polygon" and item_area(s) >= 400.0),
+                   key=lambda s: -item_area(s))
     pts = [_centre(s) for s in seeds]
     names = [s["name"] for s in seeds if s["name"] and (_is_seed(s) or name_matches(s["name"], ()))]
     st.name = names[0] if names else ""
@@ -416,7 +434,7 @@ def assemble(items, seeds):
         st.hub = centroid(ring)
         # the "boundary" that is the building's own outline (Vinnytsia West: the station way is the hall) is no yard
         # polygon: decided before the members are taken, so that a roof beside the hall is not outside a boundary
-        own_outline = any(it["layer"] == "buildings" and it["kind"] == "polygon" and area(it["xy"]) >= 0.7 * area(ring)
+        own_outline = any(it["layer"] == "buildings" and it["kind"] == "polygon" and item_area(it) >= 0.7 * area(ring)
                           and contains(ring, _centre(it)) for it in items)
         if not own_outline:
             st.boundary = ring
@@ -449,10 +467,10 @@ def assemble(items, seeds):
                     and it["cls"] == "platform"))
         if roof and it["layer"] == "buildings":
             st.claimed.add(it["id"])        # the buildings layer must not draw it as a shed as well
-        if roof and it["kind"] == "polygon" and area(it["xy"]) >= CANOPY_MIN_M2:
+        if roof and it["kind"] == "polygon" and item_area(it) >= CANOPY_MIN_M2:
             h = it.get("height")
             st.canopies.append({"ring": _open(it["xy"]), "height": float(h) if h else CANOPY_H_M,
-                                "src": it["id"], "area": area(it["xy"]), "mapped": bool(h)})
+                                "src": it["id"], "area": item_area(it), "mapped": bool(h)})
     # bays: bus_stop points, counted by the boundary, the station's name, or a cluster of them
     stops = [it for it in items if it["layer"] == "infrastructure" and it["cls"] == "bus_stop"
              and it["kind"] == "point" and in_region(it["xy"][0], BOUNDARY_PAD_M + 25.0)]
@@ -470,7 +488,7 @@ def assemble(items, seeds):
     for it in items:
         if it["layer"] != "buildings" or it["kind"] != "polygon" or it["cls"] in ROOF_CLASSES:
             continue
-        a = area(it["xy"])
+        a = item_area(it)
         c = _centre(it)
         d = float(np.hypot(*(c - st.hub)))
         own = it["cls"] == "transportation" or it["sub"] == "transportation" or it["tags"].get("amenity") == "bus_station"
@@ -482,7 +500,7 @@ def assemble(items, seeds):
     st.buildings = [r[2] for r in cand if r[0] == 0] or [r[2] for r in cand[:1]]
     # a "building" with the buses' stops standing in it is an open hall (Brno Zvonařka: the whole roof is mapped as a
     # building): a roof on columns over the platforms, not a closed box
-    halls = [it for it in items if it["layer"] == "buildings" and it["kind"] == "polygon" and area(it["xy"]) >= 200.0
+    halls = [it for it in items if it["layer"] == "buildings" and it["kind"] == "polygon" and item_area(it) >= 200.0
              and it["cls"] not in ROOF_CLASSES and it["id"] not in st.claimed
              and float(np.hypot(*(_centre(it) - st.hub))) <= HALL_M
              and (sum(contains(it["xy"], s["xy"]) for s in st.bays) >= 2
@@ -494,7 +512,7 @@ def assemble(items, seeds):
         st.claimed.add(b["id"])
         h = b.get("height")
         st.canopies.append({"ring": _open(b["xy"]), "height": float(h) if h and float(h) <= 8.0 else CANOPY_H_M,
-                            "src": b["id"], "area": area(b["xy"]), "mapped": bool(h and float(h) <= 8.0)})
+                            "src": b["id"], "area": item_area(b), "mapped": bool(h and float(h) <= 8.0)})
     if st.buildings:
         st.evidence.append(("building", 2 if st.buildings[0]["cls"] == "transportation" else 1))
     if st.platforms:
@@ -514,7 +532,7 @@ def assemble(items, seeds):
     members = [st.hub] + [b["xy"] for b in st.bays] + [c for b in st.buildings for c in _open(b["xy"])] \
         + [c for p in st.platforms for c in p["xy"]]
     st.obstacles = [_open(it["xy"]) for it in items if it["layer"] == "buildings" and it["kind"] == "polygon"
-                    and it["cls"] not in ROOF_CLASSES and it["id"] not in st.claimed and area(it["xy"]) >= 15.0
+                    and it["cls"] not in ROOF_CLASSES and it["id"] not in st.claimed and item_area(it) >= 15.0
                     and float(np.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M]
     st.greens = [_open(it["xy"]) for it in items if it["layer"] == "land_use" and it["kind"] == "polygon"
                  and it["cls"] in GREEN_CLASSES and float(np.hypot(*(_centre(it) - st.hub))) <= OBSTACLE_M + 60.0]
@@ -853,8 +871,9 @@ def _group_stations(md, frame, group):
     lons = np.array([g[0] for g in group])
     lats = np.array([g[1] for g in group])
     cells = mapcells.cells_for_points(lats, lons, pad_lat=GROUP_PAD_LAT, pad_lon=GROUP_PAD_LON, max_cells=64)
-    layers = {name: [md.cell(k, layers=(name,), kind="demand").layers.get(name) for k in cells]
-              for name in ("infrastructure", "buildings", "places", "roads", "land_use")}
+    names = ("infrastructure", "buildings", "places", "roads", "land_use")
+    cds = mapcells.load_cells(md, cells, names)
+    layers = {name: [cd.layers.get(name) for cd in cds] for name in names}
     e, n, _ = frame.geodetic_to_enu(lats, lons, np.zeros(len(lats)))
     centre = (float(np.mean(e)), float(np.mean(n)))
     found = [st for st in find(items_from_layers(frame, layers, centre, GROUP_RADIUS_M)) if st.confident()]
@@ -895,9 +914,9 @@ def stations_near(md, frame, box, shared=False):
     x0, y0, x1, y1 = (float(v) for v in box)
     try:
         keys = _cells(frame, box)
-        seeds = sorted({(round(a, 5), round(b, 5)) for k in keys
-                        for a, b in seed_points(md.cell(k, layers=("infrastructure",), kind="demand")
-                                                .layers.get("infrastructure"))})
+        import mapcells
+        seeds = sorted({(round(a, 5), round(b, 5)) for cd in mapcells.load_cells(md, keys, ("infrastructure",))
+                        for a, b in seed_points(cd.layers.get("infrastructure"))})
         if not seeds:
             return []
         groups = []

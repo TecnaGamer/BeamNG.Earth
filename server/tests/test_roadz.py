@@ -4,6 +4,7 @@ BridgeProfiles / TunnelProfiles / grading with today's inference as the fallback
 import os
 import struct
 import sys
+import time
 import unittest
 
 import numpy as np
@@ -243,6 +244,91 @@ class PartsTest(unittest.TestCase):
             np.testing.assert_array_equal(a[1], b[1])
             provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
             self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
+
+    def _parts(self, d, key, name="USGS_X"):
+        import glob
+        return sorted(glob.glob(os.path.join(d, "roadz", f"v{roadz.VERSION}", "eptparts", str(key).replace("/", "_"),
+                                             name, "*", "*.npz")))
+
+    def test_a_node_another_process_reads_is_waited_for(self):
+        """The main process's warm and a block process read the same cell: a node the other one has claimed (its
+        lock file) is not downloaded again; its part file is taken once written."""
+        import shutil
+        import subprocess
+        import tempfile
+        import threading
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+            rz = roadz.RoadZ(d, None)
+            rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                [(100, 200, 550, 2), (5000, 200, 900, 17)])
+            key = mapcells.CellKey(14, 4683, 6266)
+            boxes = [(1000.0, 2000.0, 1060.0, 2010.0)]
+            nodes = ["0-0-0-0", "1-0-0-0"]
+            a = rz._read("USGS_X", nodes, boxes, key)
+            p0, p1 = self._parts(d, key)
+            keep = os.path.join(d, "keep.npz")
+            shutil.copy(p1, keep)
+            os.remove(p0)
+            os.remove(p1)
+            with open(p1 + ".lock", "w") as fh:         # (held by a live process: this one's parent)
+                fh.write(f"1 0 {os.getppid()}")
+
+            def other():
+                time.sleep(0.3)
+                shutil.copy(keep, p1 + ".tmp")
+                os.replace(p1 + ".tmp", p1)
+                os.remove(p1 + ".lock")
+            t = threading.Thread(target=other)
+            t.start()
+            import xproc
+            xproc._cancel_proc[0] = lambda: True    # (a job's cancel check: not the read's business)
+            try:
+                b = rz._read("USGS_X", nodes, boxes, key)
+            finally:
+                xproc._cancel_proc[0] = None
+            t.join()
+            self.assertEqual(len(asked), 3, "node 1 waited for, not read again")
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[1], b[1])
+            # a holder that died: its claim taken over at once
+            os.remove(p1)
+            dead = subprocess.Popen([sys.executable, "-c", "pass"])
+            dead.wait()
+            with open(p1 + ".lock", "w") as fh:
+                fh.write(f"1 0 {dead.pid}")
+            t0 = time.monotonic()
+            c = rz._read("USGS_X", nodes, boxes, key)
+            self.assertLess(time.monotonic() - t0, 5.0)
+            self.assertEqual(len(asked), 4)
+            np.testing.assert_array_equal(a[0], c[0])
+            self.assertFalse(os.path.exists(p1 + ".lock"))
+
+    def test_a_cell_another_process_built_is_taken_from_disk(self):
+        """Another process wrote the cell's file (and removed its parts) while this one read its nodes: the cell is
+        read from that file, not built again."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            rz = roadz.RoadZ(d, None)
+            key = mapcells.CellKey(14, 4683, 6266)
+            final = rz._path("lidar", key)
+            os.makedirs(os.path.dirname(final), exist_ok=True)
+            done = roadz.Lines.build([], corrected=True)
+
+            def fetch(url, headers=None, lane=None):
+                with open(final + ".gaps.json", "w") as fh:
+                    fh.write("[]")
+                done.save(final)                        # (the other process's, mid-read)
+                return las_bytes([(100, 200, 550, 2)])
+            rz._fetch = fetch
+            rz._lidar = lambda k: rz._read("USGS_X", ["0-0-0-0", "1-0-0-0"], [(1000.0, 2000.0, 1060.0, 2010.0)], k)
+            roadz.LIDAR_FETCH_THREADS, old = 1, roadz.LIDAR_FETCH_THREADS
+            try:
+                got = rz.lines("lidar", key)
+            finally:
+                roadz.LIDAR_FETCH_THREADS = old
+            self.assertEqual(len(got), 0)
+            self.assertEqual(got.gaps, [])
 
 class FakeDem:
     def __init__(self, z):

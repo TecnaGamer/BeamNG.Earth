@@ -177,6 +177,52 @@ class LidarDropped(Exception):
     """A cell's lidar read stopped: this run goes without it (RoadZ._read)."""
 
 
+class _CellBuilt(Exception):
+    """Another process built the whole cell while this one read its nodes (RoadZ._read): its file is taken."""
+
+
+# A node's read is claimed across the server's processes (xproc: a lock file beside its part file): the main process
+# builds the place's cells ahead (Server.warm_place -> RoadZ.warm) while the block and road-tile processes ask for the
+# same cells, and each downloaded and decoded every node until the cell's file was down. A node another process reads
+# is left for last, then its part file waited for (PART_WAIT_S at most, then read here too). BNGE_LIDAR_CLAIMS=0 off.
+PART_CLAIMS = os.environ.get("BNGE_LIDAR_CLAIMS", "1") != "0"
+PART_WAIT_S = 20.0
+ELSEWHERE = object()        # (_read's first pass: a node another process is reading)
+
+
+def _await_part(lock, pp, wait_s=None):
+    """(pp, False) once another process has written the node's part file pp; (None, True) when this process now holds
+    its claim (released, or its holder gone: a dead process's claim taken over at once); (None, False) after wait_s
+    (PART_WAIT_S). Whoever holds it is waited for, whatever its urgency (a holder is reading that node now), and a
+    job's cancel check plays no part (as xproc.once's would: a teleport's abandoned block must not leave the cell to
+    the rule for the session through its read's wait)."""
+    end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
+    seen = None
+    while True:
+        if os.path.exists(pp):
+            return pp, False
+        if xproc.take(lock):
+            if os.path.exists(pp):              # (written just before its holder let go)
+                xproc.release(lock)
+                return pp, False
+            return None, True
+        try:
+            st = os.stat(lock)
+            now = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            now = None
+        if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
+            seen = now
+            h = xproc._holder(lock)
+            if h is not None and not xproc.alive(h[2]):
+                xproc.release(lock)
+                seen = None
+                continue
+        if time.monotonic() > end:
+            return None, False
+        time.sleep(xproc.POLL_S)
+
+
 _TOKEN = re.compile(r"[a-z0-9]+")
 _REF = re.compile(r"^([a-z]{0,3})(\d{1,4})([a-z]?)$")
 
@@ -640,7 +686,13 @@ class RoadZ:
             if got is None:
                 t0 = time.monotonic()
                 try:
-                    got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk, "lidar": self._lidar}[src](key)
+                    try:
+                        got = {"ign": self._ign, "nvdb": self._nvdb, "hk": self._hk, "lidar": self._lidar}[src](key)
+                    except _CellBuilt:      # (another process's: read as any cell on disk, not written again)
+                        got = Lines.load(p)
+                        with open(p + ".gaps.json", encoding="utf-8") as fh:
+                            got.gaps = [(str(f), tuple(a), tuple(b)) for f, a, b in json.load(fh)]
+                        p = None
                 except Exception as e:      # (a FetchError is a revisit fault already)
                     log.debug("roadz %s %s: %s: %s", src, key, type(e).__name__, e)
                     import revisit
@@ -916,16 +968,60 @@ class RoadZ:
             h = hashlib.sha1(np.round(np.asarray(boxes, np.float64), 1).tobytes()).hexdigest()[:16]
             part_dir = os.path.join(self.dir, "eptparts", str(key).replace("/", "_"), name.replace("/", "_"), h)
 
-        def read(k):
+        final = self._path("lidar", key) if key is not None else None
+        if final and os.path.exists(final):
+            final = None                # (a damaged file of the cell: built again here)
+
+        def built():
+            if final and os.path.exists(final):
+                raise _CellBuilt(str(key))  # (built whole by another process meanwhile: its parts removed)
+
+        def load(pp):
+            try:
+                with np.load(pp) as z:
+                    return z["p"], z["c"]
+            except Exception as e:
+                log.debug("roadz part %s: %s", pp, e)
+                built()
+                return None
+
+        def read(k, wait=False):
+            """The node's points: kept on disk, or read here. A node another process of the server is reading (its
+            part's claim, PART_CLAIMS) is left (ELSEWHERE) on the first pass and waited for on the second (wait):
+            the main process builds the place's cells ahead (warm) while the block and road-tile processes ask for
+            the same cells, and each read every node of them until its files were down."""
             if key is not None and str(key) in self._dropped:
                 raise LidarDropped(str(key))
             pp = os.path.join(part_dir, f"{k}.npz") if part_dir else None
             if pp and os.path.exists(pp):
-                try:
-                    with np.load(pp) as z:
-                        return z["p"], z["c"]
-                except Exception as e:
-                    log.debug("roadz part %s: %s", pp, e)
+                got = load(pp)
+                if got is not None:
+                    return got
+            if pp is None or not PART_CLAIMS:
+                return fetch(k, pp)
+            built()
+            lock = pp + ".lock"
+            if not wait:
+                if not xproc.take(lock):
+                    return ELSEWHERE
+                mine = True
+            else:
+                got, mine = _await_part(lock, pp)
+                if got is not None:
+                    got = load(pp)
+                    if got is not None:
+                        return got
+            try:
+                if os.path.exists(pp):          # (written by the holder just before our claim)
+                    got = load(pp)
+                    if got is not None:
+                        return got
+                return fetch(k, pp)
+            finally:
+                if mine:
+                    xproc.release(lock)
+
+        def fetch(k, pp):
             p, c = fast._ef.las_decode(self._fetch(f"{EPT_BASE}{name}/ept-data/{k}.laz"), bb)
             if len(p):
                 keep = mask[((p[:, 1] - bb[1]) // MASK_M).astype(int).clip(0, ny - 1),
@@ -944,6 +1040,10 @@ class RoadZ:
         from runtimeprofiler import ThreadPoolExecutor
         with ThreadPoolExecutor(LIDAR_FETCH_THREADS, thread_name_prefix="roadz-ept") as pool:
             got = list(pool.map(read, nodes))           # (in node order: the same points whichever came first)
+            later = [i for i, g in enumerate(got) if g is ELSEWHERE]
+            if later:
+                for i, g in zip(later, pool.map(lambda i: read(nodes[i], True), later)):
+                    got[i] = g
         xyz = [p for p, _c in got if len(p)]
         cls = [c for p, c in got if len(p)]
         if not xyz:
