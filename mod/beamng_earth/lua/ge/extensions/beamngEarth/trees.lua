@@ -594,6 +594,11 @@ local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
+-- The items standing (every tile's t.made entries), kept as they change: status() counted them with pairs once a
+-- second (the perf sampler) and on every hitch line (core perfContext), 3.4 ms at 0.5 M items and 9 ms at 1.6 M
+-- (2026-11-11). M.COUNT_ITEMS = false: status() counts them again (the old way; tests compare both).
+M.COUNT_ITEMS = true
+local liveItems = 0
 M.unknownGroups = {}      -- groups seen without a CATALOG entry (logged once each)
 
 local pool = {}          -- ids of empty Forests to reuse
@@ -1453,6 +1458,7 @@ function M.update(anchorId, player, view, frameMs, fill)
         if not sh or allow(sh) then
           if fd then removeItem(fd, it, sh) end
           t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
+          liveItems = liveItems - 1
           budget = budget - 1
         else left = true end
       end
@@ -1608,8 +1614,9 @@ function M.update(anchorId, player, view, frameMs, fill)
           if allow(sh) then
             local d = data()
             if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
-            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1; liveItems = liveItems - 1 end  -- solid <-> not
             t.made[i] = makeItem(d, t, i, sh, sc, solid, g, t.variant)
+            if t.made[i] then liveItems = liveItems + 1 end
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
             if solid then nearMade = true end
@@ -1623,6 +1630,7 @@ function M.update(anchorId, player, view, frameMs, fill)
             if not d then stop(t, i, skipped, want, band, near); return end
             removeItem(d, t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
+            liveItems = liveItems - 1
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
           else skipped = skipped or i end
@@ -1651,6 +1659,7 @@ function M.clear()
     releaseForest(t)
   end
   tiles, tileList, tileAt, frameN, dirty, lastPass = {}, {}, {}, 0, true, nil
+  liveItems = 0
 end
 
 -- Level end: the level deletes its objects itself.
@@ -1658,15 +1667,23 @@ function M.reset()
   tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
   everMade = {}
   dirty, lastPass = true, nil
+  liveItems = 0
+end
+
+-- Every tile's items counted (the old status loop; the tests check the running count against it).
+function M.countItems()
+  local items = 0
+  for _, t in pairs(tiles) do for _ in pairs(t.made) do items = items + 1 end end
+  return items
 end
 
 function M.status()
-  local n, items, pending = 0, 0, 0
-  for _, t in pairs(tiles) do
-    n = n + 1
+  local n, items, pending = #tileList, 0, 0
+  for li = 1, n do                       -- (a numeric loop: compiled; pairs runs in the interpreter)
+    local t = tiles[tileList[li]]
     if t.pending or t.shown == 0 then pending = pending + 1 end
-    for _ in pairs(t.made) do items = items + 1 end
   end
+  if M.COUNT_ITEMS then items = liveItems else items = M.countItems() end
   return { tiles = n, items = items, pending = pending, made = M.made, removed = M.removed, errors = M.errors,
     geoMoved = M.geoMoved, geoFlushed = M.geoFlushed }   -- (geotiles: placed again at a rebase, made again)
 end

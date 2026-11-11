@@ -2073,11 +2073,11 @@ local function loadLine()
     and st.placeFrames == nil and not dropHold.active
   local lp = st.loadProgress
   local pend = {}
-  local okR, rs = pcall(roads.status)
-  if okR and rs then pend.roads = (rs.queued or 0) + (rs.walksQueued or 0) end
+  local okR, rq = pcall(roads.queued)       -- (the light counts, not the status tables' walks over every tile)
+  if okR and rq then pend.roads = rq end
   local okT, ts = pcall(trees.status)
   if okT and ts then pend.trees = ts.pending or 0 end
-  local okF, fs = pcall(farfield.stats)
+  local okF, fs = pcall(farfield.brief)
   if okF and fs then pend.far = fs.queued or 0 end
   loadLineText = loadprogress.line(st.clock, { placed = placed,
     failure = st.loadingFault and M._anchorload.failure(st.loadingFault),
@@ -2349,14 +2349,15 @@ local function perfContext()
   if st.terrainPending and st.terrainPending.sentAt then
     d[#d + 1] = string.format('next block asked %.1fs ago', st.clock - st.terrainPending.sentAt)
   end
-  local okF, fs = pcall(farfield.stats)
+  -- (the light counts: this runs in the frame after a hitch; farfield.stats / roads.status walk every tile)
+  local okF, fs = pcall(farfield.brief)
   if okF and fs then
     if (fs.queued or 0) > 0 then d[#d + 1] = 'far tiles ' .. fs.queued .. ' queued' end
     if not fs.done then d[#d + 1] = 'far field loading' end
   end
-  local okR, rs = pcall(roads.status)
-  if okR and rs and ((rs.queued or 0) + (rs.walksQueued or 0)) > 0 then
-    d[#d + 1] = 'road tiles ' .. ((rs.queued or 0) + (rs.walksQueued or 0)) .. ' queued'
+  local okR, rq = pcall(roads.queued)
+  if okR and rq and rq > 0 then
+    d[#d + 1] = 'road tiles ' .. rq .. ' queued'
   end
   local okT, ts = pcall(trees.status)
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end

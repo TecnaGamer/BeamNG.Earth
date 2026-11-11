@@ -2221,6 +2221,10 @@ function M.requestCollision() collisionDirty = true end
 -- the frame after it (terrainpatch.groundReady).
 function M.reloads() return reloads end
 
+-- The road chunks and sidewalk / road meshes waiting, without status()'s walk over every tile (core's hitch lines and
+-- the loading line).
+function M.queued() return #createQ + #walkQ end
+
 function M.hasWork() return #createQ > 0 or #deleteQ > 0 or #walkQ > 0 or #farQ > 0 or collisionDirty end
 
 

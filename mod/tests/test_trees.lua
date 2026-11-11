@@ -48,7 +48,16 @@ trees.EVERY_N = 1               -- (every update works here; the batching is tes
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
 trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
-local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
+-- the running item count (trees.status().items, M.COUNT_ITEMS) against a full count each time a check counts the
+-- items (checked at the file's end)
+local countChecks, countMiss = 0, {}
+local function count()
+  local n = 0; for _ in pairs(items) do n = n + 1 end
+  countChecks = countChecks + 1
+  local run, full = trees.status().items, trees.countItems()
+  if run ~= full and #countMiss < 5 then countMiss[#countMiss + 1] = 'check ' .. countChecks .. ': ' .. run .. ' vs ' .. full end
+  return n
+end
 
 -- the variant: a height inside its range, scaled to it
 local shape, sc = trees.pick('conifer', 20.0, 0.3)
@@ -758,6 +767,14 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
     'golfflag: its model at 1:1')
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
+
+T.check(countChecks > 50 and #countMiss == 0, 'the running item count matches a full count at each of '
+  .. countChecks .. ' checks' .. (#countMiss > 0 and (' (' .. table.concat(countMiss, '; ') .. ')') or ''))
+do -- the switch: COUNT_ITEMS false counts them again (the old way)
+  trees.COUNT_ITEMS = false
+  T.check(trees.status().items == trees.countItems(), 'COUNT_ITEMS off: counted')
+  trees.COUNT_ITEMS = true
 end
 
 T.done('test_trees')
