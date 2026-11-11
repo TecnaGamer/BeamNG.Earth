@@ -25,14 +25,16 @@ import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
-LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.005, "frontage": 0.03,
+LIFT = {"base": 0.0, "edge": 0.001, "gutter": 0.0015, "mark": 0.002, "frontage": 0.03,
         # road wear (roadwear.py): its materials write no depth (roadwear.materials.json), so their order in the mesh,
         # not their height, decides what lies on top: the strips (fade materials) first, the paint over them
         # (2026-11-11, the user: "can we make the road decals even closer to the ground?": 3-3.2 cm -> 1.2-1.4 cm, the
         # crack lines on the paint's own tight ground following)
         # then (the user: "make both a pixel or 2 above the ground so they dont z fight"): the paint 1 cm -> 5 mm, the wear
         # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
-        "wear": 0.006, "wear2": 0.0065, "spot": 0.004, "wline": 0.007}
+        # then (the user: "they still float. i want to make them virtualy the same height of the road"): paint 2 mm, the
+        # wear 2.2-2.6 mm, spots 1.8 mm (FOLLOW_TOL stays 2 cm: the ground steps by 1/32 m)
+        "wear": 0.0022, "wear2": 0.0024, "spot": 0.0018, "wline": 0.0026}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.
@@ -730,6 +732,7 @@ GRID_M = 1.0            # the terrain block's square (heightmap.SQUARE): its sam
                         # from its south-west corner to its north-east one (probed in-game 2026-10-20)
 
 
+FOLLOW_TOL_MIN = 0.008   # m: road_tol's finest
 FOLLOW_TOL = 0.02       # m a road triangle may depart from the drawn ground inside it before it is cut along the
                         # ground's own triangles (follow): flat graded roads stay whole, bends and junctions are cut.
                         # The ground's heights step by its quantum (1/32 m): at 5 mm nearly every triangle was cut (7-15x
@@ -824,6 +827,15 @@ FOLLOW_STEP_M = 0.45    # a terrain cell whose corners are further apart holds a
 FOLLOW_MAX_UP = 0.1     # teeth): a draped surface goes at most this over its lowest corner there (the McGraw-Graben's
                         # edge lines climbed the teeth as white tents up to 1.3 m, 2026-10-22). A road would need a
                         # ~32 % grade along a cell's diagonal (GRID_M 1 m) to count as a step.
+
+
+def road_tol(q):
+    """The road's follow tolerance for the anchor's height quantum q: 2.5 quanta, FOLLOW_TOL_MIN .. FOLLOW_TOL (the user,
+    2026-11-11: "they still float. i want to make them virtualy the same height of the road": a 2 cm tolerance let the
+    paint hang up to 2 cm over a 4 mm-quantum ground; a coarse ground keeps 2 cm, its steps would cut every triangle)."""
+    if not q:
+        return FOLLOW_TOL
+    return min(FOLLOW_TOL, max(FOLLOW_TOL_MIN, 2.5 * float(q)))
 
 
 def follow_ground(P, UV, T, grid, i0, j0, tol=None, cell=GRID_M):
@@ -1181,7 +1193,7 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
                 asphalt = M == mats.index(FRONTAGE_ASPHALT) if FRONTAGE_ASPHALT in mats else np.zeros(len(M), bool)
                 batches = [(dr & ~asphalt, .002), (asphalt, .004)]
             else:
-                batches = [(dr & ~front, None), (front, .004)]
+                batches = [(dr & ~front, road_tol(q)), (front, .004)]
             wear = np.isin(TL, [LIFT[k] + lift for k in WEAR_STRIPS]) & dr
             if wear.any():                          # (the wear strips: their own looser batch, WEAR_TOL)
                 batches = [(m & ~wear, t) for m, t in batches] + [(wear, WEAR_TOL)]
