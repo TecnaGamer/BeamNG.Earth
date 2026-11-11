@@ -38,6 +38,16 @@ getPlayerVehicle = function() return { getPosition = function() return vec3(car.
 
 local geodesy = require('beamngEarth/geodesy')
 local geotile = require('beamngEarth/geotile')
+-- Advance frame time explicitly: fast updates can share one tick of the Windows test clock.
+local elapsedMs = 0
+hptimer = function()
+  local last = elapsedMs
+  return { stopAndReset = function()
+    local dt = elapsedMs - last
+    last = elapsedMs
+    return dt
+  end }
+end
 local roads = require('beamngEarth/roads')
 roads.setGeo(true)
 roads.setSession('s1')
@@ -46,7 +56,12 @@ local gov = {}
 function gov:try() return true end
 function gov:charge() end
 function gov:chargeMotion() end
-local function run(aid, a) for _ = 1, 6 do roads.update(gov, aid, car, nil, a) end end
+local function run(aid, a)
+  for _ = 1, 6 do
+    elapsedMs = elapsedMs + 16
+    roads.update(gov, aid, car, nil, a)
+  end
+end
 
 local LAT, LON = 39.2834, -76.5934
 local gx, gy = geotile.tileOf(LAT, LON)
@@ -267,10 +282,6 @@ roads.reset()
 -- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
 do
   roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
-  -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
-  -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
-  local room = roads.RELOAD_ROOM_MS
-  roads.RELOAD_ROOM_MS = math.huge
   local function reloads() return S.calls.reloadCollision or 0 end
   -- a second road geotile ~8 km east; each tile's only collider a 3dmr deck slab (spawned at once at any distance)
   local gx2, gy2 = geotile.tileOf(LAT, LON + 8000 / (111320 * math.cos(math.rad(LAT))))
@@ -325,7 +336,6 @@ do
   T.check(roads.replace(A, 3) == 2, 'both geotiles re-placed')
   run(3, A)
   T.check(reloads() == r0 + 5, 'a rebase forces the rebuild')
-  roads.RELOAD_ROOM_MS = room
   roads.reset()
 end
 
