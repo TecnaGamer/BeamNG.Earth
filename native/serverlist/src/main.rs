@@ -19,6 +19,7 @@
 
 mod perf;
 mod telemetry;
+mod uniques;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
