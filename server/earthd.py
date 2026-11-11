@@ -2472,7 +2472,7 @@ class Server:
         rebases), anchor aid's skin and exact variants. Its gas station pads kept for the ground's painters. None
         when the anchor is gone. Worker threads (roads.GeoTracker)."""
         anchor = self.anchors.get(aid)
-        if anchor is None or self.mapdata is None or self.road_pool is None or self.is_abandoned(aid):
+        if anchor is None or self.mapdata is None or self.road_pool is None or Server.is_abandoned(self, aid):
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         fut = self.road_pool.submit(
@@ -2483,8 +2483,8 @@ class Server:
             Server.towns_enabled(self), Server.wear_arg(self))
         t0, waited = time.perf_counter(), []
         try:
-            res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: self.is_abandoned(aid)
-                                          or self.geo_left_behind(aid, gx, gy) or self.geo_unwanted(aid, gx, gy))
+            res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: Server.is_abandoned(self, aid)
+                                          or Server.geo_left_behind(self, aid, gx, gy) or Server.geo_unwanted(self, aid, gx, gy))
             took = time.perf_counter() - t0
             if took > ROAD_GEO_SLOW_S:      # (nyc_speed.py's road lead: queue against build)
                 st = {}
@@ -3476,7 +3476,7 @@ class Server:
         """Is (x, y) of anchor aid's frame left behind by every player on it (LEFT_BEHIND_M + margin away and behind
         each, or LEFT_FAR_M + margin away)? False when nobody is on aid (a teleport's own: is_abandoned) or a player's
         place is unknown."""
-        on = [c for c in list(self.connections) if getattr(c, "active", None) == aid]
+        on = [c for c in list(getattr(self, "connections", ())) if getattr(c, "active", None) == aid]
         if not on:
             return False
         for c in on:
@@ -3499,7 +3499,7 @@ class Server:
     def geo_unwanted(self, aid, gx, gy):
         """Is road geotile (gx, gy), queued for anchor aid, wanted by no player on it any more (roads.GeoTracker.unwanted:
         off every fast car's time-to-reach tree and out of reach round it, for a while)? False when nobody is on aid."""
-        on = [c for c in list(self.connections) if getattr(c, "active", None) == aid]
+        on = [c for c in list(getattr(self, "connections", ())) if getattr(c, "active", None) == aid]
         if not on:
             return False
         for c in on:
@@ -3512,7 +3512,7 @@ class Server:
         """Is the prefetched block (aid, cx, cy) predicted by no player on aid any more (each one's prediction led by its
         time-to-reach tree, the block neither its own nor the one it asked for, and not among its predicted blocks for
         reach.UNWANTED_GRACE_S: the car took another way)? False when nobody is on aid."""
-        on = [c for c in list(self.connections) if getattr(c, "active", None) == aid]
+        on = [c for c in list(getattr(self, "connections", ())) if getattr(c, "active", None) == aid]
         if not on:
             return False
         now = time.monotonic()
@@ -3528,13 +3528,14 @@ class Server:
 
     def geo_left_behind(self, aid, gx, gy):
         """left_behind of road geotile (gx, gy)'s middle in anchor aid's frame (half its size of margin)."""
-        anchor = self.anchors.get(aid)
-        if anchor is None:
+        anchor = getattr(self, "anchors", {}).get(aid)
+        frame = getattr(anchor, "frame", None)
+        if frame is None:
             return False
         import geotiles
         la, lo = geotiles.centre(gx, gy)
-        x, y, _ = anchor.frame.geodetic_to_enu(la, lo, 0.0)
-        return self.left_behind(aid, float(x), float(y), 150.0)
+        x, y, _ = frame.geodetic_to_enu(la, lo, 0.0)
+        return Server.left_behind(self, aid, float(x), float(y), 150.0)
 
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
@@ -3546,9 +3547,9 @@ class Server:
         half = self.layout.block * heightmap.SQUARE / 2
         # (a teleport left its place while it waited: is_abandoned; or a prefetched block the car has passed: left_behind,
         # or one its time-to-reach tree no longer leads to: block_unwanted)
-        gone = lambda: self.is_abandoned(anchor.id) or (     # noqa: E731
-            lane == LANE_PREFETCH and progress is None and (self.left_behind(anchor.id, cx, cy, half)
-                                                            or self.block_unwanted(anchor.id, cx, cy)))
+        gone = lambda: Server.is_abandoned(self, anchor.id) or (     # noqa: E731
+            lane == LANE_PREFETCH and progress is None and (Server.left_behind(self, anchor.id, cx, cy, half)
+                                                            or Server.block_unwanted(self, anchor.id, cx, cy)))
         if gone():
             raise poolsmod.Abandoned()
         q = self.anchor_q(anchor)
