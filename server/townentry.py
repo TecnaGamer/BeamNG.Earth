@@ -2781,23 +2781,25 @@ FACES.update({cc: FACES.get(p, _face_fr) for cc, p in TERRITORIES.items()})
 
 def write_face(out_dir, vfs_dir, name, group, local="", country="FR", nxt="", km=0, sub="", main=False):
     """A commune's sign face in out_dir (once: a face of the session is not written again): its texture (face_image,
-    <face_group>.png) and its model (<face_group>.dae: the plate's front, a quad at FACE_Y textured with it, its
+    <face_group>.dds) and its model (<face_group>.dae: the plate's front, a quad at FACE_Y textured with it, its
     material named 'bne_' + the face group). Returns the tile's entry for it {"shape", "texture", "material"} (vfs
     paths, the files' own: the revisit cache keeps the files a tile names, revisit.SHAPE_RE)."""
     import dae
     g = face_group(name, group, local, country, nxt, km, sub, main)
-    png, model = os.path.join(out_dir, g + ".png"), os.path.join(out_dir, g + ".dae")
+    # (a DDS, never a PNG the engine cooks at run time: imagery.write_picture_dds)
+    tex, model = os.path.join(out_dir, g + ".dds"), os.path.join(out_dir, g + ".dae")
     material = "bne_" + g
-    if not (os.path.exists(png) and os.path.exists(model)):
-        import staging
-        tmp = staging.tmp_for(png)
-        face_image(name, group, local, country, nxt, km, sub, main).save(tmp, format="PNG")
-        staging.replace(tmp, png)
+    if not (os.path.exists(tex) and os.path.exists(model)):
+        import io
+        import imagery
+        buf = io.BytesIO()
+        face_image(name, group, local, country, nxt, km, sub, main).save(buf, format="PNG")
+        imagery.write_picture_dds(tex, buf.getvalue())
         x, z0, z1 = plate_w(country) / 2, PLATE_Z0, PLATE_Z0 + PLATE_H
         dae.write_grid_dae(model, [-x, FACE_Y, z0, x, FACE_Y, z0, x, FACE_Y, z1, -x, FACE_Y, z1],
-                           [0, 0, 1, 0, 1, 1, 0, 1], [0, 1, 2, 0, 2, 3], material=material, texture=g + ".png",
+                           [0, 0, 1, 0, 1, 1, 0, 1], [0, 1, 2, 0, 2, 3], material=material, texture=g + ".dds",
                            normals=[0, -1, 0] * 4)
-    return {"shape": f"{vfs_dir}/{g}.dae", "texture": f"{vfs_dir}/{g}.png", "material": material}
+    return {"shape": f"{vfs_dir}/{g}.dae", "texture": f"{vfs_dir}/{g}.dds", "material": material}
 
 
 # Street furniture taken away around a sign so drivers see it (in-game 2026-10-28, Boisset-et-Gaujac: a row of street

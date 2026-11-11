@@ -19,10 +19,10 @@ import busstations as bs
 import busstationsign as bsg
 import dirsigns
 import fast
+import imagery
 import railstationmesh as rm
 import railstations as rs
 import roads
-import staging
 
 KERNEL = 204
 SUBTITLE = {"UA": "Залізнична станція", "RU": "Железнодорожная станция", "CZ": "Železniční stanice", "SK": "Železničná stanica",
@@ -49,14 +49,11 @@ def _face(out_dir, vfs_dir, name, country):
             bsg.LINE_W_M, bsg.BAR_W_M, 0.0, 0.0]
     h = hashlib.sha1(json.dumps([FACE_VERSION, flat, name, sub, bsg.PX_PER_M], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     material = f"bne_rsign_{h}"
-    png = os.path.join(out_dir, material + ".color.png")
+    png = os.path.join(out_dir, material + ".color.dds")
     data, w_m, h_m = fast._ef.dirsign_town_face(name, sub, False, flat, bsg.PX_PER_M)
     if not os.path.exists(png):
-        tmp = staging.tmp_for(png)
-        with open(tmp, "wb") as f:
-            f.write(bytes(data))
-        staging.replace(tmp, png)
-    return material, f"{vfs_dir}/{material}.color.png", w_m, h_m
+        imagery.write_picture_dds(png, data)      # (a DDS, never a PNG the engine cooks: imagery.write_picture_dds)
+    return material, f"{vfs_dir}/{material}.color.dds", w_m, h_m
 
 
 def _runs_of(pl):

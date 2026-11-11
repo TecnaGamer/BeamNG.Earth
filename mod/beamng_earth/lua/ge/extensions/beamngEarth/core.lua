@@ -2565,6 +2565,7 @@ local function onUpdate(dtReal, dtSim)
     local nq = M._netq
     local function handle(msg)
       local m0, kb0 = hitchClock(), collectgarbage('count')
+      require('beamngEarth/texdbg').log('msg', msg.type, msg.key or msg.ter or msg.base or msg.texture)
       local ok, err = pcall(onMessage, msg)
       if not ok then log('E', 'beamngEarth', 'message ' .. tostring(msg.type) .. ' failed: ' .. tostring(err)) end
       local dkb = collectgarbage('count') - kb0

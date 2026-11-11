@@ -18,8 +18,8 @@ import numpy as np
 import busstations
 import dirsigns
 import fast
+import imagery
 import roads
-import staging
 
 log = logging.getLogger("earthd.busstations")
 
@@ -51,14 +51,11 @@ def _face(out_dir, vfs_dir, name):
     h = hashlib.sha1(json.dumps([FACE_VERSION, flat, name, SUBTITLE, PX_PER_M], ensure_ascii=False)
                      .encode("utf-8")).hexdigest()[:12]
     material = f"bne_bsign_{h}"
-    png = os.path.join(out_dir, material + ".color.png")
+    png = os.path.join(out_dir, material + ".color.dds")
     data, w_m, h_m = fast._ef.dirsign_town_face(name, SUBTITLE, False, flat, PX_PER_M)
     if not os.path.exists(png):
-        tmp = staging.tmp_for(png)
-        with open(tmp, "wb") as f:
-            f.write(bytes(data))
-        staging.replace(tmp, png)
-    return material, f"{vfs_dir}/{material}.color.png", w_m, h_m
+        imagery.write_picture_dds(png, data)      # (a DDS, never a PNG the engine cooks: imagery.write_picture_dds)
+    return material, f"{vfs_dir}/{material}.color.dds", w_m, h_m
 
 
 DARK_BG = (36, 40, 46)          # the EU stations' dark totem with a white number (Náchod's, Hradec's)
@@ -80,14 +77,11 @@ def _plate_face(out_dir, vfs_dir, label, dark=False):
     flat = [*bg, *INK, *EDGE, *BAR, cap, EN_SHARE, PLATE_MIN_W_M, PLATE_MAX_W_M, 0.02, 0.015, BAR_W_M, 0.0, 0.0]
     h = hashlib.sha1(json.dumps([FACE_VERSION, flat, label, PX_PER_M], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     material = f"bne_bnum_{h}"
-    png = os.path.join(out_dir, material + ".color.png")
+    png = os.path.join(out_dir, material + ".color.dds")
     data, w_m, h_m = fast._ef.dirsign_town_face(label, "", False, flat, PX_PER_M)
     if not os.path.exists(png):
-        tmp = staging.tmp_for(png)
-        with open(tmp, "wb") as f:
-            f.write(bytes(data))
-        staging.replace(tmp, png)
-    return material, f"{vfs_dir}/{material}.color.png", w_m, h_m
+        imagery.write_picture_dds(png, data)      # (a DDS, never a PNG the engine cooks: imagery.write_picture_dds)
+    return material, f"{vfs_dir}/{material}.color.dds", w_m, h_m
 
 
 BOARD_W_M = 1.5                # the departures board's width (every row the same)
@@ -104,14 +98,11 @@ def _dark_face(out_dir, vfs_dir, text, sub, cap, w_m, prefix):
     flat = [*DARK_BG, *INK, *DARK_BG, *DARK_BG, cap, EN_SHARE, w_m, w_m, 0.02, 0.0, 0.0, 0.0, 0.0]
     h = hashlib.sha1(json.dumps([FACE_VERSION, flat, text, sub, PX_PER_M], ensure_ascii=False).encode("utf-8")).hexdigest()[:12]
     material = f"{prefix}_{h}"
-    png = os.path.join(out_dir, material + ".color.png")
+    png = os.path.join(out_dir, material + ".color.dds")
     data, wm, hm = fast._ef.dirsign_town_face(text, sub, False, flat, PX_PER_M)
     if not os.path.exists(png):
-        tmp = staging.tmp_for(png)
-        with open(tmp, "wb") as f:
-            f.write(bytes(data))
-        staging.replace(tmp, png)
-    return material, f"{vfs_dir}/{material}.color.png", wm, hm
+        imagery.write_picture_dds(png, data)      # (a DDS, never a PNG the engine cooks: imagery.write_picture_dds)
+    return material, f"{vfs_dir}/{material}.color.dds", wm, hm
 
 
 def board_rows(st, country=None):

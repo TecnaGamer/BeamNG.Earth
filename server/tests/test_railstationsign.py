@@ -84,7 +84,7 @@ class SignSpotTest(unittest.TestCase):
                 self.assertIsNotNone(mesh)
                 self.assertTrue(faces)
                 for f in faces:
-                    self.assertTrue(os.path.exists(os.path.join(d, f + ".color.png")))
+                    self.assertTrue(os.path.exists(os.path.join(d, f + ".color.dds")))
         finally:
             r.stations_near, roads.tile_bbox = old, old_box
 

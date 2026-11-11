@@ -408,6 +408,7 @@ end
 -- layers (optional, server --surface on): { masks = { path, ... }, materials = { { name, gm }, ... } }
 -- base / baseSize (optional, detail mode): the block's aerial photo (setBase)
 function M.load(path, squareSize, maxHeight, x, y, z, layers, base, baseSize)
+  require('beamngEarth/texdbg').log('load', path, base)
   if not FS:fileExists(path) then return false, 'heightmap not found: ' .. tostring(path) end
   M.square = tonumber(squareSize) or M.square
   local tb = getOrCreate()
@@ -445,6 +446,7 @@ end
 -- (nothing changed) otherwise, and the caller imports. The .ter names its materials (server
 -- surface.write_ter: layers.materials, or M.MATERIAL alone). The caller does NOT rebuild collision.
 function M.swap(terPath, squareSize, maxHeight, x, y, z, layers, base, baseSize)
+  require('beamngEarth/texdbg').log('swap', terPath, base)
   local tb = M.get()
   local sq = tonumber(squareSize)
   if not tb or not M.slots or not sq or math.abs(sq - M.square) > 1e-9 then return false end
@@ -515,6 +517,7 @@ end
 -- block from its SW corner, converted to samples); nil = the level's flat base. Also gives the level's own material its look (once). The engine
 -- re-reads a material on updateMaterial (index = the block's material slot); ~6 ms for a 2048² PNG.
 function M.setBase(path, size)
+  require('beamngEarth/texdbg').log('setBase', path, size)
   local tb = M.get()
   if not tb then return false end
   local tex, sz = baseFields(path, size)

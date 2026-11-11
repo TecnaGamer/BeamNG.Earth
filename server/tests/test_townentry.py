@@ -1152,14 +1152,14 @@ class FaceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             e = ts.write_face(d, "/temp/beamngEarth/s", "Bagard", ts.G_ENTRY)
             g = ts.face_group("Bagard", ts.G_ENTRY)
-            self.assertEqual(e, {"shape": f"/temp/beamngEarth/s/{g}.dae", "texture": f"/temp/beamngEarth/s/{g}.png",
+            self.assertEqual(e, {"shape": f"/temp/beamngEarth/s/{g}.dae", "texture": f"/temp/beamngEarth/s/{g}.dds",
                                  "material": "bne_" + g})
             text = Path(d, g + ".dae").read_text()
             self.assertIn(f'name="bne_{g}"', text)
-            self.assertIn(f"<init_from>{g}.png</init_from>", text)
-            t0 = os.stat(Path(d, g + ".png")).st_mtime_ns
+            self.assertIn(f"<init_from>{g}.dds</init_from>", text)
+            t0 = os.stat(Path(d, g + ".dds")).st_mtime_ns
             ts.write_face(d, "/temp/beamngEarth/s", "Bagard", ts.G_ENTRY)
-            self.assertEqual(os.stat(Path(d, g + ".png")).st_mtime_ns, t0, "not written again")
+            self.assertEqual(os.stat(Path(d, g + ".dds")).st_mtime_ns, t0, "not written again")
 
 
 class TileTest(unittest.TestCase):
@@ -1175,7 +1175,7 @@ class TileTest(unittest.TestCase):
             data = json.loads(text)
             self.assertEqual(list(data["townsigns"]), [g])
             self.assertEqual(data["props"]["groups"], [g])
-            self.assertEqual(revisit.shapes_in(text, "/vfs"), sorted([g + ".dae", g + ".png"]))
+            self.assertEqual(revisit.shapes_in(text, "/vfs"), sorted([g + ".dae", g + ".dds"]))
 
     def test_maker_writes_each_face_once_and_rows_use_their_groups(self):
         """Towns.maker: the communes of the tile's cells (their agglomerations from the land cover, kept), rows of

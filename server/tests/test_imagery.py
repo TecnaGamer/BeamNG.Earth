@@ -959,6 +959,27 @@ class DdsTest(unittest.TestCase):
             self.assertEqual(len(imagery.encode_dds(np.zeros((px, px, 3), np.uint8))), want)
 
 
+class PictureDdsTest(unittest.TestCase):
+    """A drawn sign face goes out as a DDS (never a PNG the engine's texture cooker takes at run time: it deadlocked the
+    game), its sides stretched up to powers of two."""
+
+    def test_any_size_to_a_power_of_two_dds(self):
+        import io
+        import tempfile
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (300, 70), (10, 60, 160)).save(buf, format="PNG")
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "face.color.dds")
+            n = imagery.write_picture_dds(p, buf.getvalue())
+            with open(p, "rb") as f:
+                data = f.read()
+        self.assertEqual(n, len(data))
+        w, h, mips, fourcc, _ = imagery.read_dds_info(data)
+        self.assertEqual((w, h, fourcc), (512, 128, b"DXT1"))
+        self.assertGreater(mips, 1)
+
+
 class NetworkImageryTest(unittest.TestCase):
     """Real sources (a handful of tiles, cached across runs)."""
 

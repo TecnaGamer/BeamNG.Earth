@@ -436,6 +436,7 @@ local function spawn(inst)
   end
   -- TSStatic setup as in probes/p5_tsstatic.lua / util/procTrack.lua:1278-1291. collisionType 'None'
   -- keeps it out of the static collision rebuild. Created hidden (P6), placed at its true height.
+  require('beamngEarth/texdbg').log('farShape', inst.shape, inst.material)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, inst.shape)
   o:setField('collisionType', 0, 'None')

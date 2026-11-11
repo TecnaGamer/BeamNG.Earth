@@ -84,6 +84,7 @@ end
 -- Point material m at texture, with the asphalt layer where the tile has a road mask and world-locked UV1 (detail:
 -- the layer's grain is laid out on it), and without it otherwise (a pooled material moves between tiles).
 local function setTexture(m, texture, detail)
+  require('beamngEarth/texdbg').log('farTex', texture)
   m:setField('colorMap', 0, texture)
   local mask = M.maskOf(texture)
   local on = M.ASPHALT_LAYER and detail ~= false and mask ~= nil and FS:fileExists(mask)

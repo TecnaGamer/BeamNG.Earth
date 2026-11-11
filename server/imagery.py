@@ -1927,6 +1927,24 @@ def write_dds(path, rgb):
     return len(data)
 
 
+def write_picture_dds(path, png_bytes):
+    """A drawn picture (PNG bytes of any size: a sign's face) to path as a DDS the game takes as it is (write_dds, its sides
+    stretched up to powers of two: the faces are mapped 0-1 over their boards). A PNG in the session folder goes through
+    the engine's texture cooker at run time, and the cooker deadlocked the game for good ("TextureCooker| Texture[] started
+    importing": direction signs at Heide 2026-11-05, the bus and railway stations' boards on cold teleports 2026-11-11).
+    Returns the file size."""
+    import io
+    from PIL import Image
+    with Image.open(io.BytesIO(bytes(png_bytes))) as im:
+        im = im.convert("RGB")
+        w, h = im.size
+        pw, ph = 1 << max(2, (w - 1).bit_length()), 1 << max(2, (h - 1).bit_length())
+        if (pw, ph) != (w, h):
+            im = im.resize((pw, ph), Image.LANCZOS)
+        rgb = np.asarray(im, np.uint8)
+    return write_dds(path, rgb)
+
+
 def read_dds_info(data):
     """(width, height, mip count, fourcc, [level byte sizes]) of a DXT1 DDS (for tests/checks)."""
     if data[:4] != DDS_MAGIC:

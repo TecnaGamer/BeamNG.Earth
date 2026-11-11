@@ -537,6 +537,7 @@ end
 
 -- collide: true ('Visible Mesh Final'), a collision type name, or false / nil (render only)
 local function createWalk(walk, collide)
+  require('beamngEarth/texdbg').log('shape', walk.shape)
   local o = createObject('TSStatic')
   o:setField('shapeName', 0, walk.shape)
   -- 'Visible Mesh Final' (the engine's own suggestion: 'Performance: Mesh is using visible collision ... switch the
