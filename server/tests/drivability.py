@@ -64,6 +64,14 @@ SITES = {       # name: (fixture prefix, what was reported)
     **{name: ("interchange", what) for name, (_issue, what) in interchanges.SITES.items()},
 }
 RADIUS_M = 200.0
+KEEP_M = 600.0          # m of roads round a place the replay plans (interchanges.load keep_m): the planner plans whole
+                        # cells (1.6 km and more), most of the time a site took; every site but these measured the same
+                        # with only these roads as with all of them (within the tolerances), at a third of the time
+KEEP_M_SITE = {         # ... these differed (2026-11-11, against the whole capture):
+    "m1_ireland_960": 800.0,        # (691x the tolerance at 600 m, the same at 800 m)
+    "tamar_bridge_1112": 1600.0,    # (12x at 600 m, 2.2x at 800 m, 1.2x at 1200 m)
+    "a61_928": None,                # (144x even at 1600 m: a road there depends on map data farther off)
+}
 SPEED_MS = {"motorway": 36.0, "trunk": 28.0, "primary": 25.0, "secondary": 22.0}   # 130, 100, 90, 80 km/h
 G = 9.81
 GRADE_RUN = 4           # m
@@ -108,7 +116,7 @@ def measure(name, threads=1, approach=None):
     # some runs only; dev gave the same result with 1 and 4 threads, but a race coming back must not make the ratchet
     # flaky: test_drivability checks threads and approach on their own.
     with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads):
-        site = interchanges.load(name, prefix)
+        site = interchanges.load(name, prefix, keep_m=KEEP_M_SITE.get(name, KEEP_M))
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}))
         store = grading.PlanStore(md, site.sample)
         store.frame_of = lambda region: site.frame

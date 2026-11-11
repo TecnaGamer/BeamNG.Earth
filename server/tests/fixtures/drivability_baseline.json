@@ -1519,16 +1519,16 @@
    "ground:0f1cf97c-0ab0-4457-9a0f-c24eadf71190": {
     "step_m": 1.101,
     "grade": 0.4484,
-    "lift_g": 8.7399
+    "lift_g": 8.7402
    },
    "ground:17e4ab08-681d-468e-9b42-d73f9b81c96f": {
-    "step_m": 2.5389,
+    "step_m": 2.5388,
     "grade": 1.6047,
     "lift_g": 12.7289
    },
    "ground:41397075-ffc0-4e2d-80db-170c4e4fce6c": {
-    "step_m": 1.8407,
-    "grade": 0.4624,
+    "step_m": 1.8406,
+    "grade": 0.4623,
     "lift_g": 3.6543
    },
    "ground:420ccd20-b86a-4327-9512-3be64a2ffe9f": {
@@ -1548,11 +1548,11 @@
    },
    "ground:56c0f32c-9913-4aec-a163-66d4a5c1c07e": {
     "step_m": 1.4723,
-    "grade": 0.3812,
+    "grade": 0.3811,
     "lift_g": 3.2014
    },
    "ground:5bb99644-6a1d-48f3-9b3c-33e8787c9506": {
-    "step_m": 0.7341,
+    "step_m": 0.7342,
     "grade": 0.1371,
     "lift_g": 3.2854
    },
@@ -1564,10 +1564,10 @@
    "ground:6c1b726f-9c13-42ee-9560-cab794922916": {
     "step_m": 2.1304,
     "grade": 0.2468,
-    "lift_g": 2.5559
+    "lift_g": 2.5558
    },
    "ground:8198e877-e650-4c54-a158-22212f1283ba": {
-    "step_m": 0.4232,
+    "step_m": 0.4231,
     "grade": 0.0791,
     "lift_g": 0.0
    },
@@ -1579,7 +1579,7 @@
    "ground:916de119-89f7-4b97-b59c-6afb06a8b777": {
     "step_m": 2.8472,
     "grade": 0.7443,
-    "lift_g": 5.2917
+    "lift_g": 5.2919
    },
    "ground:92372ee2-0e09-4157-b97d-c07f04fa289b": {
     "step_m": 1.283,
@@ -1587,7 +1587,7 @@
     "lift_g": 5.2573
    },
    "ground:95258123-cf47-47aa-a29b-cb946c30beea": {
-    "step_m": 4.083,
+    "step_m": 4.0829,
     "grade": 1.2055,
     "lift_g": 10.1826
    },
@@ -1612,7 +1612,7 @@
     "lift_g": 1.4134
    },
    "ground:c0755f47-bc59-450a-9d81-74be41fd15c3": {
-    "step_m": 2.3472,
+    "step_m": 2.3471,
     "grade": 0.0725,
     "lift_g": 1.0336
    },
@@ -1632,7 +1632,7 @@
     "lift_g": 2.9017
    },
    "ground:eb50698b-8f17-48d3-ba31-7d786b8845b6": {
-    "step_m": 0.1528,
+    "step_m": 0.1527,
     "grade": 0.0184,
     "lift_g": 0.1762
    },
@@ -1662,14 +1662,14 @@
     "lift_g": 0.0
    },
    "ground:0a852ccd-6eb5-46f9-a85b-b800c36a214b": {
-    "step_m": 1.1796,
+    "step_m": 1.1802,
     "grade": 0.0,
     "lift_g": 0.0
    },
    "ground:0d9274f4-a0a9-458f-b508-00a55f54c4b5": {
     "step_m": 1.8594,
     "grade": 0.4775,
-    "lift_g": 6.3915
+    "lift_g": 6.3908
    },
    "ground:0fbe67be-5da4-491f-b652-5b4ed8269fc0": {
     "step_m": 0.3869,
@@ -1679,7 +1679,7 @@
    "ground:11263eb5-2e1a-4088-b835-ac451f339c5f": {
     "step_m": 1.4071,
     "grade": 0.3131,
-    "lift_g": 4.5197
+    "lift_g": 4.5195
    },
    "ground:2ead720d-768f-45da-8a21-0b22567f7d5f": {
     "step_m": 0.0153,
@@ -1687,7 +1687,7 @@
     "lift_g": 0.6104
    },
    "ground:414e18d8-0ee9-4985-a254-3fef9aef3c25": {
-    "step_m": 0.9431,
+    "step_m": 0.9424,
     "grade": 0.2175,
     "lift_g": 4.4742
    },
@@ -1703,7 +1703,7 @@
    },
    "ground:5a74787c-0d22-4885-aeac-6d18cf28011a": {
     "step_m": 1.402,
-    "grade": 0.3684,
+    "grade": 0.3683,
     "lift_g": 1.7784
    },
    "ground:65ef921e-2476-4947-8abd-a18e018367eb": {
@@ -1712,14 +1712,14 @@
     "lift_g": 2.8519
    },
    "ground:74cecabd-81fb-42fb-acc8-21210f7e1577": {
-    "step_m": 1.9201,
+    "step_m": 1.9203,
     "grade": 0.1249,
     "lift_g": 1.5378
    },
    "ground:77854023-4173-4e7a-ad12-4d244f493c02": {
     "step_m": 1.9045,
     "grade": 0.7988,
-    "lift_g": 8.2938
+    "lift_g": 8.2937
    },
    "ground:7865f568-21cb-4666-a894-1c0cfb5589bd": {
     "step_m": 0.6819,
@@ -1729,10 +1729,10 @@
    "ground:79273dfd-6627-4f92-a391-91208932323d": {
     "step_m": 0.9011,
     "grade": 0.4613,
-    "lift_g": 9.7873
+    "lift_g": 9.7846
    },
    "ground:84b6f223-92b9-496d-a92c-e73a73b1ce47": {
-    "step_m": 2.1113,
+    "step_m": 2.1114,
     "grade": 0.0,
     "lift_g": 0.0
    },
@@ -1759,7 +1759,7 @@
    "ground:a70a637d-7a92-4854-9241-d7d6d9afa2c7": {
     "step_m": 1.8846,
     "grade": 0.5788,
-    "lift_g": 8.6437
+    "lift_g": 8.644
    },
    "ground:ac84b401-9c65-42d3-ad26-e1d0a8bdfc11": {
     "step_m": 0.3807,
@@ -1772,7 +1772,7 @@
     "lift_g": 0.0
    },
    "ground:ba0f9ceb-9853-4da9-a50c-ee63c1430a69": {
-    "step_m": 0.8477,
+    "step_m": 0.8473,
     "grade": 0.341,
     "lift_g": 0.0
    },
@@ -1789,7 +1789,7 @@
    "ground:c664edc6-e8d8-4582-b7d5-2e91e781d266": {
     "step_m": 2.7105,
     "grade": 0.3041,
-    "lift_g": 5.5593
+    "lift_g": 5.5576
    },
    "ground:cb91aeb9-1932-488a-ab5f-bb96f8a31471": {
     "step_m": 0.3274,
