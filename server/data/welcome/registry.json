@@ -3,160 +3,2103 @@
   "policy": "newest_available",
   "states": {
     "AK": {
-      "name": "Alaska"
+      "name": "Alaska",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:AlaskaSign.jpg",
+      "reference_license": "CC BY-SA 4.0",
+      "image": "art/ak-available.png",
+      "source_sha256": "48bfcf27e7ca793683dbc830906e9b5956e0bff57ee72a9adf0aa176a675b4ee",
+      "uv_corners": [
+        [
+          0.09775222164140095,
+          0.326817826426896
+        ],
+        [
+          0.5797177208572922,
+          0.4073494917904613
+        ],
+        [
+          0.5734448510193414,
+          0.7326035965598123
+        ],
+        [
+          0.08834291688447465,
+          0.7537138389366693
+        ]
+      ],
+      "width_m": 5.8,
+      "height_m": 3.2,
+      "support": "timber",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Alaska_sign_on_the_Yukon_Highway.jpg",
+      "source_date": "2008-06-26 13:53",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/14963903@N06\">Richard Martin</a>",
+      "license": "CC BY 2.0",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "AL": {
-      "name": "Alabama"
+      "name": "Alabama",
+      "status": "current_verified",
+      "reference": "https://commons.wikimedia.org/wiki/File:Welcome_to_Alabama_sign,_2008.jpg",
+      "reference_license": "Public domain",
+      "design": "Sweet Home Alabama, photographed June 2025",
+      "image": "art/al-current.jpg",
+      "source_sha256": "63acec15434984ede4aefbe37cffb1892dca1fa549c1f14e863ff8a5f4636b69",
+      "uv_corners": [
+        [
+          0.22441520467836257,
+          0.08662280701754387
+        ],
+        [
+          0.591374269005848,
+          0.24067982456140352
+        ],
+        [
+          0.6337719298245614,
+          0.4769736842105263
+        ],
+        [
+          0.26973684210526316,
+          0.45723684210526316
+        ]
+      ],
+      "width_m": 4.5,
+      "height_m": 3.6,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Sweet_Home_Alabama_(Jackson).jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/1/1b/Welcome_to_Sweet_Home_Alabama_%28Jackson%29.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC0",
+      "source_author": "Oreocooke",
+      "current_source": "https://commons.wikimedia.org/wiki/File:Welcome_to_Sweet_Home_Alabama_(Jackson).jpg",
+      "capture_date": "2025-06-28 10:10:32",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "AR": {
-      "name": "Arkansas"
+      "name": "Arkansas",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:Arkansas_state_welcome_sign.jpg",
+      "reference_license": "Public domain",
+      "image": "art/ar-available.png",
+      "source_sha256": "e9a7d4cec1331122e140332df2973e6691c8515386f471303410cfeb39f6a791",
+      "uv_corners": [
+        [
+          0.5282501371365881,
+          0.32772494513533285
+        ],
+        [
+          0.8337904552934723,
+          0.3269934162399415
+        ],
+        [
+          0.8365331870543061,
+          0.6181419166057059
+        ],
+        [
+          0.5298957761930884,
+          0.6144842721287491
+        ]
+      ],
+      "width_m": 5.2,
+      "height_m": 3.7,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:St-Francis-Arkansas-welcome-sign-ar.jpg",
+      "source_date": "2017-10-01",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:BrineStans\" title=\"User:BrineStans\">Brian Stansberry</a> (photographer)",
+      "license": "CC BY 4.0",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "AZ": {
-      "name": "Arizona"
+      "name": "Arizona",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:Entering_Arizona_on_I-10_Westbound.jpg",
+      "reference_license": "CC BY-SA 2.5",
+      "current_verified": false,
+      "image": "art/az-available.png",
+      "source_sha256": "6b40b60dca43fef160ee8899ffb2cfea944f1c7ed53049a3a20217c562dd41bf",
+      "uv_corners": [
+        [
+          0.05865102639296188,
+          0.18377321603128055
+        ],
+        [
+          0.9486803519061584,
+          0.1652003910068426
+        ],
+        [
+          0.9193548387096774,
+          0.7350928641251222
+        ],
+        [
+          0.11290322580645161,
+          0.7360703812316716
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 4.8,
+      "support": "metal",
+      "source_page": "https://www.flickr.com/photos/arizonadot/49205689896/",
+      "source_date": "2019-12-11",
+      "credit": "Arizona Department of Transportation",
+      "license": "Reuse terms not independently verified",
+      "rights_status": "review_before_public_redistribution",
+      "selection_note": "Official ADOT scenic San Francisco Peaks face introduced with the 2019/2020 sign family."
     },
     "CA": {
-      "name": "California"
+      "name": "California",
+      "status": "current_verified",
+      "reference": "https://commons.wikimedia.org/wiki/File:Welcome_to_California_Sign_(32517668580).jpg",
+      "reference_license": "CC BY-SA 2.0",
+      "design": "Conventional blue poppy welcome, photographed January 2026 (not the new Del Norte monuments)",
+      "image": "art/ca-current.jpg",
+      "source_sha256": "b29d12917b3cc16a7d45dc7ba0ede6b2912514b7ee5544e96b90b2dfba4def25",
+      "uv_corners": [
+        [
+          0.6197916666666666,
+          0.5488410596026491
+        ],
+        [
+          0.7135416666666666,
+          0.5571192052980133
+        ],
+        [
+          0.7151041666666667,
+          0.6531456953642384
+        ],
+        [
+          0.6192708333333333,
+          0.6473509933774835
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.15,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:California-Inyo-Nevada_border_signs.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/f/fc/California-Inyo-Nevada_border_signs.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC BY-SA 4.0",
+      "source_author": "Mxn",
+      "current_source": "https://commons.wikimedia.org/wiki/File:California-Inyo-Nevada_border_signs.jpg",
+      "capture_date": "2026-01-10 14:18:24",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "CO": {
-      "name": "Colorado"
+      "name": "Colorado",
+      "status": "current_verified",
+      "reference": "https://commons.wikimedia.org/wiki/File:Colorful_Colorado_Near_Four_Corners_USA.jpg",
+      "reference_license": "CC BY-SA 2.0",
+      "design": "Handmade Welcome to Colorful Colorado",
+      "image": "art/co.jpg",
+      "width_m": 3.048,
+      "height_m": 2.1336,
+      "source_page": "https://commons.wikimedia.org/wiki/File:Colorful_Colorado_Near_Four_Corners_USA.jpg",
+      "source_sha256": "a2583b8446e15a2427caff8f7539b59bde906382810b9303b185052571dd21b2",
+      "license": "CC BY-SA 2.0",
+      "license_url": "https://creativecommons.org/licenses/by-sa/2.0",
+      "author": "Flickr user: Sebastian Bergmann Siegburg, Germany <a rel=\"nofollow\" class=\"external free\" data-mw-original-href=\"http://sebastian-bergmann.de\" href=\"https://sebastian-bergmann.de\">http://sebastian-bergmann.de</a>",
+      "current_source": "https://www.codot.gov/programs/dmo/welcome-to-colorado-sign",
+      "uv_corners": [
+        [
+          0.5682291666666667,
+          0.4012539184952978
+        ],
+        [
+          0.7770833333333333,
+          0.37460815047021945
+        ],
+        [
+          0.7973958333333333,
+          0.5924764890282131
+        ],
+        [
+          0.5807291666666666,
+          0.6050156739811913
+        ]
+      ],
+      "shape": "zigzag",
+      "support": "timber"
     },
     "CT": {
-      "name": "Connecticut"
+      "name": "Connecticut",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:Connecticut.JPG",
+      "reference_license": "Public domain",
+      "image": "art/ct-available.png",
+      "source_sha256": "751d5a809ba0fe9bcb418bf6af8e34ffdee73eccf5468d1e14d5a28cc319ce6f",
+      "uv_corners": [
+        [
+          0.10951760104302477,
+          0.22971652003910067
+        ],
+        [
+          0.7966101694915254,
+          0.24633431085043989
+        ],
+        [
+          0.8226857887874837,
+          0.6510263929618768
+        ],
+        [
+          0.09647979139504563,
+          0.6578690127077224
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.8,
+      "support": "metal",
+      "source_page": "https://portal.ct.gov/governor/news/press-releases/2024/09-2024/governor-lamont-unveils-new-welcome-to-connecticut-interstate-highway-signs",
+      "source_date": "2024-09-04",
+      "credit": "Connecticut Office of the Governor",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "rights_status": "review_before_public_redistribution"
     },
     "DC": {
-      "name": "District of Columbia"
+      "name": "District of Columbia",
+      "status": "awaiting_current_design_verification"
     },
     "DE": {
-      "name": "Delaware"
+      "name": "Delaware",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:2017-08-12_15_33_55_View_east_along_Delaware_State_Route_279_(Elkton_Road)_at_McIntire_Drive,_entering_Newark,_New_Castle_County,_Delaware_from_Iron_Hill,_Cecil_County,_Maryland.jpg",
+      "reference_license": "CC BY-SA 4.0",
+      "image": "art/de-available.jpg",
+      "source_sha256": "0b57bfcf8fdb563cc2cbc75d8db44c542df3eaf5ab2e15a2c4ef59d7fe591760",
+      "uv_corners": [
+        [
+          0.5942275042444821,
+          0.058823529411764705
+        ],
+        [
+          0.967741935483871,
+          0.058823529411764705
+        ],
+        [
+          0.9728353140916808,
+          0.3416289592760181
+        ],
+        [
+          0.5925297113752123,
+          0.3416289592760181
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 2.75,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2017-08-12_15_33_55_View_east_along_Delaware_State_Route_279_(Elkton_Road)_at_McIntire_Drive,_entering_Newark,_New_Castle_County,_Delaware_from_Iron_Hill,_Cecil_County,_Maryland.jpg",
+      "source_date": "2017-08-12 15:33:55",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "FL": {
-      "name": "Florida"
+      "name": "Florida",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:2016-03-23_08_00_16_%22Welcome_to_Florida%22_sign_along_southbound_Florida_State_Route_97_entering_Escambia_County,_Florida_from_Atmore,_Alabama.jpg",
+      "reference_license": "CC BY-SA 4.0",
+      "image": "art/fl-available.png",
+      "source_sha256": "6eff2b0521d6e977680cb9bf29ceba73678b9d4e8e0e17ccee3e58b7f502339f",
+      "uv_corners": [
+        [
+          0.27357998957790514,
+          0.2111024237685692
+        ],
+        [
+          0.79833246482543,
+          0.03674745895230649
+        ],
+        [
+          0.8181344450234497,
+          0.6114151681000782
+        ],
+        [
+          0.22980719124544033,
+          0.6982017200938233
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.8,
+      "support": "metal",
+      "source_page": "https://pro.fdot.cloud.sitefinity.com/info/co/news/2024/07092024",
+      "source_date": "2024-07-09",
+      "credit": "Florida Department of Transportation",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "rights_status": "review_before_public_redistribution"
     },
     "GA": {
-      "name": "Georgia"
+      "name": "Georgia",
+      "status": "current_verified",
+      "reference": "https://commons.wikimedia.org/wiki/File:Georgia_Welcome_sign,_US84EB.JPG",
+      "reference_license": "CC BY-SA 4.0",
+      "design": "Blue peach, photographed July 2024",
+      "image": "art/ga-current.jpg",
+      "source_sha256": "14cbfebfca314b686bee065ee295394625423ae61a9547c8e6d401acfbd0042b",
+      "uv_corners": [
+        [
+          0.7682291666666666,
+          0.4875
+        ],
+        [
+          0.8796875,
+          0.4875
+        ],
+        [
+          0.8817708333333333,
+          0.60078125
+        ],
+        [
+          0.7682291666666666,
+          0.60078125
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.25,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:GA94_WB,_Charlton_County,_Welcome_to_Georgia.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/e1/GA94_WB%2C_Charlton_County%2C_Welcome_to_Georgia.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC BY 4.0",
+      "source_author": "Mjrmtg",
+      "current_source": "https://commons.wikimedia.org/wiki/File:GA94_WB,_Charlton_County,_Welcome_to_Georgia.jpg",
+      "capture_date": "2024-07-05 12:43:43",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "HI": {
-      "name": "Hawaii"
+      "name": "Hawaii",
+      "status": "not_applicable_no_land_border",
+      "note": "Hawaii has no road border with another state or country. No fictitious highway border sign or airport landscape image is substituted."
     },
     "IA": {
-      "name": "Iowa"
+      "name": "Iowa",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ia-available.png",
+      "source_sha256": "1f9bf9d6cda3e4c982674c9e863db12a7d6857ca00b732c2deed7cfabaa3e6ac",
+      "uv_corners": [
+        [
+          0.075046904315197,
+          0.4774859287054409
+        ],
+        [
+          0.3383364602876798,
+          0.4924953095684803
+        ],
+        [
+          0.3389618511569731,
+          0.8714821763602252
+        ],
+        [
+          0.07254534083802376,
+          0.8714821763602252
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 4.5,
+      "support": "metal",
+      "source_page": "https://k923.fm/free-things-to-do-iowa/",
+      "source_date": "2025-08",
+      "credit": "Townsquare Media; composited welcome-sign illustration",
+      "license": "Reuse terms not independently verified",
+      "rights_status": "review_before_public_redistribution",
+      "selection_note": "Printed face selected from the newest located 2025 illustration of the Freedom to Flourish design; surroundings and bright-green cutout border excluded. Lower-resolution reference."
     },
     "ID": {
-      "name": "Idaho"
+      "name": "Idaho",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:Idaho_welcome_sign.jpg",
+      "reference_license": "CC BY-SA 2.0",
+      "current_verified": false,
+      "image": "art/id-available.png",
+      "source_sha256": "ad6b1b5e2168514b7820bc7a789338d68a52de44e0a6e082efc414e81b069520",
+      "uv_corners": [
+        [
+          0.018769551616266946,
+          0.08066759388038942
+        ],
+        [
+          1.0,
+          0.1502086230876217
+        ],
+        [
+          0.9947862356621481,
+          0.7969401947148818
+        ],
+        [
+          0.0,
+          0.7454798331015299
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.9,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Idaho_(from_Utah)_on_1-15,_Aug_17.jpg",
+      "source_date": "2017-08-20 13:52:20",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:An_Errant_Knight\" title=\"User:An Errant Knight\">An Errant Knight</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "IL": {
-      "name": "Illinois"
+      "name": "Illinois",
+      "status": "newest_available",
+      "reference": "https://commons.wikimedia.org/wiki/File:US34_East_-_Welcome_to_Illinois_(28090875167).jpg",
+      "reference_license": "CC BY-SA 2.0",
+      "current_verified": false,
+      "image": "art/il-available.png",
+      "source_sha256": "497cc5b850c69db7a1e8f6c0f30d229a46c27dbac2c01203441875353f279b2a",
+      "uv_corners": [
+        [
+          0.2116788321167883,
+          0.2081377151799687
+        ],
+        [
+          0.748696558915537,
+          0.20344287949921752
+        ],
+        [
+          0.7497393117831074,
+          0.6071987480438185
+        ],
+        [
+          0.21376433785192908,
+          0.6118935837245696
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.7,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Illinois_Sign_-_US67_Rock_Island_(44320554331).jpg",
+      "source_date": "2016-06-24 14:58",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/30552029@N00\">formulanone</a> from Huntsville, United States",
+      "license": "CC BY-SA 2.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "IN": {
-      "name": "Indiana"
+      "name": "Indiana",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/in-available.png",
+      "source_sha256": "8fc7c6a3bb00b5e343f7f37476779e8aa436ac9d28b6ee9701e68b06408f22e9",
+      "uv_corners": [
+        [
+          0.24048096192384769,
+          0.18716577540106952
+        ],
+        [
+          0.8256513026052105,
+          0.18716577540106952
+        ],
+        [
+          0.8256513026052105,
+          0.5614973262032086
+        ],
+        [
+          0.24048096192384769,
+          0.5614973262032086
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.6,
+      "support": "metal",
+      "source_page": "https://aashtojournal.transportation.org/indot-installing-new-welcome-signs-on-highways/",
+      "source_date": "2023-05-26",
+      "credit": "INDOT, via AASHTO Journal",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed. Main printed face selected from 2023 unveiling photograph, excluding people and temporary display supports."
     },
     "KS": {
-      "name": "Kansas"
+      "name": "Kansas",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ks-available.png",
+      "source_sha256": "6c8ec3fdd309dab226bd194f721cf2513fb8f69940babb83fca95fb34ec6624b",
+      "uv_corners": [
+        [
+          0.08654848800834203,
+          0.2112676056338028
+        ],
+        [
+          0.5922836287799792,
+          0.30359937402190923
+        ],
+        [
+          0.5891553701772679,
+          0.5915492957746479
+        ],
+        [
+          0.07924921793534932,
+          0.5273865414710485
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.6,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Kansas_4892142218.jpg",
+      "source_date": "2009-08-06 17:09",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"http://www.CGPGrey.com\">CGP Grey</a>",
+      "license": "CC BY 2.0",
+      "selection_note": "Newest usable clear reference located; the 2012 sunset image has a tiny underexposed face and was not selected."
     },
     "KY": {
-      "name": "Kentucky"
+      "name": "Kentucky",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ky-available.png",
+      "source_sha256": "be4c8743fe57c526f9d85d6109e12ab888f0636967a0f6ebf38560373e91036b",
+      "uv_corners": [
+        [
+          0.12408759124087591,
+          0.2211404728789986
+        ],
+        [
+          0.8706986444212722,
+          0.2267037552155772
+        ],
+        [
+          0.8706986444212722,
+          0.5507649513212796
+        ],
+        [
+          0.12200208550573514,
+          0.5479833101529903
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.0,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Kentucky_-_October_2023_-_Sarah_Stierch.jpg",
+      "source_date": "Taken on 22 October 2023",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Missvain\" title=\"User:Missvain\">Missvain</a>",
+      "license": "CC BY 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "LA": {
-      "name": "Louisiana"
+      "name": "Louisiana",
+      "status": "current_verified",
+      "design": "Bilingual fleur-de-lis welcome, photographed March 2026",
+      "image": "art/la-current.jpg",
+      "source_sha256": "c4e015d8f5356a62e9357710056f442792ebdef10988c527ce52d983cd39e2ac",
+      "uv_corners": [
+        [
+          0.1388888888888889,
+          0.18311403508771928
+        ],
+        [
+          0.8340643274853801,
+          0.17105263157894737
+        ],
+        [
+          0.8530701754385965,
+          0.4303728070175439
+        ],
+        [
+          0.11038011695906433,
+          0.4309210526315789
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.8,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Louisiana_sign_Delta,_Louisiana_I-20.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/cd/Welcome_to_Louisiana_sign_Delta%2C_Louisiana_I-20.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC BY 4.0",
+      "source_author": "Ktkvtsh",
+      "current_source": "https://commons.wikimedia.org/wiki/File:Welcome_to_Louisiana_sign_Delta,_Louisiana_I-20.jpg",
+      "capture_date": "2026-03-27 12:33:17",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "MA": {
-      "name": "Massachusetts"
+      "name": "Massachusetts",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ma-available.png",
+      "source_sha256": "baecd14973cf1d5f64665d584aeb2d68567f45bbead1332b2413cec7098ff1a0",
+      "uv_corners": [
+        [
+          0.7977059436913452,
+          0.41784037558685444
+        ],
+        [
+          0.8821689259645464,
+          0.4194053208137715
+        ],
+        [
+          0.886339937434828,
+          0.5367762128325508
+        ],
+        [
+          0.7987486965589156,
+          0.5383411580594679
+        ]
+      ],
+      "width_m": 2.4,
+      "height_m": 2.2,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Massachusetts,_MA_Route_96,_Douglas_MA.jpg",
+      "source_date": "2017-05-27 14:03:38",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Faolin42\" title=\"User:Faolin42\">John Phelan</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "MD": {
-      "name": "Maryland"
+      "name": "Maryland",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/md-available.png",
+      "source_sha256": "bde50cfb87fbcc38b488661769d1d59d8169e56c5d92031a8d8339e6845aefc6",
+      "uv_corners": [
+        [
+          0.5714285714285714,
+          0.06675938803894298
+        ],
+        [
+          0.9749739311783108,
+          0.06675938803894298
+        ],
+        [
+          0.9749739311783108,
+          0.5243393602225312
+        ],
+        [
+          0.5714285714285714,
+          0.5243393602225312
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 4.1,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2021-08-07_14_08_56_Welcome_to_Maryland_sign_along_westbound_U.S._Route_50_(George_Washington_Highway)_just_before_crossing_the_Gorman-Gormania_Bridge_over_North_Branch_Potomac_River_from_Gormania,_West_Virginia_to_Gorman,_Maryland.jpg",
+      "source_date": "2021-08-07 14:08:56",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "outline": [
+        [
+          0.0,
+          0.5075987841945289
+        ],
+        [
+          0.06459948320413436,
+          0.49544072948328266
+        ],
+        [
+          0.08785529715762273,
+          0.3434650455927052
+        ],
+        [
+          0.1421188630490956,
+          0.2188449848024316
+        ],
+        [
+          0.21963824289405684,
+          0.12462006079027356
+        ],
+        [
+          0.3152454780361757,
+          0.05167173252279635
+        ],
+        [
+          0.4186046511627907,
+          0.0060790273556231
+        ],
+        [
+          0.5322997416020672,
+          0.00303951367781155
+        ],
+        [
+          0.6408268733850129,
+          0.0364741641337386
+        ],
+        [
+          0.7260981912144703,
+          0.0911854103343465
+        ],
+        [
+          0.7932816537467701,
+          0.18541033434650456
+        ],
+        [
+          0.8397932816537468,
+          0.2917933130699088
+        ],
+        [
+          0.8630490956072352,
+          0.3860182370820669
+        ],
+        [
+          0.9534883720930233,
+          0.3708206686930091
+        ],
+        [
+          0.9974160206718347,
+          0.9483282674772037
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "post_top": 0.55
     },
     "ME": {
-      "name": "Maine"
+      "name": "Maine",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/me-available.png",
+      "source_sha256": "c149d6da4d5876958826f870d0b6e809b4af1a4228f02fb11d944312cc644b96",
+      "uv_corners": [
+        [
+          0.28410513141426785,
+          0.13321647677475898
+        ],
+        [
+          0.7133917396745932,
+          0.13935144609991235
+        ],
+        [
+          0.7158948685857321,
+          0.48378615249780893
+        ],
+        [
+          0.28410513141426785,
+          0.48378615249780893
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 3.1,
+      "support": "metal",
+      "source_page": "https://www.maineturnpike.com/news/recent-news/",
+      "source_date": "Photograph date unavailable; retrieved 2026-11-10",
+      "credit": "Maine Turnpike Authority",
+      "license": "Agency-hosted photo; reuse terms not independently verified",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "source_url": "https://www.maineturnpike.com/getattachment/b9a5fb25-83e1-4908-b001-0809a863e52e/width_1600.jpeg"
     },
     "MI": {
-      "name": "Michigan"
+      "name": "Michigan",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/mi-available.png",
+      "source_sha256": "eb490ad2afb9e9c48d16dbd25f8dc396b100150a69aee1ca61733d05f590aa69",
+      "uv_corners": [
+        [
+          0.19395203336809178,
+          0.3432282003710575
+        ],
+        [
+          0.4045881126173097,
+          0.3469387755102041
+        ],
+        [
+          0.40250260688216893,
+          0.4712430426716141
+        ],
+        [
+          0.19290928050052136,
+          0.46567717996289426
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.05,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:I-94_EB_at_Indiana-Michigan_state_line_(October_2021).jpg",
+      "source_date": "Taken on 16 October 2021, 09:04:48",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:AlphaBeta135\" title=\"User:AlphaBeta135\">AlphaBeta135</a>",
+      "license": "CC BY 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "MN": {
-      "name": "Minnesota"
+      "name": "Minnesota",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/mn-available.png",
+      "source_sha256": "58226656082a5686140a87d392c74b9614b775f5e12949dce69159302e882f0a",
+      "uv_corners": [
+        [
+          0.3409801876955162,
+          0.2820874471086037
+        ],
+        [
+          0.7393117831074035,
+          0.14809590973201692
+        ],
+        [
+          0.8258602711157456,
+          0.46262341325811
+        ],
+        [
+          0.26173096976016685,
+          0.5599435825105783
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.7,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Minnesota_-_Grand_Portage_Border_Crossing_(51608094292).jpg",
+      "source_date": "2021-10-19 08:22",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/87296837@N00\">Tony Webster</a>",
+      "license": "CC BY 2.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "outline": [
+        [
+          0.08,
+          0
+        ],
+        [
+          0.92,
+          0
+        ],
+        [
+          1,
+          0.1
+        ],
+        [
+          1,
+          0.9
+        ],
+        [
+          0.92,
+          1
+        ],
+        [
+          0.08,
+          1
+        ],
+        [
+          0,
+          0.9
+        ],
+        [
+          0,
+          0.1
+        ]
+      ]
     },
     "MO": {
-      "name": "Missouri"
+      "name": "Missouri",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/mo-available.png",
+      "source_sha256": "e47c1c346e5d002d4c0f7013b8737a251aafc809ee9355caaa3f741b21c738ec",
+      "uv_corners": [
+        [
+          0.1543274244004171,
+          0.21001390820584145
+        ],
+        [
+          0.8404588112617309,
+          0.2614742698191933
+        ],
+        [
+          0.8425443169968717,
+          0.7593880389429764
+        ],
+        [
+          0.1553701772679875,
+          0.7468706536856745
+        ]
+      ],
+      "width_m": 5.8,
+      "height_m": 3.3,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Missouri_Welcomes_You_sign_I-155_2013-05-11_001.jpg",
+      "source_date": "2013-05-11",
+      "credit": "Thomas R Machnitzki (<span class=\"nowrap\">thomas<span class=\"skin-invert\" typeof=\"mw:File\"><span title=\"@\"><img alt=\"@\" src=\"https://thumb.wikimedia.org/wikipedia/commons/thumb/8/88/At_sign.svg/20px-At_sign.svg.png?utm_source=commons.wikimedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail\" decoding=\"async\" loading=\"lazy\" width=\"15\" height=\"15\" class=\"mw-file-element\" srcset=\"https://thumb.wikimedia.org/wikipedia/commons/thumb/8/88/At_sign.svg/40px-At_sign.svg.png?utm_source=commons.wikimedia.org&amp;utm_campaign=parser&amp;utm_content=thumbnail 2x\" data-file-width=\"145\" data-file-height=\"145\"></span></span>machnitzki.com</span>)",
+      "license": "CC BY 3.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "MS": {
-      "name": "Mississippi"
+      "name": "Mississippi",
+      "status": "current_verified",
+      "design": "Birthplace of America?s Music, photographed February 2026",
+      "image": "art/ms-current.jpg",
+      "source_sha256": "544cf7c84b51d484f3000245df122ff3be45e1b04c15496c59663e763c307bf3",
+      "uv_corners": [
+        [
+          0.24895833333333334,
+          0.12578125
+        ],
+        [
+          0.746875,
+          0.16015625
+        ],
+        [
+          0.75,
+          0.521875
+        ],
+        [
+          0.25416666666666665,
+          0.5109375
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.1,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Mississippi_sign.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/2/26/Welcome_to_Mississippi_sign.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC BY 4.0",
+      "source_author": "Quintin Soloviev",
+      "current_source": "https://commons.wikimedia.org/wiki/File:Welcome_to_Mississippi_sign.jpg",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "MT": {
-      "name": "Montana"
+      "name": "Montana",
+      "status": "newest_available",
+      "image": "art/mt-available.png",
+      "source_sha256": "b707aff66fde53687d60b8c9afa000dcf49a08e7a3678a0dc41cb51a99f14297",
+      "uv_corners": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          1.0
+        ],
+        [
+          0.0,
+          1.0
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.18,
+      "support": "metal",
+      "source_page": "https://news.mt.gov/Governors-Office/Governor-Gianforte-Unveils-Montanas-New-Highway-Welcome-Signs",
+      "source_date": "2026-04-07",
+      "credit": "Montana Governor / Montana Department of Transportation",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "rights_status": "review_before_public_redistribution",
+      "outline": [
+        [
+          0.06508047585724283,
+          0.05548216644649934
+        ],
+        [
+          0.21343596920923724,
+          0.07661822985468957
+        ],
+        [
+          0.3736878936319104,
+          0.09247027741083223
+        ],
+        [
+          0.5318404478656403,
+          0.0977542932628798
+        ],
+        [
+          0.7172848145556333,
+          0.08586525759577279
+        ],
+        [
+          0.8957312806158153,
+          0.06869220607661823
+        ],
+        [
+          0.9216235129461162,
+          0.8203434610303831
+        ],
+        [
+          0.3995801259622113,
+          0.8269484808454426
+        ],
+        [
+          0.3960811756473058,
+          0.9128137384412153
+        ],
+        [
+          0.37928621413575925,
+          0.8903566710700133
+        ],
+        [
+          0.3631910426871938,
+          0.916776750330251
+        ],
+        [
+          0.2743177046885934,
+          0.9445178335535006
+        ],
+        [
+          0.16235129461161651,
+          0.7318361955085865
+        ],
+        [
+          0.1819454163750875,
+          0.4940554821664465
+        ],
+        [
+          0.14485654303708886,
+          0.5099075297225891
+        ],
+        [
+          0.06648005598320504,
+          0.35931307793923384
+        ]
+      ]
     },
     "NC": {
-      "name": "North Carolina"
+      "name": "North Carolina",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nc-available.png",
+      "source_sha256": "b2c7e712f43006432e30d2fa4e3b7a378298878dcab2ed14c1ea174ea060d66c",
+      "uv_corners": [
+        [
+          0.32638164754953075,
+          0.03616133518776078
+        ],
+        [
+          0.6986444212721585,
+          0.009735744089012517
+        ],
+        [
+          0.7059436913451512,
+          0.2712100139082058
+        ],
+        [
+          0.3315954118873827,
+          0.2906815020862309
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.7,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_To_The_State.jpg",
+      "source_date": "2022-01-14",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:IDKDKAK\" title=\"User:IDKDKAK\">idkdkak</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "quality_note": "Newest located state welcome photograph is motion-blurred; lower-detail face retained pending a sharper reference."
     },
     "ND": {
-      "name": "North Dakota"
+      "name": "North Dakota",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nd-available.png",
+      "source_sha256": "f9c1889cb4a88ebed22a03a88afb45ec33d0cc2456983c4eccf8985de41da1b4",
+      "uv_corners": [
+        [
+          0.19839679358717435,
+          0.2289156626506024
+        ],
+        [
+          0.9138276553106213,
+          0.10542168674698796
+        ],
+        [
+          0.9218436873747495,
+          0.8765060240963856
+        ],
+        [
+          0.19438877755511022,
+          0.822289156626506
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.8,
+      "support": "metal",
+      "source_page": "https://aashtojournal.transportation.org/north-dakota-dot-starts-installing-new-welcome-signs/",
+      "source_date": "2020-08-14",
+      "credit": "North Dakota DOT, via AASHTO Journal",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "NE": {
-      "name": "Nebraska"
+      "name": "Nebraska",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ne-available.png",
+      "source_sha256": "e4d6cff15df24be8613b9b69185dfb010a6ae200edc96a64bbb08bfe20f4ef79",
+      "uv_corners": [
+        [
+          0.25547445255474455,
+          0.3323529411764706
+        ],
+        [
+          0.8561001042752867,
+          0.2926470588235294
+        ],
+        [
+          0.867570385818561,
+          0.675
+        ],
+        [
+          0.24191866527632952,
+          0.6941176470588235
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.8,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Nebraska_-_The_Good_Life_-_State_of_Nebraska_Welcome_Sign_(29992583177).jpg",
+      "source_date": "2018-09-22 09:56",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/87296837@N00\">Tony Webster</a> from Minneapolis, Minnesota, United States",
+      "license": "CC BY 2.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "NH": {
-      "name": "New Hampshire"
+      "name": "New Hampshire",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nh-available.png",
+      "source_sha256": "c5133c00719f40959a596ab2f37a99ae57949c90e5dfb9b8939a455dd68b2909",
+      "uv_corners": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.8139810426540285
+        ],
+        [
+          0.0,
+          0.8139810426540285
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 3.87,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_New_Hampshire_road_sign,_c._2020.png",
+      "source_date": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.eagletribune.com/news/local_news/nh-unveils-new-welcome-sign/article_093efa5f-4cab-517b-b5b1-59a822b04d80.html\">circa September 2012<div style=\"display: none;\">date QS:P,+2012-09-00T00:00:00Z/10,P1480,Q5727902</div></a>",
+      "credit": "State of N.H.",
+      "license": "Public domain",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "NJ": {
-      "name": "New Jersey"
+      "name": "New Jersey",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nj-available.png",
+      "source_sha256": "c25a92a1017321aca847d1273ffe3bb0c3a7947a5805483bda84944d9b6382be",
+      "uv_corners": [
+        [
+          0.5036496350364964,
+          0.3929663608562691
+        ],
+        [
+          0.6266944734098019,
+          0.3929663608562691
+        ],
+        [
+          0.6277372262773723,
+          0.5152905198776758
+        ],
+        [
+          0.5036496350364964,
+          0.5168195718654435
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.25,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:US_202_NB_Welcome_to_New_Jersey.JPG",
+      "source_date": "2008-01-26",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Dough4872\" title=\"User:Dough4872\">Dough4872</a>",
+      "license": "Public domain",
+      "selection_note": "Latest usable generic state-welcome reference located; newer Turnpike-specific boards excluded to avoid labelling ordinary roads as the New Jersey Turnpike."
     },
     "NM": {
-      "name": "New Mexico"
+      "name": "New Mexico",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nm-available.png",
+      "source_sha256": "0a2c59745a300d19f8e394f8f4e218ec3ea398b1b48a25f75d94422fdcbeb451",
+      "uv_corners": [
+        [
+          0.4348279457768509,
+          0.19471488178025034
+        ],
+        [
+          0.9499478623566214,
+          0.1502086230876217
+        ],
+        [
+          0.9676746611053181,
+          0.5034770514603616
+        ],
+        [
+          0.4337851929092805,
+          0.5132127955493742
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.65,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2016-03-21_10_04_58_%22Welcome_to_New_Mexico%22_sign_along_eastbound_Interstate_40_entering_McKinley_County,_New_Mexico_from_Apache_County,_Arizona.jpg",
+      "source_date": "2016-03-21 10:04:58",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "NV": {
-      "name": "Nevada"
+      "name": "Nevada",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/nv-available.png",
+      "source_sha256": "e019214d9c70e09a4337a2b01ec6b8a1c2b4b8f87446090c7118643e92185662",
+      "uv_corners": [
+        [
+          0.4869655891553702,
+          0.21557719054242003
+        ],
+        [
+          0.6996871741397289,
+          0.21557719054242003
+        ],
+        [
+          0.7007299270072993,
+          0.40611961057023643
+        ],
+        [
+          0.49009384775808135,
+          0.4089012517385257
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.2,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2015-11-04_14_16_38_%22Welcome_to_Nevada%22_sign_along_southbound_Interstate_15_entering_Clark_County,_Nevada_from_Mohave_County,_Arizona.jpg",
+      "source_date": "2015-11-04 14:16:38",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "NY": {
-      "name": "New York"
+      "name": "New York",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ny-available.png",
+      "source_sha256": "227d6fc0c311480076a9291ddbf7b132042b3000dcddf72448d09b2047678b12",
+      "uv_corners": [
+        [
+          0.5099061522419187,
+          0.12656467315716272
+        ],
+        [
+          0.8978102189781022,
+          0.10152990264255911
+        ],
+        [
+          0.9071949947862357,
+          0.4422809457579972
+        ],
+        [
+          0.5099061522419187,
+          0.4534075104311544
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.9,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2015-08-20_13_20_10_%22Welcome_to_New_York%22_and_%22Governor_Thomas_E_Dewey_Thruway%22_signs_along_northbound_Interstate_287_and_State_Route_17_entering_Hillburn,_New_York_from_Mahwah,_New_Jersey.jpg",
+      "source_date": "2015-08-20 13:20:10",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "OH": {
-      "name": "Ohio"
+      "name": "Ohio",
+      "status": "newest_available",
+      "design": "2023 Heart of It All, ODOT I-H2i",
+      "image": "art/oh-available.png",
+      "source_sha256": "79a2dc8684d2b7c3ab9908ec08c80592c6af5394be7ab935c171b957101c0506",
+      "uv_corners": [
+        [
+          0,
+          0
+        ],
+        [
+          1,
+          0
+        ],
+        [
+          1,
+          1
+        ],
+        [
+          0,
+          1
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.00625,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:MUTCD-OH_I-H2i.svg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/c/c5/MUTCD-OH_I-H2i.svg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "Public domain (MUTCD sign; ODOT)",
+      "source_author": "Ohio Department of Transportation",
+      "current_source": "https://content.govdelivery.com/accounts/OHDOT/bulletins/3703166",
+      "verification_date": "2026-11-10",
+      "rights_status": "public_domain",
+      "source_date": "2024-07-19",
+      "credit": "Ohio Department of Transportation",
+      "license": "Public domain",
+      "current_verified": false,
+      "selection_note": "Latest available clean ODOT vector reference, dated 2024. Includes officeholder lettering as printed in that reference; current officeholders not asserted."
     },
     "OK": {
-      "name": "Oklahoma"
+      "name": "Oklahoma",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ok-available.png",
+      "source_sha256": "cca7947ccb6125b7f7843bcddc4a5dcf45e9d0ac40c32fc0b59ae45d1398a2e5",
+      "uv_corners": [
+        [
+          0.006418485237483954,
+          0.012853470437017995
+        ],
+        [
+          0.9948652118100129,
+          0.012853470437017995
+        ],
+        [
+          0.9948652118100129,
+          0.987146529562982
+        ],
+        [
+          0.006418485237483954,
+          0.987146529562982
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.0,
+      "support": "metal",
+      "source_page": "https://oklahoma.gov/odot/about-us/newsroom/2020/february/a-sign-of-the-times--oklahoma-s-front-yard-welcomes-visitors-in.html",
+      "source_date": "2020-02-12",
+      "credit": "Oklahoma Department of Transportation",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "OR": {
-      "name": "Oregon"
+      "name": "Oregon",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/or-available.png",
+      "source_sha256": "bed905c8df1e91bbe7af4133dca704f360cbd2b19706132060269d83f23789f0",
+      "uv_corners": [
+        [
+          0.26001097092704334,
+          0.2150694952450622
+        ],
+        [
+          0.7098189797037849,
+          0.2150694952450622
+        ],
+        [
+          0.7098189797037849,
+          0.7790782735918069
+        ],
+        [
+          0.26001097092704334,
+          0.7790782735918069
+        ]
+      ],
+      "width_m": 4.0,
+      "height_m": 3.76,
+      "support": "monument",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Oregon_sign_I-5_northbound_2025.jpg",
+      "source_date": "2025-11-10 15:19:24",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:PortlandAppraisalBlog\" title=\"User:PortlandAppraisalBlog\">PortlandAppraisalBlog</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "outline": [
+        [
+          0.0,
+          0.7613488975356679
+        ],
+        [
+          0.03170731707317073,
+          0.6433203631647212
+        ],
+        [
+          0.05,
+          0.556420233463035
+        ],
+        [
+          0.06951219512195123,
+          0.3657587548638132
+        ],
+        [
+          0.07682926829268293,
+          0.08171206225680934
+        ],
+        [
+          0.08170731707317073,
+          0.028534370946822308
+        ],
+        [
+          0.11097560975609756,
+          0.010376134889753566
+        ],
+        [
+          0.1524390243902439,
+          0.0
+        ],
+        [
+          0.17804878048780487,
+          0.014267185473411154
+        ],
+        [
+          0.2280487804878049,
+          0.011673151750972763
+        ],
+        [
+          0.27682926829268295,
+          0.04539559014267185
+        ],
+        [
+          0.3097560975609756,
+          0.08949416342412451
+        ],
+        [
+          0.32682926829268294,
+          0.1582360570687419
+        ],
+        [
+          0.34512195121951217,
+          0.16472114137483787
+        ],
+        [
+          0.39878048780487807,
+          0.14526588845654995
+        ],
+        [
+          0.44390243902439025,
+          0.14526588845654995
+        ],
+        [
+          0.4926829268292683,
+          0.1608300907911803
+        ],
+        [
+          0.5378048780487805,
+          0.14785992217898833
+        ],
+        [
+          0.6219512195121951,
+          0.12840466926070038
+        ],
+        [
+          0.7,
+          0.10894941634241245
+        ],
+        [
+          0.7475609756097561,
+          0.11154345006485085
+        ],
+        [
+          0.7951219512195122,
+          0.12062256809338522
+        ],
+        [
+          0.8646341463414634,
+          0.11932555123216602
+        ],
+        [
+          0.9024390243902439,
+          0.12321660181582361
+        ],
+        [
+          0.9365853658536586,
+          0.1543450064850843
+        ],
+        [
+          0.9548780487804878,
+          0.19455252918287938
+        ],
+        [
+          0.9926829268292683,
+          0.2438391699092088
+        ],
+        [
+          0.975609756097561,
+          0.2905317769130999
+        ],
+        [
+          0.9707317073170731,
+          0.3942931258106355
+        ],
+        [
+          0.947560975609756,
+          0.44487678339818415
+        ],
+        [
+          0.9365853658536586,
+          0.496757457846952
+        ],
+        [
+          0.9597560975609756,
+          0.5123216601815823
+        ],
+        [
+          0.9707317073170731,
+          0.5512321660181583
+        ],
+        [
+          0.9646341463414634,
+          0.6044098573281452
+        ],
+        [
+          0.9780487804878049,
+          0.7367055771725033
+        ],
+        [
+          0.9890243902439024,
+          0.8793774319066148
+        ],
+        [
+          0.9951219512195122,
+          0.9494163424124513
+        ],
+        [
+          0.9804878048780488,
+          0.9844357976653697
+        ],
+        [
+          0.9573170731707317,
+          0.9987029831387808
+        ],
+        [
+          0.11585365853658537,
+          1.0
+        ],
+        [
+          0.07560975609756097,
+          0.9831387808041504
+        ],
+        [
+          0.0524390243902439,
+          0.9351491569390402
+        ],
+        [
+          0.01951219512195122,
+          0.8469520103761349
+        ],
+        [
+          0.014634146341463415,
+          0.814526588845655
+        ],
+        [
+          0.0024390243902439024,
+          0.7821011673151751
+        ]
+      ]
     },
     "PA": {
-      "name": "Pennsylvania"
+      "name": "Pennsylvania",
+      "status": "current_verified",
+      "design": "2024 Let Freedom Ring",
+      "image": "art/pa-current.jpg",
+      "source_sha256": "50a6ac4d0f1ec647f2da5c8ec56b7819c21a845da87a44de67b42c7bdbfcad6a",
+      "uv_corners": [
+        [
+          0.6551339285714286,
+          0.4563953488372093
+        ],
+        [
+          0.8833705357142857,
+          0.45494186046511625
+        ],
+        [
+          0.88671875,
+          0.6046511627906976
+        ],
+        [
+          0.6568080357142857,
+          0.6068313953488372
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.1,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:I-70_wb_Pennsylvania_welcome_sign,_Aug._2024.jpg",
+      "source_url": "https://upload.wikimedia.org/wikipedia/commons/e/ef/I-70_wb_Pennsylvania_welcome_sign%2C_Aug._2024.jpg?utm_source=commons.wikimedia.org&utm_campaign=imageinfo&utm_content=original",
+      "source_license": "CC BY-SA 4.0",
+      "source_author": "Mr. Matt?",
+      "current_source": "https://www.pa.gov/agencies/penndot/news-and-media/newsroom/statewide/2024/governor-shapiro-unveils-new-highway-welcome-signs--license-plates-celebrating-pennsylvania-as-the-birthplace-of-american-democracy--",
+      "verification_date": "2026-11-10",
+      "rights_status": "licensed_photo"
     },
     "RI": {
       "name": "Rhode Island",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ri-available.png",
+      "source_sha256": "4fed7a9599719a9310610b5d9ac1797cb31761a2676424b83335953ee0f2f46a",
+      "uv_corners": [
+        [
+          0.4191866527632951,
+          0.3769123783031989
+        ],
+        [
+          0.5735140771637122,
+          0.37552155771905427
+        ],
+        [
+          0.5745568300312826,
+          0.5841446453407511
+        ],
+        [
+          0.4191866527632951,
+          0.5855354659248957
+        ]
+      ],
+      "width_m": 3.4,
+      "height_m": 3.5,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:20180524_-_25_-_Tiverton,_RI.jpg",
+      "source_date": "2018-05-24",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Andre_Carrotflower\" title=\"User:Andre Carrotflower\">Andre Carrotflower</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
       "inscription_aliases": [
         "Discover Beautiful Rhode Island"
       ]
     },
     "SC": {
-      "name": "South Carolina"
+      "name": "South Carolina",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/sc-available.png",
+      "source_sha256": "d498ab5f3cedbc66c4f2b846f2a0da98d558fdac701663468df13eff1b1c791a",
+      "uv_corners": [
+        [
+          0.7184567257559958,
+          0.6118935837245696
+        ],
+        [
+          0.9301355578727841,
+          0.6103286384976526
+        ],
+        [
+          0.9332638164754953,
+          0.6917057902973396
+        ],
+        [
+          0.7184567257559958,
+          0.6932707355242567
+        ]
+      ],
+      "width_m": 5.8,
+      "height_m": 1.5,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:South_Carolina_I95nb_Welcome.jpg",
+      "source_date": "2019-06-07 15:09:37",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Mjrmtg\" title=\"User:Mjrmtg\">Michael Rivera</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "SD": {
-      "name": "South Dakota"
+      "name": "South Dakota",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/sd-available.png",
+      "source_sha256": "dbd56af33fea8a588f171dead668e4cf10f7eb63677e94734619e82f79c50733",
+      "uv_corners": [
+        [
+          0.643378519290928,
+          0.2073732718894009
+        ],
+        [
+          0.948905109489051,
+          0.21044546850998463
+        ],
+        [
+          0.9478623566214807,
+          0.4362519201228879
+        ],
+        [
+          0.6423357664233577,
+          0.434715821812596
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 2.7,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:South_Dakota_Sandhills.JPG",
+      "source_date": "2020-07-27",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Jeffrey_Beall\" title=\"User:Jeffrey Beall\">Jeffrey Beall</a>",
+      "license": "CC BY 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "TN": {
-      "name": "Tennessee"
+      "name": "Tennessee",
+      "status": "newest_available",
+      "image": "art/tn-available.png",
+      "source_sha256": "343e1b92e63cc86b15c202809612b9139b916c86094c7bff1bcd20d73595a56e",
+      "uv_corners": [
+        [
+          0.3106212424849699,
+          0.09115281501340483
+        ],
+        [
+          0.7274549098196392,
+          0.09115281501340483
+        ],
+        [
+          0.7254509018036072,
+          0.30831099195710454
+        ],
+        [
+          0.31462925851703405,
+          0.30831099195710454
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.4,
+      "support": "metal",
+      "source_page": "https://aashtojournal.transportation.org/tennessee-installing-new-highway-welcome-signs/",
+      "source_date": "2026-06-05",
+      "credit": "Tennessee DOT, via AASHTO Journal",
+      "license": "Agency-supplied press artwork; reuse terms not independently verified",
+      "current_verified": false,
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "rights_status": "review_before_public_redistribution"
     },
     "TX": {
-      "name": "Texas"
+      "name": "Texas",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/tx-available.png",
+      "source_sha256": "76100ec15175e8c294506af040ab2f8f18be2dc5e8486c9bbf7716e5f640547e",
+      "uv_corners": [
+        [
+          0.25443169968717416,
+          0.263653483992467
+        ],
+        [
+          0.7372262773722628,
+          0.2598870056497175
+        ],
+        [
+          0.7455683003128258,
+          0.5536723163841808
+        ],
+        [
+          0.26068821689259647,
+          0.5630885122410546
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 3.6,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Texas_sign.jpg",
+      "source_date": "2023-08-01 12:02:09",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Edenaviv5\" title=\"User:Edenaviv5\">Eden Aviv</a>",
+      "license": "CC0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "UT": {
-      "name": "Utah"
+      "name": "Utah",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/ut-available.png",
+      "source_sha256": "5ef288806667b0d63fcd4c197a553d8a259827e207a0a86f9ea1e297d9ac9ed0",
+      "uv_corners": [
+        [
+          0.15954118873826903,
+          0.2726008344923505
+        ],
+        [
+          0.8915537017726799,
+          0.2851182197496523
+        ],
+        [
+          0.8873826903023984,
+          0.7719054242002782
+        ],
+        [
+          0.15641293013555788,
+          0.7635605006954103
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 3.0,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Utah_sign_(US_40),_Sep_17.jpg",
+      "source_date": "2017-09-18 15:32:17",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:An_Errant_Knight\" title=\"User:An Errant Knight\">An Errant Knight</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable daylight reference located. The newer 2026 night photograph was heavily covered with stickers and not selected."
     },
     "VA": {
-      "name": "Virginia"
+      "name": "Virginia",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/va-available.png",
+      "source_sha256": "7632f84e84d7f018ada653d983cbc56ba18c58e466aa626d9cd15d626d51cfec",
+      "uv_corners": [
+        [
+          0.5505735140771637,
+          0.14100185528756956
+        ],
+        [
+          0.9520333680917622,
+          0.12244897959183673
+        ],
+        [
+          0.9520333680917622,
+          0.4582560296846011
+        ],
+        [
+          0.5516162669447341,
+          0.47680890538033394
+        ]
+      ],
+      "width_m": 6.0,
+      "height_m": 2.8,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:2017-06-12_15_45_41_%27Welcome_to_Virginia%27_sign_along_eastbound_U.S._Route_58_(Wilderness_Road)_entering_Lee_County,_Virginia_from_Claiborne_County,_Tennessee_crop.jpg",
+      "source_date": "2017-06-12 15:45:41",
+      "credit": "<a href=\"//commons.wikimedia.org/wiki/User:Famartin\" title=\"User:Famartin\">User:Famartin</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "VT": {
-      "name": "Vermont"
+      "name": "Vermont",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/vt-available.png",
+      "source_sha256": "cea9ebaed556577a0ec5e4aeea6ff9fe450547da80f41e54f847cf6231bc77c9",
+      "uv_corners": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.0
+        ],
+        [
+          1.0,
+          0.7583444592790387
+        ],
+        [
+          0.0,
+          0.7583444592790387
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 3.2,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:%22Welcome_to_Vermont_-_The_Green_Mountain_State%22_road_sign,_c._February_2017.png",
+      "source_date": "circa February 2017<div style=\"display: none;\">date QS:P,+2017-02-00T00:00:00Z/10,P1480,Q5727902</div>",
+      "credit": "State of Vermont",
+      "license": "Public domain",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "WA": {
-      "name": "Washington"
+      "name": "Washington",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/wa-available.png",
+      "source_sha256": "138cfb9705c3999bbfa176d5399b0541059e261c038223265d933c982787d108",
+      "uv_corners": [
+        [
+          0.49635036496350365,
+          0.4993045897079277
+        ],
+        [
+          0.6454640250260688,
+          0.5034770514603616
+        ],
+        [
+          0.6423357664233577,
+          0.6411682892906815
+        ],
+        [
+          0.49530761209593327,
+          0.6369958275382476
+        ]
+      ],
+      "width_m": 4.8,
+      "height_m": 3.3,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_Washington,_Interstate_82_Near_Umatilla,_Oregon_(265659312).jpg",
+      "source_date": "2006-10-06 11:46",
+      "credit": "<a rel=\"nofollow\" class=\"external text\" href=\"https://www.flickr.com/people/75683070@N00\">Ken Lund</a> from Reno, Nevada, USA",
+      "license": "CC BY-SA 2.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "WI": {
-      "name": "Wisconsin"
+      "name": "Wisconsin",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/wi-available.png",
+      "source_sha256": "17d1bf27e5a0bf079a77b13441742acb7376ef6aea5f45bb69f5aa15ddaf95c7",
+      "uv_corners": [
+        [
+          0.49009384775808135,
+          0.4296600234466589
+        ],
+        [
+          0.7101147028154328,
+          0.4296600234466589
+        ],
+        [
+          0.7101147028154328,
+          0.6400937866354045
+        ],
+        [
+          0.49009384775808135,
+          0.6400937866354045
+        ]
+      ],
+      "width_m": 2.4,
+      "height_m": 3.8,
+      "support": "timber",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Wisconsin_Welcomes_You.jpg",
+      "source_date": "2018-06-16 19:45:48",
+      "credit": "<a href=\"//commons.wikimedia.org/w/index.php?title=User:HelgaVonSlapya&amp;action=edit&amp;redlink=1\" class=\"new\" title=\"User:HelgaVonSlapya (page does not exist)\">HelgaVonSlapya</a>",
+      "license": "CC BY-SA 4.0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed.",
+      "outline": [
+        [
+          0.037914691943127965,
+          0.005571030640668524
+        ],
+        [
+          0.3933649289099526,
+          0.04735376044568245
+        ],
+        [
+          0.5165876777251185,
+          0.027855153203342618
+        ],
+        [
+          0.6161137440758294,
+          0.04178272980501393
+        ],
+        [
+          0.7440758293838863,
+          0.14484679665738162
+        ],
+        [
+          0.8388625592417062,
+          0.27019498607242337
+        ],
+        [
+          0.8341232227488151,
+          0.32590529247910865
+        ],
+        [
+          0.95260663507109,
+          0.41225626740947074
+        ],
+        [
+          0.909952606635071,
+          0.5515320334261838
+        ],
+        [
+          0.7962085308056872,
+          0.7019498607242339
+        ],
+        [
+          0.7582938388625592,
+          0.9972144846796658
+        ],
+        [
+          0.26540284360189575,
+          0.9860724233983287
+        ],
+        [
+          0.08056872037914692,
+          0.6908077994428969
+        ],
+        [
+          0.037914691943127965,
+          0.362116991643454
+        ],
+        [
+          0.0,
+          0.22562674094707522
+        ]
+      ],
+      "clearance_m": 1.0
     },
     "WV": {
-      "name": "West Virginia"
+      "name": "West Virginia",
+      "status": "newest_available",
+      "current_verified": false,
+      "image": "art/wv-available.png",
+      "source_sha256": "97f782c01500f649d1e91137ae3491f90876f05714829ccb423911604907f75c",
+      "uv_corners": [
+        [
+          0.04171011470281543,
+          0.34214186369958277
+        ],
+        [
+          0.28884254431699685,
+          0.3532684283727399
+        ],
+        [
+          0.28884254431699685,
+          0.44506258692628653
+        ],
+        [
+          0.04275286757038582,
+          0.44506258692628653
+        ]
+      ],
+      "width_m": 5.4,
+      "height_m": 1.6,
+      "support": "metal",
+      "source_page": "https://commons.wikimedia.org/wiki/File:Welcome_to_West_Virginia_sign_(May_2021).jpg",
+      "source_date": "2021-05-24",
+      "credit": "Sean Dudley",
+      "license": "CC0",
+      "selection_note": "Newest usable reference located; current installation/design not independently guaranteed."
     },
     "WY": {
-      "name": "Wyoming"
+      "name": "Wyoming",
+      "status": "current_verified",
+      "design": "2024 scenic postcard",
+      "current_source": "https://www.dot.state.wy.us/files/live/sites/wydot/files/shared/Management_Services/Annual%20Reports/250808-AR-Final.pdf",
+      "reference": "https://cowboystatedaily.com/2024/10/17/new-welcome-to-wyoming-sign-going-up-looks-like-a-giant-postcard/",
+      "reference_image": "probes/state-welcome-sources/wy-current.jpg",
+      "credit": "Courtesy Wyoming Department of Transportation, via Cowboy State Daily",
+      "image": "art/wy-current.jpg",
+      "width_m": 4.8,
+      "height_m": 2.3789999999999996,
+      "source_sha256": "c470ac39880717a5ea9f21643a627a944da9d7c3d8c5aaec078361786684dec9",
+      "uv_corners": [
+        [
+          0,
+          0.058888888888888886
+        ],
+        [
+          1,
+          0.058888888888888886
+        ],
+        [
+          1,
+          0.94
+        ],
+        [
+          0,
+          0.94
+        ]
+      ],
+      "source_page": "https://cowboystatedaily.com/2024/10/17/new-welcome-to-wyoming-sign-going-up-looks-like-a-giant-postcard/",
+      "license": "Reuse terms not independently verified",
+      "rights_status": "review_before_public_redistribution",
+      "support": "metal"
     }
   },
   "verification_date": "2026-11-09",

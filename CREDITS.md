@@ -224,6 +224,12 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   `tools/fonts/DejaVu-LICENSE.txt`; white glyph atlas also used for ARRÊT and DUR.
 
 
-## Recreation boards
+## State welcome and recreation boards
 
-Brown boards use existing Roadgeek lettering and original procedural geometry; mapped recreation names and areas retain the Overture/OSM provenance of their source cells. See the Forest Service and National Park Service notices alongside the included emblems.
+State welcome photographic assets retain their source licenses and attribution;
+see `server/data/welcome/registry.json` and `NOTICE.md`. Colorado image: CC BY-SA 2.0.
+Wyoming current graphic: courtesy WYDOT via Cowboy State Daily; reuse terms not
+independently verified, review before public redistribution. These images are not
+relicensed under MIT. State boundaries retain their Census attribution. Brown
+boards use existing Roadgeek lettering and original procedural geometry; mapped
+recreation names/areas retain the Overture/OSM provenance of their source cells.
