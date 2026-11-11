@@ -20,7 +20,7 @@ M.MAX_VIA = 10          -- (server routing.MAX_VIA)
 M.CHECK_S = 1.0
 M.ARRIVE_M = 40         -- this close (horizontally): arrived
 M.FINAL_M = 60          -- a graph node this close to the destination: the arrows end at the destination itself
-M.ON_GRAPH_M = 25       -- a route point this close to a graph node is reachable on the local graph
+M.ON_GRAPH_M = 25       -- route points may project this far onto a nearby graph edge
 M.LOOKAHEAD_M = 1500    -- how far along the route the arrows may reach
 M.SAMPLE_M = 40         -- route points tried for the arrows' target at least this far apart
 M.RETARGET_M = 150      -- the arrows' target is moved on in steps of this much route
@@ -124,7 +124,7 @@ function M.edgeSegments(nodes)
         -- the way it may be driven: 0 both, 1 from this node to the other, -1 back (a one-way edge runs from its inNode)
         local way = 0
         if type(e) == 'table' and e.oneWay and e.inNode ~= nil then way = (e.inNode == id) and 1 or -1 end
-        segs[#segs + 1] = { a.x, a.y, o.pos.x, o.pos.y, (a.z + o.pos.z) / 2, way }
+        segs[#segs + 1] = { a.x, a.y, o.pos.x, o.pos.y, (a.z + o.pos.z) / 2, way, a = id, b = other }
       end
     end
   end
@@ -134,7 +134,8 @@ end
 -- Pure: the distance from (px, py) to the nearest segment of segs, that segment's z, and {x, y, dx, dy}: the point on it
 -- and its direction (the way it may be driven for a one-way edge). With a heading (hx, hy): only segments that may be
 -- driven that way (a one-way edge against it is left out: the other carriageway of a divided road).
-function M.nearestEdge(segs, px, py, hx, hy)
+-- Optional accept(point, distanceSquared) filters projections without discarding a farther eligible edge.
+function M.nearestEdge(segs, px, py, hx, hy, accept)
   local bd, bz, bp = math.huge, 0, nil
   for _, s in ipairs(segs) do
     local ax, ay, bx, by = s[1], s[2], s[3], s[4]
@@ -145,8 +146,9 @@ function M.nearestEdge(segs, px, py, hx, hy)
     local qx, qy = ax + t * dx - px, ay + t * dy - py
     local d = qx * qx + qy * qy
     if d < bd then
-      bd, bz = d, s[5]
-      bp = { x = qx + px, y = qy + py, dx = (s[6] or 0) < 0 and -dx or dx, dy = (s[6] or 0) < 0 and -dy or dy }
+      local point = { x = qx + px, y = qy + py, dx = (s[6] or 0) < 0 and -dx or dx, dy = (s[6] or 0) < 0 and -dy or dy,
+        segment = s, t = t }
+      if not accept or accept(point, d) then bd, bz, bp = d, s[5], point end
     end
     ::next::
   end
@@ -339,8 +341,7 @@ local function toEnu(anchor)
   return enu
 end
 
--- The arrows' target on the planned route: the farthest sampled route point within LOOKAHEAD_M that lies on the local
--- graph (within ON_GRAPH_M of one of its edges); the stock route planner snaps it to the road.
+-- The arrows' target follows connected projections of the planned route within LOOKAHEAD_M and ON_GRAPH_M.
 -- the graph's applies count: the game's node table stays the same table when a new graph goes in
 local function graphSerial()
   local ok, ng = pcall(require, 'beamngEarth/navgraph')
@@ -348,14 +349,70 @@ local function graphSerial()
 end
 
 local segCache = { nodes = nil, serial = nil, segs = {} }
+
+-- Directed distances on the local graph, shared by all of this update's route samples.
+function M.routeLinks(segs)
+  local links = {}
+  for _, s in ipairs(segs) do
+    links[s.a], links[s.b] = links[s.a] or {}, links[s.b] or {}
+    local length = math.sqrt((s[3] - s[1])^2 + (s[4] - s[2])^2)
+    if s[6] ~= -1 then links[s.a][s.b] = length end
+    if s[6] ~= 1 then links[s.b][s.a] = length end
+  end
+  return links
+end
+
+-- Nearby projected samples need a nearby road connection too. Otherwise the next sample can jump onto a
+-- service road at the highway's loaded end, sending the planner back through a distant junction to reach it.
+function M.routeConnected(links, from, to, limit)
+  local a, b = from.segment, to.segment
+  local la = math.sqrt((a[3] - a[1])^2 + (a[4] - a[2])^2)
+  local lb = math.sqrt((b[3] - b[1])^2 + (b[4] - b[2])^2)
+  local delta = (to.t - from.t) * la
+  if a == b and (a[6] == 0 or delta * a[6] >= 0) and math.abs(delta) <= limit then return true end
+  local pending, distance = {}, {}
+  local function add(id, d)
+    if d <= limit and (not distance[id] or d < distance[id]) then distance[id], pending[id] = d, d end
+  end
+  if a[6] ~= 1 then add(a.a, from.t * la) end
+  if a[6] ~= -1 then add(a.b, (1 - from.t) * la) end
+  while next(pending) do
+    local id, d = nil, math.huge
+    for candidate, cost in pairs(pending) do if cost < d then id, d = candidate, cost end end
+    pending[id] = nil
+    if (id == b.a and b[6] ~= -1 and d + to.t * lb <= limit)
+      or (id == b.b and b[6] ~= 1 and d + (1 - to.t) * lb <= limit) then return true end
+    for other, length in pairs(links[id] or {}) do add(other, d + length) end
+  end
+  return false
+end
+
 local function routeTarget(e, nodes, i, t)
   local serial = graphSerial()
   if segCache.nodes ~= nodes or segCache.serial ~= serial then
     segCache = { nodes = nodes, serial = serial, segs = M.edgeSegments(nodes) }
+    segCache.links = M.routeLinks(segCache.segs)
   end
   local segs = segCache.segs
   local n = #e.x
   local s0 = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
+  local d0, _, previous = M.nearestEdge(segs, e.x[i] + t * (e.x[i + 1] - e.x[i]),
+    e.y[i] + t * (e.y[i + 1] - e.y[i]), e.x[i + 1] - e.x[i], e.y[i + 1] - e.y[i])
+  if d0 > M.ON_GRAPH_M then previous = nil end
+  if auto then
+    -- On-road, start on the car's actual edge, including elevation: the route line may be nearer a parallel road.
+    local veh = playerVeh()
+    local p, h = veh and veh:getPosition(), veh and veh:getDirectionVector()
+    local a, b
+    if p and h then a, b = M.edgeUnder(nodes, p.x, p.y, h.x, h.y, p.z) end
+    for _, seg in ipairs(segs) do
+      if b and ((seg.a == a and seg.b == b) or (seg.a == b and seg.b == a)) then
+        _, _, previous = M.nearestEdge({ seg }, p.x, p.y)
+        break
+      end
+    end
+  end
+  local previousS = s0
   local best = nil
   local via, lastVia, misses = {}, s0, 0
   -- sample along the route every SAMPLE_M from the player's spot (the simplified route's vertices can be far apart)
@@ -371,16 +428,21 @@ local function routeTarget(e, nodes, i, t)
     -- on the graph: near an edge drivable the route's way. A divided road's carriageways lie closer than ON_GRAPH_M:
     -- where the local graph ended a little sooner on the car's side, the target fell on the other one and the AI
     -- turned round across the highway to reach it, then circled at 4 mph (GitHub #180, reproduced on US-1, 2026-10-23)
-    local d, z, bp = M.nearestEdge(segs, x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k])
+    local function connected(bp, distanceSq)
+      return distanceSq <= M.ON_GRAPH_M^2 and
+        (not previous or M.routeConnected(segCache.links, previous, bp, s - previousS + 2 * M.ON_GRAPH_M))
+    end
+    local d, z, bp = M.nearestEdge(segs, x, y, e.x[k + 1] - e.x[k], e.y[k + 1] - e.y[k], connected)
     local final = s >= e.cum[n] - 1e-6
     if d <= M.ON_GRAPH_M then
+      previous, previousS = bp, s
       -- the target / waypoint itself on that edge (not the route's point, which can lie nearer the other carriageway:
       -- the game's planner went for that one, the wrong way up a one-way road, and asked for a U-turn; GitHub #180)
       if bp and not final then x, y = bp.x, bp.y end
       best = { s = s, x = x, y = y, z = z, final = final }
       misses = 0
       if s - lastVia >= M.VIA_M then via[#via + 1] = best; lastVia = s end
-    elseif best then
+    elseif previous then
       misses = misses + 1                -- the route left the graph (a short gap, a junction's offset: not yet)
       if misses >= 3 then break end
     end
@@ -970,6 +1032,19 @@ function M.update(anchor, player)
       leastRemaining = nil
       requestRoute(player)
     end
+    if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
+    if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
+    local tg
+    if auto then
+      tg = nodes and routeTarget(e, nodes, i, t)
+      if not tg then
+        -- Wait for the intended road to load. A destination-nearest fallback can send the car onto a side road.
+        local veh = playerVeh()
+        if veh then holdAutodrive(veh) end
+        progRemaining, progAt, stuckTries = nil, nil, 0
+        return
+      end
+    end
     if auto and not paused then
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
@@ -985,11 +1060,9 @@ function M.update(anchor, player)
         M.noProgressReplans = (M.noProgressReplans or 0) + 1
       end
     end
-    if route.dist and route.dist > 0 and route.dur then info.eta = route.dur * remaining / route.dist end
-    if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
     local hereS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
     if not auto and speed >= M.LINE_MPS and setLineArrows(e, hereS, player.z) then return end
-    local tg = nodes and routeTarget(e, nodes, i, t)
+    tg = tg or (nodes and routeTarget(e, nodes, i, t))
     if not tg and not auto and setLineArrows(e, hereS, player.z) then return end
     lineKey = nil                       -- (back on the planner's arrows: set again by setArrows)
     if tg then

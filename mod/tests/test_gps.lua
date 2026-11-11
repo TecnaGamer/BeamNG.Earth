@@ -58,6 +58,29 @@ T.check(bp and math.abs(bp.x - 20) < 1e-9 and math.abs(bp.y - 100) < 1e-9 and bp
 _, _, bp = G.nearestEdge(dsegs, 10, 100, 0, 1)
 T.check(bp and math.abs(bp.x) < 1e-9 and bp.dy > 0, 'and on the northbound one, facing north')
 local e = { x = { 0, 100, 100 }, y = { 0, 0, 100 }, cum = { 0, 100, 200 } }
+do
+  local a = { 0, 0, 100, 0, 0, 0, a = 'a', b = 'b' }
+  local b = { 100, 0, 200, 0, 0, 1, a = 'b', b = 'c' }
+  local c = { 200, 0, 300, 0, 0, -1, a = 'c', b = 'd' }
+  local links = G.routeLinks({ a, b, c })
+  local p = { segment = a, t = 0.4 }
+  local q = { segment = b, t = 0.6 }
+  T.check(G.routeConnected(links, p, q, 120) and not G.routeConnected(links, p, q, 119),
+    'projection connection includes partial edges and respects its distance limit')
+  T.check(not G.routeConnected(links, q, p, 1000), 'a connection cannot go backwards through a one-way edge')
+  T.check(G.routeConnected(links, { segment = a, t = 0.5 }, { segment = a, t = 0.25 }, 25),
+    'a two-way edge can be driven either way')
+  T.check(not G.routeConnected(links, q, { segment = c, t = 0.5 }, 1000),
+    'a reverse-stored one-way edge cannot be entered in the wrong direction')
+  T.check(G.routeConnected(links, { segment = c, t = 0.5 }, { segment = c, t = 0.1 }, 40),
+    'reverse-stored one-way projections connect in their permitted direction')
+  a[6] = 1
+  local back = { 200, 0, 0, 0, 0, 1, a = 'c', b = 'a' }
+  links = G.routeLinks({ a, b, back })
+  local start, finish = { segment = a, t = 0.8 }, { segment = a, t = 0.2 }
+  T.check(G.routeConnected(links, start, finish, 340) and not G.routeConnected(links, start, finish, 339),
+    'a valid directed loop reaches an earlier projection only by driving the loop')
+end
 local sl = G.routeSlice(e, 50, 160, 25)
 T.check(#sl == 6 and sl[1][1] == 50 and sl[3][1] == 100 and sl[3][2] == 0 and sl[6][1] == 100 and sl[6][2] == 60,
   'the route sliced every 25 m round its corner, both ends included')
