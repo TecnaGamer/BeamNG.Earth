@@ -8,11 +8,11 @@ for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_gro
 end
 local savedClock, savedNav = os.clock, package.loaded['beamngEarth/navgraph']
 
-local function fixture(path, y)
+local function fixture(path, y, radius)
   local G = dofile(dir .. '/../beamng_earth/lua/ge/extensions/beamngEarth/gps.lua')
   local f = { gps = G, now = 0, serial = 1, drives = {}, extensions = {}, modes = {}, arrows = 0, requests = 0,
     healthy = true, speed = 20, x = 40, y = y or 2, path = path or { 'j', 's', 't' } }
-  local function node(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links } end
+  local function node(x, y, links) return { pos = { x = x, y = y, z = 0 }, links = links, radius = radius } end
   f.nodes = { w = node(0, 0, { j = {} }), j = node(100, 0, { s = {} }),
     s = node(160, -60, { t = {} }), t = node(400, -60, {}) }
   f.map = { nodes = f.nodes, buildSerial = 1 }
@@ -97,6 +97,16 @@ do
   f = fixture(nil, 20)
   T.check(#f.drives == 0 and f.modes[#f.modes] == 'stop',
     'without a nearby matching segment, hold rather than drive toward an unrelated road')
+end
+
+do
+  local f = fixture(nil, 10, 12)
+  T.check(#f.drives == 1 and table.concat(f.drives[1], ',') == 'j,s,t',
+    'autodrive starts in an outer lane 10 m from the centre of a 24 m carriageway')
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 2 and #f.modes == 0, 'a graph handoff in the outer lane resumes without a stop')
+  f = fixture(nil, 14, 12)
+  T.check(#f.drives == 0 and f.modes[#f.modes] == 'stop', 'a position beyond the wide carriageway still holds')
 end
 
 do

@@ -492,9 +492,10 @@ local function drivable(e, a)
   return not (type(e) == 'table' and e.oneWay and e.inNode ~= nil and e.inNode ~= a)
 end
 
--- Pure: the graph edge (from id, to id) the car at (px, py) heading (hx, hy) drives on: within 8 m, running its way.
+-- Pure: the nearest graph edge (from id, to id) running the car's way, within its local half-width
+-- or the existing 8 m matching tolerance. Wide carriageways must include their outer lanes.
 function M.edgeUnder(nodes, px, py, hx, hy)
-  local best, bd = nil, 8.0
+  local best, bd = nil, math.huge
   local function try(from, to, e)
     local a, b = nodes[from] and nodes[from].pos, nodes[to] and nodes[to].pos
     if not (a and b) or not drivable(e, from) then return end
@@ -504,7 +505,15 @@ function M.edgeUnder(nodes, px, py, hx, hy)
       local t = math.max(0, math.min(1, ((px - a.x) * dx + (py - a.y) * dy) / (L * L)))
       local qx, qy = a.x + t * dx - px, a.y + t * dy - py
       local d = math.sqrt(qx * qx + qy * qy)
-      if d < bd then best, bd = { from, to }, d end
+      local ra, rb = nodes[from].radius or 0, nodes[to].radius or 0
+      if type(e) == 'table' then
+        -- Edge-specific radii avoid borrowing the width of a wider road at a shared junction.
+        local rIn, rOut = e.inRadius, e.outRadius
+        if e.inNode == to then rIn, rOut = rOut, rIn end
+        ra, rb = rIn or ra, rOut or rb
+      end
+      local reach = math.max(8, ra + t * (rb - ra))
+      if d < reach and d < bd then best, bd = { from, to }, d end
     end
   end
   for id, n in pairs(nodes or {}) do

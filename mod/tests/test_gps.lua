@@ -87,6 +87,29 @@ T.check(#jn == 2 and jn[1] == 'w', 'a planner path taking another direction is p
 jn = G.joinStart({ 's', 'j' }, 'w', 'j', g2)
 T.check(#jn == 2 and jn[1] == 's', 'a join must not create a loop through a later route node')
 
+-- Wide lanes and tapered edges use their local half-width, even on a single-sided graph.
+do
+  local edge = { inNode = 'a', outNode = 'b', inRadius = 12, outRadius = 4 }
+  local wide = {
+    a = { pos = { x = 0, y = 0 }, radius = 20, links = {} },
+    b = { pos = { x = 100, y = 0 }, radius = 20, links = { a = edge } },
+  }
+  local a, b = G.edgeUnder(wide, 25, 9, 1, 0)
+  T.check(a == 'a' and b == 'b', 'an outer lane beyond 8 m is on the wide end of the road')
+  a, b = G.edgeUnder(wide, 25, 9, -1, 0)
+  T.check(a == 'b' and b == 'a', 'edge radii keep their orientation when driving the other way')
+  T.check(G.edgeUnder(wide, 75, 9, 1, 0) == nil, 'the narrow end uses the tapered edge width, not the wider node radius')
+  T.check(G.edgeUnder(wide, 25, 11, 1, 0) == nil, 'outside the local road width is still rejected')
+  edge.oneWay = true
+  T.check(G.edgeUnder(wide, 25, 9, -1, 0) == nil, 'wide roads still reject a reverse one-way start')
+  wide.a.radius, wide.b.radius = 12, 12
+  wide.b.links.a = {}
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'node radii supply the width when edge radii are absent')
+  wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
+  wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
+end
+
 -- the AI's path across a road-graph change: from the edge under the car, as far as every step is an edge in both graphs
 do
   local function n(x, links) return { pos = { x = x, y = 0 }, links = links } end
