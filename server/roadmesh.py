@@ -25,12 +25,14 @@ import cdae
 
 DRAPE_STEP = 2.0        # m between ribbon cross-sections (the physics block's lattice)
 # Metres above the physics ground, which grading.ROAD_LIFT raises under roads.
-LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.01, "frontage": 0.03,
+LIFT = {"base": 0.0, "edge": 0.003, "gutter": 0.005, "mark": 0.005, "frontage": 0.03,
         # road wear (roadwear.py): its materials write no depth (roadwear.materials.json), so their order in the mesh,
         # not their height, decides what lies on top: the strips (fade materials) first, the paint over them
         # (2026-11-11, the user: "can we make the road decals even closer to the ground?": 3-3.2 cm -> 1.2-1.4 cm, the
         # crack lines on the paint's own tight ground following)
-        "wear": 0.012, "wear2": 0.013, "spot": 0.006, "wline": 0.014}
+        # then (the user: "make both a pixel or 2 above the ground so they dont z fight"): the paint 1 cm -> 5 mm, the wear
+        # 6-7 mm, the spots 4 mm (each wear layer's lift its own: the strips are told apart by it)
+        "wear": 0.006, "wear2": 0.0065, "spot": 0.004, "wline": 0.007}
 # The wear strips may depart further from the drawn ground than the paint before follow_ground cuts them, lifted about
 # as far (a soft decal shows no parallax): a motorway tile's lanes of tyre polish (I-95, Baltimore) were +21k triangles
 # at FOLLOW_TOL, +9k at 4 cm. The spots (small quads) keep FOLLOW_TOL.

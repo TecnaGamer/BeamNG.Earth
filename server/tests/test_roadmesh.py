@@ -91,7 +91,7 @@ class RoadMeshTest(unittest.TestCase):
         want = 10.0 + 0.05 * base[:, 0] + roadmesh.LIFT["base"]
         self.assertLess(np.abs(base[:, 2] - want).max(), 0.01, "on the ground, lifted (frame curvature ~mm)")
         mark = P[np.unique(T[M == 1])]
-        self.assertGreater((mark[:, 2] - (10.0 + 0.05 * mark[:, 0])).min(), roadmesh.LIFT["base"] + 0.005,
+        self.assertGreater((mark[:, 2] - (10.0 + 0.05 * mark[:, 0])).min(), roadmesh.LIFT["base"] + 0.5 * roadmesh.LIFT["mark"],
                            "markings above the asphalt")
         self.assertLessEqual(np.diff(np.unique(np.round(base[:, 0], 3))).max(), roadmesh.DRAPE_STEP + 1e-6)
         self.assertTrue(set(np.unique(UV[:, 0])) <= {0.0, 1.0}, "u across the width")
