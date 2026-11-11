@@ -229,7 +229,7 @@ def _edge_points(st, step=3.0):
     if not polys:
         return []
     keep = busstationkeep.Keepout(polys)
-    out = []
+    cand, probe = [], []
     for r in polys:
         area = float(np.dot(r[:, 0], np.roll(r[:, 1], -1)) - np.dot(np.roll(r[:, 0], -1), r[:, 1]))
         for a, b in zip(r, np.roll(r, -1, axis=0)):
@@ -241,10 +241,14 @@ def _edge_points(st, step=3.0):
             k = max(1, int(ln // step))
             for i in range(k):
                 q = a + (b - a) * ((i + 0.5) / k)
-                if bool(keep.contains((q - inward * 1.2)[None], 0.0)[0]):
-                    continue                                    # (an edge shared with the next rectangle: not the yard's)
-                out.append((q + inward * YARD_LAMP_IN_M, inward))
-    return out
+                cand.append((q + inward * YARD_LAMP_IN_M, inward))
+                probe.append(q - inward * 1.2)
+    if not cand:
+        return []
+    # (the probes 1.2 m out tested at once: point by point, a city's yard (thousands of edge points, each against every
+    # rectangle) was 8 s of a road tile at Port Authority; the same answer per point)
+    shared = keep.contains(np.asarray(probe, float), 0.0)       # (an edge shared with the next rectangle: not the yard's)
+    return [c for c, s in zip(cand, shared.tolist()) if not s]
 
 
 def yard_lamps(st, taken=()):

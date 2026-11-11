@@ -82,6 +82,7 @@ mod mappedlamps;
 mod vegclumps;
 mod roadwear;
 mod roadtone;
+mod railbeds;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6176,6 +6177,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 207: farglobal::far_normal_err and far_global_mesh's 11th value err_n (the far terrain's pixel-error LOD, the
     // lodPx setting; another branch's 206)
     // 208: roofs::slope_wall_floors (the walls above a heightfield roof's eave in floor bands of the window sheet)
-    m.add("VERSION", 208)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_smooth, m)?)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_join_beds, m)?)?;
+    // 209: railbeds (railprofile.smooth / join_beds: a node window's ground beds smoothed and its switches joined, in
+    // one call each; that branch's 206)
+    m.add("VERSION", 209)?;
     Ok(())
 }
