@@ -1,6 +1,7 @@
 # Python
 __pycache__/
 *.pyc
+node_modules/
 
 # local backups and logs
 backups/

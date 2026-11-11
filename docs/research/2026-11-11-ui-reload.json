@@ -1,0 +1,170 @@
+{
+  "date": "2026-11-11",
+  "baseCommit": "a317f67622249e080850f00a1394114884f162fb",
+  "uiTests": {
+    "vue": "3.5.43",
+    "development": {
+      "passed": 20,
+      "failed": 0
+    },
+    "production": {
+      "passed": 20,
+      "failed": 0
+    },
+    "pristine191": {
+      "passed": 6,
+      "failed": 14
+    },
+    "patched191": {
+      "passed": 20,
+      "failed": 0
+    },
+    "stressReloads": 50
+  },
+  "existingTests": {
+    "upstreamLuaModulesPassed": 113,
+    "snapshot191LuaModulesPassed": 103,
+    "mapMathSuitesPassed": 2
+  },
+  "game": {
+    "version": "0.40.5.0",
+    "build": 302427,
+    "context": "Isolated profile, main-menu/legal screen, official BeamMP source mod loaded; normal router and Lua bridge; no server connection",
+    "patched": {
+      "pass": true,
+      "vue": "3.5.43",
+      "route": "legal.onlineFeatures",
+      "snapshots": [
+        {
+          "reload": 0,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 1,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 2,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 3,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 4,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 5,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 6,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 7,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 8,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 9,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": 10,
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        },
+        {
+          "reload": "3 overlapping reloads",
+          "styles": 1,
+          "owner": "function",
+          "routes": true
+        }
+      ]
+    },
+    "pristine191Control": {
+      "vue": "3.5.43",
+      "before": 1,
+      "after": 2,
+      "reproducedLeak": true
+    },
+    "fixedVersionRestored": {
+      "pass": true,
+      "styles": 1,
+      "routes": true
+    },
+    "preliminaryLaunch": {
+      "status": "failed",
+      "argument": "-windowed",
+      "failure": "parseArgs.lua:58: attempt to call global 'setFullScreen' (a nil value)",
+      "beforeUIValidation": true
+    },
+    "finalExit": "Normal shutdown logged at 636.94289 seconds; test process exited."
+  },
+  "packaging": {
+    "playerAndBeamMPBuilds": "passed",
+    "patched191ClientZipCRC": "passed",
+    "patched191ClientZipMatchesSource": true,
+    "runtimeFilesChangedIn191": [
+      "ui/ui-vue/mods/beamngEarth/earthServers.js",
+      "ui/ui-vue/mods/beamngEarth/index.js"
+    ]
+  },
+  "prAudit": {
+    "checkedAt": "2026-11-11T22:34:24.340Z",
+    "count": 343,
+    "open": 117,
+    "heads": [
+      {
+        "branch": "main",
+        "sha": "e1c72abf66a42f6e877c3e1de8839352360913fc"
+      },
+      {
+        "branch": "dev",
+        "sha": "a317f67622249e080850f00a1394114884f162fb"
+      }
+    ],
+    "newPRs": []
+  },
+  "notRun": [
+    "Full server/native foundation gate",
+    "Actual first join/reconnect and streamed-world load against a staging BeamMP server carrying the patch"
+  ],
+  "pullRequestBaseCommit": "01e902f06994772fb214db9a9bbe899a6251a32e",
+  "postRebaseChecks": {
+    "runtimeFilesUnchanged": true,
+    "uiTestsPassed": 20,
+    "luaModulesPassed": 113,
+    "mapMathSuitesPassed": 2,
+    "prSummaries": 343,
+    "openPRHeads": 117,
+    "changedPRHeadsSinceFullAudit": 0
+  }
+}

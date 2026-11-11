@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Bounded foundation regression gate. Uses synthetic data, not a gameplay benchmark.
 
-Run after installing server/requirements.txt, lupa and scipy and building tools/build_native.py.
+Run after installing server/requirements.txt, lupa and scipy, running npm ci --prefix mod/tests,
+and building tools/build_native.py.
 The existing full server suite remains available through tools/run_tests.py.
 """
 import argparse
@@ -56,6 +57,7 @@ def main():
         [sys.executable, "tools/run_tests.py", *MODULES, "--par", str(args.par),
          "--timeout", str(args.timeout), "--logs", "build/quality-tests"],
         [sys.executable, "tools/run_lua_tests.py"],
+        ["node", "--experimental-vm-modules", "--test", "mod/tests/test_earth_ui.mjs"],
         ["node", "--test", "mod/tests/test_mapmath.mjs", "server/tests/test_mapmath.mjs"],
         ["cargo", "test", "--locked", "--manifest-path", "native/serverlist/Cargo.toml"],
         [sys.executable, "tools/package.py", "--beammp", "--out", "build/quality-packages"],

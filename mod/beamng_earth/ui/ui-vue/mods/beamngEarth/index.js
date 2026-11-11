@@ -13,6 +13,17 @@ import { lua } from "@/bridge"
 const TAB_ID = "beamngEarth"
 const MOD_ROOT = "/ui/ui-vue/mods/beamngEarth"
 const MAP_SOURCE = "beamngEarth.routes"
+// The mod loader may overlap async load/unload calls, including calls from different evaluated copies. Finish each
+// operation before starting the next, and let only the latest loaded copy unregister our shared UI sources.
+const LIFECYCLE = Symbol.for("beamngEarth.uiLifecycle")
+const owner = {}
+let serversTab = null
+function enqueue(operation) {
+  const lifecycle = window[LIFECYCLE] ||= { queue: Promise.resolve(), owner: null }
+  const result = lifecycle.queue.then(() => operation(lifecycle))
+  lifecycle.queue = result.catch(() => {}) // a failed bridge call must not prevent the next load or cleanup
+  return result
+}
 function mapRoutes(EarthMap, EarthWelcome, EarthSettings, EarthMap3d) {
   return [
   {
@@ -112,7 +123,7 @@ async function registerMapRoute() {
   }
 }
 
-export async function onLoad() {
+async function loadUi() {
   // the old shared-Mods-tab button, if this UI session still has one (before the tab: its id is the first page's)
   try { await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-settings") } catch (e) { /* none */ }
   await registerPauseTab()
@@ -124,12 +135,17 @@ export async function onLoad() {
   try { await lua.extensions.ui_pause_actions.unregisterModButton("beamngEarth-map") } catch (e) { /* none */ }
   await registerMapRoute()
   // the BeamNG.Earth servers tab in BeamMP's server browser (earthServers.js); its failure costs nothing else
-  try { (await import("./earthServers.js")).start() } catch (e) { console.error("BeamNG.Earth: servers tab failed", e) }
+  try {
+    serversTab = await import("./earthServers.js")
+    serversTab.start()
+  } catch (e) { console.error("BeamNG.Earth: servers tab failed", e) }
 }
 
-export async function onUnload() {
-  try { (await import("./earthServers.js")).stop() } catch (e) { /* never started */ }
-  await lua.extensions.ui_pause_actions.unregisterModTab(TAB_ID)       // (its buttons with it)
+async function unloadUi() {
+  try { serversTab?.stop() } catch (e) { /* never started */ }
+  serversTab = null
+  try { await lua.extensions.ui_pause_actions.unregisterModTab(TAB_ID) } // (its buttons with it)
+  catch (e) { console.error("BeamNG.Earth: pause menu unload failed", e) }
   try {
     if (window.bngRoutes) window.bngRoutes.remove([MAP_SOURCE])
     if (lua.extensions.ui_router_routeManager) {
@@ -141,4 +157,19 @@ export async function onUnload() {
   if (window.bngApi && window.bngApi.engineLua) {
     window.bngApi.engineLua("if beamngEarth_settings then beamngEarth_settings.setPageExists(false) end")
   }
+}
+
+export function onLoad() {
+  return enqueue(async lifecycle => {
+    lifecycle.owner = owner
+    await loadUi()
+  })
+}
+
+export function onUnload() {
+  return enqueue(async lifecycle => {
+    if (lifecycle.owner !== owner) return
+    lifecycle.owner = null
+    await unloadUi()
+  })
 }
