@@ -63,6 +63,7 @@ mod perfclean;
 mod mdhtml;
 mod roadlanes;
 mod waytags;
+mod pmtiles;
 mod underdeck;
 mod deckground;
 mod railseam;
@@ -6160,6 +6161,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 203: roadtone (paint_lines_toned: the roads painted into the photo in its own pavement's tone)
     m.add_function(wrap_pyfunction!(roadtone::paint_cover_toned, m)?)?;
     // 204: paint_cover_toned (lots and pads in the photo's own tone)
-    m.add("VERSION", 204)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_tile_id, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_header, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_find, m)?)?;
+    m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
+    // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
+    // tiles, server/pmtiles.py; 205 left to another branch)
+    m.add("VERSION", 206)?;
     Ok(())
 }

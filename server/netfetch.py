@@ -208,6 +208,12 @@ POLICIES = {
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("overturemaps-us-west-2.s3.us-west-2.amazonaws.com",
                  "overturemapswestus2.blob.core.windows.net")},
+    # Overture's own vector tiles (pmtiles.py): its tile CDN and the bucket behind it under its two names, range reads
+    # of a release's immutable archives (a cell's tile and its directories), each mirror with its own limits
+    **{h: HostPolicy(rate=40.0, burst=80.0, max_conc=8, daily_budget=None, allow_prefetch=True,
+                     offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
+       for h in ("tiles.overturemaps.org", "overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com",
+                 "overturemaps-extras-us-west-2.s3.amazonaws.com")},
     **{h: HostPolicy(rate=20.0, burst=40.0, max_conc=4, daily_budget=None, allow_prefetch=True,
                      offline_ok=True, miss_ttl=None, binary=True, timeout=30.0)
        for h in ("esa-worldcover.s3.eu-central-1.amazonaws.com",
@@ -346,6 +352,11 @@ ROLES = {
         "roads, buildings, water and land use; places not visited before may come without them",
     "overturemapswestus2.blob.core.windows.net":
         "roads, buildings, water and land use (second source); only matters while the first is down too",
+    "tiles.overturemaps.org": "roads, buildings, water and land use, fast; the other map sources stand in",
+    "overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com":
+        "roads, buildings, water and land use, fast (second source); the other map sources stand in",
+    "overturemaps-extras-us-west-2.s3.amazonaws.com":
+        "roads, buildings, water and land use, fast (third source); the other map sources stand in",
     "esa-worldcover.s3.eu-central-1.amazonaws.com":
         "land cover (ground materials, rocks, town streets); places not visited before get a plain ground meanwhile",
     "dataforgood-fb-data.s3.amazonaws.com": "the trees; places not visited before have none meanwhile",
