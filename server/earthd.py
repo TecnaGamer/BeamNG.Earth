@@ -421,8 +421,8 @@ FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
 # <= 0, the sea floor carved to L2) in flight at most this share of the far workers (at least one): at a place never
 # seen their road plans and water take 6-25 s (the map data's first download) and the nearest ten held every worker
-# meanwhile, nothing else built (Missoula, Twin Falls 2026-11-11). Once the data is in they take ~100 ms and the cap
-# costs nothing.
+# meanwhile, nothing else built (Missoula, Twin Falls 2026-11-11). Once the data is in they take ~100 ms; with nothing
+# else left to build they take every worker (the cap orders, it never leaves a worker idle).
 GRADED_SHARE = float(os.environ.get("BNGE_GRADED_SHARE", "0.5"))     # (1: no cap, A/B runs)
 MAP_ZOOM_RAMP_K = 8.0            # the 3D map's eye this many times lower than before: coarse first again (on_pose)
 MAP_FOCUS_MAX_M = 1200000.0      # a map_focus farther from the anchor than this is ignored (mod map3d REBASE_M)
@@ -8452,6 +8452,10 @@ class Connection:
             g_n = sum(1 for _, t in self.inflight.values() if self.graded(t))
             while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
                 t = self._next_tile(g_n < g_cap)
+                if t is None and g_n >= g_cap:
+                    # (nothing else to build: the cap would only leave workers idle; Laramie 2026-11-11, the near
+                    # 300 tiles once the map data was in: 17 s at half the workers)
+                    t = self._next_tile(True)
                 if t is None:
                     break
                 g_n += self.graded(t)
