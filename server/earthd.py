@@ -323,6 +323,9 @@ QUICK_SHARE_WAIT_S = 30.0       # Server._quick_once: a caller waits this long f
 QUICK_MADE_KEPT = 256           # blocks whose stand-in file names _quick_once remembers
 QUICK_BASE_PX = 512             # a block's stand-in photo (write_quick_base): the imagery alone, 2 m texels
 BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this long at most for its photo
+# A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
+# stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
+PROVISIONAL_BASE_WAIT_S = 0.3
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -3462,7 +3465,13 @@ class Server:
             from worldbundle import BundleError
             raise BundleError("Ungraded provisional terrain is disabled for pinned road plans")
         t0 = time.perf_counter()
-        q = self.anchor_q(anchor)
+        # (the anchor's height quantum when surveyed, else the finest step, which heightmap.block_params coarsens for
+        # this block alone as its own relief needs: the survey (+-15 km of DEM z10) was 3.6 s of a fresh Spokane's 5.2 s
+        # first block, 2026-11-11; it goes on beside it for the graded blocks)
+        q = anchor.q
+        if q is None:
+            q = heightmap.Q_LADDER[0]
+            threading.Thread(target=self.anchor_q, args=(anchor,), daemon=True, name="survey-q").start()
         base = None
         if self.near_visual == "detail" and self.imagery is not None:
             # (here, not in a block process: the other lane's process can still be busy with the old place's block,
@@ -3475,12 +3484,22 @@ class Server:
             # roadPaint above all), 3.9 s for the same block in a fresh process (.claude/work/rust_port_plan.md 1a,
             # 2026-11-07); the follow blocks' stand-ins went there before (make_provisional_follow)
             key = (anchor.id, cx, cy)
+            if base is not None and getattr(self, "speed", 0.0) < QUICK_SYNC_MAX_V:
+                # (its stand-in photo too, made here beside the heights (the photo process builds them): the block goes
+                # with it when its photo is not done PROVISIONAL_BASE_WAIT_S after the heights, the photo swapped in
+                # when done; it waited for the photo, 2 of a 2.9 s first block in Lower Manhattan, 2026-11-11)
+                self.quick_futs[key] = self.quick_early.submit(
+                    self._quick_once, anchor, cx, cy, lambda: self.write_quick_base(anchor, cx, cy))
+            ts = time.time()
             info = pool.submit(blockworker.build, anchor.id, anchor.lat, anchor.lon, anchor.hm_zoom, q, cx, cy,
                                self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                                provisional=True, ground_at=tuple(ground_at)).result()
-            info.pop("started", None)
-            info.pop("finished", None)
-            info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True)
+            started, finished = info.pop("started", None), info.pop("finished", None)
+            if started is not None and finished is not None:    # (where a first block's seconds go)
+                info.setdefault("stages", {}).update(queue=max(0.0, started - ts), work=max(0.0, finished - started),
+                                                     back=max(0.0, time.time() - finished))
+            info = self._finish_heightmap(anchor, cx, cy, info, t0, base, urgent=True,
+                                          base_wait=PROVISIONAL_BASE_WAIT_S)
             log.info("provisional block %s in %.2f s in a worker (%s)", key, time.perf_counter() - t0,
                      " ".join(f"{k} {v:.2f}" for k, v in info.get("stages", {}).items()))
             return info
@@ -3759,24 +3778,26 @@ class Server:
         else:
             self.base_stale.add(key)
 
-    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None):
+    def _finish_heightmap(self, anchor, cx, cy, info, t0, base=None, urgent=False, lane=None, base_wait=None):
         """_finish_heightmap_now; a block the game asked for (urgent) waiting for its photo: urgent work (urgency.py),
         the background jobs in this process wait to start meanwhile (its stand-in photo, 0.2 s of work, took 5 s and
         more beside the far tiles' and the vegetation's, the edge guard holding the car at 130-175 mph, 2026-10-31)."""
         if urgent and base is not None and not base.done():
             with urgencymod.urgent():
-                return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane)
-        return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane)
+                return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane, base_wait)
+        return self._finish_heightmap_now(anchor, cx, cy, info, t0, base, lane, base_wait)
 
-    def _finish_heightmap_now(self, anchor, cx, cy, info, t0, base=None, lane=None):
+    def _finish_heightmap_now(self, anchor, cx, cy, info, t0, base=None, lane=None, base_wait=None):
         """The base photo (detail mode; rendered here: the imagery corrections live in this process; base: its
-        future from _base_photo, started with the heights), the timings."""
+        future from _base_photo, started with the heights), the timings. base_wait: s it waits for the photo at most
+        (default by speed: BASE_FAST_WAIT_S / BASE_WAIT_S)."""
         if base is not None:
             t1 = time.perf_counter()
             if not base.done():
                 # below FAST_BASE_V it waits for its own photo (BASE_WAIT_S at most): sent before it, each block's
                 # ground swapped twice (stand-in, then the photo) and flashed at each (the user at 57-124 mph, 2026-10-30)
-                concurrent.futures.wait([base], timeout=BASE_FAST_WAIT_S if self.fast else BASE_WAIT_S)
+                concurrent.futures.wait([base], timeout=base_wait if base_wait is not None
+                                        else BASE_FAST_WAIT_S if self.fast else BASE_WAIT_S)
             quick = None
             early = self.quick_futs.pop((anchor.id, cx, cy), None)
             if not base.done() and early is not None:
