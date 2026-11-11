@@ -13,7 +13,7 @@ import math
 import netfetch
 
 OSRM_URL = "https://routing.openstreetmap.de/routed-car/route/v1/driving/{coords}" \
-           "?overview=full&geometries=geojson&steps=false"
+           "?overview=full&geometries=geojson&steps=true"
 # Waypoints between the start and the destination (GitHub #935 / #886: a charging stop, a route with several stops):
 # OSRM's own intermediate coordinates, at most MAX_VIA of them (one request for the whole trip, the FOSSGIS fair use).
 MAX_VIA = 10
@@ -107,6 +107,66 @@ def resample(points, max_points=120, min_step_m=50.0):
     return out
 
 
+def _nonnegative(value, default=0.0):
+    return float(value) if type(value) in (int, float) and math.isfinite(value) and value >= 0 else default
+
+
+def _steps(legs):
+    """OSRM maneuvers in leg order, independent of the simplified overview's vertices (GitHub #1075).
+
+    A step's distance/duration run FROM its maneuver to the next. offset is its distance from the route's start;
+    leg is one-based, including each leg's depart/arrive steps. Only the first intersection's lanes belong to
+    the maneuver; later intersections along the step must not be shown as its turn lanes.
+    """
+    out, offset, available = [], 0.0, False
+    for index, leg in enumerate(legs, 1):
+        if not isinstance(leg, dict):
+            continue
+        raw = leg.get("steps")
+        available |= isinstance(raw, list)
+        along = 0.0
+        for s in raw if isinstance(raw, list) else ():
+            if not isinstance(s, dict):
+                continue
+            distance = _nonnegative(s.get("distance"))
+            at = offset + along
+            along += distance
+            m = s.get("maneuver")
+            if not isinstance(m, dict) or not isinstance(m.get("type"), str):
+                continue
+            try:
+                lon, lat = map(float, m["location"][:2])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                continue
+            step = {"type": m["type"], "name": s.get("name") if isinstance(s.get("name"), str) else "",
+                    "distance": distance, "duration": _nonnegative(s.get("duration")), "leg": index,
+                    "offset": round(at, 1), "location": {"lat": round(lat, 6), "lon": round(lon, 6)}}
+            if isinstance(m.get("modifier"), str):
+                step["modifier"] = m["modifier"]
+            if type(m.get("exit")) is int and m["exit"] > 0:
+                step["exit"] = m["exit"]
+            for key in ("ref", "destinations", "rotary_name", "driving_side"):
+                if isinstance(s.get(key), str) and s[key]:
+                    step[key] = s[key]
+            for src, dst in (("bearing_before", "bearingBefore"), ("bearing_after", "bearingAfter")):
+                value = _nonnegative(m.get(src), None)
+                if value is not None and value < 360:
+                    step[dst] = value
+            intersections = s.get("intersections")
+            first = intersections[0] if isinstance(intersections, list) and intersections else None
+            lanes = first.get("lanes") if isinstance(first, dict) else None
+            if isinstance(lanes, list):
+                step["lanes"] = [{"valid": lane["valid"],
+                                  "indications": [v for v in lane["indications"] if isinstance(v, str)]}
+                                 for lane in lanes if isinstance(lane, dict) and type(lane.get("valid")) is bool
+                                 and isinstance(lane.get("indications"), list)]
+            out.append(step)
+        offset += _nonnegative(leg.get("distance"), along)
+    return out if available else None
+
+
 def parse(data):
     """{points: [[lat, lon], ...], dist (m), dur (s)} of an OSRM route response, or raises ValueError. Pure."""
     if not isinstance(data, dict) or data.get("code") != "Ok" or not data.get("routes"):
@@ -122,6 +182,9 @@ def parse(data):
     out = {"points": [[round(a, 6), round(b, 6)] for a, b in pts], "dist": float(r.get("distance") or 0),
            "dur": float(r.get("duration") or 0)}
     legs = r.get("legs") or []
+    steps = _steps(legs)
+    if steps is not None:
+        out["steps"] = steps
     if len(legs) > 1:               # (a route through waypoints: each leg's length and time, start to the first ...)
         out["legs"] = [[round(float(g.get("distance") or 0), 1), round(float(g.get("duration") or 0), 1)]
                        for g in legs]

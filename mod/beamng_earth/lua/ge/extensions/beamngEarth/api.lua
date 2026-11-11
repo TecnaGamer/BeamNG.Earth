@@ -28,10 +28,10 @@
 -- (places only sends a request to the app, which answers from what it has).
 local M = {}
 
-M.MAJOR, M.MINOR = 1, 6
+M.MAJOR, M.MINOR = 1, 7
 local FEATURES = { pose = true, place = true, teleport = true, gps = true, notify = true, events = true, options = true,
   gpsRoute = true, inTunnel = true, weather = true, places = true, buildings = true, speedLimit = true,
-  routeGeometry = true, transform = true }
+  routeGeometry = true, transform = true, routeSteps = true }
 local EVENTS = { worldReady = 'onBeamNGEarthWorldReady', teleported = 'onBeamNGEarthTeleported',
   routeArrived = 'onBeamNGEarthRouteArrived', addonOptions = 'onBeamNGEarthAddonOptions',
   waypointReached = 'onBeamNGEarthWaypointReached' }
@@ -252,6 +252,13 @@ function M.gps()
            waypoints = s.waypoints or {}, legs = copyLegs(s.legs), off = s.off, routeVersion = s.routeVersion }
 end
 
+local function copyRouteValue(value)
+  if type(value) ~= 'table' then return value end
+  local out = {}
+  for k, v in pairs(value) do out[k] = copyRouteValue(v) end
+  return out
+end
+
 -- The planned route (1.6, has('routeGeometry'); GitHub #1075): { version, points = { { lat, lon }... }, dist (m),
 -- dur (s), elev = { { distM, elevM }... }, legs }, as the map draws it, or nil without one. version changes with each
 -- new plan (a replan after a wrong turn too); gps().routeVersion is the current one. A copy: the caller may keep it.
@@ -266,7 +273,8 @@ function M.gpsRoute()
     elev = {}
     for i, e in ipairs(r.elev) do elev[i] = { e[1], e[2] } end
   end
-  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = copyLegs(r.legs) }
+  return { version = r.version, points = pts, dist = r.dist, dur = r.dur, elev = elev, legs = copyLegs(r.legs),
+    steps = copyRouteValue(r.steps) }       -- 1.7, has('routeSteps'); nil with an older companion
 end
 
 ------------------------------------------------------------------------------------------

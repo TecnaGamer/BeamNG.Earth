@@ -53,7 +53,7 @@ extensions = { hook = function(name, info) hooks[#hooks + 1] = { name, info } en
 
 local api = require('beamngEarth/api')
 
-T.check(api.version() == 1 and select(2, api.version()) == 6, 'version 1.6 (routeGeometry, transform)')
+T.check(api.version() == 1 and select(2, api.version()) == 7, 'version 1.7 (routeSteps)')
 T.check(api.has('pose') and api.has('events') and not api.has('flying'), 'features')
 T.check(api.earthVersion() == '1.8.2-beta', 'the app version from the server hello')
 
@@ -290,6 +290,17 @@ T.check(api.gpsRoute().legs[1][1] == 400 and api.gps().legs[1][2] == 30,
   'subsequent API reads get the original route legs')
 r.elev[1][2] = 0
 T.check(api.gpsRoute().elev[1][2] == 250, 'elevation rows are detached too')
+T.check(api.has('routeSteps') and r.steps == nil, 'routeSteps capability, nil with an older companion')
+routeData.steps = { { type = 'roundabout', exit = 3, name = 'Main Road', leg = 1, offset = 400, distance = 712,
+  location = { lat = 45.01, lon = 7 }, lanes = { { valid = true, indications = { 'right' } } } } }
+local steps = api.gpsRoute().steps
+T.check(steps[1].exit == 3 and steps[1].location.lat == 45.01 and steps[1].lanes[1].valid,
+  'the route maneuvers, position and turn lanes')
+steps[1].location.lat = 0
+steps[1].lanes[1].indications[1] = 'left'
+steps[1].exit = 99
+T.check(routeData.steps[1].location.lat == 45.01 and routeData.steps[1].lanes[1].indications[1] == 'right'
+  and api.gpsRoute().steps[1].exit == 3, 'nested step data is detached from the GPS and other callers')
 api.gpsClear()
 local gx, gy, gz = api.toGame(45.0, 7.0)
 T.near(gx, 0, 1e-6, 'toGame: the origin x')

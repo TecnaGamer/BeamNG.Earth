@@ -324,7 +324,7 @@ end
 function M.route()
   if not route then return nil end
   return { version = route.version, points = route.points, dist = route.dist, dur = route.dur, elev = route.elev,
-           legs = route.legs }
+           legs = route.legs, steps = route.steps }
 end
 
 local function toEnu(anchor)
@@ -905,7 +905,8 @@ function M.update(anchor, player)
       pendingId = nil
       if r.points and #r.points >= 2 and (tonumber(r.dist) or 0) >= 1 then
         routeVersion = routeVersion + 1
-        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev, legs = r.legs }
+        route = { points = r.points, dist = r.dist, dur = r.dur, version = routeVersion, elev = r.elev, legs = r.legs,
+          steps = r.steps }
         routeError, enu, routedTo, leastRemaining, routeFails = nil, nil, nil, nil, 0
         autoForce = true
       else
