@@ -414,6 +414,7 @@ FIRST_RAMP_MIN_LEVEL = 3        # (= farfield.GLOBAL_MIN_LEVEL: the anchor's own
 # coarse step waited 10-15 s on its photos at a cold Twin Falls, 2026-11-11); a coarse tile the full selection keeps is
 # rendered again at its own size (Connection._stream: stale when sent smaller than tile_tex_px)
 FIRST_RAMP_TEX_PX = int(os.environ.get("BNGE_FIRST_RAMP_PX", "256"))
+FIRST_RAMP_CHAIN = ("eox2023", "eox2016")     # ... from these photos alone (Server.coarse_texture)
 FIRST_RAMP_MAX_S = 12.0
 # Far tiles that wait for the place's map data (Connection.graded: graded under the roads like the block at levels
 # <= 0, the sea floor carved to L2) in flight at most this share of the far workers (at least one): at a place never
@@ -702,6 +703,7 @@ class TileInfo:
     tex_px: int = 0                     # its texture's size (Server.tile_tex_px; 0: tex_size of its level)
     shape: str | None = None    # its shape file when not tile_name(): a copy under a new material name (reslot)
     tile: object = None         # the farfield tile it was built for (Tile, GTile, Piece)
+    coarse: bool = False        # a coarse cover's texture (Server.coarse_texture: rendered again when sent after it)
     frame: tuple | None = None  # a global tile's frame (lat, lon): its geometry is in that frame's world
 
 
@@ -4315,6 +4317,53 @@ class Server:
             return self.far_max
         return self.far_drive
 
+    def coarse_imagery(self):
+        """The coarse cover's photos (FIRST_RAMP_CHAIN alone: one host, the whole world, raw), or None (not in this
+        server's chain). Shares the imagery cache's files with the server's Imagery."""
+        im = getattr(self, "_coarse_im", None)
+        if im is None:
+            have = {s_.name for s_ in self.imagery.chain}
+            names = [n for n in FIRST_RAMP_CHAIN if n in have]
+            if not names:
+                self._coarse_im = False
+                return None
+            im = imagerymod.Imagery(os.path.join(self.cache_dir, "imagery"), names, tone=self.tone, fetcher=self.net,
+                                    leaf_on=self.imagery.leaf_on, season_mode=self.imagery.season_mode)
+            # (its own registration replaced the server's failover chain: put that back, the offline test reads it)
+            self.net.register_chain("imagery", [s_.url for s_ in self.imagery.chain])
+            self._coarse_im = im
+        return im or None
+
+    def coarse_texture(self, anchor, tile, ck, zoom, gref, px):
+        """Worker thread: a coarse cover's global tile (FIRST_RAMP) with its texture from the coarse imagery alone
+        (coarse_imagery: its few satellite tiles fetched here while the far-tile process builds the geometry, then
+        rendered there, raw): (Built, (texture file, bytes, sources used)), or None (the usual way then). The
+        server's whole chain (aerial photos first: their coverage probes, a de-shadow region's analysis in this
+        interpreter, a host deferring at its rate) held the coarse step 10-15 s at a cold Elko (2026-11-11); the
+        full chain's texture comes with the full selection (TileInfo.coarse: stale there)."""
+        im = self.coarse_imagery()
+        if im is None:
+            return None
+        texture = self.texture_name(*ck, self.tex_rev.get(ck, 0))
+        frame_q, x0q, y0q, size_q = self.tile_where(anchor, tile)
+        sq = imagerymod.gutter_square(x0q, y0q, size_q, px)
+        tex = {"path": os.path.join(self.out_dir, texture), "px": px, "mask": None,
+               "chain": [s_.name for s_ in im.chain], "tone": self.tone, "leaf_on": im.leaf_on,
+               "season_mode": im.season_mode, "quick": False}
+        args = (blockworker.far_global_tile, tile.z, tile.x, tile.y, zoom, gref, self.layout, tex)
+        fut = self.far_pool.submit(*args)           # (its geometry meanwhile: kept, a second call reads it back)
+        try:
+            ok = im.fetch_needed(frame_q, *sq, px)
+        except Exception as e:      # (the geometry's call still ends; the usual way after it)
+            log.debug("coarse texture %s: %s: %s", tile.key, type(e).__name__, e)
+            ok = False
+        built, got = fut.result()
+        if got is None and ok:
+            built, got = self.far_pool.submit(*args).result()
+        if got is None:
+            return None
+        return built, (texture, got[0], got[1])
+
     def _make_tile(self, anchor, tile, prev=None):
         """Worker thread: build and write one far tile (and its texture). Returns its TileInfo.
         prev: the tile's stale TileInfo (--colormatch): only its texture is rendered again.
@@ -4335,10 +4384,16 @@ class Server:
         path = os.path.join(self.out_dir, self.tile_name(*ck))
         done = None             # (texture file, bytes, sources used) when the worker rendered it (blockworker.far_tile)
         geo = None              # the geometry's future while this thread renders the texture
+        coarse = None           # (Built, done) of a coarse cover's tile (coarse_texture)
         if is_global:
             zoom = farfield.global_dem_zoom(tile.z, self.layout.cells)
             gref = farfield.global_dem_zoom(tile.z + 1, self.layout.cells)
-            if self.far_pool is not None and self.imagery is not None:
+            if self.far_pool is not None and self.imagery is not None and tile.key in self.coarse_keys and \
+                    not quick:
+                coarse = self.coarse_texture(anchor, tile, ck, zoom, gref, px_t)
+            if coarse is not None:
+                built, done = coarse
+            elif self.far_pool is not None and self.imagery is not None:
                 # the 3D map: the quick texture in the far-tile process too (raw, what is on disk; the rest downloads
                 # meanwhile and re-renders it): the global tiles are most of a map view (2026-11-07, Spokane: 26 s each
                 # here, waiting on their photos one interpreter at a time)
@@ -4553,6 +4608,7 @@ class Server:
                         material, texture, tex_bytes, tex_s, credits=sources)
         info.tile = tile
         info.tex_px = px_t
+        info.coarse = coarse is not None
         if is_global:
             info.frame = farfield.global_frame_ll(tile.z, tile.x, tile.y)
         if material is not None and self.far_format == "cdae":    # the pooled shape path (matslots.py)
@@ -4673,7 +4729,7 @@ class Server:
                                        tex).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
-                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px)
+                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px, coarse=False)
         if self.worker_retex() and self.far_pool is not None and self.imagery is not None and \
                 type(tile) is farfield.Tile and tile.level > 0:
             # the 3D map: the sharper texture (its photos in now) from the raw photos in a far-tile process, many at
@@ -4693,7 +4749,7 @@ class Server:
                                        self.layout, tex).result()[1]
             if got is not None:
                 return replace(prev, texture=texture, tex_bytes=got[0], tex_seconds=time.perf_counter() - t0,
-                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px)
+                               cm_pending=frozenset(), stale=False, rev=prev.rev + 1, tex_px=px, coarse=False)
         try:
             rgb, used = self.render_tile(anchor, tile, px, pending)
         except imagerymod.ImageryError as e:
@@ -4715,7 +4771,7 @@ class Server:
             zoom = (farfield.global_dem_zoom(tile.z, self.layout.cells) if isinstance(tile, farfield.GTile)
                     else anchor.zooms[max(tile.level, 0)])
             sources = creditsmod.tile_sources(frame, (x0, y0, x0 + s, y0 + s), self.dem, zoom, used)
-        return replace(prev, texture=texture, tex_bytes=tex_bytes, tex_seconds=time.perf_counter() - t0,
+        return replace(prev, texture=texture, tex_bytes=tex_bytes, coarse=False, tex_seconds=time.perf_counter() - t0,
                        cm_pending=frozenset(pending), stale=False, rev=prev.rev + 1, credits=sources, tex_px=px)
 
     def start_world_warm(self, anchor):
@@ -8513,9 +8569,9 @@ class Connection:
                         self.queue.append(t)
                         continue
                 self.sent[t.key] = t
-                if info.material is not None and info.tex_px and not info.stale and \
-                        info.tex_px < self.s.tile_tex_px(self.s.anchors[self.active], t):
-                    info.stale = True   # (a coarse cover's texture, FIRST_RAMP_TEX_PX: rendered again at its size)
+                if info.material is not None and not info.stale and self.first_ramp is None and (info.coarse or (
+                        info.tex_px and info.tex_px < self.s.tile_tex_px(self.s.anchors[self.active], t))):
+                    info.stale = True   # (a coarse cover's texture: rendered again, the whole chain at its own size)
                 if info.stale:          # a region turned ready since: re-rendered live, then far_retex
                     self.s.retex_request(ck)
                 self.batch[1] += 1
