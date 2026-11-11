@@ -525,7 +525,9 @@ class RenderingRegressionTest(FrenchTest):
         base = self.heights_at(p, t[tm == mats.index("road_asphalt_2lane")], xy)
         paint = self.heights_at(p, t[tm == mats.index(fr.PAINT_MATERIAL)], xy)
         self.assertTrue(np.isfinite(base).all() and np.isfinite(paint).all())
-        self.assertGreater(float(np.min(paint - base)), .005)
+        # (over the asphalt everywhere, by millimetres: the user, 2026-11-11, "i want to make them virtualy the same
+        # height of the road": roadmesh.LIFT mark 2 mm)
+        self.assertGreater(float(np.min(paint - base)), .001)
 
     def test_geometric_paint_is_opaque_and_registered_for_road_tiles(self):
         materials = json.loads((assets.OUT / "main.materials.json").read_text())

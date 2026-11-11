@@ -178,6 +178,24 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
     mat["baseColorDetailStrength"] = [strength, far]
     SURFACES.update(made)
 
+# Squares (server/surface.py PAVERS / BRICK, the user 2026-11-11: "paint the plaza and apply a texture to it like the
+# roads"): no stock terrain texture has pavers or brick, so the building tileables at the texture set's 1024 detail
+# size (the large grey slabs of West Coast USA's brutalist plazas; the red herringbone brick); their roughness and
+# ao maps are 512 (a slot-size mismatch costs a resize at every material rebuild), so the asphalt's, ao off. A 2 m
+# repeat: 1 m slabs, 0.25 m bricks. The detail colour shows over the photo (pavers' joints, brick's red).
+TL_ = "/assets/materials/tileable/"
+for i, (name, gm, color, normal, dsize, strength, far) in enumerate((
+        ("bngEarthGroundPavers", "ASPHALT_OLD", "concrete/slabs_brutalist/t_slabs_brutalist_b.color.png",
+         "concrete/slabs_brutalist/t_slabs_brutalist_nm.normal.png", 1, 0.5, 0.15),
+        ("bngEarthGroundBrick", "COBBLESTONE", "brick/t_bricks_herringbone_01/t_bricks_herringbone_01_b.color.png",
+         "brick/t_bricks_herringbone_01/t_bricks_herringbone_01_nm.normal.png", 1, 0.85, 0.3))):
+    made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}", "asphalt/asphalt/t_asphalt", dsize,
+                   "asphalt/macro_asphalt/t_macro_asphalt", 16, strength)
+    mat = made[name]
+    mat["baseColorDetailTex"], mat["normalDetailTex"] = TL_ + color, TL_ + normal
+    mat["baseColorDetailStrength"], mat["aoDetailStrength"] = [strength, far], [0, 0]
+    SURFACES.update(made)
+
 pretty(os.path.join(T, "main.materials.json"), {
     "beamngEarthDirt": {
         "name": "beamngEarthDirt",

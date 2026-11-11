@@ -2692,8 +2692,9 @@ class Server:
         mesh = roadmeshmod.build(anchor.frame, chunks, elev, (x0, y0, 0.0),
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)
-        mesh = blockworker._with_plazas(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
-                                        self.surface, drawn=drawn, q=self.anchor_q(anchor))
+        if self.near_visual != "detail":        # (detail mode: the drawn block paints the squares)
+            mesh = blockworker._with_plazas(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
+                                            self.surface)
         _piers, _beams = buildingsmod.bridge_stub_piers(
             _bridge_fps,
             anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
@@ -3493,7 +3494,8 @@ class Server:
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
                                              blockworker._open_tunnels(g, keep))
-            idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
+            idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots,
+                                        blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):
                 idx = self.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
             stages["roadPaint"] = time.perf_counter() - t1

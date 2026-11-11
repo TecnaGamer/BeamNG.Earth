@@ -62,10 +62,14 @@ MATERIALS = (
     ("bngEarthGroundGolfFairway", "GRASS"),
     ("bngEarthGroundGolfGreen", "GRASS"),
     ("bngEarthGroundGolfBunker", "SAND"),
+    # Squares (paint_plazas): flat-topped pavers and red brick, the drawn block's detail texture over the photo (the
+    # user, 2026-11-11: "instead could we paint the plaza and apply a texture to it like the roads")
+    ("bngEarthGroundPavers", "ASPHALT_OLD"),
+    ("bngEarthGroundBrick", "COBBLESTONE"),
     ("beamngEarthDirt", "DIRT"),
 )
 ASPHALT, GRASS, DUSTY, LOOSE, ROCK, SNOW, MUD, COBBLE, LAWN, \
-    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, DIRT = range(len(MATERIALS))
+    GOLF_ROUGH, GOLF_FAIRWAY, GOLF_GREEN, GOLF_BUNKER, PAVERS, BRICK, DIRT = range(len(MATERIALS))
 # WorldCover class -> material (§5.4 of the world-data research). Built-up land is the plain dirt layer
 # (2026-10-14): its yards, lawns and lots took the asphalt layer's grey detail and macro textures, which
 # washed whole towns pale grey in the street photos (Moab, Frederick); the roads are painted asphalt anyway
@@ -1088,14 +1092,78 @@ def paint_grass(idx, lat, lon, feats_list):
     return grass
 
 
-def paint_lots(idx, lat, lon, feats_list):
-    """idx with the squares and pedestrian areas (land_use polygons of subtype "pedestrian") of feats_list
-    drawn in as plain paving (the asphalt layer), then the parking lots (polygons of class "parking") as asphalt (Lancaster County's
-    photos: the grass layer's ground cover grew on lots), the substations' yards as gravel. Pure."""
-    # (grey paving: the cobble layer's setts drew big squares and promenades pink, Harbor Point 2026-10-15)
-    idx = _paint(idx, lat, lon, feats_list, _plazas, ASPHALT)
+def paint_lots(idx, lat, lon, feats_list, us_looks=None):
+    """idx with the squares and pedestrian areas (land_use polygons of subtype "pedestrian") of feats_list painted
+    (paint_plazas), then the parking lots (polygons of class "parking") as asphalt (Lancaster County's photos: the
+    grass layer's ground cover grew on lots), the substations' yards as gravel. Pure given us_looks."""
+    idx = paint_plazas(idx, lat, lon, feats_list, us_looks)
     idx = _paint(idx, lat, lon, feats_list, _yards, LOOSE)
     return _paint(idx, lat, lon, feats_list, _parking, ASPHALT)
+
+
+# The squares' layers by their look (plazas.paving's material): asphalt and concrete the asphalt layer, flat-topped
+# pavers and red brick their own (in detail mode the block draws them: the squares' mesh is the mesh mode's), setts and
+# cobbles the cobble layer
+PLAZA_LAYER = {"road_asphalt_2lane": ASPHALT, "italy_cobblestone": COBBLE, "italy_sidewalk_tiles": PAVERS,
+               "bne_sidewalk_brick": BRICK}
+
+
+def paint_plazas(idx, lat, lon, feats_list, us_looks=None):
+    """idx with the squares and pedestrian areas of feats_list painted by their mapped surface (plazas.paving,
+    PLAZA_LAYER), their holes (a fountain, a lawn) left as they were, a smaller square over a larger one; unpaved
+    ones (sand, gravel, grass) left to the land cover. A US square mapped paving_stones or nothing: us_looks(outer
+    rings lon/lat) -> looks (plazas.us_looks: red brick where the photo shows it), None: red brick. Pure given
+    us_looks."""
+    import plazas
+    h, w = idx.shape
+    to_px = grid_affine(lat, lon)
+    items = []                          # (area px, outer ring lon/lat, holes, look)
+    for feats in feats_list:
+        if feats is None or len(feats) == 0:
+            continue
+        sel = _plazas(feats)
+        if sel is None:
+            continue
+        sf = feats.attrs.get("surface")
+        for i in np.flatnonzero(sel & (feats.kind == 3)):
+            sv = str(sf[i]).strip().lower() if sf is not None and sf[i] is not None else ""
+            for part in feats.parts(i):
+                if not part or len(part[0]) < 3:
+                    continue
+                ring = np.asarray(part[0], np.float64)
+                c, r = to_px(ring[:, 0], ring[:, 1])
+                if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
+                    continue
+                look = plazas.paving(sv or None, float(ring[:, 1].mean()), float(ring[:, 0].mean()))
+                if look is None:
+                    continue
+                area = 0.5 * abs(float(np.dot(c, np.roll(r, 1)) - np.dot(r, np.roll(c, 1))))
+                items.append((area, ring, part[1:], look))
+    if not items:
+        return idx
+    amb = [k for k, it in enumerate(items) if it[3] == plazas.US_AMBIGUOUS]
+    if amb:
+        looks = us_looks([items[k][1] for k in amb]) if us_looks is not None else None
+        for j, k in enumerate(amb):
+            look = looks[j] if looks is not None and j < len(looks) else (plazas.BRICK, plazas.BRICK_REPEAT_M)
+            items[k] = items[k][:3] + (look,)
+    im = Image.new("L", (w, h), 255)    # (255: not a square)
+    draw = ImageDraw.Draw(im)
+    for _, ring, holes, look in sorted(items, key=lambda it: -it[0]):     # (the larger first: a smaller one over it)
+        c, r = to_px(ring[:, 0], ring[:, 1])
+        draw.polygon(list(zip(c.tolist(), r.tolist())), fill=int(PLAZA_LAYER.get(look[0], ASPHALT)))
+        for hole in holes:
+            hole = np.asarray(hole, np.float64)
+            if len(hole) >= 3:
+                hc, hr = to_px(hole[:, 0], hole[:, 1])
+                draw.polygon(list(zip(hc.tolist(), hr.tolist())), fill=255)
+    lay = np.asarray(im)
+    if (lay == 255).all():
+        return idx
+    out = idx.copy()
+    m = lay != 255
+    out[m] = lay[m]
+    return out
 
 
 # Gas station forecourts (gasstations.forecourt_pad: Surface.fuel_pads, from the road tiles), asphalt in the ground

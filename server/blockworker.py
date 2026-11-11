@@ -479,7 +479,7 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
                 if over:
                     log.warning("block (%s, %s, %s): %d points of drawn roads in it (%d of them with ground parts) from "
                                 "%d cells, none painted", aid, cx, cy, over, n_ground, len(road_feats))
-        idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots) if lots else idx
+        idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots, _us_square_looks(frame)) if lots else idx
         if hasattr(_s.surface, "paint_ground_pads"):
             idx = _s.surface.paint_ground_pads(idx, keep["lat"], keep["lon"])
         stages["roadPaint"] = time.perf_counter() - t1
@@ -1290,7 +1290,8 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
-    mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None), drawn=P.drawn, q=q)
+    if not lift:                    # (detail mode, the road lift over the drawn block: the block draws the squares)
+        mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
@@ -1763,7 +1764,8 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     mesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
                              context=ctx, clip_poly=quad)
     mark("mesh")
-    mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad, drawn=drawn, q=q)
+    if not lift:                    # (detail mode, the road lift over the drawn block: the block draws the squares)
+        mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad)
     mark("plazas")
     names = geo_names(tile.key, aid)
     data = {"v": roadsmod.VERSION, "key": tile.key, "anchorId": aid, "lift": round(float(lift), 3),
@@ -2010,11 +2012,46 @@ def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_ha
 PLAZA_GEO_MARGIN_M = 12.0    # m past a geotile's quad its skin's plazas are made (then cut exactly at the quad)
 
 
-def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None, drawn=None, q=None):
+US_LOOK_CELL_M = 256.0      # m: a block's US squares are read from the photo by cells of this size (a road tile's)
+
+
+def _us_square_looks(frame):
+    """surface.paint_lots' us_looks for a block in frame: the US squares' red brick or grey pavers by the orthophoto
+    already on disk (buildings.roof_photo, never waits; plazas.us_looks), the squares grouped by the US_LOOK_CELL_M
+    cell their centre is in (one photo of each cell's squares; an unread square takes its cell's majority, as a road
+    tile's mesh did)."""
+    def looks(rings):
+        import buildings
+        import plazas
+        xys = []
+        for ring in rings:
+            e, n, _ = frame.geodetic_to_enu(ring[:, 1], ring[:, 0], 0.0)
+            xys.append(np.stack([np.asarray(e), np.asarray(n)], 1))
+        cells = {}
+        for k, xy in enumerate(xys):
+            c = np.floor(xy.mean(0) / US_LOOK_CELL_M).astype(np.int64)
+            cells.setdefault((int(c[0]), int(c[1])), []).append(k)
+        out = [None] * len(xys)
+        for ks in cells.values():
+            allxy = np.concatenate([xys[k] for k in ks])
+            photo = None
+            try:
+                photo = buildings.roof_photo(frame, float(allxy[:, 0].min()), float(allxy[:, 1].min()),
+                                             float(allxy[:, 0].max()), float(allxy[:, 1].max()),
+                                             getattr(_s, "cache_dir", None), online=False)
+            except Exception:
+                photo = None
+            for k, look in zip(ks, plazas.us_looks([xys[k] for k in ks], photo)):
+                out[k] = look
+        return out
+    return looks
+
+
+def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
     """The road mesh with the tile's squares and pedestrian areas paved (plazas.py) over box (x0, y0, x1, y1), from the
     cached land use (none when it is not cached yet: surface.Surface.lots never waits). quad (4, 2): a geotile's skin:
-    the plazas made PLAZA_GEO_MARGIN_M past the box and cut exactly at the quad (as its road mesh). drawn, q: the
-    road mesh's drawn ground and height quantum, the paving laid on it as the road mesh is (plazas.mesh)."""
+    the plazas made PLAZA_GEO_MARGIN_M past the box and cut exactly at the quad (as its road mesh). The mesh
+    near-visual mode's: in detail mode the drawn block paints them (surface.paint_lots)."""
     if surface is None or not hasattr(surface, "lots"):
         return mesh
     import plazas
@@ -2036,7 +2073,7 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None, drawn=None,
             photo = _bld.roof_photo(frame, box[0], box[1], box[2], box[3], getattr(_s, "cache_dir", None), online=False)
         except Exception:
             photo = None
-        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover, photo=photo, drawn=drawn, q=q)
+        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover, photo=photo)
         if quad is not None:
             pm = _clip_mesh(pm, origin, quad)
         return plazas.merge(mesh, pm)

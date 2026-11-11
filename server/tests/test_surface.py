@@ -510,8 +510,56 @@ class LotTest(unittest.TestCase):
                 return [[np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])]]
         idx = np.full((50, 50), sf.DIRT, np.uint8)
         out = sf.paint_lots(idx, lat, lon, [Land()])
-        self.assertEqual(out[12, 12], sf.ASPHALT)
+        self.assertEqual(out[12, 12], sf.PAVERS, "no surface mapped: flat stone pavers")
         self.assertEqual(out[12, 37], sf.DIRT)
+
+    def _square(self, lat0, lon0, surface, holes=False):
+        lat = lat0 + np.arange(50)[:, None] * 2e-5 + np.zeros((1, 50))
+        lon = lon0 + np.arange(50)[None, :] * 2.6e-5 + np.zeros((50, 1))
+
+        class Land:
+            kind = np.array([3], np.uint8)
+            attrs = {"class": np.array(["plaza"], object), "subtype": np.array(["pedestrian"], object),
+                     "surface": np.array([surface], object)}
+
+            def __len__(self):
+                return 1
+
+            def parts(self, i):
+                a, b = lon0 + 5 * 2.6e-5, lon0 + 40 * 2.6e-5
+                c, d = lat0 + 5 * 2e-5, lat0 + 40 * 2e-5
+                outer = np.array([(a, c), (b, c), (b, d), (a, d), (a, c)])
+                if not holes:
+                    return [[outer]]
+                e, f = lon0 + 18 * 2.6e-5, lon0 + 26 * 2.6e-5
+                g, h = lat0 + 18 * 2e-5, lat0 + 26 * 2e-5
+                return [[outer, np.array([(e, g), (f, g), (f, h), (e, h), (e, g)])]]
+        return lat, lon, [Land()]
+
+    def test_square_by_its_surface(self):
+        """The user, 2026-11-11: "paint the plaza and apply a texture to it like the roads": each square's layer by its
+        mapped surface, its holes (a fountain, a lawn) left as they were."""
+        for lat0, lon0, surf, want in ((48.86, 2.32, "paving_stones", sf.PAVERS), (48.86, 2.32, "sett", sf.COBBLE),
+                                       (48.86, 2.32, "asphalt", sf.ASPHALT), (40.71, -74.01, "bricks", sf.BRICK)):
+            lat, lon, land = self._square(lat0, lon0, surf, holes=True)
+            idx = np.full((50, 50), sf.GRASS, np.uint8)
+            out = sf.paint_lots(idx, lat, lon, land)
+            self.assertEqual(out[10, 10], want, surf)
+            self.assertEqual(out[22, 22], sf.GRASS, "the hole")
+            self.assertEqual(out[45, 45], sf.GRASS)
+        lat, lon, land = self._square(48.86, 2.32, "sand")
+        self.assertEqual(sf.paint_lots(np.full((50, 50), sf.GRASS, np.uint8), lat, lon, land)[10, 10], sf.GRASS,
+                         "unpaved: the land cover")
+
+    def test_us_square_by_the_photo(self):
+        """A US square mapped paving_stones: red brick where the photo shows red (us_looks), else grey pavers; brick
+        without a photo (Fells Point's rule)."""
+        import plazas
+        lat, lon, land = self._square(40.71, -74.01, "paving_stones")
+        idx = np.full((50, 50), sf.DIRT, np.uint8)
+        self.assertEqual(sf.paint_lots(idx, lat, lon, land)[10, 10], sf.BRICK)
+        grey = sf.paint_lots(idx, lat, lon, land, lambda rings: [plazas.PAVERS] * len(rings))
+        self.assertEqual(grey[10, 10], sf.PAVERS)
 
 
 class PhotoRoadsTest(unittest.TestCase):
