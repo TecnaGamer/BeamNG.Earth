@@ -132,6 +132,19 @@ class RoadWearTest(unittest.TestCase):
         fade = mesh[5]
         self.assertLess(fade[:, 1].min(), 0.05)     # (a run's open start)
 
+    def test_grass_sides(self):
+        """A rural lane through fields gets the grassy edge on its field side; a town street, a motorway and scrub
+        keep the dirt edge."""
+        def cover(lat, lon):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.0)
+            return np.where(n > 128, 40, 20).astype(np.uint8), True      # cropland north of y = 128, scrub south
+        rd = [("lane", spec(cls="tertiary", width=6.0), line(0, 128, 256, 128), 0.0),
+              ("town", spec(cls="tertiary", width=6.0, urban=True), line(0, 200, 256, 200), 0.0),
+              ("mw", spec(cls="motorway", width=12.0, oneway=True), line(0, 230, 256, 230), 0.0)]
+        got = roadwear.grass_sides(FRAME, rd, cover, roads.has_sidewalks)
+        self.assertEqual(got, {("lane", 1)})
+        self.assertEqual(roadwear.grass_sides(FRAME, rd, lambda la, lo: 1 / 0, roads.has_sidewalks), set())
+
     def test_tier_of(self):
         self.assertEqual(roadwear.tier_of("off"), 0 if roadwear.ENV_TIER is None else roadwear.ENV_TIER)
         if roadwear.ENV_TIER is None:

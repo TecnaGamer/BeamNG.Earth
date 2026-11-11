@@ -24,8 +24,12 @@ The layout is native (earthfast.wear_plan, roadwear.rs): deterministic per road 
 whole centre line), cut at the other carriageways. The condition of a surface comes from OpenStreetMap's smoothness
 where mapped, else a seeded value by class, varied per 250 m stretch.
 
-Tiers (the settings' road detail, BNE_ROAD_WEAR overrides): 0 none, 1 tyre polish and concrete joints (two
-materials at most: low-end machines), 2 everything.
+A curbless rural road's asphalt edge is the stock grassy one (roads.GRASS_EDGE_DECAL, m_road_edge_dirt_grass) instead
+of gravel and dirt where the land cover beside it is grass, crops or woods (grass_sides; the Iowa and Maryland photos:
+grass to the asphalt on the minor roads, gravel shoulders on the highways).
+
+Tiers (the settings' road detail, BNE_ROAD_WEAR overrides): 0 none, 1 tyre polish, concrete joints and grassy edges
+(three materials at most: low-end machines), 2 everything.
 """
 import hashlib
 import os
@@ -104,6 +108,47 @@ def _condition(feats, i):
     if col is None:
         return -1.0
     return SMOOTHNESS.get(str(col[i]).strip().lower(), -1.0)
+
+
+# A curbless rural road's asphalt edge (roads.EDGE_DECAL, gravel and dirt) is the grassy one (roads.GRASS_EDGE_DECAL)
+# where grass grows to it: the WorldCover class GRASS_SIDE_M beside the asphalt, every GRASS_STEP_M along it, is
+# vegetation (trees, grassland, cropland, wetland, mangroves, moss) at GRASS_SHARE of the points at least. Shrubland
+# (the dry West's scrub, bare between the bushes) and bare, built-up, snowy or watery land keep the dirt edge; so do
+# the classes with gravel shoulders (motorways, trunk and primary roads).
+GRASS_CLASSES = (10, 30, 40, 90, 95, 100)
+GRASS_ROADS = {"secondary", "tertiary", "residential", "unclassified", "living_street", "service", "unknown"}
+GRASS_SIDE_M = 2.0
+GRASS_STEP_M = 12.0
+GRASS_SHARE = 0.6
+
+
+def grass_sides(frame, roads, cover_fn, has_sidewalks):
+    """{(fid, side)} of build_tile's roads whose asphalt edge on that side (+1 left / -1 right of the geometry, as
+    roads.extras' edge decals) is grass. cover_fn(lat, lon) -> (WorldCover classes, complete): one call for all."""
+    import roads as roadsmod
+    xs, ys, owner = [], [], []
+    for fid, spec, pts, _lon in roads:
+        if spec.kind != "paved" or spec.urban or spec.cls not in GRASS_ROADS or has_sidewalks(spec) or len(pts) < 2:
+            continue
+        line = roadsmod.densify(np.asarray(pts, np.float64)[:, :3], GRASS_STEP_M)
+        for side in (1, -1):
+            q = roadsmod.offset_polyline(line, side * (float(spec.width) / 2 + GRASS_SIDE_M))
+            xs.append(q[:, 0])
+            ys.append(q[:, 1])
+            owner.extend([(fid, side)] * len(q))
+    if not owner:
+        return set()
+    lat, lon, _ = frame.enu_to_geodetic(np.concatenate(xs), np.concatenate(ys), 0.0)
+    try:
+        cls = np.asarray(cover_fn(lat, lon)[0])
+    except Exception:           # (no land cover: the dirt edge, as before)
+        return set()
+    veg = np.isin(cls, GRASS_CLASSES)
+    got, n = {}, {}
+    for key, v in zip(owner, veg.tolist()):
+        got[key] = got.get(key, 0) + v
+        n[key] = n.get(key, 0) + 1
+    return {k for k in got if got[k] >= GRASS_SHARE * n[k]}
 
 
 def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=()):

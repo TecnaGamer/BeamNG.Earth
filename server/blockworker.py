@@ -1016,7 +1016,8 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
                                  mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
                                                if props is not None else None),
-                                 mapped_lamps=mapped_lamps, wear=roadwear.tier_of(wear))
+                                 mapped_lamps=mapped_lamps, wear=roadwear.tier_of(wear),
+                                 cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.town_faces = town_faces
     mark("build_tile")
     chunks += railsmod.tile_chunks(frame, tx, ty, cells, country, urban)     # railway and tram tracks on the ground

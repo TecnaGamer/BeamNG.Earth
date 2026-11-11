@@ -291,7 +291,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     horizon or a fixed distance).
   - **Road surface detail** (Off / Basic / Full; Off on Low, Basic on Medium, Full above): wear on the paved roads
     from the game's own road decals, drawn with the road itself (no extra objects). Basic: tyre polish in the lanes'
-    wheel paths on busier roads and a concrete road's slab and lane joints (OpenStreetMap surface=concrete). Full
+    wheel paths on busier roads, a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
+    asphalt edge on rural roads through grass, crops or woods (the land cover beside them). Full
     also sealed and alligator cracks, crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
     where mapped), manhole covers on town streets and oil spots in parking lots.
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
