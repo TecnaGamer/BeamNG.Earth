@@ -12,15 +12,22 @@ elsewhere: on a forest track's junction, at a viewpoint, in a clearing (OpenStre
   historic=wayside_cross                    a roadside cross: sandstone, wooden or metal by the country's habit (or
                                             lp_cross_*), turned to face the nearest road (stage C)
   historic=wayside_shrine                   a "Bozi muka" column (lp_shrine_column)
+  historic=memorial / monument / stone      a stele, an obelisk, a boulder with a plaque, a saint's statue or a low stone
+                                            cross, by the OpenStreetMap description's words (stage F)
+  information=guidepost (Overture)          the galvanised post of a hiking guidepost (lp_gp); its plates and arrows are the
+                                            sign tile's (localpoisign.py, stage D). guideposts() is shared by both.
   amenity=bbq outside a park                picnic.py's grill
 
 Every spot is left out when it lies inside a drawn building, and moved up to SHIFT_MAX_M off a carriageway (furniture.
 RoadClearance, the collision boxes below) or dropped. BNE_LOCALPOI=off turns the module off.
 """
 import hashlib
+import json
 import logging
 import math
 import os
+import re
+import unicodedata
 
 import numpy as np
 
@@ -34,9 +41,13 @@ ON = os.environ.get("BNE_LOCALPOI", "on").lower() not in ("off", "0", "false")
 
 G_TABLE, G_ALTAN, G_FIREPIT = "lp_table", "lp_altan", "lp_firepit"
 G_CROSS_STONE, G_CROSS_WOOD, G_CROSS_METAL, G_SHRINE = "lp_cross_stone", "lp_cross_wood", "lp_cross_metal", "lp_shrine"
+G_GP = "lp_gp"
+G_STELE, G_OBELISK, G_BOULDER, G_STATUE, G_STONE_CROSS = "lp_stele", "lp_obelisk", "lp_boulder", "lp_statue", "lp_stone_cross"
 HEIGHT = {G_TABLE: 0.77, G_ALTAN: 3.2, G_FIREPIT: 0.3, G_CROSS_STONE: 3.76, G_CROSS_WOOD: 3.78, G_CROSS_METAL: 2.65,
-          G_SHRINE: 3.35}      # the catalog heights (trees.lua), scale 1
-FACING = {G_CROSS_STONE, G_CROSS_WOOD, G_CROSS_METAL, G_SHRINE}     # models whose front (local -Y) faces the road
+          G_SHRINE: 3.35, G_GP: 2.64, G_STELE: 1.92, G_OBELISK: 3.5, G_BOULDER: 1.3, G_STATUE: 3.75,
+          G_STONE_CROSS: 1.05}      # the catalog heights (trees.lua), scale 1
+MEMORIAL_GROUPS = (G_STELE, G_OBELISK, G_BOULDER, G_STATUE, G_STONE_CROSS)
+FACING = {G_CROSS_STONE, G_CROSS_WOOD, G_CROSS_METAL, G_SHRINE, *MEMORIAL_GROUPS}   # models whose front (local -Y) faces the road
 # Which cross a country puts up (no material tag in the OpenStreetMap rows: Czech wayside crosses 70 % sandstone, Polish ones
 # mostly wood and iron, Ukraine's iron): (stone, wood, metal) shares, in this order
 CROSS_SHARES = {
@@ -58,6 +69,12 @@ COLLISION_BOXES = {
     G_CROSS_WOOD: (3.78, ((-0.1, -0.1, 0.0, 0.1, 0.1, 3.5), (-0.75, -0.08, 2.62, 0.75, 0.08, 2.8))),
     G_CROSS_METAL: (2.65, ((-0.28, -0.28, -0.2, 0.28, 0.28, 0.55), (-0.45, -0.05, 0.55, 0.45, 0.05, 2.65))),
     G_SHRINE: (3.35, ((-0.55, -0.55, -0.2, 0.55, 0.55, 0.15), (-0.36, -0.36, 0.15, 0.36, 0.36, 3.35))),
+    G_GP: (2.64, ((-0.04, -0.04, 0.0, 0.04, 0.04, 2.64),)),
+    G_STELE: (1.92, ((-0.75, -0.40, -0.1, 0.75, 0.40, 1.92),)),
+    G_OBELISK: (3.5, ((-0.65, -0.65, -0.1, 0.65, 0.65, 3.5),)),
+    G_BOULDER: (1.3, ((-0.65, -0.45, 0.0, 0.65, 0.45, 1.3),)),
+    G_STATUE: (3.75, ((-0.55, -0.55, -0.1, 0.55, 0.55, 2.03), (-0.26, -0.26, 2.03, 0.26, 0.26, 3.75))),
+    G_STONE_CROSS: (1.05, ((-0.36, -0.22, -0.1, 0.36, 0.22, 1.05),)),
 }
 
 SITE_AREA_MAX_M2 = 4000.0
@@ -68,6 +85,8 @@ SHELTER_AREA_MAX_M2 = 120.0     # a bigger shelter polygon is a building or a pa
 TABLE_NEAR_M = 3.0              # two tables this close are one
 HUT_TABLE_M = 3.0               # a table inside a hut is the hut's (its model has one)
 CROSS_NEAR_M = 4.0              # two crosses this close are one (a node and its way)
+MEMORIAL_AREA_MAX_M2 = 600.0    # a memorial polygon bigger than this is a place (a cemetery, a plaza), not a monument
+MEMORIAL_KINDS = ("memorial", "monument", "stone")
 SHIFT_MAX_M = 3.0
 SHIFT_STEP_M = 1.0
 BUS_CLASSES = {"bus_stop", "stop_position"}
@@ -88,7 +107,7 @@ def _kind(feats, i):
         return "firepit"
     if cls == "shelter" or tags.get("amenity") == "shelter":
         return "shelter"
-    for what in ("wayside_cross", "wayside_shrine"):
+    for what in ("wayside_cross", "wayside_shrine", *MEMORIAL_KINDS):
         if cls == what or tags.get("historic") == what:
             return what
     return None
@@ -124,6 +143,45 @@ def _near(points, x, y, dist):
     return bool(((points[:, 0] - x) ** 2 + (points[:, 1] - y) ** 2 < dist * dist).any())
 
 
+class Found(list):
+    """candidates()' rows; .text is the description of the features that have one, by id."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.text = {}
+
+
+def _fold(text):
+    """Lower case without accents (so "Padlým" and "padlym" meet)."""
+    return "".join(c for c in unicodedata.normalize("NFD", str(text or "").lower()) if unicodedata.category(c) != "Mn")
+
+
+MEMORIAL_WORDS = (
+    # (group, words found in the description or name), the first group with a hit wins
+    (G_STATUE, ("socha", "sousosi", "statue", "statua", "figur", "nepomuk", "sv.", "svat", "saint", "skulptur",
+                "rzezba", "figura", "pamiatnik sv", "памятник святому", "статуя", "скульптур")),
+    (G_OBELISK, ("obelisk", "obelisque", "обелиск", "обеліск")),
+    (G_BOULDER, ("deska", "tabule", "plaque", "tablica", "gedenktafel", "valoun", "kamen", "stone", "boulder",
+                 "tabliczka", "мемориальн", "меморіальн", "дошка")),
+    (G_STELE, ("padl", "valk", "vojn", "obet", "war", "fallen", "gefallen", "kriegs", "ofiar", "poleg", "wojn",
+               "загиб", "жертв", "вoин", "воїн", "війн")),
+)
+
+
+def memorial_group(fid, kind, description=""):
+    """The model of a mapped memorial: by the description's words (statue, obelisk, plaque, war memorial), else a stele
+    or an obelisk by the id (a monument: an obelisk more often); historic=stone is a penance cross when it says so, else a
+    boulder."""
+    text = _fold(description)
+    if kind == "stone":
+        return G_STONE_CROSS if ("kriz" in text or "cross" in text or "krzyz" in text or "kreuz" in text) else G_BOULDER
+    for group, words in MEMORIAL_WORDS:
+        if any(w in text for w in words):
+            return group
+    u = _share(fid, "memorial")
+    return G_OBELISK if u < (0.55 if kind == "monument" else 0.3) else G_STELE
+
+
 def candidates(frame, infra_fn, land_fn, box, osm_fn=None):
     """(kind, id, x, y, ring or None, area) of the mapped spots in box that picnic.py leaves out (not in a park for a
     table, site, grill or firepit; a shelter anywhere), plus the bus stops' xy and the parks' rings. Deduplicated the
@@ -148,7 +206,7 @@ def candidates(frame, infra_fn, land_fn, box, osm_fn=None):
             if key not in seen_park:
                 seen_park.add(key)
                 parks.append(ring)
-    found, seen = [], set()
+    found, seen = Found(), set()
     for feats in loaded:
         if feats.attrs.get("class") is None and feats.attrs.get("tags") is None:
             continue
@@ -180,6 +238,9 @@ def candidates(frame, infra_fn, land_fn, box, osm_fn=None):
                 c = ring.mean(0)
                 x, y = float(c[0]), float(c[1])
             found.append((kind, fid, x, y, ring, area))
+            text = picnic._tags(feats, i).get("description", "")
+            if text:
+                found.text[fid] = text
     return found, _bus_stops(loaded, frame), parks, keys
 
 
@@ -228,10 +289,15 @@ def plan(found, buses, parks, box, country=None):
             out.append((G_FIREPIT, fid, x, y, picnic._yaw_of(fid, "firepit")))
         else:
             out.extend((group, fid, gx, gy, gyaw) for group, gx, gy, gyaw in picnic._furniture(fid, x, y, False, True))
-    for kind, fid, x, y, ring, area in items:                   # roadside crosses and shrines, in parks too
-        if kind in ("wayside_cross", "wayside_shrine") and picnic._in_box(x, y, box):
+    texts = getattr(found, "text", {})
+    for kind, fid, x, y, ring, area in items:                   # roadside crosses, shrines and memorials, in parks too
+        if not picnic._in_box(x, y, box):
+            continue
+        if kind in ("wayside_cross", "wayside_shrine"):
             group = G_SHRINE if kind == "wayside_shrine" else cross_group(fid, country)
             out.append((group, fid, x, y, picnic._yaw_of(fid, "cross")))
+        elif kind in MEMORIAL_KINDS and area <= MEMORIAL_AREA_MAX_M2:
+            out.append((memorial_group(fid, kind, texts.get(fid, "")), fid, x, y, picnic._yaw_of(fid, "memorial")))
     mapped = np.array(tables, np.float64).reshape(-1, 2)
     for kind, fid, x, y, ring, area in items:
         if kind != "site":
@@ -259,6 +325,135 @@ def plan(found, buses, parks, box, country=None):
             crosses.append((row[2], row[3]))
         kept.append(row)
     return kept
+
+
+# ------------------------------------------------------------------------------------ guideposts, boards and ways
+
+def _layer_information(feats):
+    """[(row, kind)] of the layer's information points: 'guidepost', 'board' or 'map' (Overture infrastructure, source tags)."""
+    out = []
+    if feats.attrs.get("class") is None:
+        return out
+    for i in range(len(feats)):
+        if picnic._cls(feats, i) != "information" or int(feats.kind[i]) != mapgeom.POINT:
+            continue
+        kind = picnic._tags(feats, i).get("information", "")
+        if kind in ("guidepost", "board", "map"):
+            out.append((i, kind))
+    return out
+
+
+def guideposts(frame, infra_fn, box, pad_m=0.0):
+    """The information points (hiking guideposts, boards, maps) whose spot is within pad_m of box: dicts {fid, kind, x, y,
+    name, ele, ref, hiking, bicycle, board_type, description, direction}, in id order. The same list for the road tile (the
+    post) and the sign tile (its plates), so the two agree."""
+    if infra_fn is None:
+        return []
+    x0, y0, x1, y1 = (float(v) for v in box)
+    x0, y0, x1, y1 = x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=96)
+    except (ValueError, OverflowError):
+        return []
+    out, seen = [], set()
+    for feats in picnic._load(infra_fn, keys):
+        marks = picnic._kept(feats, "lp_info", None, lambda feats=feats: _layer_information(feats))
+        if not marks:
+            continue
+        names = feats.attrs.get("name")
+        for i, kind in marks:
+            fid = str(feats.ids[i])
+            if fid in seen:
+                continue
+            rings = picnic._outers(feats, frame, i)
+            if not rings:
+                continue
+            x, y = float(rings[0][0, 0]), float(rings[0][0, 1])
+            if not (x0 <= x < x1 and y0 <= y < y1):
+                continue
+            seen.add(fid)
+            tags = picnic._tags(feats, i)
+            name = str(names[i]).strip() if names is not None else ""
+            out.append({"fid": fid, "kind": kind, "x": x, "y": y, "name": "" if name.lower() in ("none", "nan") else name,
+                        "ele": tags.get("ele", ""), "ref": tags.get("ref", ""), "hiking": tags.get("hiking") == "yes",
+                        "bicycle": tags.get("bicycle") == "yes", "board_type": tags.get("board_type", ""),
+                        "description": tags.get("description", ""), "direction": tags.get("direction", ""),
+                        "operator": tags.get("operator", "")})
+    out.sort(key=lambda g: g["fid"])
+    return out
+
+
+class Ways:
+    """Road and path segments for facing things: .a / .b are (n, 3) endpoints in the tile frame (z unused)."""
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+
+def ways_near(frame, roads_fn, box, pad_m=60.0):
+    """Every road and path segment (the roads layer, all classes) within pad_m of box, as Ways, or None."""
+    if roads_fn is None:
+        return None
+    x0, y0, x1, y1 = (float(v) for v in box)
+    x0, y0, x1, y1 = x0 - pad_m, y0 - pad_m, x1 + pad_m, y1 + pad_m
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        keys = mapcells.cells_for_points(la, lo, pad_lat=0.00005, pad_lon=0.00005, max_cells=64)
+    except (ValueError, OverflowError):
+        return None
+    aa, bb = [], []
+    for feats in picnic._load(roads_fn, keys):
+        boxes = feats.boxes(frame)
+        for i in range(len(feats)):
+            b = boxes[i]
+            if b[2] < x0 or b[0] >= x1 or b[3] < y0 or b[1] >= y1 or int(feats.kind[i]) != mapgeom.LINE:
+                continue
+            for part in feats.parts(i):
+                if not part or len(part[0]) < 2:
+                    continue
+                e, n = mapgeom.enu_xy(feats, frame, np.asarray(part[0], np.float64))
+                xy = np.column_stack((e, n, np.zeros(len(e))))
+                aa.append(xy[:-1])
+                bb.append(xy[1:])
+    if not aa:
+        return None
+    return Ways(np.vstack(aa), np.vstack(bb))
+
+
+def toward_way(ways, x, y, radius=FACE_ROAD_M):
+    """The unit vector (dx, dy) from (x, y) to the nearest road or path segment within radius, or None."""
+    if ways is None or not len(ways.a):
+        return None
+    p = np.array([x, y])
+    a2, b2 = np.asarray(ways.a)[:, :2], np.asarray(ways.b)[:, :2]
+    near = ((np.minimum(a2[:, 0], b2[:, 0]) - radius < x) & (np.maximum(a2[:, 0], b2[:, 0]) + radius > x)
+            & (np.minimum(a2[:, 1], b2[:, 1]) - radius < y) & (np.maximum(a2[:, 1], b2[:, 1]) + radius > y))
+    if not near.any():
+        return None
+    a2, b2 = a2[near], b2[near]
+    d = b2 - a2
+    t = np.clip(((p - a2) * d).sum(1) / np.maximum((d * d).sum(1), 1e-9), 0.0, 1.0)
+    q = a2 + d * t[:, None]
+    dist2 = ((q - p) ** 2).sum(1)
+    k = int(np.argmin(dist2))
+    if dist2[k] > radius * radius or dist2[k] < 1e-6:
+        return None
+    v = q[k] - p
+    return float(v[0] / math.sqrt(dist2[k])), float(v[1] / math.sqrt(dist2[k]))
+
+
+def guidepost_rows(posts, box, elev, frame, covers=()):
+    """Forest rows of the guideposts' tubes whose spot is in box (not inside a drawn building)."""
+    spots = [g for g in posts if g["kind"] == "guidepost" and picnic._in_box(g["x"], g["y"], box)
+             and not (covers and picnic._covered(covers, g["x"], g["y"]))]
+    if not spots:
+        return []
+    xy = np.array([[g["x"], g["y"]] for g in spots], np.float64)
+    lat, lon, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
+    _, _, z = frame.geodetic_to_enu(lat, lon, np.asarray(elev(lat, lon), np.float64))
+    return [[G_GP, round(g["x"], 2), round(g["y"], 2), round(float(zz), 2), 0.0, 1.0, HEIGHT[G_GP], 0.0]
+            for g, zz in zip(spots, np.asarray(z, np.float64))]
 
 
 def _offsets():
@@ -329,10 +524,10 @@ def rows(frame, infra_fn, land_fn, box, elev, osm_fn=None, bld_fn=None, clearanc
     if not ON or (infra_fn is None and land_fn is None and osm_fn is None):
         return []
     found, buses, parks, keys = candidates(frame, infra_fn, land_fn, box, osm_fn)
-    if not found:
+    posts = guideposts(frame, infra_fn, box)
+    if not found and not posts:
         return []
-    spots = plan(found, buses, parks, box, country)
-    if not spots:
-        return []
-    covers = picnic._covers(frame, bld_fn, keys) if bld_fn is not None else []
-    return settle(spots, elev, frame, clearance, covers)
+    covers = picnic._covers(frame, bld_fn, keys) if bld_fn is not None and keys else []
+    out = guidepost_rows(posts, box, elev, frame, covers)
+    spots = plan(found, buses, parks, box, country) if found else []
+    return out + (settle(spots, elev, frame, clearance, covers) if spots else [])

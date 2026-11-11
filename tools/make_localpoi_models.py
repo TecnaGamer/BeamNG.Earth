@@ -9,6 +9,11 @@ Writes mod/beamng_earth/levels/beamng_earth/art/shapes/beamngEarth/localpoi/:
   bne_lp_firepit.dae        a stone fire ring (1.4 m across) and a log bench each side
   bne_lp_cross_stone / _wood / _metal, bne_lp_shrine_column
                             roadside crosses (3.7 / 3.75 / 2.6 m) and a Bozi muka shrine (3.4 m), front towards -Y
+  bne_lp_gp_post            a hiking guidepost's galvanised tube (2.6 m); its plates and arrows are the sign tile's
+                            (server localpoisign.py)
+  bne_lp_stele / _obelisk / _boulder / _statue / _stone_cross
+                            memorials: a stele (1.9 m), an obelisk (3.5 m), a boulder with a plaque (1.3 m), a saint's statue
+                            on a pedestal (3.75 m), a low stone cross (1.05 m); the front towards -Y
   main.materials.json       bne_lp_* materials; a map is used when its file is beside it (<name>.color.png,
                             <name>.normal.png, <name>.data.png), else a flat colour
 All centred on the footprint, Z up from the ground. UVs are metric (1 repeat = 1 m, along a board's length), so the
@@ -41,6 +46,8 @@ MATERIALS = {
     "bne_lp_tin": ((0.30, 0.38, 0.33), 0.7, False),          # old painted tin (a wooden cross' small roof and plate)
     "bne_lp_paint": ((0.80, 0.81, 0.80), 0.6, False),        # white-painted steel
     "bne_lp_niche": ((0.04, 0.04, 0.04), 0.9, False),        # a shrine's dark niche, an inscription panel
+    "bne_lp_galv": ((0.62, 0.64, 0.65), 0.45, False),        # galvanised steel (a hiking guidepost's tube)
+    "bne_lp_granite": ((0.18, 0.18, 0.19), 0.35, False),     # polished dark granite (memorial plaques)
 }
 
 
@@ -363,9 +370,146 @@ def shrine_column_lods():
     return [(100, shrine_column()), (10, shrine_column(far=True))], col
 
 
+# ----------------------------------------------------------------------------- guidepost and memorials (stages D, F)
+
+def taper(m, mat, cx, cy, z0, z1, r0, r1, sides=8, turn=0.0):
+    """A tapered prism: radius r0 at z0 to r1 at z1 (r1 = 0: a cone), `sides` sides, turned by `turn` radians."""
+    a0 = [turn + 2 * math.pi * i / sides for i in range(sides)]
+    lo = [(cx + r0 * math.cos(a), cy + r0 * math.sin(a), z0) for a in a0]
+    hi = [(cx + r1 * math.cos(a), cy + r1 * math.sin(a), z1) for a in a0]
+    for i in range(sides):
+        j = (i + 1) % sides
+        quad(m, mat, lo[i], lo[j], hi[j], hi[i]) if r1 > 1e-6 else m.face(
+            mat, [lo[i], lo[j], hi[i]], [(0.0, 0.0), (r0, 0.0), (0.0, z1 - z0)])
+    if r1 > 1e-6:
+        m.face(mat, hi)
+    m.face(mat, list(reversed(lo)))
+
+
+def gp_post(far=False):
+    """A hiking guidepost's galvanised tube (2.6 m, 60 mm) with a cap and a clamp under the plate."""
+    m = Mesh(segs=8 if far else 12)
+    m.cylinder("bne_lp_galv", 0.0, 0.0, -0.3, 2.60, 0.03, caps=True)
+    if not far:
+        m.cylinder("bne_lp_galv", 0.0, 0.0, 2.60, 2.64, 0.036, caps=True)
+        m.cylinder("bne_lp_galv", 0.0, 0.0, 0.0, 0.05, 0.042, caps=True)
+    return m
+
+
+def gp_post_lods():
+    col = Mesh()
+    block(col, "bne_lp_galv", -0.04, 0.04, -0.04, 0.04, 0.0, 2.6)
+    return [(60, gp_post()), (6, gp_post(far=True))], col
+
+
+def stele(far=False):
+    """A stele: a step, a slab with a stepped cap and a dark plaque on its front (-Y), 1.9 m."""
+    m = Mesh()
+    block(m, "bne_lp_stone", -0.75, 0.75, -0.40, 0.40, -0.10, 0.15)
+    block(m, "bne_lp_stone", -0.55, 0.55, -0.26, 0.26, 0.15, 0.40)
+    block(m, "bne_lp_stone", -0.45, 0.45, -0.15, 0.15, 0.40, 1.75)
+    block(m, "bne_lp_stone", -0.50, 0.50, -0.19, 0.19, 1.75, 1.85)
+    block(m, "bne_lp_stone", -0.36, 0.36, -0.12, 0.12, 1.85, 1.92)
+    if not far:
+        block(m, "bne_lp_granite", -0.30, 0.30, -0.165, -0.15, 0.80, 1.45)
+    return m
+
+
+def stele_lods():
+    col = Mesh()
+    block(col, "bne_lp_stone", -0.75, 0.75, -0.40, 0.40, -0.10, 0.15)
+    block(col, "bne_lp_stone", -0.50, 0.50, -0.19, 0.19, 0.15, 1.92)
+    return [(80, stele()), (8, stele(far=True))], col
+
+
+def obelisk(far=False):
+    """An obelisk: a base with a plaque and a square tapering shaft with a pyramid tip, 3.5 m."""
+    m = Mesh()
+    block(m, "bne_lp_stone", -0.65, 0.65, -0.65, 0.65, -0.10, 0.20)
+    block(m, "bne_lp_stone", -0.50, 0.50, -0.50, 0.50, 0.20, 0.55)
+    taper(m, "bne_lp_stone", 0.0, 0.0, 0.55, 3.15, 0.40, 0.20, sides=4, turn=math.pi / 4)
+    taper(m, "bne_lp_stone", 0.0, 0.0, 3.15, 3.50, 0.20, 0.0, sides=4, turn=math.pi / 4)
+    if not far:
+        block(m, "bne_lp_granite", -0.26, 0.26, -0.515, -0.50, 0.28, 0.50)
+    return m
+
+
+def obelisk_lods():
+    col = Mesh()
+    block(col, "bne_lp_stone", -0.65, 0.65, -0.65, 0.65, -0.10, 0.20)
+    taper(col, "bne_lp_stone", 0.0, 0.0, 0.20, 3.5, 0.5, 0.05, sides=4, turn=math.pi / 4)
+    return [(80, obelisk()), (8, obelisk(far=True))], col
+
+
+def boulder(far=False):
+    """A memorial boulder: a few rough blocks and a dark plaque on the front (-Y), 1.3 m."""
+    m = Mesh()
+    ax = lambda yaw: [[math.cos(yaw), math.sin(yaw), 0.0], [-math.sin(yaw), math.cos(yaw), 0.0], [0.0, 0.0, 1.0]]
+    m.box("bne_lp_stone", (0.0, 0.0, 0.50), (0.62, 0.42, 0.50), ax(0.15))
+    m.box("bne_lp_stone", (-0.20, 0.05, 0.98), (0.40, 0.30, 0.28), ax(-0.35))
+    m.box("bne_lp_stone", (0.34, -0.06, 0.18), (0.34, 0.30, 0.18), ax(0.5))
+    if not far:
+        block(m, "bne_lp_granite", -0.28, 0.18, -0.50, -0.46, 0.35, 0.78)
+    return m
+
+
+def boulder_lods():
+    col = Mesh()
+    block(col, "bne_lp_stone", -0.65, 0.65, -0.45, 0.45, 0.0, 1.3)
+    return [(60, boulder()), (6, boulder(far=True))], col
+
+
+def statue(far=False):
+    """A saint's statue on a baroque pedestal: step, plinth, pedestal with a cornice, a robed figure with a head, a raised
+    arm and a halo, 3.75 m. A simplified figure (no sculpted detail)."""
+    m = Mesh()
+    block(m, "bne_lp_stone", -0.55, 0.55, -0.55, 0.55, -0.10, 0.15)
+    block(m, "bne_lp_stone", -0.40, 0.40, -0.40, 0.40, 0.15, 0.50)
+    block(m, "bne_lp_stone", -0.28, 0.28, -0.28, 0.28, 0.50, 1.85)
+    block(m, "bne_lp_stone", -0.36, 0.36, -0.36, 0.36, 1.85, 1.97)
+    block(m, "bne_lp_stone", -0.30, 0.30, -0.30, 0.30, 1.97, 2.03)                    # the figure's plinth
+    taper(m, "bne_lp_stone", 0.0, 0.0, 2.03, 3.05, 0.26, 0.17)                          # robe
+    taper(m, "bne_lp_stone", 0.0, 0.0, 3.05, 3.30, 0.17, 0.20)                          # shoulders
+    taper(m, "bne_lp_stone", 0.0, 0.0, 3.30, 3.42, 0.20, 0.06)                          # neck
+    taper(m, "bne_lp_stone", 0.0, 0.0, 3.42, 3.66, 0.11, 0.09)                          # head
+    block(m, "bne_lp_stone", 0.16, 0.26, -0.20, -0.08, 2.60, 3.20)                      # an arm, forward, with a crucifix
+    if not far:
+        block(m, "bne_lp_stone", 0.18, 0.24, -0.24, -0.16, 3.05, 3.50)
+        block(m, "bne_lp_stone", 0.13, 0.29, -0.24, -0.16, 3.30, 3.36)
+        taper(m, "bne_lp_iron", 0.0, 0.0, 3.70, 3.72, 0.20, 0.20, sides=10)           # the halo
+        block(m, "bne_lp_granite", -0.19, 0.19, -0.295, -0.28, 0.95, 1.55)
+    return m
+
+
+def statue_lods():
+    col = Mesh()
+    block(col, "bne_lp_stone", -0.55, 0.55, -0.55, 0.55, -0.10, 0.15)
+    block(col, "bne_lp_stone", -0.36, 0.36, -0.36, 0.36, 0.15, 2.03)
+    taper(col, "bne_lp_stone", 0.0, 0.0, 2.03, 3.75, 0.26, 0.10)
+    return [(100, statue()), (10, statue(far=True))], col
+
+
+def stone_cross(far=False):
+    """A low stone cross (a "smirci kriz", a penance cross), a little leaning, 1.05 m."""
+    m = Mesh()
+    block(m, "bne_lp_stone", -0.32, 0.32, -0.22, 0.22, -0.10, 0.10)
+    block(m, "bne_lp_stone", -0.11, 0.11, -0.07, 0.07, 0.10, 0.95)
+    block(m, "bne_lp_stone", -0.36, 0.36, -0.07, 0.07, 0.62, 0.84)
+    block(m, "bne_lp_stone", -0.15, 0.15, -0.07, 0.07, 0.95, 1.05)
+    return m
+
+
+def stone_cross_lods():
+    col = Mesh()
+    block(col, "bne_lp_stone", -0.36, 0.36, -0.22, 0.22, -0.10, 1.05)
+    return [(40, stone_cross()), (5, stone_cross(far=True))], col
+
+
 MODELS = {"bne_lp_table_forest": table_forest, "bne_lp_altan": altan, "bne_lp_firepit": firepit,
           "bne_lp_cross_stone": cross_stone_lods, "bne_lp_cross_wood": cross_wood_lods,
-          "bne_lp_cross_metal": cross_metal_lods, "bne_lp_shrine_column": shrine_column_lods}
+          "bne_lp_cross_metal": cross_metal_lods, "bne_lp_shrine_column": shrine_column_lods,
+          "bne_lp_gp_post": gp_post_lods, "bne_lp_stele": stele_lods, "bne_lp_obelisk": obelisk_lods,
+          "bne_lp_boulder": boulder_lods, "bne_lp_statue": statue_lods, "bne_lp_stone_cross": stone_cross_lods}
 
 
 def materials_json():

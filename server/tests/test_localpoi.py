@@ -183,7 +183,10 @@ class SourceAndCatalogTest(unittest.TestCase):
     def test_wayside_marks_of_the_osm_rows(self):
         self.assertEqual(picnicsource._mark(None, None, None, "wayside_cross")[0], "wayside_cross")
         self.assertEqual(picnicsource._mark(None, None, None, "Wayside_Shrine")[0], "wayside_shrine")
-        self.assertIsNone(picnicsource._mark(None, None, None, "memorial"))
+        self.assertEqual(picnicsource._mark(None, None, None, "memorial", "Pomník padlým")[1],
+                         {"historic": "memorial", "description": "Pomník padlým"})
+        self.assertEqual(picnicsource._mark(None, None, None, "monument")[0], "monument")
+        self.assertIsNone(picnicsource._mark(None, None, None, "ruins"))
         import picnic
 
         class F:

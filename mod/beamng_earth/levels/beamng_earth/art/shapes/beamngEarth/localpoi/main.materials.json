@@ -219,5 +219,51 @@
       {}
     ],
     "doubleSided": false
+  },
+  "bne_lp_galv": {
+    "name": "bne_lp_galv",
+    "mapTo": "bne_lp_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f35ff26c-5ac2-568b-af1d-50d2dca75505",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.62,
+          0.64,
+          0.65,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
+  },
+  "bne_lp_granite": {
+    "name": "bne_lp_granite",
+    "mapTo": "bne_lp_granite",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "f8dc906b-ac6b-5970-addf-f9935fd258b7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.18,
+          0.18,
+          0.19,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.35
+      },
+      {},
+      {},
+      {}
+    ],
+    "doubleSided": false
   }
 }
