@@ -69,7 +69,8 @@ class LeftBehindTest(unittest.TestCase):
 
 class AbandonOldTest(unittest.TestCase):
     def test_teleport_drops_then_restores(self):
-        s = SimpleNamespace(abandoned=set(), connections=[], warm_cv=_t.Condition(), warm_want=[("g", "k")])
+        s = SimpleNamespace(abandoned=set(), connections=[], warm_cv=_t.Condition(), warm_want=[("g", "k")],
+                            write_abandoned=lambda: None)
         c = SimpleNamespace(s=s, active=2)
         s.connections.append(c)
         earthd.Connection.abandon_old(c, 1)
@@ -80,11 +81,59 @@ class AbandonOldTest(unittest.TestCase):
         self.assertEqual(s.abandoned, set())
 
     def test_another_player_still_there_keeps_it(self):
-        s = SimpleNamespace(abandoned=set(), connections=[], warm_cv=_t.Condition(), warm_want=[])
+        s = SimpleNamespace(abandoned=set(), connections=[], warm_cv=_t.Condition(), warm_want=[],
+                            write_abandoned=lambda: None)
         c, other = SimpleNamespace(s=s, active=2), SimpleNamespace(active=1)
         s.connections += [c, other]
         earthd.Connection.abandon_old(c, 1)
         self.assertEqual(s.abandoned, set())
+
+
+class RunningJobGivesUpTest(unittest.TestCase):
+    """A running block or road tile of an abandoned anchor gives up at its next road-plan wait or stage."""
+
+    def test_the_server_file_reaches_the_workers(self):
+        import tempfile
+        import blockworker
+        with tempfile.TemporaryDirectory() as d:
+            s = SimpleNamespace(abandoned={3}, out_dir=d)
+            self.assertFalse(blockworker.abandoned(d, 3), "no file yet")
+            earthd.Server.write_abandoned(s)
+            self.assertTrue(blockworker.abandoned(d, 3))
+            self.assertFalse(blockworker.abandoned(d, 4))
+            s.abandoned = set()
+            import time as _time
+            _time.sleep(0.01)
+            earthd.Server.write_abandoned(s)
+            os.utime(os.path.join(d, blockworker.ABANDONED_FILE), ns=(1, 1))     # (a new mtime for sure)
+            self.assertFalse(blockworker.abandoned(d, 3))
+
+    def test_stage_marks_and_plan_waits_give_up(self):
+        import blockworker
+        import xproc
+        stages, mark = blockworker._stage_clock()
+        xproc.set_cancel(lambda: True)
+        try:
+            with self.assertRaises(pools.Abandoned):
+                mark("fuel")
+        finally:
+            xproc.set_cancel(None)
+        mark("items")                       # (no check set: goes on)
+        self.assertIn("items", stages)
+
+    def test_a_plan_wait_gives_up(self):
+        import tempfile
+        import xproc
+        with tempfile.TemporaryDirectory() as d:
+            lock = os.path.join(d, "cell.lock")
+            self.assertTrue(xproc.take(lock, "demand"))         # (another holder: this process, held)
+            xproc.set_cancel(lambda: True)
+            try:
+                with self.assertRaises(pools.Abandoned):
+                    xproc.once(lock, lambda: None, 5.0, kind="demand")
+            finally:
+                xproc.set_cancel(None)
+                xproc.release(lock)
 
 
 if __name__ == "__main__":

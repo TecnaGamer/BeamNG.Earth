@@ -14,6 +14,7 @@ lon, [mapcells.CellKey]), the latest list replacing the earlier one.
 """
 from runtimeprofiler import step as profile_step
 import collections
+import json
 import logging
 import os
 import queue
@@ -428,6 +429,14 @@ def _take_pads(fuel_pads):
 
 def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
           ground_at=(0.0, 0.0)):
+    """_build, given up (pools.Abandoned) once a teleport leaves anchor aid (_abandon_check)."""
+    with _abandon_check(out_dir, aid):
+        return _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name, fuel_pads, provisional,
+                      ground_at)
+
+
+def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None, fuel_pads=None, provisional=False,
+           ground_at=(0.0, 0.0)):
     """Build and write the block (heightmap PNG name in out_dir, its surface masks beside it, and the
     .ter ter_name if given). fuel_pads: the gas station pads around it (the server's: _take_pads). Returns the info
     dict of earthd's make_heightmap (without seconds / zoom / base)."""
@@ -839,7 +848,48 @@ def _stage_clock():
         t = time.perf_counter()
         stages[name] = stages.get(name, 0.0) + t - clock[0]
         clock[0] = t
+        if xproc._cancelled():          # (a teleport left its place: _abandon_check)
+            import pools
+            raise pools.Abandoned()
     return stages, mark
+
+
+ABANDONED_FILE = "abandoned_anchors.json"     # (earthd.Server.write_abandoned: the anchors a teleport left)
+_abandoned_seen = {}            # path -> (mtime_ns, set of anchor ids)
+
+
+def abandoned(out_dir, aid):
+    """Did a teleport leave anchor aid (the server's ABANDONED_FILE in out_dir; read again when it changes)?"""
+    p = os.path.join(out_dir, ABANDONED_FILE)
+    try:
+        m = os.stat(p).st_mtime_ns
+    except OSError:
+        return False
+    got = _abandoned_seen.get(p)
+    if got is None or got[0] != m:
+        try:
+            with open(p, encoding="utf-8") as f:
+                ids = {int(v) for v in json.load(f)}
+        except (OSError, ValueError, TypeError):
+            return False
+        got = _abandoned_seen[p] = (m, ids)
+    return aid in got[1]
+
+
+class _abandon_check:
+    """While a job of anchor aid runs: its waits for other processes' road plans (xproc.once) and its stages
+    (_stage_clock's mark) raise pools.Abandoned once a teleport leaves aid (the user, 2026-11-11: "stop generating
+    the old city"; a running graded first block and road tiles of the city left took 22-27 s more of the workers)."""
+
+    def __init__(self, out_dir, aid):
+        self.out_dir, self.aid = out_dir, aid
+
+    def __enter__(self):
+        xproc.set_cancel(lambda: abandoned(self.out_dir, self.aid))
+
+    def __exit__(self, *exc):
+        xproc.set_cancel(None)
+        return False
 
 
 class _Parts:
@@ -1941,6 +1991,8 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
     rigid placement would leave off, roads.geo_exact_auto). Returns {"content": (vfs path, chunks, info,
     fuel pads) or None, "skin": (vfs path, info) or None, "exact": {what: vfs path}, "stages": {...}}."""
     watch = _stack_watch(f"road geotile {gx}_{gy}")
+    chk = _abandon_check(out_dir, aid)      # (given up once a teleport leaves aid: pools.Abandoned)
+    chk.__enter__()
     try:
         out = {"content": None, "skin": None, "exact": {}, "stages": {}}
         t0 = time.perf_counter()
@@ -1968,6 +2020,7 @@ def roads_geo(aid, lat, lon, zoom, gx, gy, gzoom, out_dir, vfs_dir, sidewalks, l
                        "exact_s": time.perf_counter() - t2}
         return out
     finally:
+        chk.__exit__()
         watch.cancel()
 
 

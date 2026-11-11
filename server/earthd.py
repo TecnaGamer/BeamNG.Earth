@@ -3414,6 +3414,18 @@ class Server:
                 with self.warm_cv:      # not again for this pose list
                     self.warm_want = [w for w in self.warm_want if w[1] != job[1]]
 
+    def write_abandoned(self):
+        """The abandoned anchors for the worker processes (blockworker.ABANDONED_FILE in out_dir: their running blocks
+        and road tiles of those anchors give up at their next road-plan wait or stage)."""
+        try:
+            p = os.path.join(self.out_dir, blockworker.ABANDONED_FILE)
+            tmp = p + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(sorted(int(a) for a in self.abandoned), f)
+            os.replace(tmp, p)
+        except OSError as e:
+            log.debug("abandoned anchors file: %s", e)
+
     def is_abandoned(self, aid):
         """Did a teleport leave anchor aid (abandoned: its queued work is not wanted)?"""
         return aid in getattr(self, "abandoned", ())
@@ -7560,6 +7572,7 @@ class Connection:
         if any(c is not self and getattr(c, "active", None) == aid for c in list(self.s.connections)):
             return
         self.s.abandoned.add(aid)
+        self.s.write_abandoned()
         self.abandoned_from = aid
         with self.s.warm_cv:
             self.s.warm_want = []
@@ -7570,6 +7583,7 @@ class Connection:
         aid = getattr(self, "abandoned_from", None)
         if aid is not None:
             self.s.abandoned.discard(aid)
+            self.s.write_abandoned()
             self.abandoned_from = None
 
     async def prepare_anchor(self, msg):
