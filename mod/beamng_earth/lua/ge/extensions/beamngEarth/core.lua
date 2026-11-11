@@ -3156,6 +3156,15 @@ function M.appPath(what, pick, path)
   return true
 end
 
+-- A destination picked on the world map (its "Teleport here?" box, a search result): the server fetches its elevation
+-- tiles and map cells in the background before the teleport is confirmed (earthd preload_place; the fastest world
+-- generators load the destination ahead, the user 2026-11-11: "sub second world gen, even with clear cashe").
+function M.preloadPlace(lat, lon)
+  if not net.isConnected() or type(lat) ~= 'number' or type(lon) ~= 'number' then return false end
+  net.send({ type = 'preload_place', lat = lat, lon = lon })
+  return true
+end
+
 -- The world map's search box: addresses and places from the server (geocode.py); the answer is geocode_result.
 function M.requestGeocode(id, q, lat, lon, full)
   if not net.isConnected() then return false end

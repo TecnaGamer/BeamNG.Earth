@@ -132,6 +132,7 @@ import bc7  # noqa: E402
 import terraincache  # noqa: E402
 import terrainpatch as terrainpatchmod  # noqa: E402
 import geodesy  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
 import gravity as gravitymod  # noqa: E402
 import airportgrade as airportgrademod  # noqa: E402
 import airports as airportsmod  # noqa: E402
@@ -6858,6 +6859,8 @@ class Connection:
             self.spawn(self.area_add(msg))
         elif kind == "area_cmd":                # a saved area paused, resumed or deleted
             self.spawn(self.area_cmd(msg))
+        elif kind == "preload_place":           # a destination picked on the map: loaded before the teleport
+            self.preload_place(msg)
         elif kind == "stations":                # the station finder: the map's layers, Nearest (stationindex.py)
             self.spawn(self.stations(msg))
         elif kind == "route":                   # the GPS: the whole road route (routing.py)
@@ -7164,6 +7167,52 @@ class Connection:
         if info.get("ter"):         # the same block as the engine's terrain file (swapped in, no import)
             out["ter"] = f"{self.s.vfs_dir}/{info['ter']}"
         return out
+
+    def preload_place(self, msg):
+        """A destination picked on the world map (its "Teleport here?" box, a search result; mod core.preloadPlace):
+        its first block's elevation tiles and the road tiles' map cells (Server.warm_place's, in a frame at the place)
+        fetched in the background before the teleport is asked for (the fastest world generators load the destination
+        ahead; the user, 2026-11-11: "sub second world gen, even with clear cashe"). One at a time; a newer pick
+        replaces a waiting one. Never waits, never builds."""
+        try:
+            lat, lon = float(msg["lat"]), float(msg["lon"])
+        except (KeyError, TypeError, ValueError):
+            return
+        if not (math.isfinite(lat) and math.isfinite(lon) and -90.0 <= lat <= 90.0):
+            return
+        lon = (lon + 180.0) % 360.0 - 180.0
+        st = self.__dict__.setdefault("_preload", {"next": None, "busy": False, "last": None})
+        st["next"] = (lat, lon)
+        if st["busy"]:
+            return
+        st["busy"] = True
+        s = self.s
+
+        def run():
+            try:
+                while st["next"] is not None:
+                    la, lo = st["next"]
+                    st["next"] = None
+                    last = st["last"]
+                    if last is not None and abs(last[0] - la) < 1e-3 and abs(last[1] - lo) < 1e-3:
+                        continue
+                    st["last"] = (la, lo)
+                    t0 = time.monotonic()
+                    dem_n = cells_n = 0
+                    if s.dem is not None:
+                        zoom = demmod.zoom_for(la, 1.25, demmod.FINE_ZOOM)
+                        reach = s.layout.block * heightmap.SQUARE / 2 + AHEAD_MARGIN_M
+                        dem_n, _ = s.dem.prefetch(s.dem.keys_around(la, lo, reach, zoom))
+                    if s.mapdata is not None:
+                        spot = SimpleNamespace(frame=geodesy.EnuFrame(la, lo))
+                        cells_n = s.warm_place(spot, 0.0, 0.0)
+                    log.info("preload %.5f, %.5f: %d elevation tiles, %d map cells queued (%.1f s)", la, lo, dem_n,
+                             cells_n, time.monotonic() - t0)
+            except Exception as e:          # (only the head start is lost)
+                log.info("preload: %s: %s", type(e).__name__, e)
+            finally:
+                st["busy"] = False
+        threading.Thread(target=run, name="preload-place", daemon=True).start()
 
     async def prepare_anchor(self, msg):
         """Every first-ground preparation has progress and a terminal reply, including setup/finalization errors."""
