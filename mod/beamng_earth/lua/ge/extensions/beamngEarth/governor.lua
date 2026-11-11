@@ -10,6 +10,9 @@
 --    when idle. A token bucket (tokens += b per frame) decides which units run: a unit runs only
 --    when tokens >= its estimated cost, and a frame never plans more than b + maxUnit. There is no
 --    "at least one unit per frame" rule: an expensive unit waits until enough tokens accumulated.
+--    After its first unit a frame also never plans past the far cap (FAR_CAP_MS): b + maxUnit
+--    is no cap once one slow unit has dragged its kind's estimate up, because maxUnit grows with it
+--    (see try; PR #1128 by SwimmingRemy).
 --  * heavy operations (terrain commit, rebase phase 2, teleport) are isolated: once one is
 --    requested, b ramps down at -0.1 ms/frame; the slot is granted only when b == 0, no unit ran in
 --    the 2 frames before, and those 2 frames were calm (<= base + 1.5 ms); then 2 quiet frames
@@ -55,6 +58,17 @@ M.EST_ALPHA = 0.2          -- cost EMA gain
 -- the bucket (chargeEngine), at most ENGINE_MAX_DEBT_MS, so imports wait until the budget has paid for it.
 M.ENGINE_FREE_MS = 2.0
 M.ENGINE_MAX_DEBT_MS = 50.0
+-- The far cap (PR #1128 by SwimmingRemy): after its first unit a frame plans at most this many ms of units. The plan
+-- line b + maxUnit assumed units stay small; one unit that runs far over its estimate (a cold shape load can take most
+-- of a second: the governor charges a unit after it ran) lifts its kind's EMA, and maxUnit with it, so both the token
+-- cap (2 * maxUnit) and the planned frame (b + maxUnit) grow to its size - the banked tokens then ran 100+ ms of smaller
+-- units in single frames while the estimate decayed back (a Napa session, 2026-11-10: repeated 104-356 ms hitches with
+-- far tiles queued, after an 888 ms far-field frame). The first unit of a frame is exempt (the tokens pace it already):
+-- a genuinely big unit runs alone, one isolated spike the dt filter rejects (design 5.1), not followed by burst frames.
+-- With every estimate near its prior b + maxUnit (6-16 ms) binds first and nothing changes.
+-- Rollback switch: 0 (or nil) turns it off - core.lua hands this to Gov:setFarCap every frame, so setting it from the
+-- console (require('beamngEarth/governor').FAR_CAP_MS = 0) takes effect at once; trees.lua's stop rule follows it too.
+M.FAR_CAP_MS = 20.0
 -- Prior cost estimates (ms) per unit kind: in-game P5/P6 (2026-10-10): a 2k-tri .cdae first load
 -- 3.4 ms (8k-tri 1.5 ms; v1.2 drive EMA 1.93), a 2k-tri .dae 7.5-25 ms; unhide is free; setPosition
 -- ~0.006 ms (p6). v1.3 satellite imagery (lead probe p_sat.lua): a Lua-created per-tile Material
@@ -97,6 +111,7 @@ function M.new(opts)
     clock = opts.clock or stopwatch.clock(),
     target = M.DEFAULT_TARGET_MS,
     loading = false,
+    farCap = M.FAR_CAP_MS, -- after a frame's first unit it plans at most this (nil: off, setFarCap)
     b = 0,              -- current streaming budget, ms per frame
     bPrev = 0,          -- b of the previous frame
     tokens = 0,         -- token bucket, ms
@@ -129,6 +144,12 @@ function Gov:setTarget(ms)
 end
 
 function Gov:setLoading(on) self.loading = on and true or false end
+
+-- The far cap (FAR_CAP_MS): nil or 0 turns it off.
+function Gov:setFarCap(ms)
+  ms = tonumber(ms)
+  self.farCap = (ms and ms > 0) and ms or nil
+end
 
 function Gov:targetNow() return self.loading and M.LOADING_TARGET_MS or self.target end
 
@@ -204,6 +225,9 @@ function Gov:try(kind)
   local e = self.est[kind] or 1
   if self.tokens < e then return false end
   if self.frameSpent + e > self.b + self:maxUnit() then return false end
+  -- ... and past the first unit never more than the far cap: with every estimate at its prior, b + maxUnit is well
+  -- under it and nothing changes; it binds once a slow unit has inflated an estimate (FAR_CAP_MS)
+  if self.farCap and self.frameUnits > 0 and self.frameSpent + e > self.farCap then return false end
   return true
 end
 
@@ -289,6 +313,7 @@ function Gov:isHeavyFrame() return self.heavyFrame == self.frame end
 
 function Gov:snapshot()
   return { b = self.b, tokens = self.tokens, target = self:targetNow(), loading = self.loading, base = self.base,
+    farCap = self.farCap,
     heavyPending = self.heavyPending, estCdae = self.est.cdae, estDae = self.est.dae, estCdaeTex = self.est.cdaeTex,
     estCdaeTex128 = self.est.cdaeTex128, estCdaeTex256 = self.est.cdaeTex256, estCdaeTex512 = self.est.cdaeTex512,
     estMaterial = self.est.material, estMatDelete = self.est.matDelete, heavy = self.stats.heavy,

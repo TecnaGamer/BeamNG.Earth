@@ -1004,8 +1004,11 @@ end
 -- A shape's first items in a session cost far more than its population: the engine loads the shape and instances its
 -- materials in that frame's tick (a Manhattan drive on the Windows test PC, 2026-11-03: tree frames making 5-740
 -- items of new door / hydrant / sign / tree variants took the tick 75-255 ms, the shapes' items almost none). New
--- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most while driving; any number while the
--- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
+-- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most; any number only while the world fills
+-- after a teleport or at the level's start (update's fill: the player expects that wait) or with no frame budget
+-- (tools). A stop used to lift the cap too (the governor's loading frames cover standing still), and a parked player
+-- sees every hitch: the far clump shapes' first loads landed several in single frames while slow (a Napa session,
+-- 2026-11-10: repeated 104-356 ms hitches, tree passes of +24 items; PR #1128 by SwimmingRemy).
 M.NEW_SHAPES_PER_FRAME = 1
 local touched, touchedItems, newShapes = {}, 0, 0
 local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
@@ -1389,6 +1392,9 @@ M.RECHECK_S = 1.0
 -- player looks at, the colliding items stay round the car (the user, 2026-10-20: "the LODs still all follow the car").
 -- frameMs: this frame's Lua time for the tree work (default FRAME_MS); 0: none this frame (core: the governor's heavy
 -- frame or the quiet frames round it), the batch waits for the next frame.
+-- fill: the world is filling after a teleport or at the level's start (core): new shapes load without the
+-- NEW_SHAPES_PER_FRAME cap, as many first loads a frame as the pass meets. nil: the old rule (the loading frame budget
+-- lifts the cap), for callers that do not say.
 -- Spare Forests wanted in the pool now: POOL_SPARE_CALM while calm (the loading frame budget), none while driving (a
 -- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
 function M.spareWanted(frameMs)
@@ -1396,7 +1402,7 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
 end
 
-function M.update(anchorId, player, view, frameMs)
+function M.update(anchorId, player, view, frameMs, fill)
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
@@ -1430,7 +1436,8 @@ function M.update(anchorId, player, view, frameMs)
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0
-  newShapeCap = (frameMs ~= nil and frameMs < M.LOADING_FRAME_MS) and M.NEW_SHAPES_PER_FRAME or math.huge
+  if fill == nil then fill = frameMs ~= nil and frameMs >= M.LOADING_FRAME_MS end
+  newShapeCap = (frameMs ~= nil and not fill) and M.NEW_SHAPES_PER_FRAME or math.huge
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
   for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)

@@ -86,6 +86,67 @@ do
   T.near(g:maxUnit(), 1.2, 0.05, 'maxUnit = largest estimate of the kinds in use')
 end
 
+-- the far cap (PR #1128 by SwimmingRemy): one unit far over its estimate (a cold shape load) inflates its kind's EMA,
+-- and maxUnit with it, so the plan line b + maxUnit and the token cap 2 * maxUnit open for every OTHER kind - the
+-- banked tokens then ran 100+ ms of cheap units in single frames (repeated 104-356 ms hitches with far tiles queued,
+-- 2026-11-10). Past its first unit a frame now plans at most FAR_CAP_MS; the queue drains over more frames.
+do
+  local function seed(g)
+    for _ = 1, 100 do frame(g, { cost = 4 }) end                     -- imports (cdae), est ~ 4
+    for _ = 1, 100 do frame(g, { kind = 'reveal', cost = 0.3 }) end  -- reveals, est ~ 0.3
+    local q0, n0 = { 700 }, 0                                        -- one cdae runs 700 ms (est 4: charged after)
+    repeat frame(g, { queue = q0 }); n0 = n0 + 1 until q0[1] == nil or n0 > 50
+    T.check(g.est.cdae > 100, 'the slow unit drags its estimate up (' .. string.format('%.0f', g.est.cdae) .. ' ms)')
+    for _ = 1, 800 do frame(g, { queue = {} }) end                   -- work waits; the tokens bank towards 2 * maxUnit
+    T.check(g.tokens > 100, 'the bank grew with maxUnit (' .. string.format('%.0f', g.tokens) .. ' ms of tokens)')
+  end
+  local g = governor.new({ clock = clock })
+  T.check(g.farCap == governor.FAR_CAP_MS and governor.FAR_CAP_MS > 0, 'the far cap is on by default')
+  seed(g)
+  local q = {}
+  for k = 1, 600 do q[k] = 0.3 end
+  local sIn, uIn = frame(g, { kind = 'reveal', queue = q })
+  T.check(sIn <= governor.FAR_CAP_MS + 1e-9,
+    'after the spike a frame plans at most the far cap (' .. string.format('%.1f', sIn) .. ' ms)')
+  local n, total, worst = 0, uIn, 0
+  while q[1] ~= nil and n < 100 do
+    local s, u = frame(g, { kind = 'reveal', queue = q })
+    worst = math.max(worst, s)
+    n, total = n + 1, total + u
+  end
+  T.check(worst <= governor.FAR_CAP_MS + 1e-9, 'every frame stays under the far cap (worst ' .. worst .. ' ms)')
+  T.check(total == 600 and n > 3, 'the same units run, over ' .. (n + 1) .. ' frames')
+  -- the first unit of a frame is exempt: a big one still runs (alone)
+  local g3 = governor.new({ clock = clock })
+  for _ = 1, 400 do frame(g3, { cost = 30 }) end
+  T.check(g3.stats.units > 0, 'a unit bigger than the cap still runs (the frame\'s first)')
+  -- off (FAR_CAP_MS 0 / setFarCap(0)): the pre-cap behaviour, kept for A/B
+  local g2 = governor.new({ clock = clock })
+  g2:setFarCap(0)
+  T.check(g2.farCap == nil, 'setFarCap(0): off')
+  seed(g2)
+  local q2 = {}
+  for k = 1, 600 do q2[k] = 0.3 end
+  local sOff = frame(g2, { kind = 'reveal', queue = q2 })
+  T.check(sOff > 100, 'cap off: the banked tokens run in one frame (' .. string.format('%.0f', sOff) .. ' ms)')
+end
+
+-- with every estimate near its prior the cap binds nothing: the same frames admit the same units as without it
+do
+  local g = governor.new({ clock = clock })
+  local g2 = governor.new({ clock = clock })
+  g2:setFarCap(0)
+  local pat, pat2 = {}, {}
+  for i = 1, 500 do
+    local kind = (i % 3 == 0) and 'reveal' or 'cdae'
+    local cost = (kind == 'reveal') and 0.2 or (2 + (i * 37 % 50) / 25)       -- 2 .. 4 ms
+    local _, u = frame(g, { kind = kind, cost = cost })
+    local _, u2 = frame(g2, { kind = kind, cost = cost })
+    pat[i], pat2[i] = u, u2
+  end
+  T.check(table.concat(pat, ',') == table.concat(pat2, ','), 'sane estimates: the cap changes no decision')
+end
+
 ------------------------------------------------------------------------------------------
 -- isolation: a scripted queue of streaming units with heavy requests at random times; no heavy op
 -- is ever within 2 frames of a frame that ran a unit; b changes by at most 0.1 ms per frame

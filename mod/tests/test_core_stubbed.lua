@@ -791,6 +791,75 @@ drawnCredits = {}
 frames(3)
 T.check(drawnCredits[#drawnCredits] == 'Elevation: s11', 'credits: a new session shows its attribution line until its credits arrive')
 
+-- the trees' fill argument (new shapes unbounded, trees.lua newShapeCap) follows the far cap (PR #1128): a stop (the
+-- governor's loading mode through st.slowFor) is not a fill with the cap on, and is one again with it off
+-- (governor.FAR_CAP_MS 0: the pre-cap behaviour as a whole); a teleport's fill fills either way
+do
+  local governor = require('beamngEarth/governor')
+  local trees = require('beamngEarth/trees')
+  local loadprogress = require('beamngEarth/loadprogress')
+  local stC = core._state()
+  local realUpdate, savedCap, lastFill = trees.update, governor.FAR_CAP_MS, nil
+  trees.update = function(a, p, v, ms, fill) lastFill = fill; return realUpdate(a, p, v, ms, fill) end
+  stC.placeFrames, stC.loadingUntil, stC.teleportAt = nil, 0, nil
+  stC.slowFor = 10                       -- parked past SLOW_S: loading mode without a teleport
+  frame()
+  T.check(core._governor().loading and core._governor().farCap == governor.FAR_CAP_MS, 'standing: loading mode, the cap on (default)')
+  T.check(lastFill == false, 'cap on: a stop is no fill (new shapes one a frame)')
+  governor.FAR_CAP_MS = 0
+  stC.slowFor = 10
+  frame()
+  T.check(core._governor().farCap == nil, 'FAR_CAP_MS 0: the cap is off')
+  T.check(lastFill == true, 'cap off: a stop fills as before (the old behaviour, both halves)')
+  governor.FAR_CAP_MS = savedCap
+  stC.slowFor = 10
+  stC.loadingUntil = stC.clock + 5       -- a teleport's fill
+  frame()
+  T.check(core._governor().farCap ~= nil and lastFill == true, 'cap on: a teleport still fills')
+  stC.loadingUntil = 0
+
+  -- the loading cover (core M._loadCover): past the 3 s, on while the load is on and the player stays put, at most
+  -- MAX_S after the teleport (driven directly: the frame's player here is not a car)
+  local cov = core._cover
+  local savedPlayer = stC.player          -- (the clock runs on: time passing)
+  local function teleported()
+    stC.loadingUntil, stC.teleportAt = stC.clock + 3, stC.clock
+    stC.player = { x = 0, y = 0, vx = 0, vy = 0, vz = 0 }
+    loadprogress.reset(); loadprogress.start(stC.clock)
+  end
+  teleported()
+  stC.clock = stC.clock + 5
+  T.check(core._loadCover(), 'cover: still loading 5 s after a teleport while the load is on and the car stands')
+  stC.slowFor = 0
+  frame()                                 -- (the frame's own player: none here, which ends nothing)
+  T.check(core._governor().loading and lastFill == true, 'cover: the governor in loading mode, the trees fill')
+  stC.player = { x = 0, y = 0, vx = 0.5, vy = 0, vz = -6 }    -- (dropping onto the ground: not driving off)
+  T.check(core._loadCover(), 'cover: a vertical drop does not end it')
+  stC.player = { x = 0, y = 0, vx = 3, vy = 0, vz = 0 }       -- 6.7 mph: driving off
+  T.check(not core._loadCover(), 'cover: the car driving off ends it')
+  stC.player = { x = 0, y = 0, vx = 0, vy = 0, vz = 0 }
+  T.check(not core._loadCover(), 'cover: ... for good (stopping again is no teleport)')
+  teleported()
+  stC.clock = stC.clock + 4
+  T.check(core._loadCover(), 'cover: on past the 3 s')
+  loadprogress.reset()
+  T.check(not core._loadCover(), 'cover: the load over ends it')
+  teleported()
+  stC.clock = stC.clock + cov.MAX_S + 1
+  T.check(not core._loadCover(), 'cover: never past MAX_S')
+  cov.ON = false
+  teleported()
+  stC.clock = stC.clock + 2
+  T.check(core._loadCover(), 'cover off: the 3 s still')
+  stC.clock = stC.clock + 2
+  T.check(not core._loadCover(), 'cover off: none after the 3 s (the old rule)')
+  cov.ON = true
+  stC.teleportAt, stC.loadingUntil, stC.player = nil, 0, savedPlayer
+  loadprogress.reset()
+  frames(2)                              -- (loading mode off again before the next sections)
+  trees.update = realUpdate
+end
+
 -- the download cache (server cache.py) for the settings page: hello sends the page's cap, the
 -- server's 'cache' is kept (outliving levels) and a clear's answer counts; the requests go out only
 -- with a server session; a disconnect or a new session forgets the numbers

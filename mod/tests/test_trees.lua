@@ -202,7 +202,33 @@ trees.reset()
 tile('0_0', 4, 10)
 tile('0_1', 25, 10)
 trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS)
-T.check(count() == 20, 'loading: every new shape at once (' .. count() .. ')')
+T.check(count() == 20, 'loading, no fill said (the old rule): every new shape at once (' .. count() .. ')')
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, true)
+T.check(count() == 20, 'filling (a teleport): every new shape at once (' .. count() .. ')')
+-- standing still is the governor's loading mode too (the bigger Lua budget), but not a fill (PR #1128): a parked player
+-- sees each first load's frame (104-356 ms hitches while slow, 2026-11-10), so new shapes still come one a frame...
+local filled = {}
+for it in pairs(items) do filled[#filled + 1] = string.format('%.0f,%.0f,%.2f', it.m.p.x, it.m.p.y, it.sc) end
+table.sort(filled)
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, false)
+T.check(count() == 10, 'standing: one new shape a frame (' .. count() .. ')')
+local passes = 1
+while count() < 20 and passes < 10 do trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, false); passes = passes + 1 end
+T.check(count() == 20 and passes <= 3, '... split over ' .. passes .. ' passes')
+-- ... and the same items stand afterwards as a fill makes at once (order-independent)
+local spread = {}
+for it in pairs(items) do spread[#spread + 1] = string.format('%.0f,%.0f,%.2f', it.m.p.x, it.m.p.y, it.sc) end
+table.sort(spread)
+T.check(#filled == #spread and table.concat(filled, ' ') == table.concat(spread, ' '),
+  'the same items, filled at once or spread over passes')
 trees.clear()
 trees.FORESTS_PER_FRAME = savedF
 trees.SHAPE_VARIANTS = savedV
