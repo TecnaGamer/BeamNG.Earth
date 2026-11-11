@@ -267,20 +267,33 @@ def _lead(st, start, structures, ground):
             d = float(np.hypot(*(q - end)))
             if d <= reach and (best is None or d < best[0]):
                 best = (d, other, at_start)
+    d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
+    out = d / np.hypot(*d)                                  # (outwards from st's end)
+    xy = None
     if best is not None:
         _d, other, at_start = best
-        xy, z = (other.xy[:LEAD_M], other.z[:LEAD_M]) if at_start else (other.xy[::-1][:LEAD_M], other.z[::-1][:LEAD_M])
-    else:
-        d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
-        xy = end + np.arange(1, LEAD_M + 1)[:, None] * d / np.hypot(*d)
+        oxy, oz = (other.xy, other.z) if at_start else (other.xy[::-1], other.z[::-1])
+        ahead = (oxy - end) @ out > 0                       # (a deck runs past its map end: not back over st)
+        if ahead.any():
+            xy, z = oxy[ahead][:LEAD_M], oz[ahead][:LEAD_M]
+    if xy is None:
+        xy = end + np.arange(1, LEAD_M + 1)[:, None] * out
         z = ground(xy)
     return (xy[::-1], z[::-1]) if start else (xy, z)        # (from the joined end outwards: reversed before st)
+
+
+def _every_metre(xy, z):
+    """xy and z again every metre along the path: a joined structure's end can be several metres from st's (the gap
+    between them is a slope over its length, not a ledge over one metre)."""
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+    ss = np.arange(0.0, s[-1] + 1e-9, 1.0)
+    return np.c_[np.interp(ss, s, xy[:, 0]), np.interp(ss, s, xy[:, 1])], np.interp(ss, s, z)
 
 
 def _measure_structure(report, st, structures, ground):
     """A bridge deck or a tunnel floor on its profile, with LEAD_M of what joins it before and after."""
     (bxy, bz), (axy, az) = _lead(st, True, structures, ground), _lead(st, False, structures, ground)
-    path, profile = np.concatenate([bxy, st.xy, axy]), np.concatenate([bz, st.z, az])
+    path, profile = _every_metre(np.concatenate([bxy, st.xy, axy]), np.concatenate([bz, st.z, az]))
     report.add({"part": st.fid, "class": st.spec.cls, "surface": st.surface}, path, profile, _inside(path), centre=True)
 
 
