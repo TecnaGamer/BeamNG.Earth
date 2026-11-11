@@ -11,6 +11,7 @@ mod spaceclouds;
 mod cdaez;
 mod clearance;
 mod f32z;
+mod packz;
 mod gpu;
 mod traffic;
 mod dsm;
@@ -5540,6 +5541,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_pack, m)?)?;
     m.add_function(wrap_pyfunction!(f32z::f32_unpack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_pack, m)?)?;
     m.add_function(wrap_pyfunction!(cdaez::cdae_unpack, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::cdae_zstats, m)?)?;
@@ -5572,6 +5575,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(waytags::way_tag_rows, m)?)?;
     m.add_function(wrap_pyfunction!(waytags::lane_parts, m)?)?;
     m.add_function(wrap_pyfunction!(underdeck::deck_capped, m)?)?;
-    m.add("VERSION", 170)?;
+    m.add("VERSION", 171)?;
     Ok(())
 }

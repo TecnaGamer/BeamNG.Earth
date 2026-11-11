@@ -2,9 +2,10 @@
 started where it was left, a teleport back) loads it instead of building it again. Teleport anchors sit on a grid
 (the mod's geodesy.snapAnchor), so the same place gets the same frame, and what was built in it fits again.
 
-One file per item: a zip (deflated at level 1: ~5 times smaller, ~8 ms a city road tile to read back) of named blobs
-and meta.json; the callers take the session's names out and put them back. Cut back at the server's start like the
-other caches (cache.prune_dir: the least recently used first).
+An item is one record in a pack file (revisitpack.py, since 2026-11-11: each process appends to its own; one zstd
+frame a record): its named blobs and its JSON data; the callers take the session's names out and put them back. The
+zips of before (one a file, deflated) are still read, and a zip read is moved into a pack (and removed). Cut back at
+the server's start (prune: the oldest packs, zips and kept files first) like the other caches.
 
 Only a complete build is kept: one during which nothing it may have read failed or was not there yet (a download
 that failed, a map cell that could not be read, land cover or land use not cached yet: those builds leave things out
@@ -18,18 +19,22 @@ process's revisit/where/<pid>_<start>.tsv (one os.write under O_APPEND: whole li
 the file; the handle closes after each append so Windows can remove an idle cache): the code_key, the settings it was
 built with (sig(): one short hash per setting, compared with earthd.Server.world_signature()), kind, key, the anchor
 and the item's box in degrees. compact() (the server's start)
-folds the files into one and drops the lines whose zip is gone."""
+folds the files into one and drops the lines whose item is gone."""
 import hashlib
 import json
 import os
 import re
+import struct
 import threading
 import time
 import zipfile
 
+import revisitpack
+
 ON = os.environ.get("BNE_REVISIT", "on") != "off"
 SKIP = {k for k in os.environ.get("BNE_REVISIT_SKIP", "").split(",") if k}     # kinds left out (tests: "roads,far")
 MAX_MB = float(os.environ.get("BNE_REVISIT_MB", "2000"))      # the cache's size, cut back at start (earthd)
+revisitpack.CAP_BYTES = MAX_MB * 1e6
 SUBDIR = "revisit"
 CACHE_DIR = None            # the server's cache folder (blockworker._State, earthd.Server): stores without one at hand
 
@@ -76,6 +81,11 @@ _PRODUCES = re.compile(r"\brevisit\.(?:key|load|store)\(|\b_revisit_tile\(")
 _IMPORT = re.compile(r"^[ \t]*(?:from[ \t]+([A-Za-z_]\w*)[\w.]*[ \t]+import\b|import[ \t]+([^#\n]+))", re.M)
 
 
+# Modules that change how items are kept, not what they hold: left out of the key (a change of the pack format keeps
+# the items; revisitpack reads its own files' versions)
+STORAGE_ONLY = ("revisitpack",)
+
+
 def source_closure(here):
     """The server modules (file names) whose code the cached items depend on: the ones that make or read them (a
     revisit.key / load / store or _revisit_tile call), and every server module they import, anywhere in their code (a
@@ -99,7 +109,7 @@ def source_closure(here):
         seen.add(m)
         for a, b in _IMPORT.findall(srcs[m]):
             for n in ([a] if a else [p.strip().split(" ")[0].split(".")[0] for p in b.split(",")]):
-                if n in srcs and n not in seen:
+                if n in srcs and n not in seen and n not in STORAGE_ONLY:
                     todo.append(n)
     seen.add("revisit")
     return sorted(f"{m}.py" for m in seen)
@@ -266,7 +276,7 @@ def parse_where(line):
 
 def compact(cache_dir, before=None):
     """The sidecar files last written before `before` (s; default now) folded into one: a line per item (the last),
-    only those whose zip is still there (the start-up prune removes the oldest). Run once at the server's start,
+    only those whose item is still there (the start-up prune removes the oldest). Run once at the server's start,
     after the prune. Returns the lines kept. Sets COMPACTED."""
     d = os.path.join(cache_dir, SUBDIR, WHERE_DIR)
     before = time.time() if before is None else before
@@ -293,7 +303,7 @@ def compact(cache_dir, before=None):
                 continue
         if not old:
             return 0
-        lines = [line for (kind, k), line in rows.items() if os.path.exists(_path(cache_dir, kind, k))]
+        lines = [line for (kind, k), line in rows.items() if has(cache_dir, kind, k)]
         out = os.path.join(d, f"c{os.getpid()}_{int(before)}.tsv")
         tmp = out + ".tmp"
         with open(tmp, "w", encoding="utf-8", newline="") as f:
@@ -373,6 +383,45 @@ def place(blob, dst):
     staging.replace(tmp, dst)
 
 
+_HEAD = struct.Struct("<I")
+
+
+def _encode(inside, side, extra):
+    """A record's bytes: the JSON (names, sizes, side files, extra) and the blobs one after the other."""
+    meta = json.dumps({"names": list(inside), "sizes": [len(b) for b in inside.values()], "side": side,
+                       "extra": extra}).encode("utf-8")
+    return b"".join([_HEAD.pack(len(meta)), meta, *inside.values()])
+
+
+def _decode(raw):
+    """({name: bytes}, meta) of a record's bytes (_encode)."""
+    n, = _HEAD.unpack_from(raw)
+    meta = json.loads(raw[_HEAD.size:_HEAD.size + n])
+    at, blobs = _HEAD.size + n, {}
+    for name, size in zip(meta["names"], meta["sizes"]):
+        blobs[name] = raw[at:at + size]
+        at += size
+    if at != len(raw):
+        raise ValueError("revisit: a record's blobs do not add up")
+    return blobs, meta
+
+
+def _write_sides(path, kind, blobs):
+    """The SIDE_NAMES blobs of a SIDE_KINDS item as files beside its key (linked in when a Side): their names."""
+    side = [n for n in SIDE_NAMES if n in blobs] if kind in SIDE_KINDS else []
+    for n in side:          # (before the record: a record there means its files are)
+        b = blobs[n]
+        if isinstance(b, Side):
+            if os.path.abspath(b.path) != os.path.abspath(_side(path, n)):
+                _link_or_copy(b.path, _side(path, n))
+        else:
+            st = f"{_side(path, n)}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with open(st, "wb") as f:
+                f.write(b)
+            os.replace(st, _side(path, n))
+    return side
+
+
 def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
     """Keep an item under key k: blobs {name: bytes, or Side(path): a file linked in}, extra JSON data; where (where()):
     the place it stands, for the map's cache view (a sidecar line; code: its code value there, format_marker's for a
@@ -380,34 +429,27 @@ def store(cache_dir, kind, k, blobs, extra=None, where=None, code=None):
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return False
     path = _path(cache_dir, kind, k)
-    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
     try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        side = [n for n in SIDE_NAMES if n in blobs] if kind in SIDE_KINDS else []
-        for n in side:          # (before the zip: a zip there means its files are)
-            b = blobs[n]
-            if isinstance(b, Side):
-                _link_or_copy(b.path, _side(path, n))
-            else:
-                st = f"{_side(path, n)}.{os.getpid()}.{threading.get_ident()}.tmp"
-                with open(st, "wb") as f:
-                    f.write(b)
-                os.replace(st, _side(path, n))
+        if kind in SIDE_KINDS and any(n in blobs for n in SIDE_NAMES):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        side = _write_sides(path, kind, blobs)
         inside = {n: (b.read() if isinstance(b, Side) else b) for n, b in blobs.items() if n not in side}
-        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as z:
-            for name, data in inside.items():
-                z.writestr(name, data)
-            z.writestr("meta.json", json.dumps({"names": list(inside), "side": side, "extra": extra}))
-        os.replace(tmp, path)
+        revisitpack.store_for(cache_dir).put(kind, k, _encode(inside, side, extra))
         if where is not None:
             _note(cache_dir, kind, k, where, code)
         return True
     except Exception:
-        try:
-            os.remove(tmp)
-        except OSError:
-            pass
         return False
+
+
+def has(cache_dir, kind, k):
+    """Is item k kept (in a pack, or a zip of before)? Nothing read."""
+    try:
+        if revisitpack.store_for(cache_dir).has(kind, k):
+            return True
+    except Exception:
+        pass
+    return os.path.exists(_path(cache_dir, kind, k))
 
 
 def load(cache_dir, kind, k):
@@ -415,25 +457,57 @@ def load(cache_dir, kind, k):
     if not ON or kind in SKIP or os.environ.get("BNGE_WORLD_BUNDLE"):
         return None
     path = _path(cache_dir, kind, k)
+    try:
+        raw = revisitpack.store_for(cache_dir).get(kind, k)
+    except Exception:
+        raw = None
+    if raw is not None:
+        try:
+            blobs, meta = _decode(raw)
+        except (ValueError, KeyError, TypeError, struct.error):
+            return None
+        return _with_sides(path, blobs, meta)
     if not os.path.exists(path):
         return None
-    try:
+    try:            # (a zip of before)
         with zipfile.ZipFile(path) as z:
             meta = json.loads(z.read("meta.json"))
             blobs = {name: z.read(name) for name in meta["names"]}
-        for n in meta.get("side") or ():
-            sp = _side(path, n)
-            if not os.path.exists(sp):      # (its file cut back alone: built again)
-                return None
-            blobs[n] = Side(sp)
-        for p in [path] + [_side(path, n) for n in meta.get("side") or ()]:
-            try:
-                os.utime(p, None)           # (used: kept longest when cut back, the zip and its files alike)
-            except OSError:
-                pass
-        return blobs, meta.get("extra")
     except Exception:
         return None
+    record = _encode(blobs, list(meta.get("side") or ()), meta.get("extra"))
+    got = _with_sides(path, blobs, meta)
+    if got is not None:         # (moved into this process's pack: one file fewer, read quicker next time)
+        try:
+            revisitpack.store_for(cache_dir).put(kind, k, record)
+            os.remove(path)
+        except Exception:
+            pass
+    return got
+
+
+def _with_sides(path, blobs, meta):
+    """(blobs with the item's side files as Side, extra), or None when one of them is gone (cut back alone: built
+    again). The side files are touched (used: kept longest when cut back)."""
+    side = meta.get("side") or ()
+    for n in side:
+        sp = _side(path, n)
+        if not os.path.exists(sp):
+            return None
+        blobs[n] = Side(sp)
+        try:
+            os.utime(sp, None)
+        except OSError:
+            pass
+    return blobs, meta.get("extra")
+
+
+def prune(cache_dir, pinned=(), before=None):
+    """The cache cut back to MAX_MB (the server's start; revisitpack.prune): the oldest packs, zips of before and
+    files kept beside the items first; pinned (the saved areas' keys) kept. -> (units removed, packs merged, bytes
+    left)."""
+    return revisitpack.prune(cache_dir, MAX_MB * 1e6, pinned, before,
+                             files_match=lambda n: n.endswith(".zip") or n.endswith(SIDE_SUFFIXES))
 
 
 def swap(text, tokens):

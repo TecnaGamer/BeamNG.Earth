@@ -2331,7 +2331,7 @@ class Server:
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker, no network)? -> its key or None."""
         k = self.geo_content_key(gx, gy)
-        return k if k is not None and os.path.exists(revisitmod._path(self.cache_dir, "roadsg", k)) else None
+        return k if k is not None and revisitmod.has(self.cache_dir, "roadsg", k) else None
 
     def fast_precache(self, on):
         """The saved areas' fast mode (areas.py; the mod pauses the game meanwhile): road processes of its own for the
@@ -4725,7 +4725,7 @@ class Server:
                 edge = sum(math.hypot(q[(2 * k + 2) % 8] - q[2 * k], q[(2 * k + 3) % 8] - q[2 * k + 1])
                            for k in range(4)) / 4
                 t = farfield.GTile(z, x, y, level, q, float(edge))
-                if os.path.exists(revisitmod._path(self.cache_dir, "fartex", self.tex_key(anchor, t, px))):
+                if revisitmod.has(self.cache_dir, "fartex", self.tex_key(anchor, t, px)):
                     skipped += 1
                     return
                 try:
@@ -8842,7 +8842,7 @@ def prune_own_caches(cache_dir, started=None):
     limit (35 GB on a Steam Deck under a 20 GB cap, 2026-10-23: players' C: drives filled). Then the older versions'
     folders of the per-cell caches (cache.prune_versions: never read again, never deleted before: 8 GB of
     vegetation/v1..v17 here, 2026-10-28) and the revisit sidecar's compaction (revisit.compact: the files written
-    before `started`, without the lines whose zip the prune removed)."""
+    before `started`, without the lines whose item the prune removed)."""
     try:
         n = mapdatamod.prune_mirror(cache_dir)
         if n:
@@ -8854,17 +8854,20 @@ def prune_own_caches(cache_dir, started=None):
                            (os.path.join("dem", "decoded"), demmod.MIRROR_MB,
                             lambda n: n.endswith((".npy", ".f32z"))),
                            ("peercache", peerworkmod.CACHE_BYTES / 1e6, None),
-                           ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy")),
-                           (revisitmod.SUBDIR, revisitmod.MAX_MB,       # (the zips and the files kept beside them)
-                            lambda n, kept=areasmod.pinned_world(cache_dir): (n.endswith(".zip") or
-                                                                              n.endswith(revisitmod.SIDE_SUFFIXES))
-                            and n.split(".", 1)[0] not in kept)):
+                           ("roadwidth", roadwidthmod.STORE_MB, lambda n: n.endswith(".npy"))):
         try:
             n, left = cachemod.prune_dir(os.path.join(cache_dir, sub), mb * 1e6, match=match)
             if n:
                 log.info("cache: %s cut back: %d files removed, %.2f GB left", sub, n, left / 1e9)
         except Exception as e:      # a cache's trim must never stop the server
             log.warning("cache: %s not cut back: %s", sub, e)
+    try:        # (its packs whole, the zips of before and the files kept beside the items; saved areas' items kept)
+        n, merged, left = revisitmod.prune(cache_dir, areasmod.pinned_world(cache_dir), started)
+        if n or merged:
+            log.info("cache: revisit cut back: %d packs / files removed, %d small packs merged, %.2f GB left", n,
+                     merged, left / 1e9)
+    except Exception as e:
+        log.warning("cache: revisit not cut back: %s", e)
     for sub, version in (("vegetation", vegetationmod.VERSION), ("seacarve", seacarvemod.VERSION),
                          ("roadwidth", roadwidthmod.WALLS_VERSION)):
         try:

@@ -17,6 +17,7 @@ favoured as itself (xproc.once). Old runs' folders go at server start (prune).
 import logging
 import json
 import hashlib
+import io
 import os
 import shutil
 import threading
@@ -180,7 +181,7 @@ class PlanCache:
         if self.persist is None:
             return False
         import revisit
-        if os.path.exists(revisit._path(self.persist[0], "plans", self._revisit_key(key))):
+        if revisit.has(self.persist[0], "plans", self._revisit_key(key)):
             return True
         import bakepack
         k = bakepack.plans_key(self.signature, key)
@@ -240,13 +241,15 @@ class PlanCache:
             p = self._path(key)
             os.makedirs(self.dir, exist_ok=True)
             tmp = f"{p}.{os.getpid()}.{threading.get_ident()}.tmp"
+            buf = io.BytesIO()          # (the bytes kept in hand: hashed and put in the revisit cache, not read back)
+            np.savez(buf, **arrays)
+            data = buf.getvalue()
             with open(tmp, "wb") as fh:
-                np.savez(fh, **arrays)
+                fh.write(data)
             provenance = None
             if persist:
                 from worldbundle import canonical, completion_record
-                with open(tmp, "rb") as fh:
-                    digest = hashlib.sha256(fh.read()).hexdigest()
+                digest = hashlib.sha256(data).hexdigest()
                 try:
                     sources = self.source_versions() if self.source_versions is not None else {}
                     provenance = canonical(completion_record(key, self.signature, sources, digest))
@@ -269,9 +272,8 @@ class PlanCache:
                     pass
             if persist and self.persist is not None:
                 import revisit
-                with open(p, "rb") as fh:
-                    revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": fh.read()},
-                                  where=self._where(key), code=revisit.format_marker("plans", plans_format()))
+                revisit.store(self.persist[0], "plans", self._revisit_key(key), {"plans.npz": data},
+                              where=self._where(key), code=revisit.format_marker("plans", plans_format()))
                 import mpshare          # (a BeamMP session shares them: the hub sends them to the server)
                 mpshare.note_built(self.persist[0], self.signature, key)
         except (OSError, ValueError, TypeError):
