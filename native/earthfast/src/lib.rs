@@ -6032,6 +6032,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farglobal::far_box_cover, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_overlap_pairs, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_global_mesh, m)?)?;
+    m.add_function(wrap_pyfunction!(farglobal::far_normal_err, m)?)?;
     m.add_function(wrap_pyfunction!(farglobal::far_clip_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::geo_owns, m)?)?;
     m.add_function(wrap_pyfunction!(geocontent::clip_tris_convex, m)?)?;
@@ -6171,6 +6172,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
     // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
     // tiles, server/pmtiles.py; 205 left to another branch)
-    m.add("VERSION", 206)?;
+    // 207: farglobal::far_normal_err and far_global_mesh's 11th value err_n (the far terrain's pixel-error LOD, the
+    // lodPx setting; another branch's 206)
+    m.add("VERSION", 207)?;
     Ok(())
 }

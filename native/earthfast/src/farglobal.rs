@@ -13,6 +13,7 @@
 //! - far_overlap_pairs: which adds and removes of a far-field change overlap (the swap groups of mixed keys);
 //! - far_global_mesh: a global tile's mesh from its DEM heights on its Mercator grid (positions in its frame, the RTIN
 //!   simplification, normals, palette coordinates, the Mercator UV, skirts);
+//! - far_normal_err: a tile's geometric error along the surface's normal (normal_err; the screen-space LOD's metric);
 //! - far_clip_mesh: a node's mesh cut by a convex polygon (Sutherland-Hodgman per triangle, a cut vertex interpolated
 //!   on the triangle it cuts, so its height is that triangle's exactly), with skirts along the cut.
 
@@ -184,6 +185,58 @@ fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
     if a - slack <= c[6].clamp(-1.0, 1.0).acos() { 1.0 } else { c[8].max(1.0) }
 }
 
+/// far_global_select's view argument: (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs).
+pub type SseArgs = (f64, f64, f64, f64, f64, f64, f64, f64, f64, HashMap<(u32, i64, i64), f64>);
+
+/// Screen-space LOD (farfield.View, the same rule as farfield.select's): the camera, the pop allowed and the known
+/// errors of the built tiles.
+pub struct Sse {
+    cx: f64,
+    cy: f64,
+    dz: f64,
+    ppr: f64,
+    tau: f64,
+    reach: f64,
+    hs: f64,
+    cap: f64,
+    cells: f64,
+    errs: HashMap<(u32, i64, i64), f64>,
+}
+
+impl From<SseArgs> for Sse {
+    fn from(a: SseArgs) -> Self {
+        let (cx, cy, dz, ppr, tau, reach, hs, cap, cells, errs) = a;
+        Sse { cx, cy, dz: dz.max(0.0), ppr, tau, reach, hs, cap, cells: cells.max(1.0), errs }
+    }
+}
+
+impl Sse {
+    /// The node's split pop on screen (px; its known error at most cap vertex spacings, from the camera), or None.
+    fn pixels(&self, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64) -> Option<f64> {
+        let e = (*self.errs.get(&node)?).min(self.cap * size / self.cells);
+        Some(e * self.ppr / quad_dist(q, self.cx, self.cy).hypot(self.dz).max(1.0))
+    }
+
+    /// Whether a node splits, from the distance rule's answer `split` (was: refined last time; d / d3 its horizontal /
+    /// selection distance, lim its switch distance, lim_f its children's): with a known error the pop decides. Over tau
+    /// px (tau / (1 + hs) once split) it splits, within reach x lim; under that it does not split even inside the
+    /// distance rule (merges), unless d3 is within lim_f ((1 + h) lim_f once split): never more than about one level
+    /// coarser than the distance rule. Unknown errors keep the distance rule.
+    #[allow(clippy::too_many_arguments)]
+    fn decide(&self, split: bool, was: bool, node: (u32, i64, i64), q: &[[f64; 2]; 4], size: f64, d: f64, d3: f64,
+              lim: f64, lim_f: f64, h: f64) -> bool {
+        let Some(p) = self.pixels(node, q, size) else { return split };
+        let want = p > self.tau || (was && p > self.tau / (1.0 + self.hs));
+        if split && !want {
+            d3 < lim_f || (was && d3 < (1.0 + h) * lim_f)
+        } else if !split && want {
+            d < self.reach * lim
+        } else {
+            split
+        }
+    }
+}
+
 /// The global part of a far-field selection for a player at (px, py) of the anchor (lat0, lon0)'s world.
 /// zf: the finest global zoom (far level 3); max_level: the coarsest far level (its zoom zf - (max_level - 3) are the
 /// roots); k[L]: K of level L (L = 3 + zf - z), rmin: the largest near radius (a switch distance is at least it);
@@ -191,19 +244,24 @@ fn out_of_view(c: &[f64], b: &[f64; 4], d: f64) -> f64 {
 /// boxes (x0, y0, x1, y1) under which every node splits; disc: keep nodes nearer than radius (else the square of
 /// half-size radius); horizon: (reach, min_d, R', base (n, n), half, cell, merc) the per-node line-of-sight cull (merc:
 /// (zb, x0, y0, maxima (rows, cols)) the highest DEM block per Mercator tile of zoom zb, or None: the plane grid).
+/// view (screen-space LOD, farfield.View; None or tau 0: the distance rule alone): (cx, cy, dz, ppr, tau, reach, hs,
+/// cap, cells, errs): the camera at (cx, cy) dz m over the ground, ppr px per radian, the largest pop allowed tau px, the
+/// SSE split's reach (times the switch distance), its hysteresis hs, the error cap in vertex spacings (cap x edge / cells)
+/// and errs {(z, x, y): the built tile's normal error (m)}: see Sse::decide.
 /// Returns (tiles [(z, x, y, quad (8), real edge m)], refined [(z, x, y)], regions [(x, y, quad (8))]: the refined
 /// tiles of zoom zf, which the anchor's own nodes fill).
 #[pyfunction]
 #[pyo3(signature = (lat0, lon0, px, py, radius, disc, zf, max_level, k, rmin, h, prev, hold, forced, horizon=None, eye_h=0.0,
-                    cone=None))]
+                    cone=None, view=None))]
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f64, disc: bool, zf: u32,
                               max_level: i32, k: Vec<f64>, rmin: f64, h: f64, prev: Vec<(u32, i64, i64)>,
                               hold: Vec<(u32, i64, i64)>, forced: Vec<(f64, f64, f64, f64)>,
                               horizon: Option<(f64, f64, f64, PyReadonlyArray2<'py, f64>, f64, f64,
                                                Option<(u32, i64, i64, PyReadonlyArray2<'py, f64>)>)>,
-                              eye_h: f64, cone: Option<Vec<f64>>)
+                              eye_h: f64, cone: Option<Vec<f64>>, view: Option<SseArgs>)
                          -> PyResult<(Vec<(u32, i64, i64, Vec<f64>, f64)>, Vec<(u32, i64, i64)>, Vec<(i64, i64, Vec<f64>)>)> {
+    let sse = view.map(Sse::from).filter(|v| v.tau > 0.0);
     let hz = horizon.map(|(reach, min_d, r, base, half, cell, merc)| {
         let a = base.as_array();
         let merc = merc.map(|(zb, x0, y0, m)| {
@@ -253,7 +311,16 @@ pub fn far_global_select<'py>(lat0: f64, lon0: f64, px: f64, py: f64, radius: f6
                 d3 *= out_of_view(c, &b, d);
             }
             let lim = (k[lvl.min(k.len() - 1)] * size).max(rmin);
-            d3 < lim || (prev.contains(&node) && d3 < (1.0 + h) * lim)
+            let was = prev.contains(&node);
+            let split = d3 < lim || (was && d3 < (1.0 + h) * lim);
+            match &sse {
+                // (the floor: the child level's switch distance; a global node's children are about half its edge)
+                Some(v) => {
+                    let lim_f = (k[(lvl - 1).min(k.len() - 1)] * size * 0.5).max(rmin);
+                    v.decide(split, was, node, &q, size, d, d3, lim, lim_f, h)
+                }
+                None => split,
+            }
         };
         if split {
             refined.push(node);
@@ -392,19 +459,59 @@ fn up_of(f: &Frame, lat: f64, lon: f64, h: f64) -> f64 {
     f.to_enu(geo_to_ecef(lat, lon, h))[2]
 }
 
+/// A tile's geometric error along the surface normal (the screen-space LOD's metric, farfield.View): over an (m x m)
+/// grid of reference heights `refe` and the tile's surface `model` at the same points (hs m apart), the largest
+/// |refe - model| x cos(slope), the slope the model's (central differences, one-sided at the edges). On steep ground
+/// the vertical error is mostly the face shifting sideways (a cliff's 300 m vertical "error" is its face moving a few
+/// metres), which this measures; on flat ground it is the vertical error.
+pub fn normal_err(refe: &[f64], model: &[f64], m: usize, hs: f64) -> f64 {
+    if m < 2 || refe.len() < m * m || model.len() < m * m {
+        return refe.iter().zip(model).fold(0.0f64, |a, (r, s)| a.max((r - s).abs()));
+    }
+    let hs = hs.max(1e-9);
+    let mut worst = 0.0f64;
+    for j in 0..m {
+        let (j0, j1) = (j.saturating_sub(1), (j + 1).min(m - 1));
+        for i in 0..m {
+            let k = j * m + i;
+            let dv = (refe[k] - model[k]).abs();
+            if dv <= worst {
+                continue;           // (cos <= 1: it cannot be the largest)
+            }
+            let (i0, i1) = (i.saturating_sub(1), (i + 1).min(m - 1));
+            let gx = (model[j * m + i1] - model[j * m + i0]) / ((i1 - i0) as f64 * hs);
+            let gy = (model[j1 * m + i] - model[j0 * m + i]) / ((j1 - j0) as f64 * hs);
+            worst = worst.max(dv / (1.0 + gx * gx + gy * gy).sqrt());
+        }
+    }
+    worst
+}
+
+/// normal_err of an (m x m) reference and a tile's surface at the same points, hs m apart (farfield.build_tile).
+#[pyfunction]
+pub fn far_normal_err(refe: PyReadonlyArray2<'_, f64>, model: PyReadonlyArray2<'_, f64>, hs: f64) -> PyResult<f64> {
+    let (r, s) = (refe.as_array(), model.as_array());
+    if r.shape() != s.shape() || r.nrows() != r.ncols() {
+        return Err(pyo3::exceptions::PyValueError::new_err("far_normal_err: two square grids of the same size"));
+    }
+    let (rv, sv): (Vec<f64>, Vec<f64>) = (r.iter().copied().collect(), s.iter().copied().collect());
+    Ok(normal_err(&rv, &sv, r.nrows(), hs))
+}
+
 /// A global tile's mesh (farfield.build_global): elev (n+1)^2 DEM heights at its Mercator grid's vertices ([j, i], j
 /// north from its south edge, i east), refe (2n+1)^2 the reference at half the spacing (the geometric error), eps:
 /// the RTIN simplification's tolerance in vertex spacings (0: the whole grid).
 /// Returns (positions (m, 3) relative to (0, 0, pz) in the tile's frame (world convention), normals (m, 3), palette uv
 /// (m, 2), planar (m, 2): the Mercator position in the tile (u east, v north), tris (t, 3) counter-clockwise from +Z,
-/// grid (n+1)^2: the mesh's surface's world z at the vertices, pz, err, skirt depth, size: the tile's mean edge (m)).
+/// grid (n+1)^2: the mesh's surface's world z at the vertices, pz, err, skirt depth, size: the tile's mean edge (m),
+/// err_n: the error along the normal, normal_err).
 #[pyfunction]
 #[allow(clippy::type_complexity)]
 pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyReadonlyArray2<'py, f64>,
                             refe: PyReadonlyArray2<'py, f64>, eps: f64)
                             -> PyResult<(Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<f64>>,
                                          Bound<'py, PyArray2<f64>>, Bound<'py, PyArray2<i64>>, Bound<'py, PyArray2<f64>>,
-                                         f64, f64, f64, f64)> {
+                                         f64, f64, f64, f64, f64)> {
     let e = elev.as_array();
     let r = refe.as_array();
     let nv = e.nrows();
@@ -446,14 +553,18 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
         // the geometric error: the reference at half the spacing against the mesh's surface
         let nr = 2 * c + 1;
         let mut err = 0.0f64;
+        let (mut rus, mut ss) = (vec![0.0f64; nr * nr], vec![0.0f64; nr * nr]);
         for rj in 0..nr {
             for ri in 0..nr {
                 let (la, lo) = ll(ri as f64, rj as f64, (2 * c) as f64);
                 let ru = up_of(&f, la, lo, rv[rj * nr + ri]);
                 let s = surface_at(&u, nv, ri as f64 / 2.0, rj as f64 / 2.0);
                 err = err.max((ru - s).abs());
+                rus[rj * nr + ri] = ru;
+                ss[rj * nr + ri] = s;
             }
         }
+        let err_n = normal_err(&rus, &ss, nr, sp / 2.0);
         // normals: central differences of the full grid (its detail in the light), one-sided at the edges
         let at = |i: usize, j: usize| { let q = p[j * nv + i]; [q[0], q[1], u0[j * nv + i]] };
         let mut nrm = vec![[0.0f64; 3]; nv * nv];
@@ -526,11 +637,11 @@ pub fn far_global_mesh<'py>(py: Python<'py>, z: u32, x: i64, y: i64, elev: PyRea
                 tv.extend_from_slice(&[t0, l0, t1, t1, l0, l1]);
             }
         }
-        (pos, nn, uvs, pl, tv, u, pz, err, skirt, size)
+        (pos, nn, uvs, pl, tv, u, pz, err, skirt, size, err_n)
     });
-    let (pos, nn, uvs, pl, tv, u, pz, err, skirt, size) = res;
+    let (pos, nn, uvs, pl, tv, u, pz, err, skirt, size, err_n) = res;
     Ok((arr2(py, pos, 3), arr2(py, nn, 3), arr2(py, uvs, 2), arr2(py, pl, 2), arr2(py, tv, 3), arr2(py, u, nv),
-        pz, err, skirt, size))
+        pz, err, skirt, size, err_n))
 }
 
 const ATTR: usize = 10;         // x y z nx ny nz u v pu pv
@@ -704,6 +815,41 @@ mod tests {
         let half = [[1.0, -1.0], [3.0, -1.0], [3.0, 3.0], [1.0, 3.0]];
         let c = clip_convex(&sq, &half);
         assert!((poly_area(&c) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn normal_err_flat_and_steep() {
+        // a flat surface 1 m under the reference: the vertical error
+        let (r, s) = (vec![1.0; 9], vec![0.0; 9]);
+        assert!((normal_err(&r, &s, 3, 1.0) - 1.0).abs() < 1e-12);
+        // a 45 degree ramp (1 m rise per m) 1 m under it: 1 / sqrt(2)
+        let s: Vec<f64> = (0..9).map(|k| (k % 3) as f64).collect();
+        let r: Vec<f64> = s.iter().map(|v| v + 1.0).collect();
+        assert!((normal_err(&r, &s, 3, 1.0) - 0.5f64.sqrt()).abs() < 1e-12);
+    }
+
+    fn sse(tau: f64, e: f64) -> Sse {
+        let mut errs = HashMap::new();
+        errs.insert((5, 0, 0), e);
+        Sse::from((0.0, 0.0, 0.0, 1000.0, tau, 4.0, 0.5, 1e9, 64.0, errs))
+    }
+
+    #[test]
+    fn sse_merges_and_splits() {
+        let q = [[1000.0, 0.0], [2000.0, 0.0], [2000.0, 1000.0], [1000.0, 1000.0]];    // 1 km away
+        let node = (5, 0, 0);
+        // 0.1 m at 1 km: 0.1 px, under tau 2: a split by the distance rule merges past the floor (500 m) ...
+        assert!(!sse(2.0, 0.1).decide(true, false, node, &q, 1000.0, 1000.0, 1000.0, 1500.0, 500.0, 0.25));
+        // ... not inside it
+        assert!(sse(2.0, 0.1).decide(true, false, node, &q, 1000.0, 1000.0, 1000.0, 1500.0, 1200.0, 0.25));
+        // 10 m at 1 km: 10 px, over tau: splits past the distance rule within its reach
+        assert!(sse(2.0, 10.0).decide(false, false, node, &q, 1000.0, 1000.0, 1000.0, 800.0, 300.0, 0.25));
+        assert!(!sse(2.0, 10.0).decide(false, false, node, &q, 1000.0, 1000.0, 1000.0, 200.0, 100.0, 0.25));
+        // unknown errors keep the distance rule
+        assert!(sse(2.0, 0.1).decide(true, false, (5, 1, 0), &q, 1000.0, 1000.0, 1000.0, 1500.0, 500.0, 0.25));
+        // the band (tau / 1.5 .. tau) keeps the state
+        assert!(sse(2.0, 1.6).decide(true, true, node, &q, 1000.0, 1000.0, 1000.0, 1500.0, 500.0, 0.25));
+        assert!(!sse(2.0, 1.6).decide(false, false, node, &q, 1000.0, 1000.0, 1000.0, 800.0, 300.0, 0.25));
     }
 
     #[test]

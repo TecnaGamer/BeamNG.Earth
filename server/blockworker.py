@@ -2714,7 +2714,7 @@ def _built_blob(built):
     np.savez(buf, **arrays)
     meta = {"pos": [float(v) for v in built.pos], "err": float(built.err),
             "sink": None if built.sink is None else float(built.sink), "skirt": float(built.skirt),
-            "size": float(built.size)}
+            "size": float(built.size), "err_n": None if built.err_n is None else float(built.err_n)}
     return buf.getvalue(), meta
 
 
@@ -2724,7 +2724,7 @@ def _built_from(blob, meta):
         a = {n: z[n] for n in z.files}
     return farfield.Built(pos=list(meta["pos"]), positions=a["positions"], normals=a["normals"], uvs=a["uvs"],
                           planar=a["planar"], tris=a["tris"], grid=a.get("grid"), err=meta["err"], sink=meta["sink"],
-                          skirt=meta["skirt"], size=meta["size"])
+                          skirt=meta["skirt"], size=meta["size"], err_n=meta.get("err_n"))
 
 
 def _far_geometry(aid, lat, lon, tile, zoom, q, ref_zoom, with_sink, layout):

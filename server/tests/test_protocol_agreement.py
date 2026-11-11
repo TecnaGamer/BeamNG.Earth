@@ -175,9 +175,10 @@ MOD_TO_SERVER = {
     # after every hello and on a change
     "road_wear": {"value": F(str)},
     # the settings page's graphics (Connection.set_graphics; additive): sent after every hello and on a change; the
-    # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px
+    # far field's terrain detail (K x lodScale), the tree tiles' and far buildings' reach, the ground photo's px, the
+    # far field's screen-space LOD (lodPx: the largest pop on screen, px; 0: off)
     "graphics": {"lodScale": F(NUM, OPT), "treeScale": F(NUM, OPT), "buildingScale": F(NUM, OPT),
-                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT)},
+                 "photoPx": F(NUM, OPT), "viewM": F(NUM, OPT), "lodPx": F(NUM, OPT)},
     "map_tiles": {"tiles": F(list)},       # the world map's basemap tiles as files (settings.mapTiles)
     "geocode": {"id": F(int), "q": F(str), "lat": F(NUM, OPT), "lon": F(NUM, OPT), "full": F(bool, OPT)},   # the map's search box
     "stations": {"id": F(int), "lat": F(NUM), "lon": F(NUM), "r_km": F(NUM), "kinds": F(list), "mode": F(str)},   # the station finder

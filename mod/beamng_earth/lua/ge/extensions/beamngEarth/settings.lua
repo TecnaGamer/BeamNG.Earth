@@ -59,6 +59,10 @@ M.SCHEMA = {
   -- the far field's terrain detail: the server's K table times M.TERRAIN_DETAIL (the 'graphics' message's lodScale)
   terrainDetail = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Terrain detail' },
+  -- the far field's screen-space LOD (the 'graphics' message's lodPx; server farfield.View): the largest jump of the
+  -- distant ground allowed on screen when a piece switches detail, in pixels of this screen and field of view. 0: off
+  -- (the distance rule above alone); with it on, smooth ground stays coarser and rough ground finer to keep under it
+  lodPx = { kind = 'number', default = 0, min = 0, max = 8, label = 'Terrain pixel error (px, 0: off)' },
   -- how far the far buildings, the skyline and the far bridges reach (M.BUILDING_DISTANCE: buildingScale)
   buildingDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' },
     label = 'Building draw distance' },
@@ -160,7 +164,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'lodPx', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'adaptiveTraffic', 'models3dmr',
@@ -437,13 +441,14 @@ local function applyViewDistance()
   appliedView = m
 end
 
--- The server's graphics knobs now ({ lodScale, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
+-- The server's graphics knobs now ({ lodScale, lodPx, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
 -- ground photo size of the block in the level now, or of the next one (terrain.photoSize).
 function M.serverGraphics()
   local okT, trees = pcall(require, 'beamngEarth/trees')
   local okR, terrain = pcall(require, 'beamngEarth/terrain')
   return {
     lodScale = M.TERRAIN_DETAIL[values.terrainDetail] or 1.0,
+    lodPx = tonumber(values.lodPx) or 0,
     treeScale = okT and trees.distanceScale and trees.distanceScale(values.treeDistance) or 1.0,
     buildingScale = M.BUILDING_DISTANCE[values.buildingDistance] or 1.0,
     photoPx = okR and terrain.photoSize and terrain.photoSize() or tonumber(values.groundPhoto),
@@ -496,6 +501,7 @@ M.APPLY = {
     sendGraphics()          -- (the server's tree tiles reach as far)
   end,
   terrainDetail = sendGraphics,
+  lodPx = sendGraphics,
   buildingDistance = sendGraphics,
   groundPhoto = function(v)
     require('beamngEarth/terrain').setPhotoSize(tonumber(v))
