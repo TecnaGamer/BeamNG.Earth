@@ -7,6 +7,7 @@ import sys
 import unittest
 from unittest import mock
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -54,6 +55,33 @@ class ShortIdsTest(unittest.TestCase):
 
 
 class GraphTest(unittest.TestCase):
+    def test_rumble_heuristic_is_country_and_road_type_scoped(self):
+        motorway = SimpleNamespace(kind="paved", cls="motorway", urban=True, link=False)
+        rural_primary = SimpleNamespace(kind="paved", cls="primary", urban=False, link=False)
+        urban_primary = SimpleNamespace(kind="paved", cls="primary", urban=True, link=False)
+        link = SimpleNamespace(kind="paved", cls="motorway", urban=False, link=True)
+        gravel = SimpleNamespace(kind="unpaved", cls="primary", urban=False, link=False)
+        self.assertTrue(navgraph.rumble_eligible("AU", motorway))
+        self.assertTrue(navgraph.rumble_eligible("NZ", rural_primary))
+        self.assertTrue(navgraph.rumble_eligible("US", rural_primary))
+        self.assertFalse(navgraph.rumble_eligible("AU", urban_primary))
+        self.assertFalse(navgraph.rumble_eligible("GB", rural_primary))
+        self.assertFalse(navgraph.rumble_eligible("AU", link))
+        self.assertFalse(navgraph.rumble_eligible("AU", gravel))
+
+    def test_rumble_flag_is_serialized_for_rural_australian_highway(self):
+        f = features([[(0, 0), (500, 0)]], ["primary"])
+        f.rules["connectors"] = rules([(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
+        rural = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False, country="AU",
+                               urban_fn=lambda lat, lon: np.zeros_like(lat, dtype=bool))
+        self.assertTrue(rural["edges"])
+        self.assertTrue(all(len(e) > 11 and e[11] is True and e[10] is False for e in rural["edges"]),
+                        "rural eligible edges carry the optional rumble flag (after the rough-road flag)")
+        urban = navgraph.build(FRAME, [f], flat, (0.0, 0.0), mph=False, country="AU",
+                               urban_fn=lambda lat, lon: np.ones_like(lat, dtype=bool))
+        self.assertTrue(all(len(e) <= 11 or e[11] is not True for e in urban["edges"]),
+                        "urban non-motorway edges do not get rumble metadata")
+
     def test_graph_has_a_traffic_profile(self):
         g = graph([[(0, 0), (300, 0)]], ["primary"], connectors=[(0, "A", 0.0, 0.0), (0, "B", 1.0, 1.0)])
         p = g["trafficProfile"]

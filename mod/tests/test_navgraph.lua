@@ -5,6 +5,12 @@ local N = require('beamngEarth/navgraph')
 
 T.check(N.lanes(2, 1, false) == '-++' and N.lanes(2, 1, true) == '++-' and N.lanes(1, 0, false) == '+',
   'lanes: against first for right-hand traffic')
+do
+  local rg = { nodes = { a = { 0, 0, 0, 4 }, b = { 40, 0, 0, 4 } },
+    edges = { { 'a', 'b', 0, 1, 1, 20, 1, 4, nil, nil, false, true } } }
+  local rn = N.toNodes(rg, nil, 60, false)
+  T.check(rn.a.links.b.rumble == true, 'rumble-line eligibility survives graph decoding')
+end
 
 local g = {
   nodes = { a = { 0, 0, 1, 4 }, b = { 50, 0, 1, 4 }, c = { 100, 0, 1, 3 }, far = { 5000, 0, 1, 3 } },
