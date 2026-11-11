@@ -2386,7 +2386,7 @@ class Server:
             parts, n = terrainpatchmod.build(anchor.frame, elev, box, path)
         return [(f"{self.vfs_dir}/{os.path.basename(p)}", c) for p, c in parts], n
 
-    WARM_ORDER = {"roads": 0, "infrastructure": 1, "buildings": 2, "building_parts": 3, "water": 4}
+    WARM_ORDER = {"roads": 0, "infrastructure": 1, "town_areas": 1, "buildings": 2, "building_parts": 3, "water": 4}
     WARM_PLACE_LAYERS = ("roads", "infrastructure")
 
     def warm_place(self, anchor, x, y):
@@ -2406,7 +2406,12 @@ class Server:
             return math.hypot(float(e) - x, float(n) - y)
         # (only what the first block's grading and the bridges wait for: each road tile asks for its own buildings and
         # water when it starts; all of it at once kept a Steam Deck's 4 cores from the road tiles themselves)
-        order = sorted((kl for kl in needs if kl[1] in self.WARM_PLACE_LAYERS),
+        # (and the town signs' communes of the cells under the car: the first road tile waited ~2-5 s for their
+        # division areas after the block, ~40 MB of a French place's row groups that its neighbours' cells share;
+        # fetched now they come beside the block's heights. The same cells the tile asks for, no more)
+        towns = {(k, "town_areas") for tx, ty in roadsmod.tiles_near(x, y, 1.0)
+                 for k in roadsmod.cells_of_tile(anchor.frame, tx, ty)}
+        order = sorted([kl for kl in needs if kl[1] in self.WARM_PLACE_LAYERS] + sorted(towns, key=str),
                        key=lambda kl: (self.WARM_ORDER.get(kl[1], 9), where(kl[0]), str(kl[0]), kl[1]))
         n = self.mapdata.warm(order)
         if getattr(self.sea, "prefetch_full", None) is not None:   # (the coast's sea floors: NOAA's slow requests
