@@ -326,6 +326,13 @@ BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this l
 # A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
 # stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
 PROVISIONAL_BASE_WAIT_S = 0.3
+# Queued work the car has left behind while driving is dropped, not built (Server.left_behind; the user, 2026-11-11:
+# "use this to improve loading during driving as well"): a spot this far from every player on its anchor and behind
+# each (against their velocity), or LEFT_FAR_M from all of them whatever the way. The mod drops road tiles past
+# roads.DROP_M (960 m) anyway.
+LEFT_BEHIND_M = 2000.0
+LEFT_FAR_M = 8000.0
+LEFT_MIN_V = 3.0                # m/s: slower, "behind" means nothing (only LEFT_FAR_M counts)
 PADS_REFRESH_IN_USE = os.environ.get("BNGE_PADS_REFRESH", "on") != "off"     # (Connection.pads_refresh; A/B runs)
 # Full priority loading (the settings page's teleportPriority) squeezes the game onto two cores only with this on
 FULL_PIN_GAME = os.environ.get("BNGE_FULL_PIN_GAME", "off") == "on"
@@ -1227,6 +1234,11 @@ class Server:
         self.base_pending = {}          # block -> the analysis regions its base photo was rendered without
         self.base_rev = itertools.count(1)
         self.hm_committed = deque(maxlen=HM_KEEP_COMMITTED)
+        # anchors a teleport left (Connection._prepare_anchor): their queued road / sign tiles and terrain blocks are
+        # dropped, not built (the user, 2026-11-11: "if the server is still building one city but initiates a
+        # teleport, stop generating the old city"; a fresh Albuquerque waited behind the Newark it left, its graded
+        # first block and road tiles still building 46 s later); back when the teleport is never committed
+        self.abandoned = set()
         self.hm_sent = deque(maxlen=HM_KEEP_SENT)
         # Far tiles: (anchorId, key) -> TileInfo, LRU order; files are far_<anchorId>_<key>.<fmt>.
         self.tiles = OrderedDict()
@@ -2238,12 +2250,25 @@ class Server:
         if anchor is None or source is None:
             return None
         source.version()            # (the sign data's build, learnt here off the event loop: Connection.on_pose)
+        if self.is_abandoned(aid):
+            return None
         if self.sign_pool is not None:
-            return poolsmod.result_running(self.sign_pool.submit(
-                blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
-                self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor), dirsignsmod.enabled(self),
-                roadsignsmod.enabled(self), designsmod.enabled(self.dej_on), Server.towns_enabled(self)),
-                ROAD_TILE_TIMEOUT_S)
+            try:
+                return self._signs_in_pool(aid, anchor, tx, ty)
+            except poolsmod.Abandoned:
+                return None                     # (a teleport left its anchor)
+        return self._signs_here(aid, anchor, tx, ty)
+
+    def _signs_in_pool(self, aid, anchor, tx, ty):
+        """build_signs_tile in the sign process (pools.Abandoned when a teleport leaves aid while it is queued)."""
+        return poolsmod.result_running(self.sign_pool.submit(
+            blockworker.signs_tile, aid, anchor.lat, anchor.lon, anchor.zooms[0], tx, ty, self.out_dir,
+            self.vfs_dir, self.left_hand(anchor), self.mph(anchor), self.country(anchor), dirsignsmod.enabled(self),
+            roadsignsmod.enabled(self), designsmod.enabled(self.dej_on), Server.towns_enabled(self)),
+            ROAD_TILE_TIMEOUT_S, abandon=lambda: self.is_abandoned(aid))
+
+    def _signs_here(self, aid, anchor, tx, ty):
+        """build_signs_tile in this process (no sign process)."""
         g = self.grader_for(anchor)
         zoom = anchor.zooms[0]
 
@@ -2416,7 +2441,7 @@ class Server:
         rebases), anchor aid's skin and exact variants. Its gas station pads kept for the ground's painters. None
         when the anchor is gone. Worker threads (roads.GeoTracker)."""
         anchor = self.anchors.get(aid)
-        if anchor is None or self.mapdata is None or self.road_pool is None:
+        if anchor is None or self.mapdata is None or self.road_pool is None or self.is_abandoned(aid):
             return None
         lh, mph, buried, lamps, country, gzoom = self.geo_rules(gx, gy)
         fut = self.road_pool.submit(
@@ -2427,7 +2452,8 @@ class Server:
             Server.towns_enabled(self), Server.wear_arg(self))
         t0, waited = time.perf_counter(), []
         try:
-            res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
+            res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited, abandon=lambda: self.is_abandoned(aid)
+                                          or self.geo_left_behind(aid, gx, gy))
             took = time.perf_counter() - t0
             if took > ROAD_GEO_SLOW_S:      # (nyc_speed.py's road lead: queue against build)
                 st = {}
@@ -2441,6 +2467,8 @@ class Server:
                          gx, gy, took, waited[0] if waited else 0.0, tm.get("content_s", 0.0),
                          tm.get("content_cpu", 0.0), tm.get("skin_s", 0.0), tm.get("skin_cpu", 0.0),
                          tm.get("exact_s", 0.0), top)
+        except poolsmod.Abandoned:
+            return None                         # (a teleport left its anchor: not built)
         except concurrent.futures.TimeoutError:
             fut.cancel()
             log.warning("road geotile %d_%d: no answer from its worker in %.0f s: built again", gx, gy,
@@ -3386,6 +3414,44 @@ class Server:
                 with self.warm_cv:      # not again for this pose list
                     self.warm_want = [w for w in self.warm_want if w[1] != job[1]]
 
+    def is_abandoned(self, aid):
+        """Did a teleport leave anchor aid (abandoned: its queued work is not wanted)?"""
+        return aid in getattr(self, "abandoned", ())
+
+    def left_behind(self, aid, x, y, margin=0.0):
+        """Is (x, y) of anchor aid's frame left behind by every player on it (LEFT_BEHIND_M + margin away and behind
+        each, or LEFT_FAR_M + margin away)? False when nobody is on aid (a teleport's own: is_abandoned) or a player's
+        place is unknown."""
+        on = [c for c in list(self.connections) if getattr(c, "active", None) == aid]
+        if not on:
+            return False
+        for c in on:
+            f, v = getattr(c, "focus", None), getattr(c, "vel", None) or (0.0, 0.0)
+            if f is None or getattr(c, "view_at", None) is not None or getattr(c, "map_open", False) \
+                    or getattr(c, "map_view", False):
+                return False            # (the 3D map's view, or a camera away from the car: its work follows that)
+            # (the other cars it streams round: collisionfoci.lua's foci)
+            if any(math.hypot(x - fx, y - fy) < LEFT_BEHIND_M + margin + fr for fx, fy, fr, *_ in getattr(c, "foci", ())):
+                return False
+            dx, dy = x - f[0], y - f[1]
+            d = math.hypot(dx, dy)
+            if d > LEFT_FAR_M + margin:
+                continue
+            if d > LEFT_BEHIND_M + margin and math.hypot(*v) >= LEFT_MIN_V and dx * v[0] + dy * v[1] < 0:
+                continue
+            return False
+        return True
+
+    def geo_left_behind(self, aid, gx, gy):
+        """left_behind of road geotile (gx, gy)'s middle in anchor aid's frame (half its size of margin)."""
+        anchor = self.anchors.get(aid)
+        if anchor is None:
+            return False
+        import geotiles
+        la, lo = geotiles.centre(gx, gy)
+        x, y, _ = anchor.frame.geodetic_to_enu(la, lo, 0.0)
+        return self.left_behind(aid, float(x), float(y), 150.0)
+
     def make_heightmap(self, anchor, cx, cy, progress, lane=LANE_REQUEST, queued_at=None):
         """Worker thread: build and write one 1024² terrain. The follow / prefetch blocks (no progress
         callback) build in the block process when there is one; the anchor's first block here, so its
@@ -3393,6 +3459,12 @@ class Server:
         t0 = time.perf_counter()
         if queued_at is not None and t0 - queued_at > 0.5:
             log.info("terrain %s waited %.2f s for a heightmap worker", (anchor.id, cx, cy), t0 - queued_at)
+        half = self.layout.block * heightmap.SQUARE / 2
+        # (a teleport left its place while it waited: is_abandoned; or a prefetched block the car has passed: left_behind)
+        gone = lambda: self.is_abandoned(anchor.id) or (     # noqa: E731
+            lane == LANE_PREFETCH and progress is None and self.left_behind(anchor.id, cx, cy, half))
+        if gone():
+            raise poolsmod.Abandoned()
         q = self.anchor_q(anchor)
         fb, base = anchor.first_base, None
         if fb is not None and fb[0] == (cx, cy):        # the provisional first block's photo (make_provisional)
@@ -3430,7 +3502,7 @@ class Server:
                     self.layout.block, self.out_dir, self.hm_name(key), self.ter_name(key),
                     fuel_pads=self.block_fuel_pads(anchor, cx, cy, self.layout.block * heightmap.SQUARE))
                 try:
-                    info = pfut.result()
+                    info = poolsmod.result_running(pfut, None, abandon=gone)
                 finally:
                     self.hm_proc.pop(key, None)
                 if "started" in info:   # (waiting for the lane's process: a block before it, its road plans ahead)
@@ -7482,6 +7554,24 @@ class Connection:
                 st["busy"] = False
         threading.Thread(target=run, name="preload-place", daemon=True).start()
 
+    def abandon_old(self, aid):
+        """A teleport leaves anchor aid: its queued work is dropped (Server.abandoned), unless another connection is
+        on it (BeamMP: a player still there); the road plans warmed ahead for it are dropped too."""
+        if any(c is not self and getattr(c, "active", None) == aid for c in list(self.s.connections)):
+            return
+        self.s.abandoned.add(aid)
+        self.abandoned_from = aid
+        with self.s.warm_cv:
+            self.s.warm_want = []
+        log.info("teleport: anchor %d's queued work dropped", aid)
+
+    def unabandon_old(self):
+        """The teleport did not happen (never committed, failed): the old place's work goes on."""
+        aid = getattr(self, "abandoned_from", None)
+        if aid is not None:
+            self.s.abandoned.discard(aid)
+            self.abandoned_from = None
+
     async def prepare_anchor(self, msg):
         """Every first-ground preparation has progress and a terminal reply, including setup/finalization errors."""
         req = msg.get("requestId")
@@ -7507,6 +7597,7 @@ class Connection:
             log.exception("anchor request %s failed during %s", req, progress["stage"])
             if not progress["done"]:
                 self.teleport_pending = False
+                self.unabandon_old()
                 self.wake.set()
                 self.send({"type": "anchor_error", "requestId": req, "stage": progress["stage"],
                            "error": f"{type(e).__name__}: {e}"})
@@ -7574,6 +7665,7 @@ class Connection:
                 teleport = True
                 self.teleport_pending, self.teleport_t0 = True, time.monotonic()
                 log.debug("teleport to %.5f, %.5f: the old place's work paused", lat, lon)
+                self.abandon_old(old.id)
                 # the cores lent from the request on, not from the first block's arrival: that block is most of
                 # the wait (16.9 s in Baltimore on a Steam Deck, the server on its own 4 CPUs, 2026-10-20)
                 self.boost_t0 = time.monotonic()
@@ -7674,6 +7766,9 @@ class Connection:
         self.refining.add(key)              # (the loading line's ground: send_progress)
         try:
             info = await self.s.terrain(anchor, cx, cy)
+        except poolsmod.Abandoned:
+            log.info("graded first block %s dropped: a teleport left it", key)
+            return
         except Exception:
             log.exception("graded first block %s failed (the provisional one stays)", key)
             return
@@ -8169,6 +8264,7 @@ class Connection:
         self.update_far()
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
+            self.unabandon_old()
             self.wake.set()
         if self.teleport_pending:           # the old place's work waits: the new place has the CPU and the network
             self.refresh_status()
@@ -8392,6 +8488,10 @@ class Connection:
                 # (the prefetch lane's process: a correction of the block in use must not hold up the next one the
                 # mod asks for, a first visit's rebuilds queued the follow requests, 2026-11-01)
                 info = await s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH)
+            except poolsmod.Abandoned:          # (a teleport left it: the old one stays, quietly)
+                if old is not None:
+                    s.hm[key] = old
+                return
             except Exception:
                 log.exception("block %s again with its roads (the old one stays)", key)
                 if old is not None:
@@ -8434,6 +8534,10 @@ class Connection:
                 # (the prefetch lane's process: a correction of the block in use must not hold up the next one the
                 # mod asks for, a first visit's rebuilds queued the follow requests, 2026-11-01)
                 info = await s.terrain(anchor, key[1], key[2], lane=LANE_PREFETCH)
+            except poolsmod.Abandoned:          # (a teleport left it: the old one stays, quietly)
+                if old is not None:
+                    s.hm[key] = old
+                return
             except Exception:
                 log.exception("block %s again with its gas station pads (the old one stays)", key)
                 if old is not None:
@@ -8711,6 +8815,8 @@ class Connection:
                 try:
                     await self.s.terrain(anchor, cx, cy, lane=LANE_PREFETCH)
                     log.debug("prefetched terrain (%d, %.0f, %.0f)", anchor.id, cx, cy)
+                except poolsmod.Abandoned:
+                    pass                        # (a teleport left it, or the car went on: not wanted any more)
                 except Exception:
                     log.exception("terrain prefetch failed")
                 finally:
