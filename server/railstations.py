@@ -897,7 +897,10 @@ def stations_near(md, frame, box, shared=False):
         found = []
         for g in groups:
             gf = bs.group_frame(g) if shared else frame
-            found += [(st, gf) for st in _group(md, gf, tuple(g))]
+            for st in _group(md, gf, tuple(g)):
+                if shared:
+                    st.group_frame = gf         # (the frame its geometry is in: busstations.stations_near's)
+                found.append((st, gf))
     except Exception as ex:
         logging.getLogger("earthd.railstations").warning("rail stations of the tile at %s: %s: %s",
                                                          tuple(round(float(v)) for v in box[:2]), type(ex).__name__, ex)
