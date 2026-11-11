@@ -588,26 +588,41 @@ class VineyardTest(unittest.TestCase):
 
 
 class BaleTest(unittest.TestCase):
-    def _field(self, lat, cls):
+    def _fields(self, lat, cls, n=40, size=(400.0, 300.0)):
+        """n fields side by side (one polygon each), size m."""
         import mapgeom
         frame = geodesy.EnuFrame(lat, 1.6)
-        e, n = np.array([0, 2000, 2000, 0, 0.0]), np.array([0, 0, 1200, 1200, 0.0])
-        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
-        feats = mapgeom.build("land_use", np.array([f"f-{lat}"]), [(mapgeom.POLYGON, [[np.stack([lo, la], 1)]])])
-        feats.attrs["class"] = np.array([cls], object)
-        return feats
+        geoms = []
+        for k in range(n):
+            e = np.array([0, size[0], size[0], 0, 0.0]) + k * (size[0] + 20)
+            nn = np.array([0, 0, size[1], size[1], 0.0])
+            la, lo, _ = frame.enu_to_geodetic(e, nn, np.zeros(5))
+            geoms.append((mapgeom.POLYGON, [[np.stack([lo, la], 1)]]))
+        feats = mapgeom.build("land_use", np.array([f"f{lat}-{k}" for k in range(n)]), geoms)
+        feats.attrs["class"] = np.array([cls] * n, object)
+        return feats, frame
 
-    def test_bales_by_class_and_hemisphere(self):
-        it = veg.bale_items(self._field(48.3, "farmland"), None, None, None)
-        self.assertGreater(len(it), 20, "a share of the blocks of a 240 ha field")
-        self.assertLess(len(it), 2000)
+    def test_bales_on_a_share_of_the_fields(self):
+        feats, frame = self._fields(48.3, "farmland")
+        it = veg.bale_items(feats, None, None, None)
         self.assertTrue(np.all(it.group == veg.G_STRAW_N))
-        again = veg.bale_items(self._field(48.3, "farmland"), None, None, None)
+        e, n, _ = frame.geodetic_to_enu(it.lat, it.lon, np.zeros(len(it)))
+        fields = set((np.asarray(e) // 420).astype(int))
+        self.assertTrue(2 <= len(fields) <= 16, f"a share of the 40 fields: {len(fields)}")
+        per = len(it) / max(len(fields), 1) / 12.0
+        self.assertTrue(4 <= per <= 20, f"bales a hectare: {per:.1f}")
+        x = np.asarray(e) % 420
+        self.assertTrue(np.all((x > veg.BALE_EDGE_M - 0.5) & (x < 400 - veg.BALE_EDGE_M + 0.5)), "the headland clear")
+        again = veg.bale_items(feats, None, None, None)
         self.assertTrue(np.array_equal(again.lon, it.lon), "deterministic")
-        self.assertTrue(np.all(veg.bale_items(self._field(-35.0, "meadow"), None, None, None).group
+
+    def test_by_class_hemisphere_and_size(self):
+        self.assertTrue(np.all(veg.bale_items(self._fields(-35.0, "meadow")[0], None, None, None).group
                                == veg.G_SILAGE_S))
-        self.assertEqual(len(veg.bale_items(self._field(10.0, "farmland"), None, None, None)), 0, "not in the tropics")
-        self.assertEqual(len(veg.bale_items(self._field(48.3, "vineyard"), None, None, None)), 0)
+        self.assertEqual(len(veg.bale_items(self._fields(10.0, "farmland")[0], None, None, None)), 0, "not in the tropics")
+        self.assertEqual(len(veg.bale_items(self._fields(48.3, "vineyard")[0], None, None, None)), 0)
+        big = self._fields(48.3, "farmland", n=40, size=(2000.0, 1200.0))[0]
+        self.assertEqual(len(veg.bale_items(big, None, None, None)), 0, "a polygon of many fields: none")
 
 
 class FarmFoliageTest(unittest.TestCase):

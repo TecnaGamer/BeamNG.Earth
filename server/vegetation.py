@@ -978,13 +978,15 @@ def vineyard_items(feats, chm, blocked, bounds=None):
 # Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
 # (straw, on land_use class farmland: the cereals' straw) and s_haybaleround_alt_01 (wrapped silage, on meadows),
 # along windrows BALE_ACROSS_M apart down the field's dominant edge, one every ~BALE_ALONG_M, some left out. An OSM
-# farmland polygon often spans many fields: the field is cut into BALE_BLOCK_M blocks and BALE_SHARE of them (a hash
-# of the polygon and the block) are baled. The season is the mod's (trees.lua SEASON: its groups by hemisphere, the
+# farmland polygon often spans many fields (the Beauce's, 2026-11-10 aerial: one polygon over dozens of fields, the
+# bales' blocks crossed them): only a polygon up to BALE_FIELD_MAX_M2, a field, is baled, BALE_SHARE of them (a hash of
+# its id), a headland BALE_EDGE_M wide left clear. The season is the mod's (trees.lua SEASON: its groups by hemisphere, the
 # date's month): straw in July-September, silage May-September (the south: six months on); none in the tropics.
 BALE_ALONG_M = 38.0
 BALE_ACROSS_M = 14.0
-BALE_BLOCK_M = 260.0
-BALE_SHARE = 0.18
+BALE_FIELD_MAX_M2 = 40e4
+BALE_EDGE_M = 8.0
+BALE_SHARE = 0.2
 BALE_KEEP = 0.75
 BALE_JITTER_M = 9.0
 BALE_H_M = 1.25             # the shapes' height (trees.lua CATALOG.straw_* / silage_*)
@@ -1004,7 +1006,11 @@ def bale_items(feats, chm, blocked, bounds=None):
             if abs(lat) < 23.5:
                 continue
             sec = 1.0 / max(math.cos(math.radians(lat)), 0.05)
+            if area > BALE_FIELD_MAX_M2 * sec * sec:
+                continue                    # (many fields in one polygon: no field's edges to follow)
             key = np.uint64(_fid_key(fid))
+            if float(_hash01(np.array([key]), np.array([0], np.uint64), 42)[0]) >= BALE_SHARE:
+                continue
             u = _edge_axis(xy)
             along, across = BALE_ALONG_M * sec, BALE_ACROSS_M * sec
             phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 41)[0]) * along
@@ -1012,14 +1018,15 @@ def bale_items(feats, chm, blocked, bounds=None):
             pts = _lattice(xy, holes, u, along, across, phase_a, phase_b, max_steps=800)
             if pts is None or len(pts) == 0:
                 continue
-            blk = np.floor(pts / (BALE_BLOCK_M * sec)).astype(np.int64)
-            baled = _hash01(blk[:, 0] * np.int64(73856093) ^ blk[:, 1], np.full(len(pts), key), 42) < BALE_SHARE
             idx = np.arange(len(pts), dtype=np.uint64)
-            baled &= _hash01(np.full(len(pts), key), idx, 43) < BALE_KEEP
-            if not baled.any():
-                continue
+            baled = _hash01(np.full(len(pts), key), idx, 43) < BALE_KEEP
             pts, idx = pts[baled], idx[baled]
             pts = pts + ((_hash01(np.full(len(pts), key), idx, 44) - 0.5) * 2 * BALE_JITTER_M * sec)[:, None] * u
+            if len(pts):                    # (the headland: BALE_EDGE_M in from the field's edge, every way)
+                from polygon import Path
+                path, v = Path(xy), np.array([-u[1], u[0]])
+                for d in (u, -u, v, -v):
+                    pts = pts[np.asarray(path.contains_points(pts + d * BALE_EDGE_M * sec), bool)]
             if blocked is not None and np.any(blocked):
                 pts = pts[~_blocked_at(pts, chm, blocked)]
             if bounds is not None and len(pts):
