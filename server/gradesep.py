@@ -120,22 +120,27 @@ def neighbours_hook(md, key):
     180 and 241 MB, flat, in the same time)."""
     lock = threading.Lock()
     keys = _neighbour_keys(key)
-    refs = None         # per key: a weak reference to its roads layer, or None (none there)
+    names = [str(k) for k in keys]
+    refs = [_UNREAD] * len(keys)    # per key: a weak reference to its roads layer, None (none there) or _UNREAD
 
-    def run():
-        nonlocal refs
+    def run(want=None):
+        """The eight layers (None where a cell has none); want: only the cells with these names are read (the others
+        None unless at hand already): a caller that needs a few of them (a road's home cell, the cells a road
+        crosses) does not have the rest decoded, and theirs (2026-11-11: most of a cold first block's halo)."""
         with lock:
-            if refs is None:
-                got = _neighbours(md, key, keys)
-            else:
-                got = [r() if r is not None else None for r in refs]
-                gone = [i for i, r in enumerate(refs) if r is not None and got[i] is None]
-                if gone:
-                    for i, f in zip(gone, _neighbours(md, key, [keys[i] for i in gone])):
-                        got[i] = f
-            refs = [weakref.ref(f) if f is not None else None for f in got]
+            got = [r() if r is not None and r is not _UNREAD else None for r in refs]
+            todo = [i for i, r in enumerate(refs) if (r is _UNREAD or (r is not None and got[i] is None))
+                    and (want is None or names[i] in want)]
+            if todo:
+                for i, f in zip(todo, _neighbours(md, key, [keys[i] for i in todo])):
+                    got[i] = f
+                    refs[i] = weakref.ref(f) if f is not None else None
             return got
+    run.names = names
     return run
+
+
+_UNREAD = object()
 
 
 def _neighbour_keys(key):
