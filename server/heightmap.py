@@ -390,17 +390,21 @@ def height_at(qgrid, z_base, max_height, cx, cy, x, y, square=SQUARE):
 
 @profile_step('Heightmap generation')
 def generate(frame, elev_fn, path, cx=0.0, cy=0.0, ground_at=(0.0, 0.0), q=Q_DEFAULT, size=SIZE, keep=None,
-             chunks=None):
+             chunks=None, post=None):
     """Build the size² block centred at (cx, cy) with height quantum q and write it to path.
     groundZ is the terrain height at ground_at (None if that point is outside the block). keep (a
     dict, optional) receives "lat", "lon" and "u" of the grid ([gy, gx], gy = north) and write_png's
-    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added)."""
+    "qgrid". chunks: a ChunkCache of this frame (the heights it holds are reused, the new ones added).
+    post(u, keep): the grid's heights changed before they are written (a provisional block's L0 roads, l0roads.py;
+    needs keep, never with chunks: the chunks keep the heights as computed)."""
     if chunks is None:
         u = grid_u(frame, elev_fn, cx, cy, size, keep)
     else:
         u, share = grid_u_chunked(frame, elev_fn, cx, cy, size, chunks, keep)
         if keep is not None:
             keep["new_share"] = share       # (the share of samples computed: the rest from earlier blocks' chunks)
+    if post is not None and keep is not None:
+        u = post(u if chunks is None else u.copy(), keep)
     q, z_base, max_height, qgrid = write_png(path, u, q)
     if keep is not None:
         keep["u"] = u

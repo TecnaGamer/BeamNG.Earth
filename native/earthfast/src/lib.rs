@@ -90,6 +90,8 @@ mod roadtone;
 mod railbeds;
 mod osmtagshards;
 mod gradebins;
+mod l0roads;
+mod groundphoto;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5922,6 +5924,11 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
     // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
     // texture, earthd FAR_PVS; that branch's 212)
-    m.add("VERSION", 218)?;
+    // 219: l0roads / groundphoto (that branch's 171)
+    // (L0 roads: a provisional block's road corridors flattened before any road plan, l0roads.py)
+    m.add_function(wrap_pyfunction!(l0roads::l0_flatten, m)?)?;
+    // (L0 ground: a teleport's first block's stand-in photo from its own ground layers, earthd.write_ground_base)
+    m.add_function(wrap_pyfunction!(groundphoto::ground_photo, m)?)?;
+    m.add("VERSION", 219)?;
     Ok(())
 }

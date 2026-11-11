@@ -204,6 +204,12 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   of reading the large map data files, a few seconds sooner on a first visit (the same data; road lines within about
   a quarter of a metre of the files'). Water, land use and the other map layers still come from the files, and the
   files stand in whenever the tiles do not answer (`BNGE_MAP_SOURCE=parquet` uses the files for everything, as before).
+- A stand-in world while a new place loads: after a teleport to a place you have not visited, the car is set down on
+  a first version of the ground before the roads are fully built. Its roads are laid flat into it from the map data
+  as soon as that data is downloaded, and are built again in full detail a little later. Where the aerial photo is
+  not downloaded yet, the ground is coloured by its land cover until the photo arrives. The environment variables
+  `BNGE_L0_ROADS=0` (no flat roads in the first version), `BNGE_L0_REFRESH=0` (no rebuild when the map data
+  arrives) and `BNGE_L0_GROUND=0` (wait for the photo as before) turn the parts off.
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
