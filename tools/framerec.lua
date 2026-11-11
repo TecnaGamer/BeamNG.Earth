@@ -33,9 +33,13 @@ local function applyVariant(v)
   R.pacerOrig = R.pacerOrig or { step = p.step, fields = {} }
   p.step = R.pacerOrig.step
   for k, val in pairs(R.pacerOrig.fields) do p[k] = val end
+  if R.pacerOrig.enabledSaved then p.ENABLED = R.pacerOrig.enabled end
+  if not R.pacerOrig.enabledSaved then R.pacerOrig.enabledSaved, R.pacerOrig.enabled = true, p.ENABLED end
   if v.pacer == 'off' then
     p.step = function() return 0 end
+    p.ENABLED = false
   elseif type(v.pacer) == 'table' then
+    p.ENABLED = true        -- (forced: framepacer.lua paces by itself only where dtsmooth is missing)
     for k, val in pairs(v.pacer) do
       if R.pacerOrig.fields[k] == nil then R.pacerOrig.fields[k] = p[k] end
       p[k] = val
@@ -89,6 +93,7 @@ function R.stop()
   if p and R.pacerOrig then
     p.step = R.pacerOrig.step
     for k, val in pairs(R.pacerOrig.fields) do p[k] = val end
+    if R.pacerOrig.enabledSaved then p.ENABLED = R.pacerOrig.enabled end
     if p.reset then p.reset() end
   end
   R.pacerOrig = nil

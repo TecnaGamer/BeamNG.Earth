@@ -2733,11 +2733,12 @@ M._devbuild = require('beamngEarth/devbuild')    -- the development build's noti
 M._pacer = require('beamngEarth/framepacer')    -- even frame pacing (fields: the main chunk's 200-local limit)
 M._paceClock = stopwatch.clock()
 local function onPreRender(dtReal, dtSim)
-  -- even frame pacing (framepacer.lua): our level, playing (not paused, not loading), not BeamMP, the setting on
+  -- frame pacing (framepacer.lua: only where the engine patch dtsmooth is not applied): our level, playing (not
+  -- paused, not loading), not BeamMP
   local now = M._paceClock()
   if M._paceLast then
     local on = st.inOurLevel and (dtSim or 0) > 0 and not gov.loading and not beammp.inSession()
-      and settings.get('framePacing') ~= false
+      and M._pacer.active(now / 1000)
     if on then
       local wait = M._pacer.step(now - M._paceLast)
       if wait > 0 then pcall(M._pacer.sleep, wait); now = M._paceClock() end

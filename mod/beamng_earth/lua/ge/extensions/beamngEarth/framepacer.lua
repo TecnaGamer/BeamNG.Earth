@@ -7,8 +7,23 @@
 -- the thread sleeps, no core spins). The target follows the recent frames' PERCENTILE (slowly: TARGET_ALPHA a
 -- recompute), so most frames come at the same spacing and a lone slow one is the engine's filter's to drop. Off while
 -- loading, paused or in BeamMP (core.lua). Pure but for M.sleep.
+--
+-- Not needed where dtsmooth runs (2026-11-11, the user: "Consistency is more important than max frame rate.
+-- Ideally we shouldn't need that setting and make consistent performance the default"): the engine patch dtsmooth
+-- (tools/gcpatch, enginepatch.py) now keeps game time on the clock, and on a Manhattan drive (tools/framerec.py, 20 s variants
+-- interleaved) the pacer added nothing to it while costing frames: game speed over 0.25 s windows p95 / p99
+-- 1.11 / 1.16 without it, 1.11 / 1.15 at the 70th percentile (fps 48 -> 46), 1.11 / 1.14 at the 50th; the 1.9
+-- default (stock filter + this pacer) 1.23 / 1.37 at 38 fps against 49 without it. So it runs only where dtsmooth is
+-- not applied (its status file, written by the Linux library or the Windows launcher when our level starts, does not
+-- say "applied" for this session: a game started without the patch, the Windows patch until it is checked there).
+-- No setting any more; M.ENABLED = true / false (beamngEarth_core._pacer.ENABLED from the console) forces it.
 
 local M = {}
+
+M.ENABLED = nil         -- nil: automatic (see above); true / false: forced (tests)
+M.STATUS_FILE = '/temp/beamngEarth_dtsmooth.txt'   -- (tools/gcpatch/bngearth_dtsmooth.c, enginepatch.py)
+M.RECHECK_S = 5
+M.STALE_S = 30          -- an "applied" line older than this before our level's first paced frame: another session
 
 M.WINDOW = 120          -- frames the target is taken over (~1-2 s)
 M.EVERY = 30            -- frames between recomputes
@@ -22,6 +37,7 @@ local target = nil
 local sinceRecompute = 0
 
 function M.reset()
+  if n == 0 and target == nil then return end     -- (called every frame while off: no table each time)
   ring, n, head, target, sinceRecompute = {}, 0, 0, nil, 0
 end
 
@@ -54,6 +70,28 @@ function M.step(frameMs)
   if not target then return 0 end
   local wait = target - frameMs
   return wait >= M.MIN_WAIT_MS and wait or 0
+end
+
+-- Pure: does the dtsmooth status text say it is applied in this session (since `since`, os.time())?
+function M.dtsmoothApplied(text, since)
+  if type(text) ~= 'string' or not text:find(': applied:', 1, true) then return false end
+  local ts = tonumber(text:match('^(%d+) '))
+  return ts ~= nil and (since == nil or ts >= since - M.STALE_S)
+end
+
+local autoOn, checkedAt, firstAt = true, nil, nil
+-- Whether to pace now (core.lua asks once a frame in our level; `now` in seconds, any clock).
+function M.active(now)
+  if M.ENABLED ~= nil then return M.ENABLED end
+  firstAt = firstAt or os.time()
+  if not checkedAt or now - checkedAt >= M.RECHECK_S then
+    checkedAt = now
+    local read = rawget(_G, 'readFile')
+    local ok, text = false, nil
+    if read then ok, text = pcall(read, M.STATUS_FILE) end
+    autoOn = not M.dtsmoothApplied(ok and text or nil, firstAt)
+  end
+  return autoOn
 end
 
 local socket = nil

@@ -37,4 +37,23 @@ T.check(P.target() >= P.MIN_MS, 'at least MIN_MS')
 P.reset()
 for _ = 1, 200 do P.step(40.0) end
 T.check(P.target() == nil and P.step(20.0) == 0, 'slower than 30 fps (a Steam Deck): no pacing')
+-- automatic since 2026-11-11: paces only where the engine patch dtsmooth is not applied in this session
+T.check(P.ENABLED == nil, 'automatic by default')
+local now = os.time()
+T.check(P.dtsmoothApplied(now .. ' pid 12: applied: steady game speed (BeamNG.Earth level)', now), 'Linux library applied')
+T.check(P.dtsmoothApplied(now .. ' launcher pid 7: applied: steady game speed (launcher patch)', now), 'Windows launcher applied')
+T.check(not P.dtsmoothApplied(now .. ' pid 12: ready: applied while the BeamNG.Earth level runs', now), 'ready is not applied')
+T.check(not P.dtsmoothApplied(now .. ' pid 12: off (BNGEARTH_DTSMOOTH_OFF / BNGEARTH_DTSMOOTH=0)', now), 'off')
+T.check(not P.dtsmoothApplied((now - 3600) .. ' pid 9: applied: steady game speed', now), 'an old session\'s line is stale')
+T.check(not P.dtsmoothApplied(nil, now), 'no file')
+local files = {}
+readFile = function(path) return files[path] end
+T.check(P.active(0) == true, 'no status file: paced')
+files[P.STATUS_FILE] = now .. ' pid 12: applied: steady game speed'
+T.check(P.active(1) == true, 'rechecked only every RECHECK_S')
+T.check(P.active(P.RECHECK_S + 0.5) == false, 'dtsmooth applied: not paced')
+P.ENABLED = true
+T.check(P.active(P.RECHECK_S + 1) == true, 'forced on')
+P.ENABLED = nil
+readFile = nil
 T.done('test_framepacer')
