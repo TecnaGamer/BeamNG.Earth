@@ -1015,10 +1015,11 @@ class ServerMessagesTest(test_server.ServerHarness):
             # M1: the texture size with FORMAT 4 (the governor kind), never with FORMAT 3
             self.assertEqual("tex" in m, self.with_imagery and self.cells == 64, m)
             if "tex" in m:
-                # (the level's size, or less where the far PVS hides the tile or the screen needs less of it: at least
-                # farpvs.TEX_PX, a power of two)
+                # (the level's size, less where the far PVS hides the tile or the screen needs less, more where it
+                # resolves more (farpvs.UP_ON): at least farpvs.TEX_PX, farpvs.UP_PX_MAX at most, a power of two)
                 full = self.server.tex_size(m["level"])
-                self.assertTrue(farpvs.TEX_PX <= m["tex"] <= full and m["tex"] & (m["tex"] - 1) == 0, (m, full))
+                self.assertTrue(farpvs.TEX_PX <= m["tex"] <= max(full, farpvs.UP_PX_MAX)
+                                and m["tex"] & (m["tex"] - 1) == 0, (m, full))
                 self.assertGreaterEqual(m["level"], ff.MESH_MIN_LEVEL[64])
             self.assertEqual(m["key"], ff.tile_of(m["key"]).key)
         if kind in ("anchor_ready", "terrain_ready"):
@@ -1181,7 +1182,8 @@ class ServerMessagesTest(test_server.ServerHarness):
         with open(self.fs(m["texture"]), "rb") as f:
             data = f.read()
         w, h, mips, fourcc, sizes = imagery.read_dds_info(data)
-        self.assertEqual((w, h, fourcc), (self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
+        # (the size the message says: its level's, or the far PVS's / the screen's, farpvs.UP_ON)
+        self.assertEqual((w, h, fourcc), (m.get("tex") or self.server.tex_size(m["level"]),) * 2 + (b"DXT1",))
         self.assertEqual(mips, w.bit_length())                 # full chain down to 1 x 1
         self.assertEqual(len(data), imagery.DDS_HEADER + sum(sizes))
 

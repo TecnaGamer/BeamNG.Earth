@@ -245,6 +245,9 @@ def tone_lut(strength=1.0, lift=1.0):
     return np.clip(np.rint(y * 255), 0, 255).astype(np.uint8)
 
 
+SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
+
+
 def ground_res(lat, z):
     """Web-Mercator ground resolution (m per 256 px tile pixel) at latitude lat and zoom z."""
     return EARTH_CIRC * math.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
@@ -537,6 +540,7 @@ class Imagery:
         self._warm_thread = None
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
+        self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
         self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
@@ -848,6 +852,38 @@ class Imagery:
                 elif missindex.known(self._paths(*probe)[1]):
                     continue
             yield src, keys
+
+    def sharp_zoom(self, lat, lon):
+        """The finest zoom the chain's photos hold at (lat, lon): the most of its sources' (non-lazy: the far field's
+        renders use them) whose coverage there is known (their probes on hand: USGS's z16 in the US, a regional cache's
+        z17; EOX's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept per
+        ~5 km square once known (farpvs.UP_ON: a far tile is never made finer than this)."""
+        k = (round(lat * 20), round(lon * 20))
+        got = self._sharp.get(k)
+        if got is not None:
+            return got
+        best, unknown = None, False
+        with self._lock:
+            for src in self.chain:
+                if src.lazy:
+                    continue
+                z = min(src.max_zoom, src.max_view_zoom)
+                if z < src.min_zoom or (best is not None and z <= best):
+                    continue
+                n = 2 ** z
+                x = int((lon / 360.0 + 0.5) * n) % n
+                y = int(min(n - 1, max(0, (0.5 - math.asinh(math.tan(math.radians(lat))) / (2 * math.pi)) * n)))
+                st = self._probe_status((src, z, x, y))
+                if st == "covered":
+                    best = z
+                elif st == "unknown":
+                    unknown = True
+        z = best if best is not None else SHARP_FALLBACK_ZOOM
+        if not unknown:
+            if len(self._sharp) > 20000:
+                self._sharp.clear()
+            self._sharp[k] = z
+        return z
 
     def on_disk(self, key):
         """A source tile's file is there (no read)."""

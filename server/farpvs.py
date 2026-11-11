@@ -92,6 +92,14 @@ SLOPE_FLOOR = float(os.environ.get("BNGE_FAR_SLOPE_FLOOR", "0.02"))  # tan added
 SLOPE_CAP = 2.0
 SLOPE_QUANTILE = float(os.environ.get("BNGE_FAR_SLOPE_Q", "1.0"))   # of the cells under a tile (1: the steepest)
 SLOPE_PX_MIN = 64
+# Pixel-aware far textures (the user, 2026-11-11, at Ouray: "The texture on the mountains look low ... can we use a
+# higher res image further out ... Make it pixel aware too"): a tile in sight whose level's texture is coarser than the
+# screen resolves of it from where the player can be (_screen_px's need: a mountain face turned to the road needs
+# d / ppr, its level's 512 px over 2-4 km were 4-8 m texels for ~2 m screen pixels at 3 km) gets a larger one, up to
+# UP_PX_MAX and never finer than the sharpest photos there (the caller's `up`: earthd.Server.up_px); the photo zoom
+# follows the texel. The hidden tiles' saving (TEX_PX) pays for it.
+UP_ON = os.environ.get("BNGE_FAR_PX_UP", "1") != "0"
+UP_PX_MAX = int(os.environ.get("BNGE_FAR_PX_MAX", "2048"))
 SLOPE_MIN_LEVEL = 2
 SLOPE_NEAR_M = 1000.0
 PPR_MIN = 1080 / (2 * math.tan(math.radians(30.0)))     # pixels per radian at least (1080 lines, 60 deg fov)
@@ -306,22 +314,24 @@ class Set:
         self.ppr = max(PPR_MIN, ppr or 0.0)
         self.px_cache = {}
 
-    def tex_px(self, key, bbox, level, size, full):
+    def tex_px(self, key, bbox, level, size, full, up=None):
         """The texture px a tile needs for this set's eyes: TEX_PX hidden (or less where the screen needs less), the
-        screen's need when visible (SLOPE_SIZING, see the module's constants), `full` (the level's own) at most."""
+        screen's need when visible (SLOPE_SIZING, see the module's constants): `full` (the level's own) at most, or up to
+        `up` (UP_ON: the most the photos there are worth) where the screen resolves more of it than `full` gives."""
+        top = max(full, up) if (UP_ON and up) else full
         got = self.px_cache.get(key)
-        if got is not None and got[0] == (bbox, full):
+        if got is not None and got[0] == (bbox, full, top):
             return got[1]
         px = full
         hidden = self.hidden(key, bbox, level)
         if SLOPE_SIZING:
-            px = min(px, self._screen_px(bbox, level, size, full))
+            px = self._screen_px(bbox, level, size, full, top)
         if hidden:
             px = min(px, TEX_PX)
-        self.px_cache[key] = ((bbox, full), px)
+        self.px_cache[key] = ((bbox, full, top), px)
         return px
 
-    def _screen_px(self, bbox, level, size, full):
+    def _screen_px(self, bbox, level, size, full, top=None):
         if level < SLOPE_MIN_LEVEL or self.eye_top is None:
             return full
         x0, y0, x1, y1 = bbox
@@ -337,6 +347,9 @@ class Set:
         sin_a = min(1.0, max(0.0, (self.eye_top - zmin) / d) + d / (2 * R_OCC) + slope)
         need = d / (self.ppr * OVERSAMPLE) * max(1.0, 1.0 / (ANISO * max(sin_a, 1e-6)))
         px = full
+        top = top or full
+        while px * 2 <= top and size / px > need:       # (coarser than the screen resolves: larger, up to top)
+            px *= 2
         while px > SLOPE_PX_MIN and size / (px // 2) <= need:
             px //= 2
         return px

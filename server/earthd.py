@@ -4859,6 +4859,7 @@ class Server:
         key = tile.key
         glob = isinstance(tile, farfield.GTile)
         best = None
+        up = self.up_px(anchor, tile, full)
         for c in self.connections:
             if c.active is None or (not glob and c.active != anchor.id):
                 continue
@@ -4869,11 +4870,31 @@ class Server:
             if s is None or s.aid != c.active:
                 return full
             node = t.base if isinstance(t, farfield.Piece) else t
-            px = s.tex_px(key, node.bbox, t.level, node.size, full)
+            px = s.tex_px(key, node.bbox, t.level, node.size, full, up)
             best = px if best is None else max(best, px)
-            if best >= full:
-                return full
+            if best >= up:
+                return up
         return full if best is None else best
+
+    def up_px(self, anchor, tile, full):
+        """The most texture px far tile `tile` may get where the screen resolves more of it than its level's `full`
+        (farpvs.UP_ON, pvs_px): farpvs.UP_PX_MAX at most, and texels no finer than the sharpest photos at its middle
+        (Imagery.sharp_zoom: USGS's z16 in the US, EOX's z14 elsewhere: larger would only enlarge them)."""
+        if not farpvsmod.UP_ON or self.imagery is None or getattr(anchor, "frame", None) is None:
+            return full
+        node = tile.base if isinstance(tile, farfield.Piece) else tile
+        x0, y0, x1, y1 = node.bbox
+        try:
+            lat, lon, _ = anchor.frame.enu_to_geodetic((x0 + x1) / 2, (y0 + y1) / 2, 0.0)
+            texel = imagerymod.ground_res(float(lat), self.imagery.sharp_zoom(float(lat), float(lon)))
+        except Exception as e:                  # (no imagery chain to ask: the level's own)
+            log.debug("far texture cap %s: %s", tile.key, e)
+            return full
+        px = full
+        while px * 2 <= farpvsmod.UP_PX_MAX and node.size / (px * 2) >= texel * 0.9:   # (a z14 tile at 1024 px
+            # over USGS's z16 is 1.885 m against 1.88: the same photos, not enlarged)
+            px *= 2
+        return px
 
     def pvs_hidden(self, anchor, tile):
         """Is far tile `tile` (shown under `anchor`) hidden behind terrain for every connection that wants it (each
