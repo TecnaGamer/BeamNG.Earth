@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devctx;
+mod reach;
 mod devraster;
 mod roofs;
 mod roofphoto;
@@ -6185,6 +6186,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
     // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
     // server/osmtagshards.py; that branch's 207)
-    m.add("VERSION", 210)?;
+    m.add_class::<reach::RoadReach>()?;
+    m.add_function(wrap_pyfunction!(reach::reach_tile_keys, m)?)?;
+    // 211: reach (RoadReach: the drivable roads near a fast car as a graph and its time-to-reach tree;
+    // reach_tile_keys: the geotiles along a tree in its order; server/reach.py)
+    m.add("VERSION", 211)?;
     Ok(())
 }
