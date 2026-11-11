@@ -32,7 +32,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Opt-in (`BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
   colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
-  lots) with 3D grass and bushes.
+  lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
+  their mapped surface and paving tags (grey stone slabs, red herringbone brick, cobbles; in the US red brick only
+  where the aerial photo shows it), and cobbled streets show real setts. These stock textures are converted from the
+  player's own game files when the server starts.
+- Roads, parking lots and gas station forecourts are painted in the aerial photo's own pavement colour (old asphalt,
+  concrete and patches keep their shade; parked cars and old markings are left out), and the asphalt of rounded street
+  corners is painted to the curb.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
   shrubs, Mediterranean oaks and pines, Australia's eucalypts, riverside poplars in Europe, creosote bushes in North
   America's hot deserts), autumn colours in season. Far forests are drawn as the stock maps' tree clumps (fewer
@@ -55,8 +61,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   (`BNE_MAPPED_LAMPS=off` leaves them out).
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
-  porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
-  and a light skyline beyond that; bridges show out to about 3 miles too.
+  porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
+  mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
+  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; bridges show out to about 3
+  miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
   traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
   give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
@@ -186,7 +194,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
   gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
   ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
-- Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
+- Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
+  downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
   behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
