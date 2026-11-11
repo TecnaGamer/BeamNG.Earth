@@ -81,6 +81,7 @@ mod mappedlamps;
 mod vegclumps;
 mod roadwear;
 mod roadtone;
+mod railbeds;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6164,6 +6165,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
     // railway stations' signs; PR #1106 / #1023, their 188)
     // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
-    m.add("VERSION", 205)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_bed_smooth, m)?)?;
+    m.add_function(wrap_pyfunction!(railbeds::rail_join_beds, m)?)?;
+    // 206: railbeds (railprofile.smooth / join_beds: a node window's ground beds smoothed and its switches joined, in
+    // one call each)
+    m.add("VERSION", 206)?;
     Ok(())
 }
