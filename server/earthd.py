@@ -5771,6 +5771,9 @@ class Connection:
     A group is emitted (far_swap) once all its adds are sent; C then becomes C - remove + add.
     Sent tiles that no group needs any more are evicted with far_remove."""
 
+    first_ramp = None               # (the coarse cover's start, set per connection: __init__ / commit_anchor)
+    teleport_pending = False
+
     def __init__(self, server, reader, writer):
         self.s = server
         self.waterguard_ok = getattr(server, "sea", None) is None
@@ -9162,7 +9165,7 @@ class Connection:
             # tile); kept to the local workers, a Steam Deck sent 2 at a time to 12 idle helper workers (2026-10-22)
             workers += self.s.remote_slots()
             # (graded tiles: at most GRADED_SHARE of the workers, the rest go on to the ungraded ones meanwhile)
-            g_cap = max(1, int(workers * GRADED_SHARE)) if self.s.grading else workers
+            g_cap = max(1, int(workers * GRADED_SHARE)) if getattr(self.s, "grading", False) else workers
             g_n = sum(1 for _, t in self.inflight.values() if self.graded(t))
             while anchor is not None and not self.teleport_pending and len(self.inflight) < workers:
                 t = self._next_tile(g_n < g_cap)
