@@ -604,4 +604,13 @@ do
   T.check(#statics() == 0, 'clear leaves no orphaned barrier')
   getPlayerVehicle = nil
 end
+-- non-urgent collision rebuilds wait while the car rolls slowly (wheels trapped in the terrain by a rebuild)
+do
+  local d = roads.deferWhileRolling
+  T.check(d(0, 0) == false, 'parked: a rebuild runs')
+  T.check(d(nil, 0) == false, 'speed unknown: a rebuild runs')
+  T.check(d(4, 6000) == true, 'rolling at 4 m/s: the rebuild waits')
+  T.check(d(4, roads.ROLL_DEFER_S * 1000 + 1) == false, '... ROLL_DEFER_S at most')
+  T.check(d(roads.FAST_MS, 6000) == false, 'at FAST_MS and above: no wait')
+end
 T.done('test_roads')
