@@ -187,8 +187,9 @@ class Vegetation:
         self._lock = threading.Lock()
         self._cell_locks = {}
         self._tl = threading.local()    # per build thread: .dem_failed (the DEM could not answer: _load keeps no cell)
-        self._warm, self._warm_thread = [], None
+        self._warm_at, self._warm_thread = None, None   # warm_around's latest (lat, lon, radius_m), for the warm thread
         self._warm_cv = threading.Condition()
+        self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
 
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
@@ -211,31 +212,40 @@ class Vegetation:
 
     def warm_around(self, lat, lon, radius_m=WARM_M):
         """Build the cells within radius_m of (lat, lon) in the background (nearest first): the tiles
-        near a teleport's destination then find them ready instead of waiting ~3.5 s each."""
-        d = radius_m / 111320.0
-        dl = d / max(math.cos(math.radians(lat)), 0.01)
-        try:
-            keys = mapcells.cells_for_bbox(lat - d, lon - dl, lat + d, lon + dl, max_cells=64)
-        except ValueError:
-            return
-        keys = sorted(keys, key=lambda k: (k.center()[0] - lat) ** 2 + ((k.center()[1] - lon) * math.cos(math.radians(lat))) ** 2)
+        near a teleport's destination then find them ready instead of waiting ~3.5 s each. The event loop's, at every
+        pose: only the place is kept here, the warm thread picks the cells (their file checks, up to 64 a pose, held
+        the loop on a busy hard drive: GitHub #1054)."""
         with self._warm_cv:
-            for k in keys:
-                kk = (int(k.x), int(k.y))
-                if kk not in self._warm and not self.ready(k):
-                    self._warm.append(kk)
+            self._warm_at = (lat, lon, radius_m)
             if self._warm_thread is None:
                 self._warm_thread = threading.Thread(target=self._warm_loop, daemon=True, name="veg-warm")
                 self._warm_thread.start()
             self._warm_cv.notify()
 
+    def _warm_cells(self, lat, lon, radius_m):
+        """The cells within radius_m of (lat, lon) not built yet, nearest first (the warm thread's: file checks)."""
+        d = radius_m / 111320.0
+        dl = d / max(math.cos(math.radians(lat)), 0.01)
+        try:
+            keys = mapcells.cells_for_bbox(lat - d, lon - dl, lat + d, lon + dl, max_cells=64)
+        except ValueError:
+            return []
+        keys = sorted(keys, key=lambda k: (k.center()[0] - lat) ** 2 + ((k.center()[1] - lon) * math.cos(math.radians(lat))) ** 2)
+        return [(int(k.x), int(k.y)) for k in keys if not self.ready(k)]
+
     def _warm_loop(self):
+        cells = []
         while True:
             pacer.hold()                # (a teleport's first block first)
             with self._warm_cv:
-                while not self._warm:
+                while not cells and self._warm_at is None:
                     self._warm_cv.wait()
-                x, y = self._warm.pop(0)
+                at, self._warm_at = self._warm_at, None
+            if at is not None:          # a newer place: its nearest cells first
+                cells = self._warm_cells(*at)
+                if not cells:
+                    continue
+            x, y = cells.pop(0)
             try:
                 self.cell((mapcells.ZOOM, x, y))
             except Exception as e:
@@ -252,8 +262,13 @@ class Vegetation:
         with self._lock:
             if k in self._mem:
                 return True
+        if k in self._on_disk:
+            return True
         p = self._path(*k)
-        return bool(p and os.path.exists(p))
+        if p and os.path.exists(p):
+            self._on_disk.add(k)        # (the warm thread asks at every new place: each cell's file checked once)
+            return True
+        return False
 
     def _path(self, x, y):
         rel = getattr(self.md, "release", "x")

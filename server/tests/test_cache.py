@@ -95,31 +95,83 @@ class LruTest(Base):
         c = self.make(cap_gb=0)                         # unlimited
         c.ready = True
         free = {"b": 100e9}
-        c.disk_usage = lambda _root: Du(500e9, 500e9 - free["b"], free["b"])
-        self.assertEqual(c.disk_short(), 0)
+        # (the drive's free space grows as the cache's files go)
+        c.disk_usage = lambda _root: Du(500e9, 0, free["b"] + 10 * MB - c.usage()[0])
+        self.assertEqual(c.disk_short_now(), 0)
         c.tick()
         self.assertEqual(c.usage(), (10 * MB, 10), "enough free space: nothing evicted")
         # the reserve: 5 % of 500 GB is 25 GB, at most 10 GB; the disk is 4 MB short of it
         free["b"] = 10e9 - 4 * MB
-        self.assertEqual(c.disk_short(), 4 * MB)
+        self.assertEqual(c.disk_short_now(), 4 * MB)
         with unittest.mock.patch.object(cachemod, "DISK_MARGIN", 1 * MB):
             c.tick()
         self.assertEqual(c.usage(), (5 * MB, 5), "short 4 MB + 1 MB margin: the five oldest go")
         self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(10)],
                          [False] * 5 + [True] * 5)
+        self.assertEqual(c.disk_short(), 0, "asked again after the cut: the status text's note goes with it")
+
+    def test_disk_short_reads_the_last_answer(self):
+        """disk_short() is the event loop's (net_note, at every status refresh): it never asks the disk, the tick asks
+        at most every DISK_CHECK_S (a busy USB hard drive took 2-10 s to answer, every game message waiting: #1054)."""
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        c = self.make(cap_gb=0)
+        free, asked = {"b": 100e9}, []
+        c.disk_usage = lambda _root: (asked.append(1), Du(500e9, 500e9 - free["b"], free["b"]))[1]
+        self.assertEqual(c.disk_short(), 0, "not asked yet")
+        c.tick()
+        c.tick()
+        self.assertEqual(len(asked), 1, "the first tick asks, the next within DISK_CHECK_S does not")
+        free["b"] = 10e9 - 4 * MB
+        for _ in range(100):
+            self.assertEqual(c.disk_short(), 0)
+        self.assertEqual(len(asked), 1, "disk_short() never asks")
+        self.clock.t += cachemod.DISK_CHECK_S - 1
+        c.tick()
+        self.assertEqual((len(asked), c.disk_short()), (1, 0), "not before DISK_CHECK_S")
+        self.clock.t += 1
+        c.tick()
+        self.assertEqual((len(asked), c.disk_short()), (2, 4 * MB))
+
+    def test_the_event_loop_never_asks_the_disk(self):
+        """With the background thread: the disk is asked on the cache's own thread only (once before the start-up walk,
+        so a full drive shows from the start), never by disk_short() on the event loop."""
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        threads = []
+
+        def du(_root):
+            threads.append(threading.current_thread().name)
+            return Du(500e9, 499e9, 1e9)                # 1 GB free: 9 GB short of the 10 GB reserve
+        with unittest.mock.patch.object(cachemod.shutil, "disk_usage", du):
+            c = cachemod.Cache(self.root, 0, now=self.clock)
+        self.addCleanup(c.close)
+        self.assertTrue(c._ready_ev.wait(10))
+        loop = asyncio.new_event_loop()
+        self.addCleanup(loop.close)
+
+        async def poses():
+            out = []
+            for _ in range(200):
+                out.append(c.disk_short())
+                await asyncio.sleep(0)
+            return out
+        self.assertEqual(set(loop.run_until_complete(poses())), {int(9e9)})
+        self.assertEqual(set(threads), {"cache"})
 
     def test_disk_reserve_bounds(self):
         import collections
         Du = collections.namedtuple("Du", "total used free")
         c = self.make(cap_gb=20)
         c.disk_usage = lambda _root: Du(20e9, 19.5e9, 0.5e9)       # a small disk: 2 GB at least
-        self.assertEqual(c.disk_short(), int(1.5e9))
+        self.assertEqual(c.disk_short_now(), int(1.5e9))
+        self.assertEqual(c.disk_short(), int(1.5e9), "kept")
         c.disk_usage = lambda _root: Du(4e12, 3.99e12, 0.01e12)    # a big disk: 10 GB at most
-        self.assertEqual(c.disk_short(), 0)
+        self.assertEqual(c.disk_short_now(), 0)
         def broken(_root):
             raise OSError("gone")
         c.disk_usage = broken
-        self.assertEqual(c.disk_short(), 0)
+        self.assertEqual(c.disk_short_now(), 0)
 
     def test_a_hit_moves_a_file_to_the_back(self):
         """An old file used (read) a while ago in this session outlives newer files that were not."""

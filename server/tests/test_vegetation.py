@@ -414,6 +414,59 @@ class DemFailedTest(unittest.TestCase):
             self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")
 
 
+class WarmTest(unittest.TestCase):
+    """warm_around runs on the event loop at every pose: it only keeps the place there. The warm thread checks the
+    cells' files, each once, and builds the missing ones nearest first (up to 64 file checks a pose held the loop on a
+    busy hard drive, GitHub #1054)."""
+
+    def test_file_checks_on_the_warm_thread_once_per_cell(self):
+        import collections
+        import math
+        import os
+        import tempfile
+        import threading
+        import time
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            v = veg.Vegetation(None, cache_dir=tmp)
+            v._path = lambda x, y: os.path.join(tmp, f"{x}_{y}.npz")
+            built = []
+
+            def load(x, y):
+                built.append((x, y))
+                open(v._path(x, y), "wb").close()
+                return veg.Items(*(np.zeros(0) for _ in range(9)))
+            v._load = load
+            checks, threads, real = collections.Counter(), set(), os.path.exists
+
+            def exists(p):
+                if str(p).startswith(tmp):
+                    checks[p] += 1
+                    threads.add(threading.get_ident())
+                return real(p)
+            d = veg.WARM_M / 111320.0
+            dl = d / math.cos(math.radians(LAT))
+            cells = {(k.x, k.y) for k in mapcells.cells_for_bbox(LAT - d, LON - dl, LAT + d, LON + dl)}
+            with mock.patch.object(veg.os.path, "exists", exists):
+                for _ in range(10):                     # poses
+                    v.warm_around(LAT, LON)
+                for _ in range(1000):
+                    if set(built) >= cells and v._warm_at is None:
+                        break
+                    time.sleep(0.01)
+                time.sleep(0.2)                         # (the warm thread idle)
+                self.assertEqual(set(built), cells)
+                self.assertEqual(len(built), len(cells), "each built once")
+                self.assertEqual(built[0], (KEY.x, KEY.y), "nearest first")
+                self.assertNotIn(threading.get_ident(), threads, "warm_around checks no file itself")
+                with v._lock:
+                    v._mem.clear()                      # (out of memory: found on disk)
+                n = sum(checks.values())
+                for _ in range(20):
+                    self.assertEqual(v._warm_cells(LAT, LON, veg.WARM_M), [])
+                self.assertEqual(sum(checks.values()), n + len(cells), "each cell's file checked once in 20 places")
+
+
 class OrchardTest(unittest.TestCase):
     def test_trees_stand_in_lines(self):
         import mapgeom

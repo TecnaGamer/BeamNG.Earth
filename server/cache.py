@@ -82,6 +82,10 @@ DISK_RESERVE_SHARE = 0.05
 DISK_RESERVE_MIN = 2 * 1e9
 DISK_RESERVE_MAX = 10 * 1e9
 DISK_MARGIN = 1e9           # ... and a disk short of it is cut back this much further (not a file at a time)
+# The background thread asks the disk for its free space at most this often (disk_short_now); everyone else reads the
+# last answer (disk_short). On the event loop at every status refresh, a busy USB hard drive took 2-10 s to answer
+# the query, and every game message waited (GitHub #1054)
+DISK_CHECK_S = 60.0
 LIFETIMES = {}              # path prefix ("imagery/xyz/") -> max age after download (s); none today
 MSG_VERSION = 1
 READ_WAITS = (0.02, 0.05, 0.1, 0.25)   # s between the tries of a read held up on Windows (NoCache.read)
@@ -157,6 +161,7 @@ class Cache(NoCache):
         self._used = 0              # bytes of the entries with a known size
         self._cap = None            # bytes, 0 = unlimited (set below)
         self.disk_usage = shutil.disk_usage     # (tests: a stand-in)
+        self._short, self._short_at = 0, None   # disk_short_now's last answer (bytes) and when (None: not asked yet)
         self._disk_warned = False
         self._dirty = False
         self.ready = False          # the start-up walk is done
@@ -583,24 +588,34 @@ class Cache(NoCache):
 
     # --- the background thread -------------------------------------------------------------------
     def disk_short(self):
+        """Bytes the cache's disk was short of its free-space reserve when the background thread last asked
+        (disk_short_now), 0 when it had it. Never touches the disk: the event loop asks (net_note)."""
+        return self._short
+
+    def disk_short_now(self):
         """Bytes the cache's disk is short of its free-space reserve (DISK_RESERVE_*), 0 when it has it (or when the
-        disk cannot be asked)."""
+        disk cannot be asked). Asks the disk (blocking: the background thread's); the answer is kept for disk_short."""
         try:
             du = self.disk_usage(self.root)
         except OSError:
-            return 0
-        reserve = min(DISK_RESERVE_MAX, max(DISK_RESERVE_MIN, du.total * DISK_RESERVE_SHARE))
-        return int(max(0, reserve - du.free))
+            short = 0
+        else:
+            reserve = min(DISK_RESERVE_MAX, max(DISK_RESERVE_MIN, du.total * DISK_RESERVE_SHARE))
+            short = int(max(0, reserve - du.free))
+        self._short, self._short_at = short, self.now()
+        return short
 
     def tick(self):
         """One check: evict when over the cap or when the disk runs short of its free reserve (at most every EVICT_S),
-        save the index (every SAVE_S)."""
+        save the index (every SAVE_S). The disk's free space is asked at most every DISK_CHECK_S, again after a cut."""
         if not self.ready:
             return
         now = self.now()
         cap = self._cap
         due = self._last_evict is None or now - self._last_evict >= EVICT_S
-        short = self.disk_short() if self.managed else 0
+        if self.managed and (self._short_at is None or now - self._short_at >= DISK_CHECK_S):
+            self.disk_short_now()
+        short = self._short if self.managed else 0
         if short and due:
             target = max(0, self._used - short - int(DISK_MARGIN))
             if self._used > target:
@@ -610,6 +625,7 @@ class Cache(NoCache):
                                 _gb(cap) if cap else "unlimited")
                     self._disk_warned = True
                 self.evict(target=target)
+                self.disk_short_now()       # (the status text's note goes with the cut, not a minute later)
                 due = False
         if cap and self._used > cap and due:
             self.evict()
@@ -618,6 +634,8 @@ class Cache(NoCache):
 
     def _run(self):
         try:
+            if self.managed:
+                self.disk_short_now()   # (a full drive in the status text from the start: the walk can take minutes)
             self.scan()
         except Exception:
             log.exception("cache: start-up walk failed; no eviction this session")
