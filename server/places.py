@@ -972,6 +972,8 @@ def warning_rows(items, x0, y0):
     the other's footprint) has none."""
     import buildings
     from polygon import Path
+    if not ENABLED:
+        return []
     tall = []
     for spec, gmin, gmax in items or ():
         top = float(getattr(spec, "min_h", 0.0) or 0.0) + float(getattr(spec, "height", 0.0) or 0.0)
@@ -1008,6 +1010,8 @@ FAN_HANG_M = 0.35               # m between the vault and the housing's top
 def tunnel_fan_rows(chunks):
     """Forest rows of the jet fans in a road tile's tunnel tubes (roads' tunnel chunks: "tunnel", not "no_tube", their
     "tunnel_len" FAN_MIN_TUNNEL_M or more, a full tube's height; points "n" in the frame, at the floor)."""
+    if not ENABLED:
+        return []
     import roadmesh
     rows = []
     for ch in chunks or ():
