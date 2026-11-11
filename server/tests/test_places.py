@@ -221,6 +221,37 @@ class PlacesTest(unittest.TestCase):
         out = places.drop_inferred(guessed, {"hydrant": [(1e4, 0.0)] * places.INFERRED_TILE_MIN})
         self.assertNotIn("hydrant", [r[0] for r in out])
 
+    def test_obstruction_lights_on_the_topmost_tall_part(self):
+        def spec(ring, h, min_h=0.0):
+            return type("Spec", (), {"ring": np.asarray(ring, np.float64), "height": h, "min_h": min_h,
+                                     "portal": False})()
+        podium = spec(rect(0, 0, 60, 60), 160.0)                    # tall, but under the tower
+        tower = spec(rect(10, 10, 50, 50), 120.0, 160.0)            # its top at 280 m
+        low = spec(rect(100, 0, 140, 40), 90.0)
+        spire = spec(rect(200, 0, 205, 5), 200.0)
+        got = places.warning_rows([(podium, 2.0, 3.0), (tower, 2.0, 3.0), (low, 2.0, 3.0), (spire, 2.0, 3.0)],
+                                  1000.0, 2000.0)
+        tops = sorted({r[3] for r in got})
+        self.assertEqual(len([r for r in got if r[3] == tops[-1]]), 4)        # the tower's four corners
+        self.assertAlmostEqual(tops[-1], 3.0 + 280.0 + places.WARN_LIFT, places=2)
+        self.assertEqual(len(got), 5)                                         # + the spire's one
+        self.assertTrue(all(r[1] >= 1000.0 and r[2] >= 2000.0 for r in got))
+
+    def test_jet_fans_in_long_tubes(self):
+        ch = {"tunnel": True, "tunnel_len": 2700.0, "w": 8.0, "n": [[-10.0, 5.0, 100.0], [370.0, 5.0, 100.0]]}
+        got = places.tunnel_fan_rows([ch])
+        fans = [r for r in got if r[0] == places.G_FAN]
+        self.assertEqual(len(fans), 2 * 4)                    # x = 0, 120, 240, 360: a pair each
+        self.assertTrue(all(abs(r[4] - 270.0) < 1e-6 for r in fans))   # the housing's axis (local y) along +x
+        self.assertTrue(all(100.0 + 4.6 < r[3] < 100.0 + 6.8 for r in fans))
+        self.assertEqual(places.tunnel_fan_rows([dict(ch, tunnel_len=200.0)]), [])
+        self.assertEqual(places.tunnel_fan_rows([dict(ch, no_tube=True)]), [])
+        self.assertEqual(places.tunnel_fan_rows([dict(ch, tunnel_h=4.0)]), [])
+        # a tile's piece gives only its own marks
+        a = places.tunnel_fan_rows([dict(ch, n=[[-10.0, 5.0, 100.0], [128.0, 5.0, 100.0]])])
+        b = places.tunnel_fan_rows([dict(ch, n=[[128.0, 5.0, 100.0], [370.0, 5.0, 100.0]])])
+        self.assertEqual(len(a) + len(b), len(got))
+
     def test_kinds(self):
         f = feats("land_use", [("a", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "industrial",
                                 {"industrial": "container_stacking"}),

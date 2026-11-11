@@ -1228,6 +1228,13 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             raise
         except Exception as ex:
             log.warning("street furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+        try:           # (tall buildings' obstruction lights, long tunnels' jet fans)
+            props.extend(places.warning_rows(items, x0, y0))
+            props.extend(places.tunnel_fan_rows(chunks))
+        except fast.NativeMissing:
+            raise
+        except Exception as ex:
+            log.warning("lights and fans: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
             props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
         except fast.NativeMissing:

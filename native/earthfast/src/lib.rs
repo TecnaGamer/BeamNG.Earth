@@ -6149,6 +6149,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(places::berths, m)?)?;
     m.add_function(wrap_pyfunction!(places::street_points, m)?)?;
     m.add_function(wrap_pyfunction!(places::outline_panels, m)?)?;
+
+    m.add_function(wrap_pyfunction!(places::roof_corners, m)?)?;
+    m.add_function(wrap_pyfunction!(places::grid_marks, m)?)?;
     m.add("VERSION", 201)?;
     Ok(())
 }

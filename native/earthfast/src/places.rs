@@ -590,6 +590,84 @@ pub fn outline_panels<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, rin
     numpy::ndarray::Array2::from_shape_vec((k, 3), out).unwrap().into_pyarray(py)
 }
 
+/// Marks along a line where it crosses the frame's grid lines `spacing` apart (x = k * spacing on a piece running more
+/// along x, y = k * spacing on one more along y): a tunnel's jet fans, the same places whichever tile clips the line
+/// (each piece of it gives the marks on that piece). pts (k, 3). Returns (m, 5) [x, y, z, unit tangent x, y].
+#[pyfunction]
+pub fn grid_marks<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, spacing: f64) -> Bound<'py, PyArray2<f64>> {
+    let p = pts.as_array();
+    let mut out = Vec::new();
+    if spacing > 0.0 && p.ncols() >= 3 {
+        for i in 0..p.nrows().saturating_sub(1) {
+            let (a, b) = ((p[[i, 0]], p[[i, 1]], p[[i, 2]]), (p[[i + 1, 0]], p[[i + 1, 1]], p[[i + 1, 2]]));
+            let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+            let l = dx.hypot(dy);
+            if l < 1e-9 {
+                continue;
+            }
+            let (ax, bx_) = if dx.abs() >= dy.abs() { (a.0, b.0) } else { (a.1, b.1) };
+            let (lo, hi) = (ax.min(bx_), ax.max(bx_));
+            if (bx_ - ax).abs() < 1e-12 {
+                continue;
+            }
+            // (half-open per piece: a mark on a vertex belongs to the piece it starts)
+            for k in (lo / spacing).floor() as i64..=(hi / spacing).ceil() as i64 {
+                let t = (k as f64 * spacing - ax) / (bx_ - ax);
+                if (0.0..1.0).contains(&t) {
+                    out.extend_from_slice(&[a.0 + t * dx, a.1 + t * dy, a.2 + t * (b.2 - a.2), dx / l, dy / l]);
+                }
+            }
+        }
+    }
+    let m = out.len() / 5;
+    numpy::ndarray::Array2::from_shape_vec((m, 5), out).unwrap().into_pyarray(py)
+}
+
+/// A tall roof's corners for its obstruction lights: for each corner of the smallest rectangle round the ring (pts
+/// (n, 2)), the ring's vertex nearest to it, moved `inset` m toward the ring's centre; one point (the centre) when the
+/// ring's area is under `min_area`. Distinct points only (a triangle's three). Returns (k, 2).
+#[pyfunction]
+pub fn roof_corners<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, inset: f64, min_area: f64)
+                         -> Bound<'py, PyArray2<f64>> {
+    let p = pts.as_array();
+    let mut ring: Vec<P2> = (0..p.nrows()).map(|i| (p[[i, 0]], p[[i, 1]])).collect();
+    if ring.len() >= 2 && ring[0] == ring[ring.len() - 1] {
+        ring.pop();
+    }
+    let out = corners_core(&ring, inset, min_area);
+    let k = out.len();
+    let flat: Vec<f64> = out.into_iter().flat_map(|(x, y)| [x, y]).collect();
+    numpy::ndarray::Array2::from_shape_vec((k, 2), flat).unwrap().into_pyarray(py)
+}
+
+fn corners_core(ring: &[P2], inset: f64, min_area: f64) -> Vec<P2> {
+    if ring.len() < 3 {
+        return Vec::new();
+    }
+    let n = ring.len() as f64;
+    let c = (ring.iter().map(|q| q.0).sum::<f64>() / n, ring.iter().map(|q| q.1).sum::<f64>() / n);
+    if crate::power::ring_area(ring) < min_area {
+        return vec![c];
+    }
+    let Some((u, v, a, b)) = min_box(ring) else { return vec![c] };
+    let mut out: Vec<P2> = Vec::new();
+    for (ea, eb) in [(a.0, b.0), (a.1, b.0), (a.1, b.1), (a.0, b.1)] {
+        let corner = (ea * u.0 + eb * v.0, ea * u.1 + eb * v.1);
+        let best = ring.iter().copied().min_by(|p, q| {
+            let dp = (p.0 - corner.0).hypot(p.1 - corner.1);
+            let dq = (q.0 - corner.0).hypot(q.1 - corner.1);
+            dp.partial_cmp(&dq).unwrap_or(std::cmp::Ordering::Equal)
+        }).unwrap();
+        let (dx, dy) = (c.0 - best.0, c.1 - best.1);
+        let l = dx.hypot(dy);
+        let pt = if l > inset { (best.0 + dx / l * inset, best.1 + dy / l * inset) } else { c };
+        if !out.iter().any(|q| (q.0 - pt.0).hypot(q.1 - pt.1) < 0.5) {
+            out.push(pt);
+        }
+    }
+    out
+}
+
 /// Mapped street furniture beside the carriageways: each point (pts (n, 2)) moved straight off the nearest
 /// carriageway of seg (m, 5) [ax, ay, bx, by, half width] when it stands on it or within pad of its edge (a bench mapped
 /// on the road's line), and the direction toward that carriageway's line when its edge is within reach (NaN beyond).
@@ -695,6 +773,19 @@ mod tests {
         assert!(got.len() / 5 >= 30);
         let yaw = got[2];
         assert!((yaw - 90.0).abs() < 1e-6 || (yaw - 270.0).abs() < 1e-6, "yaw {yaw}");
+    }
+
+    #[test]
+    fn roof_corner_points() {
+        let sq = square(0.0, 0.0, 40.0);
+        let got = corners_core(&sq, 1.0, 300.0);
+        assert_eq!(got.len(), 4);
+        for (x, y) in got {
+            assert!((x - 0.707).abs() < 0.01 || (x - 39.293).abs() < 0.01, "{x}");
+            assert!((y - 0.707).abs() < 0.01 || (y - 39.293).abs() < 0.01, "{y}");
+        }
+        let small = square(0.0, 0.0, 10.0);
+        assert_eq!(corners_core(&small, 1.0, 300.0), vec![(5.0, 5.0)]);
     }
 
     #[test]

@@ -951,6 +951,88 @@ def drop_inferred(props, mapped):
     return out
 
 
+# --- obstruction lights on tall buildings: West Coast USA's red marker light (a 1.29 m glowing ball round its origin,
+# its material emissive: lit day and night) at the corners of a building's topmost part when its top is WARN_MIN_H or
+# more over its base (Midtown's 100 m towers all lit were ~60 lights a tile, more than the real skyline shows: most
+# carry them from ~150 m), one at the middle of a slim top (a spire)
+G_WARN, WARN_H = "warnlight", 1.29
+WARN_MIN_H = 150.0
+WARN_INSET = 0.8                # m in from the roof's edge
+WARN_MIN_AREA = 250.0           # m²: a smaller top gets one light at its middle
+WARN_LIFT = 0.4                 # m the light's centre stands over the roof
+
+
+def warning_rows(items, x0, y0):
+    """Forest rows of the obstruction lights of a road tile's building items ((spec, gmin, gmax), buildings.
+    road_tile_items: rings relative to the tile's origin x0, y0): a tall part under a taller one (its middle inside
+    the other's footprint) has none."""
+    import buildings
+    from polygon import Path
+    tall = []
+    for spec, gmin, gmax in items or ():
+        top = float(getattr(spec, "min_h", 0.0) or 0.0) + float(getattr(spec, "height", 0.0) or 0.0)
+        if not (top >= WARN_MIN_H):
+            continue
+        ring = np.ascontiguousarray(np.asarray(spec.ring, np.float64)[:, :2])
+        if len(ring) >= 3:
+            tall.append((float(buildings.base_z(spec, gmin, gmax)) + top, ring))
+    rows = []
+    for k, (ztop, ring) in enumerate(tall):
+        c = ring.mean(axis=0)
+        if any(z2 > ztop + 0.5 and r2[:, 0].min() <= c[0] <= r2[:, 0].max() and r2[:, 1].min() <= c[1] <= r2[:, 1].max()
+               and bool(Path(r2).contains_points(c[None])[0]) for j, (z2, r2) in enumerate(tall) if j != k):
+            continue
+        fast.require(NATIVE, "places.roof_corners")
+        for x, y in fast._ef.roof_corners(ring, WARN_INSET, WARN_MIN_AREA).tolist():
+            rows.append([G_WARN, round(x + x0, 2), round(y + y0, 2), round(ztop + WARN_LIFT, 2), 0.0, 1.0, WARN_H,
+                         0.0])
+    return rows
+
+
+# --- jet fans in long road tunnels: West Coast USA's tunnel fan housing (x 0.9, y 2.25 along its axis, z -1.07..0: hung
+# under its origin) and its rotor (centred), FAN_SCALE up (a road tunnel's jet fan is ~1.4 m across, 3-5 m long), in
+# pairs under the vault every FAN_GRID_M (where the tube crosses the frame's grid lines: every tile places the same)
+G_FAN, FAN_H = "jetfan", 1.07
+G_ROTOR, ROTOR_H = "jetfan_rotor", 0.73
+FAN_SCALE = 1.5
+FAN_GRID_M = 120.0
+FAN_MIN_TUNNEL_M = 400.0        # a shorter tube is ventilated by its portals
+FAN_PAIR_OFF = 1.8              # m either side of the tube's middle
+FAN_HANG_M = 0.35               # m between the vault and the housing's top
+
+
+def tunnel_fan_rows(chunks):
+    """Forest rows of the jet fans in a road tile's tunnel tubes (roads' tunnel chunks: "tunnel", not "no_tube", their
+    "tunnel_len" FAN_MIN_TUNNEL_M or more, a full tube's height; points "n" in the frame, at the floor)."""
+    import roadmesh
+    rows = []
+    for ch in chunks or ():
+        if not ch.get("tunnel") or ch.get("no_tube") or float(ch.get("tunnel_len") or 0.0) < FAN_MIN_TUNNEL_M:
+            continue
+        th = float(ch.get("tunnel_h") or roadmesh.TUNNEL_H)
+        if th < roadmesh.TUNNEL_H - 0.05:
+            continue                # (a low arch)
+        pts = np.asarray(ch.get("n") or (), np.float64)
+        if pts.ndim != 2 or len(pts) < 2 or pts.shape[1] < 3:
+            continue
+        hw = float(ch.get("w") or 0.0) / 2.0 + roadmesh.TUNNEL_SHOULDER
+        off = min(FAN_PAIR_OFF, 0.35 * hw)
+        wall = roadmesh.TUNNEL_WALL_H * th / roadmesh.TUNNEL_H
+        vault = wall + math.sqrt(max(0.0, 1.0 - (off / hw) ** 2)) * (th - wall)      # the vault's height over `off`
+        fast.require(NATIVE, "places.grid_marks")
+        marks = fast._ef.grid_marks(np.ascontiguousarray(pts[:, :3]), FAN_GRID_M)
+        for x, y, z, tx, ty in marks.tolist():
+            yaw = (math.degrees(math.atan2(ty, tx)) - 90.0) % 360.0      # (the housing's axis is its local y)
+            ztop = z + vault - FAN_HANG_M
+            for side in (-1.0, 1.0):
+                px, py = x - ty * side * off, y + tx * side * off
+                rows.append([G_FAN, round(px, 2), round(py, 2), round(ztop, 2), round(yaw, 1), 1.0,
+                             round(FAN_H * FAN_SCALE, 3), 0.0])
+                rows.append([G_ROTOR, round(px, 2), round(py, 2), round(ztop - FAN_H * FAN_SCALE / 2.0, 2),
+                             round(yaw, 1), 1.0, round(ROTOR_H * FAN_SCALE, 3), 0.0])
+    return rows
+
+
 def _country(frame, box, country):
     """The tile's country: the caller's, else the bundled borders' at the tile's centre (countrybounds)."""
     if country:

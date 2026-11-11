@@ -464,6 +464,18 @@ M.CATALOG.postbox_eu = { { IT .. 'buildings/italy_clutter_mailboxstand', 1.60 } 
 M.CATALOG.postbox_us = { { WCA .. 'objects/postbox_blue', 1.56 } }
 M.CATALOG.bikestand = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
 M.CATALOG.recyclebin = { { JV .. 'misc/s_recyclebin_brown', 1.48 } }
+-- obstruction lights on tall roofs (server places.warning_rows: West Coast USA's red marker light, emissive) and the
+-- jet fans under a long tunnel's vault (places.tunnel_fan_rows: its fan housing and rotor)
+M.CATALOG.warnlight = { { WCA .. 'objects/marker_light_red', 1.29 } }
+M.CATALOG.jetfan = { { WCA .. 'objects/tunnel_ventilation_housing', 1.07 } }
+M.CATALOG.jetfan_rotor = { { WCA .. 'objects/tunnel_ventilation_fan', 0.73 } }
+M.GROUP_MAX_M.warnlight = 5000
+M.GROUP_MAX_M.jetfan = 500
+M.GROUP_MAX_M.jetfan_rotor = 500
+for _, g in ipairs({ 'warnlight', 'jetfan', 'jetfan_rotor' }) do
+  M.ONE_SPELLING[g] = true
+  M.NO_COLLIDE[g] = true
+end
 for _, g in ipairs({ 'hydrant_eu', 'postbox_eu', 'postbox_us', 'bikestand', 'recyclebin' }) do
   M.GROUP_MAX_M[g] = 250
   M.ONE_SPELLING[g] = true
