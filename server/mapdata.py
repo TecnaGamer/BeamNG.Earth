@@ -1221,6 +1221,15 @@ class MapData:
             self._warm_ex.submit(run, k, key, layer)
         return len(todo)
 
+    def tiles_prefetch(self, needs, kind="prefetch"):
+        """The map tiles of the (cell, layer)s in needs not on disk yet fetched in batches (pmtiles.Reader.prefetch:
+        neighbouring tiles in one range read) before they are built cell by cell. No-op without the tiles source.
+        Returns the tiles asked for."""
+        if getattr(self, "pmtiles", None) is None:
+            return 0
+        todo = [(_key(k), ly) for k, ly in needs if MapData._pmt(self, ly) and not self.has(_key(k), ly)]
+        return self.pmtiles.prefetch(todo, kind) if todo else 0
+
     def side_prefetch(self, keys):
         """The side_sources' background reads of these cells (a road tile's own) started now, without waiting; France's
         measured buildings with them (bdtopo: a tile's own cells only, not the two rings of outlines warm() asks for

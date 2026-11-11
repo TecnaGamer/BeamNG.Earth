@@ -1,6 +1,7 @@
 //! Geometry kernels for the world server (server/fast.py wraps them, with the Python versions as the fallback).
 //! All coordinates are metres in the anchor's local frame, f64.
 mod devctx;
+mod reach;
 mod devraster;
 mod roofs;
 mod roofphoto;
@@ -6203,6 +6204,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(packz::zstd_unpack, m)?)?;
     // 213: packz::zstd_pack / zstd_unpack (the revisit cache's pack records, server/revisitpack.py; that branch's 171)
     // 214: junctions::junctions_find (junctions.find: corners, cuts, crosswalks, ramps in one call)
-    m.add("VERSION", 214)?;
+    m.add_class::<reach::RoadReach>()?;
+    m.add_function(wrap_pyfunction!(reach::reach_tile_keys, m)?)?;
+    // 215: reach (RoadReach: the drivable roads near a fast car as a graph and its time-to-reach tree;
+    // reach_tile_keys: the geotiles along a tree in its order; server/reach.py; that branch's 211)
+    m.add("VERSION", 215)?;
     Ok(())
 }
