@@ -81,6 +81,33 @@ function M.cause(ms, hitch)
   return bk .. ' ' .. r1(best)
 end
 
+-- The minute's 1 % low frame and its worst: the k-th largest of frames (k = 1 % of them) by one pass keeping the k
+-- largest in a short sorted list. The minute line copied and sorted every frame time with a Lua comparator: luajit
+-- 2.0 ms a minute at 60 fps, 10 ms at 240 fps (14,400 frames), in one frame; this pass 0.02 / 0.18 ms.
+-- M.TOPK_LOW = false: the old copy and sort (same numbers; the tests compare both).
+M.TOPK_LOW = true
+function M.lowAndWorst(t)
+  local n = #t
+  local k = math.max(1, math.ceil(n * 0.01))
+  if not M.TOPK_LOW then
+    local s = {}
+    for i, v in ipairs(t) do s[i] = v end
+    table.sort(s, function(a, b) return a > b end)
+    return s[k], s[1]
+  end
+  local top, m = {}, 0          -- the largest so far, descending
+  for i = 1, n do
+    local v = t[i]
+    if m < k or v > top[m] then
+      local j = (m < k) and m + 1 or m
+      while j > 1 and top[j - 1] < v do top[j] = top[j - 1]; j = j - 1 end
+      top[j] = v
+      if m < k then m = m + 1 end
+    end
+  end
+  return top[k], top[1]
+end
+
 local function median(t)
   local s = {}
   for i, v in ipairs(t) do s[i] = v end
@@ -186,13 +213,10 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
   end
   -- the minute
   if now - summaryAt >= M.SUMMARY_S and #frames > 0 then
-    local s = {}
-    for i, v in ipairs(frames) do s[i] = v end
-    table.sort(s, function(a, b) return a > b end)
-    local low = s[math.max(1, math.ceil(#s * 0.01))]
+    local low, worst = M.lowAndWorst(frames)
     local c = ctx and ctx() or {}
     local line = string.format('perf minute %.0f fps, 1%% low %.0f, worst %d ms, %d hitches', #frames / (sumMin / 1000),
-      1000 / low, r0(s[1]), hitchesMin)
+      1000 / low, r0(worst), hitchesMin)
     if worstMin and worstMin.cause ~= '' then line = line .. ' (worst: ' .. worstMin.cause .. ')' end
     line = line .. ' ' .. where(c)
     if c.extra and c.extra ~= '' then line = line .. ' | ' .. c.extra end

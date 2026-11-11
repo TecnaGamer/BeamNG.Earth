@@ -215,6 +215,7 @@ local function resetState()
     player = nil,            -- { x, y, z, vx, vy, lat, lon, dist, speed } of this frame
     cam = nil,               -- { x, y, z, fx, fy, fz, fovDeg } of this frame (core_camera), or nil
     loadingUntil = 0,        -- governor loading mode until this clock (after a teleport)
+    teleportAt = nil,        -- clock of the last teleport while its loading cover may still run on (M._loadCover)
     slowFor = 0,             -- s the player has been below SLOW_SPEED
     serverBacklog = nil,     -- status.backlog of the server's last status (v1.4 M0), nil before / from v1.3.1
     anchorLatency = nil,     -- s from prepare_anchor to anchor_ready of the last rebase request (M4 stale rule)
@@ -559,6 +560,7 @@ local function commitTeleport(msg)
   end
   farfield.switchAnchor(msg.anchorId, keepOld, { cx = tr.cx, cy = tr.cy }, st.sessionId, newA)
   st.loadingUntil = st.clock + LOADING_AFTER_TELEPORT_S
+  st.teleportAt = st.clock         -- (the loading cover past loadingUntil: M._loadCover)
   st.placeFrames = PLACE_DELAY_FRAMES
   st.placeZ = (msg.groundZ or 0) + 1.0
   st.placeX, st.placeY = tonumber(msg.px) or 0, tonumber(msg.py) or 0
@@ -1037,8 +1039,29 @@ function M.applyBaseLater()
   st.baseRefreshes = (st.baseRefreshes or 0) + 1
   return true
 end
+-- The loading cover after a teleport: the governor's loading mode (its 8 ms budget), every server message handled and
+-- decoded in the frame it came, and the trees' new shapes all at once (trees.lua fill). LOADING_AFTER_TELEPORT_S (3 s)
+-- always; then on while the load is on (loadprogress.active: until ground, roads, trees and far land are in and quiet)
+-- and the player stays put (under STILL_MPH), at most MAX_S after the teleport. The car driving off, the load done or
+-- MAX_S ends it for good (a stop later is no teleport). Telemetry (2026-11-11): ~3.7 freezes of 1 s+ a teleport, only
+-- 7 % inside the 3 s; the user: "im not to concered with performance during teliports if they dont last a long time".
+-- ON = false: the 3 s alone (the old rule). (st.loadingUntil keeps its meaning for the status / telemetry lines.)
+M._cover = { ON = true, MAX_S = 25, STILL_MPH = 5 }
+function M._loadCover()
+  if st.placeFrames ~= nil or st.clock < st.loadingUntil then return true end
+  local c, at = M._cover, st.teleportAt
+  if not at then return false end
+  local p = st.player
+  if not c.ON or st.clock - at > c.MAX_S or not loadprogress.active()
+      or (p and math.sqrt((p.vx or 0) ^ 2 + (p.vy or 0) ^ 2) * 2.23694 >= c.STILL_MPH) then  -- (level: not its drop)
+    st.teleportAt = nil
+    return false
+  end
+  return true
+end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
-function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
+function M.netBacklog() return #M._netq.q - M._netq.head + 1 + (net.decodeBacklog and net.decodeBacklog() or 0) end  -- (+ those not decoded yet)
+if net.setUrgent then net.setUrgent(M._netq.urgent) end  -- (net.lua decodes these at once while other payloads wait to be decoded)
 
 local function onMessage(msg)
   local t = msg.type
@@ -2055,11 +2078,11 @@ local function loadLine()
     and st.placeFrames == nil and not dropHold.active
   local lp = st.loadProgress
   local pend = {}
-  local okR, rs = pcall(roads.status)
-  if okR and rs then pend.roads = (rs.queued or 0) + (rs.walksQueued or 0) end
+  local okR, rq = pcall(roads.queued)       -- (the light counts, not the status tables' walks over every tile)
+  if okR and rq then pend.roads = rq end
   local okT, ts = pcall(trees.status)
   if okT and ts then pend.trees = ts.pending or 0 end
-  local okF, fs = pcall(farfield.stats)
+  local okF, fs = pcall(farfield.brief)
   if okF and fs then pend.far = fs.queued or 0 end
   loadLineText = loadprogress.line(st.clock, { placed = placed,
     failure = st.loadingFault and M._anchorload.failure(st.loadingFault),
@@ -2331,14 +2354,15 @@ local function perfContext()
   if st.terrainPending and st.terrainPending.sentAt then
     d[#d + 1] = string.format('next block asked %.1fs ago', st.clock - st.terrainPending.sentAt)
   end
-  local okF, fs = pcall(farfield.stats)
+  -- (the light counts: this runs in the frame after a hitch; farfield.stats / roads.status walk every tile)
+  local okF, fs = pcall(farfield.brief)
   if okF and fs then
     if (fs.queued or 0) > 0 then d[#d + 1] = 'far tiles ' .. fs.queued .. ' queued' end
     if not fs.done then d[#d + 1] = 'far field loading' end
   end
-  local okR, rs = pcall(roads.status)
-  if okR and rs and ((rs.queued or 0) + (rs.walksQueued or 0)) > 0 then
-    d[#d + 1] = 'road tiles ' .. ((rs.queued or 0) + (rs.walksQueued or 0)) .. ' queued'
+  local okR, rq = pcall(roads.queued)
+  if okR and rq and rq > 0 then
+    d[#d + 1] = 'road tiles ' .. rq .. ' queued'
   end
   local okT, ts = pcall(trees.status)
   if okT and ts and (ts.pending or 0) > 0 then d[#d + 1] = 'tree tiles ' .. ts.pending .. ' pending' end
@@ -2628,7 +2652,9 @@ local function onUpdate(dtReal, dtSim)
     if not st.anchor then defaultStart() end
   end
   -- the governor's frame opens first: its clock is the wall time since the last onUpdate (hptimer)
-  gov:setLoading(st.placeFrames ~= nil or st.clock < st.loadingUntil or st.slowFor > SLOW_S)
+  local cover = M._loadCover()
+  gov:setFarCap(governor.FAR_CAP_MS)    -- (PR #1128's far cap; FAR_CAP_MS 0: off, the old behaviour as a whole)
+  gov:setLoading(cover or st.slowFor > SLOW_S)
   gov:beginFrame(farfield.hasWork() or roads.hasWork() or M._trafficvisuals.hasWork())
   gov:chargeEngine(engineTickMs())     -- what the engine spent on last frame's new tiles (governor.lua)
   -- The server's messages, in order, up to a budget a frame (NET_BUDGET_MS; NET_BUSY_MS while NET_BUSY_N or more wait;
@@ -2654,7 +2680,7 @@ local function onUpdate(dtReal, dtSim)
     M._alloc.roll(st.clock)
     M._alloc.frame()
     local kbD = collectgarbage('count')
-    local msgs = net.update(dtReal)
+    local msgs = net.update(dtReal, cover)    -- (decoding spread over frames, net.lua; all at once in the cover)
     local dD = collectgarbage('count') - kbD
     local al = M._alloc
     if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
@@ -2662,9 +2688,8 @@ local function onUpdate(dtReal, dtSim)
     for _, msg in ipairs(msgs) do
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
-    local loadingNow = st.placeFrames ~= nil or st.clock < st.loadingUntil
     local waiting = #nq.q - nq.head + 1
-    local budget = loadingNow and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local budget = cover and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
     -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
     local minN, done = math.ceil(waiting / nq.drainDiv), 0
     local n0 = hitchClock()
@@ -2735,11 +2760,13 @@ local function onUpdate(dtReal, dtSim)
     t = mark('far', t)
     sea.update(st.anchorId, st.player)
     -- the trees' own Lua time a frame (trees.lua FRAME_MS), more while the world loads, none in a heavy frame or the
-    -- quiet frames round it (governor.lua: a heavy frame stays a lone spike)
+    -- quiet frames round it (governor.lua: a heavy frame stays a lone spike). fill (every new shape at once): only the
+    -- real fills - a teleport's cover, the level's start - not a stop, where the player sees each first load's frame
+    -- (trees.lua NEW_SHAPES_PER_FRAME; PR #1128); with the far cap off, a stop fills as before
     do
       local m0, r0 = trees.made, trees.removed
       trees.update(st.anchorId, st.player, M.viewAway(), (gov.blocked or gov:isHeavyFrame()) and 0
-        or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS))
+        or (gov.loading and trees.LOADING_FRAME_MS or trees.FRAME_MS), cover or (not gov.farCap and gov.loading))
       if trees.made ~= m0 or trees.removed ~= r0 then           -- (a slow frame's context: perfsummary.lua)
         M._psum.mod.note('trees')
         if trees.passNew and trees.passNew() > 0 then M._psum.mod.note('treeShapes') end

@@ -66,11 +66,13 @@ T.check(f.drivability == '-1' and f.overObjects == 'false', 'not in the navgraph
 -- a tile: queued, then made one chunk per governor unit
 T.check(roads.onTile({ anchorId = 1, key = '0_0', path = '/t/a.json', n = 2 }, 1) == true, 'tile accepted')
 T.check(roads.status().queued == 2 and decalRoads() == 0, 'queued, nothing made yet')
+T.check(roads.queued() == roads.status().queued + roads.status().walksQueued, 'roads.queued(): the status queues without its walk')
 T.check(turbineRows[1][1] == '1:0_0' and turbineRows[1][2][1].id == 'osm:node:1175681635'
   and turbineRows[1][2][1].z == 1800, 'legacy road tile passes turbine identity and world base')
 gov.allow, gov.tries = 1, 0
 roads.update(gov, 1)
 T.check(decalRoads() == 1 and roads.status().queued == 1, 'one chunk per allowed unit')
+T.check(roads.queued() == roads.status().queued + roads.status().walksQueued, 'roads.queued() follows the queue')
 gov.allow, gov.tries = nil, 0
 roads.update(gov, 1)
 T.check(decalRoads() == 2 and roads.status().roads == 2 and not roads.hasWork(), 'all made')
