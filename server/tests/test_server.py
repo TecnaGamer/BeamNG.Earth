@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import revisitpack  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import heightmap  # noqa: E402
@@ -139,6 +140,7 @@ class ServerHarness(unittest.TestCase):
             self.server.horizon_pool.shutdown(wait=True)
         if self.server.imagery is not None:
             self.server.imagery.close()
+        revisitpack.reset()
         self.tmp.cleanup()
 
     def conn(self):
