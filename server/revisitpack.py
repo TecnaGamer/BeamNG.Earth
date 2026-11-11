@@ -240,9 +240,9 @@ class Store:
         """New ENT bytes of pack p into its buffer and the index (under the lock)."""
         n0 = len(p.ents) // ENT.size
         p.ents += data
-        base = p.no << 32
-        for i, (k, *_r) in enumerate(ENT.iter_unpack(data)):
-            self.index[k] = base | (n0 + i)
+        base = (p.no << 32) + n0
+        self.index.update(zip([bytes(data[i:i + 20]) for i in range(0, len(data), ENT.size)],
+                              range(base, base + len(data) // ENT.size)))
 
     def refresh(self, force=False):
         """The packs' new entries (other processes' items), the ones gone dropped. Never raises."""
@@ -286,9 +286,9 @@ class Store:
         """The index again from the packs still there (a pack went: an item it held may be in another)."""
         self.index = {}
         for p in sorted(self.packs.values(), key=lambda q: q.mtime):
-            base = p.no << 32
-            for i, (k, *_r) in enumerate(ENT.iter_unpack(p.ents)):
-                self.index[k] = base | i
+            base, e = p.no << 32, p.ents
+            self.index.update(zip([bytes(e[i:i + 20]) for i in range(0, len(e), ENT.size)],
+                                  range(base, base + len(e) // ENT.size)))
 
     def _mark_old(self):
         """Mark the packs the next prune would remove (oldest first, down to PROMOTE_FROM of the cap): an item read
@@ -501,7 +501,12 @@ def _after_fork():
     _stores_lock = threading.Lock()
     for s in list(_stores.values()):
         s.lock = threading.RLock()
-        s.w = None
+        w, s.w = s.w, None
+        for fd in ((w.fd, w.ixfd) if w is not None else ()):
+            try:
+                os.close(fd)        # (the child's copies: the parent's pack is the parent's alone)
+            except OSError:
+                pass
         for p in s.packs.values():
             p.lock = threading.Lock()
             p.close()
