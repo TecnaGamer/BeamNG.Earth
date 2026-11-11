@@ -3,7 +3,7 @@
 //! Málaga: on lidar each carriageway's embankment was its own short arch, the first 8 m long under a 13 m carriageway,
 //! and its mouths and terrain holes stood in the motorway's lanes: cars fell through).
 
-use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
+use numpy::{IntoPyArray, PyArray1, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
 
 /// Arc positions along polyline a (with arc lengths sa) where it crosses polyline b, and the sine of the angle there.
@@ -126,35 +126,15 @@ pub fn tunnel_cover_roads<'py>(
     Ok(k.into_pyarray(py))
 }
 
-/// roads.level_ranges: a road's tunnel ranges (lo, hi m along its line xy, arc lengths s) grown at their portals over
-/// the ground roads crossing the road there (lines pts[starts[k]..starts[k + 1]], half widths halves[k]; a crossing
-/// within prm[4] m of the other line's end is a junction, left out): a crossing whose carriageway and prm[0] m past it
-/// (along the road: / max(sin, prm[1])) reaches over a portal, within prm[2] m outside it, moves that portal past it,
-/// prm[3] m at most, never past the line's ends. OSM often ends an underpass's tunnel inside the carriageway over it: the
-/// portal's approach cut ran through the A-7's lanes near Málaga, a 2.7 m dip (GitHub #450). Pure.
-#[pyfunction]
-pub fn tunnel_reach<'py>(
-    py: Python<'py>,
-    xy: PyReadonlyArray2<'py, f64>,
-    s: PyReadonlyArray1<'py, f64>,
-    ranges: PyReadonlyArray2<'py, f64>,
-    pts: PyReadonlyArray2<'py, f64>,
-    starts: PyReadonlyArray1<'py, i64>,
-    halves: PyReadonlyArray1<'py, f64>,
-    prm: PyReadonlyArray1<'py, f64>,
-) -> PyResult<Bound<'py, PyArray2<f64>>> {
-    let xa = xy.as_array();
-    let a: Vec<[f64; 2]> = (0..xa.nrows()).map(|i| [xa[[i, 0]], xa[[i, 1]]]).collect();
-    let s: Vec<f64> = s.as_array().to_vec();
-    let ra = ranges.as_array();
-    let pa = pts.as_array();
-    let p: Vec<[f64; 2]> = (0..pa.nrows()).map(|i| [pa[[i, 0]], pa[[i, 1]]]).collect();
-    let st: Vec<usize> = starts.as_array().iter().map(|&v| v.max(0) as usize).collect();
-    let hw: Vec<f64> = halves.as_array().to_vec();
-    let prm = prm.as_array();
-    if a.len() != s.len() || st.len() != hw.len() + 1 || prm.len() < 7 || ra.ncols() != 2 {
-        return Err(pyo3::exceptions::PyValueError::new_err("tunnel_reach: array sizes differ"));
-    }
+/// roads.level_ranges: a road's tunnel ranges (lo, hi m along its line a, arc lengths s) grown at their portals over
+/// the ground roads crossing the road there (lines p[st[k]..st[k + 1]], half widths hw[k]; a crossing within prm[4] m
+/// of the other line's end is a junction, left out): a crossing whose carriageway and prm[0] m past it (along the
+/// road: / max(sin, prm[1])) reaches over a portal, within prm[2] m outside it, moves that portal past it, prm[3] m at
+/// most, never past the line's ends. OSM often ends an underpass's tunnel inside the carriageway over it: the
+/// portal's approach cut ran through the A-7's lanes near Malaga, a 2.7 m dip (GitHub #450). Pure (levelrules.rs).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tunnel_reach_core(a: &[[f64; 2]], s: &[f64], ranges: &[[f64; 2]], p: &[[f64; 2]], st: &[usize],
+                                hw: &[f64], prm: &[f64]) -> Vec<[f64; 2]> {
     let (clear, min_sin, reach, grow, end_m) = (prm[0], prm[1], prm[2], prm[3], prm[4]);
     let (shrink, min_len) = (prm[5], prm[6]);
     let total = s.last().copied().unwrap_or(0.0);
@@ -175,9 +155,9 @@ pub fn tunnel_reach<'py>(
             crossings.push((sc, (hw[r] + clear) / sin.max(min_sin)));
         }
     }
-    let mut out = numpy::ndarray::Array2::<f64>::zeros((ra.nrows(), 2));
-    for r in 0..ra.nrows() {
-        let (lo0, hi0) = (ra[[r, 0]], ra[[r, 1]]);
+    let mut out = vec![[0.0f64; 2]; ranges.len()];
+    for r in 0..ranges.len() {
+        let (lo0, hi0) = (ranges[r][0], ranges[r][1]);
         let (mut lo, mut hi) = (lo0, hi0);
         for &(sc, ext) in &crossings {
             if sc >= lo0 - reach && sc - ext < lo0 {
@@ -193,21 +173,20 @@ pub fn tunnel_reach<'py>(
         // at Goeschenen stood as an arch and a mound in the A2's lanes): moved into the tunnel until clear, at most
         // shrink m; less than min_len of tunnel left: none (lo = hi)
         let (lo_start, hi_start) = (lo, hi);
-        while lo < hi - min_len && lo - lo_start < shrink && alongside(&a, &s, lo, &p, &st, &hw, clear, min_sin) {
+        while lo < hi - min_len && lo - lo_start < shrink && alongside(a, s, lo, p, st, hw, clear, min_sin) {
             lo += 1.0;
         }
-        while hi > lo + min_len && hi_start - hi < shrink && alongside(&a, &s, hi, &p, &st, &hw, clear, min_sin) {
+        while hi > lo + min_len && hi_start - hi < shrink && alongside(a, s, hi, p, st, hw, clear, min_sin) {
             hi -= 1.0;
         }
         if hi - lo <= min_len
-            && (alongside(&a, &s, lo, &p, &st, &hw, clear, min_sin) || alongside(&a, &s, hi, &p, &st, &hw, clear, min_sin))
+            && (alongside(a, s, lo, p, st, hw, clear, min_sin) || alongside(a, s, hi, p, st, hw, clear, min_sin))
         {
             hi = lo;
         }
-        out[[r, 0]] = lo;
-        out[[r, 1]] = hi;
+        out[r] = [lo, hi];
     }
-    Ok(out.into_pyarray(py))
+    out
 }
 
 /// Does the point at arc t of polyline a lie inside the carriageway (half width + clear) of one of the lines p (starts

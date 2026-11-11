@@ -283,5 +283,18 @@ do
   gc.today, gc.CHECK_S = realToday, realCheck
   _G.jsonDecode, _G.readFile, _G.flushGroundCoverGrids = realDecode, realRead, realFlush
 end
+-- the texture set's base slot is put back to the photos' size when the engine's own reload of the level's materials
+-- took it back (checkBaseSize at every block load; the game's log 2026-11-07: 24 repacks of one photo a swap)
+do
+  local o = scenetree.findObject(terrain.TEXTURE_SET)
+  T.check(o ~= nil, 'the texture set stub exists')
+  terrain.BASE_TEX_SIZE = 4096
+  o:setField('baseTexSize', 0, '2048 2048')
+  T.check(terrain.checkBaseSize() == true and tostring(o:getField('baseTexSize', 0)) == '4096 4096',
+    'checkBaseSize: a texture set at another size is set again')
+  T.check(terrain.checkBaseSize() == false, 'checkBaseSize: nothing to do when it already matches')
+  terrain.BASE_TEX_SIZE = 2048
+  o:setField('baseTexSize', 0, '2048 2048')
+end
 
 T.done('test_surface_layers')

@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
@@ -105,6 +106,23 @@ class PackagedMileMarkersTest(unittest.TestCase):
                     for key, value in stage.items():
                         if isinstance(value, str) and value.endswith('.png'):
                             self.assertIn(value.lstrip('/'), client, (name, key))
+
+
+class PackagedRadarSignsTest(unittest.TestCase):
+    def test_sr3_faces_use_packaged_cookable_textures(self):
+        mod = ROOT / 'mod/beamng_earth'
+        client = set(package.tree_files('mod/beamng_earth'))
+        scenery = 'levels/beamng_earth/art/shapes/beamngEarth/fr_radars'
+        materials = json.loads((mod / scenery / 'main.materials.json').read_text())
+        for sign in ('sr3a', 'sr3b'):
+            with self.subTest(sign=sign):
+                texture = materials[f'bne_fr_radar_{sign}']['Stages'][0]['baseColorMap'].lstrip('/')
+                self.assertTrue(texture.endswith('.color.png'))
+                self.assertIn(texture, client)
+                with Image.open(mod / texture) as image:
+                    self.assertEqual(image.mode, 'RGB')
+                    for side in image.size:
+                        self.assertEqual(side & (side - 1), 0)
 
 
 if __name__ == "__main__":

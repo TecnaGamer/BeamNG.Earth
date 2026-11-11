@@ -18,7 +18,9 @@ their position), connectors (transportation/connector), buildings (buildings/bui
 min_height, floors, roof and facade fields, class), water and land_use (base: subtype, class,
 tags), infrastructure (base: power lines and plants, towers, barriers, bridges...), places (points of interest),
 divisions and division_areas (the status bar's towns, states and countries, placenames.py: a spec with "geometry":
-False reads no geometry column, its features are points at their bbox centres; "where" filters the rows). Rows are
+False reads no geometry column, its features are points at their bbox centres; "where" filters the rows),
+town_areas and town_points (the same theme's areas with their outlines and its villages: the town signs,
+townsigns.py; a layer's `simplify` thins the counties' outlines). Rows are
 deduplicated by id (highest version) and sorted by id, so a cell's content does not depend on
 which file or row group a feature came from, or in which order they were read. Water and land-use
 polygons are clipped to the cell (an ocean or a national park would otherwise repeat its whole
@@ -70,6 +72,54 @@ FETCH_THREADS = 8               # parallel range requests per Reader (Overture's
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
+_PLAN = threading.local()           # (_plan's last: the top-level columns its matched row groups hold, for tolerant)
+_DROPPED_WARNED = set()
+
+
+def _top_items(s):
+    """s's comma-separated items at parenthesis depth 0."""
+    out, depth, cur = [], 0, []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur))
+    return out
+
+
+def tolerant(spec, present, layer=""):
+    """spec with each plain column its files do not have (present: the row groups' top-level columns) read as NULL AS
+    it (research 2026-11-10: Overture's schema issue #698 proposes moving level, min_floor and roof_direction out of the
+    core schema; a column named that a release dropped failed every fresh cell's read). Expressions are left as they
+    are. spec itself when nothing is missing or present is unknown."""
+    if not present:
+        return spec
+    out, missing = dict(spec), []
+    for key in ("cols", "extra"):
+        if not spec.get(key):
+            continue
+        items = []
+        for it in _top_items(spec[key]):
+            name = it.strip()
+            if re.fullmatch(r"[A-Za-z_]\w*", name) and name not in present and name not in BASE_COLUMNS:
+                items.append(f" NULL AS {name}")
+                missing.append(name)
+            else:
+                items.append(it)
+        out[key] = ",".join(items)
+    if not missing:
+        return spec
+    for name in missing:
+        if (layer, name) not in _DROPPED_WARNED:
+            _DROPPED_WARNED.add((layer, name))
+            log.warning("mapdata %s: the release has no column %s: read as empty", layer, name)
+    return out
 
 # Overture's attribution (https://docs.overturemaps.org/attribution/, read 2026-10-11): the line its
 # own viewer shows, and each theme's licence with the sources that ask for credit, whole (the CC BY
@@ -100,6 +150,10 @@ THEME_LICENCES = {
               "Copyright 2024 Foursquare Labs, Inc. All rights reserved. Available under Apache 2.0. Foursquare data "
               "was transformed to the Overture schema. Changed: 2026-03-18. NOTICE.txt. Data from AllThePlaces. "
               "Available under CC0 1.0.",
+    # (read 2026-10-28)
+    "divisions": "ODbL. © OpenStreetMap contributors. Available under the Open Database License. geoBoundaries. "
+                 "Available under CC BY 4.0. Esri Community Maps contributors. Available under CC BY 4.0. Land "
+                 "Information New Zealand (LINZ). Available under CC BY 4.0.",
 }
 
 _SRC = "sources[1].dataset AS src_dataset, sources[1].record_id AS src_record"
@@ -112,6 +166,28 @@ _SRC_OWN = f"{_OWN}.dataset AS src_dataset, {_OWN}.record_id AS src_record"
 _NAME = "names.\"primary\" AS name"
 _TAGS = "CAST(to_json(source_tags) AS VARCHAR) AS tags"
 DIVISION_LANGS = ("en", "de", "fr", "it")
+# the regional languages of France whose names a town sign may add under the French one (townsigns.REGIONAL: Catalan,
+# Occitan, Basque, Breton, Corsican, Alsatian, West Flemish), each a column name_<code> (names.common's, by its
+# language code)
+# (lb: Luxembourg's second line; dsb, hsb, frr: Lower and Upper Sorbian, North Frisian, Germany's; fur, sc: Friulian
+# and Sardinian, Italy's; fy: West Frisian, Friesland's; cy, gd: Welsh and Scottish Gaelic, Great Britain's; ga: Irish)
+REGIONAL_LANGS = ("ca", "oc", "eu", "br", "co", "gsw", "vls", "lb", "dsb", "hsb", "frr", "fur", "sc", "fy", "cy", "gd",
+                  "ga")
+# ... and the Latin forms of a Cyrillic or Greek name the signs write under it (townsigns.latin_name): Serbian's own
+# (sr-Latn: Beograd, not the English Belgrade), and the name's first alternate of no language (Sofia, Skopje, Štip,
+# Thessaloniki), as columns name_srlatn and name_alt
+_REGIONAL = ", ".join([f"map_extract(names.common, '{k}')[1] AS name_{k}" for k in REGIONAL_LANGS]
+                      + ["map_extract(names.common, 'sr-Latn')[1] AS name_srlatn",
+                         "list_filter(names.rules, r -> r.variant = 'alternate' AND r.language IS NULL)[1].value "
+                         "AS name_alt", "map_extract(names.common, 'en')[1] AS name_en"])
+# (name_en: a small place's English name is its transliteration, Kalabaka: when it has no alternate, Kalambaka
+# 2026-10-30)
+LATIN_COLS = ("name_srlatn", "name_alt", "name_en")
+# the countries whose communes are Overture counties or localadmins (Luxembourg, Portugal, Denmark, Estonia,
+# Lithuania, Romania, Bulgaria, Greece, Norway, Iceland, Albania, Kosovo, Belarus' cities; Switzerland's, Czechia's
+# and Slovakia's municipalities): their outlines are not simplified (a `simplify` layer's `whole`), they are where the
+# signs stand
+COUNTY_COMMUNES = ("LU", "PT", "CH", "CZ", "SK", "DK", "EE", "LT", "RO", "BG", "GR", "NO", "IS", "AL", "XK", "BY")
 LAYERS = {
     "roads": dict(theme="transportation", type="segment", clip=False,
                   cols=f"subtype, class, subclass, {_NAME}, {_SRC_OWN}",
@@ -139,12 +215,17 @@ LAYERS = {
                       bool=("is_underground", "has_parts")),
     # parts of buildings (towers on podiums, setbacks): each its own height range; buildings.py draws a
     # building's parts in place of its footprint (has_parts)
+    # (and their own materials and roof direction, research 2026-11-10: Manhattan's parts 40.6 % / 68.4 % with their
+    # own facade / roof material, drawn with the building's; no layer version bump: cells fetched from now on have
+    # them, the cached ones with the next release bump, buildings.PART_OWN reading what a cell has)
     "building_parts": dict(theme="buildings", type="building_part", clip=False,
                            cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
-                                "roof_height, facade_color, roof_color",
+                                "roof_height, facade_color, roof_color, facade_material, roof_material, "
+                                "roof_direction, roof_orientation",
                            text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
-                                 "roof_color"),
-                           float=("height", "min_height", "num_floors", "min_floor", "roof_height")),
+                                 "roof_color", "facade_material", "roof_material", "roof_orientation"),
+                           float=("height", "min_height", "num_floors", "min_floor", "roof_height",
+                                  "roof_direction")),
     "water": dict(theme="base", type="water", clip=True,
                   cols=f"subtype, class, {_NAME}, {_SRC}, level, is_salt, is_intermittent, {_TAGS}",
                   text=("subtype", "class", "name", "src_dataset", "src_record", "tags"),
@@ -203,7 +284,53 @@ LAYERS = {
                         text=("subtype", "class", "routes_txt"),
                         where="subtype = 'road' AND class IN ('motorway', 'trunk', 'primary', 'secondary', 'tertiary') "
                               "AND routes_txt <> ''"),
+    # the communes (France: OpenStreetMap's admin_level 8, Overture's `locality`; a `localadmin` there is an
+    # arrondissement, measured around Alès 2026-10-28) for the town entry signs (townsigns.py), with their names in
+    # the regional languages their signs may add (REGIONAL_LANGS), and the counties and localadmins around them (a
+    # French département, an arrondissement: which language a commune's signs add, townsigns.REGIONAL). `where`:
+    # only those rows, since a cell's bbox test also matches every country and region whose bbox covers it (France's
+    # outline alone is 75,000 vertices, the United States' 136,000 through their overseas territories). Whole, not
+    # clipped: a sign stands where a road crosses the real boundary, not a cell's edge; `simplify`: a county's or
+    # localadmin's rings to SIMPLIFY_DEG (Finistère's outline is 121,000 vertices, in every cell of the département;
+    # only which one a commune lies in is asked of them)
+    "town_areas": dict(theme="divisions", type="division_area", clip=False,
+                      cols=f"subtype, class, {_NAME}, {_REGIONAL}, country, region, division_id, {_SRC}",
+                      text=("subtype", "class", "name") + tuple(f"name_{k}" for k in REGIONAL_LANGS) + LATIN_COLS
+                           + ("country", "region", "division_id", "src_dataset", "src_record"),
+                      # (Slovenia's 212 občine, Latvia's novadi, Montenegro's opštine, Andorra's parishes,
+                      # Liechtenstein's Gemeinden, San Marino's castelli, Ireland's counties, Cyprus' districts and
+                      # Monaco, the islands' parishes, Puerto Rico's municipios, Libya's, Djibouti's, the
+                      # Seychelles' and Mayotte's districts, Bahrain's governorates and the Emirates are their
+                      # regions:
+                      # townsigns.VILLAGE_COUNTRIES)
+                      where="(subtype IN ('locality', 'county', 'localadmin') OR (subtype = 'region' AND country IN "
+                            "('SI', 'LV', 'ME', 'AD', 'LI', 'SM', 'IE', 'CY', 'MC', 'JM', 'PR', 'BS', 'TT', "
+                            "'BB', 'LC', 'VC', 'GD', 'DM', 'AG', 'KN', 'LY', 'DJ', 'SC', 'YT', 'BH', 'AE', 'BT', "
+                            "'MV', 'KP', 'SB', 'WS', 'GU', 'VN', 'IM', 'JE', 'GL', 'BM', 'KY', 'VG', 'TC', "
+                            "'PW', 'CX', 'MS', 'WF', 'MH')) OR (subtype IN ('country', 'dependency') AND country IN "
+                            "('AI', 'BQ', 'NF', 'GI', 'PN'))) AND class = 'land'",
+                      simplify=("subtype", ("county", "localadmin")), whole=COUNTY_COMMUNES),
+    # the villages (Overture divisions' `locality` points) for the town signs of the countries whose signs name a
+    # village within a commune (townsigns.VILLAGE_COUNTRIES: Luxembourg's 100 communes are Overture counties, its 682
+    # villages points only, 2026-10-29)
+    # (localities: the region, county and localities above and including the point in its first hierarchy,
+    # "subtype:id=name|...", outermost first: which town a German village is part of)
+    "town_points": dict(theme="divisions", type="division", clip=False,
+                            cols=f"subtype, {_NAME}, {_REGIONAL}, country, {_SRC}, "
+                                 "array_to_string(list_transform(list_filter(hierarchies[1], h -> h.subtype IN "
+                                 "('region', 'county', 'locality')), h -> h.subtype || ':' || h.division_id || '=' "
+                                 "|| h.name), '|') AS localities",
+                            text=("subtype", "name") + tuple(f"name_{k}" for k in REGIONAL_LANGS) + LATIN_COLS
+                                 + ("country", "src_dataset", "src_record", "localities"),
+                            where="subtype = 'locality'"),
+    # the 3D map's district names, as map apps write them close in ("FELLS POINT", "CANTON"; maplabels.hood_labels):
+    # the neighbourhoods' and macrohoods' points
+    "hoods": dict(theme="divisions", type="division", clip=False,
+                  cols=f"subtype, class, {_NAME}, country, {_SRC}",
+                  text=("subtype", "class", "name", "country", "src_dataset", "src_record"),
+                  where="subtype IN ('neighborhood', 'macrohood')"),
 }
+SIMPLIFY_DEG = 0.002            # degrees (~200 m): a `simplify` layer's tolerance
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344
@@ -482,7 +609,8 @@ class Reader:
             if not rows:
                 return empty(layer), {}         # no row of these files lies in the cell
             t2 = time.perf_counter()
-            out = self._run(con, proto, paths, layer, spec, bounds, rows, files, kind)
+            out = self._run(con, proto, paths, layer, tolerant(spec, getattr(_PLAN, "present", None), layer), bounds,
+                            rows, files, kind)
             log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, cell, t1 - t0, t2 - t1,
                       time.perf_counter() - t2)
             return out
@@ -642,6 +770,7 @@ class Reader:
             t = x0.dtype.type
             if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
                 matched.add(k)
+        _PLAN.present = {top for k in matched for top in groups[k]["cols"]} if matched else None
         used = set(re.findall(r"[A-Za-z_]+", " ".join((spec["cols"], spec.get("extra", ""), spec.get("where", "")))))
         used |= BASE_COLUMNS - ({"geometry"} if spec.get("geometry") is False else set())
         wanted = {}
@@ -741,6 +870,12 @@ class Reader:
             keep = np.array(keep, bool)
         else:
             keep = np.ones(len(rows), bool)
+        if spec.get("simplify"):
+            col, values = spec["simplify"]
+            whole = spec.get("whole", ())
+            for i, r in enumerate(rows):
+                if r[at[col]] in values and geoms[i][0] == mg.POLYGON and r[at["country"]] not in whole:
+                    geoms[i] = (mg.POLYGON, mg.simplify_polygon_parts(geoms[i][1], SIMPLIFY_DEG))
         feats = mg.build(layer, ids[keep], [g for g, k in zip(geoms, keep) if k])
         feats.clipped = clipped[keep]
         fmap = np.cumsum(keep) - 1          # old feature index -> new (rows dropped by clipping: unused)

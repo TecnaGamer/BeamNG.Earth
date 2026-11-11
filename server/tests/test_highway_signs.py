@@ -17,6 +17,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import blockworker
 import earthd
+import geotiles
 import highwaysigns
 import milemarkers
 import railtags
@@ -72,7 +73,8 @@ def server(md, out):
         left_hand=lambda a: False, mph=lambda a: True, anchor_q=lambda a: None, buried=lambda a: 0.0,
         country=lambda a: 'US', lamp_region=lambda a: None, keep_fuel_pads=lambda pads: None,
         airports=None, near_visual='detail', out_dir=out, vfs_dir='/temp/test', sidewalks=False,
-        _tunnel_ground=lambda a, g: None)
+        _tunnel_ground=lambda a, g: None, dej_on=True,    # (the German junction signs' setting, on)
+        towns_on=False)                                    # (the town signs: their speed rule not here)
     ns.chain_view = lambda *a, **kw: earthd.Server.chain_view(ns, *a, **kw)
     return ns
 
@@ -124,6 +126,29 @@ class PipelineTest(unittest.TestCase):
                 self.assertIn('exits', data)
                 self.assertIn('mileposts', data)
                 self.assertIn('/temp/revisited/', data['exits']['shape'])
+
+    def test_the_town_signs_speed_rule_only_with_the_buildings(self):
+        """The sign tiles leave Germany's general limits out (towns_on) only where the town signs stand: their road
+        tiles' props, which come with the buildings; with --buildings off no Ortstafel stands, so the 50 does (Codex on
+        PR #892)."""
+        import concurrent.futures
+        import townentry
+        got = []
+
+        class Pool:
+            def submit(self, fn, *args):
+                got.append(args[-1])
+                fut = concurrent.futures.Future()
+                fut.set_result(None)
+                return fut
+        with tempfile.TemporaryDirectory() as root, mock.patch.object(townentry, 'ENV', ''):
+            md = fixture(root)
+            for buildings in (False, True):
+                srv = server(md, root)
+                srv.sign_pool, srv.towns_on, srv.buildings = Pool(), True, buildings
+                earthd.Server.build_signs_tile(srv, 1, 0, 0)
+            md.highway_signs.close()
+        self.assertEqual(got, [False, True])
 
     def test_sign_worker_and_fallback_match_without_touching_road_outputs(self):
         with tempfile.TemporaryDirectory() as root:
@@ -191,8 +216,8 @@ class StreamingTest(unittest.IsolatedAsyncioTestCase):
         self.loop = SimpleNamespace(run_in_executor=queue)
         self.build = mock.Mock()
 
-    def pose(self, ready, aid=1, version='test'):
-        self.tracker.on_pose(self.conn, aid, 0., 0., self.loop, self.build, ready, version=version)
+    def pose(self, ready, aid=1, version='test', x=0., y=0.):
+        self.tracker.on_pose(self.conn, aid, x, y, self.loop, self.build, ready, version=version)
 
     async def finish(self, index=0, aid=1, n=None):
         result = signstream.write_tile(self.temp.name, '/temp/test', aid, 0, 0, (None, None, None))
@@ -211,9 +236,49 @@ class StreamingTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(pool.call_args.args[1], {})
         self.pose({(0, 0)})
         self.assertEqual(len(self.pending), 1)
-        self.pose(set())
+        self.pose(set(), x=roads.DROP_M + 2 * roads.TILE)
         self.assertEqual(self.conn.sent[-1]['type'], 'roads_drop')
         self.assertEqual(self.conn.sent[-1]['key'], 's0_0')
+
+    async def test_visible_signs_survive_road_retry_and_refresh(self):
+        geo = roads.GeoTracker()
+        self.addCleanup(geo.close)
+        reach = roads.TILE / 2 * 2 ** .5
+        under = {(a, b) for a, b, _ in geotiles.tiles_near(
+            FRAME, .5 * roads.TILE, .5 * roads.TILE, reach, exact=True)}
+        geo.retry = {key: 1. for key in under}
+        self.assertIn((0, 0), geo.ready_tiles(FRAME, 0., 0., 0.))
+        self.pose({(0, 0)})
+        await self.finish(n=1)
+        for _ in range(3):
+            # GeoTracker removes expired cooldowns while the next build runs.
+            geo.retry.clear()
+            self.assertEqual(geo.ready_tiles(FRAME, 0., 0., 0.), set())
+            self.pose(set())
+            self.assertEqual([m['type'] for m in self.conn.sent], ['roads_tile'])
+            geo.retry = {key: 1. for key in under}
+            self.pose({(0, 0)})
+            self.assertEqual(len(self.pending), 1, 'road retries must not rebuild visible signs')
+        # A successful road refresh can temporarily clear readiness too.
+        geo.retry.clear()
+        geo.sent, geo.skins = set(under), set(under)
+        geo.again(under)
+        self.assertEqual(geo.ready_tiles(FRAME, 0., 0., 0.), set())
+        self.pose(set())
+        self.assertEqual(len(self.pending), 1)
+        self.assertEqual([m['type'] for m in self.conn.sent], ['roads_tile'])
+        self.pose(set(), x=roads.DROP_M + 2 * roads.TILE)
+        self.assertEqual([m['type'] for m in self.conn.sent], ['roads_tile', 'roads_drop'])
+
+    async def test_rebase_does_not_retain_previous_anchor_signs(self):
+        self.pose({(0, 0)})
+        await self.finish(n=1)
+        self.pose(set(), aid=2)
+        self.assertFalse(self.tracker.sent)
+        self.assertFalse(self.tracker.wanted)
+        self.pose({(0, 0)}, aid=2)
+        await self.finish(1, aid=2, n=1)
+        self.assertEqual([m['anchorId'] for m in self.conn.sent], [1, 2])
 
     async def test_refresh_in_flight_requeues_and_discards_old_index_result(self):
         self.pose({(0, 0)})

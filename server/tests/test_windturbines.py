@@ -208,5 +208,64 @@ class TurbinePlacementTest(unittest.TestCase):
         self.assertEqual(len(later), 1)
 
 
+
+class SmallTurbineTest(unittest.TestCase):
+    """Small (rooftop, mast, structure-mounted) turbines are left out: the Eiffel Tower's two 3.2 m turbines, mapped
+    at height 134, stood under it as toy-sized utility turbines (Discord 2026-11-06)."""
+
+    def test_the_eiffel_towers_are_left_out(self):
+        eiffel = {"height": "134.0", "rotor:diameter": "3.200000047683716"}
+        self.assertTrue(wt.small(eiffel))
+        self.assertTrue(wt.small({"height:hub": "9"}))
+        self.assertFalse(wt.small({"rotor:diameter": "82", "height:hub": "80"}))
+        self.assertFalse(wt.small({}), "unknown size: the stock turbine")
+        t = wt.Turbine("osm:node:1", 48.8581, 2.2944, eiffel, 0)
+        self.assertEqual(wt.rows_for_features(geodesy.EnuFrame(48.858, 2.294), [t], lambda la, lo: np.zeros(np.shape(la))), [])
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class UrbanUnsizedTest(unittest.TestCase):
+    """An unsized turbine on built-up land is a small one, left out (Tokyo, OSM node 13722999957, Discord 2026-11-10)."""
+
+    def turbine(self, **tags):
+        return wt.Turbine(id="osm:node:1", lat=35.6556, lon=139.7439, tags=tags, version=1)
+
+    def test_unsized_in_a_city_left_out(self):
+        self.assertEqual(wt.keep([self.turbine()], lambda la, lo: True), [])
+
+    def test_sized_in_a_city_kept(self):
+        t = self.turbine(**{"height:hub": "80"})
+        self.assertEqual(wt.keep([t], lambda la, lo: True), [t])
+
+    def test_unsized_in_the_country_or_unknown_kept(self):
+        t = self.turbine()
+        self.assertEqual(wt.keep([t], lambda la, lo: False), [t])
+        self.assertEqual(wt.keep([t], lambda la, lo: None), [t])
+        self.assertEqual(wt.keep([t]), [t])
+
+    def test_small_left_out_before_the_rows(self):
+        # (the far tiles compare the rows with these features: a small one counted there was never kept)
+        self.assertEqual(wt.keep([self.turbine(**{"rotor:diameter": "3"})]), [])
+
+    def test_built_fn_majority(self):
+        class LC:
+            def __init__(self, v):
+                self.v = v
+
+            def sample(self, lon, lat):
+                return np.full(len(lon), self.v(float(lat[0]), float(lon[0])), np.uint8)
+
+        class MD:
+            def __init__(self, v):
+                self.lc = LC(v)
+
+            def cell(self, key, layers=(), kind=""):
+                return type("C", (), {"layers": {"landcover": self.lc}})()
+        lat0 = 35.6556
+        city = wt.worldcover_built_fn(MD(lambda la, lo: 50))
+        self.assertTrue(city(lat0, 139.7439))
+        # built at the point and one probe only (a 2 of 5 minority): kept
+        edge = wt.worldcover_built_fn(MD(lambda la, lo: 50 if la >= lat0 - 1e-9 and abs(lo - 139.7439) < 1e-9 else 30))
+        self.assertFalse(edge(lat0, 139.7439))

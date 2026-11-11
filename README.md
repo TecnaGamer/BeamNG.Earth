@@ -23,33 +23,51 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Europe, the US and more; in Canada the distant terrain lined up with NRCan's HRDEM lidar ground),
   Copernicus 30 m elsewhere with buildings and small tree stands filtered out of it.
 - Aerial and satellite imagery on the ground: open state and national orthophotos (Maryland's 15 cm photos,
-  a dozen more US states, NAIP across the US, Switzerland, France, Spain, the Netherlands, Germany's states,
+  a dozen more US states, NAIP across the US, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states,
   Austria, Poland, Czechia, Japan, parts of Australia and Canada, and more), Sentinel-2 cloudless everywhere else; shadows and
   colour seams taken out of the photos, the season's colours graded in, cliffs drawn as rock.
 - A real view distance out to the horizon, with the Earth's curvature.
 - Both poles: Antarctica's ice sheet up to the South Pole (2,835 m) from the Copernicus DEM, the Arctic's sea ice
   at the North Pole, the polar day and night of the real sky, and a minimap compass that points to true north.
+- Opt-in (`BNE_PHOTO_SURFACE=1`): an untagged track, service or unclassified road is asphalt, grass or gravel by the
+  colour of the regional photo under it (a lane as green as its verges is a grass lane, a pale neutral one gravel).
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
-  lots) with 3D grass and bushes.
+  lots) with 3D grass and bushes. Squares and pedestrian areas are painted into the ground with their own textures by
+  their mapped surface and paving tags (grey stone slabs, red herringbone brick, cobbles; in the US red brick only
+  where the aerial photo shows it), and cobbled streets show real setts. These stock textures are converted from the
+  player's own game files when the server starts.
+- Roads, parking lots and gas station forecourts are painted in the aerial photo's own pavement colour (old asphalt,
+  concrete and patches keep their shade; parked cars and old markings are left out), and the asphalt of rounded street
+  corners is painted to the curb.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
-  shrubs), autumn colours in season.
+  shrubs, Mediterranean oaks and pines, Australia's eucalypts, riverside poplars in Europe, creosote bushes in North
+  America's hot deserts), autumn colours in season. Far forests are drawn as the stock maps' tree clumps (fewer
+  objects, lighter on the frame time); the lower tree settings bring the clumps nearer.
+- Orchards and vineyards in rows along their fields, and round bales on a share of the fields after the harvest
+  (straw on farmland, wrapped silage on meadows, in their season for each hemisphere).
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background
   sound, the set by climate (Köppen-Geiger zones: temperate, oceanic, Mediterranean, desert, tropical), running water along
   rivers and streams, waves along coasts and large lakes, the stock tunnel, under-bridge and parking garage echo, refinery
   machinery and power plants, and rain you can hear.
 - Pump jacks at oil wells (OpenStreetMap), animated, with their sounds.
 - Wind turbines at their mapped OpenStreetMap positions worldwide, with animated blades and distant streaming.
-- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations.
+- High-voltage power lines along their mapped routes (OpenStreetMap), with towers, conductors and fenced substations
+  (on wooden poles where the line's voltage is low or its mapped supports are poles).
 - The satellite map on cars' own navigation screens.
 - Night lighting: lit windows and street lamps after dusk, out to as far as buildings are drawn (about 3 miles),
   spaced as real street lamps are (North American design standards there, OpenStreetMap's mapped lamps elsewhere),
-  and lit highways in towns and their ramps.
+  and lit highways in towns and their ramps. Street lamps mapped in OpenStreetMap stand where they are mapped, as the
+  post their mount names (high masts, straight masts, double arms), their arms toward the road
+  (`BNE_MAPPED_LAMPS=off` leaves them out).
 - Buildings from Overture / OpenStreetMap with regional styles (US siding and brick, Alpine chalets, Nordic
   wood, Mediterranean stucco, East Asian and Latin American looks), real heights, roofs, windows, shopfronts,
-  porches, churches with steeples, glass towers. Buildings show out to about 3 miles: simpler versions past 1 mile,
-  and a light skyline beyond that; bridges show out to about 3 miles too.
+  porches, churches with steeples, glass towers. Roof shapes mapped on building parts are kept and sloped along their
+  mapped direction (tower crowns, One World Trade Center's tapering corners), also on the far skyline. Buildings show
+  out to about 3 miles: simpler versions past 1 mile, and a light skyline beyond that; bridges show out to about 3
+  miles too.
 - Roads painted into the ground itself (no floating road surface), with lane markings, sidewalks and curbs, curb ramps, storm drains, cobblestone streets,
-  traffic islands, roundabouts, rural motorways with shoulders and toll booths; the ground graded under them, with
+  traffic islands, roundabouts (a granite truck apron and a planted, raised island, curbs round the ring into the entries,
+  give-way lines at every entry, splitter islands where the map has a refuge), rural motorways with shoulders and toll booths; the ground graded under them, with
   retaining walls where a road is cut into a hill (dry stone in the mountains and towns, concrete along major roads)
   and stone parapets along mountain roads' drops; switchback mountain pass roads (the Stelvio) narrow, between their
   walls and parapets; metal guard rails, concrete and cable barriers where OpenStreetMap maps them; median
@@ -59,7 +77,17 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   railway lines as 3D track (ballast, sleepers and rails, rail bridges on piers, the ground cut and filled for the
   line; abandoned and disused lines overgrown and rusty; lines not built yet left out), level crossings with the rails
   flush in the road and crossbucks, flashing lights or gates (in the US as the FRA's crossing inventory lists them),
-  and tram tracks (street track where trams run on the road).
+  and tram tracks (street track where trams run on the road). Opt-in (set `BNE_RAIL_XING=1`): a level crossing as
+  one place (a barrier kit per approach, a rubber deck between the rails), crushed-stone ballast on tracks in use,
+  parallel tracks sharing one bed, and buildings, lamps and poles kept off the railway's bed. Opt-in (`BNE_CATENARY=1`): electrified lines
+  (OpenStreetMap `electrified`) get catenary masts, cantilevers and contact wire, concrete or steel by country.
+  A track's bed comes from one profile per line, the same in every tile and grading cell (no steps at tile seams),
+  smoothed along the line with its bends rounded; switches and crossovers meet the lines they join; a road crossing a
+  track at grade lies flush with it. Railway stations are built from the map: platforms at the country's height
+  beside the rail head, roofs on columns, benches, bins and lamps, footbridges, walkable underpasses, boarded track
+  crossings and name boards (`BNE_RAILSTATIONS=off` turns them off). The catenary runs on through way joints and
+  switches, with portals over three tracks or more, droppers and per-class wire materials. Opt-in: a physics
+  collider at the rails for riding them (`BNE_RAIL_COLLIDE=on`) and rail tunnels as tubes (`BNE_RAIL_TUNNELS=on`).
 - Gas stations with pumps, canopies and forecourts in the region's style, where the stock refuel prompt fills the
   tank.
 - Golf courses: mapped greens, fairways, rough and bunkers painted into the ground, and a flag at each mapped hole
@@ -72,21 +100,49 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   in the gore, overhead destination signs, Interstate / US / state route shields in each state's style, yellow merge
   warnings at entrance ramps and Interstate mile markers, from the destinations and milestones mapped in
   OpenStreetMap (rebuilt weekly). Settings > World > Highway signs turns them off.
+- Autobahn signs in Germany: the German chain at every exit, Kreuz and Dreieck, with the sign text as mapped in
+  OpenStreetMap (rebuilt weekly). The 2000 / 1000 m announcement board with the junction's number and name, the 1000 /
+  500 m advance boards with the destinations over their lanes, the A, B and E plates and pictograms, the 300 / 200 /
+  100 m countdown boards, the direction sign at the exit and "Ausfahrt" in the gore. Overhead on carriageways with
+  more than two lanes and at every Kreuz and Dreieck (gantries and cantilevers), beside the road on two lanes; boards
+  move closer where junctions follow closely. Settings > World > Highway signs switches them too (the environment
+  variable BNE_AUTOBAHN_SIGNS=off turns them off alone).
 - Speed-limit signs everywhere, showing the limit the traffic drives (the mapped one, else the road class's default):
   where the limit changes, past major junctions and motorway entrances, and as reminders on long roads; the US
   "SPEED LIMIT" panel, Canada's "MAXIMUM" panel, and elsewhere the round red-ring sign (mph in the UK). The Highway
   signs setting switches them too.
+- Road signs (off unless the server has `BNE_ROADSIGNS=on`; Settings > World > Road signs): no-entry signs where a one-way road ends, dead-end signs, pedestrian-crossing signs at marked crossings without signals, sharp-bend and double-bend warnings, roundabout signs, signal warnings, motorway and living-street signs, one-way signs, narrowing and side-road warnings, chevron boards, give way and stop, tunnel, bus stop, car park, pedestrian zone and cycle path signs, drawn from vectors on one atlas per sign system (Czechia, Germany, Poland, Ukraine so far); a sign stands only where the road data implies it.
+  signs setting switches them too. In Germany, with the town signs on, the general limits are not posted, as there:
+  no 50 at a town's entry sign (the sign itself sets the 50) or in town, no 100 outside towns, except where a lower
+  limit ends.
+- Town entry and exit signs (off by default for now; Settings > World > Town signs; from fuxau's contribution): each
+  country's own sign where a road enters a town's built-up land, the exit sign on its back. In Germany the yellow
+  Ortstafel (Zeichen 310 / 311) in DIN lettering, with the village, its Gemeinde ("Gemeinde Barbing", "Stadt
+  Schrobenhausen", "Markt Donaustauf") and its Landkreis, the next place and its distance on the back, standing where
+  OpenStreetMap has the real one mapped (rebuilt weekly), elsewhere where the land cover's built-up land begins.
 - Direction signs (on by default; Settings > World > Direction signs): a blue, green
-  or yellow advance board beside the road before junctions of major roads, with each way's road numbers (national
+  or yellow advance board beside the road before junctions of major roads (not on German Autobahnen, which have the
+  Autobahn signs above), with each way's road numbers (national
   and European), the places it leads to, and their distances; Ukraine, Czechia, Poland and Germany for now. Cities
   and towns are written in the local language with their English name under it, villages in the local language
   only. The boards are drawn from the road network and Overture's places and route numbers, so they are a good
   guess of a real board, not a copy: the distances are the straight ones scaled to a road's, and the colours and
   plates follow each country's practice as best known.
+  In a town, a board stands only at an interchange, a way out or a fork of numbered routes: a small board with the local
+  name, hung on a lamp or utility pole that stands there, else on a stand of its own.
+- Opt-in (`BNE_REGIONAL_POLES=poles`): each European country's own utility poles, and steel or concrete street lamps
+  with a bracket arm instead of the stock American post.
+- German junction signs (off by default for now; Settings > World > German junction signs): Germany's right of way as its
+  signs show it: Zeichen 306 / 307 along priority roads, 301 at single junctions, 205 where a road gives way and the
+  map's 206 stops, with the 1002 plate where the priority road bends; no signs at right before left in residential
+  streets, and 274.1 / 274.2 where a mapped 30 zone begins and ends. The Wartelinie at a 205, the Haltlinie at a stop
+  and zebras only where mapped replace the US stop signs and crosswalks, and traffic gives way and stops by the same
+  decision. Germany is found by its real border. The signs are worked out from the map (road classes and numbers,
+  mapped priority roads, zones and stop and give-way points), so they are a good guess, not a copy of the real ones.
 - Bridges drawn as their real type (beam, truss, arch, cable-stayed, suspension) with real heights and spans, piers
   that keep clear of the roads under them and 6 m (20 ft) of headroom over roads where the ground allows; a divided
-  road's two decks joined across a narrow median; tunnels through hills, with portals, lights and low arches where
-  little is over them.
+  road's two decks joined across a narrow median, with mapped levels retained through multilevel interchanges;
+  tunnels through hills, with portals, lights and low arches where little is over them.
 - Water: the sea with real depth (cars sink), lakes, and rivers kept beside the roads.
 - Airports with graded, marked runways; racetracks (circuits, ovals and pit lanes, with their real banking);
   landmarks such as the pyramids of Giza.
@@ -117,11 +173,37 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   databases' heights, and so do roads where the terrain data is coarse. Elsewhere, or where a source has nothing,
   the heights are estimated as before. The environment variables `BNE_ROADZ=off` (all of it) and
   `BNE_LIDAR_DECKS=off` (the US lidar only) turn it off.
-- Fast teleports: right after a teleport, while you wait, the world server may borrow some of the game's
+- Measured buildings in France: each building's height to the eaves and roof rise, storeys, wall and roof materials
+  (stone, brick, render; tiles, slate, zinc) and use (houses, shops, sheds, churches) come from IGN BD TOPO and are
+  joined to the map's outlines, where the map itself does not say (Aix-en-Provence's old town: 4 000 of 4 800
+  buildings measured, tiled pitched roofs instead of predicted flat blocks). Downloaded per map cell in the background
+  beside the map data, about 0.1-0.6 MB once; `BNE_BDTOPO=off` turns it off.
+- Measured massing in New York City: the setbacks, wedding-cake towers and crowns of the city's 3-D Building Model
+  (NYC Open Data, 2014) as building parts on the map's outlines, downloaded per map cell from BeamNG.Earth's data site
+  (`BNE_NYC_MASSING=off` turns it off). Rooftop water tanks on the city's mid-rise roofs use the stock water-tower model.
+- Rooftops everywhere: a mechanical penthouse on towers, a stair / lift bulkhead on mid-rise blocks, and rooftop
+  air-conditioning units spread by roof size on shops, offices and warehouses, each kept inside the roof's outline.
+- Measured roofs from national LoD2 building models: each building's roof shape (flat, gabled, hipped, half-hipped,
+  mansard, pyramidal, ...), height and roof rise fill what the map does not say, in Germany (the states' models) and,
+  once their data is published, Switzerland and Liechtenstein (swissBUILDINGS3D), Estonia and Vienna. Where a model
+  has no roof type, the shape is read from its roof faces when the data is built. A small file per ~25 km, fetched
+  once per area; `BNE_LOD2_ROOFS=off` turns it off.
+  `BNE_GRADE_GUARD=on` (off by default) adds a last pass over a cell's road plans: roads that meet at a node get one height
+  and ease to it smoothly at a grade fit for their class, and the grades the earlier passes made stay under a ceiling per class.
+- Rounded bends (opt-in, `BNE_ROAD_SMOOTH=on`): the map draws a bend as a few straight pieces, so roads had a visible
+  corner at every vertex. With it on, each bend of a drivable road is an arc tangent to both pieces (a motorway's
+  gentle, a lane's tight; a bend of short pieces becomes one round curve, moving the line by under 0.75 m). The road's
+  ends, junctions, roundabouts and the map's own vertices that are not bends stay where they are.
+- Fast teleports: picking a destination on the world map (its "Teleport here?" box or a search result) starts
+  downloading the place's terrain and map data before you confirm. Right after a teleport, while you wait, the world server may borrow some of the game's
   CPU cores (at idle priority) to build the world faster (Linux; `--load-boost off` turns it off). It builds
   2 to 4 road pieces at once, by your computer's CPU threads and memory. While you drive and the world falls
   behind, it borrows a quarter of the game's cores until it has caught up (`BNGE_CATCHUP_LEND=0` turns that off,
   `0.5` borrows half).
+- New places' roads, buildings and places come from Overture's own map tiles: one small download per area instead
+  of reading the large map data files, a few seconds sooner on a first visit (the same data; road lines within about
+  a quarter of a metre of the files'). Water, land use and the other map layers still come from the files, and the
+  files stand in whenever the tiles do not answer (`BNGE_MAP_SOURCE=parquet` uses the files for everything, as before).
 - Places you've been load much faster the next time: what was built around you (roads, buildings, the levelled
   ground, the distant land) is kept on disk, up to 2 GB (the oldest go first; the environment variable
   `BNE_REVISIT_MB` sets the size, `BNE_REVISIT=off` turns it off). It is kept across app updates unless the
@@ -131,7 +213,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   road rules, and traffic signals at real junctions. The stock AI, traffic, police and the AI modes in the
   vehicle menu work on it.
 - **Traffic**: stock BeamNG traffic and police can be switched on, and parked cars line the streets and fill
-  parking lots (stock BeamNG parking).
+  parking lots (stock BeamNG parking). On highways the traffic's road map reaches past the loaded ground, so cars
+  ahead no longer see the road end and turn round, and a car put back near you joins at the road's speed instead of
+  from a standstill (from ProxyFirewall202's contribution, PR #728). On highways of two or more lanes each way, traffic
+  held behind a slower vehicle (a truck) moves over and passes it when the next lane is clear, then keeps right again
+  (the game's AI does not overtake by itself; the map's Autodrive does not pass yet). On divided highways every other
+  car put back near you comes on the other carriageway, towards you, so there is traffic both ways. The number of
+  traffic cars is the game's own setting (Options > Gameplay > Traffic > Traffic amount; 0, automatic, is at most 10):
+  a fast CPU can take more.
 - Distant headlights and taillights move along the mapped roads at night while traffic is on, with density
   following the local time. Returning to a recently viewed road keeps established lights bright.
 
@@ -146,7 +235,14 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - World map (**M**): pan and zoom the globe, satellite or street map (EOX) with a roads & labels overlay,
   borders and place names (the **Layers** button), search for landmarks and places as you type and streets and
   addresses on Enter, in any language, or ask for "highest bridge in Switzerland", teleport anywhere. Works with a controller,
-  laid out like the stock map.
+  laid out like the stock map. Layers > **Highways** (off by default) draws the US Interstates and US routes with their
+  shields while zoomed out, so you can see which highways a GPS route takes (closer in, Roads & labels shows every road).
+- **3D map** (experimental): a Google Earth style view in the game itself. Fly up from your car to see the whole
+  globe with its photos, search for places, pick a spot with a click, set a GPS route or teleport there; its compass
+  needle turns with the view. The map key opens the 2D or 3D map, whichever you used last, and each has a button for
+  the other. Any camera more than about 150 miles up sees the Earth as a globe too.
+- **Altitude** HUD app (hidden by default; add it from the apps menu, under BeamNG.Earth): height above sea level and
+  above the ground, and how fast you climb or fall.
 - GPS routes to any destination (OSRM on OpenStreetMap), with the stock route arrows on the road and the route
   on the game's minimap (bottom left), which shows the roads around you. The first 20 km (12 miles) of the
   route's map data and elevation download ahead while you drive, with a progress bar on the map (Settings >
@@ -165,7 +261,10 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   Pre-cached areas (Places panel) show their progress, can be paused or deleted, and their data is kept when the cache
   is full or cleared. Tick **Build the world too** (areas and routes up to 155 square miles) to have the roads,
   sidewalks, bridges, buildings and street furniture built ahead as well, so they load at once when you arrive;
-  otherwise the world itself is built when you get there.
+  otherwise the world itself is built when you get there. Tick **Fast** (or press **Fast** on a pre-cached area in the
+  Places panel) to have it done in minutes instead: the game pauses and the download and building get every CPU core
+  until it is done (each map host's own limits still apply); the game goes on by itself when it ends, or press
+  **Stop fast**.
 - In multiplayer the map has a **Players** list: follow a player, show everyone, or set the GPS to them. Teleport
   works without a car too (the free camera goes there).
 - **Autodrive**: the car drives itself along the GPS route (in lane, legal speed, minding traffic).
@@ -196,6 +295,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     fps against 94), and stays off below 30 fps.
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
+  - **Terrain pixel error** (0 = off, the default; 0.5 to 8 px; advanced): picks the distant ground's detail by what
+    your screen shows: the largest jump in pixels allowed when a piece switches detail (your resolution and field
+    of view count), so flat land stays coarser and mountains finer.
   - **Ground photo** (1024 / 2048 / 4096): the sharpness of the aerial photo and the painted roads on the
     ground around you; from the next level load.
   - **Tree density** (Lowest to Extreme) and **Tree draw distance** (about 0.5 to 1.7 miles; 0.8 miles at Normal).
@@ -210,11 +312,20 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     Off-screen motion updates less often. See [the implementation guide](docs/DISTANT_TRAFFIC.md) for bounds.
   - **Grass and shrubs**, **Grass draw distance**, **Rocks**, **Street lamp lights**, **View distance** (the real
     horizon or a fixed distance).
+  - **Road surface detail** (Off / Basic / Full; Off on Low, Basic on Medium, Full above): wear on the paved roads
+    from the game's own road decals, drawn with the road itself (no extra objects). Basic: tyre polish in the lanes'
+    wheel paths on busier roads, a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
+    asphalt edge on rural roads through grass, crops or woods (the land cover beside them). Full
+    also sealed and alligator cracks, crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
+    where mapped), manhole covers on town streets, oil spots in parking lots and, in the autumn, fallen leaves
+    along the edges where trees stand beside the road.
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
     corners reached about 40 % farther).
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant
   textures) when it can, so the server needs less of your CPU; without a usable one the CPU does it as before.
 - Offline play from the download cache (with a size cap and "clear cache").
+- Overlapping physics blocks reuse raw land-cover classifications in a bounded native cache. Updated source
+  data invalidates them; terrain slopes, underwater materials and road surfaces are still computed afresh.
 - **Performance** settings page: the world server's CPU cores (Auto: a quarter of your cores, at most half) and its
   priority (Low: the game always comes first; Normal: the map loads faster on a busy CPU), from the next start; and
   **Full priority loading**: when you join the world and after a teleport, the app builds the place on every CPU core
@@ -225,6 +336,13 @@ You can help support development by reporting [issues](https://github.com/TecnaG
   with the downloaded app (.exe / AppImage), **Update now** downloads it next to your copy, checks it against
   GitHub's checksum, and the next time you start BeamNG.Earth the new version starts (your old file and shortcut
   keep working).
+- **Add-ons** settings page: mods and tools other people made for BeamNG.Earth (a short list we keep: for now
+  Worldwide Trucking Career: Dangerous Contracts and BeamNG.Earth Live GPS), each with its description and changelog
+  from its own GitHub page. Game mods install, update, turn off and on, and uninstall from the page, through the game's
+  own mod manager, after a notice naming the author (they are not made by BeamNG.Earth); each download comes from the
+  author's own GitHub releases and is checked against GitHub's checksum. Not while a BeamMP server is joined. Other
+  mods can use BeamNG.Earth through its modding API (`beamngEarth_api`), and programs beside the game can read your
+  position from `http://127.0.0.1:47615/v1/pose` (this computer only): see [docs/ADDONS.md](docs/ADDONS.md).
 
 ## How it works
 - A **companion server** (`server/`: Python, with its heavy work in a Rust module, `native/earthfast`) downloads
@@ -278,7 +396,8 @@ as a GitHub **pre-release** named after the beta it follows, with a build number
 and not thoroughly tested**: expect bugs, and things may change or break from one build to the next. The beta
 releases are the tested ones. A development build says so in game, and its update check offers the next development
 build (or the next beta, if that is newer); a beta only ever offers betas. Only the newest three development builds
-are kept on the releases page.
+are kept on the releases page as their own pre-releases; older ones (the last 60) stay downloadable from one release,
+**Development builds (archive)**, whose page lists them newest first with their Windows and Linux files.
 
 **Uninstalling:** delete the `beamng_earth` folder in `<BeamNG user folder>/current/mods/unpacked/` and the
 downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your home folder (`~/.cache/beamng-earth` on Linux,
@@ -288,6 +407,10 @@ downloaded file (or this folder); the map cache is `.cache/beamng-earth` in your
 your system's folder window, or type or paste a folder and press **Use**. Or start the app once with `--cache-dir PATH`
 (e.g. a shortcut to `BeamNG.Earth-<version>.exe --cache-dir "D:\BeamNG.Earth cache"`). It is used from the next start
 and remembered; `default` goes back. Move the old cache folder there first to keep what is already downloaded.
+
+**Deleting the whole map cache:** start the app once with `--clear-cache`. Its folders are moved aside at once and
+deleted in the background while you play (no long wait for the many small files). The in-game **Clear cache** button
+keeps the area around you.
 
 **BeamNG.drive installed somewhere else** (not in a Steam library the app finds, e.g. another launcher): the app asks
 where it is the first time (Enter opens your system's folder window, or type or paste the folder) and remembers it;
@@ -304,6 +427,9 @@ running other code are left out, and anything a helper fails on is built on your
 network you trust: the connection is not encrypted.
 
 ### Developer setup
+Rail-crossing props can be regenerated with `python3 tools/build_rail_crossing_props.py`;
+their lettering uses the bundled DejaVu Sans Bold font on every platform.
+
 `python3 install.py` also works from a checkout (mod copy, `.venv`, then `python3 start.py`); by hand:
 1. Python 3.10+ with the packages in `server/requirements.txt`. The server needs its Rust module: the checkout
    carries it built for Linux x86-64 (`server/earthfast.abi3.so`) and Windows (`server/earthfast.pyd`); after
@@ -324,6 +450,9 @@ whenever `main` gets a `VERSION` without one. Release zip of the source: `python
 Tests: `cd server && python3 -m unittest discover -s tests -t tests` and
 `cd mod/tests && for f in test_*.lua; do luajit $f; done` (no luajit: `pip install lupa`, then
 `python3 tools/run_lua_tests.py`).
+
+For native thread-crash diagnostics without starting the game, see
+[the isolated stress runner](docs/NATIVE_CRASH_REPRODUCTION.md).
 
 ## Multiplayer (BeamMP)
 
@@ -403,6 +532,9 @@ little CPU. From the source, `python3 tools/package.py --beammp` builds the same
 ready-made host bundles (`BeamNG.Earth-Host-<version>-Windows.zip` / `-Linux-x86_64.zip`, built by
 `tools/build_host.py`): the zip above plus BeamMP's own unmodified server program (v3.9.3, checked against the
 checksum BeamMP publishes), its licence and source, and a `ServerConfig.toml` with an empty AuthKey for your own.
+With Docker: `ghcr.io/tecnagamer/beamng.earth-server:<version>`, the Linux host bundle in a container, set up through
+its environment (`BEAMMP_AUTH_KEY`, `BEAMMP_NAME`, `BNGE_WEATHER`, ...; see "Docker" in the server zip's guide,
+[beammp/README.md](beammp/README.md#docker)).
 
 **Shared road plans** (experimental, off by default): `BeamNG.Earth --world-cache export|serve|fetch|verify` packs
 the road plans one machine has built into a checked bundle that other players can fetch and reuse, so their
@@ -415,10 +547,30 @@ BeamNG.Earth's world server next to it, from the source:
 `python3 server/sharehelper.py --share-dir <BeamMP server>/Resources/Server/BeamNGEarth --cache <a folder for its map
 data> --procs 4`. It needs the same BeamNG.Earth version as the players and a few GB of disk for each area.
 
+## Usage statistics (telemetry)
+
+To see how many people play and how hard we are pushing the free map-data services we rely on, the world server
+sends a small anonymous report every 5 minutes: a random install id (created on your machine; no name, account or
+hardware id), the app version and operating system, whether the game is connected, whether it is a BeamMP session,
+and how many requests went to each data source (with their errors and rate limits). With **Performance data** ticked
+it also sends the game's frame rate and hitches, how well the world keeps up, your CPU / GPU model and settings, and
+error codes. No positions or places are sent.
+The collector looks up your country from the connection's address and does not keep the address.
+
+The public numbers (players online, peaks, history, countries with at least 5 players) are at
+<https://earth.tgforever.net/players>, and the performance numbers (groups of at least 5 players) at
+<https://earth.tgforever.net/performance>.
+
+**Nothing is sent until you choose.** The welcome screen asks first, with a main switch and two parts (performance
+data, network load); how the boxes start depends on your computer's time zone (nothing ticked in the EU and some
+other places). Change it any time in BeamNG.Earth's settings page, Interface (from the next report on), or set the
+environment variable `BNE_TELEMETRY=off` before starting BeamNG.Earth. Reports are never sent in offline mode
+(`--offline`). Every field, why we want it and what happens to it: [TELEMETRY.md](TELEMETRY.md).
+
 ## Data sources and attribution
 The repository contains only code; all map data is downloaded at runtime and cached locally.
 - Imagery: state and national orthophoto services where they are open (Maryland, a dozen more US
-  states, Switzerland, France, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
+  states, Switzerland, France, Portugal, Spain, the Netherlands, Germany's states, Poland (GUGiK), Japan, parts of Australia and
   Canada, and more), USDA NAIP and USGS The National Map (public domain) in the US, and Sentinel-2
   cloudless by EOX IT Services GmbH everywhere (https://s2maps.eu, contains modified Copernicus Sentinel
   data; 2016 release CC BY 4.0, 2023 release CC BY-NC-SA 4.0, non-commercial).
@@ -433,9 +585,17 @@ The repository contains only code; all map data is downloaded at runtime and cac
 - Oil wells and refineries: OpenStreetMap contributors (ODbL; the bundled `oil_wells.npz` and `refineries.npz`).
 - Highway signs: OpenStreetMap contributors (ODbL; exit and overhead destinations and mile references, rebuilt
   weekly from the planet by the BeamNG.Earth-data repo); lettering: the Roadgeek 2014 font (MIT, Sammi De Guzman);
+  German Autobahn signs: the DINish font (SIL OFL 1.1) and the RWB/RWBA pictograms (public domain);
   US state outlines: U.S. Census Bureau TIGERweb (public domain).
 - Direction signs: place names, populations and road route numbers from Overture Maps / OpenStreetMap contributors
   (ODbL); lettering: Overpass (SIL OFL 1.1) and Fira Sans Condensed (SIL OFL 1.1).
+- German junction signs: the faces of Zeichen 205, 206, 301, 306, 307, 274.1, 274.2 and Zusatzzeichen 1002 after the
+  Verkehrszeichenkatalog and the VwV-StVO (BMDV / BASt; amtliche Werke, § 5 UrhG); lettering: D-DIN (SIL OFL 1.1,
+  Datto); priority roads, 30 zones and junction sign nodes: OpenStreetMap contributors (ODbL; rebuilt weekly from the
+  planet by the BeamNG.Earth-data repo).
+- Town signs: towns and villages from Overture Maps (divisions), Germany's mapped town signs from OpenStreetMap
+  contributors (ODbL, rebuilt weekly), its Städte and Märkte from the Statistisches Bundesamt (Destatis,
+  Gemeindeverzeichnis); German lettering: D-DIN (SIL OFL 1.1).
 - Railways: OpenStreetMap contributors (ODbL; railway tags, rebuilt weekly from the planet by the [BeamNG.Earth-data](https://github.com/TecnaGamer/BeamNG.Earth-data) repo's GitHub Action); US level crossings: the Federal Railroad Administration's Highway-Rail Crossing Inventory (public domain).
 - Climate zones (the forest sounds' set): Beck et al. (2023), High-resolution (1 km) Köppen-Geiger maps for
   1901–2099, Scientific Data 10, 724 (CC BY 4.0).

@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import dem as demmod  # noqa: E402
 import earthd  # noqa: E402
 import farfield as ff  # noqa: E402
+import missindex  # noqa: E402
 import gravity  # noqa: E402
 import netfetch as nf  # noqa: E402
 import test_server  # noqa: E402
@@ -310,13 +311,18 @@ class TransportTest(unittest.TestCase):
                 return b"ok"
 
         class Conn:
-            def __init__(self, netloc, timeout=None, context=None, **kwargs):
+            def __init__(self, netloc, port=None, timeout=None, context=None, **kwargs):
                 made.append(self)
                 self.sent = 0
                 self.context = context
+                self.netloc, self.requests, self.tunnel = netloc, [], None
+
+            def set_tunnel(self, host, port, headers=None):
+                self.tunnel = (host, port, headers)
 
             def request(self, method, path, headers=None):
                 self.sent += 1
+                self.requests.append((method, path, headers))
                 e = errors.pop(0) if errors else None
                 if e is not None:
                     raise e
@@ -360,6 +366,58 @@ class TransportTest(unittest.TestCase):
             tr, made = self.transport([])
         self.assertEqual(tr.request(url(), {}, 20.0)[0], 200)
         self.assertIs(made[0].context, context)
+
+    def test_public_s3_dualstack_only_after_no_ipv4_route(self):
+        """GitHub #763 / PR #808: an IPv6-only network (no NAT64) finds no route to a public S3 host's IPv4 address:
+        that request goes to the bucket's dual-stack endpoint, and so does every later one this run. A network where
+        IPv4 works is never sent there (http.client has no Happy Eyeballs: a broken IPv6 would stall each connection).
+        The source URL stays the cache / quota identity."""
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        source = "https://overturemaps-us-west-2.s3.us-west-2.amazonaws.com/release/a%20b?versionId=abc"
+        headers = {"Range": "bytes=0-15", "If-Match": '"etag"'}
+        tr, made = self.transport([])
+        f = nf.Fetcher(transport=tr)
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            f.get(source, headers=headers)
+        self.assertEqual(made[0].netloc, nf.host_of(source), "IPv4 works: the source's own host")
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "Network is unreachable")])
+        f = nf.Fetcher(transport=tr)
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            f.get(source, headers=headers)
+            f.get(source + "&x=1", headers=headers)
+        dual = "overturemaps-us-west-2.s3.dualstack.us-west-2.amazonaws.com"
+        self.assertEqual([c.netloc for c in made], [nf.host_of(source), dual], "no route: the dual-stack endpoint")
+        self.assertEqual(made[1].requests[0][1], "/release/a%20b?versionId=abc")
+        self.assertEqual({k: made[1].requests[0][2][k] for k in headers}, headers)
+        self.assertEqual(len(made[1].requests), 2, "and from then on, straight there")
+        self.assertEqual(set(f.snapshot()), {nf.host_of(source)})
+
+    def test_other_errors_and_proxies_keep_the_source_host(self):
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        tr, made = self.transport([ConnectionResetError(errno.ECONNRESET, "reset")])
+        with mock.patch.object(tr, "_resolve_proxy", return_value=None):
+            with self.assertRaises(OSError):
+                tr.request("https://copernicus-dem-30m.s3.amazonaws.com/a.tif", {}, 20)
+        self.assertEqual([c.netloc for c in made], ["copernicus-dem-30m.s3.amazonaws.com"])
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "unreachable")])
+        with mock.patch.object(tr, "_resolve_proxy", return_value=("proxy.test", 8080, None, None)):
+            with self.assertRaises(OSError):
+                tr.request("https://copernicus-dem-30m.s3.amazonaws.com/a.tif", {"Range": "bytes=0-15"}, 20)
+        self.assertEqual(made[0].tunnel[:2], ("copernicus-dem-30m.s3.amazonaws.com", 443), "a proxy routes it")
+
+    def test_authorized_s3_requests_keep_the_signed_host(self):
+        import errno
+        nf._DUALSTACK_HOSTS.clear()
+        self.addCleanup(nf._DUALSTACK_HOSTS.clear)
+        tr, made = self.transport([OSError(errno.ENETUNREACH, "unreachable")])
+        source = "https://copernicus-dem-30m.s3.amazonaws.com/a.tif"
+        with self.assertRaises(OSError):
+            tr.request(source, {"Authorization": "AWS4-HMAC-SHA256 test"}, 20)
+        self.assertEqual([c.netloc for c in made], [nf.host_of(source)])
 
 
 class RetryTest(unittest.TestCase):
@@ -590,26 +648,36 @@ class DemFailoverTest(unittest.TestCase):
         d, f, clock, tr = self.dem({MT: [(404, {}, b"", 0)], "amazonaws": [(200, {}, terrarium_png(7.0, 256), 0)]})
         d._download(demmod.MAPTERHORN, 10, 1, 2)
         miss = os.path.join(self.tmp.name, "mapterhorn", "10", "1", "2.404")
-        self.assertTrue(os.path.exists(miss))
+        self.assertTrue(missindex.known(miss))
+        self.assertFalse(os.path.exists(miss), "a line in the column's miss index, no marker file")
         n = len(tr.calls)
         self.assertIsNone(d._download(demmod.MAPTERHORN, 10, 1, 2))     # remembered
         self.assertEqual(len(tr.calls), n)
         old = clock() - nf.POLICIES[MT].miss_ttl - 60      # the fetcher's wall clock (T0), not the real one
-        os.utime(miss, (old, old))                              # 90 days old (or an old-style marker)
+        missindex.record(miss, t=old)                           # 90 days old
         tr.script[MT] = [(200, {}, mt, 0)]
         self.assertEqual(d._download(demmod.MAPTERHORN, 10, 1, 2), mt)  # asked again: Mapterhorn has lidar now
-        self.assertFalse(os.path.exists(miss))
-        # AWS markers never expire
+        self.assertFalse(missindex.known(miss))
+        # an old-style marker file works the same way, and goes when the data arrives
+        old_miss = os.path.join(self.tmp.name, "mapterhorn", "10", "3", "3.404")
+        os.makedirs(os.path.dirname(old_miss))
+        open(old_miss, "wb").close()
+        n = len(tr.calls)
+        self.assertIsNone(d._download(demmod.MAPTERHORN, 10, 3, 3))
+        self.assertEqual(len(tr.calls), n, "a fresh old marker: remembered")
+        os.utime(old_miss, (old, old))
+        tr.script[MT] = [(200, {}, mt, 0)]
+        self.assertEqual(d._download(demmod.MAPTERHORN, 10, 3, 3), mt)
+        self.assertFalse(os.path.exists(old_miss))
+        # AWS misses never expire
         aws_miss = os.path.join(self.tmp.name, "aws-terrarium", "11", "0", "0.404")
-        os.makedirs(os.path.dirname(aws_miss))
-        open(aws_miss, "wb").close()
-        os.utime(aws_miss, (0, 0))
+        missindex.record(aws_miss, t=1)
         self.assertIsNone(d._download(demmod.AWS, 11, 0, 0))
-        # 400: an error, no marker
+        # 400: an error, no miss remembered
         tr.script[MT] = [(400, {}, b"", 0)]
         with self.assertRaises(nf.FetchFailed):
             d._download(demmod.MAPTERHORN, 10, 5, 5)
-        self.assertFalse(os.path.exists(os.path.join(self.tmp.name, "mapterhorn", "10", "5", "5.404")))
+        self.assertFalse(missindex.known(os.path.join(self.tmp.name, "mapterhorn", "10", "5", "5.404")))
 
     def test_undecodable_tile_fails_over_and_is_not_kept(self):
         """A 200 whose body is no image (empty, or cut short where the server sent no length): the tile
@@ -696,7 +764,7 @@ class PolicyTest(unittest.TestCase):
     def test_policies_match_the_plan(self):
         """docs/research/2026-10-10-rate-limits.md §5.2 for the hosts in use, raised 2026-10-16 (USGS again 2026-10-23)
         (docs/research/2026-10-16-rate-limits-raised.md); EOX again 2026-10-30 (the user's OK)."""
-        want = {USGS: (50, 150, 24, 150000), EOX: (20, 80, 12, 30000), MT: (50, 200, 32, 80000),
+        want = {USGS: (100, 300, 32, 150000), EOX: (40, 160, 24, 80000), MT: (50, 200, 32, 80000),
                 "s3.amazonaws.com": (50, 100, 8, None), "api.open-meteo.com": (0.1, 2, 1, 500),
                 "downloads.sourceforge.net": (1, 1, 1, None)}
         for h, (rate, burst, conc, soft) in want.items():
@@ -928,10 +996,15 @@ class OfflineTest(unittest.TestCase):
             m = os.path.join(d, "x.404")
             open(m, "wb").close()
             os.utime(m, (0, 0))
+            t = os.path.join(d, "16", "1", "2.404")         # a tile's miss (missindex)
+            missindex.record(t, t=1)
             self.assertFalse(f.miss_alive(m, url(USGS)))
+            self.assertFalse(f.miss_alive(t, url(USGS)))
             f.host(USGS).breaker.trip(60.0)
             self.assertTrue(f.miss_alive(m, url(USGS)))
+            self.assertTrue(f.miss_alive(t, url(USGS)))
             self.assertFalse(f.miss_alive(m + "-none", url(USGS)))
+            self.assertFalse(f.miss_alive(os.path.join(d, "16", "1", "3.404"), url(USGS)))
 
     def test_cli_flag(self):
         got = []

@@ -286,7 +286,7 @@ class RoundaboutTest(unittest.TestCase):
         r, g, b = (int(v) for v in sf.ISLAND_GRASS_AU)
         self.assertGreater(2 * g - r - b, sf.LAWN_GREEN, "green enough for photo_lawns to keep it lawn")
         other = sf._fill_island_photos(rgb, poly)
-        self.assertEqual(tuple(other[20, 20]), sf.ISLAND_GRASS, "elsewhere: as before (too few greens: ISLAND_GRASS)")
+        self.assertEqual(tuple(other[20, 20]), (150, 120, 90), "elsewhere: as upstream's (too few greens: a paved island, its photo as it is)")
 
 
 class ModTablesTest(unittest.TestCase):

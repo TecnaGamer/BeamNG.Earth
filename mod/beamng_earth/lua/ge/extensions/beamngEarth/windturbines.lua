@@ -186,7 +186,7 @@ end
 function M.onRows(key, rows)
   if type(key) ~= 'string' then return end
   delivery = delivery + 1
-  local wanted, changed = {}, false
+  local wanted, changed, at = {}, false, nil      -- (at: a changed turbine's base, for onCollide's distance rule)
   for _, row in ipairs(type(rows) == 'table' and rows or {}) do
     local r = record(row)
     if r and not wanted[r.id] then
@@ -197,7 +197,7 @@ function M.onRows(key, rows)
         turbines[r.id] = st
       end
       st.keys[key] = r
-      if replace(st, preferred(st)) then changed = true end
+      if replace(st, preferred(st)) then changed = true; at = at or st.rec end
     end
   end
   for id in pairs(owners[key] or {}) do
@@ -206,16 +206,18 @@ function M.onRows(key, rows)
       if st then
         st.keys[key] = nil
         if not next(st.keys) then
-          if deleteParts(st) then changed = true end
+          if deleteParts(st) then changed = true; at = at or st.rec end
           turbines[id] = nil
         elseif replace(st, preferred(st)) then
           changed = true
+          at = at or st.rec
         end
       end
     end
   end
   owners[key] = next(wanted) and wanted or nil
-  if changed and M.onCollide then M.onCollide() end
+  -- (the spot too: far from the player, roads.lua defers the rebuild until the player comes near)
+  if changed and M.onCollide then M.onCollide(at and at.x, at and at.y) end
 end
 
 function M.placeRows(key, rows) M.onRows(key, rows) end

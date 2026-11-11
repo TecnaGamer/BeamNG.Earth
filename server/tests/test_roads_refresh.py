@@ -67,7 +67,7 @@ class RoadsRefreshTest(unittest.TestCase):
             cached.update((str(k), "roads") for k in cells)
             c.roads_refresh(a.id)
             await asyncio.sleep(0.05)
-            roads_only = list(built)                # (its land cover not here yet either: still nothing)
+            roads_only = list(built)                # (its roads painted without waiting for the land cover: Kaisei)
             cached.update((str(k), "landcover") for k in cells)
             c.roads_refresh(a.id)
             await asyncio.sleep(0.05)
@@ -76,7 +76,7 @@ class RoadsRefreshTest(unittest.TestCase):
             return before, roads_only, list(built), w.msgs
         before, roads_only, done, msgs = asyncio.run(go())
         self.assertEqual(before, [])
-        self.assertEqual(roads_only, [])
+        self.assertEqual(roads_only, [(0.0, 0.0)])
         self.assertEqual(done, [(0.0, 0.0)])
         self.assertEqual([m["type"] for m in msgs if m["type"] == "terrain_refresh"], ["terrain_refresh"])
         self.assertNotIn(key, s.roads_rebuild)
@@ -98,6 +98,44 @@ class RoadsRefreshTest(unittest.TestCase):
             "surfaceComplete": False, "roadsComplete": True})
         s._hm_done((1, 0.0, 0.0), fut)
         self.assertEqual(s.roads_rebuild, {(1, 0.0, 0.0)})
+
+    def test_a_block_missing_only_its_land_cover_waits_for_it(self):
+        import mapcells
+        import heightmap
+        import numpy as np
+        s, cached = self.server()
+        a = s.new_anchor(36.36, 138.63)
+        s.anchors[a.id] = a
+        key = (a.id, 0.0, 0.0)
+        fut = types.SimpleNamespace(cancelled=lambda: False, exception=lambda: None, result=lambda: {
+            "ter": "old.ter", "zoom": 16, "seconds": 1.0, "zBase": 0.0, "maxHeight": 100.0, "q": 1 / 64,
+            "surfaceComplete": False, "roadsComplete": True})
+        s._hm_done(key, fut)
+        s.hm_committed.append(key)
+        built = []
+
+        async def terrain(anchor, cx, cy, *args, **kw):
+            built.append((cx, cy))
+            return {"ter": "new.ter"}
+        s.terrain = terrain
+        half = s.layout.block * heightmap.SQUARE / 2
+        la, lo, _ = a.frame.enu_to_geodetic(np.array([-half, half]), np.array([-half, half]), 0.0)
+        cells = mapcells.cells_for_bbox(float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
+        cached.update((str(k), "roads") for k in cells)
+
+        async def go():
+            c = earthd.Connection(s, None, _Writer())
+            c.terrain_msg = lambda k, info: {"cx": k[1], "cy": k[2], "size": 512}
+            c.roads_refresh(a.id)
+            await asyncio.sleep(0.05)
+            first = list(built)                     # (its roads were there: it waits for the land cover alone)
+            cached.update((str(k), "landcover") for k in cells)
+            c.roads_refresh(a.id)
+            await asyncio.sleep(0.05)
+            return first, list(built)
+        first, done = asyncio.run(go())
+        self.assertEqual(first, [])
+        self.assertEqual(done, [(0.0, 0.0)])
 
 
 if __name__ == "__main__":

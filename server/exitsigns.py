@@ -157,6 +157,50 @@ def index_records(main_ways, links, coords, node_tags):
     return out
 
 
+
+def _de_delta(coords, a, b):
+    p, q = np.asarray(coords[a]), np.asarray(coords[b])
+    return (q-p)*[111320.*math.cos(math.radians(float((p[1]+q[1])/2))), 111320.]
+
+
+def _de_unit(d):
+    return d/max(float(np.linalg.norm(d)), 1e-9)
+
+
+def de_walk(neighbours, coords, start, second, first_way, limit, downstream=False):
+    """The German sign data's carriageway walk (tools/build_sign_tags.py): index_records' upstream rule (the best
+    aligned edge, stopping at a bend over ~49 degrees or an ambiguous fork) from start, its first step to second along
+    first_way, on to limit metres; upstream over incoming edges {node: [(from, way id, tags)]} or downstream over
+    outgoing ones {node: [(to, way id, tags)]}. (nodes, s of each node from start, edges [[way id, s from, s to]],
+    stop: 'limit' | 'end' | 'bend' | 'ambiguous')."""
+    step = float(np.linalg.norm(_de_delta(coords, second, start)))
+    nodes, s, visited = [start, second], [0., step], {start, second}
+    edges, stop = [[first_way, 0., step]], 'limit'
+    while s[-1] < limit:
+        at, before = nodes[-1], nodes[-2]
+        travel = _de_unit(_de_delta(coords, before, at) if downstream else _de_delta(coords, at, before))
+        choices = []
+        for other, wid, _ in neighbours.get(at, ()):
+            if other in visited or other not in coords:
+                continue
+            d = _de_delta(coords, at, other) if downstream else _de_delta(coords, other, at)
+            choices.append((float(_de_unit(d)@travel), other, wid))
+        choices.sort(key=lambda c: (-c[0], c[2], c[1]))
+        if not choices:
+            stop = 'end'; break
+        if choices[0][0] < .65:
+            stop = 'bend'; break
+        if len(choices) > 1 and choices[0][0]-choices[1][0] < .12:
+            stop = 'ambiguous'; break
+        _, other, wid = choices[0]
+        length = float(np.linalg.norm(_de_delta(coords, at, other)))
+        if edges[-1][0] == wid:
+            edges[-1][2] = s[-1]+length
+        else:
+            edges.append([wid, s[-1], s[-1]+length])
+        nodes.append(other); visited.add(other); s.append(s[-1]+length)
+    return nodes, s, edges, stop
+
 def _xy(frame, lonlat):
     p = np.asarray(lonlat, float)
     e, n, _ = frame.geodetic_to_enu(p[:, 1], p[:, 0], 0.)
@@ -259,9 +303,11 @@ def _gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
     return result
 
 
-def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
+def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel, max_distance=GORE_SEARCH_M,
+                  *, clearance=GORE_CLEAR_M, candidate_clear=None):
     import signroads as roadlanes
-    ramp_rows = [r for r in pavements if r[1].link and _way_id(r[0]) == extra['ramp_id']]
+    ramp_ids = set(extra.get('ramp_ids', [extra['ramp_id']]))
+    ramp_rows = [r for r in pavements if r[1].link and _way_id(r[0]) in ramp_ids]
     if not ramp_rows:
         # A ramp segment without its OSM way id (not from OSM, or the map data's OSM differs from the
         # sign shards' week): the spatial association, requiring both proximity and the ramp's direction.
@@ -286,8 +332,8 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
     polygons = ramp_polys+[_outline(r[2], r[3]) for r in main_rows]
     direction = _station(approach, 1e12)[1]
     length = _station(ramp, 1e12)[2]
-    radius = width_panel/2+GORE_CLEAR_M
-    for distance in np.arange(8., min(GORE_SEARCH_M, length)+.01, 2.):
+    radius = width_panel/2+clearance
+    for distance in np.arange(8., min(max_distance, length)+.01, 2.):
         q = _station(ramp, distance)[0]
         choices = []
         for fid, sp, line, width in main_rows:
@@ -312,7 +358,7 @@ def _compute_gore(extra, approach, ramp, pavements, ramp_mains, width_panel):
         if inner-edge < 2.*radius:
             continue
         centre = at[:2]+outward*(edge+inner)/2
-        if _clear(centre, radius, polygons):
+        if _clear(centre, radius, polygons) and (candidate_clear is None or candidate_clear(centre)):
             return sp, at, travel, centre
     return None                          # a narrow/unsuitable gore never falls back onto the ramp shoulder
 

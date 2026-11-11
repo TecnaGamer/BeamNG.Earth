@@ -588,6 +588,25 @@ function G.announceCmd(url, file, windows)
   return curl .. ' >/dev/null 2>&1 &'
 end
 
+-- Pure: the announcement as JSON text, with encode (BeamMP's Util.JsonEncode). That encoder wraps an integer over
+-- 2^31 - 1 to a negative one (30 client mods of 2.44 GB went out as modstotalsize -1853754211), which the list
+-- refuses (400 "bad json": its modstotalsize is a u64), and the server drops off the list with nothing in its log
+-- (curl's answer goes to /dev/null). So a size over that is encoded capped and the real total put into the text.
+-- (Only the "modstotalsize" key itself matches: inside a JSON string its quotes are escaped.)
+G.INT32_MAX = 2147483647
+function G.encodeAnnouncement(ann, encode)
+  local size = math.floor(tonumber(ann.modstotalsize) or 0)
+  if size < 0 then size = 0 end
+  if size <= G.INT32_MAX then
+    ann.modstotalsize = size
+    return encode(ann)
+  end
+  ann.modstotalsize = G.INT32_MAX
+  local text = encode(ann)
+  ann.modstotalsize = size
+  return (text:gsub('("modstotalsize"%s*:%s*)%-?%d+', function(k) return k .. string.format('%d', size) end, 1))
+end
+
 -- ---------------------------------------------------------------------------------------------------------------
 -- BeamMP wiring (absent in the offline tests)
 if MP and MP.RegisterEvent then
@@ -758,7 +777,7 @@ if MP and MP.RegisterEvent then
     if not cfg.port or not G.listable(cfg) then return end
     local out = io.open(G.ANNOUNCE_FILE, 'w')
     if not out then return end
-    out:write(encode(G.announcement(cfg, G.live(), G.serverInfo(cfg))))
+    out:write(G.encodeAnnouncement(G.announcement(cfg, G.live(), G.serverInfo(cfg)), encode))
     out:close()
     os.execute(G.announceCmd(G.LIST_URL, G.ANNOUNCE_FILE, package.config:sub(1, 1) == '\\'))
   end

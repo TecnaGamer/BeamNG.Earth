@@ -153,7 +153,7 @@ pub fn dsm_ground<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f32>, px_m: f32
     let arr = a.as_array();
     let (rows, cols) = (arr.shape()[0], arr.shape()[1]);
     let src: Vec<f32> = arr.iter().copied().collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let o = opening(&src, rows, cols, w);
         let cut: Vec<f32> = src.iter().zip(&o).map(|(x, y)| x - y).collect();
         let bm = box_mean(&o, rows, cols, w_half);
@@ -190,7 +190,7 @@ pub fn fill_holes<'py>(py: Python<'py>, a: PyReadonlyArray2<'py, f32>, k: usize)
     let arr = a.as_array();
     let (n, m) = (arr.shape()[0], arr.shape()[1]);
     let src: Vec<f32> = arr.iter().copied().collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let hole: Vec<bool> = src.iter().map(|&v| v == 0.0).collect();
         let mut out = src.clone();
         if !hole.iter().any(|&h| h) || hole.iter().all(|&h| h) {

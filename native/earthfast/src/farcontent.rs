@@ -95,7 +95,7 @@ pub fn bridge_slabs<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, z: PyR
     let offs: Vec<usize> = oa.iter().map(|&o| o as usize).collect();
     let ws: Vec<f64> = wa.iter().copied().collect();
     let (top, side) = ([top.0, top.1, top.2, top.3], [side.0, side.1, side.2, side.3]);
-    let groups = py.allow_threads(|| {
+    let groups = py.detach(|| {
         let frame = Frame::new(lat0, lon0);
         let mut by: std::collections::BTreeMap<(i64, i64), Slab> = std::collections::BTreeMap::new();
         for k in 0..ws.len() {

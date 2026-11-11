@@ -193,6 +193,61 @@ class RepeatTest(unittest.TestCase):
         self.assertTrue(any(x[3] > 0.9 for x in b) or any(x[3] < -0.9 for x in b), "boards for the crossing roads too")
 
 
+@unittest.skipUnless(HAVE, "earthfast with the direction-sign kernels")
+class CityTest(unittest.TestCase):
+    """In a town a board stands only where one is needed: at an interchange, a way out of the built-up land, a fork of
+    numbered routes or a turn; not at every crossing of two main streets (the user, 2026-11-07)."""
+
+    def setUp(self):
+        self.places = place_array([(30000, 0, 20000, 1), (0, 80000, 500000, 2)])
+
+    @staticmethod
+    def junction(urban=True, link_n=False, out_e=False):
+        return {"w": row([(-1500, 0), (0, 0)], ends=("w", "j"), urban=urban),
+                "e": row([(0, 0), (1500, 0)], ends=("j", "e"), urban=urban and not out_e),
+                "n": row([(0, 0), (0, 1500)], ends=("j", "n"), urban=urban, link=link_n)}
+
+    @staticmethod
+    def west_boards(b):
+        return [x for x in b if x[2] > 0.9 and x[0] < 0]        # (travelling east: from the west arm)
+
+    def test_a_plain_crossing_of_main_streets_has_no_board_in_town(self):
+        b, _, _ = boards(self.junction(), self.places)
+        self.assertEqual(len(b), 0)
+
+    def test_the_same_junction_outside_town_still_has_its_board(self):
+        b, _, _ = boards(self.junction(urban=False), self.places)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_an_interchange_has_a_board(self):
+        b, _, _ = boards(self.junction(link_n=True), self.places)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_a_way_out_of_town_has_a_board_and_it_is_a_town_board(self):
+        b, _, _ = boards(self.junction(out_e=True), self.places)
+        west = self.west_boards(b)
+        self.assertGreaterEqual(len(west), 1)
+        self.assertAlmostEqual(west[0][6], 1.0)                 # urban
+        self.assertAlmostEqual(west[0][7], 0.0)                 # size class 0: town
+
+    def test_a_fork_of_numbered_routes_has_a_board(self):
+        routes = {"e": [("ua:national", "H-01", 0.0, 1.0)], "n": [("ua:regional", "P-10", 0.0, 1.0)]}
+        b, _, _ = boards(self.junction(), self.places, routes=routes)
+        self.assertGreaterEqual(len(self.west_boards(b)), 1)
+
+    def test_two_boards_for_one_way_are_far_apart_in_town(self):
+        roads = {}
+        for i, x in enumerate((-1500, -1200, -900)):            # three ways out 300 m apart on one street going east
+            roads[f"m{i}"] = row([(x, 0), (x + 300, 0)], ends=(f"j{i}", f"j{i + 1}"), urban=True)
+            roads[f"o{i}"] = row([(x + 300, 0), (x + 300, 800)], ends=(f"j{i + 1}", f"o{i}"), urban=False)
+            roads[f"s{i}"] = row([(x + 300, -800), (x + 300, 0)], ends=(f"s{i}", f"j{i + 1}"), urban=False)
+        roads["tail"] = row([(-2600, 0), (-1500, 0)], ends=("tail", "j0"), urban=True)
+        b, _, _ = boards(roads, self.places)
+        east = [x for x in b if x[2] > 0.9 and -20 < x[1] < 20]
+        xs = sorted(x[0] for x in east)
+        self.assertTrue(all(b2 - a2 >= 590 for a2, b2 in zip(xs, xs[1:])), f"too close: {xs}")
+
+
 class ContentTest(unittest.TestCase):
     def setUp(self):
         doc = {"places": [
@@ -457,17 +512,17 @@ class PostedTextTest(unittest.TestCase):
         table = dirsigns.RouteTable()
         row = self.arm(50.0, (table.id("au:qld:s", "13"), -1, -1))
         link = self.link(dests=("Logan", "Gold Coast", "Tugun", "Currumbin"), refs=("M3", "M1", "2"))
-        turn, marks, dests = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True, link)
+        turn, marks, dests = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True, link=link)
         self.assertEqual(dests, [("Logan", "", ""), ("Gold Coast", "", ""), ("Tugun", "", "")])
         self.assertEqual([m[2] for m in marks], ["M1", "M3"], "the best class of the road: the State Route is left off")
         self.assertEqual([m[1] for m in marks], ["a", "a"], "alphanumeric routes: gold on green")
         self.assertEqual(dirsigns.posted_marks(st, ["2"]), [(4, "s", "2")], "a bare number is a State Route")
         # no destination: the street names; neither: the guess; a ref only: the kernel's places under the posted plate
         _, _, by_street = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True,
-                                                self.link(dests=(), streets=("Pacific Motorway",)))
+                                                link=self.link(dests=(), streets=("Pacific Motorway",)))
         self.assertEqual(by_street, [("Pacific Motorway", "", "")])
         _, m2, guess = dirsigns._row_content(st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True,
-                                             self.link(dests=(), refs=("A3",)))
+                                             link=self.link(dests=(), refs=("A3",)))
         self.assertEqual(guess, [("Brisbane", "", "15")])
         self.assertEqual([m[2] for m in m2], ["A3"])
 
@@ -479,7 +534,7 @@ class PostedTextTest(unittest.TestCase):
         m1 = table.id("au:qld", "M1")
         row = [0, 0.0, m1, -1, -1, 0, 24000.0, -1, 0.0, 5, 0]
         args = (st, row, table, pl, 1.25, dirsigns.styles()["distance_round"], True)
-        self.assertEqual(dirsigns._row_content(*args), dirsigns._row_content(*args, None))
+        self.assertEqual(dirsigns._row_content(*args), dirsigns._row_content(*args, link=None))
         self.assertEqual(dirsigns._row_content(*args), (0, [(0, "a", "M1")], [("Brisbane", "", "30")]))
 
     def test_a_missing_shard_is_an_empty_one_the_places_stay(self):

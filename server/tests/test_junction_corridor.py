@@ -82,3 +82,36 @@ class JunctionCorridorTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class WeldContinuationsTest(unittest.TestCase):
+    """Pieces of one road meet at one height (grading.weld_continuations): no dip across a junction."""
+
+    def test_the_lower_piece_rises_to_its_neighbour_at_the_joint(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        ps = [("a", a), ("b", b)]
+        grading.weld_continuations(ps, [roads.Spec(6.0, "paved", False, "residential"),
+                                        roads.Spec(6.0, "paved", False, "residential")])
+        a, b = [p for _f, p in ps]
+        self.assertAlmostEqual(float(a.z[-1]), 100.2, places=6)
+        self.assertAlmostEqual(float(b.z[0]), 100.2, places=6)
+        self.assertAlmostEqual(float(a.z[0]), 100.0, places=6, msg="the far end keeps its profile")
+        self.assertAlmostEqual(float(b.z[-1]), 100.2, places=6)
+
+    def test_different_classes_are_not_welded(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        ps = [("a", a), ("b", b)]
+        grading.weld_continuations(ps, [roads.Spec(10.0, "paved", False, "primary"),
+                                        roads.Spec(6.0, "paved", False, "residential")])
+        self.assertAlmostEqual(float(ps[0][1].z[-1]), 100.0, places=6)
+        self.assertAlmostEqual(float(ps[1][1].z[0]), 100.2, places=6)
+
+    def test_a_plan_set_is_welded_in_place(self):
+        a = grading.Plan(np.array([[-20.0, 0.0], [0.0, 0.0]]), np.full(2, 100.0), 4.0, road_half=3.5)
+        b = grading.Plan(np.array([[0.0, 0.0], [20.0, 0.0]]), np.full(2, 100.2), 4.0, road_half=3.5)
+        a.rank = b.rank = 114
+        plans = [a, b]
+        grading.weld_continuations(plans)
+        self.assertAlmostEqual(float(plans[0].z[-1]), 100.2, places=6)
+        self.assertAlmostEqual(float(plans[1].z[0]), 100.2, places=6)

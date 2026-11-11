@@ -196,6 +196,54 @@ class KernelTest(unittest.TestCase):
             ef.las_decode(b"nope" * 100, [0, 0, 1, 1])
 
 
+
+def las_bytes(points):
+    """A LAS 1.2 point format 0 file (no compression) of points [(x, y, z, class)] in 0.01 units at (1000, 2000, 0)."""
+    hdr = bytearray(227)
+    hdr[0:4] = b"LASF"
+    hdr[24], hdr[25] = 1, 2
+    struct.pack_into("<H", hdr, 94, 227)
+    struct.pack_into("<I", hdr, 96, 227)
+    struct.pack_into("<I", hdr, 100, 0)
+    hdr[104] = 0
+    struct.pack_into("<H", hdr, 105, 20)
+    struct.pack_into("<I", hdr, 107, len(points))
+    struct.pack_into("<3d", hdr, 131, 0.01, 0.01, 0.01)
+    struct.pack_into("<3d", hdr, 155, 1000.0, 2000.0, 0.0)
+    out = bytes(hdr)
+    for (x, y, z, c) in points:
+        rec = bytearray(20)
+        struct.pack_into("<3i", rec, 0, x, y, z)
+        rec[15] = c
+        out += bytes(rec)
+    return out
+
+
+class PartsTest(unittest.TestCase):
+    """A cell's lidar read keeps each node's points on disk as they come (2026-11-06): a read dropped this run goes on
+    from there next time instead of downloading every node again (a busy cell was dropped at every visit)."""
+
+    def test_a_second_read_takes_the_nodes_from_disk(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            asked = []
+
+            def provider():
+                rz = roadz.RoadZ(d, None)
+                rz._fetch = lambda url, headers=None, lane=None: asked.append(url) or las_bytes(
+                    [(100, 200, 550, 2), (5000, 200, 900, 17)])
+                return rz
+            key = mapcells.CellKey(14, 4683, 6266)
+            boxes = [(1000.0, 2000.0, 1060.0, 2010.0)]
+            a = provider()._read("USGS_X", ["0-0-0-0", "1-0-0-0"], boxes, key)
+            self.assertEqual(len(asked), 2)
+            b = provider()._read("USGS_X", ["0-0-0-0", "1-0-0-0"], boxes, key)
+            self.assertEqual(len(asked), 2, "the second read from disk")
+            np.testing.assert_array_equal(a[0], b[0])
+            np.testing.assert_array_equal(a[1], b[1])
+            provider()._read("USGS_X", ["0-0-0-0"], [(1000.0, 2000.0, 1070.0, 2010.0)], key)
+            self.assertEqual(len(asked), 3, "other boxes (another bridge, a changed map) read their own")
+
 class FakeDem:
     def __init__(self, z):
         self.z = z
@@ -320,6 +368,36 @@ class BridgeOverrideTest(unittest.TestCase):
         roadz.PROVIDER = StubProvider(fn)
         _xy, z1 = solve_overpass()
         np.testing.assert_allclose(z1, z0, atol=1e-9, err_msg="steeper than OBS_MAX_GRADE: the solve stays")
+
+    def test_lower_deck_under_a_higher_one_keeps_its_solve(self):
+        # the lidar sees the upper deck's top: a lower deck under it took that height and lay inside it (the Bay
+        # Bridge's two decks both 61.9 m, solved 52.3 / 60.7, Discord 2026-11-10); a deck beside it keeps its measurement
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        line = np.c_[np.linspace(0.0, 200.0, 51), np.zeros(51)]
+        spec = types.SimpleNamespace(width=18.0)
+        lower, upper, beside = ("lo", 0), ("up", 0), ("bs", 0)
+        pool = {lower: (spec, line, 0.0, 1.0, 51, ""), upper: (spec, line + [0.4, 0.0], 0.0, 2.0, 51, ""),
+                beside: (spec, line + [0.0, 40.0], 0.0, 1.0, 51, "")}
+        z = np.full(51, FLAT + 4.0)
+        roadz.PROVIDER = StubProvider(lambda xy_, s: np.full(len(xy_), FLAT + 6.0))
+        out = bp._observed([lower], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=1e-9, err_msg="under the upper deck: the solve")
+        out2 = bp._observed([beside], pool, [line + [0.0, 40.0]], [z])
+        self.assertGreater(float(np.median(out2[0])), FLAT + 5.0, "a deck beside it: measured (off its solve, FLAT + 4)")
+
+    def test_short_deck_spike_refused(self):
+        # a deck of three points (4.4 m: a culvert's bridge) measured 5 m over its ends in the middle keeps the solve:
+        # the grade check skipped parts this short, and the spike stood across the road as a tent (GitHub #1066)
+        import types
+        bp = roads.BridgeProfiles(FRAME, lambda key: None, flat_elev)
+        k = ("culvert", 0)
+        pool = {k: (types.SimpleNamespace(width=9.0), None, 0.0, 1.0, 3, "")}
+        line = np.c_[[0.0, 2.2, 4.4], [0.0, 0.0, 0.0]]
+        z = np.array([FLAT, FLAT - 0.2, FLAT - 0.4])
+        roadz.PROVIDER = StubProvider(lambda xy_, s: FLAT + np.where(np.abs(s - 2.2) < 0.1, 5.2, 0.0) - 0.2 * s / 2.2)
+        out = bp._observed([k], pool, [line], [z])
+        np.testing.assert_allclose(out[0], z, atol=0.05)
 
 
 @unittest.skipUnless(NATIVE, "earthfast roadz kernels")

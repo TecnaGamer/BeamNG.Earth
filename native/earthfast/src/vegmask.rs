@@ -48,7 +48,7 @@ pub fn mask_polys(py: Python<'_>, mut mask: PyReadwriteArray2<'_, u8>, lonlat: P
         ((x - x0) / dx, (y0 - y) / dy)
     }).collect();
     let mut marked = 0usize;
-    py.allow_threads(|| {
+    py.detach(|| {
         let mut row_edges: Vec<(f64, f64, f64, f64)> = Vec::new();
         for &i in &fs {
             let i = i as usize;
@@ -179,7 +179,7 @@ pub fn disc_max<'py>(py: Python<'py>, a: numpy::PyReadonlyArray2<'py, f32>, r: u
     let arr = a.as_array();
     let (n, m) = (arr.shape()[0], arr.shape()[1]);
     let src: Vec<f32> = arr.iter().copied().collect();
-    let out = py.allow_threads(|| {
+    let out = py.detach(|| {
         let ri = r as i64;
         // half width of the disc's span on row offset dj: the largest di with dj^2 + di^2 <= r^2 + r
         let half: Vec<usize> = (-ri..=ri).map(|dj| {
@@ -258,7 +258,7 @@ pub fn thin_tops<'py>(py: Python<'py>, jj: PyReadonlyArray1<'py, i64>, ii: PyRea
     let ii = ii.as_slice().unwrap().to_vec();
     let h = h.as_slice().unwrap().to_vec();
     let n = jj.len();
-    let keep = py.allow_threads(|| {
+    let keep = py.detach(|| {
         // (at least MIN_RAD_PX: a 9 m tree's 0.87 px let every pixel of a flat crown in the canopy map, its heights
         // whole metres, stand as its own tree: clusters of up to 9 trees in 3 m by East Pratt Street, 2026-10-31)
         const MIN_RAD_PX: f32 = 1.5;

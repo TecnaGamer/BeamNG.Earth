@@ -36,6 +36,9 @@ import xproc  # noqa: E402
 import railtags  # noqa: E402
 
 railtags.LANES_ON = False       # (the lane shards are fetched per build: test_railtags; these count Overture's requests)
+import osmtagshards  # noqa: E402
+
+osmtagshards.ON = False         # (the OSM tag shards: test_osm_tag_shards; these count the Layercake file's requests)
 
 try:
     import duckdb  # noqa: F401 (only whether it is installed)
@@ -44,6 +47,16 @@ except ImportError:
     HAVE_DUCKDB = False
 needs_duckdb = unittest.skipUnless(HAVE_DUCKDB, "duckdb / fsspec not installed (server/requirements.txt)")
 REPO = Path(__file__).resolve().parents[2]
+# (these tests are the parquet path's: Overture's tiles have their own, tests/test_pmtiles.py)
+_SOURCE = mock.patch.object(mapdata, "MAP_SOURCE", "parquet")
+
+
+def setUpModule():
+    _SOURCE.start()
+
+
+def tearDownModule():
+    _SOURCE.stop()
 
 
 class SmallBlocks:
@@ -534,6 +547,17 @@ class Sources:
 
 
 @needs_duckdb
+class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_station_tags_beside_rail_tags(self):
+        # the weekly station shards' reader (railtags.StationTags), made with the map data like the rail one
+        import railtags
+        md, _ = self.mapdata()
+        self.assertIsInstance(md.station_tags, railtags.StationTags)
+        # (the road tiles' chargers take its capacity and charge points: their cache keys follow its weekly build)
+        self.assertIn("stations", md.versions())
+
+
+@needs_duckdb
 class StacTest(Sources, SmallBlocks, unittest.TestCase):
     def test_files_for_cell(self):
         md, t = self.mapdata()
@@ -655,6 +679,31 @@ class OvertureTest(Sources, SmallBlocks, unittest.TestCase):
                           p.attrs["src_dataset"][0]),
                          ("convenience_store", "convenience_store", "Q7492551", "Sheetz", "Sheetz", "open", "meta"))
         self.assertAlmostEqual(float(p.attrs["confidence"][0]), 0.92, places=5)
+
+    def test_town_areas_layer_reads_the_communes_and_counties(self):
+        """Overture divisions' areas (an optional layer: the town entry signs, 2026-10-28): the land communes, whole
+        (not cut at the cell's edge), with their names and their names in France's regional languages, and the county
+        around them, its outline simplified; the region and a maritime part are left out."""
+        self.assertNotIn("town_areas", mapdata.LAYERS)
+        md, t = self.mapdata()
+        d = md.cell(mf.CELL, ("town_areas",)).layers["town_areas"]
+        self.assertEqual(list(d.ids), ["div-county", "div-east", "div-west"])
+        self.assertEqual(d.kind.tolist(), [mg.POLYGON] * 3)
+        self.assertEqual([str(v) for v in d.attrs["name"]], ["Gard", "Est", "Ouest"])
+        self.assertEqual([str(v) for v in d.attrs["subtype"]], ["county", "locality", "locality"])
+        self.assertEqual([str(v) for v in d.attrs["name_oc"]], ["", "", "Oèst"])
+        self.assertEqual([str(v) for v in d.attrs["name_ca"]], ["", "", "Oest"])
+        # (the English name read for a Cyrillic or Greek name's Latin form only: townsigns.latin_name)
+        self.assertEqual([str(v) for v in d.attrs["name_en"]], ["", "", "West"])
+        self.assertEqual({str(v) for v in d.attrs["country"]}, {"FR"})
+        self.assertFalse(d.clipped.any())
+        county = d.parts(0)[0][0]
+        self.assertLess(len(county), 100, "the county's thousand vertices simplified")
+        self.assertTrue(np.array_equal(county[0], county[-1]), "its ring still closed")
+        west = d.parts(2)[0][0]
+        lon0, _, lon1, _ = mf.CELL.bounds()
+        self.assertEqual(len(west), 5, "a commune's outline as it is")
+        self.assertLess(float(west[:, 0].min()), lon0, "the west commune reaches past the cell, whole")
 
     def test_build_owned_covers_every_feature_once(self):
         """'Build the owned features of every cell' builds each whole feature once and every piece
@@ -1087,3 +1136,17 @@ class CliTest(Sources, SmallBlocks, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShedTest(unittest.TestCase):
+    def test_shed_clears_the_station_shards(self):
+        # Codex on #1111 (2026-11-10): MapData.clear_memory (budget.maybe_shed) let go of the rail and lane shards
+        # only; the station shards stayed in memory on small-memory clients
+        import threading
+        from types import SimpleNamespace
+        cleared = []
+        spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
+        md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+        mapdata.MapData.clear_memory(md)
+        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])

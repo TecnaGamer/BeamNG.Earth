@@ -98,7 +98,7 @@ class MotorwaySeamTest(unittest.TestCase):
                     # and inspect the positions consumed by the game collision shape.
                     pos, tris = terrainpatch.mesh(xs, ys, z, (0., 0.))
                     path = os.path.join(folder, f"col{k}.cdae")
-                    cdae.write(path, pos, tris, collision_only=True, material=terrainpatch.MATERIAL)
+                    cdae.write(path, pos, tris, collision_only=True, material=terrainpatch.MATERIAL, close=False)
                     shape = cdae.read(path)
                     mesh = next(m for m in shape["meshes"] if m["type"] == 0)
                     decoded.append(cdae.mesh_arrays(mesh)["verts"])

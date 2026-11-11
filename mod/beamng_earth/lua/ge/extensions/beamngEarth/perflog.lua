@@ -23,6 +23,13 @@ M.HITCH_GAP_S = 2           -- hitch lines at most this often (the ones between 
 M.ENGINE_EVERY = 5          -- the engine's breakdown sampled every this many frames for the window means
 
 local w, base, frames, sumMin, hitchesMin, worstMin, lastHitchAt, skipped, drop, summaryAt
+-- the drops since takeDrops (the anonymous performance summary, perfsummary.lua): how many, their seconds, the lowest
+local drops = { n = 0, s = 0, low = nil }
+function M.takeDrops()
+  local d = drops
+  drops = { n = 0, s = 0, low = nil }
+  return d
+end
 
 function M.reset()
   w = { t0 = nil, n = 0, ms = 0, worst = {}, mod = {}, eng = {}, engN = 0, k = 0 }
@@ -50,13 +57,28 @@ M.top = top
 -- least CAUSE_SHARE of the frame; else UNMEASURED (a first-time load, the GPU driver, the OS: outside both timers).
 M.CAUSE_SHARE = 0.25
 M.UNMEASURED = 'mostly outside the mod and engine timers (a load, the GPU driver or the system)'
+-- The engine's Lua total (all of the game's Lua: ours, traffic, UI apps, the garbage collector) is named with whom it
+-- went to: 'Lua:<our part>' when one of the mod's parts is at least CAUSE_SHARE of it, 'Lua:other' when all of the
+-- mod's parts together are under CAUSE_SHARE of it (the game's own Lua), else 'Lua' (2026-11-09 telemetry: 'Lua' was
+-- the top cause of slow frames, which said nothing about whose).
 function M.cause(ms, hitch)
   local best, bk = 0, nil
   for _, part in ipairs({ hitch and hitch.mod or {}, hitch and hitch.engine or {} }) do
     for k, v in pairs(part) do if type(v) == 'number' and v > best then best, bk = v, k end end
   end
-  if bk and best >= M.CAUSE_SHARE * ms then return bk .. ' ' .. r1(best) end
-  return M.UNMEASURED
+  if not bk or best < M.CAUSE_SHARE * ms then return M.UNMEASURED end
+  if bk == 'Lua' then
+    local sum, top, tk = 0, 0, nil
+    for k, v in pairs(hitch.mod or {}) do
+      if type(v) == 'number' then
+        sum = sum + v
+        if v > top then top, tk = v, k end
+      end
+    end
+    if tk and top >= M.CAUSE_SHARE * best then bk = 'Lua:' .. tk
+    elseif sum < M.CAUSE_SHARE * best then bk = 'Lua:other' end
+  end
+  return bk .. ' ' .. r1(best)
 end
 
 local function median(t)
@@ -144,11 +166,14 @@ function M.frame(ms, now, ctx, hitch, mod, engine)
         if c.doing and c.doing ~= '' then line = line .. ' | doing: ' .. c.doing end
         out[#out + 1] = line
         drop = { since = w.t0, low = fps }
+        drops.n = drops.n + 1
       elseif drop then
         drop.low = math.min(drop.low, fps)
         if fps >= M.BACK_SHARE * usual then
           out[#out + 1] = string.format('perf back to %.0f fps after %ds (lowest %.0f) %s', fps, r0(now - drop.since),
             drop.low, where(ctx and ctx() or {}))
+          drops.s = drops.s + (now - drop.since)
+          drops.low = math.min(drops.low or math.huge, drop.low)
           drop = nil
         end
       end

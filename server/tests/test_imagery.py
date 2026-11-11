@@ -23,6 +23,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import geodesy as g  # noqa: E402
 import imagery  # noqa: E402
+import missindex  # noqa: E402
 import netfetch  # noqa: E402
 
 LAT0, LON0 = 36.5785, -118.2923
@@ -46,6 +47,12 @@ def background(z, x, y):
 # The real host policies without their rates (the tests count requests, not seconds); retry delays
 # are not slept (FakeNet's fetcher sleeps nothing).
 FAST = {h: replace(p, rate=1e9, burst=1e9) for h, p in netfetch.POLICIES.items()}
+
+
+class _All:
+    """A set holding everything (the old render: every tile of the footprint from the next source)."""
+    def __contains__(self, _):
+        return True
 
 
 class ServeTransport:
@@ -178,6 +185,54 @@ class ChainTest(unittest.TestCase):
         # usgs: only its z10 coverage probe (blank / 404 here); eox at its max z14
         self.assertEqual({(r[0], r[1]) for r in im.requests}, {("usgs", 10), ("eox2023", 14)})
 
+    def test_next_source_only_under_the_holes(self):
+        """An all-sea (uniform) tile of the first source: the next one is asked only for the tiles under the texels it
+        left, not the whole footprint again (Bergen: 1347 EOX 2016 tiles for 1792 of 2023), and the picture is the
+        same as when the whole footprint was taken."""
+        from unittest import mock
+
+        def serve(name, z, x, y):
+            if name == "eox2023" and x == serve.x0:
+                return self.tile(name, z, x, y, uniform=True)
+            return self.tile(name, z, x, y)
+        frame = g.EnuFrame(LAT0, LON0)
+        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016"), tone=0.0)
+        lat, lon, _ = frame.enu_to_geodetic(np.array([-20000.0]), np.array([0.0]), 0.0)
+        z = imagery.zoom_for(LAT0, 40000.0 / 512)
+        serve.x0 = int(imagery.mercator_px(lat, lon, z)[0][0] // imagery.TILE)
+        rgb, used = im.render(frame, -20000.0, -20000.0, 40000.0, 512)
+        self.assertLessEqual({"eox2023", "eox2016"}, set(used))
+        asked23 = {(r[2], r[3]) for r in im.requests if r[0] == "eox2023" and r[1] == z}
+        asked16 = {(r[2], r[3]) for r in im.requests if r[0] == "eox2016" and r[1] == z}
+        self.assertGreater(len(asked23), 4)
+        self.assertTrue(asked16 and all(abs(x - serve.x0) <= 1 for x, _ in asked16), asked16)
+        self.assertLess(len(asked16), len(asked23))
+        with tempfile.TemporaryDirectory() as d, \
+                mock.patch.object(imagery, "_unfilled_tiles", lambda *a: _All()):
+            ref = FakeNet(d, serve, chain=("eox2023", "eox2016"), tone=0.0)
+            rgb_all, used_all = ref.render(frame, -20000.0, -20000.0, 40000.0, 512)
+            self.assertGreater(len({(r[2], r[3]) for r in ref.requests if r[0] == "eox2016" and r[1] == z}),
+                               len(asked16), "the whole footprint again, before")
+        np.testing.assert_array_equal(rgb, rgb_all)
+        self.assertEqual(used, used_all)
+
+    def test_open_sea_is_data(self):
+        """EOX serves open sea as one deep blue (imagery.SEA_RGB): that is the picture, not a blank, so the next layer
+        is not fetched for the same water (Bergen: 374 such tiles of EOX 2023, each fetched again from 2016)."""
+        sea = np.zeros((256, 256, 3), np.uint8) + np.array(imagery.SEA_RGB, np.uint8)
+        self.assertFalse(imagery.is_uniform(sea))
+        self.assertTrue(imagery.is_uniform(np.full((256, 256, 3), 255, np.uint8)), "a white blank stays a blank")
+
+        def serve(name, z, x, y):
+            if name == "eox2023":
+                return 200, png(sea)
+            return self.tile(name, z, x, y)
+        im = FakeNet(self.tmp.name, serve, chain=("eox2023", "eox2016"), tone=0.0)
+        rgb, used = self.render(im)
+        self.assertIn("eox2023", used)
+        self.assertNotIn("eox2016", used)
+        self.assertFalse([r for r in im.requests if r[0] == "eox2016"])
+
     def test_coverage_probe(self):
         """usgs tiles are only asked for where their z10 and z12 ancestors have data, and never
         below z10 (its global low-zoom basemap would differ from EOX on the far rings)."""
@@ -264,8 +319,9 @@ class ChainTest(unittest.TestCase):
         self.assertEqual(set(used), {"eox2023"})
         stats = im2.stats_snapshot()
         self.assertGreater(stats.get("finished:disk", 0), 0)    # (the finished tiles: no raw tile read again)
-        markers = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        indexes = [f for _, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) for f in fs if f == missindex.NAME]
+        self.assertTrue(indexes)
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")], "no marker files")
 
     def test_unreachable_source_falls_back(self):
         def serve(name, z, x, y):
@@ -332,29 +388,43 @@ class ChainTest(unittest.TestCase):
             return (400, b"bad request") if name == "usgs" else self.tile(name, z, x, y)
         _, used = self.render(FakeNet(self.tmp.name, serve, tone=0.0))
         self.assertEqual(set(used), {"eox2023"})
-        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")])
+        self.assertFalse([f for _, _, fs in os.walk(self.tmp.name) for f in fs if f.endswith(".404")
+                          or f == missindex.NAME])
 
     def test_miss_marker_ttl(self):
-        """A .404 marker is valid for the host's miss_ttl (90 days): older ones are asked again. An
-        old-style marker (an empty file from before TTLs) works the same way."""
+        """A remembered 404 is valid for the host's miss_ttl (90 days): older ones are asked again (and remembered
+        anew). An old-style marker file works the same way."""
         def serve(name, z, x, y):
             return (404, b"") if name == "usgs" else self.tile(name, z, x, y)
         im = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im)
-        markers = [os.path.join(d, f) for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs"))
-                   for f in fs if f.endswith(".404")]
-        self.assertTrue(markers)
+        cols = [d for d, _, fs in os.walk(os.path.join(self.tmp.name, "usgs")) if missindex.NAME in fs]
+        self.assertTrue(cols)
+        misses = [missindex.marker(d, y) for d in cols for y in missindex.column(d)]
+        self.assertTrue(misses)
         n = len(im.requests)
         im2 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im2)
-        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh markers
+        self.assertEqual(sum(1 for r in im2.requests if r[0] == "usgs"), 0)     # fresh misses
         old = time.time() - netfetch.POLICIES["basemap.nationalmap.gov"].miss_ttl - 60
-        for m in markers:
-            os.utime(m, (old, old))
+        missindex.record(misses, t=old)
         im3 = FakeNet(self.tmp.name, serve, tone=0.0)
         self.render(im3)
         self.assertTrue([r for r in im3.requests if r[0] == "usgs"])            # expired: asked again
-        self.assertTrue(all(time.time() - os.path.getmtime(m) < 60 for m in markers if os.path.exists(m)))
+        self.assertTrue(all(time.time() - missindex.when(m) < 60 for m in misses if missindex.known(m)))
+        # old marker files instead of the index lines: the same
+        for d in cols:
+            os.remove(os.path.join(d, missindex.NAME))
+        for m in misses:
+            open(m, "wb").close()
+        im4 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im4)
+        self.assertEqual(sum(1 for r in im4.requests if r[0] == "usgs"), 0)     # fresh old markers
+        for m in misses:
+            os.utime(m, (old, old))
+        im5 = FakeNet(self.tmp.name, serve, tone=0.0)
+        self.render(im5)
+        self.assertTrue([r for r in im5.requests if r[0] == "usgs"])            # expired: asked again
         self.assertTrue(n)
 
     def test_prefetch_dropped_then_fetched_on_demand(self):

@@ -3,10 +3,10 @@
   "version": 1,
   "placement": {
     "advance_urban_m": 80.0, "advance_rural_m": 250.0, "advance_freeway_m": 1000.0,
-    "lateral_urban_m": 0.5, "lateral_rural_m": 1.5, "lateral_freeway_m": 1.5,
+    "lateral_urban_m": 3.8, "lateral_rural_m": 1.5, "lateral_freeway_m": 1.5,
     "panel_w_m": 3.2, "cone_deg": 30.0,
     "near_min_m": 3000.0, "near_max_m": 60000.0, "far_max_m": 120000.0,
-    "near_min_pop": 4000, "far_min_pop": 50000, "mount_m": 1.8,
+    "near_min_pop": 4000, "far_min_pop": 50000, "mount_m": 1.8, "town_mount_m": 2.5,
     "detour_factor": 1.25,
     "repeat_m": 2000.0,
     "verified": false
@@ -14,6 +14,10 @@
   "face": {
     "px_per_m": 256.0, "cap_m": 0.20, "en_share": 0.72, "min_w_m": 2.0, "max_w_m": 6.0,
     "inset_m": 0.015, "trim_w_m": 0.022
+  },
+  "face_town": {
+    "_comment": "A town board (server/citysigns.py): small, hung on a pole or a stand of its own, the local name only, no road number plates (the user, 2026-11-07). Merged over face.",
+    "cap_m": 0.11, "min_w_m": 1.1, "max_w_m": 2.2, "inset_m": 0.01, "trim_w_m": 0.014
   },
   "distance_round": [[20, 1], [100000, 5]],
   "countries": {

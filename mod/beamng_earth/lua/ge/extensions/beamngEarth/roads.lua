@@ -20,10 +20,14 @@
 -- Console: beamngEarth_roads.status(), .setEnabled(bool)
 
 local stopwatch = require('beamngEarth/stopwatch')
+local sea = require('beamngEarth/sea')
+local speedtraps = require('beamngEarth/speedtraps')
 
 local M = {}
 
 M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_traffic/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/de_autobahn/de_autobahn.materials.json',   -- the German Autobahn signs (deautobahn)
   '/levels/east_coast_usa/art/road/main.materials.json',         -- ECA_road_edge_dirt (the asphalt's edge, roads.EDGE_DECAL)
   '/levels/west_coast_usa/art/decals/main.materials.json',       -- roadmarkings1 (turn arrows, markings.ARROW_MATERIAL)
   '/levels/west_coast_usa/art/shapes/roads/main.materials.json',   -- curbs, sidewalk1 (the sidewalk mesh)
@@ -31,9 +35,13 @@ M.MATERIAL_FILES = { '/levels/west_coast_usa/art/road/main.materials.json',
   '/levels/italy/art/shapes/buildings/main.materials.json',        -- italy_cobblestone (paving stones)
   '/levels/driver_training/art/road/main.materials.json',          -- m_metal_grid_drain (storm drains)
   '/levels/gridmap_v2/art/shapes/grid/main.materials.json',        -- m_gm_concrete_plain (concrete streets)
+  '/levels/beamng_earth/art/shapes/beamngEarth/regional_signs/main.materials.json',
+  '/levels/beamng_earth/art/shapes/beamngEarth/eu_surfaces/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/buildings.materials.json',  -- buildings (server/buildings.py)
+  '/levels/beamng_earth/art/shapes/beamngEarth/fr_houses/main.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/dirtroad.materials.json',   -- dirt / gravel strips (roads.DIRT_LOOK)
   '/levels/beamng_earth/art/shapes/beamngEarth/au_roads.materials.json',   -- fork: Australia's kerb channel (roads.AU_CHANNEL_M)
+  '/levels/beamng_earth/art/shapes/beamngEarth/roadwear.materials.json',   -- road wear and spots (server roadwear.py)
   -- highway signs (server/signstream.py: exit and overhead panels, mile markers, merge warnings)
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/exit.materials.json',
   '/levels/beamng_earth/art/shapes/beamngEarth/roadside/merge.materials.json',
@@ -44,7 +52,7 @@ M.enabled = true
 -- (key "s<tx>_<ty>") carry the render-only shapes SIGN_WHATS; switched off, their objects go but each tile keeps its data
 -- (signData) to show again at once
 M.signsEnabled = true
-M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
+M.SIGN_WHATS = { 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 -- be:reloadCollision() at most this often: every rebuild is a ~20 ms physics frame (2026-10-13, the
 -- engine's frame metrics), and while driving new sidewalk tiles arrive all the time. They arrive ~640 m
 -- ahead (11 s at 58 m/s), so a few seconds before they collide do not matter. A terrain commit rebuilds
@@ -122,7 +130,11 @@ local collisionDirty = false
 local lastReloadAt = -math.huge   -- now() of the last be:reloadCollision (ours or another's): M.ahead
 local reloads = 0                 -- be:reloadCollision runs so far (ours or another's): M.reloads
 local sinceUrgent = math.huge     -- frames since the last urgent walk import (M.urgentWalk)
-local deletesDirty = false  -- only far colliders deleted since the last rebuild (RELOAD_DELETES_S)
+local deletesDirty = false  -- only far colliders deleted (and far ghosts dropped) since the last rebuild (RELOAD_DELETES_S)
+local dirtyAt = {}          -- far spots where another module changed colliders (markCollisionDirty with a position):
+                            -- square "gx_gy" (TILE_M, so far churn stays bounded) -> { solid once reloads reaches,
+                            -- square centre x, y } (the centre, not the last spot: collideNear's TILE_M * 0.71
+                            -- half-diagonal then covers the whole square, wherever in it the spots fell)
 
 -- Every road object lives in one SimGroup. A Lua reload (Lua:requestReload) rebuilds the VM without
 -- unloading the extensions, so nothing deletes the old objects: 2026-10-11, after a few reloads, 3,558
@@ -201,6 +213,11 @@ local function tileKey(aid, k) return tostring(aid) .. ':' .. tostring(k) end
 -- its last object is deleted (a collider deleted and made again while the tile lives keeps it).
 local session = nil        -- the server session the slots belong to (setSession)
 local objSlot = {}         -- object id -> slot number of the pooled file it loaded
+local waterSerial, objectWater, waterReleases, waterReloads = 0, {}, {}, 0
+local function protectWater(t, data, anchor)
+  waterSerial = waterSerial + 1
+  t.waterguard = sea.protect(waterSerial, data.waterguard, anchor)
+end
 local slotLive = {}        -- slot number -> objects alive with it
 local slotDropped = {}     -- slot number -> { serial, session } of a dropped tile's slot, reported at its last delete
 local slotsGone = {}       -- { n, serial, session } to report
@@ -209,13 +226,19 @@ local function slotOf(path) return tonumber(type(path) == 'string' and path:matc
 function M.setSession(s) session = s end
 
 -- An object with a pooled shape was made / is deleted.
-local function slotMade(id, path)
+local function slotMade(id, path, water)
+  if water then objectWater[id] = water; sea.retain(water) end
   local n = slotOf(path)
   if not n then return end
   objSlot[id] = n
   slotLive[n] = (slotLive[n] or 0) + 1
 end
 local function slotObjGone(id)
+  local water = objectWater[id]
+  if water then
+    objectWater[id] = nil
+    waterReleases[#waterReleases + 1] = { water, reloads + 1 }
+  end
   local n = objSlot[id]
   if not n then return end
   objSlot[id] = nil
@@ -284,6 +307,10 @@ end
 
 local function now() return os.clock() * 1000 end
 
+-- a tile's track mesh is cut into "rail", "rail2", "rail3" (server railways.split_mesh: 16-bit indices); with a lean
+-- "railcol" (and its "railcol2", "railcol3") they only render
+local function isRailDrawn(what) return what == 'rail' or what == 'rail2' or what == 'rail3' end
+
 -- Main-thread cost of each kind of unit (n, total ms, worst ms) since the level loaded: road chunks, deletes, each
 -- mesh kind of a road tile (road, walk, bld, bldcol, deck ...), far building tiles, collision reloads. status().units
 local unitStats = {}
@@ -323,9 +350,10 @@ local function dropTile(key)
   if t.walk then deleteQ[#deleteQ + 1] = t.walk end
   if t.road then deleteQ[#deleteQ + 1] = t.road end
   if t.deck then deleteQ[#deleteQ + 1] = t.deck end
-  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  for _, w in ipairs({ 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
   if t.wire then deleteQ[#deleteQ + 1] = t.wire end
   for _, w in ipairs(M.SIGN_WHATS) do if t[w] then deleteQ[#deleteQ + 1] = t[w] end end
+  if t.signs then deleteQ[#deleteQ + 1] = t.signs end
   -- and its meshes not made yet (from KyzoFox's 1.5.4, PR #64): a tile sent again under the same key left its old
   -- walkQ / held / createQ entries, which were then made for the new tile from pooled shape paths that had just been
   -- reported gone and refilled with another tile's shape: that tile's buildings drawn here at its ground height (houses
@@ -340,10 +368,12 @@ local function dropTile(key)
   if t.guardrails then require('beamngEarth/trees').dropKey((key:gsub(':', ':g', 1))) end
   if t.props then require('beamngEarth/nightlights').dropKey(key) end
   if t.park then require('beamngEarth/parking').dropKey(key) end
+  if t.speedTraps then speedtraps.dropKey(key) end
   if t.fuel then require('beamngEarth/gasstations').dropKey(key) end
   if t.sound then require('beamngEarth/ambience').dropSpaces(key) end
   if t.wells then require('beamngEarth/pumpjacks').dropKey(key) end
   if t.turbines then require('beamngEarth/windturbines').dropKey(key) end
+  sea.release(t.waterguard)
   tiles[key] = nil
 end
 
@@ -380,6 +410,7 @@ end
 local function switchAnchor(aid)
   if aid == anchorId then return end
   anchorId = aid
+  speedtraps.resetMotion()
   for key, t in pairs(tiles) do
     if t.anchor ~= aid and not t.ghost and not t.geo then dropTile(key) end   -- (geotiles: M.replace)
   end
@@ -448,6 +479,18 @@ end
 -- Other vehicles' collision foci (collisionfoci.lua, through core.lua): their tiles' colliders are made too.
 function M.setFoci(f) foci = f or {} end
 
+-- A colliding object of tile t was made or swapped in: the prompt rebuild flag (collisionDirty) only when the tile
+-- can matter to a collision island now (M.collideNear: the player's COLLIDE_M reach and the foci, a tile of margin).
+-- Far road geotiles churn (the server rebuilds them; parked at 0 mph for an hour at dev.212, 1,489 rebuilt tiles,
+-- most 7-15 km out, kept something dirty in every RELOAD_EVERY_S window: a 70-640 ms `slow unit reloadCollision`
+-- every 6.1 s with nothing near the car changed). Their dirt waits on the tile instead (t.colDirty: solid once
+-- `reloads` reaches it) and is promoted when the player comes near (updateCollideRange, the COLLIDE_CHECK_S poll);
+-- any rebuild before that makes the collider solid anyway, be:reloadCollision being global.
+local function markTileCollider(t)
+  if not t or M.collideNear(t, M.TILE_M) then collisionDirty = true
+  else t.colDirty = reloads + 1 end
+end
+
 -- Every COLLIDE_CHECK_S: parked colliders whose tile came near queued; far tiles' colliders dropped.
 local function updateCollideRange()
   if sinceCollideCheck() < M.COLLIDE_CHECK_S * 1000 then return end
@@ -468,7 +511,15 @@ local function updateCollideRange()
     end
     parked = keep
   end
+  for sq, d in pairs(dirtyAt) do      -- other modules' deferred spots (markCollisionDirty with a position)
+    if reloads >= d[1] then dirtyAt[sq] = nil
+    elseif M.collideNear({ cx = d[2], cy = d[3] }, M.TILE_M) then dirtyAt[sq] = nil; collisionDirty = true end
+  end
   for key, t in pairs(tiles) do
+    if t.colDirty then      -- deferred collider dirt (markTileCollider): solid after any rebuild, promoted near
+      if reloads >= t.colDirty then t.colDirty = nil
+      elseif M.collideNear(t, M.TILE_M) then t.colDirty = nil; collisionDirty = true end
+    end
     if t.cq and not M.collideNear(t, M.UNCOLLIDE_M) then
       for what, q in pairs(t.cq) do
         if t[what] then deleteQ[#deleteQ + 1] = t[what]; t[what] = nil end
@@ -526,7 +577,7 @@ local function spawnCustom(key, shape, pos, rot, col)
   local id = createWalk(walk, collide)
   t.custom = t.custom or {}
   t.custom[#t.custom + 1] = id
-  if collide then collisionDirty = true end
+  if collide then markTileCollider(t) end
   return id
 end
 
@@ -557,7 +608,7 @@ M.geoStats = { tiles = 0, kept = 0, replaced = 0, skins = 0, skinSwaps = 0, exac
 local geotile = require('beamngEarth/geotile')
 local geodesy = require('beamngEarth/geodesy')
 local anchorObj = nil       -- the current anchor (geodesy) the geotiles are placed into (M.update, onTile)
-M.CONTENT_WHATS = { 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'railcol' }
+M.CONTENT_WHATS = { 'signs', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol' }
 M.SKIN_WHATS = { 'road', 'walk', 'walkcol' }
 
 local function geoKey(gkey) return 'g:' .. tostring(gkey) end
@@ -669,6 +720,10 @@ local function geoRows(key, t, data, replacing)
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
     -- (at a rebase trees.lua places its own geotiles: trees.transform)
     if not replacing then
+      -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      if type(data.townsigns) == 'table' then
+        require('beamngEarth/townsigns').register(require('beamngEarth/trees'), data.townsigns)
+      end
       require('beamngEarth/trees').onGeoRows('p' .. t.gkey, t.gkey, data.props.items, data.props.groups, nil,
         t.frame, t.rowPivot or 0, t.anchorObj)
     end
@@ -686,6 +741,11 @@ local function geoRows(key, t, data, replacing)
   if type(data.park) == 'table' and data.park[1] then
     require('beamngEarth/parking').onRows(t.anchor, key, M.mapRows(pl, data.park, 1, 4))
     t.park = true
+  end
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    local rows = M.mapRows(pl, data.speedTraps, 2, 5)
+    speedtraps.onRows(key, M.mapRows(pl, rows, 8))
+    t.speedTraps = true
   end
   if type(data.fuel) == 'table' and data.fuel[1] then
     require('beamngEarth/gasstations').onRows(t.anchor, key, M.mapStations(pl, data.fuel))
@@ -716,7 +776,7 @@ local function queueGeoParts(key, t, data)
   for _, what in ipairs(M.CONTENT_WHATS) do
     if t.parts[what] then
       local q = { key = key, what = what, tile = t, geo = true,
-        renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and what == 'rail') }
+        renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then t.colWant[what] = true end
       if q.renderOnly or M.collideNear(t) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -778,6 +838,10 @@ function M.onGeoTile(msg, currentAnchor, a)
   if not frame then lastError = 'road geotile without a frame: ' .. tostring(msg.key); return false end
   local t = { anchor = currentAnchor, geo = true, gkey = msg.key, frame = frame, h = h, objs = {}, queued = 0,
     colliders = {}, slots = {}, at = now(), colWant = {}, parts = {}, exactShape = {}, exactOf = {} }
+  -- (its buildings and their footprint share, server blockworker: the scene complexity, M.scene)
+  if type(data.scene) == 'table' and type(data.scene[1]) == 'number' then
+    t.sceneN, t.sceneCover = data.scene[1], tonumber(data.scene[2]) or 0
+  end
   local cols = type(data.colliders) == 'table' and data.colliders or {}
   local pivots, np = 0, 0
   for _, what in ipairs(M.CONTENT_WHATS) do
@@ -803,6 +867,7 @@ function M.onGeoTile(msg, currentAnchor, a)
   end
   t.rowPivot = np > 0 and pivots / np or 0
   t.data = data
+  protectWater(t, data, a)
   M.placeGeoTile(t, a)
   tiles[key] = t
   sinceChange = stopwatch.new()
@@ -934,8 +999,8 @@ function M.onExact(msg, currentAnchor)
         walkQ = keep
         local lean = t.parts.bldcol ~= nil
         local q = { key = geoKey(msg.key), what = what, tile = t, geo = true, swap = true,
-          renderOnly = what == 'wire' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
-            or (t.parts.railcol ~= nil and what == 'rail') }
+          renderOnly = what == 'wire' or what == 'signs' or (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol')
+            or (t.parts.railcol ~= nil and isRailDrawn(what)) }
         walkQ[#walkQ + 1] = q
       end
     end
@@ -949,6 +1014,7 @@ end
 -- the tiles moved.
 function M.replace(a, aid)
   if not a then return 0 end
+  speedtraps.resetMotion()
   anchorObj = a
   local n = 0
   for key, t in pairs(tiles) do
@@ -1078,8 +1144,8 @@ function M.onTile(msg, currentAnchor, a)
   end
   -- pooled shape files: the server's slot paths instead of the tile's own files
   local slots = {}
-  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'tunnel', 'rail',
-      'railcol', 'barrier', 'exits', 'mileposts', 'merges', 'speeds', 'dirs' }) do
+  for _, what in ipairs({ 'road', 'deck', 'walk', 'walkcol', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'wire', 'signs', 'tunnel', 'rail', 'rail2', 'rail3',
+      'railcol', 'railcol2', 'railcol3', 'barrier', 'buscol', 'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }) do
     local sl = msgSlot(msg, what)
     if sl then
       if type(data[what]) == 'table' and type(data[what].pos) == 'table' then
@@ -1093,6 +1159,11 @@ function M.onTile(msg, currentAnchor, a)
   local road = type(data.road) == 'table' and data.road.shape and type(data.road.pos) == 'table' and data.road
   tiles[key] = { anchor = msg.anchorId, objs = {}, queued = road and 0 or #data.chunks,
     colliders = type(data.colliders) == 'table' and data.colliders or {}, slots = slots, at = now(), colWant = {} }
+  protectWater(tiles[key], data, a)
+  if type(data.speedTraps) == 'table' and data.speedTraps[1] then
+    speedtraps.onRows(key, data.speedTraps)
+    tiles[key].speedTraps = true
+  end
   sinceChange = stopwatch.new()
   if road then                -- the tile's road mesh replaces its DecalRoads (server/roadmesh.py)
     walkQ[#walkQ + 1] = { key = key, walk = road, what = 'road', tile = tiles[key] }
@@ -1100,6 +1171,11 @@ function M.onTile(msg, currentAnchor, a)
     for _, c in ipairs(data.chunks) do createQ[#createQ + 1] = { key = key, chunk = c } end
   end
   if type(data.props) == 'table' and type(data.props.items) == 'table' then   -- street lights, poles (trees.lua)
+    if type(data.townsigns) == 'table' then   -- the town signs' faces: their Materials and shapes first (townsigns.lua)
+      local townsigns, trees = require('beamngEarth/townsigns'), require('beamngEarth/trees')
+      townsigns.register(trees, data.townsigns)
+      townsigns.addSigns(trees, msg.anchorId, data.props.items, data.props.groups)   -- (the trees in front: hidden)
+    end
     require('beamngEarth/trees').onRows(msg.anchorId, 'p' .. tostring(msg.key), data.props.items, data.props.groups)
     require('beamngEarth/nightlights').onRows(key, data.props.items, data.props.groups)   -- (the lamps' light)
     tiles[key].props = true
@@ -1127,6 +1203,9 @@ function M.onTile(msg, currentAnchor, a)
   if type(data.sound) == 'table' and data.sound[1] then    -- tunnels' and bridges' sound spaces (ambience.lua)
     require('beamngEarth/ambience').onSpaces(key, data.sound)
     tiles[key].sound = true
+  end
+  if type(data.signs) == 'table' and data.signs.shape and type(data.signs.pos) == 'table' then
+    walkQ[#walkQ + 1] = { key = key, walk = data.signs, what = 'signs', renderOnly = true, tile = tiles[key] }
   end
   if type(data.wire) == 'table' and data.wire.shape and type(data.wire.pos) == 'table' then    -- pole wires
     walkQ[#walkQ + 1] = { key = key, walk = data.wire, what = 'wire', tile = tiles[key] }
@@ -1162,12 +1241,13 @@ function M.onTile(msg, currentAnchor, a)
   local leanWalk = type(data.walkcol) == 'table' and data.walkcol.shape ~= nil
   local leanRail = type(data.railcol) == 'table' and data.railcol.shape ~= nil
   -- tunnels (server roadmesh.tunnel: tubes and portals) and railway tracks (server railways.py) collide like the decks
-  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'railcol' }) do
+  for _, what in ipairs({ 'walk', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3',
+      'buscol' }) do
     local w = data[what]
     if type(w) == 'table' and w.shape and type(w.pos) == 'table' then
       local q = { key = key, walk = w, what = what, tile = tiles[key],
         renderOnly = (lean and what:sub(1, 3) == 'bld' and what ~= 'bldcol') or (leanWalk and what == 'walk')
-          or (leanRail and what == 'rail') }
+          or (leanRail and isRailDrawn(what)) }
       if not q.renderOnly then tiles[key].colWant[what] = true end
       if q.renderOnly or M.collideNear(tiles[key]) then walkQ[#walkQ + 1] = q else parked[#parked + 1] = q end
     end
@@ -1561,8 +1641,20 @@ function M.onDrop(msg)
   sinceChange = stopwatch.new()
 end
 
--- A gas station's colliding props were made (gasstations.lua): rebuilt with the roads' next collision rebuild.
-function M.markCollisionDirty() collisionDirty = true end
+-- Another module made, moved or removed colliding objects for the roads (gas stations' props, pump jacks, wind
+-- turbines: core.lua wires their onCollide here): rebuilt with the roads' next collision rebuild. With the spot's
+-- world (x, y) the prompt flag follows markTileCollider's rule: far from every island the dirt waits (dirtyAt) and
+-- is promoted by updateCollideRange's poll when the player comes near, any rebuild in between having made the
+-- objects solid. Without a position: prompt, as before (rebases, level end, third-party callers).
+function M.markCollisionDirty(x, y)
+  if type(x) ~= 'number' or type(y) ~= 'number' then collisionDirty = true; return end
+  if M.collideNear({ cx = x, cy = y }, M.TILE_M) then collisionDirty = true; return end
+  local gx, gy = math.floor(x / M.TILE_M), math.floor(y / M.TILE_M)
+  local sq = gx .. '_' .. gy
+  local d = dirtyAt[sq]
+  if d then d[1] = reloads + 1
+  else dirtyAt[sq] = { reloads + 1, (gx + 0.5) * M.TILE_M, (gy + 0.5) * M.TILE_M } end
+end
 
 -- Origin rebase (core.lua finishRebase): the shown tiles move into the new frame (p_new = R*p + t: their TSStatics
 -- turned by R, as farfield.transform) and stay as "ghosts" until the new anchor's tiles over them are made
@@ -1581,8 +1673,8 @@ end
 M.GHOST_FAR_WAIT_S = 2      -- ... from this long after the rebase on
 local ghostSince = nil      -- stopwatch since the last rebase that left ghosts
 
-local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'tunnel', 'barrier', 'rail', 'railcol',
-  'exits', 'mileposts', 'merges', 'speeds', 'dirs' }
+local WHATS = { 'walk', 'road', 'deck', 'bld', 'bld2', 'bld3', 'bld4', 'bldcol', 'walkcol', 'wire', 'signs', 'tunnel', 'barrier', 'rail', 'rail2', 'rail3', 'railcol', 'railcol2', 'railcol3', 'buscol',
+  'exits', 'mileposts', 'merges', 'speeds', 'dirs', 'rsigns', 'autobahn' }
 
 function M.transform(xf, geodesy)
   local bx, by, bz, bw = xf:beamngQuat()
@@ -1704,7 +1796,11 @@ local function releaseGhosts(player)
         and M.boxGap(p.x, p.y, t.cx, t.cy, M.TILE_M / 2) > M.GHOST_FAR_M
       if all or far or (t.cx and (t.signOnly and covered0(signsDone, t.cx, t.cy) or (not t.signOnly and covered(done, t.cx, t.cy, busyKeys)))) then
         dropTile(key)
-        if not t.signOnly then collisionDirty = true end
+        -- a ghost dropped far from every island: its stale collision harms nobody out there, so it rides the lazy
+        -- RELOAD_DELETES_S rebuild (its colliders' deletes classify themselves the same way, the deleteQ above)
+        if not t.signOnly then
+          if M.collideNear(t, M.TILE_M) then collisionDirty = true else deletesDirty = true end
+        end
       else left = true end
     end
   end
@@ -1736,7 +1832,17 @@ local function step(name)
   M.steps[name] = t - stepT0
   stepT0 = t
 end
-function M.update(gov, currentAnchor, player, view, a)
+function M.update(gov, currentAnchor, player, view, a, dtSim, dtReal)
+  -- A deleted collider stays in the physics cache until a rebuild. Allow a full subsequent update after
+  -- that asynchronous rebuild before restoring deep water over its old bore.
+  if #waterReleases > 0 then           -- (no table a frame when there is nothing to release)
+    local keepWater = {}
+    for _, r in ipairs(waterReleases) do
+      if r[2] <= waterReloads then sea.release(r[1]) else keepWater[#keepWater + 1] = r end
+    end
+    waterReleases = keepWater
+  end
+  waterReloads = reloads
   stepT0 = stepClock()
   viewAt = view
   if a then anchorObj = a end
@@ -1745,6 +1851,7 @@ function M.update(gov, currentAnchor, player, view, a)
     prewarmId, prewarmWant = nil, prewarmPath
   end
   if currentAnchor then switchAnchor(currentAnchor) end
+  if dtReal then speedtraps.update(not holdActive and player or nil, dtSim, dtReal) end
   step('anchor')
   releaseGhosts(player)
   step('ghosts')
@@ -1812,8 +1919,8 @@ function M.update(gov, currentAnchor, player, view, a)
       local isRoad = q.what == 'road' or q.what == 'wire' or q.renderOnly   -- render-only meshes
       -- the buildings' and sidewalks' lean meshes are a collision detail (server cdae collision_only): never drawn
       local ok, id = pcall(createWalk, walk,
-        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol') and 'Collision Mesh' or not isRoad)
-      if ok then slotMade(id, walk.shape) end
+        (q.what == 'bldcol' or q.what == 'walkcol' or q.what == 'railcol' or q.what == 'buscol') and 'Collision Mesh' or not isRoad)
+      if ok then slotMade(id, walk.shape, (q.what == 'deck' or q.what == 'tunnel') and t.waterguard or nil) end
       if ok and q.skin and t.skin then             -- a new skin's part: the old one's goes (all, with the last)
         t.skin.pending = t.skin.pending - 1
         M.dropOldSkin(t, q.what)
@@ -1827,7 +1934,7 @@ function M.update(gov, currentAnchor, player, view, a)
       if ok then
         if not isRoad then t.cq = t.cq or {}; t.cq[q.what] = q end
         if isRoad then t[q.what] = id else
-          t[q.what] = id; collisionDirty = true; newColliders[#newColliders + 1] = { id, q }
+          t[q.what] = id; markTileCollider(t); newColliders[#newColliders + 1] = { id, q }
           t.colAt = t.colAt or {}; t.colAt[q.what] = now()
         end
       else lastError = tostring(id) end
@@ -1878,6 +1985,7 @@ M.PLAYER_DZ = 2.5   -- m above / below
 -- curb held the whole tile's sidewalk collision (one mesh a tile), and a tile made again while the car drove its
 -- streets had no solid sidewalks at all (the user, 2026-10-27: "sidewalks are missing collision", Fells Point)
 M.WALK_PLAYER_R = 0.0
+M.WALK_URGENT_M = 25
 M.DECK_BOX_BELOW_M = 2.2    -- a deck box's floor is this far under its lowest surface (server roads.collider_boxes:
                             -- roadmesh.DECK_DEPTH 1.2 + 1.0)
 M.DECK_ON_M = 0.2           -- the car's position this far under that surface or less: on the deck (not held)
@@ -1891,18 +1999,42 @@ function M.nearPlayer(p, r)
   return dx * dx + dy * dy <= r * r
 end
 
+local function colliderPosition(p, t, what)
+  local pp = t and t.geo and t.pls and t.pls[what]
+  if not pp then return p end
+  local x, y, z = pp.inv:apply(p.x, p.y, p.z)
+  return { x = x, y = y, z = z }
+end
+
+local function overWalk(p, outline)
+  if type(outline) ~= 'table' or #outline < 6 then return true end
+  local inside = false
+  local x, y = outline[#outline - 1], outline[#outline]
+  for i = 1, #outline, 2 do
+    local u, v = outline[i], outline[i + 1]
+    if (y > p.y) ~= (v > p.y) and p.x < x + (u - x) * (p.y - y) / (v - y) then
+      inside = not inside
+    end
+    local dx, dy = u - x, v - y
+    local l2 = dx * dx + dy * dy
+    if l2 > 0 then
+      local t = math.max(0, math.min(1, ((p.x - x) * dx + (p.y - y) * dy) / l2))
+      local ex, ey = p.x - x - t * dx, p.y - y - t * dy
+      if ex * ex + ey * ey < 0.18 * 0.18 then return true end
+    end
+    x, y = u, v
+  end
+  return inside
+end
+
 playerIn = function(boxes, what, t)
   -- (a drop hold: the car does not move until its ground and colliders are in, then it is set on top of them)
   if holdActive or type(boxes) ~= 'table' or #boxes == 0 then return false end
   local veh = getPlayerVehicle and getPlayerVehicle(0)
   if not veh then return false end
-  local p = veh:getPosition()
-  local pp = t and t.geo and t.pls and t.pls[what]
-  if pp then      -- a geotile's content: its boxes are in the tile's frame, the player mapped into it
-    local x, y, z = pp.inv:apply(p.x, p.y, p.z)
-    p = { x = x, y = y, z = z }
-  end
-  local r, dz = (what == 'walk' or what == 'walkcol') and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
+  local p = colliderPosition(veh:getPosition(), t, what)
+  local walk = what == 'walk' or what == 'walkcol'
+  local r, dz = walk and M.WALK_PLAYER_R or M.PLAYER_R, M.PLAYER_DZ
   if what == 'barrier' then r = 1.0 end -- only a car intersecting the narrow median holds its collision
   for _, b in ipairs(boxes) do
     if p.x >= b[1] - r and p.x <= b[4] + r and p.y >= b[2] - r and p.y <= b[5] + r then
@@ -1912,7 +2044,7 @@ playerIn = function(boxes, what, t)
         -- through it (I-95, Baltimore, a Deck test drive 2026-10-20)
         local surf = b[3] + M.DECK_BOX_BELOW_M
         if p.z < surf - M.DECK_ON_M and p.z > surf - M.DECK_BOX_BELOW_M - dz then return true end
-      elseif p.z >= b[3] - dz and p.z <= b[6] + dz then
+      elseif p.z >= b[3] - dz and p.z <= b[6] + dz and (not walk or overWalk(p, b[7])) then
         return true
       end
     end
@@ -1992,20 +2124,29 @@ function M.nextWalk(q)
   return best
 end
 
--- The walkQ index of a bridge deck's or tunnel's collider the car reaches within URGENT_S (150 m at least; not behind a
--- fast car), the nearest, or nil.
+-- Give a deck, tunnel or sidewalk the player is about to reach an import slot during loading.
 function M.urgentWalk(q)
   local p, dir = playerNow()
   if not p then return nil end
   local reach = math.max(150, lastSpeed * M.URGENT_S) + M.TILE_M * 0.71
   local best, bd = nil, math.huge
   for i, e in ipairs(q) do
+    local t = tiles[e.key]
     if e.what == 'deck' or e.what == 'tunnel' then
-      local t = tiles[e.key]
       if t and t.cx and not t.ghost and (not e.tile or e.tile == t) then
         local dx, dy = t.cx - p.x, t.cy - p.y
         local d = math.sqrt(dx * dx + dy * dy)
         if d <= reach and d < bd and (not dir or dx * dir.x + dy * dir.y > -M.TILE_M / 2) then best, bd = i, d end
+      end
+    elseif e.what == 'walkcol' and t and not t.ghost and (not e.tile or e.tile == t) then
+      local at = colliderPosition(p, t, e.what)
+      for _, b in ipairs(t.colliders.walkcol or {}) do
+        if b[7] and at.z >= b[3] - 2 and at.z <= b[6] + 2 then
+          local dx = math.max(b[1] - at.x, at.x - b[4], 0)
+          local dy = math.max(b[2] - at.y, at.y - b[5], 0)
+          local d = math.sqrt(dx * dx + dy * dy)
+          if d <= M.WALK_URGENT_M and d < bd then best, bd = i, d end
+        end
       end
     end
   end
@@ -2130,6 +2271,7 @@ end
 
 function M.clear()
   for key in pairs(tiles) do dropTile(key) end
+  speedtraps.clear()
   for key, f in pairs(far) do
     if f.geo then M.dropFarGeo(key) end
     if f.id then deleteQ[#deleteQ + 1] = f.id end
@@ -2147,11 +2289,15 @@ function M.clear()
   end
   deleteQ = {}
   walkQ, parked = {}, {}
-  if collisionDirty then be:reloadCollision(); collisionDirty = false end
+  if collisionDirty then be:reloadCollision(); M.collisionRebuilt() end
 end
 
 -- The level ended: its objects are gone with it.
 function M.reset()
+  for _, t in pairs(tiles) do sea.release(t.waterguard) end
+  for _, token in pairs(objectWater) do sea.release(token) end
+  for _, r in ipairs(waterReleases) do sea.release(r[1]) end
+  objectWater, waterReleases, waterReloads = {}, {}, reloads
   -- (the level took the objects: every slot goes)
   for _, t in pairs(tiles) do for _, sl in pairs(t.slots or {}) do slotsGone[#slotsGone + 1] = { sl[1], sl[2], sl[3] } end end
   for _, f in pairs(far) do
@@ -2164,7 +2310,7 @@ function M.reset()
   objSlot, slotLive, slotDropped = {}, {}, {}
   tiles, createQ, deleteQ, walkQ, anchorId, loadedMaterials = {}, {}, {}, {}, nil, false
   far, farQ = {}, {}
-  collisionDirty, deletesDirty = false, false
+  collisionDirty, deletesDirty, dirtyAt = false, false, {}
 end
 
 -- On / off (the settings page, through core.setRoadsEnabled, which asks the server for the tiles
@@ -2218,6 +2364,9 @@ function M.ahead(x, y, hx, hy, dist)
         e.road = t.road ~= nil or (t.queued or 0) <= 0
         e.bld = t.bld ~= nil                    -- (a tile without buildings never has one)
         e.walk = t.walk ~= nil
+        for _, q in ipairs(walkQ) do              -- (a sidewalk / kerb import still queued: the walk lead)
+          if q.key == tkey then e.walkWait = true; break end
+        end
         local want, made, solid = 0, 0, 0
         for what in pairs(t.colWant or {}) do
           want = want + 1
@@ -2238,6 +2387,13 @@ function M.ahead(x, y, hx, hy, dist)
             end
           end
         end
+      end
+      -- the tree tile there (trees.lua, geotiles only): not arrived or still being placed (the tree lead)
+      if M.geo then
+        local T = package.loaded['beamngEarth/trees']
+        local all = T and T.debugTiles and T.debugTiles()
+        local tt = type(all) == 'table' and all['g:' .. tostring(sq)] or nil
+        e.trees = tt ~= nil and not tt.pending
       end
       out[#out + 1] = e
     end
@@ -2400,6 +2556,25 @@ function M.status()
     urgentWalks = M.urgentWalks or 0, quietS = sinceChange() / 1000, error = lastError, units = unitStats, unitLog = unitLog,
     geo = M.geo or false, geoStats = M.geoStats, farGeo = M.farGeo or false, farGeoTiles = ngf,
     farGeoShown = ngShown }
+end
+
+-- The scene round the car for the anonymous performance reports (perfsummary.lua): the loaded road tiles (those within
+-- the send distance) with their buildings and mean footprint share. No place: counts only.
+-- (tiles built before their counts were sent have none: the known ones' total scaled to all; none known: nil)
+function M.scene()
+  local n, known, nb, cover = 0, 0, 0, 0
+  for _, t in pairs(tiles) do
+    if t.geo and not t.orphan then
+      n = n + 1
+      if t.sceneN then
+        known = known + 1
+        nb = nb + t.sceneN
+        cover = cover + (t.sceneCover or 0)
+      end
+    end
+  end
+  if known == 0 then return { tiles = n } end
+  return { tiles = n, buildings = math.floor(nb * n / known + 0.5), cover = cover / known }
 end
 
 local okSweep, swept = pcall(M.sweep)

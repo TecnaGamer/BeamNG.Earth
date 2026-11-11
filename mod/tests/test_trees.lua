@@ -55,6 +55,20 @@ local shape, sc = trees.pick('conifer', 20.0, 0.3)
 T.check(shape:find('douglasfir_large') ~= nil and sc > 0.9 and sc < 1.1, 'a 20 m conifer: a large fir near its size')
 shape, sc = trees.pick('rock', 0.6, 0.1)
 T.check(shape:find('rock') ~= nil and math.abs(sc - 0.6 / select(2, unpack({ shape, 0.6 })) * 1) < 2, 'a rock')
+shape, sc = trees.pick('pole_concrete_recessed', 8.5, 0)
+T.check(shape:find('/regional_poles/bne_pole_concrete_recessed', 1, true) ~= nil and sc == 1,
+        'regional pole: its own model at the authored height, not a fallback tree')
+
+shape, sc = trees.pick('streetlight_high_mast', 18.03, 0)
+T.check(shape == '/levels/driver_training/art/shapes/buildings/s_light_pole_high_mast' and sc == 1,
+        'mapped high-mast lamp: ETK stock asset at its authored scale')
+shape, sc = trees.pick('streetlight_straight_mast', 12.25, 0)
+T.check(shape == '/levels/driver_training/art/shapes/buildings/s_light_pole' and sc == 1,
+        'straight-mast lamp: Driver Experience stock pole at authored scale')
+shape, sc = trees.pick('streetlight_double_arm', 13.76, 0)
+T.check(shape == '/art/shapes/objects/pole_light_double' and sc == 1,
+        'double-arm lamp: West Coast stock pole at authored scale')
+T.check(trees.NO_COLLIDE.high_mast_light == true, 'high-mast light markers do not collide')
 
 -- a tile of 100 items with ranks 0 .. 0.99 at the player: all made; far away: a quarter
 local rows = {}
@@ -285,12 +299,21 @@ T.check(trees.tileThreshold(0, { f = {}, s = trees.STRIDE, n = 0 }) == 1.0, 'no 
 
 -- rows packed flat: STRIDE numbers a row in the server's order, the readers' defaults, a broken row never shown
 do
-  local f = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
-  T.check(trees.STRIDE == 8 and #f == 32, 'flatten: 8 numbers a row')
-  T.check(table.concat(f, ',', 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
-  T.check(table.concat(f, ',', 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
+  -- (an FFI double array where there is FFI: read through these, not # or table.concat)
+  local function span(f, i, j)
+    local out = {}
+    for k = i, j do out[#out + 1] = string.format('%g', f[k]) end
+    return table.concat(out, ',')
+  end
+  local f, n = trees.flatten({ { 3, 1.5, 2.5, 3.5, 90, 0.8, 14, 0.25 }, { 1, 4, 5, 6 }, 'x', { 0, nil, 1, 1 } })
+  T.check(trees.STRIDE == 8 and n == 4, 'flatten: 8 numbers a row, the row count')
+  T.check(span(f, 1, 8) == '3,1.5,2.5,3.5,90,0.8,14,0.25', 'flatten: a row\'s fields in order')
+  T.check(span(f, 9, 16) == '1,4,5,6,0,1,10,0', 'flatten: missing yaw, scale, height, rank as read before')
   T.check(f[24] == 2 and f[32] == 2, 'flatten: a row that is no table or has no position is never shown')
-  T.check(#trees.flatten(nil) == 0, 'flatten: no rows')
+  T.check(select(2, trees.flatten(nil)) == 0, 'flatten: no rows')
+  T.check(trees.FFI == (type(f) == 'cdata'), 'flatten: FFI doubles where there is FFI (the collector does not walk them)')
+  local p, pn = trees.packFlat({ 1, 2, 3, 4, 5, 6, 7, 8, 9, 'x' }, 8)
+  T.check(pn == 1 and p[1] == 1 and p[8] == 8, 'packFlat: whole rows only')
 end
 
 -- a server that knows the mod reads flat tiles (hello.vegFlat) sends { groups, stride, flat }: kept as decoded (no copy,
@@ -324,10 +347,10 @@ do
   local kept = false
   for i = 1, 20 do
     local name, v = debug.getupvalue(trees.status, i)
-    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].f == sent.flat end
+    if name == 'tiles' then kept = v['8:0_0'] and v['8:0_0'].n == 50 and v['8:0_0'].f[1] == sent.flat[1] end
   end
   T.check(count() == 50 and made() == fromRows, 'flat: the same items as the rows')
-  T.check(kept, 'flat: the decoded array itself is the tile\'s (no copy)')
+  T.check(kept, 'flat: the decoded array\'s rows are the tile\'s (packed as the collector does not walk them)')
   trees.clear()
   trees.onTile({ anchorId = 8, key = '0_0', path = '/t/wide', n = 50 }, 8)
   trees.update(8, { x = 50, y = 50 })
@@ -545,6 +568,16 @@ do -- fork: Australia's Give Way and signals (server furniture.au_group, tools/b
     T.check(trees.GROUP_MAX_M[g] and trees.GROUP_MAX_M[g] > 0 and trees.ONE_SPELLING[g], g .. ': a draw distance, one spelling')
   end
 end
+do -- Germany's junction signs (server designs.GROUPS): each mesh at its true size, never thinned, one spelling
+  for _, g in ipairs({ 'de_z205', 'de_z206_g1', 'de_z306_p4_g3', 'de_z307' }) do
+    local c = trees.CATALOG[g] and trees.CATALOG[g][1] or {}
+    T.check(c[1] == '/levels/beamng_earth/art/shapes/beamngEarth/bne_' .. g, g .. ': its own mesh')
+    local shape, sc = trees.pick(g, c[2] or 1, 0.3)
+    T.check(c[1] ~= nil and shape == c[1] and math.abs(sc - 1) < 1e-9, g .. ': at 1:1')
+    T.check(trees.isBarrier(g) and trees.GROUP_MAX_M[g] == 300 and trees.ONE_SPELLING[g],
+      g .. ': kept, near only, one spelling')
+  end
+end
 do -- stock world props (server worldprops.py): the catalog height is the mesh, so that height is 1:1
   local props = {
     { 'celltower', 28.93 }, { 'watertower', 26.16 }, { 'barn', 8.41 }, { 'container', 2.59 }, { 'billboard', 11.95 },
@@ -575,6 +608,28 @@ do
   T.check((trees.skipped or 0) == s0 + 2 and count() == 200, 'a new tile: a pass at once')
   trees.update(13, { x = 128 + trees.RECHECK_M + 1, y = 128 })
   T.check((trees.skipped or 0) == s0 + 3, 'then skipped again')
+end
+do -- roadside delineators stay traversable, even in the solid near-car pool
+  trees.clear()
+  files['/t/balises'] = '{ groups = { "fr_j1", "fr_j3", "fr_j6" }, items = { {0, 20, 20, 0, 0, 1, 1.3, 0}, {1, 30, 20, 0, 0, 1, 1.3, 0}, {2, 40, 20, 0, 0, 1, 1.05, 0} } }'
+  trees.onTile({ anchorId = 14, key = '0_0', path = '/t/balises', n = 3 }, 14)
+  for _ = 1, 4 do trees.update(14, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: visible but never solid near the car')
+  trees.update(14, { x = 30, y = 650 })
+  trees.update(14, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'J1 J3 J6: a revisit never enables collisions')
+end
+do -- country-specific delineators use the same non-solid pools on revisit
+  trees.clear()
+  files['/t/eubalises'] = '{ groups = { "eu_marker_de", "eu_marker_pl", "eu_marker_gb" }, items = { {0, 20, 20, 0, 0, 1, 1.15, 0}, {1, 30, 20, 0, 0, 1, 1.15, 0}, {2, 40, 20, 0, 0, 1, 1.15, 0} } }'
+  trees.onTile({ anchorId = 15, key = '0_0', path = '/t/eubalises', n = 3 }, 15)
+  for _ = 1, 4 do trees.update(15, { x = 30, y = 20 }) end
+  T.check(count() == 3 and solidCount() == 0, 'European delineators are visible and never collidable')
+  trees.update(15, { x = 30, y = 650 })
+  trees.update(15, { x = 30, y = 20 })
+  T.check(count() == 3 and solidCount() == 0, 'European delineator revisit remains non-solid')
+  T.check(trees.CATALOG.stop_arret[1][1]:match('stop_arret$') ~= nil, 'Quebec uses the accented ARRET asset')
+  T.check(trees.CATALOG.stop_dur[1][1]:match('stop_dur$') ~= nil, 'Turkey uses the DUR asset')
 end
 -- geotiles (server --geo-tiles on): a tile in its own frame is made where its placement puts it in the anchor's
 -- world; a rebase moves its Forest at once, then it is made again at the new placement (far too: the engine draws
@@ -677,6 +732,56 @@ do
   T.check(table.concat(at, ',') == '4,2,5,3,1', 'pass order: ' .. table.concat(at, ','))
   T.check(trees.orderKey(1e9, 7) % 2 ^ 20 == 7 and trees.orderKey(1e9, 7) < 2 ^ 53, 'pass order: far tiles capped')
 end
+do -- far clumps (server vegetation.CLUMP_OF, GitHub #1074): the clump beyond CLUMP_M, the trees it stands for within it
+  local function shapes()
+    local out = {}
+    for it in pairs(items) do
+      local sf = it.d.fields.shapeFile
+      local k = sf:find('group_low', 1, true) and 'clump' or sf:find('douglasfir', 1, true) and 'fir' or 'other'
+      out[k] = (out[k] or 0) + 1
+    end
+    return out
+  end
+  for k in pairs(items) do items[k] = nil end
+  -- three firs of a square (scale < 0), its clump, and a lone fir
+  trees.onRows(41, '0_0', { { 0, 10, 10, 0, 0, -1, 20, 0.1 }, { 0, 14, 10, 0, 0, -1, 21, 0.2 },
+    { 0, 12, 14, 0, 0, -1, 22, 0.3 }, { 1, 12, 11, 0, 0, 1, 21, 0.1 }, { 0, 100, 100, 0, 0, 1, 20, 0.05 } },
+    { 'conifer', 'conifer_clump' })
+  for _ = 1, 10 do trees.update(41, { x = 0, y = 0 }) end
+  local s = shapes()
+  T.check(s.fir == 4 and not s.clump, 'near: the square\'s firs and the lone one, no clump')
+  for _ = 1, 10 do trees.update(41, { x = 0, y = 256 + trees.CLUMP_M + 100 }) end
+  s = shapes()
+  T.check(s.fir == 1 and s.clump == 1, 'far: the clump and the lone fir, not the square\'s firs')
+  T.check(trees.clumpDistance('normal', 'normal', 200) == 200 and trees.clumpDistance('lowest', 'far', 200) == 130,
+    'clump distance by density and distance')
+  -- the far cap counts the clumps and the single trees, not the trees the clumps stand for
+  local rows = {}
+  for i = 1, 3000 do rows[#rows + 1] = { 0, i % 200, 50 + i % 7, 0, 0, -1, 20, 0.001 } end     -- (low ranks first)
+  for i = 1, 300 do rows[#rows + 1] = { 1, i % 200, 60, 0, 0, 1, 20, 0.1 } end
+  for k in pairs(items) do items[k] = nil end
+  trees.onRows(41, '0_0', rows, { 'conifer', 'conifer_clump' })
+  for _ = 1, 20 do trees.update(41, { x = 0, y = 256 + 900 }) end      -- (the 700-1500 m ring: 900 a tile at most)
+  s = shapes()
+  T.check(s.clump == 300 and not s.fir, 'far cap: every clump (the 3000 trees they stand for not counted)')
+  trees.onDrop({ anchorId = 41, key = '0_0' })
+  for _ = 1, 20 do trees.update(41, { x = 0, y = 0 }) end
+end
+
+do -- round bales in their season only, by hemisphere (server vegetation.bale_items)
+  trees.applySeason(8)
+  T.check(not trees.groupOff.straw_n and trees.groupOff.straw_s and not trees.groupOff.silage_n
+    and trees.groupOff.silage_s, 'August: the north\'s bales')
+  trees.applySeason(1)
+  T.check(trees.groupOff.straw_n and not trees.groupOff.straw_s and trees.groupOff.silage_n
+    and not trees.groupOff.silage_s, 'January: the south\'s bales')
+  T.check(trees.CATALOG.straw_s[1][1] == trees.CATALOG.straw_n[1][1] and trees.GROUP_MAX_M.straw_n == 400,
+    'one straw bale shape, near only')
+  trees.applySeason(11)
+  T.check(trees.groupOff.straw_n and trees.groupOff.straw_s and trees.groupOff.silage_n and not trees.groupOff.silage_s,
+    'November: the south\'s silage only')
+end
+
 do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
   local shape, sc = trees.pick('golfflag', 2.05, 0.3)
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,

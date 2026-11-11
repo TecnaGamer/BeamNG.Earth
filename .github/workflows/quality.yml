@@ -8,6 +8,11 @@ on:
 permissions:
   contents: read
 
+
+# (the tests start servers through the launcher: never usage reports from CI, telemetry.py)
+env:
+  BNE_TELEMETRY: "off"
+
 jobs:
   regression:
     strategy:
@@ -25,7 +30,11 @@ jobs:
         with:
           node-version: "22"
       - name: Dependencies
-        run: python -m pip install -r server/requirements.txt lupa==2.8
+        # SciPy is a test-only independent QP reference (PR #814); it is not a server requirement.
+        # The Germany tests use the regional-data builder: zstandard is its Python <3.14 compression backend.
+        run: python -m pip install -r server/requirements.txt lupa==2.8 scipy zstandard
+      - name: OSM tag inventory
+        run: python tools/build_taginfo.py --check
       - name: Build required native kernels
         run: python tools/build_native.py
       - name: Foundation regression and package gate

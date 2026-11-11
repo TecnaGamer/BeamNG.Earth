@@ -14,13 +14,17 @@ plugin, beammp/Server) and the server's README (beammp/README.md).
 import argparse
 import os
 import sys
+import time
 import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md",
+FILES = ["install.py", "start.py", "launcher.py", "bmplaunch.py", "apppaths.py", "run_server.bat", "run_server.sh", "README.md", "LICENSE", "CREDITS.md", "TELEMETRY.md",
          "VERSION", "docs/QUICKSTART.md", "docs/MODERNIZATION.md", "docs/MODERNIZATION_VALIDATION.md",
          "docs/SKETCHFAB_ASSETS.md", "docs/SHARED_WORLD.md", "docs/RELAUNCH_TROUBLESHOOTING.md", "docs/STABILITY_VALIDATION.md",
+         "docs/INITIAL_LOADING_VALIDATION.md",
+         "docs/CLASS_GRID_CACHE.md",
+         "docs/SUBSEA_TUNNEL_VALIDATION.md", "docs/licenses/Clarabel-LICENSE.txt",
          "docs/PLATFORM_STATUS.md", "docs/RELEASE_1_7_4.md", "docs/RELEASE_1_8_1.md",
          "docs/research/2026-11-02-range-cache.md", "docs/research/2026-11-02-world-bundle.md",
          "docs/research/2026-11-02-world-bundle.json", "docs/research/2026-11-02-release-1.8.1-world-bundle.json",
@@ -87,6 +91,11 @@ def beammp_zip(out_dir, ver):
             info.compress_type = zipfile.ZIP_DEFLATED
             with open(src, "rb") as f:
                 z.writestr(info, f.read())
+        # (the release this copy is: its hello names it, and a player's app whose version differs says so: a BeamMP
+        # server's mod replaces the players' own, and a mismatch loaded the world the slow way unseen, 2026-11-07)
+        info = zipfile.ZipInfo("lua/ge/extensions/beamngEarth/release.lua", past_stamp(time.time()))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        z.writestr(info, f"return {ver!r}\n")
     path = os.path.join(out_dir, f"BeamNG.Earth-BeamMP-Server-{ver}.zip")
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
         z.writestr("Resources/Client/beamng_earth.zip", mod.getvalue(), zipfile.ZIP_STORED)

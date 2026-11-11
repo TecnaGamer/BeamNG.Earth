@@ -10,6 +10,7 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 from unittest import mock
 
@@ -21,6 +22,7 @@ import cache as cachemod  # noqa: E402
 import dem as demmod  # noqa: E402
 import earthd  # noqa: E402
 import imagery as imagerymod  # noqa: E402
+import missindex  # noqa: E402
 import netfetch  # noqa: E402
 
 DAY = 86400.0
@@ -82,6 +84,68 @@ class LruTest(Base):
                          [False] * 3 + [True] * 7)
         self.assertEqual(c.usage(), (7 * MB, 7))
         self.assertEqual(c.evict(), (0, 0), "under the cap: nothing")
+
+    def test_a_disk_short_of_its_reserve_cuts_the_cache_back(self):
+        """A cap larger than the disk's free space (or unlimited): when the disk has less than its reserve free, the
+        tick evicts the least recently used files whatever the cap; files of this session's last hour stay."""
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        for i in range(10):
+            put(self.root, f"imagery/usgs/16/1/{i}.jpg", MB, T0 - (10 - i) * DAY)
+        self.clock.t += 7200
+        c = self.make(cap_gb=0)                         # unlimited
+        c.ready = True
+        free = {"b": 100e9}
+        c.disk_usage = lambda _root: Du(500e9, 500e9 - free["b"], free["b"])
+        self.assertEqual(c.disk_short(wait=True), 0)
+        c.tick()
+        self.assertEqual(c.usage(), (10 * MB, 10), "enough free space: nothing evicted")
+        # the reserve: 5 % of 500 GB is 25 GB, at most 10 GB; the disk is 4 MB short of it
+        free["b"] = 10e9 - 4 * MB
+        self.assertEqual(c.disk_short(wait=True), 4 * MB)
+        with unittest.mock.patch.object(cachemod, "DISK_MARGIN", 1 * MB):
+            c.tick()
+        self.assertEqual(c.usage(), (5 * MB, 5), "short 4 MB + 1 MB margin: the five oldest go")
+        self.assertEqual([exists(self.root, f"imagery/usgs/16/1/{i}.jpg") for i in range(10)],
+                         [False] * 5 + [True] * 5)
+
+    def test_a_slow_disk_never_holds_the_caller(self):
+        """GitHub #1054: disk_short on every pose waited 2.6-9.9 s for a busy hard disk. Now the caller gets the last
+        answer at once; the disk is asked on a thread of its own, at most every DISK_CHECK_S."""
+        import collections, threading, time
+        Du = collections.namedtuple("Du", "total used free")
+        c = self.make(cap_gb=20)
+        gate, asked = threading.Event(), []
+
+        def slow(_root):
+            asked.append(1)
+            gate.wait(10)
+            return Du(20e9, 19.5e9, 0.5e9)
+        c.disk_usage = slow
+        t0 = time.perf_counter()
+        self.assertEqual(c.disk_short(), 0)             # (nothing known yet: 0, at once)
+        self.assertEqual(c.disk_short(), 0)             # (one question in flight, not two)
+        self.assertLess(time.perf_counter() - t0, 1.0)
+        gate.set()
+        for _ in range(100):
+            if c.disk_short() == int(1.5e9):
+                break
+            time.sleep(0.02)
+        self.assertEqual(c.disk_short(), int(1.5e9))
+        self.assertEqual(len(asked), 1)
+
+    def test_disk_reserve_bounds(self):
+        import collections
+        Du = collections.namedtuple("Du", "total used free")
+        c = self.make(cap_gb=20)
+        c.disk_usage = lambda _root: Du(20e9, 19.5e9, 0.5e9)       # a small disk: 2 GB at least
+        self.assertEqual(c.disk_short(wait=True), int(1.5e9))
+        c.disk_usage = lambda _root: Du(4e12, 3.99e12, 0.01e12)    # a big disk: 10 GB at most
+        self.assertEqual(c.disk_short(wait=True), 0)
+        def broken(_root):
+            raise OSError("gone")
+        c.disk_usage = broken
+        self.assertEqual(c.disk_short(wait=True), 0)
 
     def test_a_hit_moves_a_file_to_the_back(self):
         """An old file used (read) a while ago in this session outlives newer files that were not."""
@@ -535,7 +599,7 @@ class StubFetcher:
         pass
 
     def miss_alive(self, path, url):
-        return os.path.exists(path)
+        return missindex.known(path)
 
     def get(self, url, kind="demand", headers=None):
         self.calls.append(url)
@@ -559,13 +623,17 @@ class ProducerTest(Base):
         d._download(demmod.MAPTERHORN, 12, 1, 2)
         self.assertEqual(c._entries["dem/mapterhorn/12/1/2.webp"][0], len(buf.getvalue()))
         self.assertIsNone(d._download(demmod.AWS, 13, 0, 0))
-        self.assertEqual(c._entries["dem/aws-terrarium/13/0/0.404"][0], 0, "the marker: tracked, empty")
+        e = c._entries["dem/aws-terrarium/13/0/_misses"]
+        self.assertTrue(e[0] > 0 and not c._evictable("dem/aws-terrarium/13/0/_misses", e[0]),
+                        "the column's miss index: tracked, never evicted")
+        self.assertNotIn("dem/aws-terrarium/13/0/0.404", c._entries, "no marker file")
         self.clock.t += 100
         d._download(demmod.MAPTERHORN, 12, 1, 2)                # a disk hit: last use now
         self.assertEqual((len(f.calls), c._entries["dem/mapterhorn/12/1/2.webp"][1]), (2, T0 + 100))
         self.clock.t += cachemod.PROTECT_S + 1
         c.evict(target=0)
         self.assertFalse(exists(self.root, "dem/mapterhorn/12/1/2.webp"))
+        self.assertTrue(exists(self.root, "dem/aws-terrarium/13/0/_misses"), "a miss index is never evicted")
         d._download(demmod.MAPTERHORN, 12, 1, 2)                # evicted: downloaded again
         self.assertEqual(len(f.calls), 3)
         # an undecodable tile leaves the cache and the bookkeeping

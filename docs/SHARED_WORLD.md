@@ -52,6 +52,10 @@ Missing source metadata stays unknown; malformed metadata is rejected. The expor
 match the generation-time records in every selected plan. Use the producer's versions and record the
 actual input snapshot/digest and licensing separately; do not invent them or use the examples as provenance.
 Export only data you are allowed to redistribute and retain all required notices.
+Plans of Hong Kong cells made with its measured road heights (the `hk` source of `server/roadz.py`) or its LiDAR
+terrain (`server/hkdtm.py`), both on by default, get no provenance marker, so they cannot be exported; BeamMP sharing
+and baked packs leave them out too. Produce a Hong Kong region with `BNE_ROADZ_HK=off` and `BNE_HKDTM=off` to export
+it.
 
 The included server binds **127.0.0.1 only** and serves just the selected manifest and hashes, without
 directory listings or arbitrary file paths. It limits concurrent handlers and request duration. For a

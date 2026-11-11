@@ -209,6 +209,30 @@ def cells_for_bbox(lat0, lon0, lat1, lon1, z=ZOOM, max_cells=4096):
     return [CellKey(z, ix % n, iy) for iy in range(iy0, iy1 + 1) for ix in range(ix0, ix1 + 1)]
 
 
+def bbox_ranges(lat0, lon0, lat1, lon1, z=ZOOM):
+    """cells_for_bbox of many boxes at once (arrays): per box its columns ix0..ix1 (wrapped mod 2**z) and rows
+    iy0..iy1, the same cells (an empty row range where it has none). For small boxes only: a box of more than 4096
+    cells raises ValueError, as cells_for_bbox does."""
+    n = 1 << z
+    lat0, lat1 = np.asarray(lat0, np.float64), np.asarray(lat1, np.float64)
+    la0, la1 = np.minimum(lat0, lat1), np.maximum(lat0, lat1)
+    none = (la0 > MAX_LAT) | (la1 < -MAX_LAT)
+    la0, la1 = np.maximum(-MAX_LAT, la0), np.minimum(MAX_LAT, la1)
+    _, y0 = tile_xy(la1, np.zeros_like(la1), z)
+    _, y1 = tile_xy(la0, np.zeros_like(la0), z)
+    x0 = (np.asarray(lon0, np.float64) / 360.0 + 0.5) * n
+    x1 = (np.asarray(lon1, np.float64) / 360.0 + 0.5) * n
+    x1 = np.where(x1 < x0, x1 + n, x1)
+    ix0 = np.floor(x0).astype(np.int64)
+    ix1 = np.minimum(np.maximum(np.ceil(x1).astype(np.int64) - 1, ix0), ix0 + n - 1)
+    iy0 = np.minimum(n - 1, np.maximum(0, np.floor(y0).astype(np.int64)))
+    iy1 = np.maximum(iy0, np.minimum(n - 1, np.ceil(y1).astype(np.int64) - 1))
+    iy1 = np.where(none, iy0 - 1, iy1)
+    if len(ix0) and (((ix1 - ix0 + 1) * np.maximum(iy1 - iy0 + 1, 0)) > 4096).any():
+        raise ValueError("more than 4096 cells in a box")
+    return ix0, ix1, iy0, iy1
+
+
 def cells_for_points(lat, lon, pad_lat=0.0, pad_lon=0.0, z=ZOOM, max_cells=4096):
     """The cells of the points' box (cells_for_bbox, padded), or, for points spread farther apart than max_cells
     cells (a long road; one that runs to a pole, its longitudes all round the globe: the South Pole Traverse), the

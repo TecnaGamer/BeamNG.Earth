@@ -28,6 +28,9 @@ T.check(d[1] and d[1]:find('^perf drop 20 fps') and d[1]:find('usual 60', 1, tru
 run(10, 1000 / 60)
 local b = find('perf back')
 T.check(#b == 1 and b[1]:find('^perf back to 60 fps after') and b[1]:find('lowest 20', 1, true), 'back: how long, the lowest')
+local dr = P.takeDrops()
+T.check(dr.n == 1 and dr.s >= 9 and dr.s <= 16 and math.abs(dr.low - 20) < 1, 'the drops tally: one, its seconds, the lowest')
+T.check(P.takeDrops().n == 0, 'taken: a new tally')
 lines = {}
 now = now + 0.3
 local got = P.frame(300, now, ctx, { mod = { terrainCommit = 280 }, engine = { RenderShadows = 250, Lua = 20 } }, nil, nil)
@@ -45,5 +48,12 @@ T.check(#m >= 1 and m[1]:find('^perf minute %d+ fps, 1%% low') and m[1]:find('3 
 T.check(P.cause(1600, { mod = {}, engine = { FPSLimiter = 13 } }) == P.UNMEASURED,
   'a 1.6 s frame with 13 ms measured: not blamed on that part')
 T.check(P.cause(300, { mod = { terrainCommit = 280 }, engine = {} }) == 'terrainCommit 280', 'a part that explains it: named')
+T.check(P.cause(200, { mod = { far = 60, roads = 5 }, engine = { Lua = 150, Render = 20 } }) == 'Lua:far 150',
+  'the engine\'s Lua led by one of our parts: Lua:<part>')
+T.check(P.cause(200, { mod = { far = 10, roads = 5 }, engine = { Lua = 150 } }) == 'Lua:other 150',
+  'the engine\'s Lua with little of ours in it: Lua:other')
+T.check(P.cause(200, { mod = { far = 30, roads = 25, trees = 20 }, engine = { Lua = 150 } }) == 'Lua 150',
+  'ours spread over several parts: Lua')
+T.check(P.cause(200, { mod = {}, engine = { Render = 150 } }) == 'Render 150', 'other engine parts unchanged')
 T.check(#P.frame(0 / 0, now, ctx) == 0 and #P.frame(-1, now, ctx) == 0, 'bad frame times ignored')
 T.done('test_perflog')

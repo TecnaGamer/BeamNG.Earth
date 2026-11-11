@@ -152,7 +152,7 @@ class WyomingBankingTest(unittest.TestCase):
         pos, tris = terrainpatch.mesh(xs, ys, z, (0., 0.))
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "curve.cdae")
-            cdae.write(path, pos, tris, collision_only=True, material=terrainpatch.MATERIAL)
+            cdae.write(path, pos, tris, collision_only=True, material=terrainpatch.MATERIAL, close=False)   # (terrain)
             shape = cdae.read(path)
             m = next(m for m in shape["meshes"] if m["type"] == 0)
             actual = cdae.mesh_arrays(m)["verts"]  # exporter reorders vertices by triangles

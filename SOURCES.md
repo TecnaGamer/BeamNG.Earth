@@ -22,10 +22,20 @@ A few things hold for all of them:
 
 ## Map data: roads, buildings, water, land use
 
+On a network with no IPv4 route (IPv6-only, no NAT64), the public AWS S3 sources below switch to their regional
+dual-stack endpoint (`s3.dualstack.<region>.amazonaws.com`, IPv4 and IPv6) after the first IPv4 connection finds no
+route; everywhere else they are used as listed. The source names remain the identities for download budgets, status,
+cached files and `NO_PROXY`. Signed URLs, requests with an Authorization header and proxied requests keep their
+original endpoint. Other providers still need their own IPv6 support.
+For the OpenStreetMap keys read by the server and weekly data builders, see the
+[OSM tag inventory](docs/OSM_TAGS.md) and [Taginfo project file](docs/taginfo.json).
+
 | Source | Address | What it builds | If it does not answer | Status line |
 |---|---|---|---|---|
 | Overture Maps (map data releases) | `overturemaps-us-west-2.s3.us-west-2.amazonaws.com` | Every road and railway line, every building (footprint, height, roof shape where mapped), water areas, rivers, land use (parks, farmland, industrial areas), bridges and tunnels as mapped, gas stations, airports' surroundings, and the town, state and country names in the status bar. Read in small ranges of large files: only the part around you. | Places you have not visited before come without roads, buildings or water (and the status bar without the town name) until it answers. Places you have visited load from disk. | named |
 | Overture Maps (second copy, on Azure) | `overturemapswestus2.blob.core.windows.net` | The same data, used when the first copy does not answer. | Only matters while the first copy is down too. | named |
+| Overture Maps vector tiles (its own tile CDN) | `tiles.overturemaps.org` | The roads, railways, buildings and places of a place not visited before, fast: one small read per area, the same data as the map data releases. | The map data releases above stand in (a few seconds slower for a new place). | named |
+| Overture Maps vector tiles (the bucket behind the CDN) | `overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com`, `overturemaps-extras-us-west-2.s3.amazonaws.com` | The same tiles, used when the CDN is slower or does not answer. | Only matters while the CDN is down too. | named |
 | Overture Maps file index | `stac.overturemaps.org` | The list of which file holds which part of the world. | The app carries its own copy of the list, which is used instead. | named |
 | OpenStreetMap road details (OSM US Layercake) | `data.openstreetmap.us` | OpenStreetMap's own road tags matched to the roads: lanes, widths, sidewalks, surfaces, speed limits, roads under construction. | Roads keep their width, lane and sidewalk estimates from their class and the land around them. | optional |
 
@@ -40,7 +50,11 @@ A few things hold for all of them:
 | NRCan HRDEM mosaic (CanElevation) | `canelevation-dem.s3.ca-central-1.amazonaws.com` | Canada's lidar ground heights: the distant terrain is lined up with them (and, opt-in, the near terrain read from them). | Canada's distant terrain may stand on the forest tops. | optional |
 | USGS 3DEP lidar point clouds | `s3-us-west-2.amazonaws.com` | In the US, the real height of bridge decks, measured along each bridge from the lidar points (about 13 MB per map cell full of bridges, once). Off with `BNE_LIDAR_DECKS=off`. | Bridge decks get the estimated heights. | optional |
 | NVDB (Statens vegvesen) | `nvdbapiles.atlas.vegvesen.no` | In Norway, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
+| Hong Kong road network and LiDAR index (CSDI Portal) | `portal.csdi.gov.hk` | In Hong Kong, the Transport Department's road centrelines (which are bridges, at which level, and tunnels) and the index of the CEDD 2020 LiDAR sheets, a few requests per map cell, kept on disk. Off with `BNE_ROADZ_HK=off`. | Estimated heights. | optional |
+| Hong Kong LiDAR 2020 (CEDD, CSDI bulk data) | `bulkdata.csdi.gov.hk` | In Hong Kong, the measured heights of bridges (the 0.5 m surface model) and of roads and the near terrain (the 0.5 m terrain model). A 750 x 600 m sheet is a 5-6 MB zip that cannot be read in parts: a dense map cell downloads 15-30 sheets, about 170 MB the first time, kept in a folder capped at 4 GB (`BNE_HK_SHEETS_MB`; one Sha Tin place reads about 240 sheets, 1.3 GB, for its road heights, and with the terrain about 100 sheets, 0.5 GB, more) for the neighbouring cells. The downloads run in the background: a place's heights stay estimated, and its terrain Mapterhorn's, until its sheets are on disk, then measured from the next visit. Off with `BNE_ROADZ_HK=off` (road heights) and `BNE_HKDTM=off` (terrain). | Estimated heights; Mapterhorn's terrain. | optional |
+| 3DBAG (TU Delft 3D geoinformation, 3DGI) | `data.3dbag.nl` | In the Netherlands, each building's measured roof shape, heights and ridge direction (the WFS layer BAG3D:lod22, a request per 250 m square, kept on disk). Off with `BNE_3DBAG=off`. | Predicted roofs. | optional |
 | IGN BD TOPO roads | `data.geopf.fr` (WFS) | In France, the measured heights of bridges and tunnels (and roads where the terrain is coarse). Off with `BNE_ROADZ=off`. | Estimated heights. | optional |
+| IGN BD TOPO buildings | `data.geopf.fr` (WFS) | In France, the measured height, roof rise, storeys, wall and roof materials and use of each building, joined to the map's outlines (about 0.1-0.6 MB per map cell, once; kept as ~20-100 KB). Off with `BNE_BDTOPO=off`. | Heights, roofs and materials are predicted, as everywhere else. | optional |
 | LidarBC (Province of British Columbia) | `nrs.objectstore.gov.bc.ca` | British Columbia's 10-15 cm aerial photos (around Vancouver and Victoria); opt-in, its lidar terrain and measured tree heights. | Those places get the next photo source. | optional |
 
 ## Aerial and satellite photos (what the ground looks like)
@@ -55,6 +69,7 @@ national photos, then worldwide satellite photos. If one does not answer, the ne
 | USGS / USDA NAIP aerial photos | `imagery.nationalmap.gov` | the lower 48 US states, 30-60 cm per pixel, near you | Coarser photos meanwhile. | named |
 | USDA NAIP aerial photos (second source) | `apps.geo.fpac.usda.gov` | the same photos, from the US Department of Agriculture | Coarser photos meanwhile. | named |
 | USGS The National Map photos | `basemap.nationalmap.gov` | the US, the middle distance and the distant land | Sentinel-2 satellite photos meanwhile. | named |
+| BeamNG.Earth's own tile host (Sentinel-2, ESA WorldCover 2021 composite, CC BY 4.0) | `tiles.tgforever.net` | the whole land to ~40 m per pixel, the distant land; packs of 64 tiles a request (Cloudflare R2). Only while the project's switch file (cdn.json in BeamNG.Earth-data) turns it on. | The sources below, as before. | named |
 | Sentinel-2 cloudless (EOX) | `tiles.maps.eox.at` | the whole world, 10 m per pixel; the distant land everywhere and the near ground outside the regions above. Also the world map's base layers. | New ground outside the regions above may stay plain (the land cover's colours). | named |
 
 Regional services, each used only inside its own area:
@@ -62,14 +77,15 @@ Connecticut (`cteco.uconn.edu`), Massachusetts (`tiles.arcgis.com`), Washington 
 Indiana (`di-ingov.img.arcgis.com`), Ohio (`maps.ohio.gov`), North Carolina (`services.nconemap.gov`),
 Pennsylvania (`imagery.pasda.psu.edu`), Virginia (`vginmaps.vdem.virginia.gov`), New York State
 (`orthos.its.ny.gov`), New Jersey (`maps.nj.gov`), Delaware (`imagery.firstmap.delaware.gov`), Vermont
-(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Spain
+(`maps.vcgi.vermont.gov`), Switzerland (`wmts.geo.admin.ch`), France (`data.geopf.fr`), Portugal (`cartografia.dgterritorio.gov.pt`), Spain
 (`tms-pnoa-ma.idee.es`), the Netherlands (`service.pdok.nl`), Luxembourg (`wmts1.geoportail.lu`), Austria
 (`maps.wien.gv.at`), South Tyrol (`geoservices.buergernetz.bz.it`), Italy (`wms.pcn.minambiente.it`), Poland
 (`mapy.geoportal.gov.pl`), Czechia (`ags.cuzk.gov.cz`), Estonia (`tiles.maaamet.ee`), Flanders
 (`geo.api.vlaanderen.be`), Bavaria (`geoservices.bayern.de`), North Rhine-Westphalia (`www.wms.nrw.de`),
 Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersachsen.de`), Berlin
-(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), New South Wales
-(`maps.six.nsw.gov.au`), Tasmania (`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
+(`gdi.berlin.de`), Hesse (`www.gds-srv.hessen.de`), Japan (`cyberjapandata.gsi.go.jp`), Hong Kong
+(`mapapi.hkmapservice.gov.hk`), New South Wales (`maps.six.nsw.gov.au`), Tasmania
+(`services.thelist.tas.gov.au`) and Ontario (`ws.geoservices.lrc.gov.on.ca`).
 
 ## Land cover, trees and water
 
@@ -85,6 +101,9 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 |---|---|---|---|---|
 | OpenStreetMap wind turbines, distributed by GMWID / Geomermaids | Bundled index; no gameplay requests | Mapped individual turbines worldwide, with installed stock animated shapes. OSM snapshot 2026-10-31; source, license and refresh details in `server/wind_turbines.provenance.json`. | Gameplay uses the bundled copy offline. If the index is missing or damaged, only the verified Happy Jack fallback remains and the server logs a warning. | no runtime host |
 | BeamNG.Earth's weekly data (GitHub Pages) | `tecnagamer.github.io` | Built every week from the whole OpenStreetMap planet by this project: railway details (track gauge, electrification, disused and abandoned lines, level crossings and their barriers) and, in the US, the Federal Railroad Administration's list of the gates, lights and crossbucks at each level crossing. | Railways keep their basic class; level crossings get equipment by road size. | optional |
+| Measured roofs (GitHub Pages) | `tecnagamer.github.io` | The shape and height of each building in Germany (the states' LoD2 models), Switzerland and Liechtenstein (swissBUILDINGS3D) Estonia (the Land and Spatial Development Board's LoD2 models) and Vienna (the city's roof model), reduced by this project to a small file per ~25 km and country. Fetched once per area, in those countries only. | The roofs are predicted, as everywhere else. | named |
+| New York's measured building massing (GitHub Pages) | `tecnagamer.github.io` | In New York City, the setbacks of the city's taller buildings (each roof level a part: podiums, towers, bulkheads), from the city's 2014 3-D Building Model checked against its live Building Footprints, reduced by this project to a small file per map cell (~2 km). Fetched once per area, in New York City only. Off with `BNE_NYC_MASSING=off`. | Buildings keep the map's outline and height. | optional |
+| New York's rooftop water tanks (GitHub Pages) | `tecnagamer.github.io` | In New York City, where the rooftop water tanks are: points found by this project on the state's 2024 aerial photo, a small file per map cell (~2 km). Fetched once per area, in New York City only, and only once published. Off with `BNE_NYC_TANKS=off`. | The tanks are placed by a rule (a share of the mid-rise flat roofs). | optional |
 | OurAirports | `davidmegginson.github.io` | Airports and their runways (position, length, width, surface), for paved runways and levelled airfields. Fetched about once a week. | The copy on disk is used. | named |
 | 3D Model Repository | `3dmr.eu` | 3D models of landmarks (the Eiffel Tower, the Dragon Bridge in Da Nang, ...) where the map links one: the models near you are looked up and downloaded once, then kept in the cache. Off on the settings page ("3D models from 3dmr.eu"). | The usual buildings and bridges stay there; asked again on a later visit. | optional |
 | OpenStreetMap API | `api.openstreetmap.org` | The outline of the building a 3dmr.eu model stands on, read once per model to turn the model the way the building faces. | The model is placed as downloaded. | optional |
@@ -93,6 +112,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 
 | Source | Address | What it does | What is sent | If it does not answer | Status line |
 |---|---|---|---|---|---|
+| NASA GIBS (VIIRS true colour) | `gibs.earthdata.nasa.gov` | The clouds you see from space: the latest satellite day round the point under you, only while the camera is far above the clouds. | Which map tiles round your position (no other data). | No clouds from orbit until it answers. | optional |
 | Open-Meteo | `api.open-meteo.com` | Real weather (clouds, rain, snow, wind, fog) and the local time zone. | The position you are at. | The weather stays as it is. | optional |
 | Photon (komoot) | `photon.komoot.io` | The map's address and place search. (The status bar's town names no longer come from it: they are read from the Overture Maps data.) | What you type, and your position (to rank nearby results first). | Search says it is unavailable for a moment. | optional |
 | Nominatim (OpenStreetMap) | `nominatim.openstreetmap.org` | The map's street and address search, only when you press Enter (its usage policy forbids autocomplete). What you typed is sent to it, with an area around your position as a bias. |
@@ -111,6 +131,7 @@ Baden-Wurttemberg (`owsproxy.lgl-bw.de`), Lower Saxony (`opendata.lgln.niedersac
 ## Data that comes with the app (no download)
 
 - **Country and state borders, big town names** (Natural Earth): the world map.
+- **US Interstates and US routes** (Natural Earth): the world map's Highways layer.
 - **Climate zones** (Beck et al. Köppen-Geiger map): which trees grow where and which landscape sounds play.
 - **Oil wells and refineries** (OpenStreetMap, exported once): pump jacks, refinery sounds.
 - **Bridge types** (the US National Bridge Inventory and Wikidata): trusses, arches, suspension and cable-stayed

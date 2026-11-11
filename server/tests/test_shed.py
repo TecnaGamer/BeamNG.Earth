@@ -92,3 +92,46 @@ class ClearMemoryTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class IdleShedTest(unittest.TestCase):
+    """budget.idle_shed_now: a worker with no job for IDLE_SHED_S drops its caches once (GitHub #1026)."""
+
+    def setUp(self):
+        self._old = (list(budget._shedders), budget._last_job_end, budget._idle_shed, budget._idle_thread,
+                     budget.IDLE_SHED_S)
+        self.calls = []
+        budget._shedders[:] = [lambda: self.calls.append(1)]
+        budget._idle_thread = True          # (no watcher thread: the test asks itself)
+        budget.IDLE_SHED_S = 300.0
+
+    def tearDown(self):
+        (budget._shedders[:], budget._last_job_end, budget._idle_shed, budget._idle_thread,
+         budget.IDLE_SHED_S) = self._old
+
+    def test_once_after_idle(self):
+        budget.job_ended()
+        t = budget._last_job_end
+        self.assertFalse(budget.idle_shed_now(t + 10))
+        self.assertTrue(budget.idle_shed_now(t + 301))
+        self.assertFalse(budget.idle_shed_now(t + 900))         # (once until the next job)
+        budget.job_ended()
+        self.assertTrue(budget.idle_shed_now(budget._last_job_end + 301))
+        self.assertEqual(self.calls, [1, 1])
+
+    def test_never_during_a_job(self):
+        budget.job_ended()
+        t = budget._last_job_end
+        with budget.job_lock():
+            self.assertFalse(budget.idle_shed_now(t + 301))
+        self.assertEqual(self.calls, [])
+
+    def test_off(self):
+        budget.IDLE_SHED_S = 0
+        budget.job_ended()
+        self.assertFalse(budget.idle_shed_now(budget._last_job_end + 10 ** 6))
+
+    def test_a_job_through_the_pool_starts_the_clock(self):
+        budget._last_job_end = None
+        self.assertEqual(pools._call(lambda a: a + 1, (1,), {}), 2)
+        self.assertIsNotNone(budget._last_job_end)

@@ -145,5 +145,28 @@ class ReadHeldTest(unittest.TestCase):
                 staging.read_held(gone)
 
 
+class ReadNpzTest(unittest.TestCase):
+    def test_damaged_files_removed_good_ones_read(self):
+        """read_npz: a good file read; an empty, cut short, zeroed or member-less one None and removed (built again by
+        the caller), never an exception at every ask (telemetry 2026-11-08: far tiles' EOFError / BadZipFile)."""
+        import numpy as np
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "c.npz")
+            np.savez_compressed(p, a=np.arange(1000.0))
+            with open(p, "rb") as f:
+                body = f.read()
+            self.assertEqual(float(staging.read_npz(p, lambda f: f["a"].sum())), 499500.0)
+            for name, bad in (("empty", b""), ("cut short", body[:len(body) // 2]), ("zeroed", b"\0" * len(body))):
+                with open(p, "wb") as f:
+                    f.write(bad)
+                with self.assertLogs("earthd.staging", "WARNING"):
+                    self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), name)
+                self.assertFalse(os.path.exists(p), name)
+            np.savez_compressed(p, b=np.zeros(3))
+            with self.assertLogs("earthd.staging", "WARNING"):
+                self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "a member missing")
+            self.assertIsNone(staging.read_npz(p, lambda f: f["a"]), "missing: None, quietly")
+
+
 if __name__ == "__main__":
     unittest.main()

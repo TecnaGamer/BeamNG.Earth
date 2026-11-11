@@ -19,7 +19,7 @@ import railtags
 import roads
 import signcontext
 
-Spec = namedtuple('SignRoad', 'width cls oneway dir link', defaults=(False,))
+Spec = namedtuple('SignRoad', 'width cls oneway dir link kmh', defaults=(False, None))
 NEIGHBOURHOODS = 64             # combined rows kept (Context._hoods)
 CELL_FRAMES = 4                 # anchors a cell keeps rows for
 
@@ -64,7 +64,7 @@ def cell_specs(feats, urban=None, widths=None, left_hand=False):
 
 
 def spec(value, link=False):
-    return Spec(value.width, value.cls, value.oneway, value.dir, link)
+    return Spec(value.width, value.cls, value.oneway, value.dir, link, value.kmh)
 
 
 def cross(points):
@@ -116,6 +116,7 @@ class Context(signcontext.Context):
             return got
         rows, polys = [], []
         specs = cell_specs(feats, self.urban, self.widths, left_hand)
+        placement = roads.placement_context([feats], self.urban, self.widths, left_hand)  # (as the road tiles draw)
         for i, value in enumerate(specs):
             if value is None:
                 continue
@@ -124,6 +125,7 @@ class Context(signcontext.Context):
             for ring in roads.ground_parts(feats, i):
                 if len(ring) < 2:
                     continue
+                ring = placement.ring(frame, feats, i, ring, value)
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 line = np.c_[e, n, np.zeros(len(ring))]
                 sp, line, width = outline(value, line, frame, left_hand, link)
@@ -136,13 +138,13 @@ class Context(signcontext.Context):
             memo[key] = got
         return got
 
-    def pavements(self, frame, points, left_hand=False):
+    def pavements(self, frame, points, left_hand=False, margin=signcontext.MARGIN_M):
         """The pavement rows of the map cells within signcontext.MARGIN_M of points (lon, lat), each feature once,
         in cell order (the same Pavements object while it is kept: its plans are reused)."""
         points = np.asarray(points, float).reshape(-1, 2)
         if not len(points):
             return Pavements()
-        pad = signcontext.MARGIN_M / 110540.
+        pad = margin / 110540.
         lon_pad = pad / max(.01, float(np.cos(np.radians(points[:, 1])).min()))
         keys = tuple(mapcells.cells_near_points(points[:, 1], points[:, 0], pad, lon_pad))
         hood = (frame.lat0, frame.lon0, frame.h0, bool(left_hand), keys)

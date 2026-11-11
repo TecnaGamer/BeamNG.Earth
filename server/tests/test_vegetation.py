@@ -272,6 +272,33 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 26.2, -98.2, 50, u=0.1), veg.G_PALM, "McAllen street trees")
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 25.8, -80.2, 50, u=0.9), veg.G_DECIDUOUS)
 
+    def test_mediterranean(self):
+        """The Mediterranean basin's Cs climates take Italy's trees (holm / cork oaks, olives, maritime pines,
+        cypresses) for most broadleaves and conifers; Munich and California keep theirs."""
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 50, u=0.5), veg.G_MEDITERRANEAN, "Rome")
+        self.assertEqual(self.g(veg.G_CONIFER, 15, 43.3, 5.37, 10, u=0.5), veg.G_MEDITERRANEAN, "Marseille")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 41.9, 12.5, 10, u=0.95), veg.G_DECIDUOUS, "a share stays")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 48.14, 11.58, 50, u=0.1), veg.G_DECIDUOUS, "Munich")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 34.05, -118.25, 10, u=0.5), veg.G_OAK_WEST, "California")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 41.9, 12.5, 10, u=0.1), veg.G_SHRUB, "bushes are not trees")
+
+    def test_more_regional_trees(self):
+        """2026-11-10 asset survey: Australia's eucalypts, temperate Europe's riverside poplars, the Mojave's creosote."""
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 15, -35.3, 149.1, 10, u=0.5), veg.G_EUCALYPTUS, "Canberra")
+        self.assertEqual(self.g(veg.G_CONIFER, 20, -37.8, 145.0, 10, u=0.95), veg.G_CONIFER, "a share stays (pines)")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 15, -12.4, 130.8, 10, u=0.5), veg.G_EUCALYPTUS, "Darwin's savanna")
+
+        def rip(lat, lon, group=veg.G_DECIDUOUS, u=0.2, near=True):
+            return int(veg.regional(np.array([group]), np.array([18.0]), np.array([lat]), np.array([lon]),
+                                    np.array([10]), np.array([u]), riparian=np.array([near]))[0])
+        self.assertEqual(rip(47.4, 0.7), veg.G_POPLAR, "the Loire's banks")
+        self.assertEqual(rip(47.4, 0.7, near=False), veg.G_DECIDUOUS, "away from water")
+        self.assertEqual(rip(47.4, 0.7, u=0.6), veg.G_DECIDUOUS, "a share only")
+        self.assertEqual(rip(47.4, 0.7, group=veg.G_CONIFER), veg.G_CONIFER, "broadleaves only")
+        self.assertEqual(rip(39.3, -76.6), veg.G_DECIDUOUS, "not in America")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 35.0, -116.0, 20, u=0.3), veg.G_CREOSOTE, "the Mojave")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 38.6, -109.5, 20, u=0.3), veg.G_DESERT_SHRUB, "Moab: cold desert")
+
     def test_beyond_north_america(self):
         """2026-10-15: Douglas firs in Punjab's fields; the Sahara's bushes were the East's."""
         self.assertLess(float(veg._conifer_share(30.9, 75.8)), 0.1, "Punjab: hardly any conifers")
@@ -303,8 +330,9 @@ class AustralianTreesTest(unittest.TestCase):
     def test_group_ids_unchanged_eucalypt_last(self):
         self.assertEqual(veg.GROUPS[:11], ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper",
                                            "desert_shrub", "desert_rock", "oak_west", "tropical"))
-        self.assertEqual((veg.GROUPS[11], veg.G_EUCALYPT), ("eucalypt", 11))
-        self.assertEqual(veg.GROUPS[12:], ("dry_rainforest", "mallee", "scrub", "mangrove"), "the palettes' groups follow it")
+        # (the merge with upstream dev: its 25 groups are the Rust kernel's ids; the fork's follow them, Python only)
+        self.assertEqual((veg.GROUPS[25], veg.G_EUCALYPT), ("eucalypt", 25))
+        self.assertEqual(veg.GROUPS[26:], ("dry_rainforest", "mallee", "scrub", "mangrove"), "the palettes' groups follow it")
 
     def test_brisbane_mostly_eucalypt(self):
         for generic, want in ((veg.G_DECIDUOUS, 0.85), (veg.G_CONIFER, 0.85), (veg.G_OAK_WEST, 0.70)):
@@ -494,6 +522,122 @@ class DemFailedTest(unittest.TestCase):
             self.assertTrue(os.path.exists(v._path(1, 2)), "answered: kept")
 
 
+class ClumpTest(unittest.TestCase):
+    """GitHub #1074: a forest square's trees get one far clump item; they are flagged (negative scale)."""
+
+    def _items(self, lat, lon, group, lcls=10):
+        n = len(lat)
+        f32 = lambda v: np.full(n, v, np.float32)       # noqa: E731
+        it = veg.Items(np.asarray(lon, float), np.asarray(lat, float), f32(20.0), f32(3.4),
+                       np.full(n, veg.KIND_TREE, np.uint8), np.asarray(group, np.uint8),
+                       np.linspace(0.1, 0.9, n).astype(np.float32), f32(0.0), f32(1.0))
+        return it, np.full(n, lcls, np.uint8)
+
+    def test_a_dense_square_becomes_one_clump(self):
+        cell = veg.clump_cell(LAT)
+        # a square's corner (Web Mercator, from the world's edge): three firs in it, one fir alone two squares away
+        x0 = (np.floor((-8524000.0 + 20037508.342789244) / cell) + 0.5) * cell - 20037508.342789244
+        y0 = (np.floor((4764000.0 + 20037508.342789244) / cell) + 0.5) * cell - 20037508.342789244
+        xs = np.array([x0 - 2, x0 + 2, x0, x0 + 2 * cell])
+        ys = np.array([y0, y0 + 1, y0 - 2, y0])
+        lon, lat = veg._to4326(xs, ys)
+        it, lc = self._items(lat, lon, [veg.G_CONIFER, veg.G_CONIFER, veg.G_DECIDUOUS, veg.G_CONIFER])
+        out = veg.clumps(it, lc, LAT)
+        self.assertEqual(len(out), 5)
+        self.assertEqual(list(out.scale[:4] < 0), [True, True, True, False])
+        self.assertEqual(int(out.group[4]), veg.G_CONIFER_CLUMP, "most of them firs")
+        self.assertAlmostEqual(float(out.rank[4]), float(it.rank[:3].min()), places=6)
+        cx, cy = veg._to3857(out.lon[4:], out.lat[4:])
+        self.assertAlmostEqual(float(cx[0]), float(xs[:3].mean()), places=3)
+        self.assertAlmostEqual(float(cy[0]), float(ys[:3].mean()), places=3)
+        again = veg.clumps(it, lc, LAT)
+        self.assertTrue(np.array_equal(again.lon, out.lon) and np.array_equal(again.yaw, out.yaw), "deterministic")
+
+    def test_street_trees_and_palms_stay_single(self):
+        x0, y0 = -8524000.0, 4764000.0
+        lon, lat = veg._to4326(np.array([x0, x0 + 1, x0 + 2]), np.array([y0, y0 + 1, y0]))
+        it, lc = self._items(lat, lon, [veg.G_DECIDUOUS] * 3, lcls=veg.WC["built"])
+        self.assertEqual(len(veg.clumps(it, lc, LAT)), 3)
+        it, lc = self._items(lat, lon, [veg.G_PALM] * 3)
+        self.assertEqual(len(veg.clumps(it, lc, LAT)), 3)
+
+    def test_grid_fits_the_geotiles(self):
+        import geotiles
+        tile = 2 * np.pi * veg.R / (1 << geotiles.Z)
+        for lat in (0.0, 45.0, 60.0, 80.0):
+            k = tile / veg.clump_cell(lat)
+            self.assertAlmostEqual(k, round(k), places=9)
+            self.assertTrue(10 <= veg.clump_cell(lat) * np.cos(np.radians(lat)) <= 27)
+
+    def test_clumps_beside_the_tile_cap(self):
+        n = 30
+        it = veg.Items(*(np.zeros(n) for _ in range(4)), np.zeros(n, np.uint8),
+                       np.array([veg.G_CONIFER] * 20 + [veg.G_CONIFER_CLUMP] * 10, np.uint8),
+                       np.linspace(0, 1, n).astype(np.float32)[::-1].copy(), np.zeros(n), np.ones(n))
+        old = veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX
+        veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX = 5, 3
+        try:
+            keep = veg._capped(it)
+        finally:
+            veg.TILE_ROWS_MAX, veg.CLUMP_ROWS_MAX = old
+        self.assertEqual(int(np.sum(it.group[keep] == veg.G_CONIFER)), 5)
+        self.assertEqual(int(np.sum(it.group[keep] == veg.G_CONIFER_CLUMP)), 3)
+        self.assertTrue(np.all(np.diff(keep) > 0))
+
+
+class WarmTest(unittest.TestCase):
+    """warm_around runs on the event loop at every pose: it only keeps the place there. The warm thread checks the
+    cells' files, each once, and builds the missing ones nearest first (up to 64 file checks a pose held the loop on a
+    busy hard drive, GitHub #1054)."""
+
+    def test_file_checks_on_the_warm_thread_once_per_cell(self):
+        import collections
+        import math
+        import os
+        import tempfile
+        import threading
+        import time
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            v = veg.Vegetation(None, cache_dir=tmp)
+            v._path = lambda x, y: os.path.join(tmp, f"{x}_{y}.npz")
+            built = []
+
+            def load(x, y):
+                built.append((x, y))
+                open(v._path(x, y), "wb").close()
+                return veg.Items(*(np.zeros(0) for _ in range(9)))
+            v._load = load
+            checks, threads, real = collections.Counter(), set(), os.path.exists
+
+            def exists(p):
+                if str(p).startswith(tmp):
+                    checks[p] += 1
+                    threads.add(threading.get_ident())
+                return real(p)
+            d = veg.WARM_M / 111320.0
+            dl = d / math.cos(math.radians(LAT))
+            cells = {(k.x, k.y) for k in mapcells.cells_for_bbox(LAT - d, LON - dl, LAT + d, LON + dl)}
+            with mock.patch.object(veg.os.path, "exists", exists):
+                for _ in range(10):                     # poses
+                    v.warm_around(LAT, LON)
+                for _ in range(1000):
+                    if set(built) >= cells and v._warm_at is None:
+                        break
+                    time.sleep(0.01)
+                time.sleep(0.2)                         # (the warm thread idle)
+                self.assertEqual(set(built), cells)
+                self.assertEqual(len(built), len(cells), "each built once")
+                self.assertEqual(built[0], (KEY.x, KEY.y), "nearest first")
+                self.assertNotIn(threading.get_ident(), threads, "warm_around checks no file itself")
+                with v._lock:
+                    v._mem.clear()                      # (out of memory: found on disk)
+                n = sum(checks.values())
+                for _ in range(20):
+                    self.assertEqual(v._warm_cells(LAT, LON, veg.WARM_M), [])
+                self.assertEqual(sum(checks.values()), n + len(cells), "each cell's file checked once in 20 places")
+
+
 class OrchardTest(unittest.TestCase):
     def test_trees_stand_in_lines(self):
         import mapgeom
@@ -536,6 +680,83 @@ class OrchardTest(unittest.TestCase):
         c = np.floor((xx - chm.x0) / chm.dx).astype(np.int64)
         r = np.floor((chm.y0 - yy) / chm.dy).astype(np.int64)
         self.assertFalse(bool(half[r, c].any()))
+
+
+class VineyardTest(unittest.TestCase):
+    def _field(self, e, n, cls="vineyard"):
+        import mapgeom
+        frame = geodesy.EnuFrame(44.9, -0.15)
+        la, lo, _ = frame.enu_to_geodetic(np.asarray(e, float), np.asarray(n, float), np.zeros(len(e)))
+        ring = np.stack([lo, la], 1)
+        feats = mapgeom.build("land_use", np.array(["vy-1"]), [(mapgeom.POLYGON, [[ring]])])
+        feats.attrs["class"] = np.array([cls], object)
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        pad, dx = 40.0, 2.0
+        x0, y1 = float(x.min()) - pad, float(y.max()) + pad
+        cols = int(np.ceil((float(x.max()) + pad - x0) / dx))
+        rows = int(np.ceil((y1 - float(y.min()) + pad) / dx))
+        return frame, feats, ring, Raster(np.zeros((rows, cols), np.uint8), x0, y1, dx), np.zeros((rows, cols), bool)
+
+    def test_rows_along_the_long_sides_inside_the_field(self):
+        # a parallelogram 200 m along x with 45-degree ends: its principal axis is skewed, its rows run along x
+        frame, feats, ring, chm, clear = self._field([0, 200, 260, 60, 0], [0, 0, 60, 60, 0])
+        it = veg.vineyard_items(feats, chm, clear, None)
+        self.assertGreater(len(it), 60)
+        self.assertTrue(np.all(it.group == veg.G_VINE))
+        yaw = np.asarray(it.yaw) % 180.0
+        self.assertTrue(np.all(np.minimum(yaw, 180.0 - yaw) < 0.5), "rows along the long sides")
+        from polygon import Path
+        x, y = veg._to3857(ring[:, 0], ring[:, 1])
+        path = Path(np.column_stack([x, y]))
+        cx, cy = veg._to3857(it.lon, it.lat)
+        k = (veg.VINE_ALONG_M / 2 - 1.0) / np.cos(np.radians(44.9))
+        for s in (-1, 1):
+            self.assertTrue(np.all(path.contains_points(np.column_stack([cx + s * k, cy]))), "both ends inside")
+        again = veg.vineyard_items(feats, chm, clear, None)
+        self.assertTrue(np.array_equal(again.lon, it.lon) and np.array_equal(again.yaw, it.yaw), "deterministic")
+        self.assertEqual(len(veg.vineyard_items(feats, chm, np.ones_like(clear), None)), 0, "roads / buildings: none")
+
+    def test_only_vineyards(self):
+        frame, feats, ring, chm, clear = self._field([0, 100, 100, 0, 0], [0, 0, 50, 50, 0], cls="orchard")
+        self.assertEqual(len(veg.vineyard_items(feats, chm, clear, None)), 0)
+
+
+class BaleTest(unittest.TestCase):
+    def _fields(self, lat, cls, n=40, size=(400.0, 300.0)):
+        """n fields side by side (one polygon each), size m."""
+        import mapgeom
+        frame = geodesy.EnuFrame(lat, 1.6)
+        geoms = []
+        for k in range(n):
+            e = np.array([0, size[0], size[0], 0, 0.0]) + k * (size[0] + 20)
+            nn = np.array([0, 0, size[1], size[1], 0.0])
+            la, lo, _ = frame.enu_to_geodetic(e, nn, np.zeros(5))
+            geoms.append((mapgeom.POLYGON, [[np.stack([lo, la], 1)]]))
+        feats = mapgeom.build("land_use", np.array([f"f{lat}-{k}" for k in range(n)]), geoms)
+        feats.attrs["class"] = np.array([cls] * n, object)
+        return feats, frame
+
+    def test_bales_on_a_share_of_the_fields(self):
+        feats, frame = self._fields(48.3, "farmland")
+        it = veg.bale_items(feats, None, None, None)
+        self.assertTrue(np.all(it.group == veg.G_STRAW_N))
+        e, n, _ = frame.geodetic_to_enu(it.lat, it.lon, np.zeros(len(it)))
+        fields = set((np.asarray(e) // 420).astype(int))
+        self.assertTrue(2 <= len(fields) <= 16, f"a share of the 40 fields: {len(fields)}")
+        per = len(it) / max(len(fields), 1) / 12.0
+        self.assertTrue(4 <= per <= 20, f"bales a hectare: {per:.1f}")
+        x = np.asarray(e) % 420
+        self.assertTrue(np.all((x > veg.BALE_EDGE_M - 0.5) & (x < 400 - veg.BALE_EDGE_M + 0.5)), "the headland clear")
+        again = veg.bale_items(feats, None, None, None)
+        self.assertTrue(np.array_equal(again.lon, it.lon), "deterministic")
+
+    def test_by_class_hemisphere_and_size(self):
+        self.assertTrue(np.all(veg.bale_items(self._fields(-35.0, "meadow")[0], None, None, None).group
+                               == veg.G_SILAGE_S))
+        self.assertEqual(len(veg.bale_items(self._fields(10.0, "farmland")[0], None, None, None)), 0, "not in the tropics")
+        self.assertEqual(len(veg.bale_items(self._fields(48.3, "vineyard")[0], None, None, None)), 0)
+        big = self._fields(48.3, "farmland", n=40, size=(2000.0, 1200.0))[0]
+        self.assertEqual(len(veg.bale_items(big, None, None, None)), 0, "a polygon of many fields: none")
 
 
 class FarmFoliageTest(unittest.TestCase):

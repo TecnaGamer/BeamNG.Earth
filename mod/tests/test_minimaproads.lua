@@ -11,6 +11,10 @@ local g = { anchor = 1,
 local idx = R.build(g, 128)
 T.check(idx.count == 3, 'one link per pair of nodes, none to a missing node: ' .. idx.count)
 T.check(R.class(0.95) == 1 and R.class(0.5) == 2 and R.class(0.1) == 3 and R.class(nil) == 1, 'stock colour classes')
+-- (the road colour from 0.85: Germany's give-way steps, navgraph.DE_YIELD_STEP, take a tertiary's 0.9 to 0.88, still
+-- a road; no drivability class lies in 0.85 .. 0.9)
+T.check(R.class(1) == 1 and R.class(0.9) == 1 and R.class(0.88) == 1 and R.class(0.85) == 1 and R.class(0.84) == 2
+  and R.class(0.8) == 2 and R.class(0.26) == 2 and R.class(0.25) == 3, 'the boundaries: 0.85 and 0.25')
 -- (by cell: the links of the cells the square meets, each once; the canvas clips the rest)
 local q = R.query(idx, 0, 0, 60)
 T.check(#q == 2 and idx.links[q[1]] == 0 and idx.links[q[1] + 2] == 50, 'near the origin: a-b, and b-c in the same cell')
@@ -25,10 +29,11 @@ T.check(#q == 1 and idx.links[q[1] + 4] == 3, 'c-far (a long link) found near it
 T.check(#R.query(idx, -5000, -5000, 100) == 0, 'nothing far away')
 -- a tunnel's stretch (not in the AI's edges): drawn too
 do
-  local gt = { anchor = 1, nodes = g.nodes, edges = g.edges, lines = { { -400, 0, -300, 0, 1 } } }
+  local gt = { anchor = 1, nodes = g.nodes, edges = g.edges, lines = { { -400, 0, -300, 0, 1, 19.4 } } }
   local it = R.build(gt, 128)
   local ql = R.query(it, -350, 0, 20)
-  T.check(it.count == 4 and #ql == 1 and it.links[ql[1]] == -400 and it.links[ql[1] + 4] == 1, 'a tunnel line drawn')
+  T.check(it.count == 4 and #ql == 1 and it.links[ql[1]] == -400 and it.links[ql[1] + 4] == 1
+    and it.graph.lines[1][6] == 19.4, 'a tunnel line drawn; its legal speed metadata stays available')
 end
 
 -- built over frames: the old index drawn until the new one is done

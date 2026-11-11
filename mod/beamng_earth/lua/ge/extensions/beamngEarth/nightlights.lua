@@ -2,12 +2,14 @@
 -- up. Their materials carry night emissive maps (tools/build_night_windows.py: about half the plaster sheet's windows,
 -- the curtain walls and shopfronts with some bays dimmed), dark by day (emissiveFactor 0 in buildings.materials.json);
 -- this turns them on and off with the stock environment's own day / night (core_environment.getLightState, the switch
--- the stock maps' night lights follow), checked every CHECK_S: a material change twice a day, no per-frame cost.
+-- the stock maps' night lights follow), checked every CHECK_S, and swaps the window maps for fewer lit windows late at
+-- night (M.MAPS): a material set again only when something changes, a few times a night, no per-frame cost.
 local M = {}
 
 M.CHECK_S = 1.0
 -- the materials and their night glow (emissive factor, nits: West Coast USA's highrise windows glow at 200)
 M.MATERIALS = {
+  bne_fr_house_glass_lit = { '1 0.82 0.60', 60 },
   bne_bld_facade = { '1 1 1', 200 },
   -- (offices: 150 nits drew Manhattan's curtain-wall towers as white lanterns, TGForever Discord 2026-10-28)
   bne_bld_office = { '0.95 0.97 1', 70 },
@@ -17,6 +19,7 @@ M.MATERIALS = {
   bne_bld_sky = { '1 1 1', 200 },
   -- the street lamps' lenses (furniture.py G_LENS; tools/build_lamp_lens.py): sodium-warm, bright
   bne_lamp_lens = { '1 0.66 0.33', 4000 },
+  bne_fr_glass = { '1 0.68 0.12', 900 },
   -- the Eiffel Tower's lamps (server landmarks.py, on its lattice: its iron stays dark): its gold lighting since 1985,
   -- sodium-warm points of light all night, static (no sparkle: the hourly light show is not drawn)
   bne_lm_lamp = { '1 0.72 0.36', 1500 },
@@ -26,6 +29,58 @@ M.MATERIALS = {
   bne_lm_floodlit = { '1 0.86 0.66', 25 },
   bne_lm_dial = { '1 0.97 0.88', 160 },
 }
+-- the street lamps' far glow balls (tools/build_lamp_glow.py, nearest first: bne_lamp_glow0 ..): each carries the
+-- lens's light over its disc, so a far lamp dims with its distance squared, down to 25 nits (all at the lens's 4000
+-- nits, the far balls bloomed into blobs; the user, 2026-11-07: "look blown out from afar"; a 200-nit floor, the lit
+-- windows', kept the skyline's lamps too bright, 2026-11-08)
+M.GLOW_NITS = { 20400, 7970, 3020, 1160, 454, 169, 66.6, 26 }
+for k, nits in ipairs(M.GLOW_NITS) do
+  M.MATERIALS['bne_lamp_glow' .. (k - 1)] = { M.MATERIALS.bne_lamp_lens[1], nits }
+end
+
+-- Late at night fewer windows are lit (the user, 2026-11-08: "have less lit windows depending on how late it is, peaking
+-- at 5 am"): each window material's emissive map in three steps of the night (tools/build_night_windows.py,
+-- build_sky_windows.py, build_french_houses.py: each window or room its own level and its own step to go dark, a later
+-- step's map lighting a subset of the one before), swapped at the clock hours of M.LATE ({ hour, step }: the evening's
+-- until 23:15, from then about two thirds of its windows, from 3:00 about a third (the skyline three fifths: it never
+-- goes dark), the evening's again from 6:30). (S-moreo's PR #916 split each window sheet into three materials dimmed
+-- by their factors at their own hours: the materials cost 9 % of the frame rate in Times Square at night, 2026-11-08;
+-- one map per step keeps one material per sheet.)
+local SHAPES = '/levels/beamng_earth/art/shapes/beamngEarth/'
+local function steps(base, ext)
+  return { SHAPES .. base .. ext, SHAPES .. base .. '_late' .. ext, SHAPES .. base .. '_dawn' .. ext }
+end
+M.MAPS = {
+  bne_bld_facade = steps('bne_facade_night_e', '.png'),
+  bne_bld_office = steps('bne_office_night_e', '.png'),
+  bne_bld_shop = steps('bne_office_night_e', '.png'),
+  bne_bld_sky = steps('bne_sky_night_e', '.png'),
+  bne_fr_house_glass_lit = steps('fr_houses/glass', '.emissive.png'),
+}
+M.LATE = { { 23.25, 2 }, { 3, 3 }, { 6.5, 1 } }
+
+-- The clock hour by the stock environment (0 .. 24; its time 0 is noon), nil without one.
+function M.hour()
+  local env = rawget(_G, 'core_environment')
+  if type(env) ~= 'table' or type(env.getTimeOfDay) ~= 'function' then return nil end
+  local ok, tod = pcall(env.getTimeOfDay)
+  if not ok or type(tod) ~= 'table' or type(tod.time) ~= 'number' then return nil end
+  return (tod.time * 24 + 12) % 24
+end
+
+-- Pure: the night's step (M.MAPS' index) at the clock hour (the evening's without one).
+function M.step(hour)
+  if not hour then return 1 end
+  local function since(h) return (h - 12) % 24 end    -- (hours from noon: the night in one piece)
+  local t = since(hour)
+  local step, at, last, lastAt = nil, -1, 1, -1
+  for _, e in ipairs(M.LATE) do
+    local s = since(e[1])
+    if s <= t and s > at then step, at = e[2], s end
+    if s > lastAt then last, lastAt = e[2], s end
+  end
+  return step or last
+end
 
 -- The street lamps' light: a pool of LIGHTS_MAX spot lights (no shadows), every LIGHTS_S moved to the lamps nearest
 -- the camera (their lenses: the road tiles' lamplens rows, furniture.py), pointing down: within AROUND_M all round, and
@@ -51,7 +106,12 @@ M.MAKE_PER_STEP = 4
 -- lamp's arm), a soft edge (inner .. outer); before, a hard-edged 50 m disc centred under the head.
 M.LIGHT = { range = 36, inner = 50, outer = 130, brightness = 8.0, color = '1 0.66 0.33 1', drop = 0.12, tilt = 12 }
 
+M.HIGH_MAST = { range = 70, inner = 70, outer = 150, brightness = 12.0, color = '1 0.82 0.60 1', drop = 0.12, tilt = 0 }
+M.LANTERN = { range = 20, inner = 65, outer = 150, brightness = 4.0, color = '1 0.68 0.12 1', drop = 0.12, tilt = 0 }
+
 local lastCheck = -1e9
+local shown = {}         -- material name -> the factor and nits set (set again only when they change)
+local shownMap = {}      -- material name -> the emissive map set (none: its materials.json's, M.MAPS' first)
 local lastLights = -1e9
 M.night = nil            -- the state applied (nil: none yet)
 M.errors = 0
@@ -69,33 +129,54 @@ function M.isNight()
   return st.isNight == true
 end
 
-local function apply(night)
+-- Day / night and the night's step onto the materials, each set (and reloaded) only when its glow or map changes. (By
+-- day a map stays: the glow is off, and the evening's comes back at dusk with the glow.)
+local function apply(night, step)
   for name, glow in pairs(M.MATERIALS) do
-    local m = scenetree.findObject(name)
-    if m then
-      local ok = pcall(function()
-        m:setField('emissiveFactor', 0, night and glow[1] or '0 0 0')
-        m:setField('emissiveIntensityNits', 0, tostring(night and glow[2] or -1))
-        m:flush()
-        m:reload()
-      end)
-      if not ok then M.errors = M.errors + 1 end
+    local want = night and (glow[1] .. '|' .. glow[2]) or 'off'
+    local maps = M.MAPS[name]
+    local map = night and maps and maps[step] or nil
+    if map == (shownMap[name] or (maps and maps[1])) then map = nil end
+    if shown[name] ~= want or map then
+      local m = scenetree.findObject(name)
+      if m then
+        local ok = pcall(function()
+          if map then m:setField('emissiveMap', 0, map) end
+          m:setField('emissiveFactor', 0, night and glow[1] or '0 0 0')
+          m:setField('emissiveIntensityNits', 0, tostring(night and glow[2] or -1))
+          m:flush()
+          m:reload()
+        end)
+        if ok then
+          shown[name] = want
+          if map then shownMap[name] = map end
+        else
+          M.errors = M.errors + 1
+        end
+      end
     end
   end
-  -- the lamps' far glow (trees.lua's lampglow group, off by day)
-  local okt, trees = pcall(require, 'beamngEarth/trees')
-  if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  if night ~= M.night then
+    -- the lamps' far glow (trees.lua's lampglow group, off by day)
+    local okt, trees = pcall(require, 'beamngEarth/trees')
+    if okt and trees.setGroupEnabled then pcall(trees.setGroupEnabled, { 'lampglow' }, night) end
+  end
   M.night = night
+  M.nightStep = night and step or nil
 end
 
 -- A road tile's furniture rows (roads.lua: { group index, x, y, z, yaw, ... } with its groups): its lenses.
 function M.onRows(key, items, groups)
-  local gi = nil
-  for i, g in ipairs(type(groups) == 'table' and groups or {}) do if g == 'lamplens' then gi = i - 1 end end
-  if gi == nil or type(items) ~= 'table' then lenses[key] = nil; return end
+  local groupsById = {}
+  for i, g in ipairs(type(groups) == 'table' and groups or {}) do
+    if g == 'lamplens' or g == 'high_mast_light' or g == 'fr_lantern_light' then groupsById[i - 1] = g end
+  end
+  if type(items) ~= 'table' then lenses[key] = nil; return end
   local out = {}
   for _, r in ipairs(items) do
-    if type(r) == 'table' and r[1] == gi and r[2] and r[3] and r[4] then out[#out + 1] = { r[2], r[3], r[4], r[5] } end
+    if type(r) == 'table' and groupsById[r[1]] and r[2] and r[3] and r[4] then
+      out[#out + 1] = { r[2], r[3], r[4], r[5], groupsById[r[1]] == 'fr_lantern_light', groupsById[r[1]] == 'high_mast_light' }
+    end
   end
   lenses[key] = #out > 0 and out or nil
 end
@@ -114,11 +195,36 @@ end
 -- (fx, fy) (unit): those within `around` all round, the others only within VIEW_COS of it.
 function M.nearest(x, y, r, n, fx, fy, around)
   local cand, r2 = {}, r * r
+  local limit = math.max(0, math.floor(n))
+  if limit == 0 then return cand end
   local a2 = (around or r) ^ 2
   local function consider(l)
     local dx, dy = l[1] - x, l[2] - y
     local d = dx * dx + dy * dy
-    if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then cand[#cand + 1] = { l, d } end
+    if d <= r2 and (d <= a2 or not fx or dx * fx + dy * fy >= M.VIEW_COS * math.sqrt(d)) then
+      -- Retain only the pool's nearest lights in a max heap. Distant lenses
+      -- need no candidate allocation, and only pool-sized arrays are sorted.
+      local count = #cand
+      if count < limit then
+        local i, entry = count + 1, { l, d }
+        while i > 1 do
+          local parent = math.floor(i / 2)
+          if cand[parent][2] >= d then break end
+          cand[i] = cand[parent]; i = parent
+        end
+        cand[i] = entry
+      elseif d < cand[1][2] then
+        local i, entry = 1, cand[1]
+        entry[1], entry[2] = l, d
+        while i * 2 <= count do
+          local child = i * 2
+          if child < count and cand[child + 1][2] > cand[child][2] then child = child + 1 end
+          if cand[child][2] <= d then break end
+          cand[i] = cand[child]; i = child
+        end
+        cand[i] = entry
+      end
+    end
   end
   for _, list in pairs(lenses) do
     for _, l in ipairs(list) do consider(l) end
@@ -154,15 +260,24 @@ local function place(e, l)
   local o = scenetree.findObjectById(e.id)
   if not o then return end
   if l then
+    local L = l[6] and M.HIGH_MAST or l[5] and M.LANTERN or M.LIGHT
+    -- Reapply on reuse: a light previously serving a lantern can serve a stock lamp.
+    if e.profile ~= L then
+      for field, value in pairs({ range = L.range, innerAngle = L.inner, outerAngle = L.outer,
+                                  brightness = L.brightness, color = L.color }) do
+        o:setField(field, 0, tostring(value))
+      end
+      e.profile = L
+    end
     if l[4] then                                        -- (its forward, local y: down, tilted toward the road)
-      local a, t = math.rad(l[4]), math.rad(M.LIGHT.tilt)
+      local a, t = math.rad(l[4]), math.rad(L.tilt)
       local c, s = math.cos(a), math.sin(a)
       local q = quatFromDir(vec3(c * math.sin(t), s * math.sin(t), -math.cos(t)), vec3(c, s, 0))
-      o:setPosRot(l[1], l[2], l[3] - M.LIGHT.drop, q.x, q.y, q.z, q.w)
+      o:setPosRot(l[1], l[2], l[3] - L.drop, q.x, q.y, q.z, q.w)
     else
       local m = MatrixF(true)
       m:setFromEuler(vec3(math.pi / 2, 0, 0))           -- (straight down: -pi/2 pointed it up)
-      m:setPosition(vec3(l[1], l[2], l[3] - M.LIGHT.drop))
+      m:setPosition(vec3(l[1], l[2], l[3] - L.drop))
       o:setTransform(m)
     end
   end
@@ -208,13 +323,14 @@ local function stepLights(night)
   for _, e in ipairs(free) do if e.at then place(e, nil) end end
 end
 
--- Every frame (core.lua; cheap: the materials looked at every CHECK_S, the lights every LIGHTS_S).
+-- Every frame (core.lua; cheap: day / night and the night's step looked at every CHECK_S, a material set only when its
+-- glow or map changes, or when it is first found (a material file loaded after a check); the lights every LIGHTS_S).
 function M.update()
   local now = os.clockhp()
   if now - lastCheck >= M.CHECK_S then
     lastCheck = now
     local night = M.isNight()
-    if night ~= nil and night ~= M.night then apply(night) end
+    if night ~= nil then apply(night, night and M.step(M.hour()) or nil) end
   end
   if now - lastLights >= M.LIGHTS_S and (M.night or #pool > 0) then
     lastLights = now
@@ -225,7 +341,7 @@ end
 
 -- A new level or session: the materials are new (applied again at the next check), the lights gone.
 function M.reset()
-  M.night, lastCheck, lastLights = nil, -1e9, -1e9
+  M.night, M.nightStep, lastCheck, lastLights, shown, shownMap = nil, nil, -1e9, -1e9, {}, {}
   for _, e in ipairs(pool) do
     local o = scenetree.findObjectById(e.id)
     if o then o:delete() end
@@ -237,7 +353,7 @@ function M.status()
   local on, n = 0, 0
   for _, e in ipairs(pool) do if e.at then on = on + 1 end end
   for _, list in pairs(lenses) do n = n + #list end
-  return { night = M.night, errors = M.errors, lights = #pool, lit = on, lenses = n }
+  return { night = M.night, step = M.nightStep, errors = M.errors, lights = #pool, lit = on, lenses = n }
 end
 
 return M
