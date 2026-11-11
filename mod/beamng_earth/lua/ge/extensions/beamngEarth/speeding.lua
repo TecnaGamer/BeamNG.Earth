@@ -53,6 +53,17 @@ function M.cap(limit, fast, street)
   return limit * (1 + (limit >= M.FAST_MS and fast or street))
 end
 
+-- A road OpenStreetMap tags smoothness=bad or worse (navgraph's edge flag "rough", server navgraph.ROUGH_SMOOTHNESS:
+-- passability, not a speed limit) is not sped on: a habit over the limit keeps to the limit there (PR #1122).
+local function rough(obj)
+  local ng = package.loaded['beamngEarth/navgraph']
+  if not (ng and ng.speedProfileAt and obj and obj.getPosition) then return false end
+  local p = obj:getPosition()
+  local ok, r = pcall(ng.speedProfileAt, p.x, p.y, p.z)
+  return ok and type(r) == 'table' and r.rough == true or false
+end
+M._rough = rough        -- (tests)
+
 local cars = {}         -- id -> { fast, street, sent, at, country }
 local timer, clock = 0, 0
 
@@ -96,8 +107,9 @@ function M.update(dt, graph)
       local limit = v.tracking and tonumber(v.tracking.speedLimit)
       if limit and limit > 4.2 then
         local cap = M.cap(limit, c.fast, c.street)
+        local obj = getObjectByID(id)
+        if cap > limit and rough(obj) then cap = limit end     -- (a rough road: no speeding there)
         if not c.sent or math.abs(cap - c.sent) >= M.MIN_CHANGE or clock - c.at >= M.RESEND_S then
-          local obj = getObjectByID(id)
           if obj then
             obj:queueLuaCommand(string.format('ai.setSpeedMode("limit") ai.setSpeed(%.2f)', cap))
             c.sent, c.at = cap, clock

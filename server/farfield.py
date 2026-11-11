@@ -1321,7 +1321,7 @@ def write_built(path, built, fmt="cdae", material=MATERIAL, textured=False, tex_
     uvs2 = built.detail_uvs if textured else None
     if fmt == "cdae":
         return cdae.write(path, built.positions, built.tris, normals=built.normals, uvs=uvs, uvs2=uvs2,
-                          material=material, tangent_uvs=built.planar)
+                          material=material, tangent_uvs=built.planar, close=False)    # (terrain: a heightfield)
     dae.write_grid_dae(path, built.positions.ravel(), uvs.ravel(), built.tris.ravel(),
                        material=material, normals=built.normals.ravel(),
                        uvs2=None if uvs2 is None else uvs2.ravel())

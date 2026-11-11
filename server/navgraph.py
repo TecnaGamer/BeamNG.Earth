@@ -182,6 +182,22 @@ def posted_field(legal, target, mapped):
     return v if mapped else -v
 
 
+# OSM smoothness is vehicle passability, not a speed limit. Carry a rough-road flag so the traffic driver profile
+# avoids its normal overspeed on these roads, while retaining the posted limit and any lower curve target.
+ROUGH_SMOOTHNESS = {"bad", "very_bad", "horrible", "very_horrible", "impassable"}
+
+
+def rough_road(feats, i):
+    """Whether OSM marks road i rough enough that traffic should not overspeed its legal/curve target."""
+    values = getattr(feats, "attrs", {}).get("osm_smoothness")
+    if values is None or i < 0 or i >= len(values):
+        return False
+    value = values[i]
+    if value is None:
+        return False
+    return str(value).strip().lower() in ROUGH_SMOOTHNESS
+
+
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
@@ -318,7 +334,8 @@ def _deck_z(decks, fid, x, y):
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
           mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=()):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
-    drivability, radius]], `lines` for tunnel-only minimap stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
+    drivability, radius, (optional portal radius, posted speed, rough-road flag)]], `lines` for tunnel-only minimap
+    stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
     (the last field was added in 1.9 for add-ons that read legal limits). Of the roads in the square of half size
     `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
@@ -334,6 +351,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
+    rough_edges = set()          # id(edge) -> OSM smoothness class says traffic should not overspeed
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
@@ -513,6 +531,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     continue
                 incoming = direction == 0 or (direction > 0) == (end == -1)   # unless one-way out of it
                 approaches[(names[j], fid, end)] = (names[nb], incoming)
+            rough = rough_road(feats, i)
             for j in range(len(names) - 1):
                 a, b = names[j], names[j + 1]
                 if a == b:
@@ -561,6 +580,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 pf = posted_field(legal, target, mapped_limit(feats, i, (full[j] + full[j + 1]) / (2 * L)))
                 if pf is not None:
                     posted[id(edges[-1])] = pf
+                if rough:
+                    rough_edges.add(id(edges[-1]))
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
     # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
@@ -655,12 +676,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             uniq.append(e)
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
-    for e in uniq:              # (the posted limit last: e[9], after the optional portal radius e[8])
+    for e in uniq:              # (posted limit e[10], rough flag e[11], after optional portal radius e[9])
         pf = posted.get(id(e))
-        if pf is not None:
+        rough = id(e) in rough_edges
+        if pf is not None or rough:
             if len(e) == 8:
                 e.append(None)
             e.append(pf)
+            if rough:
+                e.append(True)
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
     return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
             "trafficProfile": _traffic_profile(frame, density_lines, cx, cy), "mph": bool(mph)}

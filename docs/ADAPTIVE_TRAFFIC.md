@@ -16,6 +16,10 @@ the model falls back to the mapped road network.
 `navgraph.build` attaches the profile to every graph as `trafficProfile` (one vectorised numpy pass over the roads near
 the graph's centre, a few ms per graph, built every 400 m in the navgraph worker thread). The edges are unchanged.
 
+A road OpenStreetMap tags `smoothness=bad` or worse (`very_bad`, `horrible`, `very_horrible`, `impassable`) carries a
+rough-road flag on its graph edges (`navgraph.ROUGH_SMOOTHNESS`, the edge's 11th field); its speed target is unchanged.
+The speeding traffic (`speeding.lua`) keeps to the limit there instead of its habit over it (`navgraph.speedProfileAt`).
+
 In the game (`navgraph.lua`, `M.ADAPTIVE`, Settings > World > Adaptive traffic amount) the stock traffic's active
 amount (`gameplay_traffic.setActiveAmount`) moves toward the profile's target by one car at most every 5 s, never above
 the player's own amount (the ceiling found before it was touched, or the cars spawned). After a teleport the new

@@ -72,6 +72,28 @@ M.CUT_DECEL = 2.5
 M.CUT_STOP_M = 30
 M.FRESH_S = 5
 M.COOLDOWN_S = 8.0
+-- A car that reached the cut no longer heads for it: it stopped at the dead end at an angle, or it is turning round
+-- across the road (the AI's three-point turn: crawling through the swing, reversing, or standing across its road's
+-- axis), so headingToCut's 45-degree test let it go and it waited for the generic stuck timer — STUCK_S (45 s), and
+-- only STUCK_FAR_M or more from the player: time enough to block the lane and U-turn in front of the player
+-- (GitHub #855, "happens everywhere PERMANENTLY", with #72 / #279 the history; driving slowly near Oceanside CA
+-- 2026-11-10: cars stopping and U-turning constantly). Within CUT_NEAR_M of a cut, a car reversing, moving more
+-- than CUT_TURN_COS off its road's axis or along a one-way road against it, or nearly stationary (under CUT_NEAR_MS)
+-- while facing the dead end or standing across its road, is respawned at once — no STUCK_S wait; COOLDOWN_S and the
+-- fresh-car window (FRESH_S, a freshly placed car stands still before its launch) still apply, and nothing is taken
+-- while the game is paused. A car merely slow or stopped near a cut is not the cut's: a red light or a stop sign on
+-- a through road of a junction the clip cut holds cars just there, aligned with their road and facing past the dead
+-- end — those are left alone (cutStopped). Still uncaught: a car that completed its turn before a scan saw it and
+-- stands or drives back along a two-way road reads as ordinary oncoming traffic and is left alone.
+M.CUT_NEAR_M = 30
+M.CUT_NEAR_MS = 2.5
+M.CUT_TURN_COS = 0.5    -- (cos 60 degrees)
+-- The guard is frame-timed: a long frame (streaming hitches, 0.3-5 s in session logs) runs between two scans, and a
+-- car covers the whole gap unwatched — CUT_STOP_M's margin assumes a scan every GUARD_S, and the first frame after
+-- the gap runs the scan at once but measured only the car's position now. That scan widens each car's cut reach
+-- (cutReach), and JUMP_M's respawn-detection threshold, by the missed time at the car's speed, so the stretch it
+-- drove meanwhile is still inside the window; capped at GUARD_LAG_MAX_S (a level load or a pause is not a hitch).
+M.GUARD_LAG_MAX_S = 6
 M.JUMP_M = 30           -- a car this much farther than at the last check was respawned (stock or ours)
 -- At speed a car respawned behind the camera is never seen again: on a motorway every car ahead reached the block's
 -- edge within ~30 s and reappeared behind the player, who drove alone (GitHub #353, Albany to New York). Faster than
@@ -202,7 +224,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
           inRadius = e[8], outRadius = e[9] or e[8],      -- (e[9]: a road narrowing to a tunnel's portal)
-          posted = e[10] }      -- (the posted limit where speedLimit is not it, negative: the class's default; api)
+          posted = e[10], rough = e[11] == true } -- (posted/legal speed and OSM rough-road metadata)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -234,6 +256,35 @@ function M.followsPlayer(p, dir, pp, pu, car_sp)
   local ux, uy = pu.x / ps, pu.y / ps
   if (dir.x * ux + dir.y * uy) / dl < M.FOLLOW_DOT then return false end
   return (p.x - pp.x) * ux + (p.y - pp.y) * uy > 0
+end
+
+-- Pure: how far a car at sp m/s sees a cut it heads for (CUT_M / CUT_S, CUT_FRESH_M when fresh, at least its
+-- stopping distance), widened by the time the guard missed (lag s, a long frame) at the car's speed.
+function M.cutReach(sp, fresh, lag)
+  return math.max(fresh and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S), M.stopReach(sp)) + (lag or 0) * sp
+end
+
+-- Pure: is a car at (px, py) within m of one of the cuts, whichever way it points?
+function M.nearCut(px, py, list, m)
+  for _, c in ipairs(list) do
+    if (c[1] - px) ^ 2 + (c[2] - py) ^ 2 <= m * m then return true end
+  end
+  return false
+end
+
+-- Pure: has a car near a cut stopped at the dead end or begun its turn (CUT_NEAR_MS, CUT_TURN_COS)? sp its speed
+-- (m/s), fwd its velocity along its facing (negative: reversing), roadDot the cosine of its direction of travel
+-- (at a stand: its facing) with its road's in -> out direction (nil: no road found), oneWay that road's, facingCut
+-- whether its facing points at a cut (headingToCut's cone). Merely slow or stopped is not enough: a red light or a
+-- stop sign on a through road of a junction the clip cut holds a car just there, aligned with its road and facing
+-- past the dead end — left alone.
+function M.cutStopped(sp, fwd, roadDot, oneWay, facingCut)
+  local turned = roadDot ~= nil
+    and (math.abs(roadDot) < M.CUT_TURN_COS or (oneWay and roadDot < -M.CUT_TURN_COS)) or false
+  if sp < M.CUT_NEAR_MS then
+    return facingCut or turned                          -- stopped at the dead end, or stood across its road
+  end
+  return fwd < 0 or turned                              -- backing, across the road, or against a one-way road
 end
 
 -- Pure: is a car at (px, py) moving along unit (dx, dy) heading for one of the cuts within reach m (45 degrees)?
@@ -555,7 +606,16 @@ local function closestRoad(x, y, z)
   -- (findClosestRoad's distance is 3D, the probe at the player's height: measured in the plane here)
   local t = math.max(0, math.min(1, ((x - i.pos.x) * ex + (y - i.pos.y) * ey) / (l * l)))
   local qx, qy = i.pos.x + t * ex, i.pos.y + t * ey
-  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay }
+  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay,
+    speedLimit = e.speedLimit, posted = e.posted, rough = e.rough == true }
+end
+
+-- Local road speed metadata for traffic drivers. The graph is the current streamed graph; a generous distance gate
+-- avoids applying an adjacent road's speed profile when the vehicle is off-road or the graph is still rebuilding.
+function M.speedProfileAt(x, y, z)
+  local r = closestRoad(x, y, z)
+  if not r or r.dist > 35 then return nil end
+  return { target = r.speedLimit, posted = r.posted, rough = r.rough, distance = r.dist }
 end
 local oncomingTurn = false
 
@@ -569,7 +629,9 @@ local stillSince = {}   -- car id -> os.clock() it stopped moving
 local seenAt = {}       -- car id -> { x, y, os.clock() it appeared there }
 local lastTeleport = {} -- car id -> os.clock() it was last teleported
 local syncTrafficPool
-local function guard(b, all)
+-- (lag: the time beyond GUARD_S since the last scan, a long frame's; it widens the cut reach and the jump threshold)
+local function guard(b, all, lag)
+  lag = lag or 0
   local gt = gameplay_traffic
   if not gt or gt.getState() ~= 'on' then return end
   syncTrafficPool(gt)
@@ -593,13 +655,29 @@ local function guard(b, all)
         local dir = sp > 1 and { x = u.x / sp, y = u.y / sp } or o:getDirectionVector()
         local dl = math.sqrt(dir.x * dir.x + dir.y * dir.y)
         local s0 = seenAt[id]
-        if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > M.JUMP_M ^ 2 then s0 = { p.x, p.y, now } end
-        seenAt[id] = { p.x, p.y, s0[3] }
-        local reach = math.max(now - s0[3] < M.FRESH_S and M.CUT_FRESH_M or math.max(M.CUT_M, sp * M.CUT_S),
-          M.stopReach(sp))
+        -- (a long frame carried the car on at its speed: that is driving, not a respawn's jump)
+        local jump = M.JUMP_M + (s0 and s0[4] or 0) * lag
+        if not s0 or (p.x - s0[1]) ^ 2 + (p.y - s0[2]) ^ 2 > jump ^ 2 then s0 = { p.x, p.y, now } end
+        seenAt[id] = { p.x, p.y, s0[3], sp }
+        local fresh = now - s0[3] < M.FRESH_S
+        local reach = M.cutReach(sp, fresh, lag)
         local toCut = dl > 1e-6 and M.headingToCut(p.x, p.y, dir.x / dl, dir.y / dl, cuts, reach)
         if toCut and pp and M.followsPlayer(p, dir, pp, pv:getVelocity(), sp) then
           toCut = false     -- (the block goes on with the player: the guard's box check stays; GitHub #353)
+        end
+        -- at the cut already (GitHub #855): stopped at the dead end or turning round, which no longer heads for it
+        local atCut = false
+        if not toCut and not fresh and not paused and M.nearCut(p.x, p.y, cuts, M.CUT_NEAR_M) then
+          local f = o:getDirectionVector()
+          local fl = math.sqrt(f.x * f.x + f.y * f.y)
+          local fwd = u.x * f.x + u.y * f.y
+          local hx, hy        -- its direction of travel at speed, its facing at a stand
+          if sp >= M.CUT_NEAR_MS then hx, hy = u.x / sp, u.y / sp
+          elseif fl > 1e-6 then hx, hy = f.x / fl, f.y / fl end
+          local r = hx and closestRoad(p.x, p.y, p.z) or nil
+          local roadDot = r and (r.dx * hx + r.dy * hy) or nil
+          local facingCut = fl > 1e-6 and M.headingToCut(p.x, p.y, f.x / fl, f.y / fl, cuts, M.CUT_NEAR_M) or false
+          atCut = M.cutStopped(sp, fwd, roadDot, r and r.oneWay or nil, facingCut)
         end
         if not paused and o:getVelocity():length() < M.STUCK_MS then
           stillSince[id] = stillSince[id] or now
@@ -609,8 +687,9 @@ local function guard(b, all)
         local d = pp and (p - pp):length() or math.huge
         local underCooldown = (now - (lastTeleport[id] or -math.huge)) < M.COOLDOWN_S
         local urgent = not M.inside(b, p.x, p.y, M.GUARD_M)
-        if all or urgent or (not underCooldown and (toCut or M.stuck(stillSince[id], now, d))) then
-          if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1 end
+        if all or urgent or (not underCooldown and (toCut or atCut or M.stuck(stillSince[id], now, d))) then
+          if toCut then stats.cutRespawns = (stats.cutRespawns or 0) + 1
+          elseif atCut then stats.cutStopRespawns = (stats.cutStopRespawns or 0) + 1 end
           stillSince[id] = nil
           lastTeleport[id] = now
           -- behind the camera: the stock default is 100-500 m in front of it, where the player sees the car
@@ -1213,8 +1292,11 @@ function M.update(aid, b, gov)
     end
   end
   if applied and t0 - lastGuard >= M.GUARD_S then
+    -- (the gate is elapsed time, so the first frame after a long one scans at once; the lag widens its window)
+    local lag = lastGuard > -math.huge
+      and math.min(math.max(t0 - lastGuard - M.GUARD_S, 0), M.GUARD_LAG_MAX_S) or 0
     lastGuard = t0
-    local ok, err = pcall(guard, b, false)
+    local ok, err = pcall(guard, b, false, lag)
     if not ok then log('W', 'beamngEarth', 'navgraph guard: ' .. tostring(err)) end
     local g = (os.clock() - t0) * 1000
     stats.guardMs = g
@@ -1292,7 +1374,8 @@ function M.applies() return stats.applies end
 function M.status()
   return { graph = graph and graph.serial or nil, applies = stats.applies, lastMs = stats.lastMs,
            nodes = stats.nodes, edges = stats.edges, junctions = stats.junctions, started = started,
-           cuts = stats.cuts, cutRespawns = stats.cutRespawns, aheadRespawns = stats.aheadRespawns,
+           cuts = stats.cuts, cutRespawns = stats.cutRespawns, cutStopRespawns = stats.cutStopRespawns,
+           aheadRespawns = stats.aheadRespawns,
            launches = stats.launches, oncomingRespawns = stats.oncomingRespawns, overtake = overtake.status(),
            resetMs = stats.resetMs, signalsMs = stats.signalsMs, nodesMs = stats.nodesMs, gpsMs = stats.gpsMs,
            applyMs = stats.applyMs, guardMs = stats.guardMs, guardMaxMs = stats.guardMaxMs,

@@ -404,7 +404,17 @@ class SplitTest(unittest.TestCase):
 class MeshTest(unittest.TestCase):
     def check_outward(self, ring, attrs):
         spec = bld.plan(ring, attrs)
-        P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        import shells
+        with unittest.mock.patch.object(shells, "ON", True):       # (BNE_WATERTIGHT on: a closed solid)
+            P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        self.assertEqual(shells.open_loops(P, T), [], "a closed solid")
+        self.assertAlmostEqual(P[:, 2].min(), -bld.SKIRT_M)      # its bottom closed at the skirt's foot
+        close = shells.close        # the faces as drawn before closing (the closing's own caps face the backs)
+        shells.close = lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex))
+        try:
+            P, UV, T, M, mats, C = bld.build([(spec, 0.0, 0.0)])
+        finally:
+            shells.close = close
         c = np.append(ring.mean(0), spec.height / 2)
         n = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])
         mid = P[T].mean(1)
@@ -1804,6 +1814,8 @@ class MappedRoofShapesTest(unittest.TestCase):
             self.assertAlmostEqual(s.height + rise, 11.0, delta=0.01, msg=shape)
             self.assertAlmostEqual(self.faces(s)[:, :, 2].max(), 11.0, delta=0.15, msg=shape)
 
+    # (the faces as drawn: shells.close's bottom caps face down by design, the watertight PR)
+    @unittest.mock.patch("shells.close", lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex)))
     def test_every_face_looks_outwards(self):
         for shape in self.SHAPES:
             for seed in (0.2, 0.8):
