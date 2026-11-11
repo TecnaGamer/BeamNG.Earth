@@ -3867,6 +3867,8 @@ class Server:
         return info
 
     def _photo_lawns(self, key, ter, layers, rgb):
+        if key in self.hm_committed:            # (in use since it was asked for: its .ter is the engine's, _base_later)
+            return
         try:
             surfacemod.photo_lawns(self.out_dir, ter, layers, rgb)
         except Exception as e:
@@ -3923,10 +3925,12 @@ class Server:
                 return
             if info is not None and (not info.get("base") or info["base"] == self.quick_base_name(key)):
                 info["base"] = name
-                if photo and info.get("layers") and info.get("ter"):
+                if photo and info.get("layers") and info.get("ter") and key not in self.hm_committed:
                     # lawns only where the photo is green (_finish_heightmap), in time for a block not committed
-                    # yet (the mod reads its .ter at the commit; one in use keeps its lawns until it is read again);
-                    # off the event loop (7.6 s of a Steam Deck's loop in a drive)
+                    # yet (the mod reads its .ter at the commit); off the event loop (7.6 s of a Steam Deck's loop in
+                    # a drive). Never a block in use: the engine watches its .ter, reloaded it when patched here and
+                    # froze in its TextureCooker (a pads refresh's block whose photo came a second after it, Billings
+                    # 2026-11-11: "File changed [hm_2_0_384_5.ter]", the game hung)
                     self.quick_pool.submit(self._photo_lawns, key, info["ter"], info["layers"], photo[0])
             for c in list(self.connections):    # (the mod drops another anchor's)
                 c.send({"type": "block_base", "anchorId": key[0], "cx": key[1], "cy": key[2],
