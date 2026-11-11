@@ -222,3 +222,8 @@ weather). The pause-menu integration follows the pattern of the TAA Standalone m
   `server/data/quebec_bounds.NOTICE.md`. No Statistics Canada endorsement implied.
 - Expanded DejaVu Sans Bold atlas (Latin/Greek/Cyrillic/Armenian/Georgian): retains
   `tools/fonts/DejaVu-LICENSE.txt`; white glyph atlas also used for ARRÊT and DUR.
+
+
+## Recreation boards
+
+Brown boards use existing Roadgeek lettering and original procedural geometry; mapped recreation names and areas retain the Overture/OSM provenance of their source cells. See the Forest Service and National Park Service notices alongside the included emblems.

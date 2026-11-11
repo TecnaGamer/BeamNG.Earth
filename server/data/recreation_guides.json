@@ -1,0 +1,43 @@
+{
+  "format": 1,
+  "signs": [
+    {
+      "id": "co-i25-north-exit243-rocky-mountain",
+      "lat": 40.193228,
+      "lon": -104.979911,
+      "bearing": 0,
+      "exit": "243",
+      "name": "Rocky Mountain National Park",
+      "lines": [
+        "Rocky Mtn",
+        "Nat'l Park"
+      ],
+      "instruction": "NEXT RIGHT",
+      "width_m": 3.66,
+      "height_m": 3.4,
+      "source": "User-supplied photograph and approximate station, 2026-11-09",
+      "osm_exit_node": 55722015,
+      "osm_ramp_way": 7673494,
+      "osm_approach_way": 647810729,
+      "note": "Photo-verified supplemental recreation guide. Station is projected onto the northbound mainline; panel and posts are placed clear of pavement. OSM ramp tags do not name the park."
+    },
+    {
+      "id": "wy-vedauwoo-forest-entrance",
+      "kind": "forest_entrance",
+      "lat": 41.1550764,
+      "lon": -105.3816071,
+      "bearing": 24,
+      "name": "Vedauwoo",
+      "category": "RECREATION AREA",
+      "forest": "MEDICINE BOW",
+      "designation": "National Forest",
+      "agency": "US DEPARTMENT OF AGRICULTURE",
+      "width_m": 4.8,
+      "height_m": 3.1,
+      "source": "User-supplied entrance-sign photo; USDA Forest Service Vedauwoo directions; OSM way 15674422",
+      "location_status": "approximate_access_road",
+      "osm_approach_way": 15674422,
+      "note": "Approximate station on the mapped entrance road, not a surveyed sign node. Uses current public-domain USFS shield; lettering approximates the photographed script."
+    }
+  ]
+}

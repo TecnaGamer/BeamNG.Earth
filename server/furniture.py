@@ -80,9 +80,11 @@ def lamp_spacing(region, dense=False):
 
 
 def highway_lit(region, link, urban):
-    """Is a highway (HIGHWAY_CLASSES) lit: every ramp (in the country only at its ends: PARTIAL_END_M); the mainline in
-    built-up land, except where the state lights its interchanges only."""
-    return bool(link) or (bool(urban) and region != "na:ramps")
+    """Infer highway lighting in developed areas and at ramp ends, except sparse-region rural ramps;
+    interchange-only regions do not infer mainline lighting. Explicit OSM lighting is handled by place()."""
+    # Sparse-region rural ramps need mapped lighting, just like the rural mainline.
+    # Being a link alone is insufficient evidence (I-25, Carr to Cheyenne).
+    return (bool(link) and (bool(urban) or region != "na:sparse")) or (bool(urban) and region != "na:ramps")
 LAMP_CURB_M = 0.5           # m from the curb onto the sidewalk
 POLE_SPACING = 45.0
 POLE_CLASSES = {"secondary", "tertiary", "residential", "unclassified"}
@@ -930,7 +932,7 @@ def off_buildings(rows, rings, groups=(G_STREET_TREE,), clear=STREET_TREE_WALL_M
 def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=False, decks=(),
           signals=None, buried=0.0, region=None, lighting=None, country=None, priority=None, ground=None,
           clearance=None, development=None, pole_profile=None, pole_frame=None,
-          sign_obstacles=None, defer_gore=False):
+          sign_obstacles=None, defer_gore=False, utility_overrides=None):
     """Rows [group, x, y, z, yaw, scale, height, rank] (trees.lua's tile rows) of the lamps and poles of a
     tile box (x0, y0, x1, y1). roads: build_tile's (fid, spec, centreline (k, 3), lon); walks: its sidewalk
     runs (dicts with fid, pts, side, w); decks: the bridge decks over the tile [(centreline (k, 3), half
@@ -949,7 +951,11 @@ def place(roads, walks, box, curb_h=0.15, wires=None, town=False, left_hand=Fals
     x0, y0, x1, y1 = box
     by_fid = {fid: (spec, pts) for fid, spec, pts, _ in roads}
 
+    utility_overrides = utility_overrides or {}  # verified corrections to procedural poles/wires
+
     def overhead(fid):          # does this road's line run on poles (not buried)?
+        if utility_overrides.get(fid) is False:
+            return False
         import franceroads
         sp = by_fid.get(fid, (None, None))[0]
         if sp is not None and franceroads.enabled(sp) and not sp.urban:

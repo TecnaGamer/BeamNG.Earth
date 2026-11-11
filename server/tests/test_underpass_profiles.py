@@ -2,6 +2,7 @@
 import os
 import sys
 from unittest import TestCase
+from unittest.mock import patch
 
 import numpy as np
 
@@ -85,3 +86,40 @@ class UnderpassProfilesTest(TestCase):
         offsets = grading.underpass_offsets(lines, [])
         for xy, offset in zip(lines, offsets):
             np.testing.assert_array_equal(offset, np.zeros(len(xy)))
+
+
+class OwnBridgeApproachTest(TestCase):
+    def test_own_deck_overlap_does_not_dig_the_approach(self):
+        from test_roads import FRAME
+        import mapcells
+        road = line((-600, 0), (600, 0))
+        # Slightly different bridge ranges from adjacent cells can cross their
+        # own ground approach. A real different road crossing still needs clearance.
+        deck = np.array([[-12., -0.05], [12., 0.05]])
+        for owner in ("mainline", "other-road"):
+            with self.subTest(owner=owner):
+                planner = grading._Planner(FRAME, None, lambda la, lo: np.full(np.shape(la), 100.))
+                planner._cell_enu = lambda *a, **kw: dict(
+                    bridges=[deck], bridge_cls=["motorway"], bridge_ids=[owner], bridge_half=[7.],
+                    ground=[(road, 7., "motorway")], ground_ids=[("mainline", 0, 40., 24.)])
+                planner._coarse = lambda key: False
+                planner._end_raised = lambda xy: 0.
+                planner._end_filled = lambda *a: -np.inf
+                plan = grading.Plan(road, np.full(len(road), 100.), 8.)
+                plans = [("mainline", plan)]
+                from test_roads import LAT, LON
+                key = mapcells.cell_of(LAT, LON)
+                with patch.object(grading, "CW_ON", False), patch.object(grading, "XS_ON", False):
+                    planner._lower_underpasses(key, plans)
+                if owner == "mainline":
+                    np.testing.assert_array_equal(plans[0][1].z, plan.z)
+                else:
+                    self.assertLess(plans[0][1].z.min(), 98., "genuine other-road underpasses remain")
+
+    def test_chained_spans_keep_all_source_owners(self):
+        a = np.array([[0., 0.], [12., 0.]])
+        b = np.array([[12., 0.], [24., 0.]])
+        merged, owners = grading._merge_span_chains([(a, True, False), (b, True, False)],
+                                                   [{"first"}, {"second"}])
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(owners, [{"first", "second"}])

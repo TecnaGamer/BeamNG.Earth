@@ -273,6 +273,7 @@ URBAN_BESIDE_SHARE = float(os.environ.get("BNE_URBAN_BESIDE_SHARE", "0.35"))
                                 # school/pavement endpoints; the land cover counts wide pavement as built-up, and the Eyre Highway
                                 # through Eucla (centre 94 %, beside it 3 %) got a town's footpaths, bins and hydrants
                                 # across the Nullarbor (GitHub #267). Baltimore and Chicago keep every urban road.
+URBAN_HIGHWAY_BESIDE_M = 90.0  # beyond a divided highway's pavement and WorldCover's built-up road fringe
 URBAN_BOTH_SHARE = 0.1          # a motorway or trunk needs built-up land on both
                                 # sides of this share of its samples: a roadhouse beside the Eyre Highway (Eucla: one
                                 # side 33 %, the other 0 %) is no town
@@ -292,7 +293,8 @@ def _beside(ll, counts, d):
         m = np.array([111320.0 * math.cos(math.radians(float(p[:, 1].mean()))), 110540.0])   # m per degree
         t = np.gradient(p * m, axis=0)
         t /= np.maximum(np.hypot(t[:, 0], t[:, 1]), 1e-9)[:, None]
-        off = np.stack([-t[:, 1], t[:, 0]], axis=1) * d / m
+        distance = np.asarray(d)[k:k + c, None] if np.ndim(d) else d
+        off = np.stack([-t[:, 1], t[:, 0]], axis=1) * distance / m
         left[k:k + c], right[k:k + c] = p + off, p - off
         k += c
     return left, right
@@ -2616,7 +2618,9 @@ def _road_specs(feats, urban_fn, left_hand):
                         lanes=lanes, surf=surface_token(surf), link=link))
     if ask:
         ll = np.concatenate([samples for _, _, _, samples, *_ in ask])
-        left, right = _beside(ll, [len(samples) for _, _, _, samples, *_ in ask], URBAN_BESIDE_M)
+        beside = np.concatenate([np.full(len(samples), URBAN_HIGHWAY_BESIDE_M if cls in ("motorway", "trunk")
+                                          else URBAN_BESIDE_M) for _, cls, _, samples, *_ in ask])
+        left, right = _beside(ll, [len(samples) for _, _, _, samples, *_ in ask], beside)
         n = len(ll)
         pts = np.concatenate([ll, left, right])
         u_all = np.asarray(urban_fn(pts[:, 1], pts[:, 0]), bool)      # (one call: its cost is per call)
@@ -9386,6 +9390,7 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
         import poleprofiles
         detailed_signs = euguardrails.enabled() and poleprofiles.kit_enabled(pole_profile)
     if props is not None and walks is not None:     # street lights and utility poles (furniture.py)
+        import roadutilities
         # (the speed-limit signs are the sign tiles' since 2026-10-28: speedsigns.py)
         if sign_obstacles is not None:
             sign_obstacles.ground = ground
@@ -9395,6 +9400,8 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                                      priority=priority, ground=ground, development=development,
                                      pole_profile=pole_profile, pole_frame=frame, sign_obstacles=sign_obstacles,
                                      defer_gore=detailed_signs,
+                                     utility_overrides={fid: rule for fid, (f, i, _sp) in seen.items()
+                                                        if (rule := roadutilities.override(f, i)) is not None},
                                      lighting={fid: str(f.attrs["osm_lit"][i]).strip().lower()
                                                for fid, (f, i, _sp) in seen.items() if "osm_lit" in f.attrs}))
     if signs is not None and props is not None:

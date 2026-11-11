@@ -59,6 +59,28 @@ class PlanCacheTest(unittest.TestCase):
         self.assertEqual(md.calls, 0, "planned in the last run: read from the revisit cache")
         self.assertTrue(np.array_equal(za, zb))
 
+    def test_border_fix_rejects_persisted_format22_plans_after_restart(self):
+        # Format 22 survived the original I-25 solver fix: its old lowered
+        # approaches were read on the next run without executing the new solver.
+        f = features([[(-300, 20), (300, 20)]], ["motorway"])
+        la, lo, _ = FRAME.enu_to_geodetic(np.linspace(-150, 150, 11), np.full(11, 20.), 0.)
+        with mock.patch.object(plancache, "PLANS_FORMAT", 22):
+            old = self.grader(FakeMD(f))
+            old.apply(la, lo, np.zeros(11))
+        os.environ[plancache.RUN_ENV] = "after-border-fix"
+        md = FakeMD(f)
+        new = grading.Grader(FRAME, md, lambda la, lo: np.full(np.shape(la), 14.))
+        new.shared = plancache.for_grader(self.dir, new, None, None)
+        corrected = new.apply(la, lo, np.zeros(11))
+        self.assertGreater(md.calls, 0, "old format must be rejected and current solver executed")
+        np.testing.assert_allclose(corrected, 14., atol=.01)
+        os.environ[plancache.RUN_ENV] = "revisit-corrected-border"
+        md2 = FakeMD(f)
+        revisit = grading.Grader(FRAME, md2, lambda la, lo: np.full(np.shape(la), 14.))
+        revisit.shared = plancache.for_grader(self.dir, revisit, None, None)
+        np.testing.assert_array_equal(revisit.apply(la, lo, np.zeros(11)), corrected)
+        self.assertEqual(md2.calls, 0, "corrected plans still persist across subsequent starts")
+
     def test_has(self):
         """PlanCache.has: a cell's plans on disk, this run's or (a later run) the revisit cache's; nothing read."""
         f = features([[(-300, 20), (300, 20)], [(0, -300), (0, 300)]], ["residential", "secondary"])

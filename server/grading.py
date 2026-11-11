@@ -361,13 +361,14 @@ CW_OVERLAP_MAX_M = 120.0  # m either side of a crossing two decks' clearance is 
 CW_OVERLAP_STEP_M = 12.0  # m between the points two overlapping decks' clearance is held at
 
 
-def _merge_span_chains(parts):
+def _merge_span_chains(parts, owners=None):
     """parts [(line (k, 2+), fixed, rail)] with every simple chain of them joined into one line: parts of the same
-    (fixed, rail) whose ends meet within UNDER_CHAIN_JOIN_M at a node no other part's end reaches. Pure."""
+    (fixed, rail) whose ends meet within UNDER_CHAIN_JOIN_M at a node no other part's end reaches.
+    With parallel owner sets, return (parts, merged owner sets) to preserve source identity. Pure."""
     f64 = np.float64
     n = len(parts)
     if n < 2:
-        return list(parts)
+        return list(parts) if owners is None else (list(parts), list(owners))
     ends = np.array([[np.asarray(b, f64)[0, :2], np.asarray(b, f64)[-1, :2]] for b, _f, _r in parts]).reshape(-1, 2)
     d = np.hypot(ends[:, None, 0] - ends[None, :, 0], ends[:, None, 1] - ends[None, :, 1])
     near = d < UNDER_CHAIN_JOIN_M
@@ -380,6 +381,7 @@ def _merge_span_chains(parts):
             if parts[e // 2][1:] == parts[o // 2][1:] and np.flatnonzero(near[o]).tolist() == [e]:
                 link[e] = o
     out, used = [], set()
+    merged_owners = []
     for start in range(n):
         if start in used:
             continue
@@ -398,6 +400,7 @@ def _merge_span_chains(parts):
         if e_in == 1:
             line = line[::-1]
         used.add(p)
+        owned = set(owners[p]) if owners is not None else set()
         e_out = 2 * p + (1 - e_in)
         while e_out in link:
             o = link[e_out]
@@ -409,9 +412,12 @@ def _merge_span_chains(parts):
             w = min(line.shape[1], nxt.shape[1])
             line = np.concatenate([line[:, :w], nxt[1:, :w]])
             used.add(q)
+            if owners is not None:
+                owned.update(owners[q])
             e_out = 2 * q + (1 - o % 2)
         out.append((line, parts[p][1], parts[p][2]))
-    return out
+        merged_owners.append(owned)
+    return out if owners is None else (out, merged_owners)
 
 
 def _cw_level(q):
@@ -2580,20 +2586,24 @@ class _Planner:
         keys = sorted(set(mapcells.cells_for_bbox(float(cla.min()), float(clo.min()), float(cla.max()),
                                                   float(clo.max()))) | {key}, key=str)
         bridges, ground, over = [], {}, []
+        bridge_owners = []
         for k in keys:
             c = self._cell_enu(k)
             if UNDER_DECK_ON:               # (every deck, for the ground under it: _under_ground)
                 over += [(line, half) for line, half in zip(c["bridges"], c.get("bridge_half", ())) if half > 0]
                 over += [(line, railwaysmod.DECK_HALF_M) for line in c.get("rail_bridges", ())]
-            for line, cls in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"]))):
+            for line, cls, owner in zip(c["bridges"], c.get("bridge_cls", [None] * len(c["bridges"])),
+                                        c.get("bridge_ids", [None] * len(c["bridges"]))):
                 if cls is None:
                     continue
                 if not (UNDER_ANY_ON or cls in APPROACH_SKIP or cls.endswith("_link")):
                     continue
                 bridges.append((line, cls in APPROACH_SKIP, False))     # (a link's "<cls>_link": raised)
+                bridge_owners.append({owner} if owner is not None else set())
             # (a line's deck: never raised; straight between its ends whatever its length or what it joins, as
             # railways.deck_heights lays it: no single-span test)
             bridges += [(line, True, True) for line in c.get("rail_bridges", ())]
+            bridge_owners += [set() for _ in c.get("rail_bridges", ())]
             for (line, _h, cls), (fid, j, sg, med) in zip(c["ground"], c["ground_ids"]):
                 if cls in UNGRADED or len(line) < 2:
                     continue
@@ -2605,18 +2615,21 @@ class _Planner:
         if not bridges or not ground:
             return
         # (single spans: neither end continues into another bridge part; deduplicated across cells)
-        uniq, seen = [], set()
-        for b, fixed, rail in bridges:
+        uniq, seen, owners = [], {}, []
+        for (b, fixed, rail), owned in zip(bridges, bridge_owners):
             k2 = (round(float(b[0, 0]), 1), round(float(b[0, 1]), 1), round(float(b[-1, 0]), 1), len(b))
             if k2 not in seen:
-                seen.add(k2)
+                seen[k2] = len(uniq)
                 uniq.append((b, fixed, rail))
+                owners.append(set(owned))
+            else:
+                owners[seen[k2]].update(owned)
         chained = set()
         if UNDER_CHAIN_ON:
             n0 = [len(b) for b, _f, _r in uniq]
-            uniq = _merge_span_chains(uniq)
+            uniq, owners = _merge_span_chains(uniq, owners)
             chained = {i for i, (b, _f, _r) in enumerate(uniq) if len(b) not in n0}
-        spans, rail_span = [], []
+        spans, rail_span, span_owners = [], [], []
         ue = np.array([[b[0, :2], b[-1, :2]] for b, _f, _r in uniq], f64)        # (n, 2 ends, 2)
         stub = np.array([float(np.hypot(*np.diff(b[:, :2], axis=0).T).sum()) < UNDER_STUB_M for b, _f, _r in uniq])
         coarse = self._coarse(key)      # (there the railway rises over the road: railways.coarse_underpasses)
@@ -2637,6 +2650,7 @@ class _Planner:
             if rail or cw_deck or not (d < 0.75).any():
                 spans.append((b, L, fixed, rail))
                 rail_span.append(rail)
+                span_owners.append(owners[n])
         if not spans:
             return
         gids = sorted(ground)
@@ -2675,6 +2689,10 @@ class _Planner:
             for c in cr:
                 bi, arc_b, pt = c[0], c[1], np.asarray(c[2], f64)
                 b, L, fixed, rail = spans[bi]
+                # Adjacent cells can extend the same deck by different amounts. Their
+                # overlapping ground approach must never become an underpass of itself.
+                if gids[i][0] in span_owners[bi]:
+                    continue
                 if arc_b < APPROACH_MIN_CROSS_M or arc_b > L - APPROACH_MIN_CROSS_M:
                     continue                    # a junction at the bridge's end
                 corridor = np.clip([arc_b - roadsmod.DECK_CLEAR_REACH_M, arc_b + roadsmod.DECK_CLEAR_REACH_M], 0.0, L)

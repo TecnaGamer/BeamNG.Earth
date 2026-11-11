@@ -273,6 +273,11 @@ POLICIES = {
     "nvdbapiles.atlas.vegvesen.no": HostPolicy(rate=2.0, burst=4.0, max_conc=2, daily_budget=3000, daily_hard=6000,
                                                allow_prefetch=True, offline_ok=True, miss_ttl=None, timeout=30.0,
                                                max_attempts=3, base_delay=2.0, optional=True),
+    # Welcome-board tags absent from Layercake: batched node IDs discovered there,
+    # only near state borders; week-long disk cache, no map or Overpass queries.
+    "api.openstreetmap.org": HostPolicy(rate=1.0, burst=1.0, max_conc=1, daily_budget=200, daily_hard=400,
+                                         allow_prefetch=False, offline_ok=True, timeout=8.0,
+                                         max_attempts=1, optional=True),
     # never at runtime (OSM Overpass, OSMF vector tiles, Protomaps builds): §3.3
     "overpass-api.de": HostPolicy(denied=True, daily_hard=0),
     "vector.openstreetmap.org": HostPolicy(denied=True, daily_hard=0),
@@ -345,6 +350,7 @@ ROLES = {
     "gis.ngdc.noaa.gov": "sea depths; new coasts get a plain sloping sea floor meanwhile",
     "davidmegginson.github.io": "the airport list; the copy on disk is used meanwhile",
     "data.openstreetmap.us": "road details from OpenStreetMap (lanes, widths, sidewalks); estimated meanwhile",
+    "api.openstreetmap.org": "mapped welcome signs and posted park exits; cached signs remain available offline",
     "s3-us-west-2.amazonaws.com": "US lidar for bridge deck heights; estimated meanwhile",
     "nvdbapiles.atlas.vegvesen.no": "Norway's measured road, bridge and tunnel heights; estimated meanwhile",
     "tecnagamer.github.io": "railway details, US railroad crossing equipment and lane markings; estimated meanwhile",

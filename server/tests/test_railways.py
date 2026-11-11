@@ -137,9 +137,8 @@ class RailwayTest(unittest.TestCase):
         hw = roads.road_specs(f)[1].width / 2
         self.assertFalse(((x > 120 - hw) & (x < 120 + hw)).any(), "nothing on the road")
 
-    def test_abandoned_lines_are_drawn_but_not_graded(self):
-        """GitHub #706 / #837: an abandoned line's bed graded to a 2 % line cut walls into mountainsides. It gets no
-        grading plan (the ground stays as it is) but is still drawn, worn, on the ground; a disused one is graded."""
+    def test_abandoned_lines_are_neither_drawn_nor_graded(self):
+        """Abandoned alignments produce neither visible track nor terrain grading; disused lines remain."""
         f = features([[(0.0, 60.0), (250.0, 60.0)], [(0.0, 120.0), (250.0, 120.0)], [(0.0, 180.0), (250.0, 180.0)]],
                      ["standard_gauge"] * 3, subtypes=["rail"] * 3, flags=[(1, "is_abandoned"), (2, "is_disused")])
 
@@ -150,7 +149,7 @@ class RailwayTest(unittest.TestCase):
         self.assertEqual(sorted({fid for fid, *_ in plans}), ["id000", "id002"], "the abandoned line not graded")
         P, T, *_ = railways.tile_mesh(FRAME, 0, 0, [f], lambda xy: 100.0 + 0.3 * xy[:, 1])
         y = P[np.unique(T)][:, 1]
-        self.assertTrue(((y > 110.0) & (y < 130.0)).any(), "its track still drawn")
+        self.assertFalse(((y > 110.0) & (y < 130.0)).any(), "no abandoned track drawn")
 
     def test_worn_lines_are_cut_across_a_motorway(self):
         """GitHub #918: an abandoned or disused line mapped across a motorway on the ground (the A20, its old beds
@@ -171,22 +170,21 @@ class RailwayTest(unittest.TestCase):
         self.assertFalse(over("id002", 120.0), "an abandoned line cut at the motorway")
         self.assertFalse(over("id003", 60.0), "an abandoned line cut at a trunk road")
         self.assertTrue(over("id004", 60.0), "a disused line kept at a trunk road (its level crossing)")
-        self.assertEqual(len([1 for i, *_ in rails if i == "id002"]), 2, "both sides of the motorway kept")
+        self.assertFalse(any(i in ("id002", "id003") for i, *_ in rails), "abandoned lines removed entirely")
         self.assertEqual(railways._cut_worn_at_motorways(rails, {}, []), rails)
 
-    def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_worn(self):
+    def test_short_tunnel_under_a_road_is_track_and_abandoned_lines_are_absent(self):
         """The line under a road bridge tagged is_tunnel for 12 m (OSM's habit) is track; a long tunnel is left out;
-        an abandoned line beside it is drawn worn (Joensuu, 2026-10-25; the user, 2026-10-27: abandoned lines shown,
-        grown over)."""
+        an abandoned line beside it is excluded."""
         f = features([[(0.0, 100.0), (250.0, 100.0)], [(0.0, 110.0), (250.0, 110.0)], [(0.0, 150.0), (250.0, 150.0)]],
                      ["standard_gauge", "unknown", "standard_gauge"], subtypes=["rail"] * 3,
                      flags=[(0, "is_tunnel", 0.46, 0.51), (1, "is_abandoned"), (2, "is_tunnel", 0.2, 0.8)])
         worn = {}
         rails = railways.parts(FRAME, [f], roads.tile_bbox(0, 0), worn=worn)
         got = [(fid, kind, float(np.ptp(xy[:, 0]))) for fid, _c, kind, xy in rails]
-        self.assertEqual(sorted(g[0] for g in got), ["id000", "id001", "id002", "id002"])
-        self.assertEqual(worn, {"id001": 2}, "the abandoned line worn")
-        self.assertEqual([c for fid, c, *_ in rails if fid == "id001"], ["standard_gauge"])
+        self.assertEqual(sorted(g[0] for g in got), ["id000", "id002", "id002"])
+        self.assertEqual(worn, {}, "the abandoned line excluded")
+        self.assertEqual([c for fid, c, *_ in rails if fid == "id001"], [])
         self.assertAlmostEqual([g[2] for g in got if g[0] == "id000"][0], 250.0, 0, "track through the short tunnel")
         self.assertLess(max(g[2] for g in got if g[0] == "id002"), 60.0, "a long tunnel left out")
 

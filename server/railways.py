@@ -515,8 +515,7 @@ def _drop_stubs(rails):
     return [r for r, (a, _b, _s) in zip(rails, edges) if r[1] == "tram" or total[find(a)] >= MIN_LINE_M]
 
 
-WEAR_FLAGS = (("is_abandoned", 2), ("is_disused", 1))    # a line's wear: 1 out of use, 2 abandoned (drawn worn: the
-# user, 2026-10-27, "id still like abandond lines to show. perhapse with some grass on them or sumilate wear")
+WEAR_FLAGS = (("is_abandoned", 2), ("is_disused", 1))    # abandoned features are excluded before rendering
 UNBUILT_FLAGS = ("is_under_construction",)              # not drawn (no track yet), as OSM's proposed lines
 SHORT_TUNNEL_M = 60.0       # m: a "tunnel" this short is the line passing under a road bridge (OSM tags those
                             # tunnel too): track there (the track stopped either side of an overpass, 2026-10-25)
@@ -536,12 +535,22 @@ def wear(feats, i):
     return 0
 
 
+def abandoned(feats, i):
+    """Exclude historic alignments from every rail renderer, including tram decals."""
+    osm = feats.attrs.get("osm_railway")
+    if osm is not None and str(osm[i]) == "abandoned":
+        return True
+    flags = feats.rules.get("flags")
+    return flags is not None and any(
+        "is_abandoned" in str(flags.value[j]) and flags.end[j] > flags.start[j] for j in flags.rows(i))
+
+
 def drawn(feats, i, bridges=False):
     """(class, wear) of a built railway track, or None. bridges also admits trams:
     only their mapped bridge pieces belong in the 3D mesh; ground trams remain
     street track in rails.py, not ballast, grading or inferred underpasses."""
     sub = feats.attrs.get("subtype")
-    if sub is None or str(sub[i]) != "rail":
+    if sub is None or str(sub[i]) != "rail" or abandoned(feats, i):
         return None
     w = wear(feats, i)
     if w is None:

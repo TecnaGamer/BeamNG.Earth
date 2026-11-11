@@ -133,6 +133,7 @@ def _crossing_windows(xy, lines):
 def tram_lines(frame, tx, ty, cells):
     """[(centreline (k, 2), half the track's width)] of the trams on the ground near road tile (tx, ty): what a raised
     sidewalk or median stops at (Sweden's: roads.build_tile)."""
+    import railways
     import roads
     box = roads.tile_bbox(tx, ty)
     out, seen = [], set()
@@ -141,7 +142,7 @@ def tram_lines(frame, tx, ty, cells):
             continue
         hit = (np.asarray(feats.attrs["subtype"]).astype(str) == "rail") & (np.asarray(feats.attrs["class"]).astype(str) == "tram")
         for i in np.flatnonzero(hit):
-            if str(feats.ids[i]) in seen:
+            if str(feats.ids[i]) in seen or railways.abandoned(feats, i):
                 continue
             seen.add(str(feats.ids[i]))
             for part in roads.ground_parts(feats, i):
@@ -160,6 +161,7 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
     box = roads.tile_bbox(tx, ty)
     reach = max(t[0] for t in TRACK.values()) + MARGIN_M
     carriageways, town_ways, tracks, seen = {}, {}, [], set()
+    road_classes = {}
     sweden = str(country or "").upper() == "SE"
     llb = _lonlat_box(frame, box, reach + 20.0)
     for feats in cells:
@@ -176,6 +178,8 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
             # the lines railways.py builds as a 3D track (mpsteppe's PR #287; railways.drawn, worn ones too): only where
             # they cross a carriageway (its street track across the road, which railways.py leaves to the road),
             # nothing on open ground
+            if str(sub[i]) == "rail" and railways.abandoned(feats, i):
+                continue
             got = railways.drawn(feats, i) if str(sub[i]) == "rail" else None
             meshed = got is not None
             if str(sub[i]) == "rail" and not meshed and str(cls[i]) != "tram":
@@ -198,15 +202,17 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
                     continue
                 if kind is None:
                     carriageways[(fid, k)] = (xy, specs[i].width / 2)
+                    road_class = str(cls[i])
+                    road_classes[(fid, k)] = road_class.removesuffix("_link")
                     if sweden and specs[i].urban:
                         town_ways[(fid, k)] = carriageways[(fid, k)]
                 else:
-                    tracks.append((kind, xy, meshed))
+                    tracks.append((kind, xy, meshed, got[1] if meshed else 0))
     if not tracks:
         return []
 
     def on_road(pts):
-        return roads._on_carriageways(pts, carriageways, -ON_ROAD_INSET_M)
+        return roads._on_carriageways(pts, eligible, -ON_ROAD_INSET_M)
 
     def in_street(pts):
         return roads._on_carriageways(pts, town_ways, GATUSPAR_M) if town_ways else np.zeros(len(pts), bool)
@@ -215,16 +221,20 @@ def tile_chunks(frame, tx, ty, cells, country=None, urban_fn=None):
         return on_road(pts) | in_street(pts)
 
     ballast, sleepers, rails = [], [], []
-    cw_lines = [ln for ln, _hw in carriageways.values()]
     todo = []
-    for kind, xy, meshed in tracks:
+    for kind, xy, meshed, wear in tracks:
+        # Keep the decal crossings consistent with the 3D worn-track cutouts (#918).
+        # Otherwise historic alignments reappear as street rails across modern freeways.
+        excluded = railways.WORN_CUT_CLASSES.get(wear, ())
+        eligible = {key: value for key, value in carriageways.items() if road_classes[key] not in excluded}
+        cw_lines = [ln for ln, _hw in eligible.values()]
         if meshed and kind != "tram":
             # (a main line's only street track is where it crosses a road: just those stretches, every metre of every
             # line in reach tested against every carriageway cost a tile ~0.1 s, 2026-10-25)
-            todo += [(kind, w, meshed) for w in _crossing_windows(xy, cw_lines)]
+            todo += [(kind, w, meshed, eligible) for w in _crossing_windows(xy, cw_lines)]
         else:
-            todo.append((kind, xy, meshed))
-    for kind, xy, meshed in todo:
+            todo.append((kind, xy, meshed, eligible))
+    for kind, xy, meshed, eligible in todo:
         bw, sl, sw, step = TRACK[kind]
         off = GAUGE_M[kind] / 2 + HEAD_M / 2
         full = roads.densify(xy, SAMPLE_M)

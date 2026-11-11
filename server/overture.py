@@ -278,6 +278,16 @@ LAYERS = {
                   where="subtype IN ('neighborhood', 'macrohood')"),
 }
 SIMPLIFY_DEG = 0.002            # degrees (~200 m): a `simplify` layer's tolerance
+# Whole recreation polygons; clipped cell edges are not real park entrances.
+LAYERS['recreation_areas'] = dict(theme='base',type='land_use',clip=False,
+    cols=f"subtype, class, {_NAME}, {_SRC}, {_TAGS}",
+    text=('subtype','class','name','src_dataset','src_record','tags'),
+    where=("class IN ('park','national_park','nature_reserve','campground','camp_site','protected_area') OR "
+           "json_extract_string(tags, '$.leisure') IN ('park','nature_reserve') OR "
+           "json_extract_string(tags, '$.boundary') = 'national_park' OR "
+           "json_extract_string(tags, '$.tourism') IN ('camp_site','picnic_site') OR "
+           "regexp_matches(coalesce(json_extract_string(tags, '$.designation'),''), '(?i)national[_ ](forest|grassland)') OR "
+           "regexp_matches(coalesce(json_extract_string(tags, '$.name'),''), '(?i)national (forest|grassland)')"))
 # road_flags: one row per flag (is_bridge, is_tunnel, is_link, is_covered, ...)
 # speed_limits: max speed in km/h (mph converted) per range
 MPH = 1.609344
