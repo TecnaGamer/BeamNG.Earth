@@ -656,6 +656,8 @@ local function driveArrowsPath(gm, nodes)
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
   autoForce, autoBlocked = false, false
+  -- A continuation gets its own progress window; waiting at the old endpoint was not a failed attempt.
+  if autoFinished then progRemaining, progAt, stuckTries = nil, nil, 0 end
   autoFinished = nil
 end
 

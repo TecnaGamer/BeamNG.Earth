@@ -207,6 +207,30 @@ do
   f.path = { 'j', 's', 't' }; f:step()
   T.check(#f.drives == 2 and #f.extensions == 0,
     'a usable continuation resumes through a fresh lane-aware start')
+  f.speed = 20 -- moving, but not yet past the progress-distance threshold
+  f:step()
+  T.check(#f.drives == 2 and not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'the first update after a long wait does not immediately restart the continuation')
+  f:step(f.gps.AUTO_NOPROGRESS_S - 1)
+  T.check(#f.drives == 2 and not f.gps.noProgressReplans,
+    'a continuation gets a full progress timeout after waiting')
+  f:step(2)
+  T.check(#f.drives == 3 and f.gps.noProgressReplans == 1 and not f.gps.autoRecoveries,
+    'progress recovery still works if the resumed route makes no progress')
+end
+
+do
+  local f = fixture({ 'w', 'j' }, nil, nil, function(f) f.x = 98 end)
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1); f:step()
+  T.check(f.gps.noProgressReplans == 1, 'the old path can have a failed progress attempt before completing')
+  f.speed = 0
+  f.gps.onAiRouteDone(1); f:step()
+  f:step(70)
+  f.path = { 'j', 's', 't' }; f:step()
+  f.speed = 20; f:step()
+  f:step(f.gps.AUTO_NOPROGRESS_S + 1)
+  T.check(f.gps.noProgressReplans == 2 and not f.gps.autoRecoveries,
+    'the continuation does not inherit the old path recovery-attempt count')
 end
 
 do
