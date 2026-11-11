@@ -10446,7 +10446,9 @@ def build_tile(frame, tx, ty, cells, elev, urban_fn=None, walks=None, bridges=No
                           if has_sidewalks(s2) and float(np.hypot(*(p2[:, :2] - p[:2]).T).min()) < AU_CORNER_NEAR_M]
                 corner_h = min(v["kerb_h"] for v in near_v) if near_v and all(near_v) else None   # fork: a corner of Australian verge streets only: their low kerb
                 style = c.pop("footway", None)
-                walks.append({"corner": c, **({"h": corner_h} if corner_h is not None else {}),
+                if corner_h is not None:
+                    c = {**c, "h": corner_h}
+                walks.append({"corner": c,
                               **({"surface": style.surface, "height": style.height, "europe": True}
                                  if style is not None else {})})
                 fill_look = _corner_look(p, roads)

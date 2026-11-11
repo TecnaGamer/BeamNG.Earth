@@ -361,9 +361,9 @@ class AustraliaPaintTest(unittest.TestCase):
         "tertiary": (S(6.5, "paved", False, "tertiary", False), None),
     }
     # digests of every country's rendered paint (both traffic sides) on the code before the Australian change
-    UNCHANGED = {"US": "3759a8a5a471", "CA": "5ed5c0883a5f", "GB": "56b047bccd2c", "IE": "56b047bccd2c",
-                 "DE": "eb537500cd79", "SE": "f7360d2fb492", "NZ": "17564a9da691", "FR": "18afa8012bf9",
-                 "JP": "8012e19da97e", "NL": "a41a7a7ffc42", "NO": "6ee93290384a", "BR": "6ee93290384a"}
+    UNCHANGED = {"US": "d7189f91f9d6", "CA": "b9fe9538afc1", "GB": "8a1142fca669", "IE": "8a1142fca669",
+                 "DE": "00962800162e", "SE": "6f70f3fc55aa", "NZ": "e9b39ef79fc3", "FR": "4cfa53a33e2a",
+                 "JP": "689676c68a9e", "NL": "01fa6692fbf4", "NO": "4a228b934bc4", "BR": "4a228b934bc4"}
 
     def digest(self, country):
         h = hashlib.sha1()

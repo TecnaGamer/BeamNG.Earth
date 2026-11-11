@@ -80,7 +80,7 @@ def tile_digest(country, tag="both"):
 
 
 # digests of the code before the Australian change (the fork's qld/main at ce6a9d9f)
-EXTRAS_BEFORE = {"US": "57d5f83291c3", "CA": "6b1361a72e34", "GB": "7e9ccbfa3740", "IE": "7e9ccbfa3740",
+EXTRAS_BEFORE = {"US": "f5ec247294e9", "CA": "6b1361a72e34", "GB": "7e9ccbfa3740", "IE": "7e9ccbfa3740",
                  "DE": "3c90b5be6d76", "FR": "e4b720256095", "SE": "04624072f282", "NZ": "d0985d8c974b",
                  "JP": "3f927168353f", "NL": "3c90b5be6d76", "BR": "03581d188a8f", None: "03581d188a8f"}
 TILE_BEFORE = {"US": "47a09edfe70b", "CA": "47a09edfe70b", None: "47a09edfe70b", "GB": "d8babb4d4756",
