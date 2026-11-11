@@ -342,6 +342,7 @@ local function toEnu(anchor)
 end
 
 -- The arrows' target follows connected projections of the planned route within LOOKAHEAD_M and ON_GRAPH_M.
+-- Also reports when the route is already loaded on a different road, so an unreachable join can retain recovery.
 -- the graph's applies count: the game's node table stays the same table when a new graph goes in
 local function graphSerial()
   local ok, ng = pcall(require, 'beamngEarth/navgraph')
@@ -399,6 +400,7 @@ local function routeTarget(e, nodes, i, t)
   local d0, _, previous = M.nearestEdge(segs, e.x[i] + t * (e.x[i + 1] - e.x[i]),
     e.y[i] + t * (e.y[i + 1] - e.y[i]), e.x[i + 1] - e.x[i], e.y[i + 1] - e.y[i])
   if d0 > M.ON_GRAPH_M then previous = nil end
+  local routeEdge = previous and previous.segment
   if auto then
     -- On-road, start on the car's actual edge, including elevation: the route line may be nearer a parallel road.
     local veh = playerVeh()
@@ -412,6 +414,7 @@ local function routeTarget(e, nodes, i, t)
       end
     end
   end
+  local differentRoadLoaded = routeEdge and previous and previous.segment ~= routeEdge
   local previousS = s0
   local best = nil
   local via, lastVia, misses = {}, s0, 0
@@ -452,7 +455,7 @@ local function routeTarget(e, nodes, i, t)
     if via[#via] == best then via[#via] = nil end
     best.via = via
   end
-  return best
+  return best, differentRoadLoaded
 end
 
 -- Pure: points {x, y} every step along polyline e (x, y, cum) from distance s0 to s1 (both ends included).
@@ -1036,13 +1039,16 @@ function M.update(anchor, player)
     if off > M.OFF_ROUTE_M and not pendingId and now - lastRequest > M.REROUTE_S then requestRoute(player) end
     local tg
     if auto then
-      tg = nodes and routeTarget(e, nodes, i, t)
+      local differentRoadLoaded
+      if nodes then tg, differentRoadLoaded = routeTarget(e, nodes, i, t) end
       if not tg then
-        -- Wait for the intended road to load. A destination-nearest fallback can send the car onto a side road.
         local veh = playerVeh()
         if veh then holdAutodrive(veh) end
-        progRemaining, progAt, stuckTries = nil, nil, 0
-        return
+        -- A graph cut needs time to load. On another road beside an already loaded route, retain recovery.
+        if not differentRoadLoaded or off <= M.ON_GRAPH_M then
+          progRemaining, progAt, stuckTries = nil, nil, 0
+          return
+        end
       end
     end
     if auto and not paused then
@@ -1060,6 +1066,7 @@ function M.update(anchor, player)
         M.noProgressReplans = (M.noProgressReplans or 0) + 1
       end
     end
+    if auto and not tg then return end -- recovery may retry; never drive a destination-nearest fallback
     local hereS = e.cum[i] + t * (e.cum[i + 1] - e.cum[i])
     if not auto and speed >= M.LINE_MPS and setLineArrows(e, hereS, player.z) then return end
     tg = tg or (nodes and routeTarget(e, nodes, i, t))

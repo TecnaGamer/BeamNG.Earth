@@ -151,9 +151,60 @@ do
   local target = f.target[#f.target]
   T.check(f.arrows > f.requestArrows and target.x <= 200 and target.y == 0 and #f.drives > 0,
     'the normal polling lifecycle resumes along the highway once its graph connection loads')
+  f = fixture({ 'j', 'a', 'b', 'c', 'd' }, 30, 6, function(f)
+    diversionRoads(f)
+    f.x, f.speed = 95, 0
+    f.nodes.w.radius, f.nodes.j.radius = 50, 50
+    f.nodes.j.links.k = nil
+  end)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and f.modes[#f.modes] == 'stop',
+    'an outer lane on the intended wide edge still waits at a graph cut, even over 25 m from its centre')
   f = fixture(nil, 20, 6, function(f) f.speed = 0 end)
   f:step(35); f:step(35); f:step(35)
   T.check(recoveries == 1, 'an off-road car still recovers when its intended route has a usable graph')
+  spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
+end
+
+-- A fully loaded route can be unreachable nearby from a different parallel road.
+do
+  local recoveries, moveOnRecovery, f = 0, false, nil
+  local savedSpawn, savedQuat, savedLog = spawn, quatFromDir, log
+  spawn = { safeTeleport = function(_, p)
+    recoveries = recoveries + 1
+    if moveOnRecovery then f.x, f.y, f.z = p.x, p.y, p.z end
+  end }
+  quatFromDir = function(d) return d end
+  log = function() end
+  local function parallel(loaded)
+    return fixture({ 'a', 'b' }, 40, 6, function(f)
+      local function n(x, y, links) return { pos = { x = x, y = y, z = 0 }, radius = 6, links = links } end
+      f.speed = 0
+      f.nodes = { w = n(0, 40, { j = {} }), j = n(500, 40, {}) }
+      if loaded then
+        f.nodes.a, f.nodes.b = n(0, 0, { b = {} }), n(1000, 0, {})
+        f.nodes.j.links.b = {} -- the only junction is far beyond the local projection limit
+      end
+      f.map.nodes = f.nodes
+      f.route = { points = { { 0, 0 }, { 0, 0.1 } }, dist = 1000, dur = 50 }
+    end)
+  end
+  f = parallel(true)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries > 0 and f.gps.autodrive() and f.gps.status().off == 40,
+    'an unreachable loaded route 40 m away retains recovery despite being inside the reroute threshold')
+  T.check(#f.drives == 0, 'recovery does not hand the AI a disconnected path or a destination-nearest fallback')
+  recoveries, moveOnRecovery = 0, true
+  f = parallel(true)
+  for _ = 1, 100 do f:step(); if recoveries > 0 then break end end
+  f:step()
+  T.check(recoveries == 1 and f.y == 0 and f.x > 40 and #f.drives > 0 and f.gps.status().off == 0,
+    'after recovering to the intended road, normal GPS polling starts a connected forward path')
+  recoveries, moveOnRecovery = 0, false
+  f = parallel(false)
+  for _ = 1, 350 do f:step() end
+  T.check(recoveries == 0 and #f.drives == 0 and f.modes[#f.modes] == 'stop',
+    'a parallel road alone is not evidence that the intended route graph has loaded')
   spawn, quatFromDir, log = savedSpawn, savedQuat, savedLog
 end
 
