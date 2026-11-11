@@ -196,7 +196,7 @@ class CliDefaultTest(unittest.TestCase):
         self.assertIsInstance(got["hello"].pop("leaseId"), str)
         # (the telemetry choice's region defaults and consent version: TELEMETRY.md; the region from this machine)
         self.assertIn(got["hello"].pop("privacyRegion"), ("neutral", "perf_off", "all"))
-        self.assertEqual(got["hello"].pop("telemetryConsent"), 2)
+        self.assertEqual(got["hello"].pop("telemetryConsent"), 3)
         # The 1 m lattice holds M1's 2 m samples (terrain_png) and the ones between them, so its highest one can only
         # be higher; its lowest, zBase and q are M1's here.
         self.assertGreaterEqual(got["terrain"].pop("maxU"), want["terrain"].pop("maxU"))
