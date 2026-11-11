@@ -443,12 +443,57 @@ local function appendTail(gm, e, s0, z0)
   M.addRest(rp, total - math.min(s0 + M.TAIL_M, total))
 end
 
+-- Restore only nodes the marker planner could merge into one point (within 1 m in 3D).
+-- This is not a general route repair: real graph gaps must still be cut by validFrom.
+local function unmergedNodes(from, to, centre, nodes, links)
+  if not centre or not nodes[from] or not nodes[to] then return end
+  local queue, parent, i = { from }, { [from] = false }, 1
+  while i <= #queue do
+    local id = queue[i]; i = i + 1
+    for nextId, edge in pairs(links[id] or {}) do
+      if parent[nextId] == nil and ((edge.drivability or 1) > 0)
+        and (not edge.oneWay or edge.inNode == nil or edge.inNode == id) then
+        local p = nodes[nextId].pos
+        local dx, dy, dz = p.x - centre.x, p.y - centre.y, (p.z or 0) - (centre.z or 0)
+        if nextId == to or dx * dx + dy * dy + dz * dz <= 1 then
+          parent[nextId] = id
+          if nextId == to then
+            local out = {}
+            while id ~= from do table.insert(out, 1, id); id = parent[id] end
+            return out
+          end
+          queue[#queue + 1] = nextId
+        end
+      end
+    end
+  end
+end
+
 -- Pure: graph nodes in planner order, with consecutive duplicates removed. The stock planner can strip the
 -- final wp when projecting a destination onto an edge; retain that edge's forward endpoint for the AI.
 function M.pathNodes(path, nodes)
-  local out = {}
+  local out, links, previous = {}, nil, nil
   for _, p in ipairs(path or {}) do
-    if p.wp ~= nil and out[#out] ~= p.wp then out[#out + 1] = p.wp end
+    if p.wp ~= nil and out[#out] ~= p.wp then
+      local from = out[#out]
+      if nodes and from and not M.edge(nodes, from, p.wp) then
+        if not links then
+          links = {}
+          for id in pairs(nodes) do links[id] = {} end
+          for id, n in pairs(nodes) do
+            for other, edge in pairs(n.links or {}) do
+              if nodes[other] then
+                local data = type(edge) == 'table' and edge or {}
+                links[id][other], links[other][id] = data, data
+              end
+            end
+          end
+        end
+        local centre = previous.pos or (nodes[from] and nodes[from].pos)
+        for _, id in ipairs(unmergedNodes(from, p.wp, centre, nodes, links) or {}) do out[#out + 1] = id end
+      end
+      out[#out + 1], previous = p.wp, p
+    end
   end
   local from, last = out[#out], path and path[#path]
   local start = nodes and nodes[from]

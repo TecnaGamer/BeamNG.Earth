@@ -316,4 +316,50 @@ do
   G.clear()
   beamngEarth_core, getPlayerVehicle, beamngEarth_api = savedCore, savedGet, savedApi
 end
+-- Marker simplification must not remove topology: nearby nodes may still be required edges.
+do
+  local function node(x, links, z) return { pos = { x = x, y = 0, z = z or 0 }, links = links or {} } end
+  local nodes = { a = node(0), b = node(0.07, { a = {} }), c = node(40, { b = {} }) }
+  local path = { { wp = 'a', pos = nodes.a.pos }, { wp = 'c', pos = nodes.c.pos } }
+  local function ids() return table.concat(G.pathNodes(path, nodes), ',') end
+  T.check(ids() == 'a,b,c', 'restore a merged 7 cm edge stored on its far endpoint')
+  T.check(#G.validFrom(G.pathNodes(path, nodes), 1, { nodes }) == 3, 'restored path is connected')
+  T.check(#path == 2 and path[2].wp == 'c', 'restoring the AI path leaves the marker path unchanged')
+  nodes.d = node(0.5, { b = {} }); nodes.c.links = { d = {} }
+  T.check(ids() == 'a,b,d,c', 'restore multiple nodes merged into the same marker')
+  nodes.b.links.d = {}; nodes.d.links.a = {} -- a short cycle, not an unbounded search
+  local joined = G.pathNodes(path, nodes)
+  T.check(#joined <= 4 and joined[#joined] == 'c', 'short cycles terminate with a connected path')
+  nodes.b.links.d, nodes.d.links.a = nil, nil
+  nodes.d.pos.x = 1.01
+  T.check(ids() == 'a,c', 'do not repair a chain which leaves the marker merge radius')
+  nodes.d.pos.x = 0.5; nodes.d.pos.z = 12
+  T.check(ids() == 'a,c', 'an overlapping elevated road is not a merged node')
+  nodes.d.pos.z = 0
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(ids() == 'a,c', 'do not restore a connection against a one-way edge')
+  nodes.b.links.a.inNode = 'a'
+  T.check(ids() == 'a,b,d,c', 'restore a short connection in its legal direction')
+  nodes.d.links.b = { drivability = 0 }
+  T.check(ids() == 'a,c', 'an undrivable short connector is not restored')
+  nodes.d.links.b = nil
+  T.check(ids() == 'a,c', 'a genuine disconnected route is left for validation to truncate')
+  nodes.a.links.c = {}
+  T.check(ids() == 'a,c', 'an existing direct edge needs no reconstruction')
+  nodes.a.links.c = { oneWay = true, inNode = 'c' }; nodes.d.links.b = {}
+  T.check(ids() == 'a,c', 'an existing illegal direct edge is not replaced with an invented detour')
+  nodes.a.links.c = nil
+  path = { { wp = 'a' }, { wp = 'c' }, { wp = 'a' } }
+  nodes.b.links.a = {}
+  T.check(ids() == 'a,b,d,c,a', 'restore only a local merge gap and retain the planned return')
+  path = { { wp = 'missing' }, { wp = 'c' } }
+  T.check(ids() == 'missing,c', 'missing graph nodes remain invalid without throwing')
+  nodes = { a = node(0.6), b = node(-0.6, { a = {} }), c = node(-40, { b = {} }) }
+  path = { { wp = 'a', pos = { x = 0, y = 0, z = 0 } }, { wp = 'c', pos = nodes.c.pos } }
+  T.check(ids() == 'a,b,c', 'the merge radius is centred on the retained marker position, not its waypoint')
+  nodes.b.pos.x = -1
+  T.check(ids() == 'a,b,c', 'the stock inclusive one-metre merge boundary is restored')
+  nodes.b.pos.x = -1.001
+  T.check(ids() == 'a,c', 'nodes beyond the stock merge radius remain invalid')
+end
 T.done('test_gps')

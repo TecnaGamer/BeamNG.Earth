@@ -281,6 +281,31 @@ do
     'a late completion notification cannot re-enable disabled Autodrive')
 end
 
+-- A display route can omit a required sub-metre graph node even without a graph replacement.
+do
+  local function configure(f)
+    f.x = 20
+    f.nodes = { w = { pos = { x = 0, y = 0, z = 0 }, links = { j = {} }, radius = 6 },
+      j = { pos = { x = 40, y = 0, z = 0 }, links = { s = {} }, radius = 6 },
+      s = { pos = { x = 40.07, y = 0, z = 0 }, links = { t = {} }, radius = 6 },
+      t = { pos = { x = 400, y = 0, z = 0 }, links = {}, radius = 6 } }
+    f.map.nodes = f.nodes
+    f.route = { points = { { 0, 0 }, { 0, 0.04 } }, dist = 400, dur = 30 }
+  end
+  local f = fixture({ 'w', 'j', 't' }, 2, 6, configure)
+  T.check(table.concat(f.drives[1], ',') == 'j,s,t', 'merged internal node is restored before the first AI start')
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 'j,s,t', 'map replacement retains the restored connection')
+  f = fixture({ 'w', 'j' }, 2, 6, configure)
+  f.x, f.speed = 39.5, 0
+  f.gps.onAiRouteDone(1); f:step(0.1); f:step(35)
+  T.check(#f.drives == 1 and f.modes[#f.modes] == 'stop', 'a truly ended local path still waits safely')
+  f.path = { 'w', 'j', 't' }; f:step()
+  T.check(#f.drives == 2 and table.concat(f.drives[2], ',') == 'j,s,t',
+    'a continuation with a merged node resumes instead of waiting at the old endpoint')
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries, 'continuation needs no recovery or progress retry')
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
