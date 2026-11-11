@@ -77,6 +77,7 @@ mod specs;
 mod gsrows;
 mod places;
 mod planends;
+mod planset;
 mod wallsindex;
 mod mappedlamps;
 mod vegclumps;
@@ -6185,6 +6186,12 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
     // 210: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
     // server/osmtagshards.py; that branch's 207)
-    m.add("VERSION", 210)?;
+    m.add_function(wrap_pyfunction!(planset::plan_nearest_on, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_weld, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_trim_mouths, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
+    // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
+    m.add("VERSION", 211)?;
     Ok(())
 }
