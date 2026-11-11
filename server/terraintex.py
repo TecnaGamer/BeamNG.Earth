@@ -2,11 +2,12 @@
 user, 2026-11-11: "instead could we paint the plaza and apply a texture to it like the roads": surface.PAVERS / BRICK).
 
 The game's terrain material packing reads its textures through GBitmap, which has no DDS reader ("unable to find
-registration for extension [dds]"), and no stock terrain texture has pavers or brick: the building tileables that do
-(West Coast USA's brutalist slabs, the red herringbone brick) ship as DDS only (BC7 colour, BC5 normals). So the server
-decodes them once (Pillow) into <user folder>/temp/beamngEarth/terraintex/ (the level's materials name them under
-VFS_DIR; tools/make_level_assets.py, terrain.lua LOOKS); a BC5 normal map gets its z rebuilt. Nothing of the game's
-is shipped. Without the game's folder (BNGEARTH_GAME_DIR) or a file, that layer draws without its detail texture."""
+registration for extension [dds]"), and no stock terrain texture has pavers, brick or setts: the building tileables
+that do (West Coast USA's brutalist slabs, the red herringbone brick, Italy's setts) ship as DDS only (BC7 colour, BC5
+normals). So the server decodes them once (Pillow) into <user folder>/temp/beamngEarth/terraintex/ (the level's
+materials name them under VFS_DIR; tools/make_level_assets.py, terrain.lua LOOKS); a BC5 normal map gets its z
+rebuilt. Nothing of the game's is shipped. Without the game's folder (BNGEARTH_GAME_DIR) or a file, that layer draws
+without its detail texture."""
 import io
 import logging
 import os
@@ -16,7 +17,7 @@ import numpy as np
 
 log = logging.getLogger("earthd.terraintex")
 
-VERSION = 1
+VERSION = 2
 VFS_DIR = "/temp/beamngEarth/terraintex/"
 ARCHIVE = ("content", "assets", "materials", "tileable.zip")
 # PNG name -> (the game archive's member, "color" or "normal")
@@ -28,6 +29,13 @@ TEXTURES = {
                         "color"),
     "bne_brick_nm.png": ("assets/materials/tileable/brick/t_bricks_herringbone_01/t_bricks_herringbone_01_nm.normal.dds",
                          "normal"),
+    # setts in rows (Italy's, the cobble roads' mesh material before ROADS_IN_GROUND): the cobble layer, cobbled
+    # roads and squares mapped sett / cobblestone (the user, 2026-11-11: "can we do something similar to cobblestone
+    # roads?"); 512 in the game, resized to SIZE
+    "bne_cobble_b.png": ("assets/materials/tileable/paving/t_italy_cobblestone/t_italy_cobblestone_d.color.dds",
+                         "color"),
+    "bne_cobble_nm.png": ("assets/materials/tileable/paving/t_italy_cobblestone/t_italy_cobblestone_n.normal.dds",
+                          "normal"),
 }
 SIZE = 1024             # the texture set's detail size (a mismatch costs a resize at every material rebuild)
 

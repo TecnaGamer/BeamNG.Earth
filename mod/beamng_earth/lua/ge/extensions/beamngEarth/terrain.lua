@@ -100,6 +100,8 @@ local function tileLook(color, normal, dsize, near, far)
   local l = look('asphalt/asphalt/t_asphalt', dsize, 'asphalt/macro_asphalt/t_macro_asphalt', 32, near)
   l.baseColorDetailTex, l.normalDetailTex = TL .. color, TL .. normal
   l.baseColorDetailStrength, l.aoDetailStrength = near .. ' ' .. far, '0 0'
+  -- (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
+  l.detailDistances = '0 0 150 250'
   return l
 end
 M.LOOKS = {
@@ -110,7 +112,6 @@ M.LOOKS = {
   bngEarthGroundRock = look('rock/t_dirt_rocky/t_dirt_rocky', 4, 'rock/macro_rocky/t_macro_rocky', 64),
   bngEarthGroundSnow = look('sand/t_sand/t_sand', 4, 'sand/t_macro_sand/t_macro_sand', 64, 0.12),
   bngEarthGroundMud = look('mud/mud/t_mud', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
-  bngEarthGroundCobble = look('asphalt/t_asphalt_02/t_asphalt_02', 2, 'asphalt/macro_asphalt/t_macro_asphalt', 32, 0.3),
   bngEarthGroundLawn = look('grass/t_grass_01/t_grass_01', 1, 'grass/t_macro_grass/t_macro_grass', 64, 0.2),
   -- Golf (server/surface.py). The detail texture covers the aerial photo; none of these names is a
   -- GroundCover layer, so the 3D grass does not grow on them.
@@ -120,6 +121,7 @@ M.LOOKS = {
   bngEarthGroundGolfBunker = golfLook('sand/t_sand/t_sand', 2, 'sand/t_macro_sand/t_macro_sand', 64, 0.95, 0.55),
   bngEarthGroundPavers = tileLook('bne_pavers_b.png', 'bne_pavers_nm.png', 2, 0.5, 0.15),
   bngEarthGroundBrick = tileLook('bne_brick_b.png', 'bne_brick_nm.png', 2, 0.85, 0.3),
+  bngEarthGroundCobble = tileLook('bne_cobble_b.png', 'bne_cobble_nm.png', 2, 0.6, 0.2),
   beamngEarthDirt = look('soil/dirt_crumbly/t_dirt_crumbly', 2, 'soil/macro_clumply/t_macro_clumpy', 64),
 }
 M.LEVEL_BASE = { tex = TERRAIN_DIR_BASE, sizeM = 512 }   -- (its repeat in metres: toSamples at the block's square)
