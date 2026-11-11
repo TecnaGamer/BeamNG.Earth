@@ -34,15 +34,31 @@ import numpy as np
 import staging
 from PIL import Image
 
-SIZE = 1024
-SQUARE = 1.0                        # m; exactly representable, so the lattice is exact
+
+
+def ground_square(environ=None):
+    """The session's block square (m between samples): BNGE_GROUND_SQUARE, 1 (the default: the stock maps' resolution)
+    or 2 (the lighter ground of the Low and Medium quality presets, GitHub #943: the same kilometre in 512² samples, a
+    quarter of the .ter to parse at each swap; the launcher sets it from the settings page's groundGrid). Read once, at
+    import: every block-size rule below and in the modules using them follows it."""
+    v = (os.environ if environ is None else environ).get("BNGE_GROUND_SQUARE", "").strip()
+    try:
+        sq = float(v) if v else 1.0
+    except ValueError:
+        sq = 1.0
+    return sq if sq in GROUND_SQUARES else 1.0
+
+
+GROUND_SQUARES = (1.0, 2.0)
+SQUARE = ground_square()            # m; exactly representable, so the lattice is exact
+SIZE = int(1024 / SQUARE)           # samples per edge of the 1 km block (1024 at 1 m, 512 at 2 m)
 FAR_SQUARE = 2.0                    # m: the far field's near tiles' lattice (every second block sample)
 HALF = SIZE * SQUARE / 2            # block position = centre - HALF
 VALID = (SIZE - 1) * SQUARE         # 1023 m: collidable extent from the SW corner (P1)
 GRID_BY_M = {1024.0: 128.0, 2048.0: 256.0}  # the centre grid (m) by the block's width (m)
 GRID = GRID_BY_M[SIZE * SQUARE]     # block centres are multiples of this
 CHUNK_ROWS = 256                    # bounds the geodesy temporaries
-CHUNK = 128                         # samples: ChunkCache's chunk, 128 m (the block's follow grid)
+CHUNK = int(128 / SQUARE)           # samples: ChunkCache's chunk, 128 m (the block's follow grid)
 CHUNK_CACHE = 512                   # chunks kept per frame (128 KB each: 64 MB, 8 blocks)
 CHUNK_GEO_CACHE = 128               # ... and their lat / lon this many (256 KB each: 32 MB, 2 blocks; PR #786: a moved
                                     # block's own chunks are all it reads them for, and all 512 were +128 MB a process)

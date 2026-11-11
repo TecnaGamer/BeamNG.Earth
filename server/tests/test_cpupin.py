@@ -133,6 +133,20 @@ class PlayerSettingsTest(unittest.TestCase):
         self.assertEqual(cpupin.player_settings(None), {})
         self.assertEqual(cpupin.player_settings("/nonexistent/user/dir"), {}, "no settings file: the defaults")
 
+    def test_ground_grid(self):
+        # the Low / Medium presets' lighter 2 m ground (GitHub #943): the launcher sets BNGE_GROUND_SQUARE from it
+        self.assertEqual(cpupin.player_settings(self.write({"groundGrid": "2"})), {"ground_square": "2"})
+        for v in ("1", None, 2, "4"):
+            with self.subTest(v=v):
+                self.assertEqual(cpupin.player_settings(self.write({"groundGrid": v})).get("ground_square"),
+                                 "2" if v == 2 else None)
+        # a file from before the setting: its quality preset's value (settings.lua PRESETS: Low and Medium 2 m)
+        for q, want in (("low", "2"), ("medium", "2"), ("high", None), ("custom", None), ("auto", None)):
+            with self.subTest(q=q):
+                self.assertEqual(cpupin.player_settings(self.write({"quality": q})).get("ground_square"), want)
+        self.assertIsNone(cpupin.player_settings(self.write({"quality": "medium", "groundGrid": "1"})).get("ground_square"),
+                          "the page's own choice wins over its preset")
+
     def test_applied_where_nothing_was_set_by_hand(self):
         user = self.write({"serverCores": "2", "serverPriority": "normal"})
         env = {}

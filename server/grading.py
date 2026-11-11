@@ -129,7 +129,7 @@ WALL_CUT_M = 2.0            # a road cut deeper than this into the ground: a ret
 WALL_T_M = 0.8              # (roadmesh.retaining_walls) and the ground at its natural height right behind it, over
                             # this; on a 1:2 slope Central Park's sunken transverse was a grassy ditch between its
                             # stone walls (the user, 2026-10-17)
-WALL_FLAT_M = 1.0           # ... after one terrain grid step (1 m) at the road's level behind the wall: rising at the
+WALL_FLAT_M = roadsmod.roadmesh.GRID_M  # ... after one terrain grid step (heightmap.SQUARE) at the road's level behind the wall: rising at the
                             # wall itself, the grid's triangles stood as dark wedges in front of its face; the wall's
                             # top (roadmesh.WALL_THICK_M) covers the strip
 TUNNEL_TAG = ":tun"          # in the fid of the tunnels' own plans (open sections, mouths): apply(roads_only) skips them

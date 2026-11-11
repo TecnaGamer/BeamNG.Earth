@@ -284,6 +284,20 @@ def telemetry_on():
     return os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", "no")
 
 
+def ground_square_setting(user_dir):
+    """The terrain block's square the player's settings page chose (cpupin.player_settings' ground_square: "2" for
+    the lighter ground of the Low and Medium presets), or None (1 m, the server's default). Read at every server start:
+    a change on the page holds from the next one (the block size is fixed for a server's run)."""
+    try:
+        here = os.path.join(ROOT, "server")
+        if here not in sys.path:
+            sys.path.insert(0, here)
+        import cpupin
+        return cpupin.player_settings(user_dir).get("ground_square")
+    except Exception:           # (an unreadable file: the default)
+        return None
+
+
 def start_server(user_dir, extra, log_path, game_running=None):
     cmd = [sys.executable] + ([] if FROZEN else [os.path.abspath(__file__)])
     cmd += ["--server", "--user-dir", user_dir] + RECOMMENDED + extra
@@ -301,6 +315,10 @@ def start_server(user_dir, extra, log_path, game_running=None):
         pass
     if game_running is not None:    # (whether a game ran before this start: earthd.game_running, its earlier sessions)
         env["BNGEARTH_GAME_AT_START"] = "1" if game_running else "0"
+    if not env.get("BNGE_GROUND_SQUARE"):   # the settings page's ground grid (the Low / Medium presets: 2 m, GitHub #943)
+        sq = ground_square_setting(user_dir)
+        if sq:
+            env["BNGE_GROUND_SQUARE"] = sq
     # (dev: BNGE_SERVER_ENV="LD_PRELOAD=/usr/lib/libjemalloc.so MALLOC_CONF=prof:true": variables for the server
     # alone, not the game, e.g. a heap profiler)
     for kv in os.environ.get("BNGE_SERVER_ENV", "").split():

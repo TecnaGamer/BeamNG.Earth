@@ -227,7 +227,7 @@ def _lonlat_boxes(feats):
     return got
 
 
-ROAD_EDGE_M = 0.5    # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
+ROAD_EDGE_M = 0.5 * heightmap.SQUARE  # m past a carriageway's edge its material reaches: a square whose centre is at most this far out
                      # is road (a 1 m square reaches back up to 0.7 m; at 2 m squares this was 1.0: at 0.5 a wheel 0.2 m
                      # inside a 9 m road's edge was on dirt; the grain beyond lies under the edge decal, roads.EDGE_DECAL)
 
@@ -1098,7 +1098,7 @@ def road_mask(frame, x0, y0, size, px, surface, widths=None):
 # A road without sidewalks gets a verge of VERGE_M a side painted bare where the ground would carry grass or shrubs:
 # the ground cover goes by the layer samples (2 m then, 1 m since 2026-11-01), and tufts stood on the asphalt along its
 # edges in many places (the user, 2026-10-20: "grass on the road")
-VERGE_M = 1.5
+VERGE_M = 1.0 + 0.5 * heightmap.SQUARE     # (1.5 m at 1 m squares, 2 m at 2 m)
 VERGE_FROM = (GRASS, LAWN, DUSTY)
 VERGE = DIRT
 AISLE_STALLS_M = 5.5        # a parking aisle's stall rows (parking.LOT_SPOT_D_M), painted with it
