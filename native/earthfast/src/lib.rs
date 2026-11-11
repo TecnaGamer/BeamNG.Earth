@@ -74,6 +74,7 @@ mod nycmassing;
 mod rooftop;
 mod specs;
 mod gsrows;
+mod places;
 mod planends;
 mod wallsindex;
 mod mappedlamps;
@@ -6141,6 +6142,13 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
     // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run); regional_groups' zone / ext
     // (Australia's eucalypts, temperate Europe's riverside poplars, North America's creosote bushes)
+    // 200: places (solar farms, container stacks, trailer parks: area_grid; port cranes: edge_spots; marina boats:
+    // berths; mapped street furniture off the carriageways: street_points)
+    m.add_function(wrap_pyfunction!(places::area_grid, m)?)?;
+    m.add_function(wrap_pyfunction!(places::edge_spots, m)?)?;
+    m.add_function(wrap_pyfunction!(places::berths, m)?)?;
+    m.add_function(wrap_pyfunction!(places::street_points, m)?)?;
+    m.add_function(wrap_pyfunction!(places::outline_panels, m)?)?;
     m.add("VERSION", 201)?;
     Ok(())
 }

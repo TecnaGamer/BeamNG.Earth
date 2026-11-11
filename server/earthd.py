@@ -2756,6 +2756,14 @@ class Server:
                     k, layers=("roads",), kind="demand").layers.get("roads")))
             except Exception as ex:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import fast
+            import places
+            try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
+                props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("places: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))

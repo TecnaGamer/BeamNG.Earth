@@ -414,6 +414,39 @@ M.CATALOG.barn = { { '/levels/hirochi_raceway/art/shapes/buildings/farm_barn', 8
 -- Island's buildings)
 M.CATALOG.rooftank = { { '/levels/small_island/art/shapes/buildings/si_water_tower', 6.1 } }
 M.GROUP_MAX_M.rooftank = 1500
+-- Places from the map data (server places.py; the user, 2026-11-10: "lets use as many assets as needed to give this
+-- world detail and variety"). Heights are the shapes' vertical sizes (the asset survey's bounds), rows at 1:1 unless
+-- the server scales them. Materials: West Coast USA's objects and Utah's buildings (both in MATERIALS), the rest global.
+-- solar farms' panel tables (16 m long, the face along local +y)
+M.CATALOG.solarpanel = { { WCA .. 'objects/solarpanel', 3.54 } }
+M.GROUP_MAX_M.solarpanel = 1500
+-- a container terminal's stacks: West Coast USA's 40 ft boxes (length along local y), the colour by the row's rank
+M.CATALOG.stack = {
+  { WCA .. 'objects/s_containers_40_white', 2.59 }, { WCA .. 'objects/s_containers_40_brown', 2.59 },
+  { WCA .. 'objects/s_containers_40_nodeoline', 2.59 }, { WCA .. 'objects/s_containers_40_okudai', 2.59 },
+  { WCA .. 'objects/s_containers_40_oilex', 2.59 }, { WCA .. 'objects/s_containers_40_folk', 2.59 },
+  { WCA .. 'objects/s_containers_40_beamng', 2.59 },
+}
+M.GROUP_MAX_M.stack = 1200
+-- its ship-to-shore cranes (Industrial's; the boom's long reach along local -y)
+M.CATALOG.portcrane = { { '/levels/Industrial/art/shapes/buildings/ind_portcrane_a', 35.47 } }
+M.GROUP_MAX_M.portcrane = 3000
+-- marinas' boats (Italy's, global materials; their length along local x), one group each: the server fits each to
+-- its berth
+for _, b in ipairs({ { 'a', 5.46 }, { 'b', 9.40 }, { 'c', 7.89 }, { 'd', 9.17 }, { 'e', 13.93 } }) do
+  M.CATALOG['boat_' .. b[1]] = { { IT .. 'buildings/italy_boat_small_' .. b[1], b[2] } }
+  M.GROUP_MAX_M['boat_' .. b[1]] = 900
+  M.ONE_SPELLING['boat_' .. b[1]] = true
+end
+-- trailer parks' homes and caravan sites' caravans (Utah's caravan, its length along local y)
+M.CATALOG.caravan = { { UT .. 'buildings/ut_caravan_a', 2.85 } }
+M.GROUP_MAX_M.caravan = 700
+-- a construction site's tower crane (Italy's: its mast, and its top set on the mast's top)
+M.CATALOG.towercrane_base = { { IT .. 'buildings/ind_bld_crane_bottom_10x10', 41.74 } }
+M.CATALOG.towercrane_top = { { IT .. 'buildings/ind_bld_crane_top', 53.21 } }
+M.GROUP_MAX_M.towercrane_base = 3000
+M.GROUP_MAX_M.towercrane_top = 3000
+for _, g in ipairs({ 'portcrane', 'caravan', 'towercrane_base', 'towercrane_top' }) do M.ONE_SPELLING[g] = true end
 M.GROUP_MAX_M.celltower = 2500
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500
