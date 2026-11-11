@@ -78,9 +78,12 @@ import xproc
 log = logging.getLogger("earthd.mapdata")
 
 # Where the Overture layers that Overture's own vector tiles hold whole (pmtiles.LAYERS: roads, buildings, places...)
-# come from: "pmtiles" (the default: a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its
-# parquet row groups, 3-25 s) or "parquet" (as before; also every layer's fallback when the tiles fail)
-MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "pmtiles").strip().lower()
+# come from: "pmtiles" (a fresh cell is one ~0.1-1 MB range read, ~0.1-0.5 s, instead of DuckDB over its parquet row
+# groups, 3-25 s) or "parquet" (the default again, as before; also every layer's fallback when the tiles fail). With
+# the tiles the game froze for good (TextureCooker deadlock, "Texture[] started importing") on 7 of ~17 cold teleports,
+# none in 24 without them (bisected 2026-11-11: bc502490); same attributes, so likely the timing (everything arriving
+# at once with the first block); off until that is understood.
+MAP_SOURCE = (os.environ.get("BNGE_MAP_SOURCE") or "parquet").strip().lower()
 LAYER_THREADS = 12             # layers built at once, every cell and caller of the process (mostly waiting on downloads: 4 were a fresh place's first graded block's ~25 s queue, Ipswich 2026-10-30)
 OSM_THREADS = 8                 # cells whose OpenStreetMap tags are read at once (alongside their Overture roads)
 OSM_FUEL = os.environ.get("BNGE_OSM_FUEL", "1") != "0"     # OpenStreetMap's fuel stations per cell (osmfuel.py; the
