@@ -23,8 +23,10 @@ import mapcells
 
 log = logging.getLogger("earthd.stationindex")
 
-INDEX_VERSION = 1           # this file's rules (an index made by other rules is not read: built again)
-MAX_ITEMS = 50              # the nearest this many in an answer
+INDEX_VERSION = 2           # this file's rules (an index made by other rules is not read: built again)
+MAX_ITEMS = 50              # the nearest this many in a Nearest ("near") answer
+MAP_MAX_ITEMS = 300         # ... in a map view's: with the weekly shards a zoomed-out city view has hundreds (the user,
+                            # 2026-11-10: "does it only show a certain amount of symbols?"; 50 left the view's edges bare)
 R_KM_MAX = 25.0             # the farthest a query looks
 MAP_BUILD_MAX = 16          # cells' indexes built per map query (more: partial, asked again on the map's next poll)
 NEAR_FETCH_MAX = 4          # cells without places data downloaded per Nearest query (more: partial)
@@ -77,6 +79,20 @@ def cell_items(md, key):
                                gs._osm_points(frame, osm, amenity="charging_station")):
         add(ch.x, ch.y, ch.name, ch.brand, "ev")
     return out
+
+
+def shard_items(md, key):
+    """The cell's stations from the weekly OpenStreetMap shards (md.station_tags, railtags.StationTags; Bauer33333's
+    find on #716) as items, for a cell whose map data is not downloaded; None when the shards are off or unreachable."""
+    st = getattr(md, "station_tags", None)
+    if st is None:
+        return None
+    lo0, la0, lo1, la1 = key.bounds()
+    got = st.stations_in(la0, lo0, la1, lo1)
+    if got is None:
+        return None
+    return [{"lat": round(float(r["lat"]), 6), "lon": round(float(r["lon"]), 6), "name": r.get("name") or "",
+             "brand": r.get("brand") or "", "kind": r["kind"]} for r in got if r.get("kind") in ("fuel", "ev")]
 
 
 class StationIndex:
@@ -133,16 +149,33 @@ class StationIndex:
         return f is not None and f(key) is None
 
     def _needs(self, key, e):
-        """Whether the cell's list is to be built (again): never built, or built while its OpenStreetMap stations were
-        still being fetched and they are there now (Codex on #1056: not a complete Overture-only list for good)."""
-        return e.get("items") is None or (bool(e.get("osm_pending")) and not self._osm_pending(key))
+        """Whether the cell's list is to be built (again): never built; built while its OpenStreetMap stations were
+        still being fetched and they are there now (Codex on #1056: not a complete Overture-only list for good); or
+        taken from the weekly shards and its map data is on disk now (the lists the road tiles lay out)."""
+        if e.get("items") is None:
+            return True
+        if e.get("osm_pending") and not self._osm_pending(key):
+            return True
+        return bool(e.get("from_shard")) and self.md.has(key, "places")
+
+    def _from_shard(self, key):
+        """The cell's list from the weekly shards, in memory only (no file per cell of a wide map view; read again from
+        the shard, indexed by cell, after a restart), until its map data is on disk; False when they cannot be had."""
+        items = shard_items(self.md, key)
+        if items is None:
+            return False
+        with self._wlock:
+            e = dict(self._entry(key))
+            e["items"], e["from_shard"], e["osm_pending"] = items, True, False
+            self._remember(key, e)
+        return True
 
     def _build(self, key):
         pending = self._osm_pending(key)        # (before the read: rows that come meanwhile are read next time)
         items = cell_items(self.md, key)
         with self._wlock:               # (a mark that came meanwhile is kept)
             e = dict(self._entry(key))
-            e["items"], e["osm_pending"] = items, pending
+            e["items"], e["osm_pending"], e["from_shard"] = items, pending, False
             self._save(key, e)
             self._remember(key, e)
         return e
@@ -169,8 +202,8 @@ class StationIndex:
                 if marks == list(e.get("marks") or []):
                     continue            # (unchanged: no rewrite of the cell's file at every road tile, SSD writes)
                 e["marks"] = marks
-                try:
-                    self._save(key, e)
+                try:                    # (a list from the shards stays in memory: the file keeps the reports only)
+                    self._save(key, {**e, "items": None, "from_shard": False} if e.get("from_shard") else e)
                 except OSError as ex:
                     log.debug("station index %s: %s", key, ex)
                 self._remember(key, e)
@@ -199,7 +232,7 @@ class StationIndex:
             found, partial = self._near(lat, lon, r_km, kinds)
         else:
             found, partial = self._map(lat, lon, r_km, kinds)
-        return self._finish(found, lat, lon, r_km), partial
+        return self._finish(found, lat, lon, r_km, MAX_ITEMS if mode == "near" else MAP_MAX_ITEMS), partial
 
     def _take(self, key, kinds, out):
         e = self._entry(key)
@@ -218,7 +251,9 @@ class StationIndex:
         for key in self._cells_by_distance(lat, lon, r_km):
             e = self._entry(key)
             if self._needs(key, e):
-                if e.get("items") is None and not self.md.has(key, "places"):
+                if not self.md.has(key, "places"):
+                    self._from_shard(key)       # (the weekly shards; unreachable: the cell left out, as before)
+                    self._take(key, kinds, out)
                     continue
                 if built >= MAP_BUILD_MAX:
                     partial = True
@@ -251,6 +286,9 @@ class StationIndex:
                         continue
                     key = mapcells.CellKey(c.z, (c.x + dx) % n, c.y + dy)
                     if self._needs(key, self._entry(key)):
+                        if not self.md.has(key, "places") and self._from_shard(key):
+                            self._take(key, kinds, out)
+                            continue
                         if not self.md.has(key, "places"):
                             if fetched >= NEAR_FETCH_MAX:
                                 return out, True
@@ -263,7 +301,7 @@ class StationIndex:
         return out, False
 
     @staticmethod
-    def _finish(found, lat, lon, r_km):
+    def _finish(found, lat, lon, r_km, cap):
         items = []
         for it in found:
             km = _km(lat, lon, it["lat"], it["lon"])
@@ -275,6 +313,6 @@ class StationIndex:
             if any(k["kind"] == it["kind"] and _m(k, it) <= DEDUP_M for k in kept):
                 continue
             kept.append(it)
-            if len(kept) >= MAX_ITEMS:
+            if len(kept) >= cap:
                 break
         return kept

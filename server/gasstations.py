@@ -1833,6 +1833,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
     except Exception as e:      # an unreachable source costs the stations, not the tile
         log.debug("gas stations of road tile %s_%s: %s", tx, ty, e)
         return [], frozenset()
+    chargers = _with_shard(frame, md, box, chargers)
     sites, owned = [], []
     for st in stations:
         r = reach_of(st)
@@ -1873,7 +1874,7 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
         if not (x0 - r <= ch.x < x1 + r and y0 - r <= ch.y < y1 + r) or not roads.box_owns(box, ch.x, ch.y):
             continue            # (a charger's record is its own position's tile's: one record, no ghost)
         try:
-            site = _charger_site(frame, md, ch, kept)
+            site = _charger_site(frame, md, ch, kept, elev)
         except Exception as e:
             log.debug("EV charger %s: %s", ch.id, e)
             continue
@@ -1895,7 +1896,30 @@ def _ll_of(frame, x, y):
     return float(la), float(lo)
 
 
-def _charger_site(frame, md, ch, stations):
+def _with_shard(frame, md, box, chargers):
+    """The chargers with OSM's capacity and charge points from the weekly shards (md.station_tags; evchargers.with_shard)
+    round the tile's box; as they were when the shards are off, not there or unreachable."""
+    import evchargers
+    st = getattr(md, "station_tags", None)
+    if st is None or not chargers:
+        return chargers
+    try:
+        # (a pin's shard station up to MERGE_M away, and that station's charge points up to MERGE_M from it: two
+        # MERGE_M round the reach, Codex on #1111, 2026-11-10)
+        r = max(evchargers.reach_of(ch) for ch in chargers) + 2 * MERGE_M
+        x0, y0, x1, y1 = box
+        la, lo, _ = frame.enu_to_geodetic(np.array([x0 - r, x1 + r]), np.array([y0 - r, y1 + r]), 0.0)
+        box_ll = (float(min(la)), float(min(lo)), float(max(la)), float(max(lo)))
+        sts, pts = st.stations_in(*box_ll), st.points_in(*box_ll)
+        if sts is None or pts is None:
+            return chargers
+        return evchargers.with_shard(chargers, sts, pts, frame)
+    except Exception as e:      # (the shards cost their extras, never the chargers)
+        log.debug("station shards: %s: %s", type(e).__name__, e)
+        return chargers
+
+
+def _charger_site(frame, md, ch, stations, elev=None):
     """An EV charger's site (evchargers.layout) among its buildings and roads; a charger within MERGE_M of a laid-out
     station's forecourt is laid out from the forecourt's edge (_beside_station), the forecourt kept clear."""
     import evchargers
@@ -1906,8 +1930,13 @@ def _charger_site(frame, md, ch, stations):
     rls = [c.layers.get("roads") for c in cds]
     blds = buildings_touching(frame, [c.layers.get("buildings") for c in cds], at.x, at.y, r) + pads
     la, lo, _ = frame.enu_to_geodetic(at.x, at.y, 0.0)
+    height = None
+    if elev is not None:                # (the ground under a row: kept level, evchargers.FLAT_M)
+        def height(xs, ys):
+            gla, glo, _ = frame.enu_to_geodetic(np.asarray(xs, np.float64), np.asarray(ys, np.float64), 0.0)
+            return np.asarray(elev(gla, glo), np.float64)
     return evchargers.layout(at, blds, drive_lines(frame, rls, at.x, at.y, r + 50.0),
-                             service_lines(frame, rls, at.x, at.y, r), style_of(float(la), float(lo)))
+                             service_lines(frame, rls, at.x, at.y, r), style_of(float(la), float(lo)), height)
 
 
 BESIDE_OUT_M = 5.0          # a charger by a station: this far out from the nearest point of its forecourt

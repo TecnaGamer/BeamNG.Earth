@@ -32,6 +32,14 @@ TEXTURES = {
     "galv": dict(src="rail_galv_steel.png", out="bne_rail_galv", normal=1.0, rough=(0.35, 0.6), flatten=True),
     "concrete": dict(src="rail_concrete_mast.png", out="bne_rail_mast_concrete", normal=2.5, rough=(0.8, 0.95),
                      flatten=True),
+    # the catenary (plan 040, the user's ChatGPT images of 2026-11-10)
+    "cat_galv": dict(src="cat_galv_a.png", out="bne_cat_galv_v3", normal=1.0, rough=(0.35, 0.6), flatten=True),
+    "cat_paint": dict(src="cat_steel_paint.png", out="bne_cat_paint_v3", normal=1.2, rough=(0.55, 0.8), flatten=True),
+    "cat_porcelain": dict(src="cat_porcelain.png", out="bne_cat_porcelain_v3", normal=0.8, rough=(0.15, 0.4),
+                          flatten=True),
+    "cat_foundation": dict(src="cat_concrete_raw.png", out="bne_cat_foundation_v3", normal=2.5, rough=(0.8, 0.95),
+                           flatten=True),
+    "cat_concrete": dict(src="cat_concrete.png", out="bne_cat_concrete_v3", normal=2.5, rough=(0.8, 0.95), flatten=True),
 }
 
 
@@ -100,7 +108,12 @@ def roughness_map(a, lo, hi):
 
 TEX_VFS = "/levels/beamng_earth/art/shapes/beamngEarth/"
 # texture set -> (materials file, material) whose maps it becomes
-LINKS = {"concrete": ("catenary.materials.json", "bne_cat_concrete"), "galv": ("catenary.materials.json", "bne_cat_galv")}
+LINKS = {"concrete": ("catenary.materials.json", "bne_cat_concrete"), "galv": ("catenary.materials.json", "bne_cat_galv"),
+         "cat_galv": [("catenary.materials.json", "bne_cat_galv"), ("catenary.materials.json", "bne_cat_wire_steel")],
+         "cat_paint": ("catenary.materials.json", "bne_cat_paint"),
+         "cat_porcelain": [("catenary.materials.json", "bne_cat_insulator"), ("catenary.materials.json", "bne_cat_wire_ins")],
+         "cat_foundation": ("catenary.materials.json", "bne_cat_foundation"),
+         "cat_concrete": ("catenary.materials.json", "bne_cat_concrete")}
 
 
 def link_material(file, material, base, tint=(1.0, 1.0, 1.0)):
@@ -134,8 +147,9 @@ def ingest(key):
     im.save(base + "_b.color.png")
     Image.fromarray(normal_map(a, cfg["normal"])).save(base + "_nm.normal.png")
     Image.fromarray(roughness_map(a, *cfg["rough"]), "L").save(base + "_r.data.png")
-    if key in LINKS:
-        link_material(*LINKS[key], cfg["out"] + OUT_SUFFIX)
+    links = LINKS.get(key, [])
+    for file, material in ([links] if isinstance(links, tuple) else links):
+        link_material(file, material, cfg["out"] + OUT_SUFFIX)
     print(f"{key}: seam LR/TB {before[0]:.2f}/{before[1]:.2f} -> {after[0]:.2f}/{after[1]:.2f}, "
           f"mean {a.mean():.1f} -> {os.path.basename(base)}_*.png")
     return True

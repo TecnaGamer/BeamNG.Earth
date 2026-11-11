@@ -23,7 +23,7 @@ import numpy as np
 
 import fast
 
-VERSION = 2                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
+VERSION = 4                     # bump when the arcs change (mapdata.versions(): the derived caches are built again)
 ON = os.environ.get("BNE_ROAD_SMOOTH", "off") == "on"       # off unless asked: it changes every road
 # roads.simplify's RDP tolerance while on: its own 0.25 m put a vertex back every ~16-20 m of a R 130 m arc, turning
 # 5-7 degrees, the corners again (the user, 2026-11-08, near Korostivtsi: "still corners"; on three cells the visible
@@ -35,6 +35,16 @@ SIMPLIFY_M = 0.03
 RADIUS_M = {"motorway": 300.0, "trunk": 250.0, "primary": 150.0, "secondary": 100.0, "tertiary": 50.0,
             "unclassified": 30.0, "residential": 25.0, "unknown": 25.0, "track": 15.0, "living_street": 12.0,
             "service": 12.0}
+# a railway's bend (plan 035: a train's flange panels strike a rail at every corner of the mapped polyline; the sharpest in
+# Kyiv-Pasazhyrskyi turned 14 degrees in 2 m): a line's arcs, class by class. BNE_RAIL_CURVES=off leaves the rails as mapped.
+RAIL_ON = os.environ.get("BNE_RAIL_CURVES", "on") not in ("off", "0", "false")
+RAIL_RADIUS_M = {"standard_gauge": 250.0, "narrow_gauge": 80.0, "light_rail": 80.0}
+# A switch: another rail line's end lying on a line (the map has it a few tenths of a metre off its vertex, a cell's
+# lines are not split at every switch) keeps the line's vertices beside it as mapped, else the arc moved the line up to
+# MAX_SHIFT_M off the branch's end and the branch's bed no longer met it (Kalynivka's crossover, plan 040).
+# BNE_RAIL_SWITCH_FIX=off: rounded as before.
+SWITCH_PIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false")
+SWITCH_PIN_M = 1.0              # m: a line's end this near another rail line is on it
 LINK_RADIUS_M = 50.0            # a ramp / connector road (subclass "link") bends tighter than its class
 MIN_DEFLECT_DEG = 0.5           # a vertex turning less than this is left alone
 MAX_DEFLECT_DEG = 150.0         # ... and one turning more is a hairpin's tip or a doubling back: left alone
@@ -57,9 +67,59 @@ def smooth_line(xy, radius):
     return fast._ef.road_smooth_line(np.ascontiguousarray(xy, np.float64), float(radius), PARAMS)
 
 
+def pinned_vertices(xy, ends):
+    """The interior vertex indices of the line xy (k, 2) not to be rounded: both ends of every segment that a point of
+    ends (m, 2: the ends of the other rail lines) lies within SWITCH_PIN_M of, but for those at the line's own ends. Pure."""
+    xy = np.asarray(xy, np.float64)
+    ends = np.asarray(ends, np.float64).reshape(-1, 2)
+    if len(xy) < 3 or not len(ends):
+        return []
+    a, b = xy[:-1], xy[1:]
+    ab = b - a
+    den = np.maximum((ab * ab).sum(1), 1e-12)
+    pins = set()
+    for p in ends:
+        if min(float(np.hypot(*(p - xy[0]))), float(np.hypot(*(p - xy[-1])))) < SWITCH_PIN_M:
+            continue                # (a junction at the line's own end: a node, nothing to keep)
+        t = np.clip(((p - a) * ab).sum(1) / den, 0.0, 1.0)
+        d = np.hypot(*(a + t[:, None] * ab - p).T)
+        for k in np.flatnonzero(d < SWITCH_PIN_M):
+            pins.update(v for v in (int(k), int(k) + 1) if 0 < v < len(xy) - 1)
+    return sorted(pins)
+
+
+def smooth_pinned(xy, radius, pins):
+    """smooth_line of xy with the vertices at pins (interior indices) kept: each piece between them (and the ends)
+    rounded alone, its ends staying where they are. Same result as smooth_line; None when nothing changes."""
+    cuts = [0] + list(pins) + [len(xy) - 1]
+    pts, old_s, new_s = [], [], []
+    o_off = n_off = 0.0
+    any_change = False
+    for c0, c1 in zip(cuts[:-1], cuts[1:]):
+        seg = np.asarray(xy[c0:c1 + 1], np.float64)
+        got = smooth_line(seg, radius) if len(seg) >= 3 else None
+        if got is None:
+            d = np.r_[0.0, np.cumsum(np.hypot(*np.diff(seg, axis=0).T))]
+            got = (seg, d, d)
+        else:
+            any_change = True
+        p, o, n = got
+        first = 0 if not pts else 1
+        pts.append(np.asarray(p)[first:])
+        old_s.append(np.asarray(o)[first:] + o_off)
+        new_s.append(np.asarray(n)[first:] + n_off)
+        o_off += float(o[-1])
+        n_off += float(n[-1])
+    if not any_change:
+        return None
+    return np.concatenate(pts), np.concatenate(old_s), np.concatenate(new_s)
+
+
 def _radius(feats, i, rules):
     """The arc radius of road feature i, or None for a feature that is not smoothed."""
     sub = feats.attrs.get("subtype")
+    if sub is not None and str(sub[i]) == "rail":
+        return RAIL_RADIUS_M.get(str(feats.attrs["class"][i])) if RAIL_ON and "class" in feats.attrs else None
     if sub is not None and str(sub[i]) != "road":
         return None
     cls = str(feats.attrs["class"][i]) if "class" in feats.attrs else "unknown"
@@ -79,6 +139,14 @@ def smooth(feats, frame):
         return feats
     po, ro, co = feats.part_off, feats.ring_off, feats.coord_off
     changed = {}                                    # feature -> (new en (m, 2), old knots, new knots, old length)
+    sub = feats.attrs.get("subtype")
+    ends = []                                       # (the ends of the rail lines: where a switch's branch begins)
+    if SWITCH_PIN_ON and RAIL_ON and sub is not None:
+        for i in range(len(feats)):
+            if str(sub[i]) == "rail" and po[i + 1] - po[i] == 1 and ro[po[i] + 1] - ro[po[i]] == 1:
+                a, b = co[ro[po[i]]], co[ro[po[i]] + 1]
+                if b - a >= 2:
+                    ends.append((i, feats.en[a], feats.en[b - 1]))
     for i in range(len(feats)):
         if po[i + 1] - po[i] != 1 or ro[po[i] + 1] - ro[po[i]] != 1:
             continue
@@ -86,7 +154,10 @@ def smooth(feats, frame):
         if r is None:
             continue
         a, b = co[ro[po[i]]], co[ro[po[i]] + 1]
-        got = smooth_line(feats.en[a:b], r)
+        pins = []
+        if ends and sub is not None and str(sub[i]) == "rail":
+            pins = pinned_vertices(feats.en[a:b], [e for j, p, q in ends if j != i for e in (p, q)])
+        got = smooth_pinned(feats.en[a:b], r, pins) if pins else smooth_line(feats.en[a:b], r)
         if got is not None:
             changed[i] = got
     if not changed:

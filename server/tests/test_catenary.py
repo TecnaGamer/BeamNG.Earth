@@ -120,8 +120,10 @@ class CatenaryTest(unittest.TestCase):
         ow = lambda x, y: True    # noqa: E731
         rows, wires = catenary.rows_and_wires(ms, ow, "su")
         self.assertEqual(sorted(r[0] for r in rows), ["catpost"] * (2 * len(portals)))
-        bars = [w for w, r in wires if r in (catenary.CHORD_R, catenary.DIAG_R)]
-        self.assertEqual(len(bars), 3 * len(portals))
+        chords = [w for w, r in wires if r == catenary.CHORD_R]
+        self.assertEqual(len(chords), 2 * len(portals))
+        self.assertFalse([w for w, r in wires if r == catenary.DIAG_R and abs(w[0, 0] - w[-1, 0]) + abs(w[0, 1] - w[-1, 1]) > 1e-6],
+                         "no diagonals: the girder's bars between the chords are verticals")
         for w, r in wires:
             if r == catenary.CHORD_R:
                 self.assertIn(round(float(w[0, 2]), 1), (10.0 + catenary.PORTAL_Z, 10.0 + catenary.PORTAL_Z + catenary.PORTAL_H))
@@ -178,6 +180,117 @@ class CatenaryTest(unittest.TestCase):
         keys = {tuple(np.round(w[0], 1)) for w, r in wires if r == catenary.CONTACT_R}
         keys2 = {tuple(np.round(w[0], 1)) for w, r in wires2 if r == catenary.CONTACT_R}
         self.assertFalse(keys & keys2)
+
+    def _contact_ends(self, wires):
+        return [(tuple(np.round(w[0, :2], 1)), tuple(np.round(w[-1, :2], 1))) for w, r in wires if r == catenary.CONTACT_R]
+
+    def _chain(self, wires):
+        """The contact wires as one chain: the sorted ends joined; returns (number of wires, the gaps between consecutive
+        wires' ends along x, 0 where they join)."""
+        ws = sorted((w for w, r in wires if r == catenary.CONTACT_R), key=lambda w: min(w[0, 0], w[-1, 0]))
+        gaps = [float(np.hypot(*(a[-1, :2] - b[0, :2]))) for a, b in zip(ws[:-1], ws[1:])]
+        return len(ws), gaps
+
+    def test_wire_runs_on_through_the_joint_of_two_ways(self):
+        f = electrified([[(-300.0, 100.0), (120.0, 100.0)], [(120.0, 100.0), (550.0, 100.0)]])
+        ms = masts(f)
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        n, gaps = self._chain(wires)
+        self.assertGreater(n, 8)
+        self.assertLess(max(gaps), 0.05, "every wire starts where the one before it ends, over the joint too")
+        joint = [w for w, r in wires if r == catenary.CONTACT_R and min(w[0, 0], w[-1, 0]) < 120.0 < max(w[0, 0], w[-1, 0])]
+        self.assertTrue(joint, "a span crosses the joint")
+
+    def test_a_branch_wire_starts_on_the_main_track(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)], [(150.0, 100.0), (300.0, 160.0)]])
+        ms = masts(f)
+        ends = [m for m in ms if "link" in m and m["link"][1].get("end")]
+        self.assertTrue(ends, "the branch's end on the main track gets an anchor")
+        e = ends[0]["link"][1]
+        self.assertAlmostEqual(float(e["q"][1]), 100.0, delta=0.5, msg="on the main track's axis")
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        starts = [w[0, :2] for w, r in wires if r == catenary.CONTACT_R] + [w[-1, :2] for w, r in wires if r == catenary.CONTACT_R]
+        self.assertTrue(any(float(np.hypot(*(p - e["q"]))) < 0.05 for p in starts), "a contact wire ends at that anchor")
+        mess = [w for w, r in wires if r == catenary.MESSENGER_R and min(float(np.hypot(*(w[0, :2] - e["q"]))), float(np.hypot(*(w[-1, :2] - e["q"])))) < 0.05]
+        self.assertTrue(mess)
+        for w in mess:
+            k = 0 if float(np.hypot(*(w[0, :2] - e["q"]))) < 0.05 else -1
+            self.assertAlmostEqual(float(w[k, 2]), 10.0 + catenary.Z_CONTACT, delta=0.01, msg="the messenger comes down to the contact wire")
+
+    def test_droppers_every_few_metres_and_the_gap_between_wires(self):
+        f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])
+        rows, wires = catenary.rows_and_wires(masts(f), lambda x, y: True)
+        drops = [w for w, r in wires if r == catenary.DROPPER_R]
+        xs = np.sort(np.array([float(d[0, 0]) for d in drops]))
+        near = np.diff(xs)[np.diff(xs) > 0.5]
+        self.assertTrue(len(near) and near.max() <= catenary.DROPPER_EVERY_M * 1.5 + 1.0, near.max())
+        for d in drops:
+            self.assertGreater(float(d[1, 2] - d[0, 2]), catenary.DROPPER_MIN_GAP_M)
+        gaps = [float(d[1, 2] - d[0, 2]) for d in drops]
+        self.assertAlmostEqual(min(gaps), 0.5, delta=0.1, msg="half a metre between the messenger and the contact wire at mid span")
+
+    def test_portal_holders_per_track(self):
+        f = electrified([[(-300.0, y), (700.0, y)] for y in (100.0, 106.0, 112.0)])
+        ms = masts(f)
+        pt = next(m for m in ms if m.get("portal"))
+        wires = catenary.portal_wires(pt)
+        ins = [w for w, r in wires if r == catenary.INS_R]
+        self.assertEqual(len(ins), 2 * 3, "two rod insulators on each of the three tracks")
+        for w, r in wires:
+            pass
+        hang = [w for w, r in wires if r == catenary.HANGER_R]
+        self.assertTrue(hang)
+        tops = sorted(round(float(w[0, 2]), 2) for w in ins)
+        self.assertTrue(all(abs(a[1, 2] - b[0, 2]) < 1e-6 for a in ins for b in ins
+                            if np.allclose(a[1, :2], b[0, :2]) and a is not b and abs(a[1, 2] - b[0, 2]) < 0.2),
+                        "the two insulators of a holder touch")
+        clamps = [w for w, r in wires if r == catenary.CLAMP_R]
+        self.assertEqual(len(clamps), 3)
+
+    def test_wire_materials_by_class(self):
+        import furniture
+        f = electrified([[(-300.0, y), (700.0, y)] for y in (100.0, 106.0, 112.0)])
+        ms = masts(f)
+        rows, wires = catenary.rows_and_wires(ms, lambda x, y: True)
+        wires = list(wires) + [(np.array([[0.0, 0.0, 8.0], [30.0, 0.0, 8.0]]), furniture.WIRE_R)]
+        wm = furniture.wire_mesh(wires, (0.0, 0.0, 0.0), catenary.wire_material)
+        P, T, UV, names, TM = wm
+        self.assertEqual(set(names), {catenary.MAT_COPPER, catenary.MAT_BRONZE, catenary.MAT_STEEL, catenary.MAT_INSULATOR,
+                                      "bne_wire"})
+        self.assertEqual(len(TM), len(T))
+        self.assertEqual(furniture.wire_mesh(wires, (0, 0, 0))[0].shape, P.shape, "the plain call is as it was")
+        self.assertEqual(len(UV), len(P))
+        P2, T2, UV2, n2, TM2 = furniture.wire_mesh(wires, (0, 0, 0), catenary.wire_material, catenary.wire_solid)
+        self.assertEqual(len(P2), len(P), "a bar costs the vertices two ribbons did")
+        self.assertEqual(len(UV2), len(P2))
+        steel = n2.index(catenary.MAT_STEEL)
+        bars = T2[TM2 == steel]
+        self.assertTrue(len(bars) and len(bars) % 8 == 0, "eight triangles a bar segment")
+        self.assertGreater(float(UV2[np.unique(bars)][:, 1].max()), 1.0, "UVs run along the bar")
+        out = 0
+        for a, b, c in bars:      # (counter-clockwise seen from outside: each face's normal points away from its bar's axis)
+            n = np.cross(P2[b] - P2[a], P2[c] - P2[a])
+            cen = (P2[a] + P2[b] + P2[c]) / 3.0
+            axis = (P2[a] + P2[b] + P2[c] + P2[a] + P2[b] + P2[c]) / 6.0     # (a face's own centre: tests the sign below)
+            lo = min(a, b, c) // 8 * 8
+            mid = P2[lo:lo + 8].mean(axis=0)
+            out += float(n @ (cen - mid)) > 0
+        self.assertEqual(out, len(bars), "bars face outwards")
+
+    def test_a_vertical_wire_has_width(self):
+        import furniture
+        line = np.array([[10.0, 5.0, 6.3], [10.0, 5.0, 7.5]])
+        P, T, UV = furniture.wire_mesh([(line, 0.01)], (0.0, 0.0, 0.0))
+        self.assertGreater(float(np.ptp(P[:, 0]) + np.ptp(P[:, 1])), 0.03, "both crossed ribbons are as wide as the wire")
+        self.assertAlmostEqual(float(np.ptp(P[:, 0])), 0.02, places=6)
+        self.assertAlmostEqual(float(np.ptp(P[:, 1])), 0.02, places=6)
+
+    def test_overlapping_portals_are_merged(self):
+        a = {"portal": True, "posts": [(np.array([0.0, 0.0]), 0.0), (np.array([0.0, 20.0]), 0.0)]}
+        near = {"portal": True, "posts": [(np.array([6.0, 1.0]), 0.0), (np.array([6.0, 21.0]), 0.0)]}
+        far = {"portal": True, "posts": [(np.array([40.0, 0.0]), 0.0), (np.array([40.0, 20.0]), 0.0)]}
+        self.assertTrue(catenary._overlaps(near, [a]))
+        self.assertFalse(catenary._overlaps(far, [a]))
 
     def test_mapped_masts_are_used(self):
         f = electrified([[(-300.0, 100.0), (550.0, 100.0)]])

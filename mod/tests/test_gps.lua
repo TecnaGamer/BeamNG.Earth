@@ -66,10 +66,10 @@ T.check(sl[#sl][2] == 100 and #sl == 3, 'a slice past the end stops at the desti
 local ids = G.pathNodes({ { pos = 1 }, { wp = 'a' }, { wp = 'a' }, { wp = 'b' }, { pos = 2, fixed = true }, { pos = 3 } })
 T.check(#ids == 2 and ids[1] == 'a' and ids[2] == 'b', 'the AI path: the graph nodes of the planner path, in order, once')
 local cmd = G.aiCommand({ 'a', 'b"c' })
-T.check(cmd:find('driveUsingPath', 1, true) and cmd:find('"a","b\\"c"', 1, true) and cmd:find('driveInLane = "on"', 1, true),
-  'the AI command lists the nodes quoted, in lane')
+T.check(cmd:find('beamngEarth_autodrive.drive', 1, true) and cmd:find('"a","b\\"c"', 1, true),
+  'the AI command sends quoted node ids to the vehicle route helper')
 T.check(loadstring(cmd) ~= nil and loadstring(G.aiCommand(nil)) ~= nil, 'both AI commands are valid Lua')
-T.check(G.aiCommand(nil) == 'ai.setMode("disabled")', 'autodrive off: the AI disabled')
+T.check(G.aiCommand(nil):find('stop("disabled")', 1, true), 'autodrive off: route state cleared and AI disabled')
 -- the AI's path starts on the edge under the car (not at the first node past a turn ahead)
 local g2 = { w = { pos = { x = 0, y = 0, z = 0 }, links = { j = {} } }, j = { pos = { x = 100, y = 0, z = 0 }, links = { w = {}, s = {} } },
              s = { pos = { x = 160, y = -60, z = 0 }, links = { j = {} } } }
@@ -77,11 +77,57 @@ local ea, eb = G.edgeUnder(g2, 40, 2, 1, 0)
 T.check(ea == 'w' and eb == 'j', 'the car heading east on w-j')
 T.check(G.edgeUnder(g2, 40, 20, 1, 0) == nil, 'nothing within 8 m: no edge')
 local jn = G.joinStart({ 's' }, 'w', 'j', g2)
-T.check(#jn == 3 and jn[1] == 'w' and jn[2] == 'j' and jn[3] == 's', 'the path goes through the junction, not across the corner')
+T.check(#jn == 2 and jn[1] == 'j' and jn[2] == 's', 'the path goes through the forward junction, not across the corner')
 jn = G.joinStart({ 'j', 's' }, 'w', 'j', g2)
-T.check(#jn == 3 and jn[1] == 'w', 'the edge\'s start put in front')
+T.check(#jn == 2 and jn[1] == 'j', 'a path starting ahead stays ahead')
 jn = G.joinStart({ 'w', 'j', 's' }, 'w', 'j', g2)
-T.check(#jn == 3, 'already starting there: unchanged')
+T.check(#jn == 2 and jn[1] == 'j', 'the rear endpoint is removed when the path follows the current segment')
+jn = G.joinStart({ 'w', 's' }, 'w', 'j', g2)
+T.check(#jn == 2 and jn[1] == 'w', 'a planner path taking another direction is preserved')
+jn = G.joinStart({ 's', 'j' }, 'w', 'j', g2)
+T.check(#jn == 2 and jn[1] == 's', 'a join must not create a loop through a later route node')
+
+-- Wide lanes and tapered edges use their local half-width, even on a single-sided graph.
+do
+  local edge = { inNode = 'a', outNode = 'b', inRadius = 12, outRadius = 4 }
+  local wide = {
+    a = { pos = { x = 0, y = 0 }, radius = 20, links = {} },
+    b = { pos = { x = 100, y = 0 }, radius = 20, links = { a = edge } },
+  }
+  local a, b = G.edgeUnder(wide, 25, 9, 1, 0)
+  T.check(a == 'a' and b == 'b', 'an outer lane beyond 8 m is on the wide end of the road')
+  a, b = G.edgeUnder(wide, 25, 9, -1, 0)
+  T.check(a == 'b' and b == 'a', 'edge radii keep their orientation when driving the other way')
+  T.check(G.edgeUnder(wide, 75, 9, 1, 0) == nil, 'the narrow end uses the tapered edge width, not the wider node radius')
+  T.check(G.edgeUnder(wide, 25, 11, 1, 0) == nil, 'outside the local road width is still rejected')
+  edge.oneWay = true
+  T.check(G.edgeUnder(wide, 25, 9, -1, 0) == nil, 'wide roads still reject a reverse one-way start')
+  wide.a.radius, wide.b.radius = 12, 12
+  wide.b.links.a = {}
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'a', 'node radii supply the width when edge radii are absent')
+  wide.c = { pos = { x = 0, y = 14 }, radius = 3, links = { d = {} } }
+  wide.d = { pos = { x = 100, y = 14 }, radius = 3, links = {} }
+  T.check(G.edgeUnder(wide, 25, 10, 1, 0) == 'c', 'the nearest matching edge still wins among eligible roads')
+end
+
+-- Stacked roads can share a heading and be closer in XY on the wrong level.
+do
+  local stacked = {
+    a = { pos = { x = 0, y = 1, z = 10 }, radius = 6, links = { b = {} } },
+    b = { pos = { x = 100, y = 1, z = 20 }, radius = 6, links = {} },
+    c = { pos = { x = 0, y = 0, z = 0 }, radius = 6, links = { d = {} } },
+    d = { pos = { x = 100, y = 0, z = 0 }, radius = 6, links = {} },
+  }
+  local a, b = G.edgeUnder(stacked, 50, 0, 1, 0, 15)
+  T.check(a == 'a' and b == 'b', 'bridge height beats a horizontally closer road below')
+  a, b = G.edgeUnder(stacked, 50, 1, 1, 0, 0)
+  T.check(a == 'c' and b == 'd', 'the road below beats a horizontally closer bridge above')
+  a, b = G.edgeUnder(stacked, 50, 0, -1, 0, 15)
+  T.check(a == 'b' and b == 'a', 'interpolated bridge height also works in the reverse direction')
+  stacked.c.pos.z, stacked.d.pos.z = 14, 14
+  T.check(G.edgeUnder(stacked, 75, 0, 1, 0, 17.5) == 'a',
+    'sloping edges are compared at the car position, not at an endpoint')
+end
 
 -- the AI's path across a road-graph change: from the edge under the car, as far as every step is an edge in both graphs
 do
@@ -110,7 +156,7 @@ do
   G.afterGraph(keep, same)
   T.check(#sent == 0, 'still valid: no new path for the AI')
   G.afterGraph(keep, { b = n(100, {}), c = n(200, {}) })
-  T.check(#sent == 1, 'a broken step: the AI gets the part that is left')
+  T.check(#sent == 1 and sent[1]:find('stop', 1, true), 'a broken step: hold until the vehicle has the new graph')
   -- a rebase moved the graph (navgraph.transform): the same ids, but the AI's plan held the old frame's points
   local before = G.graphMoves or 0
   G.afterGraph(keep, same, true)
@@ -125,7 +171,7 @@ do -- the game's loaded graph keeps each edge on one node only (map.lua convertT
     c = { pos = P(100, 0), links = { b = { oneWay = false } } },
     d = { pos = P(150, 0), links = { c = { oneWay = true, inNode = 'd' } } },
   }
-  T.check(#G.validFrom({ 'a', 'b', 'c', 'd' }, 1, { one }) == 4, 'a step stored on either node is an edge')
+  T.check(#G.validFrom({ 'a', 'b', 'c', 'd' }, 1, { one }) == 3, 'a reverse one-way step is not a valid continuation')
   local f, t = G.edgeUnder(one, 70, 1, 1, 0)
   T.check(f == 'b' and t == 'c', 'the edge under the car, stored on its far node: ' .. tostring(f) .. tostring(t))
   f, t = G.edgeUnder(one, 70, 1, -1, 0)
@@ -134,7 +180,10 @@ do -- the game's loaded graph keeps each edge on one node only (map.lua convertT
   f, t = G.edgeUnder(one, 120, 1, -1, 0)
   T.check(f == 'd' and t == 'c', 'a one-way edge its way: ' .. tostring(f) .. tostring(t))
   local j = G.joinStart({ 'c', 'd' }, 'a', 'b', one)
-  T.check(#j == 4 and j[1] == 'a' and j[2] == 'b', 'joined across an edge stored on the far node')
+  T.check(#j == 3 and j[1] == 'b' and j[2] == 'c', 'joined through the forward endpoint across an edge stored on the far node')
+  one.c.links.b = { oneWay = true, inNode = 'c' }
+  j = G.joinStart({ 'c', 'd' }, 'a', 'b', one)
+  T.check(#j == 2 and j[1] == 'c', 'a join must not traverse a one-way edge backwards')
 end
 do -- a new path waits for the car's copy of the graph
   local savedMap, gm = map, { buildSerial = 3 }

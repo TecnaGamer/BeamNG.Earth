@@ -1199,6 +1199,9 @@ class Server:
         self.surface = surface      # surface.Surface: ground models under the physics block (--surface on)
         if surface is not None and self.airports is not None:      # the runways painted in (GitHub #337)
             surface.extra_pads = self.airports.runway_pads
+        if surface is not None and hasattr(surface, "bus_pads"):    # the bus stations' yards painted in as well (task 020)
+            import busstations
+            surface.bus_pads = busstations.ON           # (the road tiles keep the yards' pads)
         self.mapdata = mapdata      # mapdata.MapData for the roads (--roads on), else None
         if mapdata is not None and getattr(mapdata, "dem", 0) is None:
             mapdata.dem = self.dem  # (gradesep's ground)
@@ -2505,8 +2508,15 @@ class Server:
         if self.gas_stations:       # pumps and refuel areas; their canopy outlines left out of the buildings
             fuel, skip = gasstationsmod.tile_sites(anchor.frame, tx, ty, self.mapdata, elev, cuts=fuel_cuts,
                                                    pads=fuel_pads, tried=fuel_tried)
-            self.keep_fuel_pads(fuel_pads)
             Server.keep_fuel_tried(self, fuel_tried)
+        if self.buildings:          # bus stations draw their own roofs: the sheds the map data makes of them are left out
+            import busstations
+            import busyard
+            skip = frozenset(skip) | busstations.tile_skip(anchor.frame, tx, ty, self.mapdata)
+            import railstations
+            skip = skip | railstations.tile_skip(anchor.frame, tx, ty, self.mapdata)
+            busyard.tile_pads(anchor.frame, tx, ty, self.mapdata, fuel_pads)      # ... and their yards are painted in
+        self.keep_fuel_pads(fuel_pads)
         props = [] if self.buildings else None
         lines = [] if self.buildings else None
         wires = [] if self.buildings else None
@@ -2634,9 +2644,13 @@ class Server:
                 self.keep_fuel_pads(streetfront.pad_items(anchor.frame, box, key, paving, front_grass))
             park += spots
             park = gasstationsmod.clear_park(park, fuel)
+            if park is not None:
+                import busstationpark
+                park = park + busstationpark.rows(anchor.frame, self.mapdata, box, elev)
             buildingsmod.brick_walks(walks, items, anchor.lat, anchor.lon)
         chunks += parkingmod.finish_markings(anchor.frame, tx, ty, self.mapdata, elev, items, marks,
                                              separate_bays=bool(frontage_country))
+        chunks += blockworker._bay_lines(anchor.frame, tx, ty, self.mapdata)
         if _bridge_fps:                 # (the model bridge is the road there: its deck slab)
             chunks = buildingsmod.bridge_stub_chunks(_bridge_fps, chunks)
             ctx[:] = buildingsmod.bridge_stub_chunks(_bridge_fps, ctx)
@@ -2718,6 +2732,7 @@ class Server:
             log.warning("stone walls: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         tmesh = roadmeshmod.tunnel(chunks, (x0, y0, 0.0), rwalls)
         import railways
+        rail_props = []                 # (buffer stops and the walk signs at footway crossings: railways.tile_mesh's furniture)
         rmesh, rail_decks = railways.tile_mesh(anchor.frame, tx, ty,
                                    [cell_fn(k) for k in roadsmod.cells_of_tile(anchor.frame, tx, ty, railways.REACH_M)],
                                    railways.point_ground(anchor.frame, elev, (aid, anchor.lat, anchor.lon)),
@@ -2725,9 +2740,12 @@ class Server:
                                        anchor.frame,
                                        lambda la, lo: self.ground(anchor.frame, la, lo, self.dem.sample(la, lo, zoom)),
                                        ("raw", aid, anchor.lat, anchor.lon)),
-                                   return_decks=True,
+                                   return_decks=True, load=cell_fn,
+                                   bed_elev=getattr(getattr(self, "plan_store", None), "elev", None), furniture=rail_props,
                                    under=((lambda xy: buildingsmod._under_bridges(_bridge_fps, xy))
                                           if _bridge_fps else None))
+        if rail_props:
+            props = (props or []) + rail_props
         bld = None
         garage_sound = ()
         oil_wells = []
@@ -2765,10 +2783,13 @@ class Server:
                                          bld_fn))
             except Exception as ex:
                 log.warning("picnic: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            import busfurniture
             import shelters
-            try:
-                props.extend(shelters.rows(anchor.frame, infra_fn, box, elev, near_roads, lambda k: self.mapdata.cell(
-                    k, layers=("roads",), kind="demand").layers.get("roads"), country=self.country(anchor)))
+            try:                        # (not under a bus station's roof, nor in its bays: it has its own)
+                props.extend(busfurniture.clear_of_stations(
+                    shelters.rows(anchor.frame, infra_fn, box, elev, near_roads, lambda k: self.mapdata.cell(
+                        k, layers=("roads",), kind="demand").layers.get("roads"), country=self.country(anchor)),
+                    anchor.frame, self.mapdata, box))
             except Exception as ex:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import fast
@@ -2796,6 +2817,18 @@ class Server:
                 raise
             except Exception as ex:
                 log.warning("places: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            try:
+                props[:] = busfurniture.drop_stock_lamps(props, anchor.frame, self.mapdata, box, wires)
+                props.extend(busfurniture.rows(anchor.frame, self.mapdata, box, elev, poleprofiles.lamp_country_selector(
+                    Server.pole_profile(self, anchor), anchor.frame), props))   # benches, bins, lamps at bus stations
+            except Exception as ex:
+                log.warning("bus station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
+            try:
+                import railstationprops
+                props.extend(railstationprops.rows(anchor.frame, self.mapdata, box, elev, poleprofiles.lamp_country_selector(
+                    Server.pole_profile(self, anchor), anchor.frame)))
+            except Exception as ex:
+                log.warning("rail station furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import industry
             garage_sound = (garage_sound + industry.refinery_sound_rows(anchor.frame, tx, ty, self.mapdata, elev)
                             + industry.power_plant_sound_rows(anchor.frame, tx, ty, self.mapdata, elev))
@@ -2821,6 +2854,8 @@ class Server:
                                    rail_mesh=rmesh, guardrail_rows=guardrail_rows, garage_sound=garage_sound,
                                    custom_entries=custom_entries, signs=signs, wells=oil_wells, bld_none=bool(self.buildings),
                                    barrier_mesh=barrier_mesh, barrier_chunks=barrier_chunks,
+                                   bus_col=blockworker._station_collision(anchor.frame, box, elev, self.mapdata)
+                                   if self.buildings else None,
                                    turbines=turbine_rows, towns=town_faces,
                                    walk_ground=lambda x, y: roadmeshmod.drawn_ground(
                                        anchor.frame, drawn, np.c_[x, y], self.anchor_q(anchor)),
@@ -3125,6 +3160,7 @@ class Server:
             z = self.airports.apply(la, lo, z)
         if getattr(self, "lids", None) is not None:
             z = self.lids.apply(la, lo, z)
+        z = blockworker._level_yards_of(self, z, la, lo)
         if self.sea is not None:
             z = self.sea.carve(la, lo, z)
         return z
@@ -3595,10 +3631,18 @@ class Server:
         cell_fn = lambda key: self.mapdata.cell(key, layers=("roads",), kind="demand").layers.get("roads")   # noqa: E731
         try:
             self.tunnels_of(anchor, elev, g)
-            holes = roadsmod.block_tunnel_holes(anchor.tunnels, cell_fn, anchor.frame, keep, cx, cy, heightmap.SQUARE)
+            import railways
+            holes = roadsmod.block_tunnel_holes(
+                anchor.tunnels, cell_fn, anchor.frame, keep, cx, cy, heightmap.SQUARE,
+                rail_parts=((lambda box: railways.tunnel_hole_parts(anchor.frame, cell_fn, self.plan_store.elev, box))
+                            if railways.TUNNELS_ON and getattr(self, "plan_store", None) is not None else None))
         except Exception:
             log.exception("tunnel holes of block (%s, %s)", cx, cy)
             return idx
+        import railunderpass            # (the railway stations' underpasses: their passages and pits are open where the ground was)
+        under = railunderpass.holes(self.mapdata, anchor.frame, keep, cx, cy, heightmap.SQUARE, elev)
+        if under is not None:
+            holes = under if holes is None else (holes | under)
         if holes is None or not holes.any():
             return idx
         idx = np.zeros(holes.shape, np.uint8) if idx is None else idx
@@ -5480,7 +5524,7 @@ BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's telepor
 # (rs / rx: the road geotiles' skins and exact variants of the anchor; rail / railcol / tunnel: its road tiles' rail and
 # tunnel shapes. Left out until 2026-11-02: kept until the server stopped, GitHub #599's 9 GB session folder)
 ANCHOR_TILE_FILES = ("roads", "road", "walks", "walkcol", "deck", "bld", "bldcol", "bldfar", "wire", "veg", "navgraph",
-                     "rs", "rx", "rail", "railcol", "tunnel")
+                     "rs", "rx", "rail", "railcol", "tunnel", "buscol")
 
 
 class _BoundedLru:

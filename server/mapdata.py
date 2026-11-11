@@ -69,6 +69,7 @@ import netfetch
 import overture
 import rangeread
 import revisit
+import levelways
 import roadsmooth
 import staging
 import xproc
@@ -348,8 +349,12 @@ class MapData:
         self.bdtopo = bdtopo.Source(cache_dir, self.fetcher) if bdtopo.ON else None
         import railtags                 # (OSM's railway tags joined to the roads layer's rail segments)
         self.rail_tags = railtags.RailTags(cache_dir, self.fetcher) if railtags.ON else None
+        # the weekly station shards (railtags.StationTags: fuel and charging stations, capacity, charge points)
+        self.station_tags = railtags.StationTags(cache_dir, self.fetcher) if railtags.STATIONS_ON else None
         import regionaldata
         regionaldata.configure(cache_dir, self.fetcher)     # (PR #505's regional scenery data, fetched on demand)
+        import germanroads              # (Germany's surveyed road widths, lanes and surfaces, fetched on demand)
+        germanroads.configure(cache_dir, self.fetcher)
         import roadz                    # (real road / deck / tunnel heights where a source has them: BNE_ROADZ)
         roadz.install(cache_dir, self.fetcher, self)
         self.lane_tags = railtags.LaneTags(cache_dir, self.fetcher) if railtags.LANES_ON else None   # (markings.py)
@@ -455,10 +460,15 @@ class MapData:
              "lanes": lanes.known() if lanes is not None else None,
              "gradesep": (gradesep.VERSION, gradesep.MODE) if gradesep.TUNNELS else None,
              "osmfuel": OSM_POI_VERSION if OSM_FUEL else False}
+        st = getattr(self, "station_tags", None)
+        if st is not None:                      # (the chargers' capacity and charge points: the weekly build in use)
+            v["stations"] = st.known()
         if roadsmooth.ON:                       # (a key only while on: what is built without it keeps its cache keys)
             v["roadsmooth"] = roadsmooth.VERSION
         if europewalks.enabled():               # (PR #505's European street edges: the same, keyed only while on)
             v["street_edges"] = europewalks.VERSION
+        if levelways.ON:
+            v["levelways"] = levelways.VERSION
         return v
 
     def bundle_versions(self):
@@ -897,6 +907,7 @@ class MapData:
                 self._rails(key, layer, f)
                 self._lanes(key, layer, f)
                 if layer == "roads":
+                    f = levelways.promote(f, frame)         # (a street mapped as a footway over a level crossing: a road)
                     f = roadsmooth.smooth(f, frame)         # (bends as arcs, not corners: roadsmooth.py)
                 if layer == "buildings":
                     f = mapgeom.drop_huge(f, BUILDING_MAX_M2)
@@ -1045,7 +1056,8 @@ class MapData:
             self._mem_bytes = 0
             self._slim.clear()
             self._slim_bytes = 0
-        for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
+        # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
+        for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None)):
             if tags is not None:
                 tags.clear_memory()
 

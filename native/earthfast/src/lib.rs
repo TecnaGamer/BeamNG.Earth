@@ -5847,6 +5847,7 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(dirsigns::dirsign_mesh, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_set_fonts, m)?)?;
     m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_face, m)?)?;
+    m.add_function(wrap_pyfunction!(dirsigns_face::dirsign_town_face, m)?)?;
     m.add_function(wrap_pyfunction!(island_ring_rays, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::dsm_ground, m)?)?;
     m.add_function(wrap_pyfunction!(dsm::fill_holes, m)?)?;
@@ -6160,6 +6161,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // 203: roadtone (paint_lines_toned: the roads painted into the photo in its own pavement's tone)
     m.add_function(wrap_pyfunction!(roadtone::paint_cover_toned, m)?)?;
     // 204: paint_cover_toned (lots and pads in the photo's own tone)
-    m.add("VERSION", 204)?;
+    // 204: dirsigns_face::dirsign_town_face (a station's name board: name and subtitle on one face, the bus and
+    // railway stations' signs; PR #1106 / #1023, their 188)
+    // 205: the night's 204s at once (roadtone::paint_cover_toned and dirsigns_face::dirsign_town_face, two branches)
+    m.add("VERSION", 205)?;
     Ok(())
 }

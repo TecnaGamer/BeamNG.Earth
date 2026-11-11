@@ -365,6 +365,12 @@ def place(md, frame, box, context, left_hand, mph, sys_row):
     poly, poly_off = speedsigns._outlines(context.pavements(frame, np.c_[clo, cla], left_hand))
     sizes = tables()[1]["sizes"]["default"]
     poi = np.vstack([pois(frame, infra)] + portals)
+    if len(poi):                                # (a bus station has its own plates: no stock stop post on its ground)
+        import busstationkeep
+        keep = busstationkeep.keepout(md, frame, (x0 - m, y0 - m, x1 + m, y1 + m))
+        if keep:
+            drop = (poi[:, 2] == POI_BUS_STOP) & keep.contains(poi[:, :2])
+            poi = np.ascontiguousarray(poi[~drop], np.float64)
     got = fast._ef.road_sign_place(pts, ll, off, meta, con_at, con_id, con_off, skip, skip_off, crossings(frame, infra),
                                     signals(frame, infra), open_ends(frame, cells), poly, poly_off, [float(v) for v in box],
                                     bool(left_hand), [float(v) for v in sys_row["lateral"]], float(widest(sizes)),

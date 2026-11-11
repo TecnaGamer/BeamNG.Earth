@@ -15,7 +15,7 @@ import numpy as np
 NAME = "prewarm.cdae"
 NAME_X = "prewarm_x.cdae"     # the road meshes' other vertex format (road_materials); the mod loads it beside NAME
 # materials the code names at run time, not in a constant the scan below finds
-EXTRA = ("line_yellow", "line_white", "bne_wire", "bne_cable_steel", "bne_cable_reflector")   # (the median cable barrier's: medians.py)
+EXTRA = ("line_yellow", "line_white", "bne_wire", "bne_cat_wire_copper", "bne_cat_wire_bronze", "bne_cat_wire_steel", "bne_cat_wire_ins", "bne_cable_steel", "bne_cable_reflector")   # (the median cable barrier's: medians.py)
 
 
 def _marks(v, out):
