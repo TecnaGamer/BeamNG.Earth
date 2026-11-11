@@ -40,6 +40,22 @@ def _xy(lat, lon, lat_ref):
     return lon * m * math.cos(math.radians(lat_ref)), lat * m
 
 
+def _unwrap(points):
+    """A continuous longitude along the route: crossing +/-180 takes the short way, not through Greenwich."""
+    out = []
+    offset = 0.0
+    previous = points[0][1]
+    for lat, lon in points:
+        delta = lon + offset - previous
+        if delta > 180.0:
+            offset -= 360.0
+        elif delta < -180.0:
+            offset += 360.0
+        previous = lon + offset
+        out.append((lat, previous))
+    return out
+
+
 def simplify(points, tol_m=SIMPLIFY_M):
     """points [(lat, lon)] with the vertices closer than tol_m to their neighbours' line dropped (Ramer-Douglas-
     Peucker, iterative). Pure."""
@@ -47,7 +63,7 @@ def simplify(points, tol_m=SIMPLIFY_M):
     if n < 3:
         return list(points)
     lat_ref = points[0][0]
-    xy = [_xy(la, lo, lat_ref) for la, lo in points]
+    xy = [_xy(la, lo, lat_ref) for la, lo in _unwrap(points)]
     keep = [False] * n
     keep[0] = keep[-1] = True
     stack = [(0, n - 1)]
@@ -85,7 +101,8 @@ def resample(points, max_points=120, min_step_m=50.0):
     if n == 1:
         return [(points[0][0], points[0][1], 0.0)]
     lat_ref = points[0][0]
-    xy = [_xy(la, lo, lat_ref) for la, lo in points]
+    continuous = _unwrap(points)
+    xy = [_xy(la, lo, lat_ref) for la, lo in continuous]
     seg = [math.hypot(xy[i + 1][0] - xy[i][0], xy[i + 1][1] - xy[i][1]) for i in range(n - 1)]
     total = sum(seg)
     if total <= 0:
@@ -99,7 +116,9 @@ def resample(points, max_points=120, min_step_m=50.0):
             i += 1
         f = max(0.0, min(1.0, (s - done) / seg[i])) if seg[i] > 0 else 0.0
         la = points[i][0] + f * (points[i + 1][0] - points[i][0])
-        lo = points[i][1] + f * (points[i + 1][1] - points[i][1])
+        lo = continuous[i][1] + f * (continuous[i + 1][1] - continuous[i][1])
+        if not -180.0 <= lo <= 180.0:
+            lo = (lo + 180.0) % 360.0 - 180.0
         out.append((la, lo, s))
         s += step
     if out[-1][2] < total - 1e-6:
