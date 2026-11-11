@@ -17,6 +17,44 @@ def arc(r, a0, a1, n=12, cx=0.0, cy=0.0):
 
 
 class IslandTest(unittest.TestCase):
+    def test_splitter_marker_faces_each_incoming_lane(self):
+        ow = roads.Spec(3., "paved", True, "tertiary", True, 2.5, 1)
+        road = [
+            ("out", ow, np.array([[0., 0., 0.], [-3.2, 5., 0.], [-3.2, 27., 0.], [0., 32., 0.]])[::-1], 0.),
+            ("in", ow, np.array([[0., 0., 0.], [3.2, 5., 0.], [3.2, 27., 0.], [0., 32., 0.]]), 0.),
+        ]
+        found = islands.find(road)
+        self.assertEqual(len(found), 1)
+        placed = islands.splitter_heads(found, [], road, (-8., -5., 8., 35.))
+        self.assertEqual(len(placed), 2)
+        self.assertGreater(min(d[1] for p, d in placed if p[1] < 16.), .9)
+        self.assertLess(max(d[1] for p, d in placed if p[1] > 16.), -.9)
+        self.assertEqual(islands.splitter_heads(found, [], road, (-8., 13., 8., 19.)), [])
+        service = [(fid, spec._replace(cls="service"), line, lon) for fid, spec, line, lon in road]
+        self.assertEqual(islands.splitter_heads(found, [], service, (-8., -5., 8., 35.)), [])
+
+    def test_french_road_tile_serializes_splitter_markers(self):
+        import json
+        import os
+        import tempfile
+        from unittest.mock import patch
+        from test_roads import FRAME, features, flat, rules
+
+        west = [(60., 50.), (56.8, 55.), (56.8, 77.), (60., 82.)][::-1]
+        east = [(60., 50.), (63.2, 55.), (63.2, 77.), (60., 82.)]
+        feats = features([west, east], ["tertiary"] * 2, widths=[(0, 3.), (1, 3.)])
+        feats.rules["oneway"] = rules([(0, 1.), (1, 1.)], "float")
+        with patch.dict(os.environ, {"BNE_EU_ROAD_DETAILS": "on"}), patch("europewalks.country_for", return_value="FR"):
+            walks, signs = [], []
+            chunks = roads.build_tile(FRAME, 0, 0, [feats], flat, walks=walks, props=[], signs=signs)
+            self.assertEqual(len(signs), 1)
+            self.assertEqual(len(signs[0][1]), 2)
+            with tempfile.TemporaryDirectory() as tmp:
+                path, _ = roads.write_tile(tmp, "/probe", 1, 0, 0, chunks, None, signs=signs)
+                data = json.loads((Path(tmp) / Path(path).name).read_text())
+                self.assertEqual({row["kind"] for row in data["regionalSigns"]}, {"island_keep_right"})
+                self.assertGreater((Path(tmp) / Path(data["signs"]["shape"]).name).stat().st_size, 0)
+
     def test_roundabout_ring(self):
         ow = roads.Spec(6.0, "paved", True, "residential", True)
         two = roads.Spec(9.0, "paved", True, "residential", False)
@@ -127,12 +165,16 @@ class IslandTest(unittest.TestCase):
         f.rules["oneway"] = rules([(0, 1.0)], "float")
         walks = []
         roads.build_tile(FRAME, 0, 0, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
-        islands_w = [w for w in walks if w.get("fid") == "island"]
+        # (a roundabout's island is layered, plan 038: the paved apron outside, the planter's curb inside it)
+        layers = [w for w in walks if w.get("fid") == "island"]
+        self.assertEqual(sorted(("disc" in w, w.get("mat", 0) == 7) for w in layers), [(False, False), (False, True), (True, False)],
+                         "an apron, the planting's curb band and its fan")
+        islands_w = [w for w in layers if w.get("mat", 0) == 7]
         self.assertEqual(len(islands_w), 1, "one continuous island curb owned by the centre's tile")
         L = float(np.hypot(*np.diff(islands_w[0]["pts"][:, :2], axis=0).T).sum())
         self.assertGreater(L, 2 * math.pi * (R - 4) * 0.85, "the curb goes most of the way round")
         for w in walks:
-            if "corner" in w or w.get("fid") == "island":
+            if "corner" in w or w.get("fid") in ("island", "ringcurb"):
                 continue
             mid = w["pts"][len(w["pts"]) // 2, :2]
             self.assertGreater(float(np.hypot(mid[0] - cx, mid[1] - cy)), R - 1.0,
@@ -158,7 +200,7 @@ class IslandTest(unittest.TestCase):
             walks = []
             roads.build_tile(FRAME, tx, ty, [f], flat, lambda la, lo: np.ones(np.shape(la), bool), walks=walks)
             for w in walks:
-                if w.get("fid") == "island":
+                if w.get("fid") == "island" and w.get("mat") == 7:
                     total += float(np.hypot(*np.diff(w["pts"][:, :2], axis=0).T).sum())
                     pts.append(w["pts"][:, :2])
         self.assertGreaterEqual(len(pts), 4, "a piece in each tile")

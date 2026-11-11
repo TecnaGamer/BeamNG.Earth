@@ -17,3 +17,5 @@ setExtensionUnloadMode('beamngEarth_serverlist', 'manual')
 setExtensionUnloadMode('beamngEarth_map3d', 'manual')
 -- The modding API for other mods (api.lua: beamngEarth_api; docs/ADDONS.md).
 setExtensionUnloadMode('beamngEarth_api', 'manual')
+-- The station finder (finder.lua: Nearest station from the radial menu, a key or the map; the low fuel prompt).
+setExtensionUnloadMode('beamngEarth_finder', 'manual')

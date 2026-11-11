@@ -35,10 +35,11 @@ ON = os.environ.get("BNE_TELEMETRY", "on").lower() not in ("off", "0", "false", 
 # performance data is sent (from development builds first), everyone who chose under 1 is asked again
 CONSENT_VERSION = 2
 # The performance section (perfstats.py; the collector reads it: native/serverlist perf.rs) is sent by development
-# builds (the user, 2026-11-08: "start sending performance data on the dev builds. No release tonight"): "dev" = a
-# version with ".dev." / "-dev." in it (release.yml's development builds); True = every build (from the release whose
-# notes say so). Otherwise it is measured and kept beside the last report (LAST_FILE "perf_not_sent_yet").
-PERF_UPLOAD = "dev"
+# builds (the user, 2026-11-08: "start sending performance data on the dev builds. No release tonight") and, from the
+# release after that, releases too (the user, 2026-11-08: "releases should be the same as dev"): True = every build,
+# "dev" = only a version with ".dev." / "-dev." in it (release.yml's development builds); off: measured and kept beside
+# the last report (LAST_FILE "perf_not_sent_yet"). Always only under the player's Performance data choice.
+PERF_UPLOAD = True
 
 
 def perf_upload(version):

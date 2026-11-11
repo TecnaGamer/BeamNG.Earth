@@ -30,6 +30,16 @@ and rounded for display on some rural signs. Diagram signs use connected exits
 of the actual drawn roundabout. Placement at every candidate depends on the
 live road geometry, safe shoulder space and visibility.
 
+`fr_priority_directions-*.zip` and `fr_priority_directions.json` are the
+priority junction catalogue for the same extract. Routes are computed across
+the directed graph using tagged access and supported turn restrictions. The
+catalogue separates nearby places from regional destinations and tests each
+inferred name against the junction's competing exits. The `checked_route` flag
+identifies these estimates. The manifest lists the SHA-256 of the full archive
+and of each distributed part. Once a catalogue built this way (its index's
+`routing` 6) is the published one, `frlocaldirections.nearby` keeps only the
+checked route estimates of both catalogues; an older catalogue keeps every face.
+
 Rebuild offline (developer dependency: pyosmium; players do not need it):
 
 ```sh
@@ -42,12 +52,15 @@ SciPy. The extraction keeps a coordinate index for referenced nodes in memory.
 ```sh
 python3 tools/extract_fr_direction_network.py france-latest.osm.pbf build/fr_direction_network
 python3 tools/build_fr_local_directions.py build/fr_direction_network server/data/fr_local_directions.zip
+python3 tools/extract_fr_direction_network.py --priority france-latest.osm.pbf build/fr_priority_network
+python3 tools/build_fr_priority_directions.py build/fr_priority_network build/fr_priority_directions.zip
+python3 tools/split_fr_priority_directions.py build/fr_priority_directions.zip server/data
 ```
 
-Set `directionsigns.ROAD_DATA_SHA256` and `frlocaldirections.DATA_SHA256` to
-their respective printed checksums. The road profile fingerprints both
-archives and the SOS data. Compressed JSON retains IDs, coordinates and source
-provenance and is distributed under ODbL.
+Set `directionsigns.ROAD_DATA_SHA256` to its printed checksum; the local and
+priority archives go to BeamNG.Earth-data through `tools/build_regional_data.py`
+(below), whose manifest holds their checksums. Compressed JSON retains IDs,
+coordinates and source provenance and is distributed under ODbL.
 No public Overpass query is performed during gameplay. Motorway destinations
 come separately from the mod's existing worldwide highway-sign index.
 

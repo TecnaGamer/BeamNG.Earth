@@ -25,6 +25,15 @@ def _load():
         return _grid
 
 
+def koppen_many(lat, lon):
+    """koppen_at's class of each point (arrays), 0 on the sea's pixels (no coast search: for items on land)."""
+    g = _load()
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    j = np.clip(((90.0 - lat) / RES).astype(np.int64), 0, g.shape[0] - 1)
+    i = (((lon + 180.0) % 360.0) / RES).astype(np.int64) % g.shape[1]
+    return g[j, i].astype(np.int64)
+
+
 def koppen_at(lat, lon):
     """The class (1-30) at (lat, lon), the most common one within NEAR_PX pixels on the sea's (a coast), else 0."""
     g = _load()

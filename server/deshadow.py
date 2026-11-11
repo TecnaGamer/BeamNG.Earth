@@ -57,6 +57,7 @@ import contextlib
 import logging
 import math
 import os
+import zipfile
 import threading
 import time
 from collections import OrderedDict
@@ -759,6 +760,13 @@ class Deshadow:
         """Params from the disk cache (current VERSION only). Caller holds the lock."""
         if rk in self._params:
             return self._params[rk]
+        P = self._read_params(rk)
+        if P is not None:
+            self._params[rk] = P
+        return P
+
+    def _read_params(self, rk):
+        """_load_params' disk read, without the lock (the worker's: GitHub #1054)."""
         jp, npz = self._paths(rk)
         try:
             with open(jp) as f:
@@ -768,7 +776,6 @@ class Deshadow:
         if P.get("version") != VERSION or (P.get("ok") and not os.path.exists(npz)):
             return None
         self.disk.used(jp)
-        self._params[rk] = P
         return P
 
     def _region_center(self, rk):
@@ -785,8 +792,9 @@ class Deshadow:
         return math.hypot(dx, dy)
 
     def _enqueue(self, rk):
-        """Queue a region (once). Caller holds the lock."""
-        if rk in self._events or self._load_params(rk) is not None:
+        """Queue a region (once). Caller holds the lock. In memory only: one on disk the worker reads (prepare, on the
+        event loop at a new anchor, read every region's parameters from disk: 7.1 s on a busy hard disk, #1054)."""
+        if rk in self._events or rk in self._params:
             return
         f = self._failed.get(rk)
         if f is not None and time.monotonic() - f < RETRY_S:
@@ -836,7 +844,13 @@ class Deshadow:
     def region(self, rk, wait=True):
         """Region (params, grids) if ready; else None (queued; waits up to the anchor deadline)."""
         with self._lock:
-            P = self._load_params(rk)
+            P = self._params.get(rk)
+        if P is None:                   # (its disk read outside the lock: the event loop's prepare takes it too)
+            P = self._read_params(rk)
+            if P is not None:
+                with self._lock:
+                    self._params[rk] = P
+        with self._lock:
             if P is None:
                 if self._center is not None and self._distance(rk) > REQUEST_M:
                     return None
@@ -864,7 +878,12 @@ class Deshadow:
         try:
             with np.load(npz) as f:
                 g = f["grids"]
-        except (OSError, ValueError, KeyError):
+        except (OSError, ValueError, KeyError, EOFError, zipfile.BadZipFile) as e:
+            if isinstance(e, (EOFError, zipfile.BadZipFile)):     # (damaged: removed, computed again; colormatch's)
+                try:
+                    os.remove(npz)
+                except OSError:
+                    pass
             with self._lock:            # evicted from the disk cache (cache.py): computed again
                 self._params.pop(rk, None)
             return None
@@ -926,6 +945,14 @@ class Deshadow:
                     return
                 _, _, rk = heapq.heappop(self._queue)
             pacer.idle()                # the wait above was not busy time
+            got = self._read_params(rk)     # (built before: on disk)
+            if got is not None:
+                with self._lock:
+                    self._params[rk] = got
+                    ev = self._events.pop(rk, None)
+                if ev is not None:
+                    ev.set()
+                continue
             try:
                 P, grids = self._compute(rk)
             except Exception as e:      # network / DEM trouble: tried again later

@@ -31,7 +31,7 @@ local credits = require('beamngEarth/credits')
 local places = require('beamngEarth/places')
 
 M.FILE = '/settings/beamngEarth.json'
-M.VERSION = 1
+M.VERSION = 2     -- 2: town signs on by default (a version-1 file's townSigns = false was the old default: on)
 M.BUTTON_ID = 'beamngEarth-settings' -- index.js: the pause tab's first page button (earthSettingsStore.js pageId)
 M.LEVEL_ID = 'beamng_earth'
 
@@ -48,6 +48,10 @@ M.SCHEMA = {
   treeDistance = { kind = 'enum', default = 'normal', values = { 'nearest', 'near', 'medium', 'normal', 'far', 'farther', 'max' },
     label = 'Tree draw distance' },
   nightLights = { kind = 'enum', default = 'normal', values = { 'few', 'normal', 'many' }, label = 'Street lamp lights' },
+  -- the road surface's wear (server roadwear.py, the message road_wear): off; basic (tyre polish in the lanes, a concrete
+  -- road's joints, grassy edges on country roads: three materials at most); full (also cracks, sealed cracks, patches, potholes, manholes, oil spots, autumn leaves). Part of the
+  -- road mesh: no objects of their own
+  roadDetail = { kind = 'enum', default = 'full', values = { 'off', 'basic', 'full' }, label = 'Road surface detail' },
   distantTraffic = { kind = 'bool', default = false, label = 'Distant traffic lights' },    -- (off by default: its fps cost, PR #641)
   distantTrafficWithoutTraffic = { kind = 'bool', default = false, label = 'Distant lights without traffic' },
   distantTrafficQuality = { kind = 'enum', default = 'high', values = { 'low', 'medium', 'high' },
@@ -55,6 +59,10 @@ M.SCHEMA = {
   -- the far field's terrain detail: the server's K table times M.TERRAIN_DETAIL (the 'graphics' message's lodScale)
   terrainDetail = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high', 'ultra', 'extreme' },
     label = 'Terrain detail' },
+  -- the far field's screen-space LOD (the 'graphics' message's lodPx; server farfield.View): the largest jump of the
+  -- distant ground allowed on screen when a piece switches detail, in pixels of this screen and field of view. 0: off
+  -- (the distance rule above alone); with it on, smooth ground stays coarser and rough ground finer to keep under it
+  lodPx = { kind = 'number', default = 0, min = 0, max = 8, label = 'Terrain pixel error (px, 0: off)' },
   -- how far the far buildings, the skyline and the far bridges reach (M.BUILDING_DISTANCE: buildingScale)
   buildingDistance = { kind = 'enum', default = 'normal', values = { 'near', 'normal', 'far', 'max' },
     label = 'Building draw distance' },
@@ -77,6 +85,8 @@ M.SCHEMA = {
   clouds = { kind = 'bool', default = true, label = 'Clouds' },
   weatherMode = { kind = 'enum', default = 'real', values = { 'real', 'manual' }, label = 'Weather' },
   realGravity = { kind = 'bool', default = true, label = 'Real gravity' },
+  -- the station finder's prompt when the fuel or charge runs low (finder.lua; the user, 2026-11-09)
+  lowFuelPrompt = { kind = 'bool', default = true, label = 'Low fuel prompt' },
   -- grass and shrubs on the surface layers (groundcover.lua; needs the server's --surface on)
   groundCover = { kind = 'bool', default = true, label = 'Grass and shrubs' },
   groundCoverDensity = { kind = 'enum', default = 'normal', values = { 'low', 'normal', 'high' }, label = 'Grass density' },
@@ -85,12 +95,18 @@ M.SCHEMA = {
   -- roads near the player (roads.lua; the server's --roads on)
   roads = { kind = 'bool', default = true, label = 'Roads' },
   -- exit, overhead and merge signs and Interstate mile markers along highways (roads.lua sign tiles; server
-  -- signstream.py, from cody196's PR #363); needs Roads
+  -- signstream.py, from cody196's PR #363), and the German Autobahn signs (server deautobahn.py); needs Roads
   highwaySigns = { kind = 'bool', default = true, label = 'Highway signs' },
   -- the 3D models of landmarks from the open library 3dmr.eu (server threedmr.py; cpupin.player_settings reads it from
   -- this file when the server starts): off leaves the procedural buildings there, the player's own local models stay
   models3dmr = { kind = 'bool', default = true, label = '3D models from 3dmr.eu' },
   directionSigns = { kind = 'bool', default = true, label = 'Direction signs' },
+  -- the town entry and exit signs where a road enters a town's built-up land, each country's own (server townentry.py;
+  -- the message town_signs; BNE_TOWNSIGNS=on / off forces it)
+  townSigns = { kind = 'bool', default = true, label = 'Town signs' },
+  -- the traffic's amount by the place (navgraph.lua M.ADAPTIVE, server traffic.py; PR #728 / #773, ProxyFirewall202):
+  -- more cars in cities, fewer in the country, never more than the player's own amount
+  adaptiveTraffic = { kind = 'bool', default = false, label = 'Adaptive traffic amount' },
   -- anonymous usage statistics (server telemetry.py: players online, data-source load; the server reads this file
   -- before every report, cpupin.player_settings, so the switch holds from the next report on, even at its start)
   telemetry = { kind = 'bool', default = true, label = 'Anonymous usage statistics' },
@@ -101,6 +117,11 @@ M.SCHEMA = {
   telemetryChoice = { kind = 'number', default = 0, min = 0, max = 1000, label = 'Telemetry choice made (version)' },
   -- what the map key opens (map3d.lua; the user, 2026-11-07: "keep the 2d map and let players choose between the 2")
   mapStyle = { kind = 'enum', default = '2d', values = { '2d', '3d' }, label = 'Map style' },
+  -- ordinary road signs (server roadsigns.py, needs BNE_ROADSIGNS=on on the server)
+  roadSigns = { kind = 'bool', default = true, label = 'Road signs' },
+  -- in Germany: the German right-of-way signs and markings at junctions, 30-zone signs and traffic that gives way
+  -- accordingly (server designs.py; the message german_junctions)
+  germanJunctionSigns = { kind = 'bool', default = false, label = 'German junction signs' },
   -- Earth imagery on supported vehicle dashboard screens (dashboard.lua)
   dashboardSatellite = { kind = 'bool', default = true, label = 'Satellite on dashboard screens' },
   hudVisible = { kind = 'bool', default = false, label = 'Status HUD at level start' },
@@ -143,10 +164,10 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
-  'grassDistance', 'nightLights', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
+M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'lodPx', 'groundPhoto', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+  'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
-  'weatherMode', 'realGravity', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'models3dmr',
+  'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'townSigns', 'adaptiveTraffic', 'models3dmr',
   'dashboardSatellite',
   'hudVisible', 'statusBar', 'profilerMode', 'runtimeProfiler',
   'placeNamesOnline', 'telemetry', 'telemetryPerf', 'telemetryNet', 'mapStyle', 'creditsVisible', 'beammpOnLaunch',
@@ -162,23 +183,26 @@ M.HIDDEN = { welcomeSeen = true, updateDismissed = true, devNoticeSeen = true, q
 -- quality setting that puts everything at max quality to the real horizon"): every knob at its most, never picked by
 -- the first run (M.detectQuality).
 M.PRESET_KEYS = { 'trees', 'treeDistance', 'groundCover', 'groundCoverDensity', 'grassDistance', 'rocks', 'nightLights', 'distantTrafficQuality',
-  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail' }
+  'viewDistanceMode', 'viewDistanceKm', 'terrainDetail', 'buildingDistance', 'groundPhoto', 'objectDetail', 'roadDetail' }
 M.PRESETS = {
   low = { trees = 'low', treeDistance = 'near', groundCover = false, groundCoverDensity = 'low', grassDistance = 'near',
     rocks = true, nightLights = 'few', viewDistanceMode = 'fixed', viewDistanceKm = 40, terrainDetail = 'low',
-    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low' },
+    buildingDistance = 'near', groundPhoto = '1024', objectDetail = 'game', distantTrafficQuality = 'low', roadDetail = 'off' },
   medium = { trees = 'medium', treeDistance = 'medium', groundCover = true, groundCoverDensity = 'low',
     grassDistance = 'normal', rocks = true, nightLights = 'few', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'medium',
+    roadDetail = 'basic' },
   high = { trees = 'normal', treeDistance = 'normal', groundCover = true, groundCoverDensity = 'normal',
     grassDistance = 'normal', rocks = true, nightLights = 'normal', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high' },
+    terrainDetail = 'normal', buildingDistance = 'normal', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high',
+    roadDetail = 'full' },
   ultra = { trees = 'high', treeDistance = 'far', groundCover = true, groundCoverDensity = 'high', grassDistance = 'normal',
     rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100, terrainDetail = 'high',
-    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high' },
+    buildingDistance = 'far', groundPhoto = '2048', objectDetail = 'game', distantTrafficQuality = 'high', roadDetail = 'full' },
   extreme = { trees = 'extreme', treeDistance = 'max', groundCover = true, groundCoverDensity = 'high',
     grassDistance = 'far', rocks = true, nightLights = 'many', viewDistanceMode = 'horizon', viewDistanceKm = 100,
-    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high' },
+    terrainDetail = 'extreme', buildingDistance = 'max', groundPhoto = '4096', objectDetail = 'extreme', distantTrafficQuality = 'high',
+    roadDetail = 'full' },
 }
 M.PRESET_ORDER = { 'low', 'medium', 'high', 'ultra', 'extreme' }
 
@@ -268,6 +292,9 @@ function M.load(path)
       end
     end
     M.fillNewKnobs(data)
+    -- (town signs became on by default with version 2, the user 2026-11-10: a file from before had false as the
+    -- old default, not as a choice; once saved as version 2 the player's own setting stands)
+    if (tonumber(data.version) or 1) < 2 and data.townSigns == false then values.townSigns = true end
   elseif ok and data ~= nil then
     warnings[#warnings + 1] = 'settings file is not an object'
   elseif not ok and data ~= nil then
@@ -414,13 +441,14 @@ local function applyViewDistance()
   appliedView = m
 end
 
--- The server's graphics knobs now ({ lodScale, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
+-- The server's graphics knobs now ({ lodScale, lodPx, treeScale, buildingScale, photoPx, viewM }: core.sendGraphics). photoPx: the
 -- ground photo size of the block in the level now, or of the next one (terrain.photoSize).
 function M.serverGraphics()
   local okT, trees = pcall(require, 'beamngEarth/trees')
   local okR, terrain = pcall(require, 'beamngEarth/terrain')
   return {
     lodScale = M.TERRAIN_DETAIL[values.terrainDetail] or 1.0,
+    lodPx = tonumber(values.lodPx) or 0,
     treeScale = okT and trees.distanceScale and trees.distanceScale(values.treeDistance) or 1.0,
     buildingScale = M.BUILDING_DISTANCE[values.buildingDistance] or 1.0,
     photoPx = okR and terrain.photoSize and terrain.photoSize() or tonumber(values.groundPhoto),
@@ -473,6 +501,7 @@ M.APPLY = {
     sendGraphics()          -- (the server's tree tiles reach as far)
   end,
   terrainDetail = sendGraphics,
+  lodPx = sendGraphics,
   buildingDistance = sendGraphics,
   groundPhoto = function(v)
     require('beamngEarth/terrain').setPhotoSize(tonumber(v))
@@ -495,6 +524,23 @@ M.APPLY = {
     local core = ext('beamngEarth_core')
     if core and core.setDirectionSigns then core.setDirectionSigns(v) end
   end,
+  roadSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setRoadSigns then core.setRoadSigns(v) end
+  end,
+  germanJunctionSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setGermanJunctionSigns then core.setGermanJunctionSigns(v) end
+  end,
+  roadDetail = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setRoadWear then core.setRoadWear(v) end
+  end,
+  townSigns = function(v)
+    local core = ext('beamngEarth_core')
+    if core and core.setTownSigns then core.setTownSigns(v) end
+  end,
+  adaptiveTraffic = function(v) require('beamngEarth/navgraph').setAdaptive(v) end,
   roads = function(v)
     local core = ext('beamngEarth_core')
     if core and core.setRoadsEnabled then core.setRoadsEnabled(v) else require('beamngEarth/roads').setEnabled(v) end
@@ -824,9 +870,14 @@ local function localWeatherBadge()
   local okW, weather = pcall(require, 'beamngEarth/weather')
   local m = okW and weather.current and weather.current()
   if not (sst and sst.localTime) and not m then return nil end
+  -- night: the game's sun under the horizon (its own clock: Real or Manual), else the weather message's isDay
+  local night = nil
+  if sst and sst.sunElev then night = sst.sunElev < sky.NIGHT_ELEV_DEG
+  elseif m and m.isDay ~= nil then night = not m.isDay end
   return {
     localTime = sst and sst.localTime or nil,
     code = m and m.code or nil,
+    night = night,
     tempC = m and (m.tempC or m.slTempC) or nil,
     metric = require('beamngEarth/gps').metric(),      -- (the game's unit: the badge's °C or °F)
   }
@@ -855,6 +906,12 @@ function M.uiMapState()
 end
 
 -- Teleport from the map (the page asked "Teleport here?" first); recorded in the recent places.
+-- The map's "Teleport here?" box opened (or a search result picked): load the place ahead (core.preloadPlace).
+function M.uiMapPreload(lat, lon)
+  local core = ext('beamngEarth_core')
+  return { ok = core ~= nil and core.preloadPlace ~= nil and core.preloadPlace(tonumber(lat), tonumber(lon)) or false }
+end
+
 function M.uiMapTeleport(lat, lon, name)
   local ok, why = places.goTo(lat, lon, name)
   return { ok = ok and true or false, error = (not ok) and why or nil }
@@ -875,6 +932,26 @@ end
 -- The GPS's planned route for the map's line: { version, points = {{lat, lon}...}, dist, dur } or nil.
 function M.uiGpsRoute()
   return require('beamngEarth/gps').route()
+end
+
+-- The station finder's map layers (finder.lua, server stationindex.py): ask (lat, lon, rKm, kinds {'fuel', 'ev'}, mode
+-- 'map' | 'near' -> { id } or { error }) and poll (id -> nil while waiting, else { items = {{lat, lon, name, brand,
+-- kind, km}...}, partial, error }); Nearest for the car (the GPS set to it, a message saying where).
+function M.uiStations(lat, lon, rKm, kinds, mode)
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  local id, err = f.send(tonumber(lat), tonumber(lon), tonumber(rKm), kinds, mode == 'near' and 'near' or 'map')
+  return id and { id = id } or { error = err }
+end
+function M.uiStationsResult(id)
+  local f = ext('beamngEarth_finder')
+  return f and f.take(tonumber(id)) or nil
+end
+function M.uiNearest()
+  local f = ext('beamngEarth_finder')
+  if not f then return { error = 'BeamNG.Earth is not loaded' } end
+  f.nearest()
+  return { ok = true }
 end
 
 -- The map's search-as-you-type: send (q -> { id } or { error }) and poll (id -> nil while waiting, else

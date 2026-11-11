@@ -72,6 +72,54 @@ FETCH_THREADS = 8               # parallel range requests per Reader (Overture's
 FOOTER_GUESS = 256 * 1024       # bytes read from a file's end first for its footer (one block)
 MERGE_GAP = 64 * 1024           # column chunks closer than this are fetched in one range
 BASE_COLUMNS = {"id", "geometry", "bbox", "sources", "version"}
+_PLAN = threading.local()           # (_plan's last: the top-level columns its matched row groups hold, for tolerant)
+_DROPPED_WARNED = set()
+
+
+def _top_items(s):
+    """s's comma-separated items at parenthesis depth 0."""
+    out, depth, cur = [], 0, []
+    for ch in s:
+        if ch in "([":
+            depth += 1
+        elif ch in ")]":
+            depth -= 1
+        if ch == "," and depth == 0:
+            out.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    out.append("".join(cur))
+    return out
+
+
+def tolerant(spec, present, layer=""):
+    """spec with each plain column its files do not have (present: the row groups' top-level columns) read as NULL AS
+    it (research 2026-11-10: Overture's schema issue #698 proposes moving level, min_floor and roof_direction out of the
+    core schema; a column named that a release dropped failed every fresh cell's read). Expressions are left as they
+    are. spec itself when nothing is missing or present is unknown."""
+    if not present:
+        return spec
+    out, missing = dict(spec), []
+    for key in ("cols", "extra"):
+        if not spec.get(key):
+            continue
+        items = []
+        for it in _top_items(spec[key]):
+            name = it.strip()
+            if re.fullmatch(r"[A-Za-z_]\w*", name) and name not in present and name not in BASE_COLUMNS:
+                items.append(f" NULL AS {name}")
+                missing.append(name)
+            else:
+                items.append(it)
+        out[key] = ",".join(items)
+    if not missing:
+        return spec
+    for name in missing:
+        if (layer, name) not in _DROPPED_WARNED:
+            _DROPPED_WARNED.add((layer, name))
+            log.warning("mapdata %s: the release has no column %s: read as empty", layer, name)
+    return out
 
 # Overture's attribution (https://docs.overturemaps.org/attribution/, read 2026-10-11): the line its
 # own viewer shows, and each theme's licence with the sources that ask for credit, whole (the CC BY
@@ -167,12 +215,17 @@ LAYERS = {
                       bool=("is_underground", "has_parts")),
     # parts of buildings (towers on podiums, setbacks): each its own height range; buildings.py draws a
     # building's parts in place of its footprint (has_parts)
+    # (and their own materials and roof direction, research 2026-11-10: Manhattan's parts 40.6 % / 68.4 % with their
+    # own facade / roof material, drawn with the building's; no layer version bump: cells fetched from now on have
+    # them, the cached ones with the next release bump, buildings.PART_OWN reading what a cell has)
     "building_parts": dict(theme="buildings", type="building_part", clip=False,
                            cols=f"building_id, {_SRC}, height, min_height, num_floors, min_floor, roof_shape, "
-                                "roof_height, facade_color, roof_color",
+                                "roof_height, facade_color, roof_color, facade_material, roof_material, "
+                                "roof_direction, roof_orientation",
                            text=("building_id", "src_dataset", "src_record", "roof_shape", "facade_color",
-                                 "roof_color"),
-                           float=("height", "min_height", "num_floors", "min_floor", "roof_height")),
+                                 "roof_color", "facade_material", "roof_material", "roof_orientation"),
+                           float=("height", "min_height", "num_floors", "min_floor", "roof_height",
+                                  "roof_direction")),
     "water": dict(theme="base", type="water", clip=True,
                   cols=f"subtype, class, {_NAME}, {_SRC}, level, is_salt, is_intermittent, {_TAGS}",
                   text=("subtype", "class", "name", "src_dataset", "src_record", "tags"),
@@ -556,7 +609,8 @@ class Reader:
             if not rows:
                 return empty(layer), {}         # no row of these files lies in the cell
             t2 = time.perf_counter()
-            out = self._run(con, proto, paths, layer, spec, bounds, rows, files, kind)
+            out = self._run(con, proto, paths, layer, tolerant(spec, getattr(_PLAN, "present", None), layer), bounds,
+                            rows, files, kind)
             log.debug("mapdata %s %s: index %.2f s, plan %.2f s, query %.2f s", layer, cell, t1 - t0, t2 - t1,
                       time.perf_counter() - t2)
             return out
@@ -716,6 +770,7 @@ class Reader:
             t = x0.dtype.type
             if np.any((x0 <= t(lon1)) & (x1 >= t(lon0)) & (y0 <= t(lat1)) & (y1 >= t(lat0))):
                 matched.add(k)
+        _PLAN.present = {top for k in matched for top in groups[k]["cols"]} if matched else None
         used = set(re.findall(r"[A-Za-z_]+", " ".join((spec["cols"], spec.get("extra", ""), spec.get("where", "")))))
         used |= BASE_COLUMNS - ({"geometry"} if spec.get("geometry") is False else set())
         wanted = {}

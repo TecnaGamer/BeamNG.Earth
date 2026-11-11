@@ -99,7 +99,7 @@ macro_rules! row_sums_py {
                 || sn.len() < nmax + 1 || ls.len() < nmax + 1 || every == 0 {
                 return Err(pyo3::exceptions::PyValueError::new_err("gravity_row_sums: inconsistent tables"));
             }
-            let (out, zon) = py.allow_threads(|| row_sums(t, u, lam, ra, rb, cs, ncol, off, sn, ls, every, rescale,
+            let (out, zon) = py.detach(|| row_sums(t, u, lam, ra, rb, cs, ncol, off, sn, ls, every, rescale,
                                                           nzonal, nmax));
             let nz = zon.len() / 2;
             let a3 = numpy::ndarray::Array3::from_shape_vec((nmax + 1, 2, ncol), out).unwrap();

@@ -24,6 +24,9 @@ import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+# (what it plans goes to other players: never with Hong Kong's measured heights or terrain, roadz.hk_cell)
+os.environ["BNE_ROADZ_HK"] = "off"
+os.environ["BNE_HKDTM"] = "off"
 
 log = logging.getLogger("earthd.sharehelper")
 

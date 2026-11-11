@@ -16,7 +16,7 @@ except ImportError:         # no binary for this platform / Python: require() sa
     _ef = None
 
 AVAILABLE = _ef is not None
-MIN_VERSION = 168 # the newest kernel signature the server calls (earthd checks it at start)
+MIN_VERSION = 210 # the newest kernel signature the server calls (earthd checks it at start)
 
 
 class NativeMissing(RuntimeError):
@@ -133,3 +133,126 @@ def md_html(text, base, fold_details=False):
     mdhtml.rs: our own tags only, links as indexes into the URL list; addons.py)."""
     require(166, "md_html")
     return _ef.md_html(str(text), str(base), bool(fold_details))
+
+
+def _rows(parts):
+    """(rows (n, 2) float64 contiguous, offsets (k + 1,) int64) of polylines (m, 2+)."""
+    pts = [np.asarray(p, np.float64).reshape(len(p), -1)[:, :2] for p in parts]
+    off = np.r_[0, np.cumsum([len(p) for p in pts])].astype(np.int64)
+    return np.ascontiguousarray(np.concatenate(pts) if pts else np.zeros((0, 2))), off
+
+
+class DeckMerge:
+    """roads._merge_overlaps' pair pulls (native deckmerge.rs): lines (deck parts (k, 2+)), widths (m), pairs [(i, j)]
+    of related parts, dual[p]: the pair's parts are one level's (the lower lifted to the higher)."""
+
+    def __init__(self, lines, widths, pairs, dual, touch, dual_m):
+        require(169, "deck_merge_round")
+        self.xy, self.off = _rows(lines)
+        self.widths = np.ascontiguousarray(np.asarray(widths, np.float64))
+        self.pairs = np.ascontiguousarray(np.asarray(pairs, np.int64).reshape(-1, 2))
+        self.dual = np.ascontiguousarray(np.asarray([bool(d) for d in dual], np.uint8))
+        self.touch, self.dual_m = float(touch), float(dual_m)
+
+    def round(self, zs):
+        """([acc], [cnt], [up]) per part, one value per height of zs: the pairs' weighted heights of the other part
+        (acc), their weights (cnt) and the lift of one level's twin carriageways (up)."""
+        z = [np.asarray(v, np.float64) for v in zs]
+        zoff = np.r_[0, np.cumsum([len(v) for v in z])].astype(np.int64)
+        acc, cnt, up = _ef.deck_merge_round(self.xy, self.off, np.ascontiguousarray(np.concatenate(z) if z else
+                                                                                      np.zeros(0)), zoff,
+                                            self.widths, self.pairs, self.dual, self.touch, self.dual_m)
+        cut = lambda a: [a[zoff[k]:zoff[k + 1]] for k in range(len(z))]      # noqa: E731
+        return cut(acc), cut(cnt), cut(up)
+
+
+def deck_ground_pins(ends, ground_lines, pin_road_m, pin_m):
+    """(m, 2): of the deck ends (e, 2) the joints (another end within 0.5 m) an end of a ground line (k, 2+)
+    pin_road_m or longer lies within pin_m of, per line and its first then last end (roads._ground_pins)."""
+    require(169, "deck_ground_pins")
+    gl, goff = _rows(ground_lines)
+    return _ef.deck_ground_pins(np.ascontiguousarray(np.asarray(ends, np.float64).reshape(-1, 2)), gl, goff,
+                                float(pin_road_m), float(pin_m))
+def ucs4(values):
+    """values (a numpy unicode array, else each one's str) as (n, width) uint32: its UCS-4 code points, NUL padded
+    (the native string kernels' input: no Python string per value)."""
+    a = np.asarray(values)
+    if a.dtype.kind != "U":
+        a = np.array([str(v) for v in a.tolist()], dtype=str)
+    a = np.ascontiguousarray(a.reshape(-1), a.dtype.newbyteorder("="))
+    w = a.dtype.itemsize // 4
+    return a.view(np.uint32).reshape(len(a), w) if w else np.zeros((len(a), 0), np.uint32)
+
+
+def way_tag_rows(codes, ids, idx):
+    """(n,) int64 per record (codes: ucs4 of Overture source records, "w<id>@<version>") the tag set index of its way in
+    a lane / rail shard (railtags.Ways: its sorted ids, their tag set indices): -1 without a way id or not in the
+    shard, -2 for railtags.way_id to decide (non-ASCII after the digits, past int64). Native waytags.rs."""
+    require(169, "way_tag_rows")
+    return _ef.way_tag_rows(codes, np.ascontiguousarray(ids, np.int64), np.ascontiguousarray(idx, np.int32))
+
+
+def lane_parts(codes, feature, start, end, ids, idx, tags, ask):
+    """railtags.LaneTags.join's parts (native waytags.rs): (features (f,), [[(start, end, way id, tags), ...] each])
+    of the rule rows codes (ucs4 of their records) of features feature (sorted), tags the shard's tag sets (its
+    tags[k] or a new {} without), ask(k) -> (way id, tags) where railtags.way_id decides."""
+    require(169, "lane_parts")
+    return _ef.lane_parts(codes, np.ascontiguousarray(feature, np.int64), np.ascontiguousarray(start, np.float64),
+                          np.ascontiguousarray(end, np.float64), np.ascontiguousarray(ids, np.int64),
+                          np.ascontiguousarray(idx, np.int32), tags, ask)
+
+
+def rail_seam_couple(xy, z, half, rxy, rz, off, rh, reach, slope, tol, max_move, grade):
+    """railroadseam.couple's native work (railseam.rs): the moved bed heights (n,), or None when nothing moved. The
+    roads flattened: their points rxy (m, 2), heights rz (m,), road r = rows off[r]:off[r + 1], half widths rh."""
+    require(172, "rail_seam_couple")
+    return _ef.rail_seam_couple(np.ascontiguousarray(xy, np.float64), np.ascontiguousarray(z, np.float64), float(half),
+                                np.ascontiguousarray(rxy, np.float64), np.ascontiguousarray(rz, np.float64),
+                                np.ascontiguousarray(off, np.int64), np.ascontiguousarray(rh, np.float64), float(reach),
+                                float(slope), float(tol), float(max_move), float(grade))
+
+
+def _lines_flat(lines):
+    """(off (n + 1,) int64, xy (m, 2), half (n,)) of [(line (k, 2+), half width)]."""
+    xy = [np.asarray(ln, np.float64)[:, :2] for ln, _h in lines]
+    off = np.r_[0, np.cumsum([len(a) for a in xy])].astype(np.int64)
+    return (off, np.ascontiguousarray(np.concatenate(xy) if xy else np.zeros((0, 2)), np.float64),
+            np.array([float(h) for _ln, h in lines], np.float64))
+
+
+def deck_ground_probe(lines, step, offs, fix, dirs, reach):
+    """grading's bridges-in-the-elevation probe (deckground.rs): the sample points (m, 2) of lines [(line, half)]."""
+    require(190, "deck_ground_probe")
+    off, xy, half = _lines_flat(lines)
+    return _ef.deck_ground_probe(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                                 np.asarray(dirs, np.float64), float(reach))
+
+
+def deck_ground_fit(lines, step, offs, fix, dirs, reach, z, masks, mask_of, slope, t0, t1, mask_m):
+    """deckground.rs: (active (n,) bool, station offsets of the active decks (a + 1,), their rows (m, 6)) from the
+    probe's heights z; masks [(line, half)], deck i's being masks[j] for j in mask_of[i]."""
+    require(190, "deck_ground_fit")
+    off, xy, half = _lines_flat(lines)
+    moff, mxy, mhalf = _lines_flat(masks)
+    mo = np.r_[0, np.cumsum([len(m) for m in mask_of])].astype(np.int64)
+    mi = np.array([j for m in mask_of for j in m], np.int64)
+    return _ef.deck_ground_fit(off, xy, half, float(step), np.asarray(offs, np.float64), np.asarray(fix, np.float64),
+                               np.asarray(dirs, np.float64), float(reach), np.ascontiguousarray(z, np.float64),
+                               moff, mxy, mhalf, mo, mi, float(slope), float(t0), float(t1), float(mask_m))
+
+
+def deck_ground_apply(e, n, base, off, xy, half, soff, rows, blend, end):
+    """deckground.rs: base (n,) lowered under the corrected decks, or None when nothing changes."""
+    require(190, "deck_ground_apply")
+    return _ef.deck_ground_apply(np.ascontiguousarray(e, np.float64), np.ascontiguousarray(n, np.float64),
+                                 np.ascontiguousarray(base, np.float64), off, xy, half, soff, rows, float(blend),
+                                 float(end))
+
+
+def deck_capped(pts, z, la, box, test_box, flat, max_m, side_m, min_cross):
+    """grading.deck_capped's native work (underdeck.rs): (code, out) with code 0 z as it is, 1 z as float64, 2 out."""
+    require(169, "deck_capped")
+    off, q, sv, lb, half = flat
+    return _ef.deck_capped(pts, np.ascontiguousarray(z, np.float64), np.ascontiguousarray(la, np.float64),
+                           np.ascontiguousarray(box, np.float64), bool(test_box), off, q, sv,
+                           np.ascontiguousarray(lb, np.float64), half, float(max_m), float(side_m), float(min_cross))

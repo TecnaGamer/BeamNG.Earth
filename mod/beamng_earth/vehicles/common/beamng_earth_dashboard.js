@@ -4,7 +4,17 @@
   const canvas = document.getElementById('map');
   const ctx = canvas.getContext('2d', { alpha: false });
   const view = { pixelX: null, pixelY: null, zoom: null, heading: 0, attribution: '', status: '' };
-  let tiles = [];
+  // The tiles of the last few zoom levels (zoom -> tiles), each drawn scaled to the zoom shown: a speed change's new
+  // level appears over the old one as its tiles load, and the zoom shown eases to the new level (ZOOM_TAU_S) instead
+  // of jumping. Before (2026-11-08) only the newest level's tiles were kept, drawn at their own scale: the screen went
+  // blank grey at every zoom step until the new tiles had loaded (the user: "it will flash grey when switching
+  // between zoom levels instead of a smooth zoom out").
+  const layers = new Map();
+  const KEEP_LEVELS = 3;          // levels kept either side of the newest
+  const ZOOM_TAU_S = 0.12;        // s: the zoom shown approaches the view's (~95 % in 0.36 s)
+  let shownZoom = null;           // the zoom drawn (fractional while easing)
+  let lastFrame = 0;
+  let animating = false;
   let pixelRatio = 1;
 
   function resize() {
@@ -16,8 +26,10 @@
   }
 
   function setTiles(data) {
-    const old = new Map(tiles.map((tile) => [tile.src, tile.image]));
-    tiles = [];
+    const zoom = data && Number.isFinite(data.zoom) ? data.zoom : (view.zoom !== null ? view.zoom : 0);
+    const old = new Map();
+    for (const list of layers.values()) for (const tile of list) old.set(tile.src, tile.image);
+    const list = [];
     for (const item of (data && Array.isArray(data.tiles) ? data.tiles : [])) {
       if (!item || typeof item.src !== 'string') continue;
       const image = old.get(item.src) || new Image();
@@ -26,9 +38,31 @@
         image.onerror = render;
         image.src = item.src;
       }
-      tiles.push({ x: item.x, y: item.y, src: item.src, image: image });
+      list.push({ x: item.x, y: item.y, src: item.src, image: image });
+    }
+    // (an empty list keeps the level's tiles: tiles not ready yet are not tiles gone)
+    if (list.length || !layers.has(zoom)) layers.set(zoom, list);
+    for (const z of Array.from(layers.keys())) {
+      if (Math.abs(z - zoom) > KEEP_LEVELS) layers.delete(z);
     }
     render();
+  }
+
+  function frame(t) {
+    animating = false;
+    render(t);
+  }
+
+  // the zoom shown, a step nearer the view's (t: requestAnimationFrame's ms); true while still easing
+  function easeZoom(t) {
+    if (view.zoom === null) { shownZoom = null; return false; }
+    const now = Number.isFinite(t) ? t : (window.performance ? performance.now() : Date.now());
+    const dt = lastFrame ? Math.min(0.1, Math.max(0, (now - lastFrame) / 1000)) : 0;
+    lastFrame = now;
+    if (shownZoom === null || Math.abs(view.zoom - shownZoom) > KEEP_LEVELS) shownZoom = view.zoom;
+    else shownZoom += (view.zoom - shownZoom) * (1 - Math.exp(-dt / ZOOM_TAU_S));
+    if (Math.abs(view.zoom - shownZoom) < 0.002) shownZoom = view.zoom;
+    return shownZoom !== view.zoom;
   }
 
   function setView(data) {
@@ -67,7 +101,7 @@
   }
 
   function drawTiles(centerX, centerY, mapHeight) {
-    if (view.pixelX === null || view.pixelY === null || view.zoom === null) return 0;
+    if (view.pixelX === null || view.pixelY === null || view.zoom === null || shownZoom === null) return 0;
     let drawn = 0;
     ctx.save();
     ctx.beginPath();
@@ -76,13 +110,23 @@
     ctx.translate(centerX, centerY);
     ctx.rotate(-view.heading * Math.PI / 180);
     ctx.translate(-centerX, -centerY);
-    for (const tile of tiles) {
-      const image = tile.image;
-      if (!image || !image.complete || !image.naturalWidth) continue;
-      const x = centerX + tile.x * 256 - view.pixelX;
-      const y = centerY + tile.y * 256 - view.pixelY;
-      ctx.drawImage(image, x, y, 256, 256);
-      drawn++;
+    // the car's place at the zoom shown (view.pixelX/Y are at the view's whole zoom)
+    const k = Math.pow(2, shownZoom - view.zoom);
+    const cx = view.pixelX * k;
+    const cy = view.pixelY * k;
+    // the farthest level first, the level nearest the zoom shown on top
+    const order = Array.from(layers.keys()).sort((a, b) => Math.abs(b - shownZoom) - Math.abs(a - shownZoom));
+    for (const z of order) {
+      const size = 256 * Math.pow(2, shownZoom - z);
+      for (const tile of layers.get(z)) {
+        const image = tile.image;
+        if (!image || !image.complete || !image.naturalWidth) continue;
+        const x = centerX + tile.x * size - cx;
+        const y = centerY + tile.y * size - cy;
+        // (a hair larger: no seams between scaled tiles)
+        ctx.drawImage(image, x, y, size + 0.5, size + 0.5);
+        drawn++;
+      }
     }
     ctx.restore();
     return drawn;
@@ -105,21 +149,35 @@
     ctx.restore();
   }
 
-  function render() {
+  function render(t) {
     const width = canvas.clientWidth;
     const height = canvas.clientHeight;
     if (!width || !height) return;
+    if (easeZoom(t) && !animating) {
+      animating = true;
+      window.requestAnimationFrame(frame);
+    }
     ctx.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
     ctx.fillStyle = '#111';
     ctx.fillRect(0, 0, width, height);
 
     ctx.font = '6px sans-serif';
-    const status = view.status || (view.pixelX === null ? 'Waiting for satellite map' : '');
-    const statusHeight = status ? 10 : 0;
     const centerX = width / 2;
-    const mapHeight = Math.max(1, height - statusHeight);
-    const centerY = mapHeight / 2;
-    const drawn = drawTiles(centerX, centerY, mapHeight);
+    let status = view.status || (view.pixelX === null ? 'Waiting for satellite map' : '');
+    let statusHeight = status ? 10 : 0;
+    let mapHeight = Math.max(1, height - statusHeight);
+    let centerY = mapHeight / 2;
+    let drawn = drawTiles(centerX, centerY, mapHeight);
+    if (drawn && /loading/i.test(status)) {
+      // (a zoom step's new tiles still loading while the last level's show: no status bar flashing over them)
+      status = '';
+      statusHeight = 0;
+      mapHeight = height;
+      centerY = mapHeight / 2;
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, width, height);
+      drawn = drawTiles(centerX, centerY, mapHeight);
+    }
     if (view.pixelX !== null) drawPlayer(centerX, centerY);
 
     if (status) {

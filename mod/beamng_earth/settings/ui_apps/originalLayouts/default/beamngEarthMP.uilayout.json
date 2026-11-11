@@ -157,16 +157,6 @@
         "width": "560px",
         "height": "64px"
       }
-    },
-    {
-      "appName": "beamngEarthAltitude",
-      "placement": {
-        "bottom": "445px",
-        "height": "86px",
-        "position": "absolute",
-        "right": "5px",
-        "width": "190px"
-      }
     }
   ]
 }

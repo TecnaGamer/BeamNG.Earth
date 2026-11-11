@@ -62,7 +62,7 @@ pub fn keys_in_boxes(py: Python<'_>, keys: Vec<String>, boxes: Vec<(f64, f64, f6
         let (xb, yb) = norm(s, e);
         (xa, ya, xb, yb)
     }).collect();
-    py.allow_threads(|| keys.iter().map(|k| {
+    py.detach(|| keys.iter().map(|k| {
         let Some((z, x, y, _)) = tail_tile(k, 0) else { return false };
         let size = 1.0 / (1u64 << z) as f64;
         let (tx0, ty0) = (x as f64 * size, y as f64 * size);
@@ -266,7 +266,7 @@ pub fn keys_in_cover(py: Python<'_>, keys: Vec<String>, cover: Vec<(u8, u32, u32
         }
     }
     let zmin = exact.iter().map(|t| t.0).min().unwrap_or(0);
-    py.allow_threads(|| keys.iter().map(|k| {
+    py.detach(|| keys.iter().map(|k| {
         let Some((z, x, y, _)) = tail_tile(k, 0) else { return false };
         if up.contains(&(z, x, y)) {
             return true;

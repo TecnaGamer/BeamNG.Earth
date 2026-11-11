@@ -9,6 +9,7 @@ import collections
 import concurrent.futures
 import functools
 import logging
+import os
 import sys
 import runtimeprofiler
 import threading
@@ -58,17 +59,46 @@ def _named_init(name, init, *initargs):
         init(*initargs)
 
 
+# s a job may run in a worker before the worker writes every thread's stack to its stderr (the app's server.log), once,
+# without stopping it: a hung road process told where it hangs before the pool's watchdog restarts it (GitHub #1058:
+# four road processes stopped answering after a teleport, cause unknown). 0: off.
+HUNG_DUMP_S = float(os.environ.get("BNGE_HUNG_DUMP_S", "") or 240.0)
+
+
+def _arm_dump():
+    """faulthandler's stack dump after HUNG_DUMP_S, or False (off, or no stderr: pythonw)."""
+    if HUNG_DUMP_S <= 0:
+        return False
+    try:
+        import faulthandler
+        sys.stderr.fileno()
+        faulthandler.dump_traceback_later(HUNG_DUMP_S, repeat=False, file=sys.stderr)
+        return True
+    except Exception:
+        return False
+
+
 def _call(fn, args, kwargs):
     """A job in the worker, then its memory ceiling (budget.maybe_shed: on a small machine a worker over it drops its
-    caches between jobs)."""
-    try:
-        return fn(*args, **kwargs)
-    finally:
+    caches between jobs); never during an idle shed (budget.JOB_LOCK), whose clock it starts again. A job still running
+    after HUNG_DUMP_S writes the worker's stacks (_arm_dump)."""
+    import budget
+    armed = _arm_dump()
+    with budget.job_lock():
         try:
-            import budget
-            budget.maybe_shed()
-        except Exception:
-            pass
+            return fn(*args, **kwargs)
+        finally:
+            if armed:
+                try:
+                    import faulthandler
+                    faulthandler.cancel_dump_traceback_later()
+                except Exception:
+                    pass
+            try:
+                budget.job_ended()
+                budget.maybe_shed()
+            except Exception:
+                pass
 
 
 def _shedding(submit):
@@ -79,7 +109,7 @@ def _shedding(submit):
 class RespawningPool:
     """ProcessPoolExecutor(*args, **kwargs) made again when broken. submit / shutdown as the executor's."""
 
-    def __init__(self, name, *args, **kwargs):
+    def __init__(self, name, *args, hung_s=None, **kwargs):
         kwargs = dict(kwargs, initializer=functools.partial(_named_init, name, kwargs.get("initializer")),
                       initargs=tuple(kwargs.get("initargs", ())))         # (its processes named: proc_name)
         self.name, self._args, self._kwargs = name, args, kwargs
@@ -97,6 +127,15 @@ class RespawningPool:
         self._low, self._low_active = collections.deque(), 0
         self._low_cv = threading.Condition()
         self._low_thread = None
+        # hung_s: a job running (out of the queue) this long means its process hangs: the pool is recycled whoever waits
+        # for it (GitHub #1058: four road processes stopped finishing jobs after a teleport; the AI road graph's and
+        # the terrain patches' bare .result() never timed out, the road geotiles behind them never left the queue to
+        # start their own 300 s, and nothing restarted the processes for 16 minutes)
+        self.hung_s = hung_s
+        self._live = {}             # in-flight future -> when the watchdog first saw it running (None: still queued)
+        self._live_lock = threading.Lock()
+        if hung_s:
+            threading.Thread(target=self._watch, name=f"{name} watchdog", daemon=True).start()
 
     def submit(self, fn, *args, **kwargs):
         with self._lock:
@@ -107,12 +146,18 @@ class RespawningPool:
             fut = runtimeprofiler.collector.submit(_shedding(self._renew(pool).submit), self.name, fn, args, kwargs)
         with self._count_lock:
             self.inflight += 1
+        if self.hung_s:
+            with self._live_lock:
+                self._live[fut] = None
         fut.add_done_callback(self._done)
         return fut
 
     def _done(self, _fut):
         with self._count_lock:
             self.inflight = max(0, self.inflight - 1)
+        if self.hung_s:
+            with self._live_lock:
+                self._live.pop(_fut, None)
         if self._low:
             with self._low_cv:
                 self._low_cv.notify()
@@ -186,6 +231,39 @@ class RespawningPool:
                     pass
                 self._pool = ProcessPoolExecutor(*self._args, **self._kwargs)
             return self._pool
+
+    WATCH_S = 5.0
+
+    def _watch(self):
+        """The hung-job watchdog (hung_s): every WATCH_S, a future running (handed to the processes) for hung_s or
+        more recycles the pool; its waiters and those of the rest in flight get BrokenProcessPool (they retry)."""
+        while True:
+            time.sleep(self.WATCH_S)
+            try:
+                self._watch_step(time.monotonic())
+            except Exception as e:      # (never let the watchdog die)
+                log.debug("%s watchdog: %s: %s", self.name, type(e).__name__, e)
+
+    def _watch_step(self, now):
+        """One watchdog check at now (time.monotonic()): True when it recycled the pool."""
+        oldest = None
+        with self._live_lock:
+            for fut, t in list(self._live.items()):
+                if fut.done():
+                    self._live.pop(fut, None)
+                elif t is None:
+                    if fut.running():
+                        self._live[fut] = now
+                elif oldest is None or t < oldest:
+                    oldest = t
+        if oldest is None or now - oldest < self.hung_s:
+            return False
+        if not self.recycle(f"a job running for {now - oldest:.0f} s, no answer from its process"):
+            return False
+        with self._live_lock:
+            for fut in self._live:
+                self._live[fut] = None      # (the rest start again, counted afresh)
+        return True
 
     def recycle(self, why):
         """The pool's processes killed and the pool made again: for a worker that is alive but never answers (a

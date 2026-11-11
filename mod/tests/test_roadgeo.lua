@@ -261,4 +261,72 @@ local empty = called('windturbines', 'onRows')
 T.check(#empty[#empty][4] == 0, 'content with no turbine hands on an empty list')
 roads.reset()
 
+-- far geotile churn must not trigger the player's collision rebuild (a parked hour at dev.212: the server rebuilt
+-- 1,489 road geotiles, most 7-15 km out, and kept collisionDirty set in every RELOAD_EVERY_S window): a far tile's
+-- collider defers on the tile, a near one marks at once, deferred dirt is promoted when the player arrives, a
+-- rebuild in between makes it solid (be:reloadCollision is global), and a rebase still rebuilds at once
+do
+  roads.RELOAD_EVERY_S, roads.COLLIDE_CHECK_S = 0, 0
+  -- (a rebuild waits after RELOAD_ROOM_MS of imports in a frame, measured on the wall clock: a slow CI runner's frames
+  -- spent that and the promoted rebuild came after run()'s updates, windows-latest 2026-11-10)
+  local room = roads.RELOAD_ROOM_MS
+  roads.RELOAD_ROOM_MS = math.huge
+  local function reloads() return S.calls.reloadCollision or 0 end
+  -- a second road geotile ~8 km east; each tile's only collider a 3dmr deck slab (spawned at once at any distance)
+  local gx2, gy2 = geotile.tileOf(LAT, LON + 8000 / (111320 * math.cos(math.rad(LAT))))
+  local key2 = geotile.key(gx2, gy2)
+  local clat2, clon2 = geotile.centre(17, gx2, gy2)
+  T.check(key2 ~= key, 'a second geotile 8 km east')
+  local function slabTile(k, la, lo, h)
+    files['/s/' .. h .. '.json'] = string.format(
+      '{ v = 1, key = "%s", frame = { %.10f, %.10f }, h = "%s", b3dmr = { { shape = "/s/threedmr_%s_deck.cdae", pos = { 10, 10, 0 } } } }',
+      k, la, lo, h, h)
+    return { anchorId = 2, key = k, path = '/s/' .. h .. '.json', n = 0, frame = { la, lo }, h = h }
+  end
+  car.x, car.y = B:geodeticToWorld(clat, clon, 0)
+  local r0 = reloads()
+  T.check(roads.onTile(slabTile(key2, clat2, clon2, 'f1'), 2, B), 'far geotile accepted')
+  run(2, B)
+  T.check(#objsWith('threedmr_f1_deck') == 1, 'its colliding slab made out there')
+  T.check(reloads() == r0, 'a far tile: no player rebuild')
+  -- the churn: the far tile rebuilt with new content - still none
+  roads.onTile(slabTile(key2, clat2, clon2, 'f2'), 2, B)
+  run(2, B)
+  T.check(#objsWith('threedmr_f2_deck') == 1 and #objsWith('threedmr_f1_deck') == 0, 'the far tile swapped')
+  T.check(reloads() == r0, 'a far tile swap does not set the player-rebuild flag')
+  -- the same under the car marks at once
+  roads.onTile(slabTile(key, clat, clon, 'n1'), 2, B)
+  run(2, B)
+  T.check(reloads() == r0 + 1, 'a near tile rebuilds')
+  roads.onTile(slabTile(key, clat, clon, 'n2'), 2, B)
+  run(2, B)
+  T.check(reloads() == r0 + 2, 'a near tile swap rebuilds as before')
+  -- deferred dirt is promoted when the player arrives
+  roads.onTile(slabTile(key2, clat2, clon2, 'f3'), 2, B)
+  run(2, B)
+  T.check(reloads() == r0 + 2, 'far churn again: deferred, no rebuild')
+  car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
+  run(2, B)
+  T.check(reloads() == r0 + 3, 'the player arrives: the deferred dirt promotes, one rebuild')
+  -- a rebuild in between makes the far slab solid: nothing left to promote
+  car.x, car.y = B:geodeticToWorld(clat, clon, 0)
+  run(2, B)
+  roads.onTile(slabTile(key2, clat2, clon2, 'f4'), 2, B)
+  run(2, B)
+  T.check(reloads() == r0 + 3, 'far churn once more: deferred')
+  roads.onTile(slabTile(key, clat, clon, 'n3'), 2, B)
+  run(2, B)
+  T.check(reloads() == r0 + 4, 'the near swap rebuilds (and makes the far slab solid with it)')
+  car.x, car.y = B:geodeticToWorld(clat2, clon2, 0)
+  run(2, B)
+  T.check(reloads() == r0 + 4, 'arriving later: nothing left to promote')
+  -- a rebase / teleport still rebuilds at once (the island moved)
+  car.x, car.y = A:geodeticToWorld(clat, clon, 0)
+  T.check(roads.replace(A, 3) == 2, 'both geotiles re-placed')
+  run(3, A)
+  T.check(reloads() == r0 + 5, 'a rebase forces the rebuild')
+  roads.RELOAD_ROOM_MS = room
+  roads.reset()
+end
+
 T.done('test_roadgeo')

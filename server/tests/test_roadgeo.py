@@ -149,7 +149,7 @@ class ExactVariantTest(unittest.TestCase):
         T = np.array([[0, 1, 2], [0, 2, 3], [1, 2, 4]])
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "t.cdae")
-            cdae.write(path, P, T)
+            cdae.write(path, P, T, close=False)     # (an open test shape: its vertex count checked)
             blob = open(path, "rb").read()
             n, med, lo, hi = fast._ef.cdae_zstats(blob)
             self.assertEqual(n, 5)

@@ -56,16 +56,22 @@ TAG_KEY = "3dmr"
 API_URL = "https://3dmr.eu/api/model/{}"
 SEARCH_URL = "https://3dmr.eu/api/search/{lat:.6f}/{lon:.6f}/{range_m}"
 INFO_URL = "https://3dmr.eu/api/info/{id}"
-FEATURE_VERSION = 27  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
+FEATURE_VERSION = 29  # what a baked model is made of: in the roads revisit-cache key and the model bridges' cached
 # decks (bridge_<id>_v<n>.json); bumped whenever a model is baked differently (the sections, the OSM yaw, the bridge
-# deck, the one-sided materials) or a tile with a model bridge is built differently round it (27: the junction pads
-# and guard rails under it now take the author's lane-merge/split deck shift before being left out, not before it)
+# deck, the one-sided materials) or a tile with a model bridge is built differently round it (28: model_position's
+# new order - a tagged OSM way's own centroid, then buildings._custom_tile_entries' nearest-footprint level - can
+# move a model that used to sit at its stale api point; 29, GitHub #1071: a bridge by its 3dmr.eu tags or its
+# turned bounding box, its deck traced along its own axis past its piers, laid onto its mapped bridge, the rail and
+# walkway bridges under it left out too)
 # The settings page's "3D models from 3dmr.eu" switch (cpupin.apply_player_settings sets BNE_3DMR=off when it is off;
 # a BNE_ variable, so revisit.code_key keeps what was built with and without the models apart): off, search_ids
 # finds no model (the player's own local models stay)
 ENABLE_ENV = "BNE_3DMR"
 NO_YAW_ENV = "BNGE_3DMR_NO_YAW"  # set: skip osm_yaw's OSM lookup entirely, model placed as downloaded
 # (a fallback if OSM is unreachable from a session)
+NO_REPOSITION_ENV = "BNGE_3DMR_NO_REPOSITION"  # set: skip model_position's OSM-polygon level and buildings.
+# _custom_tile_entries' nearest-footprint level - a model sits at its POSITION_OVERRIDES/threedmr_position_fixes.json
+# entry if it has one, else its own api point, exactly as before this feature (owner debugging switch)
 MOD_MATERIALS_REL = (
     "mods",
     "unpacked",
@@ -311,6 +317,31 @@ def model_info(model_id, cache_dir, iface=None, timeout=30.0):
     return _cached_json(path, url, iface, timeout, f"info {model_id}")
 
 
+def cached_info(model_id, cache_dir):
+    """model_info's record of a model as it is on disk (model_position fetched it), or None: never a request."""
+    try:
+        with open(os.path.join(cache_dir, "threedmr_cache", f"info_{int(model_id)}.json")) as f:
+            got = json.load(f)
+        return got if isinstance(got, dict) else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def info_says_bridge(info):
+    """Does a model's 3dmr.eu record (model_info) call it a bridge: its OSM tags (man_made=bridge, building=bridge,
+    a bridge=* other than no) or one of its categories ("Bridge", "Foot Bridge")? Perth's Elizabeth Quay Bridge (id 55,
+    GitHub #1071) is an S-shaped footbridge whose bounding box is no bridge deck's shape at all."""
+    if not isinstance(info, dict):
+        return False
+    tags = info.get("tags") if isinstance(info.get("tags"), dict) else {}
+    if str(tags.get("man_made", "")).lower() == "bridge" or str(tags.get("building", "")).lower() == "bridge":
+        return True
+    if str(tags.get("bridge", "no")).lower() not in ("no", "", "0", "false"):
+        return True
+    cats = info.get("categories") if isinstance(info.get("categories"), (list, tuple)) else []
+    return any("bridge" in str(c).lower() for c in cats)
+
+
 # --- local models (no 3dmr.eu base) -------------------------------------------------------
 def local_models(cache_dir):
     """The player's own local model catalog: <cache_dir>/threedmr_cache/local_models.json, a JSON list of
@@ -437,6 +468,10 @@ SEARCH_CORRECT_R_M = 40000.0
 # model's mesh is already oriented west-east as downloaded - nothing to rotate.
 POSITION_OVERRIDES = {
     22: (16.06120, 108.22790, 0.0),
+    # id 24 (Al-Shaheed Monument, Baghdad): the api point sits ~20 m south-west of the island's own centre
+    # (probe/position_audit.json's own OSM way 1089391780 centroid, 33.3434416,44.4461248, is itself 6.6 m off
+    # that true centre) - the owner's own measured centre of the monument island, not the tagged way's centroid.
+    24: (33.343561, 44.446220, 0.0),
 }
 
 
@@ -444,6 +479,41 @@ def position_override(model_id):
     """A POSITION_OVERRIDES entry for model_id as (lat, lon, yaw_deg), or None - model_position's first
     check, ahead of its usual api/desc logic, and _custom_tile_entries' own check ahead of osm_yaw."""
     return POSITION_OVERRIDES.get(model_id)
+
+
+# Offline backstop (probe/position_audit.json, OSM-measured): a few more models whose own 3dmr.eu api point
+# sits tens to ~110 m from their real OSM way, collected by the owner's own audit run rather than at model_
+# position's usual level 2 (osm_polygon_position) - so the fix still applies with no network at all (a
+# session without internet, or one where OSM's own API is unreachable). Checked right after POSITION_OVERRIDES,
+# still ahead of any network call. id 24 is already in POSITION_OVERRIDES above (level 1, reached first) -
+# kept here too as a documented backstop in case that entry is ever removed on its own.
+_POSITION_FIXES_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "threedmr_position_fixes.json"
+)
+_position_fixes_cache = None
+
+
+def _position_fixes():
+    """{model_id: (lat, lon)} of _POSITION_FIXES_PATH, loaded once per process and cached - the file itself
+    never changes while a server runs. {} (not a crash) if it is missing or malformed: this table is a
+    backstop, not a required file."""
+    global _position_fixes_cache
+    if _position_fixes_cache is None:
+        try:
+            with open(_POSITION_FIXES_PATH) as f:
+                raw = json.load(f)
+        except (OSError, ValueError):
+            raw = {}
+        _position_fixes_cache = {
+            int(k): (float(v["lat"]), float(v["lon"])) for k, v in raw.items()
+        }
+    return _position_fixes_cache
+
+
+def position_fix(model_id):
+    """A threedmr_position_fixes.json entry for model_id as (lat, lon), or None - model_position's second
+    check (after POSITION_OVERRIDES, still no network)."""
+    return _position_fixes().get(model_id)
 
 
 def desc_position(info):
@@ -469,19 +539,41 @@ def _latlon_dist_m(lat1, lon1, lat2, lon2):
     return math.hypot(de, dn)
 
 
-def model_position(model_id, cache_dir, iface=None, timeout=30.0):
-    """(lat, lon, corrected) of a model: a POSITION_OVERRIDES entry if model_id has one (no network - the
-    model's own api AND desc data are both wrong, so neither is worth even fetching); else its own api/info
-    point, unless its desc's own osmgo.org link (desc_position) disagrees with it by more than
-    POSITION_CORRECT_M metres - in which case the desc's coordinates are trusted instead (corrected True,
-    logged). Guards against a model's api point going stale after the mapper's own write-up moves on without
-    the api point ever being updated to match."""
+def model_position(model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(lat, lon, corrected, source) of a model, in order: POSITION_OVERRIDES (source "override", level 1, no
+    network - the model's own api AND desc data are both wrong, so neither is worth even fetching); else
+    threedmr_position_fixes.json (source "fix", level 1.5, still no network - an offline backstop of a few
+    more models audited the same way level 2 would find them, for a session with no OSM access at all); else
+    the OSM way tagged 3dmr=<model_id> around the model's own api point (source "osm", level 2 -
+    osm_polygon_position: probe/position_audit.json found 8 of 3dmr.eu's own models 10-109 m from this
+    surveyed tag); else its desc's own osmgo.org link if it disagrees with the api point by more than
+    POSITION_CORRECT_M metres (source "desc", level 3 - guards against a model's api point going stale after
+    the mapper's own write-up moves on without the api point ever being updated to match); else the api point
+    itself (source "api", corrected False, level 4).
+
+    This moves the OSM tag ahead of desc (the pre-existing correction): a surveyed building outranks either
+    of the model's own two self-reported points, api or desc, not just the staler of the two. BNGE_3DMR_NO_
+    REPOSITION skips level 2 only (osm_polygon_position checks it itself) - override/fix predate any network
+    lookup and stay on; buildings._custom_tile_entries' own nearest-footprint level (level "3" in the owner's
+    own numbering, between osm and desc/api here) checks the same switch before it runs."""
     override = position_override(model_id)
     if override is not None:
         olat, olon, _oyaw = override
-        return olat, olon, True
+        return olat, olon, True, "override"
+    fix = position_fix(model_id)
+    if fix is not None:
+        flat, flon = fix
+        return flat, flon, True, "fix"
     info = model_info(model_id, cache_dir, iface=iface, timeout=timeout)
     lat, lon = float(info["lat"]), float(info["lon"])
+    poly = osm_polygon_position(lat, lon, model_id, cache_dir, iface=iface, timeout=timeout, offline=offline)
+    if poly is not None:
+        plat, plon = poly
+        log.info(
+            "3dmr model %s: positioned by its tagged OSM way (api point was %.5f,%.5f)",
+            model_id, lat, lon,
+        )
+        return plat, plon, True, "osm"
     desc_ll = desc_position(info)
     if desc_ll is not None:
         dlat, dlon = desc_ll
@@ -497,8 +589,8 @@ def model_position(model_id, cache_dir, iface=None, timeout=30.0):
                 lat,
                 lon,
             )
-            return dlat, dlon, True
-    return lat, lon, False
+            return dlat, dlon, True, "desc"
+    return lat, lon, False, "api"
 
 
 _near_memo = {}  # (cache folder, info file name) -> (lat, lon) of its model (credited_near)
@@ -524,7 +616,7 @@ def credited_near(lat, lon, range_m, cache_dir):
             try:
                 with open(os.path.join(d, name)) as f:
                     json.load(f)            # (a whole file: model_position below reads it, never fetches)
-                mlat, mlon, _corrected = model_position(int(name[5:-5]), cache_dir)
+                mlat, mlon, _corrected, _source = model_position(int(name[5:-5]), cache_dir, offline=True)
             except Exception:
                 continue
             ll = _near_memo[(d, name)] = (float(mlat), float(mlon))
@@ -642,26 +734,32 @@ def _yaw_from_angles(a_osm, a_model):
 
 
 def _osm_building_ring(lat, lon, model_id, iface, timeout):
-    """The local-metre ring (n, 2), origin (lat, lon), of the OSM way nearest a 3dmr.eu model's own mapped
-    position: preferably one tagged 3dmr=<model_id> (a mapper's own cross-reference - the only way to tell
-    which of several nearby buildings is the model's, and why this goes straight to the OSM API rather than
-    Overpass (no index on an arbitrary tag, and prone to timeouts over a VPN) or Nominatim (does not index
-    3dmr tags at all)), else the nearest building=* way inside a small bbox (OSM_BBOX_DEG) around it. None if
-    the map call fails, or no such way is found."""
+    """(ring, tagged) - the local-metre ring (n, 2), origin (lat, lon), of the OSM way nearest a 3dmr.eu
+    model's own mapped position, and whether it is the exact one: preferably the single way tagged
+    3dmr=<model_id> (a mapper's own cross-reference - the only way to tell which of several nearby buildings
+    is the model's, and why this goes straight to the OSM API rather than Overpass (no index on an arbitrary
+    tag, and prone to timeouts over a VPN) or Nominatim (does not index 3dmr tags at all)), tagged True; else
+    the nearest building=* way (or, when more than one way happens to carry the tag - id 35's own data, 5
+    different buildings all tagged 3dmr=35, apparently copy-pasted across a city block import - the nearest
+    of THOSE instead, still untagged) inside a small bbox (OSM_BBOX_DEG) around it, tagged False - good
+    enough for osm_yaw's own rotation (any nearby building is oriented about the same way as the real one),
+    but never trusted for osm_polygon_position's placement (the wrong neighbour, tagged or not, would
+    silently relocate the model, not just mis-rotate it). (None, False) if the map call fails, or no such way
+    is found at all."""
     d = OSM_BBOX_DEG
     url = f"{OSM_MAP_URL}?bbox={lon - d:.6f},{lat - d:.6f},{lon + d:.6f},{lat + d:.6f}"
     data = _fetch_retry(url, iface, timeout, what=f"osm map (model {model_id})")
     if not data:
-        return None
+        return None, False
     try:
         root = ET.fromstring(data)
     except ET.ParseError:
-        return None
+        return None, False
     nodes = {
         n.get("id"): (float(n.get("lat")), float(n.get("lon")))
         for n in root.findall("node")
     }
-    tagged, nearest, nearest_d = None, None, None
+    tagged_candidates, nearest, nearest_d = [], None, None
     for w in root.findall("way"):
         pts = [
             nodes[r] for r in (nd.get("ref") for nd in w.findall("nd")) if r in nodes
@@ -669,28 +767,146 @@ def _osm_building_ring(lat, lon, model_id, iface, timeout):
         if len(pts) < 4:
             continue
         tags = {t.get("k"): t.get("v") for t in w.findall("tag")}
-        if tags.get(TAG_KEY) == str(model_id):
-            tagged = pts
-            break
-        if "building" in tags:
+        is_tag_match = tags.get(TAG_KEY) == str(model_id)
+        if is_tag_match:
+            tagged_candidates.append(pts)
+        if is_tag_match or "building" in tags:
             clat = sum(p[0] for p in pts) / len(pts)
             clon = sum(p[1] for p in pts) / len(pts)
             dist = math.hypot(clat - lat, clon - lon)
             if nearest_d is None or dist < nearest_d:
                 nearest, nearest_d = pts, dist
-    ring = tagged or nearest
+    if len(tagged_candidates) > 1:
+        log.info(
+            "3dmr model %s: %d ways tagged 3dmr=%s - ambiguous, not used for position",
+            model_id, len(tagged_candidates), model_id,
+        )
+    is_tagged = len(tagged_candidates) == 1
+    ring = tagged_candidates[0] if is_tagged else nearest
     if ring is None:
-        return None
+        return None, False
     if (
         len(ring) > 1 and ring[0] == ring[-1]
     ):  # a closed way repeats its first node: drop the duplicate
         ring = ring[:-1]
     if len(ring) < 4:
-        return None
+        return None, False
     coslat = math.cos(math.radians(lat))
     e = [(rlon - lon) * 111320.0 * coslat for _rlat, rlon in ring]
     n = [(rlat - lat) * 111132.0 for rlat, _rlon in ring]
-    return np.array(list(zip(e, n)), np.float64)
+    return np.array(list(zip(e, n)), np.float64), is_tagged
+
+
+def _ring_cache_path(cache_dir, lat, lon):
+    cache = os.path.join(cache_dir, "threedmr_cache")
+    rlat, rlon = round(float(lat), 4), round(float(lon), 4)
+    return cache, os.path.join(cache, f"yaw_{rlat}_{rlon}.json")
+
+
+_osm_down_until = 0.0      # time.time() before which a failed OSM /map fetch is not tried again (_osm_ring_cached)
+OSM_RETRY_S = 3600.0
+
+
+def _osm_ring_cached(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(ring_xy or None, tagged) for (lat, lon, model_id): _osm_building_ring's own OSM /map fetch, cached
+    forever (including a "no ring" miss) under its own "ring"/"tagged" fields in the SAME yaw_<lat>_<lon>.json
+    file osm_yaw keeps its "yaw" answer in and osm_polygon_position its "pos" - between all three, a model's
+    OSM lookup at a given (lat, lon) costs at most one network request, however many of them ask for it."""
+    cache, path = _ring_cache_path(cache_dir, lat, lon)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if "ring" in data:
+        ring = data["ring"]
+        return (np.asarray(ring, np.float64) if ring is not None else None), bool(
+            data.get("tagged", False)
+        )
+    # offline: the cache only (credits.feature_ids asks from the server's event loop every second: a request there
+    # held every game message); and a failed fetch is not kept as "no ring" for good, only not asked again for a while
+    global _osm_down_until
+    if offline or time.time() < _osm_down_until:
+        return None, False
+    try:
+        ring_xy, tagged = _osm_building_ring(lat, lon, model_id, iface, timeout)
+    except (urllib.error.URLError, OSError) as e:
+        log.info("3dmr model %s: OSM fetch failed (%s); asked again in %.0f min", model_id, e, OSM_RETRY_S / 60)
+        _osm_down_until = time.time() + OSM_RETRY_S
+        return None, False
+    data["ring"] = ring_xy.tolist() if ring_xy is not None else None
+    data["tagged"] = tagged
+    os.makedirs(cache, exist_ok=True)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    staging.replace(tmp, path)
+    return ring_xy, tagged
+
+
+def _seed_ring_cache(cache_dir, lat, lon, ring_xy, tagged):
+    """Copies an already-fetched ring into the cache file for a SECOND (lat, lon) key - osm_polygon_position's
+    own use, once it has turned a tagged ring into a corrected position: a later osm_yaw call for the same
+    model, centred on that corrected position (not the api point the ring was originally fetched around),
+    would otherwise round to a different cache file and re-fetch the same ring over the network. A no-op if
+    that key already has a ring cached (e.g. the two points round to the same key)."""
+    _cache, path = _ring_cache_path(cache_dir, lat, lon)
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        data = {}
+    if "ring" in data:
+        return
+    data["ring"] = ring_xy.tolist() if ring_xy is not None else None
+    data["tagged"] = tagged
+    cache = os.path.dirname(path)
+    os.makedirs(cache, exist_ok=True)
+    tmp = staging.tmp_for(path)
+    with open(tmp, "w") as f:
+        json.dump(data, f)
+    staging.replace(tmp, path)
+
+
+OSM_POLYGON_GATE_M = 500.0  # a tagged OSM way's centroid farther than this from the model's own api point is
+# not trusted as this model's own building (osm_polygon_position) - in practice always comfortably inside
+# this (OSM_BBOX_DEG's own search box cannot turn up a tagged way farther than ~300 m out to begin with), but
+# a centroid that somehow comes back implausibly far is logged and left at the usual desc/api fallback
+# rather than silently moving the model there.
+
+
+def osm_polygon_position(lat, lon, model_id, cache_dir, iface=None, timeout=30.0, offline=False):
+    """(lat, lon) of the OSM way tagged 3dmr=<model_id> around a model's own api point (lat, lon here), its
+    ring's centroid - model_position's level 2, ahead of its desc/api fallback: probe/position_audit.json
+    found 8 of 3dmr.eu's own models placed by their own api point 10-109 m from this surveyed tag (Baghdad's
+    Al-Shaheed Monument, id 24, 7 m - now in POSITION_OVERRIDES instead, measured more precisely by hand).
+    None with BNGE_3DMR_NO_REPOSITION set, the OSM fetch failing, no way carrying the exact tag (_osm_
+    building_ring's own looser "nearest building" fallback is good enough for osm_yaw's rotation but not
+    trusted here - the wrong neighbouring building would silently relocate the model), or a centroid farther
+    than OSM_POLYGON_GATE_M from (lat, lon) (logged as a warning: not this model's own way after all).
+
+    Shares its OSM /map fetch and cache file with osm_yaw (_osm_ring_cached, keyed on (lat, lon) - the
+    model's api point here) and seeds that same ring under its own corrected answer's key too (_seed_ring_
+    cache), so a later osm_yaw call centred on THIS function's own (lat, lon) result also hits the cache."""
+    if os.environ.get(NO_REPOSITION_ENV):
+        return None
+    ring_xy, tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout, offline=offline)
+    if ring_xy is None or not tagged or len(ring_xy) < 3:
+        return None
+    ce, cn = float(ring_xy[:, 0].mean()), float(ring_xy[:, 1].mean())
+    dist = math.hypot(ce, cn)
+    if dist > OSM_POLYGON_GATE_M:
+        log.warning(
+            "3dmr model %s: tagged OSM way centroid is %.0f m from the api point - not trusted, ignored",
+            model_id,
+            dist,
+        )
+        return None
+    coslat = math.cos(math.radians(lat))
+    clat = lat + cn / 111132.0
+    clon = lon + ce / (111320.0 * coslat)
+    _seed_ring_cache(cache_dir, clat, clon, ring_xy, tagged)
+    return clat, clon
 
 
 def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
@@ -701,27 +917,24 @@ def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
     is not reachable from a session), the OSM lookup fails or finds no way, or either side has fewer than 4
     points to measure an edge direction from; logged, never raises (a tile must still build without this).
 
-    Cached forever per rounded (lat, lon) under <cache_dir>/threedmr_cache/yaw_<lat>_<lon>.json, including a
-    0.0 ("no footprint") result - an OSM building's own footprint does not change day to day, so a repeat
+    Cached forever per rounded (lat, lon) under <cache_dir>/threedmr_cache/yaw_<lat>_<lon>.json's own "yaw"
+    field (_osm_ring_cached keeps the ring itself, shared with osm_polygon_position, in the same file), including
+    a 0.0 ("no footprint") result - an OSM building's own footprint does not change day to day, so a repeat
     visit to the same model is not worth another network round trip either way. BNGE_3DMR_NO_YAW is checked
     ahead of the cache: the override must not depend on what an earlier, network-reachable run wrote
     there."""
     if os.environ.get(NO_YAW_ENV):
         return 0.0
-    cache = os.path.join(cache_dir, "threedmr_cache")
-    rlat, rlon = round(float(lat), 4), round(float(lon), 4)
-    path = os.path.join(cache, f"yaw_{rlat}_{rlon}.json")
+    _cache, path = _ring_cache_path(cache_dir, lat, lon)
     try:
         with open(path) as f:
-            return float(json.load(f)["yaw"])
-    except (OSError, ValueError, KeyError):
-        pass
+            cached = json.load(f)
+        if "yaw" in cached:
+            return float(cached["yaw"])
+    except (OSError, ValueError):
+        cached = {}
 
-    try:
-        ring_xy = _osm_building_ring(lat, lon, model_id, iface, timeout)
-    except (urllib.error.URLError, OSError) as e:
-        log.info("3dmr model %s: OSM fetch failed (%s), yaw 0", model_id, e)
-        ring_xy = None
+    ring_xy, _tagged = _osm_ring_cached(lat, lon, model_id, cache_dir, iface, timeout)
 
     yaw = 0.0
     points_xy = np.asarray(points_xy, np.float64)
@@ -735,10 +948,17 @@ def osm_yaw(lat, lon, model_id, points_xy, cache_dir, iface=None, timeout=30.0):
     else:
         log.info("3dmr model %s: no OSM footprint, yaw 0", model_id)
 
+    cache = os.path.dirname(path)
+    try:
+        with open(path) as f:
+            cached = json.load(f)
+    except (OSError, ValueError):
+        cached = {}
+    cached["yaw"] = yaw
     os.makedirs(cache, exist_ok=True)
     tmp = staging.tmp_for(path)
     with open(tmp, "w") as f:
-        json.dump({"yaw": yaw}, f)
+        json.dump(cached, f)
     staging.replace(tmp, path)
     return yaw
 
@@ -905,6 +1125,22 @@ def _texture_has_alpha(data):
     return img.convert("RGBA").getchannel("A").getextrema()[0] < 250
 
 
+def _trim_image(data):
+    """An embedded image's bytes without what follows its end: a GLB bufferView is padded to 4 bytes and some
+    exporters count the padding in the view, so 1-3 bytes trail the PNG's IEND chunk. Python's readers ignore them,
+    the game's does not: those slots drew BeamNG's orange "NO TEXTURE" (GitHub #1072, Perth's State War Memorial and
+    Central Park tower: 12 of 128 cached textures). PNG: up to the end of IEND; JPEG: up to its EOI marker."""
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        j = data.rfind(b"IEND")
+        if j >= 4:
+            return data[:j + 8]         # (type + CRC)
+    elif data[:2] == b"\xff\xd8":
+        j = data.rfind(b"\xff\xd9")
+        if j > 0:
+            return data[:j + 2]
+    return data
+
+
 def _resolve_texture(gltf, bin_chunk, mat_idx, cache):
     """(bytes, extension, factor, has_alpha, alpha_cutoff) of a material's baseColorTexture/baseColorFactor.
     bytes/extension are (None, None) if the material has no baseColorTexture (observed on 3dmr.eu ids 47/31:
@@ -951,6 +1187,7 @@ def _resolve_texture(gltf, bin_chunk, mat_idx, cache):
             else:
                 data = None
             if data is not None:
+                data = _trim_image(data)
                 ext = {"image/jpeg": "jpeg", "image/png": "png"}.get(
                     image.get("mimeType")
                 )
@@ -1199,12 +1436,17 @@ BRIDGE_STEP_M = 0.5  # a deck level this much off the next column's is no slope 
 BRIDGE_SMOOTH_CELLS = 2  # the deck surface averaged over +-this many samples along the bridge (a lattice step)
 BRIDGE_END_EPS_M = 0.03  # m the deck's ends are put over the ground road they meet
 BRIDGE_TILT_MAX_M = 15.0  # an end this far off its ground is not a road's end (a high footbridge): no lean
+BRIDGE_RAISE_MAX_M = 150.0  # ... onto the mapped bridge's ends: a model is lifted / lowered at most this far
 BRIDGE_APRON_M = 8.0  # m the collision slab goes on past each end of the deck, sinking into the road ...
 BRIDGE_APRON_DROP_M = 0.6  # ... to this far under its end row's lowest: no lip where the road meets the bridge
 BRIDGE_SLAB_M = 0.5  # m thick, the collision slab (closed: its top faces up whatever side the engine collides)
 BRIDGE_SLAB_VERTS_MAX = 60000  # Torque's 16-bit index buffer: coarser across the bridge over this
 BRIDGE_REACH_M = 2000.0  # m from a tile a bridge model's centre may stand and its deck still reach into it
 BRIDGE_FOOT_MARGIN_M = 2.0  # m past the deck's own sides a procedural bridge part still counts as under it
+BRIDGE_AXIS_STEP_DEG = 1.0  # deck_axis's directions (its smallest bounding rectangle's) ...
+BRIDGE_AXIS_POINTS = 20000  # ... over at most this many of the mesh's points
+BRIDGE_START_SHARE = 0.2  # _deck_levels seeks the deck's level first in the columns this share of its length round
+# its middle
 
 
 def _column_floors(A, B, C, upf, u, vs):
@@ -1252,26 +1494,136 @@ def _nan_filter(Z, size, how):
     return np.where(np.isfinite(Z), out, np.nan)
 
 
+def deck_axis(xy):
+    """(ang, major, minor) of points xy (k, 2) seen from above: ang (radians, in (-pi/2, pi/2]) the direction of the
+    long side of their smallest bounding rectangle (BRIDGE_AXIS_STEP_DEG steps), major / minor its sides (m). A bridge
+    runs along it whatever way it was drawn: Perth's Mount Henry Bridge (3dmr id 53, GitHub #1071) crosses its
+    model's frame at ~28 degrees, so its north-aligned bounding box is barely longer one way than the other."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    if not len(xy):
+        return 0.0, 0.0, 0.0
+    if len(xy) > BRIDGE_AXIS_POINTS:
+        xy = xy[:: int(np.ceil(len(xy) / BRIDGE_AXIS_POINTS))]
+    th = np.radians(np.arange(0.0, 90.0, BRIDGE_AXIS_STEP_DEG))
+    a = xy @ np.stack([np.cos(th), np.sin(th)])          # (k, m): along each direction ...
+    b = xy @ np.stack([-np.sin(th), np.cos(th)])         # ... and across it
+    ea, eb = np.ptp(a, axis=0), np.ptp(b, axis=0)
+    k = int(np.argmin(ea * eb))
+    ang, major, minor = float(th[k]), float(ea[k]), float(eb[k])
+    if minor > major:
+        ang, major, minor = ang + np.pi / 2, minor, major
+    if ang > np.pi / 2 + 1e-12:
+        ang -= np.pi
+    return ang, major, minor
+
+
+def deck_uv(s, xy):
+    """(u, v) of points xy (k, 2) in a deck surface's / footprint's frame s (bridge_deck_surface, bridge_footprint_of):
+    u along the bridge (its "ang"), v across it; a frame without "ang" (an old cache, a test's) is axis "ax"'s."""
+    xy = np.asarray(xy, np.float64).reshape(-1, 2)
+    ang = s.get("ang")
+    if ang is None:
+        ax = int(s["ax"])
+        return xy[:, ax], xy[:, 1 - ax]
+    c, sn = np.cos(ang), np.sin(ang)
+    return xy[:, 0] * c + xy[:, 1] * sn, -xy[:, 0] * sn + xy[:, 1] * c
+
+
+def deck_xy(s, u, v):
+    """deck_uv's inverse: (x, y) arrays of the points (u, v) of frame s."""
+    u, v = np.asarray(u, np.float64), np.asarray(v, np.float64)
+    ang = s.get("ang")
+    if ang is None:
+        return (u, v) if int(s["ax"]) == 0 else (v, u)
+    c, sn = np.cos(ang), np.sin(ang)
+    return u * c - v * sn, u * sn + v * c
+
+
+def _floor_layers(z):
+    """[(count, median)] of sorted heights z split where they part by more than BRIDGE_STEP_M: the floors a column's
+    samples stand on, one per layer (a deck, a pier's cap under it, the ground)."""
+    if not len(z):
+        return []
+    cut = np.nonzero(np.diff(z) > BRIDGE_STEP_M)[0] + 1
+    return [(len(g), float(np.median(g))) for g in np.split(z, cut)]
+
+
+def _deck_run(opens, i0, z0):
+    """(level (nu,) NaN off it, the samples carrying it) of the floor at z0 in column i0 followed out both ways
+    (_deck_levels)."""
+    nu = len(opens)
+    level = np.full(nu, np.nan)
+    level[i0] = z0
+    n = 0
+    for step in (1, -1):
+        last, i = i0, i0 + step
+        while 0 <= i < nu and abs(i - last) <= 4:
+            z = opens[i]
+            if len(z) >= 3:
+                tol = BRIDGE_STEP_M * abs(i - last)
+                w = z[(z >= level[last] - tol) & (z <= level[last] + tol)]
+                if len(w) < 3:
+                    break           # (floors here, none carrying on: a step)
+                level[i] = float(np.median(w))
+                n += len(w)
+                last = i
+            i += step
+    return level, n
+
+
+def _deck_levels(opens):
+    """The deck's level per column (nu,), NaN off the deck, from opens (per column, the sorted heights of its
+    samples' floors open above), or None. Each floor layer (_floor_layers, 3 samples or more) of the columns round
+    the middle (within BRIDGE_START_SHARE of the bridge's length) is followed out both ways (_deck_run) to the columns
+    whose floors carry on from the last one's level: a level that many samples (at least 3) stand within
+    BRIDGE_STEP_M (per column) of; the deck is the run that most samples carry (it spans the bridge's length and
+    width: a pylon or an arch's rib a sample or two wide, a pier's cap or the ground under the deck a few metres
+    long). Other floors in a column are left out, not followed: a pier's cap under the deck, the ground between its
+    piers, a lower rail deck beside it (Perth's Narrows Bridge, 3dmr id 54, GitHub #1071: the median of the lowest
+    floors fell onto its first pier caps, 44 m from the middle of a 370 m deck, and the deck ended there). A gap of a
+    few columns is bridged; past it, or where a column has floors but none carrying on (a step: a plinth, a lower
+    road under an end), the deck ends."""
+    nu = len(opens)
+    have = [i for i in range(nu) if len(opens[i]) >= 3]
+    if not have:
+        return None
+    centre = (have[0] + have[-1]) / 2.0
+    reach = max(2.0, BRIDGE_START_SHARE * (have[-1] - have[0]) / 2.0)
+    starts = {}                 # (a layer's level to 0.5 m) -> (its column nearest the middle, its level)
+    for i in sorted(have, key=lambda i: abs(i - centre)):
+        if abs(i - centre) > reach:
+            break
+        for cnt, z in _floor_layers(opens[i]):
+            if cnt >= 3:
+                starts.setdefault(round(z * 2.0), (i, z))
+    best = None
+    for i0, z0 in starts.values():
+        level, n = _deck_run(opens, i0, z0)
+        if best is None or n > best[1]:
+            best = (level, n)
+    return None if best is None else best[0]
+
+
 def bridge_deck_surface(positions, tris):
-    """The top of a bridge model's own road deck, sampled on a grid in positions' own frame: {"ax" (0: the bridge
-    runs along x, 1: along y), "u0", "du", "v0", "dv", "z" (nu, nv) heights, NaN off the deck}; None when the mesh
-    has no deck to drive on. Per column across the bridge its deck level is the median of the floors open above
-    (BRIDGE_HEADROOM_M: the deck's top, not its slab's lower skin, not the dragon's back); per sample the highest
-    floor within BRIDGE_TIER_BELOW_M / BRIDGE_TIER_ABOVE_M of it (a raised median stays, an arch's top does not);
-    then a 3x3 median (a lamp base, a stray face) and a mean over +-BRIDGE_SMOOTH_CELLS along it (the lattice's
-    own steps, ~0.2 m on id 22). The deck ends where its level steps (BRIDGE_STEP_M) on the way out from the
-    middle."""
+    """The top of a bridge model's own road deck, sampled on a grid along the bridge: {"ang" (radians: the direction
+    the bridge runs in positions' frame, deck_axis; deck_uv / deck_xy go between the two), "ax" (the nearer of the
+    frame's axes, informative), "u0", "du" (along), "v0", "dv" (across), "z" (nu, nv) heights, NaN off the deck}; None
+    when the mesh has no deck to drive on. The floors open above (BRIDGE_HEADROOM_M: the deck's top, not its slab's
+    lower skin, not the dragon's back) give each column across the bridge its deck level (_deck_levels: the one
+    running on from the middle); per sample the highest floor within BRIDGE_TIER_BELOW_M / BRIDGE_TIER_ABOVE_M of it
+    (a raised median stays, an arch's top does not); then a 3x3 median (a lamp base, a stray face) and a mean over
+    +-BRIDGE_SMOOTH_CELLS along it (the lattice's own steps, ~0.2 m on id 22)."""
     P = np.asarray(positions, np.float64).reshape(-1, 3)
     T = np.asarray(tris, np.int64).reshape(-1, 3)
     if not len(P) or not len(T):
         return None
-    ax = 0 if np.ptp(P[:, 0]) >= np.ptp(P[:, 1]) else 1
-    Q = np.c_[P[:, ax], P[:, 1 - ax], P[:, 2]]
+    ang = deck_axis(P[:, :2])[0]
+    frame = {"ang": ang}
+    u, v = deck_uv(frame, P[:, :2])
+    Q = np.c_[u, v, P[:, 2]]
     A, B, C = Q[T[:, 0]], Q[T[:, 1]], Q[T[:, 2]]
-    n = np.cross(B - A, C - A)
+    n = np.cross(B - A, C - A)          # (a rotation: a floor's normal still points up in z)
     nz = n[:, 2] / np.maximum(np.linalg.norm(n, axis=1), 1e-12)
-    if ax == 1:             # (u, v) = (y, x) mirrors the plane: a floor's normal still points up in z
-        nz = -nz
     keep = np.abs(nz) > 0.05            # (walls: no height of their own seen from above)
     A, B, C, nz = A[keep], B[keep], C[keep], nz[keep]
     upf = nz > BRIDGE_UP_NZ
@@ -1284,7 +1636,7 @@ def bridge_deck_surface(positions, tris):
     lo_u = np.minimum(np.minimum(A[:, 0], B[:, 0]), C[:, 0])
     hi_u = np.maximum(np.maximum(A[:, 0], B[:, 0]), C[:, 0])
     floors = []
-    level = np.full(nu, np.nan)
+    opens = []              # per column: every floor open above, one list entry per (sample, floor)
     for i, u in enumerate(us):
         sel = np.nonzero((lo_u <= u) & (hi_u >= u))[0]
         col = _column_floors(A[sel], B[sel], C[sel], upf[sel], u, vs) if len(sel) else [(None, None)] * nv
@@ -1297,26 +1649,10 @@ def bridge_deck_surface(positions, tris):
                 above = allz[allz > z + 0.05]
                 if not len(above) or above[0] > z + BRIDGE_HEADROOM_M:
                     open_.append(z)
-                    break
-        if len(open_) >= 3:
-            level[i] = float(np.median(open_))
-    if not np.isfinite(level).any():
+        opens.append(np.sort(np.asarray(open_, np.float64)))
+    level = _deck_levels(opens)
+    if level is None:
         return None
-    # the deck: the columns whose level runs on from the middle one's with no step (a gap of a few columns is
-    # bridged); past a step is something else (a plinth, a pier's top, a lower road under an end)
-    have = np.nonzero(np.isfinite(level))[0]
-    mid = have[np.argmin(np.abs(have - (have[0] + have[-1]) / 2.0))]
-    keep = np.zeros(nu, bool)
-    keep[mid] = True
-    for step in (1, -1):
-        last, i = mid, mid + step
-        while 0 <= i < nu and abs(i - last) <= 4:
-            if np.isfinite(level[i]):
-                if abs(level[i] - level[last]) > BRIDGE_STEP_M * max(1, abs(i - last)):
-                    break
-                keep[i], last = True, i
-            i += step
-    level[~keep] = np.nan
     Z = np.full((nu, nv), np.nan)
     for i in range(nu):
         if not np.isfinite(level[i]):
@@ -1333,7 +1669,8 @@ def bridge_deck_surface(positions, tris):
     Z[~cols] = np.nan
     if not cols.any():
         return None
-    return {"ax": ax, "u0": u0, "du": du, "v0": v0, "dv": dv, "z": Z}
+    return {"ang": ang, "ax": 0 if abs(np.cos(ang)) >= abs(np.sin(ang)) else 1, "u0": u0, "du": du, "v0": v0,
+            "dv": dv, "z": Z}
 
 
 def _deck_ends(surf):
@@ -1358,17 +1695,20 @@ def _deck_level_at(surf, u):
 
 
 def bridge_tilt(surf, ground_at, model_id=None, road_ends=None):
-    """(ax, u_a, dz_a, slope, (u_a, u_b)): the lean (dz = dz_a + slope (u - u_a), u the coordinate along the bridge,
-    ax its axis) that lands the deck (bridge_deck_surface) BRIDGE_END_EPS_M over the road at both ends, and the span
-    (u_a, u_b) the road runs on the deck. road_ends: the mapped bridge's own ends [(x, y, z)] in the surface's frame
+    """(ax, u_a, dz_a, slope, (u_a, u_b), ang): the lean (dz = dz_a + slope (u - u_a), u the coordinate along the
+    bridge: deck_uv's in the surface's frame, ang its "ang"; ax its nearer axis) that lands the deck
+    (bridge_deck_surface) BRIDGE_END_EPS_M over the road at both ends, and the span (u_a, u_b) the road runs on the
+    deck. road_ends: the mapped bridge's own ends [(x, y, z)] in the surface's frame
     (the procedural bridge left out under the model: where the road network leaves the bridge, at the ground road's
     height - the model may reach past them, id 22 by ~37 m a side over the riverside streets, and is buried there);
     without them the deck's own ends onto ground_at(x, y). No lean (zeros) when an end is BRIDGE_TILT_MAX_M or more
-    off."""
-    ax = surf["ax"]
+    off - onto the mapped bridge's ends, when the two ends' moves part by that much, or one is BRIDGE_RAISE_MAX_M off
+    (the model bedded on the ground under it is lifted onto its roads however high: a deck with no piers drawn,
+    a river's bed deep under it)."""
+    ax, ang = surf["ax"], surf.get("ang")
     if road_ends:
         e = np.asarray(road_ends, np.float64).reshape(-1, 3)
-        u = e[:, ax]
+        u = deck_uv(surf, e[:, :2])[0]
         sides = []
         for pick in (u <= u.min() + 10.0, u >= u.max() - 10.0):
             sides.append((float(np.median(u[pick])), float(np.median(e[pick, 2]))))
@@ -1379,27 +1719,32 @@ def bridge_tilt(surf, ground_at, model_id=None, road_ends=None):
         (ua, va, za), (ub, vb, zb) = _deck_ends(surf)
 
         def g(u, v):
-            x, y = (u, v) if ax == 0 else (v, u)
-            return float(ground_at(x, y))
+            x, y = deck_xy(surf, u, v)
+            return float(ground_at(float(x), float(y)))
         ga, gb = g(ua, va), g(ub, vb)
         what = "the ground roads"
     da = ga + BRIDGE_END_EPS_M - za
     db = gb + BRIDGE_END_EPS_M - zb
-    if max(abs(da), abs(db)) >= BRIDGE_TILT_MAX_M or ub <= ua:
+    off = (abs(da - db) >= BRIDGE_TILT_MAX_M or max(abs(da), abs(db)) >= BRIDGE_RAISE_MAX_M) if road_ends \
+        else max(abs(da), abs(db)) >= BRIDGE_TILT_MAX_M
+    if off or ub <= ua:
         log.warning("3dmr model %s: deck %.1f / %.1f m off %s: not leaned", model_id, da, db, what)
-        return ax, ua, 0.0, 0.0, (ua, ub)
+        return ax, ua, 0.0, 0.0, (ua, ub), ang
     slope = (db - da) / (ub - ua)
     log.info("3dmr model %s: deck at u %.1f / %.1f (z %.2f / %.2f) leaned onto %s (%+.2f / %+.2f m)",
              model_id, ua, ub, za, zb, what, da, db)
-    return ax, ua, da, slope, (ua, ub)
+    return ax, ua, da, slope, (ua, ub), ang
 
 
 def tilt_dz(tilt, xy):
-    """bridge_tilt's height change at points xy (k, 2) (zeros without a tilt)."""
+    """bridge_tilt's height change at points xy (k, 2) (zeros without a tilt; a tilt without its 6th element, "ang",
+    runs along axis ax)."""
     if tilt is None:
         return np.zeros(len(xy))
     ax, ua, da, slope = tilt[:4]
-    return da + slope * (np.asarray(xy, np.float64)[:, ax] - ua)
+    ang = tilt[5] if len(tilt) > 5 else None
+    u = deck_uv({"ax": ax, "ang": ang}, xy)[0]
+    return da + slope * (u - ua)
 
 
 def write_bridge_deck(out_dir, model_id, surf, tilt=None):
@@ -1411,7 +1756,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
     if surf is None:
         return None
     Z = np.array(surf["z"], np.float64)
-    ax, du = surf["ax"], surf["du"]
+    du = surf["du"]
     if tilt is not None and len(tilt) > 4:      # (only where the road runs on the deck: bridge_tilt's span)
         us = surf["u0"] + du * np.arange(Z.shape[0])
         Z[(us < tilt[4][0] - du / 2) | (us > tilt[4][1] + du / 2)] = np.nan
@@ -1434,7 +1779,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
     dv = surf["dv"] * stride
     nv = Z.shape[1]
     U, V = np.meshgrid(u0 + du * np.arange(nu), surf["v0"] + dv * np.arange(nv), indexing="ij")
-    X, Y = (U, V) if ax == 0 else (V, U)
+    X, Y = deck_xy(surf, U, V)
     ok = np.isfinite(Z)
     Zt = np.where(ok, Z, 0.0) + tilt_dz(tilt, np.c_[X.ravel(), Y.ravel()]).reshape(Z.shape)
     idx = -np.ones(Z.shape, np.int64)
@@ -1473,20 +1818,23 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
         js = np.nonzero(ok[i])[0]
         ends.append((float(X[i, js].mean()), float(Y[i, js].mean()), float(np.median(Zt[i, js]))))
     name = f"threedmr_{model_id}_deck.cdae"
-    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True)
+    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True, close=False)   # (a placed model, as made)
     return {"shape": name, "verts": verts, "tris": T, "ends": ends}
 
 
 def bridge_footprint_of(surf):
-    """The deck's footprint (bridge_deck_surface) for bridge_footprint's cache: {"ax", "u0", "du", "cols": [[v_min,
-    v_max] or None per column]} in the surface's frame."""
+    """The deck's footprint (bridge_deck_surface) for bridge_footprint's cache: {"ang", "ax", "u0", "du", "cols":
+    [[v_min, v_max] or None per column]} in the surface's frame (deck_uv)."""
     Z = surf["z"]
     cols = []
     for i in range(Z.shape[0]):
         js = np.nonzero(np.isfinite(Z[i]))[0]
         cols.append([round(surf["v0"] + surf["dv"] * float(js.min()), 2),
                      round(surf["v0"] + surf["dv"] * float(js.max()), 2)] if len(js) else None)
-    return {"ax": int(surf["ax"]), "u0": round(float(surf["u0"]), 3), "du": float(surf["du"]), "cols": cols}
+    fp = {"ax": int(surf["ax"]), "u0": round(float(surf["u0"]), 3), "du": float(surf["du"]), "cols": cols}
+    if surf.get("ang") is not None:
+        fp["ang"] = round(float(surf["ang"]), 6)
+    return fp
 
 
 def bridge_footprint(model_id, cache_dir, mesh):
@@ -1519,9 +1867,7 @@ def under_footprint(fp, centre, xy, margin=BRIDGE_FOOT_MARGIN_M):
     """Mask (k,) of points xy (k, 2) (a tile's frame) under bridge footprint fp whose model stands at centre (x, y)
     of the same frame."""
     xy = np.asarray(xy, np.float64).reshape(-1, 2)
-    ax = fp["ax"]
-    loc = xy - np.asarray(centre, np.float64)
-    u, v = loc[:, ax], loc[:, 1 - ax]
+    u, v = deck_uv(fp, xy - np.asarray(centre, np.float64))
     i = np.rint((u - fp["u0"]) / fp["du"]).astype(np.int64)
     cols = fp["cols"]
     out = np.zeros(len(xy), bool)
@@ -1991,6 +2337,7 @@ def _write_section(
             uvs=uvs,
             material=material,
             object_name=material,
+            close=False,            # (a placed 3dmr model, as made: not Earth's geometry)
         )
         result = {"shape": shape_name, "texture": None, "material": material}
         if png_bytes:
@@ -2016,6 +2363,7 @@ def _write_section(
         material=materials,
         tri_materials=tri_materials,
         object_name=materials[0],
+        close=False,                # (a placed 3dmr model, as made)
     )
     textures = [None] * len(pngs)
     written = {}  # sha256(png bytes) -> tex_name already written: several slots sharing the same source

@@ -247,7 +247,7 @@ pub fn power_line_layout<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, 
 }
 
 /// Even-odd: (x, y) inside the rings (all of an area's, outer and holes alike).
-fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
+pub(crate) fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
     let mut c = false;
     for r in rings {
         let n = r.len();
@@ -263,13 +263,13 @@ fn in_rings(rings: &[Vec<(f64, f64)>], x: f64, y: f64) -> bool {
     c
 }
 
-fn ring_area(r: &[(f64, f64)]) -> f64 {
+pub(crate) fn ring_area(r: &[(f64, f64)]) -> f64 {
     let n = r.len();
     (0..n).map(|i| r[i].0 * r[(i + 1) % n].1 - r[(i + 1) % n].0 * r[i].1).sum::<f64>().abs() / 2.0
 }
 
 /// The smallest rectangle around the ring along one of its edges: (u, v axes, a range along u, b range along v).
-fn min_box(r: &[(f64, f64)]) -> Option<((f64, f64), (f64, f64), (f64, f64), (f64, f64))> {
+pub(crate) fn min_box(r: &[(f64, f64)]) -> Option<((f64, f64), (f64, f64), (f64, f64), (f64, f64))> {
     let n = r.len();
     let mut best: Option<(f64, ((f64, f64), (f64, f64), (f64, f64), (f64, f64)))> = None;
     for i in 0..n {

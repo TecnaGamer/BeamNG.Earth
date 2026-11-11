@@ -161,7 +161,6 @@ for i, args in enumerate((
         ("bngEarthGroundRock", "ROCK", "rock/t_dirt_rocky/t_dirt_rocky", 2, "rock/macro_rocky/t_macro_rocky", 32),
         ("bngEarthGroundSnow", "SNOW", "sand/t_sand/t_sand", 2, "sand/t_macro_sand/t_macro_sand", 32, 0.12),
         ("bngEarthGroundMud", "MUD", "mud/mud/t_mud", 1, "soil/macro_clumply/t_macro_clumpy", 32),
-        ("bngEarthGroundCobble", "COBBLESTONE", "asphalt/t_asphalt_02/t_asphalt_02", 1, "asphalt/macro_asphalt/t_macro_asphalt", 16, 0.3),
         # mown town yards (server/surface.py LAWN): the grass detail, finer grain
         ("bngEarthGroundLawn", "GRASS", "grass/t_grass_01/t_grass_01", 1, "grass/t_macro_grass/t_macro_grass", 32, 0.2))):
     name, gm, detail, dsize, macro, msize, *st = args
@@ -176,6 +175,31 @@ for i, (name, gm, detail, dsize, macro, msize, strength, far) in enumerate((
     made = surface(name, gm, f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{50 + i}", detail, dsize, macro, msize, strength)
     mat = made[name]
     mat["baseColorDetailStrength"] = [strength, far]
+    SURFACES.update(made)
+
+# Squares (server/surface.py PAVERS / BRICK, the user 2026-11-11: "paint the plaza and apply a texture to it like the
+# roads"): no stock terrain texture has pavers or brick, so the building tileables at the texture set's 1024 detail
+# size (the large grey slabs of West Coast USA's brutalist plazas; the red herringbone brick); their roughness and
+# ao maps are 512 (a slot-size mismatch costs a resize at every material rebuild), so the asphalt's, ao off. A 2 m
+# repeat: 1 m slabs, 0.25 m bricks. The detail colour shows over the photo (pavers' joints, brick's red).
+# The terrain packing reads no DDS (GBitmap) and these ship as DDS only: the server writes PNG copies from the
+# player's game files under /temp/beamngEarth/terraintex/ (server/terraintex.py).
+TL_ = "/temp/beamngEarth/terraintex/"
+PAVING_DETAIL_DISTANCES = (0, 0, 150, 250)     # m: the detail texture whole to 150 m, gone at 250 (terrain.lua tileLook)
+for i, (name, gm, color, normal, dsize, strength, far) in enumerate((
+        ("bngEarthGroundPavers", "ASPHALT_OLD", "bne_pavers_b.png", "bne_pavers_nm.png", 1, 0.5, 0.15),
+        ("bngEarthGroundBrick", "COBBLESTONE", "bne_brick_b.png", "bne_brick_nm.png", 1, 0.85, 0.3),
+        # cobbled roads and squares (the layer had t_asphalt_02's grain): Italy's setts, persistentId kept
+        ("bngEarthGroundCobble", "COBBLESTONE", "bne_cobble_b.png", "bne_cobble_nm.png", 1, 0.6, 0.2))):
+    pid = "3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c37" if name == "bngEarthGroundCobble" else \
+        f"3b0f6f0e-8f5e-4a51-9a59-0b8e2f6a1c{60 + i}"
+    made = surface(name, gm, pid, "asphalt/asphalt/t_asphalt", dsize, "asphalt/macro_asphalt/t_macro_asphalt", 16,
+                   strength)
+    mat = made[name]
+    mat["baseColorDetailTex"], mat["normalDetailTex"] = TL_ + color, TL_ + normal
+    mat["baseColorDetailStrength"], mat["aoDetailStrength"] = [strength, far], [0, 0]
+    # (seen further than the land's 50-80 m: the user, 2026-11-11, "the texture fades away pretty quickly")
+    mat["detailDistances"] = list(PAVING_DETAIL_DISTANCES)
     SURFACES.update(made)
 
 pretty(os.path.join(T, "main.materials.json"), {

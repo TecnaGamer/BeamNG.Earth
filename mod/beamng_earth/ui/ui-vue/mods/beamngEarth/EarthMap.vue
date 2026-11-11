@@ -94,6 +94,20 @@
         <div class="pin"></div>
         <div class="marker-label">{{ p.name }}</div>
       </div>
+      <!-- gas stations and EV chargers (Layers; finder.lua / server stationindex.py): click to set the GPS -->
+      <div
+        v-for="m in stationMarkers"
+        :key="'s' + m.kind + m.lat + ',' + m.lon"
+        class="marker station"
+        :class="m.kind"
+        :style="{ left: m.sx + 'px', top: m.sy + 'px' }"
+        :title="(m.name || ms.NAMES[m.kind]) + ' (' + m.km + ' km)'"
+        @mousedown.stop
+        @click.stop="setGps(m.lat, m.lon, m.name || ms.NAMES[m.kind])"
+      >
+        <div class="station-icon">{{ ms.ICON[m.kind] }}</div>
+        <div v-if="m.showLabel" class="marker-label">{{ m.name || ms.NAMES[m.kind] }}</div>
+      </div>
       <!-- the GPS destination -->
       <div v-if="gpsScreen" class="marker gps" :style="{ left: gpsScreen.x + 'px', top: gpsScreen.y + 'px' }">
         <div class="flag"></div>
@@ -152,6 +166,7 @@
         <div v-if="searchMsg" class="search-msg">{{ searchMsg }}</div>
         <div v-else-if="searching && !results.length" class="search-msg">Searching…</div>
       </div>
+      <button class="map-btn" @click="nearestStation" title="Route the GPS to the nearest gas station (an EV charger for an electric car)">&#x26FD; Nearest</button>
       <button class="map-btn" @click="zoomBy(1)" title="Zoom in">+</button>
       <button class="map-btn" @click="zoomBy(-1)" title="Zoom out">-</button>
       <button class="map-btn" :class="{ on: follow === true }" @click="centreOnMe" title="Centre on the car and follow it">Me</button>
@@ -199,6 +214,10 @@
             <span class="layer-hint">(world to city zoom)</span></label>
           <label class="layer-opt" title="The US Interstates and US routes with their shields, while zoomed out (Natural Earth; closer in, Roads &amp; labels shows every road)">
             <input type="checkbox" v-model="highwaysOn" /> Highways <span class="layer-hint">(US, zoomed out)</span></label>
+          <label class="layer-opt" title="Gas stations where the map data is downloaded (around the car, where you have driven, pre-cached areas); click one to set the GPS">
+            <input type="checkbox" v-model="fuelOn" /> Gas stations <span class="layer-hint">(zoom in)</span></label>
+          <label class="layer-opt" title="EV chargers where the map data is downloaded (around the car, where you have driven, pre-cached areas); click one to set the GPS">
+            <input type="checkbox" v-model="evOn" /> EV chargers <span class="layer-hint">(zoom in)</span></label>
           <label class="layer-opt" title="What is downloaded on this computer, and at what detail (LB / RB: the next view)">
             <input type="checkbox" v-model="cacheOn" /> Cache <span class="layer-hint">(downloaded data)</span></label>
           <BngSelect v-if="cacheOn" class="cache-select" :value="cacheMode" :options="cacheModeOptions"
@@ -234,6 +253,7 @@
       <div class="ctx-where">{{ fmtLatLon(ctx.lat, ctx.lon) }}</div>
       <div class="ctx-item" :class="{ disabled: !!state.cannotGo }" @click="ctxTeleport">Teleport here</div>
       <div class="ctx-item" @click="ctxGps">Set GPS destination</div>
+      <div class="ctx-item" @click="ctxNearest">Nearest station from here</div>
       <div class="ctx-item" @click="ctxSave">Save this place</div>
       <div class="ctx-item" @click="ctxCopy">Copy coordinates</div>
       <div v-if="state.gps" class="ctx-item" @click="clearGps">Clear GPS</div>
@@ -433,6 +453,7 @@ import { ref, shallowRef, computed, watch, onMounted, onUnmounted, nextTick } fr
 import { useEvents } from "@/services/events"
 import { vBngOnUiNav } from "@/common/directives"
 import * as mm from "./mapmath.js"
+import * as ms from "./mapstations.js"
 import layerData from "./maplayers.js"
 import { BngSelect } from "@/common/components/base"
 
@@ -595,7 +616,7 @@ const weatherBadge = computed(() => {
   // (in the game's unit, as the GPS distances: gps.lua's metric, Options > Display)
   const metric = !!w.metric
   const temp = w.tempC == null ? null : (metric ? `${Math.round(w.tempC)}°C` : `${Math.round(w.tempC * 9 / 5 + 32)}°F`)
-  return { icon: w.code != null ? mm.weatherIcon(w.code) : "", localTime: w.localTime || "", temp }
+  return { icon: w.code != null ? mm.weatherIcon(w.code, !!w.night) : "", localTime: w.localTime || "", temp }
 })
 
 const creditsFull = ref(false)          // the credits' whole text (else two lines)
@@ -1168,6 +1189,92 @@ watch([cacheOn, cacheMode], () => {
   else { cacheSeq++; clearTimeout(cacheTimer); clearTimeout(cachePollTimer); cacheMsg.value = "" }
 }, { immediate: true })
 onUnmounted(() => { cacheSeq++; clearTimeout(cacheTimer); clearTimeout(cachePollTimer) })
+
+// ---- gas stations and EV chargers (the user, 2026-11-09: "a new layer on the map that you can enable, one for gas
+// stations and one for ev's"): the stations in the downloaded map cells round the view (server stationindex.py, mode
+// "map"), asked STATION_ASK_MS after the view stops moving and again while the answer is partial
+const fuelOn = ref(stored("beamngEarth.map.fuel", "1") === "1")
+const evOn = ref(stored("beamngEarth.map.ev", "1") === "1")
+watch(fuelOn, on => store("beamngEarth.map.fuel", on ? "1" : "0"), { flush: "sync" })
+watch(evOn, on => store("beamngEarth.map.ev", on ? "1" : "0"), { flush: "sync" })
+const stationItems = shallowRef([])
+const STATION_ASK_MS = 400, STATION_PARTIAL_MS = 2000, STATION_POLL_MS = 150, STATION_POLL_TRIES = 140
+const NEAR_FROM_HERE_MS = 20000     // the right-click search's limit (finder.lua NEAR_TIMEOUT_S)
+let stationTimer = null
+const mapSlot = { seq: 0, timer: null }, nearSlot = { seq: 0, timer: null }    // (the map's refresh and a right-click
+                                                                                // search: neither drops the other's answer)
+
+// One stations question: cb(answer) when it comes ({ items, partial, error }), cb(null) without one. A newer question in
+// the same slot drops an older one's answer.
+function askStations(slot, lat, lon, rKm, kinds, mode, cb) {
+  const seq = ++slot.seq
+  clearTimeout(slot.timer)
+  const list = "{" + kinds.map(luaStr).join(",") + "}"
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiStations and beamngEarth_settings.uiStations(${luaNum(lat)}, ${luaNum(lon)}, ${luaNum(rKm)}, ${list}, ${luaStr(mode)}) or nil`, r => {
+    if (seq !== slot.seq) return
+    if (!r || r.error || !r.id) { cb(r && r.error ? { items: [], error: r.error } : null); return }
+    let tries = 0
+    const poll = () => {
+      if (seq !== slot.seq) return
+      engineLua(`beamngEarth_settings and beamngEarth_settings.uiStationsResult(${r.id}) or nil`, res => {
+        if (seq !== slot.seq) return
+        if (res) cb(res)
+        else if (++tries < STATION_POLL_TRIES) slot.timer = setTimeout(poll, STATION_POLL_MS)
+        else cb(null)
+      })
+    }
+    slot.timer = setTimeout(poll, STATION_POLL_MS)
+  })
+}
+function stationKinds() { return [...(fuelOn.value ? ["fuel"] : []), ...(evOn.value ? ["ev"] : [])] }
+function scheduleStations(ms_) {
+  clearTimeout(stationTimer)
+  stationTimer = setTimeout(askMapStations, ms_)
+}
+function askMapStations() {
+  stationTimer = null
+  const v = view.value, kinds = stationKinds()
+  if (!kinds.length || v.z < ms.ICON_Z) { stationItems.value = []; return }
+  askStations(mapSlot, v.lat, v.lon, ms.radiusKm(v, w.value, h.value), kinds, "map", res => {
+    if (!res) return
+    stationItems.value = toArray(res.items)
+    if (res.partial) scheduleStations(STATION_PARTIAL_MS)
+  })
+}
+watch([view, w, h], () => scheduleStations(STATION_ASK_MS))
+watch([fuelOn, evOn], () => scheduleStations(0), { immediate: true })
+onUnmounted(() => {
+  mapSlot.seq++; nearSlot.seq++; nearSearchState.gen++
+  clearTimeout(stationTimer); clearTimeout(mapSlot.timer); clearTimeout(nearSlot.timer); clearTimeout(nearSearchState.retry)
+})
+const stationMarkers = computed(() => {
+  const v = view.value
+  const shown = ms.visible(stationItems.value, { fuel: fuelOn.value, ev: evOn.value, z: v.z })
+    .map(i => { const s = screen(i.lat, i.lon); return { ...i, sx: s.x, sy: s.y } })
+    .filter(m => onScreen({ x: m.sx, y: m.sy }))
+  return ms.labels(shown, v.z, w.value, h.value)
+})
+// Nearest for the car (finder.lua: its kind, the GPS, the message saying where)
+function nearestStation() {
+  engineLua(`beamngEarth_settings and beamngEarth_settings.uiNearest and beamngEarth_settings.uiNearest() or nil`, r => {
+    showToast(r && r.error ? r.error : "Finding the nearest station...")
+  })
+}
+// The right-click "Nearest station from here": the kinds whose layer is on (both when none is), rings outward
+const nearSearchState = { gen: 0, retry: null }        // (a newer right-click search cancels an older one's retry)
+function ctxNearest() {
+  if (!ctx.value) return
+  const c = ctx.value
+  closeCtx()
+  const kinds = stationKinds().length ? stationKinds() : ["fuel", "ev"]
+  showToast("Finding the nearest station...")
+  ms.nearSearch(nearSearchState, cb => askStations(nearSlot, c.lat, c.lon, ms.R_KM_MAX, kinds, "near", cb), res => {
+    const best = res && toArray(res.items)[0]
+    if (!best) { showToast(res && res.error ? res.error : "No station within " + ms.R_KM_MAX + " km"); return }
+    setGps(best.lat, best.lon, best.name || ms.NAMES[best.kind])
+    scheduleStations(0)
+  }, { limitMs: NEAR_FROM_HERE_MS })
+}
 
 // the bumpers: off -> each view in turn -> off
 function cycleCache(dir) {
@@ -1849,6 +1956,8 @@ function pickResult(r) {
 function askTeleport(lat, lon, name) {
   teleportMsg.value = ""
   target.value = { lat, lon: mm.wrapLon(lon), name: name || "" }
+  // (the place loads while the box is open: earthd preload_place)
+  engineLua(`if beamngEarth_settings and beamngEarth_settings.uiMapPreload then beamngEarth_settings.uiMapPreload(${Number(lat)}, ${Number(target.value.lon)}) end`)
 }
 
 // The GPS box's Teleport (a search result) and the right-click menu: straight away, no "Teleport here?" (the user
@@ -2061,6 +2170,12 @@ const fmtLatLon = mm.fmtLatLon
 
 .marker { position: absolute; width: 0; height: 0; }
 .marker.place { cursor: pointer; z-index: 2; }
+.marker.station { cursor: pointer; z-index: 2; }
+.marker.station .station-icon {
+  position: absolute; left: -11px; top: -11px; width: 22px; height: 22px; line-height: 18px; text-align: center;
+  font-size: 13px; border-radius: 50%; background: rgba(20, 24, 28, 0.85); border: 2px solid #f0a020;
+}
+.marker.station.ev .station-icon { border-color: #3cc8ff; }
 .marker.place .pin {
   position: absolute; left: -7px; top: -7px; width: 14px; height: 14px; border-radius: 50%;
   background: #ff9a3c; border: 2px solid #fff; box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);

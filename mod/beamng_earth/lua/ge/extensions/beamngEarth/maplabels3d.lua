@@ -110,8 +110,9 @@ end
 -- r, e, dx, dy, dz, id); dt: s since the last frame
 function M.draw(view, rows, dt)
   if not im and not init() then return end
-  local io = im.GetIO()
-  local W, H = io.DisplaySize.x, io.DisplaySize.y
+  -- the game's window: ImGui's main viewport (the game turns ImGui's multi-viewports on: positions are the desktop's)
+  local vp = im.GetMainViewport()
+  local W, H = vp.Size.x, vp.Size.y
   if W <= 0 or H <= 0 then return end
   local scale = H / 1080                     -- (sizes are px at 1080 lines)
   -- (an invisible window of our own: the font scale is set on the current window, and outside one ImGui showed its
@@ -119,15 +120,21 @@ function M.draw(view, rows, dt)
   local flags = bit.bor(im.WindowFlags_NoDecoration, im.WindowFlags_NoInputs, im.WindowFlags_NoBackground,
     im.WindowFlags_NoSavedSettings or 0, im.WindowFlags_NoFocusOnAppearing or 0, im.WindowFlags_NoBringToFrontOnFocus or 0,
     im.WindowFlags_NoNav or 0)
-  im.SetNextWindowPos(im.ImVec2(0, 0))
-  im.SetNextWindowSize(im.ImVec2(W, H))
+  im.SetNextWindowPos(vp.Pos)
+  im.SetNextWindowSize(vp.Size)
+  -- kept in the game's window: a window ImGui finds outside it gets an OS window of its own (opaque black where it
+  -- should be see-through) with a second swap chain, made as the map opens (DirectX 12's log: "GFXd3d12WindowTarget::init
+  -- begin: size=<the screen>"; ReShade crashed the game there, 2026-11-10). The game's own whole-pane overlays do the
+  -- same (render/playerCompassMarkers.lua)
+  if im.SetNextWindowViewport then im.SetNextWindowViewport(vp.ID) end
   im.Begin('##bngEarthMapLabels', nil, flags)
-  local ok, err = pcall(M._draw, view, rows, dt, W, H, scale)
+  local ok, err = pcall(M._draw, view, rows, dt, W, H, scale, vp.Pos.x, vp.Pos.y)
   im.End()
   if not ok then error(err, 0) end
 end
 
-function M._draw(view, rows, dt, W, H, scale)
+function M._draw(view, rows, dt, W, H, scale, ox, oy)
+  ox, oy = ox or 0, oy or 0           -- (the window's top left on the desktop: the draw list's positions are the desktop's)
   local dl = im.GetBackgroundDrawList1()
   local F = (H / 2) / math.tan(math.rad(view.fov or 55) / 2)
   local zoom = view.zoom
@@ -145,16 +152,16 @@ function M._draw(view, rows, dt, W, H, scale)
       local zc = dx * f.x + dy * f.y + dz * f.z
       -- (in front of the camera and on this side of the earth)
       if zc > 1 and ((it.x - O.x) * -dx + (it.y - O.y) * -dy + (it.z - O.z) * -dz) >= 0 then
-        local sx = W / 2 + F * (dx * r.x + dy * r.y + dz * r.z) / zc
-        local sy = H / 2 - F * (dx * u.x + dy * u.y + dz * u.z) / zc
-        if sx > -200 and sx < W + 200 and sy > -100 and sy < H + 100 then
+        local sx = ox + W / 2 + F * (dx * r.x + dy * r.y + dz * r.z) / zc
+        local sy = oy + H / 2 - F * (dx * u.x + dy * u.y + dz * u.z) / zc
+        if sx > ox - 200 and sx < ox + W + 200 and sy > oy - 100 and sy < oy + H + 100 then
           s.sx, s.sy, s.ang = sx, sy, 0
           if it.k == 'street' and it.dx then
             local ex, ey, ez = dx + it.dx, dy + it.dy, dz + it.dz
             local z2 = ex * f.x + ey * f.y + ez * f.z
             if z2 > 1 then
-              local sx2 = W / 2 + F * (ex * r.x + ey * r.y + ez * r.z) / z2
-              local sy2 = H / 2 - F * (ex * u.x + ey * u.y + ez * u.z) / z2
+              local sx2 = ox + W / 2 + F * (ex * r.x + ey * r.y + ez * r.z) / z2
+              local sy2 = oy + H / 2 - F * (ex * u.x + ey * u.y + ez * u.z) / z2
               local a = math.atan2(sy2 - sy, sx2 - sx)
               if a > math.pi / 2 then a = a - math.pi elseif a < -math.pi / 2 then a = a + math.pi end
               s.ang = a
@@ -170,7 +177,7 @@ function M._draw(view, rows, dt, W, H, scale)
   table.sort(cands, function(a, b) return a.prio < b.prio end)
   local placed, written, pois = {}, {}, {}
   local streets = 0
-  local top, bottom = M.RESERVED_TOP * scale, H - M.RESERVED_BOTTOM * scale
+  local top, bottom = oy + M.RESERVED_TOP * scale, oy + H - M.RESERVED_BOTTOM * scale
   for _, s in ipairs(cands) do
     local it = s.it
     local kind, size, caps, spc, c, mark = styleOf(it)
@@ -189,7 +196,7 @@ function M._draw(view, rows, dt, W, H, scale)
     local cx = mark and (s.sx + w / 2 - (mark == 'icon' and 9 or 4) * scale) or s.sx
     local pad = M.PAD * scale
     local x0, x1, y0, y1 = cx - bw / 2 - pad, cx + bw / 2 + pad, s.sy - bh / 2 - pad, s.sy + bh / 2 + pad
-    local ok = x0 >= 0 and x1 <= W and y0 >= top and y1 <= bottom
+    local ok = x0 >= ox and x1 <= ox + W and y0 >= top and y1 <= bottom
     if ok then
       for _, q in ipairs(placed) do
         if x0 < q[2] and x1 > q[1] and y0 < q[4] and y1 > q[3] then ok = false; break end

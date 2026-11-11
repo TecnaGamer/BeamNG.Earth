@@ -476,6 +476,9 @@ class AreasTest(unittest.TestCase):
             def lidar_wanted(self, key):
                 return key[1] % 2 == 0          # (only some cells lie in lidar's country)
 
+            def lidar_sources(self, key):
+                return ["lidar"] if self.lidar_wanted(key) else []
+
             def lidar_on_disk(self, key):
                 return tuple(key) in self.have
 
@@ -599,6 +602,13 @@ class AreaMessagesTest(test_server.ServerHarness):
         m, _ = self.c.until(lambda m: m["type"] == "area_plan_result" and m["id"] == 6, timeout=10)
         self.assertFalse(m["ok"])
         self.assertIn("no route", m["error"])
+        # the saved route a failed re-plan kept (earthd.route, test_route_retry): pre-cache still sees it
+        conn = next(iter(self.server.connections))
+        conn.route_points = [[BOX[0], BOX[1]], [(BOX[0] + BOX[2]) / 2, (BOX[1] + BOX[3]) / 2], [BOX[2], BOX[3]]]
+        self.c.send({"type": "area_plan", "id": 7, "route": "current", "half": 800})
+        m, _ = self.c.until(lambda m: m["type"] == "area_plan_result" and m["id"] == 7, timeout=10)
+        self.assertTrue(m["ok"], m)
+        self.assertGreater(m["km"], 1)
         self.c.send({"type": "area_cmd", "id": 5, "area": aid, "op": "delete"})
         m, _ = self.c.until(lambda m: m["type"] == "areas" and (m.get("result") or {}).get("id") == 5, timeout=10)
         self.assertEqual((m["result"]["ok"], m["areas"]), (True, []))

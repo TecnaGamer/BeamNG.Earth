@@ -87,7 +87,8 @@ function M.onRows(key, rows)
     end
   end
   tiles[key] = t
-  if #t.jacks > 0 and M.onCollide then M.onCollide() end
+  -- (the spot too: far from the player, roads.lua defers the rebuild until the player comes near)
+  if #t.jacks > 0 and M.onCollide then M.onCollide(t.jacks[1].x, t.jacks[1].y) end
 end
 
 -- A road geotile's jacks placed again (roads.lua M.replace: rows mapped into the new anchor's world): moved where the
@@ -105,7 +106,8 @@ function M.placeRows(key, rows)
       end
     end
   end
-  if M.onCollide then M.onCollide() end
+  local j = t.jacks[1]
+  if M.onCollide then M.onCollide(j and j.x, j and j.y) end
 end
 
 -- The road tile goes (roads.lua dropTile).
@@ -114,7 +116,7 @@ function M.dropKey(key)
   if not t then return end
   for _, j in ipairs(t.jacks) do dropJack(j) end
   tiles[key] = nil
-  if #t.jacks > 0 and M.onCollide then M.onCollide() end
+  if #t.jacks > 0 and M.onCollide then M.onCollide(t.jacks[1].x, t.jacks[1].y) end
 end
 
 -- Origin rebase (core.lua finishRebase): every jack moved by p_new = R*p + t, its yaw turned with it.

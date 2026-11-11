@@ -77,6 +77,8 @@ The tag reader does not provide `segregated`, `horse`, `designation`, `sac_scale
 or Overpass requests are added. Existing OSM contributor/ODbL attribution is retained.
 
 Affected cache identities advance automatically; users do not need to clear their download cache.
+The weekly tag-shard builder retains path geometry and structural tags. Archives with an older
+schema fall back to the existing Layercake reader; geometry requests contain only missing way IDs.
 
 This covers the mapped-path portion of Maverick568's #653 through a single path pipeline. Its
 driveway work remains separate. Unlike its proposed defaults, untagged footways do not imply cobbles,

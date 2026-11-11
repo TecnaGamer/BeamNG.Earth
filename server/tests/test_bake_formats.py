@@ -1,11 +1,15 @@
 """Baked packs (bakepack.py): read without the code hash, so a change that makes other plans or facts must bump
 plancache.PLANS_FORMAT / roads.FACTS_FORMAT, or players would get the old ones from a pack. This test holds a
 fixture's plans (as the heights graded with them) and facts digests with the format numbers they were made at
-(golden/bake_formats.json): a digest that changed under the same number fails. After bumping the number, run with
-BNGE_UPDATE_GOLDEN=1 to store the new digest. (A fixture covers the common paths, not every rule: bump on any
-deliberate change of planning or road facts output even when this passes.)
+(golden/bake_formats.json): output that changed under the same number fails. After bumping the number, run with
+BNGE_UPDATE_GOLDEN=1 to store the new golden. The plans are kept as their heights (0.1 mm steps) and compared
+within PLANS_TOL_M, not as a hash: a hash of rounded heights flips between machines on a value ~1e-8 m from a
+rounding step (other CPUs, compilers, numpy builds), while a planning change moves heights by centimetres.
+(A fixture covers the common paths, not every rule: bump on any deliberate change of planning or road facts
+output even when this passes.)
 
 Also: a pack's items round trip, are found only under a matching meta, and a run without plans reads them from it."""
+import base64
 import hashlib
 import json
 import os
@@ -13,6 +17,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zlib
 
 import numpy as np
 
@@ -25,6 +30,7 @@ from test_grading import FakeMD  # noqa: E402
 from test_roads import features, FRAME  # noqa: E402
 
 GOLDEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden", "bake_formats.json")
+PLANS_TOL_M = 1e-3                      # (machines agree to ~1e-6 m; a planning change moves heights far more)
 
 
 def fixture():
@@ -35,13 +41,33 @@ def fixture():
                     flags=[(2, "is_bridge", 0.45, 0.6)])
 
 
-def plans_digest():
-    g = grading.Grader(FRAME, FakeMD(fixture()), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
+def plans_heights(source=None):
+    source = fixture() if source is None else source
+    g = grading.Grader(FRAME, FakeMD(source), lambda la, lo: 10.0 + 0.002 * np.asarray(lo) * 0
                        + 0.0 * np.asarray(la))
     e, n = np.meshgrid(np.linspace(-380, 380, 77), np.linspace(-380, 380, 77))
     la, lo, _ = FRAME.enu_to_geodetic(e.ravel(), n.ravel(), 0.0)
-    z = g.apply(la, lo, 10.0 + 0.01 * e.ravel())
-    return hashlib.sha1(np.round(np.asarray(z, np.float64), 4).tobytes()).hexdigest()
+    # At slope 0.01, the x=200 grid column sits exactly at WALL_CUT_M below the base. Last-bit differences in the
+    # nominally 10 m plans then choose a wall or a slope (0.21 m apart on Windows). Keep the golden off that cutoff.
+    return np.asarray(g.apply(la, lo, 10.0 + 0.0101 * e.ravel()), np.float64)
+
+
+def pack_heights(z):
+    """The heights in 0.1 mm steps, compressed, as text for the golden json."""
+    return base64.b64encode(zlib.compress(np.round(z * 1e4).astype("<i4").tobytes(), 9)).decode("ascii")
+
+
+def unpack_heights(s):
+    return np.frombuffer(zlib.decompress(base64.b64decode(s)), "<i4").astype(np.float64) / 1e4
+
+
+def heights_differ(z, want):
+    """None when the heights match the golden ones, else what differs."""
+    if want is None or len(want) != len(z):
+        return "another grid"
+    d = np.abs(z - want)
+    n = int(np.count_nonzero(d > PLANS_TOL_M))
+    return f"{n} of {len(z)} heights moved, up to {d.max():.4f} m" if n else None
 
 
 def facts_digest():
@@ -58,28 +84,50 @@ class FormatTest(unittest.TestCase):
         roads._FACTS_MEM.clear()
         self.addCleanup(roads._FACTS_MEM.clear)
 
-    def check(self, name, fmt, digest):
+    def check(self, name, fmt, value, key="digest", differ=None):
+        """value: what the golden holds under key; differ(value, stored): None when they match, else how not."""
+        differ = differ or (lambda a, b: None if a == b else f"{a} != {b}")
         got = json.load(open(GOLDEN)) if os.path.exists(GOLDEN) else {}
         want = got.get(name)
-        if os.environ.get("BNGE_UPDATE_GOLDEN") and (want is None or want["format"] != fmt or want["digest"] != digest):
-            if want is not None and want["format"] == fmt and want["digest"] != digest:
-                self.fail(f"{name}: the digest changed: bump its format number first")
-            got[name] = {"format": fmt, "digest": digest}
+        why = None if want is None or key not in want else differ(value, want[key])
+        if os.environ.get("BNGE_UPDATE_GOLDEN") and (want is None or want["format"] != fmt or key not in want or why):
+            if want is not None and want["format"] == fmt and key in want and why:
+                self.fail(f"{name}: the output changed ({why}): bump its format number first")
+            got[name] = {"format": fmt, key: value}
             os.makedirs(os.path.dirname(GOLDEN), exist_ok=True)
             with open(GOLDEN, "w") as fh:
                 json.dump(got, fh, indent=1, sort_keys=True)
             return
         self.assertIsNotNone(want, f"no golden {name}: run with BNGE_UPDATE_GOLDEN=1")
-        if want["format"] == fmt:
-            self.assertEqual(digest, want["digest"],
-                             f"{name} output changed under format {fmt}: bump it (plancache.PLANS_FORMAT / "
-                             f"roads.FACTS_FORMAT), then run with BNGE_UPDATE_GOLDEN=1; baked packs of the old "
-                             f"format are then ignored")
-        else:
-            self.fail(f"{name}: format {fmt} has no golden digest yet: run with BNGE_UPDATE_GOLDEN=1")
+        if want["format"] != fmt or key not in want:
+            self.fail(f"{name}: format {fmt} has no golden yet: run with BNGE_UPDATE_GOLDEN=1")
+        self.assertIsNone(why, f"{name} output changed under format {fmt}: bump it (plancache.PLANS_FORMAT / "
+                               f"roads.FACTS_FORMAT), then run with BNGE_UPDATE_GOLDEN=1; baked packs of the old "
+                               f"format are then ignored")
 
     def test_plans_format(self):
-        self.check("plans", plancache.PLANS_FORMAT, plans_digest())
+        z = plans_heights()
+        self.check("plans", plancache.PLANS_FORMAT, pack_heights(z), "heights",
+                   lambda _a, b: heights_differ(z, unpack_heights(b)))
+
+    def test_plans_compare_within_a_millimetre(self):
+        z = plans_heights()
+        want = unpack_heights(pack_heights(z))
+        self.assertIsNone(heights_differ(z, want), "rounded to 0.1 mm: the same")
+        self.assertIsNone(heights_differ(z + 1e-6, want), "another machine's last bits: the same")
+        moved = z.copy()
+        moved[len(z) // 2] += 0.01
+        self.assertIn("1 of", heights_differ(moved, want) or "", "one height 1 cm off: changed")
+
+    def test_plans_golden_survives_coordinate_roundoff(self):
+        with open(GOLDEN) as fh:
+            want = unpack_heights(json.load(fh)["plans"]["heights"])
+        for axis, direction in ((0, np.inf), (0, -np.inf), (1, np.inf), (1, -np.inf)):
+            with self.subTest(axis=axis, direction=direction):
+                f = fixture()
+                f.lonlat[:, axis] = np.nextafter(f.lonlat[:, axis], direction)
+                self.assertIsNone(heights_differ(plans_heights(f), want),
+                                  "one-ULP coordinate noise must not switch the golden fixture's wall classification")
 
     def test_facts_format(self):
         self.check("facts", roads.FACTS_FORMAT, facts_digest())

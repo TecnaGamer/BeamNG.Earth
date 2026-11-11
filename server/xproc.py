@@ -12,14 +12,20 @@ process waits only for a holder at least as urgent as itself, so the terrain blo
 a background fetch or a road tile's process below it. A lock older than STALE_S (its process died) is taken over; a
 wait longer than wait_s does the work itself.
 """
+import json
 import os
+import re
+import shutil
 import sys
+import threading
 import time
 
 STALE_S = 120.0
 POLL_S = 0.05
 PRIORITY = 0                # this process's niceness above the server's (blockworker.init's nice)
 KIND_RANK = {"urgent": 0, "demand": 1, "prefetch": 2, "background": 3, "predownload": 4}
+RUN_ENV = "BNGE_ROADZ_SESSION"      # (earthd's; not BNE_: those are part of the revisit cache's code key)
+RUN_KEEP_S = 86400.0
 
 
 def _rank(kind):
@@ -169,3 +175,43 @@ def release(lock):
             if time.monotonic() - t0 > RELEASE_S:
                 return
             time.sleep(0.01)
+
+
+def run_dir(root):
+    """root/<this server run>, made (its processes share RUN_ENV; a process alone: its own); the folders of runs older
+    than RUN_KEEP_S under root removed."""
+    sid = re.sub(r"[^A-Za-z0-9_.-]", "_", os.environ.get(RUN_ENV) or f"p{os.getpid()}.{int(time.time())}")
+    got = os.path.join(root, sid)
+    os.makedirs(got, exist_ok=True)
+    try:
+        now = time.time()
+        for name in os.listdir(root):
+            q = os.path.join(root, name)
+            if name != sid and now - os.path.getmtime(q) > RUN_KEEP_S:
+                shutil.rmtree(q, ignore_errors=True)
+    except OSError:
+        pass
+    return got
+
+
+def decide(path, value):
+    """The decision kept at path (JSON): value when this process makes it first, else the one another process made (a
+    file made once: os.link fails when it is there); value itself when it cannot be kept or read."""
+    if not os.path.exists(path):
+        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(value, fh)
+            os.link(tmp, path)
+        except OSError:
+            pass                            # (decided by another process meanwhile)
+        finally:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return value

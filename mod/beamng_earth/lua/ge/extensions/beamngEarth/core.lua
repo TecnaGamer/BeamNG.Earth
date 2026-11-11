@@ -1019,7 +1019,7 @@ M._netq = { q = {}, head = 1, cost = {}, budgetMs = 4.0, busyMs = 12.0, busyN = 
   -- (and a block's photo and patches with it, in their order: a photo update queued behind tiles while its block was
   -- taken at once brought the road / green / road ground flicker back, the same player)
   urgent = { terrain_ready = true, terrain_ready_set = true, terrain_refresh = true, terrain_error = true,
-    block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true,
+    block_base = true, terrain_patch = true, ground_ahead = true, status = true, load_progress = true, where_result = true, geocode_result = true, stations_result = true,
     route_result = true, random_place_result = true, runtime_profiler_pong = true } }
 -- A block's refreshed base photo (block_base) waits while the car is faster than BASE_LATER_MS, and is applied once it
 -- is slower than BASE_NOW_MS, if that block is still the one in use (a later block brings its own photo)
@@ -1135,11 +1135,40 @@ local function onMessage(msg)
     net.send({ type = 'gas_stations', on = true })
     -- the highway signs' switch (settings highwaySigns): no sign tiles built while it is off
     net.send({ type = 'highway_signs', on = roads.signsEnabled })
-    -- the direction signs' switch (settings directionSigns, off by default): sign tiles with boards only while it is on
+    -- the direction signs' switch (settings directionSigns, on by default): sign tiles with boards only while it is on
     do
       local settings = rawget(_G, 'beamngEarth_settings')
       M.directionSigns = settings and settings.get and settings.get('directionSigns') == true or M.directionSigns or false
       net.send({ type = 'direction_signs', on = M.directionSigns })
+    end
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadSigns')
+      if v ~= nil then M.roadSigns = v == true end
+      net.send({ type = 'road_signs', on = M.roadSigns ~= false })
+    end
+    -- the German junction signs' switch (settings germanJunctionSigns, off by default until its performance check)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('germanJunctionSigns')
+      if v == nil then v = M.germanJunctionSigns end
+      M.germanJunctionSigns = v == true
+      net.send({ type = 'german_junctions', on = M.germanJunctionSigns })
+    end
+    -- the town signs' switch (settings townSigns, on by default since 2026-11-10)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('townSigns')
+      if v == nil then v = M.townSigns end
+      M.townSigns = v ~= false
+      net.send({ type = 'town_signs', on = M.townSigns })
+    end
+    -- the road surface's wear (settings roadDetail: the quality presets'; server roadwear.py)
+    do
+      local settings = rawget(_G, 'beamngEarth_settings')
+      local v = settings and settings.get and settings.get('roadDetail')
+      M.roadWear = type(v) == 'string' and v or M.roadWear
+      if M.roadWear then net.send({ type = 'road_wear', value = M.roadWear }) end
     end
     -- the graphics settings the server serves (terrain detail, tree and building reach, the ground photo's size)
     M.graphicsSent = nil
@@ -1381,6 +1410,9 @@ local function onMessage(msg)
   elseif t == 'map_labels_result' then       -- the 3D map's labels (map3d.lua; server maplabels.py)
     local m3 = rawget(_G, 'beamngEarth_map3d')
     if m3 and m3.onMapLabels then m3.onMapLabels(msg) end
+  elseif t == 'places_result' then           -- the modding API's places (api.lua; server places.py)
+    local api = rawget(_G, 'beamngEarth_api')
+    if api and api._onPlaces then api._onPlaces(msg) end
   elseif t == 'place_previews_ready' then      -- the level select's place pictures are there (levelinfo.lua)
     pcall(places.syncLevel)
   elseif t == 'random_place_result' then
@@ -1397,6 +1429,9 @@ local function onMessage(msg)
   elseif t == 'route_download' then
     -- the planned route's corridor prefetch (server routeahead.py): total/done tile+cell count, shown on the map
     gps.onRouteDownload(msg)
+  elseif t == 'stations_result' then         -- the station finder's answer (finder.lua: Nearest, the prompt, the map)
+    local f = rawget(_G, 'beamngEarth_finder')
+    if f and f.onStations then f.onStations(msg) end
   elseif t == 'geocode_result' then
     if msg.id then geocodeResults[msg.id] = { results = msg.results or {}, error = msg.error, text = msg.text } end
   elseif t == 'areas' then
@@ -1542,7 +1577,7 @@ local function updatePlayer(dt)
   local v = veh:getVelocity()
   local lat, lon = st.anchor:worldToGeodetic(p.x, p.y, p.z)
   st.player = { x = p.x, y = p.y, z = p.z, vx = v.x, vy = v.y, vz = v.z, lat = lat, lon = lon, dist = hypot(p.x, p.y),
-    speed = v:length() }
+    speed = v:length(), vehicleId = veh:getID() }
   st.slowFor = st.player.speed < SLOW_SPEED and (st.slowFor + dt) or 0
 end
 
@@ -2619,7 +2654,7 @@ local function onUpdate(dtReal, dtSim)
     -- the roads before the far tiles: they share the governor's budget and the first to ask gets it; after a
     -- teleport the far field's hundreds of tiles took it frame after frame and the road meshes under the car
     -- came after it had passed (Brasov, Sinaia 2026-10-15: the car drove bare ground)
-    roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor)
+    roads.update(gov, st.anchorId, st.player, M.viewAway(), st.anchor, dtSim or dtReal, dtReal)
     gasstations.update(gov)
     t = mark('roads', t)
     farfield.update(gov, (gov.w1 or dtReal * 1000) / 1000, st.cam, st.player)
@@ -2657,6 +2692,11 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    do                              -- (traffic over the limit as the country drives: speeding.lua)
+      local ok, err = pcall(require('beamngEarth/speeding').update, dtReal, navgraph.currentGraph())
+      if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
+    end
+    t = mark('speeding', t)
     require('beamngEarth/minimaproads').update(navgraph.currentGraph())
     t = mark('minimaproads', t)
     do
@@ -3049,7 +3089,8 @@ function M.status()
     cells = crossover.cells(), blockSize = blockSize, anchorLatency = st.anchorLatency,
     terrainLatency = st.terrainLatency, horizon = horizonOn, farRadius = farRadius,
     visibleDistance = st.visibleDistance or VISIBLE_DISTANCE, banner = banner.current().id, guard = st.guard.mode,
-    sessions = roads.allHeldSessions(), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status() })
+    sessions = roads.allHeldSessions(), tileSession = farfield.session(), sea = sea.status(), trees = trees.status(), ambience = ambience.status(),
+    trafficAdaptive = navgraph.trafficStatus() })
 end
 
 -- The connection state line (the settings page shows it): the banner's { id, level, text } (text
@@ -3115,16 +3156,32 @@ function M.appPath(what, pick, path)
   return true
 end
 
+-- A destination picked on the world map (its "Teleport here?" box, a search result): the server fetches its elevation
+-- tiles and map cells in the background before the teleport is confirmed (earthd preload_place; the fastest world
+-- generators load the destination ahead, the user 2026-11-11: "sub second world gen, even with clear cashe").
+function M.preloadPlace(lat, lon)
+  if not net.isConnected() or type(lat) ~= 'number' or type(lon) ~= 'number' then return false end
+  net.send({ type = 'preload_place', lat = lat, lon = lon })
+  return true
+end
+
 -- The world map's search box: addresses and places from the server (geocode.py); the answer is geocode_result.
 function M.requestGeocode(id, q, lat, lon, full)
   if not net.isConnected() then return false end
   net.send({ type = 'geocode', id = id, q = q, lat = lat, lon = lon, full = full and true or nil })
   return true
 end
-function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing)
+-- The station finder (finder.lua, the world map's layers): the nearest gas stations / EV chargers (kinds: 'fuel', 'ev')
+-- within rKm of lat, lon; mode 'map' (cached cells only) or 'near' (rings outward); the answer is stations_result.
+function M.requestStations(id, lat, lon, rKm, kinds, mode)
+  if not net.isConnected() then return false end
+  net.send({ type = 'stations', id = id, lat = lat, lon = lon, r_km = rKm, kinds = kinds, mode = mode })
+  return true
+end
+function M.requestRoute(id, lat0, lon0, lat1, lon1, bearing, via)
   if not net.isConnected() then return false end
   net.send({ type = 'route', id = id, lat0 = lat0, lon0 = lon0, lat1 = lat1, lon1 = lon1, bearing = bearing,
-    download = settings.get('routeDownload') })
+    via = via, download = settings.get('routeDownload') })
   return true
 end
 function M.takeRoute(id)
@@ -3282,7 +3339,7 @@ end
 function M.setRoadsEnabled(on)
   if roads.setEnabled(on) then net.send({ type = 'roads_reset' }) end
 end
--- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, treeScale, buildingScale,
+-- The settings page's graphics the server serves (settings.serverGraphics: { lodScale, lodPx, treeScale, buildingScale,
 -- photoPx, viewM }), after every hello and when one changes (sent only when it differs from the last one sent: applyAll
 -- runs every knob at a level's start). Whether it went out.
 M.graphicsSent = nil          -- (a field: core.lua is near Lua's 200-local limit)
@@ -3290,11 +3347,11 @@ function M.sendGraphics()
   local settings = rawget(_G, 'beamngEarth_settings')
   local g = settings and settings.serverGraphics and settings.serverGraphics()
   if type(g) ~= 'table' or not net.isConnected() or not st.sessionId then return false end
-  local sig = string.format('%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
-    tostring(g.photoPx), tostring(g.viewM))
+  local sig = string.format('%s/%s/%s/%s/%s/%s', tostring(g.lodScale), tostring(g.treeScale), tostring(g.buildingScale),
+    tostring(g.photoPx), tostring(g.viewM), tostring(g.lodPx))
   if sig == M.graphicsSent then return false end
   net.send({ type = 'graphics', lodScale = g.lodScale, treeScale = g.treeScale, buildingScale = g.buildingScale,
-    photoPx = g.photoPx, viewM = g.viewM })
+    photoPx = g.photoPx, viewM = g.viewM, lodPx = g.lodPx })
   M.graphicsSent = sig
   return true
 end
@@ -3313,6 +3370,40 @@ function M.setDirectionSigns(on)
   net.send({ type = 'direction_signs', on = on })
 end
 
+-- The road signs on / off (settings roadSigns): the server builds the sign tiles again with or without them.
+function M.setRoadSigns(on)
+  on = on == true
+  if M.roadSigns == on then return end
+  M.roadSigns = on
+  net.send({ type = 'road_signs', on = on })
+end
+
+-- The German junction signs on / off (settings germanJunctionSigns): the server builds the road and sign tiles again
+-- with or without them (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setGermanJunctionSigns(on)
+  on = on == true
+  if M.germanJunctionSigns == on then return end
+  M.germanJunctionSigns = on
+  net.send({ type = 'german_junctions', on = on })
+end
+
+-- The road surface's wear (settings roadDetail: 'off' / 'basic' / 'full'): the server builds the road tiles again with
+-- or without it (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setRoadWear(v)
+  if type(v) ~= 'string' or M.roadWear == v then return end
+  M.roadWear = v
+  if net.isConnected() then net.send({ type = 'road_wear', value = v }) end
+end
+
+-- The town signs on / off (settings townSigns): the server builds the road and sign tiles again with or without them
+-- (the tiles already shown keep what they were sent until the roads are reloaded).
+function M.setTownSigns(on)
+  on = on == true
+  if M.townSigns == on then return end
+  M.townSigns = on
+  net.send({ type = 'town_signs', on = on })
+end
+
 M.onUpdate = onUpdate
 -- the stock gas stations' POI list (gameplay/rawPois.lua): ours, so freeroam/gasStations.lua offers "Refuel" at them
 M.onGetRawPoiListForLevel = function(levelIdentifier, elements) gasstations.pois(levelIdentifier, elements) end
@@ -3322,6 +3413,7 @@ M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
 end

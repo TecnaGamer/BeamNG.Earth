@@ -63,7 +63,7 @@ pub fn polyline_label_points<'py>(py: Python<'py>, lonlat: PyReadonlyArray2<'py,
     let a = lonlat.as_array();
     let pts: Vec<[f64; 2]> = a.outer_iter().map(|r| [r[0], r[1]]).collect();
     let (s, e) = (starts.as_array().to_vec(), ends.as_array().to_vec());
-    let (fi, lo, la, br) = py.allow_threads(|| label_points(&pts, &s, &e, spacing));
+    let (fi, lo, la, br) = py.detach(|| label_points(&pts, &s, &e, spacing));
     (fi.into_pyarray(py), lo.into_pyarray(py), la.into_pyarray(py), br.into_pyarray(py))
 }
 
