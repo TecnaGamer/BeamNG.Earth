@@ -375,7 +375,7 @@
   }
  },
  "m1_ireland_960": {
-  "steps": 182,
+  "steps": 177,
   "parts": {
    "bridge:44ef9f7f-4940-45a0-869f-a801c59e75b1": {
     "step_m": 0.0191,
@@ -383,9 +383,9 @@
     "lift_g": 0.2452
    },
    "bridge:929138f3-37a1-42f1-a895-f68258039c46": {
-    "step_m": 6.0885,
-    "grade": 2.9875,
-    "lift_g": 32.0645
+    "step_m": 0.0154,
+    "grade": 0.0462,
+    "lift_g": 0.3849
    },
    "bridge:c7854f92-37c1-406b-9e1b-46d0e1da9941": {
     "step_m": 0.0249,
@@ -1164,17 +1164,17 @@
   "parts": {}
  },
  "prague_924": {
-  "steps": 103,
+  "steps": 84,
   "parts": {
    "bridge:2a2d9a62-b690-4877-bdb5-7ff39d10583e": {
-    "step_m": 9.7251,
-    "grade": 2.4218,
-    "lift_g": 54.0995
+    "step_m": 0.4896,
+    "grade": 0.261,
+    "lift_g": 2.8541
    },
    "bridge:51d3106d-e3ec-481c-8509-36c141aff00c": {
-    "step_m": 9.7391,
-    "grade": 2.4226,
-    "lift_g": 54.0828
+    "step_m": 0.1062,
+    "grade": 0.1157,
+    "lift_g": 1.7636
    },
    "bridge:a9b6b6ce-cfb8-408e-85f6-194b29a38aae": {
     "step_m": 0.0257,

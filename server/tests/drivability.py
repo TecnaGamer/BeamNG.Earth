@@ -254,29 +254,25 @@ def _feature(fid):
 
 
 def _lead(st, start, structures, ground):
-    """(xy, z) of LEAD_M before (start) or after st, ordered along the drive: on the deck or tunnel that joins st there,
-    else on the ground straight on."""
+    """(xy, z) of LEAD_M before (start) or after st, ordered along the drive: on the nearest deck or tunnel that joins st
+    there and goes on outwards, else on the ground straight on."""
     end = st.xy[0] if start else st.xy[-1]
+    d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
+    out = d / np.hypot(*d)                                  # (outwards from st's end)
     feature = _feature(st.fid)
     best = None
     for other in structures:
         if other is st:
             continue
         reach = JOIN_SAME_M if _feature(other.fid) == feature else JOIN_M
-        for at_start, q in ((True, other.xy[0]), (False, other.xy[-1])):
-            d = float(np.hypot(*(q - end)))
-            if d <= reach and (best is None or d < best[0]):
-                best = (d, other, at_start)
-    d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
-    out = d / np.hypot(*d)                                  # (outwards from st's end)
-    xy = None
+        for oxy, oz in ((other.xy, other.z), (other.xy[::-1], other.z[::-1])):     # (from its start, from its end)
+            gap = float(np.hypot(*(oxy[0] - end)))
+            ahead = (oxy - end) @ out > 0       # (not back over st: a fork's other deck, a deck past its map end)
+            if gap <= reach and ahead.any() and (best is None or gap < best[0]):
+                best = (gap, oxy[ahead][:LEAD_M], oz[ahead][:LEAD_M])
     if best is not None:
-        _d, other, at_start = best
-        oxy, oz = (other.xy, other.z) if at_start else (other.xy[::-1], other.z[::-1])
-        ahead = (oxy - end) @ out > 0                       # (a deck runs past its map end: not back over st)
-        if ahead.any():
-            xy, z = oxy[ahead][:LEAD_M], oz[ahead][:LEAD_M]
-    if xy is None:
+        xy, z = best[1], best[2]
+    else:
         xy = end + np.arange(1, LEAD_M + 1)[:, None] * out
         z = ground(xy)
     return (xy[::-1], z[::-1]) if start else (xy, z)        # (from the joined end outwards: reversed before st)
