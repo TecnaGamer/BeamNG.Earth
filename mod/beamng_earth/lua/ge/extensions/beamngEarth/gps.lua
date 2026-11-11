@@ -79,6 +79,7 @@ local lastCheck = -math.huge
 local info = nil        -- { dist, bearing, remaining, eta } at the last check
 local auto = false      -- autodrive on
 local autoPath = nil    -- the node ids last given to the AI
+local autoFinished = nil -- completed local endpoint: wait for a continuation instead of resubmitting it
 local autoSerial = nil  -- the graph (navgraph applies) they were taken from
 local autoForce = true -- restart after a stall/recovery, destination change or pause, even on the same path
 local autoBlocked = false
@@ -247,6 +248,7 @@ function M.setDestination(lat, lon, name)
   lat, lon = tonumber(lat), tonumber(lon)
   if not lat or not lon then return false end
   dest = { lat = lat, lon = lon, name = name }
+  autoFinished = nil
   vias = {}
   route, routeError, pendingId, enu, progress, info, progressS = nil, nil, nil, nil, 1, nil, nil
   leastRemaining, routeFails = nil, 0
@@ -474,6 +476,7 @@ end
 function M.onAiRouteDone(id)
   local veh = auto and playerVeh()
   if not veh or veh:getId() ~= id then return end
+  autoFinished = autoPath and autoPath[#autoPath]
   -- Completion leaves the stock AI in manual mode with no active route. Force a waypoint start,
   -- including when a compatible update was already queued before this notification arrived.
   M.retryAutodrive()
@@ -641,10 +644,19 @@ local function driveArrowsPath(gm, nodes)
   end
   ids = M.connectedStart(ids, a, b, nodes)
   if not ids or #ids == 0 then holdAutodrive(veh); return end
+  if #ids == 1 and ids[1] == autoFinished then
+    local n = nodes[ids[1]]
+    local dx, dy, dz = p.x - n.pos.x, p.y - n.pos.y, p.z - (n.pos.z or p.z)
+    local reach = math.max(8, n.radius or 0)
+    -- A late completion may follow an extension to a still-distant endpoint. Only hold at the reached one;
+    -- a replacement map alone does not make that endpoint a usable continuation.
+    if dx * dx + dy * dy + dz * dz <= reach * reach then holdAutodrive(veh); return end
+  end
   veh:queueLuaCommand(M.aiCommand(ids))
   M.trace('path', ids, nodes, p)
   autoPath, autoSerial, stillSince = ids, graphSerial(), nil
   autoForce, autoBlocked = false, false
+  autoFinished = nil
 end
 
 -- Pure: the index k of the path edge (ids[k] -> ids[k+1]) nearest (px, py) in nodes (positions), or nil.
@@ -788,6 +800,7 @@ function M.setAutodrive(on)
   on = on and true or false
   if on == auto then return auto end
   auto = on
+  autoFinished = nil
   autoPath, autoSerial, stillSince, paused, pathWait = nil, nil, nil, false, nil
   autoForce, autoBlocked = true, false
   progRemaining, progAt, stuckTries = nil, nil, 0
@@ -974,7 +987,7 @@ function M.update(anchor, player)
       if not progRemaining or info.remaining < progRemaining - M.AUTO_PROGRESS_M then
         if progRemaining then stuckTries = 0 end
         progRemaining, progAt = info.remaining, now
-      elseif now - progAt > M.AUTO_NOPROGRESS_S then
+      elseif not autoFinished and now - progAt > M.AUTO_NOPROGRESS_S then
         stuckTries = stuckTries + 1
         if stuckTries >= 2 then         -- the path given again did not help: onto the route ahead
           stuckTries = 0
@@ -1020,6 +1033,7 @@ function M.reset()
   lineKey = nil
   autoPath, autoSerial, pathWait, vehGraph = nil, nil, nil, {}
   autoForce, autoBlocked = true, false
+  autoFinished = nil
 end
 
 return M

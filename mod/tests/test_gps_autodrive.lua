@@ -193,6 +193,43 @@ end
 
 -- The stock AI clears its route on completion but stays in manual mode. Its GE notification is asynchronous.
 do
+  local f = fixture({ 'w', 'j' })
+  f.x, f.speed = 98, 0 -- local graph/path ends here, but the GPS destination is still farther ahead
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == 1 and f.modes[#f.modes] == 'stop',
+    'a completed local endpoint holds instead of immediately restarting the same waypoint')
+  for _ = 1, 35 do f:step(2) end
+  f:mapArrives(); f:step()
+  T.check(#f.drives == 1 and f.gps.autodrive(),
+    'stall checks and graph replacement cannot restart an already completed endpoint')
+  T.check(not f.gps.noProgressReplans and not f.gps.autoRecoveries,
+    'waiting for a continuation does not trigger stuck-vehicle recovery')
+  f.path = { 'j', 's', 't' }; f:step()
+  T.check(#f.drives == 2 and #f.extensions == 0,
+    'a usable continuation resumes through a fresh lane-aware start')
+end
+
+do
+  local f = fixture({ 'w', 'j' })
+  f.path = { 'j', 's' }; f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.extensions == 1, 'the local path can extend before its completion notification arrives')
+  f.x, f.y, f.path = 110, -10, { 's' }
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == 2 and f.drives[2][1] == 's',
+    'a delayed completion cannot block a single extended waypoint still ahead of the car')
+end
+
+do
+  local f = fixture({ 'w', 'j' })
+  f.x, f.speed = 98, 0
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  f.gps.setAutodrive(false)
+  f.x = 40
+  f.gps.setAutodrive(true); f:step()
+  T.check(#f.drives == 2, 'explicitly enabling Autodrive clears the completed endpoint')
+end
+
+do
   local f = fixture()
   f.gps.onAiRouteDone(2); f:step()
   T.check(#f.drives == 1, 'another vehicle finishing its route does not restart the player')
