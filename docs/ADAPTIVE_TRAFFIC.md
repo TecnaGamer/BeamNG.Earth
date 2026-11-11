@@ -14,7 +14,14 @@ Tracks and busways do not count as traffic roads. When the settlement catalogue 
 the model falls back to the mapped road network.
 
 `navgraph.build` attaches the profile to every graph as `trafficProfile` (one vectorised numpy pass over the roads near
-the graph's centre, a few ms per graph, built every 400 m in the navgraph worker thread). The edges are unchanged.
+the graph's centre, a few ms per graph, built every 400 m in the navgraph worker thread). The density profile itself
+does not alter edge speeds.
+
+For traffic AI speed targets, a mapped OSM `smoothness` value can also cap speed on rough sections: `bad` 60 km/h,
+`very_bad` 40, `horrible` 20, `very_horrible` 10, and `impassable` 5. These are cautious AI ceilings, not replacements
+for the posted speed: the graph's legal-speed metadata remains unchanged. Missing, unknown, `excellent`, `good`, and
+`intermediate` values do not add a cap. OSM describes smoothness as physical passability for wheeled vehicles; the
+speed ceilings are BeamNG.Earth's traffic-driving heuristic.
 
 In the game (`navgraph.lua`, `M.ADAPTIVE`, Settings > World > Adaptive traffic amount) the stock traffic's active
 amount (`gameplay_traffic.setActiveAmount`) moves toward the profile's target by one car at most every 5 s, never above

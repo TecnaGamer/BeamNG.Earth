@@ -182,6 +182,24 @@ def posted_field(legal, target, mapped):
     return v if mapped else -v
 
 
+# The traffic AI has no suspension-dependent model of a road's surface condition. OSM smoothness is a vehicle
+# passability class, not a speed limit; these conservative ceilings make the ordinary traffic slow down on tagged
+# rough sections without changing the posted limit (or affecting untagged roads). Keep in sync with tests/docs.
+SMOOTHNESS_CAP_KMH = {"bad": 60.0, "very_bad": 40.0, "horrible": 20.0, "very_horrible": 10.0, "impassable": 5.0}
+
+
+def smoothness_cap(feats, i):
+    """AI target-speed ceiling (m/s) for OSM's smoothness on road i; None for missing/unknown and normal surfaces."""
+    values = getattr(feats, "attrs", {}).get("osm_smoothness")
+    if values is None or i < 0 or i >= len(values):
+        return None
+    value = values[i]
+    if value is None:
+        return None
+    cap = SMOOTHNESS_CAP_KMH.get(str(value).strip().lower())
+    return cap / 3.6 if cap is not None else None
+
+
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
@@ -513,6 +531,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                     continue
                 incoming = direction == 0 or (direction > 0) == (end == -1)   # unless one-way out of it
                 approaches[(names[j], fid, end)] = (names[nb], incoming)
+            rough_cap = smoothness_cap(feats, i)
             for j in range(len(names) - 1):
                 a, b = names[j], names[j + 1]
                 if a == b:
@@ -550,6 +569,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                         deck_centres[nm] = deck_xy[dk]
                         pending_by[nm] = (-w, fid)
                 target = min(legal, float(profile[j]), float(profile[j + 1]))
+                if rough_cap is not None:
+                    target = min(target, rough_cap)
                 half = w / 2 - (MOUNTAIN_EDGE_M if getattr(spec, "mountain", False) else 0.0) + float(max(hxm[j], hxm[j + 1]))
                 if in_tunnel:
                     # (the AI keeps TUNNEL_AI_WALL_M off the tube's walls, roadmesh.tunnel's road + shoulders: with the
