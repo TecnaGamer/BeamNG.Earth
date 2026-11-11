@@ -3389,6 +3389,7 @@ M.onClientStartMission = onClientStartMission
 M.onClientPreStartMission = onClientPreStartMission
 M.onNavgraphReloaded = function() navgraph.onReloaded() end
 M.onVehicleMapmgrUpdate = function(id) gps.onVehicleMapmgrUpdate(id) end
+M.onAiRouteDone = function(id) gps.onAiRouteDone(id) end
 M.onVehicleSwitched = function(oldId, newId, player)
   if st.inOurLevel then navgraph.onVehicleSwitched(oldId, newId, player) end
 end

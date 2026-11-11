@@ -471,6 +471,15 @@ function M.retryAutodrive()
   routedTo, autoForce = nil, true
 end
 
+function M.onAiRouteDone(id)
+  local veh = auto and playerVeh()
+  if not veh or veh:getId() ~= id then return end
+  -- Completion leaves the stock AI in manual mode with no active route. Force a waypoint start,
+  -- including when a compatible update was already queued before this notification arrived.
+  M.retryAutodrive()
+  lastCheck = -math.huge
+end
+
 local function holdAutodrive(veh)
   if not autoBlocked then
     veh:queueLuaCommand('if beamngEarth_autodrive then beamngEarth_autodrive.stop() else ai.setMode("stop") end')

@@ -191,6 +191,35 @@ do
   T.check(#f.drives == 3, 'server recovery restarts the route')
 end
 
+-- The stock AI clears its route on completion but stays in manual mode. Its GE notification is asynchronous.
+do
+  local f = fixture()
+  f.gps.onAiRouteDone(2); f:step()
+  T.check(#f.drives == 1, 'another vehicle finishing its route does not restart the player')
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == 2 and #f.extensions == 0,
+    'completion restarts identical waypoints immediately, before the normal check and stall timers')
+
+  f.nodes.u = { pos = { x = 500, y = -60, z = 0 }, links = {} }
+  f.nodes.t.links.u = {}
+  f:mapArrives(); f:step()
+  local starts = #f.drives
+  f.path = { 'j', 's', 't', 'u' }
+  -- A route update can be sent before the queued completion notification is delivered.
+  f.gps.onVehicleMapmgrUpdate(1); f:step()
+  T.check(#f.extensions == 1, 'a compatible update can precede the completion notification')
+  f.gps.onAiRouteDone(1); f:step(0.1)
+  T.check(#f.drives == starts + 1 and #f.extensions == 1
+    and table.concat(f.drives[#f.drives], ',') == 'j,s,t,u',
+    'a delayed completion notification restarts the latest extended route through waypoints')
+
+  f.gps.setAutodrive(false)
+  starts = #f.drives
+  f.gps.onAiRouteDone(1); f:step()
+  T.check(#f.drives == starts and f.modes[#f.modes] == 'disabled',
+    'a late completion notification cannot re-enable disabled Autodrive')
+end
+
 for _, name in ipairs({ 'getPlayerVehicle', 'beamngEarth_core', 'map', 'core_groundMarkers', 'vec3' }) do
   _G[name] = saved[name]
 end
