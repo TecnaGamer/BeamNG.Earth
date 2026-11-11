@@ -1058,7 +1058,8 @@ function M._loadCover()
   return true
 end
 function M.netCosts() return M._netq.cost end      -- {type = {n, ms, max}}: probes
-function M.netBacklog() return #M._netq.q - M._netq.head + 1 end
+function M.netBacklog() return #M._netq.q - M._netq.head + 1 + (net.decodeBacklog and net.decodeBacklog() or 0) end  -- (+ those not decoded yet)
+if net.setUrgent then net.setUrgent(M._netq.urgent) end  -- (net.lua decodes these at once while other payloads wait to be decoded)
 
 local function onMessage(msg)
   local t = msg.type
@@ -2612,7 +2613,7 @@ local function onUpdate(dtReal, dtSim)
     M._alloc.roll(st.clock)
     M._alloc.frame()
     local kbD = collectgarbage('count')
-    local msgs = net.update(dtReal)
+    local msgs = net.update(dtReal, cover)    -- (decoding spread over frames, net.lua; all at once in the cover)
     local dD = collectgarbage('count') - kbD
     local al = M._alloc
     if dD > 0 then al.cur.decode, al.cur.total = al.cur.decode + dD, al.cur.total + dD end
@@ -2620,9 +2621,8 @@ local function onUpdate(dtReal, dtSim)
     for _, msg in ipairs(msgs) do
       if nq.urgent[msg.type] then handle(msg) else nq.q[#nq.q + 1] = msg end
     end
-    local loadingNow = cover
     local waiting = #nq.q - nq.head + 1
-    local budget = loadingNow and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
+    local budget = cover and math.huge or ((waiting >= nq.busyN) and nq.busyMs or nq.budgetMs)
     -- (and at least 1/drainDiv of what waits: under a fixed budget a slower PC's backlog grew for the whole drive)
     local minN, done = math.ceil(waiting / nq.drainDiv), 0
     local n0 = hitchClock()
