@@ -488,7 +488,8 @@ def build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None,
         if road_feats:
             before = idx
             idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
-                                         _s.surface.urban, None if provisional else _s.widths, _open_tunnels(g, keep))
+                                         _s.surface.urban, None if provisional else _s.widths, _open_tunnels(g, keep),
+                                         quick=provisional)
             if not (idx != before).any():   # (drawn roads over it, none painted: Discord's gravel mountain roads)
                 import roads as roadsmod
                 la0, la1 = float(np.min(keep["lat"])), float(np.max(keep["lat"]))

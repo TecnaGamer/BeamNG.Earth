@@ -233,7 +233,7 @@ ROAD_EDGE_M = 0.5    # m past a carriageway's edge its material reaches: a squar
 
 
 @profile_step('Surface road paint')
-def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, extra=()):
+def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, extra=(), quick=False):
     """idx (material per sample, [row, col], as classify gives it) with the roads of feats_list (the
     "roads" Features of the cells around) drawn in at their width: ROAD_MATERIAL by surface kind.
     lat / lon: the samples' positions; square: m between samples; urban_fn: as roads.road_specs (the
@@ -244,7 +244,9 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     edge line, GitHub #402). The engine gives each square the material of its south-west sample (the ground model under
     a wheel and the detail texture both: a car 1.4 m inside a 9 m road's edge was on dirt, and the dirt's grain lay over
     the asphalt along one edge; wheels swept across the edges in game, 2026-10-28): a sample is tested at the centre of
-    the square north-east of it. Pure (a new array)."""
+    the square north-east of it. quick: a stand-in block's paint (the map's own bridge / tunnel tags, no rounded
+    corners, no width tapers: nothing that waits on the session's lidar decisions, roads.quick_ground_parts; the
+    tapers' bridge specs held a cold Bozeman stand-in 16.5 s). Pure (a new array)."""
     import europewalks
 
     european = europewalks.enabled()
@@ -359,11 +361,11 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
                 roadsmod._rule_value(feats.rules.get("subclass"), i) == "parking_aisle"
             mw = roadsmod.median_width(specs[i])
             ms = roadsmod.median_side(specs[i])
-            for ring in roadsmod.ground_parts(feats, i):      # not bridges / tunnels
+            for ring in (roadsmod.quick_ground_parts if quick else roadsmod.ground_parts)(feats, i):   # not bridges / tunnels
                 if pfr is not None:
                     ring = placement.ring(pfr, feats, i, ring, specs[i], fid)
                 line(ring[:, 0], ring[:, 1], specs[i], aisle,
-                     roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
+                     () if quick else roadsmod.joint_desc(copies.get(fid, [(feats, i)]), taper_of))
                 if ms is not None and mw > roadsmod.MEDIAN_SLAB_M and len(ring) >= 2:
                     # the median's ground: lawn (report #48, Boston Street, 2026-10-17)
                     sc = np.array([111320.0 * math.cos(math.radians(float(ring[0, 1]))), 110540.0])
@@ -380,7 +382,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     gb = gfr.geodetic_to_enu(np.array([float(np.min(lat)), float(np.max(lat))]),
                              np.array([float(np.min(lon)), float(np.max(lon))]), np.zeros(2))
     for hw_, mid in gore_fills(gfr, feats_list, (float(np.min(gb[0])) - 300, float(np.min(gb[1])) - 300,
-                                                 float(np.max(gb[0])) + 300, float(np.max(gb[1])) + 300), urban_fn, widths):
+                                                 float(np.max(gb[0])) + 300, float(np.max(gb[1])) + 300), urban_fn, widths,
+                               quick=quick):
         gla, glo, _ = gfr.enu_to_geodetic(mid[:, 0], mid[:, 1], np.zeros(len(mid)))
         c, r = to_px(np.asarray(glo), np.asarray(gla))
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
@@ -399,7 +402,8 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     out = idx.copy()
     out[mask(lawn)] = LAWN
     # roundabout footprints: lawn under the grass photo fill (photo_roads), so tyres feel grass not asphalt scar
-    for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon):
+    for lonlat in _island_lonlat_rings(feats_list, urban_fn, widths, lat0=la_c, lon0=lo_c, lat=lat, lon=lon,
+                                       quick=quick):
         c, r = to_px(lonlat[:, 0], lonlat[:, 1])
         c, r = np.asarray(c, np.float64), np.asarray(r, np.float64)
         if c.max() < 0 or c.min() > w or r.max() < 0 or r.min() > h:
@@ -411,8 +415,10 @@ def paint_roads(idx, lat, lon, feats_list, square, urban_fn=None, widths=None, e
     # the rounded corners of curbless junctions (roadcorners.py): asphalt as their roads (ROAD_EDGE_M past the arc), a
     # verge round them
     lonlat_bounds = (float(np.min(lon)), float(np.min(lat)), float(np.max(lon)), float(np.max(lat)))
-    corner, corner_verge = (_corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, (h, w), grow)
-                            for grow in (ROAD_EDGE_M, ROAD_EDGE_M + VERGE_M))
+    # (quick: a stand-in block's paint, no corners: their rows wait on the lidar decisions, quick_ground_parts)
+    corner, corner_verge = (None, None) if quick else (
+        _corner_mask(feats_list, urban_fn, widths, lonlat_bounds, to_px, (h, w), grow)
+        for grow in (ROAD_EDGE_M, ROAD_EDGE_M + VERGE_M))
     if corner_verge is not None:
         v |= corner_verge
     out[v & np.isin(out, VERGE_FROM)] = VERGE
@@ -557,22 +563,22 @@ def _road_segments(frame, x0, y0, size, w, h, feats_list, urban_fn=None, widths=
 _GORE_MEMO = OrderedDict()
 
 
-def gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
+def gore_fills(frame, feats_list, box, urban_fn=None, widths=None, quick=False):
     """[(half widths (k,), middle line (k, 3) in frame)] of the paved wedges between ramps and their motorways
     (markings.gores) whose roads come near box (x0, y0, x1, y1) of frame. Kept for a few calls with the same features
     and square (a block photo asks twice: unghost_square, paint_square)."""
     key = (tuple(getattr(f, "__dict__", {}).get("_bnge_cell") or id(f) for f in feats_list), frame.lat0, frame.lon0,
-           tuple(round(float(v), 1) for v in box))
+           tuple(round(float(v), 1) for v in box), quick)
     got = _GORE_MEMO.get(key)
     if got is None:
-        got = _gore_fills(frame, feats_list, box, urban_fn, widths)
+        got = _gore_fills(frame, feats_list, box, urban_fn, widths, quick)
         _GORE_MEMO[key] = got
         while len(_GORE_MEMO) > 8:
             _GORE_MEMO.popitem(last=False)
     return got
 
 
-def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
+def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None, quick=False):
     import markings
     near, seen = [], set()
     placement = roadsmod.placement_context(feats_list, urban_fn, widths)   # (where the road tiles draw them)
@@ -587,7 +593,7 @@ def _gore_fills(frame, feats_list, box, urban_fn=None, widths=None):
                     (sp.cls not in markings.GORE_MAJOR and not sp.link):
                 continue
             seen.add(fid)
-            for k, ring in enumerate(roadsmod.ground_parts(feats, i)):
+            for k, ring in enumerate(_ground_parts(quick)(feats, i)):
                 ring = placement.ring(frame, feats, i, ring, sp, fid)
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 if e.max() < box[0] or e.min() > box[2] or n.max() < box[1] or n.min() > box[3]:
@@ -689,7 +695,12 @@ def _roundabout_footprints(roads_list):
 ISLAND_REACH_M = 150.0
 
 
-def _roads_list_enu(frame, feats_list, urban_fn=None, widths=None, bounds=None):
+def _ground_parts(quick):
+    """roads.ground_parts, or for a stand-in block's paint roads.quick_ground_parts (no waits on the lidar)."""
+    return roadsmod.quick_ground_parts if quick else roadsmod.ground_parts
+
+
+def _roads_list_enu(frame, feats_list, urban_fn=None, widths=None, bounds=None, quick=False):
     """islands.find roads_list from feats_list in frame ENU metres; bounds (x0, y0, x1, y1): only the roads with a
     point within ISLAND_REACH_M of it."""
     roads_list = []
@@ -707,7 +718,7 @@ def _roads_list_enu(frame, feats_list, urban_fn=None, widths=None, bounds=None):
             sp = specs[i]
             if sp is None or (fb is not None and not fb[i]):
                 continue
-            for ring in roadsmod.ground_parts(feats, i):
+            for ring in _ground_parts(quick)(feats, i):
                 e, n = mapgeom.enu_xy(feats, frame, ring)
                 if len(e) < 2:
                     continue
@@ -716,7 +727,8 @@ def _roads_list_enu(frame, feats_list, urban_fn=None, widths=None, bounds=None):
     return roads_list
 
 
-def _island_lonlat_rings(feats_list, urban_fn=None, widths=None, lat0=None, lon0=None, lat=None, lon=None):
+def _island_lonlat_rings(feats_list, urban_fn=None, widths=None, lat0=None, lon0=None, lat=None, lon=None,
+                         quick=False):
     """Lon/lat polygons of roundabout footprints among feats_list (for paint_roads lawn); lat / lon (the painted
     samples): only the roundabouts that can reach them (_roads_list_enu bounds)."""
     import geodesy
@@ -728,7 +740,7 @@ def _island_lonlat_rings(feats_list, urban_fn=None, widths=None, lat0=None, lon0
             for i in range(len(feats)):
                 if specs[i] is None:
                     continue
-                for ring in roadsmod.ground_parts(feats, i):
+                for ring in _ground_parts(quick)(feats, i):
                     if len(ring) >= 2:
                         lon0, lat0 = float(ring[0, 0]), float(ring[0, 1])
                         break
@@ -747,7 +759,7 @@ def _island_lonlat_rings(feats_list, urban_fn=None, widths=None, lat0=None, lon0
         e, n, _ = frame.geodetic_to_enu(cla, clo, np.zeros(4))
         bounds = (float(np.min(e)), float(np.min(n)), float(np.max(e)), float(np.max(n)))
     out = []
-    for xy in _roundabout_footprints(_roads_list_enu(frame, feats_list, urban_fn, widths, bounds)):
+    for xy in _roundabout_footprints(_roads_list_enu(frame, feats_list, urban_fn, widths, bounds, quick)):
         la, lo, _ = frame.enu_to_geodetic(xy[:, 0], xy[:, 1], np.zeros(len(xy)))
         out.append(np.column_stack([np.asarray(lo, np.float64), np.asarray(la, np.float64)]))
     return out

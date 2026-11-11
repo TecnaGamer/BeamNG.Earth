@@ -3546,7 +3546,7 @@ class Server:
             if road_feats:              # (provisional: the widths' guesses, not measured between the buildings)
                 idx = surfacemod.paint_roads(idx, keep["lat"], keep["lon"], road_feats, heightmap.SQUARE,
                                              self.surface.urban, None if provisional else self.road_widths,
-                                             blockworker._open_tunnels(g, keep))
+                                             blockworker._open_tunnels(g, keep), quick=provisional)
             idx = surfacemod.paint_lots(idx, keep["lat"], keep["lon"], lots,
                                         blockworker._us_square_looks(anchor.frame)) if lots else idx
             if hasattr(self.surface, "paint_ground_pads"):

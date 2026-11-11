@@ -1487,6 +1487,18 @@ def ground_parts(feats, i):
     return _parts_by_level(feats, i, "ground")
 
 
+def quick_ground_parts(feats, i):
+    """ground_parts by the map's own bridge / tunnel tags alone (tag_level_ranges: no grade separation inferred, no
+    lidar asked; kept on feats apart from ground_parts'): a stand-in block's road paint (blockworker.build provisional;
+    ground_parts there waited on the session's lidar decisions, LIDAR_GAPS_WAIT_S per batch of cells: a cold Bozeman
+    stand-in block 20 s, 2026-11-11)."""
+    memo = feats.__dict__.setdefault("_parts_by_level", {})
+    got = memo.get((i, "quick_ground"))
+    if got is None:
+        got = memo[(i, "quick_ground")] = _parts_by_level_new(feats, i, "ground", rngs=tag_level_ranges(feats, i))
+    return list(got)
+
+
 def bridge_parts(feats, i):
     """The bridge pieces of feature i (lon/lat polylines)."""
     return _parts_by_level(feats, i, "bridge")

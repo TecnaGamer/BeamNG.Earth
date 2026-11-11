@@ -103,6 +103,20 @@ class PavementCornerTest(unittest.TestCase):
         self.assertGreater(mask[106, 150], 240)
         self.assertEqual(mask[88, 169], 0)
 
+    def test_quick_paint_asks_no_lidar_decided_parts(self):
+        # a stand-in block's paint (quick): the roads as the map tags them, no corners, nothing that waits on the
+        # session's lidar answers (roads.ground_parts / the tapers' bridge specs held a cold stand-in 17 s)
+        f = crossing()
+        e, n = np.meshgrid(np.arange(-32.0, 32.01, 0.25), np.arange(-32.0, 32.01, 0.25))
+        la, lo, _ = FRAME.enu_to_geodetic(e, n, 0.0)
+
+        def no(*_a, **_k):
+            raise AssertionError("waited on the lidar decisions")
+        with patch.object(roads, "ground_parts", no), patch.object(roads, "bridge_specs", no):
+            mat = surface.paint_roads(np.full(e.shape, surface.GRASS, np.uint8), la, lo, [f], 0.25, quick=True)
+        self.assertEqual(mat[128, 128], surface.ASPHALT, "the crossing's middle")
+        self.assertNotEqual(mat[150, 150], surface.ASPHALT, "no rounded corner in the stand-in")
+
     def test_corner_grading_holds_the_new_pavement_on_a_hillside(self):
         # a road with a narrow flat shoulder (grading.shoulder: a motorway's ramp terminal, an expressway) meets a
         # secondary: its 12 m corners' fans reach past the roads' graded ground
