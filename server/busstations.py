@@ -75,7 +75,13 @@ def items_from_layers(frame, layers, hub_xy=(0.0, 0.0), radius=260.0):
         for feats in cells:
             if feats is None or not len(feats):
                 continue
-            for i in range(len(feats)):
+            # (only the features whose box (all their points, the numbers enu_xy gives) comes within radius: a point of
+            # the first ring is no nearer than its feature's box. Every feature of a city's cells converted one by one
+            # was 1-2 s a station group at Penn Station)
+            fb = feats.boxes(frame)
+            gap = np.hypot(np.maximum(np.maximum(fb[:, 0] - hx, hx - fb[:, 2]), 0.0),
+                           np.maximum(np.maximum(fb[:, 1] - hy, hy - fb[:, 3]), 0.0))
+            for i in np.flatnonzero(~(gap > radius)).tolist():
                 fid = str(feats.ids[i])
                 if (name, fid) in seen:
                     continue
