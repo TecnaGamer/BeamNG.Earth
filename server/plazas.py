@@ -71,9 +71,21 @@ def polygons(feats_list):
 # A US square mapped paving_stones (or nothing) was red brick (Fells Point's squares); New York's are mostly grey granite
 # and concrete pavers (the user, 2026-11-11 in game: "several parts of new york get covered in this red brick
 # texture": the World Trade Center's plaza and streets, 475 paving_stones pieces). Now red brick only where the tile's
-# orthophoto shows the area reddish (BRICK_REDNESS: red over the mean of green and blue), grey stone otherwise and
-# where no photo covers it.
-BRICK_REDNESS = 0.06
+# orthophoto shows the area brick red (its hue under BRICK_HUE_MAX degrees, saturation over BRICK_SAT_MIN: the NYS photo
+# shows the WTC's granite warm tan, hue ~37: "red over green and blue" took that for brick), grey stone otherwise; an
+# area the photo cannot read takes the tile's majority, and with no photo at all the old US rule (brick) stands.
+BRICK_HUE_MAX = 25.0
+BRICK_SAT_MIN = 0.18
+
+
+def is_brick_red(rgb):
+    """Is this sRGB colour (0..1) brick red: hue under BRICK_HUE_MAX (or over 345), saturation over BRICK_SAT_MIN?"""
+    r, g, b = (float(v) for v in rgb[:3])
+    mx, mn = max(r, g, b), min(r, g, b)
+    if mx <= 0 or (mx - mn) / mx < BRICK_SAT_MIN or mx != r:
+        return False
+    hue = 60.0 * ((g - b) / (mx - mn)) % 360.0
+    return hue < BRICK_HUE_MAX or hue > 345.0
 US_AMBIGUOUS = "us_ambiguous"
 
 
@@ -132,11 +144,15 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
                 cols = photo.colours([areas[k][1] for k in amb])
             except Exception:
                 cols = None
+        votes = {}                      # (each area the photo could read: brick or not)
         for j, k in enumerate(amb):
-            red = False
             if cols is not None and j < len(cols) and np.all(np.isfinite(cols[j])):
-                r, g, b = (float(v) for v in cols[j][:3])
-                red = r - (g + b) / 2 > BRICK_REDNESS
+                votes[k] = is_brick_red(cols[j])
+        # (an area the photo cannot read, a thin footway or shade: the tile's read areas' majority; none read in the
+        # tile: red brick, the US rule before the photo)
+        default = (sum(votes.values()) * 2 >= len(votes)) if votes else True
+        for k in amb:
+            red = votes.get(k, default)
             areas[k] = areas[k][:3] + (((BRICK, BRICK_REPEAT_M) if red else STONE),)
     areas.sort(key=lambda a: a[0])
     done = []                           # (ring xy, its box) of the areas paved so far (smaller ones)

@@ -48,8 +48,8 @@ class PavingTest(unittest.TestCase):
 
 class PlazaMeshTest(unittest.TestCase):
     def test_us_squares_by_the_photo(self):
-        """A US square mapped paving_stones is red brick where the orthophoto shows red (Fells Point), grey stone where
-        it shows grey (the World Trade Center's plaza) and where no photo covers it."""
+        """A US square mapped paving_stones is red brick where the orthophoto shows brick red (Fells Point), stone where
+        it shows grey or tan (the World Trade Center's granite, warm in the NYS photo); with no photo, brick."""
         sq = (ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)]), [], "paving_stones")
         flat = lambda la, lo: np.full(np.shape(la), 5.0)     # noqa: E731
 
@@ -63,7 +63,9 @@ class PlazaMeshTest(unittest.TestCase):
         self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.62, 0.42, 0.36)))[3], [plazas.BRICK])
         self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.55, 0.54, 0.52)))[3],
                          [plazas.STONE[0]])
-        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.STONE[0]], "no photo: grey")
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o, photo=Photo((0.68, 0.58, 0.40)))[3],
+                         [plazas.STONE[0]], "the WTC's granite, warm tan in the photo")
+        self.assertEqual(plazas.mesh(FRAME, box, [sq], flat, o)[3], [plazas.BRICK], "no photo: the US rule, brick")
 
     def test_paved_and_draped(self):
         sq = ring([(10, 10), (60, 10), (60, 40), (10, 40), (10, 10)])
