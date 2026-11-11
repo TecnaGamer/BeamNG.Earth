@@ -1818,7 +1818,7 @@ def write_bridge_deck(out_dir, model_id, surf, tilt=None):
         js = np.nonzero(ok[i])[0]
         ends.append((float(X[i, js].mean()), float(Y[i, js].mean()), float(np.median(Zt[i, js]))))
     name = f"threedmr_{model_id}_deck.cdae"
-    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True)
+    cdae.write(os.path.join(out_dir, name), verts, T, collision_only=True, close=False)   # (a placed model, as made)
     return {"shape": name, "verts": verts, "tris": T, "ends": ends}
 
 
@@ -2337,6 +2337,7 @@ def _write_section(
             uvs=uvs,
             material=material,
             object_name=material,
+            close=False,            # (a placed 3dmr model, as made: not Earth's geometry)
         )
         result = {"shape": shape_name, "texture": None, "material": material}
         if png_bytes:
@@ -2362,6 +2363,7 @@ def _write_section(
         material=materials,
         tri_materials=tri_materials,
         object_name=materials[0],
+        close=False,                # (a placed 3dmr model, as made)
     )
     textures = [None] * len(pngs)
     written = {}  # sha256(png bytes) -> tex_name already written: several slots sharing the same source

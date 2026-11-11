@@ -12,6 +12,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import unittest.mock
 from unittest.mock import patch
 
 import numpy as np
@@ -174,6 +175,8 @@ class HouseTest(unittest.TestCase):
                 self.assertLess(high[3].max(), len(high[4]))
                 self.assertGreater(high[0][:, 2].max(), spec.height)
 
+    # (the faces as drawn: shells.close's bottom caps face down by design, the watertight PR)
+    @unittest.mock.patch("shells.close", lambda P, T, TM=None, per_vertex=(), **k: (P, T, TM, list(per_vertex)))
     def test_square_hipped_roof_and_collision_winding(self):
         for shape in ("gabled", "hipped", "half-hipped", "flat"):
             s = b.plan(rect(w=10, d=10), {"class": "house", "num_floors": 2, "roof_shape": shape}, lat=48.77, lon=7.85)

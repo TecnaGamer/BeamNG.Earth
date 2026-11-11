@@ -11466,7 +11466,7 @@ def write_tile(out_dir, vfs_dir, aid, tx, ty, chunks, walks=None, road_mesh=None
     if tunnel_mesh is not None:     # roadmesh.tunnel: the tubes and portals (colliding)
         x0, y0, _, _ = tile_bbox(tx, ty)
         shape = f"tunnel_{aid}_{tx}_{ty}.cdae"
-        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh)
+        roadmesh.write(os.path.join(out_dir, shape), tunnel_mesh, close="under")
         data["tunnel"] = {"shape": f"{vfs_dir}/{shape}", "pos": [x0, y0, 0.0]}
     if guardrail_rows:              # mapped guard rails and the median barriers (guardrails / medians): Forest rows
         import guardrails
