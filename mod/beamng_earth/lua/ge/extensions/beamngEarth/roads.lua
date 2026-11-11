@@ -100,7 +100,7 @@ M.SWAP_QUIET_MS = 150
 -- jumped from ~7 kN to 30-180 kN and the car stopped dead at 3-5 m/s, wheels sunk 0.28 m, stuck for good; at 14 m/s a
 -- 94 kN hit it drove out of; parked, rebuilds did nothing). Off-road the trees' 6 s rebuilds hit almost every
 -- pull-away. Urgent rebuilds (a collider reached within URGENT_S, the hold) still run at once.
-M.ROLL_MIN_MS = 0.5
+M.ROLL_MIN_MS = 0.1
 M.ROLL_DEFER_S = 30
 M.RELOAD_ROOM_MS = 8.0
 M.RELOAD_WAIT_FRAMES = 3
