@@ -22,8 +22,12 @@ MIN_AREA_M2 = 60.0      # smaller polygons are left to the terrain
 # surface mapped or paving stones: red brick in the US (Fells Point's squares, the user's report #45), stone elsewhere.
 ASPHALT = ("road_asphalt_2lane", 11.0)
 STONE = ("italy_cobblestone", 2.5)
+# Flat-topped pavers (OSM's paving_stones: "flat top surface", unlike sett and cobblestone): the stock grey rectangular
+# sidewalk tiles (the game's art/main.materials.json, always loaded; its texture is 2:1, six by three pavers: 0.6 x 1.2 m
+# at 3.6 m per repeat), as the World Trade Center's granite pavers (the user, 2026-11-11: "the textue is now cobblestone").
+PAVERS = ("italy_sidewalk_tiles", 3.6)
 PAVING = {"asphalt": ASPHALT, "concrete": ASPHALT, "concrete:plates": ASPHALT, "concrete_plates": ASPHALT,
-          "paved": ASPHALT, "paving_stones": STONE, "sett": STONE, "cobblestone": STONE, "unhewn_cobblestone": STONE,
+          "paved": ASPHALT, "paving_stones": PAVERS, "sett": STONE, "cobblestone": STONE, "unhewn_cobblestone": STONE,
           "pebblestone": STONE, "bricks": (BRICK, BRICK_REPEAT_M)}
 UNPAVED = {"compacted", "gravel", "fine_gravel", "unpaved", "dirt", "ground", "sand", "grass", "earth", "mud",
            "woodchips", "grass_paver"}
@@ -72,8 +76,9 @@ def polygons(feats_list):
 # and concrete pavers (the user, 2026-11-11 in game: "several parts of new york get covered in this red brick
 # texture": the World Trade Center's plaza and streets, 475 paving_stones pieces). Now red brick only where the tile's
 # orthophoto shows the area brick red (its hue under BRICK_HUE_MAX degrees, saturation over BRICK_SAT_MIN: the NYS photo
-# shows the WTC's granite warm tan, hue ~37: "red over green and blue" took that for brick), grey stone otherwise; an
-# area the photo cannot read takes the tile's majority, and with no photo at all the old US rule (brick) stands.
+# shows the WTC's granite warm tan, hue ~37: "red over green and blue" took that for brick), grey pavers (PAVERS)
+# otherwise; an area the photo cannot read takes the tile's majority, and with no photo at all the old US rule (brick)
+# stands.
 BRICK_HUE_MAX = 25.0
 BRICK_SAT_MIN = 0.18
 
@@ -95,7 +100,7 @@ def paving(surface_value, lat, lon):
         return None
     import buildings
     us = buildings.region_style(lat, lon).name.startswith("us_")
-    if us and surface_value in (None, "paving_stones"):     # (red brick or grey stone by the photo: mesh's photo)
+    if us and surface_value in (None, "paving_stones"):     # (red brick or grey pavers by the photo: mesh's photo)
         return US_AMBIGUOUS
     return PAVING.get(surface_value, STONE)
 
@@ -108,12 +113,15 @@ def _covered(cover, pts):
                                                np.ascontiguousarray(pts, np.float64), 8.0))
 
 
-def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
+def mesh(frame, box, rings, elev, origin, cover=None, photo=None, drawn=None, q=None):
     """The paved mesh of the plaza rings (lon/lat) in the tile box (x0, y0, x1, y1) of the anchor frame:
     (positions relative to origin (k, 3), tris, uvs, [material], tri material index) or None. elev(lat, lon) -> m
     (the graded ground the physics block has). cover: the road mesh's triangles in the frame (n, 6: x0 y0 x1 y1 x2
     y2) or None: the ground they cover is left to them (a pedestrian street mapped over a square drew its cobbles
-    1 cm over the paving, and the two flickered at a distance; GitHub #127)."""
+    1 cm over the paving, and the two flickered at a distance; GitHub #127). drawn (lat, lon) -> m and q (the anchor's
+    height quantum): the paving laid on the drawn ground as the road mesh is (roadmesh.follow_ground, on the terrain
+    block's 1 m lattice), its squares holding a step left to the terrain; without drawn, draped on elev at its own
+    points."""
     import buildings
     x0, y0, x1, y1 = box
     Ps, Ts, Ms, n0 = [], [], [], 0
@@ -137,7 +145,7 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
             xy = xy[::-1]
         areas.append((abs(area2) / 2, xy, holes, look))
     amb = [k for k, a in enumerate(areas) if a[3] == US_AMBIGUOUS]
-    if amb:                             # (US squares: red brick where the photo shows red, grey stone otherwise)
+    if amb:                             # (US squares: red brick where the photo shows red, grey pavers otherwise)
         cols = None
         if photo is not None:
             try:
@@ -153,7 +161,7 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
         default = (sum(votes.values()) * 2 >= len(votes)) if votes else True
         for k in amb:
             red = votes.get(k, default)
-            areas[k] = areas[k][:3] + (((BRICK, BRICK_REPEAT_M) if red else STONE),)
+            areas[k] = areas[k][:3] + (((BRICK, BRICK_REPEAT_M) if red else PAVERS),)
     areas.sort(key=lambda a: a[0])
     done = []                           # (ring xy, its box) of the areas paved so far (smaller ones)
     for _, xy, holes, look in areas:
@@ -195,10 +203,6 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
         return None
     P = np.concatenate(Ps)
     T = np.concatenate(Ts)
-    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
-    h = np.asarray(elev(la, lo), np.float64)
-    _, _, z = frame.geodetic_to_enu(la, lo, h)
-    V = np.c_[P, np.asarray(z) + LIFT_M] - np.asarray(origin, np.float64)
     mats = []
     UV = np.empty((len(P), 2))
     idx = np.empty(len(T), np.int64)
@@ -209,7 +213,68 @@ def mesh(frame, box, rings, elev, origin, cover=None, photo=None):
         UV[v0:v0 + nv] = P[v0:v0 + nv] / rep_m
         idx[t0:t0 + nt] = mats.index(mat)
         v0, t0 = v0 + nv, t0 + nt
+    if drawn is not None:
+        return _follow(frame, P, T, UV, mats, idx, drawn, q, origin)
+    la, lo, _ = frame.enu_to_geodetic(P[:, 0], P[:, 1], np.zeros(len(P)))
+    h = np.asarray(elev(la, lo), np.float64)
+    _, _, z = frame.geodetic_to_enu(la, lo, h)
+    V = np.c_[P, np.asarray(z) + LIFT_M] - np.asarray(origin, np.float64)
     return V, T, UV, mats, idx
+
+
+# The paving on the drawn ground (the user, 2026-11-11 at the World Trade Center: "the texture mesh is very broken"):
+# draped at its own 2 m points it cut across the block's 1 m squares, so the terrain showed through it in patches
+# wherever the ground bent between them; and the elevation's humps where buildings stand (the 9/11 museum pavilion's
+# pyramid, 14 m over 10 m) and the pools' walls carried the paving up and down them, its top-down tiling smeared into
+# streaks. Now on the block's lattice like the road mesh (earthfast.follow_tris), and the block's squares holding a
+# step (their corners more than roadmesh.FOLLOW_STEP_M, 0.45 m, apart: a slope over 24 degrees, which follow_tris would
+# hold flat at their lowest corner, under the terrain) left to the terrain: a paved square is near level (ramps 1:12,
+# kerbs 0.15 m), the lidar's ground there 0.1-0.2 m from square to square.
+
+
+def _follow(frame, P, T, UV, mats, idx, drawn, q, origin):
+    """mesh's paving (P (n, 2) in the frame, T, UV, mats, idx) laid on the drawn ground (roadmesh.follow_ground) LIFT_M
+    over it, its steep triangles out: (positions relative to origin, tris, uvs, mats, tri material index) or None."""
+    import roadmesh
+    grid, i0, j0 = roadmesh._height_grid(frame, drawn, P, q, tris=T)
+    fP, fUV, fT, src = roadmesh.follow_ground(P, UV, T, grid, i0, j0, tol=roadmesh.road_tol(q))
+    if not len(fT):
+        return None
+    fP = np.asarray(fP, np.float64)
+    c = fP[fT].mean(1)                  # (each triangle lies in one square of the lattice: its corners' spread)
+    gi = np.clip(np.floor(c[:, 0] / roadmesh.GRID_M).astype(np.int64) - i0, 0, grid.shape[1] - 2)
+    gj = np.clip(np.floor(c[:, 1] / roadmesh.GRID_M).astype(np.int64) - j0, 0, grid.shape[0] - 2)
+    corners = np.stack([grid[gj, gi], grid[gj, gi + 1], grid[gj + 1, gi], grid[gj + 1, gi + 1]], 1)
+    with np.errstate(invalid="ignore"):
+        spread = np.nanmax(corners, 1) - np.nanmin(corners, 1)
+    level = ~(spread > roadmesh.FOLLOW_STEP_M)          # (nan: no samples round it, kept)
+    if not level.any():
+        return None
+    fT, src = fT[level], src[level]
+    used = np.unique(fT)
+    remap = np.full(len(fP), -1, np.int64)
+    remap[used] = np.arange(len(used))
+    V = fP[used].copy()
+    # (the points a step square held down are its neighbours' too: each kept point back on the ground's surface)
+    z = _on_lattice(grid, i0, j0, V[:, :2], roadmesh.GRID_M)
+    V[:, 2] = np.where(np.isfinite(z), z, V[:, 2])
+    V = V + np.array([0.0, 0.0, LIFT_M]) - np.asarray(origin, np.float64)
+    return V, remap[fT], np.asarray(fUV)[used], mats, idx[src]
+
+
+def _on_lattice(grid, i0, j0, xy, cell):
+    """The height (n,) of the ground the lattice grid (roadmesh._height_grid) draws at the points xy (n, 2): each square
+    cut from its south-west corner to its north-east one (heightmap.write_png's, follow_tris'); nan off the grid."""
+    fx, fy = xy[:, 0] / cell - i0, xy[:, 1] / cell - j0
+    ny, nx = grid.shape
+    i = np.clip(np.floor(fx).astype(np.int64), 0, nx - 2)
+    j = np.clip(np.floor(fy).astype(np.int64), 0, ny - 2)
+    u, v = fx - i, fy - j
+    h00, h10, h01, h11 = grid[j, i], grid[j, i + 1], grid[j + 1, i], grid[j + 1, i + 1]
+    se = v <= u                         # (under the diagonal: the south-east triangle)
+    z = np.where(se, h00 + u * (h10 - h00) + v * (h11 - h10), h00 + v * (h01 - h00) + u * (h11 - h01))
+    off = (u < -1e-9) | (u > 1 + 1e-9) | (v < -1e-9) | (v > 1 + 1e-9)
+    return np.where(off, np.nan, z)
 
 
 def merge(a, b):

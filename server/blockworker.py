@@ -1290,7 +1290,7 @@ def _roads_tile(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks, lift, 
     mesh = roadmeshmod.build(frame, P.chunks, P.elev, P.origin, lift, clip=P.box, follow=True, q=q, drawn=P.drawn,
                              context=P.ctx)
     mark("mesh")
-    mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None))
+    mesh = _with_plazas(mesh, frame, P.box, P.elev, P.origin, getattr(_s, "surface", None), drawn=P.drawn, q=q)
     mark("plazas")
     out = roadsmod.write_tile(out_dir, vfs_dir, aid, tx, ty, P.chunks, P.walks if sidewalks else None, mesh, P.dmesh,
                               P.bld, P.props, P.wires, P.park, tunnel_mesh=P.tmesh, fuel=P.fuel, rail_mesh=P.rmesh,
@@ -1763,7 +1763,7 @@ def _geo_skin(aid, lat, lon, zoom, gx, gy, out_dir, vfs_dir, sidewalks, lift, q,
     mesh = roadmeshmod.build(frame, chunks, elev, origin, lift, clip=bbox, follow=True, q=q, drawn=drawn,
                              context=ctx, clip_poly=quad)
     mark("mesh")
-    mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad)
+    mesh = _with_plazas(mesh, frame, bbox, elev, origin, getattr(_s, "surface", None), quad=quad, drawn=drawn, q=q)
     mark("plazas")
     names = geo_names(tile.key, aid)
     data = {"v": roadsmod.VERSION, "key": tile.key, "anchorId": aid, "lift": round(float(lift), 3),
@@ -2010,10 +2010,11 @@ def _motesfri_rows(frame, cell_fn, near_roads, box, elev, urban, widths, left_ha
 PLAZA_GEO_MARGIN_M = 12.0    # m past a geotile's quad its skin's plazas are made (then cut exactly at the quad)
 
 
-def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
+def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None, drawn=None, q=None):
     """The road mesh with the tile's squares and pedestrian areas paved (plazas.py) over box (x0, y0, x1, y1), from the
     cached land use (none when it is not cached yet: surface.Surface.lots never waits). quad (4, 2): a geotile's skin:
-    the plazas made PLAZA_GEO_MARGIN_M past the box and cut exactly at the quad (as its road mesh)."""
+    the plazas made PLAZA_GEO_MARGIN_M past the box and cut exactly at the quad (as its road mesh). drawn, q: the
+    road mesh's drawn ground and height quantum, the paving laid on it as the road mesh is (plazas.mesh)."""
     if surface is None or not hasattr(surface, "lots"):
         return mesh
     import plazas
@@ -2035,7 +2036,7 @@ def _with_plazas(mesh, frame, box, elev, origin, surface, quad=None):
             photo = _bld.roof_photo(frame, box[0], box[1], box[2], box[3], getattr(_s, "cache_dir", None), online=False)
         except Exception:
             photo = None
-        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover, photo=photo)
+        pm = plazas.mesh(frame, tuple(box), rings, elev, origin, cover, photo=photo, drawn=drawn, q=q)
         if quad is not None:
             pm = _clip_mesh(pm, origin, quad)
         return plazas.merge(mesh, pm)

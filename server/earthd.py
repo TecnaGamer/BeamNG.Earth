@@ -2693,7 +2693,7 @@ class Server:
                                  DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                                  clip=box, follow=True, q=self.anchor_q(anchor), drawn=drawn)
         mesh = blockworker._with_plazas(mesh, anchor.frame, roadsmod.tile_bbox(tx, ty), elev, (x0, y0, 0.0),
-                                        self.surface)
+                                        self.surface, drawn=drawn, q=self.anchor_q(anchor))
         _piers, _beams = buildingsmod.bridge_stub_piers(
             _bridge_fps,
             anchor.bridges.piers_in(roadsmod.tile_bbox(tx, ty)) if anchor.bridges is not None else (),
