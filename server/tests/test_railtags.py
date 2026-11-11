@@ -171,6 +171,95 @@ class KnownPinnedTest(unittest.TestCase):
             finally:
                 railtags.ON = on
 
+def _shard_xy(lat, lon):
+    key = mapcells.cell_of(lat, lon)
+    return key.x >> (key.z - 7), key.y >> (key.z - 7)
+
+
+class StationTagsTest(unittest.TestCase):
+    """The weekly station shards (tools/build_station_tags.py, dataset "stations"; Bauer33333's find on #716): fuel and
+    charging stations with capacity, and the charge points, in a lat/lon box."""
+
+    def fetcher(self, shards, manifest=True):
+        files = {f"/{x}/{y}.json.gz": gzip.compress(json.dumps(s).encode()) for (x, y), s in shards.items()}
+        if manifest:
+            files["stations/manifest.json"] = json.dumps({"built": "2026-11-13T03:00:00Z", "format": 1}).encode()
+        return _Fetcher(files)
+
+    def test_stations_and_points_in_a_box(self):
+        xy = _shard_xy(34.849, -117.085)
+        sh = {"s": [["n2", "ev", -117.0854, 34.8491, "Tesla Supercharger", "Tesla", 8],
+                    ["n1", "fuel", -117.085, 34.849, "Arco", "", None],
+                    ["n9", "fuel", -117.5, 34.9, "Far", "", None]],
+              "p": [[-117.0853, 34.8492], [-117.6, 34.95]]}
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xy: sh}))
+            got = st.stations_in(34.84, -117.09, 34.86, -117.08)
+            self.assertEqual(sorted(r["id"] for r in got), ["n1", "n2"])
+            ev = [r for r in got if r["id"] == "n2"][0]
+            self.assertEqual((ev["kind"], ev["name"], ev["brand"], ev["cap"]), ("ev", "Tesla Supercharger", "Tesla", 8))
+            self.assertAlmostEqual(ev["lat"], 34.8491)
+            self.assertEqual(st.points_in(34.84, -117.09, 34.86, -117.08), [(34.8492, -117.0853)])
+
+    def test_box_over_two_shards(self):
+        a, b = (34.0, -117.0), (34.0, -114.0)           # (~280 km apart: two z7 shards)
+        xa, xb = _shard_xy(*a), _shard_xy(*b)
+        self.assertNotEqual(xa, xb)
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xa: {"s": [["n1", "fuel", a[1], a[0], "", "", None]], "p": []},
+                                                       xb: {"s": [["n2", "fuel", b[1], b[0], "", "", None]], "p": []}}))
+            self.assertEqual(sorted(r["id"] for r in st.stations_in(33.9, -117.1, 34.1, -113.9)), ["n1", "n2"])
+
+    def test_no_shard_there_is_empty(self):
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({}))
+            self.assertEqual(st.stations_in(0.0, 0.0, 0.1, 0.1), [])
+            self.assertEqual(st.points_in(0.0, 0.0, 0.1, 0.1), [])
+
+    def test_unreachable_is_none(self):
+        class Down:
+            def get(self, url, kind="demand", **_kw):
+                raise OSError("offline")
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, Down())
+            self.assertIsNone(st.stations_in(34.84, -117.09, 34.86, -117.08))
+
+    def test_off_reads_nothing(self):
+        f = self.fetcher({})
+        old = railtags.STATIONS_ON
+        railtags.STATIONS_ON = False
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                self.assertIsNone(railtags.StationTags(d, f).stations_in(34.84, -117.09, 34.86, -117.08))
+        finally:
+            railtags.STATIONS_ON = old
+        self.assertEqual(f.asked, [], "off: nothing fetched")
+
+    def test_local_folder(self):
+        xy = _shard_xy(52.519, 13.414)
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, str(xy[0])))
+            with gzip.open(os.path.join(d, str(xy[0]), f"{xy[1]}.json.gz"), "wt", encoding="utf-8") as fh:
+                json.dump({"s": [["n3", "ev", 13.414, 52.519, "", "", 2]], "p": [[13.4141, 52.5191]]}, fh)
+            with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as fh:
+                json.dump({"built": "local test"}, fh)
+            st = railtags.StationTags(None, None, local=d)
+            self.assertEqual([r["cap"] for r in st.stations_in(52.51, 13.40, 52.53, 13.42)], [2])
+
+    def test_shed_lets_go_of_the_shards(self):
+        # Codex on #1111 (2026-11-10): the budget's shedder must let go of the decoded shards, and the per-shard cell
+        # index (by_cell) holds each shard, so it goes too
+        xy = _shard_xy(34.849, -117.085)
+        sh = {"s": [["n1", "fuel", -117.085, 34.849, "Arco", "", None]], "p": [[-117.0853, 34.8492]]}
+        with tempfile.TemporaryDirectory() as d:
+            st = railtags.StationTags(d, self.fetcher({xy: sh}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1)
+            self.assertTrue(st.shards and st.by_cell)
+            st.clear_memory()
+            self.assertEqual((st.shards, st.by_cell), ({}, {}))
+            self.assertEqual(len(st.stations_in(34.84, -117.09, 34.86, -117.08)), 1, "read again when asked")
+
+
 if __name__ == "__main__":
     unittest.main()
 

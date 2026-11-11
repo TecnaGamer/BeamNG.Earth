@@ -654,3 +654,112 @@ class SignTags(Shards):
                     out[int(r["id"])] = {"id": int(r["id"]), "lon": float(r["lon"]), "lat": float(r["lat"]),
                                          "tags": {}, "ways": [], key: d}
         return [out[k] for k in sorted(out)]
+
+
+# The weekly station shards (tools/build_station_tags.py, dataset "stations"): every OpenStreetMap fuel and charging
+# station with its capacity, and every charge point (Bauer33333 on #716, 2026-11-04: "Almost 3/4 of
+# `amenity=charging_station` on OSM got a `capacity=*` tag, same for `man_made=charge_point`"). The station finder lists
+# them where no map data is downloaded (stationindex.py); the EV chargers take their count and spots (evchargers.py).
+STATIONS_ON = os.environ.get("BNE_STATIONTAGS", "on") != "off"
+STATIONS_DIR = os.environ.get("BNE_STATIONS_DIR") or None       # a local build (tests, before the data is published)
+
+
+class StationTags(Shards):
+    """Shards {"s": [[id, kind, lon, lat, name, brand, cap], ...], "p": [[lon, lat], ...]} (FORMAT 1), each record in
+    the shard of its point. stations_in / points_in give a lat/lon box's; None when off, not published yet, offline or
+    unreachable (the callers go on without them, as before the dataset existed)."""
+
+    def __init__(self, cache_dir, fetcher, local=None):
+        super().__init__(cache_dir, fetcher, "stations")
+        self.local = local if local is not None else STATIONS_DIR
+        self.by_cell = {}           # id(shard) -> {z14 cell: (records, points)}: a box reads only its own cells
+
+    def version(self):
+        if self.local is None:
+            return super().version()
+        if self.built is None:
+            try:
+                with open(os.path.join(self.local, "manifest.json"), encoding="utf-8") as fh:
+                    self.built = "local:" + str(json.load(fh).get("built"))
+            except (OSError, ValueError):
+                return None
+        return self.built
+
+    def shard(self, x, y):
+        if self.local is None:
+            return super().shard(x, y)
+        if self.version() is None:
+            return None
+        with self.lock:
+            got = self.shards.get((x, y))
+        if got is None:
+            try:
+                with gzip.open(os.path.join(self.local, str(x), f"{y}.json.gz"), "rt", encoding="utf-8") as fh:
+                    got = json.load(fh)
+            except FileNotFoundError:
+                got = {}
+            except (OSError, ValueError) as e:
+                log.debug("stations %s/%s: %s", x, y, e)
+                return None
+            with self.lock:
+                self.shards[(x, y)] = got
+        return got
+
+    def clear_memory(self):
+        """The shards and their cell indexes (each index holds its shard: Codex on #1111, 2026-11-10)."""
+        with self.lock:
+            self.shards.clear()
+            self.by_cell.clear()
+
+    def _shards(self, lat0, lon0, lat1, lon1):
+        """The box's shards, or None when one of them cannot be had."""
+        import mapcells
+        if not STATIONS_ON:
+            return None
+        out = []
+        for key in mapcells.cells_for_bbox(lat0, lon0, lat1, lon1, z=SHARD_ZOOM):
+            sh = self.shard(key.x, key.y)
+            if sh is None:
+                return None
+            out.append(sh)
+        return out
+
+    def _cells(self, sh):
+        """The shard's records and points by map cell (z14), made once per shard (a city's 25 km map view asks ~800
+        cells of a 15,000-station shard: 1.2 s filtering the whole shard for each, instant by cell)."""
+        import mapcells
+        got = self.by_cell.get(id(sh))
+        if got is None or got[0] is not sh:
+            cells = {}
+            for r in sh.get("s") or ():
+                cells.setdefault(mapcells.cell_of(r[3], r[2]), ([], []))[0].append(r)
+            for p in sh.get("p") or ():
+                cells.setdefault(mapcells.cell_of(p[1], p[0]), ([], []))[1].append(p)
+            got = (sh, cells)
+            with self.lock:
+                self.by_cell[id(sh)] = got
+        return got[1]
+
+    def _in_box(self, lat0, lon0, lat1, lon1):
+        """[(records, points)] of the box's map cells, or None."""
+        import mapcells
+        shards = self._shards(lat0, lon0, lat1, lon1)
+        if shards is None:
+            return None
+        keys = mapcells.cells_for_bbox(lat0, lon0, lat1, lon1)
+        return [c[k] for c in (self._cells(sh) for sh in shards) for k in keys if k in c]
+
+    def stations_in(self, lat0, lon0, lat1, lon1):
+        """[{"id", "kind" ("fuel" | "ev"), "lat", "lon", "name", "brand", "cap" (int or None)}] in the box, or None."""
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
+            return None
+        return [{"id": r[0], "kind": r[1], "lat": r[3], "lon": r[2], "name": r[4], "brand": r[5], "cap": r[6]}
+                for recs, _ in got for r in recs if lat0 <= r[3] <= lat1 and lon0 <= r[2] <= lon1]
+
+    def points_in(self, lat0, lon0, lat1, lon1):
+        """[(lat, lon)] of the charge points in the box, or None."""
+        got = self._in_box(lat0, lon0, lat1, lon1)
+        if got is None:
+            return None
+        return [(p[1], p[0]) for _, pts in got for p in pts if lat0 <= p[1] <= lat1 and lon0 <= p[0] <= lon1]

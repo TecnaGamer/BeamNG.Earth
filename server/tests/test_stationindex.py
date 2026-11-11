@@ -148,11 +148,29 @@ class QueryTest(IndexCase):
         self.assertFalse(partial)
         self.assertEqual(items, [])
 
-    def test_query_sorted_capped_dedup(self):
+    def test_map_answers_more_than_nearest(self):
+        # the user, 2026-11-10: "does it only show a certain amount of symbols?" (a zoomed-out view of Berlin from the
+        # shards: 50 icons round the centre, none towards the edges). The map's cap is MAP_MAX_ITEMS, Nearest's MAX_ITEMS.
         la, lo = centre(A)
         rows = [place(f"p{i:02d}", la + (i // 8) * 0.0015 - 0.005, lo + (i % 8) * 0.002 - 0.008) for i in range(60)]
         md = CellMD({A: rows})
         items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "map")
+        self.assertEqual(len(items), 60)
+        self.assertEqual([i["km"] for i in items], sorted(i["km"] for i in items))
+        old = si.MAP_MAX_ITEMS
+        si.MAP_MAX_ITEMS = 40
+        try:
+            items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "map")
+        finally:
+            si.MAP_MAX_ITEMS = old
+        self.assertEqual(len(items), 40)
+        self.assertGreater(si.MAP_MAX_ITEMS, si.MAX_ITEMS)
+
+    def test_query_sorted_capped_dedup(self):
+        la, lo = centre(A)
+        rows = [place(f"p{i:02d}", la + (i // 8) * 0.0015 - 0.005, lo + (i % 8) * 0.002 - 0.008) for i in range(60)]
+        md = CellMD({A: rows})
+        items, _ = self.index(md).query(la, lo, 5.0, ["fuel"], "near")
         self.assertEqual(len(items), si.MAX_ITEMS)
         self.assertEqual([i["km"] for i in items], sorted(i["km"] for i in items))
         # one station seen from two cells' indexes (its pins either side of the edge): one item
@@ -270,6 +288,86 @@ class MarkTest(IndexCase):
             json.dump({"items": [], "marks": [["fuel", la, lo, False]]}, f)
         md = CellMD({A: [place("a", la, lo)]})
         self.assertEqual(len(self.index(md).query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
+
+
+class FakeShards:
+    """railtags.StationTags' answers: stations in a box, or None (unreachable)."""
+
+    def __init__(self, stations, down=False):
+        self.stations, self.down, self.asked = stations, down, 0
+
+    def stations_in(self, lat0, lon0, lat1, lon1):
+        self.asked += 1
+        if self.down:
+            return None
+        return [dict(s) for s in self.stations if lat0 <= s["lat"] <= lat1 and lon0 <= s["lon"] <= lon1]
+
+
+def shard_station(sid, lat, lon, kind="fuel", name="Sheetz", cap=None):
+    return {"id": sid, "kind": kind, "lat": lat, "lon": lon, "name": name, "brand": "", "cap": cap}
+
+
+class ShardTest(IndexCase):
+    """The weekly station shards where no map data is downloaded (Bauer33333's find on #716; the user, 2026-11-09:
+    the finder's map filled everywhere): the map lists them, Nearest reads them instead of downloading cells."""
+
+    def test_map_lists_a_shard_station_in_an_uncached_cell(self):
+        la, lo = centre(east(A, 3))
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo)])
+        items, partial = self.index(md).query(*centre(A), 15.0, ["fuel"], "map")
+        self.assertEqual([i["name"] for i in items], ["Sheetz"])
+        self.assertFalse(partial)
+        self.assertEqual(md.fetched, [], "no map data downloaded")
+
+    def test_places_on_disk_replace_the_shard_list(self):
+        la, lo = centre(A)
+        md = CellMD({A: [place("a", la, lo, name="Sheetz")]}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la + 0.00005, lo)])
+        idx = self.index(md)
+        self.assertEqual(len(idx.query(la, lo, 5.0, ["fuel"], "map")[0]), 1)
+        md.cached.add(A)                                    # (the player drove there: its places are on disk)
+        items = idx.query(la, lo, 5.0, ["fuel"], "map")[0]
+        self.assertEqual(len(items), 1, "one station, not the shard's and the places' both")
+        self.assertIn((A, "demand"), md.fetched, "built from the places once they are there")
+
+    def test_near_reads_shards_not_cells(self):
+        la, lo = centre(east(A, 8))                          # (~15 km east)
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo, kind="ev", name="Ionna", cap=6)])
+        items, partial = [], True
+        for _ in range(20):
+            items, partial = self.index(md).query(*centre(A), 25.0, ["ev"], "near")
+            if not partial:
+                break
+        self.assertFalse(partial)
+        self.assertEqual([i["name"] for i in items], ["Ionna"])
+        self.assertEqual(md.fetched, [], "no map data downloaded")
+
+    def test_unreachable_shards_download_as_before(self):
+        la, lo = centre(east(A, 2))
+        md = CellMD({A: [], east(A, 2): [place("far", la, lo)]}, cached=[A])
+        md.station_tags = FakeShards([], down=True)
+        idx = self.index(md)
+        items, partial = [], True
+        for _ in range(20):
+            items, partial = idx.query(*centre(A), 25.0, ["fuel"], "near")
+            if not partial:
+                break
+        self.assertEqual(len(items), 1)
+        self.assertIn((east(A, 2), "demand"), md.fetched)
+
+    def test_a_shard_station_reported_empty_is_hidden(self):
+        la, lo = centre(east(A, 3))
+        md = CellMD({}, cached=[])
+        md.station_tags = FakeShards([shard_station("n1", la, lo)])
+        idx = self.index(md)
+        self.assertEqual(len(idx.query(*centre(A), 15.0, ["fuel"], "map")[0]), 1)
+        idx.mark([("fuel", la, lo, False)])
+        self.assertEqual(idx.query(*centre(A), 15.0, ["fuel"], "map")[0], [])
+        # (after a restart: the report kept, the list read from the shards again, not from the cell's file)
+        md.station_tags = FakeShards([shard_station("n1", la, lo), shard_station("n2", la + 0.004, lo)])
+        self.assertEqual([i["name"] for i in self.index(md).query(*centre(A), 15.0, ["fuel"], "map")[0]], ["Sheetz"])
 
 
 import threading  # noqa: E402

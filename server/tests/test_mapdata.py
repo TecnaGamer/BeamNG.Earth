@@ -534,6 +534,17 @@ class Sources:
 
 
 @needs_duckdb
+class StationTagsAttrTest(Sources, SmallBlocks, unittest.TestCase):
+    def test_station_tags_beside_rail_tags(self):
+        # the weekly station shards' reader (railtags.StationTags), made with the map data like the rail one
+        import railtags
+        md, _ = self.mapdata()
+        self.assertIsInstance(md.station_tags, railtags.StationTags)
+        # (the road tiles' chargers take its capacity and charge points: their cache keys follow its weekly build)
+        self.assertIn("stations", md.versions())
+
+
+@needs_duckdb
 class StacTest(Sources, SmallBlocks, unittest.TestCase):
     def test_files_for_cell(self):
         md, t = self.mapdata()
@@ -1112,3 +1123,17 @@ class CliTest(Sources, SmallBlocks, unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ShedTest(unittest.TestCase):
+    def test_shed_clears_the_station_shards(self):
+        # Codex on #1111 (2026-11-10): MapData.clear_memory (budget.maybe_shed) let go of the rail and lane shards
+        # only; the station shards stayed in memory on small-memory clients
+        import threading
+        from types import SimpleNamespace
+        cleared = []
+        spy = lambda name: SimpleNamespace(clear_memory=lambda: cleared.append(name))
+        md = SimpleNamespace(_mem_lock=threading.Lock(), _mem={"k": 1}, _mem_bytes=5, _slim={}, _slim_bytes=0,
+                             rail_tags=spy("rail"), lane_tags=spy("lanes"), station_tags=spy("stations"))
+        mapdata.MapData.clear_memory(md)
+        self.assertEqual(sorted(cleared), ["lanes", "rail", "stations"])
