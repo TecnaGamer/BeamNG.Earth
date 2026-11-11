@@ -1219,6 +1219,15 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
             log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import fast
         import places
+        try:           # (mapped benches, bins, hydrants ...: furniture.place's guessed ones give way to them)
+            mapped = {}
+            srows = places.street_rows(frame, box, _s.md, elev, near_roads, country, mapped_out=mapped)
+            props[:] = places.drop_inferred(props, mapped)
+            props.extend(srows)
+        except fast.NativeMissing:
+            raise
+        except Exception as ex:
+            log.warning("street furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         try:           # (solar farms, container terminals, marinas, trailer parks, construction sites)
             props.extend(places.tile_rows(frame, box, _s.md, elev, near_roads, country))
         except fast.NativeMissing:

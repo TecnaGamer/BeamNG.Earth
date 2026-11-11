@@ -447,6 +447,18 @@ M.CATALOG.towercrane_top = { { IT .. 'buildings/ind_bld_crane_top', 53.21 } }
 M.GROUP_MAX_M.towercrane_base = 3000
 M.GROUP_MAX_M.towercrane_top = 3000
 for _, g in ipairs({ 'portcrane', 'caravan', 'towercrane_base', 'towercrane_top' }) do M.ONE_SPELLING[g] = true end
+-- mapped street furniture (server places.street_rows; the benches, bins and North America's hydrants are the groups
+-- above): Europe's pillar hydrant and post box (Italy's, global materials), the US post box, a bicycle stand (4.2 m of
+-- hoops along local x), a recycling bin
+M.CATALOG.hydrant_eu = { { IT .. 'buildings/italy_clutter_fire_hydrant', 0.79 } }
+M.CATALOG.postbox_eu = { { IT .. 'buildings/italy_clutter_mailboxstand', 1.60 } }
+M.CATALOG.postbox_us = { { WCA .. 'objects/postbox_blue', 1.56 } }
+M.CATALOG.bikestand = { { ECA .. 'clutter/clutter_city_bike_stand', 1.16 } }
+M.CATALOG.recyclebin = { { JV .. 'misc/s_recyclebin_brown', 1.48 } }
+for _, g in ipairs({ 'hydrant_eu', 'postbox_eu', 'postbox_us', 'bikestand', 'recyclebin' }) do
+  M.GROUP_MAX_M[g] = 250
+  M.ONE_SPELLING[g] = true
+end
 M.GROUP_MAX_M.celltower = 2500
 M.GROUP_MAX_M.watertower = 2000
 M.GROUP_MAX_M.container = 500

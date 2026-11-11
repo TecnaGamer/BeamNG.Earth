@@ -187,6 +187,40 @@ class PlacesTest(unittest.TestCase):
         self.assertEqual(len([r for r in got if r[0] == places.G_TC_BASE]), 1)
         self.assertEqual(len([r for r in got if r[0] == places.G_TC_TOP]), 1)
 
+    def test_mapped_street_furniture(self):
+        pt = mapgeom.POINT
+        infra = feats("infrastructure", [
+            ("b1", pt, [[[2.0, 1.0]]], "bench", {"amenity": "bench"}),
+            ("h1", pt, [[[20.0, 6.0]]], "fire_hydrant", {"emergency": "fire_hydrant", "fire_hydrant:type": "pillar"}),
+            ("h2", pt, [[[40.0, 6.0]]], "fire_hydrant", {"emergency": "fire_hydrant",
+                                                         "fire_hydrant:type": "underground"}),
+            ("p1", pt, [[[60.0, 6.0]]], "post_box", {"amenity": "post_box"}),
+            ("k1", pt, [[[80.0, 7.0]]], "bicycle_parking", {"amenity": "bicycle_parking", "capacity": "20"}),
+            ("w1", pt, [[[90.0, 6.0]]], "waste_basket", {"amenity": "waste_basket", "level": "-1"})])
+        md = FakeMD(infrastructure=infra)
+        spec = type("S", (), {"width": 8.0})()
+        road = [("r", spec, np.array([[-100.0, 0.0, 0.0], [200.0, 0.0, 0.0]]), 0.0)]
+        mapped = {}
+        us = places.street_rows(FRAME, BOX, md, flat, road, "US", keys=KEYS, mapped_out=mapped)
+        groups = sorted(r[0] for r in us)
+        self.assertEqual(groups, ["bench", "bikestand", "bikestand", "bikestand", "bikestand", "hydrant", "postbox_us"])
+        bench = next(r for r in us if r[0] == "bench")
+        self.assertGreaterEqual(bench[2], 4.0 + 0.8 - 1e-6)        # moved off the carriageway (half width 4)
+        self.assertAlmostEqual(bench[3], places.CURB_H)            # on the sidewalk
+        self.assertEqual(len(mapped["hydrant"]), 2)                # the underground one counts as mapped
+        eu = places.street_rows(FRAME, BOX, md, flat, road, "DE", keys=KEYS)
+        self.assertIn("hydrant_eu", [r[0] for r in eu])
+        self.assertIn("postbox_eu", [r[0] for r in eu])
+
+    def test_guessed_furniture_gives_way(self):
+        guessed = [["hydrant", 0.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0], ["hydrant", 200.0, 0.0, 0.0, 0.0, 1.0, 1.5, 0.0],
+                   ["bench", 0.0, 0.0, 0.0, 0.0, 1.0, 0.9, 0.0], ["streetlight", 1.0, 0.0, 0.0, 0.0, 1.0, 9.0, 0.0]]
+        out = places.drop_inferred(guessed, {"hydrant": [(10.0, 0.0)]})
+        self.assertEqual([r[0] for r in out], ["hydrant", "bench", "streetlight"])
+        self.assertEqual(out[0][1], 200.0)
+        out = places.drop_inferred(guessed, {"hydrant": [(1e4, 0.0)] * places.INFERRED_TILE_MIN})
+        self.assertNotIn("hydrant", [r[0] for r in out])
+
     def test_kinds(self):
         f = feats("land_use", [("a", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "industrial",
                                 {"industrial": "container_stacking"}),

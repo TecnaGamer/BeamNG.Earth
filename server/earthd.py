@@ -2758,6 +2758,16 @@ class Server:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import fast
             import places
+            try:       # (mapped benches, bins, hydrants ...: furniture.place's guessed ones give way to them)
+                mapped = {}
+                srows = places.street_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor),
+                                           mapped_out=mapped)
+                props[:] = places.drop_inferred(props, mapped)
+                props.extend(srows)
+            except fast.NativeMissing:
+                raise
+            except Exception as ex:
+                log.warning("street furniture: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             try:       # (solar farms, container terminals, marinas, trailer parks, construction sites)
                 props.extend(places.tile_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor)))
             except fast.NativeMissing:

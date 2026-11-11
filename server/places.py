@@ -725,7 +725,7 @@ def _park_built(frame, md, fid, pts, off):
 def trailer_rows(frame, places, box, elev, seg, blds, country, md=None):
     """Caravans in the trailer parks and caravan sites meeting box, where their homes are not mapped."""
     rows = []
-    na = str(country or "").upper() in NA
+    na = _country(frame, box, country) in NA
     seg_r = seg.copy()
     seg_r[:, 4] += TRAILER_ROAD_M
     for kind in ("trailer", "caravan_site"):
@@ -794,18 +794,194 @@ def construction_rows(frame, places, box, elev, seg):
     return rows
 
 
+# --- mapped street furniture (OpenStreetMap's amenity=bench / waste_basket / post_box / bicycle_parking / recycling and
+# emergency=fire_hydrant, Overture's infrastructure points): the stock models by region, standing where mapped (moved
+# off a carriageway they were drawn on), turned to the nearest road. Where a tile has these mapped, furniture.place's
+# guessed ones of the same kind give way (drop_inferred).
+STREET_KINDS = {"bench": "bench", "waste_basket": "bin", "fire_hydrant": "hydrant", "post_box": "postbox",
+                "bicycle_parking": "bikestand", "recycling": "recyclebin"}
+STREET_MODELS = {   # kind: (group in North America, group elsewhere, height (None: STREET_H's), m off a carriageway's
+                    # edge, yaw added to the direction toward the road (None: hashed))
+    "bench": ("bench", "bench", 0.9, 0.8, 90.0),
+    "bin": ("bin", "bin", 1.1, 0.5, None),
+    "hydrant": ("hydrant", "hydrant_eu", None, 0.4, 0.0),
+    "postbox": ("postbox_us", "postbox_eu", None, 0.5, 0.0),
+    "bikestand": ("bikestand", "bikestand", 1.16, 1.0, 90.0),
+    "recyclebin": ("recyclebin", "recyclebin", 1.48, 0.8, 90.0),
+}
+STREET_H = {"hydrant": 1.5, "hydrant_eu": 0.79, "postbox_us": 1.56, "postbox_eu": 1.60}
+STREET_REACH_M = 25.0           # a road this near turns the item toward it
+SIDEWALK_M = 6.0                # an item this near a carriageway's edge stands on the sidewalk (CURB_H up)
+CURB_H = 0.15
+BIKES_PER_STAND = 6             # a stand (4.2 m of hoops) per this many bikes of a mapped capacity ...
+BIKE_STANDS_MAX = 4             # ... at most this many side by side
+BIKE_STAND_LEN = 4.4
+HYDRANT_HIDDEN = {"underground", "pipe", "wall", "dry_barrel_underground"}
+INFERRED_DROP = {"hydrant": 60.0, "bench": 30.0, "bin": 30.0}   # m round a mapped one a guessed one gives way ...
+INFERRED_TILE_MIN = 3           # ... and none at all in a tile with this many of its kind mapped
+
+
+def street_kind(feats, i):
+    """(kind, hidden) of an infrastructure point: kind one of STREET_MODELS' or None; hidden: mapped but not drawn
+    (an underground hydrant, a post box in a wall, bicycle parking in a building: it still counts as mapped)."""
+    kind = STREET_KINDS.get(_cls(feats, i))
+    if kind is None:
+        return None, False
+    t = _tags(feats, i)
+    if t.get("location") in ("underground", "indoor", "roof") or t.get("indoor") == "yes" \
+            or t.get("level", "0") not in ("0", ""):
+        return kind, True
+    if kind == "hydrant" and (t.get("fire_hydrant:type") in HYDRANT_HIDDEN
+                              or t.get("fire_hydrant:position") == "wall"):
+        return kind, True
+    if kind == "postbox" and t.get("post_box:type") in ("wall", "lamp"):
+        return kind, True
+    if kind == "bikestand" and t.get("bicycle_parking") in ("building", "shed", "lockers", "floor", "ground_slots",
+                                                            "underground", "garage"):
+        return kind, True
+    if kind == "recyclebin" and t.get("recycling_type") == "centre":
+        return kind, True
+    return kind, False
+
+
+def _street_points(frame, md, keys, box):
+    """[(kind, hidden, fid, x, y, tags)] of the mapped street furniture with its point in box (a small polygon's
+    centre)."""
+    out, seen = [], set()
+    for feats in _layers(md, keys, "infrastructure"):
+        memo = feats.__dict__.setdefault("_pl_street", {})
+        fkey = (frame.lat0, frame.lon0, frame.h0)
+        mine = memo.get(fkey)
+        if mine is None:
+            mine = []
+            cls = feats.attrs.get("class")
+            ids = getattr(feats, "ids", None)
+            if cls is not None:
+                want = np.isin(np.asarray(cls).astype(str), list(STREET_KINDS))
+                for i in np.flatnonzero(want).tolist():
+                    kind, hidden = street_kind(feats, i)
+                    if kind is None or int(feats.kind[i]) not in (mapgeom.POINT, mapgeom.POLYGON):
+                        continue
+                    parts = feats.parts(int(i))
+                    if not parts or not parts[0] or not len(parts[0][0]):
+                        continue
+                    e, n = mapgeom.enu_xy(feats, frame, np.asarray(parts[0][0], np.float64))
+                    x, y = float(np.mean(e)), float(np.mean(n))
+                    fid = str(ids[i]) if ids is not None else f"{x:.1f},{y:.1f}"
+                    mine.append((kind, hidden, fid, x, y, _tags(feats, i)))
+            if len(memo) >= 2:
+                memo.pop(next(iter(memo)), None)
+            memo[fkey] = mine
+        for item in mine:
+            if item[2] in seen or not (box[0] <= item[3] < box[2] and box[1] <= item[4] < box[3]):
+                continue
+            seen.add(item[2])
+            out.append(item)
+    return out
+
+
+def street_rows(frame, box, md, elev, roads=(), country=None, keys=None, mapped_out=None):
+    """Forest rows of the mapped street furniture in box. mapped_out: a dict filled with kind -> [(x, y)] of every
+    mapped one (hidden ones too), for drop_inferred."""
+    if md is None or not ENABLED:
+        return []
+    if keys is None:
+        keys = _keys_of(frame, box)
+        if not keys:
+            return []
+    pts = _street_points(frame, md, keys, box)
+    if mapped_out is not None:
+        for kind, hidden, fid, x, y, tags in pts:
+            mapped_out.setdefault(kind, []).append((x, y))
+    shown = [p for p in pts if not p[1]]
+    if not shown:
+        return []
+    na = _country(frame, box, country) in NA
+    seg = _segments(roads)
+    fast.require(NATIVE, "places.street_points")
+    rows = []
+    for kind, (g_na, g_eu, h, pad, yaw_add) in STREET_MODELS.items():
+        mine = [p for p in shown if p[0] == kind]
+        if not mine:
+            continue
+        xy = np.array([[p[3], p[4]] for p in mine], np.float64)
+        got = fast._ef.street_points(xy, seg, float(pad), STREET_REACH_M)
+        group = g_na if na else g_eu
+        height = h if h is not None else STREET_H[group]
+        z = _z(frame, elev, got[:, 0], got[:, 1])
+        for (_k, _h, fid, _x, _y, tags), (x, y, toward, edge), zz in zip(mine, got.tolist(), z.tolist()):
+            if toward == toward and yaw_add is not None:
+                yaw = (toward + yaw_add) % 360.0
+            else:
+                yaw = 360.0 * _h01(fid, "yaw")
+            lift = CURB_H if edge <= SIDEWALK_M else 0.0
+            n = 1
+            if kind == "bikestand":
+                try:
+                    n = int(max(1, min(BIKE_STANDS_MAX, -(-int(float(tags.get("capacity", "0"))) // BIKES_PER_STAND))))
+                except ValueError:
+                    n = 1
+            for k in range(n):
+                # (several stands side by side along the stand's own length: local x)
+                ox, oy = _offset(yaw, (k - (n - 1) / 2.0) * BIKE_STAND_LEN, 0.0)
+                rows.append([group, round(x + ox, 2), round(y + oy, 2), round(zz + lift, 2), round(yaw, 1), 1.0,
+                             height, round(0.3 * _h01(fid, k, "r"), 4)])
+    return rows
+
+
+def drop_inferred(props, mapped):
+    """props without furniture.place's guessed hydrants, benches and bins where those are mapped: all of a kind when the
+    tile has INFERRED_TILE_MIN of it mapped, else the ones within INFERRED_DROP of a mapped one. mapped: street_rows'
+    mapped_out. Call before the mapped rows are added (they use the same groups)."""
+    if not props or not mapped:
+        return props
+    groups = {k: np.asarray(v, np.float64).reshape(-1, 2) for k, v in mapped.items() if k in INFERRED_DROP}
+    if not groups:
+        return props
+    out = []
+    for r in props:
+        pts = groups.get(r[0]) if isinstance(r, (list, tuple)) and r else None
+        if pts is not None and len(pts):
+            if len(pts) >= INFERRED_TILE_MIN:
+                continue
+            d2 = (pts[:, 0] - float(r[1])) ** 2 + (pts[:, 1] - float(r[2])) ** 2
+            if float(d2.min()) < INFERRED_DROP[r[0]] ** 2:
+                continue
+        out.append(r)
+    return out
+
+
+def _country(frame, box, country):
+    """The tile's country: the caller's, else the bundled borders' at the tile's centre (countrybounds)."""
+    if country:
+        return str(country).upper()
+    try:
+        import countrybounds
+        la, lo, _ = frame.enu_to_geodetic(np.array([(box[0] + box[2]) / 2.0]), np.array([(box[1] + box[3]) / 2.0]),
+                                          np.zeros(1))
+        return str(countrybounds.bundled().at(float(la[0]), float(lo[0])) or "").upper()
+    except Exception:
+        return ""
+
+
+def _keys_of(frame, box):
+    import mapcells
+    x0, y0, x1, y1 = (float(v) for v in box)
+    la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
+    try:
+        return mapcells.cells_for_points(la, lo, pad_lat=0.0005, pad_lon=0.0005, max_cells=64)
+    except (ValueError, OverflowError):
+        return []
+
+
 def tile_rows(frame, box, md, elev, roads=(), country=None, keys=None):
     """Forest rows of the places in a road tile's box (x0, y0, x1, y1) in frame. roads: build_tile's roads_out rows
     (the carriageways near the tile); country: ISO alpha-2 of the tile. md None: none."""
     if md is None or not ENABLED:
         return []
-    import mapcells
-    x0, y0, x1, y1 = (float(v) for v in box)
     if keys is None:
-        la, lo, _ = frame.enu_to_geodetic(np.array([x0, x0, x1, x1]), np.array([y0, y1, y0, y1]), np.zeros(4))
-        try:
-            keys = mapcells.cells_for_points(la, lo, pad_lat=0.0005, pad_lon=0.0005, max_cells=64)
-        except (ValueError, OverflowError):
+        keys = _keys_of(frame, box)
+        if not keys:
             return []
     places = _places(frame, md, keys)
     if not places:
