@@ -202,7 +202,7 @@ function M.toNodes(g, b, edgeM, leftHand, yieldEvery, halo, fastHalo)
         local edge = { drivability = e[7], oneWay = e[3] == 1, lanes = M.lanes(e[4], e[5], leftHand),
           speedLimit = e[6], inNode = a, outNode = bb, inPos = A.pos, outPos = B.pos,
           inRadius = e[8], outRadius = e[9] or e[8],      -- (e[9]: a road narrowing to a tunnel's portal)
-          posted = e[10] }      -- (the posted limit where speedLimit is not it, negative: the class's default; api)
+          posted = e[10], rumble = e[11] == true } -- (posted limit and country/road rumble heuristic)
         A.links[bb] = edge
         B.links[a] = edge
         ne = ne + 1
@@ -555,7 +555,18 @@ local function closestRoad(x, y, z)
   -- (findClosestRoad's distance is 3D, the probe at the player's height: measured in the plane here)
   local t = math.max(0, math.min(1, ((x - i.pos.x) * ex + (y - i.pos.y) * ey) / (l * l)))
   local qx, qy = i.pos.x + t * ex, i.pos.y + t * ey
-  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay }
+  return { dist = math.sqrt((x - qx) ^ 2 + (y - qy) ^ 2), dx = ex / l, dy = ey / l, oneWay = e.oneWay,
+    lateral = (ex * (y - qy) - ey * (x - qx)) / l, halfWidth = (e.inRadius or 3.5) +
+      ((e.outRadius or e.inRadius or 3.5) - (e.inRadius or 3.5)) * t, rumble = e.rumble == true,
+    edgeKey = tostring(e.inNode or n1) .. ':' .. tostring(e.outNode or n2) }
+end
+
+-- Lane-departure strip metadata for the rumble audio. The server only marks selected country/road classes; only the
+-- centerline of an undivided carriageway and its outer edges are candidates (never same-direction lane separators).
+function M.rumbleLineAt(x, y, z)
+  local r = closestRoad(x, y, z)
+  if not r or not r.rumble or r.dist > 20 or r.halfWidth < 2 then return nil end
+  return { lateral = r.lateral, halfWidth = r.halfWidth, oneWay = r.oneWay, edgeKey = r.edgeKey }
 end
 local oncomingTurn = false
 

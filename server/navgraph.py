@@ -5,8 +5,9 @@ Nodes are Overture connectors (named "c<connector id>": the same name in every w
 by every segment meeting at a junction) and the simplified shape points between them ("s<segment id>_<k>").
 Each edge carries what the custom map path does not compute (research §2.4): its half width (radius), lanes
 (per direction), one-way direction, driving target (m/s, at most the posted limit) and drivability. Positions
-are in the anchor frame, z the ground (elev); the mod clips the graph to the terrain block before using it
-(the only collidable ground).
+are in the anchor frame, z the ground (elev); optional edge fields carry a portal radius, posted-speed metadata and a
+country/road-class rumble-strip candidate flag. The mod clips the graph to the terrain block before using it (the only
+collidable ground).
 
 Pure given the map cells and elev; deterministic.
 """
@@ -182,6 +183,23 @@ def posted_field(legal, target, mapped):
     return v if mapped else -v
 
 
+# Corridor-specific longitudinal rumble strip inventories are not available in OSM. This deliberately narrow
+# country/road heuristic uses the road agency guidance documented in docs/RUMBLE_STRIPS.md.
+RUMBLE_COUNTRIES = {"AU", "NZ", "US"}
+RUMBLE_RURAL_CLASSES = {"trunk", "primary", "secondary"}
+
+
+def rumble_eligible(country, spec):
+    """Whether this carriageway gets the lane-departure rumble heuristic, not which painted lines exist."""
+    if str(country or "").upper() not in RUMBLE_COUNTRIES or getattr(spec, "kind", None) != "paved":
+        return False
+    if getattr(spec, "link", False):
+        return False
+    if getattr(spec, "cls", None) == "motorway":
+        return True
+    return getattr(spec, "cls", None) in RUMBLE_RURAL_CLASSES and not getattr(spec, "urban", True)
+
+
 def road_mph(feats, i, spec, mph=True, at=0.5, country=None, de_on=False):
     """The speed limit (mph) of road feature i at fraction at (default: its middle), else the class default
     (capped in town for arterials), or None for a class the AI does not drive. Shared by the graph and the speed-limit
@@ -318,7 +336,8 @@ def _deck_z(decks, fid, x, y):
 def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks=None, tunnels=None, widths=None, left_hand=False,
           mph=True, signals=None, country=None, priority=None, de_on=False, de_routes=()):
     """{"nodes": {name: [x, y, z, radius]}, "edges": [[in, out, oneway, lanes_out, lanes_in, speed m/s,
-    drivability, radius]], `lines` for tunnel-only minimap stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
+    drivability, radius, (optional portal radius, posted speed, rumble candidate)]], `lines` for tunnel-only minimap
+    stretches as [x1, y1, x2, y2, drivability, posted speed m/s]
     (the last field was added in 1.9 for add-ons that read legal limits). Of the roads in the square of half size
     `window` around centre (x, y) of
     the anchor frame. feats_list: the "roads" mapgeom.Features of the cells around (duplicates across cells
@@ -334,6 +353,7 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
     cx, cy = centre
     nodes, edges, edge_fids, seen = {}, [], [], set()
     posted = {}                 # id(edge) -> its posted limit where the AI's target is not it (posted_field)
+    rumble_edges = set()         # id(edge) -> likely ATLM/rural rumble strip corridor
     carriage, carriage_ll = [], []     # sampled ground carriageways, with heights batched below
     signal_parts, signal_walks, signal_depths = [], {}, {}
     copies = roads.copies_of(feats_list)
@@ -561,6 +581,8 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
                 pf = posted_field(legal, target, mapped_limit(feats, i, (full[j] + full[j + 1]) / (2 * L)))
                 if pf is not None:
                     posted[id(edges[-1])] = pf
+                if rumble_eligible(country, spec):
+                    rumble_edges.add(id(edges[-1]))
                 if in_tunnel:
                     tube_edges.add(id(edges[-1]))
     # The static props use 3D solved roads/decks. A 2D graph clearance line would falsely block every level below
@@ -655,12 +677,15 @@ def build(frame, feats_list, elev, centre, urban_fn=None, window=WINDOW_M, decks
             uniq.append(e)
     if tube_edges:
         portal_taper(nodes, uniq, tube_edges, set(tunnel_node))
-    for e in uniq:              # (the posted limit last: e[9], after the optional portal radius e[8])
+    for e in uniq:              # (posted speed e[10], rumble eligibility e[11], after optional portal radius e[9])
         pf = posted.get(id(e))
-        if pf is not None:
+        rumble = id(e) in rumble_edges
+        if pf is not None or rumble:
             if len(e) == 8:
                 e.append(None)
             e.append(pf)
+            if rumble:
+                e.append(True)
     lines = [ln for ln in lines if max(abs(ln[0] - cx), abs(ln[1] - cy), abs(ln[2] - cx), abs(ln[3] - cy)) <= window]
     return {"nodes": nodes, "edges": uniq, "signals": signals, "lines": lines,
             "trafficProfile": _traffic_profile(frame, density_lines, cx, cy), "mph": bool(mph)}

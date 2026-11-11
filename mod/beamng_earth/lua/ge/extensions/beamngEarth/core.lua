@@ -2692,6 +2692,11 @@ local function onUpdate(dtReal, dtSim)
     t = mark('parking', t)
     navgraph.update(st.anchorId, pb, gov)
     t = mark('navgraph', t)
+    do
+      local ok, err = pcall(require('beamngEarth/rumble').update, dtReal, navgraph.currentGraph(), not st.paused)
+      if not ok then log('W', 'beamngEarth', 'rumble strips: ' .. tostring(err)) end
+    end
+    t = mark('rumble', t)
     do                              -- (traffic over the limit as the country drives: speeding.lua)
       local ok, err = pcall(require('beamngEarth/speeding').update, dtReal, navgraph.currentGraph())
       if not ok then log('E', 'beamngEarth', 'speeding: ' .. tostring(err)) end
