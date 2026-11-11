@@ -1,0 +1,114 @@
+{
+  "bne_au_galv": {
+    "name": "bne_au_galv",
+    "mapTo": "bne_au_galv",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b47616e1-a828-586f-b841-5adeb6f0cbbd",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.6,
+          0.62,
+          0.63,
+          1.0
+        ],
+        "metallicFactor": 0.75,
+        "roughnessFactor": 0.45
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_sig_black": {
+    "name": "bne_au_sig_black",
+    "mapTo": "bne_au_sig_black",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "d7567d9d-ac7b-5568-a76d-d653ae84fb7e",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.014,
+          0.014,
+          0.016,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.55
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_sig_white": {
+    "name": "bne_au_sig_white",
+    "mapTo": "bne_au_sig_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "979167bf-6dfd-5312-83c2-199b44e81ab7",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.88,
+          0.86,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_sig_lens": {
+    "name": "bne_au_sig_lens",
+    "mapTo": "bne_au_sig_lens",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "fa498188-d1c9-5434-acd5-9b6ac3701b26",
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/utility/trafficLight/instanced_trafficlight_lights.png",
+        "baseColorFactor": [
+          0.12,
+          0.12,
+          0.12,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.15
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_giveway_face": {
+    "name": "bne_au_giveway_face",
+    "mapTo": "bne_au_giveway_face",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "89a9c39f-507a-5948-b86b-160582eb074f",
+    "Stages": [
+      {
+        "baseColorMap": "/levels/beamng_earth/art/shapes/beamngEarth/bne_au_giveway.png",
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.35
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

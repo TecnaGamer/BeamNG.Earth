@@ -1,0 +1,68 @@
+{
+  "bne_au_post": {
+    "name": "bne_au_post",
+    "mapTo": "bne_au_post",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "dc1502e7-f800-56d4-a046-14689c524035",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.88,
+          0.89,
+          0.87,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.6
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_reflect_red": {
+    "name": "bne_au_reflect_red",
+    "mapTo": "bne_au_reflect_red",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "a87c97eb-5225-5dd3-9607-0a39df6ceef1",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.78,
+          0.04,
+          0.04,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.25
+      },
+      {},
+      {},
+      {}
+    ]
+  },
+  "bne_au_reflect_white": {
+    "name": "bne_au_reflect_white",
+    "mapTo": "bne_au_reflect_white",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "ce163c86-59e6-5d93-874d-257beef9d591",
+    "Stages": [
+      {
+        "baseColorFactor": [
+          0.95,
+          0.95,
+          0.92,
+          1.0
+        ],
+        "metallicFactor": 0.1,
+        "roughnessFactor": 0.25
+      },
+      {},
+      {},
+      {}
+    ]
+  }
+}

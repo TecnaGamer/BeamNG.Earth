@@ -21,6 +21,26 @@ T.check(a0 == 0, 'July: summer')
 local _, aoff = S.speciesTint(oak, nil, 15, 39.2)
 T.check(aoff == 0, 'season off: nothing')
 
+-- an evergreen region (Brisbane, -27.5: the server's anchor_ready evergreen): no tint on any day in 'auto'
+do
+  local never = true
+  for doy = 1, 365 do
+    for _, sp in ipairs(S.SPECIES) do
+      local tint, t = S.speciesTint(sp, 'auto', doy, -27.5, true)
+      if t ~= 0 or tint[1] ~= 1 or tint[2] ~= 1 or tint[3] ~= 1 then never = false end
+    end
+  end
+  T.check(never, 'evergreen: no fall, winter or spring tint on any day')
+  -- the same latitude band without the flag still follows the southern calendar (autumn in May, none in October)
+  local _, aMay = S.speciesTint(S.SPECIES[2], 'auto', 130, -33.45, false)
+  T.check(aMay > 0.3 and S.fallAmount(130, -33.45) > 0.5 and S.fallAmount(287, -33.45) == 0,
+    'not evergreen, southern hemisphere: autumn in May, none in October')
+  local _, aForced = S.speciesTint(oak, 'fall', 130, -27.5, true)
+  T.check(aForced == 1, 'a forced --season fall still tints')
+  S.setEvergreen(true)
+  S.setEvergreen(nil)     -- (anything but true: off)
+end
+
 -- the far imposters of the species' shapes take their tint (the user, 2026-10-29: flat far trees kept summer green)
 do
   local oak = S.imposterSpecies('imposter_mat__levels_east_coast_usa_art_shapes_trees_trees_oak_tree_oak_forest_b.dae')

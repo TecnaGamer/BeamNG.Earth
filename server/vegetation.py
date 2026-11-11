@@ -30,10 +30,12 @@ from dataclasses import dataclass
 
 import numpy as np
 
+import climate     # in_australia, koppen_grid (australian_trees)
 import beaches
 import fast
 import dmath
 import dnp
+import vegclass     # the palettes (apply_palette)
 
 import mapcells
 import pacer
@@ -41,7 +43,9 @@ import staging
 
 log = logging.getLogger("earthd.vegetation")
 
-VERSION = 29          #(the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
+VERSION = 30          # (30: upstream dev's 29 merged, the AU groups appended after its 25; 26: palette crowns kept off roads (_crown_clear); 24: Australia's eucalypt / tropical / palm mix, australian_trees; 25: the NVIS palettes,
+                      # apply_palette, and a palette / map edit rebuilds: Vegetation._stamp)
+                      # (the cached cells hold their groups: 14 for the regional rules of GitHub #110; 16: the roads'
                       # drawn widths and sidewalks kept clear; 17: BC's lidar canopy heights, mapdata's canopy layer 2;
                       # 18: the rounded junction corners kept clear, roadcorners.py; 19: one tree per flat crown,
                       # thin_tops; 20: none on or beside a bridge deck, _mask_decks; 21: orchard rows, canopy trees
@@ -64,11 +68,12 @@ KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
           "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
-          "eucalyptus_clump", "poplar", "creosote")
+          "eucalyptus_clump", "poplar", "creosote",
+          "eucalypt", "dry_rainforest", "mallee", "scrub", "mangrove")      # the AU groups after upstream's (the ids are the Rust kernel's: never reorder)
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
  G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
- G_POPLAR, G_CREOSOTE) = range(25)
+ G_POPLAR, G_CREOSOTE, G_EUCALYPT, G_DRY_RAINFOREST, G_MALLEE, G_SCRUB, G_MANGROVE) = range(len(GROUPS))
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -279,6 +284,137 @@ def _conifer_share(lat, lon):
     return np.where(_north_america(lat, lon), share, other)
 
 
+# Australia's trees (regional()'s rules are North America's: Douglas firs and East Coast oaks in Brisbane)
+AU_EUCALYPT_P = {G_DECIDUOUS: 0.85, G_CONIFER: 0.85, G_OAK_WEST: 0.70}   # the rest: exotic street / park trees, pines
+AU_TROPICAL_P = 0.60        # rainforest (Koppen Af, Am) trees at least AU_TROPICAL_MIN_M tall
+AU_TROPICAL_MIN_M = 12.0
+AU_PALM_P = 0.15            # of a town's trees north of AU_PALM_LAT (Queensland's coast: Cairns to the Gold Coast)
+AU_PALM_LAT = -29.0
+AU_WET_TROPICS = (1, 2)     # Koppen Af, Am
+
+
+def australian_trees(generic, regional_group, height, lat, lon, lcls, u):
+    """the groups of the trees inside Australia (climate.in_australia): eucalypts for most deciduous / conifer
+    items (the rest stay as exotic street trees and pines), rainforest trees in the wet tropics, palms in
+    Queensland's towns. generic: the group before regional() (deciduous / conifer / shrub / rock);
+    regional_group: after it (shrubs and rocks keep its desert variants); u: (n, 3) hashed [0, 1) per item (the
+    eucalypt, tropical and palm draws). Items outside Australia keep regional_group. Deterministic, pure."""
+    generic, out = np.asarray(generic, np.uint8), np.array(regional_group, np.uint8)
+    lat, lon, height = (np.asarray(a, np.float64) for a in (lat, lon, height))
+    u, lcls = np.asarray(u, np.float64), np.asarray(lcls)
+    au = climate.in_australia(lat, lon) & np.isin(generic, (G_DECIDUOUS, G_CONIFER, G_OAK_WEST))
+    if not au.any():
+        return out
+    ix = np.flatnonzero(au)
+    g = generic[ix].copy()              # (regional()'s American rules, its palms and tropical trees included, undone)
+    wet = np.isin(climate.koppen_grid(lat[ix], lon[ix]), AU_WET_TROPICS)
+    palm = (lcls[ix] == WC["built"]) & (lat[ix] > AU_PALM_LAT) & (u[ix, 2] < AU_PALM_P)
+    trop = ~palm & wet & (height[ix] >= AU_TROPICAL_MIN_M) & (u[ix, 1] < AU_TROPICAL_P)
+    share = np.zeros(len(GROUPS))
+    for k, p in AU_EUCALYPT_P.items():
+        share[k] = p
+    euc = ~palm & ~trop & (u[ix, 0] < share[g])
+    g[euc] = G_EUCALYPT
+    g[trop] = G_TROPICAL
+    g[palm] = G_PALM
+    out[ix] = g
+    return out
+
+
+# the vegetation palettes (vegclass.py, data/veg_palettes.json): where a map class covers the point (Australia:
+# NVIS), its palette sets the trees' and bushes' groups, their size and their density. Towns and farmland keep
+# australian_trees' mix.
+PALETTE_TREES = (G_DECIDUOUS, G_CONIFER, G_PINE_WEST, G_JUNIPER, G_OAK_WEST, G_TROPICAL, G_EUCALYPT)
+PALETTE_SHRUBS = (G_SHRUB, G_DESERT_SHRUB)
+PALETTE_VEG = PALETTE_TREES + PALETTE_SHRUBS + (G_DRY_RAINFOREST, G_MALLEE, G_SCRUB, G_MANGROVE)
+PALETTE_KEEP = (WC["built"], WC["crop"])
+
+
+def apply_palette(group, lat, lon, cls, u):
+    """the groups of items (1-D arrays: group before, position, land cover class cls, hashed [0, 1) draw u) under
+    their palettes: a tree group becomes one of the palette's trees (its shares, normalised) and a bush group one of
+    its shrubs (the shares' sum, the rest keep their group); rocks, palms and every item on built-up land or cropland
+    or without a palette stay. A pure function of its inputs (the Rust port's reference)."""
+    group = np.asarray(group, np.uint8)
+    out = group.copy()
+    ids = vegclass.palette_ids(lat, lon)
+    sel = (ids > 0) & ~np.isin(cls, PALETTE_KEEP)
+    if not sel.any():
+        return out
+    u = np.asarray(u, np.float64)
+    names = vegclass.palette_names()
+    for pid in np.unique(ids[sel]):
+        p = vegclass.palette(names[pid])
+        for key, kinds in (("trees", PALETTE_TREES), ("shrubs", PALETTE_SHRUBS)):
+            mix = p.get(key) or []
+            k = sel & (ids == pid) & np.isin(group, kinds)
+            if not mix or not k.any():
+                continue
+            edges = np.cumsum([share for _, share in mix])
+            edges = edges / edges[-1] if key == "trees" else edges
+            pick = np.searchsorted(edges, u[k], side="right")       # the first share whose edge is past the draw
+            hit = pick < len(mix)
+            new = out[k]
+            new[hit] = np.array([GROUPS.index(g) for g, _ in mix], np.uint8)[pick[hit]]
+            out[k] = new
+    return out
+
+
+def palette_items(it, cls):
+    """Items it (land cover class cls per item) under the palettes: apply_palette's groups, the trees' and bushes'
+    height (and crown) times their palette's scale draw, and the palette's density (the share of them kept, by their
+    ranks: the others are dropped). Items without a palette are unchanged; it itself when none has one."""
+    ids = vegclass.palette_ids(it.lat, it.lon)
+    sel = (ids > 0) & ~np.isin(cls, PALETTE_KEEP)
+    if not sel.any():
+        return it
+    qa, qo = np.round(it.lat * 1e6).astype(np.int64), np.round(it.lon * 1e6).astype(np.int64)     # (the position's hash)
+    group = apply_palette(it.group, it.lat, it.lon, cls, _hash01(qa, qo, 31))
+    veg = sel & np.isin(group, PALETTE_VEG)
+    lo, hi, density = vegclass.looks()[ids].T
+    size = np.where(veg, lo + (hi - lo) * _hash01(qa, qo, 32), 1.0)
+    rank = (it.rank / np.where(veg, density, 1.0)).astype(np.float32)
+    out = Items(it.lon, it.lat, (it.height * size).astype(np.float32), (it.radius * size).astype(np.float32), it.kind,
+                group, rank, it.yaw, it.scale)
+    return out if (rank < 1.0).all() else out.take(rank < 1.0)
+
+
+# a palette tree's crown (radius times CROWN_K, wider for the rainforest's spreading figs and the tropical trees) may
+# hang OVERHANG_M over a road's edge; a tree whose crown would reach further in is dropped (Kuranda's Kennedy Highway,
+# 2026-11-07: figs over both lanes). Only palette (Australian) trees: elsewhere nothing changes.
+OVERHANG_M = 1.0
+CROWN_K = {G_TROPICAL: 2.0, G_DRY_RAINFOREST: 2.0, G_MANGROVE: 1.5}
+CLEAR_MAX_M = 14.0
+
+
+def _crown_clear(it, road, mx, my, chm):
+    if not len(it.lat) or not road.any():
+        return it
+    pal = vegclass.palette_ids(it.lat, it.lon) > 0
+    if not pal.any():
+        return it
+    k = np.ones(len(it.lat), np.float32)
+    for g, f in CROWN_K.items():
+        k[it.group == g] = f
+    need = it.radius * k - OVERHANG_M                   # m from the road's edge the trunk must stand
+    chk = pal & (it.kind == KIND_TREE) & (need > 0)
+    if not chk.any():
+        return it
+    step = float(abs(chm.dx))
+    dist = np.full(road.shape, np.inf, np.float32)      # m to the nearest road pixel (square steps)
+    cur = road
+    dist[cur] = 0.0
+    for n in range(1, int(CLEAR_MAX_M / step) + 1):
+        cur = _dilate(cur, 1)
+        dist[cur & np.isinf(dist)] = n * step
+    x = np.radians(it.lon.astype(np.float64)) * 6378137.0
+    y = dnp.log(dnp.tan(np.pi / 4 + np.radians(it.lat.astype(np.float64)) / 2)) * 6378137.0
+    col = np.clip(np.round((x - mx[0]) / (mx[1] - mx[0])).astype(np.int64), 0, road.shape[1] - 1)
+    row = np.clip(np.round((y - my[0]) / (my[1] - my[0])).astype(np.int64), 0, road.shape[0] - 1)
+    drop = chk & (dist[row, col] < need)
+    return it.take(~drop) if drop.any() else it
+
+
 class Vegetation:
     def __init__(self, md, cache_dir=None):
         self.md = md
@@ -293,6 +429,27 @@ class Vegetation:
         self._warm_cv = threading.Condition()
         self._on_disk = set()           # cells whose file ready() found (the warm thread's: each file checked once)
         self._soon = OrderedDict()      # build_soon's cells (x, y), oldest first, at most BUILD_SOON_MAX
+        self._stamp()
+
+    def _stamp(self):
+        """cached cells built under other palettes or maps (vegclass.digest, kept in a file beside them) are dropped."""
+        if not self.dir:
+            return
+        mark = os.path.join(self.dir, "palettes.sha")
+        try:
+            now = vegclass.digest()
+            have = None
+            if os.path.exists(mark):
+                with open(mark, encoding="ascii") as f:
+                    have = f.read().strip()
+            if have != now:
+                import shutil
+                shutil.rmtree(self.dir, ignore_errors=True)
+                os.makedirs(self.dir, exist_ok=True)
+                with open(mark, "w", encoding="ascii") as f:
+                    f.write(now)
+        except OSError as e:            # (the cells are then kept as they are)
+            log.debug("vegetation: palette stamp: %s", e)
 
     def cell(self, key):
         """The Items of map-data cell key ((z, x, y) or CellKey)."""
@@ -554,14 +711,21 @@ class Vegetation:
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
         conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
+        generic = group
         group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
                          riparian=None if near_water is None else near_water[jj, ii])
+        group = australian_trees(generic, group, th, tlat, tlon, lcls,       # Australia's own mix
+                                 np.stack([_hash01(gx, gy, 8), _hash01(gx, gy, 9), _hash01(gx, gy, 10)], axis=1))
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
         tree = Items(tlon2, tlat2, th.astype(np.float32), (0.12 * th + 1.0).astype(np.float32), kind, group,
                      _hash01(gx, gy, 5).astype(np.float32), (u2 * 360.0).astype(np.float32),
                      (0.85 + 0.3 * _hash01(gx, gy, 6)).astype(np.float32))
+        tree = palette_items(tree, lcls)       # the NVIS palette's trees, size and density
+        tree = _crown_clear(tree, curb, mx, my, chm)     # palette crowns overhang a road by OVERHANG_M at most
+        if len(lcls) != len(tree):              # the palette thinned / cleared some: their land cover read again
+            lcls = lc.sample(tree.lon, tree.lat) if lc is not None else np.zeros(len(tree), np.uint8)
         # squares, pedestrian areas and parking lots: no scattered bushes or rocks (a real tree there stays).
         # An orchard keeps its planted rows and loses the canopy's trees inside it.
         paved = np.zeros(h.shape, bool)
@@ -635,11 +799,11 @@ class Vegetation:
         GI, GJ, lon, lat, cls = GI[forest], GJ[forest], lon[forest], lat[forest], cls[forest]
         size = 1.2 + 1.8 * _hash01(GI, GJ, 24)
         n = len(lon)
-        return Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),
+        return palette_items(Items(lon, lat, size.astype(np.float32), (size * 0.6).astype(np.float32),     # palette
                      np.full(n, KIND_BUSH, np.uint8),
                      regional(np.full(n, G_SHRUB, np.uint8), size, lat, lon, cls, _hash01(GI, GJ, 25)),
                      _hash01(GI, GJ, 26).astype(np.float32), (_hash01(GI, GJ, 27) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32))
+                     (0.8 + 0.4 * _hash01(GI, GJ, 28)).astype(np.float32)), cls)
 
     def _slope(self, px, py):
         """The ground's slope (rise over run) at Web Mercator points (px, py), from the DEM ROCK_SLOPE_D m either side
@@ -719,13 +883,13 @@ class Vegetation:
         sel = rock | bush
         n = int(sel.sum())
         size = 0.4 + 1.6 * dnp.sq(_hash01(GI[sel], GJ[sel], 14))
-        return Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
+        return palette_items(Items(lon[sel], lat[sel], size.astype(np.float32), (size * 0.6).astype(np.float32),
                      np.where(rock[sel], KIND_ROCK, KIND_BUSH).astype(np.uint8),
                      regional(np.where(rock[sel], G_ROCK, G_SHRUB), size, lat[sel], lon[sel], cls[sel],
                               _hash01(GI[sel], GJ[sel], 18)),
                      _hash01(GI[sel], GJ[sel], 15).astype(np.float32),
                      (_hash01(GI[sel], GJ[sel], 16) * 360.0).astype(np.float32),
-                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)) if n else _empty()
+                     (0.8 + 0.4 * _hash01(GI[sel], GJ[sel], 17)).astype(np.float32)), cls[sel]) if n else _empty()
 
 
 def _thin(jj, ii, h, px, k=1.0):

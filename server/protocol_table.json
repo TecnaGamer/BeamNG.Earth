@@ -812,7 +812,10 @@
     "provisional": {"type": "bool", "optional": true, "doc": "2026-10-22: a teleport's ungraded first block"},
     "px": {"type": "num", "nullable": true, "optional": true},
     "py": {"type": "num", "nullable": true, "optional": true, "doc": "the prepare_anchor's spot, echoed"},
-    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"}
+    "fuelShapes": {"type": "list", "optional": true, "doc": "2026-10-23: the region's gas station shapes (--gas-stations)"},
+    "koppen": {"type": "int", "optional": true, "doc": "the anchor's Koppen-Geiger class (climate.py), the grass mix"},
+    "grassDry": {"type": "list", "optional": true, "doc": "12 monthly dry-grass shares (season.grass_dry_months), the grass mix"},
+    "evergreen": {"type": "bool", "optional": true, "doc": "season.evergreen at the anchor (seasonlook.setEvergreen)"}
    }
   },
   "anchor_progress": {
