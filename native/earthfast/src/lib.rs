@@ -73,6 +73,7 @@ mod railseam;
 mod classgrid;
 mod frontage;
 mod furnstations;
+mod stationgeom;
 mod bdtopo;
 mod nycmassing;
 mod rooftop;
@@ -5929,6 +5930,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(l0roads::l0_flatten, m)?)?;
     // (L0 ground: a teleport's first block's stand-in photo from its own ground layers, earthd.write_ground_base)
     m.add_function(wrap_pyfunction!(groundphoto::ground_photo, m)?)?;
-    m.add("VERSION", 219)?;
+    // 222: the stations' small geometry (busstations.contains / dist_to_path, railstations._crossings): stationgeom
+    m.add_function(wrap_pyfunction!(stationgeom::station_contains, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_path_dist, m)?)?;
+    m.add_function(wrap_pyfunction!(stationgeom::station_crossings, m)?)?;
+    m.add("VERSION", 222)?;
     Ok(())
 }

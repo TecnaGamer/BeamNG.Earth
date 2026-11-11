@@ -194,32 +194,44 @@ def centroid(xy):
     return xy.mean(0)
 
 
+GEOM_NATIVE = 222          # earthfast.VERSION of station_contains / station_path_dist (stationgeom.rs)
+
+
+def _xy(a):
+    """a's rows (k, >= 2) as float64, x and y only."""
+    a = np.asarray(a, np.float64)
+    return a.reshape(-1, a.shape[-1] if a.ndim > 1 else 2)[:, :2]
+
+
 def contains(ring, p):
-    """Is point p inside the polygon ring (even-odd)?"""
-    ring = _open(ring)
-    x, y = float(p[0]), float(p[1])
-    inside = False
-    xs, ys = ring[:, 0], ring[:, 1]
-    j = len(ring) - 1
-    for i in range(len(ring)):
-        if (ys[i] > y) != (ys[j] > y) and x < (xs[j] - xs[i]) * (y - ys[i]) / (ys[j] - ys[i] + 1e-12) + xs[i]:
-            inside = not inside
-        j = i
-    return inside
+    """Is point p inside the polygon ring (even-odd)? (earthfast.station_contains: the ring opened, the crossings'
+    expression as it was in Python.)"""
+    import fast
+    fast.require(GEOM_NATIVE, "station geometry")
+    return bool(fast._ef.station_contains(_xy(ring), np.array([[float(p[0]), float(p[1])]]))[0])
+
+
+def contains_any(ring, pts):
+    """any(contains(ring, p) for p in pts), in one kernel call."""
+    import fast
+    fast.require(GEOM_NATIVE, "station geometry")
+    pts = _xy(pts)
+    return bool(len(pts)) and bool(fast._ef.station_contains(_xy(ring), pts).any())
 
 
 def dist_to_path(path, p, closed=False):
-    """Distance from p to the polyline path (the closing edge too when closed)."""
-    pts = np.asarray(path, np.float64)
-    if closed:
-        pts = np.vstack((_open(pts), _open(pts)[:1]))
-    if len(pts) == 1:
-        return float(np.hypot(pts[0, 0] - p[0], pts[0, 1] - p[1]))
-    a, b = pts[:-1], pts[1:]
-    ab = b - a
-    ab2 = np.maximum((ab ** 2).sum(1), 1e-9)
-    t = np.clip(((p[0] - a[:, 0]) * ab[:, 0] + (p[1] - a[:, 1]) * ab[:, 1]) / ab2, 0.0, 1.0)
-    return float(np.hypot(a[:, 0] + t * ab[:, 0] - p[0], a[:, 1] + t * ab[:, 1] - p[1]).min())
+    """Distance from p to the polyline path (the closing edge too when closed). (earthfast.station_path_dist: numpy's
+    steps to the bit, one call instead of a numpy round of a few rows.)"""
+    import fast
+    fast.require(GEOM_NATIVE, "station geometry")
+    return float(fast._ef.station_path_dist(_xy(path), np.array([[float(p[0]), float(p[1])]]), bool(closed))[0])
+
+
+def min_dist_to_path(path, pts, closed=False):
+    """min(dist_to_path(path, p, closed) for p in pts) (pts not empty), in one kernel call."""
+    import fast
+    fast.require(GEOM_NATIVE, "station geometry")
+    return float(fast._ef.station_path_dist(_xy(path), _xy(pts), bool(closed)).min())
 
 
 def hull(xy):
