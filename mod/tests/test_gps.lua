@@ -85,14 +85,48 @@ do
   T.check(#ending(0, 0, 0) == 1, 'a destination at the existing endpoint adds nothing')
   T.check(#G.pathNodes({ { pos = { x = 50, y = 0, z = 5 } } }, nodes) == 0,
     'a path without a known graph endpoint does not invent an approach')
+  local projected = { pos = { x = 50, y = 0, z = 5 }, linkCount = 2 }
+  local path = { { wp = 'a', pos = nodes.a.pos }, projected,
+    { pos = { x = 50, y = 0, z = 3.5 }, fixed = true } }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination below a slope retains the edge through the projected road endpoint')
+  path[3].pos = { x = 50, y = 8, z = 5 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'a destination beside the road uses its planned road projection')
+  path[3].pos = { x = 50, y = 0, z = 15 }
+  T.check(table.concat(G.pathNodes(path, nodes), ',') == 'a,b',
+    'the planned road projection takes precedence over another road near the destination')
+  projected.linkCount = nil; path[3].pos.y = 8
+  T.check(#G.pathNodes(path, nodes) == 1, 'an arbitrary coordinate-only tail is not a road projection')
+  projected.linkCount = 2
+  local ended = { { wp = 'a' }, projected, { wp = 'b' }, { pos = { x = 110, y = 8, z = 10 } } }
+  T.check(table.concat(G.pathNodes(ended, nodes), ',') == 'a,b',
+    'a projection before the last named waypoint is not reused')
+  local unnamed = { { pos = { x = 20, y = 0, z = 2 }, linkCount = 2 }, projected, path[3] }
+  T.check(table.concat(G.pathNodes(unnamed, nodes, 'a', 'b'), ',') == 'a,b',
+    'two projected road points identify the final directed edge when both ids were removed')
+  T.check(#G.pathNodes(unnamed, nodes) == 0, 'a position-only path still requires a confirmed starting edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'b', 'a') == 0, 'a position-only path cannot run backward along the confirmed edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'upper') == 0, 'the projected endpoint must lie on the confirmed edge at its elevation')
+  unnamed[1].pos.z = 6
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'the projected start must also lie on the confirmed edge')
+  unnamed[1].pos = projected.pos
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'a zero-length projected path does not invent a continuation')
+  unnamed[1].pos = { x = 20, y = 0, z = 2 }; unnamed[1].linkCount = nil
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an arbitrary coordinate start cannot seed a final-edge route')
+  unnamed[1].linkCount = 2
   nodes.b.links.a = { oneWay = true, inNode = 'b' }
   T.check(#ending(50, 0, 5) == 1, 'the final edge cannot be driven against its one-way direction')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot override one-way restrictions')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path still obeys one-way restrictions')
   nodes.b.links.a.inNode = 'a'
   T.check(table.concat(ending(50, 0, 5), ',') == 'a,b', 'the legal direction of a one-way terminal edge is accepted')
   nodes.b.links.a = { drivability = 0 }
   T.check(#ending(50, 0, 5) == 1, 'a non-drivable terminal edge is not appended')
   nodes.b.links.a = nil
   T.check(#ending(50, 0, 5) == 1, 'a missing terminal edge does not snap to a disconnected or elevated node')
+  T.check(#G.pathNodes(path, nodes) == 1, 'a projected endpoint cannot bridge a missing graph edge')
+  T.check(#G.pathNodes(unnamed, nodes, 'a', 'b') == 0, 'an entirely projected path cannot bridge a missing edge')
 end
 local cmd = G.aiCommand({ 'a', 'b"c' })
 T.check(cmd:find('beamngEarth_autodrive.drive', 1, true) and cmd:find('"a","b\\"c"', 1, true),

@@ -471,7 +471,7 @@ end
 
 -- Pure: graph nodes in planner order, with consecutive duplicates removed. The stock planner can strip the
 -- final wp when projecting a destination onto an edge; retain that edge's forward endpoint for the AI.
-function M.pathNodes(path, nodes)
+function M.pathNodes(path, nodes, edgeFrom, edgeTo)
   local out, links, previous = {}, nil, nil
   for _, p in ipairs(path or {}) do
     if p.wp ~= nil and out[#out] ~= p.wp then
@@ -496,13 +496,25 @@ function M.pathNodes(path, nodes)
     end
   end
   local from, last = out[#out], path and path[#path]
+  -- fixStartEnd clears a projected road node's wp but keeps its linkCount. Prefer that road point
+  -- to the requested destination, which may sit beside the road or below it on a slope.
+  for i = #(path or {}), 1, -1 do
+    if path[i].wp ~= nil then break end
+    if path[i].linkCount ~= nil then last = path[i]; break end
+  end
+  -- Inside the final edge the planner can project away both endpoint ids. Its two road points
+  -- may still identify the forward part of the directed edge already confirmed beneath the car.
+  local first = path and path[1]
+  local anchored = not from and edgeFrom and edgeTo and first and first.pos
+    and first.linkCount ~= nil and last and last.linkCount ~= nil
+  if anchored then from = edgeFrom end
   local start = nodes and nodes[from]
   if start and last and not last.wp and last.pos then
     local a, p = start.pos, last.pos
     local best, errorSq = nil, 1 -- same 1 m positional tolerance as the stock planner's node merging
     for id, n in pairs(nodes) do
       local edge = M.edge(nodes, from, id)
-      if edge and (type(edge) ~= 'table' or ((edge.drivability or 1) > 0
+      if (not anchored or id == edgeTo) and edge and (type(edge) ~= 'table' or ((edge.drivability or 1) > 0
         and (not edge.oneWay or edge.inNode == nil or edge.inNode == from))) then
         local dx, dy, dz = n.pos.x - a.x, n.pos.y - a.y, (n.pos.z or 0) - (a.z or 0)
         local lengthSq = dx * dx + dy * dy + dz * dz
@@ -511,11 +523,21 @@ function M.pathNodes(path, nodes)
           local t = (px * dx + py * dy + pz * dz) / lengthSq
           local ex, ey, ez = px - t * dx, py - t * dy, pz - t * dz
           local distanceSq = ex * ex + ey * ey + ez * ez
-          if t > 0 and t <= 1 and distanceSq < errorSq then best, errorSq = id, distanceSq end
+          local forward = true
+          if anchored then
+            local q = first.pos
+            local qx, qy, qz = q.x - a.x, q.y - a.y, (q.z or 0) - (a.z or 0)
+            local t0 = (qx * dx + qy * dy + qz * dz) / lengthSq
+            forward = t0 >= 0 and t0 < t and (qx - t0 * dx)^2 + (qy - t0 * dy)^2 + (qz - t0 * dz)^2 < 1
+          end
+          if forward and t > 0 and t <= 1 and distanceSq < errorSq then best, errorSq = id, distanceSq end
         end
       end
     end
-    if best then out[#out + 1] = best end
+    if best then
+      if anchored then out[1] = from end
+      out[#out + 1] = best
+    end
   end
   return out
 end
@@ -694,7 +716,14 @@ local function driveArrowsPath(gm, nodes)
     return -- never give a new-graph route to an old vehicle graph, even after the timeout
   end
   pathWait = nil
-  local ids = M.pathNodes(gm.routePlanner.path, nodes)
+  local p, d = veh:getPosition(), veh:getDirectionVector()
+  local hl = math.sqrt(d.x * d.x + d.y * d.y)
+  local a, b
+  if hl > 0.1 then
+    -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
+    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
+  end
+  local ids = M.pathNodes(gm.routePlanner.path, nodes, a, b)
   -- the planner's path can be older than the graph (planned before the last apply): a step that is no edge now
   -- disabled the AI's Lua (ai.lua getEdgeLaneConfig, Lauterbrunnen 2026-10-15). The valid part is driven and the
   -- route planned again at the next check
@@ -702,13 +731,6 @@ local function driveArrowsPath(gm, nodes)
   if #valid < #ids then
     ids, routedTo = valid, nil
     M.pathCuts = (M.pathCuts or 0) + 1
-  end
-  local p, d = veh:getPosition(), veh:getDirectionVector()
-  local hl = math.sqrt(d.x * d.x + d.y * d.y)
-  local a, b
-  if hl > 0.1 then
-    -- A call before another argument yields only its first result in Lua: keep both edge endpoints.
-    a, b = M.edgeUnder(nodes, p.x, p.y, d.x / hl, d.y / hl, p.z)
   end
   ids = M.connectedStart(ids, a, b, nodes)
   if not ids or #ids == 0 then holdAutodrive(veh); return end

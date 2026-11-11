@@ -65,7 +65,7 @@ local function fixture(path, y, radius, configure)
     f.arrows = f.arrows + 1
     f.target = target
     local path = {}
-    for _, id in ipairs(f.path) do path[#path + 1] = { wp = id } end
+    for _, id in ipairs(f.path) do path[#path + 1] = type(id) == 'table' and id or { wp = id } end
     core_groundMarkers.routePlanner.path = path
   end }
   function f:step(seconds)
@@ -279,6 +279,28 @@ do
   f.gps.onAiRouteDone(1); f:step()
   T.check(#f.drives == starts and f.modes[#f.modes] == 'disabled',
     'a late completion notification cannot re-enable disabled Autodrive')
+end
+
+-- Projected road endpoints still count when the final target is below the road on a slope.
+do
+  local f = fixture({ 'w', 'j', { pos = { x = 199.8, y = 0, z = 2.994 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 1.5 }, fixed = true } }, 2, 6, function(f)
+    f.nodes.s.pos = { x = 200, y = 0, z = 3 }
+    f.nodes.t.pos = { x = 400, y = 0, z = 6 }
+    f.route = { points = { { 0, 0 }, { 0, 0.02 } }, dist = 200, dur = 10 }
+  end)
+  T.check(table.concat(f.drives[1], ',') == 'j,s', 'GPS hands off the sloped final edge through its projected endpoint')
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 'j,s', 'a map refresh retains the sloped final approach')
+  f.x, f.z = 125, 0.75
+  f.path = { { pos = { x = 125, y = 0, z = 0.75 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 2.994 }, linkCount = 2 },
+    { pos = { x = 199.8, y = 0, z = 1.5 }, fixed = true } }
+  f:mapArrives(); f:step()
+  T.check(table.concat(f.drives[#f.drives], ',') == 's' and #f.modes == 0,
+    'a map refresh inside the final edge resumes even when the planner removed every waypoint id')
+  f.x, f.z = 175, 2.25; f:step()
+  T.check(not f.gps.autodrive() and not f.gps.status(), 'the vehicle can reach the normal arrival threshold on the slope')
 end
 
 -- A display route can omit a required sub-metre graph node even without a graph replacement.
