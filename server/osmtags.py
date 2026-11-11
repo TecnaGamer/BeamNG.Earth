@@ -183,7 +183,6 @@ class OsmTags:
         cold downtown Los Angeles visit (4 road tiles, 2026-11-04) when every cell read it. need: [(lon0, lat0, lon1,
         lat1)] of the highways to match: only the ways whose bbox (GEOMETRY_MARGIN_M round it) holds one of them
         (roadlanes.join's own first test) and their row groups' geometry are read; none: nothing is read."""
-        lon0, lat0, lon1, lat1 = bounds
         etag, remote = self.version(kind)
         rd = self._reader
         files = {PATH: remote}
@@ -193,28 +192,10 @@ class OsmTags:
             uri = f"'{proto}://{PATH}'"
             groups = self._groups(con, uri, remote, kind)
             cand = self._candidates(groups, bounds)
-            names = list(COLUMNS)
-            hw = names.index("lane_hw")
-            lanes = names.index("lanes")
             lane_rows = []
             for rg in cand:
                 t = self._table(con, uri, groups, rg, remote, kind)
-                if not len(t["id"]):
-                    continue
-                b = np.float32
-                m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
-                                   & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
-                for r in _rows(t, m):
-                    if r[_ROW_VAL + lanes] is None or r[_ROW_VAL + hw] is None:
-                        continue
-                    if need is not None:
-                        x0, y0, x1, y1 = (r[_ROW_VAL + names.index(c)] for c in ("bx0", "by0", "bx1", "by1"))
-                        dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
-                        dy = GEOMETRY_MARGIN_M / 110574.0
-                        if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
-                                   for a0, b0, a1, b1 in need):
-                            continue
-                    lane_rows.append(r[_ROW_FRN])
+                lane_rows.extend(f for f, _ in _lane_rows(cell_rows(t, bounds), need))
             if not lane_rows or not any('geometry' in groups[rg]['cols'] for rg in cand):
                 return out
             hit = sorted({rg for r in lane_rows for rg in cand
@@ -393,7 +374,6 @@ class OsmTags:
         return t
 
     def _cell(self, remote, bounds, kind):
-        lon0, lat0, lon1, lat1 = bounds
         rd = self._reader
         files = {PATH: remote}
         con, proto, errors = rd._connect(files, kind)
@@ -408,14 +388,7 @@ class OsmTags:
             # of 3 row groups), and the decoding was most of this thread's CPU (23 CPU-s of a teleport, 2026-10-30)
             rows = []
             for rg in cand:
-                t = self._table(con, uri, groups, rg, remote, kind)
-                if not len(t["id"]):
-                    continue
-                # (in float32, as the file's bbox and DuckDB's comparison with it: a way whose box ends on the cell's edge)
-                b = np.float32
-                m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
-                                   & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
-                rows.extend(_rows(t, m))
+                rows.extend(cell_rows(self._table(con, uri, groups, rg, remote, kind), bounds))
             extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
             # the raceways inside the box of each one that may be a facility's outline (_outline_rows), from every row
             # group under that box: the decision is the way's own, the same in every cell it reaches
@@ -443,8 +416,6 @@ class OsmTags:
             raise
         finally:
             con.close()
-        names = list(COLUMNS)
-        tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
         lines = {}
         for row in got:
             coords = _linestring(bytes(row[-1]))
@@ -453,12 +424,7 @@ class OsmTags:
             d = {c: v for c, v in zip(RACEWAY_COLUMNS, row[1:-1]) if v is not None}
             d["coords"] = coords
             lines[int(row[0])] = d
-        outlines = {f for f, ins in inside.items() if f in lines
-                    and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
-        if outlines:
-            log.info("osmtags: %d raceway(s) taken for a facility's outline, not drawn: %s", len(outlines),
-                     ", ".join(str(lines[f].get("id")) for f in sorted(outlines)))
-        return tags, [lines[f] for f in extra if f in lines and f not in outlines]
+        return tags_and_ways(rows, extra, inside, lines)
 
     def _inside_rows(self, con, uri, groups, remote, kind, r):
         """The file rows of the other raceways whose bbox lies inside raceway row r's (r: a _rows tuple)."""
@@ -544,6 +510,75 @@ def _rows(t, idx):
                 vals.append(None if v != v else (int(v) if c in INT_COLUMNS else v))
         out.append((int(t["id"][i]), bool(t["race"][i]), bool(t["bus"][i]), int(t["frn"][i]), *vals))
     return out
+
+
+def cell_rows(t, bounds):
+    """The rows (_rows tuples) of decoded table t (a Layercake row group's, or a tag shard tile's) whose bbox touches
+    bounds (lon0, lat0, lon1, lat1): in float32, as the file's bbox and DuckDB's comparison with it (a way whose box
+    ends on the cell's edge)."""
+    if t is None or not len(t["id"]):
+        return []
+    lon0, lat0, lon1, lat1 = bounds
+    b = np.float32
+    m = np.flatnonzero((t["bx0"].astype(b) <= b(lon1)) & (t["bx1"].astype(b) >= b(lon0))
+                       & (t["by0"].astype(b) <= b(lat1)) & (t["by1"].astype(b) >= b(lat0)))
+    return _rows(t, m)
+
+
+def tags_and_ways(rows, extra, inside, lines):
+    """OsmTags.cell's answer from the cell's rows (cell_rows), the file rows of its raceways and busways (extra), of the
+    raceways inside each raceway that may be a facility's outline (inside: {file row: [file rows]}) and the raceway /
+    busway lines {file row: {RACEWAY_COLUMNS..., "coords"}}: ({way id: tags}, [the drawn raceways and busways])."""
+    names = list(COLUMNS)
+    tags = {int(r[0]): {k: v for k, v in zip(names, r[_ROW_VAL:]) if v is not None} for r in rows}
+    outlines = {f for f, ins in inside.items() if f in lines
+                and is_outline(lines[f]["coords"], [lines[g]["coords"] for g in ins if g in lines])}
+    if outlines:
+        log.info("osmtags: %d raceway(s) taken for a facility's outline, not drawn: %s", len(outlines),
+                 ", ".join(str(lines[f].get("id")) for f in sorted(outlines)))
+    return tags, [lines[f] for f in extra if f in lines and f not in outlines]
+
+
+def _lane_rows(rows, need):
+    """[(file row, way id)] of rows (cell_rows) with a lane count and a motorway / trunk class (lane_hw) whose bbox,
+    GEOMETRY_MARGIN_M round it, holds one of need's boxes (None: all of them): OsmTags.highway_geometry's ways."""
+    lanes, hw = _ROW_VAL + _NAMES.index("lanes"), _ROW_VAL + _NAMES.index("lane_hw")
+    box = [_ROW_VAL + _NAMES.index(c) for c in ("bx0", "by0", "bx1", "by1")]
+    out = []
+    for r in rows:
+        if r[lanes] is None or r[hw] is None:
+            continue
+        if need is not None:
+            x0, y0, x1, y1 = (r[i] for i in box)
+            dx = GEOMETRY_MARGIN_M / (111320.0 * max(0.1, float(np.cos(np.radians((y0 + y1) / 2)))))
+            dy = GEOMETRY_MARGIN_M / 110574.0
+            if not any(x0 - dx <= a0 and x1 + dx >= a1 and y0 - dy <= b0 and y1 + dy >= b1
+                       for a0, b0, a1, b1 in need):
+                continue
+        out.append((r[_ROW_FRN], r[0]))
+    return out
+
+
+def from_tile(t, bounds):
+    """OsmTags.cell's answer for bounds from a decoded tag shard tile (osmtagshards.TagShards.tile; None: a tile
+    without rows): the same rows, raceways, outlines and tags as the Layercake row groups give."""
+    rows = cell_rows(t, bounds)
+    if not rows:
+        return {}, []
+    extra = [r[_ROW_FRN] for r in rows if r[1] or r[2]]
+    inside = {r[_ROW_FRN]: list(t["inside"].get(r[_ROW_FRN], [])) for r in rows if r[1] and _maybe_outline(r)}
+    want = set(extra).union(*inside.values()) if extra else set()
+    lines = {}
+    for f, wid, cols, coords in t["lines"]:
+        if f in want:
+            lines[f] = {"id": int(wid), **cols, "coords": coords}
+    return tags_and_ways(rows, extra, inside, lines)
+
+
+def geometry_from_tile(t, bounds, need=None):
+    """OsmTags.highway_geometry's answer for bounds from a decoded tag shard tile: {way id: (k, 2) lon/lat}."""
+    geom = t["geom"] if t is not None else {}
+    return {int(w): geom[f] for f, w in _lane_rows(cell_rows(t, bounds), need) if f in geom}
 
 
 RACEWAY_PAVED = {"", "asphalt", "concrete", "paved", "chipseal"}

@@ -662,8 +662,7 @@ class MapData:
             if feats is None:
                 feats, sources = self.overture.query(layer, key, kind)
             if osm is not None:
-                feats = self._osm(feats, osm.result(),
-                                  lambda need: self.osmtags.highway_geometry(key.bounds(), kind, need))
+                feats = self._osm(feats, osm.result(), lambda need: self._osm_geometry(key, kind, need))
             ox, oy = mapcells.owner(feats.attrs.get("cx", np.zeros(0)), feats.attrs.get("cy", np.zeros(0)), key.z)
             feats.own = (ox == key.x) & (oy == key.y)
             if feats.clipped is not None:
@@ -696,13 +695,66 @@ class MapData:
                 self._osm_ex = ThreadPoolExecutor(OSM_THREADS, thread_name_prefix="osmtags")
             return self._osm_ex
 
+    def _osm_shards(self):
+        """The weekly OSM road tag shards (osmtagshards.py), None when off."""
+        import osmtagshards
+        if not osmtagshards.ON or self.fetcher is None:
+            return None
+        with self._lock:
+            if getattr(self, "osm_shards", None) is None:
+                self.osm_shards = osmtagshards.TagShards(self.cache_dir, self.fetcher)
+            return self.osm_shards
+
+    def _osm_tile(self, key, kind):
+        """The decoded tag shard tile of cell key (osmtagshards.TagShards.tile; None: no tagged highway there), or
+        False when the shards cannot answer (off, not published, unreachable, damaged: the Layercake file instead).
+        A prefetch the host had no room for is raised (DEFERRED), as the Layercake path's; on demand the Layercake
+        file is asked instead."""
+        import osmtagshards
+        shards = self._osm_shards()
+        if shards is None or key.z != mapcells.ZOOM:
+            return False
+        try:
+            return shards.tile(key, kind)
+        except osmtagshards.NotInUse:
+            return False                # (none published, or off)
+        except Exception as e:
+            if isinstance(e, DEFERRED) and kind not in ("demand", "urgent"):
+                raise
+            shards.down(e)
+            return False
+
+    def osm_tags_warm(self, kind="prefetch"):
+        """Worker thread: the tag shards' manifest and archive head read once at the start (two small reads, kept on
+        disk for every process), so a fresh place's first cell waits only for its leaf directory and tile."""
+        shards = self._osm_shards()
+        got = shards.manifest() if shards is not None else None
+        if got is not None:
+            shards.head(got[0], got[1], kind)
+
+    def _osm_geometry(self, key, kind, need):
+        """{way id: lon/lat line} of the cell's tagged motorways and trunks (roadlanes.join's callback): from the tag
+        shards when they answer, else the Layercake file."""
+        import osmtags
+        t = self._osm_tile(key, kind)
+        if t is not False:
+            return osmtags.geometry_from_tile(t, key.bounds(), need)
+        with self._lock:
+            if getattr(self, "osmtags", None) is None:
+                self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
+        return self.osmtags.highway_geometry(key.bounds(), kind, need)
+
     def _osm_cell(self, key, kind):
-        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py); none when the source fails (the roads
-        keep their width guesses). Extra ways are the raceways and busways Overture does not emit."""
+        """(tags, extra ways) of the cell's OpenStreetMap highways (osmtags.py): from the weekly tag shards
+        (osmtagshards.py, one small read), else the Layercake file; none when both fail (the roads keep their width
+        guesses). Extra ways are the raceways and busways Overture does not emit."""
         import osmtags
         if self.fetcher is None:
             return {}, []
         try:
+            t = self._osm_tile(key, kind)
+            if t is not False:
+                return osmtags.from_tile(t, key.bounds())
             with self._lock:
                 if getattr(self, "osmtags", None) is None:
                     self.osmtags = osmtags.OsmTags(self.raw_dir, self.fetcher)
@@ -1112,7 +1164,8 @@ class MapData:
             self._slim.clear()
             self._slim_bytes = 0
         # (the OSM tag shards: ~20 MB each; the station shards too, Codex on #1111, 2026-11-10)
-        for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None)):
+        for tags in (self.rail_tags, self.lane_tags, getattr(self, "station_tags", None),
+                     getattr(self, "osm_shards", None)):
             if tags is not None:
                 tags.clear_memory()
 

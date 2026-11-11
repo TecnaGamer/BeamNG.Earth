@@ -36,6 +36,9 @@ import xproc  # noqa: E402
 import railtags  # noqa: E402
 
 railtags.LANES_ON = False       # (the lane shards are fetched per build: test_railtags; these count Overture's requests)
+import osmtagshards  # noqa: E402
+
+osmtagshards.ON = False         # (the OSM tag shards: test_osm_tag_shards; these count the Layercake file's requests)
 
 try:
     import duckdb  # noqa: F401 (only whether it is installed)

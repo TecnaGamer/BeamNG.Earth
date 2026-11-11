@@ -82,6 +82,7 @@ mod mappedlamps;
 mod vegclumps;
 mod roadwear;
 mod roadtone;
+mod osmtagshards;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -6171,6 +6172,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(pmtiles::pmt_layer, m)?)?;
     // 206: pmtiles (Overture's own PMTiles archives: header, directories, MVT decode, a cell's layer whole from its
     // tiles, server/pmtiles.py; 205 left to another branch)
-    m.add("VERSION", 206)?;
+    m.add_function(wrap_pyfunction!(osmtagshards::otg_decode, m)?)?;
+    // 207: osmtagshards (otg_decode: a tile of the weekly OSM road tag shards, tools/build_osm_tag_shards.py,
+    // server/osmtagshards.py)
+    m.add("VERSION", 207)?;
     Ok(())
 }
