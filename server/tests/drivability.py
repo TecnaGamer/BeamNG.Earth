@@ -97,20 +97,25 @@ METRICS = {
 }
 
 
-def measure(name):
-    """The site's drivability (the module's docstring)."""
+def measure(name, threads=1, approach=None):
+    """The site's drivability (the module's docstring). threads: cells planned at once (grading.PLAN_THREADS); approach:
+    (east, north) m of a place graded first, as a session arriving from there would (test_drivability: neither may
+    change the result)."""
     import grading
     import revisit
     import roads
     prefix = SITES[name][0]
-    # one planning thread: cells planned at once give different heights in some places from run to run (Silistra's
-    # bridge: clean in some runs, a 1.9 m step in others), and a measurement that moves cannot hold anything
-    with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", 1):
+    # One planning thread by default. On main (1.9.1-beta) cells planned at once gave Silistra's bridge a 1.9 m step in
+    # some runs only; dev gave the same result with 1 and 4 threads, but a race coming back must not make the ratchet
+    # flaky: test_drivability checks threads and approach on their own.
+    with mock.patch.object(revisit, "ON", False), mock.patch.object(grading, "PLAN_THREADS", threads):
         site = interchanges.load(name, prefix)
         md = SimpleNamespace(cell=lambda key, **kw: SimpleNamespace(layers={"roads": site.cells.get(str(key))}))
         store = grading.PlanStore(md, site.sample)
         store.frame_of = lambda region: site.frame
         grader = grading.Grader(site.frame, md, site.sample, store=store)
+        if approach is not None:
+            _grade_around(grader, site.frame, approach)
 
         def elev(la, lo):
             return grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT)
@@ -133,6 +138,17 @@ def measure(name):
         for st in structures:
             _measure_structure(report, st, structures, ground)
     return {"site": name, **report.result()}
+
+
+APPROACH_HALF_M = 150.0  # m: the square graded first round an approach point
+
+
+def _grade_around(grader, frame, at):
+    """Grades a square round `at` (east, north m) first, so its cells are planned before the place's."""
+    axis = np.arange(-APPROACH_HALF_M, APPROACH_HALF_M + 1, 25.0)
+    x, y = np.meshgrid(axis + at[0], axis + at[1])
+    la, lo, _ = frame.enu_to_geodetic(x.ravel(), y.ravel(), 0.0)
+    grader.apply(la, lo, np.zeros(la.shape))
 
 
 def measure_all(names, jobs=None):

@@ -2,6 +2,7 @@
 is written to the baseline (python server/tests/drivability.py --update) so that it holds from then on."""
 import sys
 import unittest
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
@@ -39,6 +40,30 @@ class DrivabilityTest(unittest.TestCase):
                 self.assertFalse(worse, f"{name} got worse ({dv.SITES[name][1]}):\n  " + "\n  ".join(worse))
                 self.assertFalse(better, f"{name} improved: lock it in with {UPDATE.format(name)}\n  "
                                  + "\n  ".join(better))
+
+
+class IndependenceTest(unittest.TestCase):
+    """The roads must not depend on how many cells are planned at once or on where a session started: in the game the
+    planner runs PLAN_THREADS cells at once, and the player arrives from anywhere.
+
+    Cells planned at the same time once shared state: on main (1.9.1-beta) Silistra's bridge got a 1.9 m step in 25 %
+    of the runs with 4 threads and 42 % with all 11 of its cells at once, never with one thread and in any order one
+    at a time. A race shows only in some runs, so Silistra plans all its cells at once RACE_RUNS times: a race that
+    common passes all of them in about 1 % of the test runs."""
+    SITES = ("silistra_936", "vienna_s1_breitenleer_1083", "mannheim_motorway_bridge", "compiegne_roundabout")
+    VARIANTS = ({"threads": 16}, {"approach": (0.0, 600.0)}, {"approach": (600.0, 0.0)})
+    RACE_SITE, RACE_RUNS = "silistra_936", 8
+
+    def test_threads_and_approach_change_nothing(self):
+        cases = [(name, v) for name in self.SITES for v in self.VARIANTS]
+        cases += [(self.RACE_SITE, {"threads": 16})] * (self.RACE_RUNS - 1)
+        with ProcessPoolExecutor() as pool:
+            pinned = {name: pool.submit(dv.measure, name) for name in self.SITES}
+            runs = [(name, v, pool.submit(dv.measure, name, **v)) for name, v in cases]
+            for name, variant, run in runs:
+                with self.subTest(name, **{k: str(x) for k, x in variant.items()}):
+                    worse, better = compare(run.result(), dv.baseline_entry(pinned[name].result()))
+                    self.assertFalse(worse + better, f"{name} with {variant}:\n  " + "\n  ".join(worse + better))
 
 
 class CompareTest(unittest.TestCase):
