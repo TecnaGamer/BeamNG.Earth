@@ -489,6 +489,7 @@ MAP_TEX_OFF_PX = 128            # the 3D map: a far tile's texture off the scree
 MAP_TEX_MIN_PX = 128            # ... never under this on it ...
 MAP_TEX_OVERSAMPLE = 1.5        # ... and at most this many texels per screen pixel of its edge
 MAP_SCREEN_H = 1440.0           # ... for a screen this many pixels high
+FAR_LAZY_EVERY_S = 2.0          # Connection.far_lazy_tick: the larger far tiles' best photos queued this often at most
 FLY_TEX_EYE_M = 300.0           # flying higher than this over the ground: textures as fine as on screen too
 MAP_TEX_UPGRADE_S = 1.0         # shown tiles checked this often for a larger texture as the camera turns
 MAP_LOD_SCALE = 1.25            # ... and their detail reaching this much farther (Connection.kfun)
@@ -5886,6 +5887,15 @@ class Server:
         return [c for c in self.connections if c.active is not None and self.far_ck(c.active, key) == ck
                 and (ck in c.shown or key in c.sent)]
 
+    def far_lazy_done(self, ck):
+        """(event loop) A far tile's best photos are in (Connection.far_lazy_tick): rendered again with them."""
+        info = self.tiles.get(ck)
+        if info is None or info.material is None or info.stale:
+            return
+        info.stale = True
+        self.far_lazy_stats = getattr(self, "far_lazy_stats", 0) + 1
+        self.retex_request(ck)
+
     def retex_request(self, ck, pump=True):
         """A stale tile to re-render live if some mod shows it (event loop)."""
         if self.retex_rate <= 0 or self.imagery is None:
@@ -8632,6 +8642,7 @@ class Connection:
                 log.info("3D map: zoomed in x%.0f, coarse first", ref / self.eye)
         self.update_far()
         self.pvs_tick()                     # (the far PVS for where the player is now; after the selection: its radius)
+        self.far_lazy_tick()
         if self.teleport_pending and time.monotonic() - self.teleport_t0 > TELEPORT_PAUSE_MAX_S:
             self.teleport_pending = False   # the mod never committed it (it stayed): the old place's work goes on
             self.unabandon_old()
@@ -9494,6 +9505,42 @@ class Connection:
             return bool(info.coarse)
         need = self.s.tile_tex_px(anchor, t)
         return info.tex_px < need or (bool(info.coarse) and not self.s.pvs_hidden(anchor, t))
+
+    def far_lazy_tick(self):
+        """The far tiles shown larger than their level's texture (farpvs.UP_ON: in sight, the screen resolving more):
+        their best photos (the lazy sources: NAIP in the US, a regional service) fetched after the near ones, nearest
+        first (Imagery.far_warm), each tile rendered again when they are in (the user, 2026-11-11: "sharpen with the
+        best source available in the region"). Every FAR_LAZY_EVERY_S at most."""
+        s = self.s
+        im = s.imagery
+        anchor = s.anchors.get(self.active) if self.active is not None else None
+        if im is None or anchor is None or not imagerymod.FAR_LAZY or not farpvsmod.UP_ON or self.map_view \
+                or self.map_open:
+            return
+        now = time.monotonic()
+        if now - getattr(self, "_far_lazy_at", 0.0) < FAR_LAZY_EVERY_S:
+            return
+        self._far_lazy_at = now
+        queued = self.__dict__.setdefault("far_lazy", {})      # ck -> px queued
+        x, y = self.view_focus
+        loop = asyncio.get_running_loop()
+        for key, t in list(self.desired.items()):
+            ck = self.ck(key)
+            info = s.tiles.get(ck)
+            if info is None or info.material is None or not info.tex_px or info.tile is None or info.coarse:
+                continue
+            tile = info.tile
+            node = tile.base if isinstance(tile, farfield.Piece) else tile
+            if info.tex_px <= s.tex_size(node.level) or queued.get(ck) == info.tex_px:
+                continue
+            queued[ck] = info.tex_px
+            frame, x0, y0, size = s.tile_where(anchor, tile)
+            bx0, by0, bx1, by1 = node.bbox
+            d = math.hypot(max(bx0 - x, x - bx1, 0.0), max(by0 - y, y - by1, 0.0))
+
+            def done(ck=ck):
+                loop.call_soon_threadsafe(s.far_lazy_done, ck)
+            im.far_warm(ck, d, frame, *imagerymod.gutter_square(x0, y0, size, info.tex_px), info.tex_px, done)
 
     def pvs_tick(self):
         """Keep this connection's far PVS (farpvs.Set) current (every pose): drop it when it no longer holds (the
