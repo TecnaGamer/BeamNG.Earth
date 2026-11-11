@@ -5504,17 +5504,9 @@ class _Planner:
         # in the order of their keys: grade_points' sums run in plan order, so every caller (the block, a road
         # tile, a far tile) gets the same heights at a point whatever other cells its points reached
         plans = [got[k] for k in sorted(got)]
-        if WELD_ON:
-            try:            # (the pieces of one road a cell edge cut apart meet at one height too)
-                weld_continuations(plans)
-            except Exception as e:
-                log.debug("grading: welded plan set: %s: %s", type(e).__name__, e)
-        if TRIM_SIDE_MOUTHS_ON:
-            try:            # (a side road starts at the main's painted edge, not in its middle)
-                trim_side_mouths(plans)
-            except Exception as e:
-                log.debug("grading: trimmed side mouths: %s: %s", type(e).__name__, e)
-        out = (plans, PlanPack(plans))
+        # (the pieces of one road a cell edge cut apart meet at one height too, WELD_ON; a side road starts at the
+        # main's painted edge, not in its middle, TRIM_SIDE_MOUTHS_ON)
+        out = (plans, merge_plan_set(plans))
         with self.lock:
             if all(k in self.cells for k in keys):      # (not while a cell's fetch failed: it is asked again)
                 if len(memo) >= PLAN_SETS_MAX:
@@ -5972,6 +5964,45 @@ def rail_plan(fid, xy, z):
     p = Plan(xy, z, railwaysmod.GRADE_HALF_M, road_half=railwaysmod.BALLAST_TOP_M)
     p.rid = road_id(RAIL_TAG + fid)
     return p
+
+
+def merge_plan_set(plans):
+    """A plan set's merge as _Planner._plan_set makes it, in one Rust call (planset::plan_merge, one reading of the
+    plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
+    (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
+    import fast
+    fast.require(212, "plan_merge")
+    f64 = np.float64
+    xy, off, z = _plan_lines(plans)
+    wds = [getattr(p, "widen", None) for p in plans]
+    rids = [getattr(p, "rid", -1) for p in plans]
+    got = fast._ef.plan_merge(
+        xy, off, z, *_per_plan([getattr(p, "bank", None) for p in plans]), *_per_plan(wds),
+        np.array([p.half for p in plans], f64), np.array([getattr(p, "road_half", p.half) for p in plans], f64),
+        np.array([r if r is not None and r >= 0 else -1 for r in rids], np.int64), _plan_ranks(plans, None),
+        np.array([getattr(p, "abut", (False, False)) for p in plans], bool).reshape(-1, 2),
+        np.array([bool(getattr(p, "steep", False)) for p in plans], bool),
+        np.array([p.bbox for p in plans], f64).reshape(-1, 4),
+        *_per_plan([getattr(p, "cut", None) for p in plans], 6),
+        np.array([float(np.max(w)) if w is not None and len(w) else 0.0 for w in wds], f64), bool(WELD_ON),
+        bool(TRIM_SIDE_MOUTHS_ON), float(CHAIN_JOIN_M), float(WELD_MAX_STEP_M), float(WELD_TAPER_M),
+        float(JUNCTION_REACH_M), float(TRIM_RAMP_M), float(DUPE_XY_M), -math.cos(math.radians(CONT_TURN_DEG)),
+        float(CONT_JOIN_M), -math.cos(math.radians(LINK_TURN_DEG)), float(ABUT_NEAR_M), float(T_MAX),
+        int(LEG_RID_SHIFT), float(roadsmod.MOUNTAIN_SPAN_M), float(roadsmod.MOUNTAIN_TURN_DEG))
+    if got["weld_err"] is not None:
+        log.debug("grading: welded plan set: %s", got["weld_err"])
+    wz = got["wz"]
+    for i in np.flatnonzero(got["welded"]).tolist():
+        plans[i] = _replan(plans[i], plans[i].xy, wz[off[i]:off[i + 1]].copy(), cut=True)
+    txy, tz, toff = got["txy"], got["tz"], got["toff"]
+    for r, (i, e) in enumerate(zip(got["trimmed"], got["ends"])):
+        p = plans[i]
+        abut = list(p.abut)
+        abut[e] = False
+        plans[i] = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+    pack = PlanPack.__new__(PlanPack)
+    pack.__dict__.update(got["pack"])
+    return pack
 
 
 def _per_plan(vs, width=None):

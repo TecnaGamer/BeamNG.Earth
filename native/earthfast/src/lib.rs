@@ -6191,7 +6191,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(planset::plan_trim_mouths, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
+    m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
     // 211: planset (grading's plan-set merge: weld_continuations, trim_side_mouths, PlanPack and its near, _nearest_on)
-    m.add("VERSION", 211)?;
+    // 212: planset::plan_merge (_plan_set's weld, trim and pack at once, one reading of the plans)
+    m.add("VERSION", 212)?;
     Ok(())
 }
