@@ -372,13 +372,18 @@ def write_pmtiles(path, entries, data_path, bounds, n_rows, z=SHARD_ZOOM, root_m
 
 # ------------------------------------------------------------------------------------------------ the source
 _CON = None
+DUCKDB_MEMORY = "1500MB"        # a decode worker's DuckDB buffer pool at most
+DECODE_TASKS = 25               # row groups a decode worker takes before a fresh process replaces it (its memory back)
 
 
 def _connect(threads=2):
     import duckdb
     con = duckdb.connect(config={"threads": threads})
+    # (no cache of the remote file's bytes, a capped buffer pool: one connection per decode worker for its whole life
+    # grew the planet build's memory ~1 GB every 2 min to the runner's 16 GB, and the runner was stopped, 2026-11-11)
     for sql in ("LOAD httpfs", "SET enable_http_metadata_cache = true", "SET parquet_metadata_cache = true",
-                "SET enable_geoparquet_conversion = false"):
+                "SET enable_geoparquet_conversion = false", "SET enable_external_file_cache = false",
+                f"SET memory_limit = '{DUCKDB_MEMORY}'"):
         try:
             con.execute(sql)
         except Exception:
@@ -667,7 +672,7 @@ def build(src, out, bbox=None, workers=4, tmp=None, log=print, z=SHARD_ZOOM, roo
             clip = tuple(int(v[0]) for v in tile_ranges(*(np.array([v], np.float32) for v in bbox), z))
         paths, done, coarse, races = {}, 0, {}, []
         jobs = [(src, rg, first, n, tmp, z, cz, clip) for rg, first, n, _ in groups]
-        with ProcessPoolExecutor(workers) as ex:
+        with ProcessPoolExecutor(workers, max_tasks_per_child=DECODE_TASKS) as ex:
             for rg, n, path, areas, rr in ex.map(decode_group, jobs):
                 paths[rg] = path
                 for a in areas:
