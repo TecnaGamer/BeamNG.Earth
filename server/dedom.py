@@ -34,14 +34,52 @@ DGM_EVERY = 4               # every this many samples keep their DGM height (the
 NO_Z = -(1 << 31)           # a shard's height for none (cm)
 LOCAL_ENV = "BNE_DE_DECKS_DIR"
 
-# The states' WCS 2.0 services: DOM and DGM coverages in UTM (EPSG 25832 / 25833 = zone 32 / 33), the largest subset a
-# request may ask (m), a box round the state (south, west, north, east; a point in the box but outside the state gets
-# no data), the credit line.
+# The states whose surface model is open: a box round each (south, west, north, east; the game reads the shards there,
+# a point in the box but outside the state finds none), its UTM zone (EPSG 25832 / 25833 = zone 32 / 33), the credit
+# line. A state that serves its DOM and DGM as an open WCS 2.0 has them here: the coverages, the largest subset a
+# request may ask (m), the subset's axis names, and whether the answer is multipart (a GML part beside the GeoTIFF).
+# The others publish tiles (tools/de_dom_tiles.py reads those on the build machine). Saarland publishes no open DOM.
+_BB_WCS = {"dom": ("https://isk.geobasis-bb.de/ows/bdom_wcs", "bb_bdom"),
+           "dgm": ("https://isk.geobasis-bb.de/ows/dgm_wcs", "bb_dgm")}
 SERVICES = [
     {"name": "nw", "box": (50.32, 5.86, 52.53, 9.46), "zone": 32, "max_m": 2000.0,
      "dom": ("https://www.wcs.nrw.de/geobasis/wcs_nw_dom", "nw_dom"),
      "dgm": ("https://www.wcs.nrw.de/geobasis/wcs_nw_dgm", "nw_dgm"),
      "credit": "Geobasis NRW, DOM1 / DGM1 (dl-de/zero-2-0)"},
+    {"name": "be", "box": (52.33, 13.08, 52.68, 13.77), "zone": 33, "max_m": 1000.0, **_BB_WCS,
+     "credit": "GeoBasis-DE/LGB, bDOM / DGM (dl-de/by-2-0); Geoportal Berlin (dl-de/by-2-0)"},
+    {"name": "bb", "box": (51.36, 11.26, 53.56, 14.77), "zone": 33, "max_m": 1000.0, **_BB_WCS,
+     "credit": "GeoBasis-DE/LGB, bDOM / DGM (dl-de/by-2-0)"},
+    {"name": "mv", "box": (53.10, 10.59, 54.69, 14.42), "zone": 33, "max_m": 1000.0,
+     "dom": ("https://www.geodaten-mv.de/dienste/dom_wcs", "mv_dom1"),
+     "dgm": ("https://www.geodaten-mv.de/dienste/dgm_wcs", "mv_dgm"),
+     "credit": "GeoBasis-DE/M-V 2026, DOM1 / DGM1"},
+    {"name": "he", "box": (49.39, 7.77, 51.66, 10.24), "zone": 32, "max_m": 1000.0, "axes": ("E", "N"),
+     "dom": ("https://inspire-hessen.de/raster/dom1/ows", "dom1"),
+     "dgm": ("https://inspire-hessen.de/raster/dgm1/ows", "he_dgm1"),
+     "credit": "HVBG, DOM1 / DGM1 (dl-de/zero-2-0)"},
+    {"name": "st", "box": (50.94, 10.56, 53.04, 13.19), "zone": 32, "max_m": 1000.0, "multipart": True,
+     "dom": ("https://www.geodatenportal.sachsen-anhalt.de/ows_WCS_ST_DOM1", "Coverage1"),
+     "dgm": ("https://www.geodatenportal.sachsen-anhalt.de/ows_WCS_ST_DGM1", "Coverage1"),
+     "credit": "GeoBasis-DE / LVermGeo ST, DOM1 / DGM1 (dl-de/by-2-0)"},
+    {"name": "by", "box": (47.27, 8.97, 50.57, 13.84), "zone": 32,
+     "credit": "Bayerische Vermessungsverwaltung, www.geodaten.bayern.de, DOM20 / DGM1 (CC BY 4.0)"},
+    {"name": "bw", "box": (47.53, 7.51, 49.79, 10.50), "zone": 32,
+     "credit": "LGL-BW 2026, DOM1 / DGM1, www.lgl-bw.de (dl-de/by-2-0)"},
+    {"name": "ni", "box": (51.29, 6.65, 53.89, 11.60), "zone": 32,
+     "credit": "LGLN, DOM1 / DGM1 (dl-de/by-2-0)"},
+    {"name": "rp", "box": (48.97, 6.11, 50.94, 8.51), "zone": 32,
+     "credit": "GeoBasis-DE/LVermGeoRP 2026, DOM1 / DGM1 (dl-de/by-2-0)"},
+    {"name": "sn", "box": (50.17, 11.87, 51.69, 15.04), "zone": 33,
+     "credit": "GeoSN, DOM1 / DGM1 (dl-de/by-2-0)"},
+    {"name": "th", "box": (50.20, 9.87, 51.65, 12.66), "zone": 32,
+     "credit": "GDI-Th, DOM1 / DGM1 (dl-de/by-2-0)"},
+    {"name": "hh", "box": (53.39, 8.10, 53.97, 10.33), "zone": 32,
+     "credit": "Freie und Hansestadt Hamburg, LGV, bDOM / DGM1 (dl-de/by-2-0)"},
+    {"name": "hb", "box": (53.01, 8.48, 53.61, 8.99), "zone": 32,
+     "credit": "Landesamt GeoInformation Bremen, DOM1 / DGM1 (CC BY 4.0)"},
+    {"name": "sh", "box": (53.36, 7.86, 55.06, 11.32), "zone": 32,
+     "credit": "GeoBasis-DE/LVermGeo SH, bDOM20 / DGM1 (CC BY 4.0)"},
 ]
 
 
@@ -53,18 +91,42 @@ def service_at(lat, lon):
     return None
 
 
-def url(base, cov, x0, y0, x1, y1):
+def url(base, cov, x0, y0, x1, y1, axes=("x", "y")):
     return (f"{base}?SERVICE=WCS&VERSION=2.0.1&REQUEST=GetCoverage&COVERAGEID={cov}&FORMAT=image/tiff"
-            f"&SUBSET=x({x0:.0f},{x1:.0f})&SUBSET=y({y0:.0f},{y1:.0f})")
+            f"&SUBSET={axes[0]}({x0:.0f},{x1:.0f})&SUBSET={axes[1]}({y0:.0f},{y1:.0f})")
+
+
+def tiff_part(body):
+    """The GeoTIFF of a WCS answer: the body itself, or the TIFF part of a multipart one (Sachsen-Anhalt answers a GML
+    part and the TIFF part, multipart/related)."""
+    if body[:4] in (b"II*\x00", b"MM\x00*"):
+        return body
+    i = body.find(b"II*\x00")
+    if i < 0:
+        i = body.find(b"MM\x00*")
+    if i < 0:
+        raise ValueError("no GeoTIFF in the answer")
+    end = body.find(b"\r\n--", i)
+    return body[i:end] if end > 0 else body[i:]
 
 
 def read_tiff(body):
     """(grid (rows, cols) float64, x of its left edge, y of its top edge, pixel width, pixel height) of a GeoTIFF's
     bytes: its ModelTiepoint and ModelPixelScale (a north-up grid, as the WCS answers); no-data as NaN."""
-    from PIL import Image
-    im = Image.open(io.BytesIO(body))
-    a = np.asarray(im, np.float64)
-    tags = im.tag_v2
+    body = tiff_part(body)
+    try:                        # (the build machine reads every state's compression; Pillow only some)
+        import tifffile
+        with tifffile.TiffFile(io.BytesIO(body)) as tf:
+            page = tf.pages[0]
+            a = np.asarray(page.asarray(), np.float64)
+            tags = {t.code: t.value for t in page.tags.values()}
+    except ImportError:
+        from PIL import Image
+        im = Image.open(io.BytesIO(body))
+        a = np.asarray(im, np.float64)
+        tags = im.tag_v2
+    if a.ndim == 3:
+        a = a[..., 0]
     scale, tie = tags.get(33550), tags.get(33922)
     if scale is None or tie is None:
         raise ValueError("GeoTIFF without tie point / pixel scale")
@@ -116,9 +178,10 @@ def sample(fetch, svc, lat, lon, box_m=None):
     x, y = bcproj.utm(lat, lon, svc["zone"])
     x, y = np.asarray(x, np.float64), np.asarray(y, np.float64)
     dom, dgm = np.full(len(x), np.nan), np.full(len(x), np.nan)
+    axes = svc.get("axes", ("x", "y"))
     for x0, y0, x1, y1, idx in boxes(x, y, min(box_m or svc["max_m"], svc["max_m"])):
         for out, (base, cov) in ((dom, svc["dom"]), (dgm, svc["dgm"])):
-            out[idx] = at(read_tiff(fetch(url(base, cov, x0, y0, x1, y1))), x[idx], y[idx])
+            out[idx] = at(read_tiff(fetch(url(base, cov, x0, y0, x1, y1, axes))), x[idx], y[idx])
     return dom, dgm
 
 

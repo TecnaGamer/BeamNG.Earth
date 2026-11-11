@@ -67,7 +67,8 @@ class ReaderTest(unittest.TestCase):
 
     def test_sources(self):
         self.assertIn("lidar", roadz.sources_at(51.03, 6.97, True))         # (NRW)
-        self.assertNotIn("lidar", roadz.sources_at(48.14, 11.58, True))     # (Bavaria: no service yet)
+        self.assertIn("lidar", roadz.sources_at(48.14, 11.58, True))        # (Bavaria: its tiles)
+        self.assertNotIn("lidar", roadz.sources_at(48.21, 16.37, True))     # (Vienna)
         with mock.patch.object(roadz, "DE_ON", False):
             self.assertNotIn("lidar", roadz.sources_at(51.03, 6.97, True))
 

@@ -1386,10 +1386,10 @@ class RoadZ:
         got.gaps = gaps
         return got
 
-    def dedom_samples(self, key, svc, box_m=250.0):
+    def dedom_samples(self, key, svc, box_m=250.0, sample=None):
         """(lat, lon, dom, dgm) of the cell's bridges sampled on the state's services (tools/build_de_decks.py: the
         build machine's side, never the game's): each deck and its candidate stretches on dedom's 1 m grid across its
-        width plus LIDAR_PAD_M, in requests of at most box_m."""
+        width plus LIDAR_PAD_M, in requests of at most box_m (or read by sample(lat, lon) -> (dom, dgm))."""
         import geodesy
         parts = self._bridges(key)
         if not parts:
@@ -1404,7 +1404,10 @@ class RoadZ:
         g = np.concatenate(grid)
         la, lo, _ = frame.enu_to_geodetic(g[:, 0], g[:, 1], 0.0)
         la, lo = np.asarray(la, np.float64), np.asarray(lo, np.float64)
-        dom, dgm = dedom.sample(lambda u: self._fetch(u, lane="dedom"), svc, la, lo, box_m)
+        if sample is not None:          # (a state's tiles, tools/de_dom_tiles.py)
+            dom, dgm = sample(la, lo)
+        else:
+            dom, dgm = dedom.sample(lambda u: self._fetch(u, lane="dedom"), svc, la, lo, box_m)
         return la, lo, dom, dgm
 
     def _boxes(self, frame, parts, local):
