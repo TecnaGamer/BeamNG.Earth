@@ -44,17 +44,19 @@ VERSION = 26          # (the cached cells hold their groups: 14 for the regional
                       # inside an orchard left out; 22: shrub lines between the crop rows; 23: both of those, the
                       # orchard rows and the deck mask; 24: no rocks or bushes on a beach's sand, beaches.py; 25: the
                       # Mediterranean basin's own trees, G_MEDITERRANEAN; 26: the far clumps, CLUMP_OF, and the
-                      # vineyards' rows, vineyard_items)
+                      # vineyards' rows, vineyard_items; the round bales after the harvest, bale_items)
 TREE_MIN_M = 3.0
 CROWN_SPACING = 0.5          # tops kept this many crown radii apart (0.8 looked sparse: the user, 2026-10-13)
 BUSH_MIN_M = 1.0
 KIND_TREE, KIND_BUSH, KIND_ROCK = 0, 1, 2
 GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper", "desert_shrub", "desert_rock",
           "oak_west", "tropical", "mediterranean", "conifer_clump", "deciduous_clump", "oak_west_clump",
-          "mediterranean_clump", "vine")
+          "mediterranean_clump", "vine", "straw_n", "straw_s", "silage_n", "silage_s", "eucalyptus",
+          "eucalyptus_clump", "poplar", "creosote")
 (G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
  G_OAK_WEST, G_TROPICAL, G_MEDITERRANEAN, G_CONIFER_CLUMP, G_DECIDUOUS_CLUMP, G_OAK_WEST_CLUMP,
- G_MEDITERRANEAN_CLUMP, G_VINE) = range(17)
+ G_MEDITERRANEAN_CLUMP, G_VINE, G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S, G_EUCALYPTUS, G_EUCALYPTUS_CLUMP,
+ G_POPLAR, G_CREOSOTE) = range(25)
 # Far clumps (GitHub #1074, "trees cost too much"; the asset survey 2026-11-10): a forest's canopy trees gathered on a
 # world-fixed grid of about CLUMP_CELL_M squares (a whole number of them a geotile: none straddles two); a square with
 # CLUMP_MIN of them gets one item of a stock clump shape (trees.lua's *_clump groups: East Coast USA's
@@ -63,7 +65,7 @@ GROUPS = ("deciduous", "conifer", "shrub", "rock", "pine_west", "palm", "juniper
 # beyond its near ring (trees.lua CLUMP_M) and the square's trees, flagged by a negative scale, only within it: a far
 # forest tile of ~900 single trees becomes ~150 clumps. Other groups (palms, junipers, tropical trees) stay single.
 CLUMP_OF = {G_CONIFER: G_CONIFER_CLUMP, G_PINE_WEST: G_CONIFER_CLUMP, G_DECIDUOUS: G_DECIDUOUS_CLUMP,
-            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP}
+            G_OAK_WEST: G_OAK_WEST_CLUMP, G_MEDITERRANEAN: G_MEDITERRANEAN_CLUMP, G_EUCALYPTUS: G_EUCALYPTUS_CLUMP}
 CLUMP_GROUPS = tuple(sorted(set(CLUMP_OF.values())))
 CLUMP_CELL_M = 18.0
 CLUMP_MIN = 3
@@ -73,6 +75,18 @@ CLUMP_ROWS_MAX = 2000       # clump rows a tile sends at most (beside TILE_ROWS_
 # 2026-11-10 found them loaded with Italy's folder but unused). California's Cs keeps the West Coast's own groups.
 MED_KOPPEN = (8, 9, 10)
 MED_BOX = (28.0, -10.5, 46.5, 42.0)         # south, west, north, east
+# More regional trees (the asset survey 2026-11-10, the stock shapes the flora supports; earthfast.regional_groups):
+# - Australia: eucalypts most of its trees (West Coast USA's eucalyptus_double / _tall, eucalyptus_group far).
+# - Temperate Europe's river banks: a share of the broadleaves within RIPARIAN_M of water are poplars (Automation Test
+#   Track's s_poplar_large: the black and hybrid poplars along the Loire, the Po, the Danube; willows and alders have no
+#   stock shape).
+# - North America's hot deserts (Koppen BWh, Beck et al. class 4: the Mojave, Sonoran and Chihuahuan): most desert
+#   shrubs are creosote bushes (Automation Test Track's shrub_a-c, the creosote of West Coast USA's desert).
+ZONE_MED, ZONE_RIPARIAN, ZONE_HOT_DESERT = 1, 2, 3
+RIPARIAN_BOX = (42.0, -10.0, 60.0, 30.0)
+RIPARIAN_M = 30.0
+HOT_DESERT_KOPPEN = (4,)
+HOT_DESERT_BOX = (22.0, -120.0, 38.5, -98.0)
 ROAD_CLEAR_M = 1.5          # trees kept this far off a road's edge (its width by class below)
 TREE_PIT_M = 0.4            # m past a road's edge (+ the push's 0.6) where a top over the road lands: a sidewalk's
                             # tree pit by the curb (pushed out of the full corridor, Boston Street's trees landed on the
@@ -164,12 +178,13 @@ def _dry_west(lat, lon):
     return (lon < -102.0) & (lat > 25.0) & (lat < 46.0) & ~((lon < -121.0) & (lat > 37.0))
 
 
-def regional(group, height, lat, lon, lcls, u):
+def regional(group, height, lat, lon, lcls, u, riparian=None):
     """The groups of a region (the stock maps' species: West Coast USA's pines, oaks and palms, Utah's junipers
     and desert bushes, Johnson Valley's rocks, Jungle Rock Island's palms and tropical trees) from the generic
     ones, by a coarse climate from the position and the land cover class at the item (until a species map): the Rust
-    kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item. Pure."""
-    fast.require(193, "regional_groups")
+    kernel earthfast.regional_groups (its rules there). u: a hashed [0, 1) per item; riparian: per item, within
+    RIPARIAN_M of water (None: none). Pure."""
+    fast.require(201, "regional_groups")
     f64 = np.float64
     n = np.size(group)
     bc = lambda a, t: np.ascontiguousarray(np.broadcast_to(np.asarray(a, t), (n,)))     # noqa: E731
@@ -178,7 +193,27 @@ def regional(group, height, lat, lon, lcls, u):
         bc(group, np.uint8), bc(height, f64), la, lo, bc(lcls, np.uint8), bc(u, f64),
         [G_DECIDUOUS, G_CONIFER, G_SHRUB, G_ROCK, G_PINE_WEST, G_PALM, G_JUNIPER, G_DESERT_SHRUB, G_DESERT_ROCK,
          G_OAK_WEST, G_TROPICAL], [WC["shrub"], WC["bare"], WC["grass"], WC["built"]],
-        mediterranean(la, lo), G_MEDITERRANEAN), np.uint8)
+        zones(la, lo, None if riparian is None else bc(riparian, bool)),
+        [G_MEDITERRANEAN, G_EUCALYPTUS, G_POPLAR, G_CREOSOTE]), np.uint8)
+
+
+def _in_box(lat, lon, box):
+    return (lat >= box[0]) & (lat <= box[2]) & (lon >= box[1]) & (lon <= box[3])
+
+
+def zones(lat, lon, riparian=None):
+    """Per point: its regional zone for earthfast.regional_groups (ZONE_*; 0 none)."""
+    lat, lon = np.asarray(lat, np.float64), np.asarray(lon, np.float64)
+    z = np.where(mediterranean(lat, lon), ZONE_MED, 0).astype(np.uint8)
+    if riparian is not None:
+        z[(z == 0) & np.asarray(riparian, bool) & _in_box(lat, lon, RIPARIAN_BOX)] = ZONE_RIPARIAN
+    box = _in_box(lat, lon, HOT_DESERT_BOX)
+    if box.any():
+        import climate
+        hot = np.zeros(len(lat), bool)
+        hot[box] = np.isin(climate.koppen_many(lat[box], lon[box]), HOT_DESERT_KOPPEN)
+        z[hot & (z == 0)] = ZONE_HOT_DESERT
+    return np.ascontiguousarray(z)
 
 
 def mediterranean(lat, lon):
@@ -357,6 +392,9 @@ class Vegetation:
         push = np.zeros((3,) + h.shape, np.float32)
         push[2] = np.inf
         deck = np.zeros(h.shape, bool)      # bridge decks (+ DECK_CLEAR_M): no tree on, beside or moved off one
+        lon0_, lat0_, lon1_, lat1_ = cd.bounds
+        near_water = np.zeros(h.shape, bool) if _in_box((lat0_ + lat1_) / 2, (lon0_ + lon1_) / 2, RIPARIAN_BOX) \
+            else None                       # (within RIPARIAN_M of a river, lake or shore: riverside poplars)
         road_cells = []
         for dy in (-1, 0, 1):
             for dx in (-1, 0, 1):
@@ -371,6 +409,8 @@ class Vegetation:
                 _mask_roads(c2.layers.get("roads"), road, chm, specs=self._specs, walks=True)
                 _mask_roads(c2.layers.get("roads"), curb, chm, push, clear=TREE_PIT_M, specs=self._specs)
                 _mask_decks(c2.layers.get("roads"), deck, chm, self._specs)
+                if near_water is not None:
+                    _mask_near(c2.layers.get("water"), near_water, chm, RIPARIAN_M)
                 road_cells.append(c2.layers.get("roads"))
         # the rounded corners of curbless junctions (roadcorners.py): no tree, bush or rock on their asphalt
         _mask_corners(road_cells, (road, curb), chm, cd.bounds, getattr(self.surface, "urban", None), self.widths)
@@ -435,7 +475,8 @@ class Vegetation:
         u1, u2, u3, u4 = (_hash01(gx, gy, s) for s in (1, 2, 3, 4))
         conifer = u1 < _conifer_share(tlat, tlon) * np.clip(th / 12.0, 0.5, 1.2)
         group = np.where(is_tree, np.where(conifer, G_CONIFER, G_DECIDUOUS), G_SHRUB).astype(np.uint8)
-        group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7))
+        group = regional(group, th, tlat, tlon, lcls, _hash01(gx, gy, 7),
+                         riparian=None if near_water is None else near_water[jj, ii])
         kind = np.where(is_tree, KIND_TREE, KIND_BUSH).astype(np.uint8)
         jitter = chm.dx * 0.5
         tlon2, tlat2 = _to4326(mx[ii] + (u3 - 0.5) * jitter, my[jj] + (u4 - 0.5) * jitter)
@@ -474,7 +515,8 @@ class Vegetation:
         planted = orchard_items(lu, chm, blocked, bounds)
         hedges = farm_foliage(lu, chm, blocked, bounds)
         rows = vineyard_items(lu, chm, blocked, bounds)
-        return _concat_all([tree, scatter, edge, planted, hedges, rows])
+        bales = bale_items(lu, chm, blocked, bounds)
+        return _concat_all([tree, scatter, edge, planted, hedges, rows, bales])
 
     def _edge(self, cd, lc, blocked, road, chm, hs):
         """The thicket along forest edges beside roads (EDGE_*), outside the dry West."""
@@ -933,6 +975,80 @@ def vineyard_items(feats, chm, blocked, bounds=None):
                  np.full(n, G_VINE, np.uint8), rank, yaw.astype(np.float32), np.ones(n, np.float32))
 
 
+# Round bales on fields after the harvest (the asset survey's #16): the stock race props s_haybaleround_large_01
+# (straw, on land_use class farmland: the cereals' straw) and s_haybaleround_alt_01 (wrapped silage, on meadows),
+# along windrows BALE_ACROSS_M apart down the field's dominant edge, one every ~BALE_ALONG_M, some left out. An OSM
+# farmland polygon often spans many fields: the field is cut into BALE_BLOCK_M blocks and BALE_SHARE of them (a hash
+# of the polygon and the block) are baled. The season is the mod's (trees.lua SEASON: its groups by hemisphere, the
+# date's month): straw in July-September, silage May-September (the south: six months on); none in the tropics.
+BALE_ALONG_M = 38.0
+BALE_ACROSS_M = 14.0
+BALE_BLOCK_M = 260.0
+BALE_SHARE = 0.18
+BALE_KEEP = 0.75
+BALE_JITTER_M = 9.0
+BALE_H_M = 1.25             # the shapes' height (trees.lua CATALOG.straw_* / silage_*)
+BALE_MIN_M2 = 3000.0
+BALE_CELL_MAX = 6000
+BALE_GROUPS = (G_STRAW_N, G_STRAW_S, G_SILAGE_N, G_SILAGE_S)
+BALE_CLASSES = {"farmland": (G_STRAW_N, G_STRAW_S), "meadow": (G_SILAGE_N, G_SILAGE_S)}
+
+
+def bale_items(feats, chm, blocked, bounds=None):
+    """Round bales on a share of the fields (BALE_*): items of the BALE_GROUPS by the field's class and hemisphere.
+    blocked: the canopy grid's buildings, roads and water; bounds (lon0, lat0, lon1, lat1) keeps a bale in this cell."""
+    xs, ys, yaws, gs, us = [], [], [], [], []
+    for cls_name, (g_north, g_south) in BALE_CLASSES.items():
+        for fid, xy, holes, area in _field_rings(feats, cls_name, BALE_MIN_M2):
+            lat = float(_to4326(xy[:1, 0], xy[:1, 1])[1][0])
+            if abs(lat) < 23.5:
+                continue
+            sec = 1.0 / max(math.cos(math.radians(lat)), 0.05)
+            key = np.uint64(_fid_key(fid))
+            u = _edge_axis(xy)
+            along, across = BALE_ALONG_M * sec, BALE_ACROSS_M * sec
+            phase_a = float(_hash01(np.array([key]), np.array([1], np.uint64), 41)[0]) * along
+            phase_b = float(_hash01(np.array([key]), np.array([2], np.uint64), 41)[0]) * across
+            pts = _lattice(xy, holes, u, along, across, phase_a, phase_b, max_steps=800)
+            if pts is None or len(pts) == 0:
+                continue
+            blk = np.floor(pts / (BALE_BLOCK_M * sec)).astype(np.int64)
+            baled = _hash01(blk[:, 0] * np.int64(73856093) ^ blk[:, 1], np.full(len(pts), key), 42) < BALE_SHARE
+            idx = np.arange(len(pts), dtype=np.uint64)
+            baled &= _hash01(np.full(len(pts), key), idx, 43) < BALE_KEEP
+            if not baled.any():
+                continue
+            pts, idx = pts[baled], idx[baled]
+            pts = pts + ((_hash01(np.full(len(pts), key), idx, 44) - 0.5) * 2 * BALE_JITTER_M * sec)[:, None] * u
+            if blocked is not None and np.any(blocked):
+                pts = pts[~_blocked_at(pts, chm, blocked)]
+            if bounds is not None and len(pts):
+                ex0, ey0 = _to3857(bounds[0], bounds[1])
+                ex1, ey1 = _to3857(bounds[2], bounds[3])
+                pts = pts[(pts[:, 0] >= ex0) & (pts[:, 0] < ex1) & (pts[:, 1] > ey0) & (pts[:, 1] <= ey1)]
+            if len(pts) == 0:
+                continue
+            uh = _hash01(np.full(len(pts), key), np.arange(len(pts), dtype=np.uint64), 45)
+            yaw0 = math.degrees(math.atan2(float(u[1]), float(u[0])))
+            xs.append(pts[:, 0])
+            ys.append(pts[:, 1])
+            yaws.append(yaw0 + 90.0 + (uh - 0.5) * 50.0)
+            gs.append(np.full(len(pts), g_north if lat >= 0 else g_south, np.uint8))
+            us.append(uh)
+    if not xs:
+        return _empty()
+    x, y, yaw, g, u = (np.concatenate(a) for a in (xs, ys, yaws, gs, us))
+    rank = (u * 0.3).astype(np.float32)
+    if len(x) > BALE_CELL_MAX:
+        keep = np.sort(np.argpartition(rank, BALE_CELL_MAX - 1)[:BALE_CELL_MAX])
+        x, y, yaw, g, u, rank = x[keep], y[keep], yaw[keep], g[keep], u[keep], rank[keep]
+    lon, lat = _to4326(x, y)
+    n = len(lon)
+    h = (BALE_H_M * (0.95 + 0.25 * u)).astype(np.float32)      # (1.2-1.5 m bales)
+    return Items(lon, lat, h, np.full(n, 0.8, np.float32), np.full(n, KIND_BUSH, np.uint8), g, rank,
+                 yaw.astype(np.float32), np.ones(n, np.float32))
+
+
 def farm_foliage(feats, chm, blocked, bounds=None):
     """Shrubs in lines between the crop rows of land_use class farmland (surface.FARM_ROW_M): one line down
     the middle of each gap between the dirt furrows. Roads (blocked) are left bare, so a dirt track through a
@@ -1149,6 +1265,26 @@ def _mask_decks(f, mask, chm, specs):
                                 np.ascontiguousarray(np.concatenate(hws), np.float64))
 
 
+def _mask_near(f, mask, chm, dist_m):
+    """Mark the CHM-grid pixels within dist_m (ground m) of Features f's lines and polygon outlines (water: its rivers'
+    lines and its lakes' and the sea's shores; inside a polygon is water, masked as such)."""
+    if f is None or not len(f.kind):
+        return
+    fast.require(63, "road_segments")
+    sel = np.flatnonzero((f.kind == 2) | (f.kind == 3)).astype(np.int64)
+    if not len(sel):
+        return
+    n_r, n_c = mask.shape
+    segs, hws = fast._ef.road_segments(np.ascontiguousarray(f.lonlat, np.float64),
+                                       np.ascontiguousarray(f.coord_off, np.int64),
+                                       np.ascontiguousarray(f.ring_off, np.int64),
+                                       np.ascontiguousarray(f.part_off, np.int64), sel,
+                                       np.full(len(sel), float(dist_m)), float(chm.x0), float(chm.y0), float(chm.dx),
+                                       float(chm.dy), n_r, n_c)
+    if len(hws):
+        fast._ef.road_corridors(mask, None, np.ascontiguousarray(segs), np.ascontiguousarray(hws))
+
+
 def _mask_roads(f, mask, chm, push=None, clear=ROAD_CLEAR_M, specs=None, walks=False):
     """Mark road corridors (half width + clear) on the CHM-grid mask (footpaths left out): the half width the road is
     drawn with (specs(f): roads.road_specs; walks: with its sidewalks) or its class's, the wider. push (optional, (3, rows,
@@ -1209,7 +1345,8 @@ class JsonRows(str):
 AUDIO_CELL_M = 256.0 / 12
 AUDIO_H_MID = 15.0
 AUDIO_H_LARGE = 19.0
-AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS]
+AUDIO_SOUND = [g for g in range(len(GROUPS)) if g not in (G_ROCK, G_DESERT_ROCK, G_VINE) + CLUMP_GROUPS
+               + BALE_GROUPS]
 
 
 def _ambience(group, e, n, z, height, lat, lon):

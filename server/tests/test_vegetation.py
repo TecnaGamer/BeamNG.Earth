@@ -281,6 +281,23 @@ class RegionalTest(unittest.TestCase):
         self.assertEqual(self.g(veg.G_DECIDUOUS, 9, 34.05, -118.25, 10, u=0.5), veg.G_OAK_WEST, "California")
         self.assertEqual(self.g(veg.G_SHRUB, 1, 41.9, 12.5, 10, u=0.1), veg.G_SHRUB, "bushes are not trees")
 
+    def test_more_regional_trees(self):
+        """2026-11-10 asset survey: Australia's eucalypts, temperate Europe's riverside poplars, the Mojave's creosote."""
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 15, -35.3, 149.1, 10, u=0.5), veg.G_EUCALYPTUS, "Canberra")
+        self.assertEqual(self.g(veg.G_CONIFER, 20, -37.8, 145.0, 10, u=0.95), veg.G_CONIFER, "a share stays (pines)")
+        self.assertEqual(self.g(veg.G_DECIDUOUS, 15, -12.4, 130.8, 10, u=0.5), veg.G_EUCALYPTUS, "Darwin's savanna")
+
+        def rip(lat, lon, group=veg.G_DECIDUOUS, u=0.2, near=True):
+            return int(veg.regional(np.array([group]), np.array([18.0]), np.array([lat]), np.array([lon]),
+                                    np.array([10]), np.array([u]), riparian=np.array([near]))[0])
+        self.assertEqual(rip(47.4, 0.7), veg.G_POPLAR, "the Loire's banks")
+        self.assertEqual(rip(47.4, 0.7, near=False), veg.G_DECIDUOUS, "away from water")
+        self.assertEqual(rip(47.4, 0.7, u=0.6), veg.G_DECIDUOUS, "a share only")
+        self.assertEqual(rip(47.4, 0.7, group=veg.G_CONIFER), veg.G_CONIFER, "broadleaves only")
+        self.assertEqual(rip(39.3, -76.6), veg.G_DECIDUOUS, "not in America")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 35.0, -116.0, 20, u=0.3), veg.G_CREOSOTE, "the Mojave")
+        self.assertEqual(self.g(veg.G_SHRUB, 1, 38.6, -109.5, 20, u=0.3), veg.G_DESERT_SHRUB, "Moab: cold desert")
+
     def test_beyond_north_america(self):
         """2026-10-15: Douglas firs in Punjab's fields; the Sahara's bushes were the East's."""
         self.assertLess(float(veg._conifer_share(30.9, 75.8)), 0.1, "Punjab: hardly any conifers")
@@ -568,6 +585,29 @@ class VineyardTest(unittest.TestCase):
     def test_only_vineyards(self):
         frame, feats, ring, chm, clear = self._field([0, 100, 100, 0, 0], [0, 0, 50, 50, 0], cls="orchard")
         self.assertEqual(len(veg.vineyard_items(feats, chm, clear, None)), 0)
+
+
+class BaleTest(unittest.TestCase):
+    def _field(self, lat, cls):
+        import mapgeom
+        frame = geodesy.EnuFrame(lat, 1.6)
+        e, n = np.array([0, 2000, 2000, 0, 0.0]), np.array([0, 0, 1200, 1200, 0.0])
+        la, lo, _ = frame.enu_to_geodetic(e, n, np.zeros(5))
+        feats = mapgeom.build("land_use", np.array([f"f-{lat}"]), [(mapgeom.POLYGON, [[np.stack([lo, la], 1)]])])
+        feats.attrs["class"] = np.array([cls], object)
+        return feats
+
+    def test_bales_by_class_and_hemisphere(self):
+        it = veg.bale_items(self._field(48.3, "farmland"), None, None, None)
+        self.assertGreater(len(it), 20, "a share of the blocks of a 240 ha field")
+        self.assertLess(len(it), 2000)
+        self.assertTrue(np.all(it.group == veg.G_STRAW_N))
+        again = veg.bale_items(self._field(48.3, "farmland"), None, None, None)
+        self.assertTrue(np.array_equal(again.lon, it.lon), "deterministic")
+        self.assertTrue(np.all(veg.bale_items(self._field(-35.0, "meadow"), None, None, None).group
+                               == veg.G_SILAGE_S))
+        self.assertEqual(len(veg.bale_items(self._field(10.0, "farmland"), None, None, None)), 0, "not in the tropics")
+        self.assertEqual(len(veg.bale_items(self._field(48.3, "vineyard"), None, None, None)), 0)
 
 
 class FarmFoliageTest(unittest.TestCase):

@@ -34,7 +34,8 @@ M.TILE_CAP = { { 300, 6000 }, { 700, 2400 }, { 1500, 900 }, { 1e9, 400 } }
 -- anyway; within SOLID_M (the colliding trees round the car) every tree is its own. Scaled with the tree distance and
 -- density settings (rescale: QUALITY_LEVELS' clump).
 M.CLUMP_M = 200
-M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true }
+M.FAR_ONLY = { conifer_clump = true, deciduous_clump = true, oak_west_clump = true, mediterranean_clump = true,
+  eucalyptus_clump = true }
 -- small props only near the player (2026-10-14, Fells Point at street level: ~10 ms a frame for the Forest
 -- with a door on every house out to 300 m): the tile distance (m) beyond which a group is not shown
 -- rocks only over the fine ground (farfield.NEAR_RADII: L0 within 400 m): beyond it the coarser tiles round off the
@@ -45,7 +46,6 @@ M.GROUP_MAX_M = { tuft = 200, fern = 200, shrub = 250, desert_shrub = 250, rock 
   stop = 300, giveway = 300, signal = 500, fence = 150, wallsign_logistics = 800, wallsign_rentabox = 800, wallsign_lemon = 800, wallsign_turboburger = 500,
   speed30 = 300, speed40 = 300, speed50 = 300, speed60 = 300, speed70 = 300, guardrail = 4000, guardrail_start = 4000, guardrail_end = 4000,
   guardrail_back = 4000, guardrail_back_start = 4000, guardrail_back_end = 4000 }
-M.GROUP_MAX_M.vine = 450
 M.FOREST_NAME = 'bngEarthForest'      -- a prefix: small Forests from a pool ('bngEarthForest_<n>')
 -- A small Forest per tile, from a pool (2026-10-15, 100 mph drives: one shared Forest with ~240k items made and ~220k
 -- removed over a session made frames with any tree change cost ~100 ms in the engine's tick, and a fresh game ran the
@@ -108,6 +108,7 @@ local JV = '/levels/johnson_valley/art/shapes/'
 local JRI = '/levels/jungle_rock_island/art/shapes/'
 local HIR = '/levels/hirochi_raceway/art/shapes/'
 local IT = '/levels/italy/art/shapes/'
+local ATT = '/levels/automation_test_track/art/shapes/'
 -- the stock shapes per group with their measured heights (m; TSStatic world boxes, 2026-10-13/14)
 M.CATALOG = {
   -- rock faces along rural road cuts (server roads.cliff_rows: Italy's rock-face kit, as its own cut slopes are made)
@@ -277,7 +278,20 @@ M.CATALOG = {
   -- vineyards' rows (server vegetation.vineyard_items): Italy's grape_vine_group, three rows 2.45 m apart and 15.9 m
   -- long along its x (out to 450 m, GROUP_MAX_M: beyond it the ground photo shows the rows)
   vine = { { IT .. 'trees/trees_italy/grape_vine_group', 2.6 } },
+  -- round bales after the harvest (server vegetation.bale_items): the stock race props, straw on farmland, wrapped
+  -- silage on meadows; by hemisphere, shown in their season only (SEASON)
+  straw_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_large_01', 1.22 } },
+  silage_n = { { '/assets/meshes/props/race_event/equipment/s_haybaleround_alt_01', 1.18 } },
   mediterranean_clump = { { IT .. 'trees/trees_italy/holm_oak_filler_center', 13.9 } },
+  eucalyptus_clump = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_group', 20.3 } },
+  -- regional trees (server vegetation.regional's zones; heights from the shapes' bounds, the asset survey 2026-11-10):
+  -- Australia's eucalypts (West Coast USA's), temperate Europe's riverside poplars and North America's hot-desert
+  -- creosote bushes (Automation Test Track's)
+  eucalyptus = { { WCA .. 'trees/trees_eucalyptus/eucalyptus_double', 14.7 },
+    { WCA .. 'trees/trees_eucalyptus/eucalyptus_tall', 22.5 } },
+  poplar = { { ATT .. 'trees/trees_poplar/s_poplar_large_01', 16.5 }, { ATT .. 'trees/trees_poplar/s_poplar_large_02', 23.1 } },
+  creosote = { { ATT .. 'trees/trees_shrub/shrub_c', 1.15 }, { ATT .. 'trees/trees_shrub/shrub_b', 1.63 },
+    { ATT .. 'trees/trees_shrub/shrub_a', 2.43 } },
   tropical = {
     { JRI .. 'trees/bush_tropical_1/tro_bush_huge', 5.5 }, { JRI .. 'trees/bush_tropical_2/tro_bush_2_small', 6.1 },
     { JRI .. 'trees/trees_tropical_2/tro_tree_2_filler', 20.2 }, { JRI .. 'trees/trees_tropical_1/tro_tree_1_huge', 20.6 },
@@ -406,6 +420,14 @@ M.GROUP_MAX_M.container = 500
 M.GROUP_MAX_M.billboard = 900
 M.GROUP_MAX_M.barn = 800
 M.GROUP_MAX_M.golfflag = 400
+M.GROUP_MAX_M.vine = 450
+M.GROUP_MAX_M.creosote = 250       -- (as the other shrubs)
+M.NO_COLLIDE.creosote = true
+M.CATALOG.straw_s, M.CATALOG.silage_s = M.CATALOG.straw_n, M.CATALOG.silage_n
+for _, g in ipairs({ 'straw_n', 'straw_s', 'silage_n', 'silage_s' }) do M.GROUP_MAX_M[g] = 400; M.ONE_SPELLING[g] = true end
+-- The months (1-12) a group shows in (server vegetation.bale_items: the bales after the harvest; the south's six months
+-- on). Out of season its group is off (M.applySeason at setup: the date's month).
+M.SEASON = { straw_n = { 7, 8, 9 }, straw_s = { 1, 2, 3 }, silage_n = { 5, 6, 7, 8, 9 }, silage_s = { 11, 12, 1, 2, 3 } }
 -- Pure: whether a group is a road barrier's (guard rails, jersey and cable barriers): continuous runs, not thinned
 -- below the tile cap.
 function M.isBarrier(g)
@@ -457,7 +479,9 @@ local MATERIALS = {
   JRI .. 'trees/trees_tropical_2', JRI .. 'trees/bush_tropical_1', JRI .. 'trees/bush_tropical_2', JRI .. 'trees',
   JRI .. 'trees/vines_tropical',     -- tro_tree_1's vines and aerial roots (tro_vines_2d; orange without it)
   IT .. 'trees/trees_italy', IT .. 'trees', IT .. 'rocks', '/levels/automation_test_track/art/shapes/objects',
+  ATT .. 'trees', ATT .. 'trees/trees_poplar', ATT .. 'trees/trees_shrub',     -- riverside poplars, creosote bushes
   '/levels/automation_test_track/art/shapes/buildings',     -- the utility pole's wood_trim / painted metal
+  '/vehicles/common/loads/haybale', '/vehicles/common/loads/haybale/round',     -- the round bales (straw, silage)
   ECA .. 'signs_usa', '/art/shapes/objects', '/levels/east_coast_usa/art/shapes', WCA .. 'objects', ECA .. 'buildings',
   UT .. 'ut_roadsigns', UT .. 'buildings', '/levels/driver_training/art/shapes/race',
   '/levels/driver_training/art/shapes/buildings',     -- the mapped straight-mast lamp's (15 materials)
@@ -671,8 +695,19 @@ local function staticSignal()
   return FS:fileExists(dae)
 end
 
+-- Groups out of season off, in season on (SEASON); month: 1-12 (default the date's).
+function M.applySeason(month)
+  month = month or tonumber(os.date('%m'))
+  for g, months in pairs(M.SEASON) do
+    local on = false
+    for _, m in ipairs(months) do if m == month then on = true end end
+    M.groupOff[g] = (not on) or nil
+  end
+end
+
 local function setup()
   if ready then return true end
+  M.applySeason()
   for _, m in ipairs(MATERIALS) do
     local p = m .. '/main.materials.json'
     if not FS or FS:fileExists(p) then pcall(loadJsonMaterialsFile, p) end

@@ -5290,18 +5290,30 @@ fn fold_clearance<'py>(py: Python<'py>, xy: PyReadonlyArray2<'py, f64>, rows: nu
 /// Palms are most town trees only where they are in life: South Florida, the Rio Grande Valley, coastal Southern
 /// California, the tropics; a few along the rest of the Gulf Coast (GitHub #110: Houston and Austin were mostly palms,
 /// in life live oaks and loblolly pines). The Southeast's conifers are pines. med (per item) / g_med: the Mediterranean
-/// basin's Cs climates (vegetation.mediterranean): most broadleaves and conifers there are its own (holm and cork oaks,
-/// olives, maritime pines, cypresses: Italy's stock trees), MED_SHARE of them (more in town).
+/// basin's Cs climates (zone ZONE_MED, vegetation.mediterranean): most broadleaves and conifers there are its own (holm
+/// and cork oaks, olives, maritime pines, cypresses: Italy's stock trees), MED_SHARE of them (more in town).
+/// zone (per item, vegetation.regional): ZONE_MED; ZONE_RIPARIAN, temperate Europe's river banks: RIPARIAN_SHARE of the
+/// broadleaves are poplars (black and hybrid poplars of the Loire, the Po, the Danube; ext[2]); ZONE_HOT_DESERT, North
+/// America's hot deserts (Koppen BWh: the Mojave, Sonoran, Chihuahuan): CREOSOTE_SHARE of the desert shrubs are
+/// creosote bushes (ext[3]). Australia (its box): AUS_SHARE of the trees are eucalypts (ext[1]; in town fewer).
+/// ext: (g_med, g_euc, g_poplar, g_creosote), 255 none.
 #[pyfunction]
-#[pyo3(signature = (group, height, lat, lon, lcls, u, ids, wc, med=None, g_med=255))]
+#[pyo3(signature = (group, height, lat, lon, lcls, u, ids, wc, zone=None, ext=[255, 255, 255, 255]))]
 #[allow(clippy::too_many_arguments)]
 fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, height: PyReadonlyArray1<'py, f64>,
                         lat: PyReadonlyArray1<'py, f64>, lon: PyReadonlyArray1<'py, f64>,
                         lcls: PyReadonlyArray1<'py, u8>, u: PyReadonlyArray1<'py, f64>, ids: [u8; 11], wc: [u8; 4],
-                        med: Option<PyReadonlyArray1<'py, bool>>, g_med: u8)
+                        zone: Option<PyReadonlyArray1<'py, u8>>, ext: [u8; 4])
                         -> Bound<'py, PyArray1<u8>> {
     const MED_SHARE: (f64, f64) = (0.75, 0.9);      // (open country, in town)
-    let med = med.map(|m| m.as_array().to_vec());
+    const AUS_SHARE: (f64, f64) = (0.85, 0.6);
+    const RIPARIAN_SHARE: f64 = 0.4;
+    const CREOSOTE_SHARE: f64 = 0.7;
+    const ZONE_MED: u8 = 1;
+    const ZONE_RIPARIAN: u8 = 2;
+    const ZONE_HOT_DESERT: u8 = 3;
+    let [g_med, g_euc, g_poplar, g_creosote] = ext;
+    let zone = zone.map(|m| m.as_array().to_vec());
     let (group, height, lat, lon, lcls, u) = (group.as_array(), height.as_array(), lat.as_array(), lon.as_array(),
                                                lcls.as_array(), u.as_array());
     let [g_dec, g_con, g_shrub, g_rock, g_pine_w, g_palm, g_juniper, g_dshrub, g_drock, g_oak_w, g_trop] = ids;
@@ -5350,14 +5362,24 @@ fn regional_groups<'py>(py: Python<'py>, group: PyReadonlyArray1<'py, u8>, heigh
         if tree && ui < palm_p {
             g = g_palm;
         }
+        let australia = la > -44.0 && la < -10.0 && lo > 112.0 && lo < 154.0;
+        if australia && g_euc != 255 && (g == g_dec || g == g_con)
+            && ui < if built { AUS_SHARE.1 } else { AUS_SHARE.0 } {
+            g = g_euc;
+        }
         if tropics && g == g_dec && h >= 12.0 {
             g = g_trop;
         }
-        if let Some(m) = &med {
-            if m.get(i).copied().unwrap_or(false) && (g == g_dec || g == g_con)
-                && ui < if built { MED_SHARE.1 } else { MED_SHARE.0 } {
-                g = g_med;
-            }
+        let z = zone.as_ref().and_then(|m| m.get(i).copied()).unwrap_or(0);
+        if z == ZONE_MED && g_med != 255 && (g == g_dec || g == g_con)
+            && ui < if built { MED_SHARE.1 } else { MED_SHARE.0 } {
+            g = g_med;
+        }
+        if z == ZONE_RIPARIAN && g_poplar != 255 && g == g_dec && ui < RIPARIAN_SHARE {
+            g = g_poplar;
+        }
+        if z == ZONE_HOT_DESERT && g_creosote != 255 && g == g_dshrub && ui < CREOSOTE_SHARE {
+            g = g_creosote;
         }
         out[i] = g;
     }
@@ -6117,7 +6139,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(vegclumps::field_lattice, m)?)?;
     m.add_function(wrap_pyfunction!(vegclumps::edge_axis, m)?)?;
     // 201: vegclumps (vegetation: the stock clump trees in a forest's far rings, GitHub #1074; field_lattice: the
-    // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run)
+    // orchards', vineyards' and hay bales' rows; edge_axis: the way a field's rows run); regional_groups' zone / ext
+    // (Australia's eucalypts, temperate Europe's riverside poplars, North America's creosote bushes)
     m.add("VERSION", 201)?;
     Ok(())
 }

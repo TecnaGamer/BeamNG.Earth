@@ -713,6 +713,20 @@ do -- far clumps (server vegetation.CLUMP_OF, GitHub #1074): the clump beyond CL
   for _ = 1, 20 do trees.update(41, { x = 0, y = 0 }) end
 end
 
+do -- round bales in their season only, by hemisphere (server vegetation.bale_items)
+  trees.applySeason(8)
+  T.check(not trees.groupOff.straw_n and trees.groupOff.straw_s and not trees.groupOff.silage_n
+    and trees.groupOff.silage_s, 'August: the north\'s bales')
+  trees.applySeason(1)
+  T.check(trees.groupOff.straw_n and not trees.groupOff.straw_s and trees.groupOff.silage_n
+    and not trees.groupOff.silage_s, 'January: the south\'s bales')
+  T.check(trees.CATALOG.straw_s[1][1] == trees.CATALOG.straw_n[1][1] and trees.GROUP_MAX_M.straw_n == 400,
+    'one straw bale shape, near only')
+  trees.applySeason(11)
+  T.check(trees.groupOff.straw_n and trees.groupOff.straw_s and trees.groupOff.silage_n and not trees.groupOff.silage_s,
+    'November: the south\'s silage only')
+end
+
 do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is not a barrier
   local shape, sc = trees.pick('golfflag', 2.05, 0.3)
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,

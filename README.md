@@ -34,7 +34,11 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Ground materials from land cover (grass, dirt, rock, sand, snow, mud, lawns, paved squares and parking
   lots) with 3D grass and bushes.
 - Trees and forests from a canopy height model, regional species (conifers, broadleaf, palms, desert
-  shrubs), autumn colours in season.
+  shrubs, Mediterranean oaks and pines, Australia's eucalypts, riverside poplars in Europe, creosote bushes in North
+  America's hot deserts), autumn colours in season. Far forests are drawn as the stock maps' tree clumps (fewer
+  objects, lighter on the frame time); the lower tree settings bring the clumps nearer.
+- Orchards and vineyards in rows along their fields, and round bales on a share of the fields after the harvest
+  (straw on farmland, wrapped silage on meadows, in their season for each hemisphere).
 - Forest and river sounds: the stock maps' wind in the trees (louder and fuller in dense, tall forest) and background
   sound, the set by climate (Köppen-Geiger zones: temperate, oceanic, Mediterranean, desert, tropical), running water along
   rivers and streams, waves along coasts and large lakes, the stock tunnel, under-bridge and parking garage echo, refinery
