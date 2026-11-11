@@ -65,6 +65,35 @@ sl = G.routeSlice(e, 150, 5000, 25)
 T.check(sl[#sl][2] == 100 and #sl == 3, 'a slice past the end stops at the destination')
 local ids = G.pathNodes({ { pos = 1 }, { wp = 'a' }, { wp = 'a' }, { wp = 'b' }, { pos = 2, fixed = true }, { pos = 3 } })
 T.check(#ids == 2 and ids[1] == 'a' and ids[2] == 'b', 'the AI path: the graph nodes of the planner path, in order, once')
+do
+  local nodes = {
+    a = { pos = { x = 0, y = 0, z = 0 }, links = {} },
+    b = { pos = { x = 100, y = 0, z = 10 }, links = { a = {} } },
+    upper = { pos = { x = 100, y = 0, z = 30 }, links = { a = {} } },
+  }
+  local function ending(x, y, z)
+    return G.pathNodes({ { wp = 'a', pos = nodes.a.pos }, { pos = { x = x, y = y, z = z }, fixed = true } }, nodes)
+  end
+  local got = ending(99.99, 0, 9.999)
+  T.check(table.concat(got, ',') == 'a,b', 'a destination just before a node retains the final drivable edge')
+  got = ending(50, 0, 5)
+  T.check(table.concat(got, ',') == 'a,b', 'a position-only destination partway along an edge retains its forward endpoint')
+  T.check(table.concat(ending(50, 0, 15), ',') == 'a,upper', 'terminal edge selection includes elevation')
+  T.check(nodes.b.links.a ~= nil and #got == 2, 'terminal edge lookup supports single-sided game links')
+  T.check(#ending(120, 0, 12) == 1, 'a destination beyond the loaded edge does not invent a continuation')
+  T.check(#ending(50, 8, 5) == 1, 'an off-road destination does not select a nearby edge')
+  T.check(#ending(0, 0, 0) == 1, 'a destination at the existing endpoint adds nothing')
+  T.check(#G.pathNodes({ { pos = { x = 50, y = 0, z = 5 } } }, nodes) == 0,
+    'a path without a known graph endpoint does not invent an approach')
+  nodes.b.links.a = { oneWay = true, inNode = 'b' }
+  T.check(#ending(50, 0, 5) == 1, 'the final edge cannot be driven against its one-way direction')
+  nodes.b.links.a.inNode = 'a'
+  T.check(table.concat(ending(50, 0, 5), ',') == 'a,b', 'the legal direction of a one-way terminal edge is accepted')
+  nodes.b.links.a = { drivability = 0 }
+  T.check(#ending(50, 0, 5) == 1, 'a non-drivable terminal edge is not appended')
+  nodes.b.links.a = nil
+  T.check(#ending(50, 0, 5) == 1, 'a missing terminal edge does not snap to a disconnected or elevated node')
+end
 local cmd = G.aiCommand({ 'a', 'b"c' })
 T.check(cmd:find('beamngEarth_autodrive.drive', 1, true) and cmd:find('"a","b\\"c"', 1, true),
   'the AI command sends quoted node ids to the vehicle route helper')

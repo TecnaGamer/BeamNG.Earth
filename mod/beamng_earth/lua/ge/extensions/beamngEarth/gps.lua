@@ -443,11 +443,34 @@ local function appendTail(gm, e, s0, z0)
   M.addRest(rp, total - math.min(s0 + M.TAIL_M, total))
 end
 
--- Pure: the graph node ids of a planner path ({wp = id | nil}...): its graph stretch, ids in order, repeats dropped.
-function M.pathNodes(path)
+-- Pure: graph nodes in planner order, with consecutive duplicates removed. The stock planner can strip the
+-- final wp when projecting a destination onto an edge; retain that edge's forward endpoint for the AI.
+function M.pathNodes(path, nodes)
   local out = {}
   for _, p in ipairs(path or {}) do
     if p.wp ~= nil and out[#out] ~= p.wp then out[#out + 1] = p.wp end
+  end
+  local from, last = out[#out], path and path[#path]
+  local start = nodes and nodes[from]
+  if start and last and not last.wp and last.pos then
+    local a, p = start.pos, last.pos
+    local best, errorSq = nil, 1 -- same 1 m positional tolerance as the stock planner's node merging
+    for id, n in pairs(nodes) do
+      local edge = M.edge(nodes, from, id)
+      if edge and (type(edge) ~= 'table' or ((edge.drivability or 1) > 0
+        and (not edge.oneWay or edge.inNode == nil or edge.inNode == from))) then
+        local dx, dy, dz = n.pos.x - a.x, n.pos.y - a.y, (n.pos.z or 0) - (a.z or 0)
+        local lengthSq = dx * dx + dy * dy + dz * dz
+        if lengthSq > 0 then
+          local px, py, pz = p.x - a.x, p.y - a.y, (p.z or 0) - (a.z or 0)
+          local t = (px * dx + py * dy + pz * dz) / lengthSq
+          local ex, ey, ez = px - t * dx, py - t * dy, pz - t * dz
+          local distanceSq = ex * ex + ey * ey + ez * ez
+          if t > 0 and t <= 1 and distanceSq < errorSq then best, errorSq = id, distanceSq end
+        end
+      end
+    end
+    if best then out[#out + 1] = best end
   end
   return out
 end
@@ -626,7 +649,7 @@ local function driveArrowsPath(gm, nodes)
     return -- never give a new-graph route to an old vehicle graph, even after the timeout
   end
   pathWait = nil
-  local ids = M.pathNodes(gm.routePlanner.path)
+  local ids = M.pathNodes(gm.routePlanner.path, nodes)
   -- the planner's path can be older than the graph (planned before the last apply): a step that is no edge now
   -- disabled the AI's Lua (ai.lua getEdgeLaneConfig, Lauterbrunnen 2026-10-15). The valid part is driven and the
   -- route planned again at the next check
