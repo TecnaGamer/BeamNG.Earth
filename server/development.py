@@ -23,6 +23,7 @@ import numpy as np
 
 import fast
 import mapgeom
+import mapdata
 from mapdata import BUILDING_MAX_M2
 
 log = logging.getLogger("earthd.development")
@@ -109,7 +110,9 @@ def for_tile(md, frame, tx, ty):
             return layers
         for key in roads.cells_of_tile(frame, tx, ty, _halo(RADIUS_M)):
             try:
-                got = md.cell(key, layers=LAYERS, kind="demand").layers
+                # (the places as the road tiles read them: their pedestrian places only, mapdata.places_slim)
+                got = dict(md.cell(key, layers=tuple(n for n in LAYERS if n != "places"), kind="demand").layers)
+                got["places"] = mapdata.places_of(md, key)
             except Exception as e:          # (no context: every sample tier 0)
                 log.debug("development: cell %s: %s", key, e)
                 return None

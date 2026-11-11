@@ -1817,7 +1817,8 @@ def tile_sites(frame, tx, ty, md, elev, cuts=None, pads=None, tried=None):
     x0, y0, x1, y1 = box
     try:
         keys = station_cells(frame, tx, ty)
-        places = [md.cell(k, layers=("places",), kind="demand").layers.get("places") for k in keys]
+        import mapdata              # (the rows read here only: mapdata.places_slim)
+        places = [mapdata.places_of(md, k) for k in keys]
         stations = merge(pins(frame, places))
         osm = []
         osm_cached = getattr(md, "osm_fuel_cached", None)       # (OpenStreetMap's: cached cells only, never waited for)

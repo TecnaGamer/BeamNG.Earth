@@ -199,6 +199,69 @@ MEM_MB = 192        # decoded cell layers kept in memory per process (a road til
                     # at 64 every tile decoded them again, 446 loads for 36 tiles (7.5 s of 87 on a Steam Deck)
 
 
+# The road tiles read a cell's places (gas stations, EV chargers, the development context's pedestrian places) through
+# places_slim: only the rows they use, each at its first point, with their readers' findings made on the whole layer
+# (slim_places). The whole layer (Overture's places with every name, category and source as fixed-width strings: ~64
+# MB a Manhattan cell, ~110 MB by _nbytes) is decoded for it and not kept: kept, two of them filled the decoded
+# layers' MEM_MB and pushed out the roads layers every cell's facts read round it, decoded again and again (330
+# decodes of 97 cells for a Manhattan 3 x 3 road tile build, ~12 % of its instructions, 2026-11-10).
+PLACES_SLIM_MB = 32     # the slim places kept per process (a Manhattan cell's ~3 MB)
+
+
+def slim_places(f):
+    """places layer f cut down to its fuel stations' candidates (gasstations._candidates), EV chargers'
+    (evchargers._ev_candidates) and pedestrian places (development._pois), in their order, one point each (its first:
+    where their readers take it), those findings kept on it in its rows (its attrs left out: nothing else reads them).
+    f itself when one of those rows has no point of its own."""
+    if f is None or not len(f):
+        return f
+    import development
+    import evchargers
+    import gasstations
+    fuel, ev, pois = gasstations._candidates(f), evchargers._ev_candidates(f), development._pois(f)
+    rows = np.unique(np.concatenate([np.asarray([r[0] for r in fuel], np.int64),
+                                     np.asarray([r[0] for r in ev], np.int64), np.asarray(pois, np.int64)]))
+    part_off, ring_off = np.asarray(f.part_off, np.int64), np.asarray(f.ring_off, np.int64)
+    coord_off = np.asarray(f.coord_off, np.int64)
+    p0 = part_off[rows]
+    if len(rows) and ((part_off[rows + 1] <= p0).any() or (coord_off[ring_off[p0] + 1] <= coord_off[ring_off[p0]]).any()):
+        return f            # (a row without a point of its own: its readers' index arithmetic is not a slice's)
+    c = coord_off[ring_off[p0]]
+    m = len(rows)
+    step = np.arange(m + 1, dtype=np.int64)
+    out = mapgeom.Features(
+        f.layer, f.ids[rows], np.asarray(f.kind)[rows], step, step.copy(), step.copy(),
+        np.ascontiguousarray(np.asarray(f.lonlat)[c]), None if f.en is None else np.ascontiguousarray(f.en[c]),
+        None if f.own is None else np.asarray(f.own)[rows], None if f.clipped is None else np.asarray(f.clipped)[rows],
+        {}, {})
+    pos = np.full(len(f), -1, np.int64)
+    pos[rows] = np.arange(m, dtype=np.int64)
+    out.__dict__["_fuel_candidates"] = [(int(pos[r[0]]),) + tuple(r[1:]) for r in fuel]
+    out.__dict__["_ev_candidates"] = [(int(pos[r[0]]),) + tuple(r[1:]) for r in ev]
+    out.__dict__["_development_pois"] = pos[np.asarray(pois, np.int64)]
+    cid = f.__dict__.get("_bnge_cell")
+    if cid is not None:     # (its own facts' key: the whole layer's findings are by its rows)
+        out.__dict__["_bnge_cell"] = (cid[0], "places_slim", cid[2])
+    return out
+
+
+def _slim_nbytes(f):
+    if f is None:
+        return 1024
+    return int(sum(getattr(v, "nbytes", 0) for v in (f.ids, f.kind, f.lonlat, f.en, f.own, f.clipped,
+                                                    f.__dict__.get("_development_pois")))
+               + sum(getattr(v, "nbytes", 0) for v in f.attrs.values())       # (the whole layer when kept as it is)
+               + 200 * (len(f.__dict__.get("_fuel_candidates", ())) + len(f.__dict__.get("_ev_candidates", ())))) + 1024
+
+
+def places_of(md, key, kind="demand"):
+    """Cell key's places as the road tiles read them: md.places_slim, or (a map data without it) its places layer."""
+    slim = getattr(md, "places_slim", None)
+    if slim is not None:
+        return slim(key, kind)
+    return md.cell(key, layers=("places",), kind=kind).layers.get("places")
+
+
 def _nbytes(arrays):
     """Memory of a layer's arrays (its decoded form is about this, plus the local coordinates)."""
     n = 0
@@ -298,6 +361,9 @@ class MapData:
         self._mem_lock = threading.Lock()
         self._loading = {}                 # (cell, layer) -> shared Future, including decode; guarded by _mem_lock
         self._cell_stats = dict(memory_hits=0, loads=0, coalesced=0, wait_s=0.0, load_s=0.0, decode_s=0.0)
+        self._slim = OrderedDict()          # cell -> (slim places, bytes): places_slim's LRU (PLACES_SLIM_MB)
+        self._slim_bytes = 0
+        self._slim_locks = [threading.Lock() for _ in range(16)]    # (one thread makes a cell's)
         self._warm_ex = None
         self._warming = set()               # (cell, layer)s queued or building in warm()
 
@@ -808,7 +874,7 @@ class MapData:
         with self._mem_lock:
             return dict(self._cell_stats)
 
-    def _decoded_layer(self, key, layer, kind, frame, token=None):
+    def _decoded_layer(self, key, layer, kind, frame, token=None, remember=True):
         """Load and publish one decoded layer for all its callers. No neighbor discovery is run here:
         hooks are attached only, and no cache lock is held across I/O, decoding or tag joins."""
         k = (str(key), layer)
@@ -838,7 +904,8 @@ class MapData:
             else:
                 f = None if "missing" in arrays else _raster_from(arrays)
             entry = (f, prov, _nbytes(arrays))
-            self._remember(k, entry)
+            if remember:
+                self._remember(k, entry)
             with self._mem_lock:
                 self._cell_stats["load_s"] += t1 - t0
                 self._cell_stats["decode_s"] += time.perf_counter() - t1
@@ -929,11 +996,52 @@ class MapData:
         cd.provenance = [provs[k] for k in sorted(provs)]
         return cd
 
+    def places_slim(self, key, kind="demand"):
+        """Cell key's places layer as the road tiles read it (slim_places), kept (PLACES_SLIM_MB); the whole layer
+        decoded for it is not (MEM_MB keeps it only when another caller of cell() asked for it). None: no places.
+        Raises as cell() does when the layer cannot be had."""
+        key = _key(key)
+        k = str(key)
+        with self._mem_lock:
+            got = self._slim.get(k)
+            if got is not None:
+                self._slim.move_to_end(k)
+                return got[0]
+        with self._slim_locks[hash(k) % len(self._slim_locks)]:
+            with self._mem_lock:
+                got = self._slim.get(k)
+                if got is not None:
+                    self._slim.move_to_end(k)
+                    return got[0]
+                full = self._mem.get((k, "places"))
+            if full is not None:
+                f = full[0]
+            else:
+                lat_c, lon_c = key.center()
+                try:
+                    entry, _hit, _dt = self._decoded_layer(key, "places", kind, geodesy.EnuFrame(lat_c, lon_c, 0.0),
+                                                           remember=False)
+                except Exception:
+                    revisit.fault()             # (as cell(): a build that goes on without it is not kept)
+                    raise
+                f = entry[0]
+            slim = slim_places(f)
+            n = _slim_nbytes(slim)
+            with self._mem_lock:
+                self._slim[k] = (slim, n)
+                self._slim_bytes += n
+                while self._slim_bytes > PLACES_SLIM_MB * 1e6 and len(self._slim) > 1:
+                    _, (_, m) = self._slim.popitem(last=False)
+                    self._slim_bytes -= m
+            return slim
+
     def clear_memory(self):
         """Drop the decoded layers kept in memory (budget.maybe_shed); the cells load again from disk when asked."""
         with self._mem_lock:
             self._mem.clear()
             self._mem_bytes = 0
+            self._slim.clear()
+            self._slim_bytes = 0
         for tags in (self.rail_tags, self.lane_tags):       # (the OSM tag shards: ~20 MB each)
             if tags is not None:
                 tags.clear_memory()
