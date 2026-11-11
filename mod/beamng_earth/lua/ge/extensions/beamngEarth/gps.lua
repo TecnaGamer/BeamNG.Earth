@@ -133,7 +133,8 @@ end
 
 -- Pure: the distance from (px, py) to the nearest segment of segs, that segment's z, and {x, y, dx, dy}: the point on it
 -- and its direction (the way it may be driven for a one-way edge). With a heading (hx, hy): only segments that may be
--- driven that way (a one-way edge against it is left out: the other carriageway of a divided road).
+-- driven that way (a one-way edge against it is left out: the other carriageway of a divided road). Two-way
+-- edges face along that heading, independently of their stored endpoint order.
 function M.nearestEdge(segs, px, py, hx, hy)
   local bd, bz, bp = math.huge, 0, nil
   for _, s in ipairs(segs) do
@@ -146,7 +147,10 @@ function M.nearestEdge(segs, px, py, hx, hy)
     local d = qx * qx + qy * qy
     if d < bd then
       bd, bz = d, s[5]
-      bp = { x = qx + px, y = qy + py, dx = (s[6] or 0) < 0 and -dx or dx, dy = (s[6] or 0) < 0 and -dy or dy }
+      if (s[6] or 0) < 0 or ((s[6] or 0) == 0 and hx and dx * hx + dy * hy < 0) then
+        dx, dy = -dx, -dy
+      end
+      bp = { x = qx + px, y = qy + py, dx = dx, dy = dy }
     end
     ::next::
   end

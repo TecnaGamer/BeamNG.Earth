@@ -57,6 +57,27 @@ T.check(bp and math.abs(bp.x - 20) < 1e-9 and math.abs(bp.y - 100) < 1e-9 and bp
   'the point on the southbound carriageway, facing the way it is driven')
 _, _, bp = G.nearestEdge(dsegs, 10, 100, 0, 1)
 T.check(bp and math.abs(bp.x) < 1e-9 and bp.dy > 0, 'and on the northbound one, facing north')
+-- Recovery must face along the route, independently of a two-way edge's stored order.
+for _, axis in ipairs({ { 1, 0 }, { 0, 1 }, { 0.6, 0.8 } }) do
+  for _, order in ipairs({ -1, 1 }) do
+    local dx, dy = axis[1] * 100 * order, axis[2] * 100 * order
+    for _, heading in ipairs({ -1, 1 }) do
+      local hx, hy = axis[1] * heading, axis[2] * heading
+      local distance, z, point = G.nearestEdge({ { -dx, -dy, dx, dy, 7, 0 } }, 0, 0, hx, hy)
+      T.check(point.dx * hx + point.dy * hy > 0, 'two-way recovery follows the requested heading in either stored order')
+      T.check(distance == 0 and z == 7 and point.x == 0 and point.y == 0,
+        'orienting the edge preserves the recovery point, distance and height')
+      for _, way in ipairs({ -1, 1 }) do
+        local d, _, p = G.nearestEdge({ { -dx, -dy, dx, dy, 7, way } }, 0, 0, hx, hy)
+        local legal = order * way == heading
+        T.check(legal and p and p.dx * hx + p.dy * hy > 0 or not legal and p == nil and d == math.huge,
+          'one-way recovery accepts only the legal direction in either stored order')
+      end
+    end
+    local _, _, point = G.nearestEdge({ { -dx, -dy, dx, dy, 7, 0 } }, 0, 0)
+    T.check(point.dx == 2 * dx and point.dy == 2 * dy, 'without a heading a two-way edge retains its stored direction')
+  end
+end
 local e = { x = { 0, 100, 100 }, y = { 0, 0, 100 }, cum = { 0, 100, 200 } }
 local sl = G.routeSlice(e, 50, 160, 25)
 T.check(#sl == 6 and sl[1][1] == 50 and sl[3][1] == 100 and sl[3][2] == 0 and sl[6][1] == 100 and sl[6][2] == 60,
