@@ -57,6 +57,7 @@ mod sidewalks;
 mod roadz;
 mod fartex;
 mod farglobal;
+mod farpvs;
 mod dirtsteps;
 mod gridinterp;
 mod dejunction;
@@ -5918,6 +5919,9 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // without the GIL; grade_points itself on the same pair arithmetic, without the GIL too; that branch's 211)
     // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
     // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
-    m.add("VERSION", 217)?;
+    m.add_function(wrap_pyfunction!(farpvs::far_pvs, m)?)?;
+    // 218: farpvs::far_pvs (the far field's potentially visible set: far tiles hidden behind terrain keep a small
+    // texture, earthd FAR_PVS; that branch's 212)
+    m.add("VERSION", 218)?;
     Ok(())
 }
