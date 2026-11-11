@@ -3727,11 +3727,13 @@ class Server:
         # (a block in use built again (gas station pads, a refresh): its photo under a new name, as base_refresh's. The
         # engine watches the photo it shows: written over in place, it reloaded it and froze for good in its
         # TextureCooker (Billings and Fargo, 2026-11-11, both right after "built again with its gas station pads")
-        rev = next(self.base_rev) if (anchor.id, cx, cy) in self.hm_committed else 0
-        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, rev) if pool is not None else None
+        aid = getattr(anchor, "id", None)
+        rev = next(self.base_rev) if aid is not None and (aid, cx, cy) in getattr(self, "hm_committed", ()) else 0
+        kw = {"rev": rev} if rev else {}
+        name = self._base_elsewhere(anchor, cx, cy, pool, photo, plain, **kw) if pool is not None else None
         if name is None:
             with self.imagery.urgent() if urgent and hasattr(self.imagery, "urgent") else contextlib.nullcontext():
-                name = self.write_base(anchor, cx, cy, rev=rev, photo=photo, quick=quick)
+                name = self.write_base(anchor, cx, cy, photo=photo, quick=quick, **kw)
         return name, photo, time.perf_counter() - t1
 
     def _base_elsewhere(self, anchor, cx, cy, pool, photo, plain=False, rev=0):
