@@ -32,10 +32,10 @@ def compare(result, base):
 class DrivabilityTest(unittest.TestCase):
     def test_no_site_gets_worse(self):
         baseline = dv.load_baseline()
-        for name in dv.SITES:
+        for name, result in zip(dv.SITES, dv.measure_all(dv.SITES)):
             with self.subTest(name):
                 self.assertIn(name, baseline, f"{name} has no baseline: {UPDATE.format(name)}")
-                worse, better = compare(dv.measure(name), baseline[name])
+                worse, better = compare(result, baseline[name])
                 self.assertFalse(worse, f"{name} got worse ({dv.SITES[name][1]}):\n  " + "\n  ".join(worse))
                 self.assertFalse(better, f"{name} improved: lock it in with {UPDATE.format(name)}\n  "
                                  + "\n  ".join(better))

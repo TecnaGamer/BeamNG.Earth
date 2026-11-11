@@ -3,6 +3,7 @@
 
     python server/tests/drivability.py [NAME ...]             # one JSON line per site
     python server/tests/drivability.py --update [NAME ...]    # write those sites' measurements to the baseline
+    (--jobs N or BNE_DRIVE_JOBS: sites measured at once, each in its own process; default: one per CPU)
 
 measure(name) reports, for the roads within RADIUS_M of the place:
   steps   metres of wheel track with a step over its limit
@@ -25,6 +26,7 @@ again. The fixtures never change, so a part's id names the same road in every ru
 """
 import argparse
 import json
+from concurrent.futures import ProcessPoolExecutor
 import os
 import re
 import sys
@@ -131,6 +133,18 @@ def measure(name):
         for st in structures:
             _measure_structure(report, st, structures, ground)
     return {"site": name, **report.result()}
+
+
+def measure_all(names, jobs=None):
+    """measure() of each site, yielded in order; up to `jobs` sites at once, each in its own process (a site plans on
+    one thread, so the results are the same at any number of jobs)."""
+    names = list(names)
+    jobs = min(len(names), jobs or int(os.environ.get("BNE_DRIVE_JOBS") or 0) or os.cpu_count() or 1)
+    if jobs <= 1:
+        yield from map(measure, names)
+        return
+    with ProcessPoolExecutor(jobs) as pool:
+        yield from pool.map(measure, names)
 
 
 class Report:
@@ -275,14 +289,15 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("names", nargs="*", help="sites (default: all)")
     ap.add_argument("--update", action="store_true", help="write the measurements to the baseline")
+    ap.add_argument("--jobs", type=int, help="sites measured at once (default: BNE_DRIVE_JOBS, else one per CPU)")
     a = ap.parse_args()
     unknown = sorted(set(a.names) - set(SITES))
     if unknown:
         ap.error(f"unknown sites: {', '.join(unknown)} (known: {', '.join(SITES)})")
     results = []
-    for name in a.names or SITES:
-        results.append(measure(name))
-        print(json.dumps(results[-1]), flush=True)
+    for result in measure_all(a.names or SITES, a.jobs):
+        results.append(result)
+        print(json.dumps(result), flush=True)
     if a.update:
         write_baseline(results)
 
