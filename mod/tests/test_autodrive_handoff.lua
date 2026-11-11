@@ -60,4 +60,26 @@ mapmgr.mapData = graph()
 T.check(A.drive({'c'}, 3, false, nil, .3) == 'start', 'one waypoint restarts after map replacement')
 T.check(A.drive({}, 3, false, nil, .3) == 'waiting', 'an empty waypoint list still holds')
 T.check(A.drive({'missing'}, 3, false, nil, .3) == 'waiting', 'an unknown single waypoint still holds')
+local stopDistance, speedMode
+ai.setStopPoint = function(_, distance) stopDistance = distance end
+ai.setSpeedMode = function(mode) speedMode = mode end
+A.drive({'b','c'}, 4, true, 20, .3)
+A.approach(105)
+T.check(stopDistance == 100 and speedMode == 'limit', 'a selected speed no longer overrides the final stopping profile')
+speedMode = nil
+A.drive({'b','c'}, 5, true, nil, .3)
+A.approach(50)
+T.check(stopDistance == 45 and speedMode == nil, 'normal approaches retain legal-speed planning')
+A.approach(2)
+T.check(stopDistance == 0, 'a very near destination does not request a stop behind the car')
+ai.mode = 'disabled'; stopDistance = nil
+A.approach(50)
+T.check(stopDistance == nil, 'an approach update cannot restart a stopped local path')
+A.arrive()
+T.check(stops[#stops - 1] == 'manual' and stops[#stops] == 'stop',
+  'arrival activates braking with no old target to turn back toward')
+A.drive({'b','c'}, 5, false, nil, .3)
+T.check(starts[#starts].routeSpeedMode == 'legal', 'a new drive releases arrival control and restores its speed mode')
+A.stop('disabled')
+T.check(stops[#stops] == 'disabled', 'manual cancellation still releases control')
 T.done('test_autodrive_handoff')
