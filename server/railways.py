@@ -475,8 +475,9 @@ def level_bridges(frame, cells, rails, reach_box):
     out = []
     for fid, c, kind, xy in rails:
         if kind == "bridge" and c != "tram" and float(_arc(xy)[-1]) <= LEVEL_BRIDGE_MAX_M:
-            for line in ways:
-                hits = roads._crossings([xy], [line])
+            # (every way's crossings in one kernel call, as _crossings gives them way by way: a call per way per short
+            # bridge per window was 1.6 million calls, ~30 s of a 16-tile probe at Brno)
+            for line, hits in zip(ways, roads._crossings_by([xy], ways)):
                 if hits and level_bridge(frame, xy, line, float(np.clip(_seg_arc(line, hits[0][2]), 0.0, 1e9))):
                     kind = "ground"
                     break

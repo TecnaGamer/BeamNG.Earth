@@ -32,15 +32,22 @@ JOIN_ON = os.environ.get("BNE_RAIL_SWITCH_FIX", "on") not in ("off", "0", "false
 JOIN_M = 2.0                        # m: a ground part's end this near another part's line (not near its ends) is a switch
 JOIN_INTERIOR_M = 3.0               # m: ... farther than this from the other part's own ends (that is a joint: profile's)
 JOIN_REACH_M = 60.0                 # m along the part the bed is brought to the other's (to nothing, smoothly)
-NODE_MEMO_MAX = 48                  # nodes kept (each a few thousand points)
-_NODES = OrderedDict()              # (anchor key, ix, iy) -> {point key: bed height}
+NODE_MEMO_MAX = 48                  # nodes kept (~24 bytes a point: _node's arrays). Not more: a node made again after it
+                                    # was let go reads the ground as it is then (the graded ground changes as plans are
+                                    # made), so the number kept changes the beds (16 tiles at Brno: 147 nodes, 116 made
+                                    # twice; 256 kept moved 16 nodes' beds by up to 0.34 m), a plans format change
+_NODES = OrderedDict()              # (anchor key, ix, iy) -> {(fid, kind): (packed keys, heights)}
+_PACK = np.int64(1) << 31           # (a centimetre key (a, b) as one int64: (a + 2^31) << 32 | (b + 2^31))
 
 
-def _key(fid, kind, xy):
-    """Per point of xy (n, 2): (fid, kind, x in cm, y in cm). The points lie every STEP_M from their part's start whatever
-    the window (railways.parts), so the same point has the same key in every node's window."""
-    k = np.round(np.asarray(xy, np.float64) * 100.0).astype(np.int64)
-    return [(fid, kind, a, b) for a, b in k.tolist()]
+def _cm(xy):
+    """(n, 2) int64: each point of xy in whole centimetres. The points lie every STEP_M from their part's start whatever
+    the window (railways.parts), so the same point has the same key (fid, kind, x cm, y cm) in every node's window."""
+    return np.round(np.asarray(xy, np.float64).reshape(-1, 2) * 100.0).astype(np.int64)
+
+
+def _pack(a, b):
+    return ((np.asarray(a, np.int64) + _PACK) << 32) | (np.asarray(b, np.int64) + _PACK)
 
 
 def smooth(xy, zb):
@@ -101,20 +108,31 @@ def join_beds(rails, zbs, inside=None):
 _NEIGHBOURS = ((0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1))
 
 
-def _find(node, key):
-    """node's height at key, or at a key a centimetre off (two windows' float noise round a point lying on a centimetre's
-    edge to neighbouring keys), or NaN."""
-    fid, kind, a, b = key
+def _find(node, fid, kind, cm):
+    """(k,): node's height at each centimetre key cm (k, 2) of (fid, kind), or at the first of the keys a centimetre off
+    that it has (_NEIGHBOURS' order: two windows' float noise round a point lying on a centimetre's edge to neighbouring
+    keys), or NaN."""
+    out = np.full(len(cm), np.nan)
+    got = node.get((fid, kind))
+    if got is None or not len(cm):
+        return out
+    keys, zs = got
+    todo = np.ones(len(cm), bool)
     for da, db in _NEIGHBOURS:
-        z = node.get((fid, kind, a + da, b + db))
-        if z is not None:
-            return z
-    return math.nan
+        q = _pack(cm[:, 0] + da, cm[:, 1] + db)
+        at = np.minimum(np.searchsorted(keys, q), len(keys) - 1)
+        hit = todo & (keys[at] == q)
+        out[hit] = zs[at[hit]]
+        todo &= ~hit
+        if not todo.any():
+            break
+    return out
 
 
 def _node(frame, akey, load, ground, ix, iy):
-    """{point key: bed height} of node (ix, iy): the lines of a window NODE_M + MARGIN_M round it, laid by railways.profile
-    on ground's heights (the underpasses read in the same window)."""
+    """{(fid, kind): (centimetre keys packed (_pack), sorted; bed heights)} of node (ix, iy): the lines of a window NODE_M +
+    MARGIN_M round it, laid by railways.profile on ground's heights (the underpasses read in the same window). A point
+    two parts of a feature share has the later part's height."""
     ck = (akey, ix, iy)
     got = _NODES.get(ck)
     if got is not None:
@@ -137,9 +155,16 @@ def _node(frame, akey, load, ground, ix, iy):
                  box[2] + reach - 3 * railways.STEP_M, box[3] + reach - 3 * railways.STEP_M)
         if JOIN_ON:
             z = _join_flat(rails, xy, off, z, inner)
-        z = z.tolist()
-        for n, (fid, _c, kind, pxy) in enumerate(rails):
-            out.update(zip(_key(fid, kind, pxy), z[int(off[n]):int(off[n + 1])]))
+        cm = _cm(xy)
+        packed = _pack(cm[:, 0], cm[:, 1])
+        by = {}
+        for n, (fid, _c, kind, _pxy) in enumerate(rails):
+            by.setdefault((fid, kind), []).append(n)
+        for fk, ns in by.items():
+            k = np.concatenate([packed[off[n]:off[n + 1]] for n in ns])
+            v = np.concatenate([z[off[n]:off[n + 1]] for n in ns])
+            uk, first = np.unique(k[::-1], return_index=True)     # (the last of equal keys, as a dict's update)
+            out[fk] = (uk, v[::-1][first])
     _NODES[ck] = out
     while len(_NODES) > NODE_MEMO_MAX:
         _NODES.popitem(last=False)
@@ -154,7 +179,7 @@ def beds(frame, akey, load, ground, rails):
         xy = np.asarray(xy, np.float64)
         z = np.full(len(xy), np.nan)
         if cls != "tram" and len(xy):
-            keys = _key(fid, kind, xy)
+            cm = _cm(xy)
             fx, fy = xy[:, 0] / NODE_M, xy[:, 1] / NODE_M
             ix, iy = np.floor(fx).astype(np.int64), np.floor(fy).astype(np.int64)
             tx, ty = fx - ix, fy - iy
@@ -167,7 +192,7 @@ def beds(frame, akey, load, ground, rails):
                         continue
                     node = _node(frame, akey, load, ground, cell[0], cell[1])
                     idx = np.flatnonzero(m)
-                    zz = np.array([_find(node, keys[i]) for i in idx])
+                    zz = _find(node, fid, kind, cm[idx])
                     ok = np.isfinite(zz)
                     num[idx[ok]] += w[idx[ok]] * zz[ok]
                     den[idx[ok]] += w[idx[ok]]
