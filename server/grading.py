@@ -5976,7 +5976,7 @@ def merge_plan_set(plans):
     plans): weld_continuations (WELD_ON; a failure logged, the plans left as they were), trim_side_mouths
     (TRIM_SIDE_MOUTHS_ON), each with the plans' own ranks, on plans (a plain [Plan], in place); returns PlanPack(plans)."""
     import fast
-    fast.require(212, "plan_merge")
+    fast.require(217, "plan_merge")     # (217: the trimmed plans' banks / widens)
     f64 = np.float64
     xy, off, z = _plan_lines(plans)
     wds = [getattr(p, "widen", None) for p in plans]
@@ -6004,7 +6004,10 @@ def merge_plan_set(plans):
         p = plans[i]
         abut = list(p.abut)
         abut[e] = False
-        plans[i] = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+        q = _replan(p, txy[toff[r]:toff[r + 1]].copy(), tz[toff[r]:toff[r + 1]].copy(), abut=tuple(abut))
+        q.bank = got["tbank"][r]            # (its bank and widen cut with its line: planset::trim_vals)
+        set_widen(q, got["twiden"][r])
+        plans[i] = q
     pack = PlanPack.__new__(PlanPack)
     pack.__dict__.update(got["pack"])
     return pack
@@ -6746,38 +6749,6 @@ def weld_continuations(plans, specs=None):
 
 TRIM_SIDE_MOUTHS_ON = os.environ.get("BNE_TRIM_SIDE_MOUTHS", "on") != "off"
 TRIM_RAMP_M = 20.0          # m from the main's painted edge a trimmed side road eases to its own profile
-
-
-def trim_side_mouths(plans, specs=None):
-    """A side road's centreline ends at the *painted edge* of the higher road it joins, not at its centreline:
-    the stretch inside that carriageway is the main road's surface. The new end takes the higher road's height
-    there, the side road's own profile carries on from it (so a steep approach stays steep, without a flat lip
-    under the hold): a Hermite from the edge to its own profile over TRIM_RAMP_M. plans: [(fid, Plan)] or a plain
-    [Plan], in place, in order (a later plan sees an earlier one trimmed); one end a plan. In Rust (native/earthfast
-    planset.rs: the higher roads' boxes against every end and the nearest points on them were ~57 CPU-s of a cold
-    teleport to Santa Fe NM in numpy, 2026-11-11). A trimmed plan keeps its untrimmed plan's bank / widen arrays."""
-    if not plans:
-        return
-    import fast
-    fast.require(211, "plan_trim_mouths")
-    f64 = np.float64
-    plain = not isinstance(plans[0], tuple)
-    ps = list(plans) if plain else [p for _f, p in plans]
-    xy, off, z = _plan_lines(ps)
-    wds = [getattr(p, "widen", None) for p in ps]
-    widened = np.array([w is not None and len(w) > 0 for w in wds], bool)
-    wmax = np.array([float(np.max(w)) if on else 0.0 for w, on in zip(wds, widened)], f64)
-    idx, ends, nxy, nz, noff = fast._ef.plan_trim_mouths(
-        xy, off, z, np.array([p.half for p in ps], f64), np.array([p.road_half for p in ps], f64),
-        np.array([p.abut for p in ps], bool).reshape(-1, 2), _plan_ranks(ps, specs),
-        np.array([p.bbox for p in ps], f64).reshape(-1, 4), widened, wmax, float(JUNCTION_REACH_M),
-        float(TRIM_RAMP_M), float(T_MAX))
-    for r, (i, e) in enumerate(zip(idx, ends)):
-        p = ps[i]
-        abut = list(p.abut)
-        abut[e] = False
-        q = _replan(p, nxy[noff[r]:noff[r + 1]].copy(), nz[noff[r]:noff[r + 1]].copy(), abut=tuple(abut))
-        plans[i] = q if plain else (plans[i][0], q)
 
 
 def approach_add(xy, at_end, lift, half, others=(), side_run=None, grade=None):

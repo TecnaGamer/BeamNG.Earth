@@ -5900,7 +5900,6 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // server/osmtagshards.py; that branch's 207)
     m.add_function(wrap_pyfunction!(planset::plan_nearest_on, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_weld, m)?)?;
-    m.add_function(wrap_pyfunction!(planset::plan_trim_mouths, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_pack, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_pack_near, m)?)?;
     m.add_function(wrap_pyfunction!(planset::plan_merge, m)?)?;
@@ -5917,6 +5916,8 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // reach_tile_keys: the geotiles along a tree in its order; server/reach.py; that branch's 211)
     // 216: gradebins (grade_points_binned: the corridor apply by fine bins, bit for bit grade_points' heights,
     // without the GIL; grade_points itself on the same pair arithmetic, without the GIL too; that branch's 211)
-    m.add("VERSION", 216)?;
+    // 217: planset::plan_merge trims the trimmed plans' banks / widens with their lines (tbank / twiden; a bank left
+    // as long as the untrimmed line read the next plans' values in the pack); plan_trim_mouths gone (unused)
+    m.add("VERSION", 217)?;
     Ok(())
 }
