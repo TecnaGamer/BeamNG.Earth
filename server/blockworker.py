@@ -1218,7 +1218,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
         except Exception as ex:
             log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
         import fast
-        import places
+        import areaprops as places
         try:           # (mapped benches, bins, hydrants ...: furniture.place's guessed ones give way to them)
             mapped = {}
             srows = places.street_rows(frame, box, _s.md, elev, near_roads, country, mapped_out=mapped)

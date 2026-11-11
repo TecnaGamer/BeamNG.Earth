@@ -1,4 +1,4 @@
-"""Stock props filling mapped places (places.py): solar farms, container terminals, marinas, trailer parks,
+"""Stock props filling mapped places (areaprops.py): solar farms, container terminals, marinas, trailer parks,
 construction sites."""
 import json
 import os
@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import fast
 import geodesy
 import mapgeom
-import places
+import areaprops as places
 
 FRAME = geodesy.EnuFrame(40.0, -100.0, 0.0)
 

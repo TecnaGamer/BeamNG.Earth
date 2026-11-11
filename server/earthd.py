@@ -2757,7 +2757,7 @@ class Server:
             except Exception as ex:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import fast
-            import places
+            import areaprops as places
             try:       # (mapped benches, bins, hydrants ...: furniture.place's guessed ones give way to them)
                 mapped = {}
                 srows = places.street_rows(anchor.frame, box, self.mapdata, elev, near_roads, self.country(anchor),
