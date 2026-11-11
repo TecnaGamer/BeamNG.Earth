@@ -15,8 +15,9 @@ Metrics (1 m samples z):
   lift_g  v^2 |z(s - 5) - 2 z(s) + z(s + 5)| / 25 / g on a major road's centre line, v its class's speed (SPEED_MS):
           the vertical acceleration of a car at that speed, a crest that throws it or a dip that bottoms it out
 Surfaces: a road on the ground on the graded physics ground (Grader.apply with ROAD_LIFT, as the terrain blocks) along
-three wheel tracks; a bridge deck or a tunnel floor on its profile (centre line) with LEAD_M of the road on the ground
-before and after it, a deck where the ground is higher on that ground (the car meets the higher surface).
+three wheel tracks; a bridge deck or a tunnel floor on its profile (centre line) with LEAD_M of what joins it before
+and after: the deck or tunnel that meets it there, else the road on the ground; a deck where the ground is higher on
+that ground (the car meets the higher surface).
 
 test_drivability.py holds every site to fixtures/drivability_baseline.json (steps and each part's metrics): no part may
 get worse and no part may become bad, and an improvement must be written back (--update) so that it cannot get worse
@@ -25,6 +26,7 @@ again. The fixtures never change, so a part's id names the same road in every ru
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -66,7 +68,10 @@ G = 9.81
 GRADE_RUN = 4           # m
 LIFT_HALF = 5           # m: half the chord of lift_g (shorter: the DEM's metre noise, not the road's shape)
 TRACK_IN_M = 0.8        # m from the carriageway's edge to the outer wheel tracks
-LEAD_M = 10             # m of the road on the ground measured before and after a deck or a tunnel
+LEAD_M = 10             # m of the road measured before and after a deck or a tunnel
+JOIN_M = 5.0            # m: a deck or tunnel end this near another's end goes on onto it (a deck runs ~3 m past its map end)
+JOIN_SAME_M = 10.0      # ... this near for the same road's next part (Casagranda's tunnel ends 5.5 m from its bridge; a
+                        # parallel carriageway's twin structure is another feature, 10 m or more off)
 
 
 def _step(z, cls):
@@ -118,11 +123,13 @@ def measure(name):
         tunnels.ends = lambda la, lo: grader.apply(la, lo, site.sample(la, lo), grading.ROAD_LIFT, roads_only=True)
         report = Report()
         _measure_ground(report, cells, site.frame, ground, roads)
-        for surface, profiles in (("bridge", roads.BridgeProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)),
-                                  ("tunnel", tunnels)):
-            for fid, spec, xy, z, _lon in profiles.parts(cells, box):
-                _measure_structure(report, surface, fid, spec, np.asarray(xy, np.float64)[:, :2],
-                                   np.asarray(z, np.float64), ground)
+        structures = [s for surface, profiles in
+                      (("bridge", roads.BridgeProfiles(site.frame, lambda k: site.cells.get(str(k)), elev)), ("tunnel", tunnels))
+                      for fid, spec, xy, z, _lon in profiles.parts(cells, box)
+                      for s in [_structure(surface, fid, spec, np.asarray(xy, np.float64)[:, :2], np.asarray(z, np.float64), ground)]
+                      if s is not None]
+        for st in structures:
+            _measure_structure(report, st, structures, ground)
     return {"site": name, **report.result()}
 
 
@@ -138,7 +145,7 @@ class Report:
         for name, (limit, _tol, fn, on) in METRICS.items():
             if (on == "centre" and not centre) or (fn is not _step and where["class"] not in SPEED_MS):
                 continue
-            values, first = fn(z, where["class"]) if len(z) > 2 * LIFT_HALF else (np.zeros(0), 0)
+            values, first = fn(z, where["class"])       # (empty when the profile is shorter than the metric's window)
             values = np.where(inside[first:first + len(values)] & np.isfinite(values), values, 0.0)
             if not len(values):
                 continue
@@ -197,23 +204,54 @@ def _measure_ground(report, cells, frame, ground, roads):
                     report.add(where, p, ground(p), inside, centre=off == 0.0)
 
 
-def _measure_structure(report, surface, fid, spec, xy, z, ground):
-    """A bridge deck or a tunnel floor on its profile, with LEAD_M of ground road before and after it."""
-    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
+def _structure(surface, fid, spec, xy, z, ground):
+    """A bridge deck or a tunnel floor every metre: SimpleNamespace(surface, fid, spec, xy, z), z the surface a car meets
+    (a deck where the ground is higher: that ground). None when shorter than 3 m."""
     centre = _resample(xy)
     if centre is None:
-        return
+        return None
+    s = np.r_[0.0, np.cumsum(np.hypot(*np.diff(xy, axis=0).T))]
     arc = np.r_[0.0, np.cumsum(np.hypot(*np.diff(centre, axis=0).T))]
     zz = np.interp(arc, s, z)
-    lead = np.arange(LEAD_M, 0, -1)[:, None]
-    d0, d1 = centre[1] - centre[0], centre[-1] - centre[-2]
-    before = centre[0] - lead * d0 / np.hypot(*d0)
-    after = centre[-1] + lead[::-1] * d1 / np.hypot(*d1)
-    path = np.concatenate([before, centre, after])
-    zg = ground(path)
-    on = zz if surface == "tunnel" else np.maximum(zz, zg[LEAD_M:LEAD_M + len(zz)])
-    profile = np.concatenate([zg[:LEAD_M], on, zg[LEAD_M + len(zz):]])
-    report.add({"part": fid, "class": spec.cls, "surface": surface}, path, profile, _inside(path), centre=True)
+    if surface == "bridge":
+        zz = np.maximum(zz, ground(centre))
+    return SimpleNamespace(surface=surface, fid=fid, spec=spec, xy=centre, z=zz)
+
+
+def _feature(fid):
+    """The map feature of a part id: a tunnel's sections are "<feature>.<chain>#<k>"."""
+    return re.split(r"[.#]", fid, maxsplit=1)[0]
+
+
+def _lead(st, start, structures, ground):
+    """(xy, z) of LEAD_M before (start) or after st, ordered along the drive: on the deck or tunnel that joins st there,
+    else on the ground straight on."""
+    end = st.xy[0] if start else st.xy[-1]
+    feature = _feature(st.fid)
+    best = None
+    for other in structures:
+        if other is st:
+            continue
+        reach = JOIN_SAME_M if _feature(other.fid) == feature else JOIN_M
+        for at_start, q in ((True, other.xy[0]), (False, other.xy[-1])):
+            d = float(np.hypot(*(q - end)))
+            if d <= reach and (best is None or d < best[0]):
+                best = (d, other, at_start)
+    if best is not None:
+        _d, other, at_start = best
+        xy, z = (other.xy[:LEAD_M], other.z[:LEAD_M]) if at_start else (other.xy[::-1][:LEAD_M], other.z[::-1][:LEAD_M])
+    else:
+        d = st.xy[0] - st.xy[1] if start else st.xy[-1] - st.xy[-2]
+        xy = end + np.arange(1, LEAD_M + 1)[:, None] * d / np.hypot(*d)
+        z = ground(xy)
+    return (xy[::-1], z[::-1]) if start else (xy, z)        # (from the joined end outwards: reversed before st)
+
+
+def _measure_structure(report, st, structures, ground):
+    """A bridge deck or a tunnel floor on its profile, with LEAD_M of what joins it before and after."""
+    (bxy, bz), (axy, az) = _lead(st, True, structures, ground), _lead(st, False, structures, ground)
+    path, profile = np.concatenate([bxy, st.xy, axy]), np.concatenate([bz, st.z, az])
+    report.add({"part": st.fid, "class": st.spec.cls, "surface": st.surface}, path, profile, _inside(path), centre=True)
 
 
 def load_baseline():
