@@ -7573,16 +7573,17 @@ class Connection:
             return
         self.s.abandoned.add(aid)
         self.s.write_abandoned()
-        self.abandoned_from = aid
+        self.abandoned_from = (getattr(self, "abandoned_from", None) or []) + [aid]
         with self.s.warm_cv:
             self.s.warm_want = []
         log.info("teleport: anchor %d's queued work dropped", aid)
 
     def unabandon_old(self):
         """The teleport did not happen (never committed, failed): the old place's work goes on."""
-        aid = getattr(self, "abandoned_from", None)
-        if aid is not None:
-            self.s.abandoned.discard(aid)
+        aids = getattr(self, "abandoned_from", None)
+        if aids:
+            for aid in aids:
+                self.s.abandoned.discard(aid)
             self.s.write_abandoned()
             self.abandoned_from = None
 
@@ -7684,8 +7685,14 @@ class Connection:
                 # the wait (16.9 s in Baltimore on a Steam Deck, the server on its own 4 CPUs, 2026-10-20)
                 self.boost_t0 = time.monotonic()
                 self.s.load_boost(True, "teleport")
+        # (and a place this connection was still preparing, never committed: a teleport on before the last one came
+        # left Wichita Falls's graded first block building 67 s on, Abilene's waiting 61 s behind it, 2026-11-11)
+        prev = getattr(self, "preparing_aid", None)
+        if prev is not None and prev != self.active and teleport:
+            self.abandon_old(prev)
         anchor = self.s.new_anchor(lat, lon)
         anchor.ramp = teleport
+        self.preparing_aid = anchor.id
         if teleport and FIRST_RAMP and not (self.map_view or self.map_open):
             # the coarse cover to the horizon built while the first block is (FIRST_RAMP: the global tiles, the same for
             # any anchor; they were only asked for at the commit, 4-11 s later), its horizon grid now too (it was asked
@@ -7942,6 +7949,9 @@ class Connection:
         if self.teleport_pending:
             self.teleport_pending = False
             self.wake.set()
+        self.abandoned_from = None          # (committed: the places left stay left)
+        if getattr(self, "preparing_aid", None) == aid:
+            self.preparing_aid = None
         anchor = self.s.anchors.get(aid)
         if anchor is None:
             log.warning("commit of unknown anchor %r ignored", aid)
