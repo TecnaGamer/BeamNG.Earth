@@ -9037,6 +9037,8 @@ class Connection:
             return
         if s.horizon and anchor.id not in s.horizon_grids and anchor.id not in s.pvs_fields:
             return                          # (its far radius not known yet: rings for the 80 km disc made twice)
+        if self.first_ramp is not None and anchor.id not in s.pvs_fields:
+            return                          # (a teleport's coarse cover first: the rings' DEM and CPU after it)
         field = s.pvs_field(anchor, self.radius or s.radius)
         if field is None:
             self._pvs_drop()
