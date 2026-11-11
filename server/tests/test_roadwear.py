@@ -48,6 +48,13 @@ def kinds(chunks):
 
 
 class RoadWearTest(unittest.TestCase):
+    def setUp(self):              # (the strips' engine: drawn only with BNE_WEAR_STRIPS=on for now)
+        self._strips = roadwear.STRIPS_ON
+        roadwear.STRIPS_ON = True
+
+    def tearDown(self):
+        roadwear.STRIPS_ON = self._strips
+
     def test_tier_off_and_unpaved(self):
         rd = [("a", spec(), line(-500, 128, 800, 128), 0.0)]
         self.assertEqual(plan(rd, tier=0), [])
@@ -60,6 +67,15 @@ class RoadWearTest(unittest.TestCase):
         got = kinds(plan(rd, tier=1))
         self.assertTrue(set(got) <= {"bne_wear_tread", "bne_crack_line"}, got)
         self.assertIn("bne_wear_tread", got)
+        self.assertIn("bne_crack_line", got)
+
+    def test_strips_off_by_default(self):
+        """The full-lane strips (tyre polish, crack networks) are left out unless BNE_WEAR_STRIPS=on (bright bands in
+        game, 2026-11-11); the crack lines stay."""
+        roadwear.STRIPS_ON = False
+        rd = [("c", spec(surf="concrete", lanes=4, cls="motorway", width=16.0), line(128, -500, 128, 800), 0.0)]
+        got = kinds(plan(rd, tier=2))
+        self.assertFalse({"bne_wear_tread", "bne_wear_sealed", "bne_wear_cracks"} & set(got), got)
         self.assertIn("bne_crack_line", got)
 
     def test_concrete_joints_across_every_few_metres(self):

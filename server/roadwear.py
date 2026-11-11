@@ -63,6 +63,12 @@ LOOKS = {
     K_LEAVES: {"m": "bne_spot_leaves", "p": 8, "layer": "spot"},
 }
 MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}))     # (prewarm.py)
+# The full-lane strips (tyre polish, sealed and alligator crack networks) are left out for now (the user, in game at
+# Fells Point 2026-11-11: "the extra road decals look out of place and very bright"): in the road mesh their stock
+# opacity maps did not shape them (whole bright bands across each lane; darkened, uniform brown bands like rails).
+# BNE_WEAR_STRIPS=on draws them (for reworking the materials); the spots and crack lines stay.
+STRIPS_ON = os.environ.get("BNE_WEAR_STRIPS", "off").strip().lower() == "on"
+STRIP_KINDS = (K_TREAD, K_SEALED, K_CRACKS)
 
 
 def _grid(cols, rows):
@@ -246,6 +252,8 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
+        if kind in STRIP_KINDS and not STRIPS_ON:
+            continue
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]
         if kind in CELLS:                   # (the spots: one chunk of quads a material, roadmesh's "quads": a polygon
