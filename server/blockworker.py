@@ -453,6 +453,7 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
     part_s = {"dem": 0.0, "sea": 0.0, "tunnels": 0.0}  # (the rest of "heights": the stages' log, 2026-10-30)
 
     def elev(la, lo):
+        xproc.check_cancel()        # (a chunk of the block's grid at a time: given up once a teleport leaves aid)
         t1 = time.perf_counter()
         z = _s.dem.sample(la, lo, hm_zoom)
         t2 = time.perf_counter()
