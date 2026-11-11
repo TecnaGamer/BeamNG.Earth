@@ -150,8 +150,6 @@ M.SCHEMA = {
   -- (typed on the page since 2026-10-29, the user: "change the cache limit setting to be a text box"; 0: unlimited.
   -- The old choices '5' .. '50' read as numbers, 'unlimited' as 0: MIGRATE)
   cacheCapGb = { kind = 'number', default = 20, min = 0, max = 100000, label = 'Download cache size (GB, 0: unlimited)' },
-  -- even frame pacing (framepacer.lua): frames shorter than the recent ones wait, so the game's time runs steadily
-  framePacing = { kind = 'bool', default = true, label = 'Even frame pacing' },
   -- the world server's share of the CPU (server cpupin.player_settings reads them from this file when it starts;
   -- GitHub #529: an i5-3470 loaded the map in a few seconds instead of 10-20 with 2 of its 4 cores at normal priority)
   serverCores = { kind = 'enum', default = 'auto', values = { 'auto', '1', '2', '3', '4', '6', '8' },
@@ -172,7 +170,7 @@ M.SCHEMA = {
   updateDismissed = { kind = 'string', default = '', maxLen = 40, label = 'Update notice dismissed (version)' },
   devNoticeSeen = { kind = 'string', default = '', maxLen = 40, label = 'Development build notice seen (version)' },
 }
-M.ORDER = { 'quality', 'framePacing', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
+M.ORDER = { 'quality', 'terrainDetail', 'lodPx', 'groundPhoto', 'groundGrid', 'trees', 'treeDistance', 'buildingDistance', 'objectDetail',
   'grassDistance', 'nightLights', 'roadDetail', 'distantTraffic', 'distantTrafficWithoutTraffic', 'distantTrafficQuality', 'rebaseDistance',
   'viewDistanceMode', 'viewDistanceKm', 'hazeStrength', 'skyMode', 'clouds',
   'weatherMode', 'realGravity', 'lowFuelPrompt', 'groundCover', 'groundCoverDensity', 'rocks', 'roads', 'highwaySigns', 'directionSigns', 'roadSigns', 'germanJunctionSigns', 'rumbleStrips', 'softDrag', 'townSigns', 'adaptiveTraffic', 'models3dmr',
@@ -260,8 +258,9 @@ M.defaults = defaults
 values = defaults() -- until load(): the defaults (= today's behaviour)
 
 -- Settings no longer on the page, left in older files: ignored without a warning (gasStations: gas stations are
--- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle")
-M.RETIRED = { gasStations = true }
+-- always on since the user's 2026-10-25 "make gas station always enabled and remove the toggle"; framePacing: the
+-- engine patch dtsmooth keeps game speed steady instead, 2026-11-11 "make consistent performance the default")
+M.RETIRED = { gasStations = true, framePacing = true }
 
 -- A valid value for key, or nil + error. Numbers are clamped to the range; strings that read as a
 -- number or boolean are accepted (the page sends what its controls hold).

@@ -295,10 +295,9 @@ You can help support development by reporting [issues](https://github.com/TecnaG
 - Quality presets (Low / Medium / High / Ultra / Extreme) in BeamNG.Earth's own pause-menu tab (pause menu >
   BeamNG.Earth > Graphics; every settings page is listed down the side there), each fine-tunable; the first start
   picks Low, Medium or High for your hardware (Medium on a Steam Deck). **Extreme** puts every setting at its most,
-  out to the real horizon, for the strongest PCs (it is never picked for you). The Graphics page's settings:
-  - **Even frame pacing** (on): keeps the time between frames steady so the game's speed doesn't pulse while the
-    world loads around you; costs about a seventh of the frame rate while the world loads (a city drive: 81
-    fps against 94), and stays off below 30 fps.
+  out to the real horizon, for the strongest PCs (it is never picked for you). (The "Even frame pacing" setting is gone:
+  steady game speed is the default now, from the engine patch dtsmooth, at no frame-rate cost.) The
+  Graphics page's settings:
   - **Terrain detail** (Low to Extreme): how far out each finer level of the distant land reaches (Extreme builds
     about twice as many distant ground pieces).
   - **Terrain pixel error** (0 = off, the default; 0.5 to 8 px; advanced): picks the distant ground's detail by what
@@ -377,8 +376,8 @@ connection (the map is downloaded while you play).
 2. **Run it** (with Steam running). A console window opens (like BeamMP's launcher); it copies the mod into the
    game, starts the world server and starts BeamNG.drive. Closing the game stops the server.
    - **Linux, native game:** started with the engine patches (`tools/gcpatch`: grass kept across block moves,
-     with two more opt-in patches for testing) already applied, no Steam launch
-     options needed.
+     steady game speed (dtsmooth: no catch-up burst after a hitch), texkeep opt-in for testing) already applied, no
+     Steam launch options needed.
    - **Linux, Windows build under Proton:** the AppImage sees the Proton setting and starts that build through
      Steam (the server runs natively). The `.exe` also works inside the game's Proton prefix (for example with
      protontricks' launcher).
