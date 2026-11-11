@@ -14,6 +14,7 @@ measure() reports, for the decks within RADIUS_M of the place:
   low             the crossings whose gap is under LOW_GAP_M (a deck that blocks, or lies on, the road under it)
 These are measurements, not expectations: test_interchanges.py checks what holds today and that the replay runs.
 """
+import ast
 import json
 import os
 import sys
@@ -65,10 +66,23 @@ def _bilinear(axis, z, x, y):
     return out, inside
 
 
-def load(name):
-    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon))."""
-    with np.load(FIXTURES / f"interchange_{name}.npz", allow_pickle=False) as a:
-        data = {k: a[k] for k in a.files}
+STRUCTURED = (".attr.osm_lane_parts",)     # object columns the capture keeps as text (Python literals: no pickles)
+
+
+def _structured(key, values):
+    """A fixture column as Features holds it: a STRUCTURED one's text read back ("" -> None)."""
+    if not key.endswith(STRUCTURED):
+        return values
+    out = np.empty(len(values), object)
+    out[:] = [ast.literal_eval(str(v)) if str(v) else None for v in values]
+    return out
+
+
+def load(name, prefix="interchange"):
+    """SimpleNamespace(frame, cells {key str: Features}, sample(lat, lon) -> raw z, origin (lat, lon)) of
+    fixtures/PREFIX_NAME.npz."""
+    with np.load(FIXTURES / f"{prefix}_{name}.npz", allow_pickle=False) as a:
+        data = {k: _structured(k, a[k]) for k in a.files}
     lat, lon = (float(v) for v in data["origin"])
     frame = geodesy.EnuFrame(lat, lon)
     cells = {}
