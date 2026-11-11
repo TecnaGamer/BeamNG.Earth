@@ -326,6 +326,9 @@ BASE_NO_STANDIN_MAX_S = 8.0     # a block with no stand-in possible waits this l
 # A teleport's provisional first block waits this long at most for its photo after its heights, then goes with its
 # stand-in (made beside it), the photo swapped in when done (_base_later): the car placed ~1-2 s sooner on a fresh place
 PROVISIONAL_BASE_WAIT_S = 0.3
+PADS_REFRESH_IN_USE = os.environ.get("BNGE_PADS_REFRESH", "on") != "off"     # (Connection.pads_refresh; A/B runs)
+# Full priority loading (the settings page's teleportPriority) squeezes the game onto two cores only with this on
+FULL_PIN_GAME = os.environ.get("BNGE_FULL_PIN_GAME", "off") == "on"
 BASE_WAIT_S = 2.5               # ... and slower, this long: a slow photo held the heightmap thread and the blocks behind
                                 # it (a city's first visit at 127 mph: 4.75 s for one photo, the next block 7.8 s and the
                                 # car at the edge of its ground; a 4-core PC's photos took ~26 s, GitHub #496); it then
@@ -2097,7 +2100,10 @@ class Server:
             if full:
                 try:
                     n = cpupin.pin_tree(full[0])
-                    g = cpupin.pin_game(full[1])
+                    # (the game left on its own cores unless BNGE_FULL_PIN_GAME=on: its threads squeezed onto two and
+                    # spread back at the end, three of six cold teleports froze the game for good in its
+                    # TextureCooker within a second of the spread, a texture import under way; 2026-11-11)
+                    g = cpupin.pin_game(full[1]) if FULL_PIN_GAME else 0
                 except OSError as e:
                     log.warning("full priority loading: %s", e)
                 else:
@@ -2110,7 +2116,8 @@ class Server:
         if not on and self.boost_full:
             try:
                 cpupin.pin_tree(self.server_cpus)
-                cpupin.pin_game(getattr(self, "game_cpus", None))
+                if FULL_PIN_GAME:
+                    cpupin.pin_game(getattr(self, "game_cpus", None))
             except OSError as e:
                 log.warning("full priority loading: %s", e)
             self.boost_on = self.boost_full = False
@@ -2150,7 +2157,7 @@ class Server:
                 return False
             try:
                 n = cpupin.pin_tree(full[0])
-                g = cpupin.pin_game(full[1])
+                g = cpupin.pin_game(full[1]) if FULL_PIN_GAME else 0      # (load_boost's FULL_PIN_GAME)
             except OSError as e:
                 log.warning("%s boost: %s", why, e)
                 return False
@@ -2165,7 +2172,8 @@ class Server:
             return False                # (full priority loading came meanwhile: its split stays)
         try:
             cpupin.pin_tree(self.boost_cpus if self.boost_on and self.boost_cpus else self.server_cpus)
-            cpupin.pin_game(getattr(self, "game_cpus", None))
+            if FULL_PIN_GAME:
+                cpupin.pin_game(getattr(self, "game_cpus", None))
         except OSError as e:
             log.warning("%s: %s", why, e)
         log.info("%s: the cores back as before", why)
@@ -8275,6 +8283,8 @@ class Connection:
         brings several); one at a time."""
         s = self.s
         now = time.monotonic() if now is None else now
+        if not PADS_REFRESH_IN_USE:
+            return
         if (self.pads_busy or not s.pads_rebuild or math.hypot(*self.vel) > PADS_REFRESH_MS
                 or now - s.pads_changed_at < PADS_SETTLE_S):
             return

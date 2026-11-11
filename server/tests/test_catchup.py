@@ -120,7 +120,8 @@ class HoldBoostTest(unittest.TestCase):
         c = types.SimpleNamespace(s=s)
         pins = []
         with mock.patch.object(earthd.cpupin, "pin_tree", lambda cpus: pins.append(("server", set(cpus))) or 1), \
-                mock.patch.object(earthd.cpupin, "pin_game", lambda cpus: pins.append(("game", set(cpus) if cpus else None)) or 1):
+                mock.patch.object(earthd.cpupin, "pin_game", lambda cpus: pins.append(("game", set(cpus) if cpus else None)) or 1), \
+                mock.patch.object(earthd, "FULL_PIN_GAME", True):
             earthd.Connection.hold_boost(c, True)
             self.assertTrue(c.hold_split and s.split_on)
             self.assertEqual(pins[0], ("server", s.server_cpus | s.game_cpus))
@@ -134,6 +135,20 @@ class HoldBoostTest(unittest.TestCase):
             earthd.Connection.hold_boost(c, False)
             self.assertFalse(c.hold_split or s.split_on)
             self.assertEqual(pins[2:], [("server", s.server_cpus), ("game", s.game_cpus)])
+
+    def test_the_game_left_on_its_cores_by_default(self):
+        # (BNGE_FULL_PIN_GAME off: the game's threads squeezed onto two cores and spread back froze it in its
+        # TextureCooker, 2026-11-11; the server still gets every core)
+        from unittest import mock
+        s = self.server()
+        c = types.SimpleNamespace(s=s)
+        pins = []
+        with mock.patch.object(earthd.cpupin, "pin_tree", lambda cpus: pins.append(("server", set(cpus))) or 1), \
+                mock.patch.object(earthd.cpupin, "pin_game", lambda cpus: pins.append(("game", cpus)) or 1):
+            earthd.Connection.hold_boost(c, True)
+            c.hold_seen -= earthd.HOLD_BOOST_CALM_S + 0.1
+            earthd.Connection.hold_boost(c, False)
+        self.assertEqual(pins, [("server", s.server_cpus | s.game_cpus), ("server", s.server_cpus)])
 
     def test_not_over_full_priority(self):
         s = self.server()

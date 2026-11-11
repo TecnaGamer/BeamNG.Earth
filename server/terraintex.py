@@ -63,7 +63,7 @@ def convert(data, kind):
 def ensure(user_dir, game_dir):
     """Write the TEXTURES missing under out_dir(user_dir) from game_dir's archive. -> the names written; never raises."""
     done = []
-    if not user_dir or not game_dir:
+    if not user_dir or not game_dir or os.environ.get("BNGE_TERRAINTEX") == "off":
         return done
     d = out_dir(user_dir)
     stamp = os.path.join(d, f"v{VERSION}")
