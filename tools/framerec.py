@@ -9,6 +9,8 @@ the game started with BNGEARTH_DTSMOOTH_CTL=1) and the mod's frame pacer.
   python3 tools/framerec.py run --out /tmp/fr --mph 35 --km 6 --set dt      (the dt filter variants, pacer off)
   python3 tools/framerec.py run --out /tmp/fr --mph 35 --km 6 --set pacer   (pacer variants, the new filter)
   python3 tools/framerec.py analyze /tmp/fr/frames.csv --variants /tmp/fr/variants.json
+  BNGE_MCP_URL=http://127.0.0.1:29393/mcp BNGE_FRAMEREC_SCP=doeri@10.0.0.237:AppData/Local/BeamNG/BeamNG.drive/current/temp \
+      python3 tools/framerec.py run --out /tmp/frw --set final     (the Windows test PC through wintunnel.sh)
 
 Metrics per variant (frames at >= 90 % of the nominal speed, the first --skip s of each segment left out):
   speed p1/p5/p95/p99: game time / real time over 0.25 s windows (dtSim against the wall clock; 1.00 = steady);
@@ -108,13 +110,18 @@ def run(a):
         mcp_lua("be:setDynamicCollisionEnabled(true) return 1")
     name = f"frec_{int(t0)}.csv"
     print(mcp_lua(f"return FREC.dump('/temp/{name}')"))
-    src = os.path.join(USER, "temp", name)
     dst = os.path.join(a.out, "frames.csv")
-    for _ in range(20):
-        if os.path.exists(src):
-            break
-        time.sleep(0.5)
-    shutil.move(src, dst)
+    remote = os.environ.get("BNGE_FRAMEREC_SCP")    # another machine's game: HOST:its user folder's temp (scp)
+    if remote:
+        time.sleep(3)
+        subprocess.run(["scp", "-q", "-o", "BatchMode=yes", f"{remote}/{name}", dst], check=True)
+    else:
+        src = os.path.join(USER, "temp", name)
+        for _ in range(20):
+            if os.path.exists(src):
+                break
+            time.sleep(0.5)
+        shutil.move(src, dst)
     res = analyze(dst, variants, a.mph, a.skip)
     with open(os.path.join(a.out, "result.json"), "w") as f:
         json.dump(res, f, indent=1)

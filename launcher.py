@@ -2027,7 +2027,7 @@ def run(args):
             proc = start_game(not args.no_gcpatch, build, args.gfx, user_dir, steam_args)
         if IS_WIN and not args.no_gcpatch:
             # the Windows game's engine patches, written into its memory once it runs (enginepatch.py: dtsmooth; off
-            # until checked on a Windows PC: BNGEARTH_DTSMOOTH_WIN=1)
+            # with BNGEARTH_DTSMOOTH_WIN=0 or BNGEARTH_DTSMOOTH_OFF=1)
             try:
                 import enginepatch
                 threading.Thread(target=enginepatch.attach, args=(user_dir,), kwargs={"log": say},

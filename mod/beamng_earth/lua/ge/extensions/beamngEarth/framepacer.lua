@@ -15,7 +15,7 @@
 -- 1.11 / 1.16 without it, 1.11 / 1.15 at the 70th percentile (fps 48 -> 46), 1.11 / 1.14 at the 50th; the 1.9
 -- default (stock filter + this pacer) 1.23 / 1.37 at 38 fps against 49 without it. So it runs only where dtsmooth is
 -- not applied (its status file, written by the Linux library or the Windows launcher when our level starts, does not
--- say "applied" for this session: a game started without the patch, the Windows patch until it is checked there).
+-- say "applied" for this session: a game started without the patch, a build the patch does not recognise).
 -- No setting any more; M.ENABLED = true / false (beamngEarth_core._pacer.ENABLED from the console) forces it.
 
 local M = {}
