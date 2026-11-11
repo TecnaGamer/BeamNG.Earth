@@ -120,9 +120,30 @@ if os.name == "nt":
         except OSError:
             _k32.CloseHandle(h)
             raise
+    _GENERIC_WRITE, _CREATE_NEW, _ERROR_FILE_EXISTS = 0x40000000, 1, 80
+
+    def _open_new_append(path):
+        """A new file's append handle that never blocks its removal either (FILE_SHARE_DELETE): os.open's held the
+        process's open pack and index against every delete, "clear cache" and the tests' temporary folders alike
+        ([WinError 32], the Windows CI, 2026-11-11)."""
+        h = _k32.CreateFileW(path, _GENERIC_WRITE, _SHARE_ALL, None, _CREATE_NEW, _NORMAL, None)
+        if h is None or h == wintypes.HANDLE(-1).value:
+            err = ctypes.get_last_error()
+            if err == _ERROR_FILE_EXISTS:
+                raise FileExistsError(errno.EEXIST, ctypes.FormatError(err), path)
+            raise FileNotFoundError(errno.ENOENT, ctypes.FormatError(err), path) if err in (2, 3) else \
+                OSError(errno.EACCES, ctypes.FormatError(err), path)
+        try:
+            return msvcrt.open_osfhandle(h, os.O_WRONLY | os.O_APPEND | os.O_BINARY)
+        except OSError:
+            _k32.CloseHandle(h)
+            raise
 else:
     def _open_read(path):
         return os.open(path, os.O_RDONLY)
+
+    def _open_new_append(path):
+        return os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL, 0o644)
 
 
 def _pread(fd, lock, n, off):
@@ -403,19 +424,18 @@ class Store:
 
     def _open_writer(self):
         os.makedirs(self.dir, exist_ok=True)
-        flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
         while True:
             self.seq += 1
             name = f"{os.getpid()}_{_START}_{self.seq}"
             path = os.path.join(self.dir, name)
             try:
-                fd = os.open(path + PACK_SUFFIX, flags, 0o644)
+                fd = _open_new_append(path + PACK_SUFFIX)
             except FileExistsError:
                 continue
             break
         try:
             _write_all(fd, MAGIC)
-            ixfd = os.open(path + INDEX_SUFFIX, flags, 0o644)
+            ixfd = _open_new_append(path + INDEX_SUFFIX)
         except OSError:
             os.close(fd)
             raise

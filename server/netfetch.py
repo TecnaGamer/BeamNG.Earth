@@ -1064,6 +1064,14 @@ class Fetcher:
         if kind == "predownload" and (p.interactive_only or not p.offline_ok):
             raise PolicyDenied(f"{h.name}: no pre-download", url, h.name)
 
+    def budget_share(self, url):
+        """The share of url's host's soft daily budget used today (0 without one)."""
+        h = self.host(host_of(url))
+        if not h.policy.daily_budget:
+            return 0.0
+        with self._lock:
+            return h.day["requests"] / h.policy.daily_budget
+
     def _check_budget(self, h, url, kind):
         p = h.policy
         with self._lock:

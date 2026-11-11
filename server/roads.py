@@ -357,7 +357,8 @@ def home_copy(feats, i):
     if home == me[0]:
         return None
     try:
-        near = {f.__dict__["_bnge_cell"][0]: f for f in hook() if f is not None and f.__dict__.get("_bnge_cell")}
+        near = {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, {home})
+                if f is not None and f.__dict__.get("_bnge_cell")}
     except Exception as e:              # (this cell's own)
         log.debug("home copy: neighbours: %s: %s", type(e).__name__, e)
         return None
@@ -406,9 +407,10 @@ def _level_lists(feats, idx):
     if HOME_RANGES_ON and me is not None and hook is not None and len(idx):
         homes = _home_cells(feats)
         near = {}
-        if any(homes[i] != me[0] for i in idx):
+        away = {homes[i] for i in idx if homes[i] != me[0]}
+        if away:
             try:
-                near = {f.__dict__["_bnge_cell"][0]: f for f in hook()
+                near = {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, away)
                         if f is not None and f.__dict__.get("_bnge_cell")}
             except Exception as e:          # (this cell's own)
                 log.debug("home copy: neighbours: %s: %s", type(e).__name__, e)
@@ -878,7 +880,7 @@ def _structure_widths(feats, idx):
     miss = np.unique(ix[sk[ix] == 0]) if len(ix) else ix
     if len(miss):
         inp = _spec_inputs(feats)
-        w = _road_rules().structure_widths(inp["geo"], inp["cols"], inp["built"], miss, lambda: lane_flow(feats))
+        w = _road_rules().structure_widths(inp["geo"], inp["cols"], inp["built"], miss, _flow_fn(feats, inp))
         none = np.isnan(w)
         sw[miss[~none]] = w[~none]
         sk[miss] = np.where(none, 1, 2)
@@ -1157,12 +1159,45 @@ def _home_far(feats, near_hook, home):
     memo = feats.__dict__.setdefault("_home_far", {})
     got = memo.get(home)
     if got is None:
+        names = getattr(near_hook, "names", None)
+        if names is not None:
+            # (told by the eight cells' names, none read for it: a neighbour's roads layer always comes back; the cells
+            # were all read for this before, each a cold first visit's decode, 2026-11-11)
+            got = memo[home] = home not in names
+            return got
         try:
-            cells = {f.__dict__["_bnge_cell"][0] for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")}
+            cells = {f.__dict__["_bnge_cell"][0] for f in near_hook()
+                     if f is not None and f.__dict__.get("_bnge_cell")}
         except Exception:
             return False
         got = memo[home] = home not in cells
     return got
+
+
+def _cells_reached(hook, boxes):
+    """The names of hook's cells (mapdata's _bnge_neighbours) whose bounds lon/lat boxes (m, 4) reach, as
+    _gradesep_many tests them (the others it skips for every feature); None: every one (a hook without names)."""
+    names = getattr(hook, "names", None)
+    if names is None:
+        return None
+    import mapcells
+    out = set()
+    for nm in names:
+        try:
+            ob = mapcells.CellKey(*(int(v) for v in nm.split("/"))).bounds()
+        except (TypeError, ValueError):
+            return None
+        if np.any(~((boxes[:, 2] < ob[0]) | (boxes[:, 0] > ob[2]) | (boxes[:, 3] < ob[1]) | (boxes[:, 1] > ob[3]))):
+            out.add(nm)
+    return out
+
+
+def _near_layers(hook, want=None):
+    """hook(want) (mapdata's _bnge_neighbours: only the cells named in want read), or hook() for one that reads all
+    eight (a test's)."""
+    if want is not None and getattr(hook, "names", None) is not None:
+        return hook(want)
+    return hook()
 
 
 def _gradesep_elsewhere(feats, i):
@@ -1197,8 +1232,9 @@ def _gradesep_many(feats, idx):
     if not cand:
         return {}
     import revisit
+    want = _cells_reached(near_hook, boxes[np.asarray(cand, np.int64)])
     try:
-        near = [f for f in near_hook() if f is not None and f.__dict__.get("_bnge_cell")]
+        near = [f for f in _near_layers(near_hook, want) if f is not None and f.__dict__.get("_bnge_cell")]
     except Exception as e:              # (not kept: made again with them)
         log.debug("gradesep elsewhere: neighbours: %s: %s", type(e).__name__, e)
         revisit.fault()
@@ -2307,19 +2343,48 @@ def lane_flow(feats):
     return _cell_memo(feats, "_lane_flow_home", lambda: _lane_flow_home(feats))
 
 
+def _lane_flow_counted(f):
+    """(n,) bool: layer f's roads lane_flow's solve counts (earthfast.lane_flow_cells: a one-way sign and two points
+    or more); only those can get a count, in this cell or in any other copy of them (the sign is the road's own: its
+    class, subtype and one-way rule)."""
+    pts, npts, attrs = _lane_flow_rows(f)
+    return (attrs[:, 0] != 0.0) & (npts >= 2)
+
+
+def _flow_fn(feats, inp):
+    """The lane flow callable earthfast.RoadRules takes (asked when a road needs it: one with no lane count of its
+    own, generated or mapped, specs.rs lane_counts): lane_flow(feats), or every road's None at once when no road that
+    could be asked is counted (_lane_flow_counted: the others' flow is None whatever the cells round it hold; asking
+    it read the eight cells round this one, and those round its roads' home cells, for nothing, 2026-11-11)."""
+    def run():
+        cols = inp["cols"]
+        maybe = (_lane_flow_counted(feats) & (np.asarray(cols["over"]) < 0)
+                 & ~np.isfinite(np.asarray(cols["osm_lanes"], np.float64)) & (np.asarray(cols["gen"]) < 0))
+        if not maybe.any():
+            return [None] * len(feats)
+        return lane_flow(feats)
+    return run
+
+
 def _lane_flow_home(feats):
     out = list(_lane_flow_local(feats))
     me = feats.__dict__.get("_bnge_cell")
     hook = feats.__dict__.get("_bnge_neighbours")
-    if me is not None and hook is not None:
+    # (only the counted roads at home elsewhere take their home cell's count: the others have none in any copy, the
+    # sign being the road's own; only those home cells read, 2026-11-11)
+    counted = _lane_flow_counted(feats).tolist()
+    homes = _home_cells(feats) if me is not None and hook is not None else ()
+    away = {home for i, home in enumerate(homes) if counted[i] and home != me[0]}
+    if away:
         try:
-            near = {f.__dict__["_bnge_cell"][0]: f for f in hook() if f is not None and f.__dict__.get("_bnge_cell")}
+            near = {f.__dict__["_bnge_cell"][0]: f for f in _near_layers(hook, away)
+                    if f is not None and f.__dict__.get("_bnge_cell")}
         except Exception as e:          # (this cell's own)
             log.debug("lane flow: neighbours: %s: %s", type(e).__name__, e)
             near = {}
         rows = {}
-        for i, home in enumerate(_home_cells(feats)):
-            if home != me[0] and home in near:
+        for i, home in enumerate(homes):
+            if counted[i] and home != me[0] and home in near:
                 rows.setdefault(home, []).append(i)
         for home, idx in rows.items():
             other = near[home]
@@ -2401,6 +2466,12 @@ def _lane_flow_local(feats):
         return got
     import fast
     fast.require(169, "lane_flow_cells")
+    if not _lane_flow_counted(feats).any():
+        # (the solve gives a count only to this layer's counted roads: none here, none found, whatever the cells round
+        # it hold; their roads layers were read for it anyway, most of a cold first block's halo: every cell asked
+        # for its decks or road specs read the eight round it, and their home cells the eight round those, 2026-11-11)
+        got = feats.__dict__["_lane_flow"] = [None] * len(feats)
+        return got
     layers = [feats]
     hook = feats.__dict__.get("_bnge_neighbours")
     if hook is not None:
@@ -3024,7 +3095,7 @@ def _road_specs(feats, urban_fn, left_hand, towns=None):
     inp = _spec_inputs(feats)
     off, rng = _raw_flat(feats)
     uf = None if urban_fn is None else (lambda la, lo: np.asarray(urban_fn(la, lo), bool))   # (one call: per-call cost)
-    d = _road_rules().road_specs(inp["geo"], inp["cols"], inp["built"], off, rng, lambda: lane_flow(feats),
+    d = _road_rules().road_specs(inp["geo"], inp["cols"], inp["built"], off, rng, _flow_fn(feats, inp),
                                  lambda: sorted(regional_unpaved(feats)), uf, _spec_prm(), european, bool(left_hand))
     out = _specs_of(d, inp, _marking_states(feats))
     if towns is not None:
@@ -3703,7 +3774,7 @@ def _bridge_specs(feats, want="bridge"):
     nan = float("nan")
     gmed = np.fromiter((g.median if g is not None and g.median else nan for g in ground), np.float64, n)
     gdir = np.fromiter((g.dir if g is not None else 0 for g in ground), np.int64, n)
-    d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, lambda: lane_flow(feats),
+    d = _road_rules().bridge_specs(inp["geo"], inp["cols"], inp["built"], has, gmed, gdir, _flow_fn(feats, inp),
                                    _spec_prm())
     out = _specs_of(d, inp, _marking_states(feats))
     import germanroads          # (Germany's surveyed widths on decks and in tunnels too: a 6.5 m Kreisstraße's

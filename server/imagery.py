@@ -245,6 +245,15 @@ def tone_lut(strength=1.0, lift=1.0):
     return np.clip(np.rint(y * 255), 0, 255).astype(np.uint8)
 
 
+# The far field's best photos (the user, 2026-11-11: "sharpen with the best source available in the region"): far tiles
+# in sight sized for the lazy sources too (NAIP's z17 in the US, the regional services' in theirs: sharp_zoom), their
+# photos fetched by warm()'s thread after the near list (far_warm), the tile rendered again when they are in
+FAR_LAZY = os.environ.get("BNGE_FAR_LAZY", "1") != "0"
+FAR_WARM_MAX = 400                  # far tiles queued at most (the farthest dropped)
+FAR_BUDGET_SHARE = 0.5              # ... fetched only while the host's daily budget is less used than this
+SHARP_FALLBACK_ZOOM = 14            # Imagery.sharp_zoom while unknown (EOX's Sentinel-2, everywhere)
+
+
 def ground_res(lat, z):
     """Web-Mercator ground resolution (m per 256 px tile pixel) at latitude lat and zoom z."""
     return EARTH_CIRC * math.cos(math.radians(min(abs(lat), MAX_LAT))) / (TILE * 2 ** z)
@@ -535,8 +544,11 @@ class Imagery:
         self._warm_want = []                # warm(): lazy tiles ahead of the player, nearest first
         self._warm_cv = threading.Condition()
         self._warm_thread = None
+        self._far_warm = {}                 # far_warm(): tag -> (priority, frame, x0, y0, size, px, done callback)
+        self._far_keys = {}                 # ... tag -> (its item, its lazy keys, [any fetched]) (the warm thread's)
         self._inflight = {}
         self._lock = threading.RLock()     # RLock: a done future's callback runs at once
+        self._sharp = {}                    # sharp_zoom: (lat, lon) ~5 km square -> zoom
         self._local = threading.local()     # per fetch thread: the kind of the request being loaded
         self.stats = {}                     # counters ("usgs:net", "eox2023:404", ...), and fetch times
         self.fetch_ms = []                  # network fetch latencies (ms), for the log / measurements
@@ -848,6 +860,38 @@ class Imagery:
                 elif missindex.known(self._paths(*probe)[1]):
                     continue
             yield src, keys
+
+    def sharp_zoom(self, lat, lon):
+        """The finest zoom the chain's photos hold at (lat, lon): the most of its sources' whose coverage there is known
+        (their probes on hand: NAIP's z17 in the US (lazy: FAR_LAZY, far_warm fetches them), USGS's z16, a regional
+        service's z17; EOX's z14 everywhere), SHARP_FALLBACK_ZOOM while a probe is unknown (its fetch started). Kept
+        per ~5 km square once known (farpvs.UP_ON: a far tile is never made finer than this)."""
+        k = (round(lat * 20), round(lon * 20))
+        got = self._sharp.get(k)
+        if got is not None:
+            return got
+        best, unknown = None, False
+        with self._lock:
+            for src in self.chain:
+                if src.lazy and not FAR_LAZY:
+                    continue
+                z = min(src.max_zoom, src.max_view_zoom)
+                if z < src.min_zoom or (best is not None and z <= best):
+                    continue
+                n = 2 ** z
+                x = int((lon / 360.0 + 0.5) * n) % n
+                y = int(min(n - 1, max(0, (0.5 - math.asinh(math.tan(math.radians(lat))) / (2 * math.pi)) * n)))
+                st = self._probe_status((src, z, x, y))
+                if st == "covered":
+                    best = z
+                elif st == "unknown":
+                    unknown = True
+        z = best if best is not None else SHARP_FALLBACK_ZOOM
+        if not unknown:
+            if len(self._sharp) > 20000:
+                self._sharp.clear()
+            self._sharp[k] = z
+        return z
 
     def on_disk(self, key):
         """A source tile's file is there (no read)."""
@@ -1255,6 +1299,87 @@ class Imagery:
             self._local.kind = old if old is not None else "demand"
         return True
 
+    def far_warm(self, tag, priority, frame, x0, y0, size, px, done):
+        """Fetch the lazy sources' photos a far tile's texture (the square x0, y0, size of frame at px: the best
+        source in the region, the user, 2026-11-11: "sharpen with the best source available in the region") would use,
+        after warm()'s near list (its tiles first), the lowest priority first; done() (on the warm thread) once they
+        are on disk or known missing, when any was fetched. A tag already queued: its square and priority updated."""
+        if not FAR_LAZY or not any(src.lazy for src in self.chain):
+            return
+        with self._warm_cv:
+            self._far_warm[tag] = (priority, frame, x0, y0, size, px, done)
+            if len(self._far_warm) > FAR_WARM_MAX:      # (the farthest dropped)
+                for t in sorted(self._far_warm, key=lambda t: self._far_warm[t][0])[FAR_WARM_MAX:]:
+                    del self._far_warm[t]
+            if self._warm_thread is None:
+                self._warm_thread = threading.Thread(target=self._warm_loop, name="img-warm", daemon=True)
+                self._warm_thread.start()
+            self._warm_cv.notify()
+
+    def far_unwarm(self, tag):
+        """A far tile no longer wanted sharper (gone, hidden): out of far_warm's queue."""
+        with self._warm_cv:
+            self._far_warm.pop(tag, None)
+
+    def lazy_keys(self, frame, x0, y0, size, px):
+        """The lazy sources' keys (src, z, x, y: one per exported parent, route_keys') a render of the square x0, y0,
+        size of frame at px would use (their own zoom range, bounds), in chain order."""
+        lazy = [s_ for s_ in self.chain if s_.lazy]
+        if not lazy:
+            return []
+        xs = np.array([x0, x0 + size, x0, x0 + size], float)
+        ys = np.array([y0, y0, y0 + size, y0 + size], float)
+        lat, lon, _ = frame.enu_to_geodetic(xs, ys, np.zeros(4))
+        if np.abs(lat).max() > MAX_LAT:
+            return []
+        zw = zoom_for(float(np.mean(lat)), size / px)
+        want = []
+        for src in lazy:
+            if zw > src.max_view_zoom:
+                continue
+            z = min(zw, src.max_zoom)
+            if z < src.min_zoom:
+                continue
+            if src.bounds:
+                bs, bw, bn, be = src.bounds
+                if lat.max() < bs or lat.min() > bn or lon.max() < bw or lon.min() > be:
+                    continue
+            k = src.export
+            fx, fy = mercator_px(lat, lon, z)
+            for ty in range(int(fy.min() // TILE) >> k << k, int(fy.max() // TILE) + 1, 1 << k):
+                for tx in range(int(fx.min() // TILE) >> k << k, int(fx.max() // TILE) + 1, 1 << k):
+                    key = (src, z, tx, ty)
+                    if in_bounds(*key):
+                        want.append(key)
+        return want
+
+    def _far_next(self):
+        """warm()'s thread with its near list done: the next lazy key of the far queue's first tile (nearest), or
+        None; a tile with nothing (more) to fetch leaves the queue (its callback when any was fetched)."""
+        while True:
+            with self._warm_cv:
+                if not self._far_warm:
+                    return None
+                tag = min(self._far_warm, key=lambda t: self._far_warm[t][0])
+                item = self._far_warm[tag]
+            prio, frame, x0, y0, size, px, done = item
+            got = self._far_keys.get(tag)
+            if got is None or got[0] is not item:
+                got = self._far_keys[tag] = (item, self.lazy_keys(frame, x0, y0, size, px),
+                                             got[2] if got is not None else [False])
+            for k in got[1]:
+                if not self._warm_done(k):
+                    return tag, k
+            with self._warm_cv:
+                if self._far_warm.get(tag) is item:
+                    del self._far_warm[tag]
+            self._far_keys.pop(tag, None)
+            if got[2][0]:
+                try:
+                    done()
+                except Exception:
+                    log.exception("far warm %s done", tag)
+
     def _warm_loop(self):
         self._local.kind = "prefetch"
         done, want = set(), None    # keys of this list found done: not looked at on disk again at every wake
@@ -1275,19 +1400,34 @@ class Imagery:
                     continue
                 key = k
                 break
+            far = None
+            if key is None:
+                far = self._far_next()      # (the near list done: the far tiles' best photos, nearest first)
+                if far is not None:
+                    key = far[1]
             if key is None:
                 with self._warm_cv:
-                    if self._warm_want is want:
+                    if self._warm_want is want and not self._far_warm:
                         self._warm_cv.wait()
                 continue
             src, z, x, y = key
             last = (1 << src.export) - 1
+            share = getattr(self.fetcher, "budget_share", None)
+            if far is not None and share is not None and share(src.url) >= FAR_BUDGET_SHARE:
+                got = self._far_keys.get(far[0])      # (the rest of today's budget for the photos round the car)
+                if got is not None and key in got[1]:
+                    got[1].remove(key)
+                continue
             try:
                 # the child _warm_done looks for: with only some children on disk (the cache cap evicted the
                 # others) the first one was a disk hit, the key never done, and this thread read it in a loop
                 # (170 s of the server process's CPU in a 4-minute drive, 2026-10-20)
                 self._download(src, z, x | last, y | last)
-                self._count(src.name + ":warm")
+                self._count(src.name + (":far" if far else ":warm"))
+                if far is not None:
+                    got = self._far_keys.get(far[0])
+                    if got is not None:
+                        got[2][0] = True
             except ImageryError as e:       # the host takes no prefetch now / failed: later
                 with self._warm_cv:
                     self._warm_cv.wait(5.0 if e.deferred else 30.0)
@@ -1296,6 +1436,10 @@ class Imagery:
                 log.exception("imagery warm %s", key[1:])
             with self._warm_cv:             # fetched (or no use asking again): never the same key in a loop
                 done.add(key)
+            if far is not None and not self._warm_done(key):    # (a failed one: not again for this tile)
+                got = self._far_keys.get(far[0])
+                if got is not None:
+                    got[1].remove(key)
 
     def _warm_done(self, key):
         """Nothing (more) to fetch for key's parent: it was fetched (its last child, the one written last, is

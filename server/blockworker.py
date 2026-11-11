@@ -31,6 +31,7 @@ import furniture
 import geodesy
 import grading as gradingmod
 import heightmap
+import l0roads
 import mapdata as mapdatamod
 import mappedpoles
 import netfetch
@@ -487,10 +488,12 @@ def _build(aid, lat, lon, hm_zoom, q, cx, cy, size, out_dir, name, ter_name=None
             z = roadsmod.block_arch_raise(tun, cell_fn, frame, la, lo, z, (cx - half, cy - half, cx + half, cy + half))
             part_s["arch"] = part_s.get("arch", 0.0) + time.perf_counter() - t1
             return z
+    l0_st = {}                  # (a provisional block's L0 roads: its painted roads' corridors flattened, l0roads.py)
     info = heightmap.generate(frame, gen, os.path.join(out_dir, name), cx, cy, q=q, size=size, keep=keep,
-                              chunks=chunks, ground_at=tuple(ground_at))
+                              chunks=chunks, ground_at=tuple(ground_at),
+                              post=l0roads.post_for(frame, _s.surface, cx, cy, size, l0_st) if provisional else None)
     stages = {"heights": time.perf_counter() - t0, "grading": grade_s[0], **part_s, "anchor": anchor_s, "plan": plan_s,
-              "newShare": float(keep.get("new_share", 1.0))}
+              "newShare": float(keep.get("new_share", 1.0)), **l0_st}
     idx = None
     if _s.surface is not None:
         t1 = time.perf_counter()

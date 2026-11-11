@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import cdae  # noqa: E402
 import earthd  # noqa: E402
+import farpvs  # noqa: E402
 import farfield as ff  # noqa: E402
 import geodesy  # noqa: E402
 import heightmap  # noqa: E402
@@ -210,9 +211,11 @@ class ServerHarness(unittest.TestCase):
                     keys.add("slotSerial")
                 if self.layout.format >= 4:             # M1: the texture size (the mod's unit kind)
                     keys.add("tex")
-                    # M1h: 256/128 px from L8; flying high (or the 3D map) as fine as on the screen, never finer
+                    # M1h: 256/128 px from L8; flying high (or the 3D map) as fine as on the screen; in sight and resolved
+                    # finer on screen than its level's, larger (farpvs.UP_ON), farpvs.UP_PX_MAX at most
                     self.assertIn(m["tex"], {self.server.tex_size(m["level"]),
-                                             *range(earthd.MAP_TEX_MIN_PX, self.server.tex_size(m["level"]))})
+                                             *range(earthd.MAP_TEX_MIN_PX, self.server.tex_size(m["level"])),
+                                             *(1 << k for k in range(8, farpvs.UP_PX_MAX.bit_length()))})
                 self.assertTrue(self.server.matslots.owns((aid, m["key"]), m["material"]), m)     # its pooled name
                 self.assertEqual(m["texture"], f"/temp/beamngEarth/{self.server.sid}/far_{aid}_{m['key']}.dds")
                 self.assertIs(m["detail"], True)
