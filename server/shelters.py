@@ -7,6 +7,7 @@ carriageway and that signed side at the street, with the body on the sidewalk. A
 shelter that is not a bus stop (amenity=shelter, shelter_type=public_transport) is included. A
 stop with no road nearby still stands, turned by its id.
 """
+import collections
 import hashlib
 import json
 import logging
@@ -33,6 +34,35 @@ POST_PAD_M = 0.5            # m every post keeps off any carriageway's edge, and
                             # post stood on the asphalt behind the kerb, at a junction by a car park (Suchy Dul, 2026-11-07)
 CLEAR_PASSES = 4            # a shelter pushed off one road may reach another: a few passes, then it stays
 POLY_MAX = 80.0             # m²: a bus stop drawn as a polygon is still one shelter
+# The regional stock shelters (the user, 2026-11-10: "lets use as many assets as needed to give this world detail and
+# variety"; the stock maps' own: art/shapes/objects/s_busstop_*). Each open toward its local -x (its roof's overhang,
+# a step: the street side) and long along local y: (trees.lua group, m from the origin to the street side, to the back,
+# half length, m its base lies under the origin, height). North America East Coast's glass box; Europe Italy's; the
+# tropics Jungle Rock Island's; elsewhere West Coast USA's.
+Shelter = collections.namedtuple("Shelter", "group front back half lift h")
+ECU = Shelter(G_SHELTER, STREET_X, STREET_X, LONG_HALF, LIFT, SHELTER_H)
+SHELTERS = {
+    "na": ECU,
+    "eu": Shelter("busshelter_it", 0.93, 0.84, 2.21, 0.29, 3.11),
+    "tropics": Shelter("busshelter_jri", 1.21, 0.92, 1.55, 0.20, 2.99),
+    "other": Shelter("busshelter_wcu", 1.17, 0.43, 1.94, 0.27, 3.12),
+}
+NA_SHELTER = {"US", "CA", "MX", "PR"}
+TROPICS_LAT = 23.5
+EUROPE = set("AD AL AM AT AX AZ BA BE BG BY CH CY CZ DE DK EE ES FI FO FR GB GE GG GI GR HR HU IE IM IS IT JE LI LT "
+             "LU LV MC MD ME MK MT NL NO PL PT RO RS RU SE SI SJ SK SM TR UA VA XK".split())
+
+
+def shelter_for(country, lat):
+    """The stock shelter of a country (ISO alpha-2, or None: by latitude alone) at a latitude. Pure."""
+    c = str(country or "").upper()
+    if c in NA_SHELTER:
+        return SHELTERS["na"]
+    if c in EUROPE:
+        return SHELTERS["eu"]
+    if abs(float(lat)) < TROPICS_LAT:
+        return SHELTERS["tropics"]
+    return SHELTERS["other"] if c else SHELTERS["na"]
 NO_SHELTER = {"no", "none"}
 BODY_ON_ROAD_M = 0.05       # m a point of the body may go past a carriageway's edge before the shelter is left out
 TRANSIT_SHELTER = {"public_transport", "public_transit", "bus_stop", "bus", "bus_shelter", "transit"}
@@ -158,26 +188,29 @@ def _closest(roads, x, y):
     return best[1:]
 
 
-def _posts(ox, oy, yaw):
-    """The (4, 2) corners of a shelter's footprint: its posts."""
+def _posts(ox, oy, yaw, d=None):
+    """The (4, 2) corners of a shelter's footprint (d: its Shelter, East Coast's when None): its posts."""
+    d = d or ECU
     rad = math.radians(yaw)
     ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
-                     for sx in (-STREET_X, STREET_X) for sy in (-LONG_HALF, LONG_HALF)], np.float64)
+                     for sx in (-d.front, d.back) for sy in (-d.half, d.half)], np.float64)
 
 
-def _body_points(ox, oy, yaw):
+def _body_points(ox, oy, yaw, d=None):
     """The (9, 2) points of a shelter's footprint: corners, edge middles and centre."""
+    d = d or ECU
     rad = math.radians(yaw)
     ux, uy, vx, vy = math.cos(rad), math.sin(rad), -math.sin(rad), math.cos(rad)
     return np.array([[ox + sx * ux + sy * vx, oy + sx * uy + sy * vy]
-                     for sx in (-STREET_X, 0.0, STREET_X) for sy in (-LONG_HALF, 0.0, LONG_HALF)], np.float64)
+                     for sx in (-d.front, (d.back - d.front) / 2.0, d.back) for sy in (-d.half, 0.0, d.half)],
+                    np.float64)
 
 
-def _intrusion(ox, oy, yaw, roads):
+def _intrusion(ox, oy, yaw, roads, d=None):
     """m the deepest point of the shelter's body is inside any carriageway (0 when none is)."""
     worst = 0.0
-    pts9 = _body_points(ox, oy, yaw)
+    pts9 = _body_points(ox, oy, yaw, d)
     for item in roads or ():
         spec, pts = item[1], np.asarray(item[2], np.float64)
         if len(pts) < 2:
@@ -188,12 +221,12 @@ def _intrusion(ox, oy, yaw, roads):
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
         for p in pts9:
             t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            d = np.hypot(*(p - (a + t[:, None] * ab)).T)
-            worst = max(worst, half - float(d.min()))
+            dist = np.hypot(*(p - (a + t[:, None] * ab)).T)
+            worst = max(worst, half - float(dist.min()))
     return worst
 
 
-def _clear_of_roads(ox, oy, yaw, roads):
+def _clear_of_roads(ox, oy, yaw, roads, d=None):
     """(x, y) of a shelter moved straight off every carriageway a post stands on or within POST_PAD_M of."""
     for _ in range(CLEAR_PASSES):
         worst = None
@@ -205,12 +238,12 @@ def _clear_of_roads(ox, oy, yaw, roads):
             a, b = pts[:-1, :2], pts[1:, :2]
             ab = b - a
             ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-            for p in _posts(ox, oy, yaw):
+            for p in _posts(ox, oy, yaw, d):
                 t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
                 foot = a + t[:, None] * ab
-                d = np.hypot(*(p - foot).T)
-                k = int(np.argmin(d))
-                short = half + POST_PAD_M - float(d[k])
+                dist = np.hypot(*(p - foot).T)
+                k = int(np.argmin(dist))
+                short = half + POST_PAD_M - float(dist[k])
                 if short > 1e-3 and (worst is None or short > worst[0]):
                     # (off the road's own centre line: the shelter's centre says which side it is on)
                     n = np.array([ox, oy]) - foot[k]
@@ -225,7 +258,7 @@ def _clear_of_roads(ox, oy, yaw, roads):
 RAIL_SLIDES_M = (0.0, 2.0, -2.0, 4.0, -4.0, 6.0, -6.0, 9.0, -9.0, 12.0, -12.0, 15.0, -15.0)
 
 
-def _rail_short(ox, oy, yaw, rails):
+def _rail_short(ox, oy, yaw, rails, d=None):
     """m the worst post of a shelter stands inside a track's ballast (an item's half width + POST_PAD_M from its
     axis), 0 when clear. rails: railxing.rail_obstacles' [(id, half width, polyline (k, 3))]."""
     worst = 0.0
@@ -236,32 +269,33 @@ def _rail_short(ox, oy, yaw, rails):
         a, b = pts[:-1, :2], pts[1:, :2]
         ab = b - a
         ab2 = np.maximum((ab * ab).sum(1), 1e-9)
-        for p in _posts(ox, oy, yaw):
+        for p in _posts(ox, oy, yaw, d):
             t = np.clip(((p - a) * ab).sum(1) / ab2, 0.0, 1.0)
-            d = float(np.hypot(*(p - (a + t[:, None] * ab)).T).min())
-            worst = max(worst, float(item[1]) + POST_PAD_M - d)
+            dist = float(np.hypot(*(p - (a + t[:, None] * ab)).T).min())
+            worst = max(worst, float(item[1]) + POST_PAD_M - dist)
     return worst
 
 
-def _clear_of_rails(ox, oy, yaw, roads, rails):
+def _clear_of_rails(ox, oy, yaw, roads, rails, d=None):
     """(x, y) of a shelter slid along the curb (RAIL_SLIDES_M, the nearest first) to where no post is in a track's
     ballast and none on a carriageway, or None: the road and the track leave it no room (Nemiia, prospekt Heroiv,
     48.4553 N 27.7815 E: a track 3 m past the road's edge, the shelter stood on the rails, 2026-11-08)."""
-    if not rails or _rail_short(ox, oy, yaw, rails) <= 1e-3:
+    if not rails or _rail_short(ox, oy, yaw, rails, d) <= 1e-3:
         return ox, oy
     rad = math.radians(yaw)
     vx, vy = -math.sin(rad), math.cos(rad)             # local +y: along the curb
     for s in RAIL_SLIDES_M[1:]:
-        cx, cy = _clear_of_roads(ox + s * vx, oy + s * vy, yaw, roads)
-        if _rail_short(cx, cy, yaw, rails) <= 1e-3:
+        cx, cy = _clear_of_roads(ox + s * vx, oy + s * vy, yaw, roads, d)
+        if _rail_short(cx, cy, yaw, rails, d) <= 1e-3:
             return cx, cy
     return None
 
 
-def _place(fid, x, y, roads, flip=False):
+def _place(fid, x, y, roads, flip=False, d=None):
     """(origin x, y, yaw, ambiguous) with the signed face toward the road and the shelter on the sidewalk; ambiguous
     when the point is on the centre line, so that either side could be the right one (flip takes the other).
     Local +x points away from the carriageway: the stock shape's signed side is that axis reversed."""
+    front = (d or ECU).front
     hit = _closest(roads, x, y)
     if hit is None:
         return x, y, _yaw_of(fid), False
@@ -283,18 +317,18 @@ def _place(fid, x, y, roads, flip=False):
         fx, fy = cx + away[0] * curb, cy + away[1] * curb
     else:
         fx, fy = x, y
-    return (fx - STREET_X * toward[0], fy - STREET_X * toward[1], (_yaw(toward[0], toward[1]) + 180.0) % 360.0,
+    return (fx - front * toward[0], fy - front * toward[1], (_yaw(toward[0], toward[1]) + 180.0) % 360.0,
             ambiguous)
 
 
-def _pose(fid, x, y, roads):
+def _pose(fid, x, y, roads, d=None):
     """(origin x, y, yaw) of a shelter clear of every carriageway, or None when no spot is. A stop on a centre line
     (a junction node, a road beside another) tries both sides and keeps the one with less of the body on a road."""
     best = None
     for flip in (False, True):
-        ox, oy, yaw, ambiguous = _place(fid, x, y, roads, flip)
-        ox, oy = _clear_of_roads(ox, oy, yaw, roads)
-        deep = _intrusion(ox, oy, yaw, roads)
+        ox, oy, yaw, ambiguous = _place(fid, x, y, roads, flip, d)
+        ox, oy = _clear_of_roads(ox, oy, yaw, roads, d)
+        deep = _intrusion(ox, oy, yaw, roads, d)
         if best is None or deep < best[0] - 1e-6:
             best = (deep, ox, oy, yaw)
         if best[0] <= BODY_ON_ROAD_M or not ambiguous:
@@ -304,7 +338,7 @@ def _pose(fid, x, y, roads):
     return best[1:]
 
 
-def _base_heights(frame, elev, xy, yaw):
+def _base_heights(frame, elev, xy, yaw, d=None):
     """Local z of each shelter: the lowest ground under its four posts (and its centre). One height at the centre
     left the posts of a shelter on a bank hanging in the air; the lowest point sets the base on the ground and
     buries the uphill posts in the bank instead."""
@@ -314,8 +348,9 @@ def _base_heights(frame, elev, xy, yaw):
     n = len(xy)
     px = [xy[:, 0]]
     py = [xy[:, 1]]
-    for sx in (-STREET_X, STREET_X):
-        for sy in (-LONG_HALF, LONG_HALF):
+    d = d or ECU
+    for sx in (-d.front, d.back):
+        for sy in (-d.half, d.half):
             px.append(xy[:, 0] + sx * ux + sy * vx)
             py.append(xy[:, 1] + sx * uy + sy * vy)
     px, py = np.concatenate(px), np.concatenate(py)
@@ -341,8 +376,9 @@ def _rails_near(frame, road_cell_fn, box):
         return []
 
 
-def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None):
-    """Forest rows [group, x, y, z, yaw, scale, height, rank] of the bus shelters whose stop is inside box."""
+def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None, country=None):
+    """Forest rows [group, x, y, z, yaw, scale, height, rank] of the bus shelters whose stop is inside box: the
+    region's stock shelter (shelter_for: the country, ISO alpha-2; None: the bundled borders at the box's centre)."""
     if infra_fn is None:
         return []
     x0, y0, x1, y1 = (float(v) for v in box)
@@ -353,6 +389,13 @@ def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None):
         return []
     pending = []
     seen = set()
+    if not country:
+        try:
+            import countrybounds
+            country = countrybounds.bundled().at(float(np.mean(la)), float(np.mean(lo)))
+        except Exception:
+            country = None
+    d = shelter_for(country, float(np.mean(la)))
     rails = _rails_near(frame, road_cell_fn, box)
     for key in keys:
         try:
@@ -374,13 +417,13 @@ def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None):
             if spot is None or not (x0 <= spot[0] < x1 and y0 <= spot[1] < y1):
                 continue
             seen.add(fid)
-            pose = _pose(fid, spot[0], spot[1], roads)
+            pose = _pose(fid, spot[0], spot[1], roads, d)
             if pose is None:
                 log.debug("shelters: stop %s at (%.1f, %.1f) left out: no spot clear of the carriageways",
                           fid, spot[0], spot[1])
                 continue
             if rails:
-                got = _clear_of_rails(pose[0], pose[1], pose[2], roads, rails)
+                got = _clear_of_rails(pose[0], pose[1], pose[2], roads, rails, d)
                 if got is None:         # (no room between the road and the track: the stop keeps its sign only)
                     continue
                 pose = (got[0], got[1], pose[2])
@@ -388,9 +431,9 @@ def rows(frame, infra_fn, box, elev, roads=(), road_cell_fn=None):
     if not pending:
         return []
     xy = np.array([[p[0], p[1]] for p in pending], np.float64)
-    zz_all = _base_heights(frame, elev, xy, np.array([p[2] for p in pending], np.float64))
+    zz_all = _base_heights(frame, elev, xy, np.array([p[2] for p in pending], np.float64), d)
     out = []
     for (ox, oy, yaw), zz in zip(pending, zz_all):
-        out.append([G_SHELTER, round(ox, 2), round(oy, 2), round(float(zz) + LIFT, 2), round(yaw, 1) % 360.0,
-                    1.0, SHELTER_H, 0.0])
+        out.append([d.group, round(ox, 2), round(oy, 2), round(float(zz) + d.lift, 2), round(yaw, 1) % 360.0,
+                    1.0, d.h, 0.0])
     return out

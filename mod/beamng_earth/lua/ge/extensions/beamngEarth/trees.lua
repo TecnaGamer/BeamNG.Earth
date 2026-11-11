@@ -399,6 +399,15 @@ M.GROUP_MAX_M.picnicgrill = 400
 -- side local y, and it sits 0.2 m below its origin.
 M.CATALOG.busshelter = { { '/art/shapes/objects/s_busstop_ecu', 2.90 } }
 M.GROUP_MAX_M.busshelter = 600
+-- ... and the regional ones (server shelters.SHELTERS: Europe Italy's, the tropics Jungle Rock Island's, elsewhere
+-- West Coast USA's; global materials), open toward local -x as the East Coast's
+M.CATALOG.busshelter_it = { { '/art/shapes/objects/s_busstop_it', 3.11 } }
+M.CATALOG.busshelter_jri = { { '/art/shapes/objects/s_busstop_jri', 2.99 } }
+M.CATALOG.busshelter_wcu = { { '/art/shapes/objects/s_busstop_wcu', 3.12 } }
+for _, g in ipairs({ 'busshelter_it', 'busshelter_jri', 'busshelter_wcu' }) do
+  M.GROUP_MAX_M[g] = 600
+  M.ONE_SPELLING[g] = true
+end
 -- Cell and water towers, shipping containers, the drag-strip billboard (poster included) and a stock barn
 -- (server worldprops.py).
 -- The height is the mesh's vertical size, so a row of that height is the model at 1:1.

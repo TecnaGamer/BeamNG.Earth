@@ -2753,7 +2753,7 @@ class Server:
             import shelters
             try:
                 props.extend(shelters.rows(anchor.frame, infra_fn, box, elev, near_roads, lambda k: self.mapdata.cell(
-                    k, layers=("roads",), kind="demand").layers.get("roads")))
+                    k, layers=("roads",), kind="demand").layers.get("roads"), country=self.country(anchor)))
             except Exception as ex:
                 log.warning("shelters: tile %s_%s: %s: %s", tx, ty, type(ex).__name__, ex)
             import fast
