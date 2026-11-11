@@ -281,7 +281,12 @@ class PartsTest(unittest.TestCase):
                 os.remove(p1 + ".lock")
             t = threading.Thread(target=other)
             t.start()
-            b = rz._read("USGS_X", nodes, boxes, key)
+            import xproc
+            xproc._cancel_proc[0] = lambda: True    # (a job's cancel check: not the read's business)
+            try:
+                b = rz._read("USGS_X", nodes, boxes, key)
+            finally:
+                xproc._cancel_proc[0] = None
             t.join()
             self.assertEqual(len(asked), 3, "node 1 waited for, not read again")
             np.testing.assert_array_equal(a[0], b[0])

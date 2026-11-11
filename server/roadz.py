@@ -190,6 +190,39 @@ PART_WAIT_S = 20.0
 ELSEWHERE = object()        # (_read's first pass: a node another process is reading)
 
 
+def _await_part(lock, pp, wait_s=None):
+    """(pp, False) once another process has written the node's part file pp; (None, True) when this process now holds
+    its claim (released, or its holder gone: a dead process's claim taken over at once); (None, False) after wait_s
+    (PART_WAIT_S). Whoever holds it is waited for, whatever its urgency (a holder is reading that node now), and a
+    job's cancel check plays no part (as xproc.once's would: a teleport's abandoned block must not leave the cell to
+    the rule for the session through its read's wait)."""
+    end = time.monotonic() + (PART_WAIT_S if wait_s is None else wait_s)
+    seen = None
+    while True:
+        if os.path.exists(pp):
+            return pp, False
+        if xproc.take(lock):
+            if os.path.exists(pp):              # (written just before its holder let go)
+                xproc.release(lock)
+                return pp, False
+            return None, True
+        try:
+            st = os.stat(lock)
+            now = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            now = None
+        if now is not None and now[1] > 0 and now != seen:     # (a new holder: its pid read once, as xproc.once)
+            seen = now
+            h = xproc._holder(lock)
+            if h is not None and not xproc.alive(h[2]):
+                xproc.release(lock)
+                seen = None
+                continue
+        if time.monotonic() > end:
+            return None, False
+        time.sleep(xproc.POLL_S)
+
+
 _TOKEN = re.compile(r"[a-z0-9]+")
 _REF = re.compile(r"^([a-z]{0,3})(\d{1,4})([a-z]?)$")
 
@@ -973,8 +1006,7 @@ class RoadZ:
                     return ELSEWHERE
                 mine = True
             else:
-                # (waited for whoever holds it, whatever its urgency: a holder is reading that node now)
-                got, mine = xproc.once(lock, lambda: pp if os.path.exists(pp) else None, PART_WAIT_S, "background")
+                got, mine = _await_part(lock, pp)
                 if got is not None:
                     got = load(pp)
                     if got is not None:
