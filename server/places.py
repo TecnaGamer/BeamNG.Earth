@@ -10,7 +10,8 @@ detail and variety"), as Forest rows [group, x, y, z, yaw, scale, height, rank] 
   terminal's outline meets water), their booms out over the water;
 - marinas (leisure=marina): boats moored along the piers (man_made=pier lines and outlines) where the water is;
 - trailer parks (residential=trailer_park, landuse=residential): Utah's caravan in rows between the park's streets,
-  scaled to a single-wide home in North America; caravan sites (tourism=caravan_site) sparser, at its own size;
+  scaled to a single-wide home in North America; caravan sites (tourism=caravan_site, and camp sites with
+  caravans=yes) sparser, at its own size; a park or site whose homes are mapped as buildings is left to them;
 - construction sites (landuse=construction): a hoarding of chain-link panels along the outline, gaps where a road
   goes in, and a tower crane on a big site.
 The layouts are earthfast's (places.rs: area_grid, edge_spots, berths, outline_panels); this module picks the places
@@ -84,6 +85,7 @@ BOAT_CLEAR = 0.4                # m a boat keeps from every other pier
 BOAT_SINK = 0.35                # m the hull's bottom sits under the water's surface
 PIER_HW = 1.0                   # a pier line's half width
 BOAT_KEEP = 0.8                 # share of the berths with a boat
+BERTH_REACH_M = 40.0            # m round a tile whose piers are looked at
 
 # --- trailer parks: Utah's caravan (x -1.68..1.45, y -4.92..3.55 along its length, z 0..2.85)
 G_CARAVAN, CARAVAN_H = "caravan", 2.85
@@ -132,7 +134,7 @@ def _tags(feats, i):
 
 # a feature's raw tags must hold one of these before they are parsed (most of a cell's infrastructure is kerbs and
 # crossings: ~30k json.loads a Munich cell block otherwise)
-KEYWORDS = ("solar", "container", "marina", "trailer_park", "caravan_site", "construction")
+KEYWORDS = ("solar", "container", "marina", "trailer_park", "caravan", "construction")
 PLACE_CLASSES = {"construction", "marina"}
 
 
@@ -178,7 +180,8 @@ def kind_of(feats, i, layer):
         return "marina"
     if t.get("residential") == "trailer_park" or t.get("landuse") == "trailer_park":
         return "trailer"
-    if t.get("tourism") == "caravan_site":
+    if t.get("tourism") == "caravan_site" or (t.get("tourism") == "camp_site" and (
+            t.get("caravans") == "yes" or t.get("static_caravans") in ("yes", "only"))):
         return "caravan_site"
     if layer == "land_use" and (cls == "construction" and t.get("landuse", "construction") == "construction"):
         return "construction"
@@ -650,9 +653,10 @@ def marina_rows(frame, places, box, elev, md, keys, water):
     if not near:
         return []
     keep = _poly_set([(p[1], p[2]) for p in near])
-    # the piers: infrastructure class pier lines and outlines near the marinas
-    mb = np.array([min(p[3][0] for p in near), min(p[3][1] for p in near), max(p[3][2] for p in near),
-                   max(p[3][3] for p in near)])
+    # the piers: infrastructure class pier lines and outlines near the tile (_piers adds 30 m: a boat of the tile only
+    # meets boats of piers that near, and theirs a few more: BERTH_REACH_M round the box; the whole harbour's ~1,600
+    # piers at Marina del Rey were ~80 ms a tile)
+    mb = np.array([box[0] - BERTH_REACH_M, box[1] - BERTH_REACH_M, box[2] + BERTH_REACH_M, box[3] + BERTH_REACH_M])
     lines, hws, keyv = [], [], []
     for fid, xy, hw in _piers(frame, md, keys, mb):
         lines.append(xy)

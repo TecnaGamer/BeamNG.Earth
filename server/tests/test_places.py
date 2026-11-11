@@ -258,10 +258,16 @@ class PlacesTest(unittest.TestCase):
                                ("b", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "camp_site",
                                 {"tourism": "caravan_site"}),
                                ("c", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "industrial",
-                                {"industrial": "port"})])
+                                {"industrial": "port"}),
+                               ("d", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "camp_site",
+                                {"tourism": "camp_site", "caravans": "yes"}),
+                               ("e", mapgeom.POLYGON, [rect(0, 0, 10, 10)], "camp_site",
+                                {"tourism": "camp_site", "tents": "yes"})])
         self.assertEqual(places.kind_of(f, 0, "land_use"), "terminal")
         self.assertEqual(places.kind_of(f, 1, "land_use"), "caravan_site")
         self.assertIsNone(places.kind_of(f, 2, "land_use"))
+        self.assertEqual(places.kind_of(f, 3, "land_use"), "caravan_site")
+        self.assertIsNone(places.kind_of(f, 4, "land_use"))
 
 
 if __name__ == "__main__":
