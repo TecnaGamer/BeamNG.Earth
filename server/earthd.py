@@ -2350,7 +2350,7 @@ class Server:
             self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
             self.buildings, lh, mph, self.anchor_q(anchor) if skin else None, self.gas_stations, buried, lamps,
             country, content, skin, exact, Server.pole_profile(self), designsmod.enabled(self.dej_on),
-            Server.towns_enabled(self), Server.wear_tier(self))
+            Server.towns_enabled(self), Server.wear_arg(self))
         t0, waited = time.perf_counter(), []
         try:
             res = poolsmod.result_running(fut, ROAD_TILE_TIMEOUT_S, waited)
@@ -2391,7 +2391,7 @@ class Server:
                                             self.gas_stations, buried, lamps, country, md=self.mapdata.versions(),
                                             models_dir=self.root, pole_profile=Server.pole_profile(self),
                                             de_junctions=designsmod.enabled(self.dej_on),
-                                            towns_on=Server.towns_enabled(self), wear=Server.wear_tier(self))
+                                            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self))
 
     def geo_prebuilt(self, gx, gy):
         """Is geotile (gx, gy)'s road content in the revisit cache (no worker; no network but Germany's border data
@@ -2442,7 +2442,7 @@ class Server:
             blockworker.prebuild_geo, gx, gy, gzoom, scratch, self.buildings, lh, mph, self.gas_stations, buried,
             lamps, country, "/temp/beamngEarth/areas_scratch", pole_profile=Server.pole_profile(self),
             wait_gaps=fast is not None, de_junctions=designsmod.enabled(self.dej_on),
-            towns_on=Server.towns_enabled(self), wear=Server.wear_tier(self)), timeout)
+            towns_on=Server.towns_enabled(self), wear=Server.wear_arg(self)), timeout)
 
     def build_roads_tile(self, aid, tx, ty):
         """roads.py: one road tile of anchor aid, written to the session folder. Returns (vfs path,
@@ -2458,7 +2458,7 @@ class Server:
                 self.vfs_dir, self.sidewalks, DETAIL_ROAD_LIFT if self.near_visual == "detail" else 0.0,
                 self.buildings, self.left_hand(anchor), self.mph(anchor), self.anchor_q(anchor),
                 self.gas_stations, self.buried(anchor), self.lamp_region(anchor), self.country(anchor), Server.pole_profile(self, anchor),
-                designsmod.enabled(self.dej_on), Server.towns_enabled(self), Server.wear_tier(self))
+                designsmod.enabled(self.dej_on), Server.towns_enabled(self), Server.wear_arg(self))
             try:
                 # bounded: a worker that never answered held this thread and its roads.Tracker slot for good (4
                 # slots: four hung tiles and no road tile ever again, the loading line at "roads & buildings 0/26")
@@ -2594,7 +2594,7 @@ class Server:
                                      nodes=sign_nodes, clearance_out=clearance,
                                      development=developmentmod.for_tile(self.mapdata, anchor.frame, tx, ty), towns=towns,
                                      de_on=designsmod.enabled(self.dej_on), de_routes=de_routes, mapped_lamps=mapped_lamps,
-                                     wear=Server.wear_tier(self),
+                                     wear=Server.wear_arg(self),
                                      cover_fn=getattr(self.surface, "classes", None))
         # (railway and tram tracks on the ground)
         chunks += railsmod.tile_chunks(anchor.frame, tx, ty, cells, self.country(anchor), urban)
@@ -2837,6 +2837,12 @@ class Server:
         """The road wear's tier the road tiles are built with (roadwear.tier_of of the settings page's Road detail).
         Called as Server.wear_tier(self) (the tests' servers are namespaces)."""
         return roadwear.tier_of(getattr(self, "road_wear", None))
+
+    def wear_arg(self):
+        """The road tiles' wear argument (roadwear.py): the tier and the season mode of the imagery (the fallen leaves:
+        roadwear.fall_of). Called as Server.wear_arg(self)."""
+        im = getattr(self, "imagery", None)
+        return {"tier": Server.wear_tier(self), "season": getattr(im, "season_mode", None) or "off"}
 
     def set_road_wear(self, value):
         """The settings page's Road detail (message road_wear {value: 'off' / 'basic' / 'full'}): True when the tier

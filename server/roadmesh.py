@@ -1046,7 +1046,11 @@ def build(frame, chunks, elev, origin, lift=0.0, clip=None, follow=False, q=None
     pv, fans = [], []
     for c in polys:
         p = np.asarray(c["poly"], np.float64)[:, :2]
-        fan = np.array([(0, j, j + 1) for j in range(1, len(p) - 1)], dtype=np.int64).reshape(-1, 3)
+        if c.get("quads"):                      # (many quads, 4 corners each: roadwear's spots, one chunk a material)
+            fan = (np.array([[0, 1, 2], [0, 2, 3]], np.int64)[None]
+                   + 4 * np.arange(len(p) // 4, dtype=np.int64)[:, None, None]).reshape(-1, 3)
+        else:
+            fan = np.array([(0, j, j + 1) for j in range(1, len(p) - 1)], dtype=np.int64).reshape(-1, 3)
         pv.append(p)
         fans.append(fan)
     if draped or pv:

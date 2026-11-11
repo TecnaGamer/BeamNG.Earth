@@ -242,5 +242,33 @@
       {},
       {}
     ]
+  },
+  "bne_spot_leaves": {
+    "name": "bne_spot_leaves",
+    "mapTo": "bne_spot_leaves",
+    "class": "Material",
+    "version": 1.5,
+    "persistentId": "b1e0d002-0009-4a11-9c01-000000000009",
+    "annotation": "ASPHALT",
+    "translucent": true,
+    "translucentZWrite": false,
+    "castShadows": false,
+    "Stages": [
+      {
+        "baseColorMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_b.color.png",
+        "normalMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_nm.normal.png",
+        "opacityMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_o.data.png",
+        "roughnessMap": "/assets/materials/decal/vegetation/m_fallen_leaves_decal/t_fallen_leaves_decal_r.data.png",
+        "baseColorFactor": [
+          1,
+          1,
+          1,
+          1
+        ]
+      },
+      {},
+      {},
+      {}
+    ]
   }
 }

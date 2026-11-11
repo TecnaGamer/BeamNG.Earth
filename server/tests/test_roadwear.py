@@ -29,6 +29,17 @@ def plan(rds, tier=2, box=BOX, **kw):
     return roadwear.tile_chunks(rds, {}, box, tier, **kw)
 
 
+def quads(chunks, m):
+    """The quads (4, 3) of the spot chunks of material m (roadmesh "quads": 4 corners each)."""
+    out = []
+    for c in chunks:
+        if c["m"] == m:
+            self_check = len(c["poly"]) % 4 == 0 and len(c["uvq"]) == len(c["poly"]) and c.get("quads")
+            assert self_check, c
+            out.extend(np.asarray(c["poly"], np.float64).reshape(-1, 4, 3))
+    return out
+
+
 def kinds(chunks):
     out = {}
     for c in chunks:
@@ -71,9 +82,9 @@ class RoadWearTest(unittest.TestCase):
         def near(chunks, x0, x1):
             out = set()
             for c in chunks:
-                pts = np.asarray(c.get("poly") or c["n"])
-                if pts[:, 0].min() >= x0 and pts[:, 0].max() <= x1:
-                    out.add((c["m"], tuple(np.round(pts[0, :2], 2)), round(float(c.get("slen", -1)), 2)))
+                for pts in (np.asarray(c["poly"]).reshape(-1, 4, 3) if c.get("quads") else [np.asarray(c["n"])]):
+                    if pts[:, 0].min() >= x0 and pts[:, 0].max() <= x1:
+                        out.add((c["m"], tuple(np.round(pts[0, :2], 2)), round(float(c.get("slen", -1)), 2)))
             return out
         self.assertTrue(a and b)
         self.assertEqual(near(a, 210, 250), near(b, 210, 250))
@@ -105,12 +116,10 @@ class RoadWearTest(unittest.TestCase):
         got = kinds(plan(town))
         self.assertIn("bne_spot_manhole", got)
         aisle = [("lot", spec(cls="service", width=7.0), line(-50, 128, 300, 128), 0.0)]
-        oil = [c for c in plan(aisle, aisles={"lot"}) if c["m"] == "bne_spot_oil"]
+        oil = quads(plan(aisle, aisles={"lot"}), "bne_spot_oil")
         self.assertTrue(oil)
-        for c in oil:               # in the stalls beside the aisle, not on it
-            y = np.asarray(c["poly"])[:, 1].mean()
-            self.assertAlmostEqual(abs(y - 128), 3.5 + 2.0, places=3)
-            self.assertEqual(len(c["uvq"]), 4)
+        for q in oil:               # in the stalls beside the aisle, not on it
+            self.assertAlmostEqual(abs(q[:, 1].mean() - 128), 3.5 + 2.0, places=3)
 
     def test_poor_roads_get_more_damage(self):
         def damage(cond):
@@ -121,6 +130,16 @@ class RoadWearTest(unittest.TestCase):
             return sum(c["m"] in ("bne_wear_cracks", "bne_spot_pothole") for c in ch)
         self.assertGreater(damage("bad"), damage("excellent"))
         self.assertEqual(damage("excellent"), 0)
+
+    def test_mesh_draws_quads(self):
+        town = [("t", spec(cls="residential", width=8.0, urban=True), line(-800, 128, 1200, 128), 0.0)]
+        ch = [c for c in plan(town) if c.get("quads")]
+        n = sum(len(c["poly"]) // 4 for c in ch)
+        mesh = roadmesh.build(FRAME, ch, lambda la, lo: np.zeros(np.shape(la)), (0.0, 0.0, 0.0))
+        self.assertEqual(len(mesh[1]), 2 * n)       # two triangles a quad, facing up
+        P, T = mesh[0], mesh[1]
+        nz = np.cross(P[T[:, 1]] - P[T[:, 0]], P[T[:, 2]] - P[T[:, 0]])[:, 2]
+        self.assertTrue(np.all(nz > 0))
 
     def test_mesh_fades_wear_and_draws_it_first(self):
         rd = [("a", spec(lanes=2), line(0, 128, 256, 128), 0.0)]
@@ -141,9 +160,35 @@ class RoadWearTest(unittest.TestCase):
         rd = [("lane", spec(cls="tertiary", width=6.0), line(0, 128, 256, 128), 0.0),
               ("town", spec(cls="tertiary", width=6.0, urban=True), line(0, 200, 256, 200), 0.0),
               ("mw", spec(cls="motorway", width=12.0, oneway=True), line(0, 230, 256, 230), 0.0)]
-        got = roadwear.grass_sides(FRAME, rd, cover, roads.has_sidewalks)
+        got, leaves = roadwear.verges(FRAME, rd, cover, roads.has_sidewalks)
         self.assertEqual(got, {("lane", 1)})
-        self.assertEqual(roadwear.grass_sides(FRAME, rd, lambda la, lo: 1 / 0, roads.has_sidewalks), set())
+        self.assertEqual(leaves, {})
+        self.assertEqual(roadwear.verges(FRAME, rd, lambda la, lo: 1 / 0, roads.has_sidewalks), (set(), {}))
+
+    def test_fallen_leaves_under_trees_in_the_fall(self):
+        def cover(lat, lon):
+            e, n, _ = FRAME.geodetic_to_enu(np.asarray(lat), np.asarray(lon), 0.0)
+            return np.where(n > 128, 10, 30).astype(np.uint8), True      # woods north of y = 128, grass south
+        rd = [("lane", spec(cls="tertiary", width=6.0), line(-400, 128, 600, 128), 0.0)]
+        _, leaves = roadwear.verges(FRAME, rd, cover, roads.has_sidewalks, fall=1.0)
+        self.assertAlmostEqual(leaves[("lane", 1)], 1.0)
+        self.assertNotIn(("lane", -1), leaves)
+        got = quads(roadwear.tile_chunks(rd, {}, BOX, 2, leaves=leaves), "bne_spot_leaves")
+        self.assertTrue(got)
+        self.assertTrue(all(q[:, 1].mean() > 128 for q in got))     # the wooded side only
+        self.assertFalse([c for c in roadwear.tile_chunks(rd, {}, BOX, 1, leaves=leaves) if c["m"] == "bne_spot_leaves"])
+
+    def test_fall_by_season_and_hemisphere(self):
+        self.assertEqual(roadwear.fall_of({"tier": 2, "season": "off"}, 45.0), 0.0)
+        self.assertEqual(roadwear.fall_of({"tier": 2, "season": "fall"}, -30.0), 1.0)
+        self.assertEqual(roadwear.fall_of(2, 45.0), 0.0)
+        import datetime
+        import season
+        a = season.amounts_for("auto", 48.0, datetime.date(2026, 10, 7))["fall"]
+        b = season.amounts_for("auto", -48.0, datetime.date(2026, 10, 7))["fall"]
+        self.assertGreater(a, 0.5)
+        self.assertLess(b, 0.1)
+        self.assertEqual(roadwear.wear_key({"tier": 1, "season": "fall"}, 45.0), (1, 0.0))
 
     def test_tier_of(self):
         self.assertEqual(roadwear.tier_of("off"), 0 if roadwear.ENV_TIER is None else roadwear.ENV_TIER)

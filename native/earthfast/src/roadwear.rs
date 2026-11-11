@@ -31,7 +31,9 @@ const A_SEED: usize = 9;
 const A_WEAR: usize = 10;       // 1: the road gets wear (a paved ground road of its own), 0: a blocker only
 const A_AISLE: usize = 11;      // 1: a parking lot's aisle (oil in its stalls)
 const A_BLOCK: usize = 12;      // its blocker's half width (A_HW + the caller's margin)
-pub const NA: usize = 13;
+const A_LEAF_L: usize = 13;     // fallen leaves along its left edge (the season's fall x the trees beside it, 0..1)
+const A_LEAF_R: usize = 14;     // ... and its right edge
+pub const NA: usize = 15;
 
 // road classes (attrs[A_CLS])
 const CLS_MOTORWAY: i64 = 0;
@@ -49,6 +51,7 @@ pub const K_PATCH: i64 = 5;     // a repair patch (quad, atlas cell)
 pub const K_POTHOLE: i64 = 6;   // (quad, atlas cell)
 pub const K_MANHOLE: i64 = 7;   // (quad, atlas cell)
 pub const K_OIL: i64 = 8;       // (quad)
+pub const K_LEAVES: i64 = 9;    // fallen leaves along an edge (quad)
 
 const TEST_STEP_M: f64 = 1.5;   // m between a piece's points tested against the blockers and the box
 const SIMPLIFY_M: f64 = 0.02;   // m a dropped point may lie off its run's kept line
@@ -578,7 +581,7 @@ fn road_pieces(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], tier: i
                 let size = rng.range(0.9, 1.7);
                 let turn = rng.range(0.0, std::f64::consts::TAU);
                 let hit = rng.f();
-                if hit < 0.35 && overlaps(&win, s - 2.0, s + 2.0) {
+                if hit < 0.25 && overlaps(&win, s - 2.0, s + 2.0) {
                     let (x, y, z, tx, ty) = ln.at(s);
                     let d = side * (hw + 2.0);
                     emit_quad(ctx, out, r, (x - ty * d, y + tx * d, z), (tx, ty), turn, size, size, K_OIL, -1);
@@ -600,6 +603,25 @@ fn road_pieces(ctx: &Ctx, out: &mut Out, r: usize, ln: &Line, a: &[f64], tier: i
             s += rng.range(6.0, 25.0);
         }
     }
+    if tier >= 2 {
+        // fallen leaves in the autumn under trees: blobs along the edges, denser the more the trees and the season
+        for (side, col, stream) in [(1.0f64, A_LEAF_L, 0xC00u64), (-1.0, A_LEAF_R, 0xC01)] {
+            let leaf = a[col].clamp(0.0, 1.0);
+            if leaf < 0.05 { continue; }
+            let mut rng = Rng::new(seed, stream);
+            let mut s = rng.range(0.0, 8.0);
+            while s < len {
+                let (roll, inset, size, turn) = (rng.f(), rng.range(0.2, 1.1), rng.range(1.2, 2.6),
+                                                 rng.range(0.0, std::f64::consts::TAU));
+                if roll < leaf && overlaps(&win, s - 2.0, s + 2.0) {
+                    let (x, y, z, tx, ty) = ln.at(s);
+                    let d = side * (hw - inset).max(0.0);
+                    emit_quad(ctx, out, r, (x - ty * d, y + tx * d, z), (tx, ty), turn, size, size, K_LEAVES, -1);
+                }
+                s += rng.range(2.5, 9.0);
+            }
+        }
+    }
     let _ = CLS_MOTORWAY;
 }
 
@@ -618,7 +640,7 @@ pub fn wear_plan<'py>(py: Python<'py>, pts: PyReadonlyArray2<'py, f64>, off: PyR
     let (p, o, a, e, b) = (pts.as_array(), off.as_array(), attrs.as_array(), excl.as_array(), bx.as_array());
     let nr = o.len().saturating_sub(1);
     if a.nrows() != nr || (nr > 0 && a.ncols() < NA) || b.len() < 4 || p.ncols() < 3 || (e.nrows() > 0 && e.ncols() < 2) {
-        return Err(pyo3::exceptions::PyValueError::new_err("wear_plan: pts (N, 3), off (R + 1), attrs (R, 13), excl (E, 2), box (4)"));
+        return Err(pyo3::exceptions::PyValueError::new_err("wear_plan: pts (N, 3), off (R + 1), attrs (R, 15), excl (E, 2), box (4)"));
     }
     let lines: Vec<Line> = (0..nr).map(|r| {
         let (s, t) = (o[r] as usize, (o[r + 1] as usize).min(p.nrows()));

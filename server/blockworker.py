@@ -690,7 +690,7 @@ def _roads_tile_cached(aid, lat, lon, zoom, tx, ty, out_dir, vfs_dir, sidewalks,
                     bool(buildings), bool(left_hand), bool(mph), None if q is None else float(q), bool(gas_stations),
                     _s.md.versions() if _s.md is not None else None, float(buried), lamp_region, country,
                     pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(os.path.dirname(out_dir)),
-                    *_radar_key(), bool(towns_on), roadwear.tier_of(wear), bool(de_junctions), *de)     # (the German junction parts last)
+                    *_radar_key(), bool(towns_on), roadwear.wear_key(wear, lat), bool(de_junctions), *de)     # (the German junction parts last)
     wh = _where_enu(lat, lon, *roadsmod_tile_bbox(tx, ty),
                     sidewalks=bool(sidewalks), lift=float(lift), buildings=bool(buildings),
                     gas_stations=bool(gas_stations), de_junctions=bool(de_junctions), towns_on=bool(towns_on), road_wear=roadwear.tier_of(wear),
@@ -1016,7 +1016,7 @@ def _tile_parts(mark, frame, tile, zoom, g, buildings, left_hand, mph, gas_stati
                                  # (the mapped utility poles mappedpoles.tile_poles draws: no guessed ones along them)
                                  mapped_poles=(mappedpoles.road_points(_s.md, frame, tx, ty, pole_profile)
                                                if props is not None else None),
-                                 mapped_lamps=mapped_lamps, wear=roadwear.tier_of(wear),
+                                 wear=wear if isinstance(wear, dict) else roadwear.tier_of(wear),
                                  cover_fn=getattr(getattr(_s, "surface", None), "classes", None))
     P.town_faces = town_faces
     mark("build_tile")
@@ -1458,6 +1458,13 @@ def _write_geo_content(out_dir, vfs_dir, tile, P):
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+def _geo_lat(key):
+    """The latitude of geotile key's own frame (its content's: roads.build_tile's frame.lat0, roadwear.fall_of)."""
+    import geotiles
+    z, gx, gy = geotiles.parse(key)
+    return float(geotiles.geobox(gx, gy, z).frame.lat0)
+
+
 def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried, lamp_region, country, md=None, pole_profile=None,
                      models_dir=None, de_junctions=False, towns_on=False, wear=None):
     """The revisit key of a geotile's content (md: the map data's versions, when not this worker's: the server's own
@@ -1476,7 +1483,7 @@ def _geo_content_key(key, zoom, buildings, left_hand, mph, gas_stations, buried,
     return revisit.key("roadsg", str(key), int(zoom), bool(buildings), bool(left_hand), bool(mph), bool(gas_stations),
                        _md_versions() if md is None else md, float(buried), lamp_region, country, GEO_SKIN_MARGIN_M,
                        pole_profile, threedmr.FEATURE_VERSION, threedmr.local_signature(models_dir), *_radar_key(),
-                       bool(towns_on), roadwear.tier_of(wear), bool(de_junctions), *de)     # (the German junction parts last)
+                       bool(towns_on), roadwear.wear_key(wear, _geo_lat(key)), bool(de_junctions), *de)     # (the German junction parts last)
 
 
 def prebuild_geo(gx, gy, zoom, scratch, buildings, left_hand, mph, gas_stations, buried=0.0, lamp_region=None,

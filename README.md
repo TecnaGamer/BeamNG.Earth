@@ -294,7 +294,8 @@ You can help support development by reporting [issues](https://github.com/TecnaG
     wheel paths on busier roads, a concrete road's slab and lane joints (OpenStreetMap surface=concrete) and a grassy
     asphalt edge on rural roads through grass, crops or woods (the land cover beside them). Full
     also sealed and alligator cracks, crack lines, repair patches, potholes on poor roads (OpenStreetMap smoothness
-    where mapped), manhole covers on town streets and oil spots in parking lots.
+    where mapped), manhole covers on town streets, oil spots in parking lots and, in the autumn, fallen leaves
+    along the edges where trees stand beside the road.
   - What loads around you reaches the same distance in every direction (a circle; before it was a square, whose
     corners reached about 40 % farther).
 - Uses your graphics card for some of the world server's work (colour matching of the photos, compressing the distant

@@ -25,11 +25,16 @@ whole centre line), cut at the other carriageways. The condition of a surface co
 where mapped, else a seeded value by class, varied per 250 m stretch.
 
 A curbless rural road's asphalt edge is the stock grassy one (roads.GRASS_EDGE_DECAL, m_road_edge_dirt_grass) instead
-of gravel and dirt where the land cover beside it is grass, crops or woods (grass_sides; the Iowa and Maryland photos:
+of gravel and dirt where the land cover beside it is grass, crops or woods (verges; the Iowa and Maryland photos:
 grass to the asphalt on the minor roads, gravel shoulders on the highways).
 
+In the autumn (season.amounts_for: the server's --season, "auto" = today's date at the place, either hemisphere)
+fallen leaves (bne_spot_leaves, m_fallen_leaves_decal) lie along the edges where trees stand beside the road (WorldCover
+tree cover at the verge), as many as the season's fall amount (quantized to quarters: the revisit keys, wear_key).
+
 Tiers (the settings' road detail, BNE_ROAD_WEAR overrides): 0 none, 1 tyre polish, concrete joints and grassy edges
-(three materials at most: low-end machines), 2 everything.
+(three materials at most: low-end machines), 2 everything. The road tiles' wear argument is {"tier", "season"}
+(earthd.Server.wear_arg) or a tier alone.
 """
 import hashlib
 import os
@@ -40,9 +45,9 @@ TIERS = {"off": 0, "basic": 1, "full": 2}
 ENV_TIER = TIERS.get(os.environ.get("BNE_ROAD_WEAR", "").strip().lower())   # (None: the setting's)
 DEFAULT_TIER = 2
 CUT_MARGIN = 0.5            # m past another carriageway's edge a piece stops (roads.CUT_MARGIN)
-NA = 13                     # roadwear.rs attrs columns
+NA = 15                     # roadwear.rs attrs columns
 
-K_TREAD, K_SEALED, K_CRACKS, K_LINE, K_ACROSS, K_PATCH, K_POTHOLE, K_MANHOLE, K_OIL = range(9)
+K_TREAD, K_SEALED, K_CRACKS, K_LINE, K_ACROSS, K_PATCH, K_POTHOLE, K_MANHOLE, K_OIL, K_LEAVES = range(10)
 # kind -> look (layer: roadmesh.LIFT; "p": the DecalRoad priority, unused in a mesh); strips with "fade" carry
 # s0 / s1 / slen / fends (roadmesh._fade_uv); "feather": 0 leaves out the strip's side rows (its texture is soft)
 LOOKS = {
@@ -55,6 +60,7 @@ LOOKS = {
     K_POTHOLE: {"m": "bne_spot_pothole", "p": 8, "layer": "spot"},
     K_MANHOLE: {"m": "bne_spot_manhole", "p": 8, "layer": "spot"},
     K_OIL: {"m": "bne_spot_oil", "p": 8, "layer": "spot"},
+    K_LEAVES: {"m": "bne_spot_leaves", "p": 8, "layer": "spot"},
 }
 MATERIALS = tuple(sorted({v["m"] for v in LOOKS.values()}))     # (prewarm.py)
 
@@ -77,6 +83,7 @@ CELLS = {
     K_POTHOLE: _grid(2, 2),
     K_MANHOLE: ((0.0, 0.5, 0.5, 1.0), (0.5, 0.5, 1.0, 1.0), (0.0, 0.0, 0.5, 0.5)) + _SMALL,
     K_OIL: ((0.0, 0.0, 1.0, 1.0),),
+    K_LEAVES: ((0.0, 0.0, 1.0, 1.0),),
 }
 CLASS_CODE = {"motorway": 0, "trunk": 1, "primary": 2, "secondary": 3, "tertiary": 4, "residential": 5,
               "unclassified": 5, "living_street": 5, "service": 6}
@@ -86,9 +93,12 @@ SMOOTHNESS = {"excellent": 0.95, "good": 0.75, "intermediate": 0.45, "bad": 0.2,
 
 
 def tier_of(setting):
-    """The tier for a setting value ('off' / 'basic' / 'full', a number, None: DEFAULT_TIER); BNE_ROAD_WEAR wins."""
+    """The tier for a setting value ('off' / 'basic' / 'full', a number, a wear argument {"tier", "season"}, None:
+    DEFAULT_TIER); BNE_ROAD_WEAR wins."""
     if ENV_TIER is not None:
         return ENV_TIER
+    if isinstance(setting, dict):
+        setting = setting.get("tier")
     if setting is None:
         return DEFAULT_TIER
     if isinstance(setting, str):
@@ -97,6 +107,26 @@ def tier_of(setting):
         return int(np.clip(int(setting), 0, 2))
     except (TypeError, ValueError):
         return DEFAULT_TIER
+
+
+FALL_STEP = 0.25            # the fall amount's quantum (the revisit keys change at most four times a season)
+
+
+def fall_of(wear, lat):
+    """The season's fall amount (0..1, FALL_STEP steps) for a wear argument at latitude lat: its "season" mode
+    (season.amounts_for; "off" without one)."""
+    mode = wear.get("season", "off") if isinstance(wear, dict) else "off"
+    if mode in (None, "off", "summer"):
+        return 0.0
+    import season
+    f = float(season.amounts_for(mode, float(lat))["fall"])
+    return round(f / FALL_STEP) * FALL_STEP
+
+
+def wear_key(wear, lat):
+    """The wear's part of a road tile's revisit key: (tier, fall amount at lat)."""
+    t = tier_of(wear)
+    return (t, fall_of(wear, lat) if t >= 2 else 0.0)
 
 
 def _seed(fid):
@@ -122,41 +152,55 @@ GRASS_STEP_M = 12.0
 GRASS_SHARE = 0.6
 
 
-def grass_sides(frame, roads, cover_fn, has_sidewalks):
-    """{(fid, side)} of build_tile's roads whose asphalt edge on that side (+1 left / -1 right of the geometry, as
-    roads.extras' edge decals) is grass. cover_fn(lat, lon) -> (WorldCover classes, complete): one call for all."""
+TREE_CLASS = 10
+
+
+def verges(frame, roads, cover_fn, has_sidewalks, fall=0.0):
+    """({(fid, side)} of build_tile's roads whose asphalt edge on that side (+1 left / -1 right of the geometry, as
+    roads.extras' edge decals) is grass, {(fid, side): fallen leaves 0..1} (fall x the share of tree cover beside it)).
+    cover_fn(lat, lon) -> (WorldCover classes, complete): one call for all."""
     import roads as roadsmod
     xs, ys, owner = [], [], []
     for fid, spec, pts, _lon in roads:
-        if spec.kind != "paved" or spec.urban or spec.cls not in GRASS_ROADS or has_sidewalks(spec) or len(pts) < 2:
+        if spec.kind != "paved" or len(pts) < 2:
+            continue
+        grassy = not spec.urban and spec.cls in GRASS_ROADS and not has_sidewalks(spec)
+        if not grassy and fall <= 0.0:
             continue
         line = roadsmod.densify(np.asarray(pts, np.float64)[:, :3], GRASS_STEP_M)
         for side in (1, -1):
             q = roadsmod.offset_polyline(line, side * (float(spec.width) / 2 + GRASS_SIDE_M))
             xs.append(q[:, 0])
             ys.append(q[:, 1])
-            owner.extend([(fid, side)] * len(q))
+            owner.extend([(fid, side, grassy)] * len(q))
     if not owner:
-        return set()
+        return set(), {}
     lat, lon, _ = frame.enu_to_geodetic(np.concatenate(xs), np.concatenate(ys), 0.0)
     try:
         cls = np.asarray(cover_fn(lat, lon)[0])
-    except Exception:           # (no land cover: the dirt edge, as before)
-        return set()
-    veg = np.isin(cls, GRASS_CLASSES)
-    got, n = {}, {}
-    for key, v in zip(owner, veg.tolist()):
+    except Exception:           # (no land cover: the dirt edge, no leaves)
+        return set(), {}
+    veg = np.isin(cls, GRASS_CLASSES).tolist()
+    tree = (cls == TREE_CLASS).tolist()
+    got, trees, n, can = {}, {}, {}, {}
+    for (fid, side, grassy), v, t in zip(owner, veg, tree):
+        key = (fid, side)
         got[key] = got.get(key, 0) + v
+        trees[key] = trees.get(key, 0) + t
         n[key] = n.get(key, 0) + 1
-    return {k for k in got if got[k] >= GRASS_SHARE * n[k]}
+        can[key] = grassy
+    grass = {k for k in got if can[k] and got[k] >= GRASS_SHARE * n[k]}
+    leaves = {k: fall * trees[k] / n[k] for k in trees if fall > 0.0 and trees[k]}
+    return grass, leaves
 
 
-def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=()):
+def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=(), leaves=None):
     """The wear chunks of a tile's roads (build_tile's roads: (fid, spec, centreline (k, 3), lon)); seen: fid ->
     (feats, i, spec) (OpenStreetMap's smoothness); box: x0 y0 x1 y1 the pieces are laid in (the mesh is cut at the
     tile); exclude(fid, other fid): the other road does not cut this one's pieces (a straight continuation, a ramp's
     merge); aisles: a parking lot's aisles (their stalls' oil); skip: roads without wear of their own (a piece inside a
-    junction). Chunks carry "wear": 1 (no DecalRoad fallback draws them)."""
+    junction); leaves: {(fid, side): fallen leaves 0..1} (verges). Chunks carry "wear": 1 (no DecalRoad fallback
+    draws them)."""
     if tier <= 0 or not roads:
         return []
     import fast
@@ -176,7 +220,8 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=()):
         feats, i = (seen[fid][0], seen[fid][1]) if fid in seen else (None, 0)
         rows.append((hw, float(drive), float(doff), float(lanes), float(bool(spec.oneway)),
                      float(CLASS_CODE.get(spec.cls, 7)), float(spec.surf == "concrete"), float(bool(spec.urban)),
-                     _condition(feats, i), float(_seed(fid)), float(wear), float(fid in aisles), hw + CUT_MARGIN))
+                     _condition(feats, i), float(_seed(fid)), float(wear), float(fid in aisles), hw + CUT_MARGIN,
+                     float((leaves or {}).get((fid, 1), 0.0)), float((leaves or {}).get((fid, -1), 0.0))))
     if not any(r[10] for r in rows):
         return []
     excl = []
@@ -194,23 +239,28 @@ def tile_chunks(roads, seen, box, tier, exclude=None, aisles=(), skip=()):
                                  np.ascontiguousarray(np.asarray(rows, np.float64).reshape(-1, NA)),
                                  np.asarray(excl, np.int64).reshape(-1, 2),
                                  np.asarray(box, np.float64)[:4], int(tier))
-    out = []
+    out, spots = [], {}
     for k in range(len(A)):
         kind, width, tl, slen, cell = A[k]
         kind = int(kind)
         look = LOOKS[kind]
         q = P[O[k]:O[k + 1]]
-        ch = {"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1}
-        if kind in CELLS:
-            u0, v0, u1, v1 = CELLS[kind][max(0, int(cell)) % len(CELLS[kind])]
-            ch.update(w=0.0, tl=1.0, n=[], poly=np.round(q[:, :3], 3).tolist(),
-                      uvq=[[u0, v1], [u1, v1], [u1, v0], [u0, v0]])
-        else:
-            ch.update(w=round(float(width), 2), tl=round(float(tl), 2), n=np.round(q[:, :3], 3).tolist())
-            if look.get("fade") and slen > 0:
-                ch.update(s0=round(float(q[0, 3]), 3), s1=round(float(q[-1, 3]), 3), slen=round(float(slen), 3),
-                          fends=[1, 1])
-                if "feather" in look:
-                    ch["feather"] = look["feather"]
+        if kind in CELLS:                   # (the spots: one chunk of quads a material, roadmesh's "quads": a polygon
+            u0, v0, u1, v1 = CELLS[kind][max(0, int(cell)) % len(CELLS[kind])]     # each cost a loop step there)
+            corners, uvs = spots.setdefault(kind, ([], []))
+            corners.extend(np.round(q[:, :3], 3).tolist())
+            uvs.extend([[u0, v1], [u1, v1], [u1, v0], [u0, v0]])
+            continue
+        ch = {"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1,
+              "w": round(float(width), 2), "tl": round(float(tl), 2), "n": np.round(q[:, :3], 3).tolist()}
+        if look.get("fade") and slen > 0:
+            ch.update(s0=round(float(q[0, 3]), 3), s1=round(float(q[-1, 3]), 3), slen=round(float(slen), 3),
+                      fends=[1, 1])
+            if "feather" in look:
+                ch["feather"] = look["feather"]
         out.append(ch)
+    for kind in sorted(spots):
+        look = LOOKS[kind]
+        out.append({"m": look["m"], "p": look["p"], "layer": look["layer"], "wear": 1, "w": 0.0, "tl": 1.0, "n": [],
+                    "poly": spots[kind][0], "uvq": spots[kind][1], "quads": 1})
     return out
