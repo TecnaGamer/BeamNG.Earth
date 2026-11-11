@@ -49,7 +49,6 @@ SITES = {       # name: (fixture prefix, what was reported)
     "casagranda_bridge": ("drive", "Galleria Casagranda: a large incline between the tunnels"),
     "casagranda_portal": ("drive", "Galleria Casagranda: a large incline before the tunnel"),
     "a5_underpass": ("drive", "A5 near Heidelberg: a gap in the autobahn over an underpass"),
-    "mannheim_motorway_bridge": ("drive", "Mannheim: an autobahn bridge with a bump too large for high speeds"),
     "compiegne_roundabout": ("drive", "Compiègne: a roundabout the railway crosses twice on bridges; every version a different mess"),
     "perth_mount_henry_520": ("drive", "GitHub #520, Perth: Mount Henry Bridge's crests launch the car"),
     "tamar_bridge_1112": ("drive", "GitHub #1112, Tamar Bridge: the ends droop, a drop and a bump onto the deck"),

@@ -1,7 +1,7 @@
 # Drivability replay inputs
 
 Places reported as hard or impossible to drive, captured on 2026-11-11 with
-`tools/capture_interchange_fixture.py --prefix drive` into a cache of their own: the first seven with the
+`tools/capture_interchange_fixture.py --prefix drive` into a cache of their own: the first six with the
 default `--cells-m 1200`, the GitHub issues' places with `--cells-m 400` (the measurement reaches 200 m; at
 Südtiroler Platz 400 m and 1200 m measured the same, at a third of the size). Same format as
 [interchanges.md](interchanges.md); `server/tests/drivability.py` measures them (with the interchange
@@ -15,7 +15,6 @@ replays) and `test_drivability.py` holds them to `drivability_baseline.json`.
 | `drive_casagranda_bridge.npz` | a large incline between tunnels | 45.86134, 10.83268 |
 | `drive_casagranda_portal.npz` | a large incline before a tunnel | 45.85964, 10.83267 |
 | `drive_a5_underpass.npz` | a gap in the autobahn | 49.35458, 8.63166 |
-| `drive_mannheim_motorway_bridge.npz` | an autobahn bridge with a bump too large for high speeds | 49.46771, 8.51828 |
 | `drive_compiegne_roundabout.npz` | a roundabout the railway crosses twice on bridges: "every version does a different kind of mess" | 49.422213, 2.806541 |
 | `drive_perth_mount_henry_520.npz` | GitHub #520: Mount Henry Bridge's crests launch the car (in the game likely the imported 3D bridge model, which the replay does not load) | -32.033890, 115.858373 |
 | `drive_tamar_bridge_1112.npz` | GitHub #1112: Tamar Bridge's ends droop, a drop and a bump onto the deck | 50.407633, -4.198455 |

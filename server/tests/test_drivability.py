@@ -50,7 +50,7 @@ class IndependenceTest(unittest.TestCase):
     of the runs with 4 threads and 42 % with all 11 of its cells at once, never with one thread and in any order one
     at a time. A race shows only in some runs, so Silistra plans all its cells at once RACE_RUNS times: a race that
     common passes all of them in about 1 % of the test runs."""
-    SITES = ("silistra_936", "vienna_s1_breitenleer_1083", "mannheim_motorway_bridge", "compiegne_roundabout")
+    SITES = ("silistra_936", "vienna_s1_breitenleer_1083", "perth_915", "compiegne_roundabout")
     VARIANTS = ({"threads": 16}, {"approach": (0.0, 600.0)}, {"approach": (600.0, 0.0)})
     RACE_SITE, RACE_RUNS = "silistra_936", 8
 
