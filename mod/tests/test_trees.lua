@@ -48,7 +48,16 @@ trees.EVERY_N = 1               -- (every update works here; the batching is tes
 -- (no time budget, no spare Forests: both tested at the end)
 local FRAME_MS, POOL_SPARE = trees.FRAME_MS, trees.POOL_SPARE
 trees.FRAME_MS, trees.POOL_SPARE = math.huge, 0
-local function count() local n = 0; for _ in pairs(items) do n = n + 1 end; return n end
+-- the running item count (trees.status().items, M.COUNT_ITEMS) against a full count each time a check counts the
+-- items (checked at the file's end)
+local countChecks, countMiss = 0, {}
+local function count()
+  local n = 0; for _ in pairs(items) do n = n + 1 end
+  countChecks = countChecks + 1
+  local run, full = trees.status().items, trees.countItems()
+  if run ~= full and #countMiss < 5 then countMiss[#countMiss + 1] = 'check ' .. countChecks .. ': ' .. run .. ' vs ' .. full end
+  return n
+end
 
 -- the variant: a height inside its range, scaled to it
 local shape, sc = trees.pick('conifer', 20.0, 0.3)
@@ -202,7 +211,33 @@ trees.reset()
 tile('0_0', 4, 10)
 tile('0_1', 25, 10)
 trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS)
-T.check(count() == 20, 'loading: every new shape at once (' .. count() .. ')')
+T.check(count() == 20, 'loading, no fill said (the old rule): every new shape at once (' .. count() .. ')')
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, true)
+T.check(count() == 20, 'filling (a teleport): every new shape at once (' .. count() .. ')')
+-- standing still is the governor's loading mode too (the bigger Lua budget), but not a fill (PR #1128): a parked player
+-- sees each first load's frame (104-356 ms hitches while slow, 2026-11-10), so new shapes still come one a frame...
+local filled = {}
+for it in pairs(items) do filled[#filled + 1] = string.format('%.0f,%.0f,%.2f', it.m.p.x, it.m.p.y, it.sc) end
+table.sort(filled)
+trees.clear()
+trees.reset()
+tile('0_0', 4, 10)
+tile('0_1', 25, 10)
+trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, false)
+T.check(count() == 10, 'standing: one new shape a frame (' .. count() .. ')')
+local passes = 1
+while count() < 20 and passes < 10 do trees.update(3, { x = 50, y = 50 }, nil, trees.LOADING_FRAME_MS, false); passes = passes + 1 end
+T.check(count() == 20 and passes <= 3, '... split over ' .. passes .. ' passes')
+-- ... and the same items stand afterwards as a fill makes at once (order-independent)
+local spread = {}
+for it in pairs(items) do spread[#spread + 1] = string.format('%.0f,%.0f,%.2f', it.m.p.x, it.m.p.y, it.sc) end
+table.sort(spread)
+T.check(#filled == #spread and table.concat(filled, ' ') == table.concat(spread, ' '),
+  'the same items, filled at once or spread over passes')
 trees.clear()
 trees.FORESTS_PER_FRAME = savedF
 trees.SHAPE_VARIANTS = savedV
@@ -732,6 +767,14 @@ do -- a pin flag (server golf.py): the mesh height, so scale 1 is 1:1, and it is
   T.check(trees.CATALOG.golfflag and shape == trees.CATALOG.golfflag[1][1] and math.abs(sc - 1) < 1e-9,
     'golfflag: its model at 1:1')
   T.check(not trees.isBarrier('golfflag'), 'a pin flag is not a barrier')
+end
+
+T.check(countChecks > 50 and #countMiss == 0, 'the running item count matches a full count at each of '
+  .. countChecks .. ' checks' .. (#countMiss > 0 and (' (' .. table.concat(countMiss, '; ') .. ')') or ''))
+do -- the switch: COUNT_ITEMS false counts them again (the old way)
+  trees.COUNT_ITEMS = false
+  T.check(trees.status().items == trees.countItems(), 'COUNT_ITEMS off: counted')
+  trees.COUNT_ITEMS = true
 end
 
 T.done('test_trees')

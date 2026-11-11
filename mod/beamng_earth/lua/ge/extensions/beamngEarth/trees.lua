@@ -594,6 +594,11 @@ local types = {}        -- "shape" / "shape#n" (not solid) -> TSForestItemData
 local pop = {}          -- shape -> its items in the level
 local ready = false
 M.made, M.removed, M.errors = 0, 0, 0
+-- The items standing (every tile's t.made entries), kept as they change: status() counted them with pairs once a
+-- second (the perf sampler) and on every hitch line (core perfContext), 3.4 ms at 0.5 M items and 9 ms at 1.6 M
+-- (2026-11-11). M.COUNT_ITEMS = false: status() counts them again (the old way; tests compare both).
+M.COUNT_ITEMS = true
+local liveItems = 0
 M.unknownGroups = {}      -- groups seen without a CATALOG entry (logged once each)
 
 local pool = {}          -- ids of empty Forests to reuse
@@ -1004,8 +1009,11 @@ end
 -- A shape's first items in a session cost far more than its population: the engine loads the shape and instances its
 -- materials in that frame's tick (a Manhattan drive on the Windows test PC, 2026-11-03: tree frames making 5-740
 -- items of new door / hydrant / sign / tree variants took the tick 75-255 ms, the shapes' items almost none). New
--- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most while driving; any number while the
--- world loads (the governor's loading frames: a teleport, the level's start, a stop) or with no frame budget (tools).
+-- shapes (never made this session) come NEW_SHAPES_PER_FRAME a frame at most; any number only while the world fills
+-- after a teleport or at the level's start (update's fill: the player expects that wait) or with no frame budget
+-- (tools). A stop used to lift the cap too (the governor's loading frames cover standing still), and a parked player
+-- sees every hitch: the far clump shapes' first loads landed several in single frames while slow (a Napa session,
+-- 2026-11-10: repeated 104-356 ms hitches, tree passes of +24 items; PR #1128 by SwimmingRemy).
 M.NEW_SHAPES_PER_FRAME = 1
 local touched, touchedItems, newShapes = {}, 0, 0
 local frameWork = { { made = 0, removed = 0, shapes = 0, items = 0, new = 0, forests = 0 },
@@ -1389,6 +1397,9 @@ M.RECHECK_S = 1.0
 -- player looks at, the colliding items stay round the car (the user, 2026-10-20: "the LODs still all follow the car").
 -- frameMs: this frame's Lua time for the tree work (default FRAME_MS); 0: none this frame (core: the governor's heavy
 -- frame or the quiet frames round it), the batch waits for the next frame.
+-- fill: the world is filling after a teleport or at the level's start (core): new shapes load without the
+-- NEW_SHAPES_PER_FRAME cap, as many first loads a frame as the pass meets. nil: the old rule (the loading frame budget
+-- lifts the cap), for callers that do not say.
 -- Spare Forests wanted in the pool now: POOL_SPARE_CALM while calm (the loading frame budget), none while driving (a
 -- frame budget below it); POOL_SPARE without one (no governor: tools, tests).
 function M.spareWanted(frameMs)
@@ -1396,7 +1407,7 @@ function M.spareWanted(frameMs)
   return frameMs >= M.LOADING_FRAME_MS and math.max(M.POOL_SPARE, M.POOL_SPARE_CALM) or 0
 end
 
-function M.update(anchorId, player, view, frameMs)
+function M.update(anchorId, player, view, frameMs, fill)
   if not next(tiles) then return end
   if frameMs and frameMs <= 0 then return end
   if not setup() then return end
@@ -1430,7 +1441,8 @@ function M.update(anchorId, player, view, frameMs)
   newForests = 0
   M.lastShapeItems = touchedItems        -- the previous frame's (diagnostics)
   touched, touchedItems, newShapes = {}, 0, 0
-  newShapeCap = (frameMs ~= nil and frameMs < M.LOADING_FRAME_MS) and M.NEW_SHAPES_PER_FRAME or math.huge
+  if fill == nil then fill = frameMs ~= nil and frameMs >= M.LOADING_FRAME_MS end
+  newShapeCap = (frameMs ~= nil and not fill) and M.NEW_SHAPES_PER_FRAME or math.huge
   releaseGhosts(anchorId, player)
   bandCapsUpdate()
   for li = #tileList, 1, -1 do               -- (backwards: a tile removed takes the last one's place, already seen)
@@ -1446,6 +1458,7 @@ function M.update(anchorId, player, view, frameMs)
         if not sh or allow(sh) then
           if fd then removeItem(fd, it, sh) end
           t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
+          liveItems = liveItems - 1
           budget = budget - 1
         else left = true end
       end
@@ -1601,8 +1614,9 @@ function M.update(anchorId, player, view, frameMs)
           if allow(sh) then
             local d = data()
             if not d then stop(t, i, skipped, want, band, near); return end      -- (a new Forest: next frame)
-            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1 end  -- solid <-> not
+            if t.made[i] then removeItem(d, t.made[i], t.madeShape[i]); budget = budget - 1; liveItems = liveItems - 1 end  -- solid <-> not
             t.made[i] = makeItem(d, t, i, sh, sc, solid, g, t.variant)
+            if t.made[i] then liveItems = liveItems + 1 end
             t.solid[i] = (t.made[i] and solid) or nil      -- true or nil
             t.madeShape[i] = t.made[i] and sh or nil
             if solid then nearMade = true end
@@ -1616,6 +1630,7 @@ function M.update(anchorId, player, view, frameMs)
             if not d then stop(t, i, skipped, want, band, near); return end
             removeItem(d, t.made[i], t.madeShape[i])
             t.made[i], t.solid[i], t.madeShape[i] = nil, nil, nil
+            liveItems = liveItems - 1
             budget = budget - 1
             if elapsed() > limit then stop(t, i + 1, skipped, want, band, near); return end
           else skipped = skipped or i end
@@ -1644,6 +1659,7 @@ function M.clear()
     releaseForest(t)
   end
   tiles, tileList, tileAt, frameN, dirty, lastPass = {}, {}, {}, 0, true, nil
+  liveItems = 0
 end
 
 -- Level end: the level deletes its objects itself.
@@ -1651,15 +1667,23 @@ function M.reset()
   tiles, tileList, tileAt, types, ready, pool, forestCount, pop = {}, {}, {}, {}, false, {}, 0, {}
   everMade = {}
   dirty, lastPass = true, nil
+  liveItems = 0
+end
+
+-- Every tile's items counted (the old status loop; the tests check the running count against it).
+function M.countItems()
+  local items = 0
+  for _, t in pairs(tiles) do for _ in pairs(t.made) do items = items + 1 end end
+  return items
 end
 
 function M.status()
-  local n, items, pending = 0, 0, 0
-  for _, t in pairs(tiles) do
-    n = n + 1
+  local n, items, pending = #tileList, 0, 0
+  for li = 1, n do                       -- (a numeric loop: compiled; pairs runs in the interpreter)
+    local t = tiles[tileList[li]]
     if t.pending or t.shown == 0 then pending = pending + 1 end
-    for _ in pairs(t.made) do items = items + 1 end
   end
+  if M.COUNT_ITEMS then items = liveItems else items = M.countItems() end
   return { tiles = n, items = items, pending = pending, made = M.made, removed = M.removed, errors = M.errors,
     geoMoved = M.geoMoved, geoFlushed = M.geoFlushed }   -- (geotiles: placed again at a rebase, made again)
 end
