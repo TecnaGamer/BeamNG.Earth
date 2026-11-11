@@ -110,6 +110,110 @@ class CompactTerTest(unittest.TestCase):
             self.assertEqual(sf.write_ter(d, "b.ter", np.zeros((8, 8), np.uint16), None), ("b.ter", None))
 
 
+class LayerFoldTest(unittest.TestCase):
+    """Rarely used land-cover layers folded into the ones around them (surface.fold_layers: fewer materials per .ter,
+    a cheaper swap; the user, 2026-11-11: "combine the ground layers and reduce them without reducing quality")."""
+
+    def block(self, n=200):
+        idx = np.full((n, n), sf.GRASS, np.uint8)
+        idx[:, :40] = sf.DIRT
+        idx[:, 90:96] = sf.ASPHALT                      # a road (painted)
+        return idx
+
+    def land_of(self, idx):
+        land = idx.copy()
+        land[idx == sf.ASPHALT] = sf.GRASS
+        return land
+
+    def test_specks_fold_into_their_neighbours(self):
+        idx = self.block()
+        idx[10:13, 10:13] = sf.ROCK                     # in the dirt
+        idx[50:52, 150:152] = sf.ROCK                   # in the grass
+        idx[100:102, 96] = sf.ROCK                      # by the road
+        idx[150:152, 100:190] = sf.ROCK                 # a line along a bank (no core)
+        st = {}
+        out = sf.fold_layers(idx, self.land_of(idx), 1.0, st)
+        self.assertFalse((out == sf.ROCK).any())
+        self.assertTrue((out[10:13, 10:13] == sf.DIRT).all() and (out[50:52, 150:152] == sf.GRASS).all())
+        self.assertTrue((out[100:102, 96] == sf.GRASS).all(), "the land cover beside it, not the road")
+        self.assertTrue(((out == idx) | (idx == sf.ROCK)).all(), "nothing else changes")
+        self.assertEqual(st["layersFolded"], 1)
+        self.assertEqual(sf.used_materials(out), [sf.ASPHALT, sf.GRASS, sf.DIRT])
+
+    def test_kept(self):
+        n = 200
+
+        def rock_rows(i):
+            for r in range(0, 200, 4):
+                i[r:r + 3, 100:103] = sf.ROCK           # 450 thin samples > 1 % of 200²
+        cases = {
+            "a big patch": lambda i: i.__setitem__((slice(10, 40), slice(100, 130)), sf.ROCK),     # its core 26² m² > 256
+            "a road layer": lambda i: i.__setitem__((slice(10, 12), slice(100, 102)), sf.LOOSE),
+            "the water bed": lambda i: i.__setitem__((slice(10, 12), slice(100, 102)), sf.MUD),
+            "too many samples": rock_rows,
+        }
+        for what, put in cases.items():
+            with self.subTest(what):
+                idx = self.block(n)
+                put(idx)
+                out = sf.fold_layers(idx, self.land_of(idx), 1.0)
+                self.assertTrue((out == idx).all())
+        idx = self.block(n)
+        idx[10:12, 100:102] = sf.LAWN
+        land = self.land_of(idx)
+        land[10:12, 100:102] = sf.GRASS                 # a mapped lawn painted over the land cover
+        self.assertTrue((sf.fold_layers(idx, land, 1.0) == idx).all(), "a painted layer is kept")
+
+    def test_patch_limit_in_square_metres(self):
+        idx = self.block()
+        idx[10:22, 100:112] = sf.ROCK                   # 12 x 12 samples: a core of 8² at 1 m (r 2), 10² x 4 m² at 2 m (r 1)
+        self.assertFalse((sf.fold_layers(idx, self.land_of(idx), 1.0) == sf.ROCK).any())
+        self.assertTrue((sf.fold_layers(idx, self.land_of(idx), 2.0) == sf.ROCK).any())
+
+    def test_switch_off(self):
+        idx = self.block()
+        idx[10:13, 10:13] = sf.ROCK
+        old = sf.FOLD_ON
+        sf.FOLD_ON = False
+        try:
+            self.assertIs(sf.fold_layers(idx, self.land_of(idx), 1.0), idx)
+        finally:
+            sf.FOLD_ON = old
+
+    def test_cap_merges_look_alikes_then_folds_the_least_used(self):
+        n = 400
+        idx = np.full((n, n), sf.GRASS, np.uint8)
+        stripes = [sf.DIRT, sf.ASPHALT, sf.LAWN, sf.MUD, sf.COBBLE, sf.BRICK, sf.PAVERS, sf.GOLF_GREEN,
+                   sf.GOLF_FAIRWAY, sf.LOOSE, sf.DUSTY]
+        for k, m in enumerate(stripes):
+            idx[:, 20 + 30 * k:40 + 30 * k] = m
+        land = idx.copy()
+        for m in (sf.ASPHALT, sf.COBBLE, sf.BRICK, sf.PAVERS, sf.GOLF_GREEN, sf.GOLF_FAIRWAY):
+            land[idx == m] = sf.GRASS
+        self.assertEqual(len(sf.used_materials(idx)), 12)
+        counts = np.bincount(idx.ravel(), minlength=256)
+        painted = np.bincount(idx[idx != land], minlength=256)
+        folded, merged = sf.fold_policy(counts, painted, np.zeros(256), n, 1.0)
+        self.assertEqual(merged, [(sf.GOLF_GREEN, sf.GOLF_FAIRWAY), (sf.BRICK, sf.COBBLE), (sf.GOLF_FAIRWAY, sf.LAWN)])
+        self.assertEqual(folded, [])
+        out = sf.fold_layers(idx, land, 1.0)
+        self.assertEqual(len(sf.used_materials(out)), sf.LAYER_CAP)
+        self.assertTrue((out[idx == sf.GOLF_GREEN] == sf.LAWN).all() and (out[idx == sf.BRICK] == sf.COBBLE).all())
+        # no look-alike pairs left: the least used land-cover layer goes, whatever its size
+        idx2 = idx.copy()
+        idx2[idx2 == sf.BRICK] = sf.ROCK
+        idx2[idx2 == sf.GOLF_GREEN] = sf.SNOW
+        idx2[idx2 == sf.GOLF_FAIRWAY] = sf.GRASS
+        half = idx2[200:]
+        half[half == sf.SNOW] = sf.GRASS                # snow the least used land-cover layer
+        idx2[:, 380:] = sf.ROCK
+        land2 = np.where(np.isin(idx2, [sf.ASPHALT, sf.COBBLE, sf.PAVERS]), sf.GRASS, idx2).astype(np.uint8)
+        out2 = sf.fold_layers(idx2, land2, 1.0)
+        self.assertLessEqual(len(sf.used_materials(out2)), sf.LAYER_CAP)
+        self.assertFalse((out2 == sf.SNOW).any())
+        self.assertTrue((out2 == sf.ROCK).any())
+
+
 class PhotoSnowTest(unittest.TestCase):
     def test_snow_only_where_the_photo_is_white(self):
         # WorldCover "snow and ice" on the Stelvio Pass's summit where the orthophoto has grey-brown scree (#40/#44)

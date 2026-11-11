@@ -92,6 +92,7 @@ mod osmtagshards;
 mod gradebins;
 mod l0roads;
 mod groundphoto;
+mod layerfold;
 
 use std::cell::Cell;
 use numpy::{PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2, PyReadonlyArray3, IntoPyArray};
@@ -5929,6 +5930,10 @@ fn earthfast(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(l0roads::l0_flatten, m)?)?;
     // (L0 ground: a teleport's first block's stand-in photo from its own ground layers, earthd.write_ground_base)
     m.add_function(wrap_pyfunction!(groundphoto::ground_photo, m)?)?;
-    m.add("VERSION", 219)?;
+    // 220: layerfold (layer_stats / layer_fold: a block's rarely used ground layers folded into the ones around them,
+    // surface.fold_layers: fewer terrain materials per .ter, a cheaper texture-array rebuild at the swap)
+    m.add_function(wrap_pyfunction!(layerfold::layer_stats, m)?)?;
+    m.add_function(wrap_pyfunction!(layerfold::layer_fold, m)?)?;
+    m.add("VERSION", 220)?;
     Ok(())
 }
