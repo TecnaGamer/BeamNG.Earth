@@ -6113,6 +6113,7 @@ BAKE_FETCH = os.environ.get("BNGE_BAKE_FETCH", "off") == "on"   # the data repo'
 CATCHUP_MORE_S = 10.0       # s behind all along before the catch-up boost lends half the game's cores
 HOLD_BOOST_CALM_S = 2.0     # s after an edge hold ends before its boost does (Connection.hold_boost)
 CATCHUP_LEND_SHARE = float(os.environ.get("BNGE_CATCHUP_LEND", "0.25"))     # of the game's cores (cpupin.boosted)
+CATCHUP_LEND_AT_NORMAL = os.environ.get("BNGE_CATCHUP_LEND_NORMAL", "0") == "1"   # ... also at normal priority
 CATCHUP_MIN_MS = 8.0        # m/s: only while driving (a parked player's work waits as before)
 BOOST_FULL_MAX_S = 300.0    # full priority loading (Server.load_boost's teleportPriority) ends this long after at most
 
@@ -8417,6 +8418,11 @@ class Connection:
         """The loading boost (Server.load_boost: half of the game's cores lent) while the world is behind a driving
         player, off CATCHUP_CALM_S after it caught up. Not over a teleport's own boost."""
         if CATCHUP_LEND_SHARE <= 0:         # (BNGE_CATCHUP_LEND=0: none)
+            return
+        if not getattr(self.s, "below_game", True) and not CATCHUP_LEND_AT_NORMAL:
+            # (the server at the game's own priority, "World server priority: normal": its workers on lent game cores
+            # took the game's own time; a 6-core player's logs, 1% lows 30-38 fps, 37-44 with "low", Discord
+            # 2026-11-06; the user, 2026-11-11: consistency over speed)
             return
         if self.catchup and not self.s.boost_on:
             self.catchup = False            # (ended elsewhere: free to start again)
@@ -10957,6 +10963,7 @@ def main():
             log.info("the settings page: the server on %s", ", ".join(chosen))
     except Exception as e:          # (the defaults then)
         log.warning("could not read the settings page's server choices: %s", e)
+    server.below_game = bool(args.nice and args.nice > 0)     # (catch_up: no game cores lent at the game's priority)
     if args.nice:
         try:
             # all threads: below the game's main and physics threads (Windows: the "below normal" class)
